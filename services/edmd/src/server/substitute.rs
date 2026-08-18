@@ -32,7 +32,7 @@ pub struct SubstituteRequest {
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`. Determines the `unit`
     /// the substitute is stored in — a substituted water gap is m³, not kWh.
     pub sparte: Option<String>,
-    /// Why a substitute is required (§ 60 Abs. 6 MsbG audit trail).
+    /// Why a substitute is required (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail).
     ///
     /// One of the `substitute_value_log.reason` values. Defaults to
     /// `NoMeasurementAvailable`.
@@ -78,7 +78,7 @@ pub(crate) fn substitute_method_to_db(method: metering::SubstituteMethod) -> &'s
 /// 2. Fetches prior-period reference data from `meter_reads`.
 /// 3. Calls `metering::prior_period_substitutes()` to generate values.
 /// 4. Stores the generated intervals as `AUTO_SUBSTITUTE` source.
-/// 5. Records each substitution in `substitute_value_log` for § 60 Abs. 6 MsbG audit.
+/// 5. Records each substitution in `substitute_value_log` for § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit.
 /// 6. Returns the generated intervals with their methods and confidence notes.
 ///
 /// **Cedar action**: `write-meter-reads`
@@ -200,6 +200,45 @@ pub async fn run_substitute_values(
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
+    // Scope the reference data to the **one register** the Ersatzwert is written
+    // to. `query` spans every channel the measuring point reported, and both of
+    // the things computed from it below are single-series questions:
+    //
+    // - `billable_slots` decides which slots already carry a real measurement.
+    //   Across registers, a prosumer's Einspeisung reading at 12:00 marked the
+    //   12:00 slot occupied and blocked the gap in its *consumption* register
+    //   from ever being filled — the § 60 Abs. 2 obligation stayed open forever.
+    // - `fill_gaps` walks the series to find each gap and the readings bracketing
+    //   it. Handed two registers it sees two values at every timestamp, so a gap
+    //   in one is hidden by the other's presence and an interpolation is
+    //   bracketed by a reading from the wrong channel.
+    //
+    // The target register is the request's when it names one, otherwise the
+    // measuring point's dominant energy series.
+    let groups = crate::domain::register_groups(&resolved);
+    let target: Option<String> = match req.obis_code.as_deref() {
+        Some(code) => Some(
+            metering::obis::ObisCode::parse(code)
+                .map_or_else(|_| code.to_owned(), |c| c.to_string()),
+        ),
+        None => groups
+            .iter()
+            .filter(|g| {
+                g.obis_code
+                    .is_none_or(crate::domain::register::is_energy_register)
+            })
+            .max_by_key(|g| g.intervals.len())
+            .and_then(|g| g.obis_code.map(|c| c.to_string())),
+    };
+    let in_target = |r: &MeterRead| -> bool {
+        let code = r
+            .obis_code
+            .as_deref()
+            .and_then(|s| metering::obis::ObisCode::parse(s).ok())
+            .map(|c| c.to_string());
+        code == target
+    };
+    let resolved: Vec<MeterRead> = resolved.into_iter().filter(in_target).collect();
     let existing: Vec<MeterRead> = resolved
         .iter()
         .filter(|r| r.quality.is_billable())
@@ -362,7 +401,7 @@ pub async fn run_substitute_values(
         rust_decimal::Decimal,
     )> = Vec::new();
 
-    // The same V01–V10 pass every ingest path runs: engine-generated values
+    // The same V-rule pass every ingest path runs: engine-generated values
     // are still stored values, and an Ersatzwert derived from anomalous prior
     // data (negative carry-forward, implausible spike) must carry its warning
     // annotation into `quality_warnings` like any other reading.
@@ -448,7 +487,6 @@ pub async fn run_substitute_values(
             "method": method_str,
             "reference_count": entry.reference_count,
             "reason": format!("{:?}", entry.reason),
-            "reference_count": entry.reference_count,
         }));
     }
 
@@ -468,7 +506,7 @@ pub async fn run_substitute_values(
     // Persist through the repository. meterstore's `append` routes each interval to
     // the tier that owns it, opens the § 60 Abs. 2 MsbG confirmation obligation
     // (so an operator is later nudged to replace the estimate with a real value),
-    // and writes the § 60 Abs. 6 MsbG displacement audit — none of which the old
+    // and writes the § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) displacement audit — none of which the old
     // raw upsert did.
     // Ersatzwerte are edmd's own output, but they are billed like any other
     // reading, so they run the same V-rules — a generator that emits a wrong
@@ -554,7 +592,7 @@ pub async fn run_substitute_values(
             "method_requested": format!("{method:?}"),
             // What each interval was actually produced by. A requested strategy
             // with no data to work from degrades — prior-period to carry-forward
-            // to zero — and the § 60 Abs. 6 MsbG record must name what ran, not what
+            // to zero — and the § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) record must name what ran, not what
             // was asked for.
             "methods_applied": log_entries
                 .iter()

@@ -5,7 +5,7 @@
 -- TEXT NOT NULL for tenant isolation on every table (no nullable UUIDs),
 -- and all indexes co-located with the table they serve.
 --
--- § 60 Abs. 6 MsbG requires 5 decimal place kWh precision.
+-- § 147 Abs. 1 AO / GoBD require a billed quantity to be recorded exactly; NUMERIC(18,5) matches the MSCONS MIG's decimal capability.
 -- GDPR Art. 32 requires per-tenant data isolation on every table.
 -- The authoritative `meter_reads` store (hot Postgres + cold Iceberg) and the
 -- ESA `esa_typ2_reads` store are owned by the `meterstore` crate, not this file.
@@ -85,7 +85,7 @@ CREATE INDEX mbp_tenant_malo_v2
     ON meter_billing_periods (tenant, malo_id, period_from, period_to)
     WHERE tenant <> '';
 
--- ── Bitemporal corrections (§ 60 Abs. 6 MsbG audit trail) ──────────────────────────
+-- ── Bitemporal corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail) ──────────────────────────
 
 CREATE TABLE meter_read_corrections (
     correction_id    UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -205,8 +205,13 @@ CREATE INDEX ablese_anlass_rolle   ON ablese_auftraege (anlass, auftraggeber_rol
 
 -- ── iMSys/SMGW direct push session deduplication ────────────────────────────
 
+-- The key is `(tenant, session_id)`, not `session_id` alone. Every read here is
+-- already tenant-scoped — two tenants may legitimately mint the same session id
+-- (an SMGW serial plus a timestamp is not globally unique) — but with a
+-- tenant-blind primary key the ingest upsert's `ON CONFLICT` landed on the other
+-- tenant's row and overwrote its status and quality summary.
 CREATE TABLE direct_push_sessions (
-    session_id      TEXT        PRIMARY KEY,
+    session_id      TEXT        NOT NULL,
     malo_id         TEXT        NOT NULL,
     source          TEXT        NOT NULL DEFAULT 'DIRECT_PUSH',
     obis_code       TEXT,
@@ -216,27 +221,40 @@ CREATE TABLE direct_push_sessions (
     status          TEXT        NOT NULL DEFAULT 'committed'
                         CHECK (status IN ('committed','partial','failed')),
     quality_summary JSONB,
+    -- The undecoded uplink frame, for the IoT door (LoRaWAN / wM-Bus). Network
+    -- server codecs are mutable and carry no version, so the stored value can
+    -- only be re-derived from the original frame.
+    raw_payload     TEXT,
     tenant          TEXT        NOT NULL,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, session_id)
 );
 
-CREATE INDEX dps_malo   ON direct_push_sessions (malo_id, created_at DESC);
-CREATE INDEX dps_tenant ON direct_push_sessions (tenant);
+CREATE INDEX dps_malo   ON direct_push_sessions (tenant, malo_id, created_at DESC);
 
 -- ── Gas quality data ─────────────────────────────────────────────────────────
--- Brennwert + Zustandszahl per MaLo per period (PID 13007).
+-- Brennwert + Zustandszahl per MaLo per period (PID 13007), written by
+-- `record_gas_quality` on every Gasbeschaffenheit delivery.
+--
+-- Both factors are nullable: a delivery may carry only `QTY+Z08` (Brennwert) or
+-- only `QTY+Z10` (Zustandszahl), and a NOT NULL pair forced the handler to
+-- discard a half delivery rather than record what arrived. At least one must be
+-- present, or the row records nothing.
 
 CREATE TABLE gas_quality_data (
     id                   UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
     malo_id              TEXT          NOT NULL,
     period_from          DATE          NOT NULL,
     period_to            DATE          NOT NULL,
-    brennwert_kwh_per_m3 NUMERIC(10,4) NOT NULL,
-    zustandszahl         NUMERIC(8,4)  NOT NULL,
+    brennwert_kwh_per_m3 NUMERIC(10,4),
+    zustandszahl         NUMERIC(8,4),
     source_pid           INTEGER,
     received_at          TIMESTAMPTZ   NOT NULL DEFAULT now(),
     tenant               TEXT          NOT NULL,
-    CONSTRAINT gqd_period_forward CHECK (period_to >= period_from)
+    CONSTRAINT gqd_period_forward CHECK (period_to >= period_from),
+    CONSTRAINT gqd_has_a_value CHECK (
+        brennwert_kwh_per_m3 IS NOT NULL OR zustandszahl IS NOT NULL
+    )
 );
 
 CREATE UNIQUE INDEX gqd_malo_period ON gas_quality_data (malo_id, period_from, period_to, tenant);
@@ -355,7 +373,7 @@ CREATE TABLE substitute_value_log (
                             'ZeroFill','LastValueCarryForward','ManualEntry'
                         )),
     reason          TEXT,
-    -- Operator who authorised the Ersatzwert (§ 60 Abs. 6 MsbG attributability).
+    -- Operator who authorised the Ersatzwert (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) attributability).
     created_by      TEXT,
     created_at      TIMESTAMPTZ   NOT NULL DEFAULT now(),
     tenant          TEXT          NOT NULL,
@@ -366,25 +384,14 @@ CREATE INDEX svl_malo_dtm ON substitute_value_log (malo_id, dtm_from, dtm_to);
 CREATE INDEX svl_tenant   ON substitute_value_log (tenant);
 CREATE INDEX svl_method   ON substitute_value_log (method);
 
--- ── Meter exchange events ────────────────────────────────────────────────────
-
-CREATE TABLE meter_exchange_events (
-    exchange_id           UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
-    melo_id               TEXT          NOT NULL,
-    old_meter_serial      TEXT          NOT NULL,
-    old_final_reading_kwh NUMERIC(18,5) NOT NULL,
-    new_meter_serial      TEXT          NOT NULL,
-    new_first_reading_kwh NUMERIC(18,5) NOT NULL,
-    exchange_date         DATE          NOT NULL,
-    exchange_at           TIMESTAMPTZ   NOT NULL,
-    triggered_by_pid      INTEGER,
-    insrpt_process_id     TEXT,
-    performed_by          TEXT,
-    tenant                TEXT          NOT NULL
-);
-
-CREATE INDEX mee_melo_date ON meter_exchange_events (melo_id, exchange_date);
-CREATE INDEX mee_tenant    ON meter_exchange_events (tenant);
+-- ── Gerätewechsel: not an edmd table ─────────────────────────────────────────
+--
+-- `meter_exchange_events` used to be declared here and was never read or
+-- written by any code path — a WiM Gerätewechsel is device master data, which
+-- `marktd` owns (see the marktd/edmd boundary: marktd owns MaLo/MeLo/Zähler/
+-- Gerät/SMGW identity, edmd owns interval data). An empty table that looks like
+-- the system of record for meter exchanges is worse than none, so it is gone
+-- rather than left to be discovered by the first integration that trusts it.
 
 -- ── GDPR Art. 17 erasure tracking ────────────────────────────────────────────
 --
@@ -405,7 +412,7 @@ CREATE TABLE gdpr_deletions (
     CONSTRAINT gdpr_unique_malo_tenant UNIQUE (malo_id, tenant)
 );
 
--- ── BSI TR-03109 SMGW session registry (MsbG §21c / §14a EnWG) ──────────────
+-- ── BSI TR-03109 SMGW session registry (§ 25 MsbG / §14a EnWG) ──────────────
 --
 -- One row per SMGW device (by malo_id + tenant).  The full `SmgwSession` is
 -- stored as JSONB so the `metering::SmgwSession` struct can be round-tripped
@@ -441,49 +448,114 @@ CREATE INDEX smgw_last_contact   ON smgw_sessions (tenant, last_contact_at DESC)
 --   SELECT ... WHERE session @> '{"status":"OPERATIONAL"}'
 CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
 
--- ── §14a Fernsteuerbarkeit compliance audit log ───────────────────────────────
+-- ── §14a Fernsteuerbarkeit compliance — open-issue register ──────────────────
 --
--- Append-only log of every compliance issue detected by the background worker
--- or the on-demand compliance scan (`POST /api/v1/smgw/compliance/scan`).
--- Each row corresponds to one emitted `de.messwert.cls.compliance-issue` CloudEvent.
+-- **A register of what is wrong now, not a log of every time we looked.**
+--
+-- This was an append-only log, and the daily sweep wrote one row per open issue
+-- per sweep and emitted one CloudEvent to match. A gateway sitting on an expired
+-- certificate therefore produced a `de.messwert.cls.compliance-issue` every day
+-- for as long as nobody fixed it — for a fleet, an unbounded event stream that
+-- says the same thing forever, and a table that grows without limit. Worse, the
+-- fleet list counted rows in the last 24 h and called that "issues", so the
+-- number measured the sweep cadence rather than the fleet.
+--
+-- The identity of an issue is therefore `(tenant, device_id, issue_type,
+-- cert_serial, channel_id)` — deliberately **not** `days_to_expiry`, which
+-- changes every day and is the reason a naive key would still re-fire. An issue
+-- is opened once, re-sighted silently, and resolved when a sweep no longer finds
+-- it. Events fire on the transitions, which is what an operator can act on.
+--
+-- `cert_serial` and `channel_id` are NOT NULL DEFAULT '' so they can sit in the
+-- key: a NULL would not compare equal to itself and every sweep would insert a
+-- new row, reintroducing exactly the defect this shape removes.
 --
 -- `issue_type` maps to the MSB's legal exposure:
---   CERT_EXPIRED        — BNetzA can impose fines; §14a eligibility lost
---   CERT_EXPIRING       — 30-day advance warning; MSB must renew
---   TLS_CERT_MISSING    — SMGW unreachable via SMGW Admin Protocol
---   CLS_NOT_COMPLIANT   — §14a Konfigurationsprodukt not assigned; DSO control impossible
---   COMMUNICATION_FAULT — No contact > 2h; § 60 Abs. 2 MsbG substitute values required
---   GATEWAY_REVOKED     — Security incident; immediate replacement required (MsbG §29)
+--   CERT_EXPIRED        — §14a eligibility lost; the SM-PKI chain no longer validates
+--   CERT_EXPIRING       — inside the operator's renewal warning window
+--   TLS_CERT_MISSING    — SMGW unreachable over the Admin interface (BSI TR-03109-4)
+--   CLS_NOT_COMPLIANT   — §14a Konfigurationsprodukt not assigned (BK6-22-300)
+--   COMMUNICATION_FAULT — gateway silent past the threshold; § 60 Abs. 2 MsbG
+--   GATEWAY_REVOKED     — security incident; § 25 MsbG reporting duty
 
-CREATE TABLE cls_compliance_log (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    malo_id         TEXT        NOT NULL,
-    device_id       TEXT        NOT NULL,
-    issue_type      TEXT        NOT NULL CHECK (issue_type IN (
-                        'CERT_EXPIRED','CERT_EXPIRING','TLS_CERT_MISSING',
-                        'CLS_NOT_COMPLIANT','COMMUNICATION_FAULT','GATEWAY_REVOKED'
-                    )),
-    severity        TEXT        NOT NULL CHECK (severity IN ('CRITICAL','WARNING')),
-    cert_serial     TEXT,           -- for CERT_* issues
-    cert_type       TEXT,           -- 'TLS', 'SIG', 'ENC', 'KEY_AGREEMENT'
-    days_to_expiry  INTEGER,        -- negative = already expired
-    channel_id      TEXT,           -- for CLS_NOT_COMPLIANT issues
-    details         JSONB,          -- full issue context
-    detected_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
-    cloud_event_id  TEXT,           -- CloudEvent `id` of emitted event
-    tenant          TEXT        NOT NULL
+CREATE TABLE cls_compliance_issues (
+    tenant            TEXT        NOT NULL,
+    device_id         TEXT        NOT NULL,
+    issue_type        TEXT        NOT NULL CHECK (issue_type IN (
+                          'CERT_EXPIRED','CERT_EXPIRING','TLS_CERT_MISSING',
+                          'CLS_NOT_COMPLIANT','COMMUNICATION_FAULT','GATEWAY_REVOKED'
+                      )),
+    -- Part of the identity: one expiring certificate is not another.
+    cert_serial       TEXT        NOT NULL DEFAULT '',
+    -- Part of the identity: one non-compliant CLS channel is not another.
+    channel_id        TEXT        NOT NULL DEFAULT '',
+
+    malo_id           TEXT        NOT NULL,
+    severity          TEXT        NOT NULL CHECK (severity IN ('CRITICAL','WARNING')),
+    cert_type         TEXT,           -- 'TLS', 'SIG', 'ENC', 'KEY_AGREEMENT'
+    days_to_expiry    INTEGER,        -- negative = already expired; refreshed each sweep
+    details           JSONB,          -- full issue context as last seen
+
+    first_detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- Set when a sweep no longer finds the issue. A later recurrence reopens the
+    -- row and restarts `first_detected_at`, so "how long has this been broken"
+    -- answers about the current episode rather than the first one ever.
+    resolved_at       TIMESTAMPTZ,
+    cloud_event_id    TEXT,
+
+    PRIMARY KEY (tenant, device_id, issue_type, cert_serial, channel_id)
 );
 
--- Fast lookups for compliance dashboard and agentd smgw-diagnostics-agent:
-CREATE INDEX ccl_malo_detected  ON cls_compliance_log (malo_id, detected_at DESC);
-CREATE INDEX ccl_tenant_recent  ON cls_compliance_log (tenant, detected_at DESC);
-CREATE INDEX ccl_open_critical  ON cls_compliance_log (tenant, issue_type, detected_at DESC)
-    WHERE severity = 'CRITICAL';
-CREATE INDEX ccl_issue_type     ON cls_compliance_log (issue_type, detected_at DESC);
+-- The fleet dashboard's only question: what is open right now?
+CREATE INDEX cci_open ON cls_compliance_issues (tenant, severity, first_detected_at DESC)
+    WHERE resolved_at IS NULL;
+CREATE INDEX cci_malo ON cls_compliance_issues (tenant, malo_id, resolved_at);
+
+-- ── Delivery surveillance — the points that stopped ──────────────────────────
+--
+-- Every other quality mechanism here judges data that **arrived**: the V-rules
+-- run on an ingest batch, the Hampel scorer grades one, the § 60 Abs. 2
+-- confirmation loop chases estimates already written. Silence triggers none of
+-- them, so a measuring point that stops delivering was invisible until a
+-- settlement run came up short — by which time the window for re-reading or
+-- substituting the values had usually closed.
+--
+-- Like `cls_compliance_issues`, this is a register of what is wrong now rather
+-- than a log of every time we looked: one row per (tenant, MaLo), opened once,
+-- re-sighted silently, resolved when a sweep finds the point delivering again.
+-- Events fire on the transitions.
+
+CREATE TABLE delivery_surveillance (
+    tenant            TEXT        NOT NULL,
+    malo_id           TEXT        NOT NULL,
+    -- SILENT: nothing arrived for longer than the threshold.
+    -- UNDER_COVERED: still delivering, but too little of the window to settle on.
+    state             TEXT        NOT NULL CHECK (state IN ('SILENT','UNDER_COVERED')),
+    -- End of the newest interval seen, and the gap from it to the sweep.
+    last_interval_end TIMESTAMPTZ,
+    hours_silent      BIGINT      NOT NULL DEFAULT 0,
+    -- Share of the window spanned by intervals. Deliberately a *duration* ratio,
+    -- not an interval count: a point that legitimately moved from quarter-hours
+    -- to hours has a quarter of the intervals and the same coverage.
+    coverage_pct      NUMERIC(5,2),
+    interval_count    BIGINT      NOT NULL DEFAULT 0,
+
+    first_detected_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    resolved_at       TIMESTAMPTZ,
+
+    PRIMARY KEY (tenant, malo_id)
+);
+
+CREATE INDEX ds_open ON delivery_surveillance (tenant, state, first_detected_at)
+    WHERE resolved_at IS NULL;
 
 -- ── SMGW certificate expiry alert dedup ──────────────────────────────────────
 -- One row per (certificate, threshold tier) so each 90/30/7-day tier emits
--- exactly once as the cert ages (BSI TR-03109-4 §6.3). `valid_to` is part of the
+-- exactly once as the cert ages. The ladder is operational, not statutory: BSI
+-- TR-03109-4 binds certificate runtimes and the Root-CP fixes the renewal lead
+-- time. `valid_to` is part of the
 -- key so a renewed certificate (new expiry date) gets a fresh set of alerts.
 -- `emitted = false` records a tier that was passed silently because a more urgent
 -- tier fired in the same sweep (e.g. a cert first seen already inside 7 days).

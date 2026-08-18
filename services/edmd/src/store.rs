@@ -44,8 +44,9 @@ pub use meterstore::WarehouseAuth;
 
 use crate::domain::validation::ValidatedReads;
 use crate::domain::{
-    BillingPeriodQuery, CorrectionRecord, ImbalanceReport, Messtyp, MeterBillingPeriod,
-    MeterDataReceipt, MeterRead, QualityFlag, Sparte, TimeSeriesQuery, Typ2DeliveryPath, Typ2Read,
+    BillingPeriodQuery, CorrectionRecord, EnergyDirection, ImbalanceReport, Messtyp,
+    MeterBillingPeriod, MeterDataReceipt, MeterRead, QualityFlag, Sparte, TimeSeriesQuery,
+    Typ2DeliveryPath, Typ2Read,
     error::EdmError,
     messtyp_as_str, messtyp_from_str,
     repository::{TimeSeriesRepository, Typ2Repository},
@@ -257,17 +258,35 @@ async fn table_builder(
         .iter()
         .map(|s| s.as_str())
         .collect();
+    let delivery_paths: Vec<&str> = crate::domain::Typ2DeliveryPath::ALL
+        .iter()
+        .map(|p| p.as_str())
+        .collect();
     let mut config = TableConfig::new(table_name)
         .partition_step(tiering.partition_step)
         .archival_step(tiering.archival_step)
         .settlement_lag(tiering.settlement_lag)
         .identity_column(Field::new("tenant", DataType::Utf8, false))
-        .attribute_column(meterstore::coded_column("source", &source_codes, true))
-        .attribute_column(Field::new("sender_mp_id", DataType::Utf8, true))
-        .attribute_column(Field::new("allocation_version", DataType::Utf8, true));
-    if with_subject {
-        config = config.subject_column("subject_ref");
-    }
+        .attribute_column(Field::new("sender_mp_id", DataType::Utf8, true));
+    config = if with_subject {
+        // The authoritative store: ingestion provenance and the MaBiS delivery
+        // label, plus the GDPR subject reference.
+        config
+            .attribute_column(meterstore::coded_column("source", &source_codes, true))
+            .attribute_column(Field::new("allocation_version", DataType::Utf8, true))
+            .subject_column("subject_ref")
+    } else {
+        // The ESA Typ-2 stream carries neither — but it does carry the transport
+        // it arrived on (Codeliste 1.4 Kap. 4.6: MSCONS backend vs. direct from
+        // the SMGW over SM-PKI). Without the column the field was write-only:
+        // every Typ-2 value read back as `MSCONS_BACKEND` whatever it was
+        // delivered by, and the model documented a column that did not exist.
+        config.attribute_column(meterstore::coded_column(
+            "delivery_path",
+            &delivery_paths,
+            true,
+        ))
+    };
     let config = config.build()?;
 
     // `table_provider` eagerly loads the cold table's schema, so the table must
@@ -326,8 +345,76 @@ impl MeterStoreTimeSeriesRepository {
         &self.store
     }
 
+    /// Append a value **edmd itself authored**, ensuring it becomes the current one.
+    ///
+    /// Ordinary ingest must not do this: a delivery that arrives late is
+    /// legitimately shadowed by a newer one, and forcing it to win would let a
+    /// replayed original supersede the correction that fixed it. But an operator
+    /// correction (`POST /api/v1/corrections/{malo_id}`) and a § 60 Abs. 2
+    /// Ersatzwert are not deliveries — they are edmd asserting a value *now*,
+    /// about a slot whose current content it has just read and judged unusable.
+    /// They have to take effect.
+    ///
+    /// They could not. Neither carries an MSCONS version, so both fell back to
+    /// [`version_of`]'s transaction-time millisecond value — 13 digits,
+    /// deliberately one short of the ≥ 14 MSCONS mandates so that a stated
+    /// version always outranks a fallback. That rule is right for a delivery and
+    /// exactly backwards here: against any reading that *did* arrive with a
+    /// stated version, the correction resolved to `Effect::Shadowed` and the
+    /// original stayed current. Nothing failed. The audit row was still written,
+    /// the § 60 confirmation still closed as `BESTAETIGT`, the billing-period
+    /// cache was still invalidated — and the recomputed aggregate returned the
+    /// uncorrected value, because it never changed. The § 147 AO trail recorded a
+    /// correction that had not happened, which is worse than refusing one.
+    ///
+    /// So the write asserts itself against the incumbent instead of guessing a
+    /// magnitude: append, read the effect off the store's own report, and on
+    /// `Shadowed`/`Duplicate` re-append one above the version that actually
+    /// holds. The incumbent comes from [`Displacement::superseded`], which is
+    /// populated for those effects precisely so a caller can see that its write
+    /// did not take. That is race-free in the way a read-then-write is not — the
+    /// report describes the state the write itself observed — and it needs no
+    /// assumption about how many digits an operator's versions run to.
+    ///
+    /// [`Displacement::superseded`]: meterstore::session::Displacement::superseded
+    async fn append_superseding(
+        &self,
+        read: &MeterRead,
+        subject: &str,
+    ) -> Result<Option<meterstore::session::Displacement>, EdmError> {
+        // One retry is enough for an uncontended write; the rest cover another
+        // writer landing a higher version between our append and our retry.
+        const ATTEMPTS: u8 = 4;
+        let mut forced: Option<Version> = None;
+        for _ in 0..ATTEMPTS {
+            let stored = read_to_stored_at(read, forced)?
+                .with_extra("subject_ref", ScalarValue::Utf8(Some(subject.to_owned())));
+            let outcome = self.store.append(&[stored]).await.map_err(store_err)?;
+            let Some(d) = outcome.displacements.into_iter().next() else {
+                // No displacement reported: nothing contended the slot.
+                return Ok(None);
+            };
+            if d.effect.changed_current_value() {
+                return Ok(Some(d));
+            }
+            // Shadowed or Duplicate — an existing version still wins. Re-assert
+            // directly above it.
+            let Some(prior) = d.superseded.as_ref() else {
+                return Ok(Some(d));
+            };
+            let next = prior.version.version().get().saturating_add(1);
+            forced = Some(Version::new(next).map_err(store_err)?);
+        }
+        Err(EdmError::Internal(format!(
+            "could not make an edmd-authored value current for MaLo {malo} at {from}: \
+             {ATTEMPTS} attempts were each outranked by a higher stored version",
+            malo = read.malo_id,
+            from = read.dtm_from,
+        )))
+    }
+
     /// As [`TimeSeriesRepository::query`], but reading the data **as it was known
-    /// at** `as_of` — the § 60 Abs. 6 MsbG point-in-time (bitemporal)
+    /// at** `as_of` — the § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time (bitemporal)
     /// reconstruction.
     ///
     /// Backed by meterstore's `as_known_at`, which pins the row-level `recorded_at`
@@ -402,7 +489,32 @@ fn version_of(mscons: Option<u128>, recorded_at: OffsetDateTime) -> Result<Versi
     }
 }
 
+/// The unit a stored quantity is expressed in — always the Sparte's **billing**
+/// unit, never its measured one.
+///
+/// Every ingest door converts gas from the m³ its register counts into kWh_Hs
+/// before the value reaches the store (§ 25 Nr. 4 MessEV / DVGW G 685), so the
+/// column holds kWh and must say kWh. Labelling it `CubicMetre` — the *measured*
+/// unit — described a gas reading as roughly a tenth of itself to every consumer
+/// that trusts the unit: the BO4E `Mengeneinheit` on `Zeitreihe`/`Energiemenge`,
+/// and anything reading the cold tier through the Iceberg facade. Water is the
+/// one Sparte whose measured and billed unit coincide (m³), so it is unaffected;
+/// heat registers kWh_th on-device and needs no conversion either.
+fn stored_unit(sparte: Sparte) -> MeasurementUnit {
+    sparte.billing_unit()
+}
+
 fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
+    read_to_stored_at(r, None)
+}
+
+/// [`read_to_stored`], optionally overriding the version the delivery resolves
+/// under.
+///
+/// The override exists for values **edmd itself authors** — an operator
+/// correction and a § 60 Abs. 2 Ersatzwert — which must supersede whatever
+/// currently holds. See [`MeterStoreTimeSeriesRepository::append_superseding`].
+fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSeries, EdmError> {
     let obis: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| ObisCode::parse(s).ok());
     let interval = MeterInterval {
         from: r.dtm_from,
@@ -416,7 +528,10 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
     let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
     let scope = VersionScope::for_interval(&operator, r.dtm_from).map_err(store_err)?;
     let recorded_at = r.valid_from_tx.unwrap_or_else(OffsetDateTime::now_utc);
-    let version = version_of(r.mscons_version, recorded_at)?;
+    let version = match version {
+        Some(v) => v,
+        None => version_of(r.mscons_version, recorded_at)?,
+    };
 
     let source = MeasurementSource::Mscons {
         pid: r.pid,
@@ -439,17 +554,13 @@ fn read_to_stored(r: &MeterRead) -> Result<StoredSeries, EdmError> {
         })
         .transpose()?;
 
-    let unit = match r.sparte {
-        Sparte::Gas | Sparte::Wasser => MeasurementUnit::CubicMetre,
-        _ => MeasurementUnit::KiloWattHour,
-    };
     Ok(StoredSeries::of(
         r.sparte,
         series,
         ScopedVersion::new(scope, version),
         recorded_at,
     )
-    .in_unit(unit)
+    .in_unit(stored_unit(r.sparte))
     .with_extra("tenant", ScalarValue::Utf8(Some(r.tenant.clone())))
     // Provenance the MeasurementSeries cannot carry — recovered verbatim on
     // read-back rather than defaulted (see `series_to_reads`).
@@ -491,12 +602,17 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         if reads.is_empty() {
             return Ok(());
         }
+        // Which door this batch came in by. Every caller builds a batch from one
+        // ingest path, so the first row names it for the whole write; it is what
+        // the § 147 AO audit rows below are attributed to.
+        let batch_source = reads[0].source;
         // Enrol each distinct MaLo as an erasure subject and stamp the pseudonymous
         // reference on every row it owns. meterstore refuses a write whose
         // subject_ref does not resolve to a live mapping, and Article 17 erasure
         // works by destroying that mapping — so registration has to precede the
         // append. `register` is idempotent, so a re-ingest is one lookup per MaLo.
         let mut stored: Vec<StoredSeries> = Vec::with_capacity(reads.len());
+        let mut refs: Vec<String> = Vec::with_capacity(reads.len());
         let mut subjects: HashMap<String, String> = HashMap::new();
         for r in reads {
             let natural = subject_natural_id(&r.tenant, &r.malo_id);
@@ -515,18 +631,77 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 }
             };
             stored.push(
-                read_to_stored(r)?.with_extra("subject_ref", ScalarValue::Utf8(Some(subject))),
+                read_to_stored(r)?
+                    .with_extra("subject_ref", ScalarValue::Utf8(Some(subject.clone()))),
             );
+            refs.push(subject);
         }
 
         // Route the whole batch through `append`: it splits current vs late
         // (below-watermark) intervals across the two tiers, and returns the
         // displacements that DRIVE the § 60 audit — no separate re-read of prior
         // state (which would race exactly when two corrections arrive together).
-        let outcome = self.store.append(&stored).await.map_err(store_err)?;
+        //
+        // A batch edmd **authored** takes the other route. A § 60 Abs. 2
+        // Ersatzwert stands in for a reading the substitution logic has already
+        // judged unusable, so it has to become the current value; delivered
+        // through the plain batch append it was silently outranked by any
+        // `FAULTY` reading that carried a stated MSCONS version — which is
+        // exactly the case Ersatzwertbildung exists for. See
+        // [`Self::append_superseding`].
+        let mut displacements = self
+            .store
+            .append(&stored)
+            .await
+            .map_err(store_err)?
+            .displacements;
+
+        // Repair the writes that did not take.
+        //
+        // The batch append stays the fast path — one round trip for the whole
+        // batch, which a month of quarter-hourly Ersatzwerte very much needs — and
+        // only the intervals reported as `Shadowed`/`Duplicate` are re-asserted
+        // individually. In ordinary traffic that is none of them.
+        if batch_source.is_edmd_authored() {
+            // Match a displacement back to the read that produced it by identity,
+            // not by position: `append` documents one entry per interval but not
+            // the order, and re-asserting the wrong interval would write one
+            // value over another's slot.
+            //
+            // The register is keyed on its **canonical** spelling, because that is
+            // what the store reports back: a read carrying `1-0:1.8.0*255` comes
+            // back as `1-0:1.8.0`, and matching the raw string would miss it and
+            // skip the repair without a word.
+            let by_key: HashMap<(&str, String, OffsetDateTime), (&MeterRead, &String)> = reads
+                .iter()
+                .zip(&refs)
+                .map(|(r, subject)| {
+                    (
+                        (
+                            r.malo_id.as_str(),
+                            normalise_obis(r.obis_code.as_deref()),
+                            r.dtm_from,
+                        ),
+                        (r, subject),
+                    )
+                })
+                .collect();
+            for slot in &mut displacements {
+                if slot.effect.changed_current_value() {
+                    continue;
+                }
+                let key = (slot.malo_id.as_str(), slot.obis_code.clone(), slot.from);
+                let Some((read, subject)) = by_key.get(&key).copied() else {
+                    continue;
+                };
+                if let Some(d) = self.append_superseding(read, subject).await? {
+                    *slot = d;
+                }
+            }
+        }
 
         // ── § 60 Abs. 6 audit + § 60 Abs. 2 confirmation, from displacements ──
-        for d in &outcome.displacements {
+        for d in &displacements {
             if !d.effect.changed_current_value() {
                 continue; // Shadowed / Duplicate: nothing became current.
             }
@@ -538,17 +713,17 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .unwrap_or_default();
 
             if let Some(prior) = d.superseded.as_ref() {
-                // A prior value stopped being current → immutable audit row
-                // (§ 60 Abs. 6 MsbG). Reconstructed from the write's own report,
-                // never from a second read.
+                // A prior value stopped being current → immutable audit row.
+                // § 146 Abs. 4 AO requires the superseded figure to stay
+                // recoverable; the row is reconstructed from the write's own
+                // report, never from a second read (which would race exactly
+                // when two corrections arrive together).
                 sqlx::query(
                     r"INSERT INTO meter_read_corrections
                           (malo_id, dtm_from, dtm_to, obis_code_norm,
                            original_kwh, original_quality, corrected_kwh, corrected_quality,
                            reason, source, corrected_by, tenant)
-                      VALUES ($1,$2,$9,$3,$4,$5,$6,$7,
-                              'Neulieferung überschreibt gespeichertes Intervall (§ 60 Abs. 6 MsbG)',
-                              'MSCONS_UPDATE','edmd-ingest',$8)",
+                      VALUES ($1,$2,$9,$3,$4,$5,$6,$7,$10,$11,$12,$8)",
                 )
                 .bind(&d.malo_id)
                 .bind(d.from)
@@ -559,6 +734,13 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .bind(quality_to_str(d.written.quality))
                 .bind(&tenant)
                 .bind(d.to)
+                .bind(format!(
+                    "Neulieferung über {door} überschreibt gespeichertes Intervall \
+                     (§ 146 Abs. 4 AO)",
+                    door = batch_source.as_str()
+                ))
+                .bind(correction_source_of(batch_source))
+                .bind(format!("edmd-ingest:{}", batch_source.as_str()))
                 .execute(&self.pool)
                 .await
                 .map_err(store_err)?;
@@ -570,7 +752,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 QualityFlag::Measured | QualityFlag::Corrected => {
                     sqlx::query(
                         r"UPDATE estimated_read_confirmations
-                          SET status='BESTAETIGT', resolved_at=now(), resolved_by='meterstore-ingest'
+                          SET status='BESTAETIGT', resolved_at=now(), resolved_by=$5
                           WHERE tenant=$4 AND malo_id=$1 AND dtm_from=$2 AND obis_code_norm=$3
                             AND status IN ('OFFEN','UEBERFAELLIG')",
                     )
@@ -578,6 +760,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                     .bind(d.from)
                     .bind(&d.obis_code)
                     .bind(&tenant)
+                    .bind(batch_source.as_str())
                     .execute(&self.pool)
                     .await
                     .map_err(store_err)?;
@@ -689,14 +872,15 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         to: Date,
         tenant: &str,
         sparte: Sparte,
+        bilanziert_kwh: Decimal,
     ) -> Result<ImbalanceReport, EdmError> {
-        // Aggregate over the tier-split resolved series (§60 MMM). The window
-        // is the commodity's balancing period: calendar days for Strom, the
+        // Aggregate over the tier-split resolved series. The window is the
+        // commodity's balancing period: calendar days for Strom, the
         // 06:00–06:00 Gastag for Gas.
         let (from_ts, to_ts) = period_window(sparte, from, to);
-        // Only billable qualities enter the MMM saldo — the FAULTY/UNKNOWN filter
-        // is pushed into the scan (§60 Abs. 2 billable set) rather than applied
-        // after materialising the series.
+        // Only billable qualities enter the saldo — the FAULTY/UNKNOWN filter is
+        // pushed into the scan rather than applied after materialising the
+        // series.
         let resolved = self
             .store
             .series(malo(malo_id)?)
@@ -717,16 +901,33 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 to: to.to_string(),
             });
         }
-        let total: Decimal = reads.iter().map(|r| r.quantity_kwh).sum();
+        // A Mehr-/Mindermengensaldo settles the **grid draw**, so the series is
+        // projected onto the Bezug registers before it is summed. The resolved
+        // read spans every channel the measuring point reported, and folding
+        // those together would settle a prosumer's Bezug plus its Einspeisung,
+        // or a dual-tariff meter's consumption twice over (`domain::register`).
+        let intervals = crate::domain::energy_intervals(&reads, EnergyDirection::Bezug);
+        let gemessen: Decimal = intervals.iter().map(|iv| iv.value).sum();
+        // The GPKE Kap. 8.4 arithmetic and its sign convention come from
+        // `metering`, not from a second implementation here.
+        let saldo = metering::compute_imbalance(gemessen, bilanziert_kwh);
+        // The worst quality that actually contributed, not a fixed `UNKNOWN` —
+        // a saldo built partly from Ersatzwerte is a different fact from one
+        // built entirely from measurements, and the settlement side must see it.
+        let quality = crate::domain::worst_quality(&intervals);
         Ok(ImbalanceReport {
             malo_id: malo_id.to_owned(),
             period_from: from,
             period_to: to,
-            lf_quantity_kwh: total,
-            nb_quantity_kwh: total,
-            delta_kwh: Decimal::ZERO,
-            delta_pct: Decimal::ZERO,
-            quality: QualityFlag::Unknown,
+            sparte,
+            gemessen_kwh: saldo.actual_kwh,
+            bilanziert_kwh: saldo.contracted_kwh,
+            mehrmenge_kwh: saldo.mehr_kwh,
+            mindermenge_kwh: saldo.minder_kwh,
+            delta_kwh: saldo.delta_kwh,
+            delta_pct: saldo.delta_pct(),
+            quality,
+            interval_count: intervals.len(),
         })
     }
 
@@ -816,29 +1017,53 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             return Ok(None);
         }
 
-        let total_kwh: Decimal = reads.iter().map(|r| r.quantity_kwh).sum();
+        // The Arbeitsmenge is the **Bezug**, projected onto one canonical set of
+        // registers: the resolved read spans every channel, and a prosumer's
+        // Einspeisung or a dual-tariff meter's HT/NT split beside its total would
+        // otherwise be summed into the invoiced figure (`domain::register`).
+        let intervals = crate::domain::energy_intervals(&reads, EnergyDirection::Bezug);
+        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value).sum();
+        // The tariff split, reported when the meter actually delivers one. It is
+        // read off the HT/NT registers rather than the total, so it stays `None`
+        // for a single-tariff meter instead of claiming a zero NT quantity.
+        let tariff_sum = |stage: fn(&metering::obis::ObisCode) -> bool| -> Option<Decimal> {
+            let sum: Decimal = reads
+                .iter()
+                .filter(|r| r.quality.is_billable())
+                .filter_map(|r| {
+                    let c: metering::obis::ObisCode = r.obis_code.as_deref()?.parse().ok()?;
+                    (c.is_import() && crate::domain::register::is_energy_register(c) && stage(&c))
+                        .then_some(r.quantity_kwh)
+                })
+                .sum();
+            (sum != Decimal::ZERO).then_some(sum)
+        };
+        let arbeitsmenge_ht_kwh = tariff_sum(metering::obis::ObisCode::is_ht);
+        let arbeitsmenge_nt_kwh = tariff_sum(metering::obis::ObisCode::is_nt);
         let sparte = reads.first().map_or(Sparte::Strom, |r| r.sparte);
-        let first_interval_min = reads
+        let first_interval_min = intervals
             .first()
-            .map(|r| (r.dtm_to - r.dtm_from).whole_minutes().unsigned_abs());
+            .map(|iv| (iv.to - iv.from).whole_minutes().unsigned_abs());
         let messtyp = match first_interval_min {
             Some(m) if m <= 60 => Messtyp::Rlm,
             _ => Messtyp::Slp,
         };
+        // Peak demand is a **power**: the interval's energy divided by its own
+        // length in hours. Hard-coding the ÷¼ h of a quarter-hour grid meant an
+        // hourly RLM series — legitimate, and the norm for Gas — reported no
+        // Leistungsmaximum at all, because no interval matched the filter.
         let spitzenleistung_kw = if messtyp == Messtyp::Rlm && sparte == Sparte::Strom {
-            reads
+            intervals
                 .iter()
-                .filter(|r| (r.dtm_to - r.dtm_from).whole_minutes().unsigned_abs() == 15)
-                .map(|r| r.quantity_kwh * Decimal::from(4))
+                .filter_map(|iv| {
+                    let minutes = Decimal::from((iv.to - iv.from).whole_minutes().unsigned_abs());
+                    (minutes > Decimal::ZERO).then(|| iv.value * Decimal::from(60) / minutes)
+                })
                 .max()
         } else {
             None
         };
-        let worst_quality = reads
-            .iter()
-            .map(|r| r.quality)
-            .max_by_key(|q| q.severity_rank())
-            .unwrap_or_default();
+        let worst_quality = crate::domain::worst_quality(&intervals);
 
         let result = MeterBillingPeriod {
             malo_id: q.malo_id.clone(),
@@ -847,8 +1072,8 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             messtyp,
             sparte,
             arbeitsmenge_kwh: total_kwh,
-            arbeitsmenge_ht_kwh: None,
-            arbeitsmenge_nt_kwh: None,
+            arbeitsmenge_ht_kwh,
+            arbeitsmenge_nt_kwh,
             spitzenleistung_kw,
             brennwert_kwh_per_m3: None,
             zustandszahl: None,
@@ -860,16 +1085,35 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         };
 
         // Cache the computed aggregate.
-        let _ = sqlx::query(
+        //
+        // The conflict target is the index's **column list**, not
+        // `ON CONSTRAINT mbp_tenant_period_unique`. That name belongs to a
+        // `CREATE UNIQUE INDEX`, and `ON CONFLICT ON CONSTRAINT` only accepts a
+        // *table constraint* — so PostgreSQL rejected every one of these
+        // statements with "constraint … does not exist". The error was
+        // discarded by `let _ =`, so the cache silently never populated: every
+        // billing read recomputed from the resolved series, and
+        // `GET /api/v1/billing-periods` (which used to read this table) returned
+        // an empty list to `mabis-syncd` no matter how much data was stored.
+        let cached = sqlx::query(
+            // The tariff split is cached with the total. It is read back by the
+            // cache-hit branch above, so leaving it out of the write made the
+            // *same* period answer with an HT/NT split on the computing request
+            // and without one on every request after it.
             r"INSERT INTO meter_billing_periods
                   (malo_id, period_from, period_to, messtyp, sparte,
-                   arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-              ON CONFLICT ON CONSTRAINT mbp_tenant_period_unique
-              DO UPDATE SET arbeitsmenge_kwh = EXCLUDED.arbeitsmenge_kwh,
-                            spitzenleistung_kw = EXCLUDED.spitzenleistung_kw,
-                            quality = EXCLUDED.quality,
-                            computed_at = now()",
+                   arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant,
+                   arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              ON CONFLICT (malo_id, period_from, period_to, tenant)
+              DO UPDATE SET messtyp             = EXCLUDED.messtyp,
+                            sparte              = EXCLUDED.sparte,
+                            arbeitsmenge_kwh    = EXCLUDED.arbeitsmenge_kwh,
+                            spitzenleistung_kw  = EXCLUDED.spitzenleistung_kw,
+                            quality             = EXCLUDED.quality,
+                            arbeitsmenge_ht_kwh = EXCLUDED.arbeitsmenge_ht_kwh,
+                            arbeitsmenge_nt_kwh = EXCLUDED.arbeitsmenge_nt_kwh,
+                            computed_at         = now()",
         )
         .bind(&result.malo_id)
         .bind(result.period_from)
@@ -880,34 +1124,80 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         .bind(result.spitzenleistung_kw)
         .bind(quality_to_str(result.quality))
         .bind(&q.tenant)
+        .bind(result.arbeitsmenge_ht_kwh)
+        .bind(result.arbeitsmenge_nt_kwh)
         .execute(&self.pool)
         .await;
+        // A failed cache write is not a failed read — the aggregate is correct
+        // either way — but it must be visible, not swallowed.
+        if let Err(e) = cached {
+            tracing::warn!(
+                malo_id = %q.malo_id, error = %e,
+                "edmd: could not cache the computed billing period"
+            );
+        }
 
         Ok(Some(result))
     }
 
-    async fn update_gas_quality(
+    async fn record_gas_quality(
         &self,
-        tenant: &str,
-        malo_id: &str,
-        brennwert_kwh_per_m3: Option<Decimal>,
-        zustandszahl: Option<Decimal>,
+        q: &crate::domain::GasQualityRecord,
     ) -> Result<u64, EdmError> {
-        // Business table (meter_billing_periods) — unchanged from pg/timeseries.
+        let mut tx = self.pool.begin().await.map_err(store_err)?;
+
+        // 1. The delivery itself. A re-delivery for the same period supersedes
+        //    the previous values rather than appending a second row — the grid
+        //    operator's latest published Brennwert for a month is the one that
+        //    settles it.
+        sqlx::query(
+            r"INSERT INTO gas_quality_data
+                  (malo_id, period_from, period_to, brennwert_kwh_per_m3,
+                   zustandszahl, source_pid, tenant)
+              VALUES ($1,$2,$3,$4,$5,$6,$7)
+              ON CONFLICT (malo_id, period_from, period_to, tenant) DO UPDATE
+                  SET brennwert_kwh_per_m3 =
+                          COALESCE(EXCLUDED.brennwert_kwh_per_m3,
+                                   gas_quality_data.brennwert_kwh_per_m3),
+                      zustandszahl =
+                          COALESCE(EXCLUDED.zustandszahl, gas_quality_data.zustandszahl),
+                      source_pid  = COALESCE(EXCLUDED.source_pid, gas_quality_data.source_pid),
+                      received_at = now()",
+        )
+        .bind(&q.malo_id)
+        .bind(q.period_from)
+        .bind(q.period_to)
+        .bind(q.brennwert_kwh_per_m3)
+        .bind(q.zustandszahl)
+        .bind(q.source_pid.map(|p| p as i32))
+        .bind(&q.tenant)
+        .execute(&mut *tx)
+        .await
+        .map_err(store_err)?;
+
+        // 2. Backfill cached billing-period aggregates that overlap the period
+        //    and are still missing their gas factors. Bounded by the delivery's
+        //    own period: an unqualified update patched every period the MaLo
+        //    ever had with whatever month happened to arrive last.
         let result = sqlx::query(
             r"UPDATE meter_billing_periods
               SET brennwert_kwh_per_m3 = COALESCE($2, brennwert_kwh_per_m3),
                   zustandszahl        = COALESCE($3, zustandszahl)
               WHERE malo_id = $1 AND tenant = $4
+                AND period_from <= $6 AND period_to >= $5
                 AND (brennwert_kwh_per_m3 IS NULL OR zustandszahl IS NULL)",
         )
-        .bind(malo_id)
-        .bind(brennwert_kwh_per_m3)
-        .bind(zustandszahl)
-        .bind(tenant)
-        .execute(&self.pool)
+        .bind(&q.malo_id)
+        .bind(q.brennwert_kwh_per_m3)
+        .bind(q.zustandszahl)
+        .bind(&q.tenant)
+        .bind(q.period_from)
+        .bind(q.period_to)
+        .execute(&mut *tx)
         .await
         .map_err(store_err)?;
+
+        tx.commit().await.map_err(store_err)?;
         Ok(result.rows_affected())
     }
 
@@ -917,10 +1207,25 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
     ) -> Result<Vec<uuid::Uuid>, EdmError> {
         use crate::domain::CorrectionSource;
 
+        // The audit rows commit together or not at all. They used to be written
+        // one autocommit statement at a time, so a failure half-way through a
+        // multi-interval correction left the earlier rows standing — against a
+        // documented "all or none" contract, and with no way for the caller to
+        // tell which half landed. The store appends run outside this transaction
+        // by necessity (meterstore owns its own tiers), so the ordering is:
+        // audit rows staged → intervals appended → audit committed. A crash
+        // between the append and the commit loses audit rows for values that did
+        // change, which is the recoverable direction: the version history in
+        // `meter_reads_versions` still holds both values.
+        let mut tx = self.pool.begin().await.map_err(store_err)?;
         let mut ids = Vec::with_capacity(records.len());
+        let mut touched: Vec<(String, String, OffsetDateTime, OffsetDateTime)> =
+            Vec::with_capacity(records.len());
         for rec in records {
-            // 1. Immutable audit row (§ 60 Abs. 6 MsbG) — the original value is
-            //    carried by the correction request itself.
+            // 1. Immutable audit row — the original value is carried by the
+            //    correction request itself. § 147 Abs. 1 AO / GoBD: the record of
+            //    what a billed figure used to be is a Buchungsbeleg and must stay
+            //    unveränderbar (§ 146 Abs. 4 AO).
             let source_str = match rec.source {
                 CorrectionSource::MsconsUpdate => "MSCONS_UPDATE",
                 CorrectionSource::Operator => "OPERATOR",
@@ -951,11 +1256,17 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .bind(rec.pid.map(|p| p as i32))
             .bind(&rec.tenant)
             .bind(&obis_norm)
-            .fetch_one(&self.pool)
+            .fetch_one(&mut *tx)
             .await
             .map_err(store_err)?;
             let correction_id: uuid::Uuid = row.try_get("correction_id").map_err(store_err)?;
             ids.push(correction_id);
+            touched.push((
+                rec.tenant.clone(),
+                rec.malo_id.clone(),
+                rec.dtm_from,
+                rec.dtm_to,
+            ));
 
             // 2. Append the corrected interval at a HIGHER version — the store
             //    routes it to the tier that owns the (possibly archived) interval
@@ -1011,11 +1322,13 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .register_subject(&subject_natural_id(&rec.tenant, &rec.malo_id))
                 .await
                 .map_err(store_err)?;
-            let stored = read_to_stored(&corrected)?.with_extra(
-                "subject_ref",
-                ScalarValue::Utf8(Some(subject.as_str().to_owned())),
-            );
-            self.store.append(&[stored]).await.map_err(store_err)?;
+            // A correction is edmd asserting a value, not a delivery arriving:
+            // it must become current, whatever version the reading it supersedes
+            // was delivered under. Failing here aborts the transaction, so the
+            // audit row and the discharged confirmation roll back with it rather
+            // than describing a correction that never took effect.
+            self.append_superseding(&corrected, subject.as_str())
+                .await?;
 
             // 3. § 60 Abs. 2: a corrected real value discharges the open
             //    confirmation for the slot.
@@ -1034,11 +1347,35 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .bind(&obis_norm)
                 .bind(&rec.tenant)
                 .bind(source_str)
-                .execute(&self.pool)
+                .execute(&mut *tx)
                 .await
                 .map_err(store_err)?;
             }
         }
+
+        // 4. Drop the cached billing-period aggregates the corrected intervals
+        //    fall inside. `billing_period` is read-through, so a stale cache row
+        //    is not merely old — it is what `invoicd` and `netzbilanzd` invoice
+        //    from, and it would keep serving the pre-correction total forever.
+        //    The ingest path has always done this; the correction path did not,
+        //    which made an explicit § 60 correction the one write that could not
+        //    reach a bill.
+        for (tenant, malo_id, from, to) in &touched {
+            sqlx::query(
+                r"DELETE FROM meter_billing_periods
+                  WHERE tenant = $1 AND malo_id = $2
+                    AND period_from <= $4::date AND period_to >= $3::date",
+            )
+            .bind(tenant)
+            .bind(malo_id)
+            .bind(metering::calendar::local_day(*from))
+            .bind(metering::calendar::local_day(*to))
+            .execute(&mut *tx)
+            .await
+            .map_err(store_err)?;
+        }
+
+        tx.commit().await.map_err(store_err)?;
         Ok(ids)
     }
 }
@@ -1103,22 +1440,22 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
                 })
         })
         .transpose()?;
-    let unit = match r.sparte {
-        Sparte::Gas | Sparte::Wasser => MeasurementUnit::CubicMetre,
-        _ => MeasurementUnit::KiloWattHour,
-    };
     Ok(StoredSeries::of(
         r.sparte,
         series,
         ScopedVersion::new(scope, version),
         recorded_at,
     )
-    .in_unit(unit)
+    .in_unit(stored_unit(r.sparte))
     .with_extra("tenant", ScalarValue::Utf8(Some(r.tenant.clone())))
-    // The reporting operator's MP-ID, recovered on read-back. `source` and
-    // `allocation_version` do not apply to the non-authoritative Typ-2 stream,
-    // so they stay NULL.
-    .with_extra("sender_mp_id", ScalarValue::Utf8(r.sender_mp_id.clone())))
+    // The reporting operator's MP-ID and the transport the value arrived on,
+    // both recovered on read-back. `source` and `allocation_version` do not
+    // apply to the non-authoritative Typ-2 stream and are not declared for it.
+    .with_extra("sender_mp_id", ScalarValue::Utf8(r.sender_mp_id.clone()))
+    .with_extra(
+        "delivery_path",
+        ScalarValue::Utf8(Some(r.delivery_path.as_str().to_owned())),
+    ))
 }
 
 impl Typ2Repository for MeterStoreTyp2Repository {
@@ -1149,6 +1486,26 @@ impl Typ2Repository for MeterStoreTyp2Repository {
 }
 
 // ── mapping helpers ─────────────────────────────────────────────────────────
+
+/// The `meter_read_corrections.source` category an ingest door falls into.
+///
+/// The audit row records *who* superseded a stored value. Every displacement
+/// used to be filed as `MSCONS_UPDATE` by `edmd-ingest`, so an Ersatzwert
+/// overwriting a faulty slot and an SMGW re-push correcting one both read, in the
+/// § 147 AO trail, as an EDIFACT redelivery that never happened.
+fn correction_source_of(source: crate::domain::IngestionSource) -> &'static str {
+    use crate::domain::IngestionSource as S;
+    match source {
+        S::Mscons => "MSCONS_UPDATE",
+        S::DirectPush | S::DirectGas => "IMSYS_DIRECT_PUSH",
+        S::AutoSubstitute => "AUTO_SUBSTITUTE",
+        S::Manual | S::Estimated => "OPERATOR",
+        // An API import, an IoT uplink, or a value written by the correction
+        // endpoint (which files its own row) — none of them is one of the four
+        // named categories, and guessing would put a false one in the trail.
+        S::ApiImport | S::IotPush | S::Correction => "OTHER",
+    }
+}
 
 /// The § 60 Abs. 2 MsbG billable quality set — every flag except `FAULTY` and
 /// `UNKNOWN`. Derived from [`metering::QualityFlag::is_billable`] so it cannot
@@ -1220,6 +1577,10 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
         _ => 13027,
     };
     let sender_mp_id = extra_str(&resolved.extra, "sender_mp_id");
+    let delivery_path = extra_str(&resolved.extra, "delivery_path")
+        .map_or(Typ2DeliveryPath::MsconsBackend, |p| {
+            Typ2DeliveryPath::from_db_str(&p)
+        });
     series
         .intervals
         .iter()
@@ -1234,7 +1595,7 @@ fn series_to_typ2(resolved: &meterstore::ResolvedSeries, tenant: &str) -> Vec<Ty
             sparte: resolved.sparte,
             obis_code: iv.obis_code.map(|o| o.to_string()),
             tenant: tenant.to_string(),
-            delivery_path: Typ2DeliveryPath::MsconsBackend,
+            delivery_path,
             sender_mp_id: sender_mp_id.clone(),
             received_at: None,
         })
@@ -1362,6 +1723,42 @@ mod tests {
         let smallest_stated =
             version_of(Some(10_000_000_000_000), datetime!(2020-01-01 0:00 UTC)).expect("version");
         assert!(smallest_stated.get() > fallback.get());
+    }
+
+    /// A stored quantity carries the unit it is stored *in*, which for gas is
+    /// kWh — not the m³ its register counts.
+    ///
+    /// Every ingest door applies the Brennwert conversion before the value
+    /// reaches the store, so tagging gas `CubicMetre` described the reading as
+    /// roughly a tenth of itself to everything that reads the unit: the BO4E
+    /// `Mengeneinheit` on an exported `Zeitreihe`, and any external engine
+    /// reading the cold tier through the Iceberg facade.
+    #[test]
+    fn a_stored_quantity_is_labelled_in_the_unit_it_is_stored_in() {
+        assert_eq!(
+            stored_unit(Sparte::Gas),
+            MeasurementUnit::KiloWattHour,
+            "gas is converted at ingest (§ 25 Nr. 4 MessEV) and stored as energy"
+        );
+        assert_eq!(stored_unit(Sparte::Strom), MeasurementUnit::KiloWattHour);
+        assert_eq!(
+            stored_unit(Sparte::Waerme),
+            MeasurementUnit::KiloWattHour,
+            "a heat meter integrates on-device and registers kWh_th"
+        );
+        assert_eq!(
+            stored_unit(Sparte::Wasser),
+            MeasurementUnit::CubicMetre,
+            "water is the one Sparte measured and billed in the same unit"
+        );
+        for sparte in Sparte::ALL {
+            assert_eq!(
+                stored_unit(sparte),
+                sparte.billing_unit(),
+                "{} must be stored in its settlement unit",
+                sparte.as_str()
+            );
+        }
     }
 
     /// Gas balances on the Gastag, electricity on the calendar day.

@@ -1,6 +1,6 @@
 +++
 title = "edmd Operator Guide"
-description = "edmd operator guide: Energy Data Management daemon. Stores MSCONS meter readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring (V01–V10 validation), virtual meters (§42b EnWG GGV Solarpaket I — GgvConstantAllocation CCI+ZG6 Beispiel 1 + GgvProportionalAllocation variable Beispiel 3, with Pos() cap per §42b Abs. 5), § 60 Abs. 2 MsbG substitution + forecasting, reading-order scheduling (Ablesesteuerung), MeterBillingPeriod (RLM Spitzenleistung + Gas Brennwert/Zustandszahl), Mehr-/Mindermengensaldo imbalance, BSI TR-03109 SMGW lifecycle, meterstore hot/cold tier, MCP server. meterstore-backed (PostgreSQL + Apache Iceberg), OIDC-secured, CloudEvents webhook."
+description = "edmd operator guide: Energy Data Management daemon. Stores MSCONS meter readings, iMSys direct push for §41a real-time billing, Hampel-filter quality scoring (V01–V09/V11/V12 validation), virtual meters (§42b EnWG GGV Solarpaket I — GgvConstantAllocation CCI+ZG6 Beispiel 1 + GgvProportionalAllocation variable Beispiel 3, with Pos() cap per §42b Abs. 5), § 60 Abs. 2 MsbG substitution + forecasting, reading-order scheduling (Ablesesteuerung), MeterBillingPeriod (RLM Spitzenleistung + Gas Brennwert/Zustandszahl), Mehr-/Mindermengensaldo imbalance, BSI TR-03109 SMGW lifecycle, meterstore hot/cold tier, MCP server. meterstore-backed (PostgreSQL + Apache Iceberg), OIDC-secured, CloudEvents webhook."
 weight = 27
 [extra]
 mermaid = true
@@ -14,7 +14,7 @@ Key responsibilities:
 
 - Store MSCONS meter readings (SLP and RLM) via the webhook from `marktd`.
 - Accept **iMSys / SMGW direct push** (15-min intervals in JSON, bypassing EDIFACT) for §41a real-time billing.
-- Run the **Hampel-filter quality scorer** and **V01–V10 validation engine** on all inbound interval data. Emit `de.messwert.reading.quality.warning` CloudEvents when either fires, from every ingest door.
+- Run the **Hampel-filter quality scorer** and **V01–V09/V11/V12 validation engine** on all inbound interval data. Emit `de.messwert.reading.quality.warning` CloudEvents when either fires, from every ingest door.
 - Schedule and track **reading orders** (Ablesesteuerung) for the market roles LF, MSB, NB and ESA (an ESA may order value delivery under §60 Abs. 1 MsbG). Auto-creates `INSRPT_STOERUNG` orders when a WiM INSRPT PID 23001 Störungsmeldung arrives.
 - Compute and serve **virtual meter time series** (Sum, Residual, PvSelfConsumption, GgvConstantAllocation, GgvProportionalAllocation per §42b EnWG Solarpaket I GGV community solar) on demand.
 - Generate **§ 60 Abs. 2 MsbG annual forecasts** (Jahresprognose — daily-average projection with automatic prior-year **seasonal correction** when the same window one year earlier has data) and **prior-period substitute values** for gap intervals — runs of up to three missing slots interpolate linearly between their real neighbours (the VDE-AR-N 4400 short-gap rule), longer runs use the Vergleichstag (same slot one week earlier); the audit row names the method that actually ran.
@@ -46,9 +46,9 @@ The **domain calculation logic** is provided by the external [`metering`](https:
 | Function / Type | §-basis | Used in |
 |---|---|---|
 | `gas_m3_to_kwh_hs(m3, hs, z)` | §25 Nr. 4 MessEV / DVGW G 685 | Gas direct push |
-| `aggregate(intervals, AggregationConfig)` | § 12 StromNZV | `MeterBillingPeriod` |
-| `classify_messtyp(intervals, source)` | §3/§ 12 StromNZV, §41a EnWG | iMSys classification |
-| `compute_imbalance(actual, contracted)` | § 13 StromNZV | Mehr-/Mindermengensaldo |
+| `aggregate(intervals, AggregationConfig)` | GPKE (BK6-24-174) / MaBiS | `MeterBillingPeriod` |
+| `classify_messtyp(intervals, source)` | GPKE (BK6-24-174), §41a EnWG | iMSys classification |
+| `compute_imbalance(actual, contracted)` | GPKE (BK6-24-174) Teil 1 Kap. 8.4 | Mehr-/Mindermengensaldo |
 
 ### The balancing day is not the calendar day
 
@@ -73,8 +73,8 @@ intuitive guess is wrong: the clocks change at 02:00/03:00 local, which is
 Saturday**, while electricity's long day is the Sunday. Both are pinned by
 tests.
 | `score_intervals(intervals, config)` | — | Hampel quality scoring (A/B/C/F) |
-| `validate_intervals(intervals, config)` | § 60 Abs. 2 MsbG (Plausibilisierung) | V01–V10 validation engine |
-| `resample(intervals, config)` | § 13 StromNZV, MaBiS | Hourly/daily/monthly resampling |
+| `validate_intervals(intervals, config)` | § 60 Abs. 2 MsbG (Plausibilisierung) | V01–V09/V11/V12 validation engine |
+| `resample(intervals, config)` | GPKE Teil 1 Kap. 8.4, MaBiS | Hourly/daily/monthly resampling |
 | `compute_virtual_meter(rule, sources)` | §42b EnWG (GGV); Residuallast = ordinary supply | GGV community solar, Residuallast |
 | `project_annual_consumption(intervals, _)` | § 60 Abs. 2 MsbG Jahresprognose | Annual consumption forecast |
 | `prior_period_substitutes(gap, _, _, prior, _)` | § 60 Abs. 2 MsbG | Prior-period gap filling |
@@ -98,13 +98,13 @@ graph TB
     erp["ERP / netzbilanzd<br/>mabis-syncd"]
     duckdb["DuckDB / Spark<br/>Trino / PyIceberg"]
     catalog["/api/v1/iceberg<br/>meterstore CatalogFacade<br/>(read-only · Cedar read-archive-olap)"]
-    qa["quality engine<br/>Hampel score_intervals<br/>+ V01–V10 validate_intervals"]
+    qa["quality engine<br/>Hampel score_intervals<br/>+ validate_intervals"]
 
     marktd -->|"de.mako.process.initiated (23001 INSRPT)<br/>HMAC POST /webhook"| edmd
     smgw -->|"POST /api/v1/meter-reads/rlm/{malo_id}<br/>POST /api/v1/meter-reads/gas/{malo_id}"| edmd
     edmd --> qa
     qa -->|"annotated reads (ValidatedReads)"| store
-    qa -->|"grade C/F <b>or</b> any V01–V10 finding<br/>de.messwert.reading.quality.warning"| erp
+    qa -->|"grade C/F <b>or</b> any V-rule finding<br/>de.messwert.reading.quality.warning"| erp
     edmd -->|"store_reads (version-resolved, tier-split)"| store
     edmd --> edmdpg
     edmd -->|"mounts"| catalog
@@ -240,10 +240,41 @@ history cannot mean rewriting Parquet in place. It means destroying the **subjec
 mapping**: each MaLo is enrolled as an erasure subject at ingest — a pseudonymous
 `subject_ref` stamped on every row it owns — and erasure deletes that mapping in
 meterstore's registry (`meterstore_subject_map` / `meterstore_erasures`). The
-readings survive in both tiers but become unattributable, so the § 60 Abs. 6 MsbG
+readings survive in both tiers but become unattributable, so the § 147 Abs. 1 AO
 audit trail is preserved while the personal link is gone. No external Spark/Trino
 rewrite is scheduled, and there is no `archive_deletion_pending` obligation left
 over to discharge.
+
+That covers the readings. edmd keeps a dozen tables of its own keyed on
+`malo_id`, five of them holding meter values beside it, so the same transaction
+splits them by what each row is: the **Buchungsbelege** — `meter_read_corrections`,
+`substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`,
+`gas_quality_data` — have their `malo_id` rewritten to that same subject
+reference (§ 147 Abs. 1 AO requires them kept; Art. 17 Abs. 3 lit. b DSGVO
+exempts exactly that), while the derived, operational and device tables
+(`meter_billing_periods`, `quality_assessments`, `estimated_read_confirmations`,
+`direct_push_sessions`, `smgw_sessions`, `cls_compliance_issues`,
+`delivery_surveillance`, `smgw_cert_expiry_alerts`, `virtual_meter_configs`) are
+deleted outright.
+
+`virtual_meter_configs` is the one that names a MaLo without a `malo_id` column,
+and it survived an erasure that reached every other table. It names them twice —
+`virtual_malo_id` is the derived point's own ID, and `rule_json` carries the
+**source** MaLo-IDs of the aggregation — so a community member erased under
+Art. 17 stayed named, in clear text, inside the § 42b rule of every virtual meter
+that drew on their meter. Both go, which is also the only coherent outcome: the
+subject's readings are unattributable once the mapping is destroyed, so the
+virtual meter cannot be computed either way. The source match is
+`jsonb_path_exists` with the ID as a **bound variable** rather than a `LIKE` over
+the serialised JSON — the rule variants nest their IDs under different keys, so
+the recursive wildcard covers all of them while still comparing whole values, and
+an 11-digit ID cannot match as a substring and delete a stranger's community.
+
+**§ 60 Abs. 6 MsbG points the other way.** It is a *deletion* duty — personal
+Messwerte deleted or anonymized at the latest three years after the end of the
+collection year — and destroying the subject mapping is that anonymization. It is
+not the basis for keeping an audit trail; that is § 147 Abs. 1 AO (retention) and
+§ 146 Abs. 4 AO (the original must stay recoverable after a change).
 
 ### Queries are tenant-scoped
 
@@ -287,9 +318,32 @@ displacements the append returns drive edmd's § 60 audit — the durability of 
 corrected value in the cold tier is the tiering watermark's business, not a
 per-row `archived` flag edmd maintains.
 
+**"A higher version" has to be arranged, not assumed.** Which of two deliveries
+wins is decided by the MSCONS version the network operator assigned; a delivery
+that states none falls back to arrival time in milliseconds — 13 digits,
+deliberately one short of the ≥ 14 MSCONS mandates, so a stated version always
+outranks a fallback whatever order they arrived in.
+
+That rule is right for a delivery and exactly backwards for a value **edmd
+authors**. An operator correction and a § 60 Abs. 2 Ersatzwert carry no MSCONS
+version, so both took the low fallback and were outranked by any reading that had
+arrived with a stated one: stored in the version history, never current. Nothing
+failed — the audit row was written, the § 60 confirmation closed as
+`BESTAETIGT`, the billing cache was invalidated — and the recomputed aggregate
+returned the uncorrected value, because it never changed. A § 147 AO trail that
+records a correction which did not happen is worse than one that refuses it.
+
+`IngestionSource::is_edmd_authored` separates the two kinds of write. An authored
+one appends, reads the effect off the store's own displacement report, and on
+`Shadowed`/`Duplicate` re-appends one above the version that actually holds —
+race-free in the way a read-then-write is not, since the report describes the
+state the write itself observed, and with no assumption about how many digits an
+operator's versions run to. After four contested attempts it errors, and inside
+`store_corrections` that rolls the audit row back with it.
+
 ### Substitution is atomic
 
-A substitute reading and its § 60 Abs. 6 MsbG audit row commit in one transaction. As
+A substitute reading and its § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit row commit in one transaction. As
 two independent writes a failure part-way would leave billable `SUBSTITUTED`
 values in `meter_reads` with no record of who substituted them or why.
 
@@ -332,7 +386,7 @@ reachable.
 `store_reads` carries the reading's provenance as `meterstore` **attribute
 columns** — declared once in `build_stores`, out of the merge key, folded
 from the newest delivery on read. `allocation_version` carries the MaBiS version a
-value belongs to, `sender_mp_id` carries § 60 Abs. 6 MsbG per-interval MSB
+value belongs to, `sender_mp_id` carries § 60 Abs. 1 MsbG per-interval MSB
 attribution across a WiM switch, and `source` records the ingest door. A
 `MeasurementSeries` is a channel of numbers and cannot hold these, so the typed
 read recovers them through `collect_resolved` rather than reconstructing them with
@@ -362,7 +416,7 @@ supersede.
 The repository's `store_reads` does not accept a slice of readings. It accepts a
 `ValidatedReads`, whose only constructor is `ValidatedReads::validate` and whose
 field is private to `domain::validation`. Obtaining the type *is* running
-**V01–V10**; there is no path to the store that skips it.
+**V01–V09/V11/V12**; there is no path to the store that skips it.
 
 That is a type rule rather than a convention because the failure is silent. A
 new ingest path that forgot to validate would write rows indistinguishable from
@@ -449,6 +503,13 @@ that do not. § 60 Abs. 2 MsbG authorises an Ersatzwert where no usable measurem
 exists, not in place of one, so a window overlapping billable data leaves that
 data untouched and returns those intervals in `skipped_measured`.
 
+That read is scoped to the **one register** being written to — the request's
+`obis_code`, else the point's dominant energy series. Scoped per MaLo instead, a
+prosumer's feed-in reading marked the consumption register's slot occupied and
+the gap could never be filled at all; and `fill_gaps`, handed two registers, sees
+two values at every timestamp, so a gap in one is hidden by the other's presence
+and an interpolation is bracketed by a reading from the wrong channel.
+
 Four methods are honoured: `PriorPeriodAverage`, `LinearInterpolation`,
 `ZeroFill` and `LastValueCarryForward`. Anything else is `422`.
 
@@ -467,9 +528,159 @@ Each interval records the method that actually produced it in
 `intervals[].method`, which may differ from the request: a prior-period average
 with no matching reference slot degrades to carry-forward, then to zero, and
 linear interpolation with no closing value has no slope to follow. The response
-reports `method_requested` alongside the set of `methods_applied` — a § 60 Abs. 6 MsbG
+reports `method_requested` alongside the set of `methods_applied` — a § 147 AO
 audit record naming a method that did not run would be a claim the value does not
 support.
+
+## A reading is stored in its Sparte's billing unit
+
+Gas is metered in m³ and settled in kWh. Every ingest door applies the Brennwert
+conversion (§ 25 Nr. 4 MessEV / DVGW G 685) *before* the value reaches the store,
+so what is held is energy — and the stored `unit` says so
+(`store::stored_unit(sparte) == sparte.billing_unit()`).
+
+The unit is not decoration. It travels to the BO4E `Mengeneinheit` on an exported
+`Zeitreihe` or `Energiemenge`, and into the Parquet an external engine reads
+through the Iceberg facade. Labelling a converted gas reading `m³` — the
+*measured* unit — described roughly a tenth of the real quantity to every one of
+those consumers while the number itself was correct, which is the hardest kind of
+error to notice.
+
+Water is the one Sparte measured and billed in the same unit, so it is the only
+volume in the store. Heat integrates flow × ΔT on-device and registers kWh_th.
+
+## A MaLo is a set of registers, not a series
+
+A Marktlokation does not deliver *a* series. It delivers a set of OBIS registers
+— Bezug beside Einspeisung on a prosumer, HT beside NT on a dual-tariff meter,
+Blindarbeit beside Wirkarbeit on an industrial connection — and a `meterstore`
+read **spans channels**: one series comes back carrying every register the point
+reported. Summing it is not an approximation, it is a different number.
+
+| Mixed | What the sum becomes |
+|---|---|
+| `1-0:1.8.0` + `1-0:1.8.1` + `1-0:1.8.2` | Consumption counted **twice** — the total register already *is* HT + NT |
+| `1-0:1.8.0` + `1-0:2.8.0` | Grid draw plus feed-in, a quantity with no meaning |
+| `1-0:1.8.0` + `1-0:3.8.0` | kWh plus **kvarh** |
+| any + `1-0:1.6.0` | kWh plus a **kW** peak-demand register |
+| any + `…63` | kWh plus a **fault counter** |
+
+So the decision is made once, in `domain::register`, and every path that folds
+readings into a figure goes through it — the billing period, the
+Mehr-/Mindermengensaldo, the Summenzeitreihe, the resampled Lastgang, the annual
+forecast, the Netzverlust balance, the OLAP total, the energy-sharing allocation,
+the virtual meters, and their MCP twins.
+
+**`energy_intervals(reads, direction)`** is the projection for anything that
+sums. Non-billable qualities are dropped (§ 60 Abs. 2 MsbG), registers that are
+not kWh are dropped, the other direction is dropped, and then the rule that stops
+the double count: *when a total register is present it is the answer and its
+tariff registers are dropped; when only tariff registers are present they are
+summed*. The second half is the one a naive dedup gets backwards — picking a
+single winner per slot silently discards NT consumption for every dual-tariff
+meter that does not also report a total.
+
+**`register_groups(reads)`** is the split for anything that judges a series'
+*shape*. Cadence, gaps, overlaps and the Hampel filter are single-series
+statements; flattened, registers share every timestamp, so the observed cadence
+collapses towards zero, every same-slot pair reads as an overlap, and coverage is
+multiplied by the number of registers. Validation, quality scoring and the
+delivery-surveillance sweep all split before they judge.
+
+Two boundaries are worth stating because a medium-blind rule gets them wrong:
+
+- **Value group C is a direction for electricity only.** On the gas energy code
+  `7-1:99.33.17` it is the Messgröße, so an import/export test answers `false`
+  both ways — a medium-blind filter projects every gas, water and heat series
+  onto the empty set. Those media meter a single flow out of the network, so
+  their registers are Bezug, and the tariff-stage rule is likewise
+  electricity-only.
+- **Einspeisung is never inferred.** It requires an explicit `C = 2` electricity
+  code. Bezug is what an unqualified energy quantity means — a single-register
+  delivery that never named its register is that point's consumption — but
+  reading the same silence as feed-in would put unlabelled consumption into the
+  § 51 EEG reduction, which is a guess about money.
+- **The Messart (group D) is deliberately not filtered.** Strictly `D = 8` is a
+  cumulative Zählerstand and `D = 29` the Lastgang, but in the traffic edmd
+  receives `1-0:1.8.0` is the ordinary label for a per-interval energy quantity.
+  Filtering on D would reject the most common register in the store and return
+  zero. The `D = 6` maximum register is excluded on the *unit* axis instead,
+  because `register_unit` types it `kW`.
+
+## The Mehr-/Mindermengensaldo takes both halves
+
+`GET /api/v1/imbalance/{malo_id}/{year}/{month}` **requires**
+`?bilanziert_kwh=`.
+
+The saldo compares a **measured** quantity against a **bilanzierte** one, and
+edmd holds only the first. The bilanzierte Menge is what the balancing side
+allocated to the Bilanzkreis from the load profile — a commercial figure in the
+supplier's system, not a measurement — so no amount of metering data yields it.
+Omitting it is not "assume zero"; it is "there is no comparison to make", and the
+endpoint answers `422` saying so.
+
+`gemessen_kwh` is the **Bezug**, register-projected as above. Folding in the
+point's Einspeisung or its HT/NT split beside the total does not merely add noise
+— it moves the saldo, and with it the money.
+
+```bash
+curl "http://edmd:8380/api/v1/imbalance/51238696012/2026/07?bilanziert_kwh=1000" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "gemessen_kwh":    "962.5",
+  "bilanziert_kwh":  "1000",
+  "mehrmenge_kwh":   "37.5",
+  "mindermenge_kwh": "0",
+  "delta_kwh":       "-37.5",
+  "delta_pct":       "-3.75",
+  "quality":         "MEASURED",
+  "interval_count":  2976,
+  "richtung":        "MEHRMENGE — Netzbetreiber vergütet dem Lieferanten"
+}
+```
+
+**The naming is from the network operator's side, which inverts the intuitive
+reading** (GPKE Teil 1 Kap. 8.4 Nr. 3). A customer consuming *less* than the
+profile leaves surplus energy the NB absorbed — that surplus is the
+**Mehr**menge, and the NB credits it. Consuming more is the **Minder**menge,
+which the NB invoices. Only one of the two is ever positive. The arithmetic and
+the convention are `metering::compute_imbalance`'s, shared by the REST endpoint
+and the `get_imbalance` MCP tool, so an agent and an operator cannot get
+different answers.
+
+`?sparte=gas` moves the period onto the 06:00 Gastag.
+
+`quality` is the worst flag that actually contributed. A saldo built partly from
+Ersatzwerte is a different fact from one built entirely from measurements, and
+the settlement side has to be able to see which it is.
+
+## Read windows are bounded
+
+Every materialising read endpoint defaults to the **last 31 days** and refuses a
+window wider than **732 days** — two years, which covers a Jahresabrechnung plus
+its comparison year.
+
+The defaults used to be `UNIX_EPOCH … now`, so
+`GET /api/v1/lastgang/{malo_id}` with no parameters asked for every interval ever
+stored for that MaLo across both tiers, materialised into a `Vec<MeterRead>` and
+then into BO4E JSON. At quarter-hour resolution a decade is 350 000 rows: one
+unparameterised request from a dashboard is a tenant-wide outage.
+
+A malformed `?from=` or `?to=` is a `400`. It used to be parsed with `.ok()` and
+fall back silently, so `?from=last-tuesday` returned the whole history and looked
+like a successful answer to the question the caller asked.
+
+Bulk history has three paths that stream rather than materialise, and none of
+them is bounded this way:
+
+| Path | Use |
+|---|---|
+| `Accept: application/vnd.apache.arrow.stream` | Columnar export of a Lastgang / Zeitreihe |
+| `POST /api/v1/query/sql` | DataFusion over the resolved relation, JSON or Arrow IPC |
+| `GET /api/v1/iceberg/v1/…` | External engine reads Parquet directly from object storage |
 
 ## ESA "Werte nach Typ 2" live in a separate store, unreachable from billing
 
@@ -568,6 +779,143 @@ per_tenant_requests_per_second = 100
 gateway flushing a backlog arrives all at once but fits comfortably within the
 hourly budget.
 
+## Delivery surveillance — the points that stopped
+
+Every quality mechanism above judges **data that arrived**. The V-rules run on an
+ingest batch; the Hampel scorer grades one; the § 60 Abs. 2 confirmation loop
+chases estimates already written. All of them are triggered by a delivery.
+
+Silence triggers nothing. A head-end that breaks, a gateway that loses its WAN, a
+Kafka producer redeployed onto the wrong topic — none produce an ingest, so none
+produce a validation, a grade, or an event. The measuring point simply stops
+appearing, and until now nothing in the service was looking for an absence.
+
+That failure surfaces at settlement, which is too late: the Summenzeitreihe is
+short, the Bilanzkreis carries the difference, and the window in which the values
+could still have been re-read or substituted under § 60 Abs. 2 MsbG has closed.
+
+An hourly sweep now asks the complementary question.
+
+| State | Meaning | Typical cause |
+|---|---|---|
+| `SILENT` | Newest interval ends more than `silent_after_hours` ago (default 36) | Gateway offline, head-end down, routing broken |
+| `UNDER_COVERED` | Still delivering, but under `min_coverage_pct` of the window | Partial batches, dropped intervals |
+
+```bash
+curl -s "http://edmd:8380/api/v1/surveillance/delivery?state=SILENT" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+```json
+{
+  "count": 1,
+  "points": [{
+    "malo_id":           "51238696012",
+    "state":             "SILENT",
+    "last_interval_end": "2026-08-15 06:00:00 +00:00:00",
+    "hours_silent":      74,
+    "coverage_pct":      "56.55",
+    "first_detected_at": "2026-08-16 19:00:00 +00:00:00"
+  }],
+  "legal_basis": "§ 60 Abs. 2 MsbG — a measuring point that stops delivering leaves Plausibilisierung und Ersatzwertbildung owing"
+}
+```
+
+Three decisions are deliberate:
+
+- **Coverage is a duration ratio, not an interval count.** A point that
+  legitimately moves from quarter-hours to hours has a quarter of the intervals
+  and the same coverage. Counting intervals would report every such point as
+  degraded.
+- **Only billable qualities count.** A window full of `FAULTY` intervals is not a
+  delivered window, and treating it as covered would hide exactly the case
+  § 60 Abs. 2 MsbG exists for.
+- **A point that has *never* delivered is not reported.** edmd cannot tell "meter
+  installed and broken" from "MaLo in master data, no meter yet", and guessing
+  produces one alert per unbuilt connection. That is `marktd`'s question;
+  `GET /api/v1/sharing/readiness` answers the §42c form of it.
+
+`max_events_per_sweep` (default 500) caps the burst, because one broken head-end
+can take a whole fleet dark at once. The register still records every finding and
+the response carries `suppressed`, so a fleet-wide outage cannot be mistaken for
+a handful of broken meters.
+
+## A standing fault is announced once, not once per sweep
+
+Three signals describe a *condition* rather than an occurrence: a silent
+measuring point, an open §14a fault, an expiring certificate. Each is backed by a
+**register** — `delivery_surveillance`, `cls_compliance_issues`,
+`smgw_cert_expiry_alerts` — keyed on the identity of the problem, not on when it
+was noticed, and each emits on the **transition** into and out of the state.
+
+The §14a compliance log used to work the other way: append a row and emit an event
+on every daily pass. A gateway on an expired certificate produced one CloudEvent a
+day for as long as nobody fixed it — an unbounded stream saying the same thing
+forever, a table that only grew, and a fleet dashboard whose "issues in the last
+24 h" measured the sweep cadence rather than the fleet.
+
+One consequence is load-bearing. **The watermark that decides what a sweep did
+not re-sight must come from the database clock**, because `last_seen_at` does.
+Compare it against an application timestamp and the result depends on the skew
+between two machines: a database even slightly behind closes every row in the
+same sweep that re-sighted it, so a standing fault flaps resolved/reopened
+forever and emits *both* events each pass — worse than the behaviour the register
+replaced. This is not hypothetical; it is what the integration suite caught.
+
+## Validation runs per series, with the commodity's own thresholds
+
+Two properties of the ingest validator decide whether a finding means anything.
+
+**One series per register.** The batch is split by `(Sparte, OBIS register)`
+before the rules run. V01 (gap) and V02 (overlap) are statements about a *single*
+series, and a MaLo routinely delivers several at once — import beside export on a
+prosumer MeLo, HT beside NT on a dual-tariff meter. Validated as one flat list
+those registers share every timestamp, so V02 reported each same-slot pair as an
+overlapping interval at `Error` severity, and a bidirectional delivery could not
+be ingested cleanly at all.
+
+**The thresholds are the commodity's, and the cadence is observed.** They come
+from `metering::QualityConfig::for_sparte`, not from the electricity defaults:
+
+| Sparte | Zero-run tolerance | Why |
+|---|---|---|
+| Strom | 4 intervals | A household has a standby floor; a short zero run means a dead meter |
+| Gas | 48 | Heating is seasonal — a summer week of near-zero draw is normal |
+| Wärme | 720 | Unheated months are ordinary, and the resolution is coarse |
+| Wasser | wide, with a sigma floor | A vacant flat reads exactly zero indefinitely |
+
+The cadence comes from `detect_interval_length`, not from an assumed 900 s. With
+the assumption, every interval of an hourly gas series tripped V06, and a
+one-hour hole in that series was reported as "4 missing intervals" — the right
+finding with the wrong evidence in the audit record.
+
+## The rule set is `metering`'s, and there is no V10
+
+`metering` 0.18 runs **V01–V09, V11 and V12**. V10 was a "register rollover" rule
+comparing consecutive interval energies, which is meaningless for a series of
+per-interval quantities rather than cumulative Zählerstände — for it to fire, one
+quarter-hour would have had to carry 50 MWh, or 200 MW of average load. The crate
+removed it and left the number unused so a stored `V10` finding cannot be
+silently reinterpreted as something else. Rollover is a property of a meter
+register and is detected where register readings live.
+
+| Code | Rule | Severity |
+|---|---|---|
+| V01 | Gap | Error |
+| V02 | Overlap | Error |
+| V03 | Negative energy | Error (off for a bidirectional register) |
+| V04 | Statistical outlier (Hampel) | Warning |
+| V05 | Zero run | Warning |
+| V06 | Interval length | Warning |
+| V07 | Collapsed DST hour | Error |
+| V08 | Future timestamp | Warning |
+| V09 | Non-billable quality | Error |
+| V11 | Unordered series | Warning |
+| V12 | Implausible power | Error |
+
+Nothing in edmd enumerates the rules — findings are stored by their own
+`rule_id`, so the set is whatever the crate runs.
+
 ## V07 — DST ambiguity
 
 Germany repeats local 02:00–03:00 when CEST ends, so that day has **25 hours**.
@@ -614,7 +962,7 @@ duplicate order. Two partial unique indexes back it:
 │  GET  /api/v1/deliveries/{malo_id}          ← BO4E Energiemenge           │
 │  GET  /api/v1/billing-period/{malo_id}      ← MeterBillingPeriod          │
 │  GET  /api/v1/billing-periods               ← collection (mabis-syncd)    │
-│  GET  /api/v1/imbalance/{malo_id}/{y}/{m}   ← Mehr-/Mindermengen          │
+│  GET  /api/v1/imbalance/{malo_id}/{y}/{m}?bilanziert_kwh=  ← MMM saldo    │
 │  GET  /api/v1/lastgang/{malo_id}            ← BO4E Lastgang               │
 │  GET  /api/v1/feed-in/{malo_id}             ← ¼h Einspeisung (§51 einsd)  │
 │  GET  /api/v1/zeitreihe/{malo_id}           ← BO4E Zeitreihe              │
@@ -631,7 +979,7 @@ duplicate order. Two partial unique indexes back it:
 │  POST /api/v1/meter-reads/rlm/{malo_id}     ← Strom 15-min direct push   │
 │  POST /api/v1/meter-reads/gas/{malo_id}     ← Gas direct push (m³→kWh_Hs)│
 │                                                                            │
-│  ── §14a SMGW session registry (MsbG §21c / BSI TR-03109) ─────────────  │
+│  ── §14a SMGW session registry (§ 25 MsbG / BSI TR-03109) ────────────  │
 │  PUT  /api/v1/smgw/{malo_id}                ← upsert SmgwSession          │
 │  GET  /api/v1/smgw/{malo_id}                ← session + recent issues     │
 │  GET  /api/v1/smgw                          ← fleet list with issue counts│
@@ -664,6 +1012,8 @@ duplicate order. Two partial unique indexes back it:
 │     routes → 405; engines read Parquet with their own object-store creds) │
 │                                                                            │
 │  ── § 60 Abs. 2 MsbG + §22 EnWG ──────────────────────────────────────── │
+│  GET  /api/v1/surveillance/delivery       ← points that stopped delivering │
+│  POST /api/v1/surveillance/delivery/scan  ← sweep now                      │
 │  GET  /api/v1/confirmations                 ← Schätzwert-Bestätigungen    │
 │  GET  /api/v1/netzverlust                   ← indicative grid-loss balance│
 │                                                                            │
@@ -671,7 +1021,8 @@ duplicate order. Two partial unique indexes back it:
 │  DELETE /api/v1/gdpr/erasure/{malo_id}      ← Art. 17 DSGVO erasure      │
 │                                                                            │
 │  GET  /metrics                              ← Prometheus metrics          │
-│  GET  /health/live  /health/ready                                         │
+│  GET  /health/live  /health/ready   ← the runner's (real DB ping)         │
+│  GET  /edmd/metrics                 ← edmd's own gauges                   │
 │  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)                   │
 └────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -723,7 +1074,7 @@ resolution column. The shared rule set lives in `metering::sharing`.
 | PID | Description | Direction |
 |-----|-------------|-----------|
 | 13005 | Lastgang Messwerte Strom | NB → LF |
-| 13006 | Zählerstand / Ersatzwert Strom | NB → LF |
+| 13006 | **Messwert Storno** — withdraws an earlier delivery; the receipt is recorded, the payload is not stored | NB → LF; MSB → NB/LF/ÜNB |
 | 13007 | **Gasbeschaffenheitsdaten — Brennwert + Zustandszahl** | NB → LF |
 | 13013 | Allokationsliste Gas MMMA (GaBi Gas 2.1) | NB → LF |
 | 13015 | Lastgang Summenzeitreihe SLP Strom | NB → LF |
@@ -917,8 +1268,8 @@ governs the monthly consumption *message*, not the meter.
 Head-end systems and LoRaWAN network servers that manage large gateway fleets
 stream reading batches instead of pushing per-gateway HTTP. The optional
 Kafka consumer drains such a topic through **the same path as every other
-ingest**: V01–V10 validation, quality-warning annotation, PK-idempotent
-upsert with the § 60 Abs. 6 MsbG overwrite audit trail.
+ingest**: V-rule validation, quality-warning annotation, PK-idempotent
+upsert with the § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) overwrite audit trail.
 
 ```toml
 [kafka_ingest]
@@ -960,7 +1311,7 @@ the group's first commit are a backlog to drain, not a feed to tail.
 
 The path runs the full pipeline against krafka's in-process `FakeBroker`
 (`test-broker` feature) over an actual TCP socket — produce → group join → fetch
-→ V01–V10 → audited store → offset commit, poison pill included, with no Kafka
+→ V-rules → audited store → offset commit, poison pill included, with no Kafka
 container. A dedicated end-to-end suite for it is follow-up work (the previous one
 was removed with the embedded-Iceberg storage layer it depended on).
 
@@ -1020,7 +1371,7 @@ because outlier detection doesn't require accounting precision.
 | **F** | Unusable | Block billing run |
 
 `de.messwert.reading.quality.warning` is raised on the **union of both quality
-signals** — a Hampel grade of C or F, *or* any V01–V10 finding — and by **every**
+signals** — a Hampel grade of C or F, *or* any V-rule finding — and by **every**
 ingest door: MSCONS, RLM/gas direct push, IoT push, bulk import and the Kafka
 consumer. Both halves matter. A `FAULTY` interval (V09) can carry a perfectly
 ordinary statistical profile, so grading alone misses it; and a head-end feed
@@ -1112,9 +1463,9 @@ This eliminates the risk of billing a zero-reading period after a device swap �
 | `list_overdue_reading_orders` | §40 EnWG compliance gaps |
 | `trigger_jahresablesung` | Launch or preview annual reading campaign |
 | `trigger_substitution` | Generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window |
-| `get_correction_history` | Bitemporal correction audit trail (§ 60 Abs. 6 MsbG) |
-| `validate_timeseries` | Run V01–V10 validation on stored meter reads |
-| `get_quality_assessments` | Per-batch quality history (§ 60 Abs. 6 MsbG) |
+| `get_correction_history` | Bitemporal correction audit trail (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
+| `validate_timeseries` | Run V01–V09/V11/V12 validation on stored meter reads |
+| `get_quality_assessments` | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
 | `get_summenzeitreihe` | Monthly aggregated kWh for MaBiS |
 | `get_annual_forecast` | § 60 Abs. 2 MsbG Jahresprognose |
 | `get_gas_quality` | PID 13007 Brennwert + Zustandszahl |
@@ -1296,7 +1647,7 @@ Response shape (one element per OBIS register):
 consecutive read pair (15 min → `VIERTELSTUNDE`, 60 min → `MINUTE(60)`, 1440
 min → `TAG`). RLM reads are typically 15-minute intervals.
 
-**Point-in-time reconstruction — `?as_of=RFC3339`.** § 60 Abs. 6 MsbG lets an
+**Point-in-time reconstruction — `?as_of=RFC3339`.** § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) lets an
 auditor reconstruct the exact billing basis as it stood at a past instant. Adding
 `&as_of=2026-02-05T00:00:00Z` reads the series through meterstore's
 **transaction-time axis** (`store.as_known_at`): version resolution runs under a
@@ -1376,7 +1727,7 @@ sequenceDiagram
 | `PUT` | `/api/v1/reading-orders/{id}/complete` | Record meter reading result |
 | `PUT` | `/api/v1/reading-orders/{id}/cancel` | Cancel pending order — no longer owed |
 | `PUT` | `/api/v1/reading-orders/{id}/fail` | Record an Ablesehindernis — still owed |
-| `GET` | `/api/v1/compliance/jahresablesung/{year}` | §40 Abs. 2 EnWG compliance report |
+| `GET` | `/api/v1/compliance/jahresablesung/{year}` | Jahresablesung compliance report (§ 40b Abs. 1 EnWG) |
 
 ### Cancelled vs failed
 
@@ -1421,7 +1772,7 @@ Only grade `F` blocks billing. `C` is significant but still billable, which is
 why `billing_blocked` is stored rather than derived from the letter by each
 reader.
 
-### §40 Abs. 2 EnWG compliance report
+### Jahresablesung compliance report (§ 40b Abs. 1 EnWG)
 
 `GET /api/v1/compliance/jahresablesung/{year}` reports what became of each
 order, because only `AUSGEFUEHRT` discharges the annual-reading obligation:
@@ -1442,7 +1793,7 @@ MaLo that was never scheduled has no order here at all, so the population must b
 cross-checked against `marktd` — reporting a population-based rate from edmd
 would overstate coverage.
 
-A failed `JAHRESABLESUNG` past `ausfuehrt_bis` is still a §40 Abs. 2 EnWG gap, so
+A failed `JAHRESABLESUNG` past `ausfuehrt_bis` is still a § 40b Abs. 1 EnWG gap, so
 it keeps appearing in `list_overdue_reading_orders` until the reading is
 re-dispatched or the quantity is estimated under §40a EnWG. Failing an order
 emits `de.messwert.reading.order.failed`; the reason decides whether the NB may
@@ -1635,7 +1986,7 @@ with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 |------|---------|---------|-------------|
 | `--config` / `-c` | `EDMD_CONFIG` | `edmd.toml` | Path to `edmd.toml` |
 | `--log-level` | `RUST_LOG` | `info` | Log level |
-| `--check` | `EDMD_CHECK` | `false` | Validate config + DB connectivity, then exit 0. Used by Dockerfile HEALTHCHECK. |
+| `--check` | — | — | Probe the already-running instance's `/health/ready` on loopback and exit 0/1. The Dockerfile HEALTHCHECK — no shell or curl needed in the distroless image. |
 
 ```bash
 edmd --config /etc/edmd/edmd.toml
@@ -1890,7 +2241,7 @@ with open('reads.arrows', 'rb') as f:
 | `malo_id` | `Utf8` | 11-digit Marktlokations-ID |
 | `dtm_from` | `Timestamp(µs, UTC)` | Interval start |
 | `dtm_to` | `Timestamp(µs, UTC)` | Interval end |
-| `quantity_kwh` | `Float64` | Energy in kWh |
+| `quantity_kwh` | `Decimal128(18,5)` | Energy in kWh — the storage column's exact type, not a float |
 | `quality` | `Utf8` | `MEASURED` / `ESTIMATED` / … |
 | `sparte` | `Utf8` | `STROM` / `GAS` |
 | `obis_code` | `Utf8?` | nullable |
@@ -1980,8 +2331,26 @@ value).
 
 ## §14a Fernsteuerbarkeit compliance — SMGW session registry
 
+> **The duty is § 25 MsbG**: the Smart-Meter-Gateway-Administrator is responsible
+> for the *configuration, administration, monitoring and maintenance* of the
+> intelligent metering system, and must report security deficiencies to the BSI
+> without delay. Four citations this module used to carry were wrong, and each
+> pointed a reader somewhere real but irrelevant: **§ 21c MsbG does not exist**
+> (the MsbG runs § 21 → § 22); **§ 29 MsbG** is *Ausstattung von Messstellen* —
+> the rollout obligation and its 2032 deadlines, not certificates;
+> **BK6-24-174** is GPKE, while the §14a Konfigurationsprodukt is
+> **BK6-22-300**; and **"BSI TR-03109-4 §6.3 requires renewal ≥ 30 days before
+> expiry"** was ours — the TR binds certificate *runtimes* and the Root-CP fixes
+> the lead time. The 90/30/7 ladder is an operational choice, and configurable
+> for that reason.
+>
+> `REPLACED` gateways are excluded from both sweeps. The `gateway_status` column
+> was promoted out of the JSONB precisely so that filter would be an index
+> lookup — and the filter was then never written, so hardware that had been
+> physically swapped out reported its expired certificate every day, forever.
+
 `edmd` maintains a **SMGW (Smart Meter Gateway) session registry** and runs a daily
-compliance sweep per **MsbG §21c** and **BSI TR-03109-4 §6.3**.
+compliance sweep per **§ 25 MsbG** (the GWA's monitoring duty) and **BSI TR-03109**.
 
 ### Why here?
 
@@ -1995,7 +2364,7 @@ can escalate to the MSB and ERP system automatically.
 ### Data model
 
 ```
-smgw_sessions (1) ──────────────────────────────────► cls_compliance_log (N)
+smgw_sessions (1) ──────────────────────────────────► cls_compliance_issues (N)
   malo_id (PK)          append-only audit trail
   device_id             per issue detected (CRITICAL / WARNING)
   gateway_status        ← promoted column for fast pre-filtering
@@ -2017,9 +2386,9 @@ issue types in priority order:
 | 1 | `GATEWAY_REVOKED` | **CRITICAL** | MsbG §29 — replace immediately |
 | 2 | `COMMUNICATION_FAULT` | **CRITICAL** | § 60 Abs. 2 MsbG — substitute values required after 2h silence |
 | 3 | `TLS_CERT_MISSING` | **CRITICAL** | BSI TR-03109-4 — SMGW Admin Protocol unreachable |
-| 4 | `CERT_EXPIRED` | **CRITICAL** | BSI TR-03109-4 §6.3 — §14a eligibility lost |
-| 5 | `CERT_EXPIRING` | WARNING | BSI TR-03109-4 §6.3 — 30-day renewal window |
-| 6 | `CLS_NOT_COMPLIANT` | WARNING | BK6-24-174 §4.3 — DSO load control impossible |
+| 4 | `CERT_EXPIRED` | **CRITICAL** | SM-PKI chain no longer validates — §14a eligibility lost |
+| 5 | `CERT_EXPIRING` | WARNING | Inside the configured renewal window (`[smgw] cert_warning_days`) |
+| 6 | `CLS_NOT_COMPLIANT` | WARNING | No §14a Konfigurationsprodukt (BK6-22-300) — DSO load control impossible |
 
 ### Background worker
 
@@ -2028,7 +2397,7 @@ and graceful shutdown via `CancellationToken`. On each sweep:
 
 1. Query all `smgw_sessions` for the tenant.
 2. For each session, run `check_session_compliance()` (pure — no I/O).
-3. For each issue found: insert into `cls_compliance_log` + emit `de.messwert.cls.compliance-issue`.
+3. For each issue found: insert into `cls_compliance_issues` + emit `de.messwert.cls.compliance-issue`.
 4. Tracing logs the sweep result (sessions scanned, issue count, `has_critical`).
 
 ### SMGW session API
@@ -2123,7 +2492,7 @@ the same device has open § 60 Abs. 2 MsbG substitute-value orders.
 sequenceDiagram
     participant Worker as edmd daily worker<br/>(05:00 UTC)
     participant DB as edmd PostgreSQL<br/>(smgw_sessions)
-    participant Log as cls_compliance_log
+    participant Log as cls_compliance_issues
     participant ERP as ERP webhook
 
     Worker->>DB: SELECT malo_id, session FROM smgw_sessions
@@ -2131,7 +2500,7 @@ sequenceDiagram
     loop for each session
         Worker->>Worker: check_session_compliance()<br/>(pure — no I/O)
         alt has issues
-            Worker->>Log: INSERT cls_compliance_log
+            Worker->>Log: INSERT cls_compliance_issues
             Worker->>ERP: POST de.messwert.cls.compliance-issue<br/>(CloudEvent per issue)
         end
     end
@@ -2180,7 +2549,7 @@ Response `200 OK`:
 }
 ```
 
-The readings remain for § 60 Abs. 6 MsbG reconciliation but no longer identify
+The readings remain for § 147 Abs. 1 AO reconciliation but no longer identify
 the MaLo. `subject_unlinked` is `false` when the MaLo had no mapping — never
 stored or already erased — which is recorded, not treated as an error.
 
@@ -2198,7 +2567,7 @@ everything but write nothing.
 |---|---|---|
 | Reads | `read-timeseries`, `read-imbalance`, `read-billing-period`, `read-corrections`, `read-archive-olap`, `read-archive-status`, `read-reading-order`, `use-mcp` | any (tenant match only) |
 | Reading ingest | `write-meter-reads` (direct push, gas, IoT, SMGW registry) | `MSB` or `admin` |
-| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, § 60 Abs. 6 MsbG corrections, § 60 Abs. 2 MsbG substitutes, virtual meters, rescore) | `MSB`, `NB`, or `admin` |
+| Series mutation | `write-timeseries`, `write-corrections`, `write-quality-rescore` (bulk import, § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) corrections, § 60 Abs. 2 MsbG substitutes, virtual meters, rescore) | `MSB`, `NB`, or `admin` |
 | Field dispatch | `write-reading-order` (orders + §40 EnWG campaign) | `NB`, `MSB`, or `admin` |
 | Erasure | `write-gdpr-erasure` (Art. 17 DSGVO) | `NB`, `MSB`, or `admin` |
 

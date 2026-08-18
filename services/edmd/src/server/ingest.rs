@@ -1,4 +1,4 @@
-//! Direct-push ingest (iMSys/SMGW/Gas), V01–V10 validation, corrections and bulk ingestion.
+//! Direct-push ingest (iMSys/SMGW/Gas), V-rule validation, corrections and bulk ingestion.
 
 #[allow(unused_imports)]
 use super::*;
@@ -43,7 +43,7 @@ pub(crate) fn default_unit_kwh() -> String {
 /// ```json
 /// {
 ///   "session_id": "SMGW-SN1234-2026-07-12T00:00:00Z",
-///   "source": "SMGW",
+///   "source": "DIRECT_PUSH",
 ///   "obis_code": "1-0:1.8.0",
 ///   "melo_id": "DE00001234567890723456789012345",
 ///   "intervals": [
@@ -62,15 +62,23 @@ pub struct DirectPushRequest {
     /// Caller-supplied idempotency key (e.g. SMGW SN + timestamp).
     /// Re-submitting the same key returns 200 with the original result.
     pub session_id: Option<String>,
-    /// Human-readable source identifier (e.g. `"SMGW"`, `"CLS_GATEWAY"`, `"ERP"`).
-    #[serde(default = "default_source")]
-    pub source: String,
+    /// Ingestion source, from the [`IngestionSource`] vocabulary — `DIRECT_PUSH`
+    /// (Strom iMSys/SMGW), `DIRECT_GAS`, `IOT_PUSH`, `API_IMPORT`, `MANUAL`.
+    ///
+    /// Omit it and the endpoint's own default applies: `DIRECT_PUSH` for
+    /// `/rlm/{malo_id}`, `DIRECT_GAS` for `/gas/{malo_id}`. A value outside the
+    /// vocabulary is refused rather than coerced — free-text labels like `SMGW`
+    /// used to parse as `MSCONS` and stamp EDIFACT provenance on a reading that
+    /// never went near it.
+    #[serde(default)]
+    pub source: Option<String>,
     /// OBIS-Kennzahl (e.g. `"1-0:1.8.0"` for Wirkarbeit Tarif 1 + 2).
     pub obis_code: Option<String>,
     /// 33-character MeLo-ID (optional but recommended for device tracing).
     pub melo_id: Option<String>,
-    /// MP-ID of the sender (MSB or SMGW system). Stored as `sender_mp_id` per § 60 Abs. 6 MsbG
-    /// per-interval MSB attribution — required after a WiM MSB switch (PID 55039).
+    /// MP-ID of the sender (MSB or SMGW system). Stored as `sender_mp_id` for
+    /// per-interval MSB attribution (§ 60 Abs. 1 MsbG) — required after a WiM MSB
+    /// switch (PID 55039), and it keys the meterstore version scope.
     pub sender_mp_id: Option<String>,
     /// Metered intervals (15-min for iMSys; 60-min or 1440-min for SLP).
     pub intervals: Vec<DirectInterval>,
@@ -87,10 +95,6 @@ pub struct DirectPushRequest {
     /// Omit it and arrival order decides — see `MeterRead::mscons_version`.
     #[serde(default)]
     pub mscons_version: Option<u128>,
-}
-
-pub(crate) fn default_source() -> String {
-    "DIRECT_PUSH".to_owned()
 }
 
 /// `POST /api/v1/meter-reads/rlm/{malo_id}`
@@ -133,7 +137,7 @@ pub async fn post_direct_reads_rlm(
         return (StatusCode::BAD_REQUEST, "intervals must not be empty").into_response();
     }
 
-    post_direct_reads_inner(&state, &malo_id, req, "STROM", "DIRECT_PUSH").await
+    post_direct_reads_inner(&state, &malo_id, req, "STROM", IngestionSource::DirectPush).await
 }
 
 /// `POST /api/v1/meter-reads/gas/{malo_id}`
@@ -159,7 +163,7 @@ pub async fn post_direct_reads_gas(
         return (StatusCode::BAD_REQUEST, "intervals must not be empty").into_response();
     }
 
-    post_direct_reads_inner(&state, &malo_id, req, "GAS", "DIRECT_GAS").await
+    post_direct_reads_inner(&state, &malo_id, req, "GAS", IngestionSource::DirectGas).await
 }
 
 /// Internal implementation shared by Strom and Gas direct-push handlers.
@@ -189,7 +193,7 @@ pub(crate) async fn post_direct_reads_inner(
     malo_id: &str,
     req: DirectPushRequest,
     sparte_str: &str,
-    source_default: &str,
+    source_default: IngestionSource,
 ) -> axum::response::Response {
     use rust_decimal::Decimal;
 
@@ -207,11 +211,33 @@ pub(crate) async fn post_direct_reads_inner(
     }
 
     let pool = state.repo.pool();
-    let source = if req.source.is_empty() {
-        source_default.to_owned()
-    } else {
-        req.source.clone()
+    // The endpoint's own default applies when the caller states nothing, so the
+    // gas door records `DIRECT_GAS`. It could not before: `source` carried a
+    // serde default of `"DIRECT_PUSH"`, which is never empty, so `source_default`
+    // was unreachable and every gas push was filed as an electricity one.
+    let ingestion_source = match req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => source_default,
+        Some(raw) => match IngestionSource::parse_db_str(raw) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("unknown source `{raw}`"),
+                        "expected": IngestionSource::ALL
+                            .iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    })),
+                )
+                    .into_response();
+            }
+        },
     };
+    let source = ingestion_source.as_str();
 
     // \u2500\u2500 Idempotency check \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     let session_id = req.session_id.clone().unwrap_or_else(|| {
@@ -373,7 +399,49 @@ pub(crate) async fn post_direct_reads_inner(
     let period_start = accepted.iter().map(|iv| iv.from).min().unwrap();
     let period_end = accepted.iter().map(|iv| iv.to).max().unwrap();
 
-    let mut quality = compute_quality(&accepted, period_start, period_end);
+    // Score the values **as they will be stored**, not as they were submitted.
+    // Every accepted interval parsed in the loop above, so the unit is known and
+    // valid for this Sparte; m³ → kWh_Hs for Gas (§25 Nr. 4 MessEV / DVGW G 685)
+    // with the Brennwert required rather than defaulted, since it varies by
+    // supply area and month and a national average would systematically mis-bill
+    // an L-Gas network. Scoring the raw submission instead ran the media-aware
+    // absolute sigma floor against m³ magnitudes for a series held in kWh.
+    let quality_flag_of = |iv: &DirectInterval| {
+        // Unrecognised flags are rejected in the accept loop, so the fallback
+        // only covers an omitted one. A direct push carries a register reading,
+        // so it defaults to MEASURED — matching the IoT path, and leaving
+        // substitution to the § 60 Abs. 2 MsbG flow that records who
+        // substituted and why.
+        iv.quality
+            .as_deref()
+            .and_then(quality_flag_from_wire)
+            .unwrap_or(QualityFlag::Measured)
+    };
+    let stored_value_of = |iv: &DirectInterval| {
+        let scale = metering::interval::MeasurementUnit::parse_scaled(&iv.unit)
+            .expect("unit validated in the accept loop");
+        let rescaled = scale.apply(iv.value);
+        if msparte.requires_conversion() && scale.unit == msparte.measured_unit() {
+            let hs = req
+                .brennwert_kwh_per_m3
+                .expect("brennwert presence validated in the accept loop");
+            metering::gas_m3_to_kwh_hs(rescaled, hs, z)
+        } else {
+            rescaled
+        }
+    };
+    let samples: Vec<metering::MeterInterval> = accepted
+        .iter()
+        .map(|iv| metering::MeterInterval {
+            from: iv.from,
+            to: iv.to,
+            value: stored_value_of(iv),
+            quality: quality_flag_of(iv),
+            obis_code: req.obis_code.as_deref().and_then(|s| s.parse().ok()),
+        })
+        .collect();
+
+    let mut quality = compute_quality(&samples, msparte, period_start, period_end);
     quality.intervals_rejected = rejected_count;
 
     record_quality_assessment(
@@ -382,7 +450,7 @@ pub(crate) async fn post_direct_reads_inner(
         malo_id,
         period_start,
         period_end,
-        &source,
+        source,
         &quality,
     )
     .await;
@@ -397,8 +465,10 @@ pub(crate) async fn post_direct_reads_inner(
         "intervals_consistent": quality.intervals_consistent,
         "has_warnings": quality.has_warnings,
         "coverage_pct": quality.coverage_pct,
+        "expected_intervals": quality.expected_intervals,
+        "interval_secs": quality.interval_secs,
         "grade": quality.grade,
-        "algorithm": "hampel_k3_t3",
+        "algorithm": quality.algorithm,
     });
 
     // \u2500\u2500 Persist intervals \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
@@ -409,43 +479,16 @@ pub(crate) async fn post_direct_reads_inner(
         "GAS" => EdmSparte::Gas,
         _ => EdmSparte::Strom,
     };
-    let ingestion_source = IngestionSource::from_db_str(&source);
-
-    let mut batch: Vec<MeterRead> = Vec::with_capacity(accepted.len());
-    for iv in &accepted {
-        // Every accepted interval parsed in the loop above, so the unit is known
-        // and valid for this Sparte.
-        let scale = metering::interval::MeasurementUnit::parse_scaled(&iv.unit)
-            .expect("unit validated in the accept loop");
-        let rescaled = scale.apply(iv.value);
-        // m³ → kWh_Hs for Gas (§25 Nr. 4 MessEV / DVGW G 685). The Brennwert is
-        // required rather than defaulted: it varies by supply area and month, so
-        // a national average would systematically mis-bill an L-Gas network.
-        let kwh = if msparte.requires_conversion() && scale.unit == msparte.measured_unit() {
-            let hs = req
-                .brennwert_kwh_per_m3
-                .expect("brennwert presence validated in the accept loop");
-            metering::gas_m3_to_kwh_hs(rescaled, hs, z)
-        } else {
-            rescaled
-        };
-
-        batch.push(MeterRead {
+    // The rows carry the same converted values the scorer just saw.
+    let batch: Vec<MeterRead> = samples
+        .iter()
+        .map(|iv| MeterRead {
             malo_id: malo_id.to_owned(),
             melo_id: melo_id.map(str::to_owned),
             dtm_from: iv.from,
             dtm_to: iv.to,
-            quantity_kwh: kwh,
-            // Unrecognised flags are rejected in the accept loop, so the
-            // fallback only covers an omitted one. A direct push carries a
-            // register reading, so it defaults to MEASURED — matching the IoT
-            // path, and leaving substitution to the § 60 Abs. 2 MsbG flow that
-            // records who substituted and why.
-            quality: iv
-                .quality
-                .as_deref()
-                .and_then(quality_flag_from_wire)
-                .unwrap_or(QualityFlag::Measured),
+            quantity_kwh: iv.value,
+            quality: iv.quality,
             pid: 0, // no MSCONS process behind a direct push
             sparte: sparte_enum,
             obis_code: obis_code.map(str::to_owned),
@@ -453,14 +496,14 @@ pub(crate) async fn post_direct_reads_inner(
             source: ingestion_source,
             push_session: Some(session_id.clone()),
             // Session-level Hampel scoring. `ValidatedReads::validate` adds the
-            // per-interval V01–V10 findings under a `validation` key.
+            // per-interval V-rule findings under a `validation` key.
             quality_warnings: quality.has_warnings.then(|| quality_json.clone()),
             sender_mp_id: req.sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: req.mscons_version,
-        });
-    }
+        })
+        .collect();
 
     let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
         batch,
@@ -479,13 +522,13 @@ pub(crate) async fn post_direct_reads_inner(
               (session_id, malo_id, source, obis_code, interval_count,
                period_from, period_to, status, quality_summary, tenant)
           VALUES ($1, $2, $3, $4, $5, $6, $7, 'committed', $8, $9)
-          ON CONFLICT (session_id) DO UPDATE
+          ON CONFLICT (tenant, session_id) DO UPDATE
               SET status          = 'committed',
                   quality_summary = EXCLUDED.quality_summary",
     )
     .bind(&session_id)
     .bind(malo_id)
-    .bind(&source)
+    .bind(source)
     .bind(obis_code)
     .bind(accepted.len() as i32)
     .bind(period_start)
@@ -816,13 +859,13 @@ mod ingest_contract_tests {
     }
 }
 
-// ── § 60 Abs. 6 MsbG Bitemporal Corrections ─────────────────────────────────────────
+// ── Bitemporal corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO) ───────────────
 
 /// `POST /api/v1/corrections/{malo_id}`
 ///
 /// Submit one or more retroactive corrections to stored meter intervals.
 ///
-/// ## § 60 Abs. 6 MsbG compliance
+/// ## § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) compliance
 ///
 /// Every correction creates an immutable `meter_read_corrections` row that
 /// preserves the original value, corrected value, reason, and operator identity,
@@ -901,7 +944,7 @@ pub async fn post_corrections(
             return (
                 axum::http::StatusCode::BAD_REQUEST,
                 format!(
-                    "correction[{i}].reason must not be empty (§ 60 Abs. 6 MsbG audit requirement)"
+                    "correction[{i}].reason must not be empty (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit requirement)"
                 ),
             )
                 .into_response();
@@ -937,7 +980,7 @@ pub async fn post_corrections(
             tracing::info!(
                 malo_id,
                 corrected_count = count,
-                "edmd: {} interval(s) corrected (§ 60 Abs. 6 MsbG)",
+                "edmd: {} interval(s) corrected (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD))",
                 count
             );
             (
@@ -980,7 +1023,8 @@ pub struct BulkReadRequest {
     /// OBIS-Kennzahl (optional — defaults to `1-0:1.8.0*255` for Strom Bezug).
     #[serde(default)]
     pub obis_code: Option<String>,
-    /// Source identifier (default: `API_IMPORT`).
+    /// Ingestion source from the [`IngestionSource`] vocabulary. Default:
+    /// `API_IMPORT`. A value outside it is refused rather than coerced.
     #[serde(default)]
     pub source: Option<String>,
     /// The interval readings.
@@ -1012,7 +1056,7 @@ pub struct BulkReadEntry {
 ///
 /// Batch ingestion endpoint. Accepts up to 50 000 intervals per request.
 ///
-/// The whole batch is validated (V01–V10) and then written in one statement, so
+/// The whole batch is validated (V01–V09/V11/V12) and then written in one statement, so
 /// `stored_count` reflects rows that actually committed and a failure leaves
 /// nothing behind for the caller to reconcile.
 ///
@@ -1093,7 +1137,29 @@ pub async fn post_bulk_reads(
                 .into_response();
         }
     };
-    let source = req.source.as_deref().unwrap_or("API_IMPORT");
+    let ingestion_source = match req
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => IngestionSource::ApiImport,
+        Some(raw) => match IngestionSource::parse_db_str(raw) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("unknown source `{raw}`"),
+                        "expected": IngestionSource::ALL
+                            .iter().map(|s| s.as_str()).collect::<Vec<_>>(),
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
+    let source = ingestion_source.as_str();
     let session_id = req
         .session_id
         .clone()
@@ -1105,8 +1171,6 @@ pub async fn post_bulk_reads(
         "WASSER" => EdmSparte::Wasser,
         _ => EdmSparte::Strom,
     };
-    let ingestion_source = IngestionSource::from_db_str(source);
-
     let mut batch: Vec<MeterRead> = Vec::with_capacity(req.reads.len());
 
     for entry in &req.reads {
@@ -1225,7 +1289,7 @@ pub async fn post_bulk_reads(
               (session_id, malo_id, source, obis_code, interval_count,
                period_from, period_to, status, quality_summary, tenant)
           VALUES ($1,$2,$3,$4,$5,$6,$7,'committed',$8,$9)
-          ON CONFLICT (session_id) DO NOTHING",
+          ON CONFLICT (tenant, session_id) DO NOTHING",
     )
     .bind(&session_id)
     .bind(&malo_id)
@@ -1239,7 +1303,7 @@ pub async fn post_bulk_reads(
     .execute(state.repo.pool())
     .await;
 
-    // A bulk import used to answer 201 and stay silent whatever the V01–V10 pass
+    // A bulk import used to answer 201 and stay silent whatever the V-rule pass
     // found, so an operator uploading a month of corrected readings got the same
     // "created" for a clean file and for one carrying billing-blocking intervals.
     let alert = crate::server::quality_alert::QualityAlert {

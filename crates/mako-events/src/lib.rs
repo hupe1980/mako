@@ -260,7 +260,7 @@ pub mod netzbilanz {
 /// Renamed from the legacy `de.edmd.*` prefix — the context is the
 /// Messwert (meter value), not the daemon that happens to store it.
 pub mod messwert {
-    /// Hampel/V01–V10 quality flag on new meter readings (grade C/F).
+    /// Hampel grade C/F, or any V-rule finding, on newly ingested readings.
     pub const READING_QUALITY_WARNING: &str = "de.messwert.reading.quality.warning";
     /// Direct iMSys/SMGW push stored.
     pub const READING_DIRECT_STORED: &str = "de.messwert.reading.direct.stored";
@@ -268,12 +268,32 @@ pub mod messwert {
     pub const READING_ORDER_FAILED: &str = "de.messwert.reading.order.failed";
     /// Expected reading confirmation overdue.
     pub const READING_CONFIRMATION_OVERDUE: &str = "de.messwert.reading.confirmation.overdue";
-    /// §14a SMGW/CLS compliance issue detected (MsbG §21c sweep).
+    /// A measuring point has stopped delivering, or is delivering too little of
+    /// the settlement window to bill.
+    ///
+    /// The counterpart to [`READING_QUALITY_WARNING`], which can only fire on
+    /// data that *arrived*. Silence produces no ingest and therefore no
+    /// validation, so without this a head-end that simply stops is invisible
+    /// until a settlement run comes up short — by which point the window in
+    /// which the values could still have been re-read has closed
+    /// (§ 60 Abs. 2 MsbG).
+    pub const READING_DELIVERY_OVERDUE: &str = "de.messwert.reading.delivery.overdue";
+    /// A measuring point that was overdue is delivering again.
+    pub const READING_DELIVERY_RESUMED: &str = "de.messwert.reading.delivery.resumed";
+    /// §14a SMGW/CLS compliance issue **opened** (§ 25 MsbG monitoring duty).
+    ///
+    /// Fires on the transition into a fault, not on every sweep that still sees
+    /// it — see `cls_compliance_issues`.
     pub const CLS_COMPLIANCE_ISSUE: &str = "de.messwert.cls.compliance-issue";
-    /// SMGW certificate approaching expiry — tiered advance warning at 90 / 30 / 7
-    /// days (BSI TR-03109-4 §6.3). An expired cert silently ends §14a
-    /// Fernsteuerbarkeit and the MsbG §29 remote-readout obligation, so each tier
-    /// fires once per certificate as it ages.
+    /// A §14a SMGW/CLS compliance issue a later sweep no longer finds.
+    pub const CLS_COMPLIANCE_RESOLVED: &str = "de.messwert.cls.compliance-resolved";
+    /// SMGW certificate approaching expiry — tiered advance warning at 90 / 30 /
+    /// 7 days before `valid_to`, once per tier per certificate.
+    ///
+    /// The ladder is operational, not statutory: BSI TR-03109-4 binds
+    /// certificate runtimes while the Root-CP fixes the renewal lead time and
+    /// the Zertifikatswechsel overlap. An expired certificate silently ends §14a
+    /// Fernsteuerbarkeit.
     pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.messwert.smgw.cert.expiry-warning";
 }
 
@@ -510,7 +530,10 @@ pub fn all() -> &'static [&'static str] {
         messwert::READING_DIRECT_STORED,
         messwert::READING_ORDER_FAILED,
         messwert::READING_CONFIRMATION_OVERDUE,
+        messwert::READING_DELIVERY_OVERDUE,
+        messwert::READING_DELIVERY_RESUMED,
         messwert::CLS_COMPLIANCE_ISSUE,
+        messwert::CLS_COMPLIANCE_RESOLVED,
         messwert::SMGW_CERT_EXPIRY_WARNING,
         // de.tarif.*
         tarif::PRODUCT_UPDATED,

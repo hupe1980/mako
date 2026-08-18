@@ -1,5 +1,10 @@
 //! Startup phases, factored out of `async_main`.
 //!
+//! The phase table below links the functions it names. They are deliberately
+//! crate-private — a startup phase is not API — so the links only resolve under
+//! `--document-private-items`, which is the readership this module has.
+#![allow(rustdoc::private_intra_doc_links)]
+//!
 //! `main` reads as the boot *order*; the work each step does lives here, so that
 //! order stays visible rather than buried under state construction. Each phase
 //! is independently callable, which is what lets the startup guards run as

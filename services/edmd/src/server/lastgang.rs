@@ -30,7 +30,7 @@ pub(crate) struct LastgangParams {
     /// Bitemporal point-in-time query (RFC 3339).
     ///
     /// When set, the query returns the meter reads **as they were stored at this timestamp**,
-    /// not the current (potentially corrected) values. Enables § 60 Abs. 6 MsbG point-in-time
+    /// not the current (potentially corrected) values. Enables § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time
     /// billing reconstruction: "what did we know at invoice date 2026-07-01T00:00:00Z?".
     ///
     /// Implementation: queries `meter_read_corrections` to find the state before any
@@ -57,18 +57,11 @@ pub(crate) async fn get_lastgang(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
-    // ── Bitemporal query: ?as_of= (§ 60 Abs. 6 MsbG point-in-time reconstruction) ──
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
+    // ── Bitemporal query: ?as_of= (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) point-in-time reconstruction) ──
     // When `as_of` is set, the read is served through meterstore's transaction-time
     // axis (`as_known_at`): version resolution runs under a `recorded_at` ceiling,
     // so the value returned is the one that was in force at that instant — a
@@ -225,17 +218,10 @@ pub(crate) async fn get_feed_in(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
         from,
@@ -251,50 +237,44 @@ pub(crate) async fn get_feed_in(
         }
     };
 
-    let mut intervals = Vec::new();
-    let mut billable = 0usize;
-    for r in &reads {
-        // Only Einspeisung (export) registers feed the §51 reduction.
-        let is_einspeisung = r
-            .obis_code
-            .as_deref()
-            .and_then(|s| metering::obis::ObisCode::parse(s).ok())
-            .is_some_and(|c| c.is_einspeisung());
-        if !is_einspeisung {
-            continue;
-        }
-        let b = r.quality.is_billable();
-        if b {
-            billable += 1;
-        }
-        intervals.push(serde_json::json!({
-            "start": r.dtm_from.format(&Rfc3339).unwrap_or_default(),
-            "kwh": r.quantity_kwh.to_string(),
-            "billable": b,
-        }));
-    }
+    // Only Einspeisung registers feed the § 51 EEG reduction, and the canonical
+    // projection is what decides which those are — including the total-vs-HT/NT
+    // rule, which a bare direction filter misses (`domain::register`).
+    let selected =
+        crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Einspeisung);
+    let intervals: Vec<serde_json::Value> = selected
+        .iter()
+        .map(|iv| {
+            serde_json::json!({
+                "start": iv.from.format(&Rfc3339).unwrap_or_default(),
+                "kwh": iv.value.to_string(),
+                // The projection admits only billable qualities, so every
+                // interval here is one — but Estimated/Substituted are among
+                // them, so the flag is reported rather than assumed.
+                "quality": crate::store::quality_to_str(iv.quality),
+            })
+        })
+        .collect();
 
     let count = intervals.len();
+    // Coverage is a **duration ratio**, measured against the cadence the series
+    // actually delivers. Assuming a quarter-hour grid reported a legitimately
+    // hourly feed-in series as 25 % covered.
+    let covered: i64 = selected
+        .iter()
+        .map(|iv| (iv.to - iv.from).whole_seconds().max(0))
+        .sum();
+    let window = (to - from).whole_seconds().max(1);
     #[allow(clippy::cast_precision_loss)]
-    let billable_pct = if count == 0 {
-        0.0
-    } else {
-        billable as f64 / count as f64 * 100.0
-    };
-    // Expected ¼h slots over [from, to) — coverage for the §60 quality gate.
-    let expected = ((to - from).whole_minutes() / 15).max(0) as usize;
-    #[allow(clippy::cast_precision_loss)]
-    let coverage_pct = if expected == 0 {
-        0.0
-    } else {
-        (count as f64 / expected as f64 * 100.0).min(100.0)
-    };
+    let coverage_pct = (covered as f64 / window as f64 * 100.0).clamp(0.0, 100.0);
+    let resolution_min = metering::classification::detect_interval_length(&selected)
+        .map(|r| r.nominal_seconds() / 60);
 
     Json(serde_json::json!({
         "malo_id": malo_id,
-        "resolution_min": 15,
+        "resolution_min": resolution_min,
         "coverage_pct": coverage_pct,
-        "billable_pct": billable_pct,
+        "interval_count": count,
         "intervals": intervals,
     }))
     .into_response()
@@ -309,17 +289,30 @@ pub(crate) fn request_wants_arrow(headers: &axum::http::HeaderMap) -> bool {
         .unwrap_or(false)
 }
 
+/// The precision the storage column and the Arrow schema share.
+///
+/// `meter_reads.quantity_kwh` is `NUMERIC(18,5)` because a settled energy figure
+/// is a Buchungsbeleg (§ 147 AO / GoBD) and must be exact. The bulk transport has
+/// to carry the same type: `mabis-syncd` and `billingd` read Lastgang and
+/// Zeitreihe over this stream precisely *because* it is the high-volume path,
+/// and it used to hand them `Float64`. Binary floating point cannot represent
+/// 0.1 kWh, so every value crossed the wire rounded, and a month of quarter-hours
+/// summed to a total that did not match the one the store would compute.
+const QUANTITY_PRECISION: u8 = 18;
+const QUANTITY_SCALE: i8 = 5;
+
 /// Serialise a slice of `MeterRead` rows to an Arrow IPC stream.
 ///
 /// Schema: `malo_id Utf8 · dtm_from TimestampMicrosecond(UTC) ·
-/// dtm_to TimestampMicrosecond(UTC) · quantity_kwh Float64 ·
+/// dtm_to TimestampMicrosecond(UTC) · quantity_kwh Decimal128(18,5) ·
 /// quality Utf8 · sparte Utf8 · obis_code Utf8(nullable) · pid Int32`.
 ///
 /// Callers that receive `Content-Type: application/vnd.apache.arrow.stream`
-/// can read the result with any Arrow library (DuckDB, Polars, PyArrow, etc.).
+/// can read the result with any Arrow library (DuckDB, Polars, PyArrow, etc.);
+/// all of them map `Decimal128` onto an exact decimal type.
 pub(crate) fn reads_to_arrow_ipc(reads: &[crate::domain::MeterRead]) -> anyhow::Result<Vec<u8>> {
     use arrow::array::{
-        Float64Array, Int32Array, StringArray, StringBuilder, TimestampMicrosecondArray,
+        Decimal128Array, Int32Array, StringArray, StringBuilder, TimestampMicrosecondArray,
     };
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use arrow::ipc::writer::StreamWriter;
@@ -338,7 +331,11 @@ pub(crate) fn reads_to_arrow_ipc(reads: &[crate::domain::MeterRead]) -> anyhow::
             DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into())),
             false,
         ),
-        Field::new("quantity_kwh", DataType::Float64, false),
+        Field::new(
+            "quantity_kwh",
+            DataType::Decimal128(QUANTITY_PRECISION, QUANTITY_SCALE),
+            false,
+        ),
         Field::new("quality", DataType::Utf8, false),
         Field::new("sparte", DataType::Utf8, false),
         Field::new("obis_code", DataType::Utf8, true),
@@ -361,27 +358,26 @@ pub(crate) fn reads_to_arrow_ipc(reads: &[crate::domain::MeterRead]) -> anyhow::
             .collect::<Vec<i64>>(),
     )
     .with_timezone_opt(Some("UTC".to_string()));
-    let quantities: Float64Array = reads
+    // A `Decimal` rescaled to five places is an exact `i128` of scaled units;
+    // `mantissa()` after `rescale` is that integer, which is what Arrow's
+    // Decimal128 stores. A value too large for `NUMERIC(18,5)` could not have
+    // been stored in the first place, so it is refused here rather than wrapped.
+    let quantities: Decimal128Array = reads
         .iter()
         .map(|r| {
-            use rust_decimal::prelude::ToPrimitive;
-            r.quantity_kwh.to_f64()
+            let mut d = r.quantity_kwh;
+            d.rescale(u32::from(QUANTITY_SCALE.unsigned_abs()));
+            Some(d.mantissa())
         })
-        .collect();
+        .collect::<Decimal128Array>()
+        .with_precision_and_scale(QUANTITY_PRECISION, QUANTITY_SCALE)
+        .map_err(|e| anyhow::anyhow!("quantity_kwh does not fit NUMERIC(18,5): {e}"))?;
+    // One spelling of a quality flag across the whole service — the same
+    // `quality_to_str` the store writes and the JSON responses render, so the
+    // columnar stream cannot drift into a second vocabulary.
     let qualities: StringArray = reads
         .iter()
-        .map(|r| {
-            Some(match r.quality {
-                metering::QualityFlag::Measured => "MEASURED",
-                metering::QualityFlag::Estimated => "ESTIMATED",
-                metering::QualityFlag::Substituted => "SUBSTITUTED",
-                metering::QualityFlag::Calculated => "CALCULATED",
-                metering::QualityFlag::Corrected => "CORRECTED",
-                metering::QualityFlag::Preliminary => "PRELIMINARY",
-                metering::QualityFlag::Faulty => "FAULTY",
-                metering::QualityFlag::Unknown => "UNKNOWN",
-            })
-        })
+        .map(|r| Some(crate::store::quality_to_str(r.quality)))
         .collect();
     let spartes: StringArray = reads.iter().map(|r| Some(r.sparte.as_str())).collect();
     let mut obis_builder = StringBuilder::with_capacity(n, n * 12);
@@ -448,8 +444,6 @@ pub(crate) async fn get_esa_typ2(
     Path(malo_id): Path<String>,
     Query(params): Query<LastgangParams>,
 ) -> impl IntoResponse {
-    use time::format_description::well_known::Rfc3339;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
         return (
@@ -459,17 +453,10 @@ pub(crate) async fn get_esa_typ2(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
         from,
@@ -514,17 +501,10 @@ pub(crate) async fn get_zeitreihe(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     // Same transaction-time semantics as `get_lastgang`: an `?as_of=` reads
     // through meterstore's `recorded_at` ceiling, a malformed one is rejected.
     let as_of_ts = match params.as_of.as_deref() {
@@ -643,7 +623,7 @@ pub(crate) struct ResampledParams {
 /// |---|---|
 /// | `HOUR` | Hourly dashboard chart (default) |
 /// | `DAY` | Daily totals for SLP billing |
-/// | `MONTH` | Monthly totals for MMM / § 13 StromNZV |
+/// | `MONTH` | Monthly totals for MMM / GPKE Teil 1 Kap. 8.4 |
 /// | `YEAR` | Annual settlement |
 ///
 /// Each bucket carries:
@@ -659,7 +639,6 @@ pub(crate) async fn get_lastgang_resampled(
     Query(params): Query<ResampledParams>,
 ) -> impl IntoResponse {
     use metering::{ResampleConfig, resample};
-    use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
@@ -670,17 +649,10 @@ pub(crate) async fn get_lastgang_resampled(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     let config = match params
         .resolution
         .as_deref()
@@ -729,21 +701,12 @@ pub(crate) async fn get_lastgang_resampled(
             .into_response();
     }
 
-    // Convert MeterRead → MeterInterval (metering crate). `QualityFlag` is the
-    // same type on both sides — `edmd::domain` re-exports `metering::QualityFlag`.
-    // Billable qualities only (§60 Abs. 2), consistent with aggregate/imbalance:
-    // a Faulty/Unknown value must not enter a billing-preview total.
-    let intervals: Vec<metering::MeterInterval> = reads
-        .iter()
-        .filter(|r| r.quality.is_billable())
-        .map(|r| metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        })
-        .collect();
+    // Project onto one canonical energy series before resampling. A resolved read
+    // spans every register the measuring point reported, and a bucket total built
+    // from all of them adds a prosumer's Einspeisung to its Bezug and counts a
+    // dual-tariff meter's consumption twice (`domain::register`). Non-billable
+    // qualities are dropped by the same projection (§ 60 Abs. 2).
+    let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
 
     let buckets = resample(&intervals, &config);
 
@@ -783,7 +746,7 @@ pub(crate) async fn get_lastgang_resampled(
 ///
 /// This is the canonical data format for:
 /// - MABIS balance group accounting (PID 13003)
-/// - Mehr-/Mindermengensaldo (§ 13 StromNZV)
+/// - Mehr-/Mindermengensaldo (GPKE Teil 1 Kap. 8.4)
 /// - Annual Jahresabrechnung summaries
 ///
 /// Each month bucket includes: `total_kwh`, `peak_kw`, `coverage_pct`, `quality`.
@@ -795,7 +758,6 @@ pub(crate) async fn get_summenzeitreihe(
     Query(params): Query<SimpleTimeParams>,
 ) -> impl IntoResponse {
     use metering::{ResampleConfig, resample};
-    use time::format_description::well_known::Rfc3339;
 
     if let Err(e) = enforcer.check(
         &claims.principal(),
@@ -808,17 +770,10 @@ pub(crate) async fn get_summenzeitreihe(
         )
             .into_response();
     }
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
         from,
@@ -834,19 +789,11 @@ pub(crate) async fn get_summenzeitreihe(
         }
     };
 
-    // Billable qualities only (§60 Abs. 2) — the Summenzeitreihe feeds MaBiS
-    // and MMM totals, where a Faulty/Unknown value must not contribute.
-    let intervals: Vec<metering::MeterInterval> = reads
-        .iter()
-        .filter(|r| r.quality.is_billable())
-        .map(|r| metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-        })
-        .collect();
+    // The Summenzeitreihe feeds MaBiS and the Mehr-/Mindermengensaldo, so it is
+    // the **Bezug**, projected onto one canonical register set: billable
+    // qualities only (§ 60 Abs. 2), no Einspeisung folded in, and no total
+    // register added to its own HT/NT split (`domain::register`).
+    let intervals = crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
 
     let buckets = resample(&intervals, &ResampleConfig::to_monthly());
     let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total).sum();
@@ -873,7 +820,96 @@ pub(crate) async fn get_summenzeitreihe(
         "total_kwh": total_kwh,
         "month_count": months.len(),
         "months": months,
-        "legal_basis": "MABIS PID 13003 / § 13 StromNZV Mehr-Mindermengensaldo",
+        "legal_basis": "MABIS PID 13003 / GPKE (BK6-24-174) Teil 1 Kap. 8.4 Mehr-/Mindermengensaldo",
     }))
     .into_response()
+}
+
+#[cfg(test)]
+mod arrow_transport_tests {
+    use super::*;
+    use crate::domain::{IngestionSource, MeterRead, QualityFlag, Sparte};
+    use time::macros::datetime;
+
+    fn read(kwh: &str) -> MeterRead {
+        MeterRead {
+            malo_id: "51238696012".to_owned(),
+            melo_id: None,
+            dtm_from: datetime!(2026-07-01 10:00 UTC),
+            dtm_to: datetime!(2026-07-01 10:15 UTC),
+            quantity_kwh: kwh.parse().expect("decimal"),
+            quality: QualityFlag::Measured,
+            pid: 13025,
+            sparte: Sparte::Strom,
+            obis_code: Some("1-0:1.8.0".to_owned()),
+            tenant: "9900357000004".to_owned(),
+            source: IngestionSource::Mscons,
+            push_session: None,
+            quality_warnings: None,
+            sender_mp_id: None,
+            allocation_version: "INITIAL".to_owned(),
+            valid_from_tx: None,
+            mscons_version: None,
+        }
+    }
+
+    /// The bulk path carries the stored value exactly, not a float of it.
+    ///
+    /// `0.1` has no binary floating-point representation, so an `f64` column
+    /// handed `mabis-syncd` and `billingd` a different number than the store
+    /// holds — on the transport chosen *because* it is the high-volume one, and
+    /// for a figure § 147 AO requires to be exact.
+    #[test]
+    fn the_arrow_stream_carries_the_exact_stored_decimal() {
+        use arrow::array::Array as _;
+
+        let reads = [read("0.10000"), read("2.34567"), read("123456.78901")];
+        let bytes = reads_to_arrow_ipc(&reads).expect("serialises");
+
+        let mut reader =
+            arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
+                .expect("valid IPC stream");
+        let batch = reader.next().expect("one batch").expect("readable");
+
+        let column = batch
+            .column_by_name("quantity_kwh")
+            .expect("quantity_kwh column");
+        assert_eq!(
+            column.data_type(),
+            &arrow::datatypes::DataType::Decimal128(QUANTITY_PRECISION, QUANTITY_SCALE),
+            "the wire type must match NUMERIC(18,5)"
+        );
+        let values = column
+            .as_any()
+            .downcast_ref::<arrow::array::Decimal128Array>()
+            .expect("Decimal128");
+        for (i, expected) in ["0.10000", "2.34567", "123456.78901"].iter().enumerate() {
+            assert_eq!(
+                values.value_as_string(i),
+                *expected,
+                "row {i} must round-trip exactly"
+            );
+        }
+    }
+
+    /// The columnar path spells quality flags the way the store does.
+    #[test]
+    fn arrow_quality_flags_use_the_stored_vocabulary() {
+        for flag in QualityFlag::ALL {
+            let mut r = read("1.0");
+            r.quality = flag;
+            let bytes = reads_to_arrow_ipc(&[r]).expect("serialises");
+            let mut reader =
+                arrow::ipc::reader::StreamReader::try_new(std::io::Cursor::new(bytes), None)
+                    .expect("valid IPC stream");
+            let batch = reader.next().expect("one batch").expect("readable");
+            let quality = batch
+                .column_by_name("quality")
+                .expect("quality column")
+                .as_any()
+                .downcast_ref::<arrow::array::StringArray>()
+                .expect("Utf8");
+            assert_eq!(quality.value(0), crate::store::quality_to_str(flag));
+        }
+    }
 }

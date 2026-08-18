@@ -11,57 +11,26 @@ use super::*;
 /// A MaLo/MeLo delivers *all* its OBIS registers (1.8.x Bezug, 2.8.x
 /// Einspeisung, HT/NT splits), but `metering`'s virtual-meter engine indexes
 /// each source by interval start alone — feeding it every register makes
-/// same-slot registers collide and an arbitrary one win. So per source:
+/// same-slot registers collide and an arbitrary one win. So each source is put
+/// through the canonical projection in [`crate::domain::register`], which is the
+/// same one every aggregate uses: non-billable qualities dropped, the wrong
+/// direction dropped, reactive and fault registers refused, and the total
+/// register preferred over its own HT/NT decomposition.
 ///
-/// - non-billable qualities are dropped (Faulty/Unknown must not enter a
-///   derived series),
-/// - the wrong direction is dropped — import registers for a generation
-///   source, export registers for a consumption source (reads without an OBIS
-///   code, and non-electricity media whose codes carry no direction, are kept),
-/// - reactive registers and the Fehlerregister (E = 63, a fault *count*) are
-///   dropped — neither is an Arbeitsmenge,
-/// - when several same-direction registers still share a slot (total beside
-///   HT/NT), the total register (E = 0) wins.
+/// Sharing that projection fixed a defect specific to this path: it used to keep
+/// **one** register per slot, so a dual-tariff source reporting only HT and NT —
+/// with no total register to prefer — had its NT consumption discarded rather
+/// than added, and every derived series ran low by that amount.
 pub(crate) fn source_intervals(
     reads: &[MeterRead],
     generation: bool,
 ) -> Vec<metering::MeterInterval> {
-    let mut by_slot: BTreeMap<OffsetDateTime, metering::MeterInterval> = BTreeMap::new();
-    for r in reads.iter().filter(|r| r.quality.is_billable()) {
-        let obis: Option<metering::obis::ObisCode> =
-            r.obis_code.as_deref().and_then(|s| s.parse().ok());
-        if let Some(c) = obis {
-            if c.is_reactive() || c.is_fehlerregister() {
-                continue;
-            }
-            if generation && c.is_import() {
-                continue;
-            }
-            if !generation && c.is_export() {
-                continue;
-            }
-        }
-        let iv = metering::MeterInterval {
-            from: r.dtm_from,
-            to: r.dtm_to,
-            value: r.quantity_kwh,
-            quality: r.quality,
-            obis_code: obis,
-        };
-        match by_slot.entry(r.dtm_from) {
-            std::collections::btree_map::Entry::Vacant(e) => {
-                e.insert(iv);
-            }
-            std::collections::btree_map::Entry::Occupied(mut e) => {
-                let held_total = e.get().obis_code.is_some_and(|c| c.is_total_register());
-                let new_total = obis.is_some_and(|c| c.is_total_register());
-                if new_total && !held_total {
-                    e.insert(iv);
-                }
-            }
-        }
-    }
-    by_slot.into_values().collect()
+    let direction = if generation {
+        crate::domain::EnergyDirection::Einspeisung
+    } else {
+        crate::domain::EnergyDirection::Bezug
+    };
+    crate::domain::energy_intervals(reads, direction)
 }
 
 /// The source IDs that carry generation (Einspeisung) in this rule; every other
@@ -86,6 +55,21 @@ pub(crate) fn generation_source_ids(rule: &metering::AggregationRule) -> Vec<&st
     }
 }
 
+/// The `rule_type` discriminator for a rule, matching the DDL\'s CHECK list.
+///
+/// The single source of truth is the enum variant, so the stored discriminator
+/// and the stored rule can never disagree.
+pub(crate) fn rule_type_of(rule: &metering::AggregationRule) -> &'static str {
+    use metering::AggregationRule as R;
+    match rule {
+        R::Sum { .. } => "Sum",
+        R::Residual { .. } => "Residual",
+        R::PvSelfConsumption { .. } => "PvSelfConsumption",
+        R::GgvConstantAllocation { .. } => "GgvConstantAllocation",
+        R::GgvProportionalAllocation { .. } => "GgvProportionalAllocation",
+    }
+}
+
 /// `GET /api/v1/virtual/{virtual_malo_id}/lastgang`
 ///
 /// Computes the virtual meter time series by fetching all source MaLo time
@@ -102,7 +86,6 @@ pub(crate) async fn get_virtual_lastgang(
 ) -> impl IntoResponse {
     use metering::{AggregationRule, compute_virtual_meter};
     use std::collections::HashMap;
-    use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
@@ -153,17 +136,10 @@ pub(crate) async fn get_virtual_lastgang(
         }
     };
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     // Fetch source series for all referenced MaLos, projected per source onto
     // the register matching its role in the rule (see `source_intervals`).
     let generation_ids = generation_source_ids(&rule);
@@ -279,20 +255,29 @@ pub(crate) async fn create_virtual_meter(
         )
             .into_response();
     }
-    // Validate that rule_json deserialises to a known AggregationRule
-    if let Err(e) = serde_json::from_value::<metering::AggregationRule>(
+    // `rule_type` is **derived** from the rule, never taken from the caller
+    // beside it. Two fields describing the same thing drift: a body claiming
+    // `rule_type: "Sum"` while `rule_json` held a `GgvConstantAllocation` was
+    // accepted, and then `/virtual/{id}/lastgang` (which reads `rule_json`)
+    // computed a GGV allocation while `/sharing/{id}/allocation` (which filters
+    // on `rule_type`) could not find the community at all.
+    let rule: metering::AggregationRule = match serde_json::from_value(
         body.get("rule_json")
             .cloned()
             .unwrap_or(serde_json::Value::Null),
     ) {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": format!("invalid rule_json: {e}")
-            })),
-        )
-            .into_response();
-    }
+        Ok(r) => r,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "error": format!("invalid rule_json: {e}")
+                })),
+            )
+                .into_response();
+        }
+    };
+    let rule_type = rule_type_of(&rule);
     let virtual_malo_id = body
         .get("virtual_malo_id")
         .and_then(|v| v.as_str())
@@ -301,7 +286,6 @@ pub(crate) async fn create_virtual_meter(
         .get("display_name")
         .and_then(|v| v.as_str())
         .unwrap_or(virtual_malo_id);
-    let rule_type = body.get("rule_type").and_then(|v| v.as_str()).unwrap_or("");
     let sparte = body
         .get("sparte")
         .and_then(|v| v.as_str())
@@ -312,12 +296,10 @@ pub(crate) async fn create_virtual_meter(
         .unwrap_or(serde_json::Value::Null);
     let legal_basis: Option<&str> = body.get("legal_basis").and_then(|v| v.as_str());
 
-    if virtual_malo_id.is_empty() || rule_type.is_empty() {
+    if virtual_malo_id.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({
-                "error": "virtual_malo_id and rule_type are required"
-            })),
+            Json(serde_json::json!({ "error": "virtual_malo_id is required" })),
         )
             .into_response();
     }
@@ -344,7 +326,7 @@ pub(crate) async fn create_virtual_meter(
     .fetch_one(state.repo.pool())
     .await {
         Ok(_) => (StatusCode::CREATED, Json(serde_json::json!({
-            "virtual_malo_id": virtual_malo_id, "status": "created"
+            "virtual_malo_id": virtual_malo_id, "rule_type": rule_type, "status": "created"
         }))).into_response(),
         Err(e) => {
             tracing::warn!(error = %e, "edmd: create_virtual_meter insert failed");

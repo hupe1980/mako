@@ -656,7 +656,8 @@ pub struct WebdiensteAuthState {
     pub tenant: Arc<str>,
 }
 
-/// Scope the caller's Marktpartner-ID into [`CLIENT_MP_ID`] for the request.
+/// Scope the caller's Marktpartner-ID into the `CLIENT_MP_ID` task-local for
+/// the request.
 ///
 /// Runs on every `:8090` request, including when the auth layer is disabled
 /// because a fronting proxy terminates mTLS — that proxy is exactly what sets

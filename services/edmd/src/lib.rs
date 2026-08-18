@@ -54,3 +54,4 @@ pub mod smgw;
 /// BSI TR-03109 SMGW domain model — rehomed from `metering` 0.17. See the module docs.
 pub mod smgw_model;
 pub mod store;
+pub mod surveillance;

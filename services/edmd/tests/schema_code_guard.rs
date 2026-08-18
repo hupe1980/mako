@@ -274,3 +274,242 @@ fn quality_checks_match_the_quality_flag_codes() {
         }
     }
 }
+
+// ── Every column named in SQL exists in the DDL ───────────────────────────────
+//
+// `sqlx::query` is unchecked, so a column named in a query but absent from the
+// DDL is a runtime error and nothing more. The guards above pinned one table by
+// hand and, precisely because the list was hand-maintained, missed the next one:
+// `GET /api/v1/gas-quality/{malo_id}` and the `get_gas_quality` MCP tool both
+// selected `pid` from `gas_quality_data`, whose column is `source_pid`. Every
+// call to either failed, and the failure showed up as a 500 rather than as a
+// broken build.
+//
+// This walks the source instead of a list.
+
+/// Every table `0001_schema.sql` declares, with its column names.
+fn declared_tables() -> std::collections::BTreeMap<String, std::collections::BTreeSet<String>> {
+    let sql = migration();
+    let mut tables = std::collections::BTreeMap::new();
+    for (idx, _) in sql.match_indices("CREATE TABLE ") {
+        let rest = &sql[idx + "CREATE TABLE ".len()..];
+        let Some(paren) = rest.find(" (") else {
+            continue;
+        };
+        let name = rest[..paren].trim().to_owned();
+        tables.insert(name.clone(), declared_columns(&ddl_of(&sql, &name)));
+    }
+    tables
+}
+
+/// Every `.rs` file under `src/`.
+fn source_files() -> Vec<(String, String)> {
+    fn walk(dir: &std::path::Path, out: &mut Vec<(String, String)>) {
+        for entry in std::fs::read_dir(dir)
+            .expect("readable source dir")
+            .flatten()
+        {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push((
+                    path.display().to_string(),
+                    std::fs::read_to_string(&path).expect("readable source file"),
+                ));
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(
+        &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src"),
+        &mut out,
+    );
+    out
+}
+
+/// A bare column identifier, or `None` for anything that is not one: a
+/// function call, a literal, a `*`, a qualified or aliased expression, a cast.
+///
+/// Only unambiguous bare identifiers are checked, so the guard cannot produce a
+/// false failure on SQL it does not fully parse — it is a net, not a parser.
+fn bare_column(token: &str) -> Option<String> {
+    let t = token.trim();
+    if t.is_empty()
+        || t == "*"
+        || t.contains('(')
+        || t.contains(')')
+        || t.contains('\'')
+        || t.contains(':')
+        || t.contains('.')
+        || t.contains(' ')
+        || t.contains('$')
+        || t.starts_with(|c: char| c.is_ascii_digit())
+    {
+        return None;
+    }
+    t.chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '_')
+        .then(|| t.to_ascii_lowercase())
+}
+
+/// Column lists named against `table` in `sql`: `SELECT … FROM table` and
+/// `INSERT INTO table (…)`.
+fn columns_referenced(sql: &str, table: &str) -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    let lower = sql.to_ascii_lowercase();
+    let table_lc = table.to_ascii_lowercase();
+
+    // `INSERT INTO <table> (a, b, c)`
+    let insert = format!("insert into {table_lc}");
+    for (idx, _) in lower.match_indices(&insert) {
+        let rest = &sql[idx + insert.len()..];
+        let Some(open) = rest.find('(') else { continue };
+        let Some(close) = rest[open..].find(')') else {
+            continue;
+        };
+        // Nothing but whitespace and newlines may separate the table from its
+        // column list, or this is a different statement shape.
+        if rest[..open].chars().any(|c| !c.is_whitespace()) {
+            continue;
+        }
+        found.extend(
+            rest[open + 1..open + close]
+                .split(',')
+                .filter_map(bare_column),
+        );
+    }
+
+    // `SELECT <list> FROM <table>` — only single-table statements, so a bare
+    // identifier is unambiguously this table's.
+    let from = format!("from {table_lc}");
+    for (idx, _) in lower.match_indices(&from) {
+        let before = &lower[..idx];
+        let Some(select_at) = before.rfind("select ") else {
+            continue;
+        };
+        // A join or subquery makes a bare identifier ambiguous; skip those.
+        let clause = &sql[select_at + "select ".len()..idx];
+        if clause.to_ascii_lowercase().contains("join") || clause.contains('(') {
+            continue;
+        }
+        found.extend(clause.split(',').filter_map(bare_column));
+    }
+    found
+}
+
+/// SQL words that can appear where a column would and are not columns.
+const NOT_COLUMNS: &[&str] = &["distinct", "count", "now", "true", "false", "null"];
+
+#[test]
+fn every_column_named_in_sql_is_declared_in_the_ddl() {
+    let tables = declared_tables();
+    let mut problems: Vec<String> = Vec::new();
+
+    for (file, source) in source_files() {
+        for (table, declared) in &tables {
+            for column in columns_referenced(&source, table) {
+                if declared.contains(&column) || NOT_COLUMNS.contains(&column.as_str()) {
+                    continue;
+                }
+                problems.push(format!(
+                    "{file}: `{column}` is queried on `{table}`, which declares {declared:?}"
+                ));
+            }
+        }
+    }
+
+    assert!(
+        problems.is_empty(),
+        "SQL references columns that do not exist:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// The guard is a net with real holes; this pins that it catches the shape of
+/// bug it was written for, so a future simplification cannot quietly defeat it.
+#[test]
+fn the_column_guard_catches_a_misnamed_select() {
+    let tables = declared_tables();
+    let gas = tables
+        .get("gas_quality_data")
+        .expect("gas_quality_data is declared");
+    assert!(
+        gas.contains("source_pid") && !gas.contains("pid"),
+        "the column is `source_pid`; `pid` is the name that used to be queried"
+    );
+
+    let bad = r#"sqlx::query("SELECT period_from, pid FROM gas_quality_data WHERE malo_id = $1")"#;
+    let referenced = columns_referenced(bad, "gas_quality_data");
+    assert!(
+        referenced.contains("pid"),
+        "the extractor must see `pid` in {referenced:?}"
+    );
+    assert!(
+        !gas.contains("pid"),
+        "and the DDL must not declare it, so the guard fires"
+    );
+}
+
+/// Every `ON CONFLICT (a, b)` target has a matching unique index or primary key.
+///
+/// Without one PostgreSQL rejects the statement at runtime. `direct_push_sessions`
+/// was keyed on `session_id` alone while every read of it was tenant-scoped, so
+/// two tenants using the same session id collided: the upsert landed on the other
+/// tenant's row.
+#[test]
+fn every_on_conflict_target_has_a_matching_unique_constraint() {
+    let sql = migration();
+    let mut problems = Vec::new();
+
+    for (_file, source) in source_files() {
+        for (idx, _) in source.match_indices("ON CONFLICT (") {
+            let rest = &source[idx + "ON CONFLICT (".len()..];
+            let Some(close) = rest.find(')') else {
+                continue;
+            };
+            let target: Vec<String> = rest[..close]
+                .split(',')
+                .map(|c| c.trim().to_ascii_lowercase())
+                .collect();
+            // A composite key must appear as a parenthesised list — a UNIQUE
+            // INDEX, a table-level PRIMARY KEY, or a UNIQUE constraint. A
+            // single-column target may also be an inline `col … PRIMARY KEY`.
+            let key = target.join(", ");
+            let lower = sql.to_ascii_lowercase();
+            let listed = lower.contains(&format!("({key})"));
+            let inline_pk = target.len() == 1
+                && lower.lines().any(|l| {
+                    let l = l.trim();
+                    l.starts_with(&target[0]) && l.contains("primary key")
+                });
+            if !listed && !inline_pk {
+                problems.push(format!("ON CONFLICT ({key}) has no matching unique key"));
+            }
+        }
+    }
+
+    // `ON CONFLICT ON CONSTRAINT <name>` only accepts a *table constraint*.
+    // Naming a `CREATE UNIQUE INDEX` there makes PostgreSQL reject the whole
+    // statement — which is how the billing-period cache came to never populate.
+    for (file, source) in source_files() {
+        for (idx, _) in source.match_indices("ON CONFLICT ON CONSTRAINT ") {
+            let rest = &source[idx + "ON CONFLICT ON CONSTRAINT ".len()..];
+            let name: String = rest
+                .chars()
+                .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+                .collect();
+            let is_table_constraint = sql.contains(&format!("CONSTRAINT {name} UNIQUE"))
+                || sql.contains(&format!("CONSTRAINT {name} PRIMARY KEY"));
+            if !is_table_constraint {
+                problems.push(format!(
+                    "{file}: ON CONFLICT ON CONSTRAINT {name} — `{name}` is not a table \
+                     constraint (a CREATE UNIQUE INDEX of that name does not count); \
+                     use the column list instead"
+                ));
+            }
+        }
+    }
+
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+}

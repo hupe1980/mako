@@ -626,7 +626,7 @@ impl MpIdRegistry {
     /// Returns the NAD DE3055 agency code for the given Marktpartner-ID.
     ///
     /// A configured `[[party]] agency` override wins; anything else is derived
-    /// from the MP-ID itself via [`derive_agency`].
+    /// from the MP-ID itself via `derive_agency`.
     ///
     /// The derivation is what makes this correct for **counterparties**, which
     /// is the main way it is called: the AS4 sender asks for the *recipient's*

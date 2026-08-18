@@ -40,8 +40,13 @@ pub(crate) async fn get_gas_quality(
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok().map(|t| t.date()))
         .unwrap_or(time::Date::MAX);
 
+    // `source_pid` is the column name; `pid` does not exist, and naming it made
+    // every request to this endpoint a 500. The two NUMERIC factors decode as
+    // `Decimal` — asking sqlx for a `String` fails the same way, and the
+    // `unwrap_or_default()` around it turned that failure into a silent `""`.
     match sqlx::query(
-        "SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl, pid, received_at
+        "SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl,
+                source_pid, received_at
            FROM gas_quality_data
           WHERE malo_id = $1 AND period_from >= $2 AND period_to <= $3
             AND tenant = $4
@@ -56,15 +61,21 @@ pub(crate) async fn get_gas_quality(
     {
         Ok(rows) => {
             use sqlx::Row;
-            let records: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+            let records: Vec<serde_json::Value> = rows.iter().map(|r| {
+                let dec = |c: &str| r
+                    .try_get::<Option<rust_decimal::Decimal>, _>(c)
+                    .ok()
+                    .flatten()
+                    .map(|d| d.to_string());
+                serde_json::json!({
                 "period_from": r.try_get::<time::Date, _>("period_from").ok().map(|d| d.to_string()),
                 "period_to": r.try_get::<time::Date, _>("period_to").ok().map(|d| d.to_string()),
-                "brennwert_kwh_per_m3": r.try_get::<String, _>("brennwert_kwh_per_m3").unwrap_or_default(),
-                "zustandszahl": r.try_get::<String, _>("zustandszahl").unwrap_or_default(),
-                "pid": r.try_get::<i32, _>("pid").unwrap_or(13007),
+                "brennwert_kwh_per_m3": dec("brennwert_kwh_per_m3"),
+                "zustandszahl": dec("zustandszahl"),
+                "source_pid": r.try_get::<Option<i32>, _>("source_pid").ok().flatten(),
                 "received_at": r.try_get::<OffsetDateTime, _>("received_at").ok().map(|t| t.to_string()),
                 "legal_basis": "§25 Nr. 4 MessEV / DVGW G 685",
-            })).collect();
+            })}).collect();
             if records.is_empty() {
                 (
                     StatusCode::NOT_FOUND,

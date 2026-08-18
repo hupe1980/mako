@@ -41,7 +41,6 @@
 //! ```
 
 use serde::Deserialize;
-use std::path::Path;
 
 // ── meterstore / cold-tier config ───────────────────────────────────────────
 
@@ -181,6 +180,13 @@ pub struct Config {
     /// § 60 Abs. 2 MsbG confirmation loop for estimated/substituted readings.
     #[serde(default)]
     pub confirmation: ConfirmationConfig,
+    /// §14a SMGW/CLS compliance sweep thresholds. See [`SmgwConfig`].
+    #[serde(default)]
+    pub smgw: SmgwConfig,
+    /// Delivery surveillance — which measuring points have gone quiet. See
+    /// [`SurveillanceConfig`].
+    #[serde(default)]
+    pub surveillance: SurveillanceConfig,
     /// Start without token verification.
     ///
     /// With `[oidc]` absent the verifier admits every request as `dev-admin`
@@ -237,6 +243,22 @@ fn kafka_default_group() -> String {
 }
 fn kafka_default_poll_ms() -> u64 {
     500
+}
+
+/// `edmd` is a [`mako_service::Daemon`], so the runner owns the lifecycle:
+/// tracing, the tuned pool with `application_name = edmd`, migrations, a real
+/// DB-ping readiness probe, the `/metrics` and `/health/*` routes, and — the
+/// one edmd previously lacked — graceful shutdown on **`SIGTERM`** as well as
+/// `SIGINT`. A hand-rolled `main` that only watched Ctrl-C never shut down
+/// cleanly under Kubernetes or systemd, which send `SIGTERM`: in-flight ingest
+/// requests were cut off at the end of the termination grace period.
+impl mako_service::ServiceConfig for Config {
+    fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
+        Some(&self.database)
+    }
+    fn bind_addr(&self) -> String {
+        self.http.addr.clone()
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -301,7 +323,7 @@ pub struct WebhookConfig {
 /// `de.messwert.reading.confirmation.overdue`. No statute fixes the deadline —
 /// the 8-week default aligns with the MaBiS Bilanzkreisabrechnung
 /// correction window.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ConfirmationConfig {
     /// Whether the overdue-escalation worker runs. Default: true — the
@@ -325,6 +347,137 @@ impl Default for ConfirmationConfig {
         Self {
             enabled: true,
             deadline_weeks: default_confirmation_deadline_weeks(),
+        }
+    }
+}
+
+/// `[smgw]` — §14a SMGW/CLS compliance sweep.
+///
+/// These were function parameters that every call site passed `30` and `2` to,
+/// while the docs called them configurable. Now they are.
+///
+/// ```toml
+/// [smgw]
+/// cert_warning_days          = 30
+/// comm_fault_threshold_hours = 2
+/// sweep_interval_secs        = 86400
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SmgwConfig {
+    /// Whether the daily compliance and certificate-expiry sweeps run.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// How far ahead of `valid_to` a certificate is reported as expiring.
+    ///
+    /// Not a statutory number: BSI TR-03109-4 binds certificate runtimes and the
+    /// Root-CP fixes the renewal lead time. 30 days is a common operational
+    /// choice, not a deadline the TR states.
+    #[serde(default = "smgw_default_cert_warning_days")]
+    pub cert_warning_days: i32,
+    /// Hours of silence after which a gateway counts as a communication fault,
+    /// which is what leaves § 60 Abs. 2 MsbG Ersatzwerte owing.
+    #[serde(default = "smgw_default_comm_fault_hours")]
+    pub comm_fault_threshold_hours: i64,
+    /// Seconds between sweeps. Default: daily.
+    #[serde(default = "default_daily_secs")]
+    pub sweep_interval_secs: u64,
+}
+
+fn smgw_default_cert_warning_days() -> i32 {
+    30
+}
+fn smgw_default_comm_fault_hours() -> i64 {
+    2
+}
+fn default_daily_secs() -> u64 {
+    86_400
+}
+
+impl Default for SmgwConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            cert_warning_days: smgw_default_cert_warning_days(),
+            comm_fault_threshold_hours: smgw_default_comm_fault_hours(),
+            sweep_interval_secs: default_daily_secs(),
+        }
+    }
+}
+
+/// `[surveillance]` — delivery surveillance for measuring points that go quiet.
+///
+/// The V-rules can only judge data that arrived. A measuring point that stops
+/// delivering produces no ingest, so no validation runs and no quality warning
+/// fires: the failure is invisible until a settlement run comes up short. This
+/// worker is the other half — it looks for the **absence** of data.
+///
+/// ```toml
+/// [surveillance]
+/// enabled            = true
+/// silent_after_hours = 36     # RLM/iMSys: a day plus a retry window
+/// min_coverage_pct   = 95.0
+/// coverage_window_days = 7
+/// ```
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SurveillanceConfig {
+    /// Whether the sweep runs. Default: true — an MSB that does not notice a
+    /// silent meter cannot meet § 60 Abs. 2 MsbG in time.
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Hours since a measuring point's newest interval **ended** after which it
+    /// counts as overdue.
+    ///
+    /// Default 36: a daily delivery cadence plus a retry window, so an ordinary
+    /// late batch does not raise an alarm but a missed day does.
+    #[serde(default = "surveillance_default_silent_hours")]
+    pub silent_after_hours: i64,
+    /// Coverage below which a point is reported even though it is still
+    /// delivering — a meter sending one interval an hour instead of four is not
+    /// silent, but it is not billable either.
+    #[serde(default = "surveillance_default_min_coverage")]
+    pub min_coverage_pct: f64,
+    /// The window coverage is measured over. Default: 7 days.
+    #[serde(default = "surveillance_default_coverage_days")]
+    pub coverage_window_days: i64,
+    /// Seconds between sweeps. Default: hourly — a settlement deadline is
+    /// measured in working days, so an hour of latency costs nothing and a
+    /// daily sweep can miss most of one.
+    #[serde(default = "surveillance_default_interval_secs")]
+    pub sweep_interval_secs: u64,
+    /// Maximum measuring points reported per sweep, so one broken head-end
+    /// cannot emit a hundred thousand CloudEvents in a burst. The count of
+    /// suppressed points is logged and carried on the summary.
+    #[serde(default = "surveillance_default_max_events")]
+    pub max_events_per_sweep: usize,
+}
+
+fn surveillance_default_silent_hours() -> i64 {
+    36
+}
+fn surveillance_default_min_coverage() -> f64 {
+    95.0
+}
+fn surveillance_default_coverage_days() -> i64 {
+    7
+}
+fn surveillance_default_interval_secs() -> u64 {
+    3_600
+}
+fn surveillance_default_max_events() -> usize {
+    500
+}
+
+impl Default for SurveillanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            silent_after_hours: surveillance_default_silent_hours(),
+            min_coverage_pct: surveillance_default_min_coverage(),
+            coverage_window_days: surveillance_default_coverage_days(),
+            sweep_interval_secs: surveillance_default_interval_secs(),
+            max_events_per_sweep: surveillance_default_max_events(),
         }
     }
 }
@@ -369,13 +522,6 @@ pub use mako_service::oidc::OidcConfig;
 
 /// OpenTelemetry config — shared struct from `mako-service`.
 pub use mako_service::telemetry::OtelConfig;
-
-pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
-    toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))
-}
 
 pub fn resolve_env(value: &str) -> anyhow::Result<String> {
     if let Some(var) = value.strip_prefix("env:") {

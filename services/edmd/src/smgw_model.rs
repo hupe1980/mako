@@ -21,12 +21,20 @@
 //!
 //! ## Legal basis
 //!
-//! - **BSI TR-03109-1**: Smart Meter Gateway — Architecture
-//! - **BSI TR-03109-4**: Smart Meter Gateway — Management (SMGW Admin Protocol)
-//! - **§21 MsbG**: Anforderungen an Smart-Meter-Gateways
-//! - **§22 MsbG**: Zulassung und Einbau
-//! - **§29 MsbG**: Remote read-out obligation for iMSys
-//! - **§14a EnWG**: Steuerbare Verbrauchseinrichtungen — CLS channel mandatory
+//! - **BSI TR-03109-1**: Smart Meter Gateway — architecture (HAN / WAN / CLS)
+//! - **BSI TR-03109-4**: SM-PKI — certificate roles, runtimes and Zertifikatswechsel
+//! - **§ 21 MsbG**: Mindestanforderungen an intelligente Messsysteme
+//! - **§ 22 MsbG**: Mindestanforderungen an das Smart-Meter-Gateway *durch
+//!   Schutzprofile und Technische Richtlinien* — the hook that binds TR-03109
+//! - **§ 24 MsbG**: Zertifizierung des Smart-Meter-Gateway
+//! - **§ 25 MsbG**: Smart-Meter-Gateway-Administrator — configuration,
+//!   administration, monitoring and maintenance
+//! - **§ 28 MsbG**: Inhaber der Wurzelzertifikate — the SM-PKI trust root
+//! - **§ 14a EnWG** / **BK6-22-300**: Steuerbare Verbrauchseinrichtungen — the
+//!   CLS channel a netzorientierte Steuerung travels over
+//!
+//! Not § 22 "Zulassung und Einbau" and not § 29 "remote read-out": neither is
+//! that section\'s subject. § 29 MsbG is the *Ausstattung* (rollout) obligation.
 //!
 //! ## Architecture overview
 //!
@@ -64,7 +72,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Lifecycle: Provisioned → Commissioned → Operational → (Revoked | Replaced)
 ///
-/// Source: BSI TR-03109-1 §3.2, §29 MsbG.
+/// Source: BSI TR-03109-1; § 25 MsbG (GWA lifecycle responsibility).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum GatewayStatus {
@@ -197,7 +205,7 @@ pub enum CertificateType {
 ///                                                                    └─→ Device
 /// ```
 ///
-/// Source: BK6-24-174 §4 Konfigurationsprozesse; BSI TR-03109-1 §5.3 CLS.
+/// Source: BK6-22-300 (§14a EnWG netzorientierte Steuerung); BSI TR-03109-1 (CLS).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClsChannel {
     /// CLS channel ID (alphanumeric, assigned by MSB).
@@ -212,7 +220,7 @@ pub struct ClsChannel {
     pub channel_status: ClsChannelStatus,
     /// §14a Konfigurationsprodukt-Code (BDEW product code for control profile).
     ///
-    /// Assigned by the DSO/TSO per BK6-24-174 §4.3. Mandatory for §14a compliance.
+    /// Assigned by the DSO per BK6-22-300. Mandatory before a load may be steered.
     pub produktcode: Option<String>,
     /// Date from which this channel configuration is active.
     pub valid_from: Date,
@@ -235,14 +243,21 @@ impl ClsChannel {
 }
 
 /// Type of device connected to a CLS channel.
+///
+/// These are device classes, **not** §14a modules. The three §14a modules are
+/// network-charge reduction models the Anschlussnutzer elects — Modul 1 a flat
+/// reduction, Modul 2 a reduced Arbeitspreis, Modul 3 zeitvariable Netzentgelte
+/// (BK6-22-300) — and any SteuVE may be on any of them. Pinning "Wärmepumpe =
+/// Modul 1" and "Wallbox = Modul 2" onto the device type, as this enum\'s docs
+/// used to, is a category error that would mis-price a §14a bill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClsDeviceType {
-    /// Heat pump (Wärmepumpe) — §14a EnWG Modul 1.
+    /// Heat pump (Wärmepumpe).
     HeatPump,
-    /// Electric vehicle charger (Wallbox) — §14a EnWG Modul 2.
+    /// Electric vehicle charger (Wallbox).
     EvCharger,
-    /// Air conditioning (Klimaanlage) — §14a EnWG.
+    /// Air conditioning (Klimaanlage).
     AirConditioning,
     /// Night storage heating (Nachtspeicherheizung).
     NightStorage,
@@ -333,9 +348,7 @@ pub struct SmgwSession {
 }
 
 impl SmgwSession {
-    /// `true` when the gateway has a valid, non-expiring TLS certificate.
-    ///
-    /// BSI TR-03109-4 §4: TLS cert renewal must happen ≥ 30 days before expiry.
+    /// `true` when the gateway has a TLS certificate that is valid on `today`.
     #[must_use]
     pub fn has_valid_tls_cert(&self, today: Date) -> bool {
         self.certificates
@@ -343,9 +356,12 @@ impl SmgwSession {
             .any(|c| matches!(c.cert_type, CertificateType::Tls) && c.is_valid(today))
     }
 
-    /// Find certificates expiring within `warning_days` (any type).
+    /// Certificates of any type expiring within `warning_days`.
     ///
-    /// MSBs must renew certificates before expiry — BSI TR-03109-4 §6.3.
+    /// The window is the caller\'s: BSI TR-03109-4 binds certificate *runtimes*,
+    /// while the renewal lead time and the Zertifikatswechsel overlap are fixed
+    /// by the Root-CP. A flat "30 days" is an operational choice, not a rule the
+    /// TR states, so it is a parameter.
     #[must_use]
     pub fn expiring_certificates(
         &self,

@@ -64,6 +64,20 @@ fn quality_from_mscons(status: Option<&str>) -> QualityFlag {
 
 use crate::store::{MeterStoreTimeSeriesRepository, MeterStoreTyp2Repository};
 
+/// The calendar month `day` falls in, as an inclusive date range.
+///
+/// The default period for a Gasbeschaffenheit delivery that states none: the
+/// grid operator publishes the Abrechnungsbrennwert monthly, so the month is the
+/// narrowest honest guess. Applying it to the MaLo's whole history — the former
+/// behaviour — silently repriced every past period.
+fn month_of(day: time::Date) -> (time::Date, time::Date) {
+    let first = day.replace_day(1).unwrap_or(day);
+    let last = first
+        .replace_day(first.month().length(first.year()))
+        .unwrap_or(day);
+    (first, last)
+}
+
 /// Shared application state for the webhook handler.
 #[derive(Clone)]
 pub struct HandlerState {
@@ -83,6 +97,22 @@ pub struct HandlerState {
     pub erp_webhook_url: Option<String>,
     /// Optional HMAC secret signing outbound CloudEvents (`x-mako-signature`).
     pub erp_webhook_secret: Option<secrecy::SecretString>,
+    /// §14a SMGW/CLS compliance thresholds, so the synchronous checks on the
+    /// upsert and audit endpoints use the same numbers as the daily sweep. They
+    /// were hardcoded `30, 2` at four call sites while the docs called them
+    /// configurable.
+    pub smgw: crate::config::SmgwConfig,
+    /// Delivery-surveillance thresholds, shared by the worker and the on-demand
+    /// scan endpoint so both judge by the same numbers.
+    pub surveillance: crate::config::SurveillanceConfig,
+    /// Whether a real cold tier is configured and its maintenance loop running.
+    ///
+    /// `false` means meterstore is hot-only against an in-memory warehouse:
+    /// nothing is ever archived and the settled history has nowhere to go.
+    /// `GET /api/v1/archive/status` used to answer `"enabled": true`
+    /// unconditionally, which reads as "archival is working" on exactly the
+    /// deployment where it is not.
+    pub cold_tier_enabled: bool,
 }
 
 impl HandlerState {
@@ -402,35 +432,82 @@ pub async fn handle_webhook(
             }
         }
 
-        // ── PID 13007: update meter_billing_periods with gas quality data ──────
+        // ── PID 13007: record the Gasbeschaffenheit delivery ───────────────────
         // The ProcessCompleted payload carries `brennwert_kwh_per_m3` and
-        // `zustandszahl` extracted by the makod adapter from `QTY+Z08`/`QTY+Z10`.
+        // `zustandszahl` extracted by the makod adapter from `QTY+Z08`/`QTY+Z10`,
+        // plus the period they apply to. Both factors are period-scoped: the gas
+        // grid operator publishes an Abrechnungsbrennwert per supply area per
+        // month, so a value without its period cannot be matched to a
+        // consumption month. When the payload omits the period, the delivery is
+        // filed against the calendar month it arrived in — the publication
+        // cadence — rather than being applied to the MaLo's whole history.
         if GAS_QUALITY_PIDS.contains(&pid) {
-            let brennwert = data["brennwert_kwh_per_m3"]
-                .as_str()
-                .and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
-            let zustandszahl = data["zustandszahl"]
-                .as_str()
-                .and_then(|s| s.parse::<rust_decimal::Decimal>().ok());
+            let decimal = |key: &str| {
+                data[key]
+                    .as_str()
+                    .and_then(|s| s.parse::<rust_decimal::Decimal>().ok())
+                    .or_else(|| {
+                        data[key]
+                            .as_f64()
+                            .and_then(rust_decimal::Decimal::from_f64_retain)
+                    })
+            };
+            let brennwert = decimal("brennwert_kwh_per_m3");
+            let zustandszahl = decimal("zustandszahl");
             if brennwert.is_some() || zustandszahl.is_some() {
-                match state
-                    .repo
-                    .update_gas_quality(&state.tenant, &malo_id, brennwert, zustandszahl)
-                    .await
-                {
+                let (default_from, default_to) = month_of(received_at.date());
+                let date = |key: &str| {
+                    data[key].as_str().and_then(|s| {
+                        time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE)
+                            .ok()
+                    })
+                };
+                let period_from = date("period_from").unwrap_or(default_from);
+                let period_to = date("period_to")
+                    .filter(|t| *t >= period_from)
+                    .unwrap_or(default_to.max(period_from));
+
+                let record = crate::domain::GasQualityRecord {
+                    tenant: state.tenant.clone(),
+                    malo_id: malo_id.clone(),
+                    period_from,
+                    period_to,
+                    brennwert_kwh_per_m3: brennwert,
+                    zustandszahl,
+                    source_pid: Some(pid),
+                };
+                match state.repo.record_gas_quality(&record).await {
                     Ok(n) => info!(
                         process_id = %process_id, pid, malo_id = %malo_id,
-                        rows_updated = n,
-                        "edmd: updated gas quality (Brennwert/Zustandszahl) in meter_billing_periods"
+                        %period_from, %period_to, billing_periods_backfilled = n,
+                        "edmd: recorded Gasbeschaffenheit (Brennwert/Zustandszahl)"
                     ),
                     Err(err) => warn!(%err, process_id = %process_id, pid,
-                        "edmd: failed to update gas quality"),
+                        "edmd: failed to record gas quality"),
                 }
             }
         }
+        // ── PID 13006: Messwert Storno ────────────────────────────────────
+        // A Storno withdraws values delivered earlier; it carries no new
+        // measurements. Storing whatever `reads` array it happens to include
+        // would book the *cancelled* quantities as freshly measured ones — the
+        // opposite of what the message says — so the receipt is recorded and the
+        // payload is not. Applying the cancellation to the referenced delivery
+        // needs the reference the ProcessCompleted payload does not carry yet.
+        if crate::domain::STORNO_PIDS.contains(&pid) {
+            warn!(
+                process_id = %process_id, pid, malo_id = %malo_id,
+                message_ref = ?receipt.message_ref,
+                "edmd: MSCONS Messwert Storno received — receipt recorded, no values \
+                 stored; the referenced delivery must be withdrawn by an operator \
+                 correction (POST /api/v1/corrections/{{malo_id}})"
+            );
+            return StatusCode::NO_CONTENT.into_response();
+        }
+
         // ── Typed MSCONS interval ingest ──────────────────────────────────
         // The reads carried by a ProcessCompleted event are the primary source
-        // of metered data in German MaKo. They are validated (V01–V10) and then
+        // of metered data in German MaKo. They are validated (V01–V09/V11/V12) and then
         // stored through the same batched path as every other ingest family, so
         // a MSCONS reading lands with the same key, unit and quality record as
         // one that arrived by direct push.
@@ -605,7 +682,7 @@ pub async fn handle_webhook(
                 period_to,
                 validation: &validation,
                 // The MSCONS door does not run the Hampel scorer at ingest;
-                // V01–V10 is its signal. Retroactive rescoring adds the grade.
+                // the V-rules are its signal. Retroactive rescoring adds the grade.
                 hampel: None,
             };
             if alert.is_warning() {

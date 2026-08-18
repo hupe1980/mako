@@ -32,12 +32,16 @@ pub(crate) fn edm_sparte_to_medium(s: EdmSparte) -> Medium {
 
 /// The `Mengeneinheit` a stored quantity of this Sparte is expressed in.
 ///
-/// Matches the storage convention (`store.rs`): gas and water readings are
-/// stored as volume (m³), everything else as energy (kWh).
+/// Follows the storage convention (`store::stored_unit`): every reading is held
+/// in its Sparte's **billing** unit. Gas registers m³ but is converted to kWh_Hs
+/// at ingest (§ 25 Nr. 4 MessEV), so only water — whose measured and billed unit
+/// are both m³ — is exported as a volume. Declaring gas as `Kubikmeter` here
+/// understated an exported Energiemenge by the Brennwert factor, roughly
+/// tenfold.
 pub(crate) fn edm_sparte_to_einheit(s: EdmSparte) -> Mengeneinheit {
     match s {
-        EdmSparte::Gas | EdmSparte::Wasser => Mengeneinheit::Kubikmeter,
-        EdmSparte::Strom | EdmSparte::Waerme => Mengeneinheit::Kwh,
+        EdmSparte::Wasser => Mengeneinheit::Kubikmeter,
+        EdmSparte::Strom | EdmSparte::Gas | EdmSparte::Waerme => Mengeneinheit::Kwh,
     }
 }
 

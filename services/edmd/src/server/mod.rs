@@ -1,7 +1,6 @@
 //! Axum router and startup logic for `edmd`.
 
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
 use std::sync::Arc;
 
 // Quality scoring and Gas conversion are provided by the `metering` crate.
@@ -27,7 +26,6 @@ use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use sqlx::PgPool;
 use time::OffsetDateTime;
-use tokio::net::TcpListener;
 use tokio_util::sync::CancellationToken;
 
 use crate::domain::{
@@ -117,7 +115,7 @@ pub fn router(state: HandlerState) -> Router {
             put(cancel_reading_order),
         )
         .route("/api/v1/reading-orders/{id}/fail", put(fail_reading_order))
-        // N7: Jahresablesung campaign scheduler (§40 Abs. 2 EnWG)
+        // N7: Jahresablesung campaign scheduler (§ 40b Abs. 1 EnWG)
         .route(
             "/api/v1/reading-orders/campaign",
             post(jahresablesung_campaign),
@@ -142,7 +140,7 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/quality-score/{malo_id}",
             post(post_quality_rescore),
         )
-        // § 60 Abs. 6 MsbG bitemporal corrections: audit-trail preserving retroactive corrections.
+        // § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) bitemporal corrections: audit-trail preserving retroactive corrections.
         .route("/api/v1/corrections/{malo_id}", post(post_corrections))
         // Bulk ingestion: batched direct-push reads (performance path for large MSCONS deliveries)
         .route("/api/v1/meter-reads/{malo_id}/bulk", post(post_bulk_reads))
@@ -187,6 +185,16 @@ pub fn router(state: HandlerState) -> Router {
         .route("/api/v1/netzverlust", get(get_netzverlust))
         // § 60 Abs. 2 MsbG — estimated-reading confirmation obligations
         .route("/api/v1/confirmations", get(list_confirmations))
+        // Delivery surveillance — the measuring points that stopped delivering.
+        // The V-rules can only judge data that arrived; this is the other half.
+        .route(
+            "/api/v1/surveillance/delivery",
+            get(crate::surveillance::get_delivery_surveillance),
+        )
+        .route(
+            "/api/v1/surveillance/delivery/scan",
+            post(crate::surveillance::post_delivery_surveillance_scan),
+        )
         // Iceberg/S3 archive endpoints
         .route("/api/v1/archive/status", get(get_archive_status))
         .route("/api/v1/archive/olap/{malo_id}", get(get_archive_olap))
@@ -213,7 +221,7 @@ pub fn router(state: HandlerState) -> Router {
         // Iceberg clients (DuckDB/Spark/Trino) connect to meterstore's own catalog
         // facade, not an edmd-hosted one.
         .route("/api/v1/query/sql", post(post_sql_query))
-        // ── §14a SMGW session registry (MsbG §21c / BSI TR-03109) ────────────
+        // ── §14a SMGW session registry (§ 25 MsbG / BSI TR-03109) ────────────
         // `compliance` is a static segment and takes priority over {malo_id} in Axum 0.8.
         .route("/api/v1/smgw", get(list_smgw_sessions))
         .route("/api/v1/smgw/compliance", get(get_smgw_compliance))
@@ -225,28 +233,20 @@ pub fn router(state: HandlerState) -> Router {
             "/api/v1/smgw/{malo_id}",
             get(get_smgw_session).put(put_smgw_session),
         )
-        .route("/metrics", get(metrics))
-        .route("/health/live", get(|| async { StatusCode::OK }))
-        .route("/health/ready", get(health_ready))
+        // `/health/live`, `/health/ready` and the generic `/metrics` are the
+        // runner's (`mako_service::run`), which probes the pool for real. This
+        // is edmd's own domain gauge, mounted beside them.
+        .route("/edmd/metrics", get(metrics))
         .with_state(state)
 }
 
 // ── REST handlers ─────────────────────────────────────────────────────────────
 
-/// `GET /health/ready` — confirms the database connection is alive.
-/// Returns 503 when the pool cannot reach PostgreSQL.
-async fn health_ready(State(state): State<HandlerState>) -> impl IntoResponse {
-    match sqlx::query("SELECT 1").execute(state.repo.pool()).await {
-        Ok(_) => StatusCode::OK,
-        Err(e) => {
-            tracing::warn!(error = %e, "edmd: readiness probe: DB unreachable");
-            StatusCode::SERVICE_UNAVAILABLE
-        }
-    }
-}
-
-/// `GET /metrics` — Prometheus-compatible operational metrics.
-/// No authentication required; restrict network access at the ingress layer.
+/// `GET /edmd/metrics` — edmd's own Prometheus gauges.
+///
+/// The runner mounts the generic `/metrics` (request counters) and both health
+/// probes; this adds the domain numbers. No authentication — restrict network
+/// access at the ingress layer.
 async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
     let mut out = String::with_capacity(512);
     let pool = state.repo.pool();
@@ -289,10 +289,101 @@ pub(crate) struct SimpleTimeParams {
     pub(crate) to: Option<String>,
 }
 
+// ── Read windows ──────────────────────────────────────────────────────────────
+
+/// How far back a read reaches when the caller names no `from`.
+///
+/// Every time-series endpoint used to default to `OffsetDateTime::UNIX_EPOCH`,
+/// so `GET /api/v1/lastgang/{malo_id}` with no parameters asked for **every
+/// interval ever stored** for that MaLo across both tiers. At quarter-hour
+/// resolution a decade is 350 000 rows, materialised into a `Vec<MeterRead>` and
+/// then into BO4E JSON — one unparameterised request from a dashboard is a
+/// tenant-wide outage. A month is the window an interactive caller almost always
+/// means; anything longer is asked for explicitly.
+pub(crate) const DEFAULT_READ_WINDOW: time::Duration = time::Duration::days(31);
+
+/// The longest window a single request may ask for.
+///
+/// Two years covers a Jahresabrechnung with its comparison year, which is the
+/// widest legitimate interactive read. Bulk history is what the Arrow IPC
+/// negotiation, `POST /api/v1/query/sql` and the Iceberg REST catalog are for —
+/// all three stream rather than materialise.
+pub(crate) const MAX_READ_WINDOW: time::Duration = time::Duration::days(732);
+
+/// Parse a `?from=` / `?to=` pair into a bounded UTC window.
+///
+/// A malformed timestamp is a `400`, not a default. Both bounds used to be
+/// parsed with `.ok()` and fall back silently, so `?from=last-tuesday` returned
+/// the whole history and looked like a successful answer to the question the
+/// caller asked.
+// A whole `axum::Response` in the `Err` arm trips `clippy::result_large_err`,
+// so the refusal travels as its message and is rendered by `into_response`.
+pub(crate) struct WindowRefusal(String);
+
+impl WindowRefusal {
+    /// The `400` this refusal renders as.
+    pub(crate) fn into_response(self) -> axum::response::Response {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({ "error": self.0 })),
+        )
+            .into_response()
+    }
+}
+
+pub(crate) fn read_window(
+    from: Option<&str>,
+    to: Option<&str>,
+) -> Result<(OffsetDateTime, OffsetDateTime), WindowRefusal> {
+    use time::format_description::well_known::Rfc3339;
+
+    let refuse = WindowRefusal;
+    let parse = |name: &str, raw: &str| {
+        OffsetDateTime::parse(raw, &Rfc3339).map_err(|_| {
+            refuse(format!(
+                "invalid `{name}` timestamp {raw:?}; expected RFC 3339"
+            ))
+        })
+    };
+
+    let to = match to {
+        Some(raw) => parse("to", raw)?,
+        None => OffsetDateTime::now_utc(),
+    };
+    let from = match from {
+        Some(raw) => parse("from", raw)?,
+        None => to - DEFAULT_READ_WINDOW,
+    };
+
+    if from >= to {
+        return Err(refuse(format!(
+            "`from` ({from}) must be before `to` ({to})"
+        )));
+    }
+    if to - from > MAX_READ_WINDOW {
+        return Err(refuse(format!(
+            "requested window is {} days; the maximum for a materialised read is {}. \
+             Use `Accept: application/vnd.apache.arrow.stream`, POST /api/v1/query/sql, \
+             or the Iceberg REST catalog under /api/v1/iceberg for bulk history.",
+            (to - from).whole_days(),
+            MAX_READ_WINDOW.whole_days(),
+        )));
+    }
+    Ok((from, to))
+}
+
 // ── RunConfig + startup ───────────────────────────────────────────────────────
 
 pub struct RunConfig {
-    pub listen: SocketAddr,
+    /// The runner's tuned pool, already connected and migrated. It also backs
+    /// meterstore's hot tier, so its sizing bounds both.
+    pub pool: PgPool,
+    /// §14a SMGW/CLS compliance sweep thresholds.
+    pub smgw: crate::config::SmgwConfig,
+    /// Delivery-surveillance thresholds.
+    pub surveillance: crate::config::SurveillanceConfig,
+    /// The same URL the pool was built from — meterstore's `SqlCatalog` opens its
+    /// own small metadata pool over it (see `store::CATALOG_POOL_MAX`).
     pub database_url: SecretString,
     pub marktd_url: String,
     pub marktd_api_key: secrecy::SecretString,
@@ -300,8 +391,6 @@ pub struct RunConfig {
     pub webhook_url: String,
     pub webhook_secret: Option<SecretString>,
     pub inbound_secret: Option<SecretString>,
-    /// PostgreSQL pool tuning (size, timeouts, connection lifetime).
-    pub db: crate::config::DatabaseConfig,
     /// Tenant identifier — used as Cedar resource_tenant.
     pub tenant: String,
     /// OIDC verifier.  Use [`OidcVerifier::disabled`] in dev/test.
@@ -356,22 +445,14 @@ async fn iceberg_catalog_guard(
     next.run(request).await
 }
 
-/// Connect to the database, run migrations, register subscription, and serve.
-pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
-    // Build the pool through the shared builder so the configured `pool_size` and
-    // connection lifetimes actually take effect (a bare `PgPool::connect` ignores
-    // them) and every connection is tagged `edmd` in `pg_stat_activity`. This pool
-    // also backs meterstore's hot tier, so its sizing bounds both.
-    let pool = cfg
-        .db
-        .connect(cfg.database_url.expose_secret(), "edmd")
-        .await?;
-
-    // Run database migrations at startup.
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .map_err(|e| anyhow::anyhow!("run edmd migrations: {e}"))?;
+/// Build edmd's domain router and spawn its background workers.
+///
+/// The runner (`mako_service::run`) owns everything around this: tracing, the
+/// tuned pool (already connected and migrated, handed over in `cfg.pool`), the
+/// health probes with a real DB ping, the generic `/metrics`, and graceful
+/// shutdown on SIGINT **and SIGTERM**.
+pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
+    let pool = cfg.pool.clone();
 
     // ── meterstore-backed storage tier ─────────────────────────────────────────
     // The hot PostgreSQL window and the cold Iceberg history are owned by
@@ -450,6 +531,9 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
     };
 
     let repo = MeterStoreTimeSeriesRepository::new(reads_store, pool.clone());
+    // The surveillance worker reads the resolved series across both tiers, so it
+    // needs the store handle, not just the business-table pool.
+    let repo_for_surveillance = repo.clone();
 
     let mcp_state = Arc::new(crate::mcp_server::EdmdMcpState {
         pool: pool.clone(),
@@ -482,6 +566,9 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
             .erp_webhook_secret
             .clone()
             .map(secrecy::SecretString::from),
+        cold_tier_enabled: cfg.archive.as_ref().is_some_and(|a| a.enabled),
+        smgw: cfg.smgw.clone(),
+        surveillance: cfg.surveillance.clone(),
     };
     // ── Kafka ingest consumer (optional) ─────────────────────────────────────
     // High-throughput intake for head-end systems that stream reading batches
@@ -534,8 +621,6 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
 
     let pool_arc = Arc::new(pool);
 
-    // Both limiters apply: the keyed one bounds any single caller, the global
-    // one bounds their sum.
     // meterstore's read-only Iceberg REST catalog, mounted so external engines
     // (DuckDB / Spark / Trino / PyIceberg) can read the cold tier directly from
     // object storage — edmd stays in the metadata path only, never the data path.
@@ -551,6 +636,9 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
                 iceberg_catalog_guard,
             ));
 
+    // Both limiters apply: the keyed one bounds any single caller, the global one
+    // bounds their sum. Health, tracing and the generic `/metrics` come from the
+    // runner, so they are not added again here.
     let app = mako_service::ServiceBuilder::new()
         .merge(
             router(state)
@@ -564,44 +652,43 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         .with_rate_limit(&cfg.rate_limit)
         .build();
 
-    let listener = TcpListener::bind(cfg.listen).await?;
+    tracing::info!(marktd_url = %cfg.marktd_url, "edmd: domain router built");
 
-    tracing::info!(
-        listen = %cfg.listen,
-        marktd_url = %cfg.marktd_url,
-        "edmd: listening"
-    );
-
-    // §14a Fernsteuerbarkeit compliance background worker (MsbG §21c, BSI TR-03109-4 §6.3).
-    // Daily sweep of all SmgwSessions: checks TLS cert validity, CLS channel §14a
-    // Konfigurationsprodukt, and communication faults.
-    // Emits `de.messwert.cls.compliance-issue` CloudEvents for every detected issue.
-    {
-        use crate::smgw::spawn_cls_compliance_worker;
-        spawn_cls_compliance_worker(
+    // §14a compliance sweeps (§ 25 MsbG: the GWA is responsible for monitoring
+    // and maintenance of the intelligent metering system). Two sweeps, both
+    // deduplicated so a standing fault is announced once rather than daily:
+    // the CLS/certificate compliance register and the tiered certificate-expiry
+    // advance warning.
+    if cfg.smgw.enabled {
+        crate::smgw::spawn_cls_compliance_worker(
             pool_arc.clone(),
             smgw_tenant.clone(),
             smgw_webhook_url.clone(),
             smgw_webhook_secret.clone(),
-            30,     // cert_warning_days — warn 30 days before expiry (BSI TR-03109-4 §6.3)
-            2,      // comm_fault_threshold_hours — § 60 Abs. 2 MsbG: substitute after 2h silence
-            86_400, // interval_secs — sweep daily
+            cfg.smgw.cert_warning_days,
+            cfg.smgw.comm_fault_threshold_hours,
+            cfg.smgw.sweep_interval_secs,
+            cfg.shutdown.clone(),
+        );
+        crate::smgw::spawn_smgw_cert_expiry_worker(
+            pool_arc.clone(),
+            smgw_tenant.clone(),
+            smgw_webhook_url.clone(),
+            smgw_webhook_secret.clone(),
+            cfg.smgw.sweep_interval_secs,
             cfg.shutdown.clone(),
         );
     }
 
-    // SMGW certificate-expiry alerting (BSI TR-03109-4 §6.3). Daily sweep of every
-    // certificate in `smgw_sessions`, emitting `de.messwert.smgw.cert.expiry-warning`
-    // at 90 / 30 / 7 days before `valid_to` (SMGW_CERT_ABLAUFDATUM), once per tier per
-    // certificate. An expired cert silently ends §14a Fernsteuerbarkeit.
-    {
-        use crate::smgw::spawn_smgw_cert_expiry_worker;
-        spawn_smgw_cert_expiry_worker(
-            pool_arc.clone(),
+    // Delivery surveillance — the measuring points that have gone quiet. The
+    // V-rules can only judge data that arrived; this is the other half.
+    if cfg.surveillance.enabled {
+        crate::surveillance::spawn_surveillance_worker(
+            repo_for_surveillance,
+            cfg.surveillance.clone(),
             smgw_tenant.clone(),
             smgw_webhook_url.clone(),
             smgw_webhook_secret.clone(),
-            86_400, // interval_secs — sweep daily
             cfg.shutdown.clone(),
         );
     }
@@ -620,8 +707,17 @@ pub async fn run(cfg: RunConfig) -> anyhow::Result<()> {
         );
     }
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { cfg.shutdown.cancelled().await })
-        .await?;
-    Ok(())
+    // The maintenance handles own their tiering loops — dropping one stops it —
+    // so they are parked on the shutdown token's lifetime rather than on this
+    // function's, which returns as soon as the router is built.
+    if !_maintenance.is_empty() {
+        let shutdown = cfg.shutdown.clone();
+        tokio::spawn(async move {
+            let _held = _maintenance;
+            shutdown.cancelled().await;
+            tracing::info!("edmd: meterstore tiering loops stopping");
+        });
+    }
+
+    Ok(app)
 }

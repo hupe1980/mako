@@ -3,6 +3,8 @@
 #[allow(unused_imports)]
 use super::*;
 
+use rust_decimal::Decimal;
+
 // ── Ablesesteuerung — Reading Order API ──────────────────────────────────────
 //
 // All three market roles schedule meter readings through the same API:
@@ -25,12 +27,19 @@ pub(crate) struct CreateReadingOrderRequest {
     pub insrpt_process_id: Option<String>,
 }
 
+/// Register readings and gas factors reported when a reading order completes.
+///
+/// Every quantity is a `Decimal`, matching the `NUMERIC` columns that hold it.
+/// They were `f64`: on the way in that silently rounded a five-decimal
+/// Zählerstand, and on the way out sqlx has no `NUMERIC → f64` decode at all, so
+/// listing or fetching any *completed* order failed with a type-mismatch error
+/// the moment a register reading was present.
 #[derive(Debug, serde::Deserialize)]
 pub(crate) struct CompleteReadingOrderRequest {
-    pub zaehlerstand_kwh: Option<f64>,
-    pub zaehlerstand_qm3: Option<f64>,
-    pub brennwert: Option<f64>,
-    pub zustandszahl: Option<f64>,
+    pub zaehlerstand_kwh: Option<Decimal>,
+    pub zaehlerstand_qm3: Option<Decimal>,
+    pub brennwert: Option<Decimal>,
+    pub zustandszahl: Option<Decimal>,
     pub mscons_ref: Option<String>,
 }
 
@@ -53,8 +62,8 @@ pub(crate) struct ReadingOrderRow {
     pub geplant_am: time::Date,
     pub ausfuehrt_bis: Option<time::Date>,
     pub status: String,
-    pub zaehlerstand_kwh: Option<f64>,
-    pub zaehlerstand_qm3: Option<f64>,
+    pub zaehlerstand_kwh: Option<Decimal>,
+    pub zaehlerstand_qm3: Option<Decimal>,
     pub ausgefuehrt_am: Option<time::OffsetDateTime>,
     pub mscons_ref: Option<String>,
     pub auftrag_position_id: Option<uuid::Uuid>,
@@ -204,10 +213,10 @@ pub(crate) async fn complete_reading_order(
     let res = sqlx::query(
         "UPDATE ablese_auftraege
          SET status='AUSGEFUEHRT',
-             zaehlerstand_kwh=$1::numeric,
-             zaehlerstand_qm3=$2::numeric,
-             brennwert=$3::numeric,
-             zustandszahl=$4::numeric,
+             zaehlerstand_kwh=$1,
+             zaehlerstand_qm3=$2,
+             brennwert=$3,
+             zustandszahl=$4,
              ausgefuehrt_am=now(),
              mscons_ref=COALESCE($5,mscons_ref)
          WHERE id=$6 AND tenant=$7 AND status IN ('OFFEN','BEAUFTRAGT')",
@@ -288,7 +297,7 @@ pub(crate) const ABLESEHINDERNIS_GRUENDE: [&str; 7] = [
 ///
 /// Distinct from `/cancel`: a cancelled order is no longer owed, whereas a
 /// failed one still is. A failed JAHRESABLESUNG past its deadline remains a
-/// §40 Abs. 2 EnWG gap, so it keeps appearing in `list_overdue_reading_orders`
+/// § 40b Abs. 1 EnWG gap, so it keeps appearing in `list_overdue_reading_orders`
 /// until it is re-dispatched or the quantity is estimated under §40a EnWG.
 pub(crate) async fn fail_reading_order(
     claims: Claims,

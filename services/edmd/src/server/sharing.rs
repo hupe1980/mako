@@ -30,8 +30,6 @@ pub(crate) async fn get_sharing_allocation(
     Path(community_id): Path<String>,
     Query(params): Query<LastgangParams>,
 ) -> impl IntoResponse {
-    use time::format_description::well_known::Rfc3339;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
         return (
@@ -41,17 +39,10 @@ pub(crate) async fn get_sharing_allocation(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     // Load the virtual meter config for this community.
     let pool = state.repo.pool();
     let config_row = sqlx::query(

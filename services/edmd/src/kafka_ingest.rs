@@ -27,12 +27,12 @@
 //!
 //! At-least-once: offsets are committed only after the batch is stored. A
 //! replayed batch is idempotent — `store_reads` upserts on the primary key,
-//! and a value-changing replay leaves a § 60 Abs. 6 MsbG audit row like any other
+//! and a value-changing replay leaves a § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit row like any other
 //! redelivery. Records that fail to parse are logged and skipped (a poison
 //! pill must not wedge the partition); records that fail to store abort the
 //! poll loop iteration without committing, so they are redelivered.
 //!
-//! Every batch runs the same V01–V10 `ValidatedReads::validate` pass as the REST
+//! Every batch runs the same V01–V09/V11/V12 `ValidatedReads::validate` pass as the REST
 //! ingest paths — a "trusted" transport does not skip validation.
 
 use std::time::Duration;
@@ -108,7 +108,7 @@ impl QualityAlertTarget {
 /// Spawn the Kafka ingest consumer. Runs until `shutdown` is cancelled.
 ///
 /// `alerts` is where a quality warning goes. A head-end feed is the least
-/// supervised ingest door there is, so a V01–V10 finding on it has to reach the
+/// supervised ingest door there is, so a V-rule finding on it has to reach the
 /// same CloudEvent the REST doors raise, not just the log.
 pub fn spawn(
     cfg: KafkaIngestConfig,
@@ -263,7 +263,7 @@ async fn run_consumer(
     }
 }
 
-/// Convert one wire batch into `MeterRead`s, run V01–V10, and store.
+/// Convert one wire batch into `MeterRead`s, run the V-rules, and store.
 async fn store_batch(
     repo: &MeterStoreTimeSeriesRepository,
     tenant: &str,
@@ -300,20 +300,21 @@ async fn store_batch(
         if from >= to {
             anyhow::bail!("malo {}: interval from >= to at {from}", batch.malo_id);
         }
-        let quality = iv
-            .quality
-            .as_deref()
-            .map(|q| match q.to_uppercase().as_str() {
-                "ESTIMATED" => QualityFlag::Estimated,
-                "SUBSTITUTED" => QualityFlag::Substituted,
-                "CALCULATED" => QualityFlag::Calculated,
-                "CORRECTED" => QualityFlag::Corrected,
-                "PRELIMINARY" => QualityFlag::Preliminary,
-                "FAULTY" => QualityFlag::Faulty,
-                "UNKNOWN" => QualityFlag::Unknown,
-                _ => QualityFlag::Measured,
-            })
-            .unwrap_or(QualityFlag::Measured);
+        // An unrecognised flag is refused, exactly as the REST doors refuse it.
+        // The catch-all used to make it `MEASURED`, so a head-end typo turned a
+        // non-billable reading into a billable one — on the least supervised
+        // ingest door there is.
+        let quality = match iv.quality.as_deref() {
+            None => QualityFlag::Measured,
+            Some(raw) => match crate::server::quality_flag_from_wire(raw) {
+                Some(q) => q,
+                None => anyhow::bail!(
+                    "malo {}: unknown quality `{raw}` at {}",
+                    batch.malo_id,
+                    iv.from
+                ),
+            },
+        };
         reads.push(MeterRead {
             malo_id: batch.malo_id.clone(),
             melo_id: batch.melo_id.clone(),
@@ -338,7 +339,7 @@ async fn store_batch(
         return Ok(0);
     }
 
-    // Same V01–V10 pass as every REST ingest path.
+    // Same V-rule pass as every REST ingest path.
     let malo_id = reads[0].malo_id.clone();
     let (validated, validation) =
         crate::domain::validation::ValidatedReads::validate(reads, "KAFKA_INGEST", &malo_id);
@@ -355,7 +356,7 @@ async fn store_batch(
         period_from: validated.as_slice().first().map(|r| r.dtm_from),
         period_to: validated.as_slice().last().map(|r| r.dtm_to),
         validation: &validation,
-        // The Kafka door does not run the Hampel scorer; V01–V10 is its signal.
+        // The Kafka door does not run the Hampel scorer; the V-rules are its signal.
         hampel: None,
     };
     crate::server::quality_alert::raise_quality_warning(

@@ -13,12 +13,12 @@
 //! | `get_device_history`         | RAG: comprehensive device history for LanceDB indexing |
 //! | `get_quality_warnings`       | Hampel quality warnings (grade A/B/C/F) |
 //! | `list_reading_orders`        | List Ablesesteuerung reading orders for a MaLo |
-//! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§40 EnWG compliance) |
+//! | `list_overdue_reading_orders`| Reading orders past `ausfuehrt_bis` (§ 40b Abs. 1 EnWG compliance) |
 //! | `trigger_jahresablesung`     | Launch Jahresablesung campaign for a NB grid area |
 //! | `trigger_substitution`       | Generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window |
-//! | `get_correction_history`     | § 60 Abs. 6 MsbG audit: list corrections for a MaLo |
-//! | `validate_timeseries`        | Run validation rules V01–V10 on meter reads (gaps, spikes, quality, rollover) |
-//! | `get_quality_assessments`    | Per-batch quality history (§ 60 Abs. 6 MsbG) |
+//! | `get_correction_history`     | § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list corrections for a MaLo |
+//! | `validate_timeseries`        | Run the metering validation rules (V01–V09/V11/V12) on meter reads |
+//! | `get_quality_assessments`    | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
 //! | `get_annual_forecast`        | § 60 Abs. 2 MsbG Jahresprognose |
 //! | `get_gas_quality`            | PID 13007 Brennwert + Zustandszahl |
@@ -30,7 +30,7 @@
 //! | `analyze-consumption`      | Step-by-step consumption analysis |
 //! | `submit-mscons`            | Step-by-step MSCONS ingestion guide |
 //! | `quality-assessment`       | Hampel quality assessment guide |
-//! | `jahresablesung-workflow`  | §40 Abs. 2 EnWG Jahresablesung campaign guide |
+//! | `jahresablesung-workflow`  | § 40b Abs. 1 EnWG Jahresablesung campaign guide |
 //! | `reading-order-lifecycle`  | Reading order lifecycle: OFFEN → AUSGEFUEHRT |
 
 use std::sync::Arc;
@@ -99,10 +99,18 @@ pub struct GetTimeseriesParams {
 pub struct GetImbalanceParams {
     /// 11-digit Marktlokations-ID.
     pub malo_id: String,
-    /// Year (e.g. 2025).
+    /// Year (e.g. 2026).
     pub year: i32,
     /// Month (1–12).
     pub month: u8,
+    /// The bilanzierte (profile-allocated) quantity for the month, in kWh.
+    ///
+    /// Required: edmd holds the measured half of the saldo only. The bilanzierte
+    /// Menge comes from the Bilanzkreisabrechnung, not from metering data.
+    pub bilanziert_kwh: rust_decimal::Decimal,
+    /// `STROM` (default) or `GAS` — Gas balances on the 06:00 Gastag.
+    #[serde(default)]
+    pub sparte: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -185,7 +193,7 @@ pub struct TriggerSubstitutionParams {
     pub obis_code: Option<String>,
     /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
     pub sparte: Option<String>,
-    /// § 60 Abs. 6 MsbG audit reason (default `NoMeasurementAvailable`).
+    /// § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit reason (default `NoMeasurementAvailable`).
     pub reason: Option<String>,
 }
 
@@ -344,13 +352,22 @@ impl EdmdMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Read the Mehr-/Mindermengen imbalance report for a MaLo and month.
+    /// Read the Mehr-/Mindermengensaldo for a MaLo and month.
     ///
-    /// Returns the aggregated Mehr-/Mindermengen (MMM) imbalance for a given
-    /// billing month.  The report is used by `invoicd` to compute the
-    /// monthly selbstausgestellt INVOIC 31006 MMM amount.  Returns an error when no data exists yet.
+    /// One implementation, shared with `GET /api/v1/imbalance/…`: the arithmetic
+    /// and the sign convention are `metering::compute_imbalance`\'s. This tool
+    /// used to carry a third definition of its own — "Mehr = the positive
+    /// intervals, Minder = the absolute value of the negative ones" — which is
+    /// not the Mehr-/Mindermengensaldo at all but a series split by sign, and it
+    /// was documented as feeding the INVOIC 31006 MMM amount.
     #[tool(
-        description = "Get Mehr-/Mindermengen imbalance report for a MaLo and billing month",
+        description = "Get the Mehr-/Mindermengensaldo for a MaLo and billing month. \
+                       Compares the measured quantity edmd holds against the bilanzierte \
+                       (profile-allocated) quantity, which must be supplied as \
+                       `bilanziert_kwh` — edmd measures, it does not balance. \
+                       Naming is from the network operator\'s side (GPKE Teil 1 Kap. 8.4): \
+                       consuming *under* the profile is a MEHRmenge the NB credits; \
+                       consuming over it is a MINDERmenge the NB invoices.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_imbalance(
@@ -374,50 +391,59 @@ impl EdmdMcpHandler {
                 .previous_day()
                 .unwrap_or(from)
         };
+        let sparte = match p
+            .sparte
+            .as_deref()
+            .unwrap_or("STROM")
+            .to_uppercase()
+            .as_str()
+        {
+            "GAS" => metering::Sparte::Gas,
+            "WAERME" | "WÄRME" => metering::Sparte::Waerme,
+            "WASSER" => metering::Sparte::Wasser,
+            _ => metering::Sparte::Strom,
+        };
 
-        let from_ts = time::OffsetDateTime::new_utc(from, time::Time::MIDNIGHT);
-        let to_ts = time::OffsetDateTime::new_utc(to, time::Time::MIDNIGHT);
-
-        let reads = self
+        let report = match self
             .state
             .repo
-            .query(&TimeSeriesQuery {
-                malo_id: p.malo_id.clone(),
-                from: from_ts,
-                to: to_ts,
-                sparte: None,
-                tenant: self.state.tenant.clone(),
-            })
+            .imbalance(
+                &p.malo_id,
+                from,
+                to,
+                &self.state.tenant,
+                sparte,
+                p.bilanziert_kwh,
+            )
             .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        if reads.is_empty() {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "no_data: No meter reads for MaLo '{}' in {}-{:02}.",
-                p.malo_id, p.year, p.month
-            ))]));
-        }
-
-        // Mehr = positive intervals, Minder = |negative intervals|. The former SQL
-        // did not filter quality, so this does not either.
-        let mut mehr = rust_decimal::Decimal::ZERO;
-        let mut minder = rust_decimal::Decimal::ZERO;
-        for r in &reads {
-            if r.quantity_kwh.is_sign_positive() && !r.quantity_kwh.is_zero() {
-                mehr += r.quantity_kwh;
-            } else if r.quantity_kwh.is_sign_negative() {
-                minder += r.quantity_kwh.abs();
+        {
+            Ok(r) => r,
+            Err(crate::domain::EdmError::NoData { .. }) => {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "no_data: no billable meter reads for MaLo \'{}\' in {}-{:02}. \
+                     Without a measured quantity the saldo is unknown, not zero.",
+                    p.malo_id, p.year, p.month
+                ))]));
             }
-        }
-        let count = reads.len();
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
 
         ContentBlock::json(serde_json::json!({
-            "malo_id": p.malo_id,
-            "year": p.year,
-            "month": p.month,
-            "mehrmengen_kwh": mehr.to_string(),
-            "mindermengen_kwh": minder.to_string(),
-            "reading_count": count,
+            "malo_id":            report.malo_id,
+            "year":               p.year,
+            "month":              p.month,
+            "sparte":             report.sparte.as_str(),
+            "gemessen_kwh":       report.gemessen_kwh.to_string(),
+            "bilanziert_kwh":     report.bilanziert_kwh.to_string(),
+            "mehrmenge_kwh":      report.mehrmenge_kwh.to_string(),
+            "mindermenge_kwh":    report.mindermenge_kwh.to_string(),
+            "delta_kwh":          report.delta_kwh.to_string(),
+            "delta_pct":          report.delta_pct.map(|d| d.to_string()),
+            "quality":            report.quality.as_str(),
+            "interval_count":     report.interval_count,
+            "legal_basis":
+                "GPKE (BK6-24-174) Teil 1 Kap. 8.4 (Strom) · GaBi Gas 2.1 \
+                 (BK7-24-01-008) Ziff. 3a (Gas)",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -528,14 +554,25 @@ impl EdmdMcpHandler {
                 ))]));
             }
 
-            let total_kwh: rust_decimal::Decimal = billable.iter().map(|r| r.quantity_kwh).sum();
-            // Spitzenleistung: peak 15-min slot converted to kW (×4).
-            let spitzenleistung_kw: Option<rust_decimal::Decimal> = billable
+            // One canonical Bezug series, so the tool cannot answer with a
+            // prosumer's Einspeisung folded into its grid draw, or with a
+            // dual-tariff meter's consumption counted twice (`domain::register`).
+            let intervals =
+                crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
+            let total_kwh: rust_decimal::Decimal = intervals.iter().map(|iv| iv.value).sum();
+            // Peak demand is the interval's energy over its own length in hours,
+            // so an hourly series reports one instead of none.
+            let spitzenleistung_kw: Option<rust_decimal::Decimal> = intervals
                 .iter()
-                .filter(|r| (r.dtm_to - r.dtm_from).whole_seconds() == 900)
-                .map(|r| r.quantity_kwh * rust_decimal::Decimal::from(4))
+                .filter_map(|iv| {
+                    let minutes = rust_decimal::Decimal::from(
+                        (iv.to - iv.from).whole_minutes().unsigned_abs(),
+                    );
+                    (minutes > rust_decimal::Decimal::ZERO)
+                        .then(|| iv.value * rust_decimal::Decimal::from(60) / minutes)
+                })
                 .max();
-            let count = billable.len();
+            let count = intervals.len();
 
             ContentBlock::json(serde_json::json!({
                 "malo_id": p.malo_id,
@@ -816,41 +853,31 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             })
             .collect();
 
-        // The response reports `window_from`/`window_to` next to `coverage_pct`,
-        // so coverage must be measured against that window — without
-        // `over_period` a truncated delivery reads as 100 %.
-        let report = metering::score_intervals(
-            &intervals,
-            &metering::QualityConfig::default().over_period(from_dt, to_dt),
-        );
+        // The **same** scorer the REST surface runs, not a second one. This tool
+        // used to call `score_intervals` directly with `QualityConfig::default()`,
+        // which is three divergences at once: electricity thresholds applied to
+        // every commodity (a summer gas profile grades as a stuck meter), an
+        // assumed 900 s cadence instead of the observed one, and a fixed
+        // `hampel_k3_t3` label that named parameters it had not used. An agent
+        // and an operator asking the same question got different answers.
+        let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
+        let report = crate::server::compute_quality(&intervals, sparte, from_dt, to_dt);
 
         ContentBlock::json(serde_json::json!({
             "malo_id": p.malo_id,
             "window_from": from_dt.to_string(),
             "window_to": to_dt.to_string(),
-            "interval_count": intervals.len(),
-            "grade": report.grade.as_str(),
-            "has_warnings": report.has_warnings(),
+            "interval_count": report.intervals_accepted,
+            "grade": report.grade,
+            "has_warnings": report.has_warnings,
             "gaps_detected": report.gaps_detected,
-            "zero_run_length": report.max_zero_run,
+            "zero_run_length": report.zero_run_length,
             "coverage_pct": report.coverage_pct,
             "intervals_consistent": report.intervals_consistent,
-            // Findings carry the instant they are about since metering 0.17,
-            // so the anomalous slots come off `issues` rather than from two
-            // pre-split lists of synthetic timestamp strings.
-            "outlier_intervals": report
-                .issues
-                .iter()
-                .filter(|i| i.rule_id == metering::validation::ValidationRuleId::StatisticalOutlier)
-                .filter_map(|i| i.affected_from.map(|t| t.to_string()))
-                .collect::<Vec<_>>(),
-            "spike_intervals": report
-                .issues
-                .iter()
-                .filter(|i| i.rule_id == metering::validation::ValidationRuleId::ImplausiblePower)
-                .filter_map(|i| i.affected_from.map(|t| t.to_string()))
-                .collect::<Vec<_>>(),
-            "algorithm": "hampel_k3_t3",
+            "expected_intervals": report.expected_intervals,
+            "outlier_intervals": report.outlier_intervals,
+            "spike_intervals": report.spike_intervals,
+            "algorithm": report.algorithm,
             "hint": "Use POST /api/v1/quality-score/{malo_id} to persist this rescore to quality_assessments.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
@@ -860,7 +887,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     /// List reading orders (Ablesesteuerung) for a MaLo.
     ///
     /// Returns reading orders filtered by status and/or Anlass.
-    /// Use this to check §40 Abs. 2 EnWG Jahresablesung scheduling,
+    /// Use this to check § 40b Abs. 1 EnWG Jahresablesung scheduling,
     /// INSRPT_STOERUNG sonderablesung status, and Lieferbeginn/ende readings.
     #[tool(
         description = "List Ablesesteuerung reading orders for a MaLo. Filter by status (OFFEN/BEAUFTRAGT/AUSGEFUEHRT) and anlass (JAHRESABLESUNG/LIEFERBEGINN/SONDERABLESUNG/…).",
@@ -919,11 +946,11 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
 
     /// List overdue reading orders — past their `ausfuehrt_bis` deadline.
     ///
-    /// Identifies §40 Abs. 2 EnWG Jahresablesung compliance failures.
+    /// Identifies § 40b Abs. 1 EnWG Jahresablesung compliance failures.
     /// An overdue JAHRESABLESUNG means SLP meter data is missing, which will
     /// cause Mehr-/Mindermengen disputes with the LF.
     #[tool(
-        description = "List all reading orders past their ausfuehrt_bis deadline (§40 Abs. 2 EnWG compliance). Returns overdue OFFEN/BEAUFTRAGT orders sorted by deadline oldest-first.",
+        description = "List all reading orders past their ausfuehrt_bis deadline (§ 40b Abs. 1 EnWG compliance). Returns overdue OFFEN/BEAUFTRAGT orders sorted by deadline oldest-first.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_overdue_reading_orders(
@@ -934,7 +961,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
         let rows = sqlx::query(
             // FEHLGESCHLAGEN is included: the order is terminal but the reading
             // is still owed, so a failed Jahresablesung past its deadline is
-            // exactly the §40 Abs. 2 EnWG gap this tool exists to surface.
+            // exactly the § 40b Abs. 1 EnWG gap this tool exists to surface.
             // Excluding it would let /fail retire an obligation silently.
             r"SELECT id, malo_id, melo_id, anlass, auftraggeber_rolle,
                      ausfuehrender_msb, geplant_am, ausfuehrt_bis, status,
@@ -990,19 +1017,19 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             "failed_count": failed,
             "by_anlass": by_anlass,
             "orders": orders,
-            "regulatory_note": "JAHRESABLESUNG overdue = §40 Abs. 2 EnWG violation. SLP Mehr-/Mindermengen will be estimated, not metered. FEHLGESCHLAGEN orders are listed too — the order is closed but the reading is still owed, so it needs re-dispatch or a documented §40a EnWG estimate.",
+            "regulatory_note": "JAHRESABLESUNG overdue = § 40b Abs. 1 EnWG violation. SLP Mehr-/Mindermengen will be estimated, not metered. FEHLGESCHLAGEN orders are listed too — the order is closed but the reading is still owed, so it needs re-dispatch or a documented §40a EnWG estimate.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Launch a §40 Abs. 2 EnWG Jahresablesung campaign via MCP.
+    /// Launch a § 40b Abs. 1 EnWG Jahresablesung campaign via MCP.
     ///
     /// Creates JAHRESABLESUNG reading orders for all SLP MaLos in the NB's
     /// grid area that have not yet been scheduled. Use `dry_run = true` to
     /// preview the count without creating orders.
     #[tool(
-        description = "Launch §40 Abs. 2 EnWG Jahresablesung campaign: creates JAHRESABLESUNG reading orders for all SLP MaLos without a scheduled reading this year. Set dry_run=true to preview.",
+        description = "Launch § 40b Abs. 1 EnWG Jahresablesung campaign: creates JAHRESABLESUNG reading orders for all SLP MaLos without a scheduled reading this year. Set dry_run=true to preview.",
         annotations(
             destructive_hint = true,
             idempotent_hint = true,
@@ -1078,7 +1105,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 "geplant_am": outcome.geplant_am.to_string(),
                 "ausfuehrt_bis": outcome.ausfuehrt_bis.to_string(),
                 "capped": outcome.total_malos >= usize::try_from(max_malos).unwrap_or(usize::MAX),
-                "legal_basis": "§40 Abs. 2 EnWG",
+                "legal_basis": "§ 40b Abs. 1 EnWG",
                 "note": "re-running is idempotent — already-scheduled MaLos are skipped, \
                          so a capped run is resumed by calling again",
             }))
@@ -1088,7 +1115,7 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
     }
 
     #[tool(
-        description = "Generate and store § 60 Abs. 2 MsbG Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 60 Abs. 6 MsbG audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
+        description = "Generate and store § 60 Abs. 2 MsbG Ersatzwerte (substitute values) for a gap window. Methods: PriorPeriodAverage (default), LinearInterpolation, ZeroFill, LastValueCarryForward. Never overwrites a billable reading; every substitute is logged to substitute_value_log (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail). Runs the same core as POST /api/v1/meter-reads/{malo_id}/substitute.",
         annotations(
             destructive_hint = true,
             idempotent_hint = true,
@@ -1225,17 +1252,17 @@ impl EdmdMcpHandler {
 
     #[prompt(
         name = "jahresablesung-workflow",
-        description = "§40 Abs. 2 EnWG Jahresablesung: annual SLP meter reading campaign"
+        description = "§ 40b Abs. 1 EnWG Jahresablesung: annual SLP meter reading campaign"
     )]
     async fn jahresablesung_workflow_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(
                 Role::User,
-                "How do I run the §40 Abs. 2 EnWG Jahresablesung campaign?",
+                "How do I run the § 40b Abs. 1 EnWG Jahresablesung campaign?",
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "## §40 Abs. 2 EnWG — Annual SLP Meter Reading\n\n\
+                "## § 40b Abs. 1 EnWG — Annual SLP Meter Reading\n\n\
                  The NB must ensure all SLP meters are read at least once per year.\n\
                  Failure → estimated SLP billing → Mehr-/Mindermengendisputes with the LF.\n\n\
                  ### Step 1: Check compliance status\n\
@@ -1254,7 +1281,7 @@ impl EdmdMcpHandler {
                  Update status via `PUT /api/v1/reading-orders/{id}/complete` with Zählerstand.\n\n\
                  ### Step 4: Verify completion\n\
                  `list_overdue_reading_orders` after campaign deadline.\n\
-                 Count of JAHRESABLESUNG overdue = §40 EnWG compliance gap.\n\n\
+                 Count of JAHRESABLESUNG overdue = § 40b Abs. 1 EnWG compliance gap.\n\n\
                  ### Step 5: Billing impact\n\
                  `get_billing_period(malo_id, from=Jan 1, to=Dec 31)` shows the full-year\n\
                  arbeitsmenge_kwh used for SLP Mehr-/Mindermengensaldo.\n\
@@ -1301,7 +1328,7 @@ impl EdmdMcpHandler {
                  | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
                  | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
                  | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\
-                 | NB campaign | `JAHRESABLESUNG` (§40 Abs. 2 EnWG) |\n\n\
+                 | NB campaign | `JAHRESABLESUNG` (§ 40b Abs. 1 EnWG) |\n\n\
                  ### Manual creation\n\
                  ```http\n\
                  POST /api/v1/reading-orders\n\
@@ -1326,14 +1353,14 @@ impl EdmdMcpHandler {
 
     // ── New Phase-2 tools ─────────────────────────────────────────────────────
 
-    /// `get_correction_history` — list retroactive corrections for a MaLo (§ 60 Abs. 6 MsbG).
+    /// `get_correction_history` — list retroactive corrections for a MaLo (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)).
     ///
     /// Returns all `meter_read_corrections` rows for the given MaLo in descending
     /// chronological order. Each row shows the original value, corrected value, reason,
-    /// and operator — enabling full § 60 Abs. 6 MsbG audit trail reconstruction.
+    /// and operator — enabling full § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit-trail reconstruction.
     #[tool(
         name = "get_correction_history",
-        description = "§ 60 Abs. 6 MsbG audit: list all retroactive corrections applied to a MaLo's \
+        description = "§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit: list all retroactive corrections applied to a MaLo's \
                        meter reads. Each entry shows original value, corrected value, reason, \
                        source (MSCONS_UPDATE/OPERATOR/AUTO_SUBSTITUTE), and timestamp.",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -1404,7 +1431,7 @@ impl EdmdMcpHandler {
             "period": { "from": from_ts.format(&Rfc3339).ok(), "to": to_ts.format(&Rfc3339).ok() },
             "correction_count": corrections.len(),
             "corrections": corrections,
-            "_note": "Use POST /api/v1/corrections/{malo_id} to submit new corrections (§ 60 Abs. 6 MsbG)"
+            "_note": "Use POST /api/v1/corrections/{malo_id} to submit new corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD))"
         });
         serde_json::to_string_pretty(&out)
             .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
@@ -1413,18 +1440,25 @@ impl EdmdMcpHandler {
 
     /// `validate_timeseries` — run the metering validation engine on a MaLo's time-series.
     ///
-    /// Applies all 10 validation rules (V01–V10) to the stored meter reads:
-    /// gap detection, overlap detection, negative energy, impossible spikes,
-    /// zero runs, interval length consistency, DST ambiguity, future timestamps,
-    /// and non-billable quality flags.
+    /// Applies the metering validation rules to the stored meter reads: gap
+    /// detection, overlap detection, negative energy, statistical outliers, zero
+    /// runs, interval-length consistency, DST ambiguity, future timestamps,
+    /// non-billable quality flags, unordered input and implausible power.
+    ///
+    /// There is no V10. It was a "register rollover" rule that compared
+    /// consecutive interval energies, which is meaningless for a series of
+    /// per-interval quantities rather than cumulative Zählerstände — it could
+    /// only fire on a quarter-hour carrying 50 MWh. `metering` removed it and
+    /// left the number unused so a stored `V10` finding cannot be reinterpreted.
     #[tool(
         name = "validate_timeseries",
-        description = "Run the metering validation engine (rules V01–V10) on stored meter reads \
+        description = "Run the metering validation engine (rules V01–V09/V11/V12) on stored meter reads \
                        for a MaLo. Identifies gaps (V01), overlaps (V02), negative energy (V03), \
-                       impossible spikes (V04), zero-runs (V05), inconsistent intervals (V06), \
+                       statistical outliers (V04), zero-runs (V05), inconsistent intervals (V06), \
                        DST ambiguity (V07), future timestamps (V08), non-billable quality (V09), \
-                       and register rollover (V10, WiM Gerätewechsel-Dokumentation). Use before billing to detect \
-                       intervals requiring § 60 Abs. 2 MsbG substitute values.",
+                       unordered input (V11) and implausible power (V12). There is no V10. \
+                       Use before billing to detect intervals requiring § 60 Abs. 2 MsbG \
+                       substitute values.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn validate_timeseries(
@@ -1467,21 +1501,42 @@ impl EdmdMcpHandler {
             })
             .collect();
 
+        // V01 (gap) and V02 (overlap) are statements about a **single** series,
+        // and a MaLo delivers several registers at once. Validated flat, every
+        // same-slot pair of a bidirectional or dual-tariff meter reported as an
+        // overlapping interval at `Error` severity — so this tool told an agent
+        // that a perfectly ordinary prosumer delivery was unbillable. The ingest
+        // path splits by register for exactly this reason (`domain::validation`);
+        // so does this one now.
         let config = ValidationConfig {
             expected_interval_secs: Some(p.interval_secs.unwrap_or(900)),
             now: Some(time::OffsetDateTime::now_utc()),
             ..ValidationConfig::default()
         };
-        let result = validate_intervals(&intervals, &config);
+        let groups = crate::domain::register_groups(&reads);
+        let mut issues = Vec::new();
+        let mut billing_block_count = 0usize;
+        let mut has_errors = false;
+        for group in &groups {
+            let result = validate_intervals(&group.intervals, &config);
+            billing_block_count += result.billing_block_count();
+            has_errors |= result.has_errors();
+            for i in &result.issues {
+                issues.push((group.obis_code, i.clone()));
+            }
+        }
+        let is_clean = issues.is_empty();
 
-        let issues_json: Vec<serde_json::Value> = result
-            .issues
+        let issues_json: Vec<serde_json::Value> = issues
             .iter()
-            .map(|i| {
+            .map(|(obis, i)| {
                 serde_json::json!({
                     "rule": i.rule_id.to_string(),
                     "severity": format!("{:?}", i.severity),
                     "message": i.message,
+                    // Which register the finding is about: an index into one
+                    // group means nothing without it.
+                    "obis_code": obis.map(|c| c.to_string()),
                     "interval_index": i.interval_index,
                     "affected_from": i.affected_from.map(|t| t.format(&Rfc3339).ok()),
                     "affected_value_kwh": i.affected_value,
@@ -1494,13 +1549,14 @@ impl EdmdMcpHandler {
             "malo_id": malo_id,
             "period": { "from": &p.from, "to": &p.to },
             "interval_count": intervals.len(),
-            "is_clean": result.is_clean(),
-            "has_errors": result.has_errors(),
-            "billing_block_count": result.billing_block_count(),
-            "issue_count": result.issues.len(),
+            "register_count": groups.len(),
+            "is_clean": is_clean,
+            "has_errors": has_errors,
+            "billing_block_count": billing_block_count,
+            "issue_count": issues.len(),
             "issues": issues_json,
-            "_note": if result.billing_block_count() > 0 {
-                format!("{} interval(s) require § 60 Abs. 2 MsbG substitute values before billing", result.billing_block_count())
+            "_note": if billing_block_count > 0 {
+                format!("{billing_block_count} interval(s) require § 60 Abs. 2 MsbG substitute values before billing")
             } else {
                 "All intervals are billing-eligible".to_owned()
             }
@@ -1510,12 +1566,12 @@ impl EdmdMcpHandler {
             .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// Get per-batch quality assessment history for a MaLo (§ 60 Abs. 6 MsbG audit trail).
+    /// Get per-batch quality assessment history for a MaLo (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail).
     #[tool(
         name = "get_quality_assessments",
         description = "Retrieve quality assessment history for a MaLo — per-batch \
                        grade (A/B/C/F), coverage %, gap count, billing_blocked flag. \
-                       Use to investigate recurring quality issues or § 60 Abs. 6 MsbG audit. \
+                       Use to investigate recurring quality issues or § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit. \
                        Params: malo_id (required), from / to (ISO 8601, optional).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1577,13 +1633,13 @@ impl EdmdMcpHandler {
         .map_err(|e| McpError::internal_error(e.to_string(), None))
     }
 
-    /// Get Summenzeitreihe (monthly aggregated energy) for MaBiS and § 13 StromNZV.
+    /// Get Summenzeitreihe (monthly aggregated energy) for MaBiS and GPKE (BK6-24-174) Teil 1 Kap. 8.4.
     #[tool(
         name = "get_summenzeitreihe",
         description = "Get monthly aggregated energy (Summenzeitreihe) for a MaLo. \
                        Returns total_kwh per calendar month with coverage percentage. \
                        Used for MaBiS UTILTS submissions (BK6-22-024 Anlage 3) and \
-                       Mehr-/Mindermengensaldo (§ 13 StromNZV). \
+                       Mehr-/Mindermengensaldo (GPKE Teil 1 Kap. 8.4). \
                        Params: malo_id (required), from / to (ISO 8601 UTC).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1629,16 +1685,12 @@ impl EdmdMcpHandler {
         // must not depend on which surface asked for it. Hand-rolling a UTC
         // month-start here diverged from resample's DST-aware Berlin months at
         // every month boundary.
-        let intervals: Vec<metering::MeterInterval> = reads
-            .iter()
-            .map(|r| metering::MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            })
-            .collect();
+        // …including the register projection and the billable-quality filter. The
+        // tool used to map every read straight through, so a MaLo whose data the
+        // REST surface reported as one Bezug series answered here with its
+        // Einspeisung and its Faulty intervals summed in as well.
+        let intervals =
+            crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
         let buckets = metering::resample(&intervals, &metering::ResampleConfig::to_monthly());
         let total_kwh: rust_decimal::Decimal = buckets.iter().map(|b| b.total).sum();
 
@@ -1664,7 +1716,7 @@ impl EdmdMcpHandler {
             "total_kwh": total_kwh.to_string(),
             "month_count": months.len(),
             "months": months,
-            "legal_basis": "MaBiS BK6-22-024 Anlage 3 / § 13 StromNZV Mehr-Mindermengensaldo",
+            "legal_basis": "MaBiS BK6-22-024 Anlage 3 / GPKE (BK6-24-174) Teil 1 Kap. 8.4 Mehr-/Mindermengensaldo",
         }))
         .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
         .map_err(|e| McpError::internal_error(e.to_string(), None))
@@ -1699,10 +1751,11 @@ impl EdmdMcpHandler {
                 .map_err(|e| McpError::invalid_params(format!("invalid to: {e}"), None))?
                 .unwrap_or_else(time::OffsetDateTime::now_utc);
 
-        // Mirror the (now-fixed) REST `get_annual_forecast`: read the window via
-        // the repository, no quality filter — `project_annual_consumption` weighs
-        // each interval's quality itself.
-        use metering::MeterInterval;
+        // Mirror the REST `get_annual_forecast` exactly: read the window via the
+        // repository, then project onto the canonical Bezug registers. Quality is
+        // filtered by both — the projection drops non-billable readings, and
+        // `project_annual_consumption` filters them again internally — so the two
+        // surfaces agree by construction rather than by coincidence.
         let reads = self
             .state
             .repo
@@ -1715,16 +1768,10 @@ impl EdmdMcpHandler {
             })
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let intervals: Vec<MeterInterval> = reads
-            .iter()
-            .map(|r| MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            })
-            .collect();
+        // The canonical Bezug projection, as the REST forecast uses: a projection
+        // over every register would forecast a year of energy nobody draws.
+        let intervals =
+            crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Bezug);
 
         // Prior-year window enables the seasonal correction branch — without it
         // every forecast is the naive daily × 365 projection. A missing prior-year
@@ -1742,16 +1789,8 @@ impl EdmdMcpHandler {
             })
             .await
             .unwrap_or_default();
-        let prior_intervals: Vec<MeterInterval> = prior_reads
-            .iter()
-            .map(|r| MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            })
-            .collect();
+        let prior_intervals =
+            crate::domain::energy_intervals(&prior_reads, crate::domain::EnergyDirection::Bezug);
         let prior = (!prior_intervals.is_empty()).then_some(prior_intervals.as_slice());
 
         match metering::project_annual_consumption(&intervals, prior) {
@@ -1796,8 +1835,10 @@ impl EdmdMcpHandler {
         &self,
         Parameters(p): Parameters<GetGasQualityParams>,
     ) -> Result<CallToolResult, McpError> {
+        // `source_pid`, not `pid` — see the note in `server::gas_quality`.
         let rows = sqlx::query(
-            r"SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl, pid, received_at
+            r"SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl,
+                     source_pid, received_at
               FROM gas_quality_data
               WHERE malo_id = $1
                 AND tenant = $2
@@ -1817,15 +1858,21 @@ impl EdmdMcpHandler {
         }
 
         use sqlx::Row;
-        let records: Vec<serde_json::Value> = rows.iter().map(|r| serde_json::json!({
+        let records: Vec<serde_json::Value> = rows.iter().map(|r| {
+            let dec = |c: &str| r
+                .try_get::<Option<rust_decimal::Decimal>, _>(c)
+                .ok()
+                .flatten()
+                .map(|d| d.to_string());
+            serde_json::json!({
             "period_from": r.try_get::<time::Date, _>("period_from").ok().map(|d| d.to_string()),
             "period_to": r.try_get::<time::Date, _>("period_to").ok().map(|d| d.to_string()),
-            "brennwert_kwh_per_m3": r.try_get::<String, _>("brennwert_kwh_per_m3").unwrap_or_default(),
-            "zustandszahl": r.try_get::<String, _>("zustandszahl").unwrap_or_default(),
-            "pid": r.try_get::<i32, _>("pid").unwrap_or(13007),
+            "brennwert_kwh_per_m3": dec("brennwert_kwh_per_m3"),
+            "zustandszahl": dec("zustandszahl"),
+            "source_pid": r.try_get::<Option<i32>, _>("source_pid").ok().flatten(),
             "received_at": r.try_get::<time::OffsetDateTime, _>("received_at").ok().map(|t| t.to_string()),
             "legal_basis": "§25 Nr. 4 MessEV / DVGW G 685 kWh_Hs = m³ × Brennwert × Zustandszahl",
-        })).collect();
+        })}).collect();
 
         serde_json::to_string_pretty(&serde_json::json!({
             "malo_id": p.malo_id,
@@ -1853,22 +1900,22 @@ impl ServerHandler for EdmdMcpHandler {
              \n\
              Stores MSCONS meter data, iMSys direct push (15-min RLM), virtual meters, \
              quality assessments, Gas quality data, and manages reading orders.\n\
-             Quality scoring uses the Hampel filter + V01-V10 validation engine.\n\
+             Quality scoring uses the Hampel filter + the V01–V09/V11/V12 validation engine.\n\
              \n\
              ## Tools (15)\n\
              - `get_timeseries` — read meter reads for a MaLo in a time range\n\
-             - `get_imbalance` — Mehr-/Mindermengen imbalance report (§ 13 StromNZV)\n\
+             - `get_imbalance` — Mehr-/Mindermengen imbalance report (GPKE (BK6-24-174) Teil 1 Kap. 8.4)\n\
              - `get_billing_period` — MeterBillingPeriod (arbeitsmenge_kwh, brennwert, spitzenleistung)\n\
              - `get_device_history` — M9 RAG: comprehensive device history for LanceDB indexing\n\
              - `get_quality_warnings` — Hampel quality warnings (grade A/B/C/F)\n\
              - `list_reading_orders` — Ablesesteuerung reading orders for a MaLo\n\
-             - `list_overdue_reading_orders` — overdue reading orders (§40 EnWG compliance)\n\
+             - `list_overdue_reading_orders` — overdue reading orders (§ 40b Abs. 1 EnWG compliance)\n\
              - `trigger_jahresablesung` — launch annual SLP reading campaign\n\
              - `trigger_substitution` — generate + store § 60 Abs. 2 MsbG Ersatzwerte for a gap window\n\
-             - `get_correction_history` — § 60 Abs. 6 MsbG bitemporal correction audit trail\n\
-             - `validate_timeseries` — V01-V10 validation (gaps, spikes, DST, rollover)\n\
-             - `get_quality_assessments` — per-batch quality history (§ 60 Abs. 6 MsbG)\n\
-             - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / § 13 StromNZV\n\
+             - `get_correction_history` — § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) bitemporal correction audit trail\n\
+             - `validate_timeseries` — V01–V09/V11/V12 validation (gaps, overlaps, outliers, DST, quality)\n\
+             - `get_quality_assessments` — per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD))\n\
+             - `get_summenzeitreihe` — monthly aggregated kWh for MaBiS / GPKE Teil 1 Kap. 8.4\n\
              - `get_annual_forecast` — § 60 Abs. 2 MsbG Jahresprognose from available reads\n\
              - `get_gas_quality` — PID 13007 Brennwert + Zustandszahl for Gas kWh_Hs conversion\n\
              \n\

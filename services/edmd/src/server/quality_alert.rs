@@ -3,7 +3,7 @@
 //! # Why this is shared rather than per-handler
 //!
 //! A batch can fail two independent ways: the **Hampel scorer** flags a session
-//! as grade C/F, and the **V01–V10 engine** annotates individual intervals
+//! as grade C/F, and the **V-rule engine** annotates individual intervals
 //! (V03 negative energy, V04 impossible spike, V09 non-billable quality). Only
 //! the first used to raise the event, and only on the RLM direct-push door — so
 //! a `FAULTY` reading with an unremarkable statistical profile, or any reading
@@ -35,7 +35,7 @@ pub(crate) struct QualityAlert<'a> {
     pub sparte: Option<&'a str>,
     pub period_from: Option<OffsetDateTime>,
     pub period_to: Option<OffsetDateTime>,
-    /// V01–V10 outcome for the batch.
+    /// V-rule outcome for the batch.
     pub validation: &'a BatchValidation,
     /// The Hampel session summary, where the door computes one.
     pub hampel: Option<serde_json::Value>,

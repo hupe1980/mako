@@ -234,6 +234,18 @@ pub struct MmmAutoRunRequest {
     pub minder_preis_ct_per_kwh: Option<rust_decimal::Decimal>,
     /// SLP Lastprofil designation (e.g. "H0"). Auto-derived from marktd when absent.
     pub lastprofil: Option<String>,
+    /// The **bilanzierte** (profile-allocated) quantity for the month, in kWh.
+    ///
+    /// Required. The Mehr-/Mindermengensaldo compares this against the measured
+    /// quantity, and only the measured half is a metering figure: the
+    /// bilanzierte Menge is what the Bilanzkreis was charged from the load
+    /// profile, which lives on the balancing side, not in `edmd`.
+    ///
+    /// This used to be read out of edmd\'s imbalance response as
+    /// `nb_quantity_kwh` — a field that held the *measured* total under a
+    /// balancing name, so the profile and the measurement were the same number
+    /// and the saldo was structurally zero.
+    pub bilanziert_kwh: rust_decimal::Decimal,
 }
 
 /// `POST /api/v1/billing/mmm-run/{malo_id}`
@@ -243,10 +255,16 @@ pub struct MmmAutoRunRequest {
 /// Operators need only supply `nb_mp_id`, `lf_mp_id`, `period_year`,
 /// `period_month`.  Everything else is auto-fetched:
 ///
-/// - `profil_kwh` ← `edmd GET /api/v1/imbalance/{malo_id}/{year}/{month}`
-///   (`nb_quantity_kwh` = NB-settled SLP profile consumption)
+/// - `arbeitsmenge_kwh` (the measured quantity) ←
+///   `edmd GET /api/v1/imbalance/{malo_id}/{year}/{month}?bilanziert_kwh=…`
+/// - `profil_kwh` ← the caller\'s `bilanziert_kwh`, echoed back by edmd
 /// - `mehr_preis` / `minder_preis` ← `marktd GET /api/v1/mmm-preise/strom/{year}/{month}`
 ///   (when not overridden in request)
+///
+/// Both halves of the saldo are now supplied. The position used to be built with
+/// `arbeitsmenge_kwh: None`, which `run_billing_internal` rejects outright
+/// ("arbeitsmenge_kwh (actual) required for MMM") — so this endpoint could not
+/// complete a single run.
 ///
 /// Then runs `run_billing_internal` → INVOIC 31002 draft + self-validation.
 pub async fn post_mmm_auto_run(
@@ -273,8 +291,8 @@ pub async fn post_mmm_auto_run(
     };
 
     let url = format!(
-        "{edmd_url}/api/v1/imbalance/{}/{}/{}",
-        malo_id, req.period_year, req.period_month
+        "{edmd_url}/api/v1/imbalance/{}/{}/{}?bilanziert_kwh={}",
+        malo_id, req.period_year, req.period_month, req.bilanziert_kwh
     );
     let mut http_req = http_client.get(&url);
     if let Some(key) = cfg.edmd_api_key.as_deref() {
@@ -299,17 +317,30 @@ pub async fn post_mmm_auto_run(
         Err(e) => return (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     };
 
-    let profil_kwh: Decimal = imbalance_body
-        .get("nb_quantity_kwh")
-        .and_then(|v| {
+    let decimal_field = |key: &str| -> Option<Decimal> {
+        imbalance_body.get(key).and_then(|v| {
             v.as_str()
                 .and_then(|s| s.parse().ok())
                 .or_else(|| v.as_f64().and_then(|f| Decimal::try_from(f).ok()))
         })
-        .unwrap_or(Decimal::ZERO);
+    };
+    // The measured half comes from edmd; the bilanzierte half is the caller\'s,
+    // echoed back so the invoice records the pair edmd actually compared.
+    let Some(gemessen_kwh) = decimal_field("gemessen_kwh") else {
+        return (
+            StatusCode::BAD_GATEWAY,
+            "edmd imbalance response carries no `gemessen_kwh`",
+        )
+            .into_response();
+    };
+    let profil_kwh = decimal_field("bilanziert_kwh").unwrap_or(req.bilanziert_kwh);
 
-    if profil_kwh == Decimal::ZERO {
-        return (StatusCode::UNPROCESSABLE_ENTITY, "nb_quantity_kwh is zero").into_response();
+    if gemessen_kwh == Decimal::ZERO && profil_kwh == Decimal::ZERO {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "both the measured and the bilanzierte quantity are zero — nothing to settle",
+        )
+            .into_response();
     }
 
     // ── Build dates ───────────────────────────────────────────────────────────
@@ -355,7 +386,7 @@ pub async fn post_mmm_auto_run(
             period_from,
             period_to,
             billing_type: "mmm".to_owned(),
-            arbeitsmenge_kwh: None,
+            arbeitsmenge_kwh: Some(gemessen_kwh),
             arbeitspreis_ct_per_kwh: None,
             arbeitsmenge_ht_kwh: None,
             arbeitspreis_ht_ct_per_kwh: None,

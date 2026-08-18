@@ -66,18 +66,25 @@ pub(crate) async fn get_archive_status(
     }
 
     let _ = &pool;
-    // Archival is owned by meterstore now (hot Postgres + cold Iceberg). Report
-    // the tier it manages rather than the former per-batch export bookkeeping.
+    // Archival is owned by meterstore (hot Postgres + cold Iceberg). Report the
+    // tier it manages rather than the former per-batch export bookkeeping — and
+    // report it honestly: without `[archive] enabled = true` there is no cold
+    // tier and no maintenance loop, so nothing is ever archived.
     let store = state.repo.store();
     Json(serde_json::json!({
-        "enabled": true,
+        "cold_tier_enabled": state.cold_tier_enabled,
         "backend": "meterstore",
         "tables": {
             "resolved": store.resolved_table(),
             "raw": store.raw_table(),
         },
-        "note": "Cold-tier archival is managed by meterstore; per-batch archive \
-                 statistics are no longer tracked.",
+        "note": if state.cold_tier_enabled {
+            "Cold-tier archival is managed by meterstore's tiering watermark; \
+             per-batch archive statistics are not tracked."
+        } else {
+            "Hot tier only — `[archive] enabled` is false, so settled intervals \
+             stay in PostgreSQL and the Iceberg warehouse is in-memory."
+        },
     }))
     .into_response()
 }
@@ -106,8 +113,6 @@ pub(crate) async fn get_archive_olap(
     Path(malo_id): Path<String>,
     Query(params): Query<ArchiveOlapParams>,
 ) -> impl IntoResponse {
-    use time::format_description::well_known::Rfc3339;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
         return (
@@ -117,17 +122,10 @@ pub(crate) async fn get_archive_olap(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     // MMM aggregation now runs against the version-resolved, tier-split series
     // meterstore hands back — the same numbers a settlement would reconcile.
     let query = match parse_malo(&malo_id).and_then(|m| open_series(state.repo.store(), m)) {
@@ -145,11 +143,20 @@ pub(crate) async fn get_archive_olap(
         .await
     {
         Ok(Some(series)) => {
-            let total: rust_decimal::Decimal = series.intervals.iter().map(|i| i.value).sum();
+            // The same canonical Bezug projection the REST and MCP aggregates
+            // use: a resolved read spans every register, so summing it raw mixed
+            // Einspeisung into the total, counted a dual-tariff meter's
+            // consumption twice, and admitted Faulty intervals the settlement
+            // side must never see (`domain::register`).
+            let intervals = crate::domain::register::energy_intervals_from(
+                series.intervals,
+                crate::domain::EnergyDirection::Bezug,
+            );
+            let total: rust_decimal::Decimal = intervals.iter().map(|i| i.value).sum();
             Json(serde_json::json!({
                 "malo_id": malo_id,
                 "total_kwh": total.to_string(),
-                "read_count": series.intervals.len(),
+                "read_count": intervals.len(),
                 "from": from.to_string(),
                 "to": to.to_string(),
             }))
@@ -198,18 +205,10 @@ pub(crate) async fn get_archive_portfolio(
             .into_response();
     }
 
-    use time::format_description::well_known::Rfc3339;
-
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     // A hostile `limit` would otherwise reach the SQL text; clamp it to a sane
     // ceiling and render it as a plain integer so it cannot carry an injection.
     let limit = params.limit.clamp(1, 10_000);
@@ -307,8 +306,6 @@ pub(crate) async fn get_archive_timeseries(
     Path(malo_id): Path<String>,
     Query(params): Query<ArchiveOlapParams>,
 ) -> impl IntoResponse {
-    use time::format_description::well_known::Rfc3339;
-
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-archive-olap", resource_tenant) {
         return (
@@ -318,17 +315,10 @@ pub(crate) async fn get_archive_timeseries(
             .into_response();
     }
 
-    let from = params
-        .from
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or(OffsetDateTime::UNIX_EPOCH);
-    let to = params
-        .to
-        .as_deref()
-        .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok())
-        .unwrap_or_else(OffsetDateTime::now_utc);
-
+    let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
+        Ok(w) => w,
+        Err(refusal) => return refusal.into_response(),
+    };
     let query = match parse_malo(&malo_id).and_then(|m| open_series(state.repo.store(), m)) {
         Ok(q) => q,
         Err(refusal) => return refusal.into_response(),

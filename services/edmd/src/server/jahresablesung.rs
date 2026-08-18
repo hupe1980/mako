@@ -1,9 +1,9 @@
-//! Jahresablesung campaign scheduler and compliance report (§40 Abs. 2 EnWG).
+//! Jahresablesung campaign scheduler and compliance report (§ 40b Abs. 1 EnWG).
 
 #[allow(unused_imports)]
 use super::*;
 
-// ── Jahresablesung campaign (N7 — §40 Abs. 2 EnWG) ───────────────────────────
+// ── Jahresablesung campaign (N7 — § 40b Abs. 1 EnWG) ───────────────────────────
 
 #[derive(Debug, serde::Deserialize)]
 pub struct JahresablesungCampaignRequest {
@@ -24,7 +24,7 @@ pub struct JahresablesungCampaignRequest {
 
 /// `POST /api/v1/reading-orders/campaign`
 ///
-/// **Jahresablesung campaign scheduler (§40 Abs. 2 EnWG).**
+/// **Jahresablesung campaign scheduler (§ 40b Abs. 1 EnWG).**
 ///
 /// Creates bulk `JAHRESABLESUNG` reading orders for all SLP MaLos in the NB's
 /// grid area that have not yet been scheduled for reading this campaign year.
@@ -42,7 +42,7 @@ pub struct JahresablesungCampaignRequest {
 ///    - `ausfuehrt_bis = January 31 of campaign_year+1`
 /// 4. Return campaign summary.
 ///
-/// ## §40 Abs. 2 EnWG
+/// ## § 40b Abs. 1 EnWG
 ///
 /// NB is obligated to ensure annual SLP meter reading.  Unread SLP meters →
 /// estimated settlement → potential Mehr-/Mindermengendisputes with the LF.
@@ -107,7 +107,7 @@ impl CampaignOutcome {
             "total_slp_malos_enumerated": self.total_malos,
             "reading_orders_created": self.created,
             "already_scheduled_skipped": self.skipped,
-            "legal_basis": "§40 Abs. 2 EnWG",
+            "legal_basis": "§ 40b Abs. 1 EnWG",
         })
     }
 }
@@ -151,7 +151,7 @@ impl CampaignError {
 /// Create the Jahresablesung reading orders for one NB's grid area.
 ///
 /// Shared by the HTTP endpoint and the MCP tool so both raise identical orders.
-/// A second implementation would be a second §40 Abs. 2 EnWG obligation with its
+/// A second implementation would be a second § 40b Abs. 1 EnWG obligation with its
 /// own idempotency rules.
 ///
 /// # Errors
@@ -335,7 +335,7 @@ pub async fn run_jahresablesung_campaign(
 
 /// `GET /api/v1/compliance/jahresablesung/{year}`
 ///
-/// §40 Abs. 2 EnWG compliance report for a campaign year.
+/// § 40b Abs. 1 EnWG compliance report for a campaign year.
 ///
 /// The obligation is to read each SLP Marktlokation annually. This reports
 /// whether that happened, broken down by what actually became of each order —
@@ -448,7 +448,7 @@ pub(crate) async fn jahresablesung_compliance(
             "ueberfaellig":       overdue,
             "by_status":          by_status,
             "fehlschlag_gruende": by_grund,
-            "legal_basis":        "§40 Abs. 2 EnWG (jährliche Ablesung), §40a EnWG (Schätzung)",
+            "legal_basis":        "§ 40b Abs. 1 EnWG i. V. m. GPKE (BK6-24-174) Teil 1 Turnusablesung; § 40a Abs. 2 EnWG (Schätzung)",
             "note": "`ablesequote` is over orders raised, not over the SLP population — \
                      a MaLo that was never scheduled has no order here. Cross-check the \
                      population with marktd.",

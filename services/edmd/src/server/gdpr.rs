@@ -30,8 +30,11 @@ use super::*;
 ///    ([`SubjectRegistry::erase_in`]) — the readings in both tiers become
 ///    unattributable. Skipped when the MaLo has no mapping (never stored, or
 ///    already erased), which is recorded rather than treated as an error.
-/// 3. Deletes the derived `meter_billing_periods`, `quality_assessments` and
-///    `substitute_value_log` rows for the MaLo, tenant-scoped.
+/// 3. Rewrites `malo_id` to the (now unmapped) subject reference in every table
+///    whose rows are Buchungsbelege — `meter_read_corrections`,
+///    `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`,
+///    `gas_quality_data` — and deletes the derived, operational and device
+///    tables outright. Tenant-scoped throughout.
 ///
 /// ## Regulatory basis
 ///
@@ -180,35 +183,126 @@ pub(crate) async fn post_gdpr_erasure(
         false
     };
 
-    // 3. Delete derived aggregates (no audit obligation). A MaLo-ID is not unique
-    //    across tenants, so every delete is tenant-scoped.
-    erasure_step!(
-        "delete_billing_periods",
-        sqlx::query("DELETE FROM meter_billing_periods WHERE malo_id = $1 AND tenant = $2")
-            .bind(&malo_id)
-            .bind(resource_tenant)
-            .execute(&mut *tx)
-            .await
-    );
+    // 3. Every other table that keys rows on this MaLo. Unlinking the reading
+    //    store alone left the MaLo-ID — and, in four of these, register readings
+    //    and corrected kWh values beside it — in plain text, so the "erased"
+    //    subject stayed identifiable in edmd\'s own database. Each table is
+    //    handled by what it is:
+    //
+    //    - **Pseudonymised** where the row is a Buchungsbeleg. § 147 Abs. 1 AO
+    //      requires it kept and Art. 17 Abs. 3 lit. b DSGVO exempts exactly that;
+    //      rewriting `malo_id` to the (now unmapped) subject reference satisfies
+    //      both, the same way the readings themselves are handled.
+    //    - **Deleted** where the row is derived, operational, or device
+    //      administration, and carries no retention duty of its own.
+    //
+    //    A MaLo-ID is not unique across tenants, so every statement is
+    //    tenant-scoped.
+    let pseudonym = subject.as_ref().map(|s| s.as_str().to_owned());
 
-    // 4. Delete quality assessments.
-    erasure_step!(
-        "delete_quality_assessments",
-        sqlx::query("DELETE FROM quality_assessments WHERE malo_id = $1 AND tenant = $2")
-            .bind(&malo_id)
-            .bind(resource_tenant)
-            .execute(&mut *tx)
-            .await
-    );
+    /// Rewrite `malo_id` to the pseudonym, or delete the rows when the MaLo
+    /// never had a mapping (nothing to keep them linked to).
+    macro_rules! pseudonymise {
+        ($step:literal, $table:literal) => {
+            match pseudonym.as_deref() {
+                Some(p) => erasure_step!(
+                    $step,
+                    sqlx::query(concat!(
+                        "UPDATE ",
+                        $table,
+                        " SET malo_id = $1 WHERE malo_id = $2 AND tenant = $3"
+                    ))
+                    .bind(p)
+                    .bind(&malo_id)
+                    .bind(resource_tenant)
+                    .execute(&mut *tx)
+                    .await
+                ),
+                None => erasure_step!(
+                    $step,
+                    sqlx::query(concat!(
+                        "DELETE FROM ",
+                        $table,
+                        " WHERE malo_id = $1 AND tenant = $2"
+                    ))
+                    .bind(&malo_id)
+                    .bind(resource_tenant)
+                    .execute(&mut *tx)
+                    .await
+                ),
+            }
+        };
+    }
 
-    // 5. Delete the substitute-value log.
+    macro_rules! purge {
+        ($step:literal, $table:literal) => {
+            erasure_step!(
+                $step,
+                sqlx::query(concat!(
+                    "DELETE FROM ",
+                    $table,
+                    " WHERE malo_id = $1 AND tenant = $2"
+                ))
+                .bind(&malo_id)
+                .bind(resource_tenant)
+                .execute(&mut *tx)
+                .await
+            )
+        };
+    }
+
+    // Buchungsbeleg-bearing: the values must survive, the identity must not.
+    pseudonymise!("pseudonymise_corrections", "meter_read_corrections");
+    pseudonymise!("pseudonymise_substitute_log", "substitute_value_log");
+    pseudonymise!("pseudonymise_receipts", "meter_data_receipts");
+    pseudonymise!("pseudonymise_reading_orders", "ablese_auftraege");
+    pseudonymise!("pseudonymise_gas_quality", "gas_quality_data");
+
+    // Derived, operational, or device administration — no retention duty.
+    purge!("delete_billing_periods", "meter_billing_periods");
+    purge!("delete_quality_assessments", "quality_assessments");
+    purge!("delete_confirmations", "estimated_read_confirmations");
+    purge!("delete_push_sessions", "direct_push_sessions");
+    purge!("delete_smgw_sessions", "smgw_sessions");
+    purge!("delete_cls_compliance_issues", "cls_compliance_issues");
+    purge!("delete_delivery_surveillance", "delivery_surveillance");
+    purge!("delete_cert_expiry_alerts", "smgw_cert_expiry_alerts");
+
+    // Virtual meter configuration names MaLos in two places and neither is a
+    // `malo_id` column, so it survived an erasure that covered every other table:
+    // `virtual_malo_id` is the derived point's own ID, and `rule_json` carries the
+    // **source** MaLo-IDs of the aggregation. A community member erased under
+    // Art. 17 stayed named, in clear text, inside the § 42b rule of every virtual
+    // meter that drew on their meter.
+    //
+    // Configuration is derived and operational — no retention duty — so both go.
+    // Deleting a rule that referenced the subject is also the only coherent
+    // outcome: its readings are unattributable after the mapping is destroyed, so
+    // the virtual meter can no longer be computed either way.
+    //
+    // The source match is `jsonb_path_exists` with the ID as a **bound variable**,
+    // not a `LIKE '%…%'` over the serialised JSON: the rule variants nest their
+    // IDs under different keys (`subtract_malo_ids`, `generation_malo_id`,
+    // `plant_melo_id`), so the recursive wildcard is what makes one statement
+    // cover all of them — while still comparing whole values, so an 11-digit ID
+    // cannot match as a substring of some other field and delete a stranger's
+    // community.
     erasure_step!(
-        "delete_substitute_log",
-        sqlx::query("DELETE FROM substitute_value_log WHERE malo_id = $1 AND tenant = $2")
-            .bind(&malo_id)
-            .bind(resource_tenant)
-            .execute(&mut *tx)
-            .await
+        "delete_virtual_meter_configs",
+        sqlx::query(
+            r"DELETE FROM virtual_meter_configs
+               WHERE tenant = $2
+                 AND (virtual_malo_id = $1
+                      OR jsonb_path_exists(
+                             rule_json,
+                             '$.** ? (@ == $mid)',
+                             jsonb_build_object('mid', $1::text)
+                         ))",
+        )
+        .bind(&malo_id)
+        .bind(resource_tenant)
+        .execute(&mut *tx)
+        .await
     );
 
     erasure_step!("commit", tx.commit().await);
@@ -227,10 +321,21 @@ pub(crate) async fn post_gdpr_erasure(
             "status":           "erased",
             "subject_unlinked": subject_unlinked,
             "mechanism":        "meterstore subject-registry pseudonymisation (append-only tiers)",
-            "legal_basis":      "DSGVO Art. 17 right to erasure",
-            "audit_note": "Subject mapping destroyed — readings survive in both tiers for \
-                           § 60 Abs. 6 MsbG reconciliation but no longer identify the MaLo. \
-                           Derived aggregates deleted.",
+            "legal_basis":      "DSGVO Art. 17; Art. 17 Abs. 3 lit. b for the retained \
+                                 Buchungsbelege (§ 147 Abs. 1 AO)",
+            "pseudonymised": [
+                "meter_read_corrections", "substitute_value_log", "meter_data_receipts",
+                "ablese_auftraege", "gas_quality_data",
+            ],
+            "deleted": [
+                "meter_billing_periods", "quality_assessments",
+                "estimated_read_confirmations", "direct_push_sessions",
+                "smgw_sessions", "cls_compliance_issues", "delivery_surveillance",
+                "smgw_cert_expiry_alerts",
+            ],
+            "audit_note": "Subject mapping destroyed — readings survive in both tiers and the \
+                           § 147 AO trail survives in edmd, but neither identifies the MaLo. \
+                           Derived and operational rows deleted outright.",
         })),
     )
         .into_response()

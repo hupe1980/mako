@@ -12,26 +12,43 @@ pub use metering::{QualityFlag, Sparte};
 
 /// MSCONS PIDs that `edmd` consumes from `marktd` webhook fan-out.
 ///
-/// ## Messwesen PIDs (MSCONS AHB, BDEW BK6-24-174 / BK7-24-01-009 / BK7-24-01-008)
+/// ## Messwesen PIDs
 ///
-/// | PID   | Direction        | Content |
-/// |-------|------------------|---------|
-/// | 13005 | NB → LF (Strom)  | Lastgang Messwerte Strom |
-/// | 13006 | NB → LF (Strom)  | Zählerstand / Ersatzwert Strom |
-/// | 13007 | NB → LF (Gas)    | Gasbeschaffenheitsdaten (Brennwert + Zustandszahl) |
-/// | 13013 | NB → LF (Gas)    | Allokationsliste Gas MMMA (GaBi Gas 2.1) |
-/// | 13015 | NB → LF (Strom)  | Lastgang Summenzeitreihe (SLP-Abrechnung) |
-/// | 13016 | NB → LF (Strom)  | Ausfallarbeit Strom |
-/// | 13017 | NB → LF (Strom)  | Zählerstand Strom (Ablese-Übermittlung) |
-/// | 13018 | NB → LF (Strom)  | Messwerte Strom — korrigierte Werte |
-/// | 13019 | NB → LF (Strom)  | Netzverluste Strom |
-/// | 13025 | NB → LF (Gas)    | Lastgang Gas (Zustandsmengen / Energiemengen) |
-/// | 13027 | MSB → ESA        | Werte nach Typ 2 (ESA, non-authoritative) |
+/// | PID   | Direction   | Anwendungsfall |
+/// |-------|-------------|----------------|
+/// | 13005 | BIKO → BKV / NB | EEG-Überführungszeitreihe |
+/// | 13006 | NB → LF; MSB → NB/LF/ÜNB | **Messwert Storno** — see below |
+/// | 13007 | NB → LF/NB (Gas) | Gasbeschaffenheit (Brennwert + Zustandszahl) |
+/// | 13013 | NB → LF (Gas) | Marktlokationsscharfe Allokationsliste (MMMA) |
+/// | 13015 | NB → LF | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn |
+/// | 13016 | NB → LF | Energiemenge und Leistungsmaximum (Strom) |
+/// | 13017 | NB → LF/RB | Zählerstand (Strom) |
+/// | 13018 | NB → NB/ÜNB | Lastgang Messlokation, Netzkoppelpunkt, Netzlokation |
+/// | 13019 | NB → LF/RB | Energiemenge (Strom) |
+/// | 13025 | NB → LF/RB | Lastgang Marktlokation, Tranche |
+/// | 13027 | MSB → NB/LF/ESA | Werte nach Typ 2 (non-authoritative) |
 ///
-/// This is the set `edmd` **subscribes to / accepts** from `marktd` (the
-/// `makopid_filter`), not the set that lands in `meter_reads`. PID 13027 is
-/// received here but routed to the separate, non-billing Typ-2 store at ingest
-/// time — see [`ESA_TYP2_PIDS`], [`Typ2Read`], and the handler fork.
+/// **This table and [`mscons_pid_description`] render one source** — the BDEW
+/// *Anwendungsübersicht der Prüfidentifikatoren* 4.0 — and
+/// `pid_table_matches_descriptions` pins them together. They used to disagree on
+/// five of eleven rows: 13005 was labelled "Lastgang Messwerte Strom", 13016
+/// "Ausfallarbeit Strom", 13018 "korrigierte Werte", 13019 "Netzverluste Strom"
+/// and 13025 a *Gas* Lastgang. Each names a different Anwendungsfall than the
+/// PID carries and sends a reader to the wrong AHB section.
+///
+/// ## 13006 is a cancellation, not a reading
+///
+/// "Messwert Storno" withdraws values delivered earlier (GPKE Teil 2
+/// Stornierung Lieferschein; WiM Strom Teil 2 Stornierung Werte vom MSB). Its
+/// payload references what is being cancelled — it carries no new measurements.
+/// The ingest handler records the receipt and refuses to store a `reads` array
+/// under it, rather than booking withdrawn values as fresh readings. See
+/// [`STORNO_PIDS`].
+///
+/// This is the subscription/accept filter, not the set that lands in
+/// `meter_reads`: 13027 is included because `edmd` must **receive** ESA Typ-2
+/// values, but they are routed to a separate, non-billing store — see
+/// [`ESA_TYP2_PIDS`], [`Typ2Read`], and the handler fork.
 ///
 /// ## Note on PIDs 13002–13028
 ///
@@ -43,16 +60,12 @@ pub use metering::{QualityFlag, Sparte};
 /// `mako-gabi-gas` `gabi-gas-mmma` for workflow state tracking, but the raw
 /// meter-data receipts and interval values are stored here in `edmd`.
 ///
-/// Source: MSCONS AHB 3.1g; BDEW BK6-24-174 Anlage 1; BK7-24-01-008.
-///
-/// This is the subscription/accept filter. 13027 is included because `edmd` must
-/// **receive** ESA Typ-2 values — but they are routed to a separate store, not
-/// `meter_reads`. See [`ESA_TYP2_PIDS`].
+/// Source: BDEW *Anwendungsübersicht der Prüfidentifikatoren* 4.0; MSCONS AHB.
 pub const MSCONS_PIDS: &[u32] = &[
     13005, 13006, 13007, 13013, 13015, 13016, 13017, 13018, 13019, 13025, 13027,
 ];
 
-/// MSCONS PIDs carrying ESA-delivered **"Werte nach Typ 2"** (MSB → ESA).
+/// MSCONS PIDs carrying **"Werte nach Typ 2"** (MSB → NB / LF / ESA).
 ///
 /// These values are **non-authoritative** (Codeliste der Konfigurationen 1.4,
 /// Kap. 4.6; WiM Strom Teil 2 §4): they have *no bearing* on Netznutzungs-,
@@ -62,6 +75,16 @@ pub const MSCONS_PIDS: &[u32] = &[
 /// a **separate** table ([`Typ2Read`] → `esa_typ2_reads`) that no billing query
 /// can reach — the separation is a schema decision, not a runtime filter.
 pub const ESA_TYP2_PIDS: &[u32] = &[13027];
+
+/// MSCONS PIDs that **withdraw** previously delivered values rather than
+/// carrying new ones.
+///
+/// PID 13006 "Messwert Storno" cancels an earlier delivery — GPKE Teil 2
+/// (Stornierung Lieferschein) and WiM Strom Teil 2 (Stornierung Werte vom MSB).
+/// Its payload identifies what is being cancelled; treating it as an ordinary
+/// value delivery books the withdrawn quantities as if they had been measured,
+/// which is the opposite of what the message says.
+pub const STORNO_PIDS: &[u32] = &[13006];
 
 /// MSCONS PIDs for Redispatch 2.0 time-series data delivery.
 ///
@@ -99,7 +122,7 @@ pub const fn mscons_pid_description(pid: u32) -> &'static str {
         13002 => "Zählerstand (Gas)",
         13003 => "Summenzeitreihe (MaBiS)",
         13005 => "EEG-Überführungszeitreihe",
-        13006 => "Zählerstand / Ersatzwert Strom",
+        13006 => "Messwert Storno",
         13007 => "Gasbeschaffenheit — Brennwert + Zustandszahl",
         13008 => "Lastgang (Gas)",
         13009 => "Energiemenge (Gas)",
@@ -191,7 +214,7 @@ pub struct MeterDataReceipt {
 /// How a `MeterRead` entered the system.
 ///
 /// Stored in the `source` column of `meter_reads` for provenance tracking.
-/// Every interval must be traceable to its origin for § 60 Abs. 6 MsbG compliance.
+/// Every interval must be traceable to its origin for § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) compliance.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum IngestionSource {
@@ -239,6 +262,27 @@ impl IngestionSource {
         Self::IotPush,
     ];
 
+    /// Whether edmd itself authored the value, rather than receiving it.
+    ///
+    /// The distinction decides how a write resolves against what is already
+    /// stored. A *delivery* — MSCONS, direct push, IoT, a bulk import — is
+    /// legitimately shadowed by a newer one, and forcing it to win would let a
+    /// replayed original supersede the correction that fixed it. A value edmd
+    /// authored is not a delivery: it is edmd asserting a figure about a slot
+    /// whose current content it has just read and judged unusable — a § 60
+    /// Abs. 2 MsbG Ersatzwert for a `FAULTY` reading, or an operator's explicit
+    /// correction — and it has to take effect or be refused, never be silently
+    /// outranked. See `store::MeterStoreTimeSeriesRepository::append_superseding`.
+    ///
+    /// `Manual` and `Estimated` are operator entries, so they are authored too.
+    #[must_use]
+    pub fn is_edmd_authored(self) -> bool {
+        matches!(
+            self,
+            Self::AutoSubstitute | Self::Correction | Self::Manual | Self::Estimated
+        )
+    }
+
     /// Returns the DB string value for this source.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -255,23 +299,29 @@ impl IngestionSource {
         }
     }
 
-    /// Parse from a DB string value.
+    /// Parse a DB / wire string, or `None` when it names no known source.
+    ///
+    /// Returning `None` rather than falling back is what stops a caller's
+    /// provenance being quietly rewritten. `POST /api/v1/meter-reads/rlm/…`
+    /// documents `"source": "SMGW"` and `"CLS_GATEWAY"` as examples; both fell
+    /// through the old catch-all and were stored as `MSCONS`, so a reading that
+    /// never touched EDIFACT claimed to have arrived by it. § 60 Abs. 1 MsbG
+    /// attribution needs the door a value actually came in by.
+    #[must_use]
+    pub fn parse_db_str(s: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|source| source.as_str().eq_ignore_ascii_case(s))
+    }
+
+    /// Parse from a DB string value, falling back to `Mscons`.
+    ///
+    /// For **read-back only**, where the column is CHECK-constrained so an
+    /// unknown value means enum and schema have diverged and there is nothing
+    /// better to return. Ingest paths use [`Self::parse_db_str`] and refuse.
     #[must_use]
     pub fn from_db_str(s: &str) -> Self {
-        match s {
-            "DIRECT_PUSH" => Self::DirectPush,
-            "DIRECT_GAS" => Self::DirectGas,
-            "API_IMPORT" => Self::ApiImport,
-            "AUTO_SUBSTITUTE" => Self::AutoSubstitute,
-            "CORRECTION" => Self::Correction,
-            "MANUAL" => Self::Manual,
-            "ESTIMATED" => Self::Estimated,
-            "IOT_PUSH" => Self::IotPush,
-            // Lossy by design: the column is CHECK-constrained, so an unknown
-            // value means enum and schema have diverged. `schema_code_guard`
-            // pins the two together.
-            _ => Self::Mscons,
-        }
+        Self::parse_db_str(s).unwrap_or(Self::Mscons)
     }
 }
 
@@ -389,7 +439,7 @@ pub struct MeterRead {
     /// Tenant data-isolation key. Matches `meter_reads.tenant`.
     pub tenant: String,
 
-    // ── Provenance tracking (§ 60 Abs. 6 MsbG) ───────────────────────────────────────
+    // ── Provenance tracking (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) ───────────────────────────────────────
     /// Origin of this interval — which ingestion path was used.
     ///
     /// Stored in `meter_reads.source`. Default: `Mscons`.
@@ -414,7 +464,7 @@ pub struct MeterRead {
     /// MP-ID of the MSB or system that delivered this reading.
     ///
     /// Populated from `meter_data_receipts.sender_mp_id` (MSCONS path) or from the
-    /// direct-push API header. Required for § 60 Abs. 6 MsbG per-interval MSB attribution
+    /// direct-push API header. Required for § 60 Abs. 1 MsbG per-interval MSB attribution
     /// after an MSB switch (WiM PID 55039).
     #[serde(default)]
     pub sender_mp_id: Option<String>,
@@ -478,10 +528,37 @@ pub struct TimeSeriesQuery {
     pub tenant: String,
 }
 
-/// Mehr-/Mindermengen imbalance report for one MaLo and one billing period.
+/// Mehr-/Mindermengensaldo for one MaLo and one billing period.
 ///
-/// Computed from [`MeterRead`] records by comparing LF-expected quantities
-/// against NB-reported quantities.
+/// ## The two halves, and which one edmd owns
+///
+/// The saldo compares a **measured** quantity against a **bilanzierte** one, and
+/// edmd holds only the first. The bilanzierte Menge is what the balancing side
+/// allocated to the Bilanzkreis from the load profile — a commercial figure in
+/// the supplier's system, not a measurement — so it is an *input* to this report
+/// (`bilanziert_kwh`), never something edmd can derive.
+///
+/// The previous shape had `lf_quantity_kwh` and `nb_quantity_kwh` and filled
+/// both from the same measured total, so `delta_kwh` was structurally zero: an
+/// imbalance report that could not report an imbalance. Naming the two halves for
+/// what they are makes that unrepresentable.
+///
+/// ## Sign convention
+///
+/// Both quantities are named from the **network operator's** side, which inverts
+/// the intuitive reading (GPKE Teil 1 Kap. 8.4 Nr. 3): a customer consuming
+/// *less* than the profile leaves surplus energy the NB absorbed, and that
+/// surplus is the **Mehrmenge**, which the NB credits. Consuming more is the
+/// **Mindermenge**, which the NB invoices. Only one of the two is ever positive.
+/// The arithmetic is [`metering::compute_imbalance`]'s, so the convention lives
+/// in one place.
+///
+/// ## Legal basis
+///
+/// GPKE (BK6-24-174) Teil 1 Kap. 8.4 for Strom; GaBi Gas 2.1 (BK7-24-01-008)
+/// Ziff. 3a for Gas. **Not** § 13 StromNZV / § 25 GasNZV — both ceased to be in
+/// effect at the end of 31 December 2025, when the Bundesnetzagentur folded
+/// their content into the Festlegungen.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ImbalanceReport {
     pub malo_id: String,
@@ -489,16 +566,29 @@ pub struct ImbalanceReport {
     pub period_from: Date,
     /// End of billing period (inclusive).
     pub period_to: Date,
-    /// Total LF quantity (kWh) in period.
-    pub lf_quantity_kwh: Decimal,
-    /// Total NB reported quantity (kWh) in period.
-    pub nb_quantity_kwh: Decimal,
-    /// Delta = lf − nb.
+    /// The commodity, which decides whether the period runs on calendar days or
+    /// on the 06:00 Gastag.
+    pub sparte: Sparte,
+    /// Measured energy in the period (kWh) — billable qualities only. edmd's
+    /// half of the comparison.
+    pub gemessen_kwh: Decimal,
+    /// Bilanzierte (profile-allocated) energy in the period (kWh), as supplied
+    /// by the caller.
+    pub bilanziert_kwh: Decimal,
+    /// `max(0, bilanziert − gemessen)` — the NB credits the LF.
+    pub mehrmenge_kwh: Decimal,
+    /// `max(0, gemessen − bilanziert)` — the NB invoices the LF.
+    pub mindermenge_kwh: Decimal,
+    /// `gemessen − bilanziert`. Positive is a Mindermenge.
     pub delta_kwh: Decimal,
-    /// Delta as percentage of nb quantity. Zero when nb_quantity is zero.
-    pub delta_pct: Decimal,
-    /// Worst quality flag across all reads in the period.
+    /// The delta as a percentage of the bilanzierte quantity. `None` when that
+    /// is zero — a ratio against nothing is not zero, it is undefined.
+    pub delta_pct: Option<Decimal>,
+    /// Worst quality flag across the reads that contributed.
     pub quality: QualityFlag,
+    /// How many intervals the measured total is built from, so a caller can see
+    /// whether the period is actually covered.
+    pub interval_count: usize,
 }
 
 /// Aggregated billing period summary for one MaLo.
@@ -608,6 +698,35 @@ pub struct BillingPeriodQuery {
     pub sparte: Sparte,
 }
 
+/// One Gasbeschaffenheit delivery (MSCONS PID 13007, `QTY+Z08` / `QTY+Z10`).
+///
+/// Brennwert and Zustandszahl are only meaningful together with the period they
+/// apply to: the gas grid operator publishes an Abrechnungsbrennwert per supply
+/// area per month, and `kWh = m³ × Hs × Z` uses the one in force for the
+/// consumption month. Storing the pair without its period — as the PID 13007
+/// handler used to, by patching `meter_billing_periods` alone — leaves no record
+/// of *which* month's value was applied.
+///
+/// Source: MSCONS AHB Gas; Allgemeine Festlegungen §6; § 25 Nr. 4 MessEV /
+/// DVGW G 685.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GasQualityRecord {
+    /// Tenant data-isolation key.
+    pub tenant: String,
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// First day the values apply to (inclusive).
+    pub period_from: Date,
+    /// Last day the values apply to (inclusive).
+    pub period_to: Date,
+    /// Abrechnungsbrennwert Hs in kWh/m³ (`QTY+Z08`).
+    pub brennwert_kwh_per_m3: Option<Decimal>,
+    /// Zustandszahl, dimensionless (`QTY+Z10`).
+    pub zustandszahl: Option<Decimal>,
+    /// PID the values were delivered under (13007).
+    pub source_pid: Option<u32>,
+}
+
 // ── Correction domain types ───────────────────────────────────────────────────
 
 /// Source category for a meter read correction.
@@ -629,7 +748,7 @@ pub enum CorrectionSource {
 /// A retroactive correction to a previously stored meter interval.
 ///
 /// Stored in `meter_read_corrections` without modifying the original row —
-/// enabling full § 60 Abs. 6 MsbG audit trail reconstruction.
+/// enabling full § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit-trail reconstruction.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CorrectionRecord {
     /// MaLo for the corrected interval.
@@ -687,7 +806,7 @@ pub struct CorrectionResponse {
 
 #[cfg(test)]
 mod mscons_pid_tests {
-    use super::{ALL_MSCONS_PIDS, mscons_pid_description};
+    use super::{ALL_MSCONS_PIDS, MSCONS_PIDS, mscons_pid_description};
 
     /// Every PID the platform accepts must have a name taken from the AHB.
     ///
@@ -711,6 +830,7 @@ mod mscons_pid_tests {
         for (pid, expected) in [
             (13003, "Summenzeitreihe (MaBiS)"),
             (13005, "EEG-Überführungszeitreihe"),
+            (13006, "Messwert Storno"),
             (
                 13015,
                 "Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn",
@@ -726,6 +846,75 @@ mod mscons_pid_tests {
             (13027, "Werte nach Typ 2"),
         ] {
             assert_eq!(mscons_pid_description(pid), expected, "PID {pid}");
+        }
+    }
+
+    /// The doc table on `MSCONS_PIDS` and `mscons_pid_description` render one
+    /// source, so they must not drift — and they had, on five of eleven rows.
+    #[test]
+    fn pid_table_matches_descriptions() {
+        // The table as it appears in the `MSCONS_PIDS` doc comment.
+        let table = include_str!("model.rs");
+        let table = table
+            .split("/// | PID   | Direction   | Anwendungsfall |")
+            .nth(1)
+            .expect("the PID table is in the MSCONS_PIDS doc comment")
+            .split("///\n")
+            .next()
+            .expect("table block");
+
+        for &pid in MSCONS_PIDS {
+            assert_eq!(
+                table.matches(&format!("| {pid} |")).count(),
+                1,
+                "PID {pid} is subscribed but not documented exactly once"
+            );
+        }
+
+        // The Anwendungsfall column is the AHB heading, so the check is on the
+        // distinguishing term rather than on string equality.
+        for (pid, term) in [
+            (13005u32, "EEG-Überführungszeitreihe"),
+            (13006, "Messwert Storno"),
+            (13007, "Gasbeschaffenheit"),
+            (13013, "Allokationsliste"),
+            (13015, "Leistungsmaximum im Kalenderjahr"),
+            (13016, "Energiemenge und Leistungsmaximum"),
+            (13017, "Zählerstand (Strom)"),
+            (13018, "Lastgang Messlokation"),
+            (13019, "Energiemenge (Strom)"),
+            (13025, "Lastgang Marktlokation"),
+            (13027, "Werte nach Typ 2"),
+        ] {
+            assert!(
+                table.contains(term),
+                "the table must name PID {pid} as {term:?}"
+            );
+            let described = mscons_pid_description(pid);
+            assert!(
+                described.contains(term) || term.contains(described),
+                "PID {pid}: table says {term:?}, description says {described:?}"
+            );
+        }
+    }
+
+    /// A Storno withdraws values, so it must be received but never treated as a
+    /// value delivery.
+    #[test]
+    fn storno_pids_are_subscribed_but_are_not_value_deliveries() {
+        for &pid in super::STORNO_PIDS {
+            assert!(
+                MSCONS_PIDS.contains(&pid),
+                "a Storno must still be received: {pid}"
+            );
+            assert!(
+                ALL_MSCONS_PIDS.contains(&pid),
+                "a Storno must be an accepted PID: {pid}"
+            );
+            assert!(
+                !super::ESA_TYP2_PIDS.contains(&pid),
+                "a Storno is not a Typ-2 delivery: {pid}"
+            );
         }
     }
 

@@ -41,9 +41,11 @@ pub(crate) struct IotPushRequest {
     melo_id: Option<String>,
     /// Raw, undecoded payload as received (base64 or hex, verbatim).
     ///
-    /// Retained as the system of record: network-server codecs are mutable and
-    /// carry no version on the uplink, so a stored value can only be re-derived
-    /// from the original frame.
+    /// Recorded on the session row (`direct_push_sessions.raw_payload`) so a
+    /// value can be re-derived if the network server\'s codec changes: codecs are
+    /// mutable and carry no version on the uplink. It used to be accepted and
+    /// dropped, while the response still reported `raw_retained: true` — a claim
+    /// about evidence that was not kept.
     raw_payload: Option<String>,
     /// Brennwert Hs in kWh/m³. **Required** when `sparte = GAS` and `unit = M3`.
     ///
@@ -276,36 +278,34 @@ pub(crate) async fn post_iot_reads(
         .collect();
     samples.sort_by_key(|iv| iv.from);
 
-    let quality = if samples.len() >= 3 {
-        Some(metering::score_intervals(
-            &samples,
-            &metering::QualityConfig::for_sparte(sparte),
-        ))
-    } else {
-        None
+    // The same scorer every other door runs, so the grade a reading gets does
+    // not depend on which door it came in by. A pushed batch declares its own
+    // span, so that is the period coverage is measured against.
+    let quality = match (samples.len() >= 3, samples.first(), samples.last()) {
+        (true, Some(first), Some(last)) => {
+            Some(compute_quality(&samples, sparte, first.from, last.to))
+        }
+        _ => None,
     };
 
     // Findings carry the instant they are about, so the anomalous slots are read
     // straight off them.
-    //
-    // They did not before: `score_intervals_f64` took bare `f64`s and `i64`
-    // nanosecond stamps, had no calendar to format against, and reported
-    // outliers as synthetic `"t+<unix_nanos>"` strings the caller had to decode.
-    // `metering` 0.17 takes typed intervals and returns real timestamps.
-    let outlier_stamps: std::collections::HashSet<i64> = quality
+    let outlier_stamps: std::collections::HashSet<OffsetDateTime> = quality
         .as_ref()
         .map(|q| {
-            q.issues
+            q.outlier_intervals
                 .iter()
-                .filter(|i| {
-                    matches!(
-                        i.rule_id,
-                        metering::validation::ValidationRuleId::StatisticalOutlier
-                            | metering::validation::ValidationRuleId::ImplausiblePower
-                    )
+                .chain(q.spike_intervals.iter())
+                .filter_map(|t| {
+                    OffsetDateTime::parse(t, &time::format_description::well_known::Rfc3339)
+                        .ok()
+                        .or_else(|| {
+                            samples
+                                .iter()
+                                .map(|iv| iv.from)
+                                .find(|f| f.to_string() == *t)
+                        })
                 })
-                .filter_map(|i| i.affected_from)
-                .map(|t| t.unix_timestamp_nanos() as i64)
                 .collect()
         })
         .unwrap_or_default();
@@ -342,11 +342,7 @@ pub(crate) async fn post_iot_reads(
         // downstream decision.
         // `PRELIMINARY` (MSCONS Z84, vorläufiger Wert): measured but not yet
         // confirmed. `FAULTY` would assert a defect the filter cannot establish.
-        let quality_flag = if outlier_stamps.contains(&(from.unix_timestamp_nanos() as i64)) {
-            "PRELIMINARY"
-        } else {
-            "MEASURED"
-        };
+        let is_outlier = outlier_stamps.contains(&from);
 
         // `meter_reads.quantity_kwh` holds the settlement quantity, so gas is
         // converted before it lands.
@@ -363,7 +359,7 @@ pub(crate) async fn post_iot_reads(
             dtm_from: from,
             dtm_to: to,
             quantity_kwh: quantity,
-            quality: if quality_flag == "PRELIMINARY" {
+            quality: if is_outlier {
                 QualityFlag::Preliminary
             } else {
                 QualityFlag::Measured
@@ -386,36 +382,13 @@ pub(crate) async fn post_iot_reads(
     let (validated, validation) =
         crate::domain::validation::ValidatedReads::validate(batch, "IOT_PUSH_VALIDATION", &malo_id);
 
-    // The IoT path scores with `score_intervals_f64` rather than
-    // `compute_quality`, so the report is adapted before it is recorded — the
-    // history must not depend on which door the reading came in by.
     if let (Some(q), Some(first), Some(last)) = (
         quality.as_ref(),
         validated.as_slice().first().map(|r| r.dtm_from),
         validated.as_slice().last().map(|r| r.dtm_to),
     ) {
-        // The anomalous slots are read off the findings, which carry the
-        // instant each is about — see the note where `outlier_stamps` is built.
-        let at = |rule: metering::validation::ValidationRuleId| -> Vec<String> {
-            q.issues
-                .iter()
-                .filter(|i| i.rule_id == rule)
-                .filter_map(|i| i.affected_from)
-                .map(|t| t.to_string())
-                .collect()
-        };
-        let report = QualityReport {
-            intervals_accepted: q.intervals_analysed,
-            intervals_rejected: rejected.len(),
-            gaps_detected: q.gaps_detected,
-            zero_run_length: q.max_zero_run,
-            outlier_intervals: at(metering::validation::ValidationRuleId::StatisticalOutlier),
-            spike_intervals: at(metering::validation::ValidationRuleId::ImplausiblePower),
-            intervals_consistent: q.intervals_consistent,
-            has_warnings: q.has_warnings(),
-            coverage_pct: q.coverage_pct,
-            grade: q.grade.as_str(),
-        };
+        let mut report = QualityReport { ..q.clone() };
+        report.intervals_rejected = rejected.len();
         record_quality_assessment(
             pool,
             resource_tenant,
@@ -449,13 +422,21 @@ pub(crate) async fn post_iot_reads(
     if stored > 0 {
         let _ = sqlx::query(
             r"INSERT INTO direct_push_sessions
-                (session_id, malo_id, interval_count, status, tenant)
-              VALUES ($1,$2,$3,'committed',$4)
-              ON CONFLICT (session_id) DO UPDATE SET status = 'committed'",
+                (session_id, malo_id, source, obis_code, interval_count,
+                 period_from, period_to, status, raw_payload, tenant)
+              VALUES ($1,$2,'IOT_PUSH',$3,$4,$5,$6,'committed',$7,$8)
+              ON CONFLICT (tenant, session_id) DO UPDATE
+                  SET status      = 'committed',
+                      raw_payload = COALESCE(EXCLUDED.raw_payload,
+                                             direct_push_sessions.raw_payload)",
         )
         .bind(&req.session_id)
         .bind(&malo_id)
+        .bind(&req.obis_code)
         .bind(i32::try_from(stored).unwrap_or(i32::MAX))
+        .bind(period_from)
+        .bind(period_to)
+        .bind(&req.raw_payload)
         .bind(resource_tenant)
         .execute(state.repo.pool())
         .await;
@@ -466,12 +447,13 @@ pub(crate) async fn post_iot_reads(
     // meter-data-agent and replacement-value-agent are event-driven.
     let hampel = quality.as_ref().map(|q| {
         serde_json::json!({
-            "grade": q.grade.as_str(),
+            "grade": q.grade,
             "coverage_pct": q.coverage_pct,
             "gaps_detected": q.gaps_detected,
-            "outliers": q.outliers_detected,
-            "has_warnings": q.has_warnings(),
-            "blocks_billing": q.grade.blocks_billing(),
+            "outliers": q.outlier_intervals.len() + q.spike_intervals.len(),
+            "has_warnings": q.has_warnings,
+            "blocks_billing": q.grade == "F",
+            "algorithm": q.algorithm,
         })
     });
     let alert = crate::server::quality_alert::QualityAlert {
@@ -517,11 +499,14 @@ pub(crate) async fn post_iot_reads(
             "warnings":    warnings,
             "raw_retained": req.raw_payload.is_some(),
             "quality": quality.as_ref().map(|q| serde_json::json!({
-                "grade":         q.grade.as_str(),
-                "coverage_pct":  q.coverage_pct,
-                "gaps_detected": q.gaps_detected,
-                "outliers":      q.outliers_detected,
-                "blocks_billing": q.grade.blocks_billing(),
+                "grade":              q.grade,
+                "coverage_pct":       q.coverage_pct,
+                "gaps_detected":      q.gaps_detected,
+                "outliers":           q.outlier_intervals.len() + q.spike_intervals.len(),
+                "expected_intervals": q.expected_intervals,
+                "interval_secs":      q.interval_secs,
+                "blocks_billing":     q.grade == "F",
+                "algorithm":          q.algorithm,
             })),
             "validation": {
                 "issue_count":         validation.issue_count,

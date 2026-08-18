@@ -44,10 +44,18 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         tenant: &str,
     ) -> Result<Vec<MeterDataReceipt>, EdmError>;
 
-    /// Compute Mehr-/Mindermengen imbalance for one MaLo in one billing period.
+    /// Compute the Mehr-/Mindermengensaldo for one MaLo in one billing period.
     ///
-    /// `tenant` is mandatory — passing an empty string is rejected at the SQL layer
-    /// by the `AND tenant = $N` guard.
+    /// `bilanziert_kwh` is the profile-allocated quantity the balancing side
+    /// booked, and it is a **parameter** because edmd cannot know it: it is a
+    /// commercial figure in the supplier's system, not a measurement. edmd
+    /// supplies the measured half. Deriving both from the same measured total —
+    /// as this used to — makes the delta structurally zero.
+    ///
+    /// `tenant` is mandatory; the read is scoped by it in the store query.
+    ///
+    /// Returns [`EdmError::NoData`] when the period holds no billable reading:
+    /// a saldo against nothing measured is not "zero imbalance", it is unknown.
     async fn imbalance(
         &self,
         malo_id: &str,
@@ -55,6 +63,7 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         to: Date,
         tenant: &str,
         sparte: Sparte,
+        bilanziert_kwh: Decimal,
     ) -> Result<ImbalanceReport, EdmError>;
 
     /// Return the most recent typed read for a MaLo.
@@ -80,41 +89,57 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         q: &BillingPeriodQuery,
     ) -> Result<Option<MeterBillingPeriod>, EdmError>;
 
-    /// Update Gas quality fields (`brennwert_kwh_per_m3`, `zustandszahl`) in
-    /// `meter_billing_periods` for a MaLo.
+    /// Record a Gasbeschaffenheit delivery (MSCONS PID 13007) for one MaLo.
     ///
-    /// Called by `edmd` when a `de.mako.process.completed` event arrives for
-    /// PID 13007 (Gasbeschaffenheitsdaten). Updates the billing-period rows for
-    /// the MaLo **within `tenant`** that currently have `NULL` gas quality
-    /// fields. A MaLo-ID is not unique across tenants, and the calorific value
-    /// directly scales invoiced kWh, so the tenant scope is mandatory.
+    /// Two writes, one transaction:
     ///
-    /// Returns the number of updated rows.
-    async fn update_gas_quality(
+    /// 1. The delivery itself is appended to `gas_quality_data`, keyed by
+    ///    `(malo_id, period_from, period_to, tenant)`. This is the *record* of
+    ///    what the gas grid operator published — Brennwert varies by supply area
+    ///    and month, so a value is only meaningful together with the period it
+    ///    applies to, and `GET /api/v1/gas-quality/{malo_id}` reads it back.
+    /// 2. Cached `meter_billing_periods` aggregates overlapping that period and
+    ///    still missing their gas factors are backfilled, so a billing read does
+    ///    not have to join.
+    ///
+    /// Both are tenant-scoped: a MaLo-ID is not unique across tenants and the
+    /// calorific value directly scales invoiced kWh.
+    ///
+    /// Returns the number of backfilled billing-period rows.
+    async fn record_gas_quality(
         &self,
-        tenant: &str,
-        malo_id: &str,
-        brennwert_kwh_per_m3: Option<Decimal>,
-        zustandszahl: Option<Decimal>,
+        q: &crate::domain::GasQualityRecord,
     ) -> Result<u64, EdmError>;
 
     /// Record a retroactive correction to one or more meter read intervals.
     ///
     /// ## Semantics
     ///
-    /// 1. The original interval in `meter_reads` is **overwritten** with the
-    ///    corrected `quantity_kwh` and `quality`.
-    /// 2. An immutable `meter_read_corrections` row is inserted, preserving the
-    ///    original value, correction reason, and operator identity.
-    /// 3. `meter_reads.correction_count` is incremented.
+    /// 1. An immutable `meter_read_corrections` row is inserted, preserving the
+    ///    original value, the correction reason, and the operator identity.
+    /// 2. The corrected interval is **appended to the store at a higher
+    ///    version** — nothing is overwritten. meterstore routes it to the tier
+    ///    that owns the (possibly already archived) interval and applies
+    ///    latest-version-wins on resolution, so the read path returns the
+    ///    corrected value while `meter_reads_versions` keeps both.
+    /// 3. Any open § 60 Abs. 2 MsbG confirmation for the slot is discharged when
+    ///    the corrected value is a real one (`MEASURED` / `CORRECTED`).
+    /// 4. Cached `meter_billing_periods` aggregates covering the corrected
+    ///    intervals are invalidated, so the next billing read recomputes.
     ///
-    /// This gives the **query layer** the latest (corrected) value, while the
-    /// **audit layer** retains the full correction history per § 60 Abs. 6 MsbG.
+    /// The audit trail exists because a billed figure is a Buchungsbeleg: § 147
+    /// Abs. 1 AO requires it to be retained and § 146 Abs. 4 AO requires the
+    /// original to stay recoverable after a change. (§ 60 Abs. 6 MsbG is the
+    /// opposite duty — a *deletion* ceiling on personal Messwerte — and is
+    /// discharged by the GDPR erasure path, not by this one.)
     ///
     /// ## Atomicity
     ///
-    /// All corrections in `records` are applied in a single database transaction.
-    /// If any correction fails, none are committed.
+    /// The audit rows, the confirmation updates and the cache invalidation all
+    /// commit in one transaction. The interval appends go to meterstore, which
+    /// owns its own tiers, so they are not enrolled in it: a crash between the
+    /// append and the commit loses audit rows for values that did change, which
+    /// is recoverable — both versions are still in `meter_reads_versions`.
     ///
     /// Returns the UUIDs of the newly created `meter_read_corrections` rows.
     async fn store_corrections(
