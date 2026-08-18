@@ -113,8 +113,7 @@ pub fn is_direktvermarktung_mandatory(leistung_kw: Decimal, gesetz: EegGesetz) -
 #[must_use]
 pub fn requires_ausschreibung(leistung_kw: Decimal, art: ErzeugungsArt) -> bool {
     match art {
-        ErzeugungsArt::Solar
-        | ErzeugungsArt::SolarAufdach
+        ErzeugungsArt::SolarAufdach
         | ErzeugungsArt::SolarFreiflaeche
         | ErzeugungsArt::SolarAgriPv
         | ErzeugungsArt::SolarMieterstrom

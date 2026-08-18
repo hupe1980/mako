@@ -57,12 +57,24 @@ pub enum SettlementScheme {
         verguetungssatz_ct: Decimal,
     },
 
-    /// §21 Abs. 1 Satz 1 Nr. 3 EEG — **Ausfallvergütung** (temporary feed-in tariff).
+    /// §21 Abs. 1 Satz 1 Nr. 3 EEG — **Ausfallvergütung**.
     ///
-    /// Same formula as `FeedInTariff` but at the statutory reduced rate: −20 %
-    /// per §53 Abs. 3 EEG 2023. Caller must supply the already-reduced rate.
+    /// The fallback a plant above 100 kW falls back to when its Direktvermarkter
+    /// drops out: the same formula as [`FeedInTariff`](Self::FeedInTariff), but
+    /// §53 Abs. 3 reduces the anzulegender Wert by **20 %**.
+    ///
+    /// Supply the plant's **ordinary** rate — the engine applies the reduction and
+    /// rounds to two decimals. It used to be the caller's job, and every caller
+    /// passed the ordinary rate straight through, so the one scheme that exists
+    /// for a plant in trouble paid it 25 % more than the statute allows.
+    ///
+    /// §21 Abs. 1 Satz 1 Nr. 3 also caps the Inanspruchnahme at **three
+    /// consecutive calendar months and six calendar months per calendar year**;
+    /// exceeding either is a §52 Abs. 1 Nr. 5 Pflichtverstoß, which the caller
+    /// detects (it needs the settlement history) and passes as a
+    /// [`Pflichtverstoss`](crate::Pflichtverstoss).
     TemporaryFeedInTariff {
-        /// Reduced rate ct/kWh (§21 Abs. 1 Satz 1 Nr. 3, reduced per §53 Abs. 3 EEG 2023).
+        /// The plant's ordinary rate in ct/kWh, **before** the §53 Abs. 3 cut.
         verguetungssatz_ct: Decimal,
     },
 

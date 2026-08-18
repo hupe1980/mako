@@ -260,7 +260,7 @@ mod tests {
             dec!(8.11),
             &ctx,
             &TariffSource::Statutory,
-            ErzeugungsArt::Solar,
+            ErzeugungsArt::SolarAufdach,
         );
         assert_eq!(
             aw,
@@ -297,7 +297,7 @@ mod tests {
             ..AwReductionContext::default()
         };
         let ts = TariffSource::Transitional(crate::scheme::Paragraph100Rule::OldPlantBeforeEeg2023);
-        let (aw, _) = apply_aw_reductions(dec!(9.00), &ctx, &ts, ErzeugungsArt::Solar);
+        let (aw, _) = apply_aw_reductions(dec!(9.00), &ctx, &ts, ErzeugungsArt::SolarAufdach);
         assert_eq!(aw, dec!(8.90));
     }
 
@@ -311,7 +311,7 @@ mod tests {
             dec!(8.11),
             &ctx,
             &TariffSource::Statutory,
-            ErzeugungsArt::Solar,
+            ErzeugungsArt::SolarAufdach,
         );
         assert_eq!(aw, dec!(6.06));
         assert_eq!(applied[0].legal_basis, "§53c EEG 2023");
@@ -328,7 +328,7 @@ mod tests {
             dec!(8.11),
             &ctx,
             &TariffSource::Statutory,
-            ErzeugungsArt::Solar,
+            ErzeugungsArt::SolarAufdach,
         );
         assert_eq!(aw, dec!(6.06));
         assert_eq!(applied[0].deduction_ct_kwh, dec!(2.05));
@@ -426,7 +426,7 @@ mod tests {
             dec!(1.00),
             &ctx,
             &TariffSource::Statutory,
-            ErzeugungsArt::Solar,
+            ErzeugungsArt::SolarAufdach,
         );
         assert_eq!(aw, Decimal::ZERO);
     }
@@ -439,7 +439,7 @@ mod tests {
             dec!(8.11),
             &ctx,
             &TariffSource::Statutory,
-            ErzeugungsArt::Solar,
+            ErzeugungsArt::SolarAufdach,
         );
         assert_eq!(aw, dec!(8.11));
         assert!(applied.is_empty());

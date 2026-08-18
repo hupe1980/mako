@@ -567,8 +567,7 @@ pub fn lookup_rate_for(
         // Solar has half-yearly §49 windows, which a calendar year cannot
         // select. This routes to the §48 Abs. 2 Startwerte; for the window that
         // actually applies to a plant use `solar_pv_ueberschuss_aw_ct`.
-        E::Solar
-        | E::SolarAufdach
+        E::SolarAufdach
         | E::SolarFreiflaeche
         | E::SolarAgriPv
         | E::SolarMieterstrom
@@ -617,7 +616,7 @@ pub fn lookup_rate_for(
 /// use rust_decimal::dec;
 ///
 /// // Solar PV and Wind: -0.4 ct/kWh
-/// assert_eq!(sect53_deduction(ErzeugungsArt::Solar),       dec!(0.4));
+/// assert_eq!(sect53_deduction(ErzeugungsArt::SolarAufdach),       dec!(0.4));
 /// assert_eq!(sect53_deduction(ErzeugungsArt::WindOnshore), dec!(0.4));
 ///
 /// // Biomasse, Wasserkraft, etc.: -0.2 ct/kWh
@@ -631,8 +630,7 @@ pub fn sect53_deduction(art: crate::technology::ErzeugungsArt) -> rust_decimal::
     use crate::technology::ErzeugungsArt as A;
     match art {
         // §53 Nr. 2: Solar PV and Wind → -0.4 ct/kWh
-        A::Solar
-        | A::SolarAufdach
+        A::SolarAufdach
         | A::SolarFreiflaeche
         | A::SolarAgriPv
         | A::SolarMieterstrom

@@ -10,16 +10,24 @@ through Förderdauer expiry.
 | **Database** | PostgreSQL (eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
 | **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT from the operator's declared `eeg_anlagen.ust_status` (Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 % category `E`) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
-| **Plant types** | 19 `erzeugungsart` values: SOLAR variants, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHANE, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG |
-| **Settlement models** | 9: VERGUETUNG, MIETERSTROM (§21 Abs. 3), DIREKTVERMARKTUNG (§20 Gleitende Marktprämie), AUSSCHREIBUNG, POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50), GGV (§42b Solarpaket I) |
-| **Rate table** | Built-in `eeg_verguetungssaetze` — Solar 2000–2024, Wind onshore/offshore, Biomasse/Biogas, Klärgas/Grubengas/Deponiegas, Wasserkraft, KWKG 2023, Geothermie/Gezeiten |
-| **Repowering** | `POST /api/v1/anlagen/{tr_id}/repowering` — resets 20-year Förderdauer (§22 EEG 2023) |
+| **Validated registration** | `POST /api/v1/anlagen` refuses a plant the settlement could not act on, naming the field — above all a Marktprämie model with no anzulegender Wert. A tender plant may carry its AW in `zuschlagswert_ct` (preferred) or `direktverm_aw_ct`. The engine holds the same line: a Marktprämie with no AW is `PriceMissing` |
+| **§44b Biogas quota** | 45 % Bemessungsleistung measured against the §3 Nr. 6 hours — the actual hours of the calendar year (**8 784 in a leap year**) less the hours before first generation, not a flat 8 760 |
+| **One settle path** | REST, batch, MCP `trigger_settle` and the monthly worker all call `settle::settle_plant`, so the entry point cannot change the amount. They differ only in what they choose to override |
+| **Cumulative counters** | `kwk_strom_kwh_gesamt` (§8 KWKG), `biogas_quota_kwh_ytd` (§44b) and `negative_price_qh_gesamt` (§51a) are running totals the settlement both reads and writes, so they are re-read under a `FOR UPDATE` lock on the plant row as the transaction's first statement — the only point serialising *every* settle of one plant. `settlement_period_accruals` holds each period's absolute contribution, so a re-settle applies the difference |
+| **§9 Steuerbarkeit** | Staged by capacity: ≥100 kW Fernsteuerbarkeit only, 25–100 kW Fernsteuerbarkeit **or** the 60 % Leistungsbegrenzung, <25 kW the cap alone, Steckersolar <2 kW exempt. Each plant records **which** route it took (`sect9_erfuellung`) |
+| **§52 Pflichtzahlungen** | Five of the twelve Abs. 1 violations are derived from the plant record in one place (`sect52`) and fed into the settlement: Nr. 1 (§9), Nr. 4 (§10b >100 kW on an Einspeisevergütung model), Nr. 5 (Ausfallvergütung Höchstdauer), Nr. 9 (§21c not notified), Nr. 11 (MaStR). Priced by the engine — Abs. 2 rate, Abs. 3 reduction, Abs. 5 cap |
+| **Ausfallvergütung** | §21 Abs. 1 Satz 1 Nr. 3: the engine applies the §53 Abs. 3 **−20 %** to the plant's ordinary rate; the 3-consecutive / 6-per-year Höchstdauern are counted from the receipts (§52 Abs. 1 Nr. 5); and §51 Abs. 3 cuts the claim **5 % per calendar day** of an unreported negative-price period, counted from the spot store in Europe/Berlin |
+| **Plant types** | 18 `erzeugungsart` values: five SOLAR Bauformen, WIND_ONSHORE/OFFSHORE, BIOMASSE/BIOGAS/BIOMETHAN, KLAEGAS/GRUBENGAS/DEPONIEGAS, WASSERKRAFT, GEOTHERMIE, GEZEITEN, KWKG. There is no generic `SOLAR` — the §48 rate depends on the Bauform |
+| **Settlement models** | 12, one token each (no aliases): VERGUETUNG, AUSFALLVERGUETUNG (§21 Abs. 1 Nr. 2), MIETERSTROM (§21 Abs. 3), GGV (§42b EnWG), DIREKTVERMARKTUNG (§20), AUSSCHREIBUNG (§22), SONSTIGE_DIREKTVERMARKTUNG (§21a), POST_EEG_SPOT, EIGENVERBRAUCH, KWKG_ZUSCHLAG (§7 KWKG 2023), FLEXIBILITAET (§50b), FLEXIBILITAET_ZUSCHLAG (§50a) |
+| **Rate table** | Built-in `eeg_verguetungssaetze`, keyed on `(erzeugungsart, verguetungsform, leistung_min_kwp, billing_start)` — Überschuss and Volleinspeisung differ by the §48 Abs. 2a bonus, so `verguetungsform` is part of the key **and** of the lookup |
+| **Repowering** | `POST /api/v1/anlagen/{tr_id}/repowering` — a Vollrepowering is a fresh Inbetriebnahme (§3 Nr. 30), so §25 restarts. §22 is the Ausschreibung provision and governs none of this |
 | **Zusammenlegung** | `parent_tr_id` links merged plants. The endpoint evaluates **§24 Abs. 1 in full** — the four cumulative conditions of Satz 1 plus the Sätze 2–5 carve-outs — and refuses a merge the statute does not support with `422`, naming the rule that decided. Ownership is not a criterion ("unabhängig von den Eigentumsverhältnissen") |
 | **§§53b–54 AW cuts** | Only the triggering facts are stored (`eeg_regionalnachweise`, `eeg_stromsteuerbefreiungen`, `eeg_sect54_solar_defekte`); every amount but §53c's is statutory. All three cut the anzulegender Wert **before** the settlement formula, because the Marktprämie floors at zero |
-| **KWKG Förderdauer** | `kwk_foerderdauer_h` (>2 MW, 30,000 h) or `kwk_foerderdauer_years` (≤2 MW) |
-| **Förderdauer alerts** | Background worker emits `de.eeg.anlage.foerderung-auslaufend` 180 days before expiry |
-| **§51 auto-derivation** | `PUT /api/v1/epex-spot` loads EPEX day-ahead prices; every settle without explicit values fetches the plant's ¼h feed-in from edmd (`GET /feed-in`), overlays the spot store, and derives the negative-price quarter-hours via `eeg-billing::negativpreis` (version-aware run logic). A **§60 Abs. 2 MsbG gate** skips the reduction when edmd coverage <95 % or any interval is non-billable |
-| **§51a Förderende-Verlängerung** | Raw lost quarter-hours accrue in `negative_price_qh_gesamt`; `effektives_foerderende` derives the extended end at settle time (solar: Volllastviertelstunden contingent; others: rounded up to whole calendar days) — the stored statutory `foerderendedatum` is left untouched |
+| **KWKG Förderdauer** | `kwk_foerderdauer_h` (>2 MW, 30 000 Vollbenutzungsstunden, with the §8 Abs. 4 fifteen-calendar-year backstop in `foerderendedatum`) or `kwk_foerderdauer_years` (≤2 MW) |
+| **Förderdauer alerts** | Background worker emits `de.eeg.anlage.foerderung-auslaufend` **once per plant** inside the 180-day window (`foerderung_alert_sent_at`); a repowering re-arms it |
+| **§51 Negativpreisregel** | Keyed on the **Inbetriebnahmedatum**, not the law year: the Solarspitzengesetz rewrote §51 on 25.02.2025, inside the EEG 2023 range. `NegativpreisRegime::fuer_inbetriebnahme` gives the run-length threshold (6 h · 4 h · staged 4-3-2-1 h · first ¼h) and the exemption (3 MW/500 kW · 500 kW · **400 kW** · 100 kW-until-iMSys with a 2 kW floor). Pilotwindenergieanlagen (§3 Nr. 37) are exempt throughout |
+| **§51 auto-derivation** | `PUT /api/v1/epex-spot` loads EPEX day-ahead prices; every settle without explicit values fetches the plant's ¼h feed-in from edmd (`GET /feed-in`), overlays the spot store over the **Europe/Berlin** billing month, and applies the plant's regime. A **§60 Abs. 2 MsbG gate** skips the reduction when edmd coverage <95 % or any interval is non-billable; a genuine zero is recorded as a zero, not as "unknown" |
+| **§51a Förderende-Verlängerung** | Only where §51 actually bit — and, before the Solarspitzengesetz, only for ausschreibungspflichtige Anlagen. Raw lost quarter-hours accrue in `negative_price_qh_gesamt`; `effektives_foerderende` derives the extended end at settle time (solar: the Abs. 2 Volllastviertelstunden table; others: whole calendar days) — the stored statutory `foerderendedatum` is untouched |
 | **§36h Abs. 2 Standortgüte re-eval** | `POST /api/v1/anlagen/{tr_id}/wind-reevaluation` records the Gütefaktor re-evaluated from operating year 6/11/16 (`wind_guetefaktor_reevaluations`); settlement selects the effective Korrekturfaktor per period and flags `reconciliation_required` on a >2 pp deviation (§147 AO correction) |
 | **edmd auto-fetch** | Automatically fetches `arbeitsmenge_kwh` and the §51 ¼h feed-in from `edmd` when not supplied (authenticated with `edmd_api_key`, registered in edmd `[[oidc.service_keys]]`) |
 | **Health** | `GET /health/live`, `GET /health/ready` |
@@ -29,12 +37,16 @@ through Förderdauer expiry.
 | Model | Formula |
 |---|---|
 | VERGUETUNG | `kwh × rate_ct / 100` |
-| MIETERSTROM | `kwh × (rate_ct + mieter_zuschlag_ct) / 100` |
-| DIREKTVERMARKTUNG | `max(0, AW_ct − EPEX_avg_ct) × kwh / 100` — clamped at zero (no clawback) |
-| AUSSCHREIBUNG | Same formula with BNetzA tender `AW_ct` |
-| POST_EEG_SPOT | `kwh × EPEX_monthly_avg_ct / 100` |
-| KWKG_ZUSCHLAG | `kwh × kwk_ct / 100` (paid on top of electricity market price) |
+| AUSFALLVERGUETUNG | `kwh × (rate_ct × 0.8) / 100` — §53 Abs. 3, then §51 Abs. 3 if unreported |
+| MIETERSTROM / GGV | `kwh × (rate_ct + mieter_zuschlag_ct) / 100` |
+| DIREKTVERMARKTUNG | `max(0, AW_ct − Marktwert_ct) × kwh / 100` — floored at zero (no clawback) |
+| AUSSCHREIBUNG | Same formula with the BNetzA tender `AW_ct` |
+| SONSTIGE_DIREKTVERMARKTUNG | EUR 0 — the plant sells on the open market |
+| POST_EEG_SPOT | `kwh × Marktwert_ct / 100` |
+| EIGENVERBRAUCH | EUR 0 |
+| KWKG_ZUSCHLAG | `kwh × kwk_ct / 100` (paid on top of the electricity market price) |
 | FLEXIBILITAET | `kwh × (rate_ct + flex_praemie_ct) / 100` |
+| FLEXIBILITAET_ZUSCHLAG | `kw × rate_eur_per_kw / 12` — a capacity payment, not per kWh |
 
 All arithmetic uses `rust_decimal::Decimal` — never `f64`. Settlement formulas are covered
 by unit tests without a database:
@@ -48,6 +60,11 @@ cargo test -p einsd --test settlement_tests
 `einsd` exposes a Streamable HTTP MCP server at `/mcp`. All tools are read-only
 unless they explicitly trigger a side effect (e.g. `trigger_settle`).
 
+Money and energy cross this surface as **exact decimals**, accepted as a JSON string
+(`"8.11"`) or a number parsed from its own decimal text — never through `f64`. A rate
+that ends up on a legally binding Gutschrift must not have passed through binary
+floating point, and 0,1 ct/kWh has no exact `f64`.
+
 | Tool | Purpose |
 |---|---|
 | `list_plants` | List registered plants with optional filters |
@@ -60,10 +77,15 @@ unless they explicitly trigger a side effect (e.g. `trigger_settle`).
 | `trigger_settle` | Trigger one-off settlement for a plant + month |
 | `get_epex_monthly_price` | EPEX Day-Ahead monthly average for a period |
 | `import_epex_monthly_price` | Import a new monthly average price |
-| `get_compliance_status` | §52 violations, MaStR status, Direktvermarktung flag |
-| `list_plants_without_mastr` | Plants not yet registered in MaStR (§52 §11 EEG 2023) |
-| `check_direktvermarktung_compliance` | **§3 Nr. 1 + §20 EEG 2023**: plants >100 kW on non-market scheme — §52 Abs. 2 Nr. 4 violation risk |
-| `check_sect44b_quota` | **§44b EEG 2023**: annual biogas cap (leistung × 0.45 × 8760 kWh), YTD, remaining, 75 %/90 % alert |
+| `get_compliance_status` | Every §52 Abs. 1 violation `einsd` derives, priced with the engine's Abs. 2/3/5 rules |
+| `list_plants_without_mastr` | Plants not registered in MaStR (§52 Abs. 1 Nr. 11); a pre-2023 plant owes no Pflichtzahlung and is excluded from the total |
+| `check_direktvermarktung_compliance` | Plants >100 kW on an Einspeisevergütung model — §52 Abs. 1 Nr. 4, now charged by the settlement too |
+| `check_sect44b_quota` | **§44b EEG 2023**: annual biogas cap (leistung × 0.45 × the §3 Nr. 6 hours of *that* year — 8 784 in a leap year, less the hours before first generation), YTD, remaining, 75 %/90 % alert |
+| `explain_settlement` | The full position trace behind one month's EUR amount — every `SettlePosition` with its `legal_basis`, kWh and rate. What an operator dispute or a BNetzA inspection actually asks for |
+| `get_aw_reduktionen` | Why the anzulegender Wert is cut on a date: every active §53b / §53c / §54 reduction with its statutory amount. These cuts shrink the payment without touching the Einspeisemenge or the rate table, so they are the first thing to check when a Gutschrift is smaller than expected |
+| `get_settlement_state_history` | The § 147 AO / GoBD trail of `settlement_state` transitions with the period that caused each |
+| `get_jahresmarktwert` | The stored §20 Abs. 2 technology-specific monthly Marktwert; `DEFAULT` reads the generic fallback row |
+| `import_jahresmarktwert` | Store the ÜNB Marktwert (netztransparenz.de). Takes precedence over the generic EPEX average for Direktvermarktung / Ausschreibung |
 
 ## Testing
 
@@ -82,12 +104,8 @@ that every `ON CONFLICT` on `settlement_receipts` repeats the partial-index
 predicate, that no query names a column the schema does not define, and that a
 `settlement_state` change records the transition it came from. The integration
 suite proves the same rules against a real PostgreSQL and drives the router
-through its actual layers.
-
-Both exist because the arithmetic was never where the defects were. A query
-naming a derived value as if it were a column, an upsert that cannot match a
-partial index, an audit field accepted and then dropped — none of those are
-reachable from a pure test, and each of them shipped.
+through its actual layers. Neither is reachable from a pure arithmetic test,
+which is why both exist alongside the `eeg-billing` unit tests.
 
 ## Jahresabrechnung
 
@@ -100,23 +118,30 @@ from the stored receipts, not recomputed** — the monthly runs are what created
 the payment obligation, so a statement that recalculated from scratch could
 disagree with what was actually paid.
 
+Each month contributes its **latest** receipt: the correction where one exists,
+the original otherwise. A correction is a separate row that neither adds to its
+month nor replaces the original in place, so the statement takes one row per
+month and never sums both.
+
 | Field | Meaning |
 |---|---|
-| `einspeisemenge_kwh` / `settlement_eur` | totals over the year's receipts |
+| `einspeisemenge_kwh` / `settlement_eur` | totals over each month's latest receipt |
 | `pflichtzahlung_eur` | §52 EEG 2023 — a separate claim, never netted into the Vergütung |
-| `months_settled` / `missing_months` | an incomplete year names its gaps |
+| `months_settled` / `missing_months` | of the months the plant is **entitled to**, which still carry no receipt |
 | `verlaengerungsanspruch_qh` | §51a quarter-hours accrued toward the Vergütungszeitraum |
 | `correction_count` | § 147 AO / GoBD corrections issued in the year |
-| `status` | `vorlaeufig` until all twelve months are settled, then `endgueltig` |
+| `status` | `vorlaeufig` until every entitled month is settled, then `endgueltig` |
 
-Two things it deliberately does not do. It never presents a partial sum as the
-year: eleven settled months yield `vorlaeufig` and a list of what is missing,
-because the total otherwise looks entirely plausible. And a correction does not
-add to its month — the partial unique index keeps one non-correction receipt per
-period, so counting the correction too would double that month.
+`missing_months` is bounded by the commissioning date and the Förderende — a plant
+commissioned in June is not missing January, so its first and last years can reach
+`endgueltig` rather than demanding all twelve.
 
-Re-running replaces the statement, so it can be produced provisionally during
-the year and finalised once December is settled.
+A partial sum is never presented as the year: an incomplete year yields
+`vorlaeufig` and a list of what is missing, because the total on its own looks
+entirely plausible.
+
+Re-running replaces the statement, so it can be produced provisionally during the
+year and finalised once the last entitled month is settled.
 
 ## Authorization
 
@@ -148,6 +173,11 @@ port           = 9180
 tenant         = "9900357000004"
 edmd_url       = "http://edmd:8380"
 edmd_api_key   = "env:EINSD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
+
+# The auto-settle worker sweeps this many months back on each run, newest first,
+# so a period whose ÜNB Marktwert arrived late is still picked up. Default 3.
+auto_settle_catchup_months = 3
+auto_settle_from_day       = 7   # wait for the ÜNB Marktwert window
 
 # Outbound ERP CloudEvents, signed with HMAC-SHA256 (X-Mako-Signature).
 # Delivery is durable: each event is written to `event_outbox` in the same

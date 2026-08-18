@@ -7,15 +7,25 @@
 //! so run on every `cargo test`.
 
 const PG: &str = include_str!("../src/pg.rs");
+const HANDLERS: &str = include_str!("../src/handlers.rs");
 const MCP: &str = include_str!("../src/mcp_server.rs");
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 
-/// Strip `--` line comments so a rule cannot be satisfied by prose.
+/// Strip comments so a rule cannot be satisfied — or broken — by prose.
+///
+/// Both `--` (SQL) and `//` (Rust, including doc comments): a guard that fires on
+/// a sentence describing the old behaviour is a guard nobody trusts.
 fn code_only(src: &str) -> String {
     src.lines()
-        .map(|l| match l.find("--") {
-            Some(i) => &l[..i],
-            None => l,
+        .map(|l| {
+            let l = match l.find("--") {
+                Some(i) => &l[..i],
+                None => l,
+            };
+            match l.find("//") {
+                Some(i) => &l[..i],
+                None => l,
+            }
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -95,23 +105,86 @@ fn eeg_anlagen_queries(src: &str) -> Vec<&str> {
     out
 }
 
-/// No query may name a column the schema does not define.
+/// The columns `eeg_anlagen` actually defines.
+fn eeg_anlagen_columns() -> std::collections::BTreeSet<String> {
+    let schema = code_only(SCHEMA);
+    let start = schema
+        .find("CREATE TABLE eeg_anlagen")
+        .expect("eeg_anlagen must exist");
+    let body = &schema[start..start + schema[start..].find("\n);").expect("table ends")];
+    body.lines()
+        .skip(1)
+        .filter_map(|l| {
+            let t = l.trim();
+            let first = t.split_whitespace().next()?;
+            // Column definitions start with a bare identifier followed by a type;
+            // constraints and continuation lines do not.
+            let is_ident = !first.is_empty()
+                && first
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+            let looks_like_a_type = t
+                .split_whitespace()
+                .nth(1)
+                .is_some_and(|ty| ty.chars().next().is_some_and(char::is_uppercase));
+            (is_ident && looks_like_a_type).then(|| first.to_owned())
+        })
+        .collect()
+}
+
+/// No `INSERT INTO eeg_anlagen` may name a column the schema does not define.
+///
+/// The column list is read out of the real DDL, not hardcoded: a column added to
+/// the Rust binding list and forgotten in the DDL takes every registration down
+/// with a 422, which is the class of bug this guard exists for.
+#[test]
+fn inserts_only_name_columns_that_exist() {
+    let columns = eeg_anlagen_columns();
+    assert!(
+        columns.contains("tr_id") && columns.contains("settlement_model"),
+        "the DDL parser lost track of the column list: {columns:?}"
+    );
+
+    for (name, src) in [
+        ("pg.rs", PG),
+        ("mcp_server.rs", MCP),
+        ("handlers.rs", HANDLERS),
+    ] {
+        for q in eeg_anlagen_queries(src) {
+            let Some(at) = q.find("INSERT INTO eeg_anlagen") else {
+                continue;
+            };
+            let rest = &q[at..];
+            let open = rest.find('(').expect("column list");
+            let close = rest
+                .find(") VALUES")
+                .or_else(|| rest.find("\n           ) VALUES"));
+            let close = close.unwrap_or_else(|| rest.find(')').expect("column list ends"));
+            for col in rest[open + 1..close].split(',') {
+                let col = col.trim();
+                if col.is_empty() {
+                    continue;
+                }
+                assert!(
+                    columns.contains(col),
+                    "{name} inserts into eeg_anlagen.{col}, which the schema does not define"
+                );
+            }
+        }
+    }
+}
+
+/// No query may name a value that is computed rather than stored.
 ///
 /// `get_compliance_status` selected `kwk_max_kwh`, which is derived
 /// (`kwk_foerderdauer_h × leistung_kwp`) and has never been a column, so the
 /// tool failed for every plant.
 #[test]
-fn queries_do_not_name_columns_absent_from_eeg_anlagen() {
-    let schema = code_only(SCHEMA);
-    let start = schema
-        .find("CREATE TABLE eeg_anlagen")
-        .expect("eeg_anlagen must exist");
-    let ddl = &schema[start..start + schema[start..].find(");").expect("table ends")];
-
-    // Values computed in Rust that must never appear in a projection.
+fn queries_do_not_name_derived_values_as_columns() {
+    let columns = eeg_anlagen_columns();
     for derived in ["kwk_max_kwh"] {
         assert!(
-            !ddl.contains(derived),
+            !columns.contains(derived),
             "{derived} is derived, not stored — this guard assumes that"
         );
         for (name, src) in [("pg.rs", PG), ("mcp_server.rs", MCP)] {
@@ -255,4 +328,370 @@ fn eeg_gesetz_check_list_equals_the_enum_years() {
             "eeg_gesetz CHECK allows {y}, which EegGesetz::from_db_year rejects"
         );
     }
+}
+
+// ── The settlement-model vocabulary ──────────────────────────────────────────
+
+/// Pull the quoted tokens out of the `CHECK (… IN (…))` that follows `anchor`.
+fn check_tokens_after(anchor: &str) -> Vec<String> {
+    let at = SCHEMA
+        .find(anchor)
+        .unwrap_or_else(|| panic!("anchor `{anchor}` not found in the schema"));
+    let rest = &SCHEMA[at..];
+    let open = rest.find("IN (").expect("CHECK … IN (…)") + 4;
+    let mut depth = 1usize;
+    let mut close = open;
+    for (i, c) in rest[open..].char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    close = open + i;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut out = Vec::new();
+    let mut chars = rest[open..close].chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '\'' {
+            continue;
+        }
+        let mut tok = String::new();
+        for c in chars.by_ref() {
+            if c == '\'' {
+                break;
+            }
+            tok.push(c);
+        }
+        out.push(tok);
+    }
+    out
+}
+
+/// `models::ALL` and the schema's `CHECK` list must name exactly the same tokens.
+///
+/// The two drifted before: the schema accepted a German and an English spelling
+/// of every model, the service listed both in most gates and one in others, and
+/// the KWKG kWh counter silently stopped applying to any plant registered under
+/// the spelling it had missed. Asserting the two lists equal is what makes a
+/// third spelling impossible to add halfway.
+#[test]
+fn the_settlement_model_vocabulary_is_single_sourced() {
+    let mut from_schema = check_tokens_after("settlement_model   TEXT");
+    let mut from_code: Vec<String> = einsd::models::ALL.iter().map(|s| (*s).to_owned()).collect();
+    from_schema.sort();
+    from_code.sort();
+    assert_eq!(
+        from_schema, from_code,
+        "eeg_anlagen.settlement_model CHECK and einsd::models::ALL disagree"
+    );
+}
+
+/// Every model the schema accepts must have a settlement branch.
+///
+/// A token the schema permits and `run_settlement` does not know bails the whole
+/// settlement at runtime — for a plant that registered successfully.
+#[test]
+fn every_accepted_model_has_a_settlement_branch() {
+    let code = code_only(PG);
+    for token in einsd::models::ALL {
+        assert!(
+            code.contains(&format!("\"{token}\"")),
+            "settlement_model {token} is accepted by the schema but has no branch in pg.rs"
+        );
+    }
+}
+
+/// The plant record's `verguetungsform` values and the tariff table's must match.
+///
+/// The lookup joins one against the other; a value that exists on a plant and not
+/// in the rate table silently returns no rate.
+#[test]
+fn verguetungsform_vocabularies_match() {
+    let mut plant = check_tokens_after("verguetungsform    TEXT");
+    let mut table = check_tokens_after("verguetungsform     TEXT");
+    plant.sort();
+    table.sort();
+    assert_eq!(
+        plant, table,
+        "eeg_anlagen.verguetungsform and eeg_verguetungssaetze.verguetungsform disagree"
+    );
+}
+
+/// The tariff-rate lookup must filter on `verguetungsform`.
+///
+/// Überschuss and Volleinspeisung rates share a band and a start date and differ
+/// by the §48 Abs. 2a bonus. Without the filter, which of the two a plant is
+/// seeded with came down to row order.
+#[test]
+fn the_tariff_lookup_filters_on_verguetungsform() {
+    let code = code_only(PG);
+    let at = code
+        .find("FROM eeg_verguetungssaetze")
+        .expect("the rate lookup must exist");
+    let stmt = &code[at..at + 500.min(code.len() - at)];
+    assert!(
+        stmt.contains("verguetungsform"),
+        "the rate lookup ignores verguetungsform:\n{stmt}"
+    );
+}
+
+/// The tariff-table seed must not swallow its own key collisions.
+///
+/// With `ON CONFLICT DO NOTHING` the entire §48 Abs. 2a Volleinspeisung block
+/// collides with the Überschuss rows on
+/// `(erzeugungsart, leistung_min_kwp, billing_start)`, and every one of those
+/// rates is dropped by a migration that reports success.
+#[test]
+fn the_tariff_seed_does_not_swallow_collisions() {
+    let seed_at = SCHEMA
+        .find("INSERT INTO eeg_verguetungssaetze")
+        .expect("the rate seed must exist");
+    let seed = &SCHEMA[seed_at..];
+    let end = seed.find(";\n").map_or(seed.len(), |e| e + 1);
+    assert!(
+        !seed[..end].contains("ON CONFLICT"),
+        "the eeg_verguetungssaetze seed must fail loudly on a key collision"
+    );
+}
+
+/// The §51 auto-derivation must take the billing month in German local time.
+///
+/// EPEX day-ahead prices and edmd's ¼h series are both published for the German
+/// market time. Taking the month from midnight UTC shifted the window by an hour
+/// — two at DST — so the first hour of the month was matched against the previous
+/// month's prices and the last hour was dropped entirely.
+#[test]
+fn the_billing_month_window_is_german_local_time() {
+    let code = code_only(HANDLERS);
+    let at = code
+        .find("fn billing_month_range")
+        .expect("billing_month_range must exist");
+    let body = &code[at..at + 1400.min(code.len() - at)];
+    assert!(
+        body.contains("europe::BERLIN"),
+        "the billing-month window must be anchored in Europe/Berlin"
+    );
+    assert!(
+        !body.contains("assume_utc"),
+        "the billing-month window must not be taken in UTC"
+    );
+}
+
+// ── One settle path ──────────────────────────────────────────────────────────
+
+const SETTLE: &str = include_str!("../src/settle.rs");
+const MAIN: &str = include_str!("../src/main.rs");
+const SECT52: &str = include_str!("../src/sect52.rs");
+
+/// Only `settle.rs` may run a settlement.
+///
+/// REST, batch, MCP `trigger_settle` and the monthly worker are four entry points
+/// to one payment obligation. Each assembling its own `SettleOverrides` lets them
+/// drift, so the same plant is paid differently depending on which one ran.
+#[test]
+fn only_one_module_calls_run_settlement() {
+    for (name, src) in [
+        ("handlers.rs", HANDLERS),
+        ("mcp_server.rs", MCP),
+        ("main.rs", MAIN),
+    ] {
+        let code = code_only(src);
+        assert!(
+            !code.contains("run_settlement("),
+            "{name} calls run_settlement directly — settlements go through \
+             settle::settle_plant so the amount cannot depend on the entry point"
+        );
+    }
+    assert!(
+        code_only(SETTLE).contains("run_settlement("),
+        "settle.rs must be the one that runs it"
+    );
+}
+
+/// Every entry point resolves the §51 figures, because they all share one path.
+#[test]
+fn the_shared_settle_path_derives_the_sect51_figures() {
+    let code = code_only(SETTLE);
+    assert!(
+        code.contains("derive_negativpreis_from_edmd"),
+        "the shared settle path must derive §51/§51a when the caller supplies neither"
+    );
+    assert!(
+        code.contains("fetch_einspeisemenge_from_edmd"),
+        "the shared settle path must fetch the Einspeisemenge when not supplied"
+    );
+}
+
+/// §52 detection lives in one module.
+///
+/// Detecting them inline in `run_settlement` lets a rule go half-present: indexed
+/// but never queried, or reported by an MCP tool but never reaching a settlement.
+#[test]
+fn sect52_violations_are_derived_in_one_place() {
+    for (name, src) in [
+        ("pg.rs", PG),
+        ("mcp_server.rs", MCP),
+        ("handlers.rs", HANDLERS),
+    ] {
+        let code = code_only(src);
+        assert!(
+            !code.contains("SanktionsTyp::"),
+            "{name} constructs a §52 violation — that belongs in sect52.rs"
+        );
+    }
+    let sect52 = code_only(SECT52);
+    for typ in [
+        "FernsteuerbarkeitmFehlend",
+        "DirektvermarktungspflichtVerletzt",
+        "AusfallverguetungHoechstdauerUeberschritten",
+        "ZuordnungsWechselNichtGemeldet",
+        "MastrNichtRegistriert",
+    ] {
+        assert!(sect52.contains(typ), "sect52.rs no longer derives {typ}");
+    }
+}
+
+/// The §9 obligation is staged by capacity, so a flat capacity test is a bug.
+///
+/// A flat "≥ 25 kW needs Fernsteuerbarkeit" charged 10 €/kW/month to every
+/// compliant plant in the 25–100 kW band that took the 60 % Leistungsbegrenzung
+/// §9 Abs. 2 Nr. 2 offers it.
+#[test]
+fn sect9_compliance_is_not_a_bare_capacity_test() {
+    let code = code_only(SECT52);
+    assert!(
+        code.contains("sect9_verletzt"),
+        "§9 compliance must go through the staged helper"
+    );
+    assert!(
+        !code.contains("fernsteuerbarkeit_datum.is_none()"),
+        "a bare 'no Fernsteuerbarkeit date' test ignores the 60 % Leistungsbegrenzung route"
+    );
+}
+
+/// Money does not cross the MCP surface as `f64`.
+///
+/// 0,1 ct/kWh has no exact `f64`, and these values reach a legally binding
+/// §14 UStG Gutschrift.
+#[test]
+fn the_mcp_surface_takes_exact_decimals() {
+    let code = code_only(MCP);
+    for field in [
+        "leistung_kwp: f64",
+        "avg_ct_kwh: f64",
+        "einspeisemenge_kwh: Option<f64>",
+        "epex_avg_ct_kwh: Option<f64>",
+    ] {
+        assert!(
+            !code.contains(field),
+            "the MCP surface still takes `{field}` — money and energy use DecimalArg"
+        );
+    }
+}
+
+// ── The MCP prompts are instructions a model acts on ─────────────────────────
+
+/// No prompt may teach a rule the engine does not implement.
+///
+/// The six prompts shipped an additive Managementprämie of 0,4 ct/kWh — Anlage 1
+/// Nr. 3.1.2 defines `MP = AW − MW` and nothing else, and §20 EEG 2023 has no
+/// Absätze at all — a 20-year clock reset under "§22" (the Ausschreibung
+/// provision), a twelve-month advance-notice duty under "§21 Abs. 1" that no such
+/// provision contains, and MaStR maintenance under "§28a". A wrong instruction is
+/// worse than none: the model acts on it.
+#[test]
+fn the_mcp_prompts_do_not_teach_refuted_rules() {
+    // The prose that documents *why* these are wrong is allowed to name them;
+    // the instruction text a model receives is not.
+    let prompts = {
+        let at = MCP
+            .find("#[prompt_router]")
+            .expect("the prompt router must exist");
+        code_only(&MCP[at..])
+    };
+    for (needle, why) in [
+        // The formula forms. The term itself is allowed where a prompt denies it,
+        // which is the whole point of saying so.
+        (
+            "+ Managementpraemie",
+            "Anlage 1 defines MP = AW − MW, with the marketing cost inside the AW",
+        ),
+        (
+            "Managementpraemie: 0.4",
+            "there is no additive Managementprämie to state a rate for",
+        ),
+        (
+            "REPOWERING sect. 22",
+            "§22 is the Ausschreibung provision; repowering is §3 Nr. 30 i.V.m. §25",
+        ),
+        (
+            "sect. 22 EEG — replace components",
+            "§22 does not govern repowering",
+        ),
+        (
+            "notify Anlagenbetreiber",
+            "no EEG provision imposes an advance-notice period for the Förderende",
+        ),
+        (
+            "sect. 28a EEG",
+            "MaStR maintenance is the MaStRV i.V.m. §71, not §28a",
+        ),
+        (
+            "sect. 25 EEG 2023 sanctions",
+            "§25 is Beginn/Dauer/Beendigung des Anspruchs, not a sanction",
+        ),
+        ("§23b", "POST_EEG_SPOT has no §23b 10-ct cap"),
+    ] {
+        assert!(
+            !prompts.contains(needle),
+            "an MCP prompt still contains {needle:?} — {why}"
+        );
+    }
+    // And the denial is stated where an agent computing a Marktprämie will read it.
+    assert!(
+        prompts.contains("no additive Managementprämie"),
+        "the settle-monthly prompt must say the Marktprämie has no additive component"
+    );
+}
+
+/// The prompts must name the vocabulary the schema actually accepts.
+#[test]
+fn the_mcp_prompts_name_the_real_settlement_models() {
+    let at = MCP.find("fn get_info").expect("server info must exist");
+    let instructions = &MCP[at..];
+    for model in einsd::models::ALL {
+        assert!(
+            instructions.contains(model),
+            "the MCP server instructions omit the {model} settlement model"
+        );
+    }
+    assert!(
+        !instructions.contains("Settlement models (9)"),
+        "the model count in the server instructions is stale"
+    );
+}
+
+/// The §44b quota is measured against the statutory hours, not a flat 8 760.
+///
+/// §3 Nr. 6 divides by "die Summe der vollen Zeitstunden des jeweiligen
+/// Kalenderjahres abzüglich der vollen Stunden vor der erstmaligen Erzeugung" —
+/// 8 784 in a leap year, and shorter for a plant's first year.
+#[test]
+fn the_sect44b_quota_uses_the_statutory_hours() {
+    for (name, src) in [("pg.rs", PG), ("mcp_server.rs", MCP)] {
+        let code = code_only(src);
+        assert!(
+            !code.contains("8760"),
+            "{name} still hardcodes 8760 hours for a Bemessungsleistung"
+        );
+    }
+    assert!(
+        code_only(PG).contains("sect44b_jahreskontingent_kwh"),
+        "the settlement must take the §44b quota from the engine"
+    );
 }

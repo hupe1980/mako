@@ -16,7 +16,6 @@
 ///
 /// | `ErzeugungsArt` | DB `erzeugungsart` TEXT |
 /// |---|---|
-/// | `Solar` | `"SOLAR"` |
 /// | `SolarAufdach` | `"SOLAR_AUFDACH"` |
 /// | `SolarFreiflaeche` | `"SOLAR_FREIFLAECHE"` |
 /// | `SolarAgriPv` | `"SOLAR_AGRIPV"` |
@@ -40,10 +39,13 @@
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum ErzeugungsArt {
-    /// Generic solar PV (backward compat; prefer `SolarAufdach`/`SolarFreiflaeche`).
+    /// Rooftop PV (Gebäudeanlage) — §48 Abs. 1 Nr. 1 / Abs. 2a.
+    ///
+    /// There is deliberately no generic `Solar` variant. The §48 rate depends on
+    /// the Bauform, so a plant recorded as "solar, unspecified" cannot be priced
+    /// — it was the default, which meant an omitted Bauform silently became a
+    /// rooftop rate on a Freiflächenanlage.
     #[default]
-    Solar,
-    /// Rooftop PV (Gebäudeanlage) — higher §48 rates.
     SolarAufdach,
     /// Ground-mounted PV (Freiflächenanlage) — lower rates, tender-based >1 MWp.
     SolarFreiflaeche,
@@ -86,8 +88,7 @@ impl ErzeugungsArt {
     /// schema↔enum guard test) enumerate the canonical `to_db_str` vocabulary
     /// exhaustively — adding a variant updates this array via the compiler's
     /// exhaustiveness check on the mapping functions.
-    pub const ALL: [Self; 19] = [
-        Self::Solar,
+    pub const ALL: [Self; 18] = [
         Self::SolarAufdach,
         Self::SolarFreiflaeche,
         Self::SolarAgriPv,
@@ -120,8 +121,7 @@ impl ErzeugungsArt {
     pub fn is_solar(self) -> bool {
         matches!(
             self,
-            Self::Solar
-                | Self::SolarAufdach
+            Self::SolarAufdach
                 | Self::SolarFreiflaeche
                 | Self::SolarAgriPv
                 | Self::SolarMieterstrom
@@ -149,7 +149,6 @@ impl ErzeugungsArt {
     /// or log a warning for unexpected technology codes.
     pub fn from_db_str(s: &str) -> Result<Self, InvalidErzeugungsArt> {
         match s {
-            "SOLAR" => Ok(Self::Solar),
             "SOLAR_AUFDACH" => Ok(Self::SolarAufdach),
             "SOLAR_FREIFLAECHE" => Ok(Self::SolarFreiflaeche),
             "SOLAR_AGRIPV" => Ok(Self::SolarAgriPv),
@@ -175,7 +174,6 @@ impl ErzeugungsArt {
     /// The canonical DB column value for this variant.
     pub fn to_db_str(self) -> &'static str {
         match self {
-            Self::Solar => "SOLAR",
             Self::SolarAufdach => "SOLAR_AUFDACH",
             Self::SolarFreiflaeche => "SOLAR_FREIFLAECHE",
             Self::SolarAgriPv => "SOLAR_AGRIPV",

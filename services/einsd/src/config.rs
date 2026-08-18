@@ -3,7 +3,6 @@
 use serde::Deserialize;
 
 /// `einsd` runtime configuration — loaded via `mako_service::load_config`.
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct EinsdConfig {
     /// PostgreSQL connection + pool tuning (`application_name` = `einsd`).
@@ -21,12 +20,6 @@ pub struct EinsdConfig {
 
     /// HMAC-SHA256 secret for signing outbound CloudEvent POSTs.
     pub erp_hmac_secret: Option<String>,
-
-    /// Optional `tarifbd` URL — used to fetch EPEX monthly prices for
-    /// DIREKTVERMARKTUNG and POST_EEG_SPOT settlement models.
-    /// When absent, operators must import prices via
-    /// `PUT /api/v1/epex-monthly/{year}/{month}`.
-    pub tarifbd_url: Option<String>,
 
     /// Optional `edmd` base URL — used to auto-fetch Einspeisemenge when
     /// `einspeisemenge_kwh` is not provided in a settlement request.
@@ -70,6 +63,15 @@ pub struct EinsdConfig {
     /// receipts for plants that were merely early, and those had to be settled
     /// again afterwards.
     pub auto_settle_from_day: Option<u8>,
+
+    /// How many months back the auto-settle worker sweeps on each run.
+    /// Defaults to 3; clamped to 1–24.
+    ///
+    /// Settling only the previous month meant a period the service was down for
+    /// — or whose ÜNB Marktwert arrived late — was never revisited: the window
+    /// moved on and the plant simply went unpaid. §23 EEG 2023 puts the monthly
+    /// payment on the Netzbetreiber, so the sweep re-checks a short tail.
+    pub auto_settle_catchup_months: Option<u8>,
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:EINSD_MCP_API_KEY"`.
     #[serde(default)]

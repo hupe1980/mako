@@ -35,7 +35,8 @@ spec:
       ## COMPLIANCE CHECKS
 
       ### §20 EEG + §52 Abs. 1 Nr. 4 — Direktvermarktungspflicht
-      Plants > 100 kW must be in Direktvermarktung. VERGUETUNG model → violation.
+      Plants > 100 kW must be in Direktvermarktung (§21 Abs. 1 Nr. 3 EEG 2023).
+      A plant that size still on the VERGUETUNG model is a §52 Abs. 1 Nr. 4 violation.
       Penalty: €10/kW/month from violation date.
 
       ### §44b EEG 2023 — Biogas 45% annual cap

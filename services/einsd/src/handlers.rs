@@ -12,14 +12,14 @@ use rust_decimal::Decimal;
 use serde::Deserialize;
 use sqlx::PgPool;
 use std::sync::Arc;
+use time::{Date, OffsetDateTime};
 
 use crate::{
     config::EinsdConfig,
     pg::{
-        AnlageUpsertRequest, AnlagenQuery, SettleOverrides, build_settle_input,
-        decommission_anlage, fetch_anlage, fetch_epex_price, fetch_jahresmarktwert_single,
-        list_anlagen, list_expiring, list_settlement_receipts, list_unsettled,
-        lookup_verguetungssatz, run_settlement, upsert_anlage, upsert_epex_price,
+        AnlageUpsertRequest, AnlagenQuery, decommission_anlage, fetch_anlage, fetch_epex_price,
+        fetch_jahresmarktwert_single, list_anlagen, list_expiring, list_settlement_receipts,
+        list_unsettled, lookup_verguetungssatz, upsert_anlage, upsert_epex_price,
         upsert_jahresmarktwert, zusammenlegen,
     },
 };
@@ -75,55 +75,97 @@ struct FeedInInterval {
     kwh: String,
 }
 
+/// The billing month as a half-open instant range in **German local time**.
+///
+/// The §51 overlay matches feed-in quarter-hours against day-ahead prices by
+/// their start instant, and both series are published for the German market
+/// time (CET/CEST). Taking the month from midnight *UTC* shifted the window by
+/// an hour — two at DST — so the first hour of the month was read from the
+/// previous month's prices and the last hour was dropped. On a negative-price
+/// night that is a whole hour of feed-in either paid or not paid in error.
+pub fn billing_month_range(year: i16, month: i16) -> Option<(OffsetDateTime, OffsetDateTime)> {
+    let berlin = time_tz::timezones::db::europe::BERLIN;
+    let start_date = Date::from_calendar_date(
+        i32::from(year),
+        time::Month::try_from(u8::try_from(month).ok()?).ok()?,
+        1,
+    )
+    .ok()?;
+    // First day of the following month — a half-open upper bound needs no
+    // knowledge of the month's length or of a leap year.
+    let end_date = if month == 12 {
+        Date::from_calendar_date(i32::from(year) + 1, time::Month::January, 1).ok()?
+    } else {
+        Date::from_calendar_date(
+            i32::from(year),
+            time::Month::try_from(u8::try_from(month).ok()? + 1).ok()?,
+            1,
+        )
+        .ok()?
+    };
+    // Midnight Berlin is never inside a DST gap (transitions happen at 02:00/03:00),
+    // so the ambiguous/none arms are unreachable; they are handled rather than
+    // unwrapped because a month boundary that panics takes the whole batch down.
+    let to_instant = |d: Date| -> Option<OffsetDateTime> {
+        use time_tz::{OffsetResult, PrimitiveDateTimeExt as _};
+        let midnight = time::PrimitiveDateTime::new(d, time::Time::MIDNIGHT);
+        match midnight.assume_timezone(berlin) {
+            OffsetResult::Some(dt) => Some(dt.to_offset(time::UtcOffset::UTC)),
+            OffsetResult::Ambiguous(earlier, _) => Some(earlier.to_offset(time::UtcOffset::UTC)),
+            OffsetResult::None => None,
+        }
+    };
+    Some((to_instant(start_date)?, to_instant(end_date)?))
+}
+
 /// §51 auto-derivation: fetch ¼h feed-in from edmd, overlay the stored EPEX spot
 /// prices, and derive `(kwh_during_negative_epex, negative_price_quarter_hours)`
-/// via the version-aware `eeg-billing::negativpreis` engine.
+/// via the date-aware `eeg-billing::negativpreis` engine.
 ///
-/// Returns `None` — leaving the two figures caller-supplied — when edmd is not
-/// configured, there is no feed-in or spot data, or the metering coverage /
-/// quality is below the §60 Abs. 2 MsbG threshold. Deriving on an incomplete or
-/// partly-faulty month would find too few negative-price kWh and thus *overpay*,
-/// so a gap is surfaced (logged) rather than silently under-reduced.
+/// Returns [`Negativpreis::Unbekannt`] — leaving the two figures caller-supplied
+/// — when edmd is not configured, there is no feed-in or spot data, or the
+/// metering coverage / quality is below the §60 Abs. 2 MsbG threshold. Deriving
+/// on an incomplete or partly-faulty month would find too few negative-price kWh
+/// and thus *overpay*, so a gap is surfaced (logged) rather than silently
+/// under-reduced.
+///
+/// A month that genuinely had no qualifying negative quarter-hour returns
+/// [`Negativpreis::Ermittelt`] with zeroes. Collapsing that into "unknown" left
+/// the settlement carrying `None`, which reads downstream as "no data supplied"
+/// — indistinguishable from a failed lookup in the audit trail.
 pub async fn derive_negativpreis_from_edmd(
     cfg: &EinsdConfig,
     client: &reqwest::Client,
     pool: &PgPool,
     malo_id: &str,
-    eeg_gesetz: i16,
+    inbetriebnahme: time::Date,
     year: i16,
     month: i16,
-) -> Option<(Decimal, u64)> {
+) -> Negativpreis {
     use time::format_description::well_known::Rfc3339;
 
-    let edmd_url = cfg.edmd_url.as_deref()?;
-    let version = eeg_billing::EegGesetz::from_db_year(eeg_gesetz).ok()?;
-    let month_m = time::Month::try_from(month as u8).ok()?;
-    let last_day = days_in_month(year, month);
-    let range_from = time::Date::from_calendar_date(i32::from(year), month_m, 1)
-        .ok()?
-        .with_hms(0, 0, 0)
-        .ok()?
-        .assume_utc();
-    let range_to = time::Date::from_calendar_date(i32::from(year), month_m, last_day)
-        .ok()?
-        .with_hms(23, 59, 59)
-        .ok()?
-        .assume_utc();
+    let Some(edmd_url) = cfg.edmd_url.as_deref() else {
+        return Negativpreis::Unbekannt;
+    };
+    let regime = eeg_billing::NegativpreisRegime::fuer_inbetriebnahme(inbetriebnahme);
+    let Some((range_from, range_to)) = billing_month_range(year, month) else {
+        return Negativpreis::Unbekannt;
+    };
 
-    let url = format!(
-        "{edmd_url}/api/v1/feed-in/{malo_id}?from={}&to={}",
-        range_from.format(&Rfc3339).ok()?,
-        range_to.format(&Rfc3339).ok()?,
-    );
+    let (Ok(from_s), Ok(to_s)) = (range_from.format(&Rfc3339), range_to.format(&Rfc3339)) else {
+        return Negativpreis::Unbekannt;
+    };
+    let url = format!("{edmd_url}/api/v1/feed-in/{malo_id}?from={from_s}&to={to_s}");
     let mut req = client.get(&url);
     if let Some(key) = cfg.edmd_api_key.as_deref() {
         req = req.bearer_auth(key);
     }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let feed: FeedInResponse = resp.json().await.ok()?;
+    let Some(resp) = req.send().await.ok().filter(|r| r.status().is_success()) else {
+        return Negativpreis::Unbekannt;
+    };
+    let Ok(feed) = resp.json::<FeedInResponse>().await else {
+        return Negativpreis::Unbekannt;
+    };
 
     // §60 Abs. 2 gate: auto-derive only on near-complete, fully-billable data.
     if feed.coverage_pct < 95.0 || feed.billable_pct < 100.0 {
@@ -134,7 +176,7 @@ pub async fn derive_negativpreis_from_edmd(
             "§51 auto-derivation skipped — metering coverage/quality below threshold; \
              supply kwh_during_negative_epex manually or backfill substitute values"
         );
-        return None;
+        return Negativpreis::Unbekannt;
     }
 
     let spot = match crate::pg::fetch_spot_prices(pool, range_from, range_to).await {
@@ -144,7 +186,7 @@ pub async fn derive_negativpreis_from_edmd(
                 malo_id, year, month, error = %e,
                 "§51 auto-derivation skipped — the EPEX spot store could not be read"
             );
-            return None;
+            return Negativpreis::Unbekannt;
         }
     };
     if spot.is_empty() {
@@ -158,33 +200,65 @@ pub async fn derive_negativpreis_from_edmd(
             "§51 auto-derivation skipped — the EPEX spot store has no coverage for the \
              period; import the day-ahead prices or supply kwh_during_negative_epex"
         );
-        return None;
+        return Negativpreis::Unbekannt;
     }
-    let negative_starts: std::collections::HashSet<time::OffsetDateTime> = spot
+    let negative_starts: std::collections::HashSet<OffsetDateTime> = spot
         .iter()
         .filter(|(_, p)| p.is_sign_negative())
         .map(|(t, _)| *t)
         .collect();
 
-    let intervals: Vec<eeg_billing::negativpreis::NegativpreisInterval> = feed
+    let mut intervals: Vec<eeg_billing::NegativpreisInterval> = feed
         .intervals
         .iter()
         .filter_map(|iv| {
-            let start = time::OffsetDateTime::parse(&iv.start, &Rfc3339).ok()?;
+            let start = OffsetDateTime::parse(&iv.start, &Rfc3339).ok()?;
             let feed_in_kwh = iv.kwh.parse::<Decimal>().ok()?;
-            Some(eeg_billing::negativpreis::NegativpreisInterval {
+            Some(eeg_billing::NegativpreisInterval {
                 start,
                 feed_in_kwh,
                 price_negative: negative_starts.contains(&start),
             })
         })
         .collect();
+    // The run detector needs ascending order to recognise a consecutive run;
+    // edmd sorts its series, but a §51 threshold that silently stops applying
+    // because an upstream sort changed is not a failure mode worth keeping.
+    intervals.sort_unstable_by_key(|iv| iv.start);
 
-    let r = eeg_billing::negativpreis::derive_negativpreis(&intervals, version);
-    if r.negative_quarter_hours == 0 {
-        return None;
+    let r = eeg_billing::derive_negativpreis(&intervals, regime);
+    Negativpreis::Ermittelt {
+        kwh: r.kwh_during_negative,
+        quarter_hours: r.negative_quarter_hours,
     }
-    Some((r.kwh_during_negative, r.negative_quarter_hours))
+}
+
+/// What the §51 auto-derivation could establish for a billing period.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Negativpreis {
+    /// The overlay ran. Zero values mean the month genuinely had no qualifying
+    /// negative quarter-hour, not that nothing was known.
+    Ermittelt {
+        /// Feed-in kWh in qualifying negative-price intervals (§51).
+        kwh: Decimal,
+        /// Count of those quarter-hours (§51a).
+        quarter_hours: u64,
+    },
+    /// Nothing could be established — no edmd, no prices, or metering below the
+    /// §60 Abs. 2 MsbG threshold. The settlement is left unreduced and the
+    /// receipt records no §51 figures.
+    Unbekannt,
+}
+
+impl Negativpreis {
+    /// Split into the two override fields, `(None, None)` when unknown.
+    #[must_use]
+    pub fn into_overrides(self) -> (Option<Decimal>, Option<u64>) {
+        match self {
+            Self::Ermittelt { kwh, quarter_hours } => (Some(kwh), Some(quarter_hours)),
+            Self::Unbekannt => (None, None),
+        }
+    }
 }
 
 fn days_in_month(year: i16, month: i16) -> u8 {
@@ -292,15 +366,12 @@ pub async fn enqueue_settlement_ce(
     if result.status != "calculated" {
         return Ok(());
     }
-    // de.eeg.marktpraemie.berechnet — the gleitende/feste Marktprämie models
+    // de.eeg.marktpraemie.berechnet — the gleitende/wettbewerbliche Marktprämie
     // de.eeg.verguetung.berechnet   — everything else (FiT, Mieterstrom, Post-EEG, Flex, KWKG)
-    // `MARKET_PREMIUM` is a Direktvermarktung model (see `build_settle_input`), so
-    // it belongs on the Marktprämie event — it must not fall through to Vergütung.
-    let ce_type = match anlage.settlement_model.as_str() {
-        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" | "MARKET_PREMIUM" => {
-            mako_events::eeg::MARKTPRAEMIE_BERECHNET
-        }
-        _ => mako_events::eeg::VERGUETUNG_BERECHNET,
+    let ce_type = if crate::models::ist_marktpraemie(&anlage.settlement_model) {
+        mako_events::eeg::MARKTPRAEMIE_BERECHNET
+    } else {
+        mako_events::eeg::VERGUETUNG_BERECHNET
     };
     if let Some(ce) = build_settlement_ce(
         cfg,
@@ -401,7 +472,7 @@ pub async fn post_anlage(
 
     match upsert_anlage(&pool, &cfg.tenant, req).await {
         Ok(()) => StatusCode::CREATED.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -425,7 +496,7 @@ pub async fn put_anlage(
     req.tr_id = tr_id;
     match upsert_anlage(&pool, &cfg.tenant, req).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -448,7 +519,7 @@ pub async fn get_anlage(
     match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -470,7 +541,7 @@ pub async fn get_anlagen(
 
     match list_anlagen(&pool, &cfg.tenant, &q).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -493,7 +564,7 @@ pub async fn delete_anlage(
     match decommission_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -521,7 +592,7 @@ pub async fn get_foerderung_auslaufend(
     let days = q.days.unwrap_or(180);
     match list_expiring(&pool, &cfg.tenant, days).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -543,10 +614,7 @@ pub struct SettleTriggerRequest {
     /// POST_EEG_SPOT).  When absent, the value stored in `epex_monthly_prices`
     /// is used automatically.
     pub epex_avg_ct_kwh: Option<Decimal>,
-    /// Override §20 Abs. 3 EEG 2023 Managementprämie ct/kWh.
-    /// Defaults to 0.4 ct/kWh (0.2 ct/kWh for plants >100 MW).
-    /// Only applies to DIREKTVERMARKTUNG and AUSSCHREIBUNG settlement models.
-    /// §13a EnWG (Redispatch 2.0) — kWh curtailed by NB this billing month.
+    /// §13a EnWG (Redispatch 2.0) — kWh curtailed by the NB this billing month.
     ///
     /// The NB must compensate the operator at the AW rate for these kWh
     /// (§19 Abs. 2 EEG 2023: §51 Negativpreisregel does NOT apply to EInsMan kWh).
@@ -567,9 +635,11 @@ pub struct SettleTriggerRequest {
     /// §51a EEG 2023 — quarter-hours during which the EPEX price was negative
     /// AND the plant's §51 threshold was met.
     ///
-    /// Used to compute the Verlängerungsanspruch (Förderzeitraum extension):
-    /// Solar PV: `ceil(qh / 2)` · Others: `qh` (1:1 factor).
-    /// Pass the total QH count from hourly EPEX data for the billing month.
+    /// Used to compute the §51a Verlängerungsanspruch. Non-solar plants extend by
+    /// whole calendar days (96 QH/day, rounded up once over the total); solar
+    /// plants convert at factor 0,5 into Volllastviertelstunden and draw them
+    /// down against the §51a Abs. 2 monthly table (73 in December, 508 in June).
+    /// Pass the raw qualifying quarter-hour count for the billing month.
     #[serde(default)]
     pub negative_price_quarter_hours: Option<u64>,
 }
@@ -595,96 +665,28 @@ pub async fn post_settle(
             .into_response();
     }
 
-    // Load plant to get settlement parameters.
-    let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    // Auto-fetch Einspeisemenge from edmd when not supplied in request.
-    // Calls GET {edmd_url}/api/v1/billing-period/{malo_id}?from=...&to=...
-    // Uses arbeitsmenge_kwh from the MeterBillingPeriod response.
-    let einspeisemenge_kwh = match req.einspeisemenge_kwh {
-        Some(kwh) => Some(kwh),
-        None => {
-            fetch_einspeisemenge_from_edmd(&cfg, &http_client, &anlage.malo_id, year, month).await
-        }
-    };
-
-    // Resolve EPEX price from DB when not supplied in request.
-    let epex_avg_ct_kwh = match req.epex_avg_ct_kwh {
-        Some(p) => Some(p),
-        None => match fetch_epex_price(&pool, year, month).await {
-            Ok(p) => p,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
-    };
-
-    // §51/§51a auto-derivation: when the caller supplied neither figure, derive
-    // both from edmd's ¼h feed-in overlaid on the stored EPEX spot prices
-    // (version-aware, §60-gated). Explicit request values always win.
-    let (kwh_during_negative_epex, negative_price_quarter_hours) =
-        if req.kwh_during_negative_epex.is_none() && req.negative_price_quarter_hours.is_none() {
-            match derive_negativpreis_from_edmd(
-                &cfg,
-                &http_client,
-                &pool,
-                &anlage.malo_id,
-                anlage.eeg_gesetz,
-                year,
-                month,
-            )
-            .await
-            {
-                Some((kwh, qh)) => (Some(kwh), Some(qh)),
-                None => (None, None),
-            }
-        } else {
-            (
-                req.kwh_during_negative_epex,
-                req.negative_price_quarter_hours,
-            )
-        };
-
-    let input = build_settle_input(
-        &cfg.tenant,
-        &anlage,
+    match crate::settle::settle_by_tr_id(
+        &pool,
+        &cfg,
+        &http_client,
+        &tr_id,
         year,
         month,
-        SettleOverrides {
-            einspeisemenge_kwh,
-            epex_avg_ct_kwh,
+        crate::settle::SettleRequest {
+            einspeisemenge_kwh: req.einspeisemenge_kwh,
+            epex_avg_ct_kwh: req.epex_avg_ct_kwh,
             einspeisemanagement_kwh: req.einspeisemanagement_kwh,
-            kwh_during_negative_epex,
-            negative_price_quarter_hours,
-            correction_of: None,
-            correction_reason: None,
-            jahresmarktwert_ct_kwh: None, // auto-fetched by run_settlement
+            kwh_during_negative_epex: req.kwh_during_negative_epex,
+            negative_price_quarter_hours: req.negative_price_quarter_hours,
+            correction: None,
         },
-    );
-
-    // ── Transactional outbox: settlement write + CloudEvent enqueue commit as one ─
-    // The settlement is money-critical, so the domain write and the ERP CloudEvent
-    // must be atomic. run_settlement runs its writes on the tx; the CE is enqueued
-    // into event_outbox in the same tx and drained by the OutboxWorker.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let result = match run_settlement(&mut tx, input).await {
-        Ok(r) => r,
-        // tx dropped here → rollback; nothing was persisted.
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    // ── Enqueue CloudEvent for ERP webhook (shared with the MCP settle path) ──
-    if let Err(e) = enqueue_settlement_ce(&mut tx, &cfg, &anlage, &result, year, month).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    )
+    .await
+    {
+        Ok(Some(result)) => (StatusCode::OK, Json(result)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
-    (StatusCode::OK, Json(result)).into_response()
 }
 
 /// `GET /api/v1/anlagen/{tr_id}/settlements`
@@ -707,7 +709,7 @@ pub async fn get_settlements(
     match list_settlement_receipts(&pool, &cfg.tenant, &tr_id, q.limit.unwrap_or(24).min(200)).await
     {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -766,7 +768,7 @@ pub async fn put_jahresmarktwert(
     match upsert_jahresmarktwert(&pool, year, month, &erzeugungsart, body.avg_ct_kwh, source).await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -795,7 +797,7 @@ pub async fn get_jahresmarktwert(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -819,7 +821,7 @@ pub async fn put_epex_price(
     let source = body.source.as_deref().unwrap_or("manual");
     match upsert_epex_price(&pool, year, month, body.avg_ct_kwh, source).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -879,7 +881,7 @@ pub async fn put_epex_spot(
     let source = body.source.as_deref().unwrap_or("manual");
     match crate::pg::upsert_spot_prices(&pool, &prices, source).await {
         Ok(n) => (StatusCode::OK, Json(serde_json::json!({ "upserted": n }))).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -915,11 +917,11 @@ pub async fn get_epex_price(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
-// ── Repowering (§22 EEG 2023) ────────────────────────────────────────────────
+// ── Repowering (§3 Nr. 30 i.V.m. §25 EEG 2023) ───────────────────────────────
 
 /// Request body for `POST /api/v1/anlagen/{tr_id}/repowering`.
 #[derive(Debug, Deserialize)]
@@ -1002,17 +1004,32 @@ pub async fn post_wind_reevaluation(
         )
             .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
 /// `POST /api/v1/anlagen/{tr_id}/repowering`
 ///
-/// Trigger a repowering event for an existing plant.  Per §22 EEG 2023:
-/// - The 20-year Förderungsdauer resets from `repowering_datum`.
-/// - The Vergütungssatz is updated to the rate applicable at `repowering_datum`.
-/// - The original commissioning date is preserved in `ursprungs_inbetriebnahme`.
-/// - The plant status transitions from `aktiv` to `aktiv` (remains active).
+/// Record a **Vollrepowering** — replacing the generator unit — for an existing
+/// plant.
+///
+/// The Förderdauer restarts because the replacement is a fresh Inbetriebnahme
+/// (§3 Nr. 30 EEG 2023: the first commissioning of the *generator* after its
+/// renewal), so §25 Abs. 1 runs again from `repowering_datum`. **§22 governs the
+/// wettbewerbliche Ermittlung der Marktprämie and has nothing to do with this**;
+/// citing it here was simply wrong.
+///
+/// - `inbetriebnahme` becomes `repowering_datum`; the original date is kept in
+///   `ursprungs_inbetriebnahme`.
+/// - The Vergütungssatz is re-looked-up for `repowering_datum` unless supplied.
+/// - The §51 regime is re-derived from the new date, so a plant repowered after
+///   25.02.2025 falls under the Solarspitzengesetz rules.
+/// - The 180-day Förderende alert is re-armed: the new expiry is a new fact.
+/// - The plant stays `aktiv`.
+///
+/// This is only correct for a full replacement. Partial repowering (rotor or
+/// nacelle only) leaves the original commissioning date governing — do not use
+/// this endpoint for it.
 ///
 /// Idempotent: re-posting with the same date is safe.
 pub async fn post_repowering(
@@ -1047,15 +1064,14 @@ pub async fn post_repowering(
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     };
 
-    // §25 Abs. 1 Satz 2 EEG 2023: statutory plants extend to Dec 31 of the 20th year.
-    // foerderendedatum_repowering() uses the correct formula (Dec 31 of year+20),
-    // NOT the Ausschreibung rule (exact +20y anniversary).
+    // §25 Abs. 1 Satz 2 EEG 2023: statutory plants extend to Dec 31 of the 20th
+    // year, not to the exact +20 y anniversary (which is the Ausschreibung rule).
     let foerderendedatum_neu = match eeg_billing::foerderendedatum_repowering(repowering_datum) {
         Ok(d) => d,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     };
 
     // Auto-lookup new Vergütungssatz when not supplied.
@@ -1065,6 +1081,7 @@ pub async fn post_repowering(
         match lookup_verguetungssatz(
             &pool,
             &anlage.erzeugungsart,
+            &anlage.verguetungsform,
             req.leistung_kwp_neu.unwrap_or(anlage.leistung_kwp),
             &req.repowering_datum,
         ).await {
@@ -1073,7 +1090,7 @@ pub async fn post_repowering(
                 StatusCode::UNPROCESSABLE_ENTITY,
                 "No Vergütungssatz found for this plant type and repowering date — supply verguetungssatz_ct_neu explicitly",
             ).into_response(),
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
         }
     };
 
@@ -1086,6 +1103,9 @@ pub async fn post_repowering(
               foerderendedatum         = $4,
               verguetungssatz_ct       = $5,
               leistung_kwp             = COALESCE($6, leistung_kwp),
+              -- The Förderende moved, so the 180-day alert has to be able to
+              -- fire again for the new one.
+              foerderung_alert_sent_at = NULL,
               updated_at               = now()
           WHERE tr_id = $1 AND tenant = $2",
     )
@@ -1107,7 +1127,7 @@ pub async fn post_repowering(
         }))
         .into_response(),
         Ok(_) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1120,6 +1140,11 @@ pub struct VerguetungssatzLookupRequest {
     pub leistung_kwp: Decimal,
     /// ISO 8601 Inbetriebnahmedatum.
     pub inbetriebnahme: String,
+    /// `"UEBERSCHUSS"` (default), `"VOLLEINSPEISUNG"` (§48 Abs. 2a) or
+    /// `"KWK_ZUSCHLAG"`. The two solar forms differ by several ct/kWh, so a
+    /// lookup that omits it is answered on the Überschuss column.
+    #[serde(default)]
+    pub verguetungsform: Option<String>,
 }
 
 // ── MaStR registration confirmation ──────────────────────────────────────────
@@ -1189,7 +1214,7 @@ pub async fn post_mastr_registrierung(
     // drains `event_outbox` (persist-before-dispatch).
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     };
 
     let rows = sqlx::query(
@@ -1209,7 +1234,7 @@ pub async fn post_mastr_registrierung(
     .await;
 
     match rows {
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
         Ok(r) if r.rows_affected() == 0 => return StatusCode::NOT_FOUND.into_response(),
         Ok(_) => {}
     }
@@ -1229,12 +1254,12 @@ pub async fn post_mastr_registrierung(
         );
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             tracing::error!(tr_id, error = %e, "einsd: MaStR registriert outbox enqueue failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
         }
     }
 
     if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
     }
     StatusCode::NO_CONTENT.into_response()
 }
@@ -1259,9 +1284,11 @@ pub async fn post_verguetungssatz_lookup(
             .into_response();
     }
 
+    let verguetungsform = req.verguetungsform.as_deref().unwrap_or("UEBERSCHUSS");
     match lookup_verguetungssatz(
         &pool,
         &req.erzeugungsart,
+        verguetungsform,
         req.leistung_kwp,
         &req.inbetriebnahme,
     )
@@ -1269,6 +1296,7 @@ pub async fn post_verguetungssatz_lookup(
     {
         Ok(Some(ct)) => Json(serde_json::json!({
             "erzeugungsart": req.erzeugungsart,
+            "verguetungsform": verguetungsform,
             "leistung_kwp": req.leistung_kwp,
             "inbetriebnahme": req.inbetriebnahme,
             "verguetungssatz_ct": ct,
@@ -1279,7 +1307,7 @@ pub async fn post_verguetungssatz_lookup(
             "No matching EEG tariff rate found. Use PUT /api/v1/verguetungssaetze to import additional rates.",
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1328,14 +1356,14 @@ pub async fn post_batch_settle(
         Some(p) => Some(p),
         None => match fetch_epex_price(&pool, year, month).await {
             Ok(p) => p,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
         },
     };
 
     let limit = req.limit.unwrap_or(500).min(2000);
     let plants = match list_unsettled(&pool, &cfg.tenant, year, month).await {
         Ok(p) => p,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     };
 
     let plants: Vec<_> = plants.into_iter().take(limit as usize).collect();
@@ -1378,55 +1406,26 @@ pub async fn post_batch_settle(
             let pool = pool.clone();
             let sem = Arc::clone(&sem);
             let client = Arc::clone(&http_client);
-            let malo_id = anlage.malo_id.clone();
             let tr_id = anlage.tr_id.clone();
             let settlement_model = anlage.settlement_model.clone();
             join_set.spawn(async move {
                 let _permit = sem.acquire().await.expect("semaphore closed");
-                let einspeisemenge_kwh =
-                    fetch_einspeisemenge_from_edmd(&cfg, &client, &malo_id, year, month).await;
-                let input = build_settle_input(
-                    &cfg.tenant,
+                // The same path the REST, MCP and worker settles take, so a
+                // plant settled in bulk gets the identical amount.
+                let res = crate::settle::settle_plant(
+                    &pool,
+                    &cfg,
+                    &client,
                     &anlage,
                     year,
                     month,
-                    SettleOverrides {
-                        einspeisemenge_kwh,
+                    crate::settle::SettleRequest {
                         epex_avg_ct_kwh,
-                        einspeisemanagement_kwh: None,
-                        kwh_during_negative_epex: None,
-                        negative_price_quarter_hours: None,
-                        correction_of: None,
-                        correction_reason: None,
-                        jahresmarktwert_ct_kwh: None,
+                        ..Default::default()
                     },
-                );
-                // Transactional outbox: each plant's settlement write + its CE enqueue
-                // commit atomically on their own transaction.
-                let mut tx = match pool.begin().await {
-                    Ok(tx) => tx,
-                    Err(e) => return (tr_id, settlement_model, Err(e.into())),
-                };
-                let res = run_settlement(&mut tx, input).await;
-                match res {
-                    Ok(result) => {
-                        // Single-sourced CE type + gate + bank details, shared with
-                        // the REST/MCP/worker settle paths (Marktprämie payouts carry
-                        // IBAN/BIC/payee so accountingd has the bank data pain.001 needs).
-                        if let Err(e) =
-                            enqueue_settlement_ce(&mut tx, &cfg, &anlage, &result, year, month)
-                                .await
-                        {
-                            return (tr_id, settlement_model, Err(e.into()));
-                        }
-                        if let Err(e) = tx.commit().await {
-                            return (tr_id, settlement_model, Err(e.into()));
-                        }
-                        (tr_id, settlement_model, Ok(result))
-                    }
-                    // tx dropped → rollback.
-                    Err(e) => (tr_id, settlement_model, Err(e)),
-                }
+                )
+                .await;
+                (tr_id, settlement_model, res)
             });
         }
 
@@ -1525,8 +1524,9 @@ pub struct ZusammenlegungRequest {
 /// - The parent's `foerderendedatum` is **NOT** reset (only Repowering resets it).
 /// - Future settlements continue only on the parent plant.
 ///
-/// This is distinct from Repowering (§22 EEG): Zusammenlegung is an
-/// administrative merger, not a hardware replacement. No new commissioning date.
+/// This is distinct from Repowering: Zusammenlegung is an administrative merger,
+/// not a hardware replacement, so there is no new commissioning date and no new
+/// Förderdauer.
 pub async fn post_zusammenlegen(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -1573,7 +1573,7 @@ pub async fn post_zusammenlegen(
         )
             .into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, format!("plant {child_tr_id} not found or not aktiv")).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -1582,9 +1582,8 @@ pub async fn post_zusammenlegen(
 /// Request body for `POST /api/v1/anlagen/{tr_id}/switch-veraeusserungsform`.
 #[derive(Debug, serde::Deserialize)]
 pub struct VeraeusserungsformWechselRequest {
-    /// The new settlement model to switch to.
-    /// Must be either `"FEED_IN_TARIFF"` / `"VERGUETUNG"` (switch to Einspeisevergütung)
-    /// or `"MARKET_PREMIUM"` / `"DIREKTVERMARKTUNG"` (switch to Direktvermarktung).
+    /// The Veräußerungsform to switch to: `"VERGUETUNG"` (Einspeisevergütung,
+    /// §21 Abs. 1) or `"DIREKTVERMARKTUNG"` (gleitende Marktprämie, §20).
     pub new_model: String,
     /// Effective date for the switch (must be the 1st of a calendar month).
     pub effective_date: String,
@@ -1600,10 +1599,14 @@ pub struct VeraeusserungsformWechselRequest {
 ///
 /// Switches the plant between Einspeisevergütung (§21) and Direktvermarktung (§20).
 ///
-/// Rules enforced by `eeg_billing::direktverm::validate_switch_to_vergütung`:
-/// - Plants > 100 kW (mandatory Direktvermarktung) cannot switch back to Einspeisevergütung.
-/// - Plants can only switch once per calendar month (§21b / §21c EEG 2023).
-/// - The effective date must be the 1st of a calendar month.
+/// Rules enforced:
+/// - §21b Abs. 1: the switch takes effect on the 1st of a calendar month, and a
+///   plant may change form once per month.
+/// - §21 Abs. 1 Nr. 3: a plant above the mandatory-Direktvermarktung threshold
+///   cannot switch back to Einspeisevergütung.
+/// - §21c Abs. 1: the Netzbetreiber must be notified before the start of the
+///   preceding calendar month — so the earliest reachable date is the 1st of the
+///   month after next.
 ///
 /// On success: updates `settlement_model`, `direktverm_mp_id`, `direktverm_aw_ct`,
 /// and `last_veraeusserungsform_switch` on the plant record.
@@ -1630,7 +1633,7 @@ pub async fn post_switch_veraeusserungsform(
     let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     };
 
     let effective_date = match time::Date::parse(&req.effective_date, &Iso8601::DEFAULT) {
@@ -1647,7 +1650,28 @@ pub async fn post_switch_veraeusserungsform(
     if effective_date.day() != 1 {
         return (
             StatusCode::BAD_REQUEST,
-            "effective_date must be the 1st of a calendar month (§21c EEG 2023)",
+            "effective_date must be the 1st of a calendar month (§21b Abs. 1 EEG 2023)",
+        )
+            .into_response();
+    }
+
+    // §21c Abs. 1 EEG 2023: the switch must reach the Netzbetreiber **before the
+    // beginning of the preceding calendar month**. A switch effective 1 June has
+    // to be notified by 30 April.
+    //
+    // The check is on the request date because that is when the notification is
+    // enqueued. A backdated switch is refused rather than silently accepted: it
+    // would change what the plant is owed for a month already settled.
+    if let Some(earliest) = fruehester_wechseltermin(time::OffsetDateTime::now_utc().date())
+        && effective_date < earliest
+    {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            format!(
+                "§21c Abs. 1 EEG 2023: a Veräußerungsform switch must reach the \
+                 Netzbetreiber before the start of the preceding calendar month — \
+                 the earliest effective_date that can still be notified today is {earliest}"
+            ),
         )
             .into_response();
     }
@@ -1656,8 +1680,7 @@ pub async fn post_switch_veraeusserungsform(
 
     // Only validate the switch-to-Vergütung direction (mandatory plants cannot switch back).
     // Switching to Direktvermarktung is always allowed.
-    let is_switching_to_verguetung =
-        matches!(req.new_model.as_str(), "FEED_IN_TARIFF" | "VERGUETUNG");
+    let is_switching_to_verguetung = req.new_model == crate::models::VERGUETUNG;
 
     if is_switching_to_verguetung
         && let Err(reason) = validate_switch_to_vergütung(
@@ -1679,12 +1702,15 @@ pub async fn post_switch_veraeusserungsform(
     }
 
     let new_model = match req.new_model.as_str() {
-        "FEED_IN_TARIFF" | "VERGUETUNG" => "FEED_IN_TARIFF",
-        "MARKET_PREMIUM" | "DIREKTVERMARKTUNG" => "MARKET_PREMIUM",
+        crate::models::VERGUETUNG => crate::models::VERGUETUNG,
+        crate::models::DIREKTVERMARKTUNG => crate::models::DIREKTVERMARKTUNG,
         other => {
             return (
                 StatusCode::BAD_REQUEST,
-                format!("unsupported model: {other}"),
+                format!(
+                    "§21b EEG 2023 knows two Veräußerungsformen — expected VERGUETUNG or \
+                     DIREKTVERMARKTUNG, got {other}"
+                ),
             )
                 .into_response();
         }
@@ -1694,14 +1720,18 @@ pub async fn post_switch_veraeusserungsform(
     // its §21c notification CloudEvent commit atomically. ─────────────────────────
     let mut tx = match pool.begin().await {
         Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     };
+    // `direktvermarktung` moves with the model. Left behind, the plant read back
+    // as "in Direktvermarktung" while settling as Einspeisevergütung, and the
+    // next plain upsert then rewrote settlement_model from the stale flag.
     let updated = sqlx::query(
         r"UPDATE eeg_anlagen
           SET settlement_model               = $3,
+              direktvermarktung              = ($3 = 'DIREKTVERMARKTUNG'),
               direktverm_mp_id               = $4,
               direktverm_aw_ct               = $5,
-              last_veraeusserungsform_switch  = $6,
+              last_veraeusserungsform_switch = $6,
               updated_at                     = now()
           WHERE tr_id = $1 AND tenant = $2",
     )
@@ -1723,7 +1753,7 @@ pub async fn post_switch_veraeusserungsform(
             let notification_sent = ce.is_some();
             if let Some(ce) = &ce {
                 if let Err(e) = mako_service::outbox::enqueue(&mut tx, ce).await {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
                 }
                 // Record the notification timestamp in the same tx.
                 if let Err(e) = sqlx::query(
@@ -1736,11 +1766,11 @@ pub async fn post_switch_veraeusserungsform(
                 .execute(&mut *tx)
                 .await
                 {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                    return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
                 }
             }
             if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
             }
             (
                 StatusCode::OK,
@@ -1751,7 +1781,7 @@ pub async fn post_switch_veraeusserungsform(
                     "notification_sent": notification_sent,
                     "note": format!(
                         "§21b EEG 2023 Veräußerungsform Wechsel to {} recorded. \
-                         §21c notification {}.",
+                         §21c Abs. 1 notification {}.",
                         new_model,
                         if notification_sent { "enqueued for delivery" } else { "pending — configure erp_webhook_url" }
                     )
@@ -1761,8 +1791,27 @@ pub async fn post_switch_veraeusserungsform(
         }
         // rows_affected == 0 → plant not found; tx dropped (nothing changed).
         Ok(_) => (StatusCode::NOT_FOUND, format!("plant {tr_id} not found")).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
+}
+
+/// The earliest first-of-month a switch notified **today** can take effect.
+///
+/// §21c Abs. 1 EEG 2023 requires the notification before the start of the
+/// preceding calendar month, so a notification sent in April is in time for
+/// 1 June but not for 1 May.
+#[must_use]
+pub fn fruehester_wechseltermin(heute: time::Date) -> Option<time::Date> {
+    let mut d = heute.replace_day(1).ok()?;
+    for _ in 0..2 {
+        let (y, m) = if d.month() == time::Month::December {
+            (d.year() + 1, time::Month::January)
+        } else {
+            (d.year(), d.month().next())
+        };
+        d = time::Date::from_calendar_date(y, m, 1).ok()?;
+    }
+    Some(d)
 }
 
 /// Build the `de.eeg.veraeusserungsform.gewechselt` CloudEvent for §21c EEG 2023.
@@ -1789,8 +1838,8 @@ fn build_veraeusserungsform_ce(
             "tr_id": tr_id,
             "new_model": new_model,
             "effective_date": effective_date,
-            "legal_basis": "§21c EEG 2023",
-            "deadline": "End of calendar month of effective_date"
+            "legal_basis": "§21c Abs. 1 EEG 2023",
+            "frist": "vor Beginn des dem Wechsel vorangegangenen Kalendermonats"
         }),
     )
     .with_id(ce_id.to_string());
@@ -1833,6 +1882,7 @@ pub async fn post_correction_settle(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Extension(http_client): Extension<Arc<reqwest::Client>>,
     Path((tr_id, year, month)): Path<(String, i16, i16)>,
     Json(req): Json<CorrectionSettleRequest>,
 ) -> impl IntoResponse {
@@ -1844,17 +1894,14 @@ pub async fn post_correction_settle(
             .into_response();
     }
 
-    let anlage = match fetch_anlage(&pool, &cfg.tenant, &tr_id).await {
-        Ok(Some(a)) => a,
-        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    // Fetch the original receipt to get its ID for the traceability link.
-    let original_id: Option<String> = sqlx::query_scalar(
-        r"SELECT id::text FROM settlement_receipts
+    // The link points at the period's **initial** receipt, not at whichever row
+    // was written last. Ordering by `settled_at` made a second correction claim
+    // to supersede the first one, so the chain no longer led back to the
+    // settlement that actually created the payment obligation.
+    let original_id: Option<uuid::Uuid> = sqlx::query_scalar(
+        r"SELECT id FROM settlement_receipts
           WHERE tr_id = $1 AND tenant = $2 AND billing_year = $3 AND billing_month = $4
-          ORDER BY settled_at DESC LIMIT 1",
+            AND is_correction = false",
     )
     .bind(&tr_id)
     .bind(&cfg.tenant)
@@ -1866,56 +1913,37 @@ pub async fn post_correction_settle(
     .flatten();
 
     let original_id_str = original_id
-        .clone()
+        .map(|id| id.to_string())
         .unwrap_or_else(|| format!("{tr_id}/{year}/{month}"));
 
-    let epex_avg_ct_kwh = match req.epex_avg_ct_kwh {
-        Some(p) => Some(p),
-        None => match fetch_epex_price(&pool, year, month).await {
-            Ok(p) => p,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
-    };
-
-    let einspeisemenge_kwh = req.einspeisemenge_kwh;
-
-    let input = build_settle_input(
-        &cfg.tenant,
-        &anlage,
+    // A correction runs the same path as the settlement it supersedes, so a
+    // corrected month is recomputed under exactly the rules the original was,
+    // §51 derivation included.
+    let result = match crate::settle::settle_by_tr_id(
+        &pool,
+        &cfg,
+        &http_client,
+        &tr_id,
         year,
         month,
-        SettleOverrides {
-            einspeisemenge_kwh,
-            epex_avg_ct_kwh,
-            einspeisemanagement_kwh: None,
-            kwh_during_negative_epex: None,
-            negative_price_quarter_hours: None,
-            // § 147 AO / GoBD: correction receipt linked to original
-            correction_of: original_id
-                .as_deref()
-                .and_then(|s| uuid::Uuid::parse_str(s).ok()),
-            correction_reason: Some(match &req.reason_detail {
-                Some(detail) => format!("{:?}: {detail}", req.reason),
-                None => format!("{:?}", req.reason),
+        crate::settle::SettleRequest {
+            einspeisemenge_kwh: req.einspeisemenge_kwh,
+            epex_avg_ct_kwh: req.epex_avg_ct_kwh,
+            correction: Some(crate::pg::Korrektur {
+                original_id,
+                reason: req.reason,
+                detail: req.reason_detail.clone(),
             }),
-            jahresmarktwert_ct_kwh: None,
+            ..Default::default()
         },
-    );
+    )
+    .await
+    {
+        Ok(Some(r)) => r,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    };
 
-    // Correction settlement runs its writes on a transaction that commits as one.
-    // No CloudEvent is emitted for corrections, so there is nothing to enqueue.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let result = match run_settlement(&mut tx, input).await {
-        Ok(r) => r,
-        // tx dropped → rollback.
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
     (
         StatusCode::OK,
         Json(serde_json::json!({
@@ -2127,7 +2155,7 @@ pub async fn post_regionalnachweis(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -2177,7 +2205,7 @@ pub async fn post_stromsteuerbefreiung(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -2237,7 +2265,7 @@ pub async fn post_sect54_defekt(
             Json(serde_json::json!({ "id": id, "tr_id": tr_id, "paragraph": "§54 EEG 2023" })),
         )
             .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -2280,7 +2308,7 @@ pub async fn post_sect54_nachweis_erbracht(
         )
             .into_response(),
         Ok(false) => (StatusCode::NOT_FOUND, "no open §54 defect with that id").into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response(),
     }
 }
 
@@ -2323,7 +2351,7 @@ pub async fn get_aw_reduktionen(
     };
     match crate::pg::aw_reduktionen_am(&pool, &cfg.tenant, &tr_id, on).await {
         Ok(v) => (StatusCode::OK, Json(v)).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
     }
 }
 

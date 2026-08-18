@@ -1,26 +1,32 @@
 //! MCP server for `einsd` — Einspeiser Registry + EEG/KWKG Settlement.
 //!
-//! ## Tools (17)
+//! ## Tools (19)
 //!
 //! | Tool | Description |
 //! |---|---|
 //! | `list_plants` | List EEG/KWKG plants (filterable by malo_id, erzeugungsart, status) |
 //! | `get_plant` | Get a single plant by TechnischeRessource ID |
 //! | `list_expiring` | Plants with Förderung ending within N days |
-//! | `list_settlements` | Settlement history for a plant |
+//! | `list_settlements` | Settlement history for a plant, corrections marked as such |
 //! | `lookup_verguetungssatz` | Look up the applicable EEG/KWKG tariff rate (DB) |
 //! | `lookup_statutory_rate` | Look up EEG rate from static tables (Solarpaket I 2024) |
-//! | `trigger_settle` | Trigger monthly settlement for one plant |
+//! | `trigger_settle` | Settle one plant for a month — the same path REST and the worker take |
 //! | `list_unsettled_plants` | Plants not yet settled for a given month |
 //! | `get_epex_monthly_price` | Look up stored EPEX Spot monthly average |
 //! | `import_epex_monthly_price` | Store/update EPEX Spot monthly average price |
 //! | `import_jahresmarktwert` | Store/update §20 Abs. 2 technology-specific monthly Marktwert (ÜNB) |
-//! | `get_compliance_status` | Check §52 EEG compliance status for a plant (MaStR, Fernsteuerbarkeit) |
-//! | `list_plants_without_mastr` | Find plants not registered in MaStR (§52 §11 EEG 2023 violation) |
-//! | `check_direktvermarktung_compliance` | List plants >100 kW not in Direktvermarktung (§3 Nr. 1 + §20 EEG) |
+//! | `get_compliance_status` | Every §52 Abs. 1 violation einsd derives, priced with the engine's Abs. 2/3/5 rules |
+//! | `list_plants_without_mastr` | Plants not registered in MaStR (§52 Abs. 1 Nr. 11 EEG 2023) |
+//! | `check_direktvermarktung_compliance` | Plants >100 kW on an Einspeisevergütung model (§52 Abs. 1 Nr. 4) |
 //! | `check_sect44b_quota` | Check §44b biogas annual 45%-cap quota status |
-//! | `get_settlement_state_history` | Fetch § 147 AO / GoBD audit trail of settlement state transitions |
+//! | `get_settlement_state_history` | § 147 AO / GoBD audit trail of settlement state transitions |
 //! | `get_jahresmarktwert` | Look up stored §20 Abs. 2 technology-specific monthly Marktwert |
+//! | `get_aw_reduktionen` | What is cutting a plant's anzulegender Wert on a given day (§§53b–54) |
+//! | `explain_settlement` | The stored receipt's positions, each with its legal basis |
+//!
+//! Money and energy cross this surface as exact decimals ([`DecimalArg`]), not
+//! `f64`: a rate that reaches a legally binding Gutschrift must not have passed
+//! through binary floating point on the way.
 //!
 //! ## Prompts (6)
 //!
@@ -63,6 +69,72 @@ pub struct EinsdMcpState {
     pub http_client: std::sync::Arc<reqwest::Client>,
 }
 
+// ── Money and quantity over the wire ──────────────────────────────────────────
+
+/// A decimal quantity accepted as a JSON **string** or number.
+///
+/// EEG amounts are `rust_decimal::Decimal` and never `f64`: a rate on a legally
+/// binding Gutschrift must not pass through binary floating point, and 0,1 ct/kWh
+/// has no exact `f64`.
+///
+/// A string is the lossless form and what the schema asks for; a JSON number is
+/// also accepted, parsed from its own decimal text rather than through `f64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DecimalArg(pub rust_decimal::Decimal);
+
+impl<'de> Deserialize<'de> for DecimalArg {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        use serde::de::Error as _;
+        let v = serde_json::Value::deserialize(d)?;
+        let text = match &v {
+            serde_json::Value::String(s) => s.clone(),
+            serde_json::Value::Number(n) => n.to_string(),
+            other => {
+                return Err(D::Error::custom(format!(
+                    "expected a decimal as a string or number, got {other}"
+                )));
+            }
+        };
+        text.trim()
+            .parse()
+            .map(DecimalArg)
+            .map_err(|e| D::Error::custom(format!("invalid decimal `{text}`: {e}")))
+    }
+}
+
+impl JsonSchema for DecimalArg {
+    fn schema_name() -> std::borrow::Cow<'static, str> {
+        "Decimal".into()
+    }
+    fn json_schema(_: &mut schemars::SchemaGenerator) -> schemars::Schema {
+        schemars::json_schema!({
+            "type": ["string", "number"],
+            "description": "An exact decimal. Prefer a string (\"8.11\") — a JSON number \
+                            is accepted but a client that formats it as a float may \
+                            already have lost precision.",
+        })
+    }
+}
+
+impl From<DecimalArg> for rust_decimal::Decimal {
+    fn from(d: DecimalArg) -> Self {
+        d.0
+    }
+}
+
+impl serde::Serialize for DecimalArg {
+    /// Serialised as a string, for the same reason it is parsed from one.
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&self.0.to_string())
+    }
+}
+
+impl std::fmt::Display for DecimalArg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+
 // ── Parameter types ───────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -95,9 +167,12 @@ pub struct ListSettlementsParams {
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct LookupParams {
     pub erzeugungsart: String,
-    pub leistung_kwp: f64,
+    pub leistung_kwp: DecimalArg,
     /// ISO-8601 commissioning date YYYY-MM-DD.
     pub inbetriebnahme: String,
+    /// UEBERSCHUSS (default) | VOLLEINSPEISUNG (§48 Abs. 2a bonus) | KWK_ZUSCHLAG.
+    /// The two solar forms differ by several ct/kWh.
+    pub verguetungsform: Option<String>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -105,10 +180,11 @@ pub struct TriggerSettleParams {
     pub tr_id: String,
     pub billing_year: i16,
     pub billing_month: i16,
-    /// Override kWh. When absent, auto-fetched from edmd.
-    pub einspeisemenge_kwh: Option<f64>,
-    /// Override EPEX avg ct/kWh. When absent, uses DB value.
-    pub epex_avg_ct_kwh: Option<f64>,
+    /// Override kWh. When absent, fetched from edmd.
+    pub einspeisemenge_kwh: Option<DecimalArg>,
+    /// Override the market reference ct/kWh. When absent, the stored monthly
+    /// average is used (a §20 Abs. 2 Jahresmarktwert may still supersede it).
+    pub epex_avg_ct_kwh: Option<DecimalArg>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -128,7 +204,7 @@ pub struct ImportEpexPriceParams {
     pub billing_year: i16,
     pub billing_month: i16,
     /// Monthly average EPEX Spot Day-Ahead price in ct/kWh.
-    pub avg_ct_kwh: f64,
+    pub avg_ct_kwh: DecimalArg,
     /// Source description (e.g. "netztransparenz.de", "smard.de", "manual").
     pub source: Option<String>,
 }
@@ -138,7 +214,7 @@ pub struct LookupStatutoryRateParams {
     /// Technology: SOLAR_AUFDACH | SOLAR_FREIFLAECHE | WIND_ONSHORE | BIOMASSE | KWKG
     pub erzeugungsart: String,
     /// Installed capacity in kWp (or kW_el for KWKG).
-    pub leistung_kwp: f64,
+    pub leistung_kwp: DecimalArg,
     /// EEG law year: 2017, 2021, 2023, or 2024 (Solarpaket I).
     pub eeg_year: i16,
     /// Inbetriebnahme date (`YYYY-MM-DD`) — **required for solar**. The §49
@@ -158,7 +234,7 @@ pub struct ImportJahresmarktwertParams {
     pub erzeugungsart: String,
     /// §20 Abs. 2 + Anlage 1 EEG 2023 monthly technology-specific Marktwert in ct/kWh.
     /// Published by ÜNB at netztransparenz.de.
-    pub avg_ct_kwh: f64,
+    pub avg_ct_kwh: DecimalArg,
     /// Source description (e.g. "netztransparenz.de", "manual").
     pub source: Option<String>,
 }
@@ -314,12 +390,11 @@ impl EinsdMcpHandler {
         Parameters(params): Parameters<LookupParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::lookup_verguetungssatz;
-        use rust_decimal::Decimal;
-        let kwp = Decimal::try_from(params.leistung_kwp)
-            .map_err(|_| McpError::invalid_params("invalid leistung_kwp", None))?;
+        let kwp = params.leistung_kwp.into();
         match lookup_verguetungssatz(
             &self.state.pool,
             &params.erzeugungsart,
+            params.verguetungsform.as_deref().unwrap_or("UEBERSCHUSS"),
             kwp,
             &params.inbetriebnahme,
         )
@@ -342,84 +417,36 @@ impl EinsdMcpHandler {
 
     #[tool(
         description = "Trigger monthly EEG/KWKG settlement for one plant. Idempotent. \
-        Auto-fetches Einspeisemenge from edmd and EPEX price from DB when not supplied. \
-        Emits de.eeg.verguetung.berechnet or de.eeg.marktpraemie.berechnet on success. \
-        KWKG: hour-limit enforcement automatic (max_kwh = rated_kW * foerderdauer_h)."
+        Runs the same path as the REST endpoint and the monthly worker, so the amount does \
+        not depend on which one triggered it: Einspeisemenge from edmd, market price from the \
+        store, and the §51/§51a figures derived from the ¼h feed-in against the EPEX spot \
+        curve, unless supplied. Emits de.eeg.verguetung.berechnet or \
+        de.eeg.marktpraemie.berechnet. KWKG hour-limit enforcement is automatic."
     )]
     async fn trigger_settle(
         &self,
         Parameters(params): Parameters<TriggerSettleParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{fetch_anlage, fetch_epex_price, run_settlement};
-        use rust_decimal::Decimal;
-
-        let anlage = match fetch_anlage(&self.state.pool, &self.state.tenant, &params.tr_id).await {
-            Ok(Some(a)) => a,
-            Ok(None) => {
-                return Err(McpError::invalid_params(
-                    format!("plant {} not found", params.tr_id),
-                    None,
-                ));
-            }
-            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-        };
-
-        let einspeisemenge_kwh = params
-            .einspeisemenge_kwh
-            .and_then(|v| Decimal::try_from(v).ok());
-        let epex_avg_ct_kwh = match params.epex_avg_ct_kwh {
-            Some(v) => Decimal::try_from(v).ok(),
-            None => fetch_epex_price(&self.state.pool, params.billing_year, params.billing_month)
-                .await
-                .ok()
-                .flatten(),
-        };
-
-        let input = crate::pg::build_settle_input(
-            &self.state.tenant,
-            &anlage,
-            params.billing_year,
-            params.billing_month,
-            crate::pg::SettleOverrides {
-                einspeisemenge_kwh,
-                epex_avg_ct_kwh,
-                einspeisemanagement_kwh: None,
-                kwh_during_negative_epex: None,
-                negative_price_quarter_hours: None,
-                correction_of: None,
-                correction_reason: None,
-                jahresmarktwert_ct_kwh: None,
-            },
-        );
-
-        // Transactional outbox: settlement write + CE enqueue commit as one tx.
-        let mut tx = self
-            .state
-            .pool
-            .begin()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        let result = match run_settlement(&mut tx, input).await {
-            Ok(r) => r,
-            // tx dropped → rollback.
-            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-        };
-        // Identical obligation to the REST path — single-sourced so the CE type
-        // (which accountingd dispatches on exactly) and the status gate cannot
-        // drift between the two entry points.
-        crate::handlers::enqueue_settlement_ce(
-            &mut tx,
+        // The same path REST, batch and the worker take, so an agent settling a
+        // plant gets the identical amount — edmd auto-fetch and §51 included.
+        let result = crate::settle::settle_by_tr_id(
+            &self.state.pool,
             &self.state.cfg,
-            &anlage,
-            &result,
+            &self.state.http_client,
+            &params.tr_id,
             params.billing_year,
             params.billing_month,
+            crate::settle::SettleRequest {
+                einspeisemenge_kwh: params.einspeisemenge_kwh.map(Into::into),
+                epex_avg_ct_kwh: params.epex_avg_ct_kwh.map(Into::into),
+                ..Default::default()
+            },
         )
         .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-        tx.commit()
-            .await
-            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?
+        .ok_or_else(|| {
+            McpError::invalid_params(format!("plant {} not found", params.tr_id), None)
+        })?;
 
         ContentBlock::json(serde_json::to_value(&result).unwrap_or_default())
             .map(|b| CallToolResult::success(vec![b]))
@@ -498,9 +525,7 @@ impl EinsdMcpHandler {
         Parameters(params): Parameters<ImportEpexPriceParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::upsert_epex_price;
-        use rust_decimal::Decimal;
-        let avg = Decimal::try_from(params.avg_ct_kwh)
-            .map_err(|_| McpError::invalid_params("invalid avg_ct_kwh", None))?;
+        let avg = params.avg_ct_kwh.into();
         let source = params.source.as_deref().unwrap_or("mcp-import");
         match upsert_epex_price(
             &self.state.pool,
@@ -540,10 +565,8 @@ impl EinsdMcpHandler {
         Parameters(params): Parameters<LookupStatutoryRateParams>,
     ) -> Result<CallToolResult, McpError> {
         use eeg_billing::rates;
-        use rust_decimal::Decimal;
 
-        let kwp = Decimal::try_from(params.leistung_kwp)
-            .map_err(|_| McpError::invalid_params("invalid leistung_kwp", None))?;
+        let kwp = params.leistung_kwp.into();
 
         let volleinspeisung = params
             .messkonzept
@@ -633,96 +656,120 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "Check §52 EEG compliance status for a plant: MaStR registration, Fernsteuerbarkeit, KWKG hour-limit proximity. Returns compliance_ok, missing_mastr, penalty_risk_eur_per_month, and recommended action per §52 EEG 2023.",
+        description = "Check §52 EEG 2023 compliance for a plant: every Abs. 1 violation \
+        einsd can derive (§9 Steuerbarkeit, §10b Direktvermarktungspflicht, §21c \
+        Wechselmeldung, MaStR), the Pflichtzahlung the settlement engine would charge for \
+        them (Abs. 2/3 rates, Abs. 5 cap), and the KWKG hour-limit position.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_compliance_status(
         &self,
         Parameters(p): Parameters<GetPlantParams>,
     ) -> Result<CallToolResult, McpError> {
-        use sqlx::Row;
-        let row = sqlx::query(
-            r"SELECT tr_id, erzeugungsart, leistung_kwp, eeg_gesetz,
-                     mastr_registriert, mastr_nummer, mastr_datum, status,
-                     inbetriebnahme, foerderendedatum,
-                     kwk_strom_kwh_gesamt, kwk_foerderdauer_h
-              FROM eeg_anlagen WHERE tr_id = $1 AND tenant = $2",
-        )
-        .bind(&p.tr_id)
-        .bind(&self.state.tenant)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let Some(r) = row else {
+        let Some(anlage) = crate::pg::fetch_anlage(&self.state.pool, &self.state.tenant, &p.tr_id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?
+        else {
             return Err(McpError::invalid_params(
                 format!("plant {} not found", p.tr_id),
                 None,
             ));
         };
 
-        let mastr_ok: bool = r.try_get("mastr_registriert").unwrap_or(false);
-        let leistung_kwp: f64 = r
-            .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
-            .ok()
-            .and_then(|d| d.try_into().ok())
-            .unwrap_or(0.0);
-        let eeg_gesetz: i16 = r.try_get("eeg_gesetz").unwrap_or(2023);
-        let foerderendedatum: Option<time::Date> = r.try_get("foerderendedatum").unwrap_or(None);
-
         let today = time::OffsetDateTime::now_utc().date();
-        let foerderung_aktiv = foerderendedatum.is_none_or(|d| d >= today);
+        let foerderung_aktiv = anlage.foerderendedatum >= today;
+        let heute_monatserster = today.replace_day(1).unwrap_or(today);
 
-        // §8 KWKG: the limit is full-load hours x installed capacity, held as those
-        // two columns rather than a stored product, so it is derived here too.
-        let kwk_max_kwh = r
-            .try_get::<Option<i32>, _>("kwk_foerderdauer_h")
-            .ok()
-            .flatten()
-            .map(|h| f64::from(h) * leistung_kwp);
-        let kwk_verbraucht_kwh = r
-            .try_get::<Option<rust_decimal::Decimal>, _>("kwk_strom_kwh_gesamt")
-            .ok()
-            .flatten()
-            .and_then(|d| TryInto::<f64>::try_into(d).ok());
+        // The same detector the settlement uses, so the report and the payment
+        // agree — including the Abs. 3 reduced rate, the Abs. 5 cap and §9.
+        let verstoesse = crate::sect52::derive_pflichtverstoesse(
+            &anlage,
+            crate::sect52::Sect52Context {
+                billing_date: heute_monatserster,
+                ausfallverguetung: crate::pg::ausfallverguetung_nutzung(
+                    &mut *self
+                        .state
+                        .pool
+                        .acquire()
+                        .await
+                        .map_err(|e| McpError::internal_error(e.to_string(), None))?,
+                    &anlage.tr_id,
+                    &self.state.tenant,
+                    i16::try_from(heute_monatserster.year()).unwrap_or(0),
+                    heute_monatserster.month() as i16,
+                )
+                .await
+                .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?,
+            },
+        );
 
-        // §52 Abs. 1 Nr. 11 EEG 2023: MaStR not registered
-        let penalty_per_month = if !mastr_ok && foerderung_aktiv {
-            leistung_kwp * 10.0 // €10/kW/month (EEG 2023) or Vergütung=0 (EEG ≤2021)
-        } else {
-            0.0
-        };
+        // §52 Abs. 2/3 rates and the Abs. 5 cap, from the engine — one month's
+        // exposure, so each violation is priced for a single month.
+        let monatlich: rust_decimal::Decimal = verstoesse
+            .iter()
+            .map(|v| {
+                eeg_billing::calculate_pflichtzahlung(&eeg_billing::Pflichtverstoss {
+                    monate_des_verstosses: 1,
+                    ..v.clone()
+                })
+            })
+            .sum::<rust_decimal::Decimal>()
+            .min(anlage.leistung_kwp * rust_decimal::Decimal::from(10));
+
+        let eeg_2023_regime = anlage.eeg_gesetz >= 2023;
+        let kwk_max_kwh = anlage
+            .kwk_foerderdauer_h
+            .map(|h| rust_decimal::Decimal::from(h) * anlage.leistung_kwp);
 
         ContentBlock::json(serde_json::json!({
-            "tr_id": p.tr_id,
-            "compliance_ok": mastr_ok || !foerderung_aktiv,
+            "tr_id": anlage.tr_id,
+            "compliance_ok": verstoesse.is_empty(),
             "foerderung_aktiv": foerderung_aktiv,
             "mastr": {
-                "registriert": mastr_ok,
-                "nummer": r.try_get::<Option<String>, _>("mastr_nummer").unwrap_or(None),
+                "registriert": anlage.mastr_registriert,
+                "nummer": anlage.mastr_nummer,
                 // ISO 8601, not `time::Date`'s derived `[year, ordinal]` array —
                 // see the note in obsd's MCP server. A date a consumer cannot
                 // read must not look like one it can.
-                "datum": r.try_get::<Option<time::Date>, _>("mastr_datum")
-                    .unwrap_or(None)
-                    .map(|d| d.to_string()),
+                "datum": anlage.mastr_datum.map(|d| d.to_string()),
             },
-            "penalty_risk": {
-                "monthly_eur": penalty_per_month,
-                "regime": if eeg_gesetz >= 2023 { "§52 EEG 2023: €10/kW/month" } else { "§47 EEG ≤2021: Vergütung = 0" },
-                "note": if !mastr_ok { "URGENT: Register in MaStR at https://www.marktstammdatenregister.de" } else { "No penalty risk" },
+            "sect9": {
+                "erfuellung": anlage.sect9_erfuellung,
+                "pflicht": format!("{:?}", eeg_billing::settlement_state::sect9_pflicht(
+                    anlage.leistung_kwp,
+                    eeg_billing::ErzeugungsArt::from_db_str(&anlage.erzeugungsart).ok(),
+                )),
             },
-            "kwkg_stundenkontingent": kwk_max_kwh.map(|max| serde_json::json!({
-                "max_kwh": max,
-                "verbraucht_kwh": kwk_verbraucht_kwh,
-                "verbleibend_kwh": kwk_verbraucht_kwh.map(|v| (max - v).max(0.0)),
-                "erschoepft": kwk_verbraucht_kwh.is_some_and(|v| v >= max),
-                "basis": "§8 KWKG — Vollbenutzungsstunden x installierte Leistung",
-            })),
-            "recommended_action": if !mastr_ok && foerderung_aktiv {
-                "Register plant in MaStR immediately. POST /api/v1/anlagen/{tr_id}/mastr-registrierung after registration."
+            "pflichtverstoesse": verstoesse.iter().map(|v| serde_json::json!({
+                "typ": format!("{:?}", v.typ),
+                "monate": v.monate_des_verstosses,
+            })).collect::<Vec<_>>(),
+            "pflichtzahlung": {
+                "monatlich_eur": monatlich.to_string(),
+                "regime": if eeg_2023_regime {
+                    "§52 Abs. 2 EEG 2023: 10 €/kW/Monat, auf 2 € reduziert bei Nachholung (Abs. 3),                      gedeckelt auf 10 €/kW (Abs. 5), verrechenbar mit der Vergütung (Abs. 6)"
+                } else {
+                    "EEG ≤2021 via §100: der Verstoß mindert die Vergütung selbst, es gibt keine                      separate Pflichtzahlung — monatlich_eur ist hier nicht anwendbar"
+                },
+                "anwendbar": eeg_2023_regime,
+            },
+            "kwkg_stundenkontingent": kwk_max_kwh.map(|max| {
+                let verbraucht = anlage.kwk_strom_kwh_gesamt.unwrap_or_default();
+                serde_json::json!({
+                    "max_kwh": max.to_string(),
+                    "verbraucht_kwh": verbraucht.to_string(),
+                    "verbleibend_kwh": (max - verbraucht).max(rust_decimal::Decimal::ZERO).to_string(),
+                    "erschoepft": verbraucht >= max,
+                    "basis": "§8 KWKG — Vollbenutzungsstunden × installierte Leistung",
+                })
+            }),
+            "recommended_action": if verstoesse.is_empty() {
+                "No action required".to_owned()
             } else {
-                "No action required"
+                format!(
+                    "Resolve {} open §52 Abs. 1 violation(s); each further calendar month adds to the charge.",
+                    verstoesse.len()
+                )
             },
         }))
         .map(|b| CallToolResult::success(vec![b]))
@@ -730,7 +777,7 @@ impl EinsdMcpHandler {
     }
 
     #[tool(
-        description = "List plants not registered in MaStR (Marktstammdatenregister). §52 Abs. 1 Nr. 11 EEG 2023: unregistered plants incur €10/kW/month penalty (EEG 2023) or Vergütung=0 (EEG ≤2021). Returns tr_id, malo_id, leistung_kwp, eeg_gesetz, and monthly penalty risk.",
+        description = "List plants not registered in MaStR (Marktstammdatenregister). §52 Abs. 1 Nr. 11 EEG 2023 charges 10 €/kW/month for them; a plant under the pre-2023 regime instead loses its Vergütung entirely and owes no Pflichtzahlung, so its monthly_penalty_eur is null and it is excluded from the total.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_plants_without_mastr(&self) -> Result<CallToolResult, McpError> {
@@ -752,33 +799,42 @@ impl EinsdMcpHandler {
         let plants: Vec<serde_json::Value> = rows
             .iter()
             .map(|r| {
-                let leistung: f64 = r
-                    .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
-                    .ok()
-                    .and_then(|d| d.try_into().ok())
-                    .unwrap_or(0.0);
+                let leistung: rust_decimal::Decimal = r
+                    .try_get("leistung_kwp")
+                    .unwrap_or_default();
                 let eeg_gesetz: i16 = r.try_get("eeg_gesetz").unwrap_or(2023);
-                let penalty_per_month = leistung * 10.0;
+                // §52 Abs. 2 charges 10 €/kW/month only under the EEG 2023
+                // regime. For an older plant §100 keeps the pre-2023 rule, where
+                // the breach reduces the Vergütung to zero and no Pflichtzahlung
+                // exists — reporting 10 €/kW for those, and summing it into a
+                // portfolio total, invented money nobody owes.
+                let eeg_2023 = eeg_gesetz >= 2023;
                 serde_json::json!({
                     "tr_id": r.try_get::<String, _>("tr_id").unwrap_or_default(),
                     "malo_id": r.try_get::<String, _>("malo_id").unwrap_or_default(),
                     "erzeugungsart": r.try_get::<String, _>("erzeugungsart").unwrap_or_default(),
-                    "leistung_kwp": leistung,
+                    "leistung_kwp": leistung.to_string(),
                     "eeg_gesetz": eeg_gesetz,
-                    "monthly_penalty_eur": penalty_per_month,
-                    "regime": if eeg_gesetz >= 2023 { "§52 EEG 2023: €10/kW/month" } else { "§47 EEG ≤2021: Vergütung = 0" },
+                    "monthly_penalty_eur": eeg_2023.then(|| (leistung * rust_decimal::Decimal::from(10)).to_string()),
+                    "regime": if eeg_2023 {
+                        "§52 Abs. 1 Nr. 11 i.V.m. Abs. 2 EEG 2023: 10 €/kW/Monat"
+                    } else {
+                        "EEG ≤2021 via §100: Vergütung auf null — keine Pflichtzahlung"
+                    },
                 })
             })
             .collect();
 
-        let total_penalty: f64 = plants
+        // Only the plants that actually owe a Pflichtzahlung are in the total.
+        let total_penalty: rust_decimal::Decimal = plants
             .iter()
-            .filter_map(|p| p["monthly_penalty_eur"].as_f64())
+            .filter_map(|p| p["monthly_penalty_eur"].as_str())
+            .filter_map(|s| s.parse::<rust_decimal::Decimal>().ok())
             .sum();
 
         ContentBlock::json(serde_json::json!({
             "count": plants.len(),
-            "total_monthly_penalty_eur": total_penalty,
+            "total_monthly_penalty_eur": total_penalty.to_string(),
             "plants": plants,
             "regulatory_note": "Register all plants at https://www.marktstammdatenregister.de. POST /api/v1/anlagen/{tr_id}/mastr-registrierung after successful registration.",
         }))
@@ -790,54 +846,45 @@ impl EinsdMcpHandler {
     /// but the plant is settled under a non-Direktvermarktung scheme.
     ///
     /// Mandatory when: leistung_kwp > 100 AND eeg_gesetz >= 2012 AND status = aktiv.
-    /// Settling such plants under VERGUETUNG/FEED_IN_TARIFF violates §52 Abs. 2 Nr. 4 EEG 2023.
+    /// Settling such plants under VERGUETUNG violates §52 Abs. 1 Nr. 4 EEG 2023.
     #[tool(
         name = "check_direktvermarktung_compliance",
-        description = "§3 Nr. 1 + §20 EEG 2023: list active plants that MUST be in Direktvermarktung (>100 kW, EEG ≥ 2012) but are settled under a non-market scheme. §52 Abs. 2 Nr. 4 violation risk.",
+        description = "List active plants above 100 kW settled on an Einspeisevergütung model. §21 Abs. 1 Satz 1 Nr. 1 EEG 2023 grants that claim only up to 100 kW, so a larger plant must market directly (§10b) — the breach is §52 Abs. 1 Nr. 4 at 10 €/kW/month, and the settlement engine now charges it.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn check_direktvermarktung_compliance(&self) -> Result<CallToolResult, McpError> {
-        use sqlx::Row;
-        let rows = sqlx::query(
-            r"SELECT tr_id, malo_id, erzeugungsart, leistung_kwp, eeg_gesetz,
-                     settlement_model, foerderendedatum
-              FROM eeg_anlagen
+        // Exactly the predicate `sect52::derive_pflichtverstoesse` charges on, so
+        // the report and the settlement cannot tell an operator different things
+        // about the same plant.
+        let rows = sqlx::query_as::<_, crate::pg::AnlageRow>(
+            r"SELECT * FROM eeg_anlagen
               WHERE tenant = $1
                 AND status = 'aktiv'
-                AND eeg_gesetz >= 2012
-                AND leistung_kwp > 100
-                AND settlement_model NOT IN (
-                    'DIREKTVERMARKTUNG', 'AUSSCHREIBUNG', 'SONSTIGE_DIREKTVERMARKTUNG',
-                    'MARKET_PREMIUM', 'POST_EEG', 'POST_EEG_SPOT',
-                    'EIGENVERBRAUCH', 'KWKG_ZUSCHLAG', 'GGV'
-                )
-                AND (foerderendedatum IS NULL OR foerderendedatum >= CURRENT_DATE)
+                AND leistung_kwp > $2
+                AND settlement_model = $3
+                AND foerderendedatum >= CURRENT_DATE
               ORDER BY leistung_kwp DESC",
         )
         .bind(&self.state.tenant)
+        .bind(crate::sect52::DIREKTVERMARKTUNG_PFLICHT_KW)
+        .bind(crate::models::VERGUETUNG)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         let violations: Vec<serde_json::Value> = rows
             .iter()
-            .map(|r| {
-                let leistung: f64 = r
-                    .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
-                    .ok()
-                    .and_then(|d| d.try_into().ok())
-                    .unwrap_or(0.0);
+            .map(|a| {
                 serde_json::json!({
-                    "tr_id": r.try_get::<String, _>("tr_id").unwrap_or_default(),
-                    "malo_id": r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                    "erzeugungsart": r.try_get::<String, _>("erzeugungsart").unwrap_or_default(),
-                    "leistung_kwp": leistung,
-                    "eeg_gesetz": r.try_get::<i16, _>("eeg_gesetz").unwrap_or(0),
-                    "current_settlement_model": r.try_get::<String, _>("settlement_model").unwrap_or_default(),
-                    "foerderendedatum": r.try_get::<Option<time::Date>, _>("foerderendedatum")
-                        .ok().flatten().map(|d| d.to_string()),
-                    "required_action": "Switch to DIREKTVERMARKTUNG. Use PUT /api/v1/anlagen/{tr_id} with settlement_model=DIREKTVERMARKTUNG + direktverm_aw_ct + direktverm_mp_id.",
-                    "legal_basis": "§3 Nr. 1 + §20 EEG 2023: Direktvermarktungspflicht ab 100 kW (EEG 2012: ab 10 kW Pflicht). §52 Abs. 2 Nr. 4: Pflichtzahlung bei Verletzung.",
+                    "tr_id": a.tr_id,
+                    "malo_id": a.malo_id,
+                    "erzeugungsart": a.erzeugungsart,
+                    "leistung_kwp": a.leistung_kwp.to_string(),
+                    "eeg_gesetz": a.eeg_gesetz,
+                    "current_settlement_model": a.settlement_model,
+                    "foerderendedatum": a.foerderendedatum.to_string(),
+                    "monthly_penalty_eur": (a.leistung_kwp * rust_decimal::Decimal::from(10)).to_string(),
+                    "required_action": "Switch to DIREKTVERMARKTUNG: PUT /api/v1/anlagen/{tr_id} with settlement_model=DIREKTVERMARKTUNG, direktverm_aw_ct and direktverm_mp_id — or POST /switch-veraeusserungsform, which enforces the §21b/§21c timing.",
                 })
             })
             .collect();
@@ -846,127 +893,117 @@ impl EinsdMcpHandler {
             "violations_count": violations.len(),
             "compliant": violations.is_empty(),
             "violations": violations,
-            "note": "Plants in EIGENVERBRAUCH, KWKG_ZUSCHLAG, or GGV are exempt from Direktvermarktungspflicht regardless of capacity.",
+            "legal_basis": "§21 Abs. 1 Satz 1 Nr. 1 EEG 2023 caps the Einspeisevergütung claim at 100 kW; the duty to market directly is §10b and the breach is §52 Abs. 1 Nr. 4 i.V.m. Abs. 2 at 10 €/kW/Monat.",
+            "note": "Mieterstrom (§21 Abs. 3) and GGV (§42b EnWG) are deliberately out of scope — they carry their own size rules, and the settlement does not charge Nr. 4 on them either.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Check §44b EEG 2023 annual biogas production quota for a specific plant.
-    ///
-    /// §44b Abs. 1 EEG 2023: Biogas plants >100 kW may not receive EEG payment
-    /// for more than 45% of rated capacity × 8760 h/year.
+    /// §44b Abs. 1 EEG 2023 — the annual Biogas quota for one plant.
     #[tool(
         name = "check_sect44b_quota",
-        description = "§44b EEG 2023: show remaining annual biogas quota for a plant. Annual cap = leistung_kw × 0.45 × 8760 kWh. Only applies to BIOGAS plants >100 kW not in §51b Ausschreibung.",
+        description = "§44b Abs. 1 EEG 2023: the annual Biogas quota for a plant and how much of \
+        it is left. The quota is the share of the calendar year's generation whose \
+        Bemessungsleistung equals 45 % of the installed capacity — 0,45 × kW × the §3 Nr. 6 \
+        hours of that year, which is 8 784 in a leap year and is shortened for a plant that \
+        first generated during it. Applies to BIOGAS above 100 kW outside the §51b Ausschreibung.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn check_sect44b_quota(
         &self,
         Parameters(p): Parameters<GetPlantParams>,
     ) -> Result<CallToolResult, McpError> {
-        use sqlx::Row;
-        let row = sqlx::query(
-            r"SELECT tr_id, malo_id, erzeugungsart, leistung_kwp, is_biogas_sect51b,
-                     biogas_quota_kwh_ytd, biogas_quota_ytd_year, eeg_gesetz
-              FROM eeg_anlagen
-              WHERE tr_id = $1 AND tenant = $2",
-        )
-        .bind(&p.tr_id)
-        .bind(&self.state.tenant)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        use rust_decimal::Decimal;
 
-        let Some(row) = row else {
+        let Some(anlage) = crate::pg::fetch_anlage(&self.state.pool, &self.state.tenant, &p.tr_id)
+            .await
+            .map_err(|e| McpError::internal_error(format!("{e:#}"), None))?
+        else {
             return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "Plant '{}' not found",
                 p.tr_id
             ))]));
         };
 
-        let erzeugungsart: String = row.try_get("erzeugungsart").unwrap_or_default();
-        let leistung: f64 = row
-            .try_get::<rust_decimal::Decimal, _>("leistung_kwp")
-            .ok()
-            .and_then(|d| d.try_into().ok())
-            .unwrap_or(0.0);
-        let is_sect51b: bool = row.try_get("is_biogas_sect51b").unwrap_or(false);
-        let ytd_kwh: f64 = row
-            .try_get::<rust_decimal::Decimal, _>("biogas_quota_kwh_ytd")
-            .ok()
-            .and_then(|d| d.try_into().ok())
-            .unwrap_or(0.0);
-        let ytd_year: Option<i16> = row.try_get("biogas_quota_ytd_year").ok().flatten();
-        let eeg_gesetz: i16 = row.try_get("eeg_gesetz").unwrap_or(0);
-
-        if erzeugungsart != "BIOGAS" {
+        // The same applicability test the settlement uses.
+        if anlage.erzeugungsart != "BIOGAS" {
             return ContentBlock::json(serde_json::json!({
                 "tr_id": p.tr_id,
                 "applicable": false,
-                "reason": "§44b only applies to BIOGAS plants",
+                "reason": format!(
+                    "§44b Abs. 1 covers Strom aus Biogas; this plant is {}",
+                    anlage.erzeugungsart
+                ),
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+        if anlage.is_biogas_sect51b {
+            return ContentBlock::json(serde_json::json!({
+                "tr_id": p.tr_id,
+                "applicable": false,
+                "reason": "an Ausschreibungsanlage under §51b is outside the §44b cap",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None));
+        }
+        if anlage.leistung_kwp <= Decimal::from(100) {
+            return ContentBlock::json(serde_json::json!({
+                "tr_id": p.tr_id,
+                "applicable": false,
+                "reason": format!(
+                    "§44b Abs. 1 applies above 100 kW; this plant is {} kW",
+                    anlage.leistung_kwp
+                ),
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None));
         }
 
-        if eeg_gesetz < 2023 {
-            return ContentBlock::json(serde_json::json!({
-                "tr_id": p.tr_id,
-                "applicable": false,
-                "reason": "§44b EEG 2023 — only applies to plants under EEG 2023 or later",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
-        }
-
-        if is_sect51b {
-            return ContentBlock::json(serde_json::json!({
-                "tr_id": p.tr_id,
-                "applicable": false,
-                "reason": "§44b does not apply: plant is in §51b Ausschreibung (AW=0 when EPEX ≤2ct)",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
-        }
-
-        if leistung <= 100.0 {
-            return ContentBlock::json(serde_json::json!({
-                "tr_id": p.tr_id,
-                "applicable": false,
-                "reason": format!("§44b only applies to plants >100 kW; this plant is {leistung:.1} kW"),
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None));
-        }
-
-        let current_year = time::OffsetDateTime::now_utc().year() as i16;
-        let ytd_this_year = if ytd_year == Some(current_year) {
-            ytd_kwh
+        let jahr = time::OffsetDateTime::now_utc().year();
+        // The quota comes from the engine, in Decimal, against the §3 Nr. 6 hours
+        // of *this* year — not a flat 8 760, which would disagree with the
+        // settlement in every leap year and in a plant's first year.
+        let kontingent = eeg_billing::sect44b_jahreskontingent_kwh(
+            anlage.leistung_kwp,
+            jahr,
+            Some(anlage.inbetriebnahme),
+        );
+        let ytd = if anlage.biogas_quota_ytd_year == i16::try_from(jahr).ok() {
+            anlage.biogas_quota_kwh_ytd
         } else {
-            0.0
+            Decimal::ZERO
         };
-        let annual_quota_kwh = leistung * 0.45 * 8760.0;
-        let remaining_kwh = (annual_quota_kwh - ytd_this_year).max(0.0);
-        let exhaustion_pct = if annual_quota_kwh > 0.0 {
-            (ytd_this_year / annual_quota_kwh * 100.0).min(100.0)
+        let verbleibend = (kontingent - ytd).max(Decimal::ZERO);
+        let ausschoepfung = if kontingent > Decimal::ZERO {
+            (ytd / kontingent * Decimal::from(100)).min(Decimal::from(100))
         } else {
-            0.0
+            Decimal::ZERO
         };
 
         ContentBlock::json(serde_json::json!({
             "tr_id": p.tr_id,
             "applicable": true,
-            "leistung_kwp": leistung,
-            "annual_quota_kwh": annual_quota_kwh,
-            "ytd_fed_in_kwh": ytd_this_year,
-            "remaining_quota_kwh": remaining_kwh,
-            "exhaustion_pct": exhaustion_pct,
-            "quota_year": current_year,
-            "alert": if exhaustion_pct >= 90.0 { "CRITICAL: quota >90% exhausted — remaining settlements will be €0" }
-                     else if exhaustion_pct >= 75.0 { "WARNING: quota >75% exhausted" }
-                     else { "OK" },
-            "legal_basis": "§44b Abs. 1 EEG 2023: annual cap = leistung_kw × 0.45 × 8760 kWh for BIOGAS >100 kW (excl. §51b Ausschreibung).",
+            "leistung_kwp": anlage.leistung_kwp.to_string(),
+            "quota_year": jahr,
+            "bemessungsstunden": eeg_billing::bemessungsleistung_stunden(
+                jahr,
+                Some(anlage.inbetriebnahme),
+            )
+            .map(|h| h.to_string()),
+            "annual_quota_kwh": kontingent.to_string(),
+            "ytd_fed_in_kwh": ytd.to_string(),
+            "remaining_quota_kwh": verbleibend.to_string(),
+            "exhaustion_pct": ausschoepfung.round_dp(1).to_string(),
+            "alert": if ausschoepfung >= Decimal::from(90) {
+                "CRITICAL: the quota is over 90 % used — further kWh are paid at the Marktwert, or nothing at all on a Marktprämie"
+            } else if ausschoepfung >= Decimal::from(75) {
+                "WARNING: the quota is over 75 % used"
+            } else {
+                "OK"
+            },
+            "legal_basis": "§44b Abs. 1 i.V.m. §3 Nr. 6 EEG 2023",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -986,10 +1023,7 @@ SOLAR_FREIFLAECHE, BIOMASSE, BIOGAS, WASSERKRAFT, etc.) or 'DEFAULT' for the gen
         Parameters(params): Parameters<ImportJahresmarktwertParams>,
     ) -> Result<CallToolResult, McpError> {
         use crate::pg::upsert_jahresmarktwert;
-        use rust_decimal::Decimal;
-        use std::str::FromStr as _;
-        let avg = Decimal::from_str(&params.avg_ct_kwh.to_string())
-            .unwrap_or_else(|_| Decimal::try_from(params.avg_ct_kwh).unwrap_or(Decimal::ZERO));
+        let avg = params.avg_ct_kwh.into();
         let source = params.source.as_deref().unwrap_or("manual");
         match upsert_jahresmarktwert(
             &self.state.pool,
@@ -1215,97 +1249,154 @@ compliance reporting.",
 }
 
 // ── Prompts ───────────────────────────────────────────────────────────────────
+//
+// These are instructions a model acts on, so a wrong one is worse than none.
+// They previously taught an additive Managementprämie of 0,4 ct/kWh (Anlage 1
+// defines `MP = AW − MW` and nothing else; §20 EEG 2023 has no Absätze at all),
+// a 20-year clock reset under "§22" (that is the Ausschreibung provision), a
+// twelve-month advance-notice duty under "§21 Abs. 1" that no such provision
+// contains, and MaStR maintenance under "§28a". All of it is gone.
 
 #[prompt_router]
 impl EinsdMcpHandler {
     #[prompt(
         name = "register-eeg-plant",
-        description = "Step-by-step: register a new EEG/KWKG feed-in plant"
+        description = "Register a new EEG/KWKG feed-in plant, with the fields each settlement model needs"
     )]
     async fn register_eeg_plant_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(Role::User, "I need to register a new EEG feed-in plant."),
             PromptMessage::new_text(
                 Role::Assistant,
-                "## EEG/KWKG Plant Registration\n\n\
-                 POST /api/v1/anlagen with:\n\
-                 - tr_id (TechnischeRessource ID from marktd), malo_id, melo_id\n\
-                 - erzeugungsart: SOLAR_AUFDACH | SOLAR_FREIFLAECHE | SOLAR_AGRIPV | SOLAR_MIETERSTROM |\n\
-                   WIND_ONSHORE | WIND_OFFSHORE | BIOMASSE | BIOGAS | KLAEGAS | GRUBENGAS | WASSERKRAFT | KWKG\n\
-                 - inbetriebnahme (YYYY-MM-DD), leistung_kwp, eeg_gesetz (year, or 0 for KWKG)\n\
-                 - settlement_model: VERGUETUNG | DIREKTVERMARKTUNG | AUSSCHREIBUNG |\n\
-                   POST_EEG_SPOT | MIETERSTROM | EIGENVERBRAUCH | KWKG_ZUSCHLAG | FLEXIBILITAET\n\n\
-                 Auto-calculated: foerderendedatum = inbetriebnahme + 20 years (or repowering_datum + 20)\n\
-                 verguetungssatz_ct auto-looked up if omitted.\n\n\
-                 DIREKTVERMARKTUNG: add direktverm_aw_ct + direktverm_mp_id\n\
-                 AUSSCHREIBUNG: add direktverm_aw_ct + ausschreibungs_zuschlag_id\n\
-                 KWKG: add kwk_foerderdauer_h (>2 MW, e.g. 30000) or kwk_foerderdauer_years (<=2 MW)\n\
-                 MIETERSTROM: add mieter_zuschlag_ct (§21 Abs. 3 EEG)\n\
-                 FLEXIBILITAET: add flex_leistung_kw + flex_praemie_ct_kwh (sect. 50 EEG)\n\n\
-                 Use lookup_verguetungssatz first to find the applicable rate.",
+                "## EEG/KWKG plant registration — POST /api/v1/anlagen\n\n\
+                 ### Always\n\
+                 - tr_id (TechnischeRessource ID from marktd), malo_id, optional melo_id\n\
+                 - inbetriebnahme (YYYY-MM-DD), leistung_kwp, eeg_gesetz (year, 0 for KWKG)\n\
+                 - erzeugungsart — there is no generic SOLAR: the §48 rate depends on the\n\
+                   Bauform, so pick SOLAR_AUFDACH | SOLAR_FREIFLAECHE | SOLAR_AGRIPV |\n\
+                   SOLAR_MIETERSTROM | SOLAR_STECKER | WIND_ONSHORE | WIND_OFFSHORE |\n\
+                   BIOMASSE | BIOMASSE_HOLZ | BIOGAS | BIOMETHAN | KLAEGAS | GRUBENGAS |\n\
+                   DEPONIEGAS | WASSERKRAFT | GEOTHERMIE | GEZEITEN | KWKG\n\
+                 - verguetungsform: UEBERSCHUSS (default) | VOLLEINSPEISUNG | KWK_ZUSCHLAG.\n\
+                   The two solar forms differ by the §48 Abs. 2a bonus, so the rate lookup\n\
+                   cannot answer without it.\n\
+                 - sect9_erfuellung: FERNSTEUERBARKEIT | LEISTUNGSBEGRENZUNG_60 | KEINE.\n\
+                   §9 is staged — from 100 kW only Fernsteuerbarkeit satisfies it, the\n\
+                   25–100 kW band may take the 60 % Leistungsbegrenzung instead, below\n\
+                   25 kW the cap alone is enough, and a Steckersolargerät under 2 kW is out\n\
+                   of scope. KEINE is a §52 Abs. 1 Nr. 1 breach wherever §9 requires\n\
+                   anything, at 10 €/kW/Monat, so say which route the plant took.\n\
+                 - settlement_model, one of twelve (see the server instructions).\n\n\
+                 ### Per model\n\
+                 - DIREKTVERMARKTUNG: direktverm_aw_ct + direktverm_mp_id\n\
+                 - AUSSCHREIBUNG: direktverm_aw_ct + ausschreibungs_zuschlag_id, plus\n\
+                   zuschlag_erloeschen_datum where a §36e/§37e/§39e deadline applies —\n\
+                   from that date the plant has no award left to settle against\n\
+                 - AUSFALLVERGUETUNG: register the plant's **ordinary** rate. The engine\n\
+                   applies the §53 Abs. 3 −20 %; supplying a pre-reduced rate double-counts it\n\
+                 - MIETERSTROM: mieter_zuschlag_ct (§21 Abs. 3)\n\
+                 - KWKG_ZUSCHLAG: kwk_foerderdauer_h (>2 MW, e.g. 30000) or\n\
+                   kwk_foerderdauer_years (≤2 MW)\n\
+                 - FLEXIBILITAET: flex_leistung_kw + flex_praemie_ct_kwh (§50b)\n\n\
+                 ### Derived for you\n\
+                 - foerderendedatum: §25 Abs. 1 — 20 years extended to 31 December of the\n\
+                   twentieth year for a statutory AW, the exact anniversary for a tender\n\
+                   award, the §8 Abs. 4 KWKG fifteen-year backstop for an hour-capped\n\
+                   KWK plant\n\
+                 - the §51 Negativpreisregel version, from the commissioning **date**\n\n\
+                 Call lookup_verguetungssatz (erzeugungsart + verguetungsform + kWp + date)\n\
+                 for the applicable rate before registering.",
             ),
         ]
     }
 
     #[prompt(
         name = "settle-monthly",
-        description = "Step-by-step: run monthly EEG/KWKG settlement"
+        description = "Run the monthly EEG/KWKG settlement and read the result"
     )]
     async fn settle_monthly_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(Role::User, "How do I run the monthly EEG/KWKG settlement?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "## Monthly EEG/KWKG Settlement\n\n\
-                 1. Import EPEX price if needed: import_epex_monthly_price (year, month, avg_ct_kwh)\n\
-                 2. Check unsettled: list_unsettled_plants (year, month)\n\
-                 3. Settle all: POST /api/v1/settle/{year}/{month} (dry_run=true first)\n\
-                    OR settle one: trigger_settle (tr_id, billing_year, billing_month)\n\
-                 4. Audit: list_settlements (tr_id)\n\n\
-                 Settlement formulas:\n\
-                 VERGUETUNG:       kwh x verguetungssatz_ct / 100\n\
-                 MIETERSTROM:      VERGUETUNG + kwh x mieter_zuschlag_ct / 100\n\
-                 DIREKTVERMARKTUNG: max(0, AW-EPEX) x kwh / 100 + Managementpraemie (0.4 ct/kWh)\n\
-                 AUSSCHREIBUNG:    same as DIREKTVERMARKTUNG (BNetzA tender AW)\n\
-                 POST_EEG_SPOT:    kwh x epex_monthly_avg / 100\n\
-                 KWKG_ZUSCHLAG:    kwh x kwk_zuschlag_ct / 100 (capped by hour-limit)\n\
-                 FLEXIBILITAET:    VERGUETUNG + kwh x flex_praemie_ct / 100\n\
-                 EIGENVERBRAUCH:   EUR 0\n\n\
-                 CloudEvents: de.eeg.verguetung.berechnet -> accountingd posts Gutschrift\n\
-                 de.eeg.marktpraemie.berechnet -> NB->UNB Marktpraemie payment",
+                "## Monthly EEG/KWKG settlement\n\n\
+                 1. Import the market reference: import_jahresmarktwert (§20 Abs. 2,\n\
+                    technology-specific, published by the ÜNB) — it takes precedence over\n\
+                    the generic import_epex_monthly_price.\n\
+                 2. Load the EPEX day-ahead curve (PUT /api/v1/epex-spot) so §51 can be\n\
+                    derived. Without it the plant is paid in full for a month §51 may well\n\
+                    have excluded, and the run logs that it skipped.\n\
+                 3. list_unsettled_plants (year, month) to preview.\n\
+                 4. POST /api/v1/settle/{year}/{month} (dry_run first), or trigger_settle\n\
+                    for one plant. Both take the same path as the monthly worker, so the\n\
+                    amount does not depend on which one you use.\n\
+                 5. explain_settlement (tr_id, year, month) to read the positions back,\n\
+                    each with the provision that produced it.\n\n\
+                 ## Formulas\n\
+                 VERGUETUNG          kwh × verguetungssatz_ct / 100\n\
+                 AUSFALLVERGUETUNG   kwh × (verguetungssatz_ct × 0,8) / 100  (§53 Abs. 3)\n\
+                 MIETERSTROM / GGV   kwh × (verguetungssatz_ct + mieter_zuschlag_ct) / 100\n\
+                 DIREKTVERMARKTUNG   max(0, AW − Marktwert) × kwh / 100\n\
+                 AUSSCHREIBUNG       the same, on the tender-awarded AW\n\
+                 POST_EEG_SPOT       kwh × Marktwert / 100\n\
+                 KWKG_ZUSCHLAG       kwh × kwk_ct / 100, capped by the kWh hour limit\n\
+                 FLEXIBILITAET       kwh × (verguetungssatz_ct + flex_praemie_ct) / 100\n\
+                 FLEXIBILITAET_ZUSCHLAG  kW × rate_eur_per_kw / 12 — a capacity payment\n\
+                 EIGENVERBRAUCH / SONSTIGE_DIREKTVERMARKTUNG  EUR 0\n\n\
+                 There is **no additive Managementprämie**. Anlage 1 Nr. 3.1.2 defines the\n\
+                 Marktprämie as `AW − Marktwert`, floored at zero, with the marketing cost\n\
+                 already inside the AW.\n\n\
+                 ## What else lands on the receipt\n\
+                 §51 reduces the eligible kWh; §§53b–54 cut the AW before the formula;\n\
+                 §52 Abs. 1 violations are charged separately as a Pflichtzahlung and are\n\
+                 never netted into settlement_eur; §13a EnWG curtailment is added on top.\n\n\
+                 CloudEvents: de.eeg.verguetung.berechnet and de.eeg.marktpraemie.berechnet\n\
+                 carry the Gutschrift number, the USt and the bank details accountingd needs\n\
+                 for the pain.001. Only a `calculated` run emits one.",
             ),
         ]
     }
 
     #[prompt(
         name = "check-foerderung-expiry",
-        description = "Step-by-step: identify plants nearing Foerderungsende and plan transition"
+        description = "Find plants nearing their Förderende and plan the transition"
     )]
     async fn check_foerderung_expiry_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(
                 Role::User,
-                "Which plants are approaching their Foerderungsende?",
+                "Which plants are approaching their Förderungsende?",
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "list_expiring (days=365) for 12-month pipeline, (days=180) for urgent.\n\
-                 Background worker emits de.eeg.anlage.foerderung-auslaufend every 6h.\n\n\
-                 Legal: sect. 21 Abs. 1 EEG 2023 — notify Anlagenbetreiber >= 12 months in advance.\n\n\
-                 Transition options:\n\
-                 1. POST_EEG_SPOT: spot market feed-in. PUT /api/v1/anlagen/{tr_id} settlement_model=POST_EEG_SPOT\n\
-                 2. EIGENVERBRAUCH: self-consumption. Notify NB via UTILMD G.\n\
-                 3. DIREKTVERMARKTUNG: obtain new Direktvermarkter + AW.\n\
-                 4. REPOWERING sect. 22: POST /api/v1/anlagen/{tr_id}/repowering — resets +20yr\n\
-                 5. ZUSAMMENLEGUNG sect. 24: POST /api/v1/anlagen/{tr_id}/zusammenlegen\n\n\
-                 See post-eeg-transition prompt for full planning guide.",
+                "## Förderende pipeline\n\n\
+                 list_expiring (days=365) for the annual view, (days=180) for the urgent one.\n\
+                 A background worker emits de.eeg.anlage.foerderung-auslaufend **once per\n\
+                 plant** inside the 180-day window — not once per sweep — and a repowering\n\
+                 re-arms it.\n\n\
+                 The EEG sets no advance-notice period for this; it is an operational\n\
+                 courtesy and a commercial deadline, not a statutory one.\n\n\
+                 Two things move the effective end date, and neither changes the stored\n\
+                 foerderendedatum:\n\
+                 - §51a: quarter-hours §51 reduced to null extend the Vergütungszeitraum.\n\
+                   Before the Solarspitzengesetz the claim existed only for\n\
+                   ausschreibungspflichtige Anlagen.\n\
+                 - §36e/§37e/§39e: a lapsed Zuschlag ends the settlement early.\n\n\
+                 ## Options at the end\n\
+                 A. POST_EEG_SPOT — paid the market value. No paperwork.\n\
+                 B. EIGENVERBRAUCH — self-consumption, no grid payment.\n\
+                 C. DIREKTVERMARKTUNG — a new Direktvermarkter and AW. Use\n\
+                    POST /switch-veraeusserungsform, which enforces the §21b/§21c timing.\n\
+                 D. Vollrepowering — a fresh Inbetriebnahme (§3 Nr. 30) restarts §25.\n\
+                    POST /api/v1/anlagen/{tr_id}/repowering. Only for a full replacement of\n\
+                    the generator; partial repowering leaves the original date governing.",
             ),
         ]
     }
 
     #[prompt(
         name = "ausschreibung-workflow",
-        description = "Step-by-step: register and settle a BNetzA Ausschreibungsanlage (sect. 22a/28 EEG 2023)"
+        description = "Register and settle a BNetzA Ausschreibungsanlage (§22 EEG 2023)"
     )]
     async fn ausschreibung_workflow_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -1315,70 +1406,77 @@ impl EinsdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "## BNetzA Ausschreibungsanlage — sect. 22a/28 EEG 2023\n\n\
-                 Plants >1 MWp (Solar Freiflaeche, Wind) must tender via BNetzA.\n\
-                 The awarded Anzulegender Wert (AW ct/kWh) replaces the fixed Verguetungssatz.\n\n\
+                "## Ausschreibungsanlage — §22 EEG 2023\n\n\
+                 §22 is the *wettbewerbliche Ermittlung der Marktprämie*: the BNetzA\n\
+                 determines both who is entitled and the anzulegender Wert. Above the\n\
+                 technology threshold a plant must tender — Wind an Land above 750 kW\n\
+                 (§22 Abs. 2), Solaranlagen des ersten Segments above 1 MW (§22 Abs. 3).\n\n\
                  1. POST /api/v1/anlagen:\n\
                     settlement_model: AUSSCHREIBUNG\n\
-                    direktverm_aw_ct: <BNetzA awarded AW in ct/kWh>\n\
-                    ausschreibungs_zuschlag_id: <BNetzA Zuschlag reference number>\n\
-                    direktvermarktung: true\n\n\
-                 2. Monthly settlement formula:\n\
-                    Marktpraemie = max(0, AW - EPEX_monthly_avg) + Managementpraemie\n\
-                    Managementpraemie: 0.4 ct/kWh (reduced to 0.2 ct/kWh for plants >100 MW)\n\
-                    Import EPEX first: import_epex_monthly_price\n\n\
-                 3. sect. 25 EEG 2023 sanctions:\n\
-                    If plant NOT in MaStR: Verguetung = 0 until registration.\n\
-                    No retroactive catch-up permitted.\n\n\
-                 4. Annual AW adjustment via BNetzA portal + MSCONS Einspeisemenge to UNB.",
+                    direktverm_aw_ct: the awarded AW in ct/kWh\n\
+                    ausschreibungs_zuschlag_id: the BNetzA Zuschlag reference\n\
+                    zuschlag_erloeschen_datum: the §36e/§37e/§39e deadline, if one applies\n\
+                    ist_innovationsausschreibung / ist_buergerenergie where they apply\n\n\
+                 2. Settlement is the ordinary gleitende Marktprämie on the awarded AW:\n\
+                    max(0, AW − Marktwert) × kwh / 100. No Managementprämie is added.\n\
+                    Import the §20 Abs. 2 Marktwert first.\n\n\
+                 3. Reductions that apply to tender plants specifically:\n\
+                    §54 — the four defects of the Solar-erstes-Segment auction, recorded via\n\
+                    POST /aw-reduktionen/sect54-defekt and cutting the AW before the formula.\n\
+                    §53b does **not** apply: it reaches only a gesetzlich bestimmter AW.\n\
+                    §51b — a Biogas Ausschreibungsanlage settles at zero whenever the market\n\
+                    reference is ≤ 2 ct/kWh, and §51/§51a do not apply to it at all.\n\n\
+                 4. Compliance: a plant that fails to register in MaStR owes the §52 Abs. 1\n\
+                    Nr. 11 Pflichtzahlung of 10 €/kW/Monat — under EEG 2023 the Vergütung\n\
+                    keeps flowing alongside it. Confirm with\n\
+                    POST /api/v1/anlagen/{tr_id}/mastr-registrierung, which stops the clock.",
             ),
         ]
     }
 
     #[prompt(
         name = "post-eeg-transition",
-        description = "Step-by-step: plan and execute Post-EEG phase transition (sect. 21 EEG 2023)"
+        description = "Plan and execute the transition after the Förderdauer ends"
     )]
     async fn post_eeg_transition_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(
                 Role::User,
-                "How do I transition a plant after its 20-year EEG Foerderung ends?",
+                "How do I transition a plant after its 20-year EEG Förderung ends?",
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "## Post-EEG Transition Planning\n\n\
-                 1. Identify pipeline: list_expiring (days=365)\n\
-                 2. Legal notice: sect. 21 Abs. 1 EEG — notify Anlagenbetreiber >= 12 months in advance\n\
-                    Background CE de.eeg.anlage.foerderung-auslaufend triggers this workflow.\n\n\
-                 Options:\n\
-                 A. POST_EEG_SPOT — feed-in at EPEX spot avg. No paperwork.\n\
-                    PUT /api/v1/anlagen/{tr_id} settlement_model=POST_EEG_SPOT\n\n\
+                "## Post-EEG transition\n\n\
+                 1. Pipeline: list_expiring (days=365).\n\
+                 2. Check the **effective** end first: §51a may have extended it, and the\n\
+                    plant keeps being paid through the extension. The stored\n\
+                    foerderendedatum is the statutory one and does not move.\n\n\
+                 ## Options\n\
+                 A. POST_EEG_SPOT — paid the market value.\n\
+                    PUT /api/v1/anlagen/{tr_id} settlement_model=POST_EEG_SPOT\n\
                  B. EIGENVERBRAUCH — self-consumption, no grid payment.\n\
-                    Notify NB via UTILMD G (GPKE or GeLi Gas Lieferende).\n\n\
-                 C. DIREKTVERMARKTUNG — sign new Direktvermarkter contract.\n\
-                    PUT /api/v1/anlagen/{tr_id} + direktverm_aw_ct + direktverm_mp_id\n\n\
-                 D. REPOWERING sect. 22 EEG — replace components, 20-year clock resets.\n\
+                    Notify the NB via UTILMD (GPKE Lieferende).\n\
+                 C. DIREKTVERMARKTUNG — a new Direktvermarkter contract.\n\
+                    POST /switch-veraeusserungsform enforces §21b (first of a month, one\n\
+                    switch per month) and §21c (the NB must be told before the start of the\n\
+                    preceding calendar month, so the earliest reachable date is the first of\n\
+                    the month after next). An unnotified switch is §52 Abs. 1 Nr. 9.\n\
+                 D. Vollrepowering — §3 Nr. 30 i.V.m. §25: a fresh Inbetriebnahme restarts\n\
+                    the Förderdauer, and the §51 regime is re-derived from the new date, so a\n\
+                    plant repowered after 25.02.2025 falls under the Solarspitzengesetz rules.\n\
                     POST /api/v1/anlagen/{tr_id}/repowering {repowering_datum, leistung_kwp_neu}\n\
-                    New Verguetungssatz auto-looked up at repowering_datum.\n\n\
-                 E. ZUSAMMENLEGUNG sect. 24 EEG — merge plants the statute deems one.\n\
-                    POST /api/v1/anlagen/{child_tr_id}/zusammenlegen {parent_tr_id}\n\
-                    The endpoint evaluates sect. 24 Abs. 1 and answers 422 when it does\n\
-                    not apply, naming the deciding rule — it does not merge on request.\n\
-                    Requires all of Satz 1: same standort_id (or\n\
-                    unmittelbare_raeumliche_naehe=true), gleichartige Energien, a\n\
-                    size-dependent claim, and commissioning within 12 calendar months.\n\
-                    Ownership is NOT a criterion (unabhaengig von den Eigentumsverhaeltnissen).\n\
-                    Note: foerderendedatum NOT reset (only Repowering resets it).\n\n\
-                 MaStR update: sect. 28a EEG — update Marktstammdatenregister after any change.",
+                 E. Zusammenlegung — §24, and only where the statute actually fuses the two;\n\
+                    the endpoint answers 422 naming the rule that decided. It does not reset\n\
+                    the parent's foerderendedatum.\n\n\
+                 Keep the Marktstammdatenregister current after any change: the duty is the\n\
+                 MaStRV i.V.m. §71 EEG, and the breach is §52 Abs. 1 Nr. 11.",
             ),
         ]
     }
 
     #[prompt(
         name = "anlagenerweiterung",
-        description = "Step-by-step: model a §24 EEG plant extension (Anlagenerweiterung) \
-            or Zusammenlegung with multiple capacity blocks at different rates"
+        description = "Model a §24 EEG Anlagenerweiterung or Zusammenlegung with capacity blocks"
     )]
     async fn anlagenerweiterung_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -1389,37 +1487,35 @@ impl EinsdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "## §24 EEG Anlagenerweiterung — Multi-Block Settlement\n\n\
-                 §24 EEG 2023 combines plants at the same location into one entity for \
-                 tariff-threshold purposes when commissioned within 12 consecutive months.\n\n\
-                 ### Eligibility (§24 Abs. 1 EEG 2023)\n\
-                 All conditions must hold:\n\
-                 1. Same Grundstück/Gebäude/Betriebsgelände (same location)\n\
-                 2. Same energy type (same Erzeugungsart)\n\
-                 3. Both commissioned within 12 calendar months (check: zusammenlegung_within_12_months)\n\n\
-                 ### Rate impact\n\
-                 Combined capacity may cross into a lower tariff band:\n\
-                 - Plant A: 7 kWp → ≤10 kWp band = 8.51 ct/kWh (EEG 2024)\n\
-                 - Extension: +5 kWp → combined 12 kWp crosses into ≤40 kWp band = 7.43 ct\n\
-                 Call lookup_statutory_rate to check the new combined rate.\n\n\
-                 ### Two settlement approaches\n\
-                 **A. Single entity (§24 Zusammenlegung):**\n\
-                   PUT /api/v1/anlagen/{parent_tr_id} with combined leistung_kwp and \n\
-                   new verguetungssatz_ct (the combined rate).\n\
+                "## §24 EEG 2023 — several plants treated as one\n\n\
+                 §24 Abs. 1 Satz 1 deems plants one Anlage for the size-dependent rules —\n\
+                 the tariff band, the tender threshold and the §51 size test — when **all**\n\
+                 of the following hold, and none of the Sätze 2–5 carve-outs applies:\n\
+                 1. the same Grundstück, Gebäude or Betriebsgelände, or unmittelbare\n\
+                    räumliche Nähe;\n\
+                 2. the same Energieträger (gleichartige erneuerbare Energien);\n\
+                 3. a claim that depends on size at all;\n\
+                 4. commissioning within twelve consecutive calendar months.\n\n\
+                 Ownership is deliberately not a criterion — Satz 1 says *unabhängig von den\n\
+                 Eigentumsverhältnissen*. The carve-outs matter: building solar behind\n\
+                 different Netzverknüpfungspunkte is not one plant (Satz 4), and biogas from\n\
+                 the same Biogaserzeugungsanlage is fused regardless of Satz 1 (Satz 2).\n\n\
+                 ### Two ways to model it\n\
+                 **A. Zusammenlegung** — one surviving entity.\n\
                    POST /api/v1/anlagen/{child_tr_id}/zusammenlegen {parent_tr_id}\n\
-                   Only available when sect. 24 Abs. 1 actually fuses the two; the\n\
-                   endpoint refuses otherwise. Simple, but loses block-level granularity.\n\n\
-                 **B. Multi-block (§24 Erweiterung, preferred):**\n\
-                   Register extension as new tr_id with its own rate and foerderendedatum.\n\
-                   Use eeg_billing::CapacityBlock in SettleInput for proportional settlement.\n\
-                   Proportional allocation: block_kwh = total_kwh × (block_kwp / total_kwp)\n\n\
-                 ### 12-month check\n\
-                   use eeg_billing::zusammenlegung_within_12_months(ibn_a, ibn_b)\n\
-                   Returns false when >12 months apart → NOT subject to §24 aggregation.\n\n\
-                 ### Förderdauer (important!)\n\
-                   §24 Zusammenlegung: foerderendedatum of PARENT is unchanged.\n\
-                   §22 Repowering: foerderendedatum RESETS to repowering_datum + 20 years.\n\
-                   Erweiterung block: own foerderendedatum = extension_ibn + 20 years.",
+                   The endpoint evaluates §24 Abs. 1 in full and answers 422 naming the rule\n\
+                   that decided, rather than merging on request: a merge the statute does not\n\
+                   support moves the survivor into a tariff band it never qualified for, for\n\
+                   the rest of its Förderdauer, and nothing downstream can tell that apart\n\
+                   from a legitimate merge. The parent's foerderendedatum is not reset.\n\n\
+                 **B. Capacity blocks** — keep each block's own rate and Förderende.\n\
+                   The settlement allocates the month's kWh proportionally by capacity,\n\
+                   applies each block's own §51 regime (a block added after 25.02.2025 is\n\
+                   governed by the Solarspitzengesetz even when the primary block is not),\n\
+                   and drops a block whose Förderende has passed. The §51 **size** test runs\n\
+                   on the aggregated capacity — §51 Abs. 2 Satz 2 applies §24 to it — so\n\
+                   splitting a plant into blocks cannot buy the exemption.\n\n\
+                 Use lookup_statutory_rate for the band the combined capacity lands in.",
             ),
         ]
     }
@@ -1439,28 +1535,47 @@ impl ServerHandler for EinsdMcpHandler {
         )
         .with_server_info(Implementation::new("einsd", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "einsd MCP — Einspeiser Registry + EEG/KWKG Settlement daemon.\n\n\
-             Settlement models (9): VERGUETUNG (§21 EEG) | MIETERSTROM (§21 Abs. 3) |\n\
-             DIREKTVERMARKTUNG (§20 Marktprämie) | AUSSCHREIBUNG (§§22a/28) |\n\
-             POST_EEG_SPOT (§23b: 10ct cap) | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
-             FLEXIBILITAET (§50b, bestehende Anlagen) | FLEXIBILITAET_ZUSCHLAG (§50a, neue Anlagen)\n\n\
-             ## Tools (18)\n\
-             Core: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
-             Rates: lookup_verguetungssatz, lookup_statutory_rate\n\
-             Settlement: trigger_settle, get_epex_monthly_price, import_epex_monthly_price\n\
-             Compliance: get_compliance_status, list_plants_without_mastr, \
+            "einsd MCP — Einspeiser Registry + EEG/KWKG Settlement daemon (Netzbetreiber side).\n\n\
+             ## Settlement models (12, one token each — no aliases)\n\
+             VERGUETUNG (§21 Abs. 1) | AUSFALLVERGUETUNG (§21 Abs. 1 Satz 1 Nr. 3, AW −20 %) |\n\
+             MIETERSTROM (§21 Abs. 3) | GGV (§42b EnWG) | DIREKTVERMARKTUNG (§20 gleitende\n\
+             Marktprämie) | AUSSCHREIBUNG (§22) | SONSTIGE_DIREKTVERMARKTUNG (§21a) |\n\
+             POST_EEG_SPOT | EIGENVERBRAUCH | KWKG_ZUSCHLAG (§7 KWKG 2023) |\n\
+             FLEXIBILITAET (§50b) | FLEXIBILITAET_ZUSCHLAG (§50a, capacity-based)\n\n\
+             ## Tools (19)\n\
+             Registry: list_plants, get_plant, list_expiring, list_settlements, list_unsettled_plants\n\
+             Rates: lookup_verguetungssatz (DB), lookup_statutory_rate (static tables)\n\
+             Market data: get_epex_monthly_price, import_epex_monthly_price,\n\
+             get_jahresmarktwert, import_jahresmarktwert\n\
+             Settlement: trigger_settle\n\
+             Compliance: get_compliance_status, list_plants_without_mastr,\n\
              check_direktvermarktung_compliance, check_sect44b_quota\n\
-             Audit/Explainability: explain_settlement (full position trace per period), \
-             get_settlement_state_history\n\n\
-             Rate tables: lookup_statutory_rate (Solarpaket I 2024 rates for SOLAR/WIND/BIOMASSE/KWKG)\n\
-             Workflow: lookup_statutory_rate -> POST /api/v1/anlagen -> import_epex_monthly_price ->\n\
-             trigger_settle (one) or POST /api/v1/settle/{y}/{m} (batch) -> list_settlements\n\n\
-             §51 EEG 2023 Negativpreisregel: any negative-price period reduces Vergütung to 0.\n\
-             §51a: Vergütungszeitraum extended by lost quarter-hours (solar: ×0.5 factor).\n\
-             §52 EEG 2023: MaStR non-registration → €10/kW/month (not Vergütung=0).\n\
-             §13a EnWG (Redispatch 2.0): EinsMan curtailment compensation (separate position, same rate).\n\
-             §36h EEG: Wind onshore Korrekturfaktor for below-reference-yield sites.\n\
-             §24 Anlagenerweiterung: use CapacityBlock for multi-block proportional settlement.",
+             Audit: explain_settlement, get_settlement_state_history, get_aw_reduktionen\n\n\
+             Money and energy cross this surface as exact decimals — send them as strings\n\
+             (\"8.11\"). They end up on a §14 UStG Gutschrift and must not pass through f64.\n\n\
+             ## Rules worth knowing before you act\n\
+             §51 Negativpreisregel is keyed on the plant's **Inbetriebnahmedatum**, not its\n\
+             eeg_gesetz year: the Solarspitzengesetz rewrote it on 25.02.2025, mid-year and\n\
+             inside the EEG 2023 range. A plant from 2024 has the staged 4-3-2-1-hour rule\n\
+             and a 400 kW exemption; one from mid-2025 loses payment from the first negative\n\
+             quarter-hour above 100 kW (2 kW pending the BNetzA Festlegung).\n\
+             §51a extends the Vergütungszeitraum for what §51 took — but before the\n\
+             Solarspitzengesetz only for ausschreibungspflichtige Anlagen.\n\
+             §20/Anlage 1: the Marktprämie is `max(0, AW − Marktwert)`. There is **no**\n\
+             additive Managementprämie.\n\
+             §9 Steuerbarkeit is staged by capacity; the 25–100 kW band may satisfy it with\n\
+             the 60 % Leistungsbegrenzung, and charging those plants §52 Abs. 1 Nr. 1 is wrong.\n\
+             §52 Abs. 1 violations are a Pflichtzahlung *alongside* the Vergütung under EEG\n\
+             2023 (Abs. 2 10 €/kW, Abs. 3 2 € on remedy, Abs. 5 cap); under the pre-2023\n\
+             regime the breach reduces the Vergütung itself and no Pflichtzahlung exists.\n\
+             §44b caps a Biogas plant above 100 kW at 45 % Bemessungsleistung — measured\n\
+             against the actual hours of the calendar year (8 784 in a leap year), less the\n\
+             hours before first generation.\n\
+             §13a EnWG curtailment is compensated as a separate position and is not touched\n\
+             by §51 — those kWh were never fed in.\n\n\
+             Workflow: lookup_verguetungssatz → POST /api/v1/anlagen → import_jahresmarktwert\n\
+             → PUT /api/v1/epex-spot (so §51 can be derived) → trigger_settle or\n\
+             POST /api/v1/settle/{y}/{m} → explain_settlement.",
         )
     }
 }

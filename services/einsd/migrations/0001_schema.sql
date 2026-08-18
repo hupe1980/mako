@@ -8,14 +8,17 @@
 -- Tables:
 --   eeg_anlagen               — central plant register (composite PK: tr_id + tenant)
 --   settlement_receipts       — monthly settlement audit log (§ 147 AO / GoBD)
+--   settlement_period_accruals — per-period contribution to the cumulative counters
 --   settlement_state_transitions — state machine audit trail
 --   settlement_receipt_history — § 147 AO / GoBD immutable correction snapshots
 --   eeg_verguetungssaetze     — EEG/KWKG tariff reference data
 --   epex_monthly_prices       — monthly EPEX Spot reference (Marktprämie)
+--   epex_spot_prices          — per-¼h/h day-ahead prices (§51 Negativpreisregel)
 --   jahresmarktwert_preise    — technology-specific Jahresmarktwert (§20 Abs. 2 EEG)
 --   eeg_regionalnachweise     — §53b Regionalnachweis periods (§79a)
 --   eeg_stromsteuerbefreiungen — §53c per-kWh Stromsteuerbefreiung
 --   eeg_sect54_solar_defekte  — §54 solar first-segment auction defects
+--   jahresabrechnungen        — the year reconciled from the stored monthly receipts
 
 -- ── EEG/KWKG plant register ───────────────────────────────────────────────────
 
@@ -30,11 +33,14 @@ CREATE TABLE eeg_anlagen (
                        CHECK (eeg_gesetz IN (0, 2000, 2004, 2009, 2012, 2017, 2021, 2023)),
 
     inbetriebnahme     DATE        NOT NULL,
-    leistung_kwp       NUMERIC(12, 3) NOT NULL,
+    -- A capacity of zero or less is not a small plant: it drives the §9 band, the
+    -- §52 Pflichtzahlung (10 €/kW — a negative one would *credit* the operator),
+    -- the §44b quota and the §51 size test, and each produces nonsense from it.
+    leistung_kwp       NUMERIC(12, 3) NOT NULL CHECK (leistung_kwp > 0),
 
     erzeugungsart      TEXT        NOT NULL CHECK (erzeugungsart IN (
-        -- Solar PV
-        'SOLAR',            -- generic / backward compat
+        -- Solar PV — no generic 'SOLAR': the §48 rate depends on the Bauform,
+        -- so a plant that does not state one cannot be priced.
         'SOLAR_AUFDACH',    -- roof-mounted (§48 Abs. 1 EEG 2023)
         'SOLAR_FREIFLAECHE', -- ground-mounted (tendering >1 MWp)
         'SOLAR_AGRIPV',     -- §51a Agri-PV (+0.5 ct/kWh premium)
@@ -59,23 +65,35 @@ CREATE TABLE eeg_anlagen (
         'KWKG'              -- combined heat & power (KWKG)
     )),
 
-    -- Feed-in tariff fixed at inbetriebnahme for the full Förderungsdauer (§20 EEG)
-    verguetungssatz_ct NUMERIC(8, 4) NOT NULL,
+    -- Feed-in tariff fixed at inbetriebnahme for the full Förderungsdauer (§25 EEG)
+    verguetungssatz_ct NUMERIC(8, 4) NOT NULL CHECK (verguetungssatz_ct >= 0),
     foerderendedatum   DATE         NOT NULL,
 
-    -- Settlement model (accepts both legacy German names and canonical enum names)
+    -- Which §48 rate column the plant is paid from. Überschusseinspeisung and
+    -- Volleinspeisung differ by the §48 Abs. 2a bonus — 8,11 vs. 12,91 ct/kWh
+    -- for a ≤10 kWp roof plant — so the rate lookup cannot answer without it.
+    -- KWK_ZUSCHLAG is the KWKG column.
+    verguetungsform    TEXT        NOT NULL DEFAULT 'UEBERSCHUSS' CHECK (verguetungsform IN (
+        'UEBERSCHUSS', 'VOLLEINSPEISUNG', 'KWK_ZUSCHLAG'
+    )),
+
+    -- Settlement model. One vocabulary, no aliases: an alias set forces every
+    -- gate in the service to list both spellings, and the ones that forgot
+    -- (the KWKG kWh counter, the KWKG index) silently stopped working for
+    -- half the plants.
     settlement_model   TEXT        NOT NULL DEFAULT 'VERGUETUNG' CHECK (settlement_model IN (
-        -- Legacy German names
-        'VERGUETUNG', 'DIREKTVERMARKTUNG', 'AUSSCHREIBUNG', 'POST_EEG_SPOT',
-        'EIGENVERBRAUCH', 'MIETERSTROM', 'KWKG_ZUSCHLAG', 'FLEXIBILITAET',
-        'FLEXIBILITAET_ZUSCHLAG',
-        -- Canonical SettlementScheme names (Rust enum)
-        'FEED_IN_TARIFF', 'MARKET_PREMIUM', 'TENANT_ELECTRICITY', 'POST_EEG',
-        'KWK_SURCHARGE', 'FLEXIBILITY_PREMIUM', 'FLEXIBILITY_SURCHARGE',
-        'TEMPORARY_FEED_IN_TARIFF',
-        -- Solarpaket I + §21a
-        'GGV',                      -- §42b EnWG Gemeinschaftliche Gebäudeversorgung
-        'SONSTIGE_DIREKTVERMARKTUNG' -- §21a direct third-party sale
+        'VERGUETUNG',                -- §21 Abs. 1 Einspeisevergütung
+        'AUSFALLVERGUETUNG',         -- §21 Abs. 1 Nr. 2 Ausfallvergütung (−20 %)
+        'DIREKTVERMARKTUNG',         -- §20 gleitende Marktprämie
+        'AUSSCHREIBUNG',             -- §22 wettbewerblich ermittelte Marktprämie
+        'SONSTIGE_DIREKTVERMARKTUNG',-- §21a Direktvermarktung ohne EEG-Zahlung
+        'MIETERSTROM',               -- §21 Abs. 3 Mieterstromzuschlag
+        'GGV',                       -- §42b EnWG gemeinschaftliche Gebäudeversorgung
+        'EIGENVERBRAUCH',            -- keine Netzeinspeisung, keine Zahlung
+        'POST_EEG_SPOT',             -- nach Förderende: Marktwert
+        'KWKG_ZUSCHLAG',             -- §7 KWKG 2023 KWK-Zuschlag
+        'FLEXIBILITAET',             -- §50b Flexibilitätsprämie (Bestandsanlagen)
+        'FLEXIBILITAET_ZUSCHLAG'     -- §50a Flexibilitätszuschlag (Neuanlagen)
     )),
 
     direktvermarktung          BOOLEAN     NOT NULL DEFAULT false,
@@ -86,7 +104,8 @@ CREATE TABLE eeg_anlagen (
     mieter_zuschlag_ct         NUMERIC(6, 4),
     -- BNetzA Zuschlag-ID from tender result (Ausschreibungsanlagen)
     ausschreibungs_zuschlag_id TEXT,
-    -- §22 EEG 2023: the awarded anzulegender Wert, distinct from a contracted
+    -- §22 EEG 2023 (wettbewerbliche Ermittlung): the awarded anzulegender Wert,
+    -- distinct from a contracted
     -- Direktvermarktung value. Held separately so an award is never confused
     -- with a bilaterally agreed rate.
     zuschlagswert_ct           NUMERIC(8, 4),
@@ -98,7 +117,9 @@ CREATE TABLE eeg_anlagen (
     -- auction-eligible size class.
     ist_buergerenergie         BOOLEAN NOT NULL DEFAULT false,
 
-    -- §22 EEG 2023 Repowering (clock reset)
+    -- Repowering (§3 Nr. 30 i.V.m. §25 EEG 2023): a Vollrepowering is a fresh
+    -- Inbetriebnahme, so the Förderdauer restarts. §22 is the Ausschreibung
+    -- provision and has nothing to do with this.
     ist_repowering             BOOLEAN     NOT NULL DEFAULT false,
     ursprungs_inbetriebnahme   DATE,       -- original commissioning before repowering
     repowering_datum           DATE,
@@ -117,7 +138,7 @@ CREATE TABLE eeg_anlagen (
 
     -- Plant status. Only the three values the service actually writes:
     -- 'aktiv' on registration, 'abgemeldet' on Abmeldung/Zusammenlegung and
-    -- 'foerderung_beendet' when the KWKG limit is reached. §22 Repowering is
+    -- 'foerderung_beendet' when the KWKG limit is reached. Repowering is
     -- recorded by `ist_repowering` + `repowering_datum` — the plant stays
     -- 'aktiv' and keeps settling, so there is no 'repowered' status.
     status                     TEXT        NOT NULL DEFAULT 'aktiv' CHECK (status IN (
@@ -125,7 +146,7 @@ CREATE TABLE eeg_anlagen (
                                 )),
     notes                      TEXT,
 
-    -- ── MaStR registration (migration 0002) ──────────────────────────────────
+    -- ── MaStR registration ───────────────────────────────────────────────────
     mastr_registriert          BOOLEAN     NOT NULL DEFAULT true,
     mastr_nummer               TEXT,
     mastr_datum                DATE,
@@ -143,33 +164,34 @@ CREATE TABLE eeg_anlagen (
     ust_status                 TEXT        NOT NULL DEFAULT 'REGELBESTEUERUNG'
                                CHECK (ust_status IN ('KLEINUNTERNEHMER', 'REGELBESTEUERUNG')),
 
-    -- ── Plant attributes (migration 0003) ────────────────────────────────────
+    -- ── Plant attributes ────────────────────────────────────
     -- 'Neubau' | 'Repowering' | 'Modernisierung'
     inbetriebnahme_typ         TEXT,
     -- §36h EEG 2023: Wind Standortgütegrad for Korrekturfaktor computation
     wind_guetegrad             NUMERIC(5, 3),
     wind_korrekturfaktor       NUMERIC(6, 5),
-    wind_standortklasse        TEXT,
     -- §36h Abs. 2 EEG 2023: Standortgüte re-evaluations (year 6/11/16).
     -- JSONB Vec<{wirksam_ab_jahr: 6|11|16, guetefaktor}> — the effective
     -- Korrekturfaktor per billing period is derived (korrekturfaktor_fuer_periode).
     wind_guetefaktor_reevaluations JSONB NOT NULL DEFAULT '[]',
-    -- §48 EEG: Bauform for solar PV tariff lookup (Freifläche | Aufdach | BIPV)
-    solar_bauform              TEXT,
-    -- §9 EEG / §29 MsbG: date Fernsteuerbarkeit (remote control) was installed
+    -- §9 EEG — Steuerbarkeit. The obligation is staged by installed capacity:
+    -- from 100 kW only Fernsteuerbarkeit satisfies it (Abs. 2 Nr. 1), the
+    -- 25–100 kW band may take the 60-%-Leistungsbegrenzung instead (Nr. 2),
+    -- below 25 kW the cap alone is enough (Nr. 3), and a Steckersolargerät under
+    -- 2 kW is out of scope (Abs. 1 Satz 2). Recording only the Fernsteuerbarkeit
+    -- date made every compliant plant on the 60 % route look like a §52 Abs. 1
+    -- Nr. 1 violation at 10 €/kW/month.
+    sect9_erfuellung           TEXT        NOT NULL DEFAULT 'KEINE' CHECK (sect9_erfuellung IN (
+        'KEINE', 'FERNSTEUERBARKEIT', 'LEISTUNGSBEGRENZUNG_60'
+    )),
+    -- When the Fernsteuerbarkeit was installed, where that is the chosen route.
     fernsteuerbarkeit_datum    DATE,
-    -- §21b EEG: direct marketing obligation flag (>100 kW mandatory from 2012)
-    direktvermarktung_pflicht  BOOLEAN     NOT NULL DEFAULT false,
     -- §24 Erweiterung: capacity blocks JSONB (Vec<CapacityBlock>)
     capacity_blocks            JSONB,
-    -- Metering type: SLP | RLM | IMSYS
-    metering_mode              TEXT        CHECK (metering_mode IN ('SLP', 'RLM', 'IMSYS')),
 
-    -- ── Settlement lifecycle (migration 0004) ─────────────────────────────────
+    -- ── Settlement lifecycle ─────────────────────────────────
     -- Active | Reduced | Suspended | PostEeg | Ended
     settlement_state           TEXT,
-    -- §52 Abs. 6 EEG 2023: enable Pflichtzahlung netting against Vergütung
-    sect52_netting_enabled     BOOLEAN     NOT NULL DEFAULT true,
 
     -- ── §51b EEG 2023: biogas Ausschreibungsanlage flag ──────────────────────
     is_biogas_sect51b          BOOLEAN     NOT NULL DEFAULT false,
@@ -179,8 +201,15 @@ CREATE TABLE eeg_anlagen (
     -- rule is technology-specific: §36e (Wind an Land), §37e (Solaranlagen des
     -- ersten Segments), §39e (Biomasseanlagen) EEG 2023. Distinct from §35a
     -- Entwertung von Zuschlägen, which is a BNetzA act rather than a deadline.
+    -- The date the Zuschlag lapses when the plant is not commissioned in time.
+    -- §36e (Wind an Land), §37e (Solar erstes Segment), §39e (Biomasse) EEG 2023.
+    -- Distinct from §35a Entwertung, which is a BNetzA act rather than a deadline.
+    --
+    -- There is deliberately no `award_expired` flag beside it. There was one, and
+    -- nothing ever set it — so the settlement branch that answers "the award has
+    -- lapsed, nothing left to settle" was unreachable. The date is the fact; the
+    -- expiry is derived from it against the billing period.
     zuschlag_erloeschen_datum  DATE,
-    award_expired              BOOLEAN     NOT NULL DEFAULT false,
     -- §52: cumulative violation start dates for Pflichtzahlung
     mastr_violation_start      DATE,
     fernsteuerbarkeit_violation_start DATE,
@@ -192,8 +221,6 @@ CREATE TABLE eeg_anlagen (
     -- effective Förderende is derived (via effektives_foerderende), not stored.
     negative_price_qh_gesamt BIGINT NOT NULL DEFAULT 0,
 
-    -- ── §53b regional reduction ───────────────────────────────────────────────
-    grid_area                  TEXT,
 
     -- ── §24 EEG 2023: facts that decide Zusammenfassung ──────────────────────
     -- Two plants are deemed one — changing the tariff band and the tender
@@ -217,11 +244,27 @@ CREATE TABLE eeg_anlagen (
     biogas_quota_kwh_ytd       NUMERIC(14, 3) NOT NULL DEFAULT 0,
     biogas_quota_ytd_year      SMALLINT,
 
-    -- ── §51 Abs. 2 Nr. 1 EEG 2023: iMSys rollout ────────────────────────────
+    -- ── §51 EEG: facts the Negativpreisregel turns on ────────────────────────
+    -- §51 Abs. 2 Nr. 1: the sub-100-kW exemption runs only "für Zeiträume vor
+    -- dem Einbau eines intelligenten Messsystems". NULL = not yet rolled out.
     imesys_rollout_datum       DATE,
+    -- §3 Nr. 37: Pilotwindenergieanlage an Land — carved out of §51 under every
+    -- Fassung, at any size. A BNetzA/FGW certification fact about the turbine,
+    -- so it is declared rather than derived.
+    ist_pilotwindanlage        BOOLEAN     NOT NULL DEFAULT false,
+    -- §100 EEG: the date the operator declared, in Textform to the NB, that
+    -- §§51 and 51a shall apply to this Bestandsanlage. The declaration runs at
+    -- the earliest from the end of the calendar year in which the plant is
+    -- fitted with an iMSys, so the *effective* date is derived from this and
+    -- `imesys_rollout_datum` rather than stored. From then on the plant forgoes
+    -- payment during negative prices and its AW rises by 0,6 ct/kWh.
+    sect51_optin_erklaert_am   DATE,
 
-    -- ── §42b EnWG: GGV Nutzungsplan ──────────────────────────────────────
-    ggv_nutzungsplan           JSONB,
+    -- When the 180-day Förderende alert was emitted; NULL until it is. The alert
+    -- worker sweeps a 180-day window every six hours, so without this it emitted
+    -- the same CloudEvent hundreds of times for every expiring plant.
+    foerderung_alert_sent_at   TIMESTAMPTZ,
+
 
     -- ── §21c notification tracking ───────────────────────────────────────────
     veraeusserungsform_notification_sent_at TIMESTAMPTZ,
@@ -248,8 +291,8 @@ CREATE INDEX ea_gesetz_tenant    ON eeg_anlagen (eeg_gesetz, tenant);
 CREATE INDEX ea_repowering       ON eeg_anlagen (tenant) WHERE ist_repowering = true;
 CREATE INDEX ea_zusammenlegung   ON eeg_anlagen (parent_tr_id, tenant) WHERE parent_tr_id IS NOT NULL;
 CREATE INDEX ea_kwkg             ON eeg_anlagen (tenant) WHERE settlement_model = 'KWKG_ZUSCHLAG';
-CREATE INDEX ea_grid_area        ON eeg_anlagen (tenant, grid_area) WHERE grid_area IS NOT NULL;
-CREATE INDEX ea_award_expired    ON eeg_anlagen (tenant, award_expired) WHERE award_expired = true;
+CREATE INDEX ea_award_erloeschen ON eeg_anlagen (tenant, zuschlag_erloeschen_datum)
+    WHERE zuschlag_erloeschen_datum IS NOT NULL;
 CREATE INDEX ea_mastr_violation  ON eeg_anlagen (tenant, mastr_violation_start) WHERE mastr_violation_start IS NOT NULL;
 CREATE INDEX ea_biogas_quota     ON eeg_anlagen (tenant, biogas_quota_ytd_year)
     WHERE erzeugungsart = 'BIOGAS' AND is_biogas_sect51b = false;
@@ -408,17 +451,24 @@ CREATE INDEX srh_tr_id       ON settlement_receipt_history (tr_id, tenant, billi
 
 CREATE TABLE eeg_verguetungssaetze (
     id                  SERIAL      PRIMARY KEY,
-    erzeugungsart       TEXT        NOT NULL DEFAULT 'SOLAR',
+    erzeugungsart       TEXT        NOT NULL,
     leistung_min_kwp    NUMERIC(10, 3) NOT NULL,
     leistung_max_kwp    NUMERIC(10, 3),         -- NULL = no upper bound
-    -- 'UEBERSCHUSS' | 'VOLLEINSPEISUNG' | 'KWK_ZUSCHLAG'
-    verguetungsform     TEXT        DEFAULT 'UEBERSCHUSS',
+    verguetungsform     TEXT        NOT NULL DEFAULT 'UEBERSCHUSS' CHECK (verguetungsform IN (
+        'UEBERSCHUSS', 'VOLLEINSPEISUNG', 'KWK_ZUSCHLAG'
+    )),
     billing_start       DATE        NOT NULL,
     billing_end         DATE,                   -- NULL = currently valid
     verguetungssatz_ct  NUMERIC(8, 4) NOT NULL,
     eeg_gesetz          SMALLINT    NOT NULL,
     notes               TEXT,
-    UNIQUE (erzeugungsart, leistung_min_kwp, billing_start)
+    -- verguetungsform is part of the key. Without it the §48 Abs. 2a
+    -- Volleinspeisung rates collide with the Überschuss rates of the same band
+    -- and start date, and the seed's ON CONFLICT DO NOTHING dropped every one of
+    -- them — leaving the Volleinspeisung tariff simply absent from the table.
+    UNIQUE (erzeugungsart, verguetungsform, leistung_min_kwp, billing_start),
+    CONSTRAINT evs_band_forward CHECK (leistung_max_kwp IS NULL OR leistung_max_kwp > leistung_min_kwp),
+    CONSTRAINT evs_period_forward CHECK (billing_end IS NULL OR billing_end >= billing_start)
 );
 
 COMMENT ON TABLE eeg_verguetungssaetze IS
@@ -426,7 +476,8 @@ COMMENT ON TABLE eeg_verguetungssaetze IS
     'verguetungssatz_ct = NET rate for EEG (§53 deduction already applied where applicable). '
     'Quarterly degression computed by eeg-billing degression module for post-billing_start quarters.';
 
-CREATE INDEX evs_lookup ON eeg_verguetungssaetze (erzeugungsart, billing_start, billing_end);
+CREATE INDEX evs_lookup ON eeg_verguetungssaetze
+    (erzeugungsart, verguetungsform, billing_start, billing_end);
 
 -- Seed: EEG 2023 + Solarpaket I rates (BGBl. I Nr. 107, 16.05.2024)
 -- Operators MUST verify against current BNetzA publications before production use.
@@ -441,19 +492,15 @@ INSERT INTO eeg_verguetungssaetze (erzeugungsart, leistung_min_kwp, leistung_max
 ('SOLAR_AUFDACH',   0,   10, 'VOLLEINSPEISUNG', 12.91, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, ≤10 kWp'),
 ('SOLAR_AUFDACH',  10,   40, 'VOLLEINSPEISUNG', 10.83, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, >10–40 kWp'),
 ('SOLAR_AUFDACH',  40,  100, 'VOLLEINSPEISUNG',  9.54, '2024-05-01', NULL, 2023, 'Solarpaket I §48 Abs. 2a, >40–100 kWp'),
--- Generic SOLAR alias (backward compat)
-('SOLAR',   0,   10, 'UEBERSCHUSS', 8.11, '2024-05-01', NULL, 2023, 'Solarpaket I generic alias'),
-('SOLAR',  10,   40, 'UEBERSCHUSS', 7.03, '2024-05-01', NULL, 2023, 'Solarpaket I generic alias'),
-('SOLAR',  40,  100, 'UEBERSCHUSS', 5.74, '2024-05-01', NULL, 2023, 'Solarpaket I generic alias'),
 -- Pre-Solarpaket I rates (EEG 2023 initial, 2023-02–2024-04)
 ('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 7.71, '2023-02-01', '2024-04-30', 2023, 'EEG 2023 initial §48 Abs. 1 Nr. 1a'),
 ('SOLAR_AUFDACH',  10,  40, 'UEBERSCHUSS', 6.69, '2023-02-01', '2024-04-30', 2023, 'EEG 2023 initial §48 Abs. 1 Nr. 1b'),
 ('SOLAR_AUFDACH',  40, 100, 'UEBERSCHUSS', 5.76, '2023-02-01', '2024-04-30', 2023, 'EEG 2023 initial §48 Abs. 1 Nr. 1c'),
 -- EEG 2021 solar
-('SOLAR',   0,  10, 'UEBERSCHUSS', 9.58, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 ≤10 kWp'),
-('SOLAR',  10,  40, 'UEBERSCHUSS', 9.33, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 10–40 kWp'),
+('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 9.58, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 ≤10 kWp'),
+('SOLAR_AUFDACH',  10,  40, 'UEBERSCHUSS', 9.33, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 10–40 kWp'),
 -- EEG 2017 solar
-('SOLAR',   0,  10, 'UEBERSCHUSS', 9.87, '2017-04-01', '2020-12-31', 2017, 'EEG 2017 ≤10 kWp avg'),
+('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 9.87, '2017-04-01', '2020-12-31', 2017, 'EEG 2017 ≤10 kWp avg'),
 -- Wind onshore statutory (≤750 kW only; >750 kW via Ausschreibung)
 ('WIND_ONSHORE',  0, 750, 'UEBERSCHUSS', 7.35, '2023-01-01', NULL, 2023, 'EEG 2023 §21 Onshore ≤750 kW'),
 -- KWKG 2023 (§7 Abs. 1 KWKG 2023)
@@ -472,8 +519,11 @@ INSERT INTO eeg_verguetungssaetze (erzeugungsart, leistung_min_kwp, leistung_max
 -- Wasserkraft (§40 EEG 2023)
 ('WASSERKRAFT',    0,  500, 'UEBERSCHUSS', 12.48, '2023-01-01', NULL, 2023, 'EEG 2023 §40 ≤500 kW'),
 ('WASSERKRAFT',  500, 5000, 'UEBERSCHUSS',  8.59, '2023-01-01', NULL, 2023, 'EEG 2023 §40 500 kW–5 MW'),
-('WASSERKRAFT', 5000, NULL, 'UEBERSCHUSS',  7.56, '2023-01-01', NULL, 2023, 'EEG 2023 §40 >5 MW')
-ON CONFLICT DO NOTHING;
+('WASSERKRAFT', 5000, NULL, 'UEBERSCHUSS',  7.56, '2023-01-01', NULL, 2023, 'EEG 2023 §40 >5 MW');
+-- No ON CONFLICT clause on purpose: it would swallow key collisions, and the §48
+-- Abs. 2a Volleinspeisung block collides with the Überschuss rows on
+-- (erzeugungsart, leistung_min_kwp, billing_start). A migration that reports
+-- success must not leave those rates missing.
 
 -- ── EPEX Spot monthly reference prices ───────────────────────────────────────
 -- Required for DIREKTVERMARKTUNG (Marktprämie) and POST_EEG_SPOT settlement.
@@ -664,10 +714,13 @@ CREATE TABLE jahresabrechnungen (
     billing_year            SMALLINT    NOT NULL,
     -- Sum over the year's receipts.
     einspeisemenge_kwh      NUMERIC(18, 3) NOT NULL DEFAULT 0,
-    settlement_eur          NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    -- Same scale as settlement_receipts.settlement_eur. At NUMERIC(14,2) the
+    -- annual total silently rounded each month's 5-decimal amount and no longer
+    -- equalled the sum of the receipts it claims to reconcile.
+    settlement_eur          NUMERIC(16, 5) NOT NULL DEFAULT 0,
     -- §52 EEG 2023 Pflichtzahlungen, kept apart from the Vergütung: they are a
     -- separate claim and are never netted into the settlement total.
-    pflichtzahlung_eur      NUMERIC(14, 2) NOT NULL DEFAULT 0,
+    pflichtzahlung_eur      NUMERIC(16, 5) NOT NULL DEFAULT 0,
     -- Months with a receipt, and the ones without.
     months_settled          SMALLINT    NOT NULL DEFAULT 0,
     missing_months          SMALLINT[]  NOT NULL DEFAULT '{}',

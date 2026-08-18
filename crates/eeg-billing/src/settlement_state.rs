@@ -40,6 +40,8 @@
 //! | `Sanctioned` | `Suspended` or `Reduced` |
 //! | `FoerderungBeendet` | `Ended` or `PostEeg` |
 
+use crate::technology::ErzeugungsArt;
+use rust_decimal::Decimal;
 use time::Date;
 
 // ── SettlementPeriodState ─────────────────────────────────────────────────────
@@ -205,54 +207,86 @@ pub enum StateTransitionReason {
 
 // ── State derivation helpers ──────────────────────────────────────────────────
 
+/// The compliance facts a settlement state is derived from.
+///
+/// A struct rather than six positional arguments: the old signature took two
+/// `Option<Date>`s, a `Decimal`, a `bool` and an `i16` in a row, and every call
+/// site had to be read against the definition to know which was which.
+#[derive(Debug, Clone, Copy)]
+pub struct SettlementStateFacts {
+    /// Whether the plant has a confirmed MaStR registration.
+    pub mastr_registriert: bool,
+    /// How the plant satisfies §9 (Fernsteuerbarkeit, 60 % cap, or nothing).
+    pub sect9_erfuellung: crate::settlement_state::Sect9Erfuellung,
+    /// Installed capacity — §9 is staged by it.
+    pub leistung_kwp: rust_decimal::Decimal,
+    /// Technology, for the §9 Abs. 1 Satz 2 Steckersolar carve-out.
+    pub erzeugungsart: Option<ErzeugungsArt>,
+    /// Subsidy end date; `None` = never expires.
+    pub foerderendedatum: Option<Date>,
+    /// First day of the billing period being evaluated.
+    pub billing_date: Date,
+    /// EEG law year (0 = KWKG).
+    pub eeg_gesetz_year: i16,
+}
+
 /// Derive the expected [`SettlementPeriodState`] from plant compliance facts.
 ///
-/// This is a **deterministic helper** — it does not access the DB.
-/// The actual state stored in `einsd` may lag behind by one billing period
-/// (state is updated after each month's settlement run).
-///
-/// ## Parameters
-///
-/// - `mastr_registriert`: whether the plant has confirmed MaStR registration
-/// - `fernsteuerbarkeit_datum`: when §9 Fernsteuerbarkeit was installed (None = not installed)
-/// - `leistung_kwp`: installed capacity
-/// - `foerderendedatum`: subsidy end date (None = not expired)
-/// - `billing_date`: first day of the billing period to evaluate
-/// - `eeg_gesetz_year`: EEG law year (0 = KWKG, 2000/2004/…/2023 = EEG version)
+/// This is a **deterministic helper** — it does not access the DB. The state
+/// stored in `einsd` may lag by one billing period, since it is written after
+/// each month's settlement run.
 ///
 /// # Example
 ///
 /// ```rust
-/// use eeg_billing::settlement_state::{derive_settlement_state, SettlementPeriodState};
+/// use eeg_billing::settlement_state::{
+///     derive_settlement_state, Sect9Erfuellung, SettlementPeriodState, SettlementStateFacts,
+/// };
 /// use rust_decimal::dec;
 /// use time::macros::date;
 ///
-/// // Healthy plant — active (50 kW, Fernsteuerbarkeit installed 2024)
-/// let state = derive_settlement_state(true, Some(date!(2024-01-01)), dec!(50), Some(date!(2040-12-31)), date!(2026-07-01), 2023);
-/// assert_eq!(state, SettlementPeriodState::Active);
+/// let facts = SettlementStateFacts {
+///     mastr_registriert: true,
+///     sect9_erfuellung: Sect9Erfuellung::Fernsteuerbarkeit,
+///     leistung_kwp: dec!(50),
+///     erzeugungsart: None,
+///     foerderendedatum: Some(date!(2040-12-31)),
+///     billing_date: date!(2026-07-01),
+///     eeg_gesetz_year: 2023,
+/// };
+/// assert_eq!(derive_settlement_state(&facts), SettlementPeriodState::Active);
 ///
-/// // MaStR not registered, EEG 2023 → Reduced (penalty, not suspension)
-/// let state2 = derive_settlement_state(false, None, dec!(50), Some(date!(2040-12-31)), date!(2026-07-01), 2023);
-/// assert_eq!(state2, SettlementPeriodState::Reduced);
+/// // A 50 kW plant on the 60 % Leistungsbegrenzung is compliant too — §9 Abs. 2
+/// // Nr. 2 offers it as an equal alternative below 100 kW.
+/// let cap = SettlementStateFacts {
+///     sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+///     ..facts
+/// };
+/// assert_eq!(derive_settlement_state(&cap), SettlementPeriodState::Active);
 ///
-/// // MaStR not registered, EEG 2017 → Suspended (VergütungAufNull)
-/// let state3 = derive_settlement_state(false, None, dec!(50), Some(date!(2040-12-31)), date!(2026-07-01), 2017);
-/// assert_eq!(state3, SettlementPeriodState::Suspended);
+/// // MaStR not registered, EEG 2023 → Reduced (Pflichtzahlung, not suspension)
+/// let no_mastr = SettlementStateFacts { mastr_registriert: false, ..facts };
+/// assert_eq!(derive_settlement_state(&no_mastr), SettlementPeriodState::Reduced);
+///
+/// // The same under EEG ≤2021 → Suspended (Vergütung auf null)
+/// let old = SettlementStateFacts { eeg_gesetz_year: 2017, ..no_mastr };
+/// assert_eq!(derive_settlement_state(&old), SettlementPeriodState::Suspended);
 ///
 /// // Förderdauer expired → PostEeg
-/// let state4 = derive_settlement_state(true, None, dec!(50), Some(date!(2020-12-31)), date!(2026-07-01), 2023);
-/// assert_eq!(state4, SettlementPeriodState::PostEeg);
+/// let expired = SettlementStateFacts { foerderendedatum: Some(date!(2020-12-31)), ..facts };
+/// assert_eq!(derive_settlement_state(&expired), SettlementPeriodState::PostEeg);
 /// ```
 #[must_use]
-pub fn derive_settlement_state(
-    mastr_registriert: bool,
-    fernsteuerbarkeit_datum: Option<Date>,
-    leistung_kwp: rust_decimal::Decimal,
-    foerderendedatum: Option<Date>,
-    billing_date: Date,
-    eeg_gesetz_year: i16,
-) -> SettlementPeriodState {
-    use rust_decimal::dec;
+pub fn derive_settlement_state(facts: &SettlementStateFacts) -> SettlementPeriodState {
+    let &SettlementStateFacts {
+        mastr_registriert,
+        sect9_erfuellung,
+        leistung_kwp,
+        erzeugungsart: art,
+        foerderendedatum,
+        billing_date,
+        eeg_gesetz_year,
+    } = facts;
 
     // ── Förderdauer expired ───────────────────────────────────────────────────
     if let Some(fed) = foerderendedatum
@@ -272,9 +306,11 @@ pub fn derive_settlement_state(
         };
     }
 
-    // ── Fernsteuerbarkeit not installed (§9 EEG) ──────────────────────────────
-    let fernsteuerbarkeit_required = leistung_kwp >= dec!(25);
-    if fernsteuerbarkeit_required && fernsteuerbarkeit_datum.is_none() {
+    // ── §9 EEG not satisfied ──────────────────────────────────────────────────
+    // The obligation is staged: from 100 kW only Fernsteuerbarkeit will do, in the
+    // 25–100 kW band the 60 % Leistungsbegrenzung is an equal alternative, and a
+    // Steckersolargerät below 2 kW is out of scope entirely.
+    if sect9_verletzt(leistung_kwp, art, sect9_erfuellung) {
         return if eeg_gesetz_year >= 2023 {
             // EEG 2023: Pflichtzahlung €10/kW/month (§52 Abs. 1 Nr. 1)
             SettlementPeriodState::Reduced
@@ -328,83 +364,254 @@ mod tests {
         assert!(!SettlementPeriodState::Ended.is_payable());
     }
 
+    /// A healthy plant, and the four facts that move it off `Active`.
+    fn gesund() -> SettlementStateFacts {
+        SettlementStateFacts {
+            mastr_registriert: true,
+            sect9_erfuellung: Sect9Erfuellung::Fernsteuerbarkeit,
+            leistung_kwp: dec!(50),
+            erzeugungsart: None,
+            foerderendedatum: Some(date!(2040 - 12 - 31)),
+            billing_date: date!(2026 - 07 - 01),
+            eeg_gesetz_year: 2023,
+        }
+    }
+
     #[test]
     fn derive_active_healthy_plant() {
-        let state = derive_settlement_state(
-            true,
-            Some(date!(2024 - 01 - 01)),
-            dec!(50),
-            Some(date!(2040 - 12 - 31)),
-            date!(2026 - 07 - 01),
-            2023,
+        assert_eq!(
+            derive_settlement_state(&gesund()),
+            SettlementPeriodState::Active
         );
-        assert_eq!(state, SettlementPeriodState::Active);
     }
 
     #[test]
     fn derive_post_eeg_expired() {
-        let state = derive_settlement_state(
-            true,
-            None,
-            dec!(50),
-            Some(date!(2020 - 12 - 31)),
-            date!(2026 - 07 - 01),
-            2023,
+        let facts = SettlementStateFacts {
+            foerderendedatum: Some(date!(2020 - 12 - 31)),
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::PostEeg
         );
-        assert_eq!(state, SettlementPeriodState::PostEeg);
     }
 
     #[test]
     fn derive_reduced_eeg2023_mastr_missing() {
-        let state = derive_settlement_state(
-            false,
-            None,
-            dec!(50),
-            Some(date!(2040 - 12 - 31)),
-            date!(2026 - 07 - 01),
-            2023,
+        let facts = SettlementStateFacts {
+            mastr_registriert: false,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Reduced
         );
-        assert_eq!(state, SettlementPeriodState::Reduced);
     }
 
     #[test]
     fn derive_suspended_eeg2017_mastr_missing() {
-        let state = derive_settlement_state(
-            false,
-            None,
-            dec!(50),
-            Some(date!(2040 - 12 - 31)),
-            date!(2026 - 07 - 01),
-            2017,
+        let facts = SettlementStateFacts {
+            mastr_registriert: false,
+            eeg_gesetz_year: 2017,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Suspended
         );
-        assert_eq!(state, SettlementPeriodState::Suspended);
     }
 
     #[test]
-    fn derive_reduced_fernsteuerbarkeit_missing_eeg2023() {
-        // 50 kW plant (≥25 kW requires Fernsteuerbarkeit)
-        let state = derive_settlement_state(
-            true,
-            None,
-            dec!(50), // fernsteuerbarkeit_datum = None
-            Some(date!(2040 - 12 - 31)),
-            date!(2026 - 07 - 01),
-            2023,
+    fn derive_reduced_when_sect9_is_not_satisfied_at_all() {
+        let facts = SettlementStateFacts {
+            sect9_erfuellung: Sect9Erfuellung::Keine,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Reduced
         );
-        assert_eq!(state, SettlementPeriodState::Reduced);
+    }
+
+    /// §9 Abs. 2 Nr. 2 — the 25–100 kW band may satisfy §9 with the 60 %
+    /// Leistungsbegrenzung. The old flat "≥ 25 kW needs Fernsteuerbarkeit" rule
+    /// put every such plant into `Reduced` and charged it 10 €/kW/month.
+    #[test]
+    fn the_sixty_percent_cap_keeps_a_50kw_plant_active() {
+        let facts = SettlementStateFacts {
+            sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Active
+        );
+    }
+
+    /// From 100 kW the 60 % route is gone (§9 Abs. 2 Nr. 1).
+    #[test]
+    fn the_sixty_percent_cap_does_not_carry_a_100kw_plant() {
+        let facts = SettlementStateFacts {
+            leistung_kwp: dec!(100),
+            sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Reduced
+        );
     }
 
     #[test]
-    fn derive_active_small_plant_no_fernsteuerbarkeit_needed() {
-        // 5 kW plant < 25 kW → Fernsteuerbarkeit not required
-        let state = derive_settlement_state(
-            true,
-            None,
-            dec!(5),
-            Some(date!(2040 - 12 - 31)),
-            date!(2026 - 07 - 01),
-            2023,
+    fn derive_active_small_plant_on_the_cap() {
+        let facts = SettlementStateFacts {
+            leistung_kwp: dec!(5),
+            sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+            ..gesund()
+        };
+        assert_eq!(
+            derive_settlement_state(&facts),
+            SettlementPeriodState::Active
         );
-        assert_eq!(state, SettlementPeriodState::Active);
+    }
+}
+
+// ── §9 EEG — Steuerbarkeit ────────────────────────────────────────────────────
+
+/// How a plant satisfies the §9 EEG technical requirements.
+///
+/// §9 is **staged by installed capacity**, not a single threshold. Treating it as
+/// "≥ 25 kW must have Fernsteuerbarkeit" charged a §52 Abs. 1 Nr. 1 Pflichtzahlung
+/// of 10 €/kW/month to every compliant 25–100 kW plant that took the
+/// 60-%-Leistungsbegrenzung route the statute explicitly offers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum Sect9Erfuellung {
+    /// Nothing installed. A violation wherever §9 requires something.
+    #[default]
+    Keine,
+    /// Technische Einrichtungen per §9 Abs. 1: the Netzbetreiber can read the
+    /// Ist-Einspeisung and remotely reduce the Einspeiseleistung.
+    Fernsteuerbarkeit,
+    /// The 60 % Leistungsbegrenzung at the Netzverknüpfungspunkt — the
+    /// alternative §9 Abs. 2 Nr. 2 grants plants below 100 kW.
+    Leistungsbegrenzung60,
+}
+
+/// The §9 obligation a plant of this size and type carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
+pub enum Sect9Pflicht {
+    /// Steckersolargerät below 2 kW / 800 VA — §9 does not reach it.
+    Keine,
+    /// Below 25 kW: the 60 % Leistungsbegrenzung only.
+    Leistungsbegrenzung60,
+    /// 25 kW up to 100 kW: Fernsteuerbarkeit **or** the 60 % Leistungsbegrenzung.
+    FernsteuerbarkeitOderBegrenzung,
+    /// From 100 kW: full Fernsteuerbarkeit; the 60 % route is not available.
+    Fernsteuerbarkeit,
+}
+
+/// Which §9 obligation applies to a plant.
+///
+/// | Installed capacity | Obligation | Basis |
+/// |---|---|---|
+/// | Steckersolargerät < 2 kW (≤ 800 VA) | none | §9 Abs. 1 Satz 2 |
+/// | < 25 kW | 60 % Leistungsbegrenzung | §9 Abs. 2 Nr. 3 |
+/// | 25 kW – < 100 kW | Fernsteuerbarkeit **or** 60 % | §9 Abs. 2 Nr. 2 |
+/// | ≥ 100 kW | Fernsteuerbarkeit | §9 Abs. 2 Nr. 1 |
+#[must_use]
+pub fn sect9_pflicht(leistung_kwp: Decimal, art: Option<ErzeugungsArt>) -> Sect9Pflicht {
+    use rust_decimal::dec;
+    if art == Some(ErzeugungsArt::SolarStecker) && leistung_kwp < dec!(2) {
+        return Sect9Pflicht::Keine;
+    }
+    if leistung_kwp >= dec!(100) {
+        Sect9Pflicht::Fernsteuerbarkeit
+    } else if leistung_kwp >= dec!(25) {
+        Sect9Pflicht::FernsteuerbarkeitOderBegrenzung
+    } else {
+        Sect9Pflicht::Leistungsbegrenzung60
+    }
+}
+
+/// Whether the plant is in breach of §9 Abs. 1/2 — the §52 Abs. 1 Nr. 1 trigger.
+#[must_use]
+pub fn sect9_verletzt(
+    leistung_kwp: Decimal,
+    art: Option<ErzeugungsArt>,
+    erfuellung: Sect9Erfuellung,
+) -> bool {
+    match sect9_pflicht(leistung_kwp, art) {
+        Sect9Pflicht::Keine => false,
+        Sect9Pflicht::Fernsteuerbarkeit => erfuellung != Sect9Erfuellung::Fernsteuerbarkeit,
+        Sect9Pflicht::FernsteuerbarkeitOderBegrenzung | Sect9Pflicht::Leistungsbegrenzung60 => {
+            erfuellung == Sect9Erfuellung::Keine
+        }
+    }
+}
+
+#[cfg(test)]
+mod sect9_tests {
+    use super::*;
+    use rust_decimal::dec;
+
+    /// The 25–100 kW band may choose either route. Charging the Nr. 1
+    /// Pflichtzahlung to a plant that took the 60 % route invents a violation.
+    #[test]
+    fn the_middle_band_may_take_either_route() {
+        for e in [
+            Sect9Erfuellung::Fernsteuerbarkeit,
+            Sect9Erfuellung::Leistungsbegrenzung60,
+        ] {
+            assert!(!sect9_verletzt(dec!(50), None, e), "{e:?}");
+        }
+        assert!(sect9_verletzt(dec!(50), None, Sect9Erfuellung::Keine));
+    }
+
+    /// From 100 kW the 60 % route is no longer available.
+    #[test]
+    fn from_100_kw_only_fernsteuerbarkeit_satisfies_sect9() {
+        assert!(sect9_verletzt(
+            dec!(100),
+            None,
+            Sect9Erfuellung::Leistungsbegrenzung60
+        ));
+        assert!(!sect9_verletzt(
+            dec!(100),
+            None,
+            Sect9Erfuellung::Fernsteuerbarkeit
+        ));
+    }
+
+    /// Below 25 kW the 60 % Leistungsbegrenzung is enough — the old rule charged
+    /// nothing here and everything just above, both by accident.
+    #[test]
+    fn below_25_kw_the_sixty_percent_cap_is_enough() {
+        assert!(!sect9_verletzt(
+            dec!(10),
+            None,
+            Sect9Erfuellung::Leistungsbegrenzung60
+        ));
+        assert!(sect9_verletzt(dec!(10), None, Sect9Erfuellung::Keine));
+    }
+
+    /// §9 Abs. 1 Satz 2 — a Steckersolargerät below 2 kW is out of scope.
+    #[test]
+    fn a_steckersolargeraet_is_exempt() {
+        assert!(!sect9_verletzt(
+            dec!(0.8),
+            Some(ErzeugungsArt::SolarStecker),
+            Sect9Erfuellung::Keine
+        ));
+        // A larger Stecker-PV plant is not.
+        assert!(sect9_verletzt(
+            dec!(2),
+            Some(ErzeugungsArt::SolarStecker),
+            Sect9Erfuellung::Keine
+        ));
     }
 }

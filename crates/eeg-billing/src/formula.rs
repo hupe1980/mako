@@ -55,37 +55,31 @@ fn total(positions: &[SettlePosition]) -> Option<Decimal> {
     }
 }
 
-/// Version-aware §51 applicability check.
+/// Whether §51 actually bites for this plant in this period.
 ///
-/// Takes typed [`EegGesetz`] and optional [`ErzeugungsArt`].
-/// The caller must only pass `kwh_during_negative_epex` after verifying that the
-/// version-specific consecutive-hour threshold was met (caller's responsibility).
-/// This function enforces only the **kW exemption** and the iMSys post-rollout rule.
+/// Two independent gates: something has to have been fed in during a qualifying
+/// negative-price period, and the plant must not be exempt on size / technology
+/// grounds. The **run-length** gate (4-3-2-1 h, 6 h, or the first quarter-hour)
+/// is not re-checked here — it is a property of the interval series and is
+/// applied by [`crate::negativpreis::derive_negativpreis`], which is what
+/// produced `kwh_during_negative_epex` in the first place.
 ///
 /// `leistung_kwp` must be the **aggregated** plant capacity: §51 Abs. 2 Satz 2
-/// applies §24 to the size test, so §24-linked capacity blocks count as one plant.
-/// Passing a single block's capacity would let a 180 kWp plant split into three
-/// 60 kWp blocks escape §51 entirely.
-fn should_apply_negativpreis_versioned(
+/// applies §24 to the size test, so §24-linked capacity blocks count as one
+/// plant. Passing a single block's capacity would let a 180 kWp plant split into
+/// three 60 kWp blocks escape §51 entirely.
+fn sect51_greift(
     kwh_during_negative_epex: Option<Decimal>,
     leistung_kwp: Option<Decimal>,
-    eeg_gesetz: crate::version::EegGesetz,
+    regime: crate::negativpreis::NegativpreisRegime,
     erzeugungsart: Option<crate::technology::ErzeugungsArt>,
     has_imesys: bool,
+    ist_pilotwindanlage: bool,
 ) -> bool {
     if kwh_during_negative_epex.is_none_or(|k| k <= Decimal::ZERO) {
         return false;
     }
-    // §51 Abs. 2 Nr. 1 EEG 2023: once iMSys installed, ALL plant sizes subject to §51.
-    // The <100 kW transitional exemption is lifted from the rollout date.
-    if has_imesys && eeg_gesetz == crate::version::EegGesetz::Eeg2023 {
-        return true;
-    }
-    let art = erzeugungsart.unwrap_or(crate::technology::ErzeugungsArt::Solar);
-    let Some(threshold_kw) = eeg_gesetz.negativpreis_kw_grenze(&art) else {
-        return false; // §51 not applicable for this EEG version
-    };
-    leistung_kwp.is_none_or(|kw| kw >= Decimal::from(threshold_kw))
+    !regime.ist_befreit(leistung_kwp, erzeugungsart, has_imesys, ist_pilotwindanlage)
 }
 
 /// Apply §51 EEG deduction: subtract kWh during negative-price hours.
@@ -197,12 +191,13 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
 
         // §51 Negativpreisregel — the size test runs on the aggregated plant
         // (§51 Abs. 2 Satz 2 i.V.m. §24), the deduction on this block's share.
-        if should_apply_negativpreis_versioned(
+        if sect51_greift(
             input.kwh_during_negative_epex,
             Some(total_kwp),
-            input.effective_eeg_gesetz(),
+            input.negativpreis_regime(),
             input.erzeugungsart,
             input.has_imesys,
+            input.ist_pilotwindanlage,
         ) {
             // Proportional share of negative kWh for this block
             let neg_share = input
@@ -240,15 +235,16 @@ fn calculate_with_capacity_blocks(input: &SettleInput, total_kwh: Decimal) -> Se
         };
         let mut block_kwh = (total_kwh * share).round_dp(3);
 
-        // §51 per-block: each block derives EegGesetz from its own inbetriebnahme
-        let block_gesetz =
-            crate::version::EegGesetz::from_inbetriebnahme_year(block.inbetriebnahme.year());
-        if should_apply_negativpreis_versioned(
+        // §51 per-block: each block carries its own commissioning date, and the
+        // §51 regime is keyed on that date — a block added after the
+        // Solarspitzengesetz is governed by it even when the primary block is not.
+        if sect51_greift(
             input.kwh_during_negative_epex,
             Some(total_kwp),
-            block_gesetz,
+            crate::negativpreis::NegativpreisRegime::fuer_inbetriebnahme(block.inbetriebnahme),
             input.erzeugungsart,
             input.has_imesys,
+            input.ist_pilotwindanlage,
         ) {
             let neg_share = input
                 .kwh_during_negative_epex
@@ -447,26 +443,66 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
         result.pflichtzahlung_faelligkeitsdatum = result.faelligkeitsdatum; // same formula
     }
 
-    // ── §51a EEG 2023 — Verlängerungsanspruch (payment period extension) ─────
+    // ── §51a — Verlängerung des Vergütungszeitraums ──────────────────────────
     // §51a Abs. 1: the extension is "für Strom aus Anlagen, für den sich der
     // anzulegende Wert nach Maßgabe des § 51 verringert" — so it accrues only
-    // where §51 actually bit. A plant under the Abs. 2 kW exemption, or on a
-    // scheme §51 does not reach, was paid in full and gets no extension.
-    // §51a does NOT apply to §51b biogas Ausschreibungsanlagen (§51b Satz 2).
+    // where §51 actually bit. A plant under the Abs. 2 exemption, or on a scheme
+    // §51 does not reach, was paid in full and gets no extension.
+    //
+    // Before the Solarspitzengesetz the extension existed only for
+    // ausschreibungspflichtige Anlagen; a statutory-AW plant commissioned in 2024
+    // loses the quarter-hours without compensation. §51a never applies to §51b
+    // biogas Ausschreibungsanlagen (§51b Satz 2).
     if !input.tariff_source.is_biogas_sect51b()
         && let Some(lost_qh) = input.negative_price_quarter_hours.filter(|&q| q > 0)
         && input.scheme.negativpreis_rule_applicable()
-        && should_apply_negativpreis_versioned(
+        && input
+            .negativpreis_regime()
+            .verlaengerungsanspruch(input.tariff_source.is_auction())
+        && sect51_greift(
             input.kwh_during_negative_epex,
             aggregierte_leistung_kwp(input),
-            input.effective_eeg_gesetz(),
+            input.negativpreis_regime(),
             input.erzeugungsart,
             input.has_imesys,
+            input.ist_pilotwindanlage,
         )
     {
         let is_solar = input.erzeugungsart.is_some_and(|a| a.is_solar());
         result.verlaengerungsanspruch_qh =
             crate::foerderdauer::verguetungszeitraum_verlaengerung_qh(lost_qh, is_solar);
+    }
+
+    // ── §51 Abs. 3 EEG — Ausfallvergütung: unreported negative-price feed-in ──
+    // "verringert sich der Anspruch ... um 5 Prozent für jeden Kalendertag, an
+    // dem der Zeitraum ... ganz oder teilweise lag." A per-day reduction of the
+    // month's claim, floored at zero — twenty such days extinguish it.
+    //
+    // Sequenced before the §25 proration because it reduces the claim itself,
+    // and after the scheme dispatch because it applies to whatever that produced.
+    if matches!(input.scheme, SettlementScheme::TemporaryFeedInTariff { .. })
+        && input.sect51_abs3_unreported_days > 0
+        && !matches!(
+            result.status,
+            SettlementStatus::NoData | SettlementStatus::PriceMissing
+        )
+    {
+        let tage = Decimal::from(input.sect51_abs3_unreported_days);
+        let faktor = (Decimal::ONE - dec!(0.05) * tage).max(Decimal::ZERO);
+        if let Some(eur) = result.settlement_eur {
+            let gekuerzt = validated_eur(eur * faktor);
+            result.positions.push(crate::model::SettlePosition {
+                description: format!(
+                    "\u{00a7}51 Abs. 3 EEG: Meldung der Einspeisung w\u{00e4}hrend negativer                      Preise unterblieben \u{2014} {} % K\u{00fc}rzung ({tage} Kalendertage)",
+                    (Decimal::ONE - faktor) * Decimal::from(100)
+                ),
+                legal_basis: "\u{00a7}51 Abs. 3 EEG".to_owned(),
+                kwh: Decimal::ZERO,
+                rate_ct_kwh: Decimal::ZERO,
+                eur: gekuerzt - eur,
+            });
+            result.settlement_eur = Some(gekuerzt);
+        }
     }
 
     // ── §25 billing_days_fraction — auto-compute or use caller override ──────
@@ -754,6 +790,15 @@ fn apply_aw_cuts(
     aw_ct: Decimal,
     input: &SettleInput,
 ) -> (Decimal, Vec<crate::aw_reductions::AwReductionApplied>) {
+    // §100 EEG — a Bestandsanlage that opted into the Solarspitzengesetz regime
+    // is paid 0,6 ct/kWh more on everything it does feed in, in exchange for
+    // forgoing payment during negative prices. The uplift is on the AW and so
+    // comes before the §§53b–54 cuts, which are also AW-level.
+    let aw_ct = if sect51_optin_active(input) {
+        aw_ct + crate::negativpreis::SECT51_OPTIN_ZUSCHLAG_CT_KWH
+    } else {
+        aw_ct
+    };
     if input.aw_reductions.is_empty() {
         return (aw_ct, Vec::new());
     }
@@ -762,6 +807,14 @@ fn apply_aw_cuts(
         &input.aw_reductions,
         &input.tariff_source,
         input.erzeugungsart.unwrap_or_default(),
+    )
+}
+
+/// Whether the §100 Solarspitzengesetz opt-in is in force for this period.
+fn sect51_optin_active(input: &SettleInput) -> bool {
+    matches!(
+        (input.sect51_optin_wirksam_ab, input.billing_date),
+        (Some(ab), Some(bd)) if bd >= ab
     )
 }
 
@@ -867,12 +920,13 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
 
     // ── Effective §51 application ─────────────────────────────────────────────
     let apply_neg = input.scheme.negativpreis_rule_applicable()
-        && should_apply_negativpreis_versioned(
+        && sect51_greift(
             input.kwh_during_negative_epex,
             aggregierte_leistung_kwp(input),
-            input.effective_eeg_gesetz(),
+            input.negativpreis_regime(),
             input.erzeugungsart,
             input.has_imesys,
+            input.ist_pilotwindanlage,
         );
     let neg_kwh = if apply_neg {
         input.kwh_during_negative_epex
@@ -928,35 +982,59 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             faelligkeitsdatum: None,
         },
 
-        // ── §21 EEG — Feste Einspeisevergütung ───────────────────────────────
-        // Ausfallvergütung (§21 Abs. 1 Satz 1 Nr. 3) uses the same formula as
-        // FeedInTariff but at the −20 % rate of §53 Abs. 3 — the caller supplies
-        // the already-reduced rate, and §53 Abs. 1 is NOT stacked on top of it.
+        // ── §21 EEG — Einspeisevergütung und Ausfallvergütung ────────────────
         SettlementScheme::TemporaryFeedInTariff { verguetungssatz_ct }
         | SettlementScheme::FeedInTariff { verguetungssatz_ct } => {
+            let ist_ausfallverguetung =
+                matches!(input.scheme, SettlementScheme::TemporaryFeedInTariff { .. });
             let effective = match neg_kwh {
                 Some(n) => apply_negativpreis(kwh, n),
                 None => kwh,
             };
             // §53 Abs. 1 EEG 2023: subtract the flat AW deduction only when the
-            // supplied rate is the GROSS AW and this is the pure Einspeisevergütung
-            // (not the already-reduced Ausfallvergütung). Default net → no change.
+            // supplied rate is the GROSS AW. Default net → no change.
             let rate_ct = if input.aw_is_gross
-                && matches!(input.scheme, SettlementScheme::FeedInTariff { .. })
+                && !ist_ausfallverguetung
                 && let Some(art) = input.erzeugungsart
             {
                 (*verguetungssatz_ct - crate::rates::sect53_deduction(art)).max(Decimal::ZERO)
             } else {
                 *verguetungssatz_ct
             };
-            // §§53b–54 reduce the anzulegender Wert itself, after §53 Abs. 1.
-            let (rate_ct, aw_cuts) = apply_aw_cuts(rate_ct, input);
-            let desc = if neg_kwh.is_some() {
-                "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)"
+            // §53 Abs. 3 EEG 2023 — Ausfallvergütung: "verringert sich der
+            // anzulegende Wert um 20 Prozent", rounded to two decimals.
+            //
+            // The engine applies it. It used to be the caller's job, and every
+            // caller passed the plant's ordinary tariff straight through, so a
+            // plant on the Ausfallvergütung was paid the full rate — 25 % more
+            // than the statute allows, on the one scheme that exists because the
+            // operator's Direktvermarkter dropped out.
+            let rate_ct = if ist_ausfallverguetung {
+                (rate_ct * dec!(0.8)).round_dp(2)
             } else {
-                "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG"
+                rate_ct
             };
-            let mut positions = vec![pos(desc, "\u{00a7}21 EEG 2023", effective, rate_ct)];
+            // §§53b–54 reduce the anzulegender Wert itself, after §53.
+            let (rate_ct, aw_cuts) = apply_aw_cuts(rate_ct, input);
+            let (desc, basis) = match (ist_ausfallverguetung, neg_kwh.is_some()) {
+                (true, true) => (
+                    "Ausfallverg\u{00fc}tung \u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG                      (\u{2212}20 % nach \u{00a7}53 Abs. 3; \u{00a7}51 Negativpreisregel angewendet)",
+                    "\u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG 2023",
+                ),
+                (true, false) => (
+                    "Ausfallverg\u{00fc}tung \u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG                      (\u{2212}20 % nach \u{00a7}53 Abs. 3)",
+                    "\u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG 2023",
+                ),
+                (false, true) => (
+                    "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG (\u{00a7}51 Negativpreisregel angewendet)",
+                    "\u{00a7}21 EEG 2023",
+                ),
+                (false, false) => (
+                    "Einspeiseverg\u{00fc}tung \u{00a7}21 EEG",
+                    "\u{00a7}21 EEG 2023",
+                ),
+            };
+            let mut positions = vec![pos(desc, basis, effective, rate_ct)];
             positions.extend(aw_cut_positions(&aw_cuts, effective));
             SettleOutput {
                 settlement_eur: total(&positions),
@@ -1048,6 +1126,37 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                 };
             };
             let raw_aw_ct = *direktverm_aw_ct;
+
+            // A Marktprämie plant with no anzulegender Wert is not a plant owed
+            // nothing — it is a plant whose AW nobody supplied. `max(0, 0 − MW)`
+            // is zero for every market price, so settling it produced a
+            // `Calculated` EUR 0 and a payout event for that amount, which reads
+            // downstream as "correctly settled, nothing due". A missing AW is
+            // exactly as fatal as a missing Marktwert and is reported the same way.
+            //
+            // Zero is only ever a *derived* AW: §54 Abs. 4, §51b and §51 all set it
+            // to null explicitly, and each does so after this point.
+            if raw_aw_ct <= Decimal::ZERO {
+                return SettleOutput {
+                    settlement_eur: None,
+                    eligible_kwh: None,
+                    positions: vec![crate::model::SettlePosition {
+                        description: "Marktpr\u{00e4}mie ohne anzulegenden Wert:                              direktverm_aw_ct fehlt oder ist null"
+                            .to_owned(),
+                        legal_basis: "\u{00a7}20 EEG 2023 i.V.m. Anlage 1".to_owned(),
+                        kwh: Decimal::ZERO,
+                        rate_ct_kwh: Decimal::ZERO,
+                        eur: Decimal::ZERO,
+                    }],
+                    status: SettlementStatus::PriceMissing,
+                    pflichtzahlung_eur: None,
+                    pflichtzahlung_faelligkeitsdatum: None,
+                    verlaengerungsanspruch_qh: 0,
+                    dezentrale_einspeisung_anspruch_verloren: false,
+                    billing_days_fraction_applied: None,
+                    faelligkeitsdatum: None,
+                };
+            }
 
             // ── §51b EEG 2023 — Biogas Ausschreibung at slightly-positive prices ──
             // For biogas plants (excl. biomethane) whose AW was set by auction:

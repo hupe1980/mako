@@ -652,13 +652,11 @@ A camt entry is signed from the bank's point of view (`CdtDbtInd`): positive is 
 arriving. accountingd's ledger is an open-items account where positive is a *Forderung*,
 so an incoming payment **reduces** the balance and a returned direct debit **re-opens** it.
 `sepa::bank_to_ledger_ct` is the single negation, and every path — flat JSON, camt.053,
-camt.054 — goes through it. The flat import used to carry its own opposite convention
-(the removed `sepa::camt054::parse_simple_json`); it no longer does.
+camt.054 — goes through it, so no import carries its own opposite convention.
 
 A row gives money back when it carries a return reason code **or** debits the account.
-The removed crate helper derived that from a field the flat format never carried, so it
-was always false: a negative amount booked as an ordinary `ZAHLUNG` with a positive
-ledger effect.
+Deriving that from a field the flat format does not carry would make it always false: a
+negative amount booked as an ordinary `ZAHLUNG` with a positive ledger effect.
 
 ### Resolving a payment to a customer
 

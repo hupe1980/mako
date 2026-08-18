@@ -10,9 +10,10 @@
 //   "write-anlage"       — POST/PUT/DELETE /api/v1/anlagen[/{tr_id}]
 //   "read-settlement"    — GET  /api/v1/anlagen/{tr_id}/settlements
 //   "run-settlement"     — POST /api/v1/anlagen/{tr_id}/settle/... and /api/v1/settle/...
-//   "correct-settlement" — POST .../settlements/{year}/{month}/correction (§22 MessZV)
-//   "manage-lifecycle"   — repowering (§22), zusammenlegen (§24), mastr-registrierung,
-//                          switch-veraeusserungsform (§21b)
+//   "correct-settlement" — POST .../settlements/{year}/{month}/correction (§147 AO / GoBD)
+//   "manage-lifecycle"   — repowering (§3 Nr. 30 i.V.m. §25), zusammenlegen (§24),
+//                          mastr-registrierung, switch-veraeusserungsform (§21b/§21c),
+//                          §§53b–54 AW-Reduktionen, §36h Abs. 2 Wind-Reevaluierung
 //   "read-marktdaten"    — GET  EPEX / Jahresmarktwert / Vergütungssatz lookup
 //   "write-marktdaten"   — PUT  EPEX / Jahresmarktwert
 //   "use-mcp"            — /mcp (Streamable HTTP MCP server)
@@ -52,7 +53,7 @@ permit(
      context.principal_roles.contains("UENB"))
 };
 
-// ── Corrections (§22 MessZV) ──────────────────────────────────────────────────
+// ── Corrections (§ 147 AO / GoBD) ─────────────────────────────────────────────
 // A correction supersedes a settlement already sent to the Anlagenbetreiber and
 // re-opens a closed accounting period, so it is held to a narrower role set than
 // an ordinary settlement run.

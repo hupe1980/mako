@@ -663,15 +663,15 @@ Every materialising read endpoint defaults to the **last 31 days** and refuses a
 window wider than **732 days** — two years, which covers a Jahresabrechnung plus
 its comparison year.
 
-The defaults used to be `UNIX_EPOCH … now`, so
-`GET /api/v1/lastgang/{malo_id}` with no parameters asked for every interval ever
-stored for that MaLo across both tiers, materialised into a `Vec<MeterRead>` and
-then into BO4E JSON. At quarter-hour resolution a decade is 350 000 rows: one
-unparameterised request from a dashboard is a tenant-wide outage.
+An unbounded default would mean `GET /api/v1/lastgang/{malo_id}` with no
+parameters asking for every interval ever stored for that MaLo across both tiers,
+materialised into a `Vec<MeterRead>` and then into BO4E JSON. At quarter-hour
+resolution a decade is 350 000 rows: one unparameterised request from a dashboard
+would be a tenant-wide outage.
 
-A malformed `?from=` or `?to=` is a `400`. It used to be parsed with `.ok()` and
-fall back silently, so `?from=last-tuesday` returned the whole history and looked
-like a successful answer to the question the caller asked.
+A malformed `?from=` or `?to=` is a **`400`**, never a silent fallback — otherwise
+`?from=last-tuesday` would return the whole history and look like a successful
+answer to the question the caller asked.
 
 Bulk history has three paths that stream rather than materialise, and none of
 them is bounded this way:
@@ -848,11 +848,11 @@ measuring point, an open §14a fault, an expiring certificate. Each is backed by
 `smgw_cert_expiry_alerts` — keyed on the identity of the problem, not on when it
 was noticed, and each emits on the **transition** into and out of the state.
 
-The §14a compliance log used to work the other way: append a row and emit an event
-on every daily pass. A gateway on an expired certificate produced one CloudEvent a
-day for as long as nobody fixed it — an unbounded stream saying the same thing
-forever, a table that only grew, and a fleet dashboard whose "issues in the last
-24 h" measured the sweep cadence rather than the fleet.
+Appending a row and emitting on every daily pass instead would make a gateway on
+an expired certificate produce one CloudEvent a day for as long as nobody fixed
+it — an unbounded stream saying the same thing forever, a table that only grows,
+and a fleet dashboard whose "issues in the last 24 h" measures the sweep cadence
+rather than the fleet.
 
 One consequence is load-bearing. **The watermark that decides what a sweep did
 not re-sight must come from the database clock**, because `last_seen_at` does.
@@ -2334,8 +2334,8 @@ value).
 > **The duty is § 25 MsbG**: the Smart-Meter-Gateway-Administrator is responsible
 > for the *configuration, administration, monitoring and maintenance* of the
 > intelligent metering system, and must report security deficiencies to the BSI
-> without delay. Four citations this module used to carry were wrong, and each
-> pointed a reader somewhere real but irrelevant: **§ 21c MsbG does not exist**
+> without delay. Four citations that look plausible here are wrong, and each
+> points a reader somewhere real but irrelevant: **§ 21c MsbG does not exist**
 > (the MsbG runs § 21 → § 22); **§ 29 MsbG** is *Ausstattung von Messstellen* —
 > the rollout obligation and its 2032 deadlines, not certificates;
 > **BK6-24-174** is GPKE, while the §14a Konfigurationsprodukt is
@@ -2344,10 +2344,9 @@ value).
 > the lead time. The 90/30/7 ladder is an operational choice, and configurable
 > for that reason.
 >
-> `REPLACED` gateways are excluded from both sweeps. The `gateway_status` column
-> was promoted out of the JSONB precisely so that filter would be an index
-> lookup — and the filter was then never written, so hardware that had been
-> physically swapped out reported its expired certificate every day, forever.
+> `REPLACED` gateways are excluded from both sweeps — hardware physically swapped
+> out must not go on reporting its expired certificate. `gateway_status` is a
+> column rather than a JSONB field so that filter is an index lookup.
 
 `edmd` maintains a **SMGW (Smart Meter Gateway) session registry** and runs a daily
 compliance sweep per **§ 25 MsbG** (the GWA's monitoring duty) and **BSI TR-03109**.

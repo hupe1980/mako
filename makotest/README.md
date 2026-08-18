@@ -269,6 +269,21 @@ maturin enables it at build time. Declaring it would make `cargo test
 --workspace --all-features` link the test harness against it and fail on
 undefined Python symbols.
 
+Because `abi3-py311` sets a floor of Python 3.11, *every* workspace-wide cargo
+command builds this crate against an interpreter — `cargo test --workspace`,
+`just ci` and `just doc-check` included. The workspace therefore pins
+`PYO3_PYTHON` to `.venv/bin/python` in [`.cargo/config.toml`](../.cargo/config.toml);
+create that venv once and the rest of the workspace builds:
+
+```bash
+python3.11 -m venv .venv    # or any ≥ 3.11
+```
+
+Without it PyO3 falls back to the first `python3` on `PATH` — still 3.9 on
+macOS — and the whole workspace fails to build on a message about a crate
+nobody was working on. Cargo does not override an already-set `PYO3_PYTHON`, so
+pointing it elsewhere still works.
+
 ## Status
 
 Pre-1.0. Shipping today: the Rust core (identifiers, Fristen **and deadline

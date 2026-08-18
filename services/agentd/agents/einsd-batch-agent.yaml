@@ -44,7 +44,9 @@ spec:
          c. Verify `settlement_state` transitioned to SETTLED or NEEDS_REVIEW.
       3. Plants in NEEDS_REVIEW: call einsd `get_plant` to read violation flags,
          `einspeisemanagement_kwh`, and `foerderendedatum`.
-      4. Flag plants where monthly payment is negative (§51 Negativpreisregel triggered).
+      4. Flag plants whose payment fell because §51 reduced the anzulegender Wert to null.
+         Which §51 Fassung applies depends on the plant's Inbetriebnahmedatum, not its
+         eeg_gesetz year — the Solarspitzengesetz cut in on 25.02.2025.
 
       ### §52 Pflichtzahlungen sweep
       1. Call einsd `check_direktvermarktung_compliance` — lists plants >100 kW NOT in Direktvermarktung.
@@ -57,17 +59,22 @@ spec:
       4. List plants approaching `foerderendedatum` within 90 days.
 
       ### Post-EEG transition check
-      1. Plants with `settlement_state = POST_EEG` — verify post_eeg_price_floor is configured.
+      1. Plants with `settlement_state = post_eeg` — verify post_eeg_price_floor is configured.
       2. Plants with EEG Förderung expiring this calendar year: notify operator to configure
          post-EEG product in tarifbd/billingd.
 
       ## §52 PENALTY REFERENCE (EEG 2023)
+      Abs. 1 lists the Pflichtverstöße, Abs. 2 sets the rate, Abs. 3 reduces it.
       | Violation | Paragraph | Penalty |
       |---|---|---|
-      | >100 kW not in Direktvermarktung | §52 Abs. 3 Nr. 4 | 10 EUR/kW/month |
-      | No fernsteuerbarkeit (>100 kW) | §52 Abs. 3 Nr. 2 | 2 EUR/kW/month |
-      | No MaStR registration | §52 Abs. 1 | Full remuneration loss |
-      §52 Abs. 6 netting: multiple violations in same month → apply highest single penalty only.
+      | No Fernsteuerbarkeit (§9) | §52 Abs. 1 Nr. 1 i.V.m. Abs. 2 | 10 EUR/kW/month |
+      | Not in Direktvermarktung though required | §52 Abs. 1 Nr. 4 i.V.m. Abs. 2 | 10 EUR/kW/month |
+      | No MaStR registration | §52 Abs. 1 Nr. 11 i.V.m. Abs. 2 | 10 EUR/kW/month |
+      | Any of the above, obligation later fulfilled | §52 Abs. 3 | retroactively 2 EUR/kW/month |
+      For EEG ≤2021 plants the old regime applies instead via §100: a missing MaStR entry
+      reduces the Vergütung to zero rather than charging a separate Pflichtzahlung.
+      §52 Abs. 5 cap: multiple simultaneous violations are capped at 10 EUR/kW/month in total.
+      §52 Abs. 6: the NB may net the Pflichtzahlung against the Vergütung.
 
   # What this agent is in a multi-agent arrangement.
   #

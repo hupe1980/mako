@@ -233,9 +233,8 @@ lets an estimate settle as a reading.
 ## MCP server and CloudEvents
 
 The `/mcp` surface is **read-only** — the agent plane's window into submission
-state. `agentd`'s `mabis-syncd-agent` used to read obsd's KPI report as a proxy
-for the submission table this server now exposes. Filing a submission stays off
-MCP deliberately: it is a binding filing with the BIKO, behind the
+state, read by `agentd`'s `mabis-syncd-agent`. Filing a submission stays off MCP
+deliberately: it is a binding filing with the BIKO, behind the
 authenticated REST surface where Cedar authorises a person.
 
 | Tool | Description |

@@ -6,9 +6,9 @@
 //!
 //! | Condition | Rule | Legal basis |
 //! |---|---|---|
-//! | Standard commissioning | 20 years from `inbetriebnahme` | §21 EEG 2023 |
-//! | Repowering | 20 years from `repowering_datum` | §22 EEG 2023 |
-//! | §24 Zusammenlegung | Parent's `foerderendedatum` unchanged | §24 EEG 2023 |
+//! | Standard commissioning | 20 years + rest of the commissioning year | §25 Abs. 1 EEG 2023 |
+//! | Repowering (Vollrepowering) | a fresh Inbetriebnahme restarts §25 | §3 Nr. 30 i.V.m. §25 EEG 2023 |
+//! | §24 Zusammenlegung | parent's `foerderendedatum` unchanged | §24 EEG 2023 |
 //!
 //! ## KWKG Förderdauer rules (§8 KWKG 2023)
 //!
@@ -226,57 +226,6 @@ pub fn kwk_eligible_kwh(
 pub fn kwk_foerderend_calendar(inbetriebnahme: Date) -> Result<Date, ComponentRange> {
     // §8 Abs. 4 KWKG: maximum 15 calendar years for large plants
     inbetriebnahme.replace_year(inbetriebnahme.year() + 15)
-}
-
-/// §51 EEG — Return `true` when the Negativpreisregel threshold is met for the given
-/// EEG version and number of consecutive negative-price hours.
-///
-/// Delegates to [`crate::version::EegGesetz::negativpreis_stunden_erreicht`].
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::foerderdauer::negativpreis_rule_applies_for_version;
-/// use eeg_billing::EegGesetz;
-///
-/// assert!(!negativpreis_rule_applies_for_version(5, EegGesetz::Eeg2017)); // 5h < 6h
-/// assert!( negativpreis_rule_applies_for_version(6, EegGesetz::Eeg2017)); // 6h = threshold
-/// assert!(!negativpreis_rule_applies_for_version(3, EegGesetz::Eeg2021)); // 3h < 4h
-/// assert!( negativpreis_rule_applies_for_version(4, EegGesetz::Eeg2021)); // 4h = threshold
-/// assert!( negativpreis_rule_applies_for_version(1, EegGesetz::Eeg2023)); // any period
-/// assert!(!negativpreis_rule_applies_for_version(100, EegGesetz::Eeg2012)); // pre-2017: never
-/// ```
-pub fn negativpreis_rule_applies_for_version(
-    consecutive_negative_hours: u32,
-    eeg_gesetz: crate::version::EegGesetz,
-) -> bool {
-    eeg_gesetz.negativpreis_stunden_erreicht(consecutive_negative_hours)
-}
-
-/// §51 EEG — Return the minimum installed capacity in kW below which
-/// the Negativpreisregel exemption applies.
-///
-/// Delegates to [`crate::version::EegGesetz::negativpreis_kw_grenze`].
-/// Pass `None` for `erzeugungsart` to use conservative defaults (non-wind).
-///
-/// # Example
-///
-/// ```rust
-/// use eeg_billing::foerderdauer::negativpreis_kw_exemption;
-/// use eeg_billing::{EegGesetz, ErzeugungsArt};
-///
-/// assert_eq!(negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::WindOnshore)), Some(3000));
-/// assert_eq!(negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::Solar)),       Some(500));
-/// assert_eq!(negativpreis_kw_exemption(EegGesetz::Eeg2021, Some(ErzeugungsArt::WindOnshore)), Some(500));
-/// assert_eq!(negativpreis_kw_exemption(EegGesetz::Eeg2023, None),                             Some(100));
-/// assert_eq!(negativpreis_kw_exemption(EegGesetz::Eeg2012, None),                             None);
-/// ```
-pub fn negativpreis_kw_exemption(
-    eeg_gesetz: crate::version::EegGesetz,
-    erzeugungsart: Option<crate::technology::ErzeugungsArt>,
-) -> Option<u32> {
-    let art = erzeugungsart.unwrap_or(crate::technology::ErzeugungsArt::Solar);
-    eeg_gesetz.negativpreis_kw_grenze(&art)
 }
 
 /// §51a EEG 2021/2023 — Vergütungszeitraum-Verlängerung (extension for lost periods).

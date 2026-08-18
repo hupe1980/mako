@@ -583,16 +583,13 @@ pub struct SettleInput {
     ///
     /// Determines which version-specific rules the engine applies:
     ///
-    /// EEG law version governing this plant.
+    /// EEG law version governing this plant — the §52 Pflichtverstoß regime and
+    /// the §100 Übergangsbestimmungen.
     ///
-    /// Determines which version-specific §51/§52 rules apply:
-    ///
-    /// | `eeg_gesetz` | §51 threshold | §51 kW exemption |
-    /// |---|---|---|
-    /// | `Kwkg` / `Eeg2000`–`Eeg2012` | none (§100 Abs. 1 Satz 4 EEG 2017 Bestandsschutz) | — |
-    /// | `Eeg2017` | ≥ **6** consecutive hours | Wind <3 MW; other <500 kW |
-    /// | `Eeg2021` | ≥ **4** consecutive hours | all plants < 500 kW |
-    /// | `Eeg2023` (default) | **any** negative period | < 100 kW (until iMSys) |
+    /// **Not** the source of the §51 rules: those are keyed on the commissioning
+    /// date (see [`SettleInput::negativpreis_regime`]), because the
+    /// Solarspitzengesetz rewrote §51 with effect from 25.02.2025 — inside the
+    /// EEG 2023 range.
     ///
     /// Use [`EegGesetz::from_db_year`] to convert the `eeg_gesetz` DB column, or
     /// [`EegGesetz::from_inbetriebnahme_year`] as a fallback.
@@ -625,7 +622,12 @@ pub struct SettleInput {
     /// and Ausschreibungsanlagen §39) with installed capacity >100 kW, the EEG payment
     /// is limited to the share of annual production corresponding to 45% of installed kW:
     ///
-    /// `annual_quota_kwh = leistung_kw × 0.45 × 8760`
+    /// `annual_quota_kwh = leistung_kw × 0.45 × <§3 Nr. 6 hours of the year>`
+    ///
+    /// The hour count is **not** a flat 8 760: it is the actual hours of the
+    /// calendar year (8 784 in a leap year) less the hours before the plant's
+    /// first generation. See [`crate::sect44b_jahreskontingent_kwh`], which is
+    /// what both the settlement and the `check_sect44b_quota` MCP tool call.
     ///
     /// When set, this field is the **eligible kWh** for the current billing period (the
     /// caller tracks cumulative annual production and passes `min(kwh, remaining_quota)`):
@@ -634,7 +636,7 @@ pub struct SettleInput {
     ///   - `MarketPremium`: AW reduces to zero, Marktprämie = 0 (§44b Abs. 1 Satz 2)
     ///   - `FeedInTariff`: paid at EPEX Marktwert (`epex_avg_ct_kwh`), requires EPEX price
     ///
-    /// `None` = cap does not apply (plant ≥00kW, fermentation biomass §44, Ausschreibung §39,
+    /// `None` = cap does not apply (plant ≤100 kW, fermentation biomass §44, Ausschreibung §39,
     /// or non-Biogas technology).
     ///
     /// Legal basis: §44b Abs. 1 EEG 2023 (BGBl. I Nr. 28, 10.01.2023).
@@ -642,18 +644,16 @@ pub struct SettleInput {
 
     /// §51 Abs. 2 Nr. 1 EEG 2023 — iMSys (intelligent metering system) rolled out.
     ///
-    /// The <100 kW exemption from §51 Negativpreisregel is **transitional**: it applies
-    /// only until the plant's iMSys is installed per §29 MsbG / §19 MessEG.
-    /// Once `has_imesys = true`, the exemption is lifted regardless of plant size,
-    /// and §51 applies to **all** EEG 2023 plants.
+    /// The sub-100-kW exemption is transitional: §51 Abs. 2 Nr. 1 grants it only
+    /// "für Zeiträume vor dem Einbau eines intelligenten Messsystems". Once the
+    /// iMSys is in, a 30 kWp plant is subject to §51 like any other.
     ///
-    /// | `has_imesys` | `eeg_gesetz` | §51 applies to |
-    /// |---|---|---|
-    /// | `false` | `Eeg2023` | plants ≥ 100 kWp |
-    /// | `true`  | `Eeg2023` | ALL sizes (no exemption) |
-    /// | any     | `Eeg2017`/`Eeg2021` | per-version threshold (unaffected) |
+    /// It lifts **only** that exemption. The 2 kW floor of Abs. 2 Nr. 2 stands
+    /// until the Bundesnetzagentur's §85 Abs. 2 Nr. 12 Festlegung, and the
+    /// exemptions of the older Fassungen (400 kW, 500 kW, 3 MW) are unaffected —
+    /// they have no iMSys condition.
     ///
-    /// Default: `false` (conservative — retains exemption when unknown).
+    /// Default: `false` (conservative — retains the exemption when unknown).
     pub has_imesys: bool,
 
     /// Technology-specific Jahresmarktwert category (§20 Abs. 2 + Anlage 1 EEG 2023).
@@ -662,6 +662,41 @@ pub struct SettleInput {
     /// The library uses `marktwert_ct_kwh` directly — this field is informational only
     /// (validation aid and audit label).
     pub marktwert_kategorie: Option<crate::scheme::MarktpreisKategorie>,
+
+    /// §100 EEG — the date a Bestandsanlage's opt-in into the Solarspitzengesetz
+    /// regime takes effect.
+    ///
+    /// The operator declares in Textform to the Netzbetreiber that §§ 51 and 51a
+    /// shall apply; the declaration runs at the earliest from the end of the
+    /// calendar year in which the plant is fitted with an iMSys. Derive it with
+    /// [`crate::negativpreis::optin_wirksam_ab`]. From that date the plant is
+    /// under the Solarspitzengesetz regime and its anzulegender Wert rises by
+    /// [`crate::negativpreis::SECT51_OPTIN_ZUSCHLAG_CT_KWH`].
+    ///
+    /// `None` — the usual case — leaves the plant on its commissioning vintage.
+    pub sect51_optin_wirksam_ab: Option<Date>,
+
+    /// §51 Abs. 3 EEG — calendar days of an unreported negative-price period,
+    /// for a plant on the **Ausfallvergütung**.
+    ///
+    /// An operator on the Ausfallvergütung must report, with the §71 Abs. 1 Nr. 1
+    /// data, the quantity it fed in while the Spotmarktpreis was continuously
+    /// negative. Where it does not, the claim for that calendar month falls by
+    /// **5 % per calendar day** on which such a period fell, wholly or partly.
+    ///
+    /// Set this to the number of those days when the figure is missing, and `0`
+    /// when it was reported (or the month had no negative period). Applies only
+    /// to [`SettlementScheme::TemporaryFeedInTariff`]; ignored elsewhere.
+    pub sect51_abs3_unreported_days: u32,
+
+    /// §3 Nr. 37 EEG 2023 — **Pilotwindenergieanlage an Land**.
+    ///
+    /// Every Fassung of §51 carves these out of the Negativpreisregel, whatever
+    /// their size. The status is a BNetzA/FGW certification fact about the
+    /// turbine, so it is declared rather than derived.
+    ///
+    /// Default: `false`.
+    pub ist_pilotwindanlage: bool,
 }
 
 impl SettleInput {
@@ -703,6 +738,42 @@ impl SettleInput {
             return implied;
         }
         self.eeg_gesetz
+    }
+
+    /// The §51 Negativpreisregel version governing this plant.
+    ///
+    /// Derived from `inbetriebnahme`, because the Solarspitzengesetz boundary
+    /// (25.02.2025) falls inside a calendar year and inside the EEG 2023 range.
+    /// When the commissioning date is unknown the plant's law version supplies a
+    /// coarse fallback, and a §100 `Transitional` rule overrides both — a rule
+    /// that pins a plant to a pre-2016 vintage must keep §51 off it.
+    #[must_use]
+    pub fn negativpreis_regime(&self) -> crate::negativpreis::NegativpreisRegime {
+        use crate::negativpreis::NegativpreisRegime as R;
+        // A §100 rule is an explicit statement about which vintage governs, so it
+        // wins over the date on the record.
+        if let crate::scheme::TariffSource::Transitional(rule) = &self.tariff_source
+            && let Some(implied) = rule.implied_eeg_gesetz()
+        {
+            return match implied {
+                EegGesetz::Eeg2017 => R::Eeg2017,
+                EegGesetz::Eeg2021 => R::Eeg2021,
+                EegGesetz::Eeg2023 => self.inbetriebnahme.map_or(R::Solarspitzen, |ibn| {
+                    R::fuer_periode(ibn, self.sect51_optin_wirksam_ab, self.billing_date)
+                }),
+                _ => R::Keine,
+            };
+        }
+        if let Some(ibn) = self.inbetriebnahme {
+            return R::fuer_periode(ibn, self.sect51_optin_wirksam_ab, self.billing_date);
+        }
+        match self.eeg_gesetz {
+            EegGesetz::Eeg2017 => R::Eeg2017,
+            EegGesetz::Eeg2021 => R::Eeg2021,
+            // No date on the record: assume current law rather than a lapsed one.
+            EegGesetz::Eeg2023 => R::Solarspitzen,
+            _ => R::Keine,
+        }
     }
 }
 

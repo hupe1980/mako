@@ -3934,6 +3934,7 @@ dependencies = [
  "testcontainers",
  "testcontainers-modules",
  "time",
+ "time-tz",
  "tokio",
  "tokio-util",
  "tower",

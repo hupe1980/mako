@@ -114,12 +114,12 @@ pub mod zusammenfassung;
 pub type EuroAmount = billing::Amount<5>;
 
 pub use aw_reductions::{AwReductionApplied, AwReductionContext, Sect54SolarReduction};
+pub use biomasse::{bemessungsleistung_stunden, sect44b_jahreskontingent_kwh};
 pub use error::SettlementError;
 pub use foerderdauer::{
     calculate_pflichtzahlung, compute_billing_days_fraction, foerderendedatum_eeg,
     foerderendedatum_eeg_ausschreibung, foerderendedatum_kwkg_years, foerderendedatum_repowering,
-    kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, negativpreis_kw_exemption,
-    negativpreis_rule_applies_for_version, pflichtzahlung_verjaehrt_am,
+    kwk_eligible_kwh, kwk_foerderend_calendar, kwk_max_kwh, pflichtzahlung_verjaehrt_am,
     sect52a_netztrennung_erforderlich, verguetungszeitraum_verlaengerung_qh,
     wind_onshore_korrekturfaktor_corrected_aw,
 };
@@ -127,6 +127,9 @@ pub use formula::calculate_settlement;
 pub use model::{
     CapacityBlock, Pflichtverstoss, SanktionAlt, SanktionsTyp, SettleInput, SettleOutput,
     SettlePosition, SettlementStatus,
+};
+pub use negativpreis::{
+    NegativpreisInterval, NegativpreisRegime, NegativpreisResult, derive_negativpreis,
 };
 pub use scheme::{
     AusschreibungMetadata, CorrectionReason, MarktpreisKategorie, Paragraph100Rule,

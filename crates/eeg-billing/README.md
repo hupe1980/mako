@@ -180,19 +180,42 @@ let out = calculate_settlement(&SettleInput {
 
 ---
 
-## §51 EEG — Negativpreisregel (version-aware)
+## §51 EEG — Negativpreisregel (keyed on the Inbetriebnahmedatum)
 
-| EEG version | Threshold | kW exemption |
-|---|---|---|
-| EEG ≤2012 | none (Bestandsschutz §100 Abs. 1 Satz 4 EEG 2017) | — |
-| EEG 2017 | ≥ 6 consecutive hours | Wind < 3 MW; others < 500 kW |
-| EEG 2021 | ≥ 4 consecutive hours | all plants < 500 kW |
-| EEG 2023 | any negative period | < 100 kW (until iMSys rollout) |
+§51 is **not** a function of the law year. The Solarspitzengesetz rewrote it with effect from
+**25.02.2025**, mid-year and inside the EEG 2023 range, so two "EEG 2023" plants are governed
+by different rules depending on the day they were commissioned. Derive the regime with
+`NegativpreisRegime::fuer_inbetriebnahme` — `EegGesetz` deliberately exposes no §51 rule.
 
-Pass `kwh_during_negative_epex` — the engine applies the correct threshold automatically.
+| Inbetriebnahme | Trigger | Exemption | §51a extension |
+|---|---|---|---|
+| ≤ 2015-12-31 | never (§100 Abs. 1 Satz 4 EEG 2017) | — | — |
+| 2016-01-01 – 2020-12-31 | ≥ 6 consecutive hours | Wind < 3 MW · others < 500 kW | none |
+| 2021-01-01 – 2022-12-31 | ≥ 4 consecutive hours | < 500 kW | ausschreibungspflichtige only |
+| 2023-01-01 – 2025-02-24 | staged 4-3-2-1 h | < 400 kW | ausschreibungspflichtige only |
+| ≥ 2025-02-25 | first negative ¼h | < 100 kW until iMSys · < 2 kW pending §85 Abs. 2 Nr. 12 | all plants |
+
+Pilotwindenergieanlagen (§3 Nr. 37) are exempt under every version at any size
+(`ist_pilotwindanlage`).
+
+`derive_negativpreis` applies the run-length threshold to a quarter-hour series;
+`calculate_settlement` then applies the size / iMSys / Pilotwind exemptions to the derived kWh.
+
+### §51 Abs. 3 — the Ausfallvergütung reporting duty
+An operator on the Ausfallvergütung must report the feed-in during continuously negative
+prices with its §71 Abs. 1 Nr. 1 data. Unreported, the month's claim falls 5 % per calendar
+day such a period touched (`sect51_abs3_unreported_days`), floored at zero.
+
+### §100 — the Bestandsanlagen opt-in
+A plant on an older vintage may declare in Textform that §§51/51a shall apply. The declaration
+runs from the end of the calendar year in which its iMSys goes in (`optin_wirksam_ab`), and its
+anzulegender Wert rises by `SECT51_OPTIN_ZUSCHLAG_CT_KWH` (0,6 ct/kWh) from then.
 
 ### §51a — Verlängerungsanspruch
-Solar PV: `ceil(lost_qh / 2)` · Others: `lost_qh` (1:1). Returned in `verlaengerungsanspruch_qh`.
+Non-solar plants extend by whole calendar days (96 QH/day, rounded up **once** over the total).
+Solar plants convert at factor 0,5 into Volllastviertelstunden and draw them down against the
+§51a Abs. 2 monthly table (73 in December, 508 in June). Returned in
+`verlaengerungsanspruch_qh`.
 
 ---
 

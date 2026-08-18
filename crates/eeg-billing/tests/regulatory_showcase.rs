@@ -19,7 +19,6 @@ use eeg_billing::{
     CapacityBlock, EegGesetz, SettleInput, SettlementScheme, SettlementStatus, TariffSource,
     calculate_settlement, foerderendedatum_eeg, foerderendedatum_kwkg_years,
     foerderendedatum_repowering, kwk_foerderend_calendar, kwk_max_kwh,
-    negativpreis_rule_applies_for_version,
 };
 use rust_decimal::Decimal;
 use rust_decimal::dec;
@@ -471,25 +470,53 @@ fn s25_after_registration_normal_settlement() {
 // §51 EEG 2023 — Negativpreisregel (negative EPEX price rule)
 // ═══════════════════════════════════════════════════════════════════════════
 
-/// §51 EEG 2023 — Rule applies for ANY negative-price period.
-/// (EEG 2023 removed the 6-consecutive-hours threshold that existed in EEG 2017/2021.)
+/// §51 — the run-length threshold is a function of the **commissioning date**,
+/// not of the law year.
+///
+/// A plant commissioned on 24.02.2025 and one commissioned the next day are both
+/// "EEG 2023" plants; the Solarspitzengesetz governs only the second. The engine
+/// used to apply the post-Solarspitzengesetz rule to every 2023+ plant and so
+/// reduced 2023 and 2024 plants for isolated negative quarter-hours the statute
+/// still paid for.
 #[test]
-fn s51_negativpreis_threshold_applies_any_duration() {
-    assert!(
-        !negativpreis_rule_applies_for_version(0, EegGesetz::Eeg2023),
-        "0h: no negative period"
+fn s51_threshold_follows_the_commissioning_date() {
+    use eeg_billing::NegativpreisRegime as R;
+    use time::macros::date;
+
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2015 - 12 - 31)).mindest_lauflaenge_qh(),
+        None,
+        "§100 Abs. 1 Satz 4 EEG 2017: §51 does not reach pre-2016 plants"
     );
-    assert!(
-        negativpreis_rule_applies_for_version(1, EegGesetz::Eeg2023),
-        "1h: EEG 2023 activates at any negative period"
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2016 - 01 - 01)).mindest_lauflaenge_qh(),
+        Some(24),
+        "EEG 2017: 6 consecutive hours"
     );
-    assert!(
-        negativpreis_rule_applies_for_version(6, EegGesetz::Eeg2023),
-        "6h: still applies"
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2021 - 06 - 01)).mindest_lauflaenge_qh(),
+        Some(16),
+        "EEG 2021: 4 consecutive hours"
     );
-    assert!(
-        negativpreis_rule_applies_for_version(24, EegGesetz::Eeg2023),
-        "full day"
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2023 - 06 - 01)).mindest_lauflaenge_qh(),
+        Some(16),
+        "EEG 2023 original: 4 consecutive hours for a 2023 plant"
+    );
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2024 - 06 - 01)).mindest_lauflaenge_qh(),
+        Some(12),
+        "EEG 2023 original: 3 consecutive hours from commissioning year 2024"
+    );
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2025 - 02 - 24)).mindest_lauflaenge_qh(),
+        Some(12),
+        "the day before the Solarspitzengesetz: still the staged rule"
+    );
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2025 - 02 - 25)).mindest_lauflaenge_qh(),
+        Some(1),
+        "Solarspitzengesetz: from the first negative quarter-hour"
     );
 }
 
@@ -3115,72 +3142,110 @@ fn sect52_netting_is_optional_for_the_netzbetreiber() {
 // Settlement state machine
 // ══════════════════════════════════════════════════════════════════════════════
 
-/// Healthy plant: MaStR registered + Fernsteuerbarkeit installed → Active.
+/// A healthy plant, and the facts that move it off `Active`.
+fn state_facts() -> eeg_billing::settlement_state::SettlementStateFacts {
+    use eeg_billing::settlement_state::{Sect9Erfuellung, SettlementStateFacts};
+    SettlementStateFacts {
+        mastr_registriert: true,
+        sect9_erfuellung: Sect9Erfuellung::Fernsteuerbarkeit,
+        leistung_kwp: d("50"),
+        erzeugungsart: None,
+        foerderendedatum: Some(date!(2040 - 12 - 31)),
+        billing_date: date!(2026 - 07 - 01),
+        eeg_gesetz_year: 2023,
+    }
+}
+
+/// Healthy plant: MaStR registered + §9 satisfied → Active.
 #[test]
 fn settlement_state_healthy_plant_is_active() {
     use eeg_billing::settlement_state::{SettlementPeriodState, derive_settlement_state};
-    use time::macros::date;
-
-    let state = derive_settlement_state(
-        true,                        // mastr_registriert
-        Some(date!(2024 - 01 - 01)), // fernsteuerbarkeit installed
-        d("50"),                     // leistung_kwp
-        Some(date!(2040 - 12 - 31)), // foerderendedatum
-        date!(2026 - 07 - 01),       // billing_date
-        2023,
+    assert_eq!(
+        derive_settlement_state(&state_facts()),
+        SettlementPeriodState::Active
     );
-    assert_eq!(state, SettlementPeriodState::Active);
+}
+
+/// §9 Abs. 2 Nr. 2 EEG — a 50 kW plant may satisfy §9 with the 60 %
+/// Leistungsbegrenzung instead of Fernsteuerbarkeit.
+///
+/// The rule used to be a flat "≥ 25 kW must have Fernsteuerbarkeit", which put
+/// every compliant plant in the 25–100 kW band into `Reduced` and charged it a
+/// §52 Abs. 1 Nr. 1 Pflichtzahlung of 10 €/kW/month it did not owe.
+#[test]
+fn settlement_state_sixty_percent_cap_satisfies_sect9_below_100kw() {
+    use eeg_billing::settlement_state::{
+        Sect9Erfuellung, SettlementPeriodState, SettlementStateFacts, derive_settlement_state,
+    };
+    let facts = SettlementStateFacts {
+        sect9_erfuellung: Sect9Erfuellung::Leistungsbegrenzung60,
+        ..state_facts()
+    };
+    assert_eq!(
+        derive_settlement_state(&facts),
+        SettlementPeriodState::Active
+    );
+
+    // From 100 kW the alternative is gone (§9 Abs. 2 Nr. 1).
+    let gross = SettlementStateFacts {
+        leistung_kwp: d("100"),
+        ..facts
+    };
+    assert_eq!(
+        derive_settlement_state(&gross),
+        SettlementPeriodState::Reduced
+    );
 }
 
 /// EEG 2023, MaStR missing → Reduced (Pflichtzahlung, Vergütung still flows).
 #[test]
 fn settlement_state_eeg2023_mastr_missing_reduced() {
-    use eeg_billing::settlement_state::{SettlementPeriodState, derive_settlement_state};
-    use time::macros::date;
-
-    let state = derive_settlement_state(
-        false,
-        None,
-        d("50"),
-        Some(date!(2040 - 12 - 31)),
-        date!(2026 - 07 - 01),
-        2023,
+    use eeg_billing::settlement_state::{
+        SettlementPeriodState, SettlementStateFacts, derive_settlement_state,
+    };
+    let facts = SettlementStateFacts {
+        mastr_registriert: false,
+        ..state_facts()
+    };
+    assert_eq!(
+        derive_settlement_state(&facts),
+        SettlementPeriodState::Reduced
     );
-    assert_eq!(state, SettlementPeriodState::Reduced);
 }
 
 /// EEG 2017, MaStR missing → Suspended (VerguetungAufNull, old regime).
 #[test]
 fn settlement_state_eeg2017_mastr_missing_suspended() {
-    use eeg_billing::settlement_state::{SettlementPeriodState, derive_settlement_state};
-    use time::macros::date;
-
-    let state = derive_settlement_state(
-        false,
-        None,
-        d("50"),
-        Some(date!(2040 - 12 - 31)),
-        date!(2026 - 07 - 01),
-        2017,
+    use eeg_billing::settlement_state::{
+        SettlementPeriodState, SettlementStateFacts, derive_settlement_state,
+    };
+    let facts = SettlementStateFacts {
+        mastr_registriert: false,
+        eeg_gesetz_year: 2017,
+        ..state_facts()
+    };
+    assert_eq!(
+        derive_settlement_state(&facts),
+        SettlementPeriodState::Suspended
     );
-    assert_eq!(state, SettlementPeriodState::Suspended);
 }
 
 /// Förderdauer expired → PostEeg state.
 #[test]
 fn settlement_state_foerderdauer_expired_post_eeg() {
-    use eeg_billing::settlement_state::{SettlementPeriodState, derive_settlement_state};
-    use time::macros::date;
-
-    let state = derive_settlement_state(
-        true,
-        Some(date!(2020 - 01 - 01)),
-        d("10"),
-        Some(date!(2024 - 12 - 31)), // expired
-        date!(2025 - 01 - 01),       // billing after expiry
-        2023,
+    use eeg_billing::settlement_state::{
+        SettlementPeriodState, SettlementStateFacts, derive_settlement_state,
+    };
+    let facts = SettlementStateFacts {
+        leistung_kwp: d("10"),
+        foerderendedatum: Some(date!(2024 - 12 - 31)),
+        billing_date: date!(2025 - 01 - 01),
+        ..state_facts()
+    };
+    assert_eq!(
+        derive_settlement_state(&facts),
+        SettlementPeriodState::PostEeg
     );
-    assert_eq!(state, SettlementPeriodState::PostEeg);
 }
 
 /// State is_payable and is_terminal semantics.
@@ -3640,11 +3705,12 @@ fn post_eeg_above_10ct_is_capped_at_10ct() {
 fn multi_block_sect24_mixed_eeg_versions_each_block_correct_negativpreis() {
     use time::Date;
 
-    // Primary block: 30 kWp IBN 2015 (EEG 2012 → §51 NOT applicable, <100 kW threshold)
-    // Extension block: 120 kWp IBN 2024 (EEG 2023 → §51 applies, ≥100 kW threshold)
-    // Total: 150 kWp.
-    // Total kWh: 1500. Primary share: 30/150 = 0.2 → 300 kWh.
-    // Extension share: 120/150 = 0.8 → 1200 kWh.
+    // Primary block: 100 kWp IBN 2015 — §51 never reaches a pre-2016 plant.
+    // Extension block: 400 kWp IBN 2024 — the EEG 2023 Fassung as enacted, whose
+    // exemption is **400 kW**, tested on the aggregated 500 kWp (§51 Abs. 2
+    // Satz 2 i.V.m. §24).
+    // Total kWh: 1500. Primary share: 100/500 = 0.2 → 300 kWh.
+    // Extension share: 400/500 = 0.8 → 1200 kWh.
     // Negative EPEX kWh: 200 total.
     //   Primary neg share: 200 × 0.2 = 40 kWh → EEG 2012 has no §51 → no deduction.
     //   Extension neg share: 200 × 0.8 = 160 kWh → EEG 2023 ≥100 kW → deducted.
@@ -3657,12 +3723,12 @@ fn multi_block_sect24_mixed_eeg_versions_each_block_correct_negativpreis() {
             verguetungssatz_ct: d("8.11"),
         },
         einspeisemenge_kwh: Some(d("1500")),
-        leistung_kwp: Some(d("30")), // primary block
+        leistung_kwp: Some(d("100")), // primary block
         inbetriebnahme: Some(ibn_primary),
         eeg_gesetz: EegGesetz::Eeg2012,
         kwh_during_negative_epex: Some(d("200")),
         capacity_blocks: vec![CapacityBlock {
-            leistung_kwp: d("120"),
+            leistung_kwp: d("400"),
             inbetriebnahme: ibn_ext,
             verguetungssatz_ct: d("8.11"),
             foerderendedatum: fed_ext,
@@ -3671,8 +3737,8 @@ fn multi_block_sect24_mixed_eeg_versions_each_block_correct_negativpreis() {
     });
 
     assert_eq!(out.status, SettlementStatus::Calculated);
-    // Primary block (EEG 2012, 30 kW): no §51 → 300 kWh × 8.11 ct = 24.33 EUR
-    // Extension block (EEG 2023, 70 kW): §51 → (700 - 140) = 560 kWh × 8.11 ct = 45.416 EUR
+    // Primary block (IBN 2015): no §51 → 300 kWh paid in full.
+    // Extension block (IBN 2024): §51 → 1200 − 160 = 1040 kWh.
     let total = out.settlement_eur.expect("settlement must exist");
     assert!(total > d("0"), "combined settlement must be positive");
     assert!(
@@ -3980,38 +4046,41 @@ fn foerderendedatum_jan1_plant_ends_20_years_later() {
 /// Plants commissioned 2016-01-01 ARE subject to §51 EEG 2017 (6h threshold).
 #[test]
 fn eeg_gesetz_bestandsschutz_boundary_2015_to_2016() {
-    use eeg_billing::foerderdauer::negativpreis_kw_exemption;
-    use eeg_billing::{EegGesetz, ErzeugungsArt};
+    use eeg_billing::{ErzeugungsArt, NegativpreisRegime as R};
+    use rust_decimal::dec;
+    use time::macros::date;
 
-    // Pre-2016 (Eeg2012): §51 never applies — negativpreis_kw_grenze returns None
-    let pre2016_threshold =
-        negativpreis_kw_exemption(EegGesetz::Eeg2012, Some(ErzeugungsArt::Solar));
+    // Pre-2016: §51 never applies (§100 Abs. 1 Satz 4 EEG 2017).
     assert_eq!(
-        pre2016_threshold, None,
+        R::fuer_inbetriebnahme(date!(2015 - 12 - 31)).kw_grenze(None),
+        None,
         "EEG 2012 plants exempt from §51 per §100 Abs. 1 Satz 4"
     );
 
-    // EEG 2017: 500 kW exemption for non-wind
-    let eeg2017_threshold =
-        negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::Solar));
-    assert_eq!(eeg2017_threshold, Some(500), "EEG 2017: <500 kW exempt");
-
-    // EEG 2017: 3 MW exemption for wind
-    let eeg2017_wind =
-        negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::WindOnshore));
-    assert_eq!(eeg2017_wind, Some(3000), "EEG 2017: wind <3 MW exempt");
-
-    // EEG 2021: 500 kW exemption for all (no wind exception)
-    let eeg2021_threshold =
-        negativpreis_kw_exemption(EegGesetz::Eeg2021, Some(ErzeugungsArt::WindOnshore));
-    assert_eq!(eeg2021_threshold, Some(500), "EEG 2021: all <500 kW exempt");
-
-    // EEG 2023: 100 kW exemption (transitional, until iMSys)
-    let eeg2023_threshold = negativpreis_kw_exemption(EegGesetz::Eeg2023, None);
+    // §51 Abs. 3 Nr. 2 EEG 2017: 500 kW for non-wind.
     assert_eq!(
-        eeg2023_threshold,
-        Some(100),
-        "EEG 2023: <100 kW exempt until iMSys"
+        R::fuer_inbetriebnahme(date!(2016 - 01 - 01)).kw_grenze(Some(ErzeugungsArt::SolarAufdach)),
+        Some(dec!(500))
+    );
+    // §51 Abs. 3 Nr. 1 EEG 2017: 3 MW for wind.
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2016 - 01 - 01)).kw_grenze(Some(ErzeugungsArt::WindOnshore)),
+        Some(dec!(3000))
+    );
+    // EEG 2021 dropped the wind carve-out.
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2021 - 06 - 01)).kw_grenze(Some(ErzeugungsArt::WindOnshore)),
+        Some(dec!(500))
+    );
+    // EEG 2023 as enacted: 400 kW — not the 100 kW of the current Fassung.
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2024 - 06 - 01)).kw_grenze(None),
+        Some(dec!(400))
+    );
+    // From the Solarspitzengesetz: 100 kW, transitional until iMSys.
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2025 - 06 - 01)).kw_grenze(None),
+        Some(dec!(100))
     );
 }
 
@@ -4313,11 +4382,12 @@ fn sect48b_stecker_pv_annual_settlement_via_slp_estimate() {
 
 /// §51 Abs. 2 Satz 2 EEG 2023 i.V.m. §24 — the kW test runs on the whole plant.
 ///
-/// A 180 kWp plant split into three §24-linked 60 kWp blocks is one Anlage for
+/// A 600 kWp plant split into three §24-linked 200 kWp blocks is one Anlage for
 /// the §51 size test ("Zur Ermittlung der Anlagengröße nach Satz 1 ist § 24
 /// entsprechend anzuwenden"). Testing each block on its own would put every
-/// block under the 100 kW exemption and let the plant keep the full payment for
-/// its negative-price energy.
+/// block under the exemption — 400 kW for a plant commissioned under the EEG
+/// 2023 as enacted — and let the plant keep the full payment for its
+/// negative-price energy.
 #[test]
 fn s51_abs2_satz2_aggregates_capacity_blocks_per_sect24() {
     use eeg_billing::CapacityBlock;
@@ -4327,20 +4397,22 @@ fn s51_abs2_satz2_aggregates_capacity_blocks_per_sect24() {
         inbetriebnahme: date!(2023 - 03 - 01),
         foerderendedatum: date!(2043 - 03 - 01),
     };
+    // A 2023 plant is under the staged 4-hour rule; the caller has already
+    // applied it when deriving `kwh_during_negative_epex`.
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: d("8.00"),
         },
         einspeisemenge_kwh: Some(d("30000")),
-        leistung_kwp: Some(d("60")),
-        capacity_blocks: vec![block("60"), block("60")],
+        leistung_kwp: Some(d("200")),
+        capacity_blocks: vec![block("200"), block("200")],
         inbetriebnahme: Some(date!(2023 - 03 - 01)),
         erzeugungsart: Some(eeg_billing::ErzeugungsArt::SolarAufdach),
         kwh_during_negative_epex: Some(d("3000")),
         ..SettleInput::default()
     });
     assert_eq!(out.status, SettlementStatus::Calculated);
-    // 180 kWp total ≥ the 100 kW threshold → §51 applies to every block.
+    // 600 kWp total ≥ the 400 kW threshold → §51 applies to every block.
     // (Three 1/3 shares rounded to 3 dp leave a 0.027 kWh allocation residue.)
     assert_eq!(out.eligible_kwh.unwrap().round(), d("27000"));
     assert_eq!(out.settlement_eur.unwrap().round_dp(0), d("2160"));
@@ -4478,11 +4550,11 @@ fn s44b_excess_without_a_marktwert_is_price_missing() {
     assert_eq!(out.status, SettlementStatus::PriceMissing);
 }
 
-/// §51a Abs. 1 EEG 2023 — no extension where §51 never withheld anything.
+/// §51a — the extension is granted only where §51 actually withheld something.
 ///
-/// The Verlängerung is granted "für Strom … für den sich der anzulegende Wert
-/// nach Maßgabe des § 51 verringert". A 50 kWp plant without an iMSys is inside
-/// the §51 Abs. 2 Nr. 1 exemption, was paid in full, and earns no extension.
+/// The Verlängerung covers "Strom … für den sich der anzulegende Wert nach
+/// Maßgabe des § 51 verringert", so a plant inside the Abs. 2 exemption was paid
+/// in full and earns nothing.
 #[test]
 fn s51a_no_extension_where_the_kw_exemption_applied() {
     let input = |kwp: &str| SettleInput {
@@ -4492,7 +4564,9 @@ fn s51a_no_extension_where_the_kw_exemption_applied() {
         einspeisemenge_kwh: Some(d("10000")),
         leistung_kwp: Some(d(kwp)),
         erzeugungsart: Some(eeg_billing::ErzeugungsArt::SolarAufdach),
-        inbetriebnahme: Some(date!(2023 - 03 - 01)),
+        // From the Solarspitzengesetz: exemption at 100 kW, and §51a covers every
+        // plant rather than only the ausschreibungspflichtige ones.
+        inbetriebnahme: Some(date!(2025 - 06 - 01)),
         kwh_during_negative_epex: Some(d("400")),
         negative_price_quarter_hours: Some(96),
         ..SettleInput::default()
@@ -4504,4 +4578,50 @@ fn s51a_no_extension_where_the_kw_exemption_applied() {
     let subject = calculate_settlement(&input("150"));
     assert!(subject.verlaengerungsanspruch_qh > 0);
     assert_eq!(subject.eligible_kwh, Some(d("9600")));
+}
+
+/// §51a before the Solarspitzengesetz — a statutory-AW plant is reduced and gets
+/// **nothing** back.
+///
+/// Until 25.02.2025 the Verlängerung existed only for ausschreibungspflichtige
+/// Anlagen. A 500 kWp plant on the statutory tariff commissioned in 2024 loses
+/// the negative-price quarter-hours outright; granting it an extension would
+/// stretch a Förderdauer the statute ends on time.
+#[test]
+fn s51a_pre_solarspitzen_extension_is_auction_only() {
+    let input = |source: eeg_billing::TariffSource| SettleInput {
+        scheme: SettlementScheme::MarketPremium {
+            direktverm_aw_ct: d("7.00"),
+            wind_korrekturfaktor: None,
+            wind_standort: None,
+        },
+        tariff_source: source,
+        einspeisemenge_kwh: Some(d("10000")),
+        marktwert_ct_kwh: Some(d("4.00")),
+        leistung_kwp: Some(d("500")),
+        erzeugungsart: Some(eeg_billing::ErzeugungsArt::SolarFreiflaeche),
+        inbetriebnahme: Some(date!(2024 - 06 - 01)),
+        kwh_during_negative_epex: Some(d("400")),
+        negative_price_quarter_hours: Some(96),
+        ..SettleInput::default()
+    };
+
+    let statutory = calculate_settlement(&input(eeg_billing::TariffSource::Statutory));
+    assert_eq!(
+        statutory.verlaengerungsanspruch_qh, 0,
+        "§51a did not reach statutory-AW plants before the Solarspitzengesetz"
+    );
+    assert_eq!(
+        statutory.eligible_kwh,
+        Some(d("9600")),
+        "§51 still reduced the plant — it simply gets no time back"
+    );
+
+    let auction = calculate_settlement(&input(eeg_billing::TariffSource::Auction(
+        eeg_billing::AusschreibungMetadata::default(),
+    )));
+    assert!(
+        auction.verlaengerungsanspruch_qh > 0,
+        "an ausschreibungspflichtige Anlage did earn the extension"
+    );
 }

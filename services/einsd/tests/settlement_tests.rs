@@ -674,20 +674,28 @@ fn kwk_foerderend_calendar_15_years() {
     );
 }
 
+/// §51 — the trigger is the Inbetriebnahmedatum, not the law year.
 #[test]
 fn negativpreis_threshold_at_boundary() {
-    use eeg_billing::{EegGesetz, negativpreis_rule_applies_for_version};
-    // EEG 2023 §51: any negative-price period applies (1h threshold, removed old 6h rule)
-    assert!(!negativpreis_rule_applies_for_version(
-        0,
-        EegGesetz::Eeg2023
-    ));
-    assert!(negativpreis_rule_applies_for_version(1, EegGesetz::Eeg2023));
-    assert!(negativpreis_rule_applies_for_version(6, EegGesetz::Eeg2023));
-    assert!(negativpreis_rule_applies_for_version(
-        24,
-        EegGesetz::Eeg2023
-    ));
+    use eeg_billing::NegativpreisRegime as R;
+    // The Solarspitzengesetz boundary sits inside 2025.
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2025 - 02 - 24)).mindest_lauflaenge_qh(),
+        Some(12)
+    );
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2025 - 02 - 25)).mindest_lauflaenge_qh(),
+        Some(1)
+    );
+    // The §100 Abs. 1 Satz 4 EEG 2017 boundary sits at 01.01.2016.
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2015 - 12 - 31)).mindest_lauflaenge_qh(),
+        None
+    );
+    assert_eq!(
+        R::fuer_inbetriebnahme(date!(2016 - 01 - 01)).mindest_lauflaenge_qh(),
+        Some(24)
+    );
 }
 
 // ── §50a EEG 2023 — Flexibilitätszuschlag (neue Anlagen) ─────────────────────
@@ -772,9 +780,9 @@ fn post_eeg_spot_negative_epex_not_capped() {
 
 // ── §51 EEG 2023 — Negativpreisregel ────────
 
+/// §51 EEG 2023 as enacted — a 2024 plant above the 400 kW exemption is reduced.
 #[test]
-fn negativpreis_eeg2023_no_threshold() {
-    // EEG 2023 §51: any single negative-price hour suffices (no 6h threshold)
+fn negativpreis_eeg2023_reduces_above_the_400kw_exemption() {
     let out = calculate_settlement(&SettleInput {
         scheme: SettlementScheme::FeedInTariff {
             verguetungssatz_ct: dec!(8.51),
@@ -782,12 +790,50 @@ fn negativpreis_eeg2023_no_threshold() {
         einspeisemenge_kwh: Some(dec!(1000)),
         kwh_during_negative_epex: Some(dec!(50)), // 50 kWh during negative hours
         inbetriebnahme: Some(date!(2024 - 06 - 01)),
-        leistung_kwp: Some(dec!(200)),
+        leistung_kwp: Some(dec!(500)),
         ..SettleInput::default()
     });
     // Effective = 950 kWh; 950 × 8.51 / 100 = 80.845 EUR
     assert_eq!(out.eligible_kwh, Some(dec!(950)));
     assert_eq!(out.settlement_eur, Some(dec!(80.845)));
+}
+
+/// The same plant at 200 kWp is **inside** the exemption of the Fassung that
+/// governs it (§51 Abs. 2 EEG 2023 as enacted: under 400 kW).
+///
+/// Reading every 2023+ plant as post-Solarspitzengesetz would exempt only below
+/// 100 kW and reduce this plant by 50 kWh a month it is entitled to in full.
+#[test]
+fn negativpreis_eeg2023_exempts_below_400kw() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
+        einspeisemenge_kwh: Some(dec!(1000)),
+        kwh_during_negative_epex: Some(dec!(50)),
+        inbetriebnahme: Some(date!(2024 - 06 - 01)),
+        leistung_kwp: Some(dec!(200)),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.eligible_kwh, Some(dec!(1000)), "paid in full");
+    assert_eq!(out.settlement_eur, Some(dec!(85.10)));
+}
+
+/// The same 200 kWp plant commissioned after the Solarspitzengesetz **is**
+/// reduced — the exemption is 100 kW there.
+#[test]
+fn negativpreis_solarspitzen_reduces_the_same_200kw_plant() {
+    let out = calculate_settlement(&SettleInput {
+        scheme: SettlementScheme::FeedInTariff {
+            verguetungssatz_ct: dec!(8.51),
+        },
+        einspeisemenge_kwh: Some(dec!(1000)),
+        kwh_during_negative_epex: Some(dec!(50)),
+        inbetriebnahme: Some(date!(2025 - 06 - 01)),
+        leistung_kwp: Some(dec!(200)),
+        ..SettleInput::default()
+    });
+    assert_eq!(out.eligible_kwh, Some(dec!(950)));
 }
 
 // ── §51a EEG 2023 — Vergütungszeitraum-Verlängerung ────────────────────────
@@ -1198,108 +1244,103 @@ fn pflichtzahlung_via_calculate_pflichtzahlung_function() {
 // verify that `calculate_settlement` with `kwh_during_negative_epex` uses the
 // correct threshold for each EEG version.
 
-use eeg_billing::foerderdauer::{negativpreis_kw_exemption, negativpreis_rule_applies_for_version};
+use eeg_billing::NegativpreisRegime as Regime;
 // EegGesetz and ErzeugungsArt are already imported at the top of this file.
 
-#[test]
-fn negativpreis_eeg2017_5h_does_not_trigger() {
-    assert!(!negativpreis_rule_applies_for_version(
-        5,
-        EegGesetz::Eeg2017
-    ));
+/// A helper reading like the Clearingstelle's table: commissioning date in,
+/// (run length in quarter-hours, kW exemption) out.
+fn regel(ibn: time::Date, art: Option<ErzeugungsArt>) -> (Option<usize>, Option<Decimal>) {
+    let r = Regime::fuer_inbetriebnahme(ibn);
+    (r.mindest_lauflaenge_qh(), r.kw_grenze(art))
 }
 
 #[test]
-fn negativpreis_eeg2017_6h_triggers() {
-    assert!(negativpreis_rule_applies_for_version(6, EegGesetz::Eeg2017));
+fn negativpreis_eeg2017_is_six_hours_and_500kw_3mw() {
+    let (run, kw) = regel(date!(2017 - 06 - 01), Some(ErzeugungsArt::SolarAufdach));
+    assert_eq!(run, Some(24), "6 h = 24 quarter-hours");
+    assert_eq!(kw, Some(Decimal::from(500)));
+    let (_, wind) = regel(date!(2017 - 06 - 01), Some(ErzeugungsArt::WindOnshore));
+    assert_eq!(wind, Some(Decimal::from(3000)), "§51 Abs. 3 Nr. 1 EEG 2017");
 }
 
 #[test]
-fn negativpreis_eeg2017_exempt_below_500kw_non_wind() {
+fn negativpreis_eeg2021_is_four_hours_and_500kw_for_all() {
+    let (run, kw) = regel(date!(2021 - 06 - 01), Some(ErzeugungsArt::WindOnshore));
+    assert_eq!(run, Some(16), "4 h = 16 quarter-hours");
+    assert_eq!(kw, Some(Decimal::from(500)), "the wind carve-out is gone");
+}
+
+/// The EEG 2023 as enacted: the staged 4-3-2-1-hour rule and a **400 kW**
+/// exemption. Applying the current Fassung's rule to these plants reduced
+/// payments the statute did not reduce.
+#[test]
+fn negativpreis_eeg2023_as_enacted_is_staged_and_400kw() {
     assert_eq!(
-        negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::Solar)),
-        Some(500)
+        regel(date!(2023 - 06 - 01), None),
+        (Some(16), Some(Decimal::from(400))),
+        "commissioning year 2023: four consecutive hours"
+    );
+    assert_eq!(
+        regel(date!(2024 - 06 - 01), None),
+        (Some(12), Some(Decimal::from(400))),
+        "commissioning year 2024: three consecutive hours"
     );
 }
 
+/// From the Solarspitzengesetz (25.02.2025): the first negative quarter-hour,
+/// 100 kW until an iMSys is installed, 2 kW until the §85 Abs. 2 Nr. 12
+/// Festlegung.
 #[test]
-fn negativpreis_eeg2017_exempt_below_3mw_wind() {
-    assert_eq!(
-        negativpreis_kw_exemption(EegGesetz::Eeg2017, Some(ErzeugungsArt::WindOnshore)),
-        Some(3000)
+fn negativpreis_solarspitzen_is_the_first_quarter_hour() {
+    let r = Regime::fuer_inbetriebnahme(date!(2025 - 06 - 01));
+    assert_eq!(r.mindest_lauflaenge_qh(), Some(1));
+    assert_eq!(r.kw_grenze(None), Some(Decimal::from(100)));
+    assert!(r.ist_befreit(Some(Decimal::from(50)), None, false, false));
+    assert!(!r.ist_befreit(Some(Decimal::from(50)), None, true, false));
+    assert!(
+        r.ist_befreit(Decimal::from_str_exact("1.5").ok(), None, true, false),
+        "below 2 kW an iMSys does not lift the exemption"
     );
 }
 
+/// §3 Nr. 37 — a Pilotwindenergieanlage is outside §51 whatever its size.
 #[test]
-fn negativpreis_eeg2021_3h_does_not_trigger() {
-    assert!(!negativpreis_rule_applies_for_version(
-        3,
-        EegGesetz::Eeg2021
-    ));
+fn negativpreis_pilotwindanlage_is_always_exempt() {
+    for ibn in [
+        date!(2017 - 06 - 01),
+        date!(2021 - 06 - 01),
+        date!(2024 - 06 - 01),
+        date!(2026 - 06 - 01),
+    ] {
+        assert!(
+            Regime::fuer_inbetriebnahme(ibn).ist_befreit(
+                Some(Decimal::from(6000)),
+                Some(ErzeugungsArt::WindOnshore),
+                true,
+                true
+            ),
+            "IBN {ibn}"
+        );
+    }
 }
 
 #[test]
-fn negativpreis_eeg2021_4h_triggers() {
-    assert!(negativpreis_rule_applies_for_version(4, EegGesetz::Eeg2021));
-}
-
-#[test]
-fn negativpreis_eeg2021_exempt_below_500kw() {
-    // EEG 2021: uniform 500 kW — wind exception removed
-    assert_eq!(
-        negativpreis_kw_exemption(EegGesetz::Eeg2021, Some(ErzeugungsArt::WindOnshore)),
-        Some(500)
-    );
-    assert_eq!(
-        negativpreis_kw_exemption(EegGesetz::Eeg2021, Some(ErzeugungsArt::Solar)),
-        Some(500)
-    );
-}
-
-#[test]
-fn negativpreis_eeg2023_1h_triggers() {
-    assert!(negativpreis_rule_applies_for_version(1, EegGesetz::Eeg2023));
-}
-
-#[test]
-fn negativpreis_eeg2023_exempt_below_100kw() {
-    assert_eq!(
-        negativpreis_kw_exemption(EegGesetz::Eeg2023, None),
-        Some(100)
-    );
-    assert_eq!(
-        negativpreis_kw_exemption(EegGesetz::Eeg2023, Some(ErzeugungsArt::WindOnshore)),
-        Some(100)
-    );
-}
-
-#[test]
-fn negativpreis_pre_2017_never_applies() {
-    assert!(!negativpreis_rule_applies_for_version(
-        1000,
-        EegGesetz::Eeg2012
-    ));
-    assert!(!negativpreis_rule_applies_for_version(
-        1000,
-        EegGesetz::Eeg2009
-    ));
-    assert!(!negativpreis_rule_applies_for_version(
-        1000,
-        EegGesetz::Eeg2004
-    ));
-    assert!(!negativpreis_rule_applies_for_version(
-        1000,
-        EegGesetz::Eeg2000
-    ));
-    assert!(!negativpreis_rule_applies_for_version(
-        1000,
-        EegGesetz::Kwkg
-    ));
+fn negativpreis_pre_2016_never_applies() {
+    for ibn in [
+        date!(2015 - 12 - 31),
+        date!(2010 - 01 - 01),
+        date!(2004 - 06 - 01),
+    ] {
+        let r = Regime::fuer_inbetriebnahme(ibn);
+        assert_eq!(r.mindest_lauflaenge_qh(), None, "IBN {ibn}");
+        assert!(r.ist_befreit(Some(Decimal::from(9999)), None, true, false));
+    }
 }
 
 #[test]
 fn negativpreis_eeg2023_settlement_triggers_with_1h() {
-    // Integration: EEG 2023 plant ≥100 kW, caller has verified ≥1 hour negative EPEX.
+    // Integration: a 2023 plant above the 400 kW exemption; the caller has
+    // already applied the staged four-hour run test when deriving the kWh.
     // §51 reduces eligible kWh by the negative-price kWh (not to zero).
     // 100 total kWh - 10 negative kWh = 90 effective kWh × 8.11ct = 7.299 EUR
     let out = calculate_settlement(&SettleInput {
@@ -1308,7 +1349,7 @@ fn negativpreis_eeg2023_settlement_triggers_with_1h() {
         },
         einspeisemenge_kwh: Some(dec!(100)),
         inbetriebnahme: Some(date!(2023 - 07 - 01)),
-        leistung_kwp: Some(dec!(200)),
+        leistung_kwp: Some(dec!(500)),
         kwh_during_negative_epex: Some(dec!(10)),
         eeg_gesetz: EegGesetz::Eeg2023,
         ..Default::default()
@@ -1325,7 +1366,7 @@ fn negativpreis_eeg2023_settlement_triggers_with_1h() {
         },
         einspeisemenge_kwh: Some(dec!(100)),
         inbetriebnahme: Some(date!(2023 - 07 - 01)),
-        leistung_kwp: Some(dec!(200)),
+        leistung_kwp: Some(dec!(500)),
         kwh_during_negative_epex: Some(dec!(100)), // all kWh during negative EPEX
         eeg_gesetz: EegGesetz::Eeg2023,
         ..Default::default()
@@ -1495,7 +1536,7 @@ fn negativpreis_eeg2017_solar_1mw_not_exempt() {
         inbetriebnahme: Some(date!(2017 - 09 - 01)),
         leistung_kwp: Some(dec!(1000)), // 1 MW solar → ≥ 500 kW → §51 applies
         kwh_during_negative_epex: Some(dec!(200)), // caller verified ≥6h
-        erzeugungsart: Some(ErzeugungsArt::Solar),
+        erzeugungsart: Some(ErzeugungsArt::SolarAufdach),
         eeg_gesetz: EegGesetz::Eeg2017,
         ..Default::default()
     });

@@ -122,7 +122,14 @@ impl Daemon for Einsd {
             tokio::spawn(worker.run(ct.clone()));
         }
 
-        // Background worker: emit de.eeg.anlage.foerderung-auslaufend every 6 h.
+        // Background worker: `de.eeg.anlage.foerderung-auslaufend`.
+        //
+        // The alert is emitted **once per plant**, not once per sweep. The window
+        // is 180 days wide and the sweep ran every six hours, so every expiring
+        // plant produced ~720 identical CloudEvents — enough to bury the one
+        // event an operator was supposed to act on. `foerderung_alert_sent_at`
+        // records the emission and the query excludes plants that already have
+        // one; a repowering clears it, because the new Förderende is a new fact.
         let alert_pool = pool.clone();
         let alert_cfg = Arc::clone(&cfg);
         let alert_client = Arc::clone(&http_client);
@@ -130,7 +137,7 @@ impl Daemon for Einsd {
             let interval_secs = alert_cfg.alert_interval_secs.unwrap_or(21_600);
             loop {
                 tokio::time::sleep(tokio::time::Duration::from_secs(interval_secs)).await;
-                match pg::list_expiring(&alert_pool, &alert_cfg.tenant, 180).await {
+                match pg::list_expiring_unalerted(&alert_pool, &alert_cfg.tenant, 180).await {
                     Ok(plants) if !plants.is_empty() => {
                         let today = time::OffsetDateTime::now_utc().date();
                         for plant in &plants {
@@ -150,6 +157,20 @@ impl Daemon for Einsd {
                                 days_remaining,
                             )
                             .await;
+                            // Marked after a successful-or-failed delivery attempt:
+                            // the alert is advisory and `GET /foerderung-auslaufend`
+                            // still lists the plant, so a retry storm is the worse
+                            // failure of the two.
+                            if let Err(e) = pg::mark_foerderung_alert_sent(
+                                &alert_pool,
+                                &alert_cfg.tenant,
+                                &plant.tr_id,
+                            )
+                            .await
+                            {
+                                tracing::warn!(tr_id = %plant.tr_id, error = %e,
+                                    "alert worker: could not record the emission");
+                            }
                         }
                     }
                     Ok(_) => {}
@@ -159,7 +180,7 @@ impl Daemon for Einsd {
         });
 
         // Background worker: auto-settle any active plant with no successful
-        // receipt for the previous month.
+        // receipt for a recent month.
         //
         // Runs on a fixed ~23 h interval but only from `auto_settle_from_day`
         // onwards: the ÜNB publishes the Marktwert around the 5th and edmd's
@@ -168,13 +189,21 @@ impl Daemon for Einsd {
         // (plant, period), so a plant already settled is skipped rather than
         // rebilled — and one that was not is retried.
         //
-        // EEG Vergütung must be paid monthly per §23 EEG 2023. The NB is responsible
-        // for initiating payment within 30 days of the billing month end.
+        // It sweeps `auto_settle_catchup_months` periods back, newest first, not
+        // only the previous month. A month the service was down for, or whose
+        // Marktwert arrived late, was otherwise never revisited: the window moved
+        // on and the plant simply went unpaid, with nothing in the service that
+        // would ever notice. §23 EEG 2023 makes the monthly payment the NB's
+        // obligation, so silently skipping one is not an option.
         let auto_pool = pool.clone();
         let auto_cfg = Arc::clone(&cfg);
         let auto_client = Arc::clone(&http_client);
         tokio::spawn(async move {
             let from_day = auto_cfg.auto_settle_from_day.unwrap_or(7);
+            let catchup = auto_cfg
+                .auto_settle_catchup_months
+                .unwrap_or(3)
+                .clamp(1, 24);
             // Wait for startup before first run.
             tokio::time::sleep(tokio::time::Duration::from_secs(60)).await;
             loop {
@@ -188,150 +217,9 @@ impl Daemon for Einsd {
                     tokio::time::sleep(tokio::time::Duration::from_secs(82_800)).await;
                     continue;
                 }
-                // Settle the previous calendar month.
-                let prev_month_year = if now.month() as u8 == 1 {
-                    now.year() - 1
-                } else {
-                    now.year()
-                };
-                let prev_month = if now.month() as u8 == 1 {
-                    12i16
-                } else {
-                    now.month() as i16 - 1
-                };
-
-                // Resolve EPEX price for previous month. A missing price and a
-                // failed lookup are different problems — one waits for an
-                // import, the other for an operator — so they are logged apart.
-                let epex = match pg::fetch_epex_price(
-                    &auto_pool,
-                    prev_month_year as i16,
-                    prev_month,
-                )
-                .await
-                {
-                    Ok(price) => {
-                        if price.is_none() {
-                            tracing::info!(
-                                year = prev_month_year,
-                                month = prev_month,
-                                "auto-settle worker: no EPEX monthly price imported yet"
-                            );
-                        }
-                        price
-                    }
-                    Err(e) => {
-                        tracing::warn!(
-                            year = prev_month_year, month = prev_month, error = %e,
-                            "auto-settle worker: EPEX monthly price lookup failed"
-                        );
-                        None
-                    }
-                };
-
-                let plants = pg::list_unsettled(
-                    &auto_pool,
-                    &auto_cfg.tenant,
-                    prev_month_year as i16,
-                    prev_month,
-                )
-                .await
-                .unwrap_or_default();
-
-                if !plants.is_empty() {
-                    tracing::info!(
-                        year = prev_month_year,
-                        month = prev_month,
-                        unsettled = plants.len(),
-                        "auto-settle worker: settling unsettled plants"
-                    );
-                    // Signal the batch to agentd's einsd-batch-agent (§52 sweep / review).
-                    handlers::emit_batch_due_ce(
-                        &auto_cfg,
-                        &auto_client,
-                        prev_month_year as i16,
-                        prev_month,
-                        plants.len(),
-                    )
-                    .await;
-                    for anlage in &plants {
-                        let kwh = handlers::fetch_einspeisemenge_from_edmd(
-                            &auto_cfg,
-                            &auto_client,
-                            &anlage.malo_id,
-                            prev_month_year as i16,
-                            prev_month,
-                        )
-                        .await;
-                        // §51/§51a auto-derivation from edmd ¼h feed-in × the EPEX
-                        // spot store (§60-gated). None when data is absent/incomplete.
-                        let (neg_kwh, neg_qh) = match handlers::derive_negativpreis_from_edmd(
-                            &auto_cfg,
-                            &auto_client,
-                            &auto_pool,
-                            &anlage.malo_id,
-                            anlage.eeg_gesetz,
-                            prev_month_year as i16,
-                            prev_month,
-                        )
-                        .await
-                        {
-                            Some((k, q)) => (Some(k), Some(q)),
-                            None => (None, None),
-                        };
-                        let input = einsd::pg::build_settle_input(
-                            &auto_cfg.tenant,
-                            anlage,
-                            prev_month_year as i16,
-                            prev_month,
-                            einsd::pg::SettleOverrides {
-                                einspeisemenge_kwh: kwh,
-                                epex_avg_ct_kwh: epex,
-                                einspeisemanagement_kwh: None,
-                                kwh_during_negative_epex: neg_kwh,
-                                negative_price_quarter_hours: neg_qh,
-                                correction_of: None,
-                                correction_reason: None,
-                                jahresmarktwert_ct_kwh: None,
-                            },
-                        );
-                        // Transactional outbox: settlement write + CE enqueue commit as one.
-                        let mut tx = match auto_pool.begin().await {
-                            Ok(tx) => tx,
-                            Err(e) => {
-                                tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: begin tx failed");
-                                continue;
-                            }
-                        };
-                        match pg::run_settlement(&mut tx, input).await {
-                            Ok(result) => {
-                                // Single-sourced with the REST/batch/MCP paths: one
-                                // CE-type map + status gate (a `calculated` payment
-                                // only; `foerderung_beendet` is a zero post-Förderende
-                                // month and no longer emits a zero-value payout CE).
-                                if let Err(e) = handlers::enqueue_settlement_ce(
-                                    &mut tx,
-                                    &auto_cfg,
-                                    anlage,
-                                    &result,
-                                    prev_month_year as i16,
-                                    prev_month,
-                                )
-                                .await
-                                {
-                                    tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: enqueue failed");
-                                    continue; // tx dropped → rollback
-                                }
-                                if let Err(e) = tx.commit().await {
-                                    tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: commit failed");
-                                }
-                            }
-                            // tx dropped → rollback.
-                            Err(e) => {
-                                tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: settlement failed");
-                            }
-                        }
-                    }
+                for back in 1..=i32::from(catchup) {
+                    let (year, month) = month_offset(now.year(), now.month() as i32, -back);
+                    auto_settle_period(&auto_pool, &auto_cfg, &auto_client, year, month).await;
                 }
 
                 // Run again in ~23 h (drift-proof; avoids DST edge at midnight).
@@ -379,10 +267,19 @@ impl Daemon for Einsd {
                                         .get("erzeugungsart")
                                         .and_then(|v| v.as_str())
                                         .unwrap_or("DEFAULT");
+                                    // Parsed from the JSON number's own text, not
+                                    // through f64: a Marktwert is money and 6.42
+                                    // has no exact binary representation.
                                     let avg_ct = item
                                         .get("avg_ct_kwh")
-                                        .and_then(|v| v.as_f64())
-                                        .and_then(|f| rust_decimal::Decimal::try_from(f).ok());
+                                        .and_then(|v| match v {
+                                            serde_json::Value::Number(n) => {
+                                                n.to_string().parse().ok()
+                                            }
+                                            serde_json::Value::String(s) => s.parse().ok(),
+                                            _ => None,
+                                        })
+                                        .map(|d: rust_decimal::Decimal| d);
                                     if let Some(ct) = avg_ct
                                         && let Err(e) = pg::upsert_jahresmarktwert(
                                             &jmw_pool,
@@ -434,7 +331,105 @@ impl Daemon for Einsd {
     }
 }
 
+/// Shift `(year, month)` by `delta` months, wrapping the year.
+fn month_offset(year: i32, month: i32, delta: i32) -> (i16, i16) {
+    let zero_based = (year * 12 + (month - 1)) + delta;
+    (
+        i16::try_from(zero_based.div_euclid(12)).unwrap_or(i16::MAX),
+        i16::try_from(zero_based.rem_euclid(12) + 1).unwrap_or(1),
+    )
+}
+
+/// Settle every active plant that has no successful receipt for one period.
+///
+/// Each plant commits on its own transaction — the settlement write and its ERP
+/// CloudEvent together — so one plant's failure cannot roll back the batch.
+async fn auto_settle_period(
+    pool: &PgPool,
+    cfg: &config::EinsdConfig,
+    client: &reqwest::Client,
+    year: i16,
+    month: i16,
+) {
+    // A missing price and a failed lookup are different problems — one waits for
+    // an import, the other for an operator — so they are logged apart.
+    let epex = match pg::fetch_epex_price(pool, year, month).await {
+        Ok(price) => {
+            if price.is_none() {
+                tracing::info!(
+                    year,
+                    month,
+                    "auto-settle worker: no EPEX monthly price imported yet"
+                );
+            }
+            price
+        }
+        Err(e) => {
+            tracing::warn!(
+                year, month, error = %e,
+                "auto-settle worker: EPEX monthly price lookup failed"
+            );
+            None
+        }
+    };
+
+    let plants = match pg::list_unsettled(pool, &cfg.tenant, year, month).await {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!(year, month, error = %e, "auto-settle worker: unsettled lookup failed");
+            return;
+        }
+    };
+    if plants.is_empty() {
+        return;
+    }
+
+    tracing::info!(
+        year,
+        month,
+        unsettled = plants.len(),
+        "auto-settle worker: settling unsettled plants"
+    );
+    // Signal the batch to agentd's einsd-batch-agent (§52 sweep / review).
+    handlers::emit_batch_due_ce(cfg, client, year, month, plants.len()).await;
+
+    for anlage in &plants {
+        // The same path REST, batch and MCP take: the worker overrides only the
+        // market price it already resolved for the whole batch.
+        if let Err(e) = einsd::settle::settle_plant(
+            pool,
+            cfg,
+            client,
+            anlage,
+            year,
+            month,
+            einsd::settle::SettleRequest {
+                epex_avg_ct_kwh: epex,
+                ..Default::default()
+            },
+        )
+        .await
+        {
+            tracing::warn!(tr_id = %anlage.tr_id, error = %e, "auto-settle: settlement failed");
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Einsd>().await
+}
+
+#[cfg(test)]
+mod month_offset_tests {
+    use super::month_offset;
+
+    /// The catch-up sweep walks backwards across a year boundary every January.
+    #[test]
+    fn stepping_back_wraps_the_year() {
+        assert_eq!(month_offset(2026, 3, -1), (2026, 2));
+        assert_eq!(month_offset(2026, 1, -1), (2025, 12));
+        assert_eq!(month_offset(2026, 1, -3), (2025, 10));
+        assert_eq!(month_offset(2026, 2, -14), (2024, 12));
+    }
 }

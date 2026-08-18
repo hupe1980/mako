@@ -52,7 +52,7 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/settlements",
             get(crate::handlers::get_settlements),
         )
-        // ── Repowering (§22 EEG 2023) ──────────────────────────────────────────
+        // ── Repowering (§3 Nr. 30 i.V.m. §25 EEG 2023) ─────────────────────────
         .route(
             "/api/v1/anlagen/{tr_id}/repowering",
             post(crate::handlers::post_repowering),

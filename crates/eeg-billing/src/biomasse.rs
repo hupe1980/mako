@@ -182,3 +182,99 @@ mod tests {
         assert!(!data.substrate_cap_ok);
     }
 }
+
+// ── §3 Nr. 6 EEG — Bemessungsleistung ─────────────────────────────────────────
+
+/// The hours a Bemessungsleistung is measured against for one calendar year.
+///
+/// §3 Nr. 6 EEG defines the Bemessungsleistung as the annual kWh divided by
+/// *„die Summe der vollen Zeitstunden des jeweiligen Kalenderjahres abzüglich der
+/// vollen Stunden vor der erstmaligen Erzeugung"*. Two things follow that a flat
+/// 8 760 gets wrong:
+///
+/// - a **leap year has 8 784 hours**, so the flat figure understates the quota by
+///   24 h × the capacity share — real money for a plant on the §44b cap;
+/// - a plant that **first generated during the year** is measured against the
+///   hours since, not the whole year, so a flat figure hands it a full-year quota
+///   the statute does not give it.
+///
+/// Returns `None` only for a year the calendar cannot represent.
+#[must_use]
+pub fn bemessungsleistung_stunden(
+    kalenderjahr: i32,
+    erstmalige_erzeugung: Option<time::Date>,
+) -> Option<rust_decimal::Decimal> {
+    use rust_decimal::Decimal;
+    let jahresbeginn =
+        time::Date::from_calendar_date(kalenderjahr, time::Month::January, 1).ok()?;
+    let naechstes_jahr =
+        time::Date::from_calendar_date(kalenderjahr + 1, time::Month::January, 1).ok()?;
+
+    // Hours before the first generation are deducted; a plant that started in an
+    // earlier year has none to deduct, one that starts later has no claim at all.
+    let start = match erstmalige_erzeugung {
+        Some(d) if d >= naechstes_jahr => return Some(Decimal::ZERO),
+        Some(d) if d > jahresbeginn => d,
+        _ => jahresbeginn,
+    };
+    let tage = (naechstes_jahr - start).whole_days();
+    Some(Decimal::from(tage) * Decimal::from(24))
+}
+
+/// §44b Abs. 1 EEG 2023 — the annual kWh a Biogas plant may be paid the full rate for.
+///
+/// The share of a calendar year's generation whose Bemessungsleistung equals 45 %
+/// of the installed capacity: `0,45 × P_inst ×` the §3 Nr. 6 hours.
+#[must_use]
+pub fn sect44b_jahreskontingent_kwh(
+    leistung_kw: rust_decimal::Decimal,
+    kalenderjahr: i32,
+    erstmalige_erzeugung: Option<time::Date>,
+) -> rust_decimal::Decimal {
+    use rust_decimal::dec;
+    let stunden =
+        bemessungsleistung_stunden(kalenderjahr, erstmalige_erzeugung).unwrap_or(dec!(8760));
+    (leistung_kw * dec!(0.45) * stunden).round_dp(3)
+}
+
+#[cfg(test)]
+mod bemessungsleistung_tests {
+    use super::*;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    /// A leap year has 8 784 hours. The flat 8 760 cost a 500 kW plant
+    /// 24 × 0,45 × 500 = 5 400 kWh of full-rate quota every leap year.
+    #[test]
+    fn a_leap_year_has_more_hours() {
+        assert_eq!(bemessungsleistung_stunden(2027, None), Some(dec!(8760)));
+        assert_eq!(bemessungsleistung_stunden(2028, None), Some(dec!(8784)));
+        assert_eq!(
+            sect44b_jahreskontingent_kwh(dec!(500), 2028, None)
+                - sect44b_jahreskontingent_kwh(dec!(500), 2027, None),
+            dec!(5400)
+        );
+    }
+
+    /// §3 Nr. 6 deducts the hours before the first generation, so a plant that
+    /// started mid-year is measured against the rest of it — a flat figure would
+    /// hand it a full-year quota.
+    #[test]
+    fn hours_before_the_first_generation_are_deducted() {
+        // 1 July 2027 → 184 days remain (Jul 31 + Aug 31 + Sep 30 + Oct 31 + Nov 30 + Dec 31).
+        assert_eq!(
+            bemessungsleistung_stunden(2027, Some(date!(2027 - 07 - 01))),
+            Some(dec!(4416))
+        );
+        // A plant commissioned in an earlier year is measured against the whole year.
+        assert_eq!(
+            bemessungsleistung_stunden(2027, Some(date!(2020 - 03 - 01))),
+            Some(dec!(8760))
+        );
+        // One that starts after the year has no quota in it at all.
+        assert_eq!(
+            bemessungsleistung_stunden(2027, Some(date!(2028 - 01 - 01))),
+            Some(dec!(0))
+        );
+    }
+}
