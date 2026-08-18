@@ -54,6 +54,8 @@ pub struct ProjectionWorker<P> {
     poll_interval: Duration,
     /// Optional liveness heartbeat — updated after each tick.
     heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
+    /// Graceful-shutdown signal — see [`ProjectionWorker::with_shutdown`].
+    shutdown: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl<P: Projection + Send> ProjectionWorker<P> {
@@ -79,6 +81,7 @@ impl<P: Projection + Send> ProjectionWorker<P> {
             prefix,
             poll_interval,
             heartbeat: None,
+            shutdown: None,
         }
     }
 
@@ -94,12 +97,27 @@ impl<P: Projection + Send> ProjectionWorker<P> {
         self
     }
 
-    /// Run the worker loop forever.
+    /// Attach a graceful-shutdown token.
+    ///
+    /// Cancelling it makes [`ProjectionWorker::run`] return out of its idle
+    /// tick, so the caller can close the store once the worker has stopped
+    /// writing checkpoints to it.
+    #[must_use]
+    pub fn with_shutdown(mut self, shutdown: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+
+    /// Run the worker loop until the shutdown token is cancelled.
     ///
     /// Ticks at `poll_interval`, calling `catch_up_persistent` on each tick
     /// to feed new events to the projection and persist the updated checkpoint.
     /// Errors are logged but do not terminate the loop; transient storage
     /// failures self-heal on the next tick.
+    ///
+    /// A catch-up already in flight runs to completion: an interrupted one would
+    /// leave the checkpoint behind the events it already folded, and the next
+    /// start would replay them into a projection that had counted them.
     pub async fn run(mut self) {
         let name = self.projection.name();
         let mut interval = tokio::time::interval(self.poll_interval);
@@ -114,7 +132,23 @@ impl<P: Projection + Send> ProjectionWorker<P> {
         );
 
         loop {
-            interval.tick().await;
+            match &self.shutdown {
+                Some(token) => {
+                    tokio::select! {
+                        _ = interval.tick() => {}
+                        () = token.cancelled() => {
+                            tracing::info!(
+                                projection = name,
+                                "projection worker: shutdown signalled; stopping",
+                            );
+                            return;
+                        }
+                    }
+                }
+                None => {
+                    interval.tick().await;
+                }
+            }
             match ProjectionRunner::catch_up_persistent(
                 &mut self.projection,
                 &self.store,

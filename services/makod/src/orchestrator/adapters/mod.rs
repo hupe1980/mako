@@ -284,6 +284,7 @@ fn build_mabis_iftsta_command(msg: &AnyMessage) -> Result<BillingCommand, Engine
     })
 }
 
+/// Accept-predicate shared by every adapter in this module.
 ///
 /// Returns `true` when `fv` is in the set of format versions derived from the
 /// compiled `edi-energy` profile registry.
@@ -311,6 +312,129 @@ pub fn known_fvs() -> Vec<FormatVersion> {
         .into_iter()
         .filter_map(|s| FormatVersion::parse(&s).ok())
         .collect()
+}
+
+// ── Adapter coverage ─────────────────────────────────────────────────────────
+
+/// Coverage verdict for one adapter registry.
+pub struct RegistryCoverage {
+    /// Name of the `*_registry` constructor this verdict describes.
+    pub registry: &'static str,
+    /// Number of adapters the registry holds.
+    pub adapters: usize,
+    /// Format versions no adapter in the registry accepts.
+    pub uncovered: Vec<FormatVersion>,
+}
+
+/// Build one coverage verdict per registry.
+///
+/// The table is the single enumeration of the module's registries. The
+/// `every_registry_is_in_the_coverage_table` test below scans this module's
+/// submodules for `pub fn …_registry` and fails when one is missing, so a new
+/// registry cannot be added without also being checked at startup — which is
+/// exactly how twenty of them silently escaped the previous hand-maintained
+/// list in `startup.rs`.
+macro_rules! coverage_table {
+    ($($name:ident),+ $(,)?) => {
+        /// Report adapter coverage for every registry in this module.
+        ///
+        /// A registry is covered when some adapter in it accepts every format
+        /// version in [`known_fvs`]. Consumed by
+        /// `startup::validate_adapter_coverage`, which refuses to boot on a gap.
+        #[must_use]
+        pub fn coverage() -> Vec<RegistryCoverage> {
+            let known = known_fvs();
+            vec![$({
+                let registry = $name();
+                RegistryCoverage {
+                    registry: stringify!($name),
+                    adapters: registry.len(),
+                    uncovered: registry
+                        .validate_policy(
+                            &mako_engine::version::WorkflowVersionPolicy::ForwardCompatible,
+                            &known,
+                        )
+                        .err()
+                        .unwrap_or_default(),
+                }
+            }),+]
+        }
+    };
+}
+
+coverage_table! {
+    esa_wertebestellung_registry,
+    gabi_gas_allocation_registry,
+    gabi_gas_comdis_registry,
+    gabi_gas_invoic_registry,
+    gabi_gas_nomination_registry,
+    gabi_gas_remadv_registry,
+    geli_gas_datenabruf_ablehnung_registry,
+    geli_gas_datenabruf_receive_registry,
+    geli_gas_lf_anmeldung_registry,
+    geli_gas_mscons_registry,
+    geli_gas_partin_registry,
+    geli_gas_registry,
+    geli_gas_sperrprozesse_invoic_registry,
+    geli_gas_sperrung_lf_registry,
+    geli_gas_sperrung_nb_registry,
+    geli_gas_sperrung_nb_response_registry,
+    geli_gas_sperrung_nb_stornierung_registry,
+    geli_gas_stammdaten_registry,
+    geli_gas_stornierung_lf_registry,
+    geli_gas_stornierung_registry,
+    gpke_abrechnung_comdis_registry,
+    gpke_abrechnung_registry,
+    gpke_abrechnung_remadv_registry,
+    gpke_allokationsliste_mscons_registry,
+    gpke_allokationsliste_ordrsp_registry,
+    gpke_anfrage_bestellung_registry,
+    gpke_ankuendigung_zuordnung_lf_registry,
+    gpke_beendigung_zuordnung_registry,
+    gpke_datenabruf_registry,
+    gpke_eog_registry,
+    gpke_konfiguration_aenderung_registry,
+    gpke_konfiguration_registry,
+    gpke_lf_abmeldung_registry,
+    gpke_lf_anmeldung_registry,
+    gpke_messwerte_registry,
+    gpke_neuanlage_registry,
+    gpke_partin_registry,
+    gpke_registry,
+    gpke_sperrung_lf_registry,
+    gpke_sperrung_msb_response_registry,
+    gpke_sperrung_registry,
+    gpke_sperrung_stornierung_registry,
+    gpke_stammdaten_registry,
+    gpke_stornierung_registry,
+    gpke_utilts_registry,
+    mabis_anforderung_registry,
+    mabis_clearingliste_registry,
+    mabis_listenabgleich_registry,
+    mabis_registry,
+    mabis_zp_lifecycle_registry,
+    wim_gas_anmeldung_registry,
+    wim_gas_geraeteubernahme_registry,
+    wim_gas_insrpt_registry,
+    wim_gas_invoic_comdis_registry,
+    wim_gas_invoic_registry,
+    wim_gas_invoic_remadv_registry,
+    wim_gas_kuendigung_registry,
+    wim_gas_stornierung_registry,
+    wim_gas_verpflichtungsanfrage_registry,
+    wim_geraeteubernahme_registry,
+    wim_insrpt_registry,
+    wim_invoic_comdis_registry,
+    wim_invoic_registry,
+    wim_invoic_remadv_registry,
+    wim_preisanfrage_registry,
+    wim_preisliste_registry,
+    wim_rechnungsabwicklung_registry,
+    wim_registry,
+    wim_stammdaten_registry,
+    wim_stammdaten_uebermittlung_registry,
+    wim_technik_aenderung_registry,
+    wim_wertebestellung_registry,
 }
 
 // ── EDIFACT → BO4E anti-corruption layer ─────────────────────────────────────
@@ -1187,6 +1311,67 @@ mod fernsteuerbarkeit_tests {
         assert_eq!(
             extract_zugeordneter_msb(&[seg("CAV", vec![vec!["Z28"]])]),
             None
+        );
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod coverage_table_tests {
+    /// Every `pub fn …_registry` in this module must appear in the coverage
+    /// table, so startup validation cannot silently skip one.
+    ///
+    /// This is the guard for a gap that was live: `startup.rs` carried a
+    /// hand-written list of registries to validate, and twenty registries —
+    /// among them both Wertebestellung families, the GPKE EoG workflow, the
+    /// WiM Technik-Änderung, and every REMADV/COMDIS resume path — had simply
+    /// never been added to it.
+    #[test]
+    fn every_registry_is_in_the_coverage_table() {
+        const SOURCES: &[(&str, &str)] = &[
+            ("gabi_gas.rs", include_str!("gabi_gas.rs")),
+            ("geli_gas.rs", include_str!("geli_gas.rs")),
+            ("gpke.rs", include_str!("gpke.rs")),
+            ("mabis.rs", include_str!("mabis.rs")),
+            ("wim.rs", include_str!("wim.rs")),
+            ("wim_gas.rs", include_str!("wim_gas.rs")),
+        ];
+        let table: std::collections::HashSet<&str> =
+            super::coverage().iter().map(|c| c.registry).collect();
+
+        let mut missing: Vec<String> = Vec::new();
+        for (file, src) in SOURCES {
+            for line in src.lines() {
+                let Some(rest) = line.strip_prefix("pub fn ") else {
+                    continue;
+                };
+                let Some((name, _)) = rest.split_once('(') else {
+                    continue;
+                };
+                if name.ends_with("_registry") && !table.contains(name) {
+                    missing.push(format!("{file}: {name}"));
+                }
+            }
+        }
+        assert!(
+            missing.is_empty(),
+            "these adapter registries are not in the coverage table and are \
+             therefore never validated at startup:\n  {}\n\
+             Add each name to the `coverage_table!` invocation in adapters/mod.rs.",
+            missing.join("\n  ")
+        );
+    }
+
+    /// Coverage is meaningless without format versions to cover: an empty
+    /// `known_fvs()` makes every registry vacuously complete while no message
+    /// would parse at all.
+    #[test]
+    fn the_known_format_versions_are_not_empty() {
+        assert!(
+            !super::known_fvs().is_empty(),
+            "no BDEW format version is registered in the compiled edi-energy \
+             profile registry — every adapter would reject every message"
         );
     }
 }

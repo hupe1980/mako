@@ -43,6 +43,7 @@ use edi_energy::{AnyMessage, EdiEnergyMessage as _, ReleaseRegistry};
 use mako_engine::{
     deadline::Deadline,
     error::EngineError,
+    event_store::CorrelationEntry,
     fristen::{self, HolidayCalendar},
     ids::{ProcessId, ProcessIdentity, TenantId},
     process::Process,
@@ -147,6 +148,57 @@ pub struct EdifactIngestDispatcher {
     ///
     /// See [`EdifactIngestDispatcher::with_marktd_client`].
     marktd_client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
+    /// Serialises the lookup→spawn window per business key — see
+    /// [`BusinessKeyLocks`].
+    ///
+    /// `Arc`, not a plain field: the dispatcher is `Clone`, and a clone with its
+    /// own lock map would serialise nothing between the two copies.
+    key_locks: Arc<BusinessKeyLocks>,
+}
+
+/// Per-business-key mutexes guarding the lookup→spawn critical section.
+///
+/// # Why this exists
+///
+/// Spawning is a check-then-act: `lookup_correlated` finds no live process, so
+/// one is created. Two initiating messages for the same business key arriving
+/// concurrently both pass the check and both spawn. The damage surfaces later —
+/// every follow-up resolves the key to two processes and fails with
+/// `AmbiguousProcess`, and the duplicate runs its own Fristen to expiry.
+///
+/// AS4 inbox deduplication does not cover this: it suppresses identical
+/// retransmits of one message, whereas this needs two *distinct* messages
+/// (an ORDERS and an ORDCHG for one MaLo, say) landing together.
+///
+/// An in-process lock is sufficient because `makod` is a single writer by
+/// construction — the exclusive data-directory lock refuses a second instance,
+/// and `--allow-multi-instance` already documents that inbox dedup is not shared
+/// across instances. A distributed deployment needs the same external lock for
+/// both.
+#[derive(Default)]
+struct BusinessKeyLocks {
+    inner: std::sync::Mutex<std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+}
+
+impl BusinessKeyLocks {
+    /// Acquire the lock for `key`, waiting for any concurrent spawn to finish.
+    ///
+    /// Entries for keys nobody is holding are dropped on each acquisition, so
+    /// the map tracks in-flight spawns rather than every key ever seen.
+    async fn acquire(&self, key: &str) -> tokio::sync::OwnedMutexGuard<()> {
+        let lock = {
+            let mut map = self
+                .inner
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            map.retain(|_, l| Arc::strong_count(l) > 1);
+            Arc::clone(
+                map.entry(key.to_owned())
+                    .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+            )
+        };
+        lock.lock_owned().await
+    }
 }
 
 impl EdifactIngestDispatcher {
@@ -281,6 +333,7 @@ impl EdifactIngestDispatcher {
             snapshot_interval,
             tenant_id,
             marktd_client: None,
+            key_locks: Arc::new(BusinessKeyLocks::default()),
         }
     }
 
@@ -564,6 +617,10 @@ impl EdifactIngestDispatcher {
             });
         }
 
+        // Held across the whole check-then-act below. Releasing it before the
+        // spawn commits would reopen the window it exists to close.
+        let _key_guard = self.key_locks.acquire(key).await;
+
         let registry = self.store.as_process_registry();
         let identities = registry.lookup_correlated(self.tenant_id, key).await?;
 
@@ -617,53 +674,57 @@ impl EdifactIngestDispatcher {
         );
         let process_id = process.process_id();
 
-        // Atomically persist events and (when applicable) the APERAK/process Frist
-        // deadlines.  Using `execute_and_enqueue_with_deadlines` ensures a crash
-        // between event write and deadline registration cannot produce a process with
-        // no monitoring window (dual-write atomicity requirement).
-        if spawn_deadlines.is_empty() {
-            process
-                .execute_and_enqueue_with_snapshot_and_retry(
-                    cmd,
-                    3,
-                    &self.snap_store,
-                    self.snapshot_interval,
-                )
-                .await?;
-        } else {
-            let deadlines: Vec<Deadline> = spawn_deadlines
-                .iter()
-                .map(|&(label, due_at)| {
-                    Deadline::new(
-                        process.stream_id().clone(),
-                        process_id,
-                        self.tenant_id,
-                        workflow_id.clone(),
-                        label,
-                        due_at,
-                    )
-                })
-                .collect();
-            process
-                .execute_and_enqueue_with_deadlines(cmd, &deadlines)
-                .await?;
-        }
-
-        // Register under the business key for future correlation lookups.
+        // Persist events, the APERAK/process Frist deadlines, *and* the
+        // correlation-index entries in one write.
+        //
+        // All three are what a spawn consists of. The correlation entry used to
+        // be written afterwards, warn-only on failure, and that ordering was the
+        // gap: a process whose events are durable but whose business key is not
+        // registered cannot be found by the counterparty's reply. Every reply
+        // resolves to `Skipped(process_not_found)`, and the next thing that
+        // happens to the process is its own Frist expiring as a false timeout —
+        // while the business key stays blocked against a fresh spawn.
         let identity = process.identity();
-        if let Err(e) = registry
-            .register_correlated(self.tenant_id, key, process_id, identity.clone())
+        let correlations: Vec<CorrelationEntry> = std::iter::once(key)
+            .chain(extra_keys.iter().copied())
+            .filter(|k| !k.is_empty())
+            .map(|k| CorrelationEntry {
+                tenant_id: self.tenant_id,
+                tag: k.to_owned(),
+                process_id,
+                identity: identity.clone(),
+            })
+            .collect();
+
+        let deadlines: Vec<Deadline> = spawn_deadlines
+            .iter()
+            .map(|&(label, due_at)| {
+                Deadline::new(
+                    process.stream_id().clone(),
+                    process_id,
+                    self.tenant_id,
+                    workflow_id.clone(),
+                    label,
+                    due_at,
+                )
+            })
+            .collect();
+        process
+            .execute_and_enqueue_with_deadlines_and_correlations(cmd, &deadlines, &correlations)
+            .await?;
+
+        // Snapshot separately: it is a read-path accelerator, not part of the
+        // spawn's durability contract, and a failed snapshot must not undo it.
+        if let Err(e) = process
+            .take_snapshot(&self.snap_store, self.snapshot_interval)
             .await
         {
             tracing::warn!(
                 process_id = %process_id,
-                key        = %key,
                 error      = %e,
-                "ingest dispatcher: correlation registry failed (non-fatal — process was spawned)",
+                "ingest dispatcher: post-spawn snapshot failed (non-fatal — replay is slower)",
             );
         }
-        self.register_extra_keys(&registry, process_id, identity, extra_keys)
-            .await;
 
         Ok(IngestOutcome::Spawned {
             workflow_name: workflow_name_static,
@@ -1292,5 +1353,109 @@ mod faelligkeitsdatum_tests {
         let msg = parse_invoic("DTM+265:20260215:102'DTM+265:20260320:102'");
         let due = faelligkeitsdatum_from_invoic(&msg).expect("DTM+265 present");
         assert_eq!(due.date(), time::macros::date!(2026 - 03 - 20));
+    }
+}
+
+#[cfg(test)]
+mod business_key_lock_tests {
+    use super::BusinessKeyLocks;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    /// Two holders of the same key must never be inside the guarded section at
+    /// once.
+    ///
+    /// This is the mechanism behind the one-key-one-process invariant. The
+    /// integration test cannot prove it: the window between `lookup_correlated`
+    /// returning empty and the spawn committing is narrow, and whether two
+    /// ingests land inside it depends on store latency. Here the overlap is
+    /// forced with an await point in the critical section, so mutual exclusion
+    /// is asserted rather than hoped for.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn the_same_key_is_never_held_twice() {
+        let locks = Arc::new(BusinessKeyLocks::default());
+        let occupied = Arc::new(AtomicBool::new(false));
+        let overlaps = Arc::new(AtomicUsize::new(0));
+
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let locks = Arc::clone(&locks);
+            let occupied = Arc::clone(&occupied);
+            let overlaps = Arc::clone(&overlaps);
+            handles.push(tokio::spawn(async move {
+                let _guard = locks.acquire("51238696012").await;
+                if occupied.swap(true, Ordering::SeqCst) {
+                    overlaps.fetch_add(1, Ordering::SeqCst);
+                }
+                // Yield inside the section: without the lock this is where a
+                // second task would observe the same "no process yet" state.
+                tokio::task::yield_now().await;
+                occupied.store(false, Ordering::SeqCst);
+            }));
+        }
+        for h in handles {
+            h.await.expect("task joins");
+        }
+
+        assert_eq!(
+            overlaps.load(Ordering::SeqCst),
+            0,
+            "two ingests were inside the lookup→spawn section for one business \
+             key at the same time; both would have found no process and spawned \
+             one, leaving the key resolving to two",
+        );
+    }
+
+    /// Different keys must not block each other — the lock is per key, not a
+    /// global ingest bottleneck.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn different_keys_do_not_serialise() {
+        let locks = Arc::new(BusinessKeyLocks::default());
+        let both_inside = Arc::new(tokio::sync::Barrier::new(2));
+
+        let a = {
+            let locks = Arc::clone(&locks);
+            let barrier = Arc::clone(&both_inside);
+            tokio::spawn(async move {
+                let _g = locks.acquire("51238696012").await;
+                barrier.wait().await;
+            })
+        };
+        let b = {
+            let locks = Arc::clone(&locks);
+            let barrier = Arc::clone(&both_inside);
+            tokio::spawn(async move {
+                let _g = locks.acquire("51238696782").await;
+                barrier.wait().await;
+            })
+        };
+
+        // The barrier only releases when both are holding their locks at once,
+        // so completing at all is the assertion.
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            a.await.expect("task a");
+            b.await.expect("task b");
+        })
+        .await
+        .expect("two different keys must be holdable concurrently");
+    }
+
+    /// The map must not accumulate an entry per business key ever seen.
+    #[tokio::test]
+    async fn released_keys_are_pruned() {
+        let locks = BusinessKeyLocks::default();
+        for i in 0..100 {
+            let _g = locks.acquire(&format!("key-{i}")).await;
+        }
+        let held = locks
+            .inner
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .len();
+        assert!(
+            held <= 1,
+            "the lock map must track in-flight spawns, not every key ever seen; \
+             it holds {held} entries after 100 sequential acquisitions",
+        );
     }
 }

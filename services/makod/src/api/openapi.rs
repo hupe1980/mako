@@ -8,8 +8,8 @@
 //!
 //! All endpoints that carry business data are protected by Bearer token
 //! authentication and Cedar ABAC authorization. Tokens are named API keys
-//! provisioned via `--auth-key NAME=TOKEN`. The health probe at `GET /health`
-//! is always unauthenticated.
+//! provisioned via `--auth-key NAME=TOKEN`. The health probes under `/health`
+//! are always unauthenticated.
 
 use utoipa::{
     Modify, OpenApi,
@@ -69,7 +69,8 @@ administrative APIs for MaLo cache and partner directory management.",
         crate::partner_api::handle_delete,
         crate::partner_api::handle_import,
         // Health
-        crate::health::handler,
+        crate::health::live,
+        crate::health::ready,
     ),
     components(
         schemas(

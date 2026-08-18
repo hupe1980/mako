@@ -1,111 +1,53 @@
-//! `makod` — Mako process engine daemon.
+//! `makod` — the Mako process engine daemon.
 //!
-//! Assembles all domain modules (GPKE, WiM, GeLi Gas, MABIS) into a single
-//! [`EngineContext`] and runs until a graceful shutdown signal is received.
+//! Assembles the domain modules (GPKE, WiM, GeLi Gas, WiM Gas, MaBiS, GaBi Gas,
+//! Redispatch 2.0) into one [`EngineContext`], opens the configured transports,
+//! and runs until a shutdown signal arrives.
+//!
+//! Which modules are compiled in is a build-time choice — see the `role-*`
+//! features in `Cargo.toml`. A build that selects no role fails at startup
+//! rather than shipping a daemon whose router is empty.
+//!
+//! ## Where the reference lives
+//!
+//! Flags, environment variables and the `makod.toml` schema are **not**
+//! restated here; a copy of `--help` in a doc comment drifts from the `Cli`
+//! struct fifty lines below it. See:
+//!
+//! - `makod --help` — the authoritative flag list
+//! - [`core::config`] — the `makod.toml` schema, field by field
+//! - `services/makod/README.md` — port layout, module/PID table, quick start
+//! - the operator guide at <https://hupe1980.github.io/mako/docs/services/makod/>
+//!
+//! ## Boot order
+//!
+//! The sequence in [`async_main`] is deliberate, and `--check` exits partway
+//! through it:
+//!
+//! ```text
+//! 1. identity      [[party]] entries → MpIdRegistry → roles, tenant key
+//! 2. store         object store opens; exclusive data-dir lock
+//! 3. engine        domain modules → EngineContext → PidRouter
+//! 4. validation    profiles, adapter coverage, dispatch completeness, preflight
+//!    ── `--check` exits here: everything above only reads ──
+//! 5. reconcile     rebuild missing ProcessRegistry routing entries (writes)
+//! 6. transports    HTTP :8080, AS4 :4080, API-Webdienste :8090
+//! 7. workers       outbox, ERP webhook, deadlines, projections, inbox purge
+//! ```
+//!
+//! ## Shutdown
+//!
+//! On `SIGTERM`/`SIGINT` the shared [`CancellationToken`] is cancelled, every
+//! listener and worker is *joined*, the dead-letter buffer is flushed, and only
+//! then is the store closed. The join is the load-bearing step: closing the
+//! store under a running outbox worker can leave a message delivered but
+//! unacknowledged, which the next start delivers again. An incomplete drain
+//! exits non-zero.
+
+// The daemon holds regulated data and market credentials; the one `unsafe`
+// block it needs (clearing an env var before the runtime starts) opts out
+// explicitly and documents why it is sound.
 #![deny(unsafe_code)]
-//!
-//! ## Usage
-//!
-//! ```text
-//! makod [OPTIONS]
-//!
-//! Options:
-//!   -l, --log-level <LEVEL>                Log level [env: MAKOD_LOG_LEVEL=]  [default: info]
-//!   -f, --log-format <FORMAT>              Log format [env: MAKOD_LOG_FORMAT=] [default: pretty]
-//!       --data-dir <DIR>                   Persistent store path [env: MAKOD_DATA_DIR=]
-//!                                          WARNING: omitting this flag enables volatile (in-memory)
-//!                                          mode — all data is lost on exit. NOT for production use.
-//!       --object-store <BACKEND>           Object store backend [env: MAKOD_OBJECT_STORE=] [default: local]
-//!       --s3-bucket <BUCKET>               S3 bucket [env: MAKOD_S3_BUCKET=]
-//!       --s3-endpoint <URL>                S3 endpoint URL (for MinIO/compat) [env: MAKOD_S3_ENDPOINT=]
-//!       --gcs-bucket <BUCKET>              GCS bucket name [env: MAKOD_GCS_BUCKET=]
-//!       --azure-container <NAME>           Azure Blob container [env: MAKOD_AZURE_CONTAINER=]
-//!       --azure-account <ACCOUNT>          Azure Storage account [env: MAKOD_AZURE_ACCOUNT=]
-//!       --http-addr <ADDR>                 HTTP REST API listen address [env: MAKOD_HTTP_ADDR=]
-//!       --api-webdienste-addr <ADDR>       API-Webdienste Strom listen address [env: MAKOD_API_WEBDIENSTE_ADDR=]
-//!       --config <FILE>                    TOML config file — required: must define at least one [[party]] entry [env: MAKOD_CONFIG=]
-//!       --as4-addr <ADDR>                  AS4 inbound transport address [env: MAKOD_AS4_ADDR=]
-//!       --as4-signing-key-pem <PEM>        PEM private key for AS4 signing (ECDSA BrainpoolP256r1) [env: MAKOD_AS4_SIGNING_KEY_PEM=]
-//!       --as4-signing-cert-pem <PEM>       PEM X.509 certificate for AS4 signing [env: MAKOD_AS4_SIGNING_CERT_PEM=]
-//!       --as4-decryption-key-pem <PEM>     PEM private key for AS4 inbound decryption (ECDH-ES, BrainpoolP256r1) [env: MAKOD_AS4_DECRYPTION_KEY_PEM=]
-//!       --as4-partner-cert <GLN=PEM>       Per-partner encryption certificate for outbound AS4 (repeatable) [env: MAKOD_AS4_PARTNER_CERT=]
-//!       --as4-party-id <GLN>               AS4 party ID (operator GLN) [env: MAKOD_AS4_PARTY_ID=]
-//!       --as4-partner <GLN=URL>            Trading partner AS4 endpoint (repeatable) [env: MAKOD_AS4_PARTNER=]
-//!       --check                            Validate config/profiles/adapters and exit (no workers started) [env: MAKOD_CHECK=]
-//!   -h, --help                             Print help
-//!   -V, --version                          Print version
-//! ```
-//!
-//! ## REST API
-//!
-//! When `--http-addr` is set (e.g. `127.0.0.1:8080`), makod exposes:
-//!
-//! - `POST /api/v1/commands` — ERP submits a BO4E object (JSON) to initiate a MaKo process
-//! - `POST /edifact` — submit a raw EDIFACT interchange as an alternative to AS4
-//! - `GET  /admin/partners` — list all trading-partner records for this tenant
-//! - `GET  /admin/partners/{mp_id}` — retrieve a single partner record
-//! - `PUT  /admin/partners/{mp_id}` — create or update a partner record (JSON body)
-//! - `DELETE /admin/partners/{mp_id}` — remove a partner record
-//! - `POST /admin/partners/import` — import partners from a raw PARTIN EDIFACT interchange
-//!
-//! See [`edifact_api`] and [`partner_api`] for full request/response documentation.
-//!
-//! ## API-Webdienste Strom
-//!
-//! When `--api-webdienste-addr` is set (e.g. `127.0.0.1:8090`), makod exposes
-//! the BDEW API-Webdienste Strom endpoints (Control Measures v1, MaLo
-//! Identification v1) on a separate port.
-//!
-//! - **MaLo Identification** — active. `POST /maloId/request/v1` performs inbox
-//!   idempotency dedup and enqueues a `MaloIdentCallback` outbox message for
-//!   async cache lookup. Cache is populated via `PUT /admin/malo/{malo_id}`.
-//! - **Control Measures** — endpoints return `405 Method Not Allowed` until
-//!   Redispatch 2.0 is fully specified.
-//!
-//! ## Environment variables
-//!
-//! Every CLI flag has a corresponding `MAKOD_` environment variable. The CLI
-//! flag takes precedence over the environment variable when both are set.
-//!
-//! For AWS credentials, the standard `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-//! and `AWS_REGION` environment variables are used by the `object_store` crate
-//! automatically — no `MAKOD_`-prefixed credential variables are needed.
-//!
-//! For GCS, set `GOOGLE_SERVICE_ACCOUNT_KEY` (JSON key content) or
-//! `GOOGLE_SERVICE_ACCOUNT` (path to a key file). For Azure, set
-//! `AZURE_STORAGE_ACCOUNT_KEY` alongside `--azure-account`.
-//!
-//! ## Architecture
-//!
-//! ```text
-//! makod
-//!   └── EngineContext (SlateDbStore — in-memory by default, local FS via --data-dir)
-//!         ├── GpkeModule    — UTILMD PIDs 55001–55002, 55016 (`gpke-supplier-change`)
-//!         │                   + INVOIC PIDs 31001–31002, 31005–31006 (`gpke-abrechnung`)
-//!         │                   [role-lf-strom OR role-nb-strom OR no role flags]
-//!         ├── WimModule     — PIDs 55039, 55042, 55051, 55168 (WiM Strom, BK6-24-174)
-//!         │                   [role-msb-strom OR role-nb-strom OR no role flags]
-//!         ├── GeliGasModule — PIDs 44001–44021 (GeLi Gas; 44022–44024 registered by WimGasModule) + PID 31011 (AWH Rechnung)
-//!         │                   [role-lf-gas OR role-nb-gas OR no role flags]
-//!         ├── WimGasModule      — PIDs 44022–44024, 44039–44053, 44168–44170, 31003 + 31004 (WiM Gas MSB-Wechsel; the shared INVOIC workflow also hosts the Sparte-neutral universal Storno 31004)
-//!         │                       [role-msb-gas OR role-nb-gas OR no role flags]
-//!         ├── GaBiGasModule     — PIDs 31010/31007/31008 (INVOIC billing, BK7-24-01-008)
-//!         │                   + PID 33001 (REMADV Zahlungsavis) + PID 29001 (COMDIS Ablehnung)
-//!         │                   + PID 13013 (MSCONS Gas Allokationsliste, `gabi-gas-mmma`)
-//!         │                   [role-nb-gas OR no role flags]
-//!         ├── MabisModule       — PID 13003 only (MABIS Bilanzkreisabrechnung Strom, MSCONS Summenzeitreihe)
-//!         │                       [role-nb-strom OR no role flags]
-//!         └── RedispatchModule  — Redispatch 2.0 (§§ 13/13a/14 EnWG); XML routing + IFTSTA PIDs 21037/21038
-//!                                 [role-nb-strom OR no role flags]
-//!
-//! Background tasks:
-//!   ├── OutboxWorker      — drains pending outbox messages via MaloIdentSender
-//!   ├── OutboxErpWorker   — POSTs BO4E outbox entries to ERP webhook (optional; --erp-webhook-url)
-//!   ├── DeadlineScheduler — fires overdue process deadlines every 30 s
-//!   │                       (dispatches TimeoutExpired to each workflow family)
-//!   ├── HTTP server       — REST API (optional; enabled via --http-addr)
-//!   └── API-Webdienste    — BDEW Webdienste Strom (optional; --api-webdienste-addr)
-//! ```
 
 mod api;
 mod core;
@@ -116,36 +58,30 @@ mod transport;
 // Flat-path aliases so every historical `crate::<module>` path keeps resolving
 // inside the binary crate (which compiles the module tree independently of the
 // lib target). Mirrors the re-export block in lib.rs.
-use crate::api::{
-    edifact_api, invoic_api, malo_admin_api, mcp_server, metrics_api, migration_api, openapi,
-    partner_api,
-};
+use crate::api::{edifact_api, malo_admin_api, migration_api, partner_api};
 use crate::core::{
-    cedar_authz, config, erp_adapter, health, malo_cache, party_registry, worker_health,
+    cedar_authz, config, erp_adapter, health, malo_cache, party_registry, preflight, worker_health,
 };
 use crate::orchestrator::{
     adapters, commands_api, deadline_dispatch, edifact_renderer, ingest_dispatcher, netzzugang,
     projection_worker,
 };
 use crate::transport::{
-    api_bridge, as4_ingest, as4_sender, contrl_ack, malo_ident_sender, redispatch_xml_ingest,
-    verzeichnisdienst_worker, webdienste,
+    api_bridge, as4_sender, contrl_ack, malo_ident_sender, redispatch_xml_ingest,
+    verzeichnisdienst_worker,
 };
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context as _;
-use asx_rs::core::SessionContextBuilder;
-use asx_rs::observability::EventBus;
 use clap::{Parser, ValueEnum};
 use edi_energy::Platform;
 use mako_engine::{
-    builder::EngineBuilder,
     marktrolle::{DeploymentRoles, Marktrolle},
     store_slatedb::SlateDbStore,
 };
-use secrecy::{ExposeSecret as _, SecretString};
+use secrecy::SecretString;
 use tokio_util::sync::CancellationToken;
 use tracing::info;
 
@@ -159,13 +95,12 @@ use tracing::info;
     long_about = None,
 )]
 struct Cli {
-    /// Minimum log level to emit.
-    ///
     /// Path to a TOML configuration file.
     ///
     /// Settings loaded from the file are applied after CLI and environment
     /// variable resolution: CLI flags and env vars always take precedence.
-    /// See `config.rs` for the full schema and an annotated example.
+    /// Every flag below has a config-file equivalent; secrets additionally have
+    /// a `*_file` form that keeps them out of `ps` output and the environment.
     ///
     /// Can also be set via the `MAKOD_CONFIG` environment variable.
     #[arg(short = 'c', long, value_name = "FILE", env = "MAKOD_CONFIG")]
@@ -182,6 +117,23 @@ struct Cli {
     /// Can also be set via the `MAKOD_LOG_FORMAT` environment variable.
     #[arg(short = 'f', long, value_enum, default_value_t = LogFormat::Pretty, env = "MAKOD_LOG_FORMAT")]
     log_format: LogFormat,
+
+    /// OTLP collector endpoint for OpenTelemetry span export.
+    ///
+    /// Setting it enables OTLP export and switches the subscriber to structured
+    /// JSON (`--log-format` no longer applies). Inbound `traceparent` headers
+    /// are propagated across the outbox boundary into outbound deliveries.
+    ///
+    /// The standard `OTEL_EXPORTER_OTLP_ENDPOINT` variable takes precedence, so
+    /// a deployment can keep telemetry entirely in the orchestrator environment.
+    #[arg(long, value_name = "URL", env = "MAKOD_OTEL_ENDPOINT")]
+    otel_endpoint: Option<String>,
+
+    /// `service.name` resource attribute for exported spans. Default: `makod`.
+    ///
+    /// The standard `OTEL_SERVICE_NAME` variable takes precedence.
+    #[arg(long, value_name = "NAME", env = "MAKOD_OTEL_SERVICE_NAME")]
+    otel_service_name: Option<String>,
 
     /// Path to the persistent event-store directory (local filesystem).
     ///
@@ -500,11 +452,16 @@ struct Cli {
     #[arg(long, value_name = "ADDR", env = "MAKOD_AS4_ADDR")]
     as4_addr: Option<std::net::SocketAddr>,
 
-    /// PEM-encoded RSA private key used to sign outbound AS4 SOAP messages
-    /// (WS-Security XML-DSig) and synchronous receipts.
+    /// PEM-encoded EC (BrainpoolP256r1) private key used to sign outbound AS4
+    /// SOAP messages (WS-Security XML-DSig) and synchronous receipts.
     ///
-    /// Must be a PKCS#8 or traditional RSA private key in PEM format.
-    /// Required when `--as4-addr` is set.
+    /// BDEW AS4-Profil v1.2 §2.2.6.2.2 mandates ECDSA over BrainpoolP256r1;
+    /// this is the signing half of the keypair, distinct from
+    /// `--as4-decryption-key-pem`. Required when `--as4-addr` is set.
+    ///
+    /// Prefer `as4.signing_key_pem_file` in `makod.toml`: a key passed as a
+    /// flag is visible in `ps` output, and one passed by environment variable
+    /// is visible to anything that can read the process environment.
     ///
     /// Can also be set via the `MAKOD_AS4_SIGNING_KEY_PEM` environment variable.
     #[arg(
@@ -1082,6 +1039,11 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     let mp_id_registry: Arc<MpIdRegistry> =
         Arc::new(MpIdRegistry::from_config(&cli.parties).context("invalid [[party]] config")?);
 
+    // makod is single-tenant: the primary Marktpartner-ID *is* the tenant, and
+    // this UUID scopes every event stream, outbox entry and cache key. Derived
+    // once here rather than at each of the dozen sites that used to re-derive it.
+    let tenant_id = mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id());
+
     info!(
         primary_mp_id  = %mp_id_registry.primary_mp_id(),
         primary_agency = %mp_id_registry.primary_agency(),
@@ -1132,105 +1094,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         store
     };
 
-    // ── exclusive file lock on data directory ──────────────────────────
-    //
-    // Prevent two makod instances from opening the same SlateDB data directory.
-    // Two concurrent writers against the same SlateDB path would corrupt the
-    // write-ahead log and produce split-brain event sequences.
-    //
-    // `Box::leak` intentionally leaks the `RwLock<File>` allocation so the
-    // write guard can hold a `'static` reference.  The file descriptor is
-    // reclaimed by the OS when the process exits.  No `unsafe` is required
-    // because `Box::leak` is a safe standard-library function.
-    let _data_dir_lock: Option<fd_lock::RwLockWriteGuard<'static, std::fs::File>> =
-        if let Some(ref data_dir) = cli.data_dir {
-            std::fs::create_dir_all(data_dir)?;
-            let lock_path = data_dir.join(".makod.lock");
-            let lock_file = std::fs::OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(false)
-                .open(&lock_path)?;
-            let lock_ref: &'static mut fd_lock::RwLock<std::fs::File> =
-                Box::leak(Box::new(fd_lock::RwLock::new(lock_file)));
-            match lock_ref.try_write() {
-                Ok(guard) => {
-                    info!(path = %lock_path.display(), "acquired exclusive data-dir lock");
-                    Some(guard)
-                }
-                Err(e) => {
-                    tracing::error!(
-                        path = %lock_path.display(),
-                        error = %e,
-                        "Another makod instance is already using this data directory. \
-                         Refusing to start to prevent write-ahead log corruption.",
-                    );
-                    std::process::exit(1);
-                }
-            }
-        } else {
-            None
-        };
+    // Refuse a second writer on the same SlateDB path before anything else
+    // touches it. Held for the process lifetime.
+    let _data_dir_lock = startup::lock_data_dir(cli.data_dir.as_deref())?;
 
-    // ── `makod migrate` subcommand ─────────────────────────────────────────
-    //
-    // Run all pending FV migrations and exit.  This allows operators to use
-    // `makod migrate` as a Kubernetes initContainer or Compose `depends_on`
-    // step without starting the full HTTP/AS4 server.
+    // `makod migrate` runs pending FV migrations and exits, so an operator can
+    // use it as a Kubernetes initContainer or a Compose `depends_on` step
+    // without starting the HTTP/AS4 servers.
     if matches!(cli.command, Some(CliCommand::Migrate)) {
-        // Migrate FV2025-10-01 → FV2026-10-01 (the only active transition).
-        // When more transitions exist, iterate over them here in order.
-        match migration_api::dispatch_migrations("FV2025-10-01", "FV2026-10-01", &store).await {
-            Some((report, _count)) if report.errors.is_empty() => {
-                // Print a JSON summary to stdout for CI log capture.
-                println!(
-                    "{{\"migrated\":{},\"skipped\":{},\"errors\":[]}}",
-                    report.migrated, report.skipped
-                );
-                tracing::info!(
-                    migrated = report.migrated,
-                    skipped = report.skipped,
-                    "makod migrate: all migrations completed successfully",
-                );
-                return Ok(());
-            }
-            Some((report, _count)) => {
-                for err in &report.errors {
-                    tracing::error!(error = %err, "migration error");
-                }
-                anyhow::bail!(
-                    "makod migrate: {} migration error(s) — see log for details",
-                    report.errors.len()
-                );
-            }
-            None => {
-                tracing::info!(
-                    "makod migrate: no applicable migration found for this transition; nothing to do"
-                );
-                return Ok(());
-            }
-        }
-    }
-
-    // ── ProcessRegistry startup reconciliation ─────────────────────────
-    //
-    // On restart after a crash or after an operator accidentally deleted a
-    // registry entry, inbound APERAKs can no longer be routed to their target
-    // process.  Reconciliation scans all `process/` streams, loads the first
-    // event from each, and re-registers any entries missing from the registry.
-    //
-    // This is a one-time startup operation — it does NOT block the server from
-    // accepting requests and runs before the engine context is built.
-    match reconcile_process_registry(&store).await {
-        Ok(0) => {}
-        Ok(n) => tracing::warn!(
-            count = n,
-            "ProcessRegistry reconciled: reconstructed missing routing entries on startup",
-        ),
-        Err(e) => tracing::error!(
-            error = %e,
-            "ProcessRegistry reconciliation failed (non-fatal — engine will start anyway)",
-        ),
+        return run_migrations(&store).await;
     }
 
     // ── Dead-letter sink + worker ────────────────────────────────────
@@ -1250,191 +1122,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     let dl_sink_workers = dl_sink.clone();
     let dl_worker_handle = tokio::spawn(dl_worker.run());
 
-    // ── Domain module selection ────────────────────────────────────────────────
-    //
-    // When role feature flags are compiled in, only the modules relevant to the
-    // declared roles are registered.  This reduces binary size and eliminates
-    // unwanted PID registrations for role-scoped deployments (LF-only, NB-only,
-    // MSB-only, etc.).
-    //
-    // Default (no feature flags active): all modules are registered — fully
-    // backward-compatible with existing deployments.
-    //
-    // Role → module mapping:
-    //   role-nb-strom / role-nb  → GpkeModule (NB-side GPKE + Sperrung)
-    //   role-lf-strom / role-lf  → GpkeModule (LF-side GPKE; GpkeModule handles
-    //                              both sides via PidRouter role dispatch)
-    //   role-msb-strom / role-msb → WimModule (MSB Strom)
-    //   role-nb-strom / role-nb  → WimModule (NB-side WiM coordination)
-    //   role-nb-gas / role-nb    → GeliGasModule + GaBiGasModule
-    //   role-lf-gas  / role-lf   → GeliGasModule (LF-side GeLi Gas)
-    //   role-nb-gas / role-msb-gas → WimGasModule
-    //   role-nb-strom / role-nb  → MabisModule (MABIS PID 13003)
-    //
-    // Clippy's vec_init_then_push fires here because the pushes are
-    // #[cfg]-gated and cannot be merged into a vec![] literal.
-    #[expect(clippy::vec_init_then_push)]
-    let modules: Vec<Box<dyn mako_engine::builder::EngineModule>> = {
-        let mut m: Vec<Box<dyn mako_engine::builder::EngineModule>> = Vec::new();
-        // GpkeModule: GPKE PIDs 55001-55018, 55022-55024, 55555, 55607-55609 +
-        //   INVOIC 31001/31002/31005/31006 + ORDERS Sperrung 17115-17117 +
-        //   ORDERS/ORDRSP Konfiguration 17134/17135/19001/19002 + PARTIN 37000-37006.
-        //   Required for both LF (Strom) and NB (Strom) roles.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-lf-strom",
-            feature = "role-nb-strom",
-        ))]
-        m.push(Box::new(mako_gpke::GpkeModule));
-
-        // WimModule: Messstellenbetrieb Strom (55039, 55042, 55051, 55168) +
-        //   ORDERS Geräteübernahme 17001-17011 + INSRPT 23001-23012.
-        //   Required for MSB (Strom) and NB (Strom, WiM coordination) roles.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-msb-strom",
-            feature = "role-nb-strom",
-        ))]
-        m.push(Box::new(mako_wim::WimModule));
-
-        // GeliGasModule: GeLi Gas 3.0 (44001-44024) + ORDERS Sperrung Gas
-        //   17115-17117 + PARTIN Gas 37008-37014 + INVOIC 31011 (AWH Rechnung).
-        //   Required for both LF (Gas) and NB (Gas) roles.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-lf-gas",
-            feature = "role-nb-gas",
-        ))]
-        m.push(Box::new(mako_geli_gas::GeliGasModule));
-
-        // WimGasModule: WiM Gas (44022-44024, 44039-44053, 44168-44170) +
-        //   INVOIC 31003/31004 + INSRPT Gas 23005/23009.
-        //   Required for gMSB (Gas) and GNB (Gas) roles.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-msb-gas",
-            feature = "role-nb-gas",
-        ))]
-        m.push(Box::new(mako_wim_gas::WimGasModule));
-
-        // GaBiGasModule: GaBi Gas (31010/31007/31008 INVOIC + 13013 MSCONS +
-        //   33001 REMADV + 29001 COMDIS).
-        //   Required for NB (Gas) role; BKV/MGV interactions are NB-side.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-nb-gas",
-        ))]
-        m.push(Box::new(mako_gabi_gas::GaBiGasModule));
-
-        // MabisModule: MABIS Bilanzkreisabrechnung Strom, PID 13003 only (BKV↔ÜNB).
-        //   Required for NB (Strom) role.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-nb-strom",
-        ))]
-        m.push(Box::new(mako_mabis::MabisModule));
-
-        // RedispatchModule: Redispatch 2.0 (§§ 13/13a/14 EnWG); IFTSTA 21037/21038.
-        // Applicable to NB (VNB/ANB) and ÜNB roles only — Lieferant (LF) and MSB
-        // deployments are out of scope for Redispatch 2.0 per BK6-20-059/060/061.
-        //
-        // Gate: registered unconditionally when no role feature flags are active
-        // (backward-compatible default), and when role-nb-strom is active (covers
-        // VNB, ANB, and ÜNB roles that share the NB Strom deployment role).
-        // Excluded for LF-only, MSB-only, and gas-only deployments — none of those
-        // roles have Redispatch 2.0 obligations.
-        #[cfg(any(
-            not(any(
-                feature = "role-lf-strom",
-                feature = "role-lf-gas",
-                feature = "role-nb-strom",
-                feature = "role-nb-gas",
-                feature = "role-msb-strom",
-                feature = "role-msb-gas",
-            )),
-            feature = "role-nb-strom",
-        ))]
-        m.push(Box::new(mako_redispatch::RedispatchModule));
-        m
-    };
-
-    let ctx = EngineBuilder::with_stores(
-        store.clone(),
-        store.as_deadline_store(),
-        store.as_process_registry(),
-    )
-    .with_event_store(store.clone())
-    // Wire the durable snapshot store so replay cost is bounded to at most
-    // 100 tail events per command dispatch instead of O(n) full replay.
-    .with_snapshot_store(store.as_snapshot_store())
-    // Wire the buffered dead-letter sink so every rejected EDIFACT message is
-    // persisted to SlateDB for regulatory audit.
-    .with_dead_letter_sink(dl_sink)
-    // Validate at startup that each domain module has an active edi-energy
-    // profile for its declared message types.  The validator runs inside
-    // EngineBuilder::build so a missing profile panics with an actionable message
-    // rather than silently dead-lettering at first dispatch.
-    .with_profile_validator({
-        let today = time::OffsetDateTime::now_utc().date();
-        move |msg_type| {
-            // If the type code is unrecognised, treat as missing (fail-safe).
-            let Some(mt) = edi_energy::MessageType::from_unh_code(msg_type) else {
-                return false;
-            };
-            edi_energy::registry::ReleaseRegistry::global()
-                .profiles_for(mt)
-                .any(|p| match (p.valid_from(), p.valid_until()) {
-                    (Some(from), Some(until)) => from <= today && today <= until,
-                    (Some(from), None) => from <= today,
-                    (None, _) => true, // legacy profile — always active
-                })
-        }
-    })
-    .register_many(modules)
-    .with_deployment_roles(effective_deployment_roles)
-    .build();
+    let ctx = startup::build_engine(&store, dl_sink, effective_deployment_roles);
 
     let inbox_store = store.as_inbox_store();
     // Clone for the daily purge worker below; the original may be moved into
@@ -1494,40 +1182,91 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // start with a Noop backend, whether in check mode or full daemon mode.
     ctx.assert_production_stores();
 
-    // ── Authenticated ports must have credentials ──────────────────────────
+    // ── Configuration preflight ────────────────────────────────────────────
     //
-    // Checked here, above the `--check` exit, because it is a property of the
-    // configuration rather than of the running daemon. Left below, `--check`
-    // reported success for a config whose real boot then failed on this very
-    // bail — a deployment pipeline gating on the exit code would promote it.
-    let needs_auth = cli.http_addr.is_some()
-        || (cli.api_webdienste_addr.is_some() && !cli.webdienste_allow_unauthenticated);
-    if needs_auth && cli.auth_keys.is_empty() && cli.oidc_issuer.is_none() {
-        anyhow::bail!(
-            "--auth-key / MAKOD_AUTH_KEYS or --oidc-issuer / MAKOD_OIDC_ISSUER is \
-             required when --http-addr or --api-webdienste-addr is set.\n\
-             These ports perform privileged operations (submitting commands, \
-             triggering migrations, API-Webdienste requests) and must not be \
-             exposed unauthenticated.\n\
-             Provide at least one named API key with --auth-key NAME=TOKEN \
-             (e.g. --auth-key erp-prod=$(openssl rand -hex 32)), or configure \
-             an OIDC issuer with --oidc-issuer <URL> --oidc-audience <AUD>."
-        );
-    }
+    // Everything judgeable from the configuration alone — AS4 key material and
+    // partner registry, Cedar policies, credentials for every authenticated
+    // port, callback URLs, the ingest and egress transport rules. It runs above
+    // the `--check` exit so the two cannot diverge: check mode validates exactly
+    // what the daemon then boots with, and the boot consumes this same result.
+    let extra_policies = read_cedar_policy_dir(&cli.cedar_policy_dir)
+        .context("loading Cedar policy files from --cedar-policy-dir")?;
+    let preflight_input = preflight::PreflightInput {
+        primary_mp_id: mp_id_registry.primary_mp_id(),
+        as4_inbound_enabled: cli.as4_addr.is_some(),
+        http_enabled: cli.http_addr.is_some(),
+        webdienste_enabled: cli.api_webdienste_addr.is_some(),
+        webdienste_allow_unauthenticated: cli.webdienste_allow_unauthenticated,
+        as4_partner: &cli.as4_partner,
+        as4_partner_cert: &cli.as4_partner_cert,
+        as4_signing_key_pem: cli.as4_signing_key_pem.as_ref(),
+        as4_signing_cert_pem: cli.as4_signing_cert_pem.as_deref(),
+        as4_trust_anchor_pem: cli.as4_trust_anchor_pem.as_deref(),
+        as4_decryption_key_pem: cli.as4_decryption_key_pem.as_ref(),
+        as4_party_id: cli.as4_party_id.as_deref(),
+        allow_unencrypted_as4: cli.allow_unencrypted_as4,
+        allow_no_as4_signing: cli.allow_no_as4_signing,
+        edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.as_deref(),
+        erp_webhook_url: cli.erp_webhook_url.as_deref(),
+        netzzugang_endpoint_url: cli.netzzugang_endpoint_url.as_deref(),
+        maloid_partner: &cli.maloid_partner,
+        verzeichnisdienst_url: cli.verzeichnisdienst_url.as_deref(),
+        marktd_url: cli.marktd_url.as_deref(),
+        marktd_api_key: cli.marktd_api_key.as_deref(),
+        auth_keys: &cli.auth_keys,
+        cedar_policies: extra_policies,
+        cedar_no_default_policy: cli.cedar_no_default_policy,
+        oidc_issuer: cli.oidc_issuer.as_deref(),
+        oidc_audience: cli.oidc_audience.as_deref(),
+    };
+    let mut checked = preflight::preflight(&preflight_input)?;
+    preflight::warn_on_degraded_config(&preflight_input, cli.data_dir.is_some());
 
     // ── --check mode early exit ────────────────────────────────────────
     //
-    // All critical startup checks (profile validator, adapter coverage, data-dir
-    // lock acquisition, ProcessRegistry reconciliation, credentials for every
-    // authenticated port) have now completed. In check mode we exit here — no
-    // workers, no transports, no listeners.
+    // All configuration-derived checks have now run: profile validator, adapter
+    // coverage, dispatch completeness, store connectivity, data-dir lock, and
+    // the preflight above. In check mode we exit here — no workers, no
+    // transports, no listeners, and nothing written: everything above this line
+    // reads, so a pipeline can point `--check` at a live data directory.
     if cli.check {
         info!(
-            "check mode: all startup validations passed \
-             (profiles, adapter coverage, store connectivity, ProcessRegistry \
-              reconciliation, port credentials)"
+            as4_partners = checked.as4_profile.registry().len(),
+            maloid_partners = checked.maloid_partners.len(),
+            "check mode: all startup validations passed"
         );
         return Ok(());
+    }
+
+    // ── ProcessRegistry startup reconciliation ─────────────────────────
+    //
+    // On restart after a crash or after an operator accidentally deleted a
+    // registry entry, inbound APERAKs can no longer be routed to their target
+    // process.  Reconciliation scans all `process/` streams, loads the first
+    // event from each, and re-registers any entries missing from the registry.
+    //
+    // Below the `--check` exit deliberately: this is the one startup step that
+    // *writes*. `--check` is run by deployment pipelines against live data
+    // directories and must be able to answer "would this config start?" without
+    // changing the store it was pointed at.
+    //
+    // A one-time operation — it does NOT block the server from accepting
+    // requests.
+    match reconcile_process_registry(&store).await {
+        // Logged unconditionally, including the zero case. This is the boot's
+        // only write step, and "it ran and found nothing to do" is a different
+        // statement from "it did not run" — the second is what `--check`
+        // promises, and only an unconditional line can distinguish them in a
+        // log or a test.
+        Ok(0) => info!(count = 0, "ProcessRegistry reconciliation complete"),
+        Ok(n) => tracing::warn!(
+            count = n,
+            "ProcessRegistry reconciliation complete: reconstructed missing routing entries",
+        ),
+        Err(e) => tracing::error!(
+            error = %e,
+            "ProcessRegistry reconciliation failed (non-fatal — engine will start anyway)",
+        ),
     }
 
     // ── Graceful-shutdown token ────────────────────────────────────────────────
@@ -1536,6 +1275,12 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // token.  When the OS delivers SIGTERM / Ctrl-C, we cancel the token and
     // every listener drains its in-flight requests before the store is closed.
     let shutdown_token = CancellationToken::new();
+
+    // Listener tasks are joined on shutdown alongside the background workers:
+    // `with_graceful_shutdown` drains in-flight requests, but nothing waits for
+    // that drain unless the handle is kept, and an in-flight command handler
+    // writes to the same event store the teardown is about to close.
+    let mut server_handles: Vec<tokio::task::JoinHandle<()>> = Vec::new();
 
     // ── Optional: HTTP REST API server ────────────────────────────────────────
     //
@@ -1591,13 +1336,15 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         .map_err(|e| anyhow::anyhow!("HTTP client build: {e}"))?;
 
     // ── Build Cedar authorizer (shared by :8080 REST, /mcp, and :8090) ───────
-    // The credential requirement for these ports is enforced above, before
-    // the `--check` early exit.
+    //
+    // The keys, the policy text and the baseline choice were validated by the
+    // preflight above; the only thing added here is the OIDC verifier, which
+    // needs the network and therefore cannot run in `--check`.
     let oidc = if let Some(issuer) = cli.oidc_issuer.clone() {
-        let audience = cli.oidc_audience.clone().context(
-            "--oidc-audience / MAKOD_OIDC_AUDIENCE is required when \
-             --oidc-issuer / MAKOD_OIDC_ISSUER is set",
-        )?;
+        let audience = cli
+            .oidc_audience
+            .clone()
+            .expect("preflight rejects an issuer without an audience");
         let verifier = mako_service::oidc::OidcVerifier::new(issuer, audience, &http_client)
             .await
             .context("OIDC verifier initialisation failed")?;
@@ -1610,406 +1357,103 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     } else {
         None
     };
-    let extra_policies = read_cedar_policy_dir(&cli.cedar_policy_dir)
-        .context("loading Cedar policy files from --cedar-policy-dir")?;
-    let auth_keys = cli
-        .auth_keys
-        .iter()
-        .map(|s| cedar_authz::NamedKey::from_arg(s))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let cedar = Arc::new(
         cedar_authz::CedarAuthorizer::new(
-            auth_keys,
-            extra_policies,
+            std::mem::take(&mut checked.auth_keys),
+            checked.cedar_policies.clone(),
             oidc,
             // makod is single-tenant: the primary MP-ID *is* the tenant
             // (see the API states below, which key on the same value).
             Some(mp_id_registry.primary_mp_id().to_owned()),
-            if cli.cedar_no_default_policy {
-                cedar_authz::DefaultPolicy::Deny
-            } else {
-                cedar_authz::DefaultPolicy::PermitAll
-            },
+            checked.cedar_default_policy,
         )
         .map_err(|e| anyhow::anyhow!("{e}"))?,
     );
 
+    let server_deps = startup::servers::ServerDeps {
+        store: store.clone(),
+        pid_router: ctx.pid_router().clone(),
+        mp_id_registry: Arc::clone(&mp_id_registry),
+        tenant_id,
+        cedar: Arc::clone(&cedar),
+        platform: Arc::clone(&platform),
+        health_state: health_state.clone(),
+        shutdown_token: shutdown_token.clone(),
+        ingest_dispatcher: Arc::clone(&ingest_dispatcher),
+        dead_letter_sink: dl_sink_ingest,
+    };
+
+    // ── Optional: HTTP REST API server (--http-addr) ──────────────────────────
     if let Some(addr) = cli.http_addr {
-        let api_state = Arc::new(edifact_api::EdifactApiState {
-            platform: Arc::clone(&platform),
-            pid_router: ctx.pid_router().clone(),
-            mp_id_registry: Arc::clone(&mp_id_registry),
-            cedar: Arc::clone(&cedar),
-            max_body_bytes: cli.http_max_body_bytes,
-            partner_store: Some(Arc::new(store.as_partner_store())),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            dl_sink: Arc::new(dl_sink_ingest.clone()),
-            dispatcher: Some(Arc::clone(&ingest_dispatcher)),
-            contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
-                Arc::new(store.clone()),
-                mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-                Arc::clone(&mp_id_registry),
-            ))),
-        });
-        let admin_state = Arc::new(malo_admin_api::MaloAdminState {
-            cache: malo_cache::SlateDbMaloCache::new(store.clone()),
-            cedar: Arc::clone(&cedar),
-            tenant_id: mp_id_registry.primary_mp_id().to_owned(),
-        });
-        let partner_store = store.as_partner_store();
-        let partner_tenant_id =
-            mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id());
-        partner_api::seed_from_config(&partner_store, partner_tenant_id, &cli.as4_partner)
-            .await
-            .context("seeding partner store from config")?;
-        let partner_admin_state = Arc::new(partner_api::PartnerAdminState {
-            store: partner_store,
-            tenant_id: partner_tenant_id,
-            cedar: Arc::clone(&cedar),
-            platform: Arc::clone(&platform),
-        });
-        let commands_state = Arc::new(commands_api::CommandsApiState {
-            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            sender_party_id: mp_id_registry.primary_mp_id().to_owned(),
-            configured_marktrollen: effective_marktrollen.to_vec(),
-            max_body_bytes: cli.http_max_body_bytes,
-            snapshot_interval: cli.snapshot_interval,
-            cedar: Arc::clone(&cedar),
-            store: Arc::new(store.clone()),
-            snapshot_store: store.as_snapshot_store(),
-            malo_cache: malo_cache.clone(),
-            maloid_result_cache: malo_cache::MaloIdentResultCache::new(store.clone()),
-            // M1: Konfigurationsprodukt guard — enabled when --marktd-url is set.
-            // Falls back to `None` (guard disabled) when not configured.
-            marktd_client: marktd_client.clone(),
-        });
-        let metrics_state = Arc::new(
-            metrics_api::MetricsState::new(
-                store.clone(),
-                Arc::clone(&cedar),
-                mp_id_registry.primary_mp_id().to_owned(),
+        server_handles.push(
+            startup::servers::serve_http(
+                &server_deps,
+                startup::servers::HttpServerConfig {
+                    addr,
+                    max_body_bytes: cli.http_max_body_bytes,
+                    snapshot_interval: cli.snapshot_interval,
+                    marktrollen: effective_marktrollen.clone(),
+                    malo_cache: Arc::clone(&malo_cache),
+                    marktd_client: marktd_client.clone(),
+                    as4_partner: &cli.as4_partner,
+                    volatile_mode: cli.data_dir.is_none() && cli.allow_volatile,
+                },
             )
-            .with_volatile_mode(cli.data_dir.is_none() && cli.allow_volatile),
+            .await?,
         );
-        let migration_state = Arc::new(migration_api::MigrationApiState {
-            store: Arc::new(store.clone()),
-            cedar: Arc::clone(&cedar),
-            tenant: mp_id_registry.primary_mp_id().to_owned(),
-        });
-        let mcp_state = Arc::new(mcp_server::MakodMcpState {
-            tenant: mp_id_registry.primary_mp_id().to_owned(),
-            version: env!("CARGO_PKG_VERSION").to_owned(),
-            cedar: Arc::clone(&cedar),
-            commands: Arc::clone(&commands_state),
-            malo_cache: malo_cache.clone(),
-            partner_store: Arc::new(store.as_partner_store()),
-            process_store: Arc::new(store.clone()),
-            deadline_store: store.as_deadline_store(),
-        });
-        let invoic_api_state = Arc::new(invoic_api::InvoicApiState {
-            store: Arc::new(store.clone()),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            cedar: Arc::clone(&cedar),
-            tenant: mp_id_registry.primary_mp_id().to_owned(),
-        });
-        let app = edifact_api::router(api_state)
-            .merge(malo_admin_api::router(admin_state))
-            .merge(partner_api::router(partner_admin_state))
-            .merge(commands_api::router(commands_state))
-            .merge(invoic_api::router(invoic_api_state))
-            .merge(metrics_api::router(metrics_state))
-            .merge(migration_api::router(migration_state))
-            .merge(mcp_server::router(mcp_state, shutdown_token.clone()))
-            .merge(health::router(health_state.clone()))
-            // W3C trace-context capture for end-to-end tracing.
-            .layer(axum::middleware::from_fn(trace_ctx_middleware))
-            .merge(openapi::router());
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| anyhow::anyhow!("HTTP server bind {addr}: {e}"))?;
-        info!(
-            addr         = %addr,
-            max_body_mib = cli.http_max_body_bytes / (1024 * 1024),
-            "HTTP REST API listening",
-        );
-        let http_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app)
-                .with_graceful_shutdown(http_token.cancelled_owned())
-                .await
-            {
-                tracing::error!(error = %e, "HTTP server error");
-            }
-        });
     }
 
-    // ── Optional: AS4 inbound transport ─────────────────────────────────────
+    // ── Optional: AS4 inbound transport (--as4-addr) ──────────────────────────
     //
-    // Enabled by --as4-addr / MAKOD_AS4_ADDR.  Provides POST /as4/inbox for
-    // BDEW EDIFACT UserMessages delivered over AS4/ebMS3 — the mandatory
-    // production transport since 2024-04-01 (electricity) / 2025-04-01 (gas).
-    //
-    // SessionContext requires a signing key + certificate PEM.  For development
-    // without real cert material, omit --as4-addr and use the REST API instead.
+    // The mandatory production transport for BDEW EDIFACT since 2024-04-01
+    // (electricity) / 2025-04-01 (gas). The signing material, decryption key and
+    // trust anchor were all proven usable by the preflight; the `expect`s below
+    // restate that invariant rather than re-checking it.
     if let Some(addr) = cli.as4_addr {
-        let party_id = cli
-            .as4_party_id
-            .clone()
-            .unwrap_or_else(|| mp_id_registry.primary_mp_id().to_owned());
-
-        let key_pem = cli.as4_signing_key_pem.clone().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--as4-signing-key-pem / MAKOD_AS4_SIGNING_KEY_PEM is required when --as4-addr is set"
+        server_handles.push(
+            startup::servers::serve_as4(
+                &server_deps,
+                startup::servers::As4ServerConfig {
+                    addr,
+                    party_id: checked.as4_party_id.clone(),
+                    signing_key_pem: cli
+                        .as4_signing_key_pem
+                        .clone()
+                        .expect("preflight requires signing key material when --as4-addr is set"),
+                    signing_cert_pem: cli
+                        .as4_signing_cert_pem
+                        .clone()
+                        .expect("preflight requires a signing certificate when --as4-addr is set"),
+                    trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
+                    decryption_key_pem: cli.as4_decryption_key_pem.clone(),
+                    inbox_store,
+                    dedup_is_durable: cli.data_dir.is_some(),
+                },
             )
-        })?;
-        let cert_pem = cli.as4_signing_cert_pem.clone().ok_or_else(|| {
-            anyhow::anyhow!(
-                "--as4-signing-cert-pem / MAKOD_AS4_SIGNING_CERT_PEM is required when --as4-addr is set"
-            )
-        })?;
-
-        //  warn when the trust anchor is the same as the signing cert.
-        // The correct production trust anchor is the BDEW/BNetzA PKI CA certificate.
-        // Using the self-signed operator cert accepts ONLY the operator's own cert
-        // as a peer — all counterparty certificates (signed by the BDEW CA) are
-        // rejected.
-        if cli
-            .as4_trust_anchor_pem
-            .as_deref()
-            .is_none_or(|ta| ta == cert_pem.as_str())
-        {
-            tracing::error!(
-                "AS4 trust anchor is set to the operator's own signing certificate. \
-                 Inbound AS4 messages from all counterparties will be REJECTED because \
-                 their certificates are signed by the BDEW PKI CA, not by this operator. \
-                 Set --as4-trust-anchor-pem / MAKOD_AS4_TRUST_ANCHOR_PEM to the \
-                 BDEW/BNetzA PKI CA certificate to fix this."
-            );
-        }
-
-        // BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound message to be
-        // encrypted.  Without an own decryption private key, `bdew_push_policy`
-        // cannot enable `require_encrypted_inbound` and would silently accept
-        // unencrypted inbound messages — so this is fail-closed: the daemon
-        // refuses to start unless the operator explicitly opts out for dev/test.
-        if cli.as4_decryption_key_pem.is_none() {
-            if cli.allow_unencrypted_as4 {
-                tracing::warn!(
-                    "--allow-unencrypted-as4: AS4 inbound decryption key not configured. \
-                     Inbound AS4 messages will be accepted WITHOUT verifying that they \
-                     are encrypted, violating BDEW AS4-Profil v1.2 §2.2.6.2.2. \
-                     This mode is for dev/test only."
-                );
-            } else {
-                anyhow::bail!(
-                    "AS4 inbound decryption key not configured \
-                     (--as4-decryption-key-pem / MAKOD_AS4_DECRYPTION_KEY_PEM not set). \
-                     BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every inbound AS4 message \
-                     to be encrypted; without your own EC (BrainpoolP256r1) private key, \
-                     unencrypted inbound cannot be rejected. Provide the key, or pass \
-                     --allow-unencrypted-as4 for dev/test."
-                );
-            }
-        }
-        let session = {
-            let session_id = format!("makod-{}", uuid::Uuid::new_v4());
-            let trust_anchor = cli
-                .as4_trust_anchor_pem
-                .clone()
-                .unwrap_or_else(|| cert_pem.clone());
-            SessionContextBuilder::new(&session_id, &party_id)
-                .with_signing_material(cert_pem.clone(), key_pem.expose_secret())
-                .with_trust_anchor_pem(trust_anchor)
-                .build()
-                .map_err(|e| anyhow::anyhow!("AS4 SessionContext build failed: {e}"))?
-        };
-
-        let event_bus = Arc::new(
-            EventBus::new(256).map_err(|e| anyhow::anyhow!("AS4 EventBus init failed: {e}"))?,
+            .await?,
         );
-
-        let dedup: Arc<dyn asx_rs::storage::DedupStorage> =
-            Arc::new(as4_ingest::SlateDbDedupBridge::new(
-                Arc::new(inbox_store),
-                // Durable = true only when backed by a persistent store.
-                // In volatile (in-memory) mode, `is_durable` signals to the
-                // asx-rs pipeline that dedup state is not preserved across restarts.
-                cli.data_dir.is_some(),
-            ));
-
-        // ── Startup warning: non-durable dedup + AS4 enabled ─────────────────
-        //
-        // When --as4-addr is set but no --data-dir is configured, the inbox
-        // dedup store is purely in-memory (volatile). A crash or restart will
-        // lose all dedup state, allowing replayed AS4 UserMessages to be
-        // ingested again as duplicates. This violates BDEW AS4 conformance
-        // (the BDEW AS4 profile requires durable duplicate detection per
-        // ebMS3 §6.6.1). Set --data-dir to a persistent path in production.
-        if cli.data_dir.is_none() {
-            tracing::warn!(
-                "AS4 inbox dedup storage is volatile (in-memory): duplicate detection \
-                 is lost on restart. Set --data-dir / MAKOD_DATA_DIR to a persistent \
-                 path to enable durable dedup (required for BDEW AS4 conformance)."
-            );
-        }
-
-        let ingest_state = Arc::new(edifact_api::EdifactApiState {
-            platform: Arc::clone(&platform),
-            pid_router: ctx.pid_router().clone(),
-            mp_id_registry: Arc::clone(&mp_id_registry),
-            cedar: Arc::new(
-                cedar_authz::CedarAuthorizer::unauthenticated()
-                    .expect("CedarAuthorizer::unauthenticated is infallible"),
-            ),
-            max_body_bytes: mako_as4::bdew_router_config().max_body_bytes,
-            partner_store: Some(Arc::new(store.as_partner_store())),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            dl_sink: Arc::new(dl_sink_ingest),
-            dispatcher: Some(Arc::clone(&ingest_dispatcher)),
-            contrl_ack: Some(Arc::new(contrl_ack::ContrlAckService::new(
-                Arc::new(store.clone()),
-                mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-                Arc::clone(&mp_id_registry),
-            ))),
-        });
-
-        let contrl_svc = Arc::new(contrl_ack::ContrlAckService::new(
-            Arc::new(store.clone()),
-            mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            Arc::clone(&mp_id_registry),
-        ));
-        let handler = Arc::new(
-            as4_ingest::BdewAs4IngestHandler::new(
-                ingest_state,
-                Arc::new(session),
-                event_bus,
-                dedup,
-            )
-            .with_decryption_key_pem(
-                cli.as4_decryption_key_pem
-                    .as_ref()
-                    .map(|s| s.expose_secret().as_bytes().to_vec()),
-            )
-            // BDEW AS4-Profil §2.2.4: sign synchronous receipts (NRR) with the
-            // operator's signing key pair — the same material used for the
-            // AS4 session signing context above.
-            .with_receipt_credentials(
-                key_pem.expose_secret().as_bytes().to_vec(),
-                cert_pem.clone().into_bytes(),
-            )
-            .with_contrl_ack(Arc::clone(&contrl_svc)),
-        );
-
-        let app = as4_ingest::router(handler, mako_as4::bdew_router_config())
-            .merge(health::router(health_state.clone()))
-            // OWASP A05 — rate limit the AS4 inbound endpoint to prevent
-            // capacity exhaustion by a misconfigured or malicious counterparty.
-            // Per-peer GCRA token bucket: 100 req/s sustained, burst of 50,
-            // keyed by client IP. Returns HTTP 429 when a peer's bucket is
-            // exhausted.
-            .layer(axum::middleware::from_fn(
-                as4_ingest::as4_rate_limit_middleware,
-            ))
-            // W3C trace-context capture for end-to-end tracing.
-            .layer(axum::middleware::from_fn(trace_ctx_middleware));
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| anyhow::anyhow!("AS4 server bind {addr}: {e}"))?;
-        info!(
-            addr     = %addr,
-            party_id = %party_id,
-            "AS4 inbound transport listening (BDEW MaKo mandatory since 2024-04-01)",
-        );
-        let as4_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            // `into_make_service_with_connect_info` provides the peer socket
-            // address the per-IP rate limiter keys on.
-            if let Err(e) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
-            )
-            .with_graceful_shutdown(as4_token.cancelled_owned())
-            .await
-            {
-                tracing::error!(error = %e, "AS4 server error");
-            }
-        });
     } else {
-        // AS4 not configured: retain inbox_store so its startup lock-map is
-        // initialised and available for future use.
-        let _inbox_store = inbox_store;
-        tracing::warn!(
-            "AS4 inbound transport is NOT configured \
-             (--as4-addr / MAKOD_AS4_ADDR unset). \
-             BDEW EDIFACT messages cannot be received via the mandatory AS4 \
-             transport. Set --as4-addr and provide signing key/cert PEM for production."
-        );
+        // AS4 not configured, so nothing consumes the inbox store. The operator
+        // warning for this case comes from `preflight::warn_on_degraded_config`,
+        // which runs in `--check` mode as well.
+        drop(inbox_store);
     }
 
-    // ── Optional: API-Webdienste Strom server ────────────────────────────
+    // ── Optional: API-Webdienste Strom (--api-webdienste-addr) ────────────────
     //
-    // Enabled by --api-webdienste-addr / MAKOD_API_WEBDIENSTE_ADDR.
-    // Provides BDEW API-Webdienste Strom endpoints (Control Measures v1,
-    // MaLo Identification v1) on a separate port.
-    //
-    // MaLo Identification is active. Control Measures are wired to
-    // WimSteuerungsauftragWorkflow.
+    // BDEW API-Webdienste Strom: Control Measures v1 and MaLo Identification v1.
     if let Some(addr) = cli.api_webdienste_addr {
-        let handler = Arc::new(webdienste::MakodApiHandler {
-            store: store.clone(),
-            tenant_id: mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
-            sender_party_id: mp_id_registry.primary_mp_id().to_owned(),
-        });
-        // ── API-Webdienste authentication ─────────────────────────────────
-        //
-        // The BDEW API-Webdienste specification requires authenticated
-        // access. Every route on :8090 sits behind bearer/OIDC
-        // authentication plus the Cedar `UseWebdienste` action, and a
-        // body-size limit. `--webdienste-allow-unauthenticated` disables the
-        // auth layer for deployments that terminate mTLS (BDEW PKI CA) at a
-        // fronting proxy and enforce access there.
-        let wd_auth = if cli.webdienste_allow_unauthenticated {
-            tracing::warn!(
-                addr = %addr,
-                "--webdienste-allow-unauthenticated: API-Webdienste Strom port \
-                 has NO authentication. Only acceptable behind a proxy that \
-                 terminates mTLS with the BDEW PKI CA.",
-            );
-            None
-        } else {
-            Some(webdienste::WebdiensteAuthState {
-                cedar: Arc::clone(&cedar),
-                tenant: Arc::from(mp_id_registry.primary_mp_id()),
-            })
-        };
-        let wd_routes = webdienste::build_app(handler, wd_auth, cli.http_max_body_bytes);
-        // Per-peer rate limit, same GCRA policy as the AS4 port.
-        let app = wd_routes
-            .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware))
-            // W3C trace-context capture for end-to-end tracing.
-            .layer(axum::middleware::from_fn(trace_ctx_middleware))
-            .merge(health::router(health_state.clone()));
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .map_err(|e| anyhow::anyhow!("API-Webdienste server bind {addr}: {e}"))?;
-        info!(
-            addr = %addr,
-            primary_mp_id = mp_id_registry.primary_mp_id(),
-            "API-Webdienste Strom server listening (MaLo Identification active)",
-        );
-        let wd_token = shutdown_token.clone();
-        tokio::spawn(async move {
-            if let Err(e) = axum::serve(
-                listener,
-                app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+        server_handles.push(
+            startup::servers::serve_webdienste(
+                &server_deps,
+                startup::servers::WebdiensteServerConfig {
+                    addr,
+                    max_body_bytes: cli.http_max_body_bytes,
+                    allow_unauthenticated: cli.webdienste_allow_unauthenticated,
+                },
             )
-            .with_graceful_shutdown(wd_token.cancelled_owned())
-            .await
-            {
-                tracing::error!(error = %e, "API-Webdienste server error");
-            }
-        });
+            .await?,
+        );
     }
 
     // ── Background workers ────────────────────────────────────────────────────
@@ -2017,7 +1461,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // Outbox delivery, ERP webhook, deadline scheduler, projection checkpoint,
     // inbox purge — all spawned as Tokio tasks that exit on shutdown_token.
     // See `startup::spawn_workers` and `startup::WorkersConfig` for details.
-    startup::spawn_workers(startup::WorkersConfig {
+    let mut workers = startup::spawn_workers(startup::WorkersConfig {
         ctx,
         store: store.clone(),
         inbox_store_for_purge,
@@ -2027,88 +1471,126 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         malo_cache: Arc::clone(&malo_cache),
         shutdown_token: shutdown_token.clone(),
         mp_id_registry: Arc::clone(&mp_id_registry),
-        as4_partner: cli.as4_partner.clone(),
+        checked,
         as4_signing_key_pem: cli.as4_signing_key_pem.clone(),
         as4_signing_cert_pem: cli.as4_signing_cert_pem.clone(),
         as4_trust_anchor_pem: cli.as4_trust_anchor_pem.clone(),
-        as4_partner_certs: cli.as4_partner_cert.clone(),
-        allow_unencrypted_as4: cli.allow_unencrypted_as4,
         as4_lenient_receipts: cli.as4_lenient_receipts,
         dead_letter_sink: dl_sink_workers,
-        as4_party_id: cli.as4_party_id.clone(),
-        maloid_partner: cli.maloid_partner.clone(),
-        verzeichnisdienst_url: cli.verzeichnisdienst_url.clone(),
         erp_webhook_url: cli.erp_webhook_url.clone(),
         erp_webhook_secret: cli.erp_webhook_secret.clone(),
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.clone(),
         netzzugang_endpoint_url: cli.netzzugang_endpoint_url.clone(),
         marktd_client: marktd_client.clone(),
-        allow_no_as4_signing: cli.allow_no_as4_signing,
         snapshot_interval: cli.snapshot_interval,
         deadline_poll_interval_secs: cli.deadline_poll_interval_secs,
         projection_checkpoint_interval: cli.projection_checkpoint_interval,
-        no_transport_configured: cli.as4_addr.is_none() && cli.http_addr.is_none(),
         health_state: health_state.clone(),
     })
     .await?;
 
+    for h in server_handles {
+        workers.push(h);
+    }
+
+    // ── Graceful shutdown ──────────────────────────────────────────────
+    //
+    // The order matters, and every step must *complete* before the next: the
+    // event store is closed at the end, and anything still writing to it when
+    // that happens can leave a half-applied outbox acknowledge — the
+    // counterparty holds the message, the outbox still shows it pending, and
+    // the next start delivers it a second time.
+    //
+    //   1. Cancel the token. Listeners stop accepting and drain in-flight
+    //      requests; every background worker returns at its next message or
+    //      tick boundary.
+    //   2. Join the workers. This is the step that makes closing the store
+    //      safe; without it the cancel is only a request.
+    //   3. Drain the dead-letter buffer, which has no other durable home.
+    //   4. Close the store.
+    //
+    // A step that times out does not abort the shutdown — the remaining steps
+    // still run, and the process reports the unclean exit at the end.
     wait_for_shutdown().await;
-    info!("Mako engine shutting down — cancelling listeners");
-    // Signal all HTTP/AS4/API-Webdienste servers to stop accepting new connections
-    // and drain in-flight requests before we close the event store.
+    info!(
+        timeout_secs = cli.shutdown_timeout_secs,
+        "Mako engine shutting down — cancelling listeners and workers",
+    );
     shutdown_token.cancel();
 
-    // ── Graceful dead-letter drain ────────────────────────────────────
-    //
-    // 1. Close the DL channel so `reject()` becomes a no-op and the worker
-    //    can drain its buffer without new entries racing in.
-    // 2. Give the worker up to 5 s to persist any buffered entries.
-    // 3. Then close the store — safe because the worker is done.
+    // The whole drain shares one budget. A worker that hangs must not be able
+    // to spend the store-close allowance as well.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(cli.shutdown_timeout_secs);
+    let remaining = || deadline.saturating_duration_since(tokio::time::Instant::now());
+
+    let workers_stopped = workers.join_all(remaining()).await;
+
+    // Close the DL channel first so `reject()` becomes a no-op and the worker
+    // can drain its buffer without new entries racing in.
     dl_sink_shutdown.signal_shutdown();
-    match tokio::time::timeout(Duration::from_secs(5), dl_worker_handle).await {
-        Ok(Ok(n)) => info!(entries = n, "dead-letter worker drained and exited"),
-        Ok(Err(e)) => tracing::error!(error = %e, "dead-letter worker panicked"),
-        Err(_) => tracing::warn!("dead-letter worker drain timed out after 5 s"),
-    }
-
-    let shutdown_timeout = Duration::from_secs(cli.shutdown_timeout_secs);
-    match tokio::time::timeout(shutdown_timeout, store.close_owned()).await {
-        Ok(Ok(())) => {}
-        Ok(Err(e)) => tracing::error!(error = %e, "store close failed"),
-        Err(_elapsed) => tracing::error!(
-            timeout_secs = cli.shutdown_timeout_secs,
-            "store close timed out; data may not be fully flushed"
-        ),
-    }
-    Ok(())
-}
-
-// ── Config file merging ──────────────────────────────────────────────────────
-
-// ── Cedar helpers ─────────────────────────────────────────────────────────────
-
-/// Load and concatenate all `*.cedar` files from `dir`.
-///
-/// Scope the request's W3C `traceparent` header into the engine task-local.
-///
-/// Every `OutboxMessage` created while handling the request captures it into
-/// its persisted `trace_context`, and the delivery workers re-inject it into
-/// outbound HTTP — end-to-end tracing across the asynchronous outbox
-/// boundary.
-async fn trace_ctx_middleware(
-    req: axum::extract::Request,
-    next: axum::middleware::Next,
-) -> axum::response::Response {
-    let tp = req
-        .headers()
-        .get("traceparent")
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
-    mako_engine::trace_ctx::TRACEPARENT
-        .scope(tp, next.run(req))
+    let dl_drained = match tokio::time::timeout(remaining().min(DL_DRAIN_TIMEOUT), dl_worker_handle)
         .await
+    {
+        Ok(Ok(n)) => {
+            info!(entries = n, "dead-letter worker drained and exited");
+            true
+        }
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "dead-letter worker panicked");
+            false
+        }
+        Err(_) => {
+            tracing::error!("dead-letter worker drain timed out; buffered rejections were lost");
+            false
+        }
+    };
+
+    // The store close always gets a floor, even if the workers ate the budget:
+    // abandoning an unflushed SlateDB WAL is worse than overrunning the grace
+    // period by a few seconds, and the container's own SIGKILL bounds it.
+    let store_closed = match tokio::time::timeout(
+        remaining().max(STORE_CLOSE_MIN_TIMEOUT),
+        store.close_owned(),
+    )
+    .await
+    {
+        Ok(Ok(())) => true,
+        Ok(Err(e)) => {
+            tracing::error!(error = %e, "store close failed");
+            false
+        }
+        Err(_elapsed) => {
+            tracing::error!("store close timed out; data may not be fully flushed");
+            false
+        }
+    };
+
+    if workers_stopped && dl_drained && store_closed {
+        info!("shutdown complete");
+        Ok(())
+    } else {
+        // A non-zero exit is the only signal an orchestrator or an init system
+        // gets that the drain was incomplete. Reporting success here would make
+        // a lost write indistinguishable from a clean stop.
+        anyhow::bail!(
+            "unclean shutdown: workers_stopped={workers_stopped}, \
+             dead_letters_drained={dl_drained}, store_closed={store_closed}"
+        )
+    }
 }
 
+/// Time allowed for the dead-letter buffer to reach the store on shutdown.
+///
+/// The buffer is small and in-memory; this is a cap on a flush, not a drain
+/// budget, and it is bounded separately so a slow worker join cannot starve it.
+const DL_DRAIN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Floor for the SlateDB close, applied even when the rest of the drain has
+/// already spent `--shutdown-timeout-secs`.
+const STORE_CLOSE_MIN_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Load and concatenate every `*.cedar` file in `dir`.
+///
 /// Files are sorted by name so loading order is deterministic.
 /// Returns `None` when the directory is `None` or contains no `.cedar` files.
 fn read_cedar_policy_dir(dir: &Option<std::path::PathBuf>) -> anyhow::Result<Option<String>> {
@@ -2188,12 +1670,20 @@ fn parse_deployment_roles(roles: &[String]) -> DeploymentRoles {
     DeploymentRoles::from_roles(parsed)
 }
 
+/// Merge `makod.toml` into the parsed CLI struct.
+///
+/// The file is the lowest-precedence source: a value is taken from it only when
+/// the corresponding flag still holds its built-in default (`is_default`) or is
+/// still unset. Every `Cli` field is reachable from here — the
+/// `cli_fields_are_reachable_from_toml` test fails the build when a new flag is
+/// added without a config-file path to it.
 fn apply_config_file(
     cfg: config::ConfigFile,
     matches: &clap::ArgMatches,
     cli: &mut Cli,
 ) -> anyhow::Result<()> {
     use clap::{ValueEnum, parser::ValueSource};
+    use config::{either_inline_or_file, read_keyed_files, read_pairs_file};
 
     // True iff the named arg got its value purely from the built-in default
     // (i.e. the user did not pass it on the CLI or via an env var).
@@ -2215,6 +1705,16 @@ fn apply_config_file(
         }
     }
 
+    // ── OpenTelemetry ─────────────────────────────────────────────────────────
+    if let Some(otel) = cfg.otel {
+        if cli.otel_endpoint.is_none() {
+            cli.otel_endpoint = otel.endpoint;
+        }
+        if cli.otel_service_name.is_none() {
+            cli.otel_service_name = otel.service_name;
+        }
+    }
+
     // ── Storage ───────────────────────────────────────────────────────────────
     if let Some(storage) = cfg.storage {
         if is_default("object_store")
@@ -2228,6 +1728,14 @@ fn apply_config_file(
         }
         if storage.allow_volatile {
             cli.allow_volatile = true;
+        }
+        if storage.allow_multi_instance {
+            cli.allow_multi_instance = true;
+        }
+        if is_default("max_stream_events")
+            && let Some(n) = storage.max_stream_events
+        {
+            cli.max_stream_events = n;
         }
         if let Some(s3) = storage.s3 {
             if cli.s3_bucket.is_none() {
@@ -2277,6 +1785,23 @@ fn apply_config_file(
         {
             cli.http_max_body_bytes = n;
         }
+        if cli.auth_keys.is_empty() {
+            let mut keys = http.auth_keys.unwrap_or_default();
+            if let Some(ref path) = http.auth_keys_file {
+                keys.extend(read_pairs_file("http.auth_keys_file", path)?);
+            }
+            cli.auth_keys = keys;
+        }
+    }
+
+    // ── Authorization ─────────────────────────────────────────────────────────
+    if let Some(authz) = cfg.authz {
+        if cli.cedar_policy_dir.is_none() {
+            cli.cedar_policy_dir = authz.cedar_policy_dir;
+        }
+        if authz.no_default_policy {
+            cli.cedar_no_default_policy = true;
+        }
     }
 
     // ── OIDC ──────────────────────────────────────────────────────────────────
@@ -2295,18 +1820,50 @@ fn apply_config_file(
     }
 
     // ── API-Webdienste ────────────────────────────────────────────────────────
-    if let Some(wd) = cfg.webdienste
-        && cli.api_webdienste_addr.is_none()
-    {
-        cli.api_webdienste_addr = wd.addr;
+    if let Some(wd) = cfg.webdienste {
+        if cli.api_webdienste_addr.is_none() {
+            cli.api_webdienste_addr = wd.addr;
+        }
+        if wd.allow_unauthenticated {
+            cli.webdienste_allow_unauthenticated = true;
+        }
     }
 
     // ── Engine ────────────────────────────────────────────────────────────────
-    if let Some(engine) = cfg.engine
-        && is_default("shutdown_timeout_secs")
-        && let Some(secs) = engine.shutdown_timeout_secs
-    {
-        cli.shutdown_timeout_secs = secs;
+    if let Some(engine) = cfg.engine {
+        if is_default("shutdown_timeout_secs")
+            && let Some(secs) = engine.shutdown_timeout_secs
+        {
+            cli.shutdown_timeout_secs = secs;
+        }
+        if is_default("snapshot_interval")
+            && let Some(n) = engine.snapshot_interval
+        {
+            cli.snapshot_interval = n;
+        }
+        if is_default("projection_checkpoint_interval")
+            && let Some(n) = engine.projection_checkpoint_interval
+        {
+            cli.projection_checkpoint_interval = n;
+        }
+        if is_default("deadline_poll_interval_secs")
+            && let Some(n) = engine.deadline_poll_interval_secs
+        {
+            cli.deadline_poll_interval_secs = n;
+        }
+        if cli.worker_threads.is_none() {
+            cli.worker_threads = engine.worker_threads;
+        }
+        if cli.marktrollen.is_empty()
+            && let Some(roles) = engine.marktrollen
+        {
+            cli.marktrollen = roles;
+        }
+        if cli.deployment_roles.is_empty()
+            && let Some(roles) = engine.deployment_roles
+        {
+            cli.deployment_roles = roles;
+        }
     }
 
     // ── AS4 ───────────────────────────────────────────────────────────────────
@@ -2317,27 +1874,37 @@ fn apply_config_file(
         if cli.as4_party_id.is_none() {
             cli.as4_party_id = as4.party_id;
         }
-        // Inline PEM takes precedence over a file reference.
-        if cli.as4_signing_key_pem.is_none() {
-            if let Some(pem) = as4.signing_key_pem {
-                cli.as4_signing_key_pem = Some(SecretString::new(pem.into()));
-            } else if let Some(ref path) = as4.signing_key_pem_file {
-                cli.as4_signing_key_pem = Some(SecretString::new(
-                    std::fs::read_to_string(path)
-                        .with_context(|| format!("reading AS4 signing key: {}", path.display()))?
-                        .into(),
-                ));
-            }
+        if cli.as4_signing_key_pem.is_none()
+            && let Some(pem) = either_inline_or_file(
+                "as4.signing_key_pem",
+                as4.signing_key_pem,
+                as4.signing_key_pem_file.as_ref(),
+            )?
+        {
+            cli.as4_signing_key_pem = Some(SecretString::new(pem.into()));
         }
         if cli.as4_signing_cert_pem.is_none() {
-            if let Some(pem) = as4.signing_cert_pem {
-                cli.as4_signing_cert_pem = Some(pem);
-            } else if let Some(ref path) = as4.signing_cert_pem_file {
-                cli.as4_signing_cert_pem =
-                    Some(std::fs::read_to_string(path).with_context(|| {
-                        format!("reading AS4 signing cert: {}", path.display())
-                    })?);
-            }
+            cli.as4_signing_cert_pem = either_inline_or_file(
+                "as4.signing_cert_pem",
+                as4.signing_cert_pem,
+                as4.signing_cert_pem_file.as_ref(),
+            )?;
+        }
+        if cli.as4_decryption_key_pem.is_none()
+            && let Some(pem) = either_inline_or_file(
+                "as4.decryption_key_pem",
+                as4.decryption_key_pem,
+                as4.decryption_key_pem_file.as_ref(),
+            )?
+        {
+            cli.as4_decryption_key_pem = Some(SecretString::new(pem.into()));
+        }
+        if cli.as4_trust_anchor_pem.is_none() {
+            cli.as4_trust_anchor_pem = either_inline_or_file(
+                "as4.trust_anchor_pem",
+                as4.trust_anchor_pem,
+                as4.trust_anchor_pem_file.as_ref(),
+            )?;
         }
         // CLI partners take full precedence; config partners are used only
         // when the CLI list is empty (no --as4-partner flags were passed).
@@ -2346,6 +1913,22 @@ fn apply_config_file(
         {
             cli.as4_partner = partners;
         }
+        if cli.as4_partner_cert.is_empty() {
+            let mut certs = as4.partner_certs.unwrap_or_default();
+            if let Some(ref files) = as4.partner_cert_files {
+                certs.extend(read_keyed_files("as4.partner_cert_files", files)?);
+            }
+            cli.as4_partner_cert = certs;
+        }
+        if as4.allow_unencrypted {
+            cli.allow_unencrypted_as4 = true;
+        }
+        if as4.allow_no_signing {
+            cli.allow_no_as4_signing = true;
+        }
+        if as4.lenient_receipts {
+            cli.as4_lenient_receipts = true;
+        }
     }
 
     // ── ERP ───────────────────────────────────────────────────────────────────
@@ -2353,15 +1936,53 @@ fn apply_config_file(
         if cli.erp_webhook_url.is_none() {
             cli.erp_webhook_url = erp.webhook_url;
         }
-        if cli.erp_webhook_secret.is_none() {
-            cli.erp_webhook_secret = erp.webhook_secret.map(|s| SecretString::new(s.into()));
+        if cli.erp_webhook_secret.is_none()
+            && let Some(secret) = either_inline_or_file(
+                "erp.webhook_secret",
+                erp.webhook_secret,
+                erp.webhook_secret_file.as_ref(),
+            )?
+        {
+            cli.erp_webhook_secret = Some(SecretString::new(secret.trim().to_owned().into()));
+        }
+        if cli.edifact_outbox_webhook_url.is_none() {
+            cli.edifact_outbox_webhook_url = erp.edifact_outbox_webhook_url;
+        }
+        if cli.netzzugang_endpoint_url.is_none() {
+            cli.netzzugang_endpoint_url = erp.netzzugang_endpoint_url;
         }
     }
 
-    // ── [[party]] — multi-GLN identity table ─────────────────────────────────
+    // ── marktd ────────────────────────────────────────────────────────────────
+    if let Some(marktd) = cfg.marktd {
+        if cli.marktd_url.is_none() {
+            cli.marktd_url = marktd.url;
+        }
+        if cli.marktd_api_key.is_none() {
+            cli.marktd_api_key = either_inline_or_file(
+                "marktd.api_key",
+                marktd.api_key,
+                marktd.api_key_file.as_ref(),
+            )?
+            .map(|s| s.trim().to_owned());
+        }
+    }
+
+    // ── MaLo-ID / Verzeichnisdienst ───────────────────────────────────────────
+    if let Some(maloid) = cfg.maloid {
+        if cli.maloid_partner.is_empty()
+            && let Some(partners) = maloid.partners
+        {
+            cli.maloid_partner = partners;
+        }
+        if cli.verzeichnisdienst_url.is_none() {
+            cli.verzeichnisdienst_url = maloid.verzeichnisdienst_url;
+        }
+    }
+
+    // ── [[party]] — multi-MP-ID identity table ───────────────────────────────
     //
-    // Takes precedence over `[engine] tenant_id` when present.  Stored
-    // separately (not merged into the CLI struct's string fields) because the
+    // Stored separately (not merged into a CLI string field) because the
     // array-of-tables structure has no CLI equivalent.
     if let Some(parties) = cfg.party
         && !parties.is_empty()
@@ -2370,6 +1991,58 @@ fn apply_config_file(
     }
 
     Ok(())
+}
+
+// ── `makod migrate` ───────────────────────────────────────────────────────────
+
+/// Run every pending format-version migration and return.
+///
+/// Prints a one-line JSON summary on stdout for CI log capture. `workflows`
+/// names what was actually covered — a count alone reads as complete whatever
+/// the migration happens to include.
+///
+/// # Errors
+///
+/// Returns an error when any individual migration reported one, so the exit
+/// code gates the deployment step that invoked it.
+async fn run_migrations(store: &SlateDbStore) -> anyhow::Result<()> {
+    // Migrate FV2025-10-01 → FV2026-10-01 (the only active transition).
+    // When more transitions exist, iterate over them here in order.
+    match migration_api::dispatch_migrations("FV2025-10-01", "FV2026-10-01", store).await {
+        Some((report, workflows)) if report.errors.is_empty() => {
+            // JSON summary on stdout for CI log capture. `workflows` names
+            // what was actually covered — a count alone reads as complete
+            // whatever the migration happens to include.
+            println!(
+                "{{\"migrated\":{},\"skipped\":{},\"workflows\":{},\"errors\":[]}}",
+                report.migrated,
+                report.skipped,
+                serde_json::to_string(&workflows).unwrap_or_else(|_| "[]".to_owned()),
+            );
+            tracing::info!(
+                migrated = report.migrated,
+                skipped = report.skipped,
+                workflows = workflows.len(),
+                "makod migrate: all migrations completed successfully",
+            );
+            Ok(())
+        }
+        Some((report, _workflows)) => {
+            for err in &report.errors {
+                tracing::error!(error = %err, "migration error");
+            }
+            anyhow::bail!(
+                "makod migrate: {} migration error(s) — see log for details",
+                report.errors.len()
+            );
+        }
+        None => {
+            tracing::info!(
+                "makod migrate: no applicable migration found for this transition; nothing to do"
+            );
+            Ok(())
+        }
+    }
 }
 
 // ── ProcessRegistry startup reconciliation ────────────────────────────
@@ -2595,17 +2268,35 @@ async fn open_store(cli: &Cli) -> anyhow::Result<SlateDbStore> {
 
 /// Initialise tracing; returns a guard that flushes OTel spans on drop.
 ///
-/// When `OTEL_EXPORTER_OTLP_ENDPOINT` is set, delegates to
-/// `mako_service::telemetry` — spans (including the AS4 ingest and outbox
-/// delivery spans) export via OTLP/gRPC with W3C propagation, joining the
-/// header-level `traceparent` chain the outbox already persists. Without the
-/// endpoint, the local fmt subscriber keeps the existing pretty/compact/json
-/// behaviour.
+/// With an OTLP endpoint configured — `OTEL_EXPORTER_OTLP_ENDPOINT`, or
+/// `[otel] endpoint` / `--otel-endpoint` — spans (including the AS4 ingest and
+/// outbox delivery spans) export via OTLP with W3C propagation, joining the
+/// header-level `traceparent` chain the outbox already persists. The subscriber
+/// is then the structured JSON layer. Without an endpoint, the local fmt
+/// subscriber keeps the pretty/compact/json behaviour selected by
+/// `--log-format`.
+///
+/// The environment variables win over the config file so a deployment can move
+/// telemetry into the orchestrator without editing `makod.toml`.
 fn init_tracing(cli: &Cli) -> Option<mako_service::telemetry::OtelGuard> {
     use tracing_subscriber::{EnvFilter, fmt};
 
     if std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").is_ok() {
         return Some(mako_service::telemetry::init_tracing_from_env("makod"));
+    }
+    if let Some(endpoint) = cli.otel_endpoint.clone() {
+        let otel = mako_service::telemetry::OtelConfig {
+            endpoint,
+            service_name: cli
+                .otel_service_name
+                .clone()
+                .unwrap_or_else(|| "makod".to_owned()),
+        };
+        return Some(mako_service::telemetry::init_tracing(
+            "makod",
+            cli.log_level.as_filter().as_str(),
+            Some(&otel),
+        ));
     }
 
     let filter = EnvFilter::builder()
@@ -2646,5 +2337,149 @@ async fn wait_for_shutdown() {
     #[cfg(not(unix))]
     {
         let _ = signal::ctrl_c().await;
+    }
+}
+
+// ── Configuration surface guard ───────────────────────────────────────────────
+
+#[cfg(test)]
+mod config_surface_tests {
+    /// Every `makod.toml` field must actually be read.
+    ///
+    /// The companion test below guards the other direction — that no flag is
+    /// missing a file form. This one guards the failure that is quieter and
+    /// therefore worse: a field declared in the schema, documented in the
+    /// operator guide, accepted by `deny_unknown_fields` at parse time, and then
+    /// read by nobody. The operator sets it, sees no error, and gets the default
+    /// behaviour. For a field like `as4.trust_anchor_pem_file` that silence is
+    /// the difference between verifying counterparty signatures and not.
+    #[test]
+    fn toml_fields_are_all_consumed() {
+        const CONFIG_SOURCE: &str = include_str!("core/config.rs");
+        const MAIN_SOURCE: &str = include_str!("main.rs");
+
+        // `[[party]]` is applied wholesale (`cli.parties = parties`) rather than
+        // field by field, so its members never appear by name.
+        const APPLIED_WHOLESALE: &[&str] = &["mp_id", "roles", "primary", "agency"];
+
+        let merge_body = MAIN_SOURCE
+            .split_once("fn apply_config_file(")
+            .expect("apply_config_file is defined in main.rs")
+            .1
+            .split_once("\n}\n")
+            .expect("apply_config_file is closed")
+            .0;
+
+        // Section-struct fields are declared as `    pub <name>: <type>,`.
+        let fields: Vec<&str> = CONFIG_SOURCE
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("    pub ")?;
+                let (name, tail) = rest.split_once(": ")?;
+                (!tail.is_empty()
+                    && !name.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+                .then_some(name)
+            })
+            .collect();
+        assert!(
+            fields.len() > 50,
+            "the field scan found only {} fields — the declaration style in \
+             core/config.rs changed and this guard is no longer looking at anything",
+            fields.len(),
+        );
+
+        let ignored: Vec<&str> = fields
+            .iter()
+            .filter(|f| !APPLIED_WHOLESALE.contains(f))
+            .filter(|f| !merge_body.contains(**f))
+            .copied()
+            .collect();
+        assert!(
+            ignored.is_empty(),
+            "these makod.toml fields are declared but never read, so setting them \
+             silently does nothing: {ignored:?}\n\
+             Read each one in apply_config_file, or delete it from core/config.rs."
+        );
+    }
+
+    /// Every CLI flag must be reachable from `makod.toml`.
+    ///
+    /// `config.rs` promises operators that anything settable by flag is also
+    /// settable by file. That promise decayed silently: the AS4 inbound
+    /// decryption key and the per-partner encryption certificates — both
+    /// mandatory in production — were flag-and-environment only, so the one
+    /// deployment shape that keeps key material out of `ps` output and out of
+    /// the container environment could not express them at all.
+    ///
+    /// The check is a source scan rather than a runtime assertion because the
+    /// mapping lives in `apply_config_file`'s body: a field the function never
+    /// mentions has no path from the file, whatever the schema declares.
+    #[test]
+    fn cli_fields_are_reachable_from_toml() {
+        const SOURCE: &str = include_str!("main.rs");
+
+        // Flags that describe *how to run this invocation* rather than what the
+        // daemon is, and therefore have no file equivalent by design.
+        const INVOCATION_ONLY: &[&str] = &[
+            // Names the file itself — it cannot live inside it.
+            "config",
+            // One-shot validation mode; a config that turned itself into a
+            // check-only run would never start.
+            "check", // Subcommand selector (`makod migrate`).
+            "command",
+            // Populated from the file's `[[party]]` array, not from a flag.
+            "parties",
+        ];
+
+        let struct_body = SOURCE
+            .split_once("struct Cli {")
+            .expect("Cli struct is defined in main.rs")
+            .1
+            .split_once("\n}\n")
+            .expect("Cli struct is closed")
+            .0;
+        // Field lines are exactly `    <name>: <type>,` — four spaces of
+        // indentation, a snake_case name, then the type. Doc comments and
+        // `#[arg(...)]` attributes fail the name-character test.
+        let fields: Vec<&str> = struct_body
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("    ")?;
+                let (name, tail) = rest.split_once(": ")?;
+                (!name.is_empty()
+                    && !tail.is_empty()
+                    && name
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_'))
+                .then_some(name)
+            })
+            .collect();
+        assert!(
+            fields.len() > 40,
+            "the Cli field scan found only {} fields — the parser drifted from \
+             the struct's formatting",
+            fields.len()
+        );
+
+        let merge_body = SOURCE
+            .split_once("fn apply_config_file(")
+            .expect("apply_config_file is defined in main.rs")
+            .1;
+        let unreachable: Vec<&str> = fields
+            .iter()
+            .filter(|f| !INVOCATION_ONLY.contains(f))
+            .filter(|f| !merge_body.contains(&format!("cli.{f}")))
+            .copied()
+            .collect();
+        assert!(
+            unreachable.is_empty(),
+            "these CLI flags cannot be set from makod.toml: {unreachable:?}\n\
+             Add a field to the matching section in core/config.rs and read it \
+             in apply_config_file, or list the flag in INVOCATION_ONLY with a \
+             reason if it genuinely has no file form."
+        );
     }
 }

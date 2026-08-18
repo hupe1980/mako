@@ -733,6 +733,11 @@ pub async fn as4_rate_limit_middleware(
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
+    // Orchestrator probes are exempt: they are cheap, unauthenticated by
+    // design, and a 429 on a liveness probe reads as a dead container.
+    if crate::health::is_health_path(req.uri().path()) {
+        return next.run(req).await;
+    }
     if AS4_RATE_LIMITER.check_key(&peer.ip()).is_err() {
         tracing::warn!(
             peer = %peer.ip(),
@@ -774,7 +779,7 @@ fn too_many_requests_status(status: axum::http::StatusCode) -> axum::response::R
         .header("Retry-After", "1")
         .header("Content-Type", "text/plain")
         .body(axum::body::Body::from(
-            "AS4 inbound rate limit exceeded. Retry after 1 second.",
+            "Inbound rate limit exceeded. Retry after 1 second.",
         ))
         .unwrap_or_else(|_| {
             axum::response::Response::builder()
@@ -784,41 +789,36 @@ fn too_many_requests_status(status: axum::http::StatusCode) -> axum::response::R
         })
 }
 
-/// Axum middleware that enforces the per-peer AS4 inbound rate limit.
+/// Axum middleware enforcing the per-peer inbound rate limit alone.
+///
+/// Used by the API-Webdienste Strom port, which shares the per-IP budget with
+/// the AS4 port — the limit is a property of the peer, not of the endpoint —
+/// but has no ebMS envelope to read a sender identity from, so the per-sender
+/// limiter does not apply.
 ///
 /// Returns `429 Too Many Requests` with a `Retry-After: 1` header when the
-/// peer's GCRA token bucket is exhausted. A `tracing::warn!` is emitted on
-/// each rejection so operators can detect unusual traffic patterns.
+/// peer's GCRA token bucket is exhausted, and logs each rejection so operators
+/// can detect unusual traffic patterns.
 pub async fn rate_limit_middleware(
     axum::extract::ConnectInfo(peer): axum::extract::ConnectInfo<std::net::SocketAddr>,
     req: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> axum::response::Response {
-    match AS4_RATE_LIMITER.check_key(&peer.ip()) {
-        Ok(()) => next.run(req).await,
-        Err(_) => {
-            tracing::warn!(
-                method = %req.method(),
-                uri    = %req.uri(),
-                peer   = %peer.ip(),
-                "AS4 inbound rate limit exceeded (100 req/s per peer) — returning 429. \
-                 Possible misconfigured or malicious counterparty."
-            );
-            axum::response::Response::builder()
-                .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
-                .header("Retry-After", "1")
-                .header("Content-Type", "text/plain")
-                .body(axum::body::Body::from(
-                    "AS4 inbound rate limit exceeded. Retry after 1 second.",
-                ))
-                .unwrap_or_else(|_| {
-                    axum::response::Response::builder()
-                        .status(axum::http::StatusCode::TOO_MANY_REQUESTS)
-                        .body(axum::body::Body::empty())
-                        .unwrap()
-                })
-        }
+    // See `as4_rate_limit_middleware`: health probes are never throttled.
+    if crate::health::is_health_path(req.uri().path()) {
+        return next.run(req).await;
     }
+    if AS4_RATE_LIMITER.check_key(&peer.ip()).is_err() {
+        tracing::warn!(
+            method = %req.method(),
+            uri    = %req.uri(),
+            peer   = %peer.ip(),
+            "inbound rate limit exceeded (100 req/s per peer) — returning 429. \
+             Possible misconfigured or malicious counterparty."
+        );
+        return too_many_requests();
+    }
+    next.run(req).await
 }
 
 #[cfg(test)]

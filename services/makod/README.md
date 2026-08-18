@@ -14,7 +14,7 @@ For the complete operator reference — including persistence configuration, AS4
 :8090  ← API-Webdienste Strom (iMS REST/JSON — energy-api)
 ```
 
-All three ports are optional and independently enabled via CLI flags or environment variables. `GET /health` is available on every enabled port.
+All three ports are optional and independently enabled via CLI flags or environment variables. The `/health` probes are available on every enabled port.
 
 ---
 
@@ -42,15 +42,26 @@ cat > makod.toml <<'TOML'
 mp_id   = "9900357000004"
 roles   = ["LF"]
 primary = true
+
+[storage]
+allow_volatile = true          # in-memory; data is lost on exit
+
+[http]
+addr      = "127.0.0.1:8080"
+auth_keys = ["dev=dev-token-change-me"]
+
+[as4]
+allow_no_signing = true        # no AS4 credentials: log outbound EDIFACT
 TOML
 
-cargo run -p makod -- \
-  --config makod.toml \
-  --allow-volatile \
-  --http-addr 127.0.0.1:8080
+cargo run -p makod -- --config makod.toml
 ```
 
-> `--allow-volatile` is required when `--data-dir` is omitted. Without it, `makod` refuses to start and prints an error directing you to set `--data-dir` or pass the flag explicitly. This prevents accidental production deployments without persistent storage.
+Three things the daemon refuses to start without, all visible above:
+
+- **Durability.** Omitting `[storage] data_dir` needs `allow_volatile = true`. Without it `makod` refuses to start, so a production deployment cannot lose its event store by accident.
+- **A credential on every authenticated port.** `[http] addr` submits commands and triggers migrations; it never runs open. Supply `auth_keys` or an `[oidc]` issuer.
+- **A path for outbound EDIFACT.** With neither AS4 signing material nor `[erp] edifact_outbox_webhook_url`, every outbound message would be logged and rescheduled forever. `allow_no_signing = true` makes that a deliberate development choice instead of a silent regulatory failure.
 
 ### Production — durable SlateDB on local disk
 
@@ -73,20 +84,39 @@ cargo build -p makod --release
 ./target/release/makod --check --config /etc/makod/makod.toml --data-dir /var/lib/makod
 ```
 
-`--check` validates configuration, loads profiles, runs all adapter startup checks, and verifies that every authenticated port has credentials configured, then exits with code 0 on success. Use this in deployment pipelines before starting the live process: exit 0 means the same configuration will start.
+`--check` runs every validation the real boot runs before it opens a socket, then exits: the config file schema, the `[[party]]` identity rules, profile and adapter coverage, dispatch completeness, the data-directory lock, AS4 key material and the partner registry, the Cedar policy set, credentials for every authenticated port, and the ingest and egress transport rules. Exit 0 means the same configuration will start; any failure exits non-zero and names the flag or field that fixes it.
+
+Only the network round-trips are deferred — OIDC discovery and the JWKS fetch — so `--check` runs on a CI runner with no route to the identity provider. Its arguments are still validated.
+
+`--check` changes no domain state: the process-registry reconciliation, the one startup step that writes, runs only after the check exits. It does take the exclusive data-directory lock, so it will refuse while the daemon is running.
 
 ---
 
 ## Health checks
 
-Every enabled port exposes `GET /health`:
+Every enabled port exposes three routes. They are unauthenticated and exempt
+from the per-peer rate limiter — a throttled probe reads as a dead container.
+
+| Route | Answers | Fails when | Kubernetes probe |
+|---|---|---|---|
+| `/health/live` | Is the process running? | never, if it responds at all | `livenessProbe` |
+| `/health/ready` | Can it serve traffic? | store unreachable, or a worker heartbeat is stale | `readinessProbe` |
+| `/health` | alias of `/health/ready` | as above | — |
 
 ```
-HTTP 200  {"status":"ok","version":"1.2.3","uptime_secs":142}
-HTTP 503  {"status":"degraded","reason":"deadline_scheduler not running"}
+HTTP 200  {"status":"ok","instance_id":"mako-prod-01-12345","version":"0.16.0"}
+HTTP 503  {"status":"degraded","instance_id":"mako-prod-01-12345","version":"0.16.0",
+           "reason":"worker_stale:deadline-scheduler"}
 ```
 
-The response is `200 OK` when all background workers (outbox, deadline scheduler, projection worker) are running. Use this as the liveness and readiness probe in container orchestration.
+The split matters: Kubernetes *restarts* a container that fails liveness, but
+only removes one that fails readiness from Service endpoints. A stalled outbox
+worker or an unreachable object store belongs on readiness — restarting the
+container does not fix the object store, and doing it mid-delivery costs an AS4
+retry cycle.
+
+`reason` is a stable category (`store_unavailable`, `worker_stale:<name>`) and
+never carries internal paths or store state.
 
 ---
 
@@ -94,11 +124,27 @@ The response is `200 OK` when all background workers (outbox, deadline scheduler
 
 `makod` handles `SIGTERM` and `SIGINT` (Ctrl-C). On receipt it:
 
-1. Stops accepting new inbound messages on all ports.
-2. Waits up to **30 seconds** for in-flight event-store writes and outbox drains to complete.
-3. Exits with code 0 on clean shutdown, or code 1 if the timeout elapses with pending work.
+1. Cancels the shared shutdown token. Listeners stop accepting and drain
+   in-flight requests; every background worker returns at its next message or
+   tick boundary.
+2. **Joins** every listener and worker — this is the step that makes the next
+   one safe.
+3. Flushes the buffered dead-letter entries, which have no other durable home.
+4. Closes the event store.
 
-Adjust the timeout via `--shutdown-timeout-secs <N>`.
+Steps 1–3 share the `--shutdown-timeout-secs` budget (default 30); the store
+close keeps a 10-second floor of its own, because abandoning an unflushed
+write-ahead log is worse than overrunning the grace period.
+
+Exit code is 0 only when all three completed. A timeout anywhere exits **1** and
+names which stage did not finish — a lost write must not be indistinguishable
+from a clean stop.
+
+> Joining the workers before closing the store is not tidiness. A worker still
+> running when the store closes can lose an outbox `acknowledge` after the
+> counterparty already has the message, and the next start delivers it again.
+
+Set `terminationGracePeriodSeconds` above `--shutdown-timeout-secs` + 10.
 
 ---
 
@@ -111,7 +157,7 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 | `--config <FILE>` | `MAKOD_CONFIG` | TOML config file. **Required** — must define at least one `[[party]]` entry (`mp_id` + `roles`); the primary entry is the operator identity. |
 | `--marktrollen <ROLES>` | `MAKOD_MARKTROLLEN` | Optional override of the role allow-list (comma-separated, e.g. `LF,LFG`, `NB,MSB`). Defaults to all roles from `[[party]]`. A command for an unlisted role is rejected with `422`. |
 | `--http-addr <ADDR>` | `MAKOD_HTTP_ADDR` | Enable HTTP REST API on this address. |
-| `--auth-key <NAME=TOKEN>` | `MAKOD_AUTH_KEYS` | Named API key for Bearer authentication. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. |
+| `--auth-key <NAME=TOKEN>` | `MAKOD_AUTH_KEYS` | Named API key for Bearer authentication. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. Prefer `[http] auth_keys_file` in the config file. |
 | `--oidc-issuer <URL>` | `MAKOD_OIDC_ISSUER` | OIDC issuer URL. `makod` fetches `<URL>/.well-known/openid-configuration` at startup and validates JWT bearer tokens. |
 | `--oidc-audience <AUD>` | `MAKOD_OIDC_AUDIENCE` | Expected JWT `aud` claim (required when `--oidc-issuer` is set). |
 | `--oidc-jwks-refresh-secs <N>` | `MAKOD_OIDC_JWKS_REFRESH_SECS` | JWKS key-set refresh interval in seconds (default: 300). |
@@ -120,7 +166,7 @@ Adjust the timeout via `--shutdown-timeout-secs <N>`.
 | `--as4-addr <ADDR>` | `MAKOD_AS4_ADDR` | Enable AS4/ebMS3 inbound transport. |
 | `--api-webdienste-addr <ADDR>` | `MAKOD_API_WEBDIENSTE_ADDR` | Enable API-Webdienste Strom port. |
 | `--erp-webhook-url <URL>` | `MAKOD_ERP_WEBHOOK_URL` | CloudEvents 1.0 webhook for ERP integration. |
-| `--check` | `MAKOD_CHECK` | Validate config, profiles, adapters and port credentials, then exit. |
+| `--check` | `MAKOD_CHECK` | Run every configuration-derived startup validation, then exit. |
 | `-l, --log-level` | `MAKOD_LOG_LEVEL` | Log level (`trace`/`debug`/`info`/`warn`/`error`). Default: `info`. |
 | `-f, --log-format` | `MAKOD_LOG_FORMAT` | Log format (`pretty`/`json`/`compact`). Default: `pretty`. |
 

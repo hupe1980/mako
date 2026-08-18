@@ -91,28 +91,37 @@ http-body-util = "0.1"
 
 # ── Role-isolation feature flags ─────────────────────────────────────────────
 #
-# Use these to build purpose-specific binaries that exclude code for roles
-# not deployed by the operator. This reduces binary size, eliminates
-# compile-time registration of unwanted PIDs, and provides legal traceability
-# (binary SHA identifies role scope for BNetzA audit).
+# Build purpose-specific binaries that exclude the code for roles the operator
+# does not deploy. This cuts binary size, keeps unwanted PIDs out of the router,
+# and gives legal traceability — the binary SHA identifies the role scope for a
+# BNetzA audit.
 #
-# Deployment profiles:
-#   lf-only       = ["role-lf"]                         # pure LF supplier
-#   nb-only       = ["role-nb"]                         # pure DSO/GNB
-#   nb-strom-only = ["role-nb-strom"]                   # Strom DSO only
-#   nb-gas-only   = ["role-nb-gas"]                     # Gas GNB only
-#   msb-only      = ["role-msb"]                        # pure MSB
-#   integrated    = ["role-lf","role-nb","role-msb"]    # Stadtwerk/integrated
+# `default` enables every role, so a plain `cargo build -p makod` is the
+# all-roles binary. A role-scoped build turns the default off:
 #
-# Default (no feature flags): all roles active — backwards-compatible with
-# existing deployments that have not yet migrated to role-scoped builds.
+#   cargo build -p makod --no-default-features --features role-lf
+#
+# Deployment profiles (all with --no-default-features):
+#   lf-only       = role-lf                        # pure LF supplier
+#   nb-only       = role-nb                        # pure DSO/GNB
+#   nb-strom-only = role-nb-strom                  # Strom DSO only
+#   nb-gas-only   = role-nb-gas                    # Gas GNB only
+#   msb-only      = role-msb                       # pure MSB
+#   esa-only      = role-esa-strom                 # pure ESA (WiM Strom Teil 2)
+#   integrated    = role-lf,role-nb,role-msb       # Stadtwerk / VIU
+#
+# Selecting no role at all is a build error rather than a silently all-roles
+# binary: `--features role-esa-strom` alone used to satisfy the old
+# "no role flags means every role" convention and shipped every module.
 [features]
+default = ["role-lf", "role-nb", "role-msb", "role-esa-strom"]
+
 # ── Per-Sparte, per-role granular flags ──────────────────────────────────────
 # Strom roles
 role-lf-strom  = []  # LF Strom: gpke-* LF-side, wim LF-affected
 role-nb-strom  = []  # NB/DSO Strom: gpke-* NB-side, Sperrung, Konfiguration,
                      #   UTILTS, MSCONS, WiM NB-side, PARTIN 37000-37006,
-                     #   INVOIC 31001/31002/31005/31006
+                     #   INVOIC 31001/31002/31005/31006, MaBiS, Redispatch 2.0
 role-msb-strom = []  # MSB Strom: wim-* Messstellenbetrieb
 role-esa-strom = []  # ESA Strom: wim-wertebestellung ESA-side (WiM Teil 2 Kap. 4)
 # Gas roles
@@ -121,6 +130,6 @@ role-nb-gas    = []  # GNB: geli-gas-* NB-side, Sperrung Gas, PARTIN 37008-37014
                      #   INVOIC 31007/31008/31011, gabi-gas-mmma (13013)
 role-msb-gas   = []  # gMSB: wim-gas-* Messstellenbetrieb Gas
 # ── Composite convenience flags ───────────────────────────────────────────────
-role-lf  = ["role-lf-strom",  "role-lf-gas"]   # dual-fuel LF (most common)
+role-lf  = ["role-lf-strom",  "role-lf-gas"]    # dual-fuel LF (most common)
 role-nb  = ["role-nb-strom",  "role-nb-gas"]    # combined DSO+GNB
 role-msb = ["role-msb-strom", "role-msb-gas"]   # combined MSB

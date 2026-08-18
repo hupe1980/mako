@@ -138,6 +138,17 @@ pub struct MigrateResponse {
     pub errors: Vec<String>,
     /// Number of workflow-family runners executed.
     pub runners_executed: usize,
+    /// Workflow families this migration covered, in name order.
+    ///
+    /// A count alone reads as complete whatever the migration happens to
+    /// include; the names let an operator check the list against the workflows
+    /// their deployment actually runs.
+    pub workflows: Vec<String>,
+    /// Workflow families deliberately not migrated, each with its reason.
+    ///
+    /// Pure receive-and-record families: they record an inbound message and
+    /// finish, so no process survives a cutover for a migration to repoint.
+    pub workflows_not_migrated: Vec<(String, String)>,
 }
 
 #[derive(Serialize)]
@@ -154,7 +165,8 @@ struct ErrorResponse {
 /// Run all workflow-family migrations for the given `(from, to)` FV pair.
 ///
 /// Returns `None` when the pair is not recognised (unknown FV transition).
-/// Returns `Some((report, runners_executed))` on success.
+/// Returns `Some((report, covered_workflows))` on success — the names, not just
+/// a count, so callers can report exactly what was migrated.
 ///
 /// # Adding a new annual release
 ///
@@ -168,7 +180,7 @@ pub async fn dispatch_migrations(
     from: &str,
     to: &str,
     store: &SlateDbStore,
-) -> Option<(MigrationReport, usize)> {
+) -> Option<(MigrationReport, Vec<&'static str>)> {
     /// Construct and run an identity migration for one workflow, merging the
     /// result into `$report` and incrementing `$count`.
     macro_rules! identity {
@@ -192,7 +204,7 @@ pub async fn dispatch_migrations(
                 "migration runner complete",
             );
             $report.merge(r);
-            $count += 1;
+            $count.push($name);
         }};
     }
 
@@ -207,7 +219,7 @@ pub async fn dispatch_migrations(
         // `identity!` call with a custom `StateMigration` impl from the domain crate.
         ("FV2025-10-01", "FV2026-10-01") => {
             let mut report = MigrationReport::default();
-            let mut count = 0usize;
+            let mut count: Vec<&'static str> = Vec::new();
 
             // ── GPKE (Strom) ──────────────────────────────────────────────────
             identity!(
@@ -512,6 +524,231 @@ pub async fn dispatch_migrations(
                 to
             );
 
+            // ── Workflows added after the first cutover ────────────────────
+            //
+            // These hold in-flight state across a release just as the families
+            // above do — the GaBi Gas final-allocation window alone runs to the
+            // end of month M+2, so it routinely spans the October cutover — and
+            // were simply never added. The coverage guard below now refuses a
+            // dispatchable workflow with neither an arm nor a stated reason.
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeBeendigungZuordnungWorkflow,
+                "gpke-beendigung-zuordnung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeAnkuendigungZuordnungLfWorkflow,
+                "gpke-ankuendigung-zuordnung-lf",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeSperrungLfWorkflow,
+                "gpke-sperrung-lf",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeKonfigurationAenderungWorkflow,
+                "gpke-konfiguration-aenderung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeDatanabrufWorkflow,
+                "gpke-datenabruf",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeAllokationslisteWorkflow,
+                "gpke-allokationsliste",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeEogWorkflow,
+                "gpke-eog",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gpke::GpkeStammdatenaenderungWorkflow,
+                "gpke-stammdatenaenderung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_geli_gas::GeliGasStammdatenaenderungWorkflow,
+                "geli-gas-stammdatenaenderung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_geli_gas::GeliGasLfStornierungWorkflow,
+                "geli-gas-stornierung-lf",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_geli_gas::GeliGasDatanabrufWorkflow,
+                "geli-gas-datenabruf",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_geli_gas::GeliGasSperrungLfWorkflow,
+                "geli-gas-sperrung-lf",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_geli_gas::GeliGasSperrungNbWorkflow,
+                "geli-gas-sperrung-nb",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_geli_gas::GeliGasSperrprozesseInvoicWorkflow,
+                "geli-gas-sperrprozesse-invoic",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim::WimRechnungsabwicklungWorkflow,
+                "wim-rechnungsabwicklung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim::WimTechnikAenderungWorkflow,
+                "wim-technik-aenderung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim::WimInsrptWorkflow,
+                "wim-insrpt",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim::wertebestellung::WimWertebestellungWorkflow,
+                mako_wim::wertebestellung::WORKFLOW_NAME,
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow,
+                mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim_gas::WimGasGeraeteubernahmeWorkflow,
+                "wim-gas-geraeteubernahme",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_wim_gas::WimGasInsrptWorkflow,
+                "wim-gas-insrpt",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gabi_gas::GaBiGasNominationWorkflow,
+                "gabi-gas-nomination",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gabi_gas::GaBiGasDeliveryOrderWorkflow,
+                "gabi-gas-delivery-order",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                mako_gabi_gas::GaBiGasAllocationWorkflow,
+                "gabi-gas-allocation",
+                from,
+                to
+            );
+
+            count.sort_unstable();
             Some((report, count))
         }
 
@@ -586,7 +823,7 @@ async fn handle_migrate(
                     migrated = report.migrated,
                     skipped = report.skipped,
                     error_count = report.errors.len(),
-                    runners_executed = runners,
+                    runners_executed = runners.len(),
                     "admin: migration completed WITH ERRORS — manual intervention may be required",
                 );
             } else {
@@ -595,7 +832,7 @@ async fn handle_migrate(
                     to = req.to,
                     migrated = report.migrated,
                     skipped = report.skipped,
-                    runners_executed = runners,
+                    runners_executed = runners.len(),
                     "admin: migration completed successfully",
                 );
             }
@@ -608,7 +845,12 @@ async fn handle_migrate(
                     migrated: report.migrated,
                     skipped: report.skipped,
                     errors,
-                    runners_executed: runners,
+                    runners_executed: runners.len(),
+                    workflows: runners.iter().map(|w| (*w).to_owned()).collect(),
+                    workflows_not_migrated: NO_MIGRATION_NEEDED
+                        .iter()
+                        .map(|(w, why)| ((*w).to_owned(), (*why).to_owned()))
+                        .collect(),
                 }),
             )
                 .into_response()
@@ -626,4 +868,143 @@ pub fn router(state: Arc<MigrationApiState>) -> Router {
     Router::new()
         .route("/admin/migrations", post(handle_migrate))
         .with_state(state)
+}
+
+// ── Coverage guard ────────────────────────────────────────────────────────────
+
+/// Workflows that deliberately have no FV migration arm, with the reason.
+///
+/// Reported by `POST /admin/migrations` alongside the covered list, because
+/// the annual-release runbook asks an operator to sign off on the migration
+/// result and "which families were intentionally skipped, and why" is part of
+/// that judgement.
+///
+/// A workflow needs one when an in-flight process must carry its snapshot
+/// across an annual release. The families below never hold one long enough for
+/// that to matter: they record an inbound message and finish, so no process
+/// survives a cutover for the migration to repoint.
+const NO_MIGRATION_NEEDED: &[(&str, &str)] = &[
+    (
+        "geli-gas-mscons",
+        "records inbound MSCONS Messdaten and completes",
+    ),
+    (
+        "gpke-messwerte",
+        "records inbound MSCONS Messwerte and completes",
+    ),
+    (
+        "gpke-partin",
+        "records inbound PARTIN Kommunikationsdaten and completes",
+    ),
+    (
+        "geli-gas-partin",
+        "records inbound PARTIN Gas Kommunikationsdaten and completes",
+    ),
+    (
+        "gpke-utilts",
+        "records inbound UTILTS Konfigurationsdaten and completes",
+    ),
+    (
+        "gabi-gas-mmma",
+        "delegates delivery to gpke-allokationsliste",
+    ),
+    (
+        "gabi-gas-schedl",
+        "DVGW SCHEDL notification, no response obligation",
+    ),
+    (
+        "gabi-gas-imbnot",
+        "DVGW IMBNOT notification, no response obligation",
+    ),
+    (
+        "gabi-gas-tranot",
+        "DVGW TRANOT notification, no response obligation",
+    ),
+    (
+        "mabis-clearingliste",
+        "records the inbound Clearingliste and completes",
+    ),
+    (
+        "mabis-listenabgleich",
+        "records the inbound list and completes",
+    ),
+    (
+        "mabis-anforderung",
+        "records the inbound Anforderung and completes",
+    ),
+    (
+        "mabis-zp-lifecycle",
+        "records the inbound ZP lifecycle message and completes",
+    ),
+    (
+        "contrl-ack-obligation",
+        "a delivery-window marker, not a workflow — it has no process state",
+    ),
+];
+
+#[cfg(test)]
+mod coverage_tests {
+    use super::NO_MIGRATION_NEEDED;
+    use crate::deadline_dispatch::DISPATCH_TABLE;
+
+    /// Every dispatchable workflow must either have a migration arm or an
+    /// explicit reason for not needing one.
+    ///
+    /// The migration covered 33 of the 71 names the dispatcher knows, and
+    /// nothing said which 38 were missing or why. That is harmless while every
+    /// migration is an identity repoint and every workflow is
+    /// `ForwardCompatible` — and stops being harmless the first release a
+    /// workflow's state schema actually changes, at which point the omission is
+    /// data loss discovered under cutover time pressure.
+    ///
+    /// This test does not demand a migration for everything. It demands a
+    /// decision for everything.
+    #[tokio::test]
+    async fn every_dispatchable_workflow_has_a_migration_decision() {
+        let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
+            .await
+            .expect("in-memory store");
+        let (_report, covered) = super::dispatch_migrations("FV2025-10-01", "FV2026-10-01", &store)
+            .await
+            .expect("the active FV pair is registered");
+
+        let exempt: std::collections::HashMap<&str, &str> =
+            NO_MIGRATION_NEEDED.iter().copied().collect();
+        let covered: std::collections::HashSet<&str> = covered.into_iter().collect();
+
+        let undecided: Vec<&str> = DISPATCH_TABLE
+            .iter()
+            .filter(|w| !covered.contains(**w) && !exempt.contains_key(**w))
+            .copied()
+            .collect();
+        assert!(
+            undecided.is_empty(),
+            "these workflows have neither an FV migration arm nor an entry in \
+             NO_MIGRATION_NEEDED:\n  {}\n\
+             Add an `identity!` call in dispatch_migrations, or list the workflow \
+             with the reason a migration is unnecessary.",
+            undecided.join("\n  "),
+        );
+
+        // An exemption for a workflow that is also migrated, or for one that no
+        // longer exists, hides a real gap behind a stale name.
+        let contradictory: Vec<&str> = exempt
+            .keys()
+            .filter(|w| covered.contains(**w))
+            .copied()
+            .collect();
+        assert!(
+            contradictory.is_empty(),
+            "NO_MIGRATION_NEEDED names workflows that are migrated anyway: {contradictory:?}"
+        );
+        let unknown: Vec<&str> = exempt
+            .keys()
+            .filter(|w| !DISPATCH_TABLE.contains(w))
+            .copied()
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "NO_MIGRATION_NEEDED names unknown workflows: {unknown:?}"
+        );
+    }
 }

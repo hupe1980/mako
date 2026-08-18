@@ -193,6 +193,14 @@ The party type is derived from the same agency code the EDIFACT layer puts in
 `NAD` DE3055, so the two identifier vocabularies cannot drift apart for one
 MP-ID.
 
+That derivation runs on the **recipient's** MP-ID for `<eb:To>`, and a
+counterparty is by definition absent from the local `[[party]]` list — so the
+agency is read off the identifier itself (`99…` → BDEW, `98…` → DVGW, other
+13-digit → GS1 GLN, 16-char → EIC) rather than from local configuration. A fixed
+default here would stamp every Gas counterparty holding a DVGW `98…` code with
+the BDEW party type, and the receiving MSH resolves its P-Mode from these fields,
+so the mismatch is the counterparty's to reject.
+
 Payloads travel as **SOAP-with-Attachments**: an `application/soap+xml` root
 part, an **empty SOAP Body**, and the EDIFACT interchange in its own MIME part
 referenced from the signed `<eb:PartInfo href="cid:…">`. §2.2.3.2 requires that

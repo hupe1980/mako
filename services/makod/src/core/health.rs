@@ -1,20 +1,28 @@
-//! Shared health-check handler for all `makod` HTTP servers.
+//! Health probes for all `makod` HTTP servers.
 //!
-//! All three exposed servers (EDIFACT REST, AS4 ingest, API-Webdienste) mount
-//! `GET /health` from this module so container orchestrators have a consistent
-//! liveness / readiness probe path on every port.
+//! All exposed servers (EDIFACT REST, AS4 ingest, API-Webdienste) mount the
+//! same three routes, so container orchestrators have a consistent probe target
+//! on every port.
 //!
-//! ## Response contract
+//! ## Why three routes
 //!
-//! | Store state   | HTTP  | `"status"` |
-//! |---------------|-------|------------|
-//! | Alive         | `200` | `"ok"`     |
-//! | Unavailable   | `503` | `"degraded"` |
+//! Liveness and readiness answer different questions, and a single endpoint
+//! answering both makes one of them wrong. Kubernetes *restarts* a container
+//! that fails liveness and merely *removes it from Service endpoints* when it
+//! fails readiness. Reporting a stalled outbox worker or an unreachable object
+//! store on the liveness probe turns a recoverable dependency outage into a
+//! restart loop — and restarting mid-delivery costs an AS4 retry cycle without
+//! fixing the object store.
 //!
-//! The probe is intentionally lightweight: it issues a single
-//! [`SlateDbStore::kv_get`] call on a sentinel key (`"hc/ping"`) — a point
-//! read that completes in microseconds when the store is open, and fails
-//! immediately when the database handle is closed or the backend is
+//! | Route | Answers | Fails when | Probe |
+//! |---|---|---|---|
+//! | `/health/live` | Is the process running? | never (the handler is reached) | `livenessProbe` |
+//! | `/health/ready` | Can it serve traffic? | store unreachable, or a worker heartbeat is stale | `readinessProbe` |
+//! | `/health` | alias of `/health/ready` | as above | compatibility |
+//!
+//! The readiness probe issues a single [`SlateDbStore::kv_get`] on a sentinel
+//! key (`hc/ping`) — a point read that completes in microseconds when the store
+//! is open and fails immediately when the handle is closed or the backend is
 //! unreachable.
 //!
 //! ## Usage
@@ -39,7 +47,7 @@ const HC: KvNamespace = KvNamespace::new("hc/");
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-/// Shared state for the health handler.
+/// Shared state for the health handlers.
 #[derive(Clone)]
 pub struct HealthState {
     store: SlateDbStore,
@@ -65,10 +73,10 @@ impl HealthState {
         }
     }
 
-    /// Register a [`WorkerWatch`] for liveness monitoring.
+    /// Register a [`WorkerWatch`] for readiness monitoring.
     ///
-    /// The health handler reports `503 degraded` if any registered watch is
-    /// stale.  Call this after spawning each background worker.
+    /// A stale watch flips `/health/ready` to 503. Call this after spawning each
+    /// background worker.
     pub fn register_worker(&self, watch: WorkerWatch) {
         self.worker_watches
             .write()
@@ -77,16 +85,19 @@ impl HealthState {
     }
 }
 
-// ── Handler ───────────────────────────────────────────────────────────────────
+// ── Response ──────────────────────────────────────────────────────────────────
 
 #[derive(Serialize, ToSchema)]
 pub(crate) struct HealthResponse {
-    /// `"ok"` when the store is alive; `"degraded"` when the store is unavailable.
+    /// `"ok"` when the probe passes; `"degraded"` when it does not.
     #[schema(value_type = String, example = "ok")]
     status: &'static str,
     /// `$HOSTNAME-$PID` of the responding `makod` instance.
     #[schema(example = "mako-prod-01-12345")]
     instance_id: String,
+    /// Daemon version (`CARGO_PKG_VERSION`).
+    #[schema(example = "0.16.0")]
+    version: &'static str,
     /// Present only when `status == "degraded"`. Stable category string — never
     /// contains internal paths or stack traces.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -94,25 +105,66 @@ pub(crate) struct HealthResponse {
     reason: Option<String>,
 }
 
-/// Liveness + readiness probe handler.
+impl HealthResponse {
+    fn ok(state: &HealthState) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::OK,
+            Json(Self {
+                status: "ok",
+                instance_id: String::from(&*state.instance_id),
+                version: env!("CARGO_PKG_VERSION"),
+                reason: None,
+            }),
+        )
+    }
+
+    fn degraded(state: &HealthState, reason: String) -> (StatusCode, Json<Self>) {
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(Self {
+                status: "degraded",
+                instance_id: String::from(&*state.instance_id),
+                version: env!("CARGO_PKG_VERSION"),
+                reason: Some(reason),
+            }),
+        )
+    }
+}
+
+// ── Handlers ──────────────────────────────────────────────────────────────────
+
+/// Liveness probe — reports that the process is running and its HTTP stack
+/// responds.
 ///
-/// Performs a lightweight SlateDB read and returns:
-/// - `200 OK`  `{"status":"ok","instance_id":"..."}` — store is alive and all workers are healthy.
-/// - `503 Service Unavailable`  `{"status":"degraded","instance_id":"...","reason":"..."}`
-///   — store is closed, unreachable, or a worker heartbeat is stale.
+/// Deliberately checks nothing else. A dependency this handler could fail on is
+/// a dependency a restart would not fix, and Kubernetes answers a liveness
+/// failure with a restart.
 #[utoipa::path(
     get,
-    path = "/health",
+    path = "/health/live",
+    tag = "health",
+    responses((status = 200, description = "Process is alive", body = HealthResponse))
+)]
+pub(crate) async fn live(State(state): State<HealthState>) -> (StatusCode, Json<HealthResponse>) {
+    HealthResponse::ok(&state)
+}
+
+/// Readiness probe — reports whether this instance can serve traffic.
+///
+/// Fails when the event store is unreachable or a background worker has stopped
+/// heartbeating, because in either case an accepted message would not be
+/// processed to the point of durability.
+#[utoipa::path(
+    get,
+    path = "/health/ready",
     tag = "health",
     responses(
-        (status = 200, description = "Store is alive", body = HealthResponse),
-        (status = 503, description = "Store is unavailable", body = HealthResponse),
+        (status = 200, description = "Store is alive and all workers are healthy", body = HealthResponse),
+        (status = 503, description = "Store is unavailable or a worker has stalled", body = HealthResponse),
     )
 )]
-pub(crate) async fn handler(
-    State(state): State<HealthState>,
-) -> (StatusCode, Json<HealthResponse>) {
-    // 1. Check worker heartbeats first (cheap atomic reads).
+pub(crate) async fn ready(State(state): State<HealthState>) -> (StatusCode, Json<HealthResponse>) {
+    // 1. Worker heartbeats first (cheap atomic reads).
     {
         let watches = state
             .worker_watches
@@ -120,59 +172,55 @@ pub(crate) async fn handler(
             .expect("worker_watches RwLock is never poisoned");
         for watch in watches.iter() {
             if watch.is_stale() {
-                tracing::warn!(worker = watch.name, "health check: worker heartbeat stale",);
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    Json(HealthResponse {
-                        status: "degraded",
-                        instance_id: String::from(&*state.instance_id),
-                        reason: Some(format!("worker_stale:{}", watch.name)),
-                    }),
-                );
+                tracing::warn!(worker = watch.name, "readiness: worker heartbeat stale");
+                return HealthResponse::degraded(&state, format!("worker_stale:{}", watch.name));
             }
         }
     }
 
     // 2. Then verify the store is alive with a sentinel key-value read.
     match state.store.kv_get(HC, "ping").await {
-        Ok(_) => (
-            StatusCode::OK,
-            Json(HealthResponse {
-                status: "ok",
-                instance_id: String::from(&*state.instance_id),
-                reason: None,
-            }),
-        ),
-        Err(e) => (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(HealthResponse {
-                status: "degraded",
-                instance_id: String::from(&*state.instance_id),
-                // Log full error internally; expose only a stable category to
-                // external clients to avoid leaking filesystem paths or internal
-                // SlateDB state-machine strings.
-                reason: {
-                    tracing::warn!(error = %e, "health check: store unavailable");
-                    Some("store_unavailable".to_owned())
-                },
-            }),
-        ),
+        Ok(_) => HealthResponse::ok(&state),
+        Err(e) => {
+            // Log the full error internally; expose only a stable category
+            // externally, so the response never leaks filesystem paths or
+            // internal SlateDB state-machine strings.
+            tracing::warn!(error = %e, "readiness: store unavailable");
+            HealthResponse::degraded(&state, "store_unavailable".to_owned())
+        }
     }
 }
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
-/// Build a router containing only `GET /health`.
+/// Build a router containing the health routes.
 ///
-/// Merge this **before** any authentication middleware layers so that
+/// Merge this **before** any authentication middleware layer so that
 /// load-balancer probes never need credentials:
 ///
 /// ```rust,ignore
 /// let app = protected_router(state)
 ///     .merge(health::router(health_state));
 /// ```
+///
+/// Note that the caller must also keep these routes out of the per-peer rate
+/// limiter — see `is_health_path`.
 pub fn router(state: HealthState) -> Router {
     Router::new()
-        .route("/health", get(handler))
+        .route("/health", get(ready))
+        .route("/health/live", get(live))
+        .route("/health/ready", get(ready))
         .with_state(state)
+}
+
+/// `true` when `path` is one of the health routes.
+///
+/// The rate limiters key on the peer address. On the AS4 port that peer is a
+/// trading partner, but on any port behind a proxy or a shared NAT it can be the
+/// same address the orchestrator probes from — and a throttled probe reads as a
+/// dead container. Health checks are cheap and unauthenticated by design, so
+/// they are exempt.
+#[must_use]
+pub fn is_health_path(path: &str) -> bool {
+    matches!(path, "/health" | "/health/live" | "/health/ready")
 }

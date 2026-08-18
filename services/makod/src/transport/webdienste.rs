@@ -31,25 +31,32 @@
 //! | MaLo Identification v1 | `/maloId/`               | `MaloIdentHandler`        | ✅ active |
 //! | WiM Order v1           | `/wimBestellung/v1/`     | `WimOrderHandler`         | ✅ wired |
 //!
-//! ## Authentication
+//! ## Authentication and caller identity
 //!
-//! **Production requirement**: BDEW API-Webdienste Strom requires mTLS with
-//! certificates issued by the BDEW PKI CA. Deploy this port behind a reverse
-//! proxy (e.g. Nginx, Envoy, AWS ALB with mutual TLS) that validates the
-//! client certificate against the BDEW PKI CA before forwarding requests.
+//! Two separate things, both required.
 //!
-//! At startup, `makod` logs a warning when `--api-webdienste-addr` is set
-//! without an mTLS guard:
+//! **Authorization to reach the port.** Every route sits behind bearer/OIDC
+//! authentication plus the Cedar `UseWebdienste` action. This is on by default;
+//! `--webdienste-allow-unauthenticated` removes it for deployments that
+//! terminate mTLS at a fronting proxy and enforce access there, and `makod`
+//! refuses to start the port without either.
 //!
-//! ```text
-//! WARN makod: API-Webdienste Strom port started WITHOUT authentication. \
-//!      BDEW API-Webdienste requires mTLS (BDEW PKI CA). Deploy behind a \
-//!      reverse proxy with mTLS termination before exposing to public networks.
+//! **Who is calling.** BDEW API-Webdienste identify the market participant by
+//! their mTLS client certificate, which the proxy validates and terminates —
+//! nothing in the request body carries it. The proxy forwards the certificate's
+//! Marktpartner-ID in [`CLIENT_MP_ID_HEADER`], and the Control Measures
+//! handlers refuse a request without it: the Endantwort to a §14a EnWG
+//! Steuerungsauftrag is addressed to whoever sent it, so an unattributable
+//! order cannot be accepted.
+//!
+//! ```nginx
+//! # Nginx terminating BDEW PKI mTLS
+//! proxy_set_header X-Mako-Client-MP-ID $ssl_client_s_dn_cn;
 //! ```
 //!
-//! Internal deployments behind a service mesh or VPC with network-level
-//! access controls enforced may operate without mTLS if the threat model
-//! permits unauthenticated inbound requests from network-adjacent peers.
+//! The WiM Order API is the exception: `WimAnmeldungRequest` carries
+//! `netzbetreiber_id` in the body, so the ordering party is known from the
+//! payload and the header is not consulted.
 
 use std::sync::Arc;
 
@@ -74,6 +81,52 @@ use mako_wim::steuerungsauftrag::{
 use serde_json::json;
 use tracing::{info, warn};
 
+// ── Caller identity ───────────────────────────────────────────────────────────
+
+/// Header naming the Marktpartner-ID of the calling market participant.
+///
+/// The BDEW API-Webdienste identify the caller by their mTLS client
+/// certificate, which is validated and terminated by the fronting proxy. The
+/// proxy forwards the certificate's Marktpartner-ID in this header; nothing in
+/// the request body carries it, because the specification does not put it there.
+pub const CLIENT_MP_ID_HEADER: &str = "x-mako-client-mp-id";
+
+tokio::task_local! {
+    /// Marktpartner-ID of the authenticated caller for the current request.
+    ///
+    /// A task-local rather than a handler argument because the `energy-api`
+    /// handler traits take only the request's business fields — the transport
+    /// identity is deliberately outside their signatures. Same shape as the
+    /// engine's `traceparent` propagation.
+    static CLIENT_MP_ID: Option<String>;
+}
+
+/// Marktpartner-ID of the caller, when the proxy supplied one.
+fn caller_mp_id() -> Option<String> {
+    CLIENT_MP_ID.try_with(Clone::clone).ok().flatten()
+}
+
+/// Error returned when a request that must be attributed carries no caller ID.
+///
+/// Fail-closed on purpose. These endpoints receive **orders**: a §14a EnWG
+/// Steuerungsauftrag and a WiM Anmeldung both have to be answered to whoever
+/// sent them, and the answer is addressed with this value. Substituting the
+/// operator's own Marktpartner-ID — which is what this code used to do —
+/// produced a confirmation addressed to ourselves, so the ordering party was
+/// never told the control action had been carried out, and the §14a billing
+/// event named the wrong party.
+fn missing_caller_error() -> energy_api::Error {
+    energy_api::Error::Http {
+        status: 400,
+        body: format!(
+            "missing {CLIENT_MP_ID_HEADER}: the calling market participant's \
+             Marktpartner-ID must be supplied by the mTLS-terminating proxy. \
+             The response to this order is addressed with it, so it cannot be \
+             inferred."
+        ),
+    }
+}
+
 // ── MakodApiHandler ───────────────────────────────────────────────────────────
 
 /// Handler state for the API-Webdienste Strom server.
@@ -82,13 +135,15 @@ use tracing::{info, warn};
 ///   persistence, and event-sourced workflow dispatch.
 /// - `tenant_id`      — the operator's [`TenantId`], derived from their BDEW
 ///   code / GLN via [`TenantId::from_party_id`].
-/// - `sender_party_id` — GLN string used as the MSB's `from` party in control
-///   measure responses.
+///
+/// The calling market participant's Marktpartner-ID is **not** state: it
+/// arrives per request in [`CLIENT_MP_ID_HEADER`], set by the mTLS-terminating
+/// proxy. A `sender_party_id` field used to stand in for it and recorded the
+/// operator's own code as the sender of orders it received.
 #[derive(Clone)]
 pub struct MakodApiHandler {
     pub store: SlateDbStore,
     pub tenant_id: TenantId,
-    pub sender_party_id: String,
 }
 
 // ── MaloIdentHandler ──────────────────────────────────────────────────────────
@@ -185,8 +240,10 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
     ) -> impl std::future::Future<Output = Result<(), energy_api::Error>> + Send {
         let store = self.store.clone();
         let tenant_id = self.tenant_id;
-        let sender_party_id = self.sender_party_id.clone();
+        let caller = caller_mp_id();
         async move {
+            // Whoever sent the order is who the Endantwort goes back to.
+            let sender = caller.ok_or_else(missing_caller_error)?;
             // Idempotency — accept only the first delivery of this tx_id.
             let inbox_key = format!("steuerungsauftrag:{tenant_id}:{tx_id}");
             let is_new = store
@@ -207,7 +264,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
 
             let domain_cmd = SteuerungsauftragCommand::ReceiveKonfiguration {
                 tx_id: tx_id.clone(),
-                sender_mp_id: party_id_to_marktpartner(sender_party_id),
+                sender_mp_id: party_id_to_marktpartner(sender),
                 location_id: location_id_to_domain(&location_id),
                 execution_time_from: command.execution_time_from.clone(),
                 max_power_kw: command.maximum_power_value.0.clone(),
@@ -247,8 +304,9 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
     ) -> impl std::future::Future<Output = Result<(), energy_api::Error>> + Send {
         let store = self.store.clone();
         let tenant_id = self.tenant_id;
-        let sender_party_id = self.sender_party_id.clone();
+        let caller = caller_mp_id();
         async move {
+            let sender = caller.ok_or_else(missing_caller_error)?;
             let inbox_key = format!("steuerungsauftrag:{tenant_id}:{tx_id}");
             let is_new = store
                 .as_inbox_store()
@@ -268,7 +326,7 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
 
             let domain_cmd = SteuerungsauftragCommand::ReceiveInitialZustand {
                 tx_id: tx_id.clone(),
-                sender_mp_id: party_id_to_marktpartner(sender_party_id),
+                sender_mp_id: party_id_to_marktpartner(sender),
                 location_id: location_id_to_domain(&location_id),
                 execution_time_from: command.execution_time_from.clone(),
             };
@@ -575,7 +633,11 @@ pub fn build_app(
     auth: Option<WebdiensteAuthState>,
     max_body_bytes: usize,
 ) -> Router {
-    let routes = router(handler).layer(axum::extract::DefaultBodyLimit::max(max_body_bytes));
+    let routes = router(handler)
+        .layer(axum::extract::DefaultBodyLimit::max(max_body_bytes))
+        // Below the auth layer, so the identity is in scope for the handlers
+        // whether or not `makod` itself checks a bearer token.
+        .layer(axum::middleware::from_fn(client_identity_middleware));
     match auth {
         Some(state) => routes.layer(axum::middleware::from_fn_with_state(
             state,
@@ -592,6 +654,33 @@ pub struct WebdiensteAuthState {
     pub cedar: Arc<crate::cedar_authz::CedarAuthorizer>,
     /// Operator tenant (GLN) — the Cedar resource scope.
     pub tenant: Arc<str>,
+}
+
+/// Scope the caller's Marktpartner-ID into [`CLIENT_MP_ID`] for the request.
+///
+/// Runs on every `:8090` request, including when the auth layer is disabled
+/// because a fronting proxy terminates mTLS — that proxy is exactly what sets
+/// the header, so the identity must be read whether or not `makod` also checks
+/// a bearer token.
+///
+/// A malformed value is dropped rather than propagated: the handlers treat a
+/// missing caller as a refusal, which is the safe reading of "the proxy did not
+/// give me a usable identity".
+pub async fn client_identity_middleware(
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mp_id = request
+        .headers()
+        .get(CLIENT_MP_ID_HEADER)
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|v| {
+            (v.len() == 13 && v.bytes().all(|b| b.is_ascii_digit()))
+                || (v.len() == 16 && v.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-'))
+        })
+        .map(str::to_owned);
+    CLIENT_MP_ID.scope(mp_id, next.run(request)).await
 }
 
 /// Authentication middleware for every `:8090` route.

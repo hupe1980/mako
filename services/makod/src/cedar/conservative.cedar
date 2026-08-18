@@ -28,6 +28,12 @@
 //   admin-readonly  — read-only admin: MaLo stats + partner list
 //   mcp-agent       — LLM / MCP access: submit commands + MaLo read + MCP tools
 //
+// MCP tools evaluate the same per-resource actions as their REST equivalents,
+// so `UseMcp` alone reaches the endpoint and nothing else.  The `mcp-agent`
+// grants below are therefore exactly its reach through an agent: commands,
+// MaLo reads and process reads — and deliberately *not* the partner directory,
+// which needs AdminPartnerRead.
+//
 // Tenancy
 // ───────
 // All permits are implicitly scoped to the tenant configured for this makod
@@ -38,9 +44,10 @@
 // Usage
 // ─────
 // Copy this file into your policy directory, then add/remove `principal ==`
-// clauses to match the key names configured in `--api-keys`.  Use the action
-// groups defined in mako.cedarschema (AdminMalo, AdminPartner) to grant
-// multiple related actions in a single permit statement.
+// clauses to match the key names configured in `[http] auth_keys` (or
+// `--auth-key NAME=TOKEN`).  Use the action groups defined in mako.cedarschema
+// (AdminMalo, AdminPartner) to grant multiple related actions in a single
+// permit statement.
 //
 // IMPORTANT: do NOT add `permit(principal is MaKo::Principal, action, resource)`
 // (the default.cedar catch-all) alongside this file, and do not drop

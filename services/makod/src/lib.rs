@@ -54,7 +54,7 @@ pub use crate::api::{
     partner_api,
 };
 pub use crate::core::{
-    cedar_authz, config, erp_adapter, health, malo_cache, party_registry, worker_health,
+    cedar_authz, config, erp_adapter, health, malo_cache, party_registry, preflight, worker_health,
 };
 pub use crate::orchestrator::{
     adapters, commands_api, deadline_dispatch, edifact_renderer, ingest_dispatcher, netzzugang,

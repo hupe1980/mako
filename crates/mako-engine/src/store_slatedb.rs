@@ -1349,11 +1349,37 @@ impl AtomicAppend for SlateDbStore {
         outbox: &[crate::outbox::PendingOutbox],
         deadlines: &[crate::deadline::Deadline],
     ) -> Result<AppendResult, EngineError> {
-        if deadlines.is_empty() {
-            // Degenerate to the base method when no deadlines are provided.
+        self.append_with_outbox_deadlines_and_correlations(
+            stream_id,
+            expected_version,
+            events,
+            outbox,
+            deadlines,
+            &[],
+        )
+        .await
+    }
+
+    async fn append_with_outbox_deadlines_and_correlations(
+        &self,
+        stream_id: &StreamId,
+        expected_version: ExpectedVersion,
+        events: &[NewEvent],
+        outbox: &[crate::outbox::PendingOutbox],
+        deadlines: &[crate::deadline::Deadline],
+        correlations: &[crate::event_store::CorrelationEntry],
+    ) -> Result<AppendResult, EngineError> {
+        if deadlines.is_empty() && correlations.is_empty() {
+            // Degenerate to the base method when there is nothing extra to write.
             return self
                 .append_with_outbox(stream_id, expected_version, events, outbox)
                 .await;
+        }
+
+        // Reject a malformed business key before opening the transaction: a
+        // rejected tag must not abort a batch that has already staged events.
+        for c in correlations {
+            validate_ci_tag(&c.tag)?;
         }
 
         let txn = self
@@ -1386,14 +1412,16 @@ impl AtomicAppend for SlateDbStore {
         //
         // All deadlines are new (we just spawned the process), so we increment
         // the counter by `deadlines.len()` without a per-deadline existence check.
-        let dl_count_before = read_dl_count_txn(&txn).await?;
-        txn.put(
-            DL_COUNT_KEY,
-            (dl_count_before + deadlines.len() as u64)
-                .to_le_bytes()
-                .as_slice(),
-        )
-        .map_err(to_deadline_err)?;
+        if !deadlines.is_empty() {
+            let dl_count_before = read_dl_count_txn(&txn).await?;
+            txn.put(
+                DL_COUNT_KEY,
+                (dl_count_before + deadlines.len() as u64)
+                    .to_le_bytes()
+                    .as_slice(),
+            )
+            .map_err(to_deadline_err)?;
+        }
         for deadline in deadlines {
             let payload =
                 serde_json::to_vec(deadline).map_err(|e| EngineError::deadline(e.to_string()))?;
@@ -1405,6 +1433,20 @@ impl AtomicAppend for SlateDbStore {
             txn.put(time_key.as_bytes(), b"").map_err(to_deadline_err)?;
             txn.put(stream_key.as_bytes(), b"")
                 .map_err(to_deadline_err)?;
+        }
+
+        // ── Correlation index ─────────────────────────────────────────────────
+        //
+        // Same batch as the events, so a spawn is either wholly visible or
+        // wholly absent. Registering afterwards left a window in which a live
+        // process could not be found by its business key — every reply resolved
+        // to nothing, and the process's own Frist was the next thing to happen.
+        for c in correlations {
+            let k = ci_key(c.tenant_id, &c.tag, c.process_id);
+            let v = serde_json::to_vec(&c.identity)
+                .map_err(|e| EngineError::registry(e.to_string()))?;
+            txn.put(k.as_bytes(), v.as_slice())
+                .map_err(to_registry_err)?;
         }
 
         txn.commit()
@@ -3298,6 +3340,138 @@ mod tests {
         // Verify the outbox message has the correct causation linkage.
         assert_eq!(pending[0].causation_event_id, events[0].event_id);
         assert_eq!(pending[0].message_type.as_ref(), "APERAK");
+    }
+
+    /// A spawn's correlation-index entry must land in the same batch as its
+    /// events.
+    ///
+    /// # Why this is a test
+    ///
+    /// A process is not usable when its events are durable — it is usable when
+    /// its business key resolves to it. The correlation entry used to be written
+    /// after the append, warn-only on failure, so a crash in between produced a
+    /// live process that no reply could find: every one resolved to
+    /// `Skipped(process_not_found)`, and the next thing to happen was the
+    /// process's own Frist expiring as a false timeout, with the business key
+    /// blocked against a fresh spawn for good.
+    #[tokio::test]
+    async fn a_spawn_writes_its_correlation_entry_in_the_same_batch() {
+        use crate::{
+            event_store::{AtomicAppend as _, CorrelationEntry},
+            ids::{ProcessId, ProcessIdentity},
+            registry::ProcessRegistry as _,
+        };
+
+        let store = make_store().await;
+        let stream = make_stream("process/spawn-correlation");
+        let registry = store.as_process_registry();
+
+        let tenant_id = TenantId::new();
+        let process_id = ProcessId::new();
+        let workflow_id = WorkflowId::new("gpke-supplier-change", "FV2025-10-01");
+        let identity = ProcessIdentity::new(process_id, tenant_id, workflow_id.clone());
+
+        // The MaLo the counterparty's reply will arrive under, plus a second key
+        // standing in for an order reference a LOC-less ORDRSP would echo.
+        let malo = "51238696012";
+        let order_ref = "BELEG-4711";
+
+        store
+            .append_with_outbox_deadlines_and_correlations(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_event(1)],
+                &[PendingOutbox::new(
+                    "UTILMD",
+                    "9900000000001",
+                    serde_json::json!({ "pid": "55001" }),
+                )],
+                &[Deadline::new(
+                    stream.clone(),
+                    process_id,
+                    tenant_id,
+                    workflow_id,
+                    "aperak-24h",
+                    OffsetDateTime::now_utc() + Duration::days(1),
+                )],
+                &[
+                    CorrelationEntry {
+                        tenant_id,
+                        tag: malo.to_owned(),
+                        process_id,
+                        identity: identity.clone(),
+                    },
+                    CorrelationEntry {
+                        tenant_id,
+                        tag: order_ref.to_owned(),
+                        process_id,
+                        identity: identity.clone(),
+                    },
+                ],
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            store.load(&stream).await.unwrap().len(),
+            1,
+            "event persisted"
+        );
+
+        for tag in [malo, order_ref] {
+            let found = registry.lookup_correlated(tenant_id, tag).await.unwrap();
+            assert_eq!(
+                found.len(),
+                1,
+                "the reply arriving under {tag} must resolve to the spawned process",
+            );
+            assert_eq!(found[0].process_id, process_id);
+        }
+    }
+
+    /// A malformed business key must be refused before anything is written.
+    ///
+    /// Staging events and then failing on the tag would leave the caller unable
+    /// to tell a rejected spawn from a committed one.
+    #[tokio::test]
+    async fn a_malformed_correlation_tag_writes_nothing() {
+        use crate::{
+            event_store::{AtomicAppend as _, CorrelationEntry},
+            ids::{ProcessId, ProcessIdentity},
+        };
+
+        let store = make_store().await;
+        let stream = make_stream("process/bad-tag");
+        let tenant_id = TenantId::new();
+        let process_id = ProcessId::new();
+        let identity = ProcessIdentity::new(
+            process_id,
+            tenant_id,
+            WorkflowId::new("gpke-supplier-change", "FV2025-10-01"),
+        );
+
+        let result = store
+            .append_with_outbox_deadlines_and_correlations(
+                &stream,
+                ExpectedVersion::NoStream,
+                &[make_event(1)],
+                &[],
+                &[],
+                &[CorrelationEntry {
+                    // `/` is the key-space separator, so it cannot appear in a tag.
+                    tenant_id,
+                    tag: "malo/with/separators".to_owned(),
+                    process_id,
+                    identity,
+                }],
+            )
+            .await;
+
+        assert!(result.is_err(), "a malformed tag must be rejected");
+        assert!(
+            store.load(&stream).await.unwrap().is_empty(),
+            "no event may be written when the spawn was rejected",
+        );
     }
 
     /// `append_with_outbox_and_deadlines` must persist events, outbox entries,

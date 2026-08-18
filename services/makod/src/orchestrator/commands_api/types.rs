@@ -217,6 +217,31 @@ pub(crate) type DispatchFn = for<'a> fn(
 ///
 /// All three data points live together so adding a new command requires
 /// filling in all fields — no parallel data structures can silently drift apart.
+/// Process family a command belongs to, for the `family` metric label.
+///
+/// Derived from the command name's first segment, with the two-segment Gas
+/// families joined so the label matches the workflow-name prefix the deadline
+/// and outbox metrics already use (`geli-gas`, `gabi-gas`).
+///
+/// This was hard-coded to `"gpke"` at the single call site, so
+/// `makod_process_initiated_total{family="gpke"}` counted every ERP-initiated
+/// process in every domain and the other six families reported nothing.
+#[must_use]
+pub(crate) fn command_family(command: &str) -> &'static str {
+    match command.split('.').next().unwrap_or_default() {
+        "gpke" => "gpke",
+        "wim" => "wim",
+        "geli" => "geli-gas",
+        "gabi" => "gabi-gas",
+        "mabis" => "mabis",
+        "esa" => "esa",
+        "invoic" => "invoic",
+        "netzzugang" => "netzzugang",
+        "maloid" => "maloid",
+        _ => "other",
+    }
+}
+
 pub(crate) struct CommandDescriptor {
     /// Stable lowercase command name, e.g. `"gpke.lieferbeginn.anmelden"`.
     pub name: &'static str,
@@ -264,5 +289,40 @@ impl std::fmt::Display for CommandError {
                 "role_not_configured: this instance is not configured for that marktrolle",
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod family_tests {
+    use super::{COMMAND_REGISTRY, command_family};
+
+    /// Every registered command must map to a named family.
+    ///
+    /// The `family` label was hard-coded to `"gpke"` at the only call site, so
+    /// the per-family process counter attributed WiM, GeLi Gas, GaBi Gas, MaBiS
+    /// and ESA initiations to GPKE and reported zero for each of them. A new
+    /// command prefix that falls through to `"other"` would quietly restore a
+    /// weaker version of the same defect.
+    #[test]
+    fn every_command_maps_to_a_known_family() {
+        let unmapped: Vec<&str> = COMMAND_REGISTRY
+            .iter()
+            .map(|d| d.name)
+            .filter(|name| command_family(name) == "other")
+            .collect();
+        assert!(
+            unmapped.is_empty(),
+            "these commands have no metric family: {unmapped:?}\n\
+             Add the prefix to command_family()."
+        );
+    }
+
+    /// The Gas families use the same hyphenated label as the workflow-name
+    /// prefix the deadline and outbox metrics carry, so a dashboard can join
+    /// initiation and completion on one label value.
+    #[test]
+    fn gas_families_match_the_workflow_name_prefix() {
+        assert_eq!(command_family("geli.lieferbeginn.anmelden"), "geli-gas");
+        assert_eq!(command_family("gabi.invoic.senden"), "gabi-gas");
     }
 }

@@ -217,6 +217,14 @@ pub struct GetProcessParams {
     pub business_key: String,
 }
 
+/// Workflow name used when a tool reads across every workflow at once.
+///
+/// `ReadProcess` carries the workflow in its Cedar context so a VIU deployment
+/// can scope a principal to one arm (§9 EnWG). A cross-workflow listing has no
+/// single workflow to name, so it is evaluated against this wildcard: an
+/// unscoped grant permits it, a `context.workflow like "gpke-*"` grant does not.
+const ANY_WORKFLOW: &str = "*";
+
 // ── MCP handler ───────────────────────────────────────────────────────────────
 
 /// MCP server handler — one instance per MCP session (clone-per-request).
@@ -229,6 +237,25 @@ pub struct MakodMcpHandler {
     prompt_router: PromptRouter<MakodMcpHandler>,
 }
 
+/// Extract the identity `mcp_auth_middleware` attached to the request.
+///
+/// Every tool that reads tenant data needs it, so the extraction lives here
+/// rather than being repeated per tool.
+fn caller(
+    parts: &axum::http::request::Parts,
+) -> Result<crate::cedar_authz::CallerIdentity, McpError> {
+    parts
+        .extensions
+        .get::<crate::cedar_authz::CallerIdentity>()
+        .cloned()
+        .ok_or_else(|| {
+            McpError::internal_error(
+                "authenticated identity missing from request context".to_owned(),
+                None,
+            )
+        })
+}
+
 #[tool_router]
 impl MakodMcpHandler {
     fn new(state: Arc<MakodMcpState>) -> Self {
@@ -236,6 +263,82 @@ impl MakodMcpHandler {
             state,
             tool_router: Self::tool_router(),
             prompt_router: Self::prompt_router(),
+        }
+    }
+
+    /// Gate a tool on the same Cedar action its REST twin enforces.
+    ///
+    /// `UseMcp` authorizes the *transport* — reaching the endpoint at all. It
+    /// has never been meant to carry the per-resource grants, which is why
+    /// `submit_command` evaluates `SubmitCommand` and the process tools
+    /// evaluate `ReadProcess`. The reads below were the gap: a principal
+    /// holding only `UseMcp` could pull the MaLo cache and the entire partner
+    /// directory through MCP while `GET /admin/partners` refused it — and the
+    /// shipped least-privilege policy grants `mcp-agent` `AdminMaloRead`
+    /// precisely because the author expected this check to exist.
+    fn require_malo_read(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
+        let identity = caller(parts)?;
+        if self.state.cedar.authorize_malo(
+            &identity,
+            crate::cedar_authz::MakoAction::AdminMaloRead,
+            &crate::cedar_authz::MaloResource {
+                tenant: &self.state.tenant,
+                malo_id: None,
+            },
+        ) {
+            Ok(())
+        } else {
+            Err(McpError::invalid_request(
+                "Cedar policy denied AdminMaloRead".to_owned(),
+                None,
+            ))
+        }
+    }
+
+    /// Gate a tool on `AdminPartnerRead` — the action `GET /admin/partners`
+    /// enforces.
+    fn require_partner_read(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
+        let identity = caller(parts)?;
+        if self.state.cedar.authorize_partner(
+            &identity,
+            crate::cedar_authz::MakoAction::AdminPartnerRead,
+            &crate::cedar_authz::PartnerResource {
+                tenant: &self.state.tenant,
+                mp_id: None,
+            },
+        ) {
+            Ok(())
+        } else {
+            Err(McpError::invalid_request(
+                "Cedar policy denied AdminPartnerRead".to_owned(),
+                None,
+            ))
+        }
+    }
+
+    /// Gate a cross-workflow process read on `ReadProcess`.
+    ///
+    /// The listing spans every workflow, so it is evaluated against the
+    /// wildcard workflow name. A policy that scopes a principal to one arm of a
+    /// VIU deployment (`context.workflow like "gpke-sperrung*"`) therefore
+    /// denies the unfiltered listing outright — which is the intended §9 EnWG
+    /// answer: an NB-scoped principal must not receive a cross-workflow view,
+    /// and there is nothing meaningful to filter it down to.
+    fn require_any_process_read(&self, parts: &axum::http::request::Parts) -> Result<(), McpError> {
+        let identity = caller(parts)?;
+        if self.state.cedar.authorize_process_read(
+            &identity,
+            &crate::cedar_authz::ProcessResource {
+                tenant: &self.state.tenant,
+                workflow: ANY_WORKFLOW,
+            },
+        ) {
+            Ok(())
+        } else {
+            Err(McpError::invalid_request(
+                "Cedar policy denied ReadProcess across workflows".to_owned(),
+                None,
+            ))
         }
     }
 
@@ -438,7 +541,11 @@ impl MakodMcpHandler {
     async fn get_malo(
         &self,
         Parameters(p): Parameters<GetMaloParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
     ) -> Result<CallToolResult, McpError> {
+        self.require_malo_read(&parts)?;
         match self
             .state
             .malo_cache
@@ -475,7 +582,11 @@ impl MakodMcpHandler {
     async fn list_partners(
         &self,
         Parameters(p): Parameters<ListPartnersParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
     ) -> Result<CallToolResult, McpError> {
+        self.require_partner_read(&parts)?;
         let limit = p.limit.unwrap_or(100).clamp(1, 500);
 
         match self
@@ -528,7 +639,11 @@ impl MakodMcpHandler {
     async fn get_partner(
         &self,
         Parameters(p): Parameters<GetPartnerParams>,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
     ) -> Result<CallToolResult, McpError> {
+        self.require_partner_read(&parts)?;
         let mp_id = mako_engine::types::MarktpartnerCode::new(p.mp_id.as_str());
 
         match self
@@ -947,7 +1062,13 @@ impl MakodMcpHandler {
         annotations(read_only_hint = true, open_world_hint = false),
         description = "Return the 20 most recent permanently dead-lettered messages (§ 147 AO / GoBD)."
     )]
-    async fn list_dead_letters(&self) -> Result<CallToolResult, McpError> {
+    async fn list_dead_letters(
+        &self,
+        rmcp::handler::server::tool::Extension(parts): rmcp::handler::server::tool::Extension<
+            axum::http::request::Parts,
+        >,
+    ) -> Result<CallToolResult, McpError> {
+        self.require_any_process_read(&parts)?;
         let records = self
             .state
             .process_store
@@ -1626,6 +1747,100 @@ fn dispatch_error_to_string(e: crate::commands_api::DispatchError) -> String {
 #[cfg(test)]
 mod tool_inventory_tests {
     use super::MakodMcpHandler;
+
+    /// Every MCP tool must evaluate a per-resource Cedar action, or be listed
+    /// here with the reason it needs none.
+    ///
+    /// `UseMcp` authorizes the transport, not the data. Four tools once relied
+    /// on it alone — `get_malo`, `list_partners`, `get_partner` and
+    /// `list_dead_letters` — so a principal holding only `UseMcp` could read
+    /// the MaLo cache, the whole partner directory and the § 147 AO
+    /// dead-letter records that the equivalent REST routes refused it. The
+    /// shipped least-privilege policy grants `mcp-agent` `AdminMaloRead` and
+    /// withholds `AdminPartnerRead`, which is exactly the distinction the code
+    /// was not making.
+    #[test]
+    fn every_tool_evaluates_a_cedar_action() {
+        const SOURCE: &str = include_str!("mcp_server.rs");
+
+        /// Tools that expose no tenant data and are therefore covered by the
+        /// `UseMcp` transport grant alone.
+        const TRANSPORT_ONLY: &[(&str, &str)] = &[
+            (
+                "list_commands",
+                "static command catalogue for the configured Marktrollen",
+            ),
+            (
+                "get_health",
+                "daemon liveness; GET /health is public on every port",
+            ),
+            (
+                "get_format_version_coverage",
+                "the published BDEW release calendar",
+            ),
+            (
+                "list_active_processes",
+                "a bare count; names no process, MaLo or workflow",
+            ),
+            (
+                "get_outbox_status",
+                "aggregate queue depth and age; names no message",
+            ),
+        ];
+
+        let exempt: std::collections::HashMap<&str, &str> =
+            TRANSPORT_ONLY.iter().copied().collect();
+
+        // Each tool body runs from its `async fn` to the next one; scan that
+        // span for an authorization call.
+        let bodies: Vec<(&str, &str)> = SOURCE
+            .match_indices("    async fn ")
+            .filter_map(|(start, _)| {
+                let rest = &SOURCE[start + "    async fn ".len()..];
+                let name = rest.split('(').next()?.trim();
+                let end = rest.find("\n    /// ").unwrap_or(rest.len());
+                Some((name, &rest[..end]))
+            })
+            .collect();
+
+        let tools: std::collections::HashSet<String> = MakodMcpHandler::tool_router()
+            .list_all()
+            .into_iter()
+            .map(|t| t.name.to_string())
+            .collect();
+
+        let mut ungated: Vec<&str> = Vec::new();
+        for (name, body) in &bodies {
+            if !tools.contains(*name) || exempt.contains_key(name) {
+                continue;
+            }
+            let gated = body.contains("authorize_")
+                || body.contains("require_malo_read")
+                || body.contains("require_partner_read")
+                || body.contains("require_any_process_read");
+            if !gated {
+                ungated.push(name);
+            }
+        }
+        assert!(
+            ungated.is_empty(),
+            "these MCP tools evaluate no per-resource Cedar action: {ungated:?}\n\
+             Gate each on the action its REST twin enforces, or add it to \
+             TRANSPORT_ONLY with the reason it exposes no tenant data."
+        );
+
+        // Keep the exemption list honest: an entry for a tool that no longer
+        // exists hides a real gap behind a stale name.
+        let stale: Vec<&str> = exempt
+            .keys()
+            .filter(|n| !tools.contains(**n))
+            .copied()
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "TRANSPORT_ONLY names unknown tools: {stale:?}"
+        );
+    }
 
     /// The published tool list is a documented contract, and the docs state a
     /// count. Pin both here: a tool added without updating

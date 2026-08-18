@@ -25,7 +25,7 @@ API-Webdienste Strom.
 │  :8080  ← HTTP REST API  (POST /edifact, admin endpoints)    │
 │  :8090  ← API-Webdienste Strom (iMS REST/JSON)               │
 │                                                               │
-│  GET /health — available on every enabled port               │
+│  /health, /health/live, /health/ready — on every enabled port│
 └───────────────────────────────────────────────────────────────┘
 ```
 
@@ -73,56 +73,79 @@ See the individual service READMEs for setup details.
 > Use volatile mode only for automated integration tests, local debugging,
 > and CI pipelines where data loss is acceptable.
 
-```bash
-cargo run -p makod -- \
-  --config makod.toml \
-  --allow-volatile \
-  --http-addr 127.0.0.1:8080
+```toml
+# makod.toml
+[[party]]
+mp_id   = "9900357000004"
+roles   = ["NB"]
+primary = true
+
+[storage]
+allow_volatile = true          # in-memory; data is lost on exit
+
+[http]
+addr      = "127.0.0.1:8080"
+auth_keys = ["dev=dev-token-change-me"]
+
+[as4]
+allow_no_signing = true        # no AS4 credentials: log outbound EDIFACT
 ```
 
-Without `--allow-volatile`, makod **refuses to start** in volatile mode and
-prints an error directing you to either set `--data-dir` or pass the flag
-explicitly.  This prevents accidental production deployments without
-persistent storage.
+```bash
+cargo run -p makod -- --config makod.toml
+```
 
-The flag can also be set via the environment variable `MAKOD_ALLOW_VOLATILE=1`
-or via the config file (`storage.allow_volatile = true`).
+Three refusals are visible in that file, and each is deliberate:
+
+- **`allow_volatile`** — without it makod refuses to start in volatile mode, so
+  a production deployment cannot lose its event store by accident. Also
+  available as `MAKOD_ALLOW_VOLATILE=1` or `--allow-volatile`.
+- **`auth_keys`** — `[http] addr` submits commands and triggers migrations; it
+  never runs open. An `[oidc]` issuer satisfies the same requirement.
+- **`allow_no_signing`** — with neither AS4 signing material nor
+  `[erp] edifact_outbox_webhook_url`, outbound EDIFACT would be logged and
+  rescheduled forever. The flag makes that a development choice rather than a
+  silent regulatory failure.
 
 ### Persistent local storage
 
-```bash
-cargo run -p makod -- \
-  --config makod.toml \
-  --data-dir /var/lib/makod \
-  --http-addr 0.0.0.0:8080 \
-  --auth-key erp-prod=$(openssl rand -hex 32)
+```toml
+[storage]
+data_dir = "/var/lib/makod"
+
+[http]
+addr      = "0.0.0.0:8080"
+auth_keys_file = "/etc/makod/auth-keys"
 ```
 
 ### Full production deployment
 
+A production deployment carries key material, per-partner certificates and
+credentials, so it belongs in the config file rather than on the command line —
+a secret passed as a flag is visible in `ps` output. The launch reduces to:
+
 ```bash
-makod \
-  --config /etc/makod/makod.toml \
-  --data-dir /var/lib/makod \
-  --http-addr 0.0.0.0:8080 \
-  --auth-key erp-sap=$(openssl rand -hex 32) \
-  --auth-key ops-grafana=$(openssl rand -hex 32) \
-  --api-webdienste-addr 0.0.0.0:8090 \
-  --as4-addr 0.0.0.0:4080 \
-  --as4-party-id 9900357000004 \
-  --as4-signing-key-pem-file /etc/makod/signing.key.pem \
-  --as4-signing-cert-pem-file /etc/makod/signing.cert.pem \
-  --as4-partner 9900000000001=https://partner-a.example/as4/inbox \
-  --as4-partner 9900000000002=https://partner-b.example/as4/inbox
+makod --config /etc/makod/makod.toml
+```
+
+Validate the same file in the deployment pipeline before promoting it:
+
+```bash
+makod --check --config /etc/makod/makod.toml
 ```
 
 ---
 
-## TOML Configuration File
+## Configuration file
 
-All CLI flags can be placed in a TOML file and loaded with `--config <FILE>`
-(or `MAKOD_CONFIG=<FILE>`). CLI flags and environment variables take precedence
-over the config file.
+Every CLI flag has a config-file equivalent, and every secret additionally has a
+`*_file` companion that reads the value from disk at startup. A guard test in the
+build fails when a new flag is added without a path to it from the file, so the
+two surfaces cannot drift apart.
+
+Unknown keys are **rejected** — a typo in a security-relevant field would
+otherwise be a silently weakened deployment. Supplying both an inline secret and
+its `*_file` companion is an error rather than a hidden precedence rule.
 
 ```toml
 # /etc/makod/makod.toml
@@ -131,44 +154,120 @@ over the config file.
 level  = "info"     # trace | debug | info | warn | error
 format = "json"     # pretty | compact | json
 
+[otel]
+# endpoint     = "http://otel-collector:4317"   # enables OTLP span export
+# service_name = "makod"
+
 [storage]
-backend  = "s3"     # local | s3 | gcs | azure
+backend = "s3"      # local | s3 | gcs | azure
+# data_dir       = "/var/lib/makod"   # required for backend = "local"
+# allow_volatile = false              # in-memory store; development only
+# max_stream_events = 100000          # per-stream quota; 0 disables
 
 [storage.s3]
 bucket   = "my-makod-events"
-prefix   = "makod"              # key prefix within the bucket
-# endpoint = "http://minio:9000"  # uncomment for MinIO / S3-compatible
+prefix   = "makod"                    # key prefix within the bucket
+# endpoint = "http://minio:9000"      # MinIO / S3-compatible
 
+# One entry per Marktpartner-ID. Allgemeine Festlegungen §2.13 requires a
+# separate code per Energieart and Marktrolle, so a Strom NB and a Gas GNB are
+# always two entries.
 [[party]]
-mp_id   = "9900357000004"       # your 13-digit GLN
+mp_id   = "9900357000004"       # 13-digit BDEW code, DVGW code, or 16-char EIC
 roles   = ["NB"]                # this identity's Marktrollen
 primary = true                  # storage partition key + default sender MP-ID
 
 [http]
 addr           = "0.0.0.0:8080"
-max_body_bytes = 10485760       # 10 MiB (default)
-# Note: auth_keys, marktrollen, and cedar_policy_dir are CLI flags / env vars only.
+max_body_bytes = 10485760                       # 10 MiB (default)
+auth_keys_file = "/etc/makod/auth-keys"         # NAME=TOKEN per line
+# auth_keys    = ["erp-sap=<token>"]            # inline alternative
+
+[authz]
+# cedar_policy_dir  = "/etc/makod/cedar"        # extra *.cedar policy files
+# no_default_policy = false                     # drop the permit-all baseline
 
 [oidc]
-# issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
-# audience = "api://makod"
+# issuer            = "https://login.microsoftonline.com/{tenant-id}/v2.0"
+# audience          = "api://makod"
+# jwks_refresh_secs = 300
+
+[webdienste]
+addr = "0.0.0.0:8090"
+# allow_unauthenticated = false   # only behind an mTLS-terminating proxy
+
+[engine]
+# shutdown_timeout_secs          = 30
+# snapshot_interval              = 100
+# projection_checkpoint_interval = 60
+# deadline_poll_interval_secs    = 30
+# worker_threads                 = 8
+# marktrollen                    = ["NB"]   # defaults to the [[party]] union
+# deployment_roles               = ["NB"]
 
 [as4]
 addr     = "0.0.0.0:4080"
-party_id = "9900357000004"
-# Inline PEM (alternative: use *_pem_file to reference disk files)
-signing_key_pem_file  = "/etc/makod/signing.key.pem"
-signing_cert_pem_file = "/etc/makod/signing.cert.pem"
+party_id = "9900357000004"      # must match the signing certificate subject
+
+# BDEW AS4-Profil v1.2 §2.2.6.2.2 mandates sign *and* encrypt, which means three
+# distinct pieces of key material — all EC (BrainpoolP256r1).
+signing_key_pem_file    = "/etc/makod/signing.key.pem"
+signing_cert_pem_file   = "/etc/makod/signing.cert.pem"
+decryption_key_pem_file = "/etc/makod/decryption.key.pem"
+trust_anchor_pem_file   = "/etc/makod/bdew-pki-ca.pem"
+
 # Trading partners — bootstrapped into the durable PartnerStore at startup.
 # Runtime updates via PUT /admin/partners/{mp_id} or inbound PARTIN messages.
 partners = [
   "9900000000001=https://partner-a.example/as4/inbox",
   "9900000000002=https://partner-b.example/as4/inbox",
 ]
+# One encryption certificate per partner. A partner without one cannot be
+# delivered to at all, so the daemon refuses to start rather than dead-letter
+# every message to it.
+partner_cert_files = [
+  "9900000000001=/etc/makod/partners/9900000000001.pem",
+  "9900000000002=/etc/makod/partners/9900000000002.pem",
+]
+# partner_certs   = ["9900000000001=<PEM>"]   # inline alternative
+# allow_unencrypted = false   # dev/test: downgrade the encryption refusals
+# allow_no_signing  = false   # dev/test: log outbound EDIFACT instead of sending
+# lenient_receipts  = false   # interop debugging: tolerate a missing eb:Receipt
 
-[webdienste]
-addr = "0.0.0.0:8090"
+[erp]
+webhook_url         = "https://erp.example.com/mako/events"
+webhook_secret_file = "/etc/makod/erp-webhook.secret"
+# edifact_outbox_webhook_url = "http://webhook:8000"  # dev transport substitute
+# netzzugang_endpoint_url    = "https://…"            # §20b EnWG platform
+
+[marktd]
+# url          = "http://marktd:8180"
+# api_key_file = "/etc/makod/marktd.key"
+
+[maloid]
+# partners             = ["9900000000001=https://partner-a.example/maloid"]
+# verzeichnisdienst_url = "https://verzeichnisdienst.example/api"
 ```
+
+### Secrets
+
+Prefer the `*_file` form for everything below. A value passed as a CLI flag
+appears in `ps` output; a value passed by environment variable is readable by
+anything that can inspect the process environment or the container spec.
+
+| Inline | File companion |
+|---|---|
+| `as4.signing_key_pem` | `as4.signing_key_pem_file` |
+| `as4.signing_cert_pem` | `as4.signing_cert_pem_file` |
+| `as4.decryption_key_pem` | `as4.decryption_key_pem_file` |
+| `as4.trust_anchor_pem` | `as4.trust_anchor_pem_file` |
+| `as4.partner_certs` | `as4.partner_cert_files` |
+| `http.auth_keys` | `http.auth_keys_file` |
+| `erp.webhook_secret` | `erp.webhook_secret_file` |
+| `marktd.api_key` | `marktd.api_key_file` |
+
+The file forms compose with Kubernetes Secrets and volume mounts, the Secrets
+Store CSI driver, a vault-agent tmpfs sink, or systemd `LoadCredential=`.
 
 ### Configuration precedence
 
@@ -498,20 +597,29 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-nb` | `role-nb-strom` + `role-nb-gas` |
 | `role-msb` | `role-msb-strom` + `role-msb-gas` |
 
-### Default (no flags)
+| `role-esa-strom` | `mako-wim` (ESA side): `esa-wertebestellung` and its `wim-wertebestellung` counterpart (WiM Strom Teil 2 Kap. 4) |
 
-When no role feature flags are set, **all modules register** — this is the
-backward-compatible default. Use this for development and combined
-multi-role deployments. The `makod` binary in the container image ships with all
-roles compiled in; use feature flags to produce smaller operator-specific images.
+### Default
+
+The `default` feature enables every role, so a plain `cargo build -p makod`
+produces the all-roles binary shipped in the container image — the right choice
+for development and for a combined multi-role (VIU) deployment.
+
+A role-scoped build turns the default off and names the roles it wants:
 
 ```dockerfile
 # Lieferant-only image
 FROM rust:1.94 AS build
 RUN cargo build -p makod --release \
     --no-default-features \
-    --features role-lf,slatedb
+    --features role-lf
 ```
+
+Selecting no role at all is refused at startup rather than silently producing an
+all-roles binary. Each role build registers a strict subset — an LF build carries
+27 workflows over 259 PIDs, an ESA build 10 over 68, against 56 over 422 for the
+default — and the startup log records both counts, so the binary's role scope is
+evidence for a BNetzA audit.
 
 > **Runtime `--marktrollen` is separate from compile-time feature flags.**
 > Feature flags determine which *code* is compiled; `--marktrollen` determines
@@ -528,12 +636,13 @@ RUN cargo build -p makod --release \
 |---|---|---|---|---|
 | `addr` | `MAKOD_HTTP_ADDR` | `--http-addr` | *(disabled)* | TCP listen address |
 | `max_body_bytes` | `MAKOD_HTTP_MAX_BODY_BYTES` | `--http-max-body-bytes` | `10485760` | Max `POST /edifact` body in bytes |
-| *(CLI/env only)* | `MAKOD_AUTH_KEYS` | `--auth-key` | *(none)* | Named API keys `NAME=TOKEN`. Repeatable. At least one `--auth-key` or `--oidc-issuer` is required when `--http-addr` is set. |
-| *(CLI/env only)* | `MAKOD_CEDAR_POLICY_DIR` | `--cedar-policy-dir` | *(none)* | Directory of extra `.cedar` policy files appended to the built-in policy |
-| *(CLI/env only)* | `MAKOD_CEDAR_NO_DEFAULT_POLICY` | `--cedar-no-default-policy` | `false` | Omit the built-in permit-all baseline; requires `--cedar-policy-dir` |
+| `auth_keys` | `MAKOD_AUTH_KEYS` | `--auth-key` | *(none)* | Named API keys `NAME=TOKEN`. Repeatable. At least one key or an `[oidc]` issuer is required when the port is enabled. |
+| `auth_keys_file` | — | — | *(none)* | File of `NAME=TOKEN` lines; keeps tokens out of the config file and out of `ps` |
+| `authz.cedar_policy_dir` | `MAKOD_CEDAR_POLICY_DIR` | `--cedar-policy-dir` | *(none)* | Directory of extra `.cedar` policy files appended to the built-in policy |
+| `authz.no_default_policy` | `MAKOD_CEDAR_NO_DEFAULT_POLICY` | `--cedar-no-default-policy` | `false` | Omit the built-in permit-all baseline; requires a policy directory |
 
 `makod` **refuses to start** when `--http-addr` is set and neither `--auth-key`
-nor `--oidc-issuer` is provided. `GET /health` is always public. Every other
+nor `--oidc-issuer` is provided. The `/health` probes are always public. Every other
 endpoint requires `Authorization: Bearer <token>`.
 
 ---
@@ -607,8 +716,8 @@ Every mutating or data-bearing endpoint is behind a Cedar action:
 `SubmitCommand`, `IngestEdifact`, the `AdminMalo*`/`AdminPartner*` families,
 `ReadMetrics`, `UseMcp`, `ReadRechnung` (`GET /api/v1/invoic/{id}/rechnung` —
 BO4E billing data), `AdminMigrations` (`POST /admin/migrations`),
-`UseWebdienste` (every `:8090` route), and `ReadProcess` (MCP `get_process` and
-`list_overdue_deadlines`).
+`UseWebdienste` (every `:8090` route), and `ReadProcess` (MCP `get_process`,
+`list_overdue_deadlines` and `list_dead_letters`).
 The conservative policy grants `AdminMigrations` to **no** standing principal:
 grant it to a break-glass principal for the FV-cutover window, then remove it.
 
@@ -806,10 +915,16 @@ principal entity ID in your policies.
 | `signing_key_pem_file` | — | — | Path to PEM key file *(preferred)* |
 | `signing_cert_pem` | `MAKOD_AS4_SIGNING_CERT_PEM` | `--as4-signing-cert-pem` | PEM cert (inline) |
 | `signing_cert_pem_file` | — | — | Path to PEM cert file *(preferred)* |
-| `partners` | `MAKOD_AS4_PARTNER` | `--as4-partner` | Trading-partner MP-ID=URL pairs |
-| — | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Trading-partner encryption certificates, `MP-ID=<PEM>` pairs (see [AS4 / BDEW](@/docs/reference/as4-bdew.md)). Required for every partner: a send to a partner with no registered certificate fails with a policy violation rather than going out unencrypted |
-| — | `MAKOD_AS4_DECRYPTION_KEY_PEM` | `--as4-decryption-key-pem` | Operator's own EC (BrainpoolP256r1) private key for inbound decryption |
-| — | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test only:** downgrade missing-encryption-material startup refusals to warnings |
+| `decryption_key_pem` | `MAKOD_AS4_DECRYPTION_KEY_PEM` | `--as4-decryption-key-pem` | Operator's own EC (BrainpoolP256r1) private key for inbound decryption (inline) |
+| `decryption_key_pem_file` | — | — | Path to the inbound decryption key file *(preferred)* |
+| `trust_anchor_pem` | `MAKOD_AS4_TRUST_ANCHOR_PEM` | `--as4-trust-anchor-pem` | BDEW/BNetzA PKI CA certificate used to verify counterparty signatures (inline) |
+| `trust_anchor_pem_file` | — | — | Path to the trust anchor file *(preferred)* |
+| `partners` | `MAKOD_AS4_PARTNER` | `--as4-partner` | Trading-partner `MP-ID=HTTPS-URL` pairs |
+| `partner_certs` | `MAKOD_AS4_PARTNER_CERT` | `--as4-partner-cert` | Trading-partner encryption certificates, `MP-ID=<PEM>` pairs (see [AS4 / BDEW](@/docs/reference/as4-bdew.md)). Required for every partner: a send to a partner with no registered certificate fails with a policy violation rather than going out unencrypted |
+| `partner_cert_files` | — | — | Trading-partner encryption certificates as `MP-ID=/path/to/cert.pem` pairs *(preferred)* |
+| `allow_unencrypted` | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test only:** downgrade missing-encryption-material startup refusals to warnings |
+| `allow_no_signing` | `MAKOD_ALLOW_NO_AS4_SIGNING` | `--allow-no-as4-signing` | **Dev/test only:** start without signing material and without an EDIFACT outbox webhook; outbound EDIFACT is logged instead of sent |
+| `lenient_receipts` | `MAKOD_AS4_LENIENT_RECEIPTS` | `--as4-lenient-receipts` | Interop debugging: treat a missing or unverifiable synchronous `eb:Receipt` as a warning |
 
 The `--as4-partner` flag is repeatable. Using the env var, provide a
 comma-separated list:
@@ -834,6 +949,11 @@ The profile itself is checked too. The BDEW stack declares a **security floor**
 of sign-and-encrypt, and `asx-rs` enforces it across the base profile and every
 override layer, rejecting a relaxing layer with
 `ProfileValidationCode::SecurityFloorViolation`.
+
+All of these refusals run in `--check` as well, and so does a trial build of the
+signing session from the supplied PEM material: a malformed key, a certificate
+that does not match it, a partner endpoint on plain `http://`, or a partner with
+no encryption certificate all fail the check rather than the boot.
 
 Declaring the floor is what makes this strict enough. The generic AS4 invariant
 only rejects disabling signing *and* encryption — "at least one", the sensible
@@ -929,7 +1049,7 @@ cargo test -p makod --test as4_security
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_API_WEBDIENSTE_ADDR` | `--api-webdienste-addr` | TCP listen address |
-| *(CLI/env only)* | `MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED` | `--webdienste-allow-unauthenticated` | Disable the built-in bearer/OIDC + Cedar auth layer on `:8090` — only behind an mTLS-terminating proxy |
+| `allow_unauthenticated` | `MAKOD_WEBDIENSTE_ALLOW_UNAUTHENTICATED` | `--webdienste-allow-unauthenticated` | Disable the built-in bearer/OIDC + Cedar auth layer on `:8090` — only behind an mTLS-terminating proxy |
 
 > **Authentication & mTLS**: By default every `:8090` route sits behind
 > bearer/OIDC authentication and the Cedar `UseWebdienste` action — the same
@@ -945,6 +1065,30 @@ cargo test -p makod --test as4_security
 > with the BDEW PKI CA and enforces access itself. When set, `makod` emits a
 > `WARN` at startup: `"--webdienste-allow-unauthenticated: API-Webdienste
 > Strom port has NO authentication."`
+
+#### Caller identity — `X-Mako-Client-MP-ID`
+
+Authorization and identity are two different things here, and both are needed.
+
+BDEW identifies the calling market participant by their **mTLS client
+certificate**, which the proxy validates and terminates — the Control Measures
+request carries no sending party in its body or query. The proxy must therefore
+forward the certificate's Marktpartner-ID:
+
+```nginx
+# Nginx terminating BDEW PKI mTLS
+proxy_set_header X-Mako-Client-MP-ID $ssl_client_s_dn_cn;
+```
+
+A Control Measures request without it is refused with `400`. That is
+deliberate: the Endantwort to a §14a EnWG Steuerungsauftrag is addressed to
+whoever sent it, so an order whose originator cannot be established has nowhere
+to be answered. The value must be a 13-digit Marktpartner-ID or a 16-character
+EIC; anything else is treated as absent.
+
+The WiM Order API is the exception — `WimAnmeldungRequest` carries
+`netzbetreiber_id` in the body, so the ordering party is known from the payload
+and the header is not consulted.
 
 ### §20b EnWG Netzzugangsplattform adapter
 
@@ -1050,6 +1194,33 @@ cutover is which releases are **in force**, and that is what it reports.
 
 The tool list is pinned by `tool_inventory_tests` in `mcp_server.rs` — adding a
 tool without updating this table fails the build.
+
+#### Authorization
+
+Reaching `/mcp` at all requires the Cedar `UseMcp` action. That grant authorizes
+the **transport**, not the data: every tool that touches tenant state
+additionally evaluates the same action its REST equivalent enforces, so an MCP
+principal can never read or change more through an agent than it could through
+the API directly.
+
+| Tool | Additional Cedar action |
+|---|---|
+| `submit_command` | `SubmitCommand` (per command name, Marktrolle and PID) |
+| `get_malo` | `AdminMaloRead` |
+| `list_partners`, `get_partner` | `AdminPartnerRead` |
+| `get_process`, `list_overdue_deadlines` | `ReadProcess`, per workflow |
+| `list_dead_letters` | `ReadProcess` across workflows |
+| `list_commands`, `get_health`, `get_format_version_coverage`, `list_active_processes`, `get_outbox_status` | none — they expose no tenant data |
+
+`get_process` and `list_overdue_deadlines` evaluate `ReadProcess` **per
+workflow**, so a combined-role (VIU) deployment can scope an NB principal to
+grid-side workflows and keep supply-side process state out of reach (§9 EnWG
+Informatorisches Unbundling). `list_dead_letters` spans every workflow, so a
+workflow-scoped principal is denied it outright rather than shown a filtered
+view that would misrepresent the queue.
+
+The `every_tool_evaluates_a_cedar_action` guard fails the build when a new tool
+reads tenant data without an action, so this table cannot drift.
 
 Call `list_commands` first — it returns every command name, its Marktrolle(n),
 primary Prüfidentifikator, and whether a `marktrolle` override is required at
@@ -1159,7 +1330,7 @@ same network access controls as the REST API — no additional configuration is 
 
 ## REST API Endpoints
 
-All REST endpoints are mounted on the `--http-addr` port. `GET /health` is also
+All REST endpoints are mounted on the `--http-addr` port. The `/health` probes are also
 mounted on `--as4-addr` and `--api-webdienste-addr`.
 
 ### OpenAPI spec and Swagger UI
@@ -1197,7 +1368,9 @@ via the **Authorize** button.
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
 | `POST` | `/edifact` | ✅ Bearer | Submit a raw EDIFACT interchange for routing and processing |
-| `GET` | `/health` | ❌ public | Liveness/readiness probe; pings the SlateDB store |
+| `GET` | `/health/live` | ❌ public | Liveness probe; reports only that the process answers |
+| `GET` | `/health/ready` | ❌ public | Readiness probe; pings the SlateDB store and checks worker heartbeats |
+| `GET` | `/health` | ❌ public | Alias of `/health/ready` |
 
 See the [ERP Commands](#erp-commands-post-api-v1-commands) section below for the full endpoint specification.
 
@@ -1226,6 +1399,48 @@ UNH+...
   ]
 }
 ```
+
+### Ingest durability
+
+Three properties hold for every inbound message, whichever transport carried it.
+They are stated here because each was once *not* true, and each failure was
+silent at the time it happened.
+
+**A spawn is one atomic write.** Events, outbox entries, regulatory deadlines and
+the correlation-index entries all commit in a single SlateDB transaction. The
+correlation entry is what makes a process reachable: until the business key
+resolves to it, the counterparty's reply finds nothing and is skipped, and the
+next thing to happen is the process's own Frist expiring as a false timeout.
+Writing that entry after the events left a window where a crash produced a live
+process that was unreachable for the rest of its life — with the business key
+itself blocked against a fresh spawn.
+
+**One business key, one process.** Spawning is a check-then-act: the lookup finds
+no live process, so one is created. Two initiating messages for the same key
+arriving together could both pass the check and both spawn. Nothing failed at
+that moment; every later message resolved the key to two processes and returned
+`AmbiguousProcess`, while the duplicate ran its own Fristen to expiry and
+reported them as missed. The lookup→spawn section is now serialised per business
+key.
+
+> The lock is in-process, which is sufficient because `makod` is a single writer
+> by construction — the exclusive data-directory lock refuses a second instance.
+> A deployment using `--allow-multi-instance` needs the same external lock that
+> AS4 inbox deduplication already requires.
+
+**Self-addressed messages are held to the network's standard.** In a combined-role
+deployment (NB + MSB on one GLN) a large share of traffic never leaves the
+process. That path now runs the same pre-send AHB conformance gate as the network
+path, refuses to skip a message of its own interchange that will not parse back,
+and visits every message rather than stopping at the first PID with no workflow
+on this side. An interchange that dispatched nothing is an error, not an
+acknowledgement: acknowledging it would retire an outbox entry that was never
+delivered anywhere.
+
+When no PID in a self-addressed interchange has a workflow on this side — a
+build that hosts the sending role but not the receiving one — the entry *is*
+acknowledged, because retrying cannot change which workflows are compiled in.
+Complete the exchange through the ERP command API.
 
 ---
 
@@ -1669,7 +1884,7 @@ It uses a **4-stage cargo-chef + distroless** build:
 - `TZ=Europe/Berlin` — `/usr/share/zoneinfo/Europe/` copied from builder so `time::OffsetDateTime` resolves CET/CEST correctly for regulatory deadline arithmetic.
 - `/var/lib/makod` pre-created with uid 65532 (distroless `nonroot`) so SlateDB can write without a mounted volume (e.g. `--check` mode and CI).
 - `VOLUME ["/var/lib/makod"]` declared *after* the pre-owned directory so Docker does not reset ownership.
-- `HEALTHCHECK CMD ["/usr/local/bin/makod", "--check"]` — validates all adapters, profiles and port credentials; exits 0 on success.
+- `HEALTHCHECK CMD ["/usr/local/bin/makod", "--check"]` — runs the full [startup validation](#startup-validation-check); exits 0 on success.
 
 ### Pre-built image
 
@@ -1754,9 +1969,10 @@ spec:
     metadata:
       labels: { app: makod }
     spec:
-      # Worst-case drain: 5 s dead-letter flush + --shutdown-timeout-secs
-      # (default 30 s) for the SlateDB close. Leave headroom above that sum —
-      # a SIGKILL during the store close can leave the last writes unflushed.
+      # Worst-case drain: --shutdown-timeout-secs (default 30 s) covers the
+      # listener/worker join and the dead-letter flush, and the store close
+      # keeps a 10 s floor of its own. Leave headroom above that sum — a
+      # SIGKILL during the store close can leave the last writes unflushed.
       terminationGracePeriodSeconds: 60
       containers:
         - name: makod
@@ -1776,22 +1992,28 @@ spec:
               mountPath: /etc/makod
             - name: data
               mountPath: /var/lib/makod
-          # Liveness restarts the pod; keep it tolerant. A SlateDB compaction
-          # or a slow object-store round trip can delay /health well past a
-          # single period, and a restart mid-delivery costs an AS4 retry cycle.
+          # Liveness answers only "is the process up?" — it never consults the
+          # store or the workers, because a restart would not fix either.
           livenessProbe:
-            httpGet: { path: /health, port: 8080 }
+            httpGet: { path: /health/live, port: 8080 }
             initialDelaySeconds: 5
             periodSeconds: 10
             timeoutSeconds: 3
-            failureThreshold: 6        # ~60 s unhealthy before restart
-          # Readiness only removes the pod from Service endpoints, so it may
-          # react quickly — makod reports ready once its stores answer.
+            failureThreshold: 3
+          # Readiness carries the dependency state. Failing it only removes the
+          # pod from Service endpoints, so it may react quickly.
           readinessProbe:
-            httpGet: { path: /health, port: 8080 }
+            httpGet: { path: /health/ready, port: 8080 }
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 3
+          # Gate rollouts on the same readiness contract instead of a fixed
+          # sleep: a replacement pod replays its event store before it answers.
+          startupProbe:
+            httpGet: { path: /health/ready, port: 8080 }
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 60       # up to 5 min for a cold replay
           # See terminationGracePeriodSeconds above: it must exceed the drain,
           # or Kubernetes SIGKILLs makod mid-delivery.
       volumes:
@@ -1804,34 +2026,112 @@ spec:
 ### Scaling
 
 SlateDB uses snapshot-isolation OCC transactions. For `local` and `s3` backends,
-only **one writer** at a time is safe — run `replicas: 1`. Multiple readers can
-share the same store via read-only `SlateDbStore::open_read_only()`.
+only **one writer** at a time is safe — run `replicas: 1`. `makod` enforces this
+for `local` with an exclusive lock on `<data-dir>/.makod.lock`; a second
+instance refuses to start rather than corrupting the write-ahead log.
 
-For high-availability, use an S3-compatible object store and implement a leader
-election layer (e.g. Kubernetes leader election, etcd) to ensure only one makod
-instance writes at a time.
+There is no read-only replica mode: every `makod` instance opens the store for
+writing. Scaling out reads would need a separate read path, which is not
+implemented.
+
+For high availability, use an S3-compatible object store and a leader-election
+layer (Kubernetes lease, etcd) so that only one instance runs at a time. Note
+that the object-store backends have no equivalent of the local lock file — pass
+`--allow-multi-instance` only when such a lock is genuinely in place, since AS4
+inbox deduplication is not shared between instances.
+
+---
+
+## Startup Validation (`--check`)
+
+`makod --check` runs every validation the real boot runs, then exits without
+opening a socket or spawning a worker. Its contract is the one deployment
+pipelines gate on: **exit 0 means this configuration will start.**
+
+| Phase | What it proves |
+|---|---|
+| Config file | Schema parses; no unknown key; no secret supplied both inline and by file |
+| `[[party]]` | Marktpartner-ID format, one code per Marktrolle, no mixed Strom+Gas entry (Allgemeine Festlegungen §2.13) |
+| Profiles | Every registered domain module has an active `edi-energy` profile for each of its message types |
+| Adapter coverage | Every adapter registry accepts every BDEW format version the compiled profile registry declares |
+| Dispatch completeness | Every workflow the `PidRouter` reaches has an ingest arm and a deadline arm |
+| Store | The object store opens and the data directory lock is acquired |
+| AS4 material | Signing key and certificate build a real session; the inbound decryption key is present; every partner endpoint is HTTPS and has an encryption certificate |
+| Cedar | The policy set compiles, including operator files from `authz.cedar_policy_dir` |
+| Ports | Every authenticated port has an API key or an OIDC issuer; an issuer has an audience and uses HTTPS |
+| Transports | At least one ingest transport is configured, and outbound EDIFACT has somewhere to go |
+
+Only the network round-trips are deferred — OIDC discovery and the JWKS fetch —
+so the check runs on a CI runner with no route to the identity provider. The
+issuer's *arguments* are still validated.
+
+The daemon does not re-derive any of this at boot: it consumes the preflight's
+own output, so a check that passes and a boot that fails cannot disagree.
+
+`--check` changes **no domain state**. The process-registry reconciliation — the
+only startup step that writes events or registry entries — is deliberately
+sequenced *after* the check exit, so pointing a pipeline at a live data
+directory cannot alter what is stored in it.
+
+Two things it does still do, both deliberate: it takes the exclusive
+data-directory lock, so it will refuse while the daemon is running (proving the
+lock is available is itself a startup precondition worth checking), and opening
+the store causes SlateDB to write its own manifest and WAL bookkeeping. Neither
+touches process state.
+
+```bash
+makod --check --config /etc/makod/makod.toml && echo "safe to promote"
+```
+
+The container image uses the same command as its `HEALTHCHECK`.
 
 ---
 
 ## Health Checks
 
-`GET /health` is mounted on every enabled port.
+Three routes are mounted on every enabled port. All are unauthenticated, and all
+are exempt from the per-peer rate limiter — the limiter keys on the peer
+address, which behind a proxy or a shared NAT is the same address the
+orchestrator probes from, and a throttled probe reads as a dead container.
+
+| Route | Answers | Fails when | Probe |
+|---|---|---|---|
+| `/health/live` | Is the process running? | never, if it responds at all | `livenessProbe` |
+| `/health/ready` | Can it serve traffic? | store unreachable, or a worker heartbeat is stale | `readinessProbe` |
+| `/health` | alias of `/health/ready` | as above | — |
 
 ```
-HTTP 200 {"status":"ok","store":"open"}      ← store healthy, all workers alive
-HTTP 503 {"status":"degraded","store":"err"} ← store unreachable, or a worker stalled
+HTTP 200 {"status":"ok","instance_id":"makod-0-1","version":"0.16.0"}
+HTTP 503 {"status":"degraded","instance_id":"makod-0-1","version":"0.16.0",
+          "reason":"worker_stale:deadline-scheduler"}
 ```
+
+`reason` is a stable category — `store_unavailable`, or `worker_stale:<name>`.
+It never contains filesystem paths or internal SlateDB state, so it is safe to
+surface in an alert.
+
+### Why the split
+
+Kubernetes **restarts** a container that fails liveness and only **removes it
+from Service endpoints** when it fails readiness. Dependency state therefore
+belongs on readiness: restarting `makod` does not fix an unreachable object
+store, and doing it mid-delivery costs an AS4 retry cycle. Liveness reports only
+that the process is up and its HTTP stack answers.
+
+Pointing both probes at a single endpoint that reports dependency state — the
+previous behaviour — turns a transient object-store outage into a restart loop.
 
 ### Worker liveness
 
-`degraded` covers more than the store. Every background worker publishes a
-heartbeat, and a watch that goes stale flips the endpoint to 503:
+Readiness covers more than the store. Every background worker publishes a
+heartbeat, and a watch that goes stale flips `/health/ready` to 503:
 
 | Worker | Stale after | What a stall costs |
 |---|---|---|
 | `deadline-scheduler` | 3 × poll interval | **Regulatory deadlines expire unnoticed** — the most consequential stall |
 | `outbox-worker` | 120 s | Outbound EDIFACT stops leaving the queue |
 | `erp-webhook-worker` | 120 s | ERP stops receiving CloudEvents |
+| `erp-log-worker` | 120 s | Registered instead of the above when `--erp-webhook-url` is unset; ERP-targeted outbox entries accumulate |
 | `projection-worker:gpke-konfiguration` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
 | `projection-worker:gpke-supplier-change` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
 | `inbox-purge-worker` | 26 h | AS4 dedup entries accumulate — storage grows without bound |
@@ -1841,17 +2141,33 @@ threshold would flap on a slow purge over a large store. A stalled purge is the
 mildest of the six — deduplication keeps working, entries simply are not
 reclaimed — but it is the one that degrades silently over weeks.
 
-In Kubernetes, target the `--http-addr` port for both liveness and readiness
-probes. Target `--as4-addr` separately if the AS4 server must be healthy before
-traffic is routed.
+In Kubernetes, target the `--http-addr` port with `/health/live` for liveness and
+`/health/ready` for readiness. Target `--as4-addr` separately if the AS4 server
+must be healthy before traffic is routed.
 
 ---
 
 ## Background Workers
 
-`startup::spawn_workers` launches the background workers as Tokio tasks, all
-cancelled on graceful shutdown. The two primary event-driven flows — outbox
-delivery and deadline firing — are:
+`startup::spawn_workers` launches the background workers as Tokio tasks and
+returns their handles. Every worker holds a clone of the shared
+`CancellationToken` and returns at its next message or tick boundary once that
+token is cancelled; the shutdown path then **joins** the handles before closing
+the event store.
+
+That join is load-bearing rather than tidy. Cancelling a token nobody reads and
+dropping a `JoinHandle` — which does not abort a Tokio task — leaves workers
+running while the store closes underneath them. An outbox `acknowledge` lost to
+that race leaves the counterparty holding a message the outbox still shows as
+pending, and the next start delivers it a second time.
+
+Cancellation is always observed *between* units of work, never inside one: a
+delivery in flight runs to its acknowledge, and a deadline being dispatched
+commits its events and outbox entries together. Work left undone stays durable —
+a queued message is still queued, and an undispatched deadline is still due — so
+the next start picks it up.
+
+The two primary event-driven flows — outbox delivery and deadline firing — are:
 
 ```mermaid
 graph LR
@@ -1947,14 +2263,18 @@ control. Use:
 
 | Method | How |
 |---|---|
-| **Kubernetes Secrets** | Mount as volume files; use `signing_key_pem_file` config key |
-| **Docker Secrets** | `docker secret create makod-key signing.pem`; bind-mount into container |
-| **Environment variables** | `MAKOD_AS4_SIGNING_KEY_PEM` (inline PEM); `MAKOD_AUTH_KEYS` |
-| **AWS Secrets Manager** | Fetch at startup via init container; write to tmpfs volume |
+| **Kubernetes Secrets** | Mount as volume files; point the `*_file` config keys at the mount |
+| **Secrets Store CSI driver** | Project AWS Secrets Manager / Azure Key Vault / Vault into a tmpfs mount |
+| **Docker Secrets** | `docker secret create makod-key signing.pem`; bind-mount into the container |
+| **systemd** | `LoadCredential=signing.key.pem:/path/to/key`, then reference `$CREDENTIALS_DIRECTORY` |
 
-For the signing key and cert, **always prefer the `*_pem_file` variant** over
-inline PEM — it avoids the key appearing in process environment listings or
-container inspect output.
+**Always prefer the `*_file` variant.** Every secret has one — the three AS4
+keys, the per-partner encryption certificates, the API keys, the ERP webhook
+secret, and the `marktd` API key. A value passed as a CLI flag appears in `ps`
+output; a value passed by environment variable is readable by anything that can
+inspect the process environment or the container spec. The environment forms
+exist for local development and for orchestrators that inject configuration that
+way, not for production key material.
 
 ---
 
@@ -1962,15 +2282,35 @@ container inspect output.
 
 ### First-time setup
 
+BDEW AS4-Profil v1.2 §2.2.6.2.1/§2.2.6.2.2 (with BSI TR-03116-3 §9.1) requires
+**EC keys on BrainpoolP256r1**, and two *separate* keypairs: one for signing,
+one for encryption. RSA material is not conformant, and reusing one key for both
+purposes is not either.
+
 ```bash
-# 1. Generate a signing keypair (RSA 2048 minimum; RSA 4096 recommended for production)
-openssl genrsa -out signing.key.pem 4096
-openssl req -new -x509 -key signing.key.pem -out signing.cert.pem -days 3650 \
+# 1. Signing keypair — ECDSA-SHA256 over BrainpoolP256r1
+openssl ecparam -name brainpoolP256r1 -genkey -noout -out signing.key.pem
+openssl req -new -x509 -key signing.key.pem -out signing.cert.pem -days 1095 \
   -subj "/CN=9900357000004/O=Stadtwerke Beispiel/C=DE"
 
-# 2. Register the certificate with your trading partners (out-of-band via BDEW)
+# 2. Encryption keypair — ECDH-ES key agreement, same curve, different key
+openssl ecparam -name brainpoolP256r1 -genkey -noout -out decryption.key.pem
+openssl req -new -x509 -key decryption.key.pem -out encryption.cert.pem -days 1095 \
+  -subj "/CN=9900357000004/O=Stadtwerke Beispiel/C=DE"
 
-# 3. Start makod
+# In production both certificates are issued by the BDEW PKI, not self-signed;
+# the self-signed pair above is for a test connection to a partner's test MSH.
+
+# 3. Publish the encryption certificate to your trading partners and collect
+#    theirs — one per partner, referenced from as4.partner_cert_files. Download
+#    the BDEW PKI CA certificate for as4.trust_anchor_pem_file: without it the
+#    trust anchor falls back to your own certificate and every counterparty is
+#    rejected.
+
+# 4. Validate the configuration before starting it
+makod --check --config /etc/makod/makod.toml
+
+# 5. Start makod
 makod --config /etc/makod/makod.toml
 
 # 4. Seed partner records (if not already in config)
@@ -2030,6 +2370,17 @@ Every significant operation carries a trace context:
 |---|---|---|
 | `makod_process_initiated_total` | `family` | Baseline for process volume |
 | `makod_process_completed_total` | `family`, `result` | `result != "accepted"` for NB-STP compliance |
+
+`family` is the domain prefix — `gpke`, `wim`, `geli-gas`, `wim-gas`,
+`gabi-gas`, `mabis`, `redispatch` — and carries the same value on both counters,
+so initiation and completion join on one label. `result` is `accepted`
+(process reached its terminal success state), `rejected` (negative APERAK),
+`timeout` (a regulatory window expired unanswered), or `cancelled` (permanent
+failure). Completions are counted as the ERP outbox drains each terminal event,
+which is the one point that sees every process ending regardless of family.
+An accepted APERAK is deliberately **not** a completion — it acknowledges that
+the interchange parsed, not that the process finished.
+
 | `makod_outbox_delivery_attempts_total` | `result` | `result = "transport_error"` spikes |
 | `makod_deadline_fired_total` | `family` | Baseline for deadline volume |
 | `makod_dead_letter_recorded_total` | `reason` | Any dead-letter = regulatory risk |
@@ -2057,20 +2408,22 @@ Protects the event store from capacity exhaustion by misconfigured or malicious 
 
 ```toml
 [otel]
-endpoint    = "http://otel-collector:4317"   # OTLP gRPC
+endpoint     = "http://otel-collector:4317"   # OTLP gRPC
 service_name = "makod"
-# or: endpoint = "http://otel-collector:4318"  # OTLP HTTP
 ```
 
-Or via environment:
+Or via environment, which takes precedence over the config file so telemetry can
+live entirely in the orchestrator:
 
 ```bash
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317 \
 OTEL_SERVICE_NAME=makod \
-makod --data-dir /var/lib/makod ...
+makod --config /etc/makod/makod.toml
 ```
 
-Omit the `[otel]` section entirely to disable telemetry with zero overhead — the instrumentation compiles to a no-op when the feature is off.
+With an endpoint configured the subscriber switches to the structured JSON layer
+and `[logging] format` no longer applies. Omit `[otel]` entirely to disable
+telemetry with zero overhead.
 
 ---
 

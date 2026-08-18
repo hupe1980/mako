@@ -52,7 +52,6 @@ impl WorkerHeartbeat {
     /// Called manually at the end of a poll loop iteration when the worker
     /// owns the tick (rather than delegating to `with_heartbeat` on the engine
     /// worker types).
-    #[allow(dead_code)]
     pub fn tick(&self) {
         let now = time::OffsetDateTime::now_utc().unix_timestamp();
         self.last_tick.store(now, Ordering::Relaxed);

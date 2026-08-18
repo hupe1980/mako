@@ -39,12 +39,17 @@
 //! to convert the JSON to BDEW-conformant EDIFACT wire bytes before handing them
 //! to the AS4 transport.
 //!
-//! For message types whose payload carries only domain intent without the actual
-//! business data required for a conformant wire message (e.g. MSCONS without
-//! meter readings), the renderer returns [`RenderError::InsufficientPayload`] and
-//! the sender falls back to transmitting the JSON blob. A structured `warn!` is
-//! emitted for every such fallback so the operator knows about non-conformant
-//! transmissions.
+//! When no wire-format renderer exists for a message type the renderer returns
+//! [`RenderError::InsufficientPayload`], and [`BdewAs4Sender`] **dead-letters
+//! the entry permanently**. It does not fall back to putting the domain JSON on
+//! the wire: a non-EDIFACT payload would breach BDEW MaKo interoperability, and
+//! retrying could never succeed. [`WebhookEdifactSender`] — the development
+//! transport, which delivers to an operator's own endpoint rather than to the
+//! regulated network — does send the JSON, with a `warn!`.
+//!
+//! Every rendered message additionally passes a pre-send conformance gate: it is
+//! parsed back and validated against its own release profile, and a failure is
+//! permanent for the same reason.
 //!
 //! [`RenderError::InsufficientPayload`]: crate::edifact_renderer::RenderError::InsufficientPayload
 
@@ -526,6 +531,42 @@ impl As4Sender for BdewAs4Sender {
                         }
                     };
 
+                    // ── Pre-send AHB conformance gate ─────────────────────
+                    //
+                    // The same gate the network path runs, for the same reason.
+                    // A self-addressed message is not a lesser message: in a
+                    // combined-role VIU deployment it is a large share of the
+                    // traffic, it produces the same § 147 AO records, and an
+                    // invalid rendering that only ever loops back is a defect
+                    // that would ship undetected until the day the counterparty
+                    // moves to a separate GLN. Skipping the gate here made the
+                    // loopback path the one place a non-conformant message could
+                    // be accepted.
+                    match loopback_state.platform.parse(&payload_bytes) {
+                        Err(e) => {
+                            return Err(EngineError::Serialization(format!(
+                                "loopback gate: rendered EDIFACT does not parse for \
+                                 {message_id_str} ({message_type}): {e}"
+                            )));
+                        }
+                        Ok(parsed) => match parsed.validate() {
+                            Err(e) => {
+                                return Err(EngineError::Serialization(format!(
+                                    "loopback gate: AHB validation failed to run for \
+                                     {message_id_str} ({message_type}): {e}"
+                                )));
+                            }
+                            Ok(report) if !report.is_valid() => {
+                                return Err(EngineError::Serialization(format!(
+                                    "loopback gate: rendered EDIFACT violates its AHB \
+                                     profile for {message_id_str} ({message_type}): {:?}",
+                                    report.errors()
+                                )));
+                            }
+                            Ok(_) => {}
+                        },
+                    }
+
                     // Recipient MP-ID (UNB DE0010) → commodity-aware routing of
                     // Sparte-split shared PIDs (INSRPT, WiM Gas device processes).
                     let loopback_recipient = loopback_state
@@ -533,14 +574,29 @@ impl As4Sender for BdewAs4Sender {
                         .parse_interchange_full(&payload_bytes[..])
                         .map(|pi| pi.header.receiver_id.to_string())
                         .unwrap_or_default();
-                    let mut any_dispatched = false;
+
+                    // Every message in the interchange is visited. The previous
+                    // version returned `Ok(())` at the *first* message whose PID
+                    // had no workflow, which acknowledged the outbox entry while
+                    // silently abandoning every message after it.
+                    let mut dispatched = 0usize;
+                    let mut unrouted_pids: Vec<u32> = Vec::new();
                     for parse_result in loopback_state
                         .platform
                         .parse_interchange(std::io::Cursor::new(&payload_bytes[..]))
                     {
-                        let Ok(parsed_msg) = parse_result else {
-                            continue;
-                        };
+                        // These are bytes *we* rendered and just validated, so a
+                        // message that will not parse back is an internal defect,
+                        // not counterparty input. Skipping it — as this loop used
+                        // to — dropped a regulated message on the floor.
+                        let parsed_msg = parse_result.map_err(|e| {
+                            EngineError::Serialization(format!(
+                                "loopback: self-rendered interchange contains an \
+                                 unparseable message for {message_id_str} \
+                                 ({message_type}): {e}"
+                            ))
+                        })?;
+
                         let pid_opt = parsed_msg
                             .detect_pruefidentifikator()
                             .ok()
@@ -555,12 +611,12 @@ impl As4Sender for BdewAs4Sender {
                                         tracing::info!(
                                             message_id   = %message_id_str,
                                             message_type = %message_type,
+                                            pid          = pid_val,
                                             workflow     = %wf_name,
                                             outcome      = ?outcome,
-                                            own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
                                             "BdewAs4Sender loopback: in-process delivery succeeded",
                                         );
-                                        any_dispatched = true;
+                                        dispatched += 1;
                                     }
                                     Err(e) => {
                                         tracing::warn!(
@@ -573,34 +629,56 @@ impl As4Sender for BdewAs4Sender {
                                     }
                                 }
                             }
-                            (Some(_), None, _) => {
-                                // PID not in dispatch table — e.g. ORDERS 17116 (Anfrage Sperrung,
-                                // NB → MSB) when no MSB-side workflow is registered.
-                                // Acknowledge the outbox entry (return Ok) so the outbox worker
-                                // does not retry indefinitely.  The MSB confirmation must be
-                                // provided via the ERP command API.
-                                tracing::warn!(
-                                    message_id   = %message_id_str,
-                                    message_type = %message_type,
-                                    pid          = ?pid_opt,
-                                    own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
-                                    "BdewAs4Sender loopback: PID not in dispatch table — \
-                                     no MSB-side workflow registered; use ERP command API \
-                                     (e.g. gpke.sperrung.bestaetigen) to confirm",
-                                );
-                                return Ok(());
+                            // PID carries no workflow on this side — e.g. ORDERS
+                            // 17116 (Anfrage Sperrung, NB → MSB) in a build with
+                            // no MSB-side workflow registered. Recorded and
+                            // reported once after the loop rather than ending it.
+                            (Some(pid_val), None, _) => unrouted_pids.push(pid_val),
+                            (Some(_), Some(_), None) | (None, _, _) => {
+                                return Err(EngineError::Serialization(format!(
+                                    "loopback: no dispatcher wired, or no Prüfidentifikator \
+                                     in a self-rendered message for {message_id_str} \
+                                     ({message_type}) — this is a wiring defect, not \
+                                     counterparty input"
+                                )));
                             }
-                            _ => {}
                         }
                     }
 
-                    if !any_dispatched {
+                    if dispatched == 0 {
+                        if unrouted_pids.is_empty() {
+                            // Nothing dispatched and nothing even identified: the
+                            // interchange yielded no messages at all. Acknowledging
+                            // here — as this path used to — retires an outbox entry
+                            // that was never delivered anywhere.
+                            return Err(EngineError::Serialization(format!(
+                                "loopback: self-rendered interchange for {message_id_str} \
+                                 ({message_type}) produced no messages — nothing was \
+                                 delivered, so the outbox entry must not be acknowledged"
+                            )));
+                        }
+                        // Every message was addressed to a role this build does
+                        // not host. Acknowledge: retrying cannot change which
+                        // workflows are compiled in, and the operator completes
+                        // the exchange through the ERP command API.
                         tracing::warn!(
                             message_id   = %message_id_str,
                             message_type = %message_type,
-                            own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
-                            "BdewAs4Sender loopback: rendered message produced no \
-                             dispatchable messages (no dispatcher wired or parse yielded nothing)",
+                            pids         = ?unrouted_pids,
+                            own_mp_ids   = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
+                            "BdewAs4Sender loopback: no PID in this interchange has a \
+                             workflow on this side; no counterpart role is registered. \
+                             Use the ERP command API (e.g. gpke.sperrung.bestaetigen) \
+                             to continue the exchange",
+                        );
+                    } else if !unrouted_pids.is_empty() {
+                        tracing::warn!(
+                            message_id   = %message_id_str,
+                            message_type = %message_type,
+                            dispatched,
+                            unrouted     = ?unrouted_pids,
+                            "BdewAs4Sender loopback: interchange partially dispatched — \
+                             these PIDs have no workflow on this side",
                         );
                     }
                     return Ok(());
@@ -648,8 +726,6 @@ impl As4Sender for BdewAs4Sender {
                 return Err(EngineError::PartnerUnknown { recipient });
             };
             let endpoint = endpoint_ref.to_owned();
-
-            // Record the delivery attempt before rendering/sending.
 
             // Render domain-intent JSON to BDEW-conformant EDIFACT wire bytes.
             //

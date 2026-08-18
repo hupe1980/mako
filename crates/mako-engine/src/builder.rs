@@ -652,6 +652,37 @@ pub struct OutboxWorker<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> {
     /// Optional liveness heartbeat — stores the current UTC Unix timestamp
     /// (seconds) after each poll cycle so health probes can detect stale workers.
     heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
+    /// Graceful-shutdown signal. When cancelled the worker finishes the message
+    /// it is delivering, then returns from [`OutboxWorker::run`] — see
+    /// [`OutboxWorker::with_shutdown`].
+    shutdown: Option<tokio_util::sync::CancellationToken>,
+}
+
+/// Sleep for `dur`, returning early if `token` is cancelled.
+///
+/// Returns `true` when the sleep completed and the caller should keep looping,
+/// `false` when the token was cancelled and the caller must return.
+///
+/// A worker that sleeps on a bare `tokio::time::sleep` cannot observe a
+/// shutdown until its poll interval elapses. For the deadline scheduler that is
+/// 30 seconds by default — longer than a typical container termination grace
+/// period, which turns a graceful drain into a SIGKILL.
+///
+/// Public so that binaries running their own poll-loop workers alongside the
+/// engine's (projection catch-up, webhook delivery, retention purges) can honour
+/// the same token and stop before the store is closed.
+pub async fn sleep_or_cancel(
+    dur: std::time::Duration,
+    token: Option<&tokio_util::sync::CancellationToken>,
+) -> bool {
+    let Some(t) = token else {
+        tokio::time::sleep(dur).await;
+        return true;
+    };
+    tokio::select! {
+        () = tokio::time::sleep(dur) => true,
+        () = t.cancelled() => false,
+    }
 }
 
 /// Compute a full-jitter exponential backoff delay.
@@ -683,7 +714,13 @@ fn backoff_delay(attempt: u32, entropy: u64) -> std::time::Duration {
 }
 
 impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
-    /// Run the outbox drain loop until the task is cancelled.
+    /// Run the outbox drain loop until the shutdown token is cancelled.
+    ///
+    /// Without a token (see [`OutboxWorker::with_shutdown`]) the loop runs until
+    /// the task is aborted or the process exits. With one, cancellation is
+    /// observed between messages and during the idle sleep, so an in-flight
+    /// delivery is always finished and acknowledged before the worker returns —
+    /// dropping it mid-`send` would risk a duplicate AS4 delivery on restart.
     ///
     /// # Panics
     ///
@@ -692,6 +729,14 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
     #[allow(clippy::too_many_lines)]
     pub async fn run(self) {
         loop {
+            if self
+                .shutdown
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+            {
+                tracing::info!("outbox worker: shutdown signalled; stopping");
+                return;
+            }
             // Tick liveness at the *start* of every poll cycle, ahead of the
             // early-`continue` paths below.  An idle worker (empty outbox) and
             // one retrying after a store error are both alive and must keep
@@ -707,17 +752,36 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                 Ok(b) => b,
                 Err(e) => {
                     tracing::warn!(error = %e, "outbox worker: store error polling pending messages (will retry)");
-                    tokio::time::sleep(self.poll_interval).await;
+                    if !sleep_or_cancel(self.poll_interval, self.shutdown.as_ref()).await {
+                        return;
+                    }
                     continue;
                 }
             };
 
             if batch.is_empty() {
-                tokio::time::sleep(self.poll_interval).await;
+                if !sleep_or_cancel(self.poll_interval, self.shutdown.as_ref()).await {
+                    return;
+                }
                 continue;
             }
 
             for msg in batch {
+                // Between messages, not inside one: a `send` that is already in
+                // flight must run to its `acknowledge`, or the counterparty
+                // receives a message the outbox still believes is pending and
+                // redelivers it after the restart.
+                if self
+                    .shutdown
+                    .as_ref()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+                {
+                    tracing::info!(
+                        "outbox worker: shutdown signalled mid-batch; \
+                         remaining messages stay queued for the next start"
+                    );
+                    return;
+                }
                 // ── Retry budget ──────────────────────────────────────
                 // `attempt_count` starts at 0 and is incremented on each
                 // `reschedule` call. The message is permanently undeliverable
@@ -945,6 +1009,7 @@ where
             max_retry_window,
             dead_letter_sink: self.dead_letter_sink.clone(),
             heartbeat: None,
+            shutdown: None,
         }
     }
 }
@@ -961,6 +1026,18 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
         heartbeat: std::sync::Arc<std::sync::atomic::AtomicI64>,
     ) -> Self {
         self.heartbeat = Some(heartbeat);
+        self
+    }
+
+    /// Attach a graceful-shutdown token.
+    ///
+    /// Cancelling it makes [`OutboxWorker::run`] return at the next message
+    /// boundary or immediately out of its idle sleep. Await the worker's
+    /// `JoinHandle` afterwards: the point of the token is that the caller can
+    /// close the event store *after* the worker has stopped writing to it.
+    #[must_use]
+    pub fn with_shutdown(mut self, shutdown: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown = Some(shutdown);
         self
     }
 
@@ -1141,12 +1218,27 @@ pub struct DeadlineScheduler<DS: DeadlineStore> {
     /// Optional liveness heartbeat — stores the current UTC Unix timestamp
     /// (seconds) after each poll cycle.
     heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
+    /// Graceful-shutdown signal — see [`DeadlineScheduler::with_shutdown`].
+    shutdown: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl<DS: DeadlineStore> DeadlineScheduler<DS> {
-    /// Run the deadline poll loop until the task is cancelled.
+    /// Run the deadline poll loop until the shutdown token is cancelled.
+    ///
+    /// Cancellation is observed between deadlines and during the idle sleep, so
+    /// a deadline already being dispatched runs to completion. A deadline left
+    /// undispatched stays registered and fires on the next start — it is due, so
+    /// the next `due_now` returns it again.
     pub async fn run(self) {
         loop {
+            if self
+                .shutdown
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+            {
+                tracing::info!("deadline scheduler: shutdown signalled; stopping");
+                return;
+            }
             // Tick liveness at the *start* of every poll cycle, ahead of the
             // early-`continue` paths below.  An idle scheduler (no due
             // deadlines) is alive and must keep ticking; only one genuinely
@@ -1165,17 +1257,34 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                         error = %e,
                         "deadline scheduler: store error polling due deadlines (will retry)",
                     );
-                    tokio::time::sleep(self.poll_interval).await;
+                    if !sleep_or_cancel(self.poll_interval, self.shutdown.as_ref()).await {
+                        return;
+                    }
                     continue;
                 }
             };
 
             if result.deadlines.is_empty() {
-                tokio::time::sleep(self.poll_interval).await;
+                if !sleep_or_cancel(self.poll_interval, self.shutdown.as_ref()).await {
+                    return;
+                }
                 continue;
             }
 
             for deadline in result.deadlines {
+                // Between deadlines, not inside one: a dispatch already running
+                // must finish so its events and outbox entries commit together.
+                if self
+                    .shutdown
+                    .as_ref()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+                {
+                    tracing::info!(
+                        "deadline scheduler: shutdown signalled mid-batch; \
+                         undispatched deadlines remain due and fire on the next start"
+                    );
+                    return;
+                }
                 let id = deadline.deadline_id();
                 let label = deadline.label().to_owned();
 
@@ -1256,6 +1365,17 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
         self.heartbeat = Some(heartbeat);
         self
     }
+
+    /// Attach a graceful-shutdown token.
+    ///
+    /// Cancelling it makes [`DeadlineScheduler::run`] return at the next
+    /// deadline boundary or immediately out of its idle sleep, so the caller can
+    /// close the event store once the scheduler has stopped writing to it.
+    #[must_use]
+    pub fn with_shutdown(mut self, shutdown: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
 }
 
 impl<ES, SS, OS, DS, PR> EngineContext<ES, SS, OS, DS, PR>
@@ -1302,6 +1422,7 @@ where
             batch_size,
             poll_interval,
             heartbeat: None,
+            shutdown: None,
         }
     }
 }
@@ -2246,6 +2367,107 @@ mod tests {
         );
     }
 
+    // ── Graceful shutdown ─────────────────────────────────────────────────────
+
+    /// Cancelling the token must make `run` return.
+    ///
+    /// The workers used to loop until the process exited: the shutdown path
+    /// cancelled a token nobody read, dropped their `JoinHandle`s — which does
+    /// not abort a Tokio task — and then closed the event store underneath
+    /// them. An outbox `acknowledge` losing that race leaves the counterparty
+    /// holding a message the outbox still shows as pending, and the next start
+    /// delivers it again.
+    #[tokio::test]
+    async fn a_cancelled_outbox_worker_returns() {
+        let worker = OutboxWorker {
+            store: InMemoryOutboxStore::new(),
+            sender: AlwaysDelivers,
+            deadline_store: InMemoryDeadlineStore::new(),
+            batch_size: 10,
+            // Far longer than the timeout below: the point is that cancellation
+            // interrupts the idle sleep rather than being noticed after it.
+            poll_interval: std::time::Duration::from_secs(300),
+            max_attempts: 48,
+            max_retry_window: std::time::Duration::from_secs(72 * 3600),
+            dead_letter_sink: std::sync::Arc::new(crate::dead_letter::LogDeadLetterSink),
+            heartbeat: None,
+            shutdown: None,
+        };
+        let token = tokio_util::sync::CancellationToken::new();
+        let worker = worker.with_shutdown(token.clone());
+
+        let handle = tokio::spawn(worker.run());
+        // Let it reach the sleep, then signal.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        token.cancel();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("outbox worker must return promptly after cancellation")
+            .expect("outbox worker must not panic");
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_deadline_scheduler_returns() {
+        let scheduler = DeadlineScheduler {
+            store: InMemoryDeadlineStore::new(),
+            dispatch: Box::new(|_| Box::pin(async { Ok(()) })),
+            batch_size: 100,
+            poll_interval: std::time::Duration::from_secs(300),
+            heartbeat: None,
+            shutdown: None,
+        };
+        let token = tokio_util::sync::CancellationToken::new();
+        let scheduler = scheduler.with_shutdown(token.clone());
+
+        let handle = tokio::spawn(scheduler.run());
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        token.cancel();
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), handle)
+            .await
+            .expect("deadline scheduler must return promptly after cancellation")
+            .expect("deadline scheduler must not panic");
+    }
+
+    /// A token cancelled before the first poll must stop the worker without it
+    /// touching the store at all — the case where shutdown arrives during boot.
+    #[tokio::test]
+    async fn a_worker_cancelled_before_it_starts_does_no_work() {
+        let outbox = InMemoryOutboxStore::new();
+        let stream_id = crate::ids::StreamId::new("gpke/shutdown-test");
+        let msg = outbox_message(&stream_id, "UTILMD");
+        outbox.enqueue(std::slice::from_ref(&msg)).await.unwrap();
+
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel();
+
+        let worker = OutboxWorker {
+            store: outbox.clone(),
+            sender: AlwaysDelivers,
+            deadline_store: InMemoryDeadlineStore::new(),
+            batch_size: 10,
+            poll_interval: std::time::Duration::from_millis(5),
+            max_attempts: 48,
+            max_retry_window: std::time::Duration::from_secs(72 * 3600),
+            dead_letter_sink: std::sync::Arc::new(crate::dead_letter::LogDeadLetterSink),
+            heartbeat: None,
+            shutdown: None,
+        }
+        .with_shutdown(token);
+
+        tokio::time::timeout(std::time::Duration::from_secs(5), worker.run())
+            .await
+            .expect("an already-cancelled worker must return immediately");
+
+        assert_eq!(
+            outbox.pending_now(10).await.unwrap().len(),
+            1,
+            "the message must stay queued for the next start, not be delivered \
+             by a worker that was told to stop",
+        );
+    }
+
     // ── APERAK delivery-window discharge ──────────────────────────────────────
 
     /// A sender that always succeeds, so the worker takes the delivery path.
@@ -2319,6 +2541,7 @@ mod tests {
             max_retry_window: std::time::Duration::from_secs(72 * 3600),
             dead_letter_sink: std::sync::Arc::new(crate::dead_letter::LogDeadLetterSink),
             heartbeat: None,
+            shutdown: None,
         };
         // `run` never returns; give it enough cycles to drain the one message.
         let _ = tokio::time::timeout(std::time::Duration::from_millis(300), worker.run()).await;
@@ -2468,6 +2691,7 @@ mod tests {
             max_retry_window: std::time::Duration::from_secs(72 * 3600),
             dead_letter_sink: std::sync::Arc::new(std::sync::Arc::clone(&sink)),
             heartbeat: None,
+            shutdown: None,
         };
         let _ = tokio::time::timeout(std::time::Duration::from_millis(300), worker.run()).await;
         (outbox, sink)

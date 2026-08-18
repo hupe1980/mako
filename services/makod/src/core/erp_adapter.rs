@@ -47,6 +47,7 @@
 //! ```
 
 use mako_engine::erp::{ErpAdapter, ErpAdapterError, ErpEvent, ErpEventType};
+use mako_engine::metrics::{EngineMetrics, ProcessOutcome};
 use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use tracing::{info, warn};
@@ -336,6 +337,8 @@ pub struct OutboxErpWorker<OS, A> {
     dl_sink: Option<std::sync::Arc<dyn mako_engine::dead_letter::DeadLetterSink>>,
     /// Liveness heartbeat, surfaced via `GET /health`.
     heartbeat: Option<std::sync::Arc<std::sync::atomic::AtomicI64>>,
+    /// Graceful-shutdown signal — see [`OutboxErpWorker::with_shutdown`].
+    shutdown: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl<OS, A> OutboxErpWorker<OS, A>
@@ -364,6 +367,7 @@ where
             initial_backoff_secs: 300, // 5 minutes
             dl_sink: None,
             heartbeat: None,
+            shutdown: None,
         }
     }
 
@@ -418,9 +422,32 @@ where
         self
     }
 
-    /// Run the ERP delivery loop.  Cancellable via task abort.
+    /// Attach a graceful-shutdown token.
+    ///
+    /// Cancelling it makes [`OutboxErpWorker::run`] return at the next message
+    /// boundary or immediately out of its idle sleep, so the caller can close
+    /// the store once the worker has stopped writing to it.
+    #[must_use]
+    pub fn with_shutdown(mut self, shutdown: tokio_util::sync::CancellationToken) -> Self {
+        self.shutdown = Some(shutdown);
+        self
+    }
+
+    /// Run the ERP delivery loop until the shutdown token is cancelled.
+    ///
+    /// A delivery already in flight runs to its acknowledge: dropping it would
+    /// leave the ERP having received a CloudEvent that the outbox still shows as
+    /// pending, and the next start would deliver it a second time.
     pub async fn run(self) {
         loop {
+            if self
+                .shutdown
+                .as_ref()
+                .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+            {
+                tracing::info!("OutboxErpWorker: shutdown signalled; stopping");
+                return;
+            }
             if let Some(hb) = &self.heartbeat {
                 hb.store(
                     time::OffsetDateTime::now_utc().unix_timestamp(),
@@ -431,17 +458,42 @@ where
                 Ok(b) => b,
                 Err(e) => {
                     warn!(error = %e, "OutboxErpWorker: store error (will retry)");
-                    tokio::time::sleep(self.poll_interval).await;
+                    if !mako_engine::builder::sleep_or_cancel(
+                        self.poll_interval,
+                        self.shutdown.as_ref(),
+                    )
+                    .await
+                    {
+                        return;
+                    }
                     continue;
                 }
             };
 
             if batch.is_empty() {
-                tokio::time::sleep(self.poll_interval).await;
+                if !mako_engine::builder::sleep_or_cancel(
+                    self.poll_interval,
+                    self.shutdown.as_ref(),
+                )
+                .await
+                {
+                    return;
+                }
                 continue;
             }
 
             for msg in batch {
+                if self
+                    .shutdown
+                    .as_ref()
+                    .is_some_and(tokio_util::sync::CancellationToken::is_cancelled)
+                {
+                    tracing::info!(
+                        "OutboxErpWorker: shutdown signalled mid-batch; \
+                         remaining messages stay queued for the next start"
+                    );
+                    return;
+                }
                 // Only deliver messages that carry a BO4E payload, are
                 // explicitly ERP-targeted, OR have a recognised ERP message
                 // type.  AS4-only EDIFACT messages (message_type = "UTILMD",
@@ -497,6 +549,18 @@ where
                     workflow_name: msg.workflow_name.clone(),
                     trace_context: msg.trace_context.clone(),
                 };
+
+                // Terminal-outcome counter. The ERP outbox is the one place
+                // that sees every process ending, whatever family it belongs
+                // to, so `makod_process_completed_total{family,result}` is
+                // emitted here. It had no emitter at all: the metric was
+                // documented, exported and permanently zero, which made the
+                // obvious "initiated vs completed" dashboard read as though no
+                // process had ever finished.
+                if let Some(outcome) = terminal_outcome(&event.event_type) {
+                    let family = event.workflow_name.split('-').next().unwrap_or("unknown");
+                    EngineMetrics::global().process_completed(family, outcome);
+                }
 
                 match self.adapter.notify(event).await {
                     Ok(()) => {
@@ -560,6 +624,21 @@ where
                 }
             }
         }
+    }
+}
+
+/// Map an ERP event to the terminal [`ProcessOutcome`] it represents.
+///
+/// `None` for events that are progress notifications rather than endings
+/// (`ProcessInitiated`, `ContrlReceived`, `AperakAccepted` — an accepted APERAK
+/// acknowledges receipt, it does not end the process).
+fn terminal_outcome(event: &ErpEventType) -> Option<ProcessOutcome> {
+    match event {
+        ErpEventType::ProcessCompleted => Some(ProcessOutcome::Accepted),
+        ErpEventType::AperakRejected { .. } => Some(ProcessOutcome::Rejected),
+        ErpEventType::AperakTimeout => Some(ProcessOutcome::Timeout),
+        ErpEventType::ProcessFailed { .. } => Some(ProcessOutcome::Cancelled),
+        _ => None,
     }
 }
 
@@ -650,6 +729,45 @@ mod tests {
         assert_eq!(
             hex,
             "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
+        );
+    }
+}
+
+#[cfg(test)]
+mod terminal_outcome_tests {
+    use super::terminal_outcome;
+    use mako_engine::erp::ErpEventType;
+    use mako_engine::metrics::ProcessOutcome;
+
+    /// An accepted APERAK acknowledges *receipt*; the process continues.
+    /// Counting it as a completion would make every GPKE process look finished
+    /// the moment the counterparty confirmed the interchange parsed.
+    #[test]
+    fn an_accepted_aperak_is_not_a_completion() {
+        assert!(terminal_outcome(&ErpEventType::AperakAccepted).is_none());
+        assert!(terminal_outcome(&ErpEventType::ProcessInitiated).is_none());
+        assert!(terminal_outcome(&ErpEventType::ContrlReceived).is_none());
+    }
+
+    #[test]
+    fn the_four_endings_map_to_their_outcomes() {
+        assert_eq!(
+            terminal_outcome(&ErpEventType::ProcessCompleted),
+            Some(ProcessOutcome::Accepted)
+        );
+        assert_eq!(
+            terminal_outcome(&ErpEventType::AperakRejected { erc_code: None }),
+            Some(ProcessOutcome::Rejected)
+        );
+        assert_eq!(
+            terminal_outcome(&ErpEventType::AperakTimeout),
+            Some(ProcessOutcome::Timeout)
+        );
+        assert_eq!(
+            terminal_outcome(&ErpEventType::ProcessFailed {
+                reason: "regulatory timeout".into()
+            }),
+            Some(ProcessOutcome::Cancelled)
         );
     }
 }

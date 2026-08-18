@@ -228,14 +228,28 @@ impl VerzeichnisdienstLookup {
 ///
 /// ```rust,ignore
 /// let lookup = VerzeichnisdienstLookup::new(client, partner_store, tenant_id);
-/// tokio::spawn(verzeichnisdienst_refresh_task(lookup, Duration::from_secs(300)));
+/// tokio::spawn(verzeichnisdienst_refresh_task(
+///     lookup,
+///     Duration::from_secs(300),
+///     shutdown_token,
+/// ));
 /// ```
-pub async fn verzeichnisdienst_refresh_task(lookup: VerzeichnisdienstLookup, interval: Duration) {
+pub async fn verzeichnisdienst_refresh_task(
+    lookup: VerzeichnisdienstLookup,
+    interval: Duration,
+    shutdown: tokio_util::sync::CancellationToken,
+) {
     let mut ticker = tokio::time::interval(interval);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
     loop {
-        ticker.tick().await;
+        tokio::select! {
+            _ = ticker.tick() => {}
+            () = shutdown.cancelled() => {
+                debug!("Verzeichnisdienst refresh: shutdown signalled; stopping");
+                return;
+            }
+        }
 
         let partners = match lookup.partner_store.list(lookup.tenant_id).await {
             Ok(v) => v,

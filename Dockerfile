@@ -234,7 +234,8 @@ EXPOSE 8080 4080 8090
 
 # Health-check for docker / docker-compose.
 # --check validates config, profiles, and adapters then exits 0.
-# In Kubernetes use a httpGet probe against GET /health instead (no shell needed).
+# In Kubernetes use httpGet probes against /health/live (liveness) and
+# /health/ready (readiness) instead — no shell needed.
 HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
     CMD ["/usr/local/bin/makod", "--check"]
 

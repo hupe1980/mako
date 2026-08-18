@@ -115,7 +115,6 @@ impl std::error::Error for RenderError {}
 /// payload (intent-only) rather than a schema or registry problem.
 ///
 /// The AS4 sender uses this to decide whether to fall back to JSON.
-#[allow(dead_code)] // used by as4_sender (bin-only module, not visible to lib)
 pub fn is_insufficient_payload(err: &RenderError) -> bool {
     matches!(err, RenderError::InsufficientPayload { .. })
 }
@@ -125,7 +124,6 @@ pub fn is_insufficient_payload(err: &RenderError) -> bool {
 /// Used for Gas positive APERAKs (silence = acceptance per APERAK AHB 1.0 §2.3).
 /// The AS4 sender acknowledges the outbox entry without transmitting.
 /// The ERP webhook sender delivers the domain JSON payload instead.
-#[allow(dead_code)] // used by as4_sender (bin-only module, not visible to lib)
 pub fn is_suppressed(err: &RenderError) -> bool {
     matches!(err, RenderError::Suppressed { .. })
 }

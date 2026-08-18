@@ -379,6 +379,27 @@ impl<S: AtomicAppend> AtomicAppend for Arc<S> {
             )
             .await
     }
+
+    async fn append_with_outbox_deadlines_and_correlations(
+        &self,
+        stream_id: &StreamId,
+        expected_version: ExpectedVersion,
+        events: &[NewEvent],
+        outbox: &[crate::outbox::PendingOutbox],
+        deadlines: &[crate::deadline::Deadline],
+        correlations: &[CorrelationEntry],
+    ) -> Result<AppendResult, EngineError> {
+        self.as_ref()
+            .append_with_outbox_deadlines_and_correlations(
+                stream_id,
+                expected_version,
+                events,
+                outbox,
+                deadlines,
+                correlations,
+            )
+            .await
+    }
 }
 
 // ── AtomicAppend trait ────────────────────────────────────────────────────────
@@ -471,6 +492,71 @@ pub trait AtomicAppend: EventStore {
         self.append_with_outbox(stream_id, expected_version, events, outbox)
             .await
     }
+
+    /// Append events, outbox entries, deadlines **and** correlation-index
+    /// entries in one atomic write.
+    ///
+    /// # Why this exists
+    ///
+    /// A spawn is not complete when its events are durable. Until the business
+    /// key is in the correlation index, nothing can *find* the process: the
+    /// counterparty's reply resolves to no process and is skipped, and the only
+    /// subsequent event is the process's own Frist expiring as a false timeout.
+    /// Registering the key after the append left exactly that window, and the
+    /// failure was warn-only — a crash in between produced a live process that
+    /// was unreachable by business key for the rest of its life, with the
+    /// business key itself blocked against a fresh spawn.
+    ///
+    /// Passing the entries here puts them in the same batch as the events that
+    /// justify them, so a spawn is either wholly visible or wholly absent.
+    ///
+    /// # Default implementation
+    ///
+    /// Falls back to [`append_with_outbox_and_deadlines`] — **correlations are
+    /// not persisted**. Override in implementations whose registry shares the
+    /// underlying database.
+    ///
+    /// # Errors
+    ///
+    /// Same as [`append_with_outbox`].
+    ///
+    /// [`append_with_outbox`]: AtomicAppend::append_with_outbox
+    /// [`append_with_outbox_and_deadlines`]: AtomicAppend::append_with_outbox_and_deadlines
+    #[must_use = "dropping the Result silently discards a version-conflict or store error"]
+    async fn append_with_outbox_deadlines_and_correlations(
+        &self,
+        stream_id: &StreamId,
+        expected_version: ExpectedVersion,
+        events: &[NewEvent],
+        outbox: &[crate::outbox::PendingOutbox],
+        deadlines: &[crate::deadline::Deadline],
+        _correlations: &[CorrelationEntry],
+    ) -> Result<AppendResult, EngineError> {
+        self.append_with_outbox_and_deadlines(
+            stream_id,
+            expected_version,
+            events,
+            outbox,
+            deadlines,
+        )
+        .await
+    }
+}
+
+/// One correlation-index entry: "this business key resolves to this process".
+///
+/// Written in the same batch as the events that created the process — see
+/// [`AtomicAppend::append_with_outbox_deadlines_and_correlations`].
+#[derive(Debug, Clone)]
+pub struct CorrelationEntry {
+    /// Tenant the key is scoped to.
+    pub tenant_id: crate::ids::TenantId,
+    /// The business key — a MaLo, MeLo, Vorgangs- or Belegnummer.
+    pub tag: String,
+    /// Process the key resolves to.
+    pub process_id: crate::ids::ProcessId,
+    /// Full identity, so a lookup can rebuild a `Process` without a second read.
+    pub identity: crate::ids::ProcessIdentity,
 }
 
 // ── InMemoryEventStore ────────────────────────────────────────────────────────

@@ -843,6 +843,7 @@ pub(crate) async fn execute_command_atomic_with_deadlines<W, S>(
     command: W::Command,
     ctx: &CommandContext,
     deadlines: &[crate::deadline::Deadline],
+    correlations: &[crate::event_store::CorrelationEntry],
 ) -> Result<Vec<EventEnvelope>, EngineError>
 where
     W: Workflow,
@@ -891,12 +892,13 @@ where
     }
 
     let result = store
-        .append_with_outbox_and_deadlines(
+        .append_with_outbox_deadlines_and_correlations(
             stream_id,
             ExpectedVersion::Exact(current_sequence),
             &new_events,
             &output.outbox,
             &all_deadlines,
+            correlations,
         )
         .await?;
 

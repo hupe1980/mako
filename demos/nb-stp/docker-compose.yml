@@ -148,8 +148,8 @@ services:
       MAKOD_DATA_DIR:                 ""     # in-memory (no persistence)
       MAKOD_EDIFACT_OUTBOX_WEBHOOK_URL: http://webhook:8000
       # Push process lifecycle CloudEvents to marktd so processd can react
-      MAKOD_ERP__WEBHOOK_URL:           http://marktd:8180/api/v1/events
-      MAKOD_ERP__WEBHOOK_SECRET:        demo-makod-webhook-secret
+      MAKOD_ERP_WEBHOOK_URL:            http://marktd:8180/api/v1/events
+      MAKOD_ERP_WEBHOOK_SECRET:         demo-makod-webhook-secret
     command:
       - "--config=/etc/makod/makod.toml"
       - "--auth-key=demo=demo-secret-change-me"

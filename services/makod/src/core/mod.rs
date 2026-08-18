@@ -7,4 +7,5 @@ pub mod erp_adapter;
 pub mod health;
 pub mod malo_cache;
 pub mod party_registry;
+pub mod preflight;
 pub mod worker_health;

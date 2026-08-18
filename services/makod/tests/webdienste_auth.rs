@@ -33,6 +33,10 @@ const ROUTE: &str = "/[Post]/steuerbefehl/konfiguration/";
 
 const TENANT: &str = "9900357000004";
 
+/// A well-formed Control Measures konfiguration call. The API passes the
+/// command and location as query parameters, not as a JSON body.
+const CONTROL_URI: &str = "/[Post]/steuerbefehl/konfiguration/?locationId=E1234848431&commandControl=%7B%22maximumPowerValue%22%3A%224.2%22%2C%22executionTimeFrom%22%3A%222026-09-01T00%3A00%3A00Z%22%7D";
+
 async fn handler() -> Arc<MakodApiHandler> {
     let store = mako_engine::store_slatedb::SlateDbStore::open_in_memory()
         .await
@@ -40,7 +44,6 @@ async fn handler() -> Arc<MakodApiHandler> {
     Arc::new(MakodApiHandler {
         store,
         tenant_id: mako_engine::ids::TenantId::from_party_id(TENANT),
-        sender_party_id: TENANT.to_owned(),
     })
 }
 
@@ -182,5 +185,100 @@ async fn the_opt_out_removes_the_layer() {
         res.status(),
         StatusCode::UNAUTHORIZED,
         "with auth disabled an anonymous request must reach the router"
+    );
+}
+
+// ── Caller identity ──────────────────────────────────────────────────────────
+
+/// A Steuerungsauftrag whose originator is unknown must be refused, not
+/// attributed to the operator.
+///
+/// # Why this is a test
+///
+/// The Control Measures request body carries no sending party — BDEW identifies
+/// the caller by their mTLS client certificate, terminated at the proxy. This
+/// code used to fill the workflow's `sender_mp_id` with the operator's *own*
+/// Marktpartner-ID, and that field is what the `DispatchConfirmed` outbox entry
+/// is addressed to. The §14a EnWG confirmation was therefore sent to ourselves:
+/// combined with the loopback path for own MP-IDs it never left the process, so
+/// the NB or LF that ordered the control action was never told it had been
+/// carried out, and the §14a billing event named the wrong party.
+#[tokio::test]
+async fn a_control_order_without_a_caller_mp_id_is_refused() {
+    let app = webdienste::build_app(
+        handler().await,
+        Some(WebdiensteAuthState {
+            cedar: authorizer(None, DefaultPolicy::PermitAll),
+            tenant: Arc::from(TENANT),
+        }),
+        1024 * 1024,
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(CONTROL_URI)
+                .header("authorization", "Bearer s3cret")
+                .header("transactionId", "tx-identity-1")
+                .header("creationDateTime", "2026-08-18T10:00:00Z")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("service call");
+
+    assert_eq!(
+        res.status(),
+        StatusCode::BAD_REQUEST,
+        "an order with no identifiable sender must be refused — the Endantwort \
+         has nowhere to go"
+    );
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .expect("body");
+    assert!(
+        body.contains(webdienste::CLIENT_MP_ID_HEADER),
+        "the refusal must name the header that fixes it: {body}"
+    );
+}
+
+/// The same request with the proxy-supplied Marktpartner-ID gets past the
+/// identity gate, so the test above is about the missing header and not about
+/// the body being rejected for some other reason.
+#[tokio::test]
+async fn a_control_order_with_a_caller_mp_id_passes_the_identity_gate() {
+    let app = webdienste::build_app(
+        handler().await,
+        Some(WebdiensteAuthState {
+            cedar: authorizer(None, DefaultPolicy::PermitAll),
+            tenant: Arc::from(TENANT),
+        }),
+        1024 * 1024,
+    );
+    let res = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(CONTROL_URI)
+                .header("authorization", "Bearer s3cret")
+                .header("transactionId", "tx-identity-2")
+                .header("creationDateTime", "2026-08-18T10:00:00Z")
+                .header(webdienste::CLIENT_MP_ID_HEADER, "9900001000002")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("service call");
+
+    let status = res.status();
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .unwrap_or_default();
+    assert!(
+        !body.contains(webdienste::CLIENT_MP_ID_HEADER),
+        "the identity gate must not reject a request carrying the header \
+         (status {status}): {body}"
     );
 }

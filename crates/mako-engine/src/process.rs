@@ -809,6 +809,34 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     where
         S: crate::event_store::AtomicAppend,
     {
+        self.execute_and_enqueue_with_deadlines_and_correlations(command, deadlines, &[])
+            .await
+    }
+
+    /// Like [`execute_and_enqueue_with_deadlines`] but also writes
+    /// correlation-index entries in the same atomic batch.
+    ///
+    /// This is the spawn path. A process is not usable when its events are
+    /// durable — it is usable when its business key resolves to it. Until then
+    /// the counterparty's reply finds no process and is skipped, and the next
+    /// thing to happen is the process's own Frist expiring as a false timeout.
+    /// Writing the key separately left exactly that window open.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`EngineError`] on storage or command handling failure. A
+    /// malformed business key is rejected before anything is written.
+    ///
+    /// [`execute_and_enqueue_with_deadlines`]: Process::execute_and_enqueue_with_deadlines
+    pub async fn execute_and_enqueue_with_deadlines_and_correlations(
+        &self,
+        command: W::Command,
+        deadlines: &[crate::deadline::Deadline],
+        correlations: &[crate::event_store::CorrelationEntry],
+    ) -> Result<Vec<EventEnvelope>, EngineError>
+    where
+        S: crate::event_store::AtomicAppend,
+    {
         let ctx = CommandContext::new(self.tenant_id, self.process_id, self.workflow_id.clone());
         crate::workflow::execute_command_atomic_with_deadlines::<W, S>(
             &self.store,
@@ -816,6 +844,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
             command,
             &ctx,
             deadlines,
+            correlations,
         )
         .await
     }

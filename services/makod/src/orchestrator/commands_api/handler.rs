@@ -192,7 +192,7 @@ pub(crate) async fn handle_command(
                 "ERP command dispatched — process spawned",
             );
             // Track per-family process initiation for the Prometheus metrics endpoint.
-            EngineMetrics::global().process_initiated("gpke");
+            EngineMetrics::global().process_initiated(command_family(&cmd_lower));
             process_id
         }
         Ok(DispatchOutcome::Dispatched { process_id }) => {

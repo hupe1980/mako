@@ -147,8 +147,8 @@ clippy-roles:
              "role-nb-strom" "role-nb-gas" \
              "role-msb-strom" "role-msb-gas" "role-esa-strom" \
              "role-lf,role-nb,role-msb"; do
-        echo "==> cargo clippy -p makod --features $f"
-        cargo clippy -p makod --features "$f" --all-targets -- -D warnings
+        echo "==> cargo clippy -p makod --no-default-features --features $f"
+        cargo clippy -p makod --no-default-features --features "$f" --all-targets -- -D warnings
     done
     # agentd carries the same role flags: it is the one service that reaches all
     # the others, so a role-scoped build must exclude the other arm's
@@ -178,10 +178,12 @@ smoke-roles:
     for pair in "role-lf:LF" "role-nb:NB" "role-msb:MSB"; do
         feat="${pair%%:*}"; role="${pair##*:}"
         echo "==> $feat (party role $role)"
-        cargo build -p makod --features "$feat"
+        cargo build -p makod --no-default-features --features "$feat"
         printf '[[party]]\nmp_id = "9900001000001"\nroles = ["%s"]\nprimary = true\n' \
             "$role" > "$tmp/makod.toml"
-        ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile --check
+        ./target/debug/makod --config "$tmp/makod.toml" --allow-volatile \
+            --http-addr 127.0.0.1:18080 --auth-key smoke=0123456789abcdef \
+            --allow-no-as4-signing --check
     done
 
 ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
