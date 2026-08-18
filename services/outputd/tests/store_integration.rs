@@ -131,7 +131,7 @@ async fn a_published_template_stays_resolvable_after_the_pointer_moves() {
 
     // The point of the whole design: v1 is still there, unchanged, and an
     // invoice rendered with it can still explain how it looked.
-    let old = template_store::by_hash(&pool, &v1)
+    let old = template_store::by_hash(&pool, tenant, &v1)
         .await
         .unwrap()
         .expect("v1 survives the rollout");
@@ -253,7 +253,7 @@ async fn the_database_refuses_an_unproven_invoice_template() {
     .await
     .expect("a Preisanpassung stores on the parse proof");
     assert_eq!(
-        template_store::by_hash(&pool, &hash)
+        template_store::by_hash(&pool, tenant, &hash)
             .await
             .unwrap()
             .map(|t| t.proof),
@@ -264,12 +264,11 @@ async fn the_database_refuses_an_unproven_invoice_template() {
 
 /// The identical source cannot be published under a second identity.
 ///
-/// The hash is the identity of the *source*, and the row keeps the first
-/// publisher's kind and proof. Before this refusal existed, the second publish
-/// was a silent no-op that returned a hash whose row carried someone else's
-/// kind: rollout then succeeded (the FK checks only existence) and every
-/// render answered 422, with no error anywhere naming the cause — two green
-/// API calls, then a bricked tenant.
+/// Within a tenant the hash is the identity of the *source*, and the row keeps
+/// the kind and proof it was admitted on. Accepting the second publish would
+/// return a hash whose row carries the first kind: rollout then succeeds (the FK
+/// checks only existence) and every render answers 422 with nothing naming the
+/// cause — two green API calls, then a bricked tenant.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn the_same_source_cannot_become_a_second_identity() {
@@ -322,10 +321,7 @@ async fn the_same_source_cannot_become_a_second_identity() {
     assert!(
         matches!(
             &err,
-            // Same tenant, wrong kind — the message must offer "publish it
-            // under INVOICE", which only makes sense when it is *this*
-            // tenant's row.
-            template_store::StoreError::IdentityCollision { existing_kind, other_tenant: false }
+            template_store::StoreError::IdentityCollision { existing_kind }
                 if existing_kind == "INVOICE"
         ),
         "{err}"
@@ -443,4 +439,125 @@ async fn a_rollback_can_discover_the_hash_to_roll_back_to() {
             .is_empty(),
         "listings are tenant-scoped",
     );
+}
+
+/// One tenant's template source is not readable by another.
+///
+/// `by_hash` resolved on the hash alone, on the reasoning that "the hash *is*
+/// the identity, and a document carrying it has already established the right
+/// to see it". That holds for a document. It does not hold for
+/// `GET /api/v1/templates/by-hash/{hash}`, where the *caller* supplies the hash
+/// and nothing has established anything — so in a shared database one
+/// operator's complete template source, Briefkopf and all, was readable by any
+/// other operator who came by a hash.
+///
+/// The lock is the query, not a check in the handler: a condition each
+/// caller-facing path has to remember is a condition one of them eventually
+/// forgets.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_foreign_tenants_template_does_not_resolve() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let ours = "9900357000004";
+    let theirs = "9910000000002";
+    let source = "#let render(invoice) = [Briefkopf der Stadtwerke]";
+
+    let hash = template_store::publish(
+        &pool,
+        theirs,
+        TemplateKind::Mahnung,
+        source,
+        None,
+        Proof::RenderedTextform,
+        Some("their-operator"),
+    )
+    .await
+    .expect("the other tenant publishes");
+
+    assert!(
+        template_store::by_hash(&pool, theirs, &hash)
+            .await
+            .expect("query")
+            .is_some(),
+        "its owner resolves it",
+    );
+    assert!(
+        template_store::by_hash(&pool, ours, &hash)
+            .await
+            .expect("query")
+            .is_none(),
+        "another tenant must not read the source of a template it does not own",
+    );
+
+    // And it is invisible to the listing, which was already tenant-scoped —
+    // the two reads now agree about what this tenant can see.
+    let listed = template_store::list(&pool, ours, None, 100)
+        .await
+        .expect("list");
+    assert!(
+        listed.is_empty(),
+        "a foreign template must not appear in this tenant's listing: {listed:?}",
+    );
+}
+
+/// Two operators may publish the same template source.
+///
+/// Identity is `(tenant, hash)`. A globally unique hash makes the first tenant
+/// to publish a source the owner of that identity for everyone: outputd ships a
+/// reference layout and tells operators to start from it, so in a shared
+/// database exactly one tenant could publish it unchanged and the rest were
+/// told to insert a cosmetic comment — which makes the audit identity of an
+/// eight-year document depend on filler. It also answered them "already
+/// published **by another tenant**", disclosing another operator's template
+/// inventory to anyone who could guess a source.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn two_tenants_may_publish_the_same_source() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let source = outputd::document::REFERENCE_INVOICE_TEMPLATE;
+
+    let mut hashes = Vec::new();
+    for tenant in ["9900000000001", "9900000000002"] {
+        hashes.push(
+            template_store::publish(
+                &pool,
+                tenant,
+                TemplateKind::Invoice,
+                source,
+                Some("a-3b"),
+                Proof::RenderedPdfa,
+                None,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                panic!("{tenant} must be able to publish the reference layout: {e}")
+            }),
+        );
+    }
+    assert_eq!(hashes[0], hashes[1], "same bytes, same content address");
+
+    // Each tenant rolls out and reads back its own row.
+    for tenant in ["9900000000001", "9900000000002"] {
+        template_store::set_current(&pool, tenant, TemplateKind::Invoice, &hashes[0])
+            .await
+            .expect("each tenant points at its own row");
+        let current = template_store::current(&pool, tenant, TemplateKind::Invoice)
+            .await
+            .expect("read back")
+            .expect("a current template");
+        assert_eq!(current.tenant, tenant, "no tenant resolves another's row");
+        assert_eq!(current.source, source);
+    }
+
+    // And a listing shows one row per tenant, not one row shared.
+    for tenant in ["9900000000001", "9900000000002"] {
+        let listed = template_store::list(&pool, tenant, None, 10)
+            .await
+            .expect("list");
+        assert_eq!(listed.len(), 1, "{tenant} sees exactly its own template");
+    }
 }

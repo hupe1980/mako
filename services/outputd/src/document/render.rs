@@ -652,15 +652,6 @@ mod tests {
         );
     }
 
-    /// A render that outlasts its budget frees the caller.
-    ///
-    /// The template here is heavy but **finite** on purpose. A genuinely
-    /// non-terminating one would model production more closely and would hang
-    /// this test at shutdown: `spawn_blocking` tasks are awaited when the
-    /// runtime drops, and Typst gives no way to interrupt a compilation. That
-    /// is exactly the trade [`render_guarded`] documents — the caller is freed,
-    /// the thread is not — and the only part of it a test can observe is the
-    /// caller being freed.
     /// Renders queue rather than thrash, and queueing counts against the budget.
     ///
     /// The cap exists so a burst of publishes cannot exhaust tokio's blocking
@@ -684,6 +675,15 @@ mod tests {
         assert_eq!(rendered, 8, "queueing must not drop work");
     }
 
+    /// A render that outlasts its budget frees the caller.
+    ///
+    /// The template here is heavy but **finite** on purpose. A genuinely
+    /// non-terminating one would model production more closely and would hang
+    /// this test at shutdown: `spawn_blocking` tasks are awaited when the
+    /// runtime drops, and Typst gives no way to interrupt a compilation. That
+    /// is exactly the trade [`render_guarded`] documents — the caller is freed,
+    /// the thread is not — and the only part of it a test can observe is the
+    /// caller being freed.
     #[tokio::test]
     async fn a_slow_render_frees_the_caller() {
         let mut req = request(MINIMAL);

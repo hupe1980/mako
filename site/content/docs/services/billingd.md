@@ -1,6 +1,6 @@
 +++
 title = "billingd Operator Guide"
-description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from tarifbd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/2/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL, B2G mandate 01.01.2027)."
+description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from tarifbd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/2/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL; B2G per §4a EGovG/ERechV, B2B per §14 UStG)."
 weight = 32
 [extra]
 mermaid = true
@@ -122,7 +122,7 @@ graph LR
         WASSER["WASSER<br/>Trinkwasser 7 % USt<br/>gesplittete Abwassergebühr<br/>Absetzungen (Schleppwasser)"]
     end
     subgraph solar_eeg ["Solar & Feed-in"]
-        SOLAR["SOLAR<br/>§21 Abs. 3 EEG Mieterstrom-Aufschlag<br/>§42b EnWG GGV-Rabatt<br/>Eigenverbrauch supply"]
+        SOLAR["SOLAR<br/>§21 Abs. 3 EEG Mieterstrom-Aufschlag<br/>§42b EnWG Gebäudestrom<br/>Eigenverbrauch supply"]
         EEG["EEG<br/>Vergütung / Marktprämie<br/>Managementprämie / KWKG<br/>(Gutschrift / credit note)"]
         EINSP["EINSPEISUNG<br/>Direktvermarktung<br/>Marktwert − Vermarktungsgebühr"]
     end
@@ -131,7 +131,6 @@ graph LR
         EMOB["EMOBILITY<br/>CPO/EMSP: Betriebsgebühr<br/>Ladeenergie + Session/Roaming"]
         EDL["ENERGIEDIENSTLEISTUNG<br/>MSB / EMS packages<br/>Flat fee + per-event"]
     end
-    BUNDLE["BUNDLE<br/>Component references<br/>→ per-position recursion"]
     SHARING["SHARING<br/>§42c Energy Sharing<br/>community credit"]
 ```
 
@@ -257,12 +256,12 @@ Arbeitspreis            [from tarifbd]     ct/kWh_th
 MwSt
 ```
 
-### SOLAR — Mieterstrom / §42b EnWG GGV
+### SOLAR — Mieterstrom (§21 Abs. 3 EEG) / GGV (§42b EnWG)
 
 ```
 Arbeitspreis Solar      [from tarifbd]     ct/kWh  (Eigenverbrauch supply price)
-Mieterstrom-Aufschlag   [from tarifbd]     ct/kWh  §42b EnWG (BNetzA-capped annually)
-§42b EnWG GGV-Rabatt         [from tarifbd]     ct/kWh  negative discount
+Mieterstrom-Aufschlag   [from tarifbd]     ct/kWh  §21 Abs. 3 EEG 2023 (rate published under §48a)
+GGV-Preisvorteil        [from tarifbd]     ct/kWh  contractual, §42b Abs. 2 Nr. 2 EnWG
 Stromsteuer             skipped by default  §9a StromStG exemption for on-site Eigenverbrauch
 MwSt
 ```
@@ -271,7 +270,10 @@ Set `solar_include_stromsteuer: true` in the product definition for non-exempt c
 
 ### EEG — Feed-in Settlement (Gutschrift)
 
-Credit note for feed-in plant operators (§21 EEG Vergütung, §38 EEG Marktprämie):
+Credit note for feed-in plant operators. §19 Abs. 1 EEG 2023 is the
+Zahlungsanspruch; which Veräußerungsform it takes — §20 Marktprämie (geförderte
+Direktvermarktung) or §21 Abs. 1 Einspeisevergütung — belongs to the plant and is
+decided by `einsd`:
 
 ```
 EEG Einspeisevergütung  [from tarifbd]     ct/kWh (credit)
@@ -336,14 +338,17 @@ A **Steuerungsentschädigung** (`sect14a_steuerungsentschaedigung_ct_per_kwh` /
 module number: all three BK6-22-300 modules are rate reductions, none of them a
 payment for a Steuerungseingriff.
 
-### HEMS / EMOBILITY / ENERGIEDIENSTLEISTUNG / BUNDLE
+### HEMS / EMOBILITY / ENERGIEDIENSTLEISTUNG
 
 ```
 HEMS: Platform fee (EUR/month) + Optimization events + Smart meter readouts
 EMOBILITY: Betriebsgebühr (EUR/month) + Ladeenergie (ct/kWh) + Session/Roaming fees
 ENERGIEDIENSTLEISTUNG: Flat fee (EUR/period) + per-event charge
-BUNDLE: per-component recursion — ERP must submit individual calculate requests per position
 ```
+
+**A bundle is not a category here.** `tarifbd` carries `BUNDLE` and decomposes it
+into component product codes; `billingd` bills each component, so `BUNDLE` never
+appears in a `billing_records` row and is absent from its category CHECK.
 
 ---
 
@@ -407,7 +412,19 @@ Content-Type: application/json
 
 Two sub-period invoices are calculated and merged via `Invoice::merge()`. Positions from
 both sub-periods appear on one combined invoice. Tax is applied independently per sub-period
-(correct per §41 EnWG for mid-month rate changes).
+(correct per §41 EnWG for mid-month rate changes), and each leg resolves the
+statutory rates of *its own* dates — that is the point of the split.
+
+The combined document takes one number from the `RE` series; the two legs carry
+`/A` and `/B` suffixes for the trace, and only the merged invoice is issued.
+
+> This endpoint answered `400 period_from must be before period_to` for **every**
+> request ever made to it. It parsed `switch_date` by passing it as both bounds of
+> `parse_period`, whose `from < to` check refused every equal pair. The same bound
+> also refused legitimate one-day periods — a same-day move-in and move-out, a
+> §41e settlement of one day's dispatches — although `BillingPeriod::new` has
+> always accepted `from == to`. Both bounds are inclusive; the period check is now
+> `from > to`, and a single date is parsed as a single date.
 
 ### Pro-rata Grundpreis (move-in / move-out)
 
@@ -508,8 +525,28 @@ how low the EPEX price can go. Common configurations:
 }
 ```
 
-**Fallback**: when Lastgang data is unavailable, `billingd` falls back to `arbeitsmenge_kwh`
-from `edmd`'s `billing-period` endpoint with the static `arbeitspreis_ct_per_kwh`.
+**There is no fallback.** A §41a tariff is billed per market time unit against
+verifiable market prices, or it is not billed:
+
+| Situation | Answer |
+|---|---|
+| no 15-minute Lastgang for the period | `422 SECT41A_NO_LASTGANG` |
+| `edmd` unreachable | `502 UPSTREAM_UNAVAILABLE` |
+| intervals with consumption but no EPEX price | `422 VALIDATION_BLOCKED` / `SECT41A_MISSING_EPEX_PRICES` |
+| the meter is not an iMSys | `422 VALIDATION_BLOCKED` / `SECT41A_IMSYS_REQUIRED` |
+
+Billing the static `arbeitspreis_ct_per_kwh` instead would charge a price the
+dynamic contract does not contain. The earlier behaviour was worse than that
+description suggested: a failed Lastgang fetch degraded to an empty interval
+list, and an empty list makes the dynamic provider price *nothing* — the invoice
+came back with the Grundpreis and no Arbeitspreis, no Stromsteuer and no
+NNE-Arbeitspreis, and looked entirely ordinary.
+
+The §41a Abs. 1 iMSys guard reads the meter's `metering_mode`, which the dynamic
+path never resolved, so the guard had never refused a production invoice. The
+meter reading is now resolved for dynamic products too (it also carries the §40
+Abs. 2 Nr. 6 register readings and the §40a estimation flag); pricing still comes
+from the Lastgang alone.
 
 ```http
 POST /api/v1/billing/51238696012/calculate
@@ -532,13 +569,179 @@ Content-Type: application/json
 
 ---
 
-## Idempotency
+## Authorization
 
-`billing_records` has a partial unique index on `(malo_id, lf_mp_id, period_from,
-period_to, product_code, tenant)` for non-correction, non-Sammel rows. Re-running
-the same billing request updates the existing record **only while it is a draft**
-(`outcome = 'generated'`) — a dispatched record refuses the overwrite and points
-at the correction path.
+Authentication establishes *who* is calling; `policies/billingd.cedar` decides
+what they may do. Every business route evaluates one action before it touches
+the database.
+
+| Action | Routes | Who |
+|---|---|---|
+| `read-billing` | `GET /api/v1/billing…`, `/review-queue`, `/xrechnung`, `/ubl`, `/pdf` | any authenticated caller in the tenant |
+| `preview-billing` | `POST …/preview` | any authenticated caller in the tenant |
+| `run-billing` | `/calculate`, `/tarifwechsel`, `/sammelrechnung/…`, `/ggv/…` | `LF`, `MSB`, `ESA` |
+| `settle-flexibility` | `POST /api/v1/billing/vpp/{vpp_id}` | `LF`, `MSB`, `ESA` |
+| `correct-billing` | `POST …/{id}/correction` | `LF`, `MSB`, `ESA` |
+| `release-billing` | `POST …/{id}/release` | `LF`, `MSB`, `ESA` |
+| `submit-b2g` | `POST …/{id}/submit-b2g` | `LF`, `MSB`, `ESA` |
+
+Tenant equality is a condition of every rule, so no role reaches another
+operator's data — not even for a read. Cedar is deny-by-default, so an action no
+policy names is refused rather than defaulted.
+
+Authentication establishes who is calling; the policy establishes what they may
+do. Without one, any token the OIDC verifier accepts could reverse an invoice
+the customer has already received, or release one the risk gate is deliberately
+holding back — which is the gate's entire purpose.
+[`einsd`](@/docs/services/einsd.md), the analogous service on the feed-in side,
+gates the same way.
+
+A preview counts as a **read**: it persists nothing and emits nothing.
+
+The MCP surface is authenticated separately by `[mcp]` and is read-only by
+construction; the VPP dispatch webhook is HMAC-authenticated. Neither carries a
+Cedar action.
+
+### What is deliberately not enforced
+
+Separating "may run billing" from "may release a held invoice" is a real control
+and this policy does not implement it. `mako_roles` carries **market** roles —
+`NB`, `LF`, `MSB`, `ESA`, `UENB` — not job functions, and a policy naming a
+`BUCHHALTUNG` or `CONTROLLING` role that no identity provider in this platform
+issues would deny every caller. An endpoint nobody can reach is worse than one
+reachable by too many. `released_by` and `released_at` record who released what,
+so the action stays attributable.
+
+---
+
+## A product that cannot price its commodity is refused
+
+`energy-billing` carries `KEIN_ARBEITSPREIS` at **Error** severity in its
+validation pass, so `bill()` refuses rather than issuing.
+
+The `Product` price fields are populated by mapping `tarifbd`'s `preistyp`
+strings onto struct fields. A renamed position, a typo in the mapper, or a
+catalog row saved without its price maps to `None` — in silence. The resulting
+invoice was not an error: a STROM product with every price field absent billed
+1000 kWh for **€20.50**, the Stromsteuer and nothing for the electricity, and
+looked entirely ordinary on paper. The risk gate caught it only where a rolling
+baseline already existed, and then only into the SAMPLE band, which dispatches.
+
+The guard asks whether the product can price its commodity *at all* — Eintarif,
+HT/NT, dynamic, indexed, seasonal or tiered all satisfy it — and covers Strom,
+Gas and Fernwärme. An operator who genuinely charges nothing per kWh states a
+`0.0`: that is how a decision is distinguished from missing data.
+
+---
+
+## Idempotency and the number series
+
+### The Rechnungsnummer is a counter
+
+`invoice_number_series (tenant, series, year)` is a per-tenant counter and the
+Rechnungsnummer is drawn from it:
+
+| Series | Document |
+|---|---|
+| `RE-2026-000123` | ordinary Rechnung — `/calculate`, Tarifwechsel, the §40b sweep, each participant line of a bundle |
+| `SR-2026-000004` | consolidated document — B2B Sammelrechnung, §42b GGV bundle |
+| `ST-2026-000002` | Storno- / Korrekturrechnung |
+| `VG-2026-000017` | §41e Gutschrift (self-billed VPP settlement) |
+
+A caller may still state its own number — an operator migrating a legacy series,
+a test pinning a value.
+
+§14 Abs. 4 Nr. 4 UStG asks for a **fortlaufende** number, which is why the
+counter exists rather than a number derived from the billed facts
+(`BILL-{malo}-{product}-{period_from}`). A derived number is not sequential and,
+more seriously, **not re-issuable**: re-billing a period after a Storno would
+regenerate the cancelled original's own string, and `br_unique_rechnungsnummer`
+refuses it — so Storno-und-Neuberechnung could not be performed at all.
+
+Numbers are allocated **before** the engine runs, because the number is the
+document's BT-1, so a refused calculation leaves a gap. That is legal: UStAE 14.5
+Abs. 11 requires that no number be issued twice, not that the sequence be
+gapless.
+
+### The two unique indexes
+
+**`br_unique_rechnungsnummer (tenant, rechnungsnummer)`** enforces the *einmalig*
+half of §14 Abs. 4 Nr. 4 UStG. The Rechnungsnummer is a first-class column, so a
+collision is a write-time database error rather than an audit finding years
+later.
+
+**`br_unique_original`** keeps one *live* original per `(malo_id, lf_mp_id,
+period_from, period_to, product_code, tenant)`. Its predicate excludes four
+kinds of row, and the upsert repeats all four — PostgreSQL cannot infer a
+partial index from a column list:
+
+| Excluded | Why |
+|---|---|
+| `is_correction = true` | a Storno is not an original |
+| `sammelrechnung_id IS NOT NULL` | the per-MaLo children of a bundle are its detail, not standalone invoices |
+| `outcome = 'cancelled'` | a Storno **releases** the period so it can be re-billed |
+| `category = 'VPP'` | several §41e dispatches legitimately settle within one calendar day; `vpp_dispatch_ledger` guards those instead |
+
+### Issued, not "dispatched to an ERP"
+
+Re-running a billing request replaces the existing record **only while it is
+withheld** (`outcome = 'generated'`, which in practice means the risk gate held
+it). An issued record refuses the overwrite with `409 PERIOD_ALREADY_BILLED`, and
+the body names the document that holds the period:
+
+```json
+{ "error": { "code": "PERIOD_ALREADY_BILLED",
+             "message": "MaLo 51238696012 product STROM-BASIS already carries an issued document for 2026-01-01..2026-01-31; storno it …",
+             "record_id": "9f1c…", "rechnungsnummer": "RE-2026-000123",
+             "outcome": "dispatched" } }
+```
+
+so a client retrying a request whose response it lost reconciles against a record
+id instead of a database string.
+
+`outcome` advances to `dispatched` whenever a document is **released**, whether or
+not an ERP webhook is configured — the CloudEvent is enqueued *additionally*
+where one is. Whether an invoice has been issued is a property of the document,
+not of the deployment: writing the stamp only inside
+`if erp_webhook_url.is_some()` would leave an operator without an ERP holding
+permanent drafts — the overwrite guard unarmed, so a re-run silently rewrites a
+document the customer already has, and `pin_template` refusing to pin, so the
+PDF re-styles itself with every template rollout.
+
+---
+
+## Errors
+
+Every route answers failures with one envelope and a stable, machine-readable
+code:
+
+```json
+{ "error": { "code": "ZEITRAUM_UEBERSCHREITET_SATZGRENZE",
+             "message": "…",
+             "category": "GAS",
+             "stichtage": ["2024-04-01"],
+             "legal_basis": "§28 Abs. 5/6 UStG (Gas/Fernwärme), §10 BEHG" } }
+```
+
+| Code | Status | Meaning |
+|---|---|---|
+| `INVALID_PERIOD`, `INVALID_DATE`, `SWITCH_DATE_OUTSIDE_PERIOD` | 400 | a malformed, reversed or misplaced date |
+| `FORBIDDEN` | 403 | the Cedar policy denied the action |
+| `RECORD_NOT_FOUND` | 404 | no such record **in this tenant** |
+| `PERIOD_ALREADY_BILLED` | 409 | an issued document holds the period — the body names it |
+| `RECHNUNGSNUMMER_IN_USE` | 409 | §14 Abs. 4 Nr. 4 UStG collision |
+| `NOT_HELD`, `ALREADY_CANCELLED`, `NOT_YET_ISSUED` | 409 | the record is not in the state the action needs |
+| `ZEITRAUM_UEBERSCHREITET_SATZGRENZE` | 422 | the period straddles a rate boundary — the body names the Stichtage |
+| `VALIDATION_BLOCKED` | 422 | the engine refused — the body carries every blocking warning |
+| `SECT41A_NO_LASTGANG` | 422 | a dynamic tariff with no interval data to price |
+| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | `edmd` / `tarifbd` has nothing for this MaLo |
+| `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT`, `BT24_NOT_AN_INVOICE` | 422 | the stored EN 16931 model is absent or does not satisfy its own BT-24 |
+| `NUTZUNGSPLAN_INVALID`, `NUTZUNGSPLAN_INCOMPLETE`, `RABATT_EXCEEDS_ARBEITSPREIS` | 422 | a §42b GGV input that would mis-bill a participant |
+| `UPSTREAM_UNAVAILABLE` | 502 | an upstream did not answer — the body names which |
+| `NO_ERP_WEBHOOK` | 503 | a B2G submission with nothing configured to transmit it |
+
+One shape for every failure, so a client matches on `error.code` rather than
+sniffing the body to tell a structured refusal from a bare string.
 
 ---
 
@@ -548,15 +751,21 @@ at the correction path.
 |--------|------|-------------|
 | `POST` | `/api/v1/billing/{malo_id}/calculate` | Calculate, persist, emit CloudEvent |
 | `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run calculation (no persist, no CloudEvent) |
-| `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
+| `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=&category=&is_correction=`) — every predicate runs **in the query** |
 | `GET` | `/api/v1/billing/{id}` | Fetch single record with full `Rechnung` JSONB |
 | `GET` | `/api/v1/billing/{id}/xrechnung` | CII XML of the stored model (via `en16931-formats`); BT-24 is plain EN 16931 for a retail invoice — only the B2G path declares XRechnung |
 | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
-| `GET` | `/api/v1/billing/{id}/pdf` | ZUGFeRD PDF/A-3 — the page and the CII XML in one file. Pins the template on first render |
-| `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD) |
+| `GET` | `/api/v1/billing/{id}/pdf` | ZUGFeRD PDF/A-3 — the page and the CII XML in one file. Pins the template on first render; a pinned document answers `ETag` + `Cache-Control: immutable`, so `If-None-Match` gets a `304` without a re-render |
+| `POST` | `/api/v1/billing/{id}/correction` | Stornorechnung; cancels the original and releases its period (§ 147 AO / GoBD) |
 | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice for mid-period price change (§41 EnWG) |
-| `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§27 EGovG) |
-| `GET` | `/health` | Liveness |
+| `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated invoice for a Rahmenvertrag — whole run in one transaction, bundle scored by the risk gate |
+| `POST` | `/api/v1/billing/ggv/{ggv_id}` | § 42b EnWG Gebäudestromnutzung, one transaction per run |
+| `POST` | `/api/v1/billing/vpp/{vpp_id}` | § 41e dispatch settlement (Gutschrift) |
+| `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement (HMAC) |
+| `GET` | `/api/v1/billing/review-queue` | Analyst work list — REVIEW + HELD, highest risk first |
+| `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
+| `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§ 4a EGovG i.V.m. ERechV) |
+| `GET` | `/health/live` | Liveness |
 | `GET` | `/health/ready` | Readiness |
 | `POST\|GET` | `/mcp` | MCP Streamable HTTP (LLM tooling) |
 
@@ -564,23 +773,35 @@ at the correction path.
 
 ## MCP server
 
-`billingd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25). **Twelve tools**
-and six prompts are available to LLM agents:
+`billingd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25).
+**Eleven tools** and six prompts are available to LLM agents, and every one of
+them is **read-only**.
+
+There is deliberately no `calculate_billing`. Issuing a Rechnung is a legally
+binding act: the row lands in `billing_records` under § 147 AO, the event
+reaches the ledger and the ERP, and only a Stornorechnung undoes it. Model
+output is untrusted input everywhere else in this platform, and that rule does
+not stop at a well-phrased tool description — an agent investigates and
+explains, a human or a scheduled run with an OIDC identity bills.
+
+The tools also run **in process** rather than looping back over the service's
+own HTTP API. A loopback carried no bearer token, so with `[oidc]` configured —
+that is, in every real deployment — the mutating and preview tools answered
+`401`. They worked exactly where they mattered least.
 
 | Tool | Description |
-|---|
----|
+|---|---|
 | `list_billing_records` | List records for a MaLo — summary without full `Rechnung` |
 | `get_billing_record` | Full BO4E `Rechnung` JSONB for a specific record UUID |
-| `preview_billing` | Dry-run preview (calls `/preview` internally — no side effects) |
-| `calculate_billing` | Trigger a real billing run (calls `/calculate`) |
+| `preview_billing` | Dry-run preview — same pipeline as `/preview`, no side effects |
 | `get_xrechnung` | Fetch XRechnung 3.0 CII XML (from the stored EN 16931 model) |
 | `check_billing_anomaly` | Rolling 3-month deviation check — flags invoices outside threshold |
 | `list_vpp_settlements` | List VPP aggregation settlement records |
 | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
 | `list_product_categories` | Describe all 13 billing categories and their required product fields |
-| `get_billing_summary` | Aggregate stats per MaLo: total billed, avg monthly, by category |
-| `validate_tariff_config` | Pre-flight: §41a iMSys guard, KAV plausibility, missing fields |
+| `list_corrections` · `list_vpp_settlements` | Storno/Korrektur chains (§ 147 AO) and § 41e settlements. Both filter **in the query**: filtering a fetched page instead would answer "no corrections" for a MaLo whose latest page is all ordinary invoices, while its Stornos sit one page further down |
+| `get_billing_summary` | Aggregate stats per MaLo or LF — aggregated in the database over the whole history, counting each euro once (Storno rows and the children of a Sammelrechnung excluded) |
+| `validate_tariff_config` | Pre-flight: engine validation (incl. `KEIN_ARBEITSPREIS`) plus the §41a iMSys guard, the legacy Stromsteuer flag and the §42 Energiemix disclosure |
 | `explain_invoice_position` | Full `PositionTrace` audit for a given position (formula, §-refs) |
 
 | Prompt | Description |
@@ -600,20 +821,44 @@ The `tariff-optimization-agent` in `agentd` calls `list_billing_records` and
 
 ## Korrekturrechnung (§ 147 AO / GoBD)
 
-`POST /api/v1/billing/{id}/correction` creates a Korrekturrechnung or Stornorechnung:
+`POST /api/v1/billing/{id}/correction` issues a Stornorechnung:
 
 ```json
-{ "reason": "Falsche Zählerstandsaufnahme Q2 2026", "negate": true }
+{ "reason": "Falsche Zählerstandsaufnahme Q2 2026" }
 ```
 
-- `negate: true` → Stornorechnung (all positions negated, `is_correction: true` in DB)
-- `negate: false` → Korrekturrechnung (amended positions only)
+In one transaction it writes a new record with every monetary position negated
+(`is_correction = true`, `originalRechnungsnummer` in `zusatzAttribute`, and its
+own number from the tenant's `ST` series), enqueues
+`de.billing.rechnung.erstellt` with `is_correction: true` so `accountingd`
+books the CREDIT, and advances the original's `outcome` to `cancelled`.
 
-Both variants include `zusatzAttribute.originalRechnungsnummer` for § 147 AO / GoBD audit trail.
+**Storno und Neuberechnung.** Cancelling releases the period: it drops out of
+`br_unique_original`, so the corrected amounts are billed by calling
+`POST /api/v1/billing/{malo_id}/calculate` again for the same window, which
+draws the **next** number of the `RE` series.
 
-A second correction of the same original is refused with `409 Conflict` —
-`KORR-{original_nr}` must stay einmalig (§14 Abs. 4 Nr. 4 UStG), and a double
-negation would corrupt the accounting ledger.
+Two things have to hold for this to work, and both are easy to break: the
+partial index must **not** count a cancelled row as live coverage, and the
+number must come from the series rather than the billed facts — a derived one
+would regenerate the cancelled original's own Rechnungsnummer and
+`br_unique_rechnungsnummer` would refuse *that* instead.
+
+A second Storno of the same original is refused with `409 ALREADY_CANCELLED`: the
+first one set `outcome = cancelled`, and a double negation would corrupt the
+ledger.
+
+A record that was **never issued** is refused with `409 NOT_YET_ISSUED`.
+`outcome = generated` means the risk gate withheld the document *and its
+CloudEvent*, so `accountingd` booked no DEBIT for it and a Storno would post an
+unbalanced CREDIT against nothing. A draft is outside `br_unique_original`'s
+overwrite guard anyway: bill the period again (`POST …/calculate` replaces it)
+or release it (`POST …/release`) and correct the issued invoice.
+
+The original's **content** is never modified — only its outcome. Both documents
+stay in `billing_records` for the statutory **eight years** (§ 147 Abs. 3 AO
+for a Buchungsbeleg, reduced from ten by the BEG IV with effect from
+01.01.2025).
 
 ---
 
@@ -747,12 +992,23 @@ misconfiguration surfaces as an error, because XRechnung requires the term and
 This is the same defect class as the buyer-side MaLo-ID: an identifier dressed up as a
 registry it does not belong to, which no business rule can detect.
 
-**Legal mandate:** B2G invoices mandatory from 01.01.2027 (§27 EGovG; EU Directive
-2014/55/EU); B2B e-invoices from 01.01.2028 (§14 UStG n.F.).
+**Legal mandate — two separate regimes, often conflated:**
+
+| Regime | Basis | Status |
+|---|---|---|
+| **B2G** — invoices to federal contracting authorities | § 4a EGovG + E-Rechnungsverordnung (ERechV, in force 27.11.2018), transposing EU Directive 2014/55/EU | **Mandatory since 27.11.2020.** Direct orders up to EUR 1 000 are exempt (§ 3 Abs. 3 ERechV). Länder follow their own EGovG/ERechV variants |
+| **B2B** — domestic invoices between businesses | § 14 UStG as amended by the Wachstumschancengesetz (27.03.2024) | **Receiving** mandatory since 01.01.2025. **Issuing** from 01.01.2027 for businesses above EUR 800 000 prior-year turnover, from 01.01.2028 for all |
+
+Both require conformance to **EN 16931**, not to a particular syntax: XRechnung
+and ZUGFeRD are CIUS/extension profiles of it, and CII and UBL are its two
+permitted syntaxes. `billingd` renders all three from one stored semantic model.
 
 **Configuration:**
 ```toml
-seller_vat_id = "DE123456789"           # BT-31 Seller VAT registration number
+# §14 Abs. 4 Nr. 2 UStG names two identifiers and requires one. Set either, or
+# both; billingd refuses to start with neither.
+seller_vat_id     = "DE123456789"        # BT-31 USt-IdNr.
+seller_tax_number = "123/456/78901"      # BT-32 Steuernummer
 seller_iban   = "DE89370400440532013000" # BT-84 — XRechnung BG-16 SEPA credit transfer
 seller_bic    = "COBADEFFXXX"            # BT-86 (optional)
 ```
@@ -775,13 +1031,18 @@ document *says*, and proves it before anything crosses the boundary:
    validated against what it declares. An invalid stored model answers `422`
    here — outputd wraps whatever payload it is handed exactly as faithfully
    when it is invalid, so the sender is the only place this check can live.
-2. **View.** `document_view::DocumentView::of` projects the semantic model onto
-   the template contract (outputd's copy is normative — it is what the publish
-   gate proves templates against).
-3. **Render.** `POST /api/v1/render/INVOICE` with the view, the CII XML and its
-   BT-24. outputd resolves the tenant's current template — or the pinned one,
-   when the record carries a hash — and answers with the PDF plus
-   `X-Mako-Template-Hash`.
+2. **Render.** `POST /api/v1/render/INVOICE` with the **EN 16931 model**, the
+   CII XML and its BT-24. outputd projects the model onto the page view its
+   publish gate proves templates against, resolves the tenant's current template
+   — or the pinned one, when the record carries a hash — and answers with the
+   PDF plus `X-Mako-Template-Hash`.
+
+   The **model** crosses the wire, not the view. Projecting here as well would
+   be two implementations of one contract with nothing tying them together: the
+   gate proves templates against outputd's projection, production would feed
+   them billingd's, and a field added to either yields templates that pass the
+   gate and fail in production. Both services already depend on `en16931`, so
+   the model is a shared type the way `zugferd::Profile` is.
 4. **Pin.** For an **issued** record, the first render pins the answered hash
    into `billing_records.template_hash` (`COALESCE`, never overwritten), so
    requesting the PDF a decade later reproduces the document that was sent
@@ -802,11 +1063,12 @@ panel (veraPDF + Mustang) are documented in the
   strategy the `Amount` fixed-point core applies internally.
   `energy_billing::round_money`/`.round_kfm(dp)` delegate to it; bare
   `Decimal::round_dp` (banker's) is banned from money paths.
-- **Rechnungsnummer scheme (§ 14 Abs. 4 Nr. 4 UStG)**: auto-generated
-  numbers embed the product code — `BILL-{malo}-{product}-{period_from}` —
-  so two products billed for the same MaLo and period never collide;
-  corrections use `KORR-{original}` and a second correction of the same
-  original is refused (`409`).
+- **Rechnungsnummer (§ 14 Abs. 4 Nr. 4 UStG)**: a **fortlaufende** number from
+  the tenant's counter — `RE-2026-000123` invoice, `SR-` consolidated, `ST-`
+  Storno, `VG-` § 41e Gutschrift. The number is a column with a unique index per
+  tenant (`br_unique_rechnungsnummer`), so uniqueness is a database guarantee
+  rather than a naming convention. See
+  [the number series](#the-rechnungsnummer-is-a-counter).
 - **Schlussrechnung (§40c EnWG)**: `POST …/calculate` with
   `"schlussrechnung": true` renders the Schlussrechnung (typed
   `rechnungstyp`; the exact label rides as the `rechnungsart` ZusatzAttribut) and
@@ -830,23 +1092,44 @@ panel (veraPDF + Mustang) are documented in the
 
 Every calculated invoice is scored by `billingd::risk` (`[risk]`, default
 on): coded findings — Σ-Steuerbeträge-Abgleich, USt-Satz-Validität,
-Null-/Negativverbrauch, Schätzwert-Ketten (§ 60 Abs. 2 MsbG),
+Null-Energie/Negativverbrauch, Schätzwert-Ketten (§ 60 Abs. 2 MsbG),
 Perioden-Überlappung/-Lücke zur Vorrechnung, rollende Abweichung — summieren
 zu 0–100.
 
-`MWST_STICHTAG_IM_ZEITRAUM` und `BEHG_JAHRESGRENZE_IM_ZEITRAUM` wiegen **allein
-schon 80** und erreichen damit die HELD-Bande. Sie melden nicht „das sieht
-ungewöhnlich aus", sondern „für diesen Zeitraum gibt es **keinen** korrekten
-Einzelsatz" — was auch immer abgerechnet wurde, ist für einen Teil falsch.
-billingd weist solche Zeiträume bereits vorher ab; das Gewicht ist die
-Absicherung für Pfade, die dennoch bis zur Bewertung kommen (ein fest
-konfigurierter Satz, eine zur Rechnung beförderte Vorschau).
+`MWST_STICHTAG_IM_ZEITRAUM` und `BEHG_JAHRESGRENZE_IM_ZEITRAUM` sind
+**blockierend** (`blocking: true` im Finding): sie halten die Rechnung an,
+unabhängig von Score und Schwellen. Sie melden nicht „das sieht ungewöhnlich
+aus", sondern „für diesen Zeitraum gibt es **keinen** korrekten Einzelsatz" —
+was auch immer abgerechnet wurde, ist für einen Teil falsch. billingd weist
+solche Zeiträume bereits vorher ab; das Blockieren ist die Absicherung für
+Pfade, die dennoch bis zur Bewertung kommen (ein fest konfigurierter Satz, eine
+zur Rechnung beförderte Vorschau).
+
+Ein Gewicht — auch ein hohes — hätte diese Zusage nicht getragen: `hold_at` ist
+operator-konfigurierbar, und ein Anheben der Schwelle ist gewöhnliches Tuning
+ohne sichtbaren Bezug dazu. Bei `hold_at = 100` läge ein Gewicht von 80 sogar
+unter `sample_at` und die Rechnung ginge sofort raus.
 
 Ab `hold_at` (Standard 80) wird der Versand angehalten:
 `GET /api/v1/billing/review-queue` listet REVIEW/HELD,
-`POST /api/v1/billing/{id}/release` gibt frei und versendet das CloudEvent.
-`risk_score`/`risk_band`/`risk_findings` sind auf jedem Record persistiert
-und in allen MCP-Record-Tools sichtbar. `hold_dispatch = false` = Shadow-Mode.
+`POST /api/v1/billing/{id}/release` gibt frei, stempelt `outcome = dispatched`
+und stellt das CloudEvent zu. `risk_score`/`risk_band`/`risk_findings` sind auf
+jedem Record persistiert und in allen MCP-Record-Tools sichtbar.
+`hold_dispatch = false` = Shadow-Mode.
+
+`ZERO_ENERGY` misst die **bewegte** Energie, nicht den Verbrauch: eine
+Einspeise-Abrechnung (EEG, EINSPEISUNG) besteht aus `Credit`-Positionen und
+hätte sonst als toter Zähler gegolten. Gemessen werden Beträge, nicht die
+Summe — auf einer Mieterstromrechnung heben sich Bezug und Einspeisung sonst
+gegenseitig auf.
+
+Bewertet wird **jedes** ausgehende Dokument, auch die konsolidierten: die B2B-
+Sammelrechnung und das §42b-GGV-Bündel laufen durch dieselbe Bewertung wie eine
+Einzelrechnung.
+
+Die Schwellen werden beim Start validiert (`sample_at < review_at < hold_at ≤ 100`):
+eine vertauschte Konfiguration erzeugt sonst eine Bande, die nie erreicht wird,
+und Rechnungen landen in einer Warteschlange, die niemand ansieht.
 
 ---
 
@@ -858,12 +1141,30 @@ active contracts and their `abrechnungszyklus` come from vertragd
 completed period (previous month/quarter/half, or the rolling year before the
 `vertragsbeginn` anniversary for JAEHRLICH) is billed through the same
 pipeline as `POST …/calculate`, skipping periods that already have a
-`billing_records` row. Monthly audit lives in `billing_run_log` (one
-accumulated row per tenant/LF/month; any failed sweep pins the month
-`failed`). iMSys MaLos additionally receive the free monthly
-Abrechnungsinformation (§40b Abs. 2 EnWG) as
-`de.billing.abrechnungsinformation.monatlich`, logged in
-`abrechnungsinfo_log` — exactly once per MaLo and month.
+`billing_records` row — and a **cancelled** row does not count as coverage, so
+a Storno's period is picked up again on the next sweep.
+
+Monthly audit lives in `billing_run_log`: one accumulated row per
+tenant/LF/month with three counters. `records_count` is what was billed,
+`errors_count` is what failed — any error pins the month `failed` — and
+`skipped_count` is what the sweep deliberately did **not** bill. An annual
+settlement is the usual skip: § 40 Abs. 1 EnWG requires it to itemise and
+deduct the paid Abschläge, the vertragd candidate carries none, and the
+postings live in `accountingd` *downstream* of billingd, so the sweep refuses
+rather than emitting a document stating the full year's gross with zero
+Vorauszahlungen (`[billing_runs] jahresrechnung = true` opts in anyway).
+Counting those refusals as errors marked every month `failed` for any operator
+with annual contracts and the default configuration — the audit signal buried
+under the configuration's own intended behaviour.
+
+iMSys MaLos additionally receive the free monthly Abrechnungsinformation
+(§40b Abs. 2 EnWG) as `de.billing.abrechnungsinformation.monatlich`, enqueued
+through the same transactional outbox as every other event and claimed in
+`abrechnungsinfo_log` exactly once per MaLo and month. The claim is taken
+*before* the work so two sweeps cannot both deliver, and **released again** on
+every path that does not deliver: holding a claim whose delivery failed would
+suppress that month's statutory information permanently, and a transient edmd
+outage is not allowed to consume a customer's entitlement.
 
 ---
 
@@ -884,7 +1185,10 @@ Content-Type: application/json
 }
 ```
 
-Returns `{ "preview": true, "netto_eur": "…", "brutto_eur": "…", "rechnung": { … } }`.
+Returns `{ "preview": true, "netto_eur": "…", "brutto_eur": "…", "warnings": […], "rechnung": { … } }`.
+
+A dry run consumes **no number** from the §14 UStG series — the placeholder
+`PREVIEW-{malo}-{period_from}` makes that visible in the output.
 
 Useful for:
 - ERP billing simulations before committing to a monthly run
@@ -902,19 +1206,36 @@ Useful for:
 | `id` | UUID primary key |
 | `malo_id`, `lf_mp_id` | MaLo + LF identity |
 | `product_code`, `category` | Product reference (`VPP` for dispatch settlements) |
+| `rechnungsnummer` | § 14 Abs. 4 Nr. 4 UStG — fortlaufend from `invoice_number_series`, unique per tenant (`br_unique_rechnungsnummer`) |
 | `period_from`, `period_to` | Billing period |
 | `rechnung_json` | Full BO4E `Rechnung` JSONB (§ 147 AO / GoBD) — the accounting representation |
 | `en16931_json` | EN 16931 semantic invoice model (serde JSONB) — the source every XRechnung/CII/UBL render reads |
 | `total_netto_eur`, `total_brutto_eur` | Cached totals for fast reporting |
-| `outcome` | `generated` → `dispatched` → `paid`/`disputed` |
-| `ce_id` | CloudEvent ID of emitted `de.billing.rechnung.erstellt` |
+| `outcome` | `generated` → `dispatched` → `paid`/`disputed`; `cancelled` = fully reversed by a Storno, which releases the period |
+| `risk_score`, `risk_band`, `risk_findings` | Deterministic release gate; `released_by`/`released_at` stamp an analyst release |
 | `template_hash` | The [outputd](@/docs/services/outputd.md) template hash this invoice's PDF was rendered with — pinned on the first render **after dispatch** and never moved, `NULL` while the record is still a draft. A plain value, not a foreign key: it crosses a service boundary, and outputd's append-only store is what keeps it resolvable |
+
+### `invoice_number_series`
+
+The §14 Abs. 4 Nr. 4 UStG counter behind the fortlaufende Rechnungsnummer.
+
+| Column | Notes |
+|--------|-------|
+| `tenant` | Tenant data-isolation key |
+| `series` | `RE` invoice · `SR` consolidated · `ST` Storno · `VG` §41e Gutschrift |
+| `year` | Calendar year of the **billed period**, not of the run — a December period swept in January stays in the year it belongs to |
+| `last_value` | Most recently issued value; allocation is an upsert returning `last_value` |
+
+Allocation takes a row lock, so concurrent runs of one tenant serialise and no
+number is ever issued twice.
 
 ### `vpp_dispatch_ledger`
 
-Idempotency table for `de.vpp.dispatch.confirmed` webhook delivery. Each `tx_id` is
-recorded exactly once per tenant; retried deliveries return `202 Accepted` without
-re-billing.
+Idempotency table for VPP dispatch settlement, shared by **both** writers — the
+`de.vpp.dispatch.confirmed` webhook and the manual endpoint's per-event `tx_id`.
+Each `tx_id` is recorded exactly once per tenant; a retried delivery returns
+`202 Accepted` and a manual back-fill skips what is already there, without
+re-billing either way.
 
 | Column | Notes |
 |--------|-------|
@@ -922,12 +1243,34 @@ re-billing.
 | `tenant` | Tenant data-isolation key |
 | `record_id` | FK to `billing_records.id` (NULL if `vpp_auto_billing = false`) |
 
+Because a portfolio can be dispatched several times within one calendar day,
+per-dispatch VPP records are exempt from `br_unique_original`. This ledger plus
+the per-transaction Rechnungsnummer are what keep them exactly-once. Without the
+exemption the second dispatch of a day would overwrite the first while it is
+still a draft, and fail with a 500 once the first has been dispatched — which
+the sender retries forever.
+
 ---
 
-## VPP Aggregation Billing (§ 41e EnWG / Art. 17 RL (EU) 2019/944)
+## VPP dispatch settlement (§ 41e EnWG / Art. 17 RL (EU) 2019/944)
 
-`billingd` supports fully automatic VPP (Virtual Power Plant) dispatch-to-billing,
-closing the loop from ORDRSP confirmation to BO4E `Rechnung` without operator intervention.
+`billingd` closes the loop from a confirmed WiM Steuerungsauftrag to a BO4E
+document without operator intervention.
+
+### The document is a Gutschrift
+
+A dispatch settlement **pays** the flexibility provider. The provider delivered
+the energy, the aggregator owes the remuneration, and the aggregator writes the
+document — § 14 Abs. 2 Satz 2 UStG Gutschriftverfahren, the same self-billing
+shape `eeg-billing` uses for feed-in remuneration. Positions are credits
+(`PositionCategory::Credit`), the document type is `InvoiceType::CreditNote`
+(`rechnungsart = GUTSCHRIFT`), and the totals are negative from the
+aggregator's side.
+
+§ 41e EnWG governs the *contract* — Textform, the pre-contractual information
+the aggregator owes, and the provider's right to their load-management data
+free of charge. The remuneration itself is contractual; the document states
+both.
 
 ### Architecture
 
@@ -944,7 +1287,7 @@ sequenceDiagram
     makod--)billingd: de.vpp.dispatch.confirmed CloudEvent<br/>{tx_id, location_id, max_power_kw,<br/>execution_time_from, execution_time_until}
     billingd->>billingd: HMAC verify + tx_id idempotency check
     billingd->>billingd: find_active_vpp_contract(sr_id)
-    billingd->>billingd: flexibility_kwh = max_power_kw × duration_h<br/>Rechnung = flexibility_kwh × capacity_price
+    billingd->>billingd: flexibility_kwh = max_power_kw × duration_h<br/>Gutschrift = −(flexibility_kwh × capacity_price)
     billingd--)accountingd: de.vpp.settlement.berechnet
     makod--)agentd: de.vpp.dispatch.confirmed (monitoring trigger)
     agentd->>billingd: verify settlement record created + arithmetic
@@ -1003,19 +1346,43 @@ curl -s -X PUT "http://marktd:8180/api/v1/subscriptions/billingd-vpp" \
 When `execution_time_until` is absent, `billingd` falls back to **15 minutes**
 (the statutory BNetzA §14a minimum dispatch window).
 
-### Invoice shape
+### Document shape
 
-Each auto-billed dispatch generates a `Rechnung` with:
-- `category = "VPP"`, `product_code = "VPP_{vpp_id}"`  
-- One `Rechnungsposition` with `positionstyp = "vpp_dispatch"` and a `zeitraum` covering the exact dispatch window
-- `zusatzAttribute`: `regulatory_basis = "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag"`, `tx_id`, `sr_id`, `flexibility_kwh`
-- The `tx_id` cross-references the originating `WimSteuerungsauftrag` process in `makod`
+Each auto-settled dispatch generates a Gutschrift with:
 
-### Manual fallback
+- `category = "VPP"`, `product_code = "VPP_{vpp_id}"`, `rechnungsart = GUTSCHRIFT`
+- One credit position tagged `vpp_dispatch`, carrying the legal basis
+  `§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag` and a `PositionTrace` with
+  the quantity, the unit price and the formula
+- `zusatzAttribute`: `vpp_id`, `tx_id`, `sr_id`, `flexibility_kwh`
+- A Rechnungsnummer from the tenant's `VG` (Gutschrift) series — `VG-2026-000017`.
+  Deriving it as `VPP-{vpp_id}-{date}-{tx_id[..8]}` would be einmalig only as
+  long as no two transaction ids of a day share their first eight characters
+- The `tx_id` cross-references the originating `WimSteuerungsauftrag` in `makod`
 
-When `vpp_auto_billing = false` or no contract exists for the SR-ID, the webhook records
-the dispatch in `vpp_dispatch_ledger` without generating a `Rechnung`. Operators can
-still trigger billing manually via `POST /api/v1/billing/vpp/{vpp_id}` at any time.
+VAT runs through the engine's `MwStProvider` like every other document, so the
+`mwst_rate_override` on the Aggregatorvertrag reaches the Steuerkennzeichen
+instead of being contradicted by a hardcoded `UST_19`.
+
+### Manual settlement, and why it shares the ledger
+
+When `vpp_auto_billing = false` or no contract exists for the SR-ID, the webhook
+records the dispatch in `vpp_dispatch_ledger` without generating a `Rechnung`.
+Operators trigger billing manually via `POST /api/v1/billing/vpp/{vpp_id}`.
+
+Each `dispatch_events[]` entry carries an optional **`tx_id`**. Supplying it makes
+the manual endpoint read and write the same `vpp_dispatch_ledger` the webhook
+uses: dispatches already settled are skipped and reported as
+`skipped_already_settled`, and the ones settled here are claimed in the same
+transaction as the document. Until then only the webhook touched the ledger, so
+the two paths were blind to each other and a period back-filled by hand after
+auto-settlement had covered part of it **paid the provider twice for the same
+flexibility** — with nothing in the store to show it.
+
+An inbound event that carries neither `data.tx_id` nor a CloudEvent `id` is
+refused with `400`. Falling back to a literal `"unknown"` key would be worse than
+having no key at all: the first such event claims it, and every later one — any
+portfolio, any day — is then treated as its duplicate and silently dropped.
 
 ### Monitoring
 
@@ -1106,8 +1473,9 @@ marktd_url    = "http://marktd:8180"
 stromsteuer_ct_per_kwh = "2.05"
 mwst_rate              = "0.19"
 
-# Seller identity for XRechnung (B2G mandate 01.01.2027)
-seller_vat_id = "DE123456789"           # BT-31
+# Seller identity for XRechnung (B2G to the Bund: §4a EGovG i.V.m. ERechV)
+seller_vat_id     = "DE123456789"        # BT-31 USt-IdNr.
+seller_tax_number = "123/456/78901"      # BT-32 Steuernummer (either suffices)
 seller_iban   = "DE89370400440532013000" # BT-84 — XRechnung BG-16 SEPA credit transfer
 seller_bic    = "COBADEFFXXX"            # BT-86 (optional)
 

@@ -6,8 +6,7 @@
 //! services computed and owns nothing about *what* a document says — see
 //! `outputd::document` for the layering and `document::mahnung` for why the
 //! view contracts live with the renderer. The delivery channel (mail, e-mail,
-//! portal inbox, with per-document evidence) is this daemon's next growth —
-//! see the ROADMAP's customer-communications item.
+//! portal inbox, with per-document evidence) is not part of this daemon.
 //!
 //! # Endpoints
 //!
@@ -65,6 +64,20 @@ impl Daemon for Outputd {
             );
         }
 
+        // ── Cedar ABAC ────────────────────────────────────────────────────────
+        // Authentication says *who* is calling; this says what they may do.
+        // outputd enabled the `cedar` feature and enforced nothing, so any
+        // authenticated caller could roll out the layout every invoice and
+        // Mahnung of the tenant renders with, or render arbitrary content under
+        // the operator's Briefkopf. A template is not one document — it is the
+        // shape of all of them.
+        let cedar = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/outputd.cedar"
+            ))
+            .context("outputd.cedar must parse at startup")?,
+        );
+
         let oidc = mako_service::oidc::OidcConfig::build_verifier(
             cfg.oidc.as_ref(),
             &ctx.http,
@@ -97,6 +110,7 @@ impl Daemon for Outputd {
                 get(handlers::get_template_by_hash),
             )
             .layer(Extension(oidc))
+            .layer(Extension(cedar))
             .layer(Extension(cfg.clone()))
             .layer(Extension(ctx.pool().clone())))
     }

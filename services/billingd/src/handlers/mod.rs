@@ -1,5 +1,6 @@
 //! HTTP handlers for `billingd`.
 
+use crate::error::{BillingError, BillingResult};
 use axum::{
     Extension, Json,
     extract::{Path, Query},
@@ -15,8 +16,10 @@ use std::sync::Arc;
 use time::format_description::well_known::Iso8601;
 use uuid::Uuid;
 
+pub(crate) use mako_service::cedar::CedarEnforcer;
+
 use crate::{
-    clients::{EdmdClient, TarifbdClient, VertragdClient},
+    clients::{BillingDeps, EdmdClient, TarifbdClient},
     config::BillingdConfig,
     pg::{
         fetch_billing_record, insert_billing_record, insert_correction_record,
@@ -32,21 +35,26 @@ use energy_billing::{
     negate_rechnung_json_for_correction,
 };
 
-/// Build a VPP settlement through the engine's canonical invoice path.
+/// Build a §41e EnWG VPP settlement through the engine's canonical path.
 ///
-/// The VPP paths hand-assembled BO4E JSON with their own inline VAT — a second
-/// VAT implementation whose Steuerkennzeichen was hardcoded `UST_19` even when
-/// the contract overrode the rate. Positions plus the engine's tax provider
-/// plus `to_rechnung_json` replace all of it: steuerbetraege, traces, and the
-/// ABSCHLAGSRECHNUNG rechnungsart come out the same way every other invoice
-/// does.
+/// A dispatch settlement is a **Gutschrift**, not an invoice. The aggregator
+/// owes the flexibility provider for energy the provider delivered, so the
+/// document is issued by the aggregator *about* its own liability —
+/// § 14 Abs. 2 Satz 2 UStG Gutschriftverfahren, the same self-billing shape
+/// `eeg-billing` already uses for feed-in remuneration.
+///
+/// A **debit** invoice of type `AdvancePayment` would have the aggregator bill
+/// the prosumer for flexibility the prosumer supplied, labelled an
+/// Abschlagsrechnung — wrong in both the sign and the Rechnungsart, and taken
+/// at face value by every downstream consumer from accountingd's ledger to the
+/// customer's own books.
 ///
 /// VPP-specific references (tx-id, SR-ID, dispatch process ids) are appended as
 /// document-level ZusatzAttribute on the typed BO before serialisation.
 #[allow(clippy::too_many_arguments)]
-fn build_vpp_invoice(
+fn build_vpp_settlement(
     malo_id: &str,
-    lf_mp_id: &str,
+    aggregator_mp_id: &str,
     rechnungsnummer: String,
     period_from: time::Date,
     period_to: time::Date,
@@ -56,11 +64,10 @@ fn build_vpp_invoice(
 ) -> anyhow::Result<(Invoice, serde_json::Value)> {
     let ctx = BillingContext {
         malo_id: malo_id.to_owned(),
-        lf_mp_id: lf_mp_id.to_owned(),
+        lf_mp_id: aggregator_mp_id.to_owned(),
         rechnungsnummer,
-        period: BillingPeriod::new(period_from, period_to)
-            .expect("parse_period guarantees from < to"),
-        invoice_type: InvoiceType::AdvancePayment,
+        period: BillingPeriod::new(period_from, period_to)?,
+        invoice_type: InvoiceType::CreditNote,
         regulatory_rates: RegulatoryRates {
             mwst_rate,
             ..Default::default()
@@ -82,6 +89,61 @@ fn build_vpp_invoice(
     }
     let json = serde_json::to_value(&rechnung)?;
     Ok((invoice, json))
+}
+
+/// One dispatch, as the credit position that settles it.
+///
+/// `credit` and not `debit`: the flexibility flowed from the provider to the
+/// aggregator, so the money flows back the other way.
+fn vpp_dispatch_position(
+    description: String,
+    flexibility_kwh: rust_decimal::Decimal,
+    capacity_price_eur_per_kwh: rust_decimal::Decimal,
+) -> BillingPosition {
+    const BASIS: &str = "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag";
+    let mut pos = BillingPosition::credit(
+        description,
+        flexibility_kwh,
+        "kWh",
+        capacity_price_eur_per_kwh,
+        PositionCategory::Credit,
+    )
+    .with_legal_basis(BASIS)
+    .with_tag("vpp_dispatch");
+    pos.trace = energy_billing::PositionTrace::commodity(
+        flexibility_kwh,
+        "kWh",
+        capacity_price_eur_per_kwh,
+        BASIS,
+    );
+    pos
+}
+
+/// Authorize `action` for the caller against the service tenant.
+///
+/// Authentication established *who* is calling; this decides what they may do.
+/// Every business route runs one of these before it touches the database:
+/// without it, any authenticated caller could reverse an issued invoice or
+/// release one the risk gate is holding.
+///
+/// # Errors
+///
+/// `403` with the Cedar denial reason.
+pub(crate) fn authorize(
+    enforcer: &CedarEnforcer,
+    claims: &Claims,
+    action: &'static str,
+    tenant: &str,
+) -> BillingResult<()> {
+    enforcer
+        .check(&claims.principal(), action, tenant)
+        .map_err(|e| {
+            tracing::warn!(action, sub = %claims.sub(), "billingd: authorization denied");
+            BillingError::Forbidden {
+                code: "FORBIDDEN",
+                message: format!("{action}: {e}"),
+            }
+        })
 }
 
 /// A document-level BO4E ZusatzAttribut.
@@ -124,7 +186,7 @@ fn build_aggregate_invoice(
         lf_mp_id: lf_mp_id.to_owned(),
         rechnungsnummer,
         period: BillingPeriod::new(period_from, period_to)
-            .expect("parse_period guarantees from < to"),
+            .expect("parse_period guarantees from <= to"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates,
         ..Default::default()
@@ -175,41 +237,22 @@ fn build_aggregate_invoice(
     Ok((aggregate, json))
 }
 
-/// Structured JSON error body for a typed engine error.
+/// The identity a set of documents produced together shares.
 ///
-/// Carries the stable machine-readable code, the display message, and — for a
-/// blocked validation — every warning the engine collected, so a caller can
-/// act on `MODUL3_AND_FLAT_NNE` without parsing prose.
-fn engine_error_body(context: &str, e: &energy_billing::EngineError) -> String {
-    serde_json::json!({
-        "error": {
-            "code": e.code(),
-            "context": context,
-            "message": e.to_string(),
-            "warnings": e.blocking_warnings(),
-        }
-    })
-    .to_string()
-}
+/// A `billingRunId` ZusatzAttribut is only worth carrying if it groups
+/// something, so it is the identity of the *run*: one id shared by every
+/// invoice of a §40b sweep, of a Sammelrechnung, or of a GGV batch. A fresh
+/// UUID per invoice would be a second record id that is not even the record's
+/// id, and the ERP reconciliation it exists for — "did every invoice from run X
+/// arrive?" — could not be performed at all. A single on-demand
+/// `/calculate` belongs to no run and carries none, which is the honest answer
+/// rather than a unique value pretending to be a group.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RunId<'a>(pub Option<&'a str>);
 
-/// Structured JSON body for a period that crosses a statutory rate boundary.
-///
-/// Names the Stichtage so the caller can split and retry rather than being told
-/// only that the period was rejected. Choosing a rate instead would bill part of
-/// the period wrong and read exactly like a correct invoice downstream.
-pub(crate) fn straddle_error_body(e: &crate::config::StraddlesRateBoundary) -> String {
-    serde_json::json!({
-        "error": {
-            "code": "ZEITRAUM_UEBERSCHREITET_SATZGRENZE",
-            "message": e.to_string(),
-            "category": e.category,
-            "period_from": e.period_from.to_string(),
-            "period_to": e.period_to.to_string(),
-            "stichtage": e.stichtage.iter().map(ToString::to_string).collect::<Vec<_>>(),
-            "legal_basis": "§28 Abs. 5/6 UStG (Gas/Fernwärme), §10 BEHG",
-        }
-    })
-    .to_string()
+impl RunId<'_> {
+    /// No run — a single on-demand calculation.
+    pub(crate) const NONE: Self = Self(None);
 }
 
 mod calculate;
@@ -221,8 +264,8 @@ mod records;
 mod sammelrechnung;
 mod vpp;
 
-// Path-preserving re-exports: everything that used to live directly in
-// `handlers.rs` stays reachable under `crate::handlers::…`.
+// Path-preserving re-exports: every handler is reachable under
+// `crate::handlers::…` regardless of which submodule defines it.
 pub use calculate::*;
 pub use correction::*;
 pub(crate) use dispatch::*;
@@ -234,32 +277,142 @@ pub use vpp::*;
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
-fn parse_period(from: &str, to: &str) -> Result<(time::Date, time::Date), String> {
-    let pf =
-        time::Date::parse(from, &Iso8601::DEFAULT).map_err(|_| "invalid period_from".to_owned())?;
-    let pt =
-        time::Date::parse(to, &Iso8601::DEFAULT).map_err(|_| "invalid period_to".to_owned())?;
-    if pf >= pt {
-        return Err("period_from must be before period_to".to_owned());
+/// One ISO-8601 calendar date from the wire.
+///
+/// # Errors
+///
+/// `400` naming the field, so a caller sees which date it got wrong.
+pub(crate) fn parse_date(field: &str, value: &str) -> BillingResult<time::Date> {
+    time::Date::parse(value, &Iso8601::DEFAULT).map_err(|_| {
+        BillingError::bad_request(
+            "INVALID_DATE",
+            format!("{field} is not an ISO-8601 date (YYYY-MM-DD): {value:?}"),
+        )
+    })
+}
+
+/// A billing period from the wire — both bounds **inclusive**.
+///
+/// A one-day period is valid and common: a move-in and move-out on the same
+/// day, a § 41e settlement of one day's dispatches. A `from < to` bound would
+/// refuse all of them — and, since the Tarifwechsel handler parses its
+/// `switch_date` by passing it as *both* bounds, would make that endpoint
+/// answer `400` for every request. `BillingPeriod::new` accepts `from == to`.
+///
+/// # Errors
+///
+/// `400` when a bound is unparsable or the period runs backwards.
+pub(crate) fn parse_period(from: &str, to: &str) -> BillingResult<(time::Date, time::Date)> {
+    let pf = parse_date("period_from", from)?;
+    let pt = parse_date("period_to", to)?;
+    if pf > pt {
+        return Err(BillingError::bad_request(
+            "INVALID_PERIOD",
+            format!("period_from {pf} must not be after period_to {pt}"),
+        ));
     }
     Ok((pf, pt))
 }
 
+/// The product to bill: the request override, else tarifbd's active assignment.
+///
+/// # Errors
+///
+/// `422` when the MaLo has no active product, `502` when tarifbd is unreachable.
 pub(crate) async fn resolve_tariff(
     req: &CalculateRequest,
     tarifbd: &TarifbdClient,
     malo_id: &str,
-) -> Result<Product, (StatusCode, String)> {
+) -> BillingResult<Product> {
     if let Some(t) = req.tariff.clone() {
         return Ok(t);
     }
     match tarifbd.get_customer_product(malo_id, &req.lf_mp_id).await {
         Ok(Some(t)) => Ok(t),
-        Ok(None) => Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("No active product for MaLo {malo_id} / LF {}", req.lf_mp_id),
+        Ok(None) => Err(BillingError::unprocessable(
+            "NO_ACTIVE_PRODUCT",
+            format!(
+                "no active product for MaLo {malo_id} / LF {} in tarifbd",
+                req.lf_mp_id
+            ),
         )),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("tarifbd: {e}"))),
+        Err(e) => Err(BillingError::upstream("tarifbd", e)),
+    }
+}
+
+/// Issue a persisted document: enqueue its event and stamp it `dispatched`.
+///
+/// Both halves happen inside the caller's transaction, so the record and the
+/// event it announces commit together or not at all.
+///
+/// **Issuance does not depend on having an ERP.** Whether an invoice has been
+/// issued is a property of the document; whether an ERP hears about it is a
+/// property of the deployment. Writing the stamp only when `erp_webhook_url` is
+/// configured would leave an operator without one holding permanent drafts:
+/// `insert_billing_record`'s overwrite guard never arms, so a re-run silently
+/// rewrites a document the customer already has; `pin_template` refuses to pin,
+/// so the PDF re-styles itself with every template rollout; and the § 147 AO
+/// reproducibility the whole design rests on is off.
+///
+/// # Errors
+///
+/// `500` when the outbox row or the stamp cannot be written.
+pub(crate) async fn issue_record(
+    tx: &mut sqlx::PgConnection,
+    cfg: &BillingdConfig,
+    record_id: Uuid,
+    ce: &mako_service::CloudEvent,
+) -> BillingResult<()> {
+    if cfg.erp_webhook_url.is_some() {
+        mako_service::outbox::enqueue(&mut *tx, ce).await?;
+    }
+    mark_dispatched_tx(&mut *tx, record_id)
+        .await
+        .map_err(BillingError::Internal)?;
+    Ok(())
+}
+
+/// The document classes the § 14 Abs. 4 Nr. 4 UStG number series is split into.
+///
+/// One counter per class keeps the series readable in an audit: an ordinary
+/// invoice, a consolidated document, a reversal and a self-billed § 41e credit
+/// are four different kinds of document and an auditor reading `ST-2026-000004`
+/// knows which one it is without opening it.
+pub(crate) mod series {
+    /// Ordinary Rechnung — `/calculate`, Tarifwechsel, the §40b sweep, and each
+    /// participant line of a bundle.
+    pub(crate) const INVOICE: &str = "RE";
+    /// Consolidated document — B2B Sammelrechnung, § 42b GGV bundle.
+    pub(crate) const CONSOLIDATED: &str = "SR";
+    /// Storno- / Korrekturrechnung.
+    pub(crate) const CORRECTION: &str = "ST";
+    /// § 41e Gutschrift (self-billed VPP dispatch settlement).
+    pub(crate) const CREDIT: &str = "VG";
+}
+
+/// The next Rechnungsnummer of a series, unless the caller stated one.
+///
+/// A caller may always supply its own number — an operator migrating a legacy
+/// series, or a test pinning a value. Otherwise the number comes from the
+/// tenant's counter, keyed on the **period's** year rather than today's, so a
+/// December period billed in January stays in the year it belongs to.
+///
+/// # Errors
+///
+/// `500` when the counter cannot be advanced — without a number there is no
+/// invoice, so this is not degradable.
+pub(crate) async fn next_rechnungsnummer(
+    pool: &PgPool,
+    tenant: &str,
+    series: &'static str,
+    stated: Option<&str>,
+    period_from: time::Date,
+) -> BillingResult<String> {
+    match stated {
+        Some(nr) if !nr.trim().is_empty() => Ok(nr.to_owned()),
+        _ => Ok(
+            crate::pg::allocate_rechnungsnummer(pool, tenant, series, period_from.year()).await?,
+        ),
     }
 }
 
@@ -292,4 +445,42 @@ pub(crate) fn rechnung_erstellt_ce(
         }),
     )
     .with_id(Uuid::new_v4().to_string())
+}
+
+#[cfg(test)]
+mod period_tests {
+    use super::{parse_date, parse_period};
+    use time::macros::date;
+
+    /// Both bounds are inclusive and a one-day period is valid: a move-in and
+    /// move-out on the same day, a § 41e settlement of one day's dispatches.
+    #[test]
+    fn a_one_day_period_is_a_period() {
+        assert_eq!(
+            parse_period("2026-03-04", "2026-03-04").unwrap(),
+            (date!(2026 - 03 - 04), date!(2026 - 03 - 04))
+        );
+    }
+
+    /// The bound that broke Tarifwechsel: the handler parsed its switch date by
+    /// passing it as both bounds, and `from < to` refused every equal pair — so
+    /// the endpoint answered 400 for every request ever made to it.
+    #[test]
+    fn a_single_date_parses_on_its_own() {
+        assert_eq!(
+            parse_date("switch_date", "2026-03-15").unwrap(),
+            date!(2026 - 03 - 15)
+        );
+        let e = parse_date("switch_date", "15.03.2026").unwrap_err();
+        assert_eq!(e.code(), "INVALID_DATE");
+        assert!(e.to_string().contains("switch_date"), "{e}");
+    }
+
+    /// A period that runs backwards is still refused.
+    #[test]
+    fn a_reversed_period_is_refused() {
+        let e = parse_period("2026-03-31", "2026-03-01").unwrap_err();
+        assert_eq!(e.code(), "INVALID_PERIOD");
+        assert_eq!(e.status(), axum::http::StatusCode::BAD_REQUEST);
+    }
 }

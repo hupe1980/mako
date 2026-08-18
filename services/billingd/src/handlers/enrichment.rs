@@ -1,6 +1,5 @@
 //! Meter auto-enrichment (Gas, Strom, dynamic intervals) and NEHS market-price overlay.
 
-#[allow(unused_imports)]
 use super::*;
 
 // ── Gas meter auto-enrichment ─────────────────────────────────────────────────
@@ -51,11 +50,18 @@ pub(crate) fn normalize_gasqualitaet(raw: &str) -> String {
 ///
 /// | Field | 1st source | 2nd source | Fallback |
 /// |---|---|---|---|
-/// | `messung_qm3` | caller (`req.gas_meter`) | `edmd` billing-period | `0` (engine rejects) |
-/// | `brennwert_kwh_per_qm3` | caller | edmd **gas-quality** (PID 13007) | edmd billing-period | `None` (engine applies default 10.55) |
-/// | `zustandszahl` | caller | edmd gas-quality (PID 13007) | edmd billing-period | `None` (engine applies default 1.0) |
+/// | `kwh_hs` | caller (`req.gas_meter`) | edmd billing-period | `None` — the caller's `messung_qm3` × factors |
+/// | `messung_qm3` | caller only | — | `0` (the engine rejects a volume-less bill) |
+/// | `brennwert_kwh_per_qm3` | caller | edmd billing-period | edmd **gas-quality** (PID 13007) → `None` (engine default 10.55) |
+/// | `zustandszahl` | caller | edmd billing-period | edmd gas-quality (PID 13007) → `None` (engine default 1.0) |
 /// | `spitzenleistung_kw` | caller | edmd billing-period | `None` (no RLM demand charge) |
+/// | `zaehlerstand_von/-bis` | caller | edmd billing-period | `None` (§40 Abs. 2 Nr. 6 reading omitted) |
 /// | `gasqualitaet` | caller | marktd MaLo fields | `None` (no audit annotation) |
+///
+/// `edmd` reports gas as energy (`arbeitsmenge_kwh` = kWh_Hs, the DSO's MSCONS
+/// conversion already applied) and never as a raw volume, which is why nothing
+/// here can fill `messung_qm3` — the m³ path exists for callers holding a
+/// customer-read meter value.
 ///
 /// ## Non-blocking
 ///
@@ -85,7 +91,7 @@ pub(crate) async fn enrich_gas_meter(
 
     // Track which fields were enriched for structured logging.
     let mut enriched_from_edmd_period = false;
-    let mut enriched_bw_from_edmd_quality = false;
+    let mut enriched_from_edmd_quality = false;
     let mut enriched_gq_from_marktd = false;
 
     // ── Step 1: Energy + conversion factors from edmd billing period ──────────
@@ -158,11 +164,11 @@ pub(crate) async fn enrich_gas_meter(
                 if let Some(q) = best {
                     if meter.brennwert_kwh_per_qm3.is_none() {
                         meter.brennwert_kwh_per_qm3 = Some(q.brennwert_kwh_per_m3);
-                        enriched_bw_from_edmd_quality = true;
+                        enriched_from_edmd_quality = true;
                     }
                     if meter.zustandszahl.is_none() {
                         meter.zustandszahl = Some(q.zustandszahl);
-                        enriched_bw_from_edmd_quality = true;
+                        enriched_from_edmd_quality = true;
                     }
                 } else if !records.is_empty() {
                     tracing::debug!(
@@ -216,7 +222,7 @@ pub(crate) async fn enrich_gas_meter(
     // ── Structured enrichment summary ─────────────────────────────────────────
     // Logged at DEBUG level so billing operators can verify auto-enrichment
     // without flooding production logs.
-    if enriched_from_edmd_period || enriched_bw_from_edmd_quality || enriched_gq_from_marktd {
+    if enriched_from_edmd_period || enriched_from_edmd_quality || enriched_gq_from_marktd {
         tracing::debug!(
             malo_id,
             messung_qm3                   = %meter.messung_qm3,
@@ -225,20 +231,26 @@ pub(crate) async fn enrich_gas_meter(
             spitzenleistung_kw            = ?meter.spitzenleistung_kw,
             gasqualitaet                  = ?meter.gasqualitaet,
             enriched_from_edmd_period,
-            enriched_bw_from_edmd_quality,
+            enriched_from_edmd_quality,
             enriched_gq_from_marktd,
             "billingd GAS: meter enrichment complete"
         );
     }
 }
 
+/// The metered quantities for the period: the request override, else edmd.
+///
+/// # Errors
+///
+/// `422` when edmd has no billing period for the MaLo, `502` when it cannot be
+/// reached.
 pub(crate) async fn resolve_strom_meter(
     req: &CalculateRequest,
     malo_id: &str,
     period_from: time::Date,
     period_to: time::Date,
     edmd: &EdmdClient,
-) -> Result<MeterInput, (StatusCode, String)> {
+) -> BillingResult<MeterInput> {
     if let Some(m) = req.meter.clone() {
         return Ok(m);
     }
@@ -247,26 +259,32 @@ pub(crate) async fn resolve_strom_meter(
         .await
     {
         Ok(Some(m)) => Ok(m),
-        Ok(None) => Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("No meter data for MaLo {malo_id}"),
+        Ok(None) => Err(BillingError::unprocessable(
+            "NO_METER_DATA",
+            format!("edmd has no billing period for MaLo {malo_id} in {period_from}..{period_to}"),
         )),
-        Err(e) => Err((StatusCode::BAD_GATEWAY, format!("edmd: {e}"))),
+        Err(e) => Err(BillingError::upstream("edmd", e)),
     }
 }
 
+/// The 15-minute Lastgang a §41a dynamic tariff is priced from.
+///
+/// A failed fetch must not degrade to an empty Vec: an empty Vec bills a
+/// dynamic customer their Grundpreis and nothing else, silently. An outage of
+/// edmd is an outage, not a zero-energy month.
+///
+/// # Errors
+///
+/// `502` when edmd cannot be reached.
 pub(crate) async fn fetch_dynamic_intervals(
     malo_id: &str,
     period_from: time::Date,
     period_to: time::Date,
     edmd: &EdmdClient,
-) -> Vec<DynamicInterval> {
+) -> BillingResult<Vec<DynamicInterval>> {
     edmd.get_lastgang(malo_id, period_from, period_to)
         .await
-        .unwrap_or_else(|e| {
-            tracing::warn!(malo_id, error = %e, "billingd: Lastgang fetch failed");
-            Vec::new()
-        })
+        .map_err(|e| BillingError::upstream("edmd", format!("Lastgang: {e}")))
 }
 
 /// Whether the nEHS market overlay applies: Gas/Wärme categories only, and
@@ -336,7 +354,7 @@ pub(crate) async fn fetch_epex_prices(
 
 #[cfg(test)]
 mod gas_enrichment_tests {
-    use crate::handlers::{build_aggregate_invoice, engine_error_body, normalize_gasqualitaet};
+    use crate::handlers::{build_aggregate_invoice, normalize_gasqualitaet};
     use energy_billing::{
         BillingContext, BillingPeriod, BillingPosition, BillingProvider as _, Invoice, InvoiceType,
         MwStProvider, Quantities, RegulatoryRates,
@@ -560,9 +578,10 @@ mod gas_enrichment_tests {
         assert_eq!(json["rechnungsdatum"], "2026-01-31");
     }
 
-    /// The engine-error body is machine-readable: code, context, warnings.
+    /// A blocked engine validation reaches the wire as a 422 whose code and
+    /// warnings a caller can act on — not a prose string it has to parse.
     #[test]
-    fn engine_error_body_is_structured() {
+    fn a_blocked_validation_is_a_machine_readable_422() {
         let e = energy_billing::EngineError::ValidationBlocked {
             warnings: vec![energy_billing::BillingWarning {
                 code: "MODUL3_AND_FLAT_NNE",
@@ -570,10 +589,10 @@ mod gas_enrichment_tests {
                 message: "both configured".to_owned(),
             }],
         };
-        let body: serde_json::Value =
-            serde_json::from_str(&engine_error_body("51238696781", &e)).unwrap();
+        let err: crate::error::BillingError = e.into();
+        assert_eq!(err.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+        let body = err.body();
         assert_eq!(body["error"]["code"], "VALIDATION_BLOCKED");
-        assert_eq!(body["error"]["context"], "51238696781");
         assert_eq!(body["error"]["warnings"][0]["code"], "MODUL3_AND_FLAT_NNE");
     }
 }

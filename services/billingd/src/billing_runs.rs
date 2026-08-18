@@ -29,9 +29,8 @@ use std::sync::Arc;
 use sqlx::PgPool;
 use time::Date;
 
-use crate::clients::{BillingCandidate, EdmdClient, TarifbdClient, VertragdClient};
-use crate::config::BillingdConfig;
-use crate::handlers::{self, CalculateRequest};
+use crate::clients::{BillingCandidate, BillingDeps};
+use crate::handlers::{self, CalculateRequest, RunId, series};
 use crate::pg;
 
 /// The most recently completed billing period for a cadence, as of `today`.
@@ -164,16 +163,12 @@ fn clip(
 }
 
 /// Spawn the §40b billing-run worker. No-op when disabled in config.
-#[allow(clippy::too_many_arguments)]
 pub fn spawn_billing_run_worker(
-    cfg: Arc<BillingdConfig>,
+    deps: Arc<BillingDeps>,
     pool: PgPool,
-    tarifbd: Arc<TarifbdClient>,
-    edmd: Arc<EdmdClient>,
-    marktd: Arc<mako_markt::marktd_client::MarktdClient>,
-    vertragd: Arc<VertragdClient>,
     shutdown: tokio_util::sync::CancellationToken,
 ) {
+    let cfg = Arc::clone(&deps.cfg);
     if !cfg.billing_runs.enabled {
         tracing::info!("billingd: §40b billing-run worker disabled ([billing_runs] enabled=false)");
         return;
@@ -195,22 +190,20 @@ pub fn spawn_billing_run_worker(
                 continue;
             }
             last_sweep = Some(now.date());
-            sweep(&cfg, &pool, &tarifbd, &edmd, &marktd, &vertragd, now.date()).await;
+            sweep(&deps, &pool, now.date()).await;
         }
     });
 }
 
 /// One daily sweep: bill everything due, deliver monthly infos, log the run.
-async fn sweep(
-    cfg: &Arc<BillingdConfig>,
-    pool: &PgPool,
-    tarifbd: &Arc<TarifbdClient>,
-    edmd: &Arc<EdmdClient>,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-    vertragd: &Arc<VertragdClient>,
-    today: Date,
-) {
-    let candidates = match vertragd.get_billing_candidates().await {
+async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
+    let cfg = &deps.cfg;
+    // One id for this sweep. Every invoice it produces carries it as
+    // `billingRunId`, so an ERP can ask "did all of last night's run arrive?" —
+    // which is what the attribute was documented for and, while it was a fresh
+    // UUID per invoice, could not answer.
+    let run_id = uuid::Uuid::new_v4().to_string();
+    let candidates = match deps.vertragd.get_billing_candidates().await {
         Ok(c) => c,
         Err(e) => {
             tracing::warn!(error = %e, "billing-run: vertragd candidates unavailable — sweep skipped");
@@ -219,12 +212,15 @@ async fn sweep(
     };
     tracing::info!(count = candidates.len(), %today, "billing-run: daily sweep");
 
-    let mut billed = 0i32;
-    let mut errors = 0i32;
-    let mut lf_for_log: Option<String> = None;
+    // Counters per Lieferant, because `billing_run_log` is keyed per Lieferant.
+    // One shared set filed under whichever LF came first would give an operator
+    // running two supply licences one LF's month carrying the other's errors,
+    // and the other's month empty.
+    let mut per_lf: std::collections::HashMap<String, SweepCounters> =
+        std::collections::HashMap::new();
 
     for cand in &candidates {
-        lf_for_log.get_or_insert_with(|| cand.lf_mp_id.clone());
+        let counters = per_lf.entry(cand.lf_mp_id.clone()).or_default();
 
         // §40 Abs. 1 EnWG: a Jahresrechnung must itemise the paid Abschläge and
         // deduct them. Nothing reaching this worker carries them — the vertragd
@@ -236,24 +232,32 @@ async fn sweep(
         let refuse_settlement =
             settles_advances(&cand.abrechnungszyklus) && !cfg.billing_runs.jahresrechnung;
         if refuse_settlement {
-            tracing::warn!(
+            // A deliberate skip, not a fault. Counting these as errors marked
+            // every month `failed` for any operator with annual contracts and
+            // the default `jahresrechnung = false` — the audit signal buried
+            // under the configuration's own intended behaviour.
+            tracing::info!(
                 malo_id = %cand.malo_id,
                 zyklus = %cand.abrechnungszyklus,
                 "billing-run: skipping annual settlement — the sweep cannot supply the paid \
                  Abschläge (§40 Abs. 1 EnWG); bill via POST /api/v1/billing/{{malo_id}}/calculate \
                  or set [billing_runs] jahresrechnung=true to emit anyway"
             );
-            errors += 1;
+            counters.skipped += 1;
         }
 
         // Bill every completed period still missing a record — oldest first, so
         // invoices are created in chronological order and a worker that missed a
-        // cycle catches up rather than skipping periods (§40c). `MONATLICH` looks
-        // back 13 months; the bound also caps quarterly/half-yearly catch-up.
+        // cycle catches up rather than skipping periods (§40c).
         let periods = if refuse_settlement {
             Vec::new()
         } else {
-            due_periods(&cand.abrechnungszyklus, today, cand.vertragsbeginn, 13)
+            due_periods(
+                &cand.abrechnungszyklus,
+                today,
+                cand.vertragsbeginn,
+                cfg.billing_runs.catch_up_periods,
+            )
         };
         for period in periods.into_iter().rev() {
             let Some((from, to)) = clip(period, cand.lieferbeginn, cand.lieferende) else {
@@ -266,15 +270,15 @@ async fn sweep(
                 Ok(false) => {}
                 Err(e) => {
                     tracing::warn!(malo_id = %cand.malo_id, error = %e, "billing-run: idempotency check failed — skipping");
-                    errors += 1;
+                    counters.errors += 1;
                     continue;
                 }
             }
-            match bill_one(cfg, pool, tarifbd, edmd, marktd, vertragd, cand, from, to).await {
-                Ok(()) => billed += 1,
+            match bill_one(deps, pool, cand, from, to, &run_id).await {
+                Ok(()) => counters.billed += 1,
                 Err(e) => {
                     tracing::warn!(malo_id = %cand.malo_id, %from, %to, error = %e, "billing-run: billing failed");
-                    errors += 1;
+                    counters.errors += 1;
                 }
             }
         }
@@ -282,40 +286,51 @@ async fn sweep(
         // §40b Abs. 2: monthly Abrechnungsinformation for iMSys MaLos — once per
         // candidate per sweep, independent of the invoice cadence.
         if cfg.billing_runs.abrechnungsinformation {
-            deliver_abrechnungsinfo(cfg, pool, tarifbd, edmd, marktd, vertragd, cand, today).await;
+            deliver_abrechnungsinfo(deps, pool, cand, today).await;
         }
     }
 
-    let lf = lf_for_log.unwrap_or_else(|| cfg.tenant.clone());
-    if let Err(e) = pg::record_billing_run(
-        pool,
-        &cfg.tenant,
-        &lf,
-        today.year() as i16,
-        u8::from(today.month()) as i16,
-        billed,
-        errors,
-    )
-    .await
-    {
-        tracing::warn!(error = %e, "billing-run: could not record run log");
+    let (mut billed, mut skipped, mut errors) = (0, 0, 0);
+    for (lf, c) in &per_lf {
+        billed += c.billed;
+        skipped += c.skipped;
+        errors += c.errors;
+        if let Err(e) = pg::record_billing_run(
+            pool,
+            &cfg.tenant,
+            lf,
+            today.year() as i16,
+            i16::from(u8::from(today.month())),
+            c.billed,
+            c.skipped,
+            c.errors,
+        )
+        .await
+        {
+            tracing::warn!(lf, error = %e, "billing-run: could not record run log");
+        }
     }
-    tracing::info!(billed, errors, "billing-run: sweep complete");
+    tracing::info!(billed, skipped, errors, %run_id, "billing-run: sweep complete");
+}
+
+/// What one Lieferant's share of a sweep did.
+#[derive(Debug, Default, Clone, Copy)]
+struct SweepCounters {
+    billed: i32,
+    skipped: i32,
+    errors: i32,
 }
 
 /// Bill one candidate's period through the same pipeline as the HTTP endpoint.
-#[allow(clippy::too_many_arguments)]
 async fn bill_one(
-    cfg: &Arc<BillingdConfig>,
+    deps: &Arc<BillingDeps>,
     pool: &PgPool,
-    tarifbd: &Arc<TarifbdClient>,
-    edmd: &Arc<EdmdClient>,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-    vertragd: &Arc<VertragdClient>,
     cand: &BillingCandidate,
     from: Date,
     to: Date,
+    run_id: &str,
 ) -> anyhow::Result<()> {
+    let cfg = &deps.cfg;
     let req = CalculateRequest {
         lf_mp_id: cand.lf_mp_id.clone(),
         nb_mp_id: cand.nb_mp_id.clone(),
@@ -326,21 +341,21 @@ async fn bill_one(
         monatliche_abrechnung: cand.abrechnungszyklus.eq_ignore_ascii_case("MONATLICH"),
         ..Default::default()
     };
-    let tariff = handlers::resolve_tariff(&req, tarifbd, &cand.malo_id)
+    let tariff = handlers::resolve_tariff(&req, &deps.tarifbd, &cand.malo_id)
         .await
-        .map_err(|(_, msg)| anyhow::anyhow!("tariff: {msg}"))?;
+        .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
     // A period crossing a statutory rate boundary has no correct single rate;
     // billing it whole would overcharge or undercharge one part silently.
     let rates = cfg
         .try_regulatory_rates_for_period(tariff.category_str(), from, to)
         .map_err(|e| anyhow::anyhow!("{e}"))?;
-    let rechnungsnummer = format!(
-        "BILL-{}-{}-{from}",
-        cand.malo_id,
-        tariff.product_code().unwrap_or(tariff.category_str())
-    );
-    let invoice = handlers::dispatch_calculator(
-        cfg,
+    // § 14 Abs. 4 Nr. 4 UStG: from the tenant's `RE` series, keyed on the
+    // billed period's year, so a December period swept in January stays in the
+    // year it belongs to.
+    let rechnungsnummer =
+        pg::allocate_rechnungsnummer(pool, &cfg.tenant, series::INVOICE, from.year()).await?;
+    let billed = handlers::dispatch_invoice(
+        deps,
         &tariff,
         &req,
         &cand.malo_id,
@@ -348,13 +363,11 @@ async fn bill_one(
         from,
         to,
         &rates,
-        edmd,
-        marktd,
-        tarifbd,
-        vertragd,
+        RunId(Some(run_id)),
     )
     .await
-    .map_err(|(_, msg)| anyhow::anyhow!("dispatch: {msg}"))?;
+    .map_err(|e| anyhow::anyhow!("dispatch: {e}"))?;
+    let (invoice, buyer) = (billed.invoice, billed.buyer);
 
     // Same deterministic risk gate as the on-demand endpoint — scored read-only
     // before the outbox tx, because a HELD band withholds the dispatch enqueue.
@@ -370,16 +383,19 @@ async fn bill_one(
     let mut tx = pool.begin().await?;
     let record_id = pg::insert_billing_record(
         &mut *tx,
-        &cfg.tenant,
-        &cand.malo_id,
-        &cand.lf_mp_id,
-        tariff.product_code().unwrap_or(tariff.category_str()),
-        tariff.category_str(),
-        from,
-        to,
-        &invoice.to_rechnung_json(),
-        invoice.netto_eur,
-        invoice.brutto_eur,
+        &pg::NewBillingRecord {
+            tenant: &cfg.tenant,
+            malo_id: &cand.malo_id,
+            lf_mp_id: &cand.lf_mp_id,
+            product_code: tariff.product_code().unwrap_or(tariff.category_str()),
+            category: tariff.category_str(),
+            rechnungsnummer: &rechnungsnummer,
+            period_from: from,
+            period_to: to,
+            rechnung_json: &invoice.to_rechnung_json(),
+            total_netto_eur: invoice.netto_eur,
+            total_brutto_eur: invoice.brutto_eur,
+        },
     )
     .await?;
     if held {
@@ -388,7 +404,7 @@ async fn bill_one(
             score = assessment.as_ref().map(|a| a.score),
             "billing-run: invoice HELD by risk gate"
         );
-    } else if cfg.erp_webhook_url.is_some() {
+    } else {
         let ce = handlers::rechnung_erstellt_ce(
             record_id,
             &cand.malo_id,
@@ -396,13 +412,21 @@ async fn bill_one(
             &invoice.to_rechnung_json(),
             false,
         );
-        mako_service::outbox::enqueue(&mut tx, &ce).await?;
-        pg::mark_dispatched_tx(&mut *tx, record_id).await?;
+        handlers::issue_record(&mut tx, cfg, record_id, &ce)
+            .await
+            .map_err(|e| anyhow::anyhow!("issue: {e}"))?;
     }
+    crate::einvoice::store(
+        &mut *tx,
+        record_id,
+        &invoice,
+        cfg,
+        &cand.malo_id,
+        buyer.as_ref(),
+    )
+    .await?;
+    handlers::persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
     tx.commit().await?;
-
-    // Persist the risk findings on the now-committed record (best effort).
-    handlers::persist_risk(pool, record_id, assessment.as_ref()).await;
 
     tracing::info!(malo_id = %cand.malo_id, %from, %to, %record_id, "billing-run: invoice created");
     Ok(())
@@ -411,17 +435,13 @@ async fn bill_one(
 /// §40b Abs. 2 EnWG: deliver the previous month's consumption/cost info for
 /// iMSys MaLos — a preview calculation emitted as a CloudEvent, never a
 /// persisted invoice.
-#[allow(clippy::too_many_arguments)]
 async fn deliver_abrechnungsinfo(
-    cfg: &Arc<BillingdConfig>,
+    deps: &Arc<BillingDeps>,
     pool: &PgPool,
-    tarifbd: &Arc<TarifbdClient>,
-    edmd: &Arc<EdmdClient>,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-    vertragd: &Arc<VertragdClient>,
     cand: &BillingCandidate,
     today: Date,
 ) {
+    let cfg = &deps.cfg;
     let Some((from, to)) = due_period("MONATLICH", today, cand.vertragsbeginn)
         .and_then(|p| clip(p, cand.lieferbeginn, cand.lieferende))
     else {
@@ -430,22 +450,15 @@ async fn deliver_abrechnungsinfo(
 
     // Only fernauslesbare (iMSys) MaLos get the monthly info.
     let is_imsys = matches!(
-        edmd.get_billing_period(&cand.malo_id, from, to).await,
+        deps.edmd.get_billing_period(&cand.malo_id, from, to).await,
         Ok(Some(ref m)) if m.metering_mode == energy_billing::MeteringMode::Imsys
     );
     if !is_imsys {
         return;
     }
 
-    match pg::claim_abrechnungsinfo(
-        pool,
-        &cfg.tenant,
-        &cand.malo_id,
-        from.year() as i16,
-        u8::from(from.month()) as i16,
-    )
-    .await
-    {
+    let (year, month) = (from.year() as i16, u8::from(from.month()) as i16);
+    match pg::claim_abrechnungsinfo(pool, &cfg.tenant, &cand.malo_id, year, month).await {
         Ok(true) => {}
         Ok(false) => return, // already delivered this month
         Err(e) => {
@@ -453,6 +466,18 @@ async fn deliver_abrechnungsinfo(
             return;
         }
     }
+
+    // From here the claim is held. Every path that does not deliver must give
+    // it back: holding a claim whose delivery failed suppresses that month's
+    // §40b Abs. 2 information for good, and the customer's statutory
+    // entitlement is not something a transient edmd outage may consume.
+    let release = || async {
+        if let Err(e) =
+            pg::release_abrechnungsinfo_claim(pool, &cfg.tenant, &cand.malo_id, year, month).await
+        {
+            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: claim release failed");
+        }
+    };
 
     let req = CalculateRequest {
         lf_mp_id: cand.lf_mp_id.clone(),
@@ -465,14 +490,14 @@ async fn deliver_abrechnungsinfo(
         ..Default::default()
     };
     let preview = async {
-        let tariff = handlers::resolve_tariff(&req, tarifbd, &cand.malo_id)
+        let tariff = handlers::resolve_tariff(&req, &deps.tarifbd, &cand.malo_id)
             .await
-            .map_err(|(_, m)| anyhow::anyhow!("tariff: {m}"))?;
+            .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
         let rates = cfg
             .try_regulatory_rates_for_period(tariff.category_str(), from, to)
             .map_err(|e| anyhow::anyhow!("{e}"))?;
-        handlers::dispatch_calculator(
-            cfg,
+        handlers::dispatch_invoice(
+            deps,
             &tariff,
             &req,
             &cand.malo_id,
@@ -480,13 +505,11 @@ async fn deliver_abrechnungsinfo(
             from,
             to,
             &rates,
-            edmd,
-            marktd,
-            tarifbd,
-            vertragd,
+            RunId::NONE,
         )
         .await
-        .map_err(|(_, m)| anyhow::anyhow!("dispatch: {m}"))
+        .map(|b| b.invoice)
+        .map_err(|e| anyhow::anyhow!("dispatch: {e}"))
     }
     .await;
 
@@ -494,13 +517,19 @@ async fn deliver_abrechnungsinfo(
         Ok(i) => i,
         Err(e) => {
             tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: preview failed");
+            release().await;
             return;
         }
     };
 
-    let Some(ref webhook_url) = cfg.erp_webhook_url else {
+    // Unlike an invoice, the §40b Abs. 2 information *is* the CloudEvent — there
+    // is no record to persist and nothing else delivers it. Without a webhook
+    // there is nowhere to send it, so the claim goes back and the month stays
+    // open for a sweep that runs once one is configured.
+    if cfg.erp_webhook_url.is_none() {
+        release().await;
         return;
-    };
+    }
     let ce = mako_service::CloudEvent::new(
         mako_service::source("billingd", &cand.lf_mp_id),
         mako_events::billing::ABRECHNUNGSINFORMATION_MONATLICH,
@@ -516,20 +545,23 @@ async fn deliver_abrechnungsinfo(
             "hinweis": "Monatliche Abrechnungsinformation — keine Rechnung",
         }),
     );
-    let client = mako_service::http::default_client();
-    match mako_service::post_ce_with_retry(
-        &client,
-        webhook_url,
-        &ce,
-        cfg.erp_hmac_secret.as_deref().map(str::as_bytes),
-    )
-    .await
-    {
+    // Through the outbox, like every other event this service emits: the info
+    // is a statutory obligation with a monthly deadline, and posting it inline
+    // dropped it whenever the ERP happened to be restarting.
+    let enqueued = async {
+        let mut tx = pool.begin().await?;
+        mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        tx.commit().await?;
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+    match enqueued {
         Ok(()) => {
-            tracing::info!(malo_id = %cand.malo_id, %from, %to, "abrechnungsinfo: delivered");
+            tracing::info!(malo_id = %cand.malo_id, %from, %to, "abrechnungsinfo: enqueued");
         }
         Err(e) => {
-            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: webhook delivery failed");
+            tracing::warn!(malo_id = %cand.malo_id, error = %e, "abrechnungsinfo: enqueue failed");
+            release().await;
         }
     }
 }

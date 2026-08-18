@@ -110,21 +110,6 @@ pub const DEFAULT_PDF_STANDARD: &str = "a-3b";
 /// services: the value is a published PEPPOL identifier, not shared state.
 const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0";
 
-/// Findings against the profile the document declares in BT-24 — the same
-/// dispatch billingd's `einvoice::validate` performs, inlined because the
-/// semantic model is a *library* both services hold, not a service boundary.
-fn validate_payload(model: &en16931::Invoice) -> en16931::validation::ValidationReport {
-    if model
-        .specification_id
-        .as_deref()
-        .is_some_and(|id| id.to_ascii_lowercase().contains("xrechnung"))
-    {
-        en16931::profiles::XRECHNUNG.validate(model)
-    } else {
-        en16931::validation::validate(model)
-    }
-}
-
 /// Prove a template, or refuse it.
 ///
 /// # Errors
@@ -245,7 +230,13 @@ fn prove_invoice(source: &str, pdf_standard: Option<&str>) -> Result<Proven> {
     // BR-E-05 requires to be zero — that nothing else here could see, because
     // the carrier round-trips an invalid payload exactly as faithfully as a
     // valid one.
-    let fatal: Vec<String> = validate_payload(&model)
+    // Against plain EN 16931, which is what the specimen declares —
+    // `specimen_invoice` stamps `EN16931_SPEC_ID` unconditionally, so there is
+    // no BT-24 to dispatch on. Dispatching anyway would be a third copy of a
+    // decision that already lives in billingd's `einvoice::validate`, guarding
+    // a branch the specimen can never take. A document billingd renders is
+    // validated by billingd, where the profile is not a constant.
+    let fatal: Vec<String> = en16931::validation::validate(&model)
         .fatal()
         .map(|f| format!("[{}] {} — {}", f.rule, f.path, f.message))
         .collect();
@@ -385,10 +376,14 @@ fn check_carrier(
 /// being wrong, so both are measured.
 ///
 /// The terms required here are the unambiguous ones § 14 Abs. 4 UStG makes
-/// mandatory: the invoice number (Nr. 4) and the full names of both parties
-/// (Nr. 1). They are not a matter of layout taste — a document without them is
-/// not a Rechnung — so requiring them constrains nothing an operator may
-/// legitimately want to do.
+/// mandatory: the invoice number (Nr. 4), the full names of both parties
+/// (Nr. 1), and the seller's tax identifier (Nr. 2). They are not a matter of
+/// layout taste — a document without them is not a Rechnung — so requiring them
+/// constrains nothing an operator may legitimately want to do.
+///
+/// Nr. 2 is checked as the **disjunction** the statute actually writes: the
+/// USt-IdNr. *or* the Steuernummer, either one satisfying it. A template is
+/// free to print whichever it prefers, and free to print both.
 fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
     let doc = lopdf::Document::load_mem(pdf).context("reading back the rendered document")?;
     let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
@@ -414,6 +409,30 @@ fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
                 "the rendered page does not print {term}: `{value}` is nowhere on it. \
                  The invoice XML would be correct and the document a customer receives \
                  would not be a valid Rechnung"
+            );
+        }
+    }
+
+    // § 14 Abs. 4 Nr. 2 UStG is a disjunction — the USt-IdNr. *or* the
+    // Steuernummer — so it is checked as one, and only when the model supplies
+    // at least one of them.
+    let tax_ids: Vec<&String> = [
+        model.seller.vat_identifier.as_ref(),
+        model.seller.tax_registration.as_ref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    if !tax_ids.is_empty() {
+        let printed = tax_ids.iter().any(|value| {
+            let needle: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+            flat.contains(&needle)
+        });
+        if !printed {
+            bail!(
+                "the rendered page prints neither the seller's USt-IdNr. (BT-31) nor their \
+                 Steuernummer (BT-32) — § 14 Abs. 4 Nr. 2 UStG requires one of them. \
+                 The model offered {tax_ids:?} and the page carries none of it"
             );
         }
     }
@@ -545,6 +564,9 @@ pub fn specimen_invoice() -> en16931::Invoice {
         "12345",
         "Musterstadt",
     );
+    // BT-32 alongside BT-31: § 14 Abs. 4 Nr. 2 UStG requires one of the two, and
+    // the specimen carries both so a template may print either.
+    seller.tax_registration = Some("123/456/78901".to_owned());
     seller.contact = Contact {
         name: Some("Kundenservice".to_owned()),
         phone: Some("0800 1234567".to_owned()),
@@ -770,6 +792,38 @@ mod tests {
         );
     }
 
+    /// A page that names both parties and the number but no tax identifier is
+    /// refused: § 14 Abs. 4 Nr. 2 UStG is mandatory too.
+    #[test]
+    fn a_page_without_a_seller_tax_identifier_is_refused() {
+        let err = prove(
+            TemplateKind::Invoice,
+            "#let render(invoice) = [Rechnung #invoice.number \
+             #invoice.seller.name #invoice.buyer.name]",
+            None,
+        )
+        .expect_err("§ 14 Abs. 4 Nr. 2 UStG is not optional");
+        assert!(
+            err.to_string().contains("Nr. 2"),
+            "the refusal must name the term it is missing: {err}",
+        );
+    }
+
+    /// Either half of the disjunction satisfies it, on its own — a seller with
+    /// only a Steuernummer prints a lawful page.
+    #[test]
+    fn either_tax_identifier_alone_satisfies_nr_2() {
+        let head = "#let render(invoice) = [Rechnung #invoice.number \
+                    #invoice.seller.name #invoice.buyer.name ";
+        for (label, field) in [
+            ("USt-IdNr.", "#invoice.seller.vat_id"),
+            ("Steuernummer", "#invoice.seller.tax_number"),
+        ] {
+            prove(TemplateKind::Invoice, &format!("{head}{field}]"), None)
+                .unwrap_or_else(|e| panic!("{label} alone satisfies § 14 Abs. 4 Nr. 2: {e}"));
+        }
+    }
+
     /// A standard that would silently drop the invoice XML is refused here too.
     #[test]
     fn a_carrier_that_cannot_hold_the_invoice_is_refused() {
@@ -804,10 +858,10 @@ mod tests {
 
     /// A Mahnung that renders but omits its mandatory content is refused.
     ///
-    /// `#let render(x) = [Mahnung]` used to *pass* (parse-proof only). With a
-    /// view and a specimen it now fails the page-content check — a dunning
-    /// letter naming neither declarant, amount, deadline nor the § 41f
-    /// Sperrtermin is not a Mahnung in any form the statute recognises.
+    /// `#let render(x) = [Mahnung]` parses, and a parse proof would accept it.
+    /// The page-content check is what refuses it: a dunning letter naming
+    /// neither declarant, amount, deadline nor the § 41f Sperrtermin is not a
+    /// Mahnung in any form the statute recognises.
     #[test]
     fn a_mahnung_that_prints_nothing_is_refused() {
         let err = prove(TemplateKind::Mahnung, "#let render(x) = [Mahnung]", None)

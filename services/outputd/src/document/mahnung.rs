@@ -107,6 +107,7 @@ pub fn specimen() -> MahnungView {
     let party = |name: &str, line1: &str, plz: &str, city: &str| PartyView {
         name: Some(name.to_owned()),
         vat_id: None,
+        tax_number: None,
         line1: Some(line1.to_owned()),
         post_code: Some(plz.to_owned()),
         city: Some(city.to_owned()),

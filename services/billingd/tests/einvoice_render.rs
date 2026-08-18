@@ -63,8 +63,13 @@ fn cfg() -> BillingdConfig {
         "marktd_url": "http://marktd",
         "seller_name": "Stadtwerke Musterstadt GmbH",
         "seller_vat_id": "DE123456789",
-        "seller_address": "Musterstraße 1, 12345 Musterstadt",
-        "seller_contact": "Tel. 0800 1234567, service@stadtwerke-musterstadt.de",
+        "seller": {
+            "street": "Musterstraße 1",
+            "post_code": "12345",
+            "city": "Musterstadt",
+            "phone": "0800 1234567",
+            "email": "service@stadtwerke-musterstadt.de"
+        },
         "seller_iban": "DE89370400440532013000",
         "seller_bic": "COBADEFFXXX",
     }))
@@ -244,123 +249,67 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
     );
 }
 
-// ── Template contract ─────────────────────────────────────────────────────────
+// ── The render boundary ───────────────────────────────────────────────────────
 
-/// The template view must carry the invoice, not a lossy summary of it.
+/// The model may omit document-level allowances only while the mapping does.
 ///
-/// An operator's layout renders from `DocumentView` and never from the semantic
-/// model, so anything missing here is a field no invoice can ever print. This
-/// pins the mixed-rate case in particular: two VAT rates must survive into the
-/// breakdown a template iterates, because a single blended rate on the page is
-/// exactly the defect the hand-rolled renderer had.
-#[test]
-fn the_template_view_carries_what_an_invoice_must_print() {
-    use billingd::document_view::DocumentView;
-
-    let buyer = billingd::clients::Rechnungsempfaenger {
-        name: Some("Erika Mustermann".to_owned()),
-        line1: Some("Beispielweg 7".to_owned()),
-        post_code: Some("10115".to_owned()),
-        city: Some("Berlin".to_owned()),
-        country: Some("DE".to_owned()),
-        vat_id: None,
-        stromwiederverkaeufer: false,
-    };
-    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", Some(&buyer));
-    let view = DocumentView::of(&model);
-
-    // §14 Abs. 4 UStG Pflichtangaben the page cannot omit.
-    assert_eq!(view.number.as_deref(), Some("R-XR-9001"));
-    assert!(view.issue_date.is_some(), "BT-2 issue date");
-    assert_eq!(
-        view.seller.name.as_deref(),
-        Some("Stadtwerke Musterstadt GmbH")
-    );
-    assert_eq!(view.seller.vat_id.as_deref(), Some("DE123456789"));
-    assert_eq!(view.buyer.name.as_deref(), Some("Erika Mustermann"));
-    assert_eq!(view.buyer.city.as_deref(), Some("Berlin"));
-
-    // Both rates reach the breakdown a template iterates.
-    let mut rates: Vec<&str> = view
-        .vat_breakdown
-        .iter()
-        .filter_map(|v| v.rate.as_deref())
-        .collect();
-    rates.sort();
-    assert_eq!(rates.len(), 2, "mixed-rate invoice keeps two BG-23 entries");
-
-    assert!(
-        !view.lines.is_empty(),
-        "an invoice with no lines prints nothing"
-    );
-    for l in &view.lines {
-        assert!(!l.net_amount.is_empty() && !l.quantity.is_empty());
-        assert!(!l.vat_category.is_empty(), "BT-151 per line");
-    }
-
-    // Amounts are decimal strings — a total that round-trips through f64 is not
-    // a total. Guard the type, not just the value.
-    assert!(
-        view.totals
-            .gross_total
-            .parse::<rust_decimal::Decimal>()
-            .is_ok(),
-        "totals must be exact decimals",
-    );
-
-    // The view is what a template consumes: it has to serialise.
-    let json = serde_json::to_value(&view).expect("DocumentView serialises");
-    assert!(json["totals"]["gross_total"].is_string());
-    assert!(json["lines"].as_array().is_some_and(|l| !l.is_empty()));
-}
-
-/// The view must never become a second source of truth for the XML.
-///
-/// It is a *projection*: every field is copied from the model, so the page and
-/// the embedded CII cannot disagree. This checks the one pair most likely to
-/// drift — what the customer owes.
-#[test]
-fn the_view_agrees_with_the_model_it_projects() {
-    use billingd::document_view::DocumentView;
-
-    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
-    let view = DocumentView::of(&model);
-
-    assert_eq!(
-        view.totals.gross_total,
-        model.totals.gross_total.to_string()
-    );
-    assert_eq!(view.totals.due, model.totals.due.to_string());
-    assert_eq!(view.lines.len(), model.lines.len());
-    assert_eq!(view.vat_breakdown.len(), model.vat_breakdown.len());
-}
-
-/// The view may omit document-level allowances only while there are none.
-///
-/// `DocumentView` carries BG-25 lines, the BG-23 breakdown and BG-22 totals, but
-/// not BG-20/BG-21 — the document-level allowances and charges that sit between
-/// the line total (BT-106) and the taxable total (BT-109). That omission is
-/// safe today for one reason only: `energy_billing`'s mapping never emits them,
+/// outputd's `DocumentView` — the projection an operator's template renders
+/// from — carries BG-25 lines, the BG-23 breakdown and BG-22 totals, but not
+/// BG-20/BG-21, the document-level allowances and charges that sit between the
+/// line total (BT-106) and the taxable total (BT-109). That omission is safe
+/// today for one reason only: `energy_billing`'s mapping never emits them,
 /// because every discount in this engine is a negative *line*. So BT-106 always
 /// equals BT-109 and a page showing one shows the other.
 ///
 /// The day that changes, a template would print a "Summe netto" that does not
 /// reconcile with the total below it while the embedded XML stays correct —
 /// exactly the visual/machine disagreement the whole design exists to prevent,
-/// and the one failure mode no rendering test would catch. This is the tripwire:
-/// if it fails, `DocumentView` needs BG-20/BG-21 before the mapping ships them.
+/// and the one failure mode no rendering test would catch. The tripwire lives
+/// here because the invariant is a property of *this* service's mapping; the
+/// fix, if it ever fires, is in outputd's view.
 #[test]
-fn the_view_may_omit_document_level_allowances_only_while_there_are_none() {
+fn the_model_may_omit_document_level_allowances_only_while_the_mapping_does() {
     let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
 
     assert!(
         model.allowances.is_empty() && model.charges.is_empty(),
-        "the mapping now emits BG-20/BG-21; DocumentView must carry them, or a \
+        "the mapping now emits BG-20/BG-21; outputd's DocumentView must carry them, or a \
          template's totals will silently stop reconciling with the embedded XML",
     );
     assert_eq!(
         model.totals.line_total, model.totals.taxable_total,
         "BT-106 and BT-109 diverge only through document-level allowances",
+    );
+}
+
+/// What crosses the wire to outputd is the **model**, not a projected view.
+///
+/// outputd holds the normative `DocumentView` — the one the publish gate proves
+/// every operator template against — and projects it there. A second copy of the
+/// projection here would be two implementations of one contract tied together by
+/// nothing: a field added to either gives templates that pass the gate and fail
+/// in production.
+///
+/// The model is the type both services already share (as they already share
+/// `zugferd::Profile`), so the projection exists once, on the side that proves
+/// templates against it. This pins that the model still serialises to what the
+/// render API accepts.
+#[test]
+fn the_render_request_carries_the_semantic_model() {
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", None);
+    let body = serde_json::json!({ "model": model });
+
+    let back: en16931::Invoice = serde_json::from_value(body["model"].clone())
+        .expect("the model round-trips through the render request body");
+    assert_eq!(back.number, model.number, "BT-1 survives the wire");
+    assert_eq!(
+        back.totals.due, model.totals.due,
+        "BT-115 survives the wire"
+    );
+    assert_eq!(
+        back.vat_breakdown.len(),
+        model.vat_breakdown.len(),
+        "the BG-23 breakdown a template iterates survives the wire"
     );
 }
 
@@ -420,10 +369,8 @@ fn the_billing_period_reaches_the_semantic_model() {
         Some("2026-01-31")
     );
 
-    // And it reaches the page: the template reads these two fields.
-    let view = billingd::document_view::DocumentView::of(&model);
-    assert_eq!(view.period_start.as_deref(), Some("2026-01-01"));
-    assert_eq!(view.period_end.as_deref(), Some("2026-01-31"));
+    // Reaching the *page* is outputd's half — `DocumentView::of` projects BG-14
+    // into `period_start`/`period_end`, and its own suite pins that.
 }
 
 /// The gate specimen's stamped terms match what production stamps.
@@ -460,4 +407,54 @@ fn production_stamps_the_terms_the_gate_specimen_proves_templates_against() {
         "BG-16 payment instructions with the SEPA means code (UNCL 4461 58)",
     );
     assert!(produced.invoicing_period.is_some(), "BG-14 billing period");
+}
+
+/// § 14 Abs. 4 Nr. 2 UStG: the Steuernummer reaches the model and the wire.
+///
+/// The statute names two identifiers and requires one — the USt-IdNr. (BT-31)
+/// *or* the Steuernummer (BT-32). A § 19 UStG Kleinunternehmer holds only the
+/// latter, so BT-32 has to survive the mapping into both syntaxes on its own.
+#[test]
+fn the_seller_steuernummer_reaches_the_model_and_the_wire() {
+    let mut v = serde_json::to_value(serde_json::json!({
+        "database": { "url": "postgres://localhost/x" },
+        "tenant": "9900000000004",
+        "tarifbd_url": "http://tarifbd",
+        "edmd_url": "http://edmd",
+        "marktd_url": "http://marktd",
+        "seller_name": "Solar Kleinbetrieb e.K.",
+        // No USt-IdNr. at all: the Kleinunternehmer case.
+        "seller_tax_number": "123/456/78901",
+        "seller": {
+            "street": "Musterstraße 1",
+            "post_code": "12345",
+            "city": "Musterstadt",
+        },
+    }))
+    .expect("fixture");
+    v["seller"]["email"] = serde_json::json!("service@example.de");
+    let cfg: BillingdConfig = serde_json::from_value(v).expect("config parses");
+
+    let model = einvoice::build(&mixed_rate_invoice(), &cfg, "51238696781", None);
+    assert_eq!(
+        model.seller.tax_registration.as_deref(),
+        Some("123/456/78901"),
+        "BT-32 reaches the semantic model",
+    );
+    assert!(
+        model.seller.vat_identifier.is_none(),
+        "this operator has no BT-31 — that is the whole point",
+    );
+
+    // And it survives the mapping into both permitted EN 16931 syntaxes.
+    for (syntax, xml) in [
+        ("CII", einvoice::render_cii(&model)),
+        ("UBL", einvoice::render_ubl(&model)),
+    ] {
+        assert!(
+            xml.contains("123/456/78901"),
+            "the Steuernummer must reach the {syntax} wire, or the document \
+             omits § 14 Abs. 4 Nr. 2 UStG: {xml}",
+        );
+    }
 }

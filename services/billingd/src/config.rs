@@ -7,6 +7,10 @@ use serde::Deserialize;
 /// Configure under `[rates]` in `billingd.toml`.
 /// Update annually as BNetzA / BMWK publish new levies.
 #[derive(Debug, Deserialize)]
+// A mistyped rate key is a wrong tax on every invoice, so unknown keys are
+// refused at startup rather than ignored: `behg_gas_ct_per_kw` would otherwise
+// leave the year-table default silently in place.
+#[serde(deny_unknown_fields)]
 pub struct RatesConfig {
     /// Stromsteuer §3 StromStG — ct/kWh (default 2.05, valid since 01.04.2003).
     pub stromsteuer_ct_per_kwh: Option<Decimal>,
@@ -29,7 +33,6 @@ pub struct RatesConfig {
     pub mwst_rate: Option<Decimal>,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct BillingdConfig {
     /// `[database]` block — connection URL plus pool tuning. The daemon runner
@@ -58,7 +61,8 @@ pub struct BillingdConfig {
     /// `marktd` bearer token.
     pub marktd_api_key: Option<String>,
 
-    /// `vertragd` base URL — Rahmenvertrag + MaLo enumeration for Sammelrechnung (L2).
+    /// `vertragd` base URL — contract facts, BG-7 buyers, Rahmenvertrag MaLo
+    /// enumeration, §41e Aggregatorverträge and the §40b billing candidates.
     pub vertragd_url: Option<String>,
 
     /// `outputd` base URL — renders the ZUGFeRD PDF from the stored model.
@@ -78,11 +82,39 @@ pub struct BillingdConfig {
     /// Seller name for XRechnung generation (BG-4, BT-27). Defaults to tenant ID.
     pub seller_name: Option<String>,
 
-    /// Seller VAT registration number (Umsatzsteuer-ID) for XRechnung output.
+    /// BT-31 — seller VAT identifier (Umsatzsteuer-Identifikationsnummer).
+    ///
+    /// § 14 Abs. 4 Nr. 2 UStG is a **disjunction**: an invoice must carry either
+    /// this or [`Self::seller_tax_number`]. See [`Self::seller_tax_identifier`].
     pub seller_vat_id: Option<String>,
 
-    /// §40 Abs. 2 Nr. 1 EnWG — supplier postal address as shown on invoices.
+    /// BT-32 — the seller's Steuernummer, as issued by their Finanzamt.
+    ///
+    /// The other half of the § 14 Abs. 4 Nr. 2 UStG disjunction. A § 19 UStG
+    /// Kleinunternehmer generally holds no USt-IdNr. and states this instead.
+    pub seller_tax_number: Option<String>,
+
+    /// §40 Abs. 2 Nr. 1 EnWG / BG-5 — the supplier's postal address, stated
+    /// field by field.
+    ///
+    /// Stated, never parsed out of a free-text line: an address that does not
+    /// happen to read `"Street 1, 12345 City"` — no comma, a two-word city, a PO
+    /// box — loses BT-52 and BT-53 to any split heuristic, which is a BR-DE-8/9
+    /// failure at the B2G path and an unusable letterhead everywhere else.
+    #[serde(default)]
+    pub seller: Option<SellerConfig>,
+
+    /// Removed. Replaced by the structured `[seller]` block.
+    ///
+    /// `BillingdConfig` does not `deny_unknown_fields` — a stale key would
+    /// otherwise be ignored in silence, and the first anyone would know of it
+    /// is invoices going out without the § 40 Abs. 2 Nr. 1 EnWG supplier
+    /// address. Naming the field keeps it a startup error instead.
+    #[serde(default)]
     pub seller_address: Option<String>,
+    /// Removed. Replaced by `[seller] phone` / `[seller] email`.
+    #[serde(default)]
+    pub seller_contact: Option<String>,
 
     /// §40 Abs. 2 Nr. 8 EnWG — annual consumption of the comparable customer
     /// group in kWh/a (e.g. Stromspiegel reference value for the operator's
@@ -92,10 +124,6 @@ pub struct BillingdConfig {
 
     /// Label for the comparable customer group, e.g. `"2-Personen-Haushalt"`.
     pub vergleichsgruppe_label: Option<String>,
-
-    /// §40 Abs. 2 Nr. 1 EnWG — customer-service contact (hotline / e-mail)
-    /// as shown on invoices.
-    pub seller_contact: Option<String>,
 
     /// Seller payment account IBAN (BT-84) for the XRechnung BG-16 SEPA credit
     /// transfer. Required for a `BR-DE-1`-conformant B2G document.
@@ -153,12 +181,169 @@ pub struct BillingdConfig {
     pub vpp_auto_billing: bool,
 }
 
+impl BillingdConfig {
+    /// Refuse to start on a configuration that cannot behave as documented.
+    ///
+    /// Covers removed keys and settings whose values contradict each other.
+    /// Both are silent failures otherwise: a stale key is ignored, and a
+    /// mis-ordered risk band produces invoices routed to a queue nobody reads.
+    ///
+    /// # Errors
+    ///
+    /// Names every problem found, so one restart reports all of them.
+    /// The § 14 Abs. 4 Nr. 2 UStG tax identifier this operator invoices under.
+    ///
+    /// The statute names two and requires one: the USt-IdNr. (BT-31) or the
+    /// Steuernummer (BT-32). The USt-IdNr. wins where both exist — an EU
+    /// counterparty can verify it (VIES) and XRechnung's BR-CO-09 constrains it.
+    /// `None` cannot issue a lawful Rechnung; [`Self::validate`] refuses it.
+    #[must_use]
+    pub fn seller_tax_identifier(&self) -> Option<&str> {
+        self.seller_vat_id
+            .as_deref()
+            .or(self.seller_tax_number.as_deref())
+    }
+
+    /// # Errors
+    ///
+    /// Refuses a configuration that cannot produce a lawful invoice.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.reject_removed_keys()?;
+        self.risk.validate()?;
+        // Neither identifier means every document this service issues omits a
+        // § 14 Abs. 4 Nr. 2 UStG Pflichtangabe. Fail at startup, like [oidc],
+        // not per invoice at 02:00 on the first of the month.
+        anyhow::ensure!(
+            self.seller_tax_identifier().is_some(),
+            "refusing to start without a seller tax identifier: § 14 Abs. 4 Nr. 2 UStG \
+             requires every Rechnung to carry the seller's USt-IdNr. or Steuernummer. \
+             Set `seller_vat_id` (BT-31) or `seller_tax_number` (BT-32)."
+        );
+        anyhow::ensure!(
+            self.billing_runs.run_hour_utc < 24,
+            "[billing_runs] run_hour_utc must be an hour of the day (0–23), got {}",
+            self.billing_runs.run_hour_utc
+        );
+        anyhow::ensure!(
+            self.billing_runs.catch_up_periods > 0,
+            "[billing_runs] catch_up_periods must be at least 1, or the sweep bills nothing"
+        );
+        Ok(())
+    }
+
+    /// Refuse to start on configuration keys that have been replaced.
+    ///
+    /// # Errors
+    ///
+    /// Names each removed key and what replaced it.
+    pub fn reject_removed_keys(&self) -> anyhow::Result<()> {
+        let removed = [
+            (
+                self.seller_address.is_some(),
+                "seller_address",
+                "[seller] street / post_code / city",
+            ),
+            (
+                self.seller_contact.is_some(),
+                "seller_contact",
+                "[seller] phone / email",
+            ),
+        ];
+        let found: Vec<String> = removed
+            .iter()
+            .filter(|(present, _, _)| *present)
+            .map(|(_, key, replacement)| format!("`{key}` → `{replacement}`"))
+            .collect();
+        anyhow::ensure!(
+            found.is_empty(),
+            "billingd.toml uses configuration keys that no longer exist: {}. \
+             They were free-text lines that einvoice split on punctuation; the \
+             replacement states each EN 16931 term (BT-35/37/38, BT-42/43) on its \
+             own. Ignoring them would ship invoices without the § 40 Abs. 2 Nr. 1 \
+             EnWG supplier address.",
+            found.join(", ")
+        );
+        Ok(())
+    }
+}
+
 impl mako_service::ServiceConfig for BillingdConfig {
     fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
         Some(&self.database)
     }
     fn bind_addr(&self) -> String {
         format!("0.0.0.0:{}", self.port.unwrap_or(9280))
+    }
+}
+
+/// `[seller]` — the supplier's own identity as it appears on every document.
+///
+/// BG-5 (postal address) and BG-6 (contact) of the EN 16931 seller party, and
+/// the §40 Abs. 2 Nr. 1 EnWG supplier statement on the BO4E Rechnung. Stated,
+/// not parsed.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SellerConfig {
+    /// BT-35 — street and house number.
+    pub street: Option<String>,
+    /// BT-36 — additional address line (c/o, building, PO box).
+    #[serde(default)]
+    pub address_line2: Option<String>,
+    /// BT-38 — post code.
+    pub post_code: Option<String>,
+    /// BT-37 — city.
+    pub city: Option<String>,
+    /// BT-40 — ISO 3166-1 alpha-2 country code. Defaults to `DE`.
+    #[serde(default)]
+    pub country: Option<String>,
+    /// BT-41 — contact point name, e.g. `"Kundenservice"`.
+    #[serde(default)]
+    pub contact_name: Option<String>,
+    /// BT-42 — contact telephone.
+    #[serde(default)]
+    pub phone: Option<String>,
+    /// BT-43 — contact e-mail.
+    #[serde(default)]
+    pub email: Option<String>,
+}
+
+impl SellerConfig {
+    /// The §40 Abs. 2 Nr. 1 EnWG address as one line, for the BO4E Rechnung.
+    ///
+    /// The EN 16931 model takes the fields individually; the BO4E
+    /// `Verbraucherinformationen` carries a single human-readable string, and
+    /// this is where the two representations meet — composed from the parts,
+    /// never parsed back out of the whole.
+    #[must_use]
+    pub fn anschrift(&self) -> Option<String> {
+        let street = self.street.as_deref().unwrap_or_default();
+        let plz = self.post_code.as_deref().unwrap_or_default();
+        let city = self.city.as_deref().unwrap_or_default();
+        let parts: Vec<&str> = [street, self.address_line2.as_deref().unwrap_or_default()]
+            .into_iter()
+            .filter(|p| !p.is_empty())
+            .collect();
+        let head = parts.join(", ");
+        let tail = format!("{plz} {city}").trim().to_owned();
+        match (head.is_empty(), tail.is_empty()) {
+            (true, true) => None,
+            (false, true) => Some(head),
+            (true, false) => Some(tail),
+            (false, false) => Some(format!("{head}, {tail}")),
+        }
+    }
+
+    /// The §40 Abs. 2 Nr. 1 EnWG customer-service contact as one line.
+    #[must_use]
+    pub fn kontakt(&self) -> Option<String> {
+        let parts: Vec<String> = [
+            self.phone.as_ref().map(|p| format!("Tel. {p}")),
+            self.email.clone(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        (!parts.is_empty()).then(|| parts.join(", "))
     }
 }
 
@@ -183,6 +368,16 @@ pub struct BillingRunsConfig {
     /// Default: true (only effective while `enabled`).
     #[serde(default = "default_true")]
     pub abrechnungsinformation: bool,
+    /// How many completed periods back the sweep will catch up, per contract.
+    ///
+    /// A worker that was down for a cycle must still bill the periods it slept
+    /// through (§40c EnWG), so the sweep walks the history backwards until it
+    /// finds a period that already has a record. The bound caps that walk:
+    /// without one, enabling the worker against a portfolio of long-running
+    /// annual contracts would issue a decade of back-dated invoices in a single
+    /// night. Default 13 — a year of monthly periods plus one.
+    #[serde(default = "default_catch_up_periods")]
+    pub catch_up_periods: usize,
     /// Bill `JAEHRLICH` contracts from the scheduled sweep. Default: **false**.
     ///
     /// A Jahresrechnung is a settlement: §40 Abs. 1 / §41 EnWG require it to
@@ -203,6 +398,9 @@ pub struct BillingRunsConfig {
 fn default_billing_run_hour() -> u8 {
     4
 }
+const fn default_catch_up_periods() -> usize {
+    13
+}
 fn default_true() -> bool {
     true
 }
@@ -213,6 +411,7 @@ impl Default for BillingRunsConfig {
             enabled: false,
             run_hour_utc: default_billing_run_hour(),
             abrechnungsinformation: true,
+            catch_up_periods: default_catch_up_periods(),
             jahresrechnung: false,
         }
     }
@@ -238,24 +437,23 @@ impl BillingdConfig {
     }
 }
 
+/// Period-aware statutory rate resolution.
+///
+/// A correction re-opens an old period, and that period is billed under its own
+/// rates: 2021 BEHG was 25 EUR/t, the second half of 2020 had 16 % VAT, and
+/// gas/Fernwärme carried **7 % USt from 01.10.2022 to 31.03.2024**
+/// (§28 Abs. 5/6 UStG) — which is why the product `category` is part of the
+/// lookup: the VAT history of gas differs from electricity.
+///
+/// An explicitly configured rate still wins — configuration is the operator
+/// saying "I know better" — but the *defaults* come from the year tables. A
+/// period straddling a boundary has **no** correct single rate, so
+/// [`BillingdConfig::try_regulatory_rates_for_period`] refuses it rather than
+/// choosing one; [`BillingdConfig::steuer_stichtage`] names the split dates.
 impl BillingdConfig {
-    /// Regulatory rates for a billing period and commodity, not for today.
+    /// The `[rates] behg_gas_ct_per_kwh` override, when the operator pinned one.
     ///
-    /// A correction re-opens an old period, and that period is billed under its
-    /// own rates: 2021 BEHG was 25 EUR/t, the second half of 2020 had 16 % VAT,
-    /// and gas/Fernwärme carried **7 % USt from 01.10.2022 to 31.03.2024**
-    /// (§28 Abs. 5/6 UStG) — which is why the product `category` is part of the
-    /// lookup: the VAT history of gas differs from electricity.
-    ///
-    /// An explicitly configured rate still wins — configuration is the operator
-    /// saying "I know better" — but the *defaults* come from the year tables.
-    ///
-    /// A period straddling a statutory rate boundary has **no** correct single
-    /// rate, so [`Self::regulatory_rates_for_period`] refuses it rather than
-    /// choosing one. See [`Self::steuer_stichtage`] for the split dates.
-    /// Explicitly configured BEHG override (ct/kWh), when the operator pinned
-    /// one in `[rates]`. An explicit override always wins over the nEHS
-    /// market-price series.
+    /// An explicit override always wins over the nEHS market-price series.
     pub fn behg_override(&self) -> Option<rust_decimal::Decimal> {
         self.rates.as_ref().and_then(|r| r.behg_gas_ct_per_kwh)
     }
@@ -461,5 +659,69 @@ mod straddle_tests {
             c.try_regulatory_rates_for_period("GAS", date!(2026 - 05 - 01), date!(2026 - 05 - 31))
                 .is_ok()
         );
+    }
+}
+
+#[cfg(test)]
+mod seller_identity_tests {
+    use super::*;
+
+    /// Build a config from JSON, optionally naming each tax identifier.
+    fn cfg(vat_id: Option<&str>, tax_number: Option<&str>) -> BillingdConfig {
+        let mut v = serde_json::json!({
+            "database": { "url": "postgres://localhost/x" },
+            "tenant": "9900357000004",
+            "tarifbd_url": "http://localhost:9080",
+            "edmd_url": "http://localhost:8380",
+            "marktd_url": "http://localhost:8080"
+        });
+        if let Some(id) = vat_id {
+            v["seller_vat_id"] = serde_json::json!(id);
+        }
+        if let Some(nr) = tax_number {
+            v["seller_tax_number"] = serde_json::json!(nr);
+        }
+        serde_json::from_value(v).expect("config parses")
+    }
+
+    /// § 14 Abs. 4 Nr. 2 UStG names two identifiers and requires one, so a
+    /// § 19 UStG Kleinunternehmer configures the Steuernummer alone.
+    #[test]
+    fn either_identifier_alone_satisfies_nr_2() {
+        assert_eq!(
+            cfg(Some("DE123456789"), None).seller_tax_identifier(),
+            Some("DE123456789"),
+        );
+        assert_eq!(
+            cfg(None, Some("123/456/78901")).seller_tax_identifier(),
+            Some("123/456/78901"),
+        );
+    }
+
+    /// With both, the USt-IdNr. is the one a counterparty can verify (VIES).
+    #[test]
+    fn the_vat_id_is_preferred_when_both_exist() {
+        assert_eq!(
+            cfg(Some("DE123456789"), Some("123/456/78901")).seller_tax_identifier(),
+            Some("DE123456789"),
+        );
+    }
+
+    /// A deployment with neither cannot issue a lawful invoice, so it does not
+    /// start. Failing here beats discovering it in a customer's post.
+    #[test]
+    fn a_seller_with_neither_identifier_is_refused_at_startup() {
+        let err = cfg(None, None)
+            .validate()
+            .expect_err("no tax identifier means no lawful Rechnung");
+        let msg = err.to_string();
+        assert!(msg.contains("§ 14 Abs. 4 Nr. 2 UStG"), "{msg}");
+        assert!(msg.contains("seller_tax_number"), "{msg}");
+    }
+
+    /// The ordinary case still starts.
+    #[test]
+    fn a_configured_seller_validates() {
+        assert!(cfg(Some("DE123456789"), None).validate().is_ok());
     }
 }

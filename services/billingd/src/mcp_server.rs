@@ -1,21 +1,30 @@
 //! MCP server for `billingd` — Multi-Product Billing Engine.
 //!
-//! ## Tools (12)
+//! ## Tools (11) — all read-only
 //!
 //! | Tool | Description |
 //! |---|---|
 //! | `list_billing_records` | List billing records for a MaLo |
 //! | `get_billing_record` | Get a single billing record with full Rechnung BO4E |
 //! | `preview_billing` | Dry-run billing calculation (no persist, no CloudEvent) |
-//! | `get_xrechnung` | Fetch XRechnung 3.0 / ZUGFeRD 2.3 CII XML for B2G submission |
-//! | `check_billing_anomaly` | AI anomaly detection: rolling 3-month average vs latest invoice |
-//! | `list_vpp_settlements` | List VPP aggregation settlement records |
+//! | `get_xrechnung` | Fetch the XRechnung / CII XML rendered from the stored EN 16931 model |
+//! | `check_billing_anomaly` | Rolling 3-invoice baseline vs the latest invoice |
+//! | `list_vpp_settlements` | List §41e VPP dispatch settlements |
 //! | `list_corrections` | List Korrekturrechnung / Stornorechnung records (§ 147 AO / GoBD) |
-//! | `calculate_billing` | Trigger a billing calculation run for a MaLo |
 //! | `list_product_categories` | Describe all 13 billing categories and their required fields |
-//! | `get_billing_summary` | Aggregate billing stats per MaLo (total billed, avg monthly) |
-//! | `validate_tariff_config` | Pre-flight validation: §41a iMSys guard, KAV plausibility, missing fields |
+//! | `get_billing_summary` | Aggregate billing stats per MaLo or LF, counted once |
+//! | `validate_tariff_config` | Pre-flight validation: §41a iMSys guard, legacy flags, §42 Energiemix |
 //! | `explain_invoice_position` | Explain how a billing position was calculated (PositionTrace audit) |
+//!
+//! ## Why nothing here issues an invoice
+//!
+//! There is deliberately no `calculate_billing` tool. Issuing a Rechnung is a
+//! legally binding act: it lands in `billing_records` under § 147 AO, dispatches
+//! `de.billing.rechnung.erstellt` to the ledger and the ERP, and can only be
+//! undone by a Stornorechnung. Model output is untrusted input everywhere else
+//! in this platform, and that rule does not stop at a well-phrased tool
+//! description. An agent investigates and explains; a human or a scheduled run
+//! with an OIDC identity bills.
 //!
 //! ## Prompts (6)
 //!
@@ -52,17 +61,19 @@ use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+/// State the MCP tools run against.
+///
+/// The read tools query the pool directly and `preview_billing` calls the same
+/// `compute_preview` the HTTP endpoint does. Nothing loops back over HTTP: the
+/// service requires OIDC on its own API, so a loopback carried no token and
+/// answered 401 in every configuration except the dev one — the tools worked
+/// exactly where they mattered least.
 #[derive(Clone)]
 pub struct BillingdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
-    /// Self base URL (e.g. `"http://localhost:9280"`) — used by MCP tools to call the HTTP API.
-    pub self_url: String,
-    /// Seller name for XRechnung generation (BG-4).
-    pub seller_name: String,
-    /// Seller VAT-ID for XRechnung (BT-31, e.g. `DE123456789`).
-    pub seller_vat_id: Option<String>,
+    pub deps: Arc<crate::clients::BillingDeps>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -99,8 +110,8 @@ pub struct PreviewParams {
     pub malo_id: String,
     /// LF MP-ID.
     pub lf_mp_id: String,
-    /// NB MP-ID (for NNE tariff lookup).
-    pub nb_mp_id: String,
+    /// NB MP-ID (§41 Abs. 1 Nr. 5 EnWG). Resolved from marktd when omitted.
+    pub nb_mp_id: Option<String>,
     /// Billing period start (YYYY-MM-DD).
     pub period_from: String,
     /// Billing period end (YYYY-MM-DD).
@@ -154,14 +165,17 @@ impl BillingdMcpHandler {
         &self,
         Parameters(params): Parameters<ListRecordsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
+        use crate::pg::{RecordFilter, list_billing_records};
         match list_billing_records(
             &self.state.pool,
             &self.state.tenant,
-            params.malo_id.as_deref(),
-            params.lf_mp_id.as_deref(),
-            params.outcome.as_deref(),
-            params.limit.unwrap_or(20).min(100),
+            &RecordFilter {
+                malo_id: params.malo_id.as_deref(),
+                lf_mp_id: params.lf_mp_id.as_deref(),
+                outcome: params.outcome.as_deref(),
+                limit: params.limit.unwrap_or(20).clamp(1, 100),
+                ..Default::default()
+            },
         )
         .await
         {
@@ -197,54 +211,47 @@ impl BillingdMcpHandler {
     }
 
     #[tool(
-        description = "Dry-run billing preview for a MaLo: returns expected Rechnung positions without persisting or emitting a CloudEvent. Calls POST /api/v1/billing/{malo_id}/preview internally.",
+        description = "Dry-run billing preview for a MaLo: the Rechnung positions, totals and \
+engine warnings that a real run would produce, without persisting a record or emitting a \
+CloudEvent. Runs the same pipeline as POST /api/v1/billing/{malo_id}/preview, in process.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn preview_billing(
         &self,
         Parameters(params): Parameters<PreviewParams>,
     ) -> Result<CallToolResult, McpError> {
-        // Call the billingd preview endpoint via HTTP (carries tarifbd/edmd/marktd context)
-        let url = format!(
-            "{}/api/v1/billing/{}/preview",
-            self.state.self_url, params.malo_id
-        );
-        let body = serde_json::json!({
-            "lf_mp_id": params.lf_mp_id,
-            "nb_mp_id": params.nb_mp_id,
-            "period_from": params.period_from,
-            "period_to": params.period_to,
-        });
-        match mako_service::http::default_client()
-            .post(&url)
-            .json(&body)
-            .send()
+        let req = crate::handlers::CalculateRequest {
+            lf_mp_id: params.lf_mp_id,
+            nb_mp_id: params.nb_mp_id,
+            period_from: params.period_from,
+            period_to: params.period_to,
+            ..Default::default()
+        };
+        // The same coded error the HTTP endpoint answers with, over MCP's
+        // transport: a caller's mistake is `invalid_params`, an outage is
+        // `internal_error`, and the body carries the same `error.code`.
+        let preview = crate::handlers::compute_preview(&self.state.deps, &params.malo_id, &req)
             .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
-                    .await
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                ContentBlock::json(json)
-                    .map(|b| CallToolResult::success(vec![b]))
-                    .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Ok(resp) => {
-                let status = resp.status();
-                let text = resp.text().await.unwrap_or_default();
-                Err(McpError::internal_error(
-                    format!("Preview failed ({status}): {text}"),
-                    None,
-                ))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+            .map_err(|e| {
+                let body = e.body().to_string();
+                if e.status().is_client_error() {
+                    McpError::invalid_params(body, None)
+                } else {
+                    McpError::internal_error(body, None)
+                }
+            })?;
+        ContentBlock::json(crate::handlers::preview_json(&params.malo_id, &preview))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None))
     }
+
     #[tool(
-        description = "Fetch the XRechnung 3.0 / ZUGFeRD 2.3 CII XML for a billing record UUID. \
-Returns EN 16931-compliant electronic invoice XML, required for B2G (Bundesbehörden) invoices from 01.01.2027. \
-The XML is BASE64-free — returns the raw XML string.",
+        description = "Fetch the EN 16931 CII XML for a billing record UUID, rendered from the \
+stored semantic model. A retail invoice declares plain EN 16931 in BT-24; only a document put \
+through POST /api/v1/billing/{id}/submit-b2g declares the XRechnung CIUS, which additionally \
+needs a Leitweg-ID (BT-10) no household has. B2G e-invoicing to federal authorities has been \
+mandatory since 27.11.2020 (§4a EGovG i.V.m. ERechV); the 2027/2028 dates belong to the separate \
+B2B mandate in §14 UStG. Returns the raw XML string, not BASE64.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_xrechnung(
@@ -273,8 +280,11 @@ The XML is BASE64-free — returns the raw XML string.",
                 ContentBlock::json(serde_json::json!({
                     "billing_record_id": id,
                     "xrechnung_xml": xml,
-                    "standard": "XRechnung 3.0 / CII (EN 16931)",
-                    "note": "Submit to ZRE (Zentraler Rechnungseingang) for B2G invoices."
+                    "specification_id": model.specification_id,
+                    "standard": "EN 16931 / CII (XRechnung 3.0 only when BT-24 says so)",
+                    "note": "For a B2G submission use POST /api/v1/billing/{id}/submit-b2g — it \
+completes the buyer, stamps the Leitweg-ID and proves the document against the XRechnung CIUS \
+before anything is sent to ZRE / OZG-RE."
                 }))
                 .map(|b| CallToolResult::success(vec![b]))
                 .map_err(|e| McpError::internal_error(e.message, None))
@@ -296,8 +306,9 @@ NOTE: every calculated invoice is also scored inline by the deterministic risk g
 (AUTO_RELEASED/SAMPLE/REVIEW/HELD) and the coded `risk_findings`; HELD records are not \
 dispatched until released via POST /api/v1/billing/{id}/release. \
 Returns deviation percentage, rolling average, and is_anomaly flag. \
-Flags invoices where |deviation| > threshold_pct (default 20%). \
-Use this to detect erroneous invoices before customers complain — powercloud's headline AI feature. \
+Flags invoices where |deviation| > threshold_pct (default 20%). The baseline counts live \
+originals and consolidated documents only — reversed invoices and the per-MaLo children of a \
+bundle are excluded, so it is the same population the risk gate scored against. \
 agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt event.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -349,7 +360,7 @@ agentd billing-anomaly-agent calls this on every de.billing.rechnung.erstellt ev
         }
     }
 
-    // ── VPP Aggregation Settlement (B12 — Art. 17 RL (EU) 2019/944) ────────────────
+    // ── §41e VPP dispatch settlement ──────────────────────────────────────────
 
     #[tool(
         description = "List VPP (Virtual Power Plant) aggregation settlement records for a VPP portfolio. \
@@ -361,44 +372,48 @@ CloudEvent de.vpp.settlement.berechnet is emitted per settlement. § 41e EnWG / 
         &self,
         Parameters(p): Parameters<serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
+        use crate::pg::{RecordFilter, list_billing_records};
         let lf_mp_id = p.get("lf_mp_id").and_then(|v| v.as_str());
         let limit = p
             .get("limit")
-            .and_then(|v| v.as_i64())
+            .and_then(serde_json::Value::as_i64)
             .unwrap_or(20)
-            .min(100);
-        // VPP records use category=VPP stored under the vpp_id as malo_id.
+            .clamp(1, 100);
+        // VPP records are stored under the vpp_id in the `malo_id` column.
         let vpp_malo = p.get("vpp_id").and_then(|v| v.as_str());
+        // The category filter runs in the query, not over the rows it returned:
+        // a portfolio whose latest `limit` documents are all ordinary invoices
+        // would otherwise answer "no settlements" while its settlements sit one
+        // page further down.
         match list_billing_records(
             &self.state.pool,
             &self.state.tenant,
-            vpp_malo,
-            lf_mp_id,
-            None,
-            limit,
+            &RecordFilter {
+                malo_id: vpp_malo,
+                lf_mp_id,
+                category: Some("VPP"),
+                limit,
+                ..Default::default()
+            },
         )
         .await
         {
-            Ok(rows) => {
-                let vpp_rows: Vec<_> = rows
-                    .iter()
-                    .filter(|r| r.category.starts_with("VPP"))
-                    .collect();
-                ContentBlock::json(serde_json::json!({
-                    "count": vpp_rows.len(),
-                    "records": vpp_rows,
-                    "hint": "POST /api/v1/billing/vpp/{vpp_id} to generate a new VPP settlement from dispatch events. CloudEvent de.vpp.settlement.berechnet is emitted to ERP."
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
+            Ok(rows) => ContentBlock::json(serde_json::json!({
+                "count": rows.len(),
+                "records": rows,
+                "hint": "POST /api/v1/billing/vpp/{vpp_id} to settle dispatch events. Supply a \
+`tx_id` per event so the manual path shares `vpp_dispatch_ledger` with the auto-settlement \
+webhook and cannot pay the same flexibility twice. CloudEvent de.vpp.settlement.berechnet is \
+emitted to the ERP."
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
     #[tool(
-        description = "List Korrekturrechnung and Stornorechnung records (§ 147 AO / GoBD audit trail). \
+        description = "List Korrekturrechnung and Stornorechnung records (§ 147 AO / GoBD audit trail, 8 years). \
 Returns all correction/reversal billing records for a MaLo. \
 Each record includes original_record_id, correction_reason, and whether it negates the original.",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -407,90 +422,45 @@ Each record includes original_record_id, correction_reason, and whether it negat
         &self,
         Parameters(params): Parameters<ListRecordsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
-        // Fetch all records; filter is_correction = true in memory to avoid
-        // a separate pg function (corrections are rare — no perf concern).
+        use crate::pg::{RecordFilter, list_billing_records};
+        // `is_correction` is a query predicate, not a post-filter. Fetching a
+        // page and keeping the corrections out of it meant a MaLo with fifty
+        // ordinary invoices and three Stornos answered "no corrections" — an
+        // audit tool (§ 147 AO) reporting that a correction chain does not
+        // exist when it does.
         match list_billing_records(
             &self.state.pool,
             &self.state.tenant,
-            params.malo_id.as_deref(),
-            params.lf_mp_id.as_deref(),
-            None, // outcome filter not applied — show all corrections
-            params.limit.unwrap_or(50).min(200),
+            &RecordFilter {
+                malo_id: params.malo_id.as_deref(),
+                lf_mp_id: params.lf_mp_id.as_deref(),
+                is_correction: Some(true),
+                limit: params.limit.unwrap_or(50).clamp(1, 200),
+                ..Default::default()
+            },
         )
         .await
         {
-            Ok(rows) => {
-                let corrections: Vec<_> = rows.iter().filter(|r| r.is_correction).collect();
-                ContentBlock::json(serde_json::json!({
-                    "count": corrections.len(),
-                    "records": corrections,
-                    "note": "Use POST /api/v1/billing/{id}/correction to create a new correction."
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
+            Ok(rows) => ContentBlock::json(serde_json::json!({
+                "count": rows.len(),
+                "records": rows,
+                "note": "Use POST /api/v1/billing/{id}/correction to create a new correction. \
+Each Storno takes its own number from the tenant's `ST` series and releases the original's \
+period for re-billing."
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
 
     #[tool(
-        description = "Trigger a billing calculation run for a MaLo. \
-Calls POST /api/v1/billing/{malo_id}/calculate, persists the Rechnung, and emits de.billing.rechnung.erstellt. \
-Use preview_billing first to verify the result without side effects.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn calculate_billing(
-        &self,
-        Parameters(params): Parameters<PreviewParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let url = format!(
-            "{}/api/v1/billing/{}/calculate",
-            self.state.self_url, params.malo_id
-        );
-        let body = serde_json::json!({
-            "lf_mp_id": params.lf_mp_id,
-            "nb_mp_id": params.nb_mp_id,
-            "period_from": params.period_from,
-            "period_to": params.period_to,
-        });
-        match mako_service::http::default_client()
-            .post(&url)
-            .json(&body)
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                let json: serde_json::Value = resp
-                    .json()
-                    .await
-                    .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-                ContentBlock::json(json)
-                    .map(|b| CallToolResult::success(vec![b]))
-                    .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Ok(resp) => {
-                let st = resp.status();
-                let txt = resp.text().await.unwrap_or_default();
-                Err(McpError::internal_error(
-                    format!("Billing run failed ({st}): {txt}"),
-                    None,
-                ))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    #[tool(
-        description = "List all 12 billing product categories with their required and optional \
-TariffInput fields. Use this to discover what fields to set in tarifbd for a given product type. \
-Returns a structured description of STROM, GAS, WAERME, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, \
-WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM also covered).",
+        description = "List all 13 billing product categories with their required and optional \
+TariffInput fields — the `Product` enum billingd dispatches on. Use this to discover what fields \
+to set in tarifbd for a given product type. Covers STROM (incl. §41a dynamic), GAS, WAERME, \
+WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG \
+and SHARING. A bundle is not a category: tarifbd decomposes it into component product codes \
+before billing.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_product_categories(
@@ -501,15 +471,16 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
             { "category": "STROM", "description": "Standard electricity — Eintarif/Zweitarif/Mehrtarif", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["grundpreis_ct_per_day", "arbeitspreis_ht_ct_per_kwh", "arbeitspreis_nt_ct_per_kwh", "dynamic_epex", "dynamic_epex_floor_ct_kwh"], "regulatory": "§41a EnWG for dynamic; §3 StromStG levy included" },
             { "category": "GAS", "description": "Natural gas with Brennwertkorrektur and CO₂ levies", "required": ["gas_arbeitspreis_ct_per_kwh_hs"], "optional": ["gas_grundpreis_ct_per_day", "energiesteuer_gas_ct_per_kwh_override", "behg_gas_ct_per_kwh_override"], "regulatory": "§25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG" },
             { "category": "WAERME", "description": "Fernwärme — Grundpreis, Arbeitspreis, Leistungspreis", "required": ["waerme_arbeitspreis_ct_per_kwh"], "optional": ["waerme_grundpreis_eur_per_month", "waerme_leistungspreis_eur_per_kw_month", "mwst_rate_override"], "regulatory": "District heating is standard-rated (19%); the 7% gas/Fernwärme window was §28 Abs. 5/6 UStG (2022–31.03.2024, expired) — set mwst_rate_override for a period inside it" },
-            { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §21 Abs. 3 EEG, §42b EnWG GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "mwst_rate_override: 0 for PV ≤30kWp from 2023"], "regulatory": "§12 Abs.3 UStG: 0% MwSt for PV ≤30kWp since 01.01.2023 (set mwst_rate_override: 0)" },
+            { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §21 Abs. 3 EEG, §42b EnWG GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "stromsteuer_befreiung"], "regulatory": "§12 Abs. 3 UStG is the 0 % rate on the PV **hardware supply** — it never applies to the electricity. Consumption is 19 %; a feed-in Gutschrift is 0 % only when the operator is a §19 UStG Kleinunternehmer (declared on the plant, not here)" },
             { "category": "EEG", "description": "EEG feed-in Vergütung — credit note to plant operator (LF role, contractual)", "required": ["eeg_verguetungssatz_ct_per_kwh"], "optional": ["eeg_marktpraemie_ct_per_kwh", "eeg_managementpraemie_ct_per_kwh", "kwkg_zuschlag_ct_per_kwh"], "meter": "eeg_meter.einspeisung_kwh, eeg_meter.kwh_during_negative_epex (§51 contractual suspension)", "regulatory": "§21 EEG Vergütung; §20 EEG Marktprämie; §51 EEG Negativpreisregel (contractual for LF)" },
             { "category": "EINSPEISUNG", "description": "Direktvermarktung settlement — Marktwert minus Vermarktungsgebühr", "required": ["marktwert_ct_per_kwh"], "optional": ["vermarktungsgebuehr_ct_per_kwh"], "regulatory": "§20 EEG Direktvermarktung; Direktvermarkter bears negative-price risk (§51 does NOT apply)" },
-            { "category": "WAERMEPUMPE", "description": "Heat pump electricity with §14a EnWG Steuerungsrabatt Modul 1/3", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["sect14a_modul1_pauschale_eur_per_kw_year", "sect14a_steuerungsentschaedigung_eur_per_kw_year"], "meter": "meter.spitzenleistung_kw (required for §14a), meter.steuerung_stunden (Modul 3)", "regulatory": "§14a EnWG; BK6-22-300; mandatory for controlled devices ≥3.7kW from 01.01.2024" },
+            { "category": "WAERMEPUMPE", "description": "Heat pump electricity with §14a EnWG Steuerungsrabatt Modul 1/3", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["sect14a_modul1_pauschale_eur_per_kw_year", "sect14a_steuerungsentschaedigung_eur_per_kw_year"], "meter": "meter.spitzenleistung_kw (required for §14a), meter.steuerung_stunden (Modul 3)", "regulatory": "§14a EnWG; BNetzA BK6-22-300 (27.11.2023), in force 01.01.2024 — applies to steuerbare Verbrauchseinrichtungen above 4.2 kW Netzanschlussleistung" },
             { "category": "WALLBOX", "description": "EV charging box with §14a EnWG Steuerungsrabatt Modul 1/3 — same as WAERMEPUMPE", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["sect14a_modul1_pauschale_eur_per_kw_year", "sect14a_steuerungsentschaedigung_eur_per_kw_year"], "regulatory": "§14a EnWG same as WAERMEPUMPE" },
             { "category": "HEMS", "description": "Home Energy Management System — platform subscription + optimization events", "required": ["hems_subscription_eur_per_month"], "optional": ["hems_optimization_event_eur", "hems_readout_event_eur"], "meter": "hems_meter.months, hems_meter.optimization_events, hems_meter.readout_events" },
             { "category": "EMOBILITY", "description": "EV charging CPO/EMSP — service fee + kWh + session fees", "required": ["emobility_service_fee_eur or emobility_kwh_price_ct"], "optional": ["emobility_session_fee_eur", "emobility_roaming_fee_eur"], "meter": "emobility_meter.months, emobility_meter.kwh_charged, emobility_meter.sessions" },
             { "category": "ENERGIEDIENSTLEISTUNG", "description": "Energy services (MSB, maintenance, analytics) — flat fee + event count", "required": ["service_fee_eur or service_event_price_eur"], "optional": [], "meter": "service_meter.months, service_meter.event_count" },
-            { "category": "SHARING", "description": "§42c EnWG Energiegemeinschaft — community energy sharing credit against the residual supply", "required": ["sharing product configuration"], "meter": "electricity meter + sharing allocation" }
+            { "category": "SHARING", "description": "§42c EnWG Energiegemeinschaft — community energy sharing credit against the residual supply", "required": ["sharing_credit_ct_per_kwh"], "optional": ["sharing_description"], "meter": "electricity meter (residual supply, from edmd) + energy_share (the community allocation)", "regulatory": "§42c EnWG, in force 01.06.2026; BNetzA Mitteilung Nr. 73 places it inside the existing supplier/Bilanzkreis model" },
+            { "category": "WASSER", "description": "Municipal Trinkwasser and gesplittete Abwassergebühr", "required": ["wasser product configuration"], "meter": "wasser_meter.verbrauch_m3 (+ sealed m² for Niederschlagswasser)", "regulatory": "Trinkwasser 7 % (§12 Abs. 2 Nr. 1 i.V.m. Anlage 2 Nr. 34 UStG); Abwasser as a hoheitliche Gebühr carries no USt" }
         ]);
         ContentBlock::json(categories)
             .map(|b| CallToolResult::success(vec![b]))
@@ -517,7 +488,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
     }
 
     #[tool(
-        description = "Validate a TariffInput configuration for regulatory compliance before billing. Checks: §41a iMSys requirement for dynamic tariffs, missing mandatory fields, KAV rate plausibility, StromsteuerBefreiung certificate reminders. Returns warnings and errors without triggering a calculation.",
+        description = "Validate a Product configuration for regulatory compliance before billing. Runs the engine's own validation pass plus three static checks: the §41a Abs. 1 EnWG iMSys requirement for dynamic tariffs, the legacy Stromsteuer-exemption flag, and the §42 EnWG Energiemix disclosure. Returns warnings and errors without triggering a calculation.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn validate_tariff_config(
@@ -597,7 +568,7 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
             extra_checks.push(serde_json::json!({
                 "code": "STROMSTEUER_BEFREIUNG_LEGACY_FLAG",
                 "severity": "Warning",
-                "message": "industrie_stromsteuer_befreiung=true is a legacy flag. Migrate to stromsteuer_befreiung=INDUSTRIE_PRODUKTIONES_GEWERBE for typed §9 StromStG exemption tracking."
+                "message": "industrie_stromsteuer_befreiung=true is a legacy flag. Migrate to stromsteuer_befreiung=INDUSTRIE_PRODUKTIONES_GEWERBE (§9 Nr. 4 StromStG) for typed exemption tracking."
             }));
         }
 
@@ -735,61 +706,28 @@ WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, and BUNDLE (§41a dynamic STROM
     }
 
     #[tool(
-        description = "Aggregate billing statistics for a MaLo: total billed, monthly average, category breakdown. Use to spot billing trends and verify consistent tariff application.",
+        description = "Aggregate billing statistics for a MaLo or an LF: record count, total \
+net and gross, average gross per 30 days of supply, and a breakdown by category. Aggregated in \
+the database over the whole history — not a capped page — and counted once: Storno rows and the \
+per-MaLo children of a Sammelrechnung are excluded so the bundle and its parts are not both \
+counted.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_billing_summary(
         &self,
         Parameters(params): Parameters<ListRecordsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
-        use rust_decimal::Decimal;
-        let malo_id = params.malo_id.as_deref();
-        let lf_mp_id = params.lf_mp_id.as_deref();
-        match list_billing_records(
+        match crate::pg::billing_summary(
             &self.state.pool,
             &self.state.tenant,
-            malo_id,
-            lf_mp_id,
-            None,
-            100,
+            params.malo_id.as_deref(),
+            params.lf_mp_id.as_deref(),
         )
         .await
         {
-            Ok(rows) => {
-                let mut total_brutto = Decimal::ZERO;
-                let mut count = 0usize;
-                let mut by_category: std::collections::HashMap<String, (usize, Decimal)> =
-                    std::collections::HashMap::new();
-                for row in &rows {
-                    if let Some(brutto) = row.total_brutto_eur {
-                        total_brutto += brutto;
-                        count += 1;
-                        let cat = row.category.clone();
-                        let e = by_category.entry(cat).or_insert((0, Decimal::ZERO));
-                        e.0 += 1;
-                        e.1 += brutto;
-                    }
-                }
-                let avg_monthly = if count > 0 {
-                    total_brutto / Decimal::from(count)
-                } else {
-                    Decimal::ZERO
-                };
-                let category_summary: Vec<_> = by_category.iter()
-                    .map(|(cat, (cnt, total))| serde_json::json!({ "category": cat, "count": cnt, "total_brutto_eur": total.to_string() }))
-                    .collect();
-                ContentBlock::json(serde_json::json!({
-                    "malo_id": malo_id,
-                    "lf_mp_id": lf_mp_id,
-                    "record_count": count,
-                    "total_brutto_eur": total_brutto.to_string(),
-                    "avg_monthly_brutto_eur": avg_monthly.to_string(),
-                    "by_category": category_summary,
-                }))
+            Ok(summary) => ContentBlock::json(summary)
                 .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
+                .map_err(|e| McpError::internal_error(e.message, None)),
             Err(e) => Err(McpError::internal_error(e.to_string(), None)),
         }
     }
@@ -806,7 +744,7 @@ impl BillingdMcpHandler {
             PromptMessage::new_text(Role::User, "Walk me through the complete Order-to-Cash process for a new electricity customer."),
             PromptMessage::new_text(Role::Assistant,
                 "The O2C cycle in mako has 6 phases:\n\n                 **1. Customer Onboarding (GPKE)**\n                 POST processd /api/v1/start-supply { malo_id, lieferbeginn_datum }\n                 → makod dispatches UTILMD 55001 to NB\n                 → NB responds UTILMD 55003 (Bestätigung) within 24h\n                 → VersorgungsStatus in marktd → Beliefert\n
-                 **2. Tariff Assignment**\n                 PUT tarifbd /api/v1/customer/{malo_id}/product { product_code, lf_mp_id, assigned_from }\n                 → STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE product assigned\n
+                 **2. Tariff Assignment**\n                 PUT tarifbd /api/v1/customer/{malo_id}/product { product_code, lf_mp_id, assigned_from }\n                 → one of the 13 product categories assigned (`list_product_categories` describes them)\n
                  **3. Meter Data (edmd)**\n                 MSCONS readings arrive via makod EDIFACT pipeline automatically.\n                 Verify: edmd GET /api/v1/billing-period/{malo_id}\n
                  **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → tarifbd → edmd → marktd (NNE) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
                  **5. Account Posting (accountingd)**\n                 de.billing.rechnung.erstellt → accountingd debit entry (Rechnungsbetrag)\n                 Check balance: accountingd `get_balance`\n                 Monthly SEPA: accountingd `run_sepa_collection` → pain.008 XML\n                 Payment receipt: accountingd `import_payments` (CAMT.054)\n
@@ -828,7 +766,13 @@ impl BillingdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "To preview a billing invoice, use POST /api/v1/billing/{malo_id}/preview.\n                 Required: lf_mp_id, nb_mp_id, period_from, period_to.\n                 Optional: tariff (override from tarifbd), meter (override from edmd), grid (override from marktd).\n\n                 The preview is a full dry-run — same calculation as /calculate but nothing is stored.\n                 The response includes all Rechnungspositionen and netto/brutto totals.",
+                "To preview a billing invoice, use POST /api/v1/billing/{malo_id}/preview.\n\
+                 Required: lf_mp_id, period_from, period_to.\n\
+                 Optional: nb_mp_id (resolved from marktd when absent), tariff (override from \
+tarifbd), meter (override from edmd), grid (override from marktd).\n\n\
+                 The preview runs the same pipeline as /calculate and stores nothing: no record, \
+no CloudEvent, and no number consumed from the §14 UStG series. The response carries every \
+Rechnungsposition, the netto/brutto totals and the engine warnings.",
             ),
         ]
     }
@@ -845,7 +789,21 @@ impl BillingdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "For §41a dynamic tariff (mandatory for iMSys customers since Jan 2025):\n                 1. Verify the product in tarifbd has dynamic_epex: true\n                 2. Verify EPEX day-ahead prices are imported for the billing period:\n                    PUT /api/v1/epex-prices/{date} in tarifbd\n                 3. Verify the customer has 15-min Lastgang data in edmd:\n                    GET /api/v1/lastgang/{malo_id}?from=...&to=...\n                 4. Run a preview: POST /api/v1/billing/{malo_id}/preview with dynamic product\n\n                 If Lastgang is unavailable, billingd falls back to static arbeitsmenge_kwh billing.",
+                "For a §41a dynamic tariff (every supplier must offer one since 01.01.2025, \
+owed to customers who have an iMSys):\n\
+                 1. Verify the product in tarifbd has dynamic_epex: true\n\
+                 2. Verify EPEX day-ahead prices are imported for the whole billing period:\n\
+                    PUT /api/v1/epex-prices/{date} in tarifbd (15-min MTUs)\n\
+                 3. Verify the customer has 15-min Lastgang data in edmd:\n\
+                    GET /api/v1/lastgang/{malo_id}?from=...&to=...\n\
+                 4. Verify the meter is an iMSys — §41a Abs. 1 EnWG requires one, and billingd\n\
+                    refuses the run with SECT41A_IMSYS_REQUIRED for MeteringMode Slp or Rlm\n\
+                 5. Run a preview: POST /api/v1/billing/{malo_id}/preview\n\n\
+                 **There is no fallback.** A dynamic tariff is billed per market time unit or \
+not at all: a period with no Lastgang is refused (SECT41A_NO_LASTGANG) and intervals with \
+consumption but no EPEX price hard-block the run (SECT41A_MISSING_EPEX_PRICES). Billing the \
+static arbeitspreis instead would charge a price the contract does not contain, and dropping \
+unpriced intervals would silently under-bill.",
             ),
         ]
     }
@@ -868,9 +826,12 @@ impl BillingdMcpHandler {
                 Example: 150 EUR/kW/year → 5 kW WP → 750 EUR/year Netzentgelteinsparung (vor MwSt).\n\
                 Requires: spitzenleistung_kw in the meter reading or billing request.\n\
                 Formula: kW × rate_eur_per_kw_year / 12 × billing_months → credit position.\n\n\
-                **Modul 2 — Event-based (per dispatch hour) — NOT YET IN billingd**\n\
-                Requires ZeitvariablePreisposition from marktd + actual controlled kWh from edmd.\n\
-                Planned: integrate with processd §14a Steuerungsauftrag CloudEvent pipeline.\n\n\
+                **Modul 2 — Reduzierter NNE-Arbeitspreis (ct/kWh)**\n\
+                In tarifbd: set `sect14a_modul2_nne_reduktion_ct_per_kwh` in the product.\n\
+                Billed by `ControllableLoadProvider` as a per-kWh credit tagged 'sect14a_modul2'.\n\
+                Requires separate metering of the steuerbare Verbrauchseinrichtung, and is\n\
+                **mutually exclusive with Modul 3** — both re-price the network usage, and\n\
+                configuring them together is an Error-severity finding (MODUL2_AND_MODUL3).\n\n\
                 **Modul 3 — Load-shedding compensation (Laststeuerung hours × kW)**\n\
                 In tarifbd: set `sect14a_steuerungsentschaedigung_eur_per_kw_year` in the product.\n\
                 Requires: steuerung_stunden in the meter reading (from agentd/processd).\n\
@@ -882,8 +843,13 @@ impl BillingdMcpHandler {
                 4. Check: position tagged 'sect14a_modul1' (pauschale Reduzierung) or\n\
                    'sect14a_modul2' (Arbeitspreisreduzierung) → negative credit amount\n\
                 5. Confirm: brutto_eur is LOWER than without §14a\n\n\
-                **Regulatory basis:** §14a EnWG (Gesetz zur Änderung des EnWG 2022), BNetzA Festlegung BK6-22-300.\n\
-                Pflicht ab 01.01.2024 für alle neuen steuerbaren Anlagen ≥3.7 kW.",
+                **Regulatory basis:** §14a EnWG, BNetzA Festlegung BK6-22-300 (27.11.2023),\n\
+                in force 01.01.2024. It applies to steuerbare Verbrauchseinrichtungen in\n\
+                Niederspannung with a Netzanschlussleistung **above 4.2 kW** — heat pumps,\n\
+                non-public charging points, air conditioning, storage. Several devices of the\n\
+                same category behind one connection count as one for the threshold, and the\n\
+                network operator dims rather than disconnects (4.2 kW floor). Legacy §14a\n\
+                installations migrate by 01.01.2029.",
             ),
         ]
     }
@@ -961,9 +927,14 @@ impl BillingdMcpHandler {
                 **Regulatory rates (configure in billingd.toml `[rates]`):**\n\
                 | Rate | Default | Legal basis |\n\
                 |---|---|---|\n\
-                | Energiesteuer | 0.55 ct/kWh_Hs | §2 Nr. 3 EnergieStG |\n\
-                | BEHG CO₂ | 1.109 ct/kWh_Hs | 55 EUR/t CO₂ × 0.20160 kg/kWh (2025) |\n\
-                | MwSt | 19% | Standard; 7% for Fernwärme (§12 Abs.2 Nr.1 UStG) |\n\n\
+                | Energiesteuer | 0.55 ct/kWh_Hs | §2 Abs. 3 Nr. 4 EnergieStG |\n\
+                | BEHG CO₂ | 1.3104 ct/kWh_Hs | 65 EUR/t CO₂ × 0.20160 kg/kWh (2026 default); \
+                since 07/2026 the price is EEX-auctioned inside the §10 Abs. 2 BEHG corridor, so \
+                billingd prefers tarifbd's `nehs_prices` series over this table |\n\
+                | MwSt | 19% | Gas and Fernwärme are standard-rated. The 7% window was \
+                §28 Abs. 5/6 UStG (01.10.2022–31.03.2024) and has expired; billingd resolves \
+                it automatically for periods inside it and refuses periods that straddle the \
+                Stichtag |\n\n\
                 **Grid pass-through (from marktd PreisblattNetznutzung):**\n\
                 Supply via `grid` override: `gas_nne_grundpreis_eur_per_year`, \n\
                 `gas_nne_arbeitspreis_ct_per_kwh`, `gas_ka_ct_per_kwh`,\n\
@@ -988,7 +959,10 @@ impl ServerHandler for BillingdMcpHandler {
         .with_instructions(
             "billingd MCP — Multi-Product Billing Engine (LF role).\n\
              Supports All energy categories. §41a dynamic EPEX for STROM. Gas Brennwertkorrektur. §14a for WAERMEPUMPE/WALLBOX. EEG/EINSPEISUNG credit notes.\n\
-             XRechnung 3.0 / ZUGFeRD 2.3 XML available at GET /api/v1/billing/{id}/xrechnung.\n\n\
+             EN 16931 CII at GET /api/v1/billing/{id}/xrechnung, PEPPOL UBL at …/ubl, the \
+             ZUGFeRD PDF at …/pdf.\n\
+             Nothing here issues a document: every tool is read-only, and a Rechnung is a \
+             legally binding act that needs a human or a scheduled run with an OIDC identity.\n\n\
              Use `list_billing_records` to audit recent invoices.\n\
              Use `get_billing_record` to inspect a specific Rechnung BO4E.\n\
              Use `preview_billing` hint to understand the dry-run endpoint.",

@@ -38,28 +38,23 @@ use crate::document::gate::Proof;
 /// one status.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    /// The identical source is already published under a different kind (or,
-    /// in a shared database, by a different tenant). The hash is the identity
-    /// of the *source*, and a template's kind decides which proof it was
-    /// admitted on — so one row cannot honestly serve both. Without this
-    /// refusal the second publish was a silent no-op that returned a hash whose
-    /// row carried the *first* publisher's kind and proof: rollout then
-    /// succeeded and every render answered 422, with no error anywhere naming
-    /// the cause.
+    /// This tenant already published the identical source under a different
+    /// kind. The hash identifies the *source*, and a template's kind decides
+    /// which proof it was admitted on, so one row cannot honestly serve both:
+    /// accepting the second publish would return a hash whose row carries the
+    /// first kind and proof, rollout would succeed, and every render would
+    /// answer 422 with nothing naming the cause.
+    ///
+    /// Only ever within one tenant — identity is `(tenant, hash)`, so another
+    /// operator publishing the same bytes is not a collision and never
+    /// discloses that they did.
     #[error(
-        "this exact source is already published {}as {existing_kind} — the hash is the identity \
-         of the source, so one row cannot serve two owners; change the source (a comment line \
-         suffices) to give it its own identity{}",
-        if *other_tenant { "by another tenant " } else { "" },
-        if *other_tenant { "" } else { ", or publish it under that kind" },
+        "you have already published this exact source as {existing_kind} — the hash is the \
+         identity of the source, so one row cannot serve two kinds; publish it under \
+         {existing_kind}, or change the source (a comment line suffices) to give it its \
+         own identity"
     )]
-    IdentityCollision {
-        existing_kind: String,
-        /// Whether the colliding row belongs to a different tenant — in that
-        /// case "publish it under {kind}" is not advice, it is what the caller
-        /// just did.
-        other_tenant: bool,
-    },
+    IdentityCollision { existing_kind: String },
 
     /// The hash names no template published as `kind` by this tenant.
     #[error("{0} is not a published {1} template of this tenant")]
@@ -214,7 +209,7 @@ pub async fn publish(
         "INSERT INTO document_templates
              (hash, tenant, kind, source, pdf_standard, proof, published_by)
          VALUES ($1, $2, $3, $4, $5, $6, $7)
-         ON CONFLICT (hash) DO NOTHING",
+         ON CONFLICT (tenant, hash) DO NOTHING",
     )
     .bind(&hash)
     .bind(tenant)
@@ -227,20 +222,19 @@ pub async fn publish(
     .await?
     .rows_affected();
     if inserted == 0 {
-        // The hash already exists. Rows are immutable, so this read cannot
-        // race anything: either it is the same (tenant, kind) — the documented
-        // idempotent re-publish — or the caller collided with an identity that
-        // is not theirs.
-        let (existing_tenant, existing_kind): (String, String) =
-            sqlx::query_as("SELECT tenant, kind FROM document_templates WHERE hash = $1")
-                .bind(&hash)
-                .fetch_one(pool)
-                .await?;
-        if existing_tenant != tenant || existing_kind != kind.as_str() {
-            return Err(StoreError::IdentityCollision {
-                existing_kind,
-                other_tenant: existing_tenant != tenant,
-            });
+        // This tenant already holds the identity. Rows are immutable, so the
+        // read cannot race anything: either it is the same kind — the
+        // documented idempotent re-publish — or the same source is already
+        // published as something else.
+        let existing_kind: String = sqlx::query_scalar(
+            "SELECT kind FROM document_templates WHERE tenant = $1 AND hash = $2",
+        )
+        .bind(tenant)
+        .bind(&hash)
+        .fetch_one(pool)
+        .await?;
+        if existing_kind != kind.as_str() {
+            return Err(StoreError::IdentityCollision { existing_kind });
         }
     }
     Ok(hash)
@@ -296,7 +290,7 @@ pub async fn current(
     Ok(sqlx::query_as(
         "SELECT t.hash, t.tenant, t.kind, t.source, t.pdf_standard, t.proof
            FROM document_template_current c
-           JOIN document_templates t ON t.hash = c.hash
+           JOIN document_templates t ON t.hash = c.hash AND t.tenant = c.tenant
           WHERE c.tenant = $1 AND c.kind = $2",
     )
     .bind(tenant)
@@ -308,21 +302,30 @@ pub async fn current(
 /// A specific template by hash — how a reissued or audited document resolves the
 /// layout it was actually rendered with, years later.
 ///
-/// Not tenant-scoped on purpose: the hash *is* the identity, and a document
-/// carrying it has already established the right to see it.
+/// **Tenant-scoped.** It was not, on the reasoning that "the hash *is* the
+/// identity, and a document carrying it has already established the right to
+/// see it". That holds for a document; it does not hold for
+/// `GET /api/v1/templates/by-hash/{hash}`, where the caller supplies the hash
+/// and nothing has established anything. In a shared database that made one
+/// tenant's complete template source — Briefkopf, addresses, whatever an
+/// operator put in a comment — readable by any other tenant that came by a
+/// hash. The tenant filter belongs in the query, not in a check a caller-facing
+/// path can forget to make.
 ///
 /// # Errors
 ///
 /// Propagates storage errors.
 pub async fn by_hash(
     exec: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
     hash: &str,
 ) -> Result<Option<StoredTemplate>> {
     Ok(sqlx::query_as(
         "SELECT hash, tenant, kind, source, pdf_standard, proof
-           FROM document_templates WHERE hash = $1",
+           FROM document_templates WHERE hash = $1 AND tenant = $2",
     )
     .bind(hash)
+    .bind(tenant)
     .fetch_optional(exec)
     .await?)
 }

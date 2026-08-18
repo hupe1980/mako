@@ -70,6 +70,45 @@ impl BillingProvider for ElectricityProvider {
         let mut w = Vec::new();
         let meter = quantities.electricity.as_ref();
 
+        // A commodity product must be able to price its commodity.
+        //
+        // Without this, a `StromProduct` carrying no Arbeitspreis at all — every
+        // price field `None` — billed 1000 kWh for €20.50: the Stromsteuer, and
+        // nothing for the electricity. No error, no warning, an invoice that
+        // looks ordinary. That is not a hypothetical: the price fields are
+        // populated by mapping `tarifbd`'s `preistyp` strings onto struct
+        // fields, and a renamed or missing position maps to `None` in silence.
+        //
+        // Error severity, so `bill()` refuses. A product that genuinely charges
+        // no work price still states one (`0.0`); the missing case is a data
+        // defect, and a zero is how an operator says they mean it.
+        let has_any_work_price = self.product.arbeitspreis_ct_per_kwh.is_some()
+            || self.product.arbeitspreis_ht_ct_per_kwh.is_some()
+            || self.product.arbeitspreis_nt_ct_per_kwh.is_some()
+            || self.product.dynamic_epex
+            || self.product.indexed_price.is_some()
+            || self
+                .product
+                .seasonal_prices
+                .as_ref()
+                .is_some_and(|s| !s.is_empty())
+            || self
+                .product
+                .block_tiers
+                .as_ref()
+                .is_some_and(|t| !t.is_empty());
+        if !has_any_work_price {
+            w.push(BillingWarning {
+                code: "KEIN_ARBEITSPREIS",
+                severity: WarningSeverity::Error,
+                message: "the product carries no Arbeitspreis in any form (Eintarif, HT/NT, \
+                          dynamic, indexed, seasonal or tiered) — the invoice would charge \
+                          the Stromsteuer and nothing for the electricity. Check the \
+                          tarifbd product's price positions."
+                    .to_owned(),
+            });
+        }
+
         // An estimated reading is billable (§ 60 Abs. 2 MsbG), but the caller
         // must know it happened: the customer can demand a corrected invoice
         // once a real reading arrives, so dispatch systems treat it differently.
@@ -291,7 +330,15 @@ impl BillingProvider for ElectricityProvider {
                 eeg_ct.abs(),
                 PositionCategory::Credit,
             )
-            .with_legal_basis("§38 EEG 2023")
+            // §19 Abs. 1 EEG 2023 is the Zahlungsanspruch itself. Which
+            // Veräußerungsform it takes — §20 Marktprämie or §21 Abs. 1
+            // Einspeisevergütung — is the plant's, and `einsd` decides it; this
+            // position is the pass-through of whatever einsd computed, so the
+            // anchor must be the entitlement rather than one of its two forms.
+            // (It read "§38 EEG 2023", which is Zahlungsberechtigung für
+            // Solaranlagen des ersten Segments — an auction provision that has
+            // nothing to do with a rooftop feed-in credit.)
+            .with_legal_basis("§19 Abs. 1 EEG 2023")
             .with_tag("eeg_gutschrift")
             .with_tag("solar");
             if product.eeg_gutschrift_kleinunternehmer_19_ustg {
@@ -1097,6 +1144,29 @@ impl BillingProvider for GasProvider {
         quantities: &Quantities,
     ) -> Vec<BillingWarning> {
         let mut w = Vec::new();
+
+        // Same invariant as electricity: a gas product must be able to price its
+        // gas. A `GasProduct` with every work-price field `None` bills the
+        // Energiesteuer and the BEHG levy and nothing for the gas itself.
+        let has_gas_work_price = self.product.gas_arbeitspreis_ct_per_kwh_hs.is_some()
+            || self.product.gas_indexed_price.is_some()
+            || self
+                .product
+                .seasonal_prices
+                .as_ref()
+                .is_some_and(|s| !s.is_empty());
+        if !has_gas_work_price {
+            w.push(BillingWarning {
+                code: "KEIN_ARBEITSPREIS",
+                severity: WarningSeverity::Error,
+                message: "the gas product carries no Arbeitspreis in any form (kWh_Hs, \
+                          indexed or seasonal) — the invoice would charge the Energiesteuer \
+                          and the BEHG levy and nothing for the gas. Check the tarifbd \
+                          product's price positions."
+                    .to_owned(),
+            });
+        }
+
         // §40a EnWG / § 60 Abs. 2 MsbG: an estimated reading is billable but
         // the caller must know it happened — dispatch systems treat it
         // differently and the customer can demand a corrected invoice.
@@ -1589,6 +1659,21 @@ impl BillingProvider for HeatProvider {
         _quantities: &Quantities,
     ) -> Vec<BillingWarning> {
         let mut w = Vec::new();
+
+        // Same invariant as electricity and gas: heat must be priced. A
+        // Fernwärme product with no Arbeitspreis bills the Grundpreis and the
+        // Leistungspreis and nothing for the delivered heat.
+        if self.product.waerme_arbeitspreis_ct_per_kwh.is_none() {
+            w.push(BillingWarning {
+                code: "KEIN_ARBEITSPREIS",
+                severity: WarningSeverity::Error,
+                message: "the Fernwärme product carries no Arbeitspreis — the invoice would \
+                          bill the standing and demand charges and nothing for the delivered \
+                          heat. Check the tarifbd product's price positions."
+                    .to_owned(),
+            });
+        }
+
         // Fernwärme carried 7 % USt from 01.10.2022 to 31.03.2024 (§28
         // Abs. 6 UStG) and 16 % in H2/2020 — same split discipline as gas.
         if crate::rates::mwst_rate_for_gas_waerme_period(ctx.period_from(), ctx.period_to())

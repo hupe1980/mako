@@ -1,22 +1,19 @@
 //! Category dispatch via `BillingEngine` — quantities and invoice assembly.
 
-#[allow(unused_imports)]
 use super::*;
 
 // ── Category dispatch via BillingEngine ──────────────────────────────────────
 
 /// Build the `Quantities` for a billing request by resolving meter data.
-#[allow(clippy::too_many_arguments)]
 pub(crate) async fn build_quantities(
+    deps: &BillingDeps,
     tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
     period_from: time::Date,
     period_to: time::Date,
-    edmd: &Arc<EdmdClient>,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-    tarifbd: &Arc<TarifbdClient>,
-) -> Result<Quantities, (StatusCode, String)> {
+) -> BillingResult<Quantities> {
+    let (edmd, marktd, tarifbd) = (&deps.edmd, &deps.marktd, &deps.tarifbd);
     let mut q = Quantities {
         eeg_gutschrift_eur: req.eeg_gutschrift_eur,
         ..Default::default()
@@ -29,13 +26,36 @@ pub(crate) async fn build_quantities(
                 Product::Waermepumpe(p) | Product::Wallbox(p) => p.base.dynamic_epex,
                 _ => false,
             };
+            // The meter reading is resolved either way. A dynamic tariff prices
+            // from the Lastgang, but the §40 Abs. 2 Nr. 6 register readings, the
+            // §40a estimation flag and — the one that mattered — the
+            // `metering_mode` all live here. Leaving `electricity` unset on the
+            // dynamic path meant `DynamicElectricityProvider::validate_warnings`
+            // saw no metering mode at all, so the §41a Abs. 1 iMSys guard this
+            // service advertises never fired on a single production invoice.
+            q.electricity =
+                Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
             if is_dynamic {
                 q.dynamic_intervals =
-                    fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await;
+                    fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await?;
                 q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, tarifbd).await;
-            } else {
-                q.electricity =
-                    Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
+                // Without intervals the dynamic provider prices nothing: the
+                // invoice comes back carrying the Grundpreis and no energy at
+                // all — no Arbeitspreis, no Stromsteuer, no NNE-Arbeitspreis —
+                // and looks entirely ordinary. That is the §41a twin of the
+                // priceless-product defect, and it must be refused, not billed.
+                if q.dynamic_intervals.is_empty() {
+                    return Err(BillingError::unprocessable(
+                        "SECT41A_NO_LASTGANG",
+                        format!(
+                            "§41a EnWG: no 15-minute Lastgang for MaLo {malo_id} in \
+                             {period_from}..{period_to}. A dynamic tariff is billed per \
+                             market time unit and cannot be billed without one — import \
+                             the MSCONS interval data or switch the customer to a \
+                             fixed-price product."
+                        ),
+                    ));
+                }
             }
         }
         "GAS" => {
@@ -64,22 +84,46 @@ pub(crate) async fn build_quantities(
         "ENERGIEDIENSTLEISTUNG" => {
             q.service = Some(req.service_meter.clone().unwrap_or_default());
         }
-        _ => {
-            // Unknown category: try electricity as fallback
+        // §42c EnWG: a sharing participant is an ordinary supply customer whose
+        // bill carries a credit for their allocated community share. Both halves
+        // are needed — the residual supply from edmd and the allocation from the
+        // caller — and the credit silently vanishing was the failure mode of
+        // routing SHARING through the electricity fallback below.
+        "SHARING" => {
             q.electricity =
                 Some(resolve_strom_meter(req, malo_id, period_from, period_to, edmd).await?);
+            q.energy_share = req.energy_share.clone();
+            if q.energy_share.is_none() {
+                tracing::warn!(
+                    malo_id,
+                    "billingd SHARING: no energy_share allocation supplied — the invoice bills \
+                     the residual supply without the §42c community credit"
+                );
+            }
+        }
+        other => {
+            // Every `Product` variant is named above. A category that is not is
+            // a tarifbd/billingd version skew, and billing it as electricity
+            // would issue a plausible-looking invoice for the wrong product.
+            return Err(BillingError::unprocessable(
+                "UNKNOWN_CATEGORY",
+                format!("no quantity source for product category {other}"),
+            ));
         }
     }
     Ok(q)
 }
 
-/// Dispatch a billing request using the new `BillingEngine` architecture.
+/// Resolve everything a period needs and run it through the engine.
 ///
-/// Replaces the old `dispatch_calculator` function.
-/// Returns an `Invoice` instead of a `BillingResult`.
+/// Quantities (meter data per category), the §40 contract facts from vertragd,
+/// the Zählernummer from marktd and the §40 Abs. 2 Nr. 7/8 comparison figures
+/// come together in one [`BillingContext`]; the engine turns that plus the
+/// [`Product`] into an [`Invoice`]. The only clock in the pipeline is the §40c
+/// deadline check at the end — the engine itself is clock-free by design.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn dispatch_invoice(
-    cfg: &BillingdConfig,
+    deps: &BillingDeps,
     tariff: &Product,
     req: &CalculateRequest,
     malo_id: &str,
@@ -87,35 +131,25 @@ pub(crate) async fn dispatch_invoice(
     period_from: time::Date,
     period_to: time::Date,
     rates: &RegulatoryRates,
-    edmd: &Arc<EdmdClient>,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-    tarifbd: &Arc<TarifbdClient>,
-    vertragd: &Arc<VertragdClient>,
-) -> Result<Invoice, (StatusCode, String)> {
+    run: RunId<'_>,
+) -> BillingResult<Billed> {
+    let cfg = deps.cfg.as_ref();
+    let (edmd, marktd, vertragd) = (&deps.edmd, &deps.marktd, &deps.vertragd);
     let grid = req.grid.clone().unwrap_or_default();
-    let quantities = build_quantities(
-        tariff,
-        req,
-        malo_id,
-        period_from,
-        period_to,
-        edmd,
-        marktd,
-        tarifbd,
-    )
-    .await?;
-
-    // Generate a unique billing run ID for audit trail and duplicate detection.
-    // Stored on the Invoice and propagated to the billing_records table.
-    let run_id = Uuid::new_v4().to_string();
+    let quantities = build_quantities(deps, tariff, req, malo_id, period_from, period_to).await?;
 
     // §40 Abs. 1 EnWG — the contract facts the invoice must state live in
     // vertragd, not in the tariff. Soft dependency: an unreachable vertragd
     // or an uncontracted MaLo degrades to an invoice without them, logged.
+    //
+    // **One lookup, one snapshot.** Every caller also needs the BG-7 buyer from
+    // this same answer. Fetching it separately would be two round trips per
+    // invoice, and two answers that a concurrent master-data change could make
+    // disagree about which customer the document is for.
     let vertrag = match vertragd.get_vertrag_by_malo(malo_id).await {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(%malo_id, error = %e, "billingd: vertragd lookup failed — invoice will lack §40 contract facts");
+            tracing::warn!(%malo_id, error = %e, "billingd: vertragd lookup failed — invoice will lack §40 contract facts and its BG-7 buyer");
             None
         }
     };
@@ -145,11 +179,9 @@ pub(crate) async fn dispatch_invoice(
                 n => format!("{n} Monate"),
             }),
             naechstmoeglicher_kuendigungstermin: v.naechstmoeglicher_kuendigungstermin,
-            // The next settlement follows the cadence of this one: a period of
-            // the same length, starting the day after this one ends.
-            naechster_abrechnungstermin: period_to.checked_add(time::Duration::days(
-                (period_to - period_from).whole_days() + 1,
-            )),
+            // The next settlement covers the period after this one, in the same
+            // cadence — so a January bill states 28 February, not 3 March.
+            naechster_abrechnungstermin: next_abrechnungstermin(period_from, period_to),
         }
     });
 
@@ -158,7 +190,7 @@ pub(crate) async fn dispatch_invoice(
         lf_mp_id: req.lf_mp_id.clone(),
         rechnungsnummer: rechnungsnummer.to_owned(),
         period: BillingPeriod::new(period_from, period_to)
-            .expect("parse_period guarantees from < to"),
+            .expect("parse_period guarantees from <= to"),
         // §40c EnWG: a Schlussrechnung (end of supply) settles the account;
         // the engine renders rechnungsart = SCHLUSSRECHNUNG and deducts the
         // paid Abschläge below from the Zahlbetrag.
@@ -203,8 +235,14 @@ pub(crate) async fn dispatch_invoice(
                     .clone()
                     .unwrap_or_else(|| cfg.tenant.clone()),
             ),
-            lieferant_anschrift: cfg.seller_address.clone(),
-            lieferant_kontakt: cfg.seller_contact.clone(),
+            lieferant_anschrift: cfg
+                .seller
+                .as_ref()
+                .and_then(crate::config::SellerConfig::anschrift),
+            lieferant_kontakt: cfg
+                .seller
+                .as_ref()
+                .and_then(crate::config::SellerConfig::kontakt),
             ..Default::default()
         }),
         // Propagate minimum invoice from product definition (tarifbd) to billing context.
@@ -214,19 +252,16 @@ pub(crate) async fn dispatch_invoice(
         energiequellen: tariff.energiequellen().cloned(),
         // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on invoice.
         nb_mp_id: req.nb_mp_id.clone(),
-        // Audit trail: unique run ID links DB record to calculation output.
-        billing_run_id: Some(run_id),
+        // The run this invoice belongs to, when it belongs to one — a §40b
+        // sweep, a Sammelrechnung, a GGV batch. `None` for a single on-demand
+        // calculation, which is a run of one and needs no group identity.
+        billing_run_id: run.0.map(ToOwned::to_owned),
         ..Default::default()
     };
 
     let engine = tariff.build_engine(&grid, rates);
 
-    let mut invoice = engine.bill(ctx, &quantities).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            engine_error_body(malo_id, &e),
-        )
-    })?;
+    let mut invoice = engine.bill(ctx, &quantities)?;
 
     // §40c Abs. 1 EnWG — an Abrechnung must reach the customer within six weeks
     // of the end of the billed period, a Schlussrechnung within six weeks of the
@@ -258,7 +293,25 @@ pub(crate) async fn dispatch_invoice(
             ),
         });
     }
-    Ok(invoice)
+    Ok(Billed {
+        invoice,
+        buyer: vertrag.and_then(|v| v.rechnungsempfaenger),
+    })
+}
+
+/// A priced period and the customer master the document is addressed to.
+///
+/// The two travel together because they come from the same `vertragd` answer:
+/// the § 40 Abs. 1 contract facts on the invoice and the EN 16931 BG-7 buyer are
+/// two views of one contract, and resolving them separately meant two round
+/// trips and two answers that could disagree.
+pub(crate) struct Billed {
+    pub(crate) invoice: Invoice,
+    /// `None` when vertragd is unreachable or the MaLo is uncontracted — the
+    /// document is then built with a buyer synthesised from the MaLo-ID and
+    /// carries the resulting BR-DE-8/9 findings, which is the documented
+    /// degradation rather than a failed billing run.
+    pub(crate) buyer: Option<crate::clients::Rechnungsempfaenger>,
 }
 
 /// Resolve the Zählernummer serving a MaLo via the marktd device registry:
@@ -290,10 +343,60 @@ pub(crate) async fn resolve_zaehlernummer(
         .next()
 }
 
-/// The same calendar window one year earlier, Feb 29 clamped to Feb 28.
+/// The same calendar date one year earlier, clamped to the end of the month.
+///
+/// 29 February has no counterpart in a common year. Subtracting 365 days landed
+/// on **1 March** — one day *past* the missing date, so the comparison window
+/// (§40 Abs. 2 Nr. 7 EnWG) started after it should. Clamping to 28 February
+/// keeps the window on the right side of the boundary.
 pub(crate) fn year_earlier(d: time::Date) -> time::Date {
-    d.replace_year(d.year() - 1)
-        .unwrap_or_else(|_| d - time::Duration::days(365))
+    let year = d.year() - 1;
+    d.replace_year(year).unwrap_or_else(|_| {
+        time::Date::from_calendar_date(year, time::Month::February, 28)
+            .expect("28 February exists in every year")
+    })
+}
+
+/// §40 Abs. 1 EnWG — when the next settlement falls due.
+///
+/// A period that spans whole calendar months advances by that many **months**,
+/// so the January bill of a monthly contract announces 28 February and the
+/// Q1 bill announces 30 June. Anything else (a move-in fragment, a Teilzeitraum)
+/// advances by its own day count, which is the only meaning it has.
+///
+/// Adding the day count unconditionally — what this replaced — turned every
+/// monthly invoice into an announcement three days into the month after next.
+pub(crate) fn next_abrechnungstermin(from: time::Date, to: time::Date) -> Option<time::Date> {
+    let next_start = to.next_day()?;
+    if let Some(months) = whole_months(from, to) {
+        // The next period is `months` long and starts the day after this one
+        // ends; its last day is the day before the month after that.
+        return next_start
+            .checked_add(time::Duration::days(0))
+            .and_then(|s| add_months(s, months))
+            .and_then(time::Date::previous_day);
+    }
+    let days = (to - from).whole_days() + 1;
+    next_start.checked_add(time::Duration::days(days - 1))
+}
+
+/// How many whole calendar months the period covers, if it covers whole ones.
+fn whole_months(from: time::Date, to: time::Date) -> Option<i32> {
+    if from.day() != 1 || to.next_day()?.day() != 1 {
+        return None;
+    }
+    let months = (to.year() - from.year()) * 12 + i32::from(u8::from(to.month()))
+        - i32::from(u8::from(from.month()))
+        + 1;
+    (months > 0).then_some(months)
+}
+
+/// Advance a first-of-month date by `months`.
+fn add_months(d: time::Date, months: i32) -> Option<time::Date> {
+    let zero_based = i32::from(u8::from(d.month())) - 1 + months;
+    let year = d.year() + zero_based.div_euclid(12);
+    let month = time::Month::try_from(u8::try_from(zero_based.rem_euclid(12) + 1).ok()?).ok()?;
+    time::Date::from_calendar_date(year, month, 1).ok()
 }
 
 /// §40 Abs. 2 Nr. 7/8 EnWG — assemble the consumption comparison.
@@ -352,40 +455,54 @@ const fn sect40c_deadline_weeks(schlussrechnung: bool, monatliche_abrechnung: bo
     }
 }
 
-/// Backward-compat shim: dispatch and return Invoice.
-///
-/// Called by existing HTTP handlers.
-/// New callers should use `dispatch_invoice` directly.
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn dispatch_calculator(
-    cfg: &BillingdConfig,
-    tariff: &Product,
-    req: &CalculateRequest,
-    malo_id: &str,
-    rechnungsnummer: &str,
-    period_from: time::Date,
-    period_to: time::Date,
-    rates: &RegulatoryRates,
-    edmd: &Arc<EdmdClient>,
-    marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-    tarifbd: &Arc<TarifbdClient>,
-    vertragd: &Arc<VertragdClient>,
-) -> Result<Invoice, (StatusCode, String)> {
-    dispatch_invoice(
-        cfg,
-        tariff,
-        req,
-        malo_id,
-        rechnungsnummer,
-        period_from,
-        period_to,
-        rates,
-        edmd,
-        marktd,
-        tarifbd,
-        vertragd,
-    )
-    .await
+#[cfg(test)]
+mod termin_tests {
+    use super::{next_abrechnungstermin, year_earlier};
+    use time::macros::date;
+
+    /// A monthly period announces the end of the following month — the previous
+    /// day-count arithmetic announced 3 March for a January bill.
+    #[test]
+    fn a_calendar_month_advances_by_a_month() {
+        assert_eq!(
+            next_abrechnungstermin(date!(2026 - 01 - 01), date!(2026 - 01 - 31)),
+            Some(date!(2026 - 02 - 28))
+        );
+        assert_eq!(
+            next_abrechnungstermin(date!(2026 - 02 - 01), date!(2026 - 02 - 28)),
+            Some(date!(2026 - 03 - 31))
+        );
+    }
+
+    /// A quarter advances by a quarter, and a year by a year.
+    #[test]
+    fn multi_month_periods_keep_their_cadence() {
+        assert_eq!(
+            next_abrechnungstermin(date!(2026 - 01 - 01), date!(2026 - 03 - 31)),
+            Some(date!(2026 - 06 - 30))
+        );
+        assert_eq!(
+            next_abrechnungstermin(date!(2025 - 01 - 01), date!(2025 - 12 - 31)),
+            Some(date!(2026 - 12 - 31))
+        );
+    }
+
+    /// A fragment has no cadence to keep, so it advances by its own length.
+    #[test]
+    fn a_partial_period_advances_by_its_day_count() {
+        // 10 days (12–21 June) → the next 10 days end on 1 July.
+        assert_eq!(
+            next_abrechnungstermin(date!(2026 - 06 - 12), date!(2026 - 06 - 21)),
+            Some(date!(2026 - 07 - 01))
+        );
+    }
+
+    /// 29 February clamps back to 28 February, not forward to 1 March.
+    #[test]
+    fn the_leap_day_clamps_backwards() {
+        assert_eq!(year_earlier(date!(2024 - 02 - 29)), date!(2023 - 02 - 28));
+        assert_eq!(year_earlier(date!(2026 - 07 - 19)), date!(2025 - 07 - 19));
+    }
 }
 
 #[cfg(test)]

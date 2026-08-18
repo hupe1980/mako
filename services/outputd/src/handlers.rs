@@ -32,7 +32,39 @@ use sqlx::PgPool;
 
 use crate::config::OutputdConfig;
 use crate::document::gate::{self, DEFAULT_PDF_STANDARD};
+use crate::error::{OutputError, OutputResult};
 use crate::template_store::{self, TemplateKind};
+
+pub(crate) use mako_service::cedar::CedarEnforcer;
+
+/// Authorize `action` for the caller against the service tenant.
+///
+/// Authentication established *who* is calling; this decides what they may do.
+/// outputd shipped with the `cedar` feature enabled and **no policy file at
+/// all**, so any token the OIDC verifier accepted could roll out a new layout
+/// for every invoice and Mahnung the tenant issues, or render arbitrary content
+/// on the operator's letterhead. A template is not one document; it is the
+/// shape of all of them.
+///
+/// # Errors
+///
+/// `403` with the Cedar denial reason.
+pub(crate) fn authorize(
+    enforcer: &CedarEnforcer,
+    claims: &Claims,
+    action: &'static str,
+    tenant: &str,
+) -> OutputResult<()> {
+    enforcer
+        .check(&claims.principal(), action, tenant)
+        .map_err(|e| {
+            tracing::warn!(action, sub = %claims.sub(), "outputd: authorization denied");
+            OutputError::Forbidden {
+                code: "FORBIDDEN",
+                message: format!("{action}: {e}"),
+            }
+        })
+}
 
 /// How long a template render may take before the caller is freed.
 ///
@@ -84,27 +116,26 @@ pub struct PublishedTemplate {
 /// each pointing at a line of the operator's own file.
 pub async fn post_template(
     claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Json(req): Json<PublishTemplateRequest>,
-) -> impl IntoResponse {
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "publish-template", &cfg.tenant)?;
     if req.source.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "source is empty").into_response();
+        return Err(OutputError::bad_request("EMPTY_SOURCE", "source is empty"));
     }
     let standard = req
         .pdf_standard
         .clone()
         .unwrap_or_else(|| DEFAULT_PDF_STANDARD.to_owned());
 
-    let proven = match prove(req.kind, req.source.clone(), standard.clone()).await {
-        Ok(proven) => proven,
-        Err(response) => return response,
-    };
+    let proven = prove(req.kind, req.source.clone(), standard.clone()).await?;
 
     // Only the invoice kind has a PDF/A level to have met; recording one for a
     // Textform template would claim a conformance nothing checked.
     let pdf_standard = (req.kind == TemplateKind::Invoice).then_some(standard.as_str());
-    match template_store::publish(
+    let hash = template_store::publish(
         &pool,
         &cfg.tenant,
         req.kind,
@@ -113,23 +144,16 @@ pub async fn post_template(
         proven.proof,
         Some(claims.sub()),
     )
-    .await
-    {
-        Ok(hash) => (
-            StatusCode::CREATED,
-            Json(PublishedTemplate {
-                hash,
-                proof: proven.proof,
-                pages: proven.pages,
-                warnings: proven.warnings,
-            }),
-        )
-            .into_response(),
-        Err(e @ template_store::StoreError::IdentityCollision { .. }) => {
-            (StatusCode::CONFLICT, e.to_string()).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(PublishedTemplate {
+            hash,
+            proof: proven.proof,
+            pages: proven.pages,
+            warnings: proven.warnings,
+        }),
+    ))
 }
 
 /// `POST /api/v1/templates/preview` — render a candidate, store nothing.
@@ -143,45 +167,43 @@ pub async fn post_template(
 /// be dropped into veraPDF or a ZUGFeRD validator as-is — a preview that skipped
 /// the carrier would be a preview of something mako does not produce.
 pub async fn post_template_preview(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
     Json(req): Json<PublishTemplateRequest>,
-) -> impl IntoResponse {
+) -> OutputResult<axum::response::Response> {
+    authorize(&cedar, &claims, "preview-template", &cfg.tenant)?;
     if req.source.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, "source is empty").into_response();
+        return Err(OutputError::bad_request("EMPTY_SOURCE", "source is empty"));
     }
     if req.kind == TemplateKind::Mahnung {
         // Its own specimen, no carrier: a Mahnung is Textform, and the preview
         // is the letter itself.
         let request = crate::document::RenderRequest {
             template: req.source,
-            data: match serde_json::to_string(&crate::document::mahnung::specimen()) {
-                Ok(json) => Some(json),
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-                }
-            },
+            data: Some(
+                serde_json::to_string(&crate::document::mahnung::specimen())
+                    .map_err(|e| OutputError::Internal(e.into()))?,
+            ),
             attachment: None,
             standard: None,
             date: gate::SPECIMEN_DATE,
             ident: "mako-template-preview-mahnung".to_owned(),
         };
-        return match crate::document::render::render_guarded(request, RENDER_BUDGET).await {
-            Ok(rendered) => pdf_response("mahnung-vorschau.pdf", rendered.pdf),
-            Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-        };
+        let rendered = crate::document::render::render_guarded(request, RENDER_BUDGET).await?;
+        return Ok(pdf_response("mahnung-vorschau.pdf", rendered.pdf));
     }
     if req.kind != TemplateKind::Invoice {
         // Rendering a Preisanpassung against an invoice specimen would fail on
         // the first field it reads, with a diagnostic that blamed the template.
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
+        return Err(OutputError::unprocessable(
+            "NO_SPECIMEN",
             format!(
                 "there is no specimen to preview a {} template against — its data contract \
                  does not live in mako yet; publishing checks that it parses",
                 req.kind.as_str(),
             ),
-        )
-            .into_response();
+        ));
     }
     let standard = req
         .pdf_standard
@@ -190,36 +212,24 @@ pub async fn post_template_preview(
     // publishing would produce rather than an approximation of it.
     let model = gate::specimen_invoice();
     let profile = crate::document::facturx::profile_of(&model);
-    let attachment = match crate::document::facturx::attachment(
-        profile,
-        en16931_formats::cii::to_string(&model),
-    ) {
-        Ok(a) => a,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-    };
+    let attachment =
+        crate::document::facturx::attachment(profile, en16931_formats::cii::to_string(&model))
+            .map_err(OutputError::Internal)?;
     let request = crate::document::RenderRequest {
         template: req.source,
         data: Some(
-            match serde_json::to_string(&crate::document::DocumentView::of(&model)) {
-                Ok(json) => json,
-                Err(e) => {
-                    return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-                }
-            },
+            serde_json::to_string(&crate::document::DocumentView::of(&model))
+                .map_err(|e| OutputError::Internal(e.into()))?,
         ),
         attachment: Some(attachment),
         standard: Some(standard),
         date: gate::SPECIMEN_DATE,
         ident: "mako-template-preview".to_owned(),
     };
-    let rendered = match crate::document::render::render_guarded(request, RENDER_BUDGET).await {
-        Ok(rendered) => rendered,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    };
-    match crate::document::facturx::stamp(&rendered.pdf, profile) {
-        Ok(pdf) => pdf_response("vorschau.pdf", pdf),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
-    }
+    let rendered = crate::document::render::render_guarded(request, RENDER_BUDGET).await?;
+    let pdf =
+        crate::document::facturx::stamp(&rendered.pdf, profile).map_err(OutputError::Internal)?;
+    Ok(pdf_response("vorschau.pdf", pdf))
 }
 
 /// `GET /api/v1/templates/reference/{kind}` — the layout mako ships per kind.
@@ -229,31 +239,31 @@ pub async fn post_template_preview(
 /// drifted. A kind with no reference yet (PREISANPASSUNG) is `404`, which is
 /// the honest answer rather than an invoice layout that would mislead.
 pub async fn get_reference_template(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path(kind): Path<String>,
-) -> impl IntoResponse {
-    let source = match parse_kind(&kind) {
-        Some(TemplateKind::Invoice) => crate::document::REFERENCE_INVOICE_TEMPLATE,
-        Some(TemplateKind::Mahnung) => crate::document::REFERENCE_MAHNUNG_TEMPLATE,
-        Some(TemplateKind::Preisanpassung) => {
-            return (
-                StatusCode::NOT_FOUND,
-                "no reference PREISANPASSUNG template exists yet — its data \
-                 contract lives in vertragd and has not been projected into a view",
-            )
-                .into_response();
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-template", &cfg.tenant)?;
+    let source = match parse_kind(&kind)? {
+        TemplateKind::Invoice => crate::document::REFERENCE_INVOICE_TEMPLATE,
+        TemplateKind::Mahnung => crate::document::REFERENCE_MAHNUNG_TEMPLATE,
+        TemplateKind::Preisanpassung => {
+            return Err(OutputError::not_found(
+                "NO_REFERENCE_TEMPLATE",
+                "no reference PREISANPASSUNG template exists yet — its data contract lives \
+                 in vertragd and has not been projected into a view",
+            ));
         }
-        None => return (StatusCode::BAD_REQUEST, "unknown template kind").into_response(),
     };
-    (
+    Ok((
         StatusCode::OK,
         [(
             "Content-Type",
             "text/plain; charset=UTF-8; x-typst-version=0.15",
         )],
         source,
-    )
-        .into_response()
+    ))
 }
 
 /// `GET /api/v1/templates` query.
@@ -274,29 +284,23 @@ pub struct ListTemplatesQuery {
 /// Newest first, `is_current` marking the one in use. The source is not
 /// included; fetch it per hash.
 pub async fn list_templates(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Query(q): Query<ListTemplatesQuery>,
-) -> impl IntoResponse {
-    let kind = match q.kind.as_deref() {
-        None => None,
-        Some(k) => match parse_kind(k) {
-            Some(kind) => Some(kind),
-            None => return (StatusCode::BAD_REQUEST, "unknown template kind").into_response(),
-        },
-    };
-    match template_store::list(
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-template", &cfg.tenant)?;
+    let kind = q.kind.as_deref().map(parse_kind).transpose()?;
+    let rows = template_store::list(
         &pool,
         &cfg.tenant,
         kind,
         q.limit.unwrap_or(100).clamp(1, 1000),
     )
     .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    .map_err(OutputError::Internal)?;
+    Ok(Json(rows))
 }
 
 /// `PUT /api/v1/templates/{kind}/current` body.
@@ -312,42 +316,46 @@ pub struct SetCurrentRequest {
 /// reports that as `422`, because it is a bad reference rather than a server
 /// fault. Rolling back is the same call with the previous hash.
 pub async fn put_current_template(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path(kind): Path<String>,
     Json(req): Json<SetCurrentRequest>,
-) -> impl IntoResponse {
-    let Some(kind) = parse_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "unknown template kind").into_response();
-    };
-    match template_store::set_current(&pool, &cfg.tenant, kind, &req.hash).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        // The caller's reference is wrong (never published, or published as a
-        // different kind) — distinct from the database being down, which is
-        // not the caller's fault and must not be reported as it.
-        Err(e @ template_store::StoreError::NotPublished(..)) => {
-            (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "rollout-template", &cfg.tenant)?;
+    let kind = parse_kind(&kind)?;
+    template_store::set_current(&pool, &cfg.tenant, kind, &req.hash).await?;
+    tracing::info!(
+        tenant = %cfg.tenant, kind = kind.as_str(), hash = %req.hash, by = %claims.sub(),
+        "outputd: template rolled out — every document of this kind now renders with it"
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// `GET /api/v1/templates/{kind}/current` — what this tenant renders with now.
 pub async fn get_current_template(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path(kind): Path<String>,
-) -> impl IntoResponse {
-    let Some(kind) = parse_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "unknown template kind").into_response();
-    };
-    match template_store::current(&pool, &cfg.tenant, kind).await {
-        Ok(Some(t)) => Json(t).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-template", &cfg.tenant)?;
+    let kind = parse_kind(&kind)?;
+    template_store::current(&pool, &cfg.tenant, kind)
+        .await
+        .map_err(OutputError::Internal)?
+        .map(Json)
+        .ok_or_else(|| {
+            OutputError::not_found(
+                "NO_CURRENT_TEMPLATE",
+                format!(
+                    "no {} template is rolled out for this tenant",
+                    kind.as_str()
+                ),
+            )
+        })
 }
 
 /// `GET /api/v1/templates/by-hash/{hash}` — resolve a template by hash.
@@ -355,46 +363,51 @@ pub async fn get_current_template(
 /// This is how an audit answers "why did the invoice from 2027 look like that":
 /// the record carries `template_hash`, and the source is still here.
 pub async fn get_template_by_hash(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path(hash): Path<String>,
-) -> impl IntoResponse {
-    match template_store::by_hash(&pool, &hash).await {
-        Ok(Some(t)) => Json(t).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-template", &cfg.tenant)?;
+    template_store::by_hash(&pool, &cfg.tenant, &hash)
+        .await
+        .map_err(OutputError::Internal)?
+        .map(Json)
+        .ok_or_else(|| {
+            OutputError::not_found(
+                "TEMPLATE_NOT_FOUND",
+                format!("no template of this tenant has hash {hash}"),
+            )
+        })
 }
 
 /// Run the publish gate off the async runtime.
 ///
 /// Typesetting is CPU-bound and takes long enough to matter; leaving it on a
 /// runtime worker would stall every other request on the same thread.
-async fn prove(
-    kind: TemplateKind,
-    source: String,
-    standard: String,
-) -> Result<gate::Proven, axum::response::Response> {
+async fn prove(kind: TemplateKind, source: String, standard: String) -> OutputResult<gate::Proven> {
     let task =
         tokio::task::spawn_blocking(move || gate::prove(kind, &source, Some(standard.as_str())));
     match tokio::time::timeout(RENDER_BUDGET, task).await {
         Ok(Ok(Ok(proven))) => Ok(proven),
-        // The template did not survive the gate. Its diagnostics are the
-        // response body: they name the operator's file, line and column.
-        Ok(Ok(Err(e))) => Err((StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response()),
-        Ok(Err(join)) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("the publish gate panicked: {join}"),
-        )
-            .into_response()),
-        Err(_) => Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
+        // The template did not survive the gate. Its diagnostics — which name
+        // the operator's file, line and column — are the response body.
+        Ok(Ok(Err(e))) => Err(OutputError::diagnostics(
+            "TEMPLATE_REJECTED_BY_GATE",
+            "the template did not survive the publish gate",
+            format!("{e:#}").lines().map(str::to_owned).collect(),
+        )),
+        Ok(Err(join)) => Err(OutputError::Internal(anyhow::anyhow!(
+            "the publish gate panicked: {join}"
+        ))),
+        Err(_) => Err(OutputError::unprocessable(
+            "RENDER_BUDGET_EXCEEDED",
             format!(
                 "the template did not finish rendering within {RENDER_BUDGET:?}; \
-                 it is doing far more work than one invoice needs"
+                 it is doing far more work than one document needs"
             ),
-        )
-            .into_response()),
+        )),
     }
 }
 
@@ -414,12 +427,23 @@ pub(crate) fn pdf_response(filename: &str, pdf: Vec<u8>) -> axum::response::Resp
         .into_response()
 }
 
-fn parse_kind(s: &str) -> Option<TemplateKind> {
+/// The `kind` path segment, as the stored vocabulary.
+///
+/// # Errors
+///
+/// `400` naming the kinds that exist, rather than a bare "unknown template
+/// kind" that leaves the caller guessing the spelling.
+fn parse_kind(s: &str) -> OutputResult<TemplateKind> {
     match s.to_ascii_uppercase().as_str() {
-        "INVOICE" => Some(TemplateKind::Invoice),
-        "MAHNUNG" => Some(TemplateKind::Mahnung),
-        "PREISANPASSUNG" => Some(TemplateKind::Preisanpassung),
-        _ => None,
+        "INVOICE" => Ok(TemplateKind::Invoice),
+        "MAHNUNG" => Ok(TemplateKind::Mahnung),
+        "PREISANPASSUNG" => Ok(TemplateKind::Preisanpassung),
+        other => Err(OutputError::bad_request(
+            "UNKNOWN_TEMPLATE_KIND",
+            format!(
+                "`{other}` is not a template kind — expected INVOICE, MAHNUNG or PREISANPASSUNG"
+            ),
+        )),
     }
 }
 
@@ -436,10 +460,13 @@ mod tests {
             TemplateKind::Mahnung,
             TemplateKind::Preisanpassung,
         ] {
-            assert_eq!(parse_kind(k.as_str()), Some(k));
+            assert_eq!(parse_kind(k.as_str()).expect("round-trips"), k);
         }
-        assert_eq!(parse_kind("invoice"), Some(TemplateKind::Invoice));
-        assert_eq!(parse_kind("nope"), None);
+        assert_eq!(
+            parse_kind("invoice").expect("case-insensitive"),
+            TemplateKind::Invoice
+        );
+        assert!(parse_kind("nope").is_err());
     }
 
     /// The default the API applies is the one ZUGFeRD requires.
@@ -464,29 +491,26 @@ mod tests {
         }
     }
 
-    /// A pinned hash resolves by identity alone, so the render endpoint itself
-    /// must refuse the combinations nothing upstream has checked.
+    /// A pinned hash resolves by identity, so the render endpoint itself must
+    /// refuse the combination nothing upstream has checked: a template proven
+    /// as one kind rendering another.
+    ///
+    /// The tenant case is gone from here because it is gone from the code —
+    /// `by_hash` is tenant-scoped, so another operator's layout does not
+    /// resolve at all. `a_foreign_tenants_template_does_not_resolve` in
+    /// `tests/store_integration.rs` is what pins that.
     #[test]
-    fn a_render_refuses_a_template_of_the_wrong_kind_or_tenant() {
+    fn a_render_refuses_a_template_of_the_wrong_kind() {
         // The proof-discipline case: an INVOICE render with a Textform-proven
         // template would produce a carrier the gate never proved as one.
         let err = render_admissible(
             TemplateKind::Invoice,
             &stored("MAHNUNG", "9900000000004"),
-            "9900000000004",
             true,
         )
         .expect_err("kind mismatch must be refused");
-        assert!(err.contains("MAHNUNG"), "{err}");
-
-        let err = render_admissible(
-            TemplateKind::Invoice,
-            &stored("INVOICE", "9900000000001"),
-            "9900000000004",
-            true,
-        )
-        .expect_err("another tenant's layout must be refused");
-        assert!(err.contains("another tenant"), "{err}");
+        assert_eq!(err.code(), "TEMPLATE_WRONG_KIND");
+        assert!(err.to_string().contains("MAHNUNG"), "{err}");
     }
 
     /// The attachment contract follows the kind, in both directions.
@@ -495,11 +519,11 @@ mod tests {
         let t = "9900000000004";
         // An invoice without its payload is the failure mode that looks like
         // success: a handsome PDF that is not an invoice.
-        assert!(render_admissible(TemplateKind::Invoice, &stored("INVOICE", t), t, false).is_err());
-        assert!(render_admissible(TemplateKind::Invoice, &stored("INVOICE", t), t, true).is_ok());
+        assert!(render_admissible(TemplateKind::Invoice, &stored("INVOICE", t), false).is_err());
+        assert!(render_admissible(TemplateKind::Invoice, &stored("INVOICE", t), true).is_ok());
         // A Textform document carries no embedded invoice.
-        assert!(render_admissible(TemplateKind::Mahnung, &stored("MAHNUNG", t), t, true).is_err());
-        assert!(render_admissible(TemplateKind::Mahnung, &stored("MAHNUNG", t), t, false).is_ok());
+        assert!(render_admissible(TemplateKind::Mahnung, &stored("MAHNUNG", t), true).is_err());
+        assert!(render_admissible(TemplateKind::Mahnung, &stored("MAHNUNG", t), false).is_ok());
     }
 }
 
@@ -508,11 +532,13 @@ mod tests {
 /// `POST /api/v1/render/{kind}` body.
 #[derive(Debug, Deserialize)]
 pub struct RenderApiRequest {
-    /// The view the template consumes, verbatim — the caller serialises its
-    /// boundary copy of the kind's view struct. outputd does not re-validate
-    /// the shape: a missing field fails in the template with a diagnostic
-    /// naming it, which is the same error an operator sees in preview.
-    pub view: serde_json::Value,
+    /// What the document says.
+    ///
+    /// For `INVOICE` this is the **EN 16931 semantic model** and outputd
+    /// projects the page view from it; for the Textform kinds it is the kind's
+    /// own view, verbatim. See [`RenderSubject`].
+    #[serde(flatten)]
+    pub subject: RenderSubject,
     /// A specific published template, or `None` for the tenant's current one.
     #[serde(default)]
     pub template_hash: Option<String>,
@@ -525,6 +551,33 @@ pub struct RenderApiRequest {
     pub date: String,
     /// Stable identity for the PDF `/ID` — the caller's record id, typically.
     pub ident: String,
+}
+
+/// What a render is *about*, in the only two shapes outputd accepts.
+///
+/// An invoice arrives as the semantic model, not as a projected view. That is
+/// the fix for a duplication that had no business existing: the projection
+/// `en16931::Invoice → DocumentView` lived in **both** services — outputd's
+/// copy is what the publish gate proves templates against, billingd's copy is
+/// what production actually sent — and nothing tied them together. A field
+/// added on one side gives you templates that pass the gate and fail in
+/// production. Both services already depend on `en16931`, so the model is a
+/// type they share the way they already share `zugferd::Profile`; the
+/// projection now exists once, here, where the gate and the renderer both use
+/// it.
+///
+/// The Textform kinds keep sending their view directly: their producer
+/// (`accountingd`, for a Mahnung) has no EN 16931 model to send, and their view
+/// *is* the contract.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum RenderSubject {
+    /// The EN 16931 semantic model. outputd projects the page view from it.
+    #[serde(rename = "model")]
+    Model(Box<en16931::Invoice>),
+    /// A Textform view, serialised by its producer.
+    #[serde(rename = "view")]
+    View(serde_json::Value),
 }
 
 /// The invoice payload to embed.
@@ -540,12 +593,15 @@ pub struct RenderAttachment {
 /// Whether this template may render this request — the render endpoint's
 /// admission rules, all `422` when violated.
 ///
-/// A pinned hash resolves by identity alone, so nothing upstream has checked
-/// that it belongs here. **Kind** matters for proof discipline: an INVOICE
-/// render with a Textform-proven template would wrap a carrier around a layout
-/// the gate never proved as one (`RENDERED_PDFA` is exactly the claim it
-/// lacks). **Tenant** matters in a shared database: another tenant's layout
-/// must not render this tenant's documents.
+/// **Kind** matters for proof discipline: an INVOICE render with a
+/// Textform-proven template would wrap a carrier around a layout the gate never
+/// proved as one (`RENDERED_PDFA` is exactly the claim it lacks). A pinned hash
+/// resolves by identity, so nothing upstream has checked that.
+///
+/// There is no tenant check here any more, because there is nothing left to
+/// check: [`template_store::by_hash`] is tenant-scoped, so a hash belonging to
+/// another operator does not resolve at all. The rule lives in the query rather
+/// than in a condition each caller-facing path has to remember.
 ///
 /// The attachment contract follows the kind: an INVOICE *is* the hybrid
 /// document, so a render without the CII payload would produce a handsome PDF
@@ -555,31 +611,33 @@ pub struct RenderAttachment {
 fn render_admissible(
     kind: TemplateKind,
     template: &template_store::StoredTemplate,
-    tenant: &str,
     has_attachment: bool,
-) -> Result<(), String> {
+) -> OutputResult<()> {
     if template.kind != kind.as_str() {
-        return Err(format!(
-            "template {} is a {} template, not {}",
-            template.hash,
-            template.kind,
-            kind.as_str()
-        ));
-    }
-    if template.tenant != tenant {
-        return Err(format!(
-            "template {} belongs to another tenant",
-            template.hash
+        return Err(OutputError::unprocessable(
+            "TEMPLATE_WRONG_KIND",
+            format!(
+                "template {} is a {} template, not {}",
+                template.hash,
+                template.kind,
+                kind.as_str()
+            ),
         ));
     }
     match (kind, has_attachment) {
-        (TemplateKind::Invoice, false) => Err(
-            "an INVOICE render requires the attachment (the CII payload and its BT-24)".to_owned(),
-        ),
-        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, true) => Err(format!(
-            "a {} is Textform and carries no embedded invoice — omit the attachment",
-            kind.as_str()
+        (TemplateKind::Invoice, false) => Err(OutputError::unprocessable(
+            "ATTACHMENT_REQUIRED",
+            "an INVOICE render requires the attachment (the CII payload and its BT-24)",
         )),
+        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, true) => {
+            Err(OutputError::unprocessable(
+                "ATTACHMENT_NOT_ALLOWED",
+                format!(
+                    "a {} is Textform and carries no embedded invoice — omit the attachment",
+                    kind.as_str()
+                ),
+            ))
+        }
         _ => Ok(()),
     }
 }
@@ -590,42 +648,68 @@ fn render_admissible(
 /// how a caller pins. A `template_hash` that was never published is `422`; a
 /// tenant with nothing rolled out for the kind is `422` with the fix.
 pub async fn post_render(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<OutputdConfig>>,
     Path(kind): Path<String>,
     Json(req): Json<RenderApiRequest>,
-) -> impl IntoResponse {
-    let Some(kind) = parse_kind(&kind) else {
-        return (StatusCode::BAD_REQUEST, "unknown template kind").into_response();
-    };
-    let date = match time::Date::parse(
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "render-document", &cfg.tenant)?;
+    let kind = parse_kind(&kind)?;
+    let date = time::Date::parse(
         &req.date,
         &time::format_description::well_known::Iso8601::DATE,
-    ) {
-        Ok(d) => d,
-        Err(e) => {
-            return (StatusCode::BAD_REQUEST, format!("date: {e}")).into_response();
+    )
+    .map_err(|e| OutputError::bad_request("INVALID_DATE", format!("date: {e}")))?;
+
+    // The subject and the kind must agree: an invoice is rendered from the
+    // semantic model, a Textform document from its own view. Mixing them would
+    // hand the template a dictionary whose every field lookup fails, with a
+    // diagnostic that blamed the operator's layout for the caller's mistake.
+    let data = match (kind, &req.subject) {
+        (TemplateKind::Invoice, RenderSubject::Model(model)) => {
+            serde_json::to_string(&crate::document::DocumentView::of(model))
+                .map_err(|e| OutputError::Internal(e.into()))?
+        }
+        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, RenderSubject::View(view)) => {
+            view.to_string()
+        }
+        (TemplateKind::Invoice, RenderSubject::View(_)) => {
+            return Err(OutputError::unprocessable(
+                "SUBJECT_MUST_BE_A_MODEL",
+                "an INVOICE render takes `model` (the EN 16931 semantic model); outputd \
+                 projects the page view from it so the gate and production cannot disagree \
+                 about what a template may print",
+            ));
+        }
+        (TemplateKind::Mahnung | TemplateKind::Preisanpassung, RenderSubject::Model(_)) => {
+            return Err(OutputError::unprocessable(
+                "SUBJECT_MUST_BE_A_VIEW",
+                format!(
+                    "a {} render takes `view` — it is not an EN 16931 document",
+                    kind.as_str()
+                ),
+            ));
         }
     };
 
     let template = match req.template_hash {
-        Some(ref hash) => match template_store::by_hash(&pool, hash).await {
-            Ok(Some(t)) => t,
-            Ok(None) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("no published template with hash {hash}"),
+        Some(ref hash) => template_store::by_hash(&pool, &cfg.tenant, hash)
+            .await
+            .map_err(OutputError::Internal)?
+            .ok_or_else(|| {
+                OutputError::unprocessable(
+                    "TEMPLATE_NOT_PUBLISHED",
+                    format!("no template of this tenant has hash {hash}"),
                 )
-                    .into_response();
-            }
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
-        None => match template_store::current(&pool, &cfg.tenant, kind).await {
-            Ok(Some(t)) => t,
-            Ok(None) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
+            })?,
+        None => template_store::current(&pool, &cfg.tenant, kind)
+            .await
+            .map_err(OutputError::Internal)?
+            .ok_or_else(|| {
+                OutputError::unprocessable(
+                    "NO_CURRENT_TEMPLATE",
                     format!(
                         "no {} template is rolled out for this tenant — publish one and \
                          PUT /api/v1/templates/{}/current",
@@ -633,16 +717,10 @@ pub async fn post_render(
                         kind.as_str(),
                     ),
                 )
-                    .into_response();
-            }
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        },
+            })?,
     };
 
-    if let Err(refusal) = render_admissible(kind, &template, &cfg.tenant, req.attachment.is_some())
-    {
-        return (StatusCode::UNPROCESSABLE_ENTITY, refusal).into_response();
-    }
+    render_admissible(kind, &template, req.attachment.is_some())?;
 
     // The attachment, when the document carries one, is derived from BT-24 —
     // the caller cannot ask for a filename or a conformance level the payload
@@ -651,18 +729,15 @@ pub async fn post_render(
         None => (None, None),
         Some(a) => {
             let profile = crate::document::facturx::Profile::parse(&a.specification_id);
-            match crate::document::facturx::attachment(profile, a.xml) {
-                Ok(att) => (Some(att), Some(profile)),
-                Err(e) => {
-                    return (StatusCode::UNPROCESSABLE_ENTITY, format!("{e:#}")).into_response();
-                }
-            }
+            let att = crate::document::facturx::attachment(profile, a.xml)
+                .map_err(|e| OutputError::unprocessable("ATTACHMENT_UNUSABLE", format!("{e:#}")))?;
+            (Some(att), Some(profile))
         }
     };
 
     let request = crate::document::RenderRequest {
         template: template.source.clone(),
-        data: Some(req.view.to_string()),
+        data: Some(data),
         attachment,
         standard: (kind == TemplateKind::Invoice).then(|| {
             template
@@ -673,31 +748,23 @@ pub async fn post_render(
         date,
         ident: format!("{}:{}:{}", cfg.tenant, template.hash, req.ident),
     };
-    let rendered = match crate::document::render::render_guarded(request, RENDER_BUDGET).await {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    };
+    let rendered = crate::document::render::render_guarded(request, RENDER_BUDGET).await?;
     for warning in &rendered.warnings {
         tracing::warn!(template = %template.hash, %warning, "render warning");
     }
 
     let pdf = match profile {
-        Some(profile) => match crate::document::facturx::stamp(&rendered.pdf, profile) {
-            Ok(p) => p,
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response();
-            }
-        },
+        Some(profile) => crate::document::facturx::stamp(&rendered.pdf, profile)
+            .map_err(OutputError::Internal)?,
         None => rendered.pdf,
     };
 
-    (
+    Ok((
         StatusCode::OK,
         [
             ("Content-Type", "application/pdf".to_owned()),
             ("X-Mako-Template-Hash", template.hash.clone()),
         ],
         pdf,
-    )
-        .into_response()
+    ))
 }

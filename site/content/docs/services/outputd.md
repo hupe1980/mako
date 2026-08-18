@@ -32,19 +32,84 @@ Port: `:9880`
 
 ## The render API — `POST /api/v1/render/{kind}`
 
-The caller sends the **view** (the JSON its document kind's template consumes),
-optionally a **template hash** (a pinned document; omitted, the tenant's current
-template renders), and — for `INVOICE` — the **CII payload with its BT-24**, so
-the ZUGFeRD carrier is stamped exactly as the document declares itself. The
-answer is the PDF, with `X-Mako-Template-Hash` naming the template used; the
-issuing service pins that hash next to its record.
+The caller sends what the document is *about*, optionally a **template hash**
+(a pinned document; omitted, the tenant's current template renders), and — for
+`INVOICE` — the **CII payload with its BT-24**, so the ZUGFeRD carrier is
+stamped exactly as the document declares itself. The answer is the PDF, with
+`X-Mako-Template-Hash` naming the template used; the issuing service pins that
+hash next to its record.
+
+What "about" means depends on the kind:
+
+| Kind | Field | Why |
+|---|---|---|
+| `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
+| `MAHNUNG`, `PREISANPASSUNG` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
+
+A caller projecting `en16931::Invoice → DocumentView` itself and sending the
+result would be two implementations of one contract with nothing tying them
+together: the gate proves templates against outputd's, production would feed
+them the caller's, and a field added to either yields templates that pass the
+gate and fail in production. Both services already depend on `en16931`, so the
+model is a type they share the way they share `zugferd::Profile`.
 
 Admission is checked before anything renders, each refusal a `422` naming the
-fix: a pinned hash must belong to **this kind and this tenant** (a Textform
-template must never become a carrier — `RENDERED_PDFA` is exactly the proof it
-lacks), an `INVOICE` render **requires** the attachment (a handsome PDF without
-its embedded invoice is the failure mode that looks like success), and a
-Textform render must not carry one.
+fix: a pinned hash must belong to **this kind** (a Textform template must never
+become a carrier — `RENDERED_PDFA` is exactly the proof it lacks), the subject
+must match the kind, an `INVOICE` render **requires** the attachment (a handsome
+PDF without its embedded invoice is the failure mode that looks like success),
+and a Textform render must not carry one.
+
+A pinned hash belonging to another tenant does not resolve at all —
+`template_store::by_hash` is tenant-scoped, so the rule lives in the query
+rather than in a check each caller-facing path has to remember.
+
+## Authorization
+
+Authentication establishes *who* is calling; `policies/outputd.cedar` decides
+what they may do, and every route checks it before touching the database.
+
+| Action | Routes | Who |
+|---|---|---|
+| `read-template` | `GET /templates`, `/{kind}/current`, `/by-hash/{hash}`, `/reference/{kind}` | any authenticated caller in the tenant |
+| `preview-template` | `POST /templates/preview` | any authenticated caller in the tenant |
+| `publish-template` | `POST /templates` | `LF`, `MSB`, `ESA` |
+| `rollout-template` | `PUT /templates/{kind}/current` | `LF`, `MSB`, `ESA` |
+| `render-document` | `POST /render/{kind}` | `LF`, `MSB`, `ESA` |
+
+Authentication alone is not enough here: without a policy, any token the OIDC
+verifier accepts could roll out the layout every invoice and Mahnung of the
+tenant renders with, or render arbitrary content under the operator's
+Briefkopf. A template is not one document — it is the shape of all of them.
+
+A preview is a read on purpose: it renders mako's own specimen, stores nothing,
+moves nothing and reaches no customer.
+
+## Errors
+
+Every route answers failures with one envelope and a stable code. A template
+that does not compile returns its diagnostics as a **list** — each already
+`path:line:col: message`, pointing into the operator's own file — because
+flattening them into one string is the single thing that makes them useless to
+the editor the operator is writing the template in:
+
+```json
+{ "error": { "code": "TEMPLATE_DID_NOT_COMPILE",
+             "message": "the template did not render",
+             "diagnostics": ["/template.typ:12:4: unknown variable: invoce"] } }
+```
+
+| Code | Status | Meaning |
+|---|---|---|
+| `UNKNOWN_TEMPLATE_KIND`, `INVALID_DATE`, `EMPTY_SOURCE` | 400 | a malformed request |
+| `FORBIDDEN` | 403 | the Cedar policy denied the action |
+| `TEMPLATE_NOT_FOUND`, `NO_CURRENT_TEMPLATE`, `NO_REFERENCE_TEMPLATE` | 404 | nothing of this tenant answers to that |
+| `TEMPLATE_IDENTITY_TAKEN` | 409 | you have already published this exact source under another kind |
+| `TEMPLATE_DID_NOT_COMPILE`, `TEMPLATE_REJECTED_BY_GATE` | 422 | with `diagnostics` |
+| `TEMPLATE_WRONG_KIND`, `SUBJECT_MUST_BE_A_MODEL`, `SUBJECT_MUST_BE_A_VIEW` | 422 | the render's parts do not agree |
+| `ATTACHMENT_REQUIRED`, `ATTACHMENT_NOT_ALLOWED`, `ATTACHMENT_UNUSABLE` | 422 | the carrier contract |
+| `PDF_STANDARD_UNUSABLE` | 422 | a level that would silently drop the invoice |
+| `RENDER_BUDGET_EXCEEDED` | 422 | the template is doing far more work than one document needs |
 
 The **layout** belongs to the operator — a [Typst](https://typst.app) template
 published over the API and pinned by hash. The **content** belongs to the
@@ -78,7 +143,8 @@ A template exports exactly one function:
 #let render(invoice) = { .. }
 ```
 
-`invoice` is `document::view::DocumentView` as a Typst dictionary — the §14
+`invoice` is `document::view::DocumentView` as a Typst dictionary — projected by
+outputd from the caller's EN 16931 model, and the §14
 Abs. 4 UStG Pflichtangaben, the lines, the VAT breakdown per rate and the
 totals, each field documented with its EN 16931 BT/BG term. Amounts are exact
 decimal strings, never floats, and they keep the scale their business term
@@ -188,9 +254,14 @@ two-decimal money, umlauts, a long item name, absent optional fields — then:
    cleanly: XMP profile ≠ BT-24, XMP filename ≠ the file attached, an
    `/AFRelationship` that calls the invoice supplementary, or no XMP at all;
 4. reads the text back off the **page** and requires the § 14 Abs. 4 UStG terms
-   that are not a matter of taste — the invoice number (Nr. 4) and both party
-   names (Nr. 1). Without this, `#let render(invoice) = []` passes: conformant
-   PDF/A-3, perfectly extractable CII invoice, blank page;
+   that are not a matter of taste — the invoice number (Nr. 4), both party
+   names (Nr. 1), and the seller's tax identifier (Nr. 2). Without this,
+   `#let render(invoice) = []` passes: conformant PDF/A-3, perfectly
+   extractable CII invoice, blank page.
+
+   Nr. 2 is checked as the **disjunction** the statute writes — the USt-IdNr.
+   (BT-31) *or* the Steuernummer (BT-32), either one satisfying it, so a § 19
+   UStG Kleinunternehmer prints a lawful page from the Steuernummer alone;
 5. refuses a layout that spends more than 8 pages on the specimen.
 
 The specimen is a real `en16931::Invoice`, reconciled by the crate that owns
@@ -238,12 +309,22 @@ operator's own preview on the version they were about to fix, permanently.
 ### The template store
 
 Templates live in `document_templates`, **content-addressed and append-only**: a
-template is identified by the SHA-256 of its source, rows are never updated or
-deleted, and the issuing service records which one rendered each document (for
+template is identified by `(tenant, SHA-256 of its source)`, rows are never
+updated or deleted, and the issuing service records which one rendered each
+document (for
 an invoice: `billing_records.template_hash` in billingd). The pin lives in
 *another service's database*, so no foreign key can guard it — this store's
 append-only policy is the whole guarantee that it stays resolvable. `document_template_current` is a separate, mutable pointer per
 `(tenant, kind)` — the pointer moves, the templates it references do not.
+
+The identity is scoped to the **tenant**, not global. outputd ships a reference
+layout (`GET /api/v1/templates/reference`) that operators are told to start
+from, so a globally unique hash would make the first tenant to publish it
+unchanged its owner for everyone: every other tenant is refused and told to add
+a cosmetic comment — which makes the audit identity of an eight-year document
+depend on filler — and the refusal itself discloses that some other tenant holds
+those exact bytes. Two tenants publishing the same source get two rows and never
+observe each other.
 
 That shape is required, not chosen. An invoice is a Buchungsbeleg kept **8 years**
 (§ 14b UStG / § 147 AO) and GoBD requires *Unveränderbarkeit*, so a document
@@ -331,15 +412,14 @@ conformance the generator had already established otherwise untouched. It walks
 every object in the pre-stamp file and requires the post-stamp file to resolve
 each identically, with the `/Metadata` stream the single permitted exception.
 
-**Running veraPDF found a real defect, then verified the fix.** The first run
-reported the stamped file unparseable (6.6.2.1) with no PDF/A identification
-(6.6.4) — while the pre-stamp control was compliant, isolating the stamp. The
-cause is an XMP data-model rule that XML well-formedness does not imply: a
-property may appear **once** per packet, and `pdfaExtension:schemas` is a
-property Typst already writes. mako's schema description had been added as a
-second one; it now joins the existing bag, a test pins the single occurrence,
-and all three specimens (`just zugferd-specimen`) validate compliant. veraPDF
-is not part of `just ci` — re-run after any change to `document::facturx`.
+**The stamp must respect an XMP data-model rule that XML well-formedness does
+not imply:** a property may appear **once** per packet, and
+`pdfaExtension:schemas` is one Typst already writes. mako's schema description
+therefore joins the existing bag rather than opening a second, a test pins the
+single occurrence, and all three specimens (`just zugferd-specimen`) validate
+compliant. A second occurrence renders the file unparseable (veraPDF 6.6.2.1)
+with no PDF/A identification (6.6.4). veraPDF is not part of `just ci` — re-run
+it after any change to `document::facturx`.
 
 **`just zugferd-verify` runs the whole panel containerized** — veraPDF via the
 foundation's `verapdf/cli` image, Mustang under Temurin — so verification needs

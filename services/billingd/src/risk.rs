@@ -41,6 +41,16 @@ pub struct RiskFinding {
     pub weight: u8,
     /// Human-readable reason with the concrete values that triggered it.
     pub message: String,
+    /// This finding holds the invoice on its own, whatever the score says.
+    ///
+    /// Most findings are *evidence* — they say an invoice looks unusual, and
+    /// the score decides how much attention that earns. A few are *verdicts*:
+    /// a period straddling a statutory rate boundary has no correct single
+    /// rate, so part of what was billed is wrong no matter what else is true.
+    /// Expressing a verdict as a large weight leaves it at the mercy of
+    /// `hold_at`, which an operator may raise.
+    #[serde(default)]
+    pub blocking: bool,
 }
 
 /// Risk band derived from the score and the configured thresholds.
@@ -124,6 +134,33 @@ impl Default for RiskConfig {
 }
 
 impl RiskConfig {
+    /// Refuse a band configuration that cannot mean what it says.
+    ///
+    /// `band_for` tests the thresholds in descending order, so a configuration
+    /// with `review_at` above `hold_at` does not produce the bands its author
+    /// intended — it produces a REVIEW band that can never be reached, and
+    /// invoices land in a queue nobody is watching. The scale is 0–100, so a
+    /// threshold above 100 has the same effect.
+    ///
+    /// # Errors
+    ///
+    /// When the thresholds are not strictly ascending.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            self.sample_at < self.review_at && self.review_at < self.hold_at,
+            "[risk] thresholds must ascend: sample_at ({}) < review_at ({}) < hold_at ({})",
+            self.sample_at,
+            self.review_at,
+            self.hold_at
+        );
+        anyhow::ensure!(
+            self.hold_at <= 100,
+            "[risk] hold_at ({}) is above the 0–100 score scale, so no invoice can ever be held",
+            self.hold_at
+        );
+        Ok(())
+    }
+
     #[must_use]
     pub fn band_for(&self, score: u8) -> RiskBand {
         if score >= self.hold_at {
@@ -156,6 +193,15 @@ pub struct RiskContext {
 
 // ── Scoring ───────────────────────────────────────────────────────────────────
 
+/// The findings that hold an invoice on their own, whatever the score says.
+///
+/// Both mean the billed period straddles a statutory rate boundary, so it has
+/// no correct single rate and part of what was billed is wrong — a verdict, not
+/// evidence. Stated as a set rather than as a heavy weight, because a weight
+/// only holds while it stays above `hold_at`, and raising that threshold is
+/// ordinary tuning with no visible connection to this promise.
+const BLOCKING_FINDINGS: [&str; 2] = ["MWST_STICHTAG_IM_ZEITRAUM", "BEHG_JAHRESGRENZE_IM_ZEITRAUM"];
+
 /// Score one calculated invoice.
 ///
 /// Pure given its inputs: the engine's invoice (warnings, positions,
@@ -177,6 +223,7 @@ pub fn assess(
             code: code.to_owned(),
             weight,
             message,
+            blocking: false,
         });
     };
 
@@ -196,24 +243,45 @@ pub fn assess(
             ),
         );
     }
-    // Every applied VAT rate must be a rate that exists in German law.
+    // Every applied VAT rate must be one German law has actually used. 16/5 are
+    // the 01.07.–31.12.2020 Corona rates, still reachable through a correction
+    // of that period; 0 is reverse charge, §19 Kleinunternehmer and the §12
+    // Abs. 3 hardware supply.
+    const GERMAN_VAT_RATES: [Decimal; 5] = [dec!(0), dec!(5), dec!(7), dec!(16), dec!(19)];
     for s in &subtotals {
         let pct = s.rate_percent.normalize();
-        if ![dec!(0), dec!(7), dec!(16), dec!(19)].contains(&pct) {
+        if !GERMAN_VAT_RATES.contains(&pct) {
             add(
                 "INVALID_MWST_RATE",
                 60,
-                format!("USt-Satz {pct} % ist kein gültiger deutscher Satz (0/7/16/19)"),
+                format!("USt-Satz {pct} % ist kein gültiger deutscher Satz (0/5/7/16/19)"),
             );
         }
     }
 
-    // Consumption facts from the positions.
+    // Consumption: signed, and only what the customer was charged for.
     let consumption_kwh: Decimal = invoice
         .positions
         .iter()
         .filter(|p| p.category == PositionCategory::Commodity && p.unit.starts_with("kWh"))
         .map(|p| p.quantity)
+        .sum();
+
+    // Energy that moved at all, in either direction. A feed-in settlement bills
+    // `Credit` positions and carries no `Commodity` line, so a measure counting
+    // only consumption reads every EEG and Einspeisung invoice as a dead meter.
+    // Magnitudes, not a signed sum: on a Mieterstrom invoice that both charges
+    // consumption and credits a feed-in, the two would otherwise cancel.
+    let energy_kwh: Decimal = invoice
+        .positions
+        .iter()
+        .filter(|p| {
+            matches!(
+                p.category,
+                PositionCategory::Commodity | PositionCategory::Credit
+            ) && p.unit.starts_with("kWh")
+        })
+        .map(|p| p.quantity.abs())
         .sum();
     let period_days = (period_to - period_from).whole_days() + 1;
 
@@ -224,9 +292,9 @@ pub fn assess(
             format!("Verbrauch {consumption_kwh} kWh ist negativ"),
         );
     }
-    if consumption_kwh == Decimal::ZERO && period_days >= 28 {
+    if energy_kwh == Decimal::ZERO && period_days >= 28 {
         add(
-            "ZERO_CONSUMPTION",
+            "ZERO_ENERGY",
             30,
             format!("0 kWh über {period_days} Tage — Leerstand oder Messausfall?"),
         );
@@ -234,13 +302,12 @@ pub fn assess(
 
     // ── Engine-warning findings (Layer 1 surfaced into the score) ─────────────
     //
-    // The two boundary warnings weigh into the HELD band on their own. They do
-    // not say "this looks unusual" — they say the period has **no** correct
-    // single rate, so whatever was billed is wrong for part of it. billingd
-    // refuses such a period upstream; if one reaches scoring anyway (an
-    // operator-pinned rate, a preview promoted to a bill), it must not dispatch
-    // automatically. A weight below the hold threshold would let the invoice go
-    // out with a silent over- or undercharge.
+    // The two boundary warnings are **verdicts**, not evidence: the period has
+    // no correct single rate, so part of what was billed is wrong. billingd
+    // refuses such a period upstream; one that reaches scoring anyway (an
+    // operator-pinned rate, a preview promoted to a bill) must not dispatch.
+    // They carry `blocking` rather than a heavy weight, because a weight only
+    // holds while it stays above `hold_at` — which is operator-configurable.
     for w in &invoice.warnings {
         let (weight, code) = match w.code {
             "ESTIMATED_READING" => (15, "ESTIMATED_READING"),
@@ -322,14 +389,28 @@ pub fn assess(
         );
     }
 
+    for f in &mut findings {
+        f.blocking = BLOCKING_FINDINGS.contains(&f.code.as_str());
+    }
+
     let score: u8 = findings
         .iter()
         .fold(0u32, |acc, f| acc + u32::from(f.weight))
         .min(100) as u8;
 
+    // A verdict outranks the scorecard. Without this the guarantee that a
+    // straddling period never dispatches would hold only while `hold_at` stays
+    // at or below the finding's weight, and raising a threshold is a normal
+    // tuning action with no visible connection to that promise.
+    let band = if findings.iter().any(|f| f.blocking) {
+        RiskBand::Held
+    } else {
+        cfg.band_for(score)
+    };
+
     RiskAssessment {
         score,
-        band: cfg.band_for(score),
+        band,
         findings,
     }
 }
@@ -365,6 +446,95 @@ mod tests {
             .build_engine(&GridInput::default(), &rates)
             .bill(ctx, &quantities)
             .unwrap()
+    }
+
+    /// Raising `hold_at` must not release a straddling period.
+    ///
+    /// The two boundary findings are verdicts: the period has no correct single
+    /// rate. Carried as a weight of 80 they hold only while `hold_at` stays at
+    /// or below 80 — and raising a threshold is ordinary tuning that looks
+    /// unrelated to this promise, so the invoice would dispatch with a silent
+    /// over- or undercharge.
+    #[test]
+    fn a_raised_hold_threshold_cannot_release_a_straddling_period() {
+        let mut inv = invoice(dec!(300));
+        inv.warnings.push(energy_billing::BillingWarning {
+            code: "MWST_STICHTAG_IM_ZEITRAUM",
+            severity: energy_billing::WarningSeverity::Warning,
+            message: "Zeitraum überschreitet eine Satzgrenze".to_owned(),
+        });
+        // Every threshold above the finding's own weight.
+        let cfg = RiskConfig {
+            sample_at: 90,
+            review_at: 95,
+            hold_at: 100,
+            ..RiskConfig::default()
+        };
+        cfg.validate().expect("a legal band configuration");
+
+        let a = assess(
+            &cfg,
+            &inv,
+            dec!(0.19),
+            date!(2026 - 06 - 01),
+            date!(2026 - 06 - 30),
+            &RiskContext::default(),
+        );
+        assert!(
+            a.score < cfg.hold_at,
+            "the score alone does not reach the band"
+        );
+        assert_eq!(a.band, RiskBand::Held, "the verdict holds it anyway");
+        assert!(
+            a.findings.iter().any(|f| f.blocking),
+            "and it is recorded as the reason: {:?}",
+            a.findings,
+        );
+    }
+
+    /// A feed-in settlement carries no consumption, and that is not a fault.
+    ///
+    /// EEG positions are `PositionCategory::Credit`, so a measure that counts
+    /// only `Commodity` kWh reads every feed-in invoice as a dead meter.
+    #[test]
+    fn a_feed_in_settlement_is_not_a_dead_meter() {
+        let rates = energy_billing::RegulatoryRates::default();
+        let product: Product =
+            serde_json::from_str(r#"{"category":"EEG","eeg_verguetungssatz_ct_per_kwh":8.2}"#)
+                .expect("EEG product");
+        let ctx = BillingContext {
+            malo_id: "51238696781".into(),
+            lf_mp_id: "9900000000001".into(),
+            rechnungsnummer: "RISK-EEG".into(),
+            period: BillingPeriod::new(date!(2026 - 06 - 01), date!(2026 - 06 - 30)).unwrap(),
+            regulatory_rates: rates.clone(),
+            ..Default::default()
+        };
+        let quantities = Quantities {
+            eeg: Some(energy_billing::EegMeterInput {
+                einspeisung_kwh: dec!(4200),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let inv = product
+            .build_engine(&GridInput::default(), &rates)
+            .bill(ctx, &quantities)
+            .expect("EEG invoice");
+
+        let a = assess(
+            &RiskConfig::default(),
+            &inv,
+            dec!(0.19),
+            date!(2026 - 06 - 01),
+            date!(2026 - 06 - 30),
+            &RiskContext::default(),
+        );
+        assert!(
+            !a.findings.iter().any(|f| f.code == "ZERO_ENERGY"),
+            "4200 kWh were fed in: {:?}",
+            a.findings,
+        );
     }
 
     /// A gas period crossing a statutory rate boundary has no correct single
@@ -422,7 +592,7 @@ mod tests {
     }
 
     #[test]
-    fn zero_consumption_over_a_month_is_flagged() {
+    fn zero_energy_over_a_month_is_flagged() {
         let cfg = RiskConfig::default();
         let inv = invoice(Decimal::ZERO);
         let a = assess(
@@ -433,7 +603,7 @@ mod tests {
             date!(2026 - 06 - 30),
             &RiskContext::default(),
         );
-        assert!(a.findings.iter().any(|f| f.code == "ZERO_CONSUMPTION"));
+        assert!(a.findings.iter().any(|f| f.code == "ZERO_ENERGY"));
         assert_eq!(a.band, RiskBand::Sample);
     }
 
@@ -505,6 +675,24 @@ mod tests {
         );
         assert!(a.findings.iter().any(|f| f.code == "CONSECUTIVE_ESTIMATES"));
         assert_eq!(a.band, RiskBand::Sample);
+    }
+
+    /// A configuration whose bands cannot mean what they say is refused at
+    /// startup, not discovered when an invoice lands in an unreachable queue.
+    #[test]
+    fn misordered_thresholds_are_refused() {
+        assert!(RiskConfig::default().validate().is_ok());
+        let inverted = RiskConfig {
+            review_at: 90,
+            hold_at: 80,
+            ..RiskConfig::default()
+        };
+        assert!(inverted.validate().is_err(), "review_at above hold_at");
+        let unreachable = RiskConfig {
+            hold_at: 101,
+            ..RiskConfig::default()
+        };
+        assert!(unreachable.validate().is_err(), "hold_at above the scale");
     }
 
     #[test]

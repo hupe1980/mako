@@ -174,6 +174,13 @@
   // § 41f Abs. 1 EnWG — the Stufe-3 threat block. Visually set apart: a
   // disconnection threat buried in body text fails its purpose and, arguably,
   // its lawfulness.
+  //
+  // The § 41g Abwendungsvereinbarung is cited because that is the statute that
+  // creates it, but note its scope: § 41g governs Haushaltskunden **in der
+  // Grundversorgung**. Offering the arrangement to a customer outside it is
+  // always permitted and usually wise; citing § 41g as the customer's
+  // entitlement is only exact inside it. An operator serving only
+  // Sondervertragskunden may want to reword this sentence.
   if mahnung.sperrandrohung != none {
     v(4mm)
     block(

@@ -277,9 +277,9 @@ mod tests {
 
     /// There is no path the embedded invoice could be read from.
     ///
-    /// It used to be served as `/attachment.bin` so the harness could `read` it
-    /// — which meant a template could read it too. It is now a literal inside
-    /// the harness, so the file simply does not exist.
+    /// It is a literal inside the harness, not a file. Serving it as
+    /// `/attachment.bin` so the harness could `read` it would mean a template
+    /// could read it too.
     #[test]
     fn the_embedded_invoice_is_not_a_file_at_all() {
         let w = world();

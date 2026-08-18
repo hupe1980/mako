@@ -15,10 +15,12 @@
 //! |---|---|
 //! | `config` | TOML + env configuration |
 //! | `document` | Renderer sandbox, ZUGFeRD carrier, publish gates, view contracts |
+//! | `error` | `OutputError` — the one coded JSON envelope every route answers with |
 //! | `handlers` | Axum HTTP handlers: template CRUD + render |
 //! | `template_store` | Content-addressed, append-only templates |
 
 pub mod config;
 pub mod document;
+pub mod error;
 pub mod handlers;
 pub mod template_store;

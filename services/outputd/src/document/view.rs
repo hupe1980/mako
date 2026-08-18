@@ -35,6 +35,11 @@ pub struct PartyView {
     pub name: Option<String>,
     /// BT-31 / BT-48 — VAT identifier, when the party has one.
     pub vat_id: Option<String>,
+    /// BT-32 — the seller's Steuernummer. Seller side only; EN 16931 gives the
+    /// buyer no equivalent term. § 14 Abs. 4 Nr. 2 UStG requires **one of**
+    /// this and [`Self::vat_id`] on every Rechnung, and the publish gate
+    /// checks that one of them reaches the page.
+    pub tax_number: Option<String>,
     /// BT-35 / BT-50 — street and number.
     pub line1: Option<String>,
     /// BT-38 / BT-53 — post code.
@@ -152,6 +157,7 @@ fn party(p: &en16931::invoice::Party) -> PartyView {
     PartyView {
         name: p.name.clone(),
         vat_id: p.vat_identifier.clone(),
+        tax_number: p.tax_registration.clone(),
         line1: p.address.line1.clone(),
         post_code: p.address.post_code.clone(),
         city: p.address.city.clone(),
@@ -225,5 +231,111 @@ impl DocumentView {
             },
             notes: inv.notes.iter().filter_map(|n| n.note.clone()).collect(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DocumentView;
+
+    /// The view must carry the invoice, not a lossy summary of it.
+    ///
+    /// An operator's layout renders from `DocumentView` and never from the
+    /// semantic model, so anything missing here is a field no invoice can ever
+    /// print. The specimen is deliberately awkward — two VAT rates, an exempt
+    /// line, a credit line — so a breakdown loop that assumes one rate is
+    /// caught here rather than by a customer.
+    ///
+    /// It lives with the projection it guards, and only here: a copy on the
+    /// caller's side would test a second implementation of one contract, with
+    /// the gate proving templates against this one and production feeding them
+    /// the other.
+    #[test]
+    fn the_view_carries_what_an_invoice_must_print() {
+        let model = crate::document::gate::specimen_invoice();
+        let view = DocumentView::of(&model);
+
+        // §14 Abs. 4 UStG Pflichtangaben the page cannot omit.
+        assert!(view.number.is_some(), "BT-1 invoice number");
+        assert!(view.issue_date.is_some(), "BT-2 issue date");
+        assert!(view.seller.name.is_some(), "BT-27 seller name");
+        assert!(view.buyer.name.is_some(), "BT-44 buyer name");
+        // § 14 Abs. 4 Nr. 2 is a disjunction — one of the two must be printable.
+        // Projecting only BT-31 made the Steuernummer unrenderable, which left a
+        // § 19 UStG Kleinunternehmer with no lawful page at all.
+        assert!(
+            view.seller.vat_id.is_some() || view.seller.tax_number.is_some(),
+            "BT-31 or BT-32 seller tax identifier",
+        );
+        assert_eq!(
+            view.seller.tax_number, model.seller.tax_registration,
+            "BT-32 is projected, not dropped",
+        );
+
+        // Every rate reaches the breakdown a template iterates. A single
+        // blended rate on the page is exactly the defect the hand-rolled
+        // renderer had.
+        assert!(
+            view.vat_breakdown.len() >= 2,
+            "the mixed-rate specimen keeps its BG-23 entries: {:?}",
+            view.vat_breakdown,
+        );
+
+        assert!(
+            !view.lines.is_empty(),
+            "an invoice with no lines prints nothing"
+        );
+        for l in &view.lines {
+            assert!(!l.net_amount.is_empty() && !l.quantity.is_empty());
+            assert!(!l.vat_category.is_empty(), "BT-151 per line");
+        }
+
+        // Amounts are decimal strings — a total that round-trips through f64 is
+        // not a total.
+        assert!(
+            view.totals.gross_total.parse::<f64>().is_ok() && view.totals.gross_total.contains('.'),
+            "totals are decimal strings: {}",
+            view.totals.gross_total,
+        );
+
+        // The view is what a template consumes: it has to serialise.
+        let json = serde_json::to_value(&view).expect("DocumentView serialises");
+        assert!(json["totals"]["gross_total"].is_string());
+        assert!(json["lines"].as_array().is_some_and(|l| !l.is_empty()));
+    }
+
+    /// The view must never become a second source of truth for the XML.
+    ///
+    /// It is a *projection*: every field is copied from the model, so the page
+    /// and the embedded CII cannot disagree. This checks the pair most likely
+    /// to drift — what the customer owes.
+    #[test]
+    fn the_view_agrees_with_the_model_it_projects() {
+        let model = crate::document::gate::specimen_invoice();
+        let view = DocumentView::of(&model);
+
+        assert_eq!(
+            view.totals.gross_total,
+            model.totals.gross_total.to_string()
+        );
+        assert_eq!(view.totals.due, model.totals.due.to_string());
+        assert_eq!(view.lines.len(), model.lines.len());
+        assert_eq!(view.vat_breakdown.len(), model.vat_breakdown.len());
+    }
+
+    /// BG-14 reaches the page. billingd pins that the period reaches the model;
+    /// this pins the other half of the same journey.
+    #[test]
+    fn the_billing_period_reaches_the_page() {
+        let mut model = crate::document::gate::specimen_invoice();
+        model.invoicing_period = Some(en16931::invoice::Period {
+            start: Some(
+                en16931::Date::try_from(time::macros::date!(2026 - 01 - 01)).expect("valid"),
+            ),
+            end: Some(en16931::Date::try_from(time::macros::date!(2026 - 01 - 31)).expect("valid")),
+        });
+        let view = DocumentView::of(&model);
+        assert_eq!(view.period_start.as_deref(), Some("2026-01-01"));
+        assert_eq!(view.period_end.as_deref(), Some("2026-01-31"));
     }
 }

@@ -1,9 +1,13 @@
-//! VPP aggregation billing, contract registry and auto-billing webhook (B12 — Art. 17 RL (EU) 2019/944).
+//! § 41e EnWG VPP dispatch settlement — the manual endpoint and the
+//! `de.vpp.dispatch.confirmed` auto-settlement webhook.
+//!
+//! Both produce a **Gutschrift**: the flexibility provider delivered the
+//! energy, the aggregator owes the remuneration, and the aggregator writes the
+//! document (§ 14 Abs. 2 Satz 2 UStG Gutschriftverfahren).
 
-#[allow(unused_imports)]
 use super::*;
 
-// ── VPP Aggregation Billing (B12 — Art. 17 RL (EU) 2019/944) ───────────────────────
+// ── § 41e EnWG dispatch settlement (Art. 17 RL (EU) 2019/944) ─────────────────
 
 /// One confirmed dispatch event for VPP settlement billing.
 ///
@@ -19,6 +23,16 @@ pub struct VppDispatchEvent {
     pub flexibility_kwh: rust_decimal::Decimal,
     /// IFTSTA process UUID from makod (for §20 audit trail).
     pub process_id: Option<String>,
+    /// The dispatch transaction id, when the caller has one.
+    ///
+    /// Supplying it makes the manual endpoint share `vpp_dispatch_ledger` with
+    /// the auto-settlement webhook: a dispatch already settled by either path is
+    /// skipped instead of paid twice. Without it the two writers were blind to
+    /// each other, and a period back-filled by hand after the webhook had
+    /// auto-billed part of it remunerated the same flexibility twice with
+    /// nothing in the store to show it.
+    #[serde(default)]
+    pub tx_id: Option<String>,
 }
 
 /// Request body for `POST /api/v1/billing/vpp/{vpp_id}`.
@@ -27,7 +41,7 @@ pub struct VppDispatchEvent {
 /// (typically the SR-ID of the `SteuerbareRessource` portfolio in `marktd`).
 #[derive(Debug, serde::Deserialize)]
 pub struct VppBillingRequest {
-    /// LF/Aggregator MP-ID (invoice issuer).
+    /// Aggregator MP-ID — the party issuing the Gutschrift.
     pub lf_mp_id: String,
     /// MaLo-ID of the VPP aggregation point (or primary resource).
     pub malo_id: String,
@@ -39,27 +53,36 @@ pub struct VppBillingRequest {
     pub capacity_price_eur_per_kwh: rust_decimal::Decimal,
     /// All confirmed dispatch events in the billing period.
     pub dispatch_events: Vec<VppDispatchEvent>,
-    /// Optional invoice number prefix.
-    pub rechnungsnummer_prefix: Option<String>,
+    /// Override the settlement's number. Absent — the normal case — takes the
+    /// next number of the tenant's `VG` (Gutschrift) series.
+    #[serde(default)]
+    pub rechnungsnummer: Option<String>,
     /// MwSt rate override (default from billingd config, typically 0.19).
     pub mwst_rate_override: Option<rust_decimal::Decimal>,
 }
 
-/// `POST /api/v1/billing/vpp/{vpp_id}`
+/// `POST /api/v1/billing/vpp/{vpp_id}` — settle a period of VPP dispatches.
 ///
-/// **B12 — VPP Aggregation Settlement (Art. 17 RL (EU) 2019/944).**
-///
-/// Generates a settlement `Rechnung` for a Virtual Power Plant aggregator.
-/// Each dispatch event becomes one `Rechnungsposition`.
+/// One credit position per confirmed dispatch event, one Gutschrift for the
+/// period. The webhook below settles per dispatch instead; this endpoint is the
+/// manual and back-fill path.
 ///
 /// ## Calculation
 ///
 /// ```text
-/// DispatchPosition_eur = flexibility_kwh * capacity_price_eur_per_kwh
-/// Total_netto          = sum(DispatchPosition_eur)
-/// MwSt                 = Total_netto * mwst_rate
-/// Total_brutto         = Total_netto + MwSt
+/// DispatchCredit_eur = flexibility_kwh × capacity_price_eur_per_kwh
+/// Total_netto        = −Σ DispatchCredit_eur      (the aggregator owes it)
+/// MwSt               = Total_netto × mwst_rate
+/// Total_brutto       = Total_netto + MwSt
 /// ```
+///
+/// ## Direction
+///
+/// The document is a **Gutschrift** (§ 14 Abs. 2 Satz 2 UStG Gutschriftverfahren):
+/// the flexibility provider delivered the energy, the aggregator owes the
+/// remuneration, and the aggregator writes the document. Totals are therefore
+/// negative from the aggregator's side — the same shape as an EEG feed-in
+/// settlement.
 ///
 /// ## CloudEvent emitted
 ///
@@ -68,93 +91,112 @@ pub struct VppBillingRequest {
 /// ## Regulatory basis
 ///
 /// § 41e EnWG (Verträge zwischen Aggregatoren und Betreibern einer Erzeugungsanlage
-/// oder Letztverbrauchern), transposing Art. 17 RL (EU) 2019/944 (Demand response
-/// through aggregation):
-/// Aggregators must provide transparent settlement invoices per dispatch event.
+/// oder Letztverbrauchern), transposing Art. 17 RL (EU) 2019/944 (demand response
+/// through aggregation). The remuneration itself is contractual; §41e governs the
+/// contract's form and the data the provider may demand.
 pub async fn post_vpp_billing(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
-    Extension(vertragd): Extension<Arc<crate::clients::VertragdClient>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     Path(vpp_id): Path<String>,
     Json(req): Json<VppBillingRequest>,
-) -> impl IntoResponse {
+) -> BillingResult<impl IntoResponse> {
     use rust_decimal::Decimal;
 
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "settle-flexibility", &cfg.tenant)?;
+
     if req.dispatch_events.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
+        return Err(BillingError::bad_request(
+            "NO_DISPATCH_EVENTS",
             "VPP billing requires at least one dispatch event",
-        )
-            .into_response();
+        ));
     }
 
-    let (period_from, period_to) = match parse_period(&req.period_from, &req.period_to) {
-        Ok(pd) => pd,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
-    };
+    let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
     let mwst_rate = req
         .mwst_rate_override
         .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
 
+    // Dispatches already settled — by an earlier run of this endpoint or by the
+    // auto-settlement webhook — are excluded before anything is priced.
+    let stated_tx_ids: Vec<String> = req
+        .dispatch_events
+        .iter()
+        .filter_map(|ev| ev.tx_id.clone())
+        .collect();
+    let already_settled = crate::pg::settled_vpp_dispatches(&pool, &cfg.tenant, &stated_tx_ids)
+        .await
+        .map_err(BillingError::Internal)?;
+
     // ── Positions from dispatch events, through the engine ────────────────────
     // Every event becomes a BillingPosition; VAT, steuerbetraege and traces come
-    // from the same machinery as every other invoice instead of an inline block
-    // whose Steuerkennzeichen said UST_19 whatever the override rate was.
+    // from the same machinery as every other invoice.
     let mut positions: Vec<BillingPosition> = Vec::with_capacity(req.dispatch_events.len());
+    let mut settled_now: Vec<String> = Vec::new();
     let mut total_flex_kwh = Decimal::ZERO;
-    // Load-increase (negative flexibility) dispatches are not billable on this
-    // capacity-price model, but dropping them without trace makes a settlement
-    // silently smaller than the dispatch log. Count them and report the count.
-    let mut skipped_events = 0usize;
+    // Load-increase (negative flexibility) dispatches are not remunerated on
+    // this capacity-price model, but dropping them without trace makes a
+    // settlement silently smaller than the dispatch log. Count and report them.
+    let mut skipped_non_positive = 0usize;
+    let mut skipped_duplicate = 0usize;
     for ev in &req.dispatch_events {
+        if ev
+            .tx_id
+            .as_ref()
+            .is_some_and(|tx| already_settled.contains(tx))
+        {
+            skipped_duplicate += 1;
+            continue;
+        }
         if ev.flexibility_kwh <= Decimal::ZERO {
-            skipped_events += 1;
+            skipped_non_positive += 1;
             continue;
         }
         total_flex_kwh += ev.flexibility_kwh;
-        let mut pos = BillingPosition::debit(
+        if let Some(tx) = ev.tx_id.clone() {
+            settled_now.push(tx);
+        }
+        positions.push(vpp_dispatch_position(
             format!("VPP Dispatch {} bis {}", ev.start_utc, ev.end_utc),
             ev.flexibility_kwh,
-            "kWh",
             req.capacity_price_eur_per_kwh,
-            PositionCategory::Fee,
-        )
-        .with_legal_basis("§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag")
-        .with_tag("vpp_dispatch");
-        pos.trace = energy_billing::PositionTrace::commodity(
-            ev.flexibility_kwh,
-            "kWh",
-            req.capacity_price_eur_per_kwh,
-            "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag",
-        );
-        positions.push(pos);
+        ));
     }
 
     if positions.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "all dispatch events have zero or negative flexibility — no billing generated",
-        )
-            .into_response();
+        return Err(BillingError::unprocessable_with(
+            "NOTHING_TO_SETTLE",
+            "no billable dispatch remains: every event was already settled or carries \
+             zero/negative flexibility",
+            serde_json::json!({
+                "skipped_already_settled": skipped_duplicate,
+                "skipped_non_positive": skipped_non_positive,
+            }),
+        ));
     }
-    if skipped_events > 0 {
+    if skipped_non_positive > 0 || skipped_duplicate > 0 {
         tracing::warn!(
             %vpp_id,
             malo_id = %req.malo_id,
-            skipped_events,
+            skipped_non_positive,
+            skipped_duplicate,
             billed_events = positions.len(),
-            "billingd VPP: dispatch events with zero or negative flexibility are not billable \
-             on the capacity-price model — excluded from this settlement"
+            "billingd VPP: events excluded from this settlement"
         );
     }
 
-    let rechnungsnummer = req
-        .rechnungsnummer_prefix
-        .as_deref()
-        .map(|p| format!("{p}-{period_from}"))
-        .unwrap_or_else(|| format!("VPP-{vpp_id}-{period_from}"));
+    let billed_events = positions.len();
+    let rechnungsnummer = next_rechnungsnummer(
+        &pool,
+        &cfg.tenant,
+        series::CREDIT,
+        req.rechnungsnummer.as_deref(),
+        period_from,
+    )
+    .await?;
 
     let attrs = vec![
         zusatz_attribut("vpp_id", serde_json::json!(vpp_id)),
@@ -164,7 +206,7 @@ pub async fn post_vpp_billing(
         ),
         zusatz_attribut(
             "dispatch_event_count",
-            serde_json::json!(req.dispatch_events.len().to_string()),
+            serde_json::json!(billed_events.to_string()),
         ),
         zusatz_attribut(
             "dispatch_process_ids",
@@ -176,133 +218,126 @@ pub async fn post_vpp_billing(
             ),
         ),
     ];
-    let (invoice, rechnung_json) = match build_vpp_invoice(
+    let (invoice, rechnung_json) = build_vpp_settlement(
         &req.malo_id,
         &req.lf_mp_id,
-        rechnungsnummer,
+        rechnungsnummer.clone(),
         period_from,
         period_to,
         mwst_rate,
         positions,
         attrs,
-    ) {
-        Ok(v) => v,
-        Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-    };
+    )
+    .map_err(BillingError::Internal)?;
     let total_netto = invoice.netto_eur;
     let total_brutto = invoice.brutto_eur;
 
-    // VPP settlement row + its `de.vpp.settlement.berechnet` outbox event commit
-    // atomically, so a settled dispatch can never be persisted without its event.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let record_id = match insert_billing_record(
+    // The §41e settlement is issued against the prosumer behind the MaLo, so the
+    // ordinary BG-7 lookup resolves the right party. This path builds the
+    // document from dispatch events rather than through `dispatch_invoice`, so
+    // it looks the buyer up itself.
+    let buyer = vpp_buyer(&deps, &req.malo_id).await;
+
+    // VPP settlement row, its ledger claims and its `de.vpp.settlement.berechnet`
+    // outbox event commit atomically, so a settled dispatch can never be
+    // persisted without its event or without its idempotency claim.
+    let mut tx = pool.begin().await?;
+    let record_id = insert_billing_record(
         &mut *tx,
-        &cfg.tenant,
-        &req.malo_id,
-        &req.lf_mp_id,
-        &format!("VPP_{vpp_id}"),
-        "VPP",
-        period_from,
-        period_to,
-        &rechnung_json,
-        total_netto,
-        total_brutto,
+        &crate::pg::NewBillingRecord {
+            tenant: &cfg.tenant,
+            malo_id: &req.malo_id,
+            lf_mp_id: &req.lf_mp_id,
+            product_code: &format!("VPP_{vpp_id}"),
+            category: "VPP",
+            rechnungsnummer: &rechnungsnummer,
+            period_from,
+            period_to,
+            rechnung_json: &rechnung_json,
+            total_netto_eur: total_netto,
+            total_brutto_eur: total_brutto,
+        },
     )
     .await
-    {
-        Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    if cfg.erp_webhook_url.is_some() {
-        let ce = mako_service::CloudEvent::new(
-            mako_service::source("billingd", &cfg.tenant),
-            mako_events::vpp::SETTLEMENT_BERECHNET,
-            vpp_id.clone(),
-            serde_json::json!({
-                "record_id": record_id.to_string(),
-                "vpp_id": vpp_id,
-                "malo_id": req.malo_id,
-                "lf_mp_id": req.lf_mp_id,
-                "total_flexibility_kwh": total_flex_kwh.to_string(),
-                "total_netto_eur": total_netto.to_string(),
-                "total_brutto_eur": total_brutto.to_string(),
-                "dispatch_count": req.dispatch_events.len(),
-                "rechnung": rechnung_json,
-            }),
-        );
-        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+    .map_err(crate::error::BillingError::from)?;
+    for tx_id in &settled_now {
+        crate::pg::record_vpp_dispatch(&mut *tx, tx_id, &cfg.tenant, Some(record_id))
+            .await
+            .map_err(BillingError::Internal)?;
     }
-    // The §41e settlement is issued against the prosumer behind the MaLo, so the
-    // ordinary BG-7 lookup resolves the right party.
-    let buyer = vertragd
-        .get_vertrag_by_malo(&req.malo_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.rechnungsempfaenger);
-    if let Err(e) = crate::einvoice::store(
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("billingd", &cfg.tenant),
+        mako_events::vpp::SETTLEMENT_BERECHNET,
+        vpp_id.clone(),
+        serde_json::json!({
+            "record_id": record_id.to_string(),
+            "vpp_id": vpp_id,
+            "malo_id": req.malo_id,
+            "lf_mp_id": req.lf_mp_id,
+            "total_flexibility_kwh": total_flex_kwh.to_string(),
+            "total_netto_eur": total_netto.to_string(),
+            "total_brutto_eur": total_brutto.to_string(),
+            "dispatch_count": billed_events,
+            "trigger": "manual",
+            "rechnung": rechnung_json,
+        }),
+    );
+    issue_record(&mut tx, cfg, record_id, &ce).await?;
+    crate::einvoice::store(
         &mut *tx,
         record_id,
         &invoice,
-        &cfg,
+        cfg,
         &req.malo_id,
         buyer.as_ref(),
     )
-    .await
-    {
-        tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
-    }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
+    .await?;
+    tx.commit().await?;
 
-    (
+    Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "record_id": record_id,
             "vpp_id": vpp_id,
             "malo_id": req.malo_id,
+            "rechnungsnummer": rechnungsnummer,
             "period_from": period_from.to_string(),
             "period_to": period_to.to_string(),
             "dispatch_count": req.dispatch_events.len(),
-            // Not billable on the capacity-price model — stated so the caller can
-            // reconcile the settlement against its dispatch log.
-            "skipped_non_positive_events": skipped_events,
+            "billed_dispatch_count": billed_events,
+            // Stated so the caller can reconcile the settlement against its
+            // dispatch log rather than wondering where the difference went.
+            "skipped_already_settled": skipped_duplicate,
+            "skipped_non_positive_events": skipped_non_positive,
             "total_flexibility_kwh": total_flex_kwh.to_string(),
             "total_netto_eur": total_netto.to_string(),
             "total_brutto_eur": total_brutto.to_string(),
             "mwst_eur": invoice.mwst_eur.to_string(),
             "rechnung": rechnung_json,
         })),
-    )
-        .into_response()
+    ))
 }
 
-// ── VPP Auto-Billing Webhook (B12 — Art. 17 RL (EU) 2019/944) ────────────────
+// ── Auto-settlement webhook ───────────────────────────────────────────────────
 
 /// `POST /api/v1/webhooks/vpp-dispatch`
 ///
-/// **VPP Dispatch Confirmed auto-billing trigger.**
+/// **Dispatch-confirmed auto-settlement.**
 ///
-/// Receives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when
-/// the MSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag
-/// (PID 55168).  Auto-generates a VPP settlement `Rechnung` using the
-/// pre-configured `VppContractRow` for the dispatched SR-ID.
+/// Receives `de.vpp.dispatch.confirmed` CloudEvents emitted by `makod` when the
+/// MSB sends a positive `EndantwortPositiv` for a WiM Steuerungsauftrag
+/// (PID 55168), and writes one Gutschrift per dispatch against the
+/// §41e Aggregatorvertrag in force **on the day the dispatch executed** —
+/// `vertragd` owns that contract; billingd keeps no copy.
 ///
 /// ## Idempotency
 ///
-/// Each `tx_id` is recorded in `vpp_dispatch_ledger`.  Repeated delivery
-/// (outbox retry) returns `202 Accepted` without re-billing.
+/// Each `tx_id` is recorded in `vpp_dispatch_ledger` **inside the settlement
+/// transaction**, so a dispatch is settled exactly once and a redelivery
+/// returns `202 Accepted` without re-settling. That ledger is also why
+/// per-dispatch records are exempt from `br_unique_original`: a portfolio is
+/// dispatched several times a day, and a one-row-per-period index cannot
+/// express that.
 ///
 /// ## HMAC verification
 ///
@@ -334,11 +369,11 @@ pub async fn post_vpp_billing(
 /// ```
 pub async fn post_vpp_webhook(
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
-    Extension(vertragd): Extension<Arc<crate::clients::VertragdClient>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
+    let (cfg, vertragd) = (&deps.cfg, &deps.vertragd);
     // ── 1. HMAC signature verification ────────────────────────────────────────
     if let Some(ref secret) = cfg.inbound_webhook_secret {
         let sig = headers
@@ -370,16 +405,24 @@ pub async fn post_vpp_webhook(
         .cloned()
         .unwrap_or(serde_json::Value::Null);
 
-    let tx_id = data
+    // The idempotency key. Falling back to a literal `"unknown"` would be worse
+    // than having none: the first such event claims that key, and every later
+    // one — any portfolio, any day — is then seen as its duplicate and silently
+    // dropped. An event without an identifiable transaction cannot be settled
+    // exactly once, so it is refused.
+    let Some(tx_id) = data
         .get("tx_id")
         .and_then(|v| v.as_str())
-        .unwrap_or_else(|| {
-            event
-                .get("id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("unknown")
-        })
-        .to_owned();
+        .or_else(|| event.get("id").and_then(|v| v.as_str()))
+        .map(str::to_owned)
+    else {
+        tracing::warn!("billingd: vpp-dispatch webhook — event carries neither data.tx_id nor id");
+        return (
+            StatusCode::BAD_REQUEST,
+            "the event must carry data.tx_id (or a CloudEvent id) as its idempotency key",
+        )
+            .into_response();
+    };
 
     // ── 3. Idempotency check ───────────────────────────────────────────────────
     match crate::pg::is_vpp_dispatch_processed(&pool, &tx_id, &cfg.tenant).await {
@@ -497,26 +540,41 @@ pub async fn post_vpp_webhook(
         return StatusCode::ACCEPTED.into_response();
     }
 
-    // ── 8. Build and run VPP billing ──────────────────────────────────────────
-    // Billing period = calendar day of dispatch_from — the same day the
-    // contract above was selected by.
+    // ── 8. Build and run the VPP settlement ───────────────────────────────────
+    // Settlement period = the calendar day the dispatch executed — the same day
+    // the contract above was selected by. Several dispatches legitimately settle
+    // within one day, so these records are exempt from `br_unique_original`;
+    // `vpp_dispatch_ledger` is their idempotency guard and the per-tx
+    // Rechnungsnummer keeps § 14 Abs. 4 Nr. 4 UStG satisfied.
     let period_from = dispatch_date;
-    let period_to = period_from; // single-day billing record per dispatch
+    let period_to = period_from;
 
     let mwst_rate = contract
         .mwst_rate_override
         .unwrap_or_else(|| cfg.regulatory_rates().mwst_rate);
 
-    let rechnungsnummer = format!(
-        "VPP-{}-{}-{}",
-        contract.vpp_id,
-        period_from,
-        tx_id.get(..8).unwrap_or(&tx_id)
-    );
+    // From the tenant's `VG` (Gutschrift) series, like the manual path. The old
+    // `VPP-{vpp}-{date}-{tx-prefix}` string was einmalig only as long as no two
+    // transaction ids of a day shared their first eight characters.
+    let rechnungsnummer = match crate::pg::allocate_rechnungsnummer(
+        &pool,
+        &cfg.tenant,
+        crate::handlers::series::CREDIT,
+        period_from.year(),
+    )
+    .await
+    {
+        Ok(nr) => nr,
+        Err(e) => {
+            tracing::error!(tx_id, error = %e, "billingd: could not allocate a Rechnungsnummer");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
 
-    // One position through the engine's canonical path — VAT, steuerbetraege
-    // and the trace come from the same machinery as every other invoice.
-    let mut pos = BillingPosition::debit(
+    // One credit position through the engine's canonical path — VAT,
+    // steuerbetraege and the trace come from the same machinery as every other
+    // document.
+    let pos = vpp_dispatch_position(
         format!(
             "VPP Dispatch {} bis {} (SR: {})",
             execution_time_from,
@@ -524,17 +582,7 @@ pub async fn post_vpp_webhook(
             location_id
         ),
         flexibility_kwh,
-        "kWh",
         contract.capacity_price_eur_per_kwh,
-        PositionCategory::Fee,
-    )
-    .with_legal_basis("§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag")
-    .with_tag("vpp_dispatch");
-    pos.trace = energy_billing::PositionTrace::commodity(
-        flexibility_kwh,
-        "kWh",
-        contract.capacity_price_eur_per_kwh,
-        "§ 41e EnWG, Art. 17 RL (EU) 2019/944, VPP-Vertrag",
     );
 
     let attrs = vec![
@@ -546,10 +594,10 @@ pub async fn post_vpp_webhook(
             serde_json::json!(flexibility_kwh.to_string()),
         ),
     ];
-    let (invoice, rechnung_json) = match build_vpp_invoice(
+    let (invoice, rechnung_json) = match build_vpp_settlement(
         &contract.malo_id,
         &contract.aggregator_mp_id,
-        rechnungsnummer,
+        rechnungsnummer.clone(),
         period_from,
         period_to,
         mwst_rate,
@@ -580,16 +628,19 @@ pub async fn post_vpp_webhook(
     };
     let record_id = match insert_billing_record(
         &mut *tx,
-        &cfg.tenant,
-        &contract.malo_id,
-        &contract.aggregator_mp_id,
-        &format!("VPP_{}", contract.vpp_id),
-        "VPP",
-        period_from,
-        period_to,
-        &rechnung_json,
-        position_netto,
-        total_brutto,
+        &crate::pg::NewBillingRecord {
+            tenant: &cfg.tenant,
+            malo_id: &contract.malo_id,
+            lf_mp_id: &contract.aggregator_mp_id,
+            product_code: &format!("VPP_{}", contract.vpp_id),
+            category: "VPP",
+            rechnungsnummer: &rechnungsnummer,
+            period_from,
+            period_to,
+            rechnung_json: &rechnung_json,
+            total_netto_eur: position_netto,
+            total_brutto_eur: total_brutto,
+        },
     )
     .await
     {
@@ -612,7 +663,7 @@ pub async fn post_vpp_webhook(
     // ── 9. Enqueue de.vpp.settlement.berechnet ────────────────────────────────
     // The VPP dispatch subscriber keys on `de.vpp.settlement.berechnet`, so the
     // event carries that type directly (never the Rechnung helper's type).
-    if cfg.erp_webhook_url.is_some() {
+    {
         let ce = mako_service::CloudEvent::new(
             mako_service::source("billingd", &cfg.tenant),
             mako_events::vpp::SETTLEMENT_BERECHNET,
@@ -631,34 +682,26 @@ pub async fn post_vpp_webhook(
                 "rechnung":           rechnung_json,
             }),
         );
-        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-            tracing::error!(tx_id, error = %e, "billingd: vpp settlement enqueue failed");
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
-            tracing::error!(error = %e, "billingd: mark_dispatched failed");
+        if let Err(e) = issue_record(&mut tx, cfg, record_id, &ce).await {
+            tracing::error!(tx_id, error = %e, "billingd: vpp settlement issuance failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     }
     // The §41e settlement is issued against the prosumer behind the MaLo, so the
     // ordinary BG-7 lookup resolves the right party.
-    let buyer = vertragd
-        .get_vertrag_by_malo(&contract.malo_id)
-        .await
-        .ok()
-        .flatten()
-        .and_then(|v| v.rechnungsempfaenger);
+    let buyer = vpp_buyer(&deps, &contract.malo_id).await;
     if let Err(e) = crate::einvoice::store(
         &mut *tx,
         record_id,
         &invoice,
-        &cfg,
+        cfg,
         &contract.malo_id,
         buyer.as_ref(),
     )
     .await
     {
-        tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
+        tracing::error!(%record_id, error = ?e, "billingd: attach en16931 model failed");
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     }
     if let Err(e) = tx.commit().await {
         tracing::error!(tx_id, error = %e, "billingd: vpp auto-billing commit failed");
@@ -676,6 +719,26 @@ pub async fn post_vpp_webhook(
     );
 
     StatusCode::ACCEPTED.into_response()
+}
+
+/// The BG-7 buyer for a § 41e settlement, best-effort.
+///
+/// The VPP paths assemble their document from dispatch events instead of running
+/// a period through `dispatch_invoice`, so they have no priced invoice to carry
+/// the buyer along with.
+async fn vpp_buyer(
+    deps: &BillingDeps,
+    malo_id: &str,
+) -> Option<crate::clients::Rechnungsempfaenger> {
+    deps.vertragd
+        .get_vertrag_by_malo(malo_id)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(%malo_id, error = %e, "billingd VPP: BG-7 buyer lookup failed");
+        })
+        .ok()
+        .flatten()
+        .and_then(|v| v.rechnungsempfaenger)
 }
 
 /// Compute delivered flexibility in kWh from dispatch parameters.

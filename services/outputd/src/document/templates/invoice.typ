@@ -6,7 +6,8 @@
 //
 //     #let render(invoice) = ...
 //
-// and `invoice` is the DocumentView described in billingd's `document::view`.
+// and `invoice` is the DocumentView described in outputd's `document::view` —
+// projected there from the EN 16931 model the issuing service sends.
 // The CII XML embedded beside this page is produced by mako from the EN 16931
 // model and is not reachable from here; nothing you write can make the page and
 // the XML disagree about what the invoice says.
@@ -114,7 +115,12 @@
           #opt(seller.line1)#opt(seller.post_code, prefix: ", ") #opt(seller.city)
         ],
         [
-          #opt(seller.vat_id, prefix: "USt-IdNr. ") \
+          // § 14 Abs. 4 Nr. 2 UStG — the USt-IdNr. or the Steuernummer,
+          // both when the operator holds both.
+          #opt(seller.vat_id, prefix: "USt-IdNr. ")#opt(
+            seller.tax_number,
+            prefix: if seller.vat_id == none { "St.-Nr. " } else { " · St.-Nr. " },
+          ) \
           #opt(seller.phone)#opt(seller.email, prefix: " · ")
         ],
         [Seite #counter(page).display() von #counter(page).final().first()],

@@ -3,6 +3,7 @@
 use anyhow::{Context as _, Result};
 use rust_decimal::Decimal;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use energy_billing::{DynamicInterval, MeterInput, Product};
 
@@ -247,6 +248,13 @@ fn extract_tariff_from_product_data(
     let mut emobility_roaming_fee_eur: Option<Decimal> = None;
     let mut service_fee_eur: Option<Decimal> = None;
     let mut service_event_price_eur: Option<Decimal> = None;
+    // Priced positions this mapper has no field for. A silently dropped
+    // position is money the customer is not charged (or not credited), and it
+    // looks exactly like a product that never had one — the same failure shape
+    // as `KEIN_ARBEITSPREIS`, which is why that one is an Error-severity engine
+    // finding. This mapper cannot refuse (a catalog may legitimately carry
+    // positions billingd does not model), so it says so instead.
+    let mut dropped: Vec<String> = Vec::new();
 
     for pp in &preispositionen {
         // preistyp is stored in ALLCAPS after tarifbd normalisation.
@@ -274,7 +282,15 @@ fn extract_tariff_from_product_data(
             ("ARBEITSPREIS_NT", _) => arbeitspreis_nt_ct_per_kwh = preis,
 
             ("LEISTUNGSPREIS", "WAERME") => waerme_leistungspreis_eur_per_kw_month = preis,
-            ("LEISTUNGSPREIS", _) => {} // not mapped outside Wärme
+            // Strom and Gas take their demand charge from the typed `data`
+            // keys (`leistungspreis_strom_ct_per_kw_month`,
+            // `gas_leistungspreis_ct_per_kw_month`), which state the unit.
+            // A `LEISTUNGSPREIS` *position* cannot be mapped there: tarifbd
+            // normalises `preis` to a bare scalar, so the BO4E `einheit` is
+            // gone by the time it reaches here — and Wärme's field is
+            // EUR/kW/month while Strom's is ct/kW/month. Guessing would risk a
+            // hundredfold error on a demand charge, so it is reported instead.
+            ("LEISTUNGSPREIS", other) => dropped.push(format!("LEISTUNGSPREIS ({other})")),
 
             ("SOLAR_ARBEITSPREIS", _) => solar_arbeitspreis_ct_per_kwh = preis,
             ("MIETERSTROM_AUFSCHLAG", _) => mieterstrom_aufschlag_ct_per_kwh = preis,
@@ -298,8 +314,23 @@ fn extract_tariff_from_product_data(
             ("EMOBILITY_ROAMING", _) => emobility_roaming_fee_eur = preis,
             ("SERVICE_GEBUEHR", _) => service_fee_eur = preis,
             ("SERVICE_EVENT", _) => service_event_price_eur = preis,
-            _ => {}
+            ("", _) => {}
+            (other, _) => dropped.push((*other).to_owned()),
         }
+    }
+
+    if !dropped.is_empty() {
+        tracing::warn!(
+            category = %category,
+            product_code = product
+                .and_then(|p| p.get("product_code"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("<unnamed>"),
+            dropped = %dropped.join(", "),
+            "billingd: tarifbd product carries priced positions this mapper has no field for — \
+             they are absent from every invoice for this product. Either the preistyp is \
+             misspelled in the catalog, or billingd needs a mapping for it."
+        );
     }
 
     let gas_indexed_price: Option<energy_billing::IndexedPriceConfig> = product
@@ -695,7 +726,7 @@ pub struct GasQualityRecord {
 /// Minimal HTTP client for querying `vertragd` contract data.
 ///
 /// Used by `billingd` to:
-/// - List active MaLo IDs for a Rahmenvertrag (Sammelrechnung, L2)
+/// - List active MaLo IDs for a Rahmenvertrag (Sammelrechnung)
 pub struct VertragdClient {
     base_url: String,
     client: reqwest::Client,
@@ -987,9 +1018,10 @@ pub enum OutputdError {
 ///
 /// billingd owns what an invoice *says* (the stored EN 16931 model and the CII
 /// rendered from it); outputd owns what it *looks like* (the operator's Typst
-/// template, the PDF/A-3 carrier, the publish gate). This client carries the
-/// view and the payload across that boundary and brings back the PDF plus the
-/// template hash to pin.
+/// template, the PDF/A-3 carrier, the publish gate) — and, because it is the
+/// side the gate runs on, the projection of the model onto what a template may
+/// print. This client carries the model and the payload across that boundary
+/// and brings back the PDF plus the template hash to pin.
 pub struct OutputdClient {
     base_url: String,
     api_key: Option<String>,
@@ -1020,7 +1052,7 @@ impl OutputdClient {
     /// failed.
     pub async fn render_invoice(
         &self,
-        view: &crate::document_view::DocumentView,
+        model: &en16931::Invoice,
         xml: String,
         specification_id: &str,
         template_hash: Option<&str>,
@@ -1028,8 +1060,12 @@ impl OutputdClient {
         ident: &str,
     ) -> Result<RenderedDocument, OutputdError> {
         let url = format!("{}/api/v1/render/INVOICE", self.base_url);
+        // The **semantic model**, not a projected view. outputd owns the
+        // projection onto what a template may print, and it owns it once: the
+        // publish gate proves every operator template against that projection,
+        // so a second copy on this side is a contract the gate cannot see.
         let body = serde_json::json!({
-            "view": view,
+            "model": model,
             "template_hash": template_hash,
             "attachment": { "xml": xml, "specification_id": specification_id },
             "date": date.to_string(),
@@ -1057,5 +1093,31 @@ impl OutputdClient {
             .context("outputd response is missing X-Mako-Template-Hash")?;
         let pdf = resp.bytes().await.context("outputd render body")?.to_vec();
         Ok(RenderedDocument { pdf, template_hash })
+    }
+}
+
+// ── BillingDeps ───────────────────────────────────────────────────────────────
+
+/// Everything a calculation needs from outside this process.
+///
+/// One `Extension` instead of six. Taking `cfg`, `tarifbd`, `edmd`, `marktd`,
+/// `vertragd` and `outputd` as separate extractors pushes nearly every function
+/// in the service past clippy's argument limit, and the `allow` for that is a
+/// workaround for a lint that is right.
+pub struct BillingDeps {
+    pub cfg: Arc<crate::config::BillingdConfig>,
+    pub tarifbd: Arc<TarifbdClient>,
+    pub edmd: Arc<EdmdClient>,
+    pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
+    pub vertragd: Arc<VertragdClient>,
+    pub outputd: Arc<OutputdClient>,
+}
+
+impl BillingDeps {
+    /// The operator's tenant — the resource identity every Cedar check and
+    /// every query scopes on.
+    #[must_use]
+    pub fn tenant(&self) -> &str {
+        &self.cfg.tenant
     }
 }

@@ -1,6 +1,5 @@
 //! §42b EnWG (Solarpaket I) GGV community solar billing and Tarifwechsel.
 
-#[allow(unused_imports)]
 use super::*;
 
 // ── §42b EnWG (Solarpaket I) GGV Community Solar Multi-Tenant Billing ─────
@@ -28,11 +27,14 @@ pub struct GgvTenantInput {
     /// Required when `pv_generation_kwh` is set and some tenants have consumption
     /// exceeding their PV allocation (grid fallback billing).
     pub grid_arbeitspreis_ct_per_kwh: Option<rust_decimal::Decimal>,
-    /// GGV Rabatt on the PV portion (ct/kWh, §42b Abs. 3 EEG 2023).
+    /// Price advantage on the PV portion (ct/kWh).
     ///
-    /// The discount reduces the net price of the PV portion below the standard
-    /// electricity rate. Per §42b Abs. 3 EEG 2023 the LF must pass on savings from
-    /// reduced grid charges for locally consumed PV electricity.
+    /// Purely **contractual**: §42b Abs. 2 Nr. 2 EnWG requires the
+    /// Gebäudestromnutzungsvertrag to state a Vergütung in ct/kWh for the
+    /// shared electricity, and this is the discount against the residual grid
+    /// rate that the parties agreed. There is no statutory pass-through duty
+    /// for saved Netzentgelte — §42b EnWG does not contain one — so nothing
+    /// here may be presented as a legal requirement.
     pub gemeinschaft_rabatt_ct_per_kwh: Option<rust_decimal::Decimal>,
 }
 
@@ -59,9 +61,17 @@ pub struct GgvBillingRequest {
     pub pv_generation_kwh: Option<rust_decimal::Decimal>,
     /// GGV allocation plan: tenant fractions that sum to 1.0.
     ///
-    /// Required when `pv_generation_kwh` is supplied. The fractions determine how much
-    /// of the plant's generation each tenant is entitled to (§42b Abs. 2 EEG 2023).
-    /// Entries must match the `malo_id` values in `tenants`.
+    /// Required when `pv_generation_kwh` is supplied. The fractions are the
+    /// Aufteilungsschlüssel the Gebäudestromnutzungsvertrag must state
+    /// (§42b Abs. 2 Nr. 1 EnWG). Entries must match the `malo_id` values in
+    /// `tenants`.
+    ///
+    /// **§42b Abs. 5 EnWG caps what may be allocated at all**: only the
+    /// electricity generated *and* consumed inside the same 15-minute interval
+    /// is shareable. A period total cannot express that cap, so a caller
+    /// supplying `pv_generation_kwh` must already have applied the
+    /// quarter-hour matching — `edmd`'s virtual-meter allocation does. Handing
+    /// in a raw meter total over-allocates.
     pub nutzungsplan: Option<Vec<NutzungsplanInput>>,
     /// All tenant delivery points belonging to this GGV installation.
     pub tenants: Vec<GgvTenantInput>,
@@ -104,6 +114,10 @@ pub struct TarifwechselRequest {
     /// Optional grid pass-through data.
     #[serde(default)]
     pub grid: Option<GridInput>,
+    /// Override the combined invoice's number. Absent — the normal case — takes
+    /// the next number of the tenant's `RE` series.
+    #[serde(default)]
+    pub rechnungsnummer: Option<String>,
 }
 
 /// `POST /api/v1/billing/{malo_id}/tarifwechsel`
@@ -125,66 +139,64 @@ pub struct TarifwechselRequest {
 /// on the next invoice showing the old and new price with their respective
 /// applicable periods.
 pub async fn post_tarifwechsel(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     Path(malo_id): Path<String>,
     Json(req): Json<TarifwechselRequest>,
-) -> impl IntoResponse {
-    // Parse all three date boundaries
-    let (period_from, period_to) = match parse_period(&req.period_from, &req.period_to) {
-        Ok(d) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("period: {e}")).into_response(),
-    };
-    let switch_date = match parse_period(&req.switch_date, &req.switch_date) {
-        Ok((d, _)) => d,
-        Err(e) => return (StatusCode::BAD_REQUEST, format!("switch_date: {e}")).into_response(),
-    };
+) -> BillingResult<impl IntoResponse> {
+    let cfg = Arc::clone(&deps.cfg);
+    authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
+    let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
+    // A single date, parsed as a single date — not through
+    // `parse_period(switch_date, switch_date)`, which pairs a date with itself
+    // and reports any refusal as a period error.
+    let switch_date = parse_date("switch_date", &req.switch_date)?;
     if switch_date <= period_from || switch_date > period_to {
-        return (
-            StatusCode::BAD_REQUEST,
+        return Err(BillingError::bad_request(
+            "SWITCH_DATE_OUTSIDE_PERIOD",
             format!(
-                "switch_date {switch_date} must be strictly inside [{period_from}, {period_to}]"
+                "switch_date {switch_date} must fall strictly inside \
+                 ({period_from}, {period_to}]"
             ),
-        )
-            .into_response();
+        ));
     }
 
     let grid = req.grid.clone().unwrap_or_default();
 
-    // Build the rechnungsnummer prefix — use timestamp for uniqueness
-    let base_nr = format!("TW-{malo_id}-{period_from}",);
+    // The combined document's own number, from the ordinary invoice series; the
+    // two legs carry `/A` and `/B` suffixes for the trace, but only the merged
+    // invoice is issued, so only it consumes a number.
+    let base_nr = next_rechnungsnummer(
+        &pool,
+        &cfg.tenant,
+        series::INVOICE,
+        req.rechnungsnummer.as_deref(),
+        period_from,
+    )
+    .await?;
 
     // ── Sub-period A: period_from → switch_date - 1 ───────────────────────────
     // Each leg is billed under the statutory rates of *its own* dates and
     // commodity — that is the point of the split (§41 Abs. 5 EnWG price
     // change; a leg inside a VAT window carries that window's rate).
     let period_a_to = switch_date - time::Duration::days(1);
-    let rates_a = match cfg.try_regulatory_rates_for_period(
+    let rates_a = cfg.try_regulatory_rates_for_period(
         req.old_tariff.category_str(),
         period_from,
         period_a_to,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                super::straddle_error_body(&e),
-            )
-                .into_response();
-        }
-    };
-    let run_id_a = Uuid::new_v4().to_string();
+    )?;
     let ctx_a = BillingContext {
         malo_id: malo_id.clone(),
         lf_mp_id: req.lf_mp_id.clone(),
-        rechnungsnummer: format!("{base_nr}-A"),
+        rechnungsnummer: format!("{base_nr}/A"),
         period: BillingPeriod::new(period_from, period_a_to)
             .expect("switch date is validated inside the period"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_a.clone(),
         nb_mp_id: req.nb_mp_id.clone(),
-        billing_run_id: Some(run_id_a),
+        billing_run_id: None,
         ..Default::default()
     };
     let quantities_a = Quantities {
@@ -192,43 +204,21 @@ pub async fn post_tarifwechsel(
         ..Default::default()
     };
     let engine_a = req.old_tariff.build_engine(&grid, &rates_a);
-    let inv_a = match engine_a.bill(ctx_a, &quantities_a) {
-        Ok(i) => i,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                engine_error_body("tarifwechsel period A", &e),
-            )
-                .into_response();
-        }
-    };
+    let inv_a = engine_a.bill(ctx_a, &quantities_a)?;
 
     // ── Sub-period B: switch_date → period_to ─────────────────────────────────
-    let rates_b = match cfg.try_regulatory_rates_for_period(
-        req.new_tariff.category_str(),
-        switch_date,
-        period_to,
-    ) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                super::straddle_error_body(&e),
-            )
-                .into_response();
-        }
-    };
-    let run_id_b = Uuid::new_v4().to_string();
+    let rates_b =
+        cfg.try_regulatory_rates_for_period(req.new_tariff.category_str(), switch_date, period_to)?;
     let ctx_b = BillingContext {
         malo_id: malo_id.clone(),
         lf_mp_id: req.lf_mp_id.clone(),
-        rechnungsnummer: format!("{base_nr}-B"),
+        rechnungsnummer: format!("{base_nr}/B"),
         period: BillingPeriod::new(switch_date, period_to)
             .expect("switch date is validated inside the period"),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_b.clone(),
         nb_mp_id: req.nb_mp_id.clone(),
-        billing_run_id: Some(run_id_b),
+        billing_run_id: None,
         ..Default::default()
     };
     let quantities_b = Quantities {
@@ -236,16 +226,7 @@ pub async fn post_tarifwechsel(
         ..Default::default()
     };
     let engine_b = req.new_tariff.build_engine(&grid, &rates_b);
-    let inv_b = match engine_b.bill(ctx_b, &quantities_b) {
-        Ok(i) => i,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                engine_error_body("tarifwechsel period B", &e),
-            )
-                .into_response();
-        }
-    };
+    let inv_b = engine_b.bill(ctx_b, &quantities_b)?;
 
     // ── Merge via billing::merge_period_documents semantics ───────────────────
     let merged = inv_a.merge(inv_b);
@@ -260,47 +241,79 @@ pub async fn post_tarifwechsel(
         req.old_tariff.category_str(),
         req.new_tariff.category_str()
     );
-    // Combined Tarifwechsel invoice + its dispatch event commit atomically.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let record_id = match insert_billing_record(
-        &mut *tx,
-        &cfg.tenant,
+
+    // A Tarifwechsel invoice is an invoice: it goes through the same risk gate
+    // and stores the same EN 16931 model as every other document, or the
+    // render endpoints answer 422 for it and no analyst ever sees it.
+    let assessment = assess_risk(
+        &pool,
+        &cfg,
         &malo_id,
-        &req.lf_mp_id,
-        &product_code,
-        "TARIFWECHSEL",
+        &merged,
+        &rates_b,
         period_from,
         period_to,
-        &rechnung_json,
-        netto,
-        brutto,
     )
-    .await
-    {
-        Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    if cfg.erp_webhook_url.is_some() {
-        let ce = rechnung_erstellt_ce(record_id, &malo_id, &req.lf_mp_id, &rechnung_json, false);
-        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-        if let Err(e) = mark_dispatched_tx(&mut *tx, record_id).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-    }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
+    .await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+    // A Tarifwechsel drives the engine twice directly, so the BG-7 buyer is
+    // looked up here rather than travelling with a priced invoice.
+    let buyer = deps
+        .vertragd
+        .get_vertrag_by_malo(&malo_id)
+        .await
+        .inspect_err(|e| {
+            tracing::warn!(%malo_id, error = %e, "billingd: BG-7 buyer lookup failed");
+        })
+        .ok()
+        .flatten()
+        .and_then(|v| v.rechnungsempfaenger);
 
-    (
+    // Combined Tarifwechsel invoice + its dispatch event commit atomically.
+    let mut tx = pool.begin().await?;
+    let record_id = insert_billing_record(
+        &mut *tx,
+        &crate::pg::NewBillingRecord {
+            tenant: &cfg.tenant,
+            malo_id: &malo_id,
+            lf_mp_id: &req.lf_mp_id,
+            product_code: &product_code,
+            category: "TARIFWECHSEL",
+            rechnungsnummer: &base_nr,
+            period_from,
+            period_to,
+            rechnung_json: &rechnung_json,
+            total_netto_eur: netto,
+            total_brutto_eur: brutto,
+        },
+    )
+    .await;
+    let record_id = match record_id {
+        Ok(id) => id,
+        Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+    };
+    if held {
+        tracing::warn!(
+            %record_id, %malo_id,
+            score = assessment.as_ref().map(|a| a.score),
+            "billingd: Tarifwechsel invoice HELD by risk gate"
+        );
+    } else {
+        let ce = rechnung_erstellt_ce(record_id, &malo_id, &req.lf_mp_id, &rechnung_json, false);
+        issue_record(&mut tx, &cfg, record_id, &ce).await?;
+    }
+    persist_risk(&mut *tx, record_id, assessment.as_ref()).await?;
+    crate::einvoice::store(&mut *tx, record_id, &merged, &cfg, &malo_id, buyer.as_ref()).await?;
+    tx.commit().await?;
+
+    Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "record_id": record_id,
             "malo_id": malo_id,
+            "rechnungsnummer": base_nr,
             "period_from": period_from.to_string(),
             "switch_date": switch_date.to_string(),
             "period_to": period_to.to_string(),
@@ -308,9 +321,10 @@ pub async fn post_tarifwechsel(
             "brutto_eur": brutto,
             "old_category": req.old_tariff.category_str(),
             "new_category": req.new_tariff.category_str(),
+            "risk": assessment,
+            "held": held,
         })),
-    )
-        .into_response()
+    ))
 }
 
 /// `POST /api/v1/billing/ggv/{ggv_id}` — §42b EnWG community solar (GGV) billing.
@@ -322,46 +336,45 @@ pub async fn post_tarifwechsel(
 /// ## §42b EnWG (Solarpaket I) — two billing models
 ///
 /// **Model A — Nutzungsplan-based (recommended)**: supply `pv_generation_kwh` +
-/// `nutzungsplan`. Each tenant is allocated a proportional share of plant
-/// generation. Per-tenant invoices show both the PV portion (at the GGV rate) and
-/// the residual grid electricity (at the standard rate) — §42b Abs. 2 EEG 2023.
+/// `nutzungsplan`. Each participant is allocated their Aufteilungsschlüssel
+/// share of the shareable generation (§42b Abs. 2 Nr. 1 EnWG); the invoice shows
+/// that portion at the agreed Gebäudestrom rate and the remainder as residual
+/// grid supply, which §42b Abs. 3 EnWG explicitly contemplates because the
+/// operator owes no Vollversorgung.
 ///
-/// **Model B — Direct consumption (legacy)**: omit `pv_generation_kwh`. Each
-/// tenant's full `consumption_kwh` is billed as solar Eigenverbrauch. Only valid
-/// when consumption ≤ plant output for every tenant.
+/// **Model B — Direct consumption**: omit `pv_generation_kwh`. Each
+/// participant's full `consumption_kwh` is billed as Gebäudestrom. Only valid
+/// when the plant covered every participant for the whole period.
 ///
-/// The GGV Rabatt (§42b Abs. 3 EEG 2023) reflects the savings from reduced network
-/// charges for locally consumed PV electricity.
+/// The price advantage on the shared portion is contractual (§42b Abs. 2 Nr. 2
+/// EnWG names the Vergütung as a contract term), not a statutory rebate.
 #[allow(clippy::too_many_arguments)]
 pub async fn post_ggv_billing(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
-    Extension(tarifbd): Extension<Arc<TarifbdClient>>,
-    Extension(vertragd): Extension<Arc<crate::clients::VertragdClient>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     Path(ggv_id): Path<String>,
     Json(req): Json<GgvBillingRequest>,
-) -> impl IntoResponse {
+) -> BillingResult<impl IntoResponse> {
+    let cfg = Arc::clone(&deps.cfg);
+    let (tarifbd, vertragd) = (&deps.tarifbd, &deps.vertragd);
+    authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
     if req.tenants.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            "GGV request must contain at least one tenant",
-        )
-            .into_response();
+        return Err(BillingError::bad_request(
+            "NO_PARTICIPANTS",
+            "a GGV request must contain at least one participant",
+        ));
     }
 
-    let (period_from, period_to) = match parse_period(&req.period_from, &req.period_to) {
-        Ok(pd) => pd,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
-    };
+    let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
     let total_kwh: rust_decimal::Decimal = req.tenants.iter().map(|t| t.consumption_kwh).sum();
     if total_kwh <= rust_decimal::Decimal::ZERO {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
+        return Err(BillingError::unprocessable(
+            "NO_CONSUMPTION",
             "total GGV consumption must be > 0 kWh",
-        )
-            .into_response();
+        ));
     }
 
     // ── §42b Model A: Nutzungsplan-based PV allocation ─────────────────────────
@@ -377,52 +390,55 @@ pub async fn post_ggv_billing(
                     })
                     .collect(),
             );
-            if let Err(e) = plan.validate() {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("nutzungsplan: {e}"),
-                )
-                    .into_response();
-            }
-            // A tenant absent from the plan gets no allocation and falls through
-            // to Model B below — their entire consumption billed as Solar-
-            // Eigenverbrauch, with no grid residual and no Stromsteuer. Refuse
-            // instead of silently mis-billing them.
-            if let Err(e) = plan.validate_covers(req.tenants.iter().map(|t| t.malo_id.as_str())) {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    format!("nutzungsplan: {e}"),
-                )
-                    .into_response();
-            }
+            plan.validate().map_err(|e| {
+                BillingError::unprocessable("NUTZUNGSPLAN_INVALID", format!("nutzungsplan: {e}"))
+            })?;
+            // A participant absent from the plan gets no allocation and falls
+            // through to Model B below — their entire consumption billed as
+            // Solar-Eigenverbrauch, with no grid residual and no Stromsteuer.
+            // Refuse instead of silently mis-billing them.
+            plan.validate_covers(req.tenants.iter().map(|t| t.malo_id.as_str()))
+                .map_err(|e| {
+                    BillingError::unprocessable(
+                        "NUTZUNGSPLAN_INCOMPLETE",
+                        format!("nutzungsplan: {e}"),
+                    )
+                })?;
             plan.allocate(pv_gen_kwh).into_iter().collect()
         } else {
             std::collections::HashMap::new()
         };
 
-    let rates = match cfg.try_regulatory_rates_for_period("SOLAR", period_from, period_to) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                super::straddle_error_body(&e),
-            )
-                .into_response();
-        }
-    };
-    let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(req.tenants.len());
-    let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(req.tenants.len());
-    let mut tenant_record_ids: Vec<Uuid> = Vec::with_capacity(req.tenants.len());
+    let rates = cfg.try_regulatory_rates_for_period("SOLAR", period_from, period_to)?;
+
+    // ── Phase 1: calculate everything, touching no transaction ────────────────
+    // Resolving a tariff and a buyer per participant is a round-trip to tarifbd
+    // and vertragd each; doing that inside the write transaction would hold a
+    // pool connection open across the whole fan-out. Everything below is pure
+    // reads plus the engine, so a failure here has written nothing.
+    struct Priced {
+        malo_id: String,
+        rechnungsnummer: String,
+        product_code: String,
+        category: &'static str,
+        invoice: Invoice,
+        buyer: Option<crate::clients::Rechnungsempfaenger>,
+    }
+    let mut priced: Vec<Priced> = Vec::with_capacity(req.tenants.len());
+    // Every document this request produces — the participant records and the
+    // bundle — belongs to one run, so they carry one `billingRunId`.
+    let run_id = Uuid::new_v4().to_string();
 
     for tenant in &req.tenants {
         // Build Product — prefer request overrides, fall back to tarifbd lookup.
         let tariff = match tarifbd
             .get_customer_product(&tenant.malo_id, &req.lf_mp_id)
             .await
+            .map_err(|e| BillingError::upstream("tarifbd", e))?
         {
-            Ok(Some(t)) => t,
-            Ok(None) => {
-                // No product in tarifbd — build minimal Product from request overrides.
+            Some(t) => t,
+            // No product in tarifbd — build a minimal Product from the request.
+            None => {
                 let map = serde_json::json!({
                     "category": "SOLAR",
                     "product_code": tenant.product_code,
@@ -430,18 +446,13 @@ pub async fn post_ggv_billing(
                     "gemeinschaft_rabatt_ct_per_kwh": tenant.gemeinschaft_rabatt_ct_per_kwh,
                     "arbeitspreis_ct_per_kwh": tenant.grid_arbeitspreis_ct_per_kwh,
                 });
-                match serde_json::from_value::<Product>(map) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        return (
-                            StatusCode::UNPROCESSABLE_ENTITY,
-                            format!("tariff build: {e}"),
-                        )
-                            .into_response();
-                    }
-                }
+                serde_json::from_value::<Product>(map).map_err(|e| {
+                    BillingError::unprocessable(
+                        "PRODUCT_INVALID",
+                        format!("MaLo {}: tariff build: {e}", tenant.malo_id),
+                    )
+                })?
             }
-            Err(e) => return (StatusCode::BAD_GATEWAY, format!("tarifbd: {e}")).into_response(),
         };
 
         // Per-request overrides take precedence over tarifbd product data.
@@ -451,28 +462,37 @@ pub async fn post_ggv_billing(
                 if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {
                     p.solar_arbeitspreis_ct_per_kwh = Some(ap);
                 }
-                // solar_arbeitspreis is also used for grid remainder in SolarProvider
+                // solar_arbeitspreis is also used for the grid remainder in SolarProvider.
                 if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
-                    if let Some(ap) = p.solar_arbeitspreis_ct_per_kwh {
-                        let cap = ap * rust_decimal::dec!(0.10);
-                        if rabatt > cap {
-                            tracing::warn!(
-                                malo_id = %tenant.malo_id,
-                                ggv_id = %ggv_id,
-                                rabatt_ct = %rabatt,
-                                cap_diagnostic = %cap,
-                                "billingd GGV: gemeinschaft_rabatt > 10% of Arbeitspreis — \
-                                 verify §42b Abs. 3 EEG 2023 compliance against local Grundversorgungstarif"
-                            );
-                        }
+                    // A discount exceeding the price it discounts turns the
+                    // supply position negative — the participant would be paid
+                    // for consuming. That is an input error, not a policy
+                    // question, so it is refused rather than warned about.
+                    if let Some(ap) = p.solar_arbeitspreis_ct_per_kwh
+                        && rabatt > ap
+                    {
+                        return Err(BillingError::unprocessable(
+                            "RABATT_EXCEEDS_ARBEITSPREIS",
+                            format!(
+                                "MaLo {}: gemeinschaft_rabatt {rabatt} ct/kWh exceeds the \
+                                 Gebäudestrom Arbeitspreis {ap} ct/kWh — the supply position \
+                                 would be negative",
+                                tenant.malo_id
+                            ),
+                        ));
                     }
                     p.gemeinschaft_rabatt_ct_per_kwh = Some(rabatt);
                 }
                 Product::Solar(p)
             }
             Product::Sharing(mut p) => {
+                // Stromsteuer is a *product* property, not an endpoint one: the
+                // §9 Nr. 3 / §9a StromStG exemption depends on plant size and
+                // spatial proximity, and `tarifbd` carries it as the typed
+                // `stromsteuer_befreiung`. Forcing it off here — and only when
+                // an Arbeitspreis override happens to be present — would decide
+                // a tax question from a price field.
                 if let Some(ap) = tenant.arbeitspreis_ct_per_kwh {
-                    p.electricity.solar_include_stromsteuer = false; // GGV shares are Stromsteuer-free
                     p.electricity.arbeitspreis_ct_per_kwh = Some(ap);
                 }
                 if let Some(rabatt) = tenant.gemeinschaft_rabatt_ct_per_kwh {
@@ -503,110 +523,73 @@ pub async fn post_ggv_billing(
             }
         };
 
-        let rechnungsnummer = tenant
-            .product_code
-            .as_deref()
-            .map(|p| format!("GGV-{ggv_id}-{p}-{period_from}"))
-            .unwrap_or_else(|| format!("GGV-{ggv_id}-{}-{period_from}", tenant.malo_id));
+        // A GGV participant's invoice is an ordinary Rechnung and takes its
+        // number from the `RE` series. Deriving it from the community id, the
+        // MaLo and the period would repeat exactly when the period is re-billed
+        // after a Storno.
+        let rechnungsnummer =
+            next_rechnungsnummer(&pool, &cfg.tenant, series::INVOICE, None, period_from).await?;
 
         let ctx = BillingContext {
             malo_id: tenant.malo_id.clone(),
             lf_mp_id: req.lf_mp_id.clone(),
             rechnungsnummer: rechnungsnummer.clone(),
             period: BillingPeriod::new(period_from, period_to)
-                .expect("parse_period guarantees from < to"),
+                .expect("parse_period guarantees from <= to"),
             invoice_type: InvoiceType::Initial,
             regulatory_rates: rates.clone(),
             contract_id: None,
+            billing_run_id: Some(run_id.clone()),
             ..Default::default()
         };
         let engine = tariff.build_engine(&GridInput::default(), &rates);
+        let result = engine.bill(ctx, &quantities)?;
 
-        let result = match engine.bill(ctx, &quantities) {
-            Ok(r) => r,
-            Err(e) => {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    engine_error_body(&format!("GGV tenant {}", tenant.malo_id), &e),
-                )
-                    .into_response();
-            }
-        };
-
-        let record_id = match insert_billing_record(
-            &pool,
-            &cfg.tenant,
-            &tenant.malo_id,
-            &req.lf_mp_id,
-            tariff.product_code().unwrap_or("SOLAR_GGV"),
-            "SOLAR",
-            period_from,
-            period_to,
-            &result.to_rechnung_json(),
-            result.netto_eur,
-            result.brutto_eur,
-        )
-        .await
-        {
-            Ok(id) => id,
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-        };
-        // A GGV Teilnehmer under §42b is a Letztverbraucher with their own MaLo
-        // and supply relationship, so the ordinary BG-7 lookup applies.
-        let buyer = vertragd
-            .get_vertrag_by_malo(&tenant.malo_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|v| v.rechnungsempfaenger);
-        if let Err(e) = crate::einvoice::store(
-            &pool,
-            record_id,
-            &result,
-            &cfg,
-            &tenant.malo_id,
-            buyer.as_ref(),
-        )
-        .await
-        {
-            tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
-        }
-
-        tenant_results.push(serde_json::json!({
-            "record_id": record_id,
-            "malo_id": tenant.malo_id,
-            "consumption_kwh": tenant.consumption_kwh,
-            "netto_eur": result.netto_eur,
-            "brutto_eur": result.brutto_eur,
-        }));
-        tenant_record_ids.push(record_id);
-        parts.push((tenant.malo_id.clone(), result));
+        priced.push(Priced {
+            // A GGV Teilnehmer under §42b is a Letztverbraucher with their own
+            // MaLo and supply relationship, so the ordinary BG-7 lookup applies.
+            // This path drives the engine directly rather than through
+            // `dispatch_invoice`, so it resolves the buyer itself.
+            buyer: vertragd
+                .get_vertrag_by_malo(&tenant.malo_id)
+                .await
+                .unwrap_or_else(|e| {
+                    tracing::warn!(malo_id = %tenant.malo_id, error = %e, "GGV: BG-7 buyer lookup failed");
+                    None
+                })
+                .and_then(|v| v.rechnungsempfaenger),
+            malo_id: tenant.malo_id.clone(),
+            rechnungsnummer,
+            product_code: tariff.product_code().unwrap_or("SOLAR_GGV").to_owned(),
+            category: tariff.category_str(),
+            invoice: result,
+        });
     }
 
     // Consolidated SAMMEL document for the GGV installation — through the
     // engine, like every other invoice: derived totals, per-rate VAT over the
     // combined base, deterministic rechnungsdatum.
-    let sammel_nr = format!("GGV-SAMMEL-{ggv_id}-{period_from}");
-    let (sammel_invoice, sammel_rechnung) = match build_aggregate_invoice(
+    let parts: Vec<(String, Invoice)> = priced
+        .iter()
+        .map(|t| (t.malo_id.clone(), t.invoice.clone()))
+        .collect();
+    let sammel_nr =
+        next_rechnungsnummer(&pool, &cfg.tenant, series::CONSOLIDATED, None, period_from).await?;
+    let (sammel_invoice, sammel_rechnung) = build_aggregate_invoice(
         &ggv_id,
         &req.lf_mp_id,
-        sammel_nr,
+        sammel_nr.clone(),
         period_from,
         period_to,
-        rates,
+        rates.clone(),
         parts,
         vec![
             zusatz_attribut("ggv_id", serde_json::json!(ggv_id)),
-            zusatz_attribut(
-                "tenant_count",
-                serde_json::json!(tenant_results.len().to_string()),
-            ),
+            zusatz_attribut("tenant_count", serde_json::json!(priced.len().to_string())),
             zusatz_attribut("total_kwh", serde_json::json!(total_kwh.to_string())),
+            zusatz_attribut("billingRunId", serde_json::json!(run_id)),
         ],
-    ) {
-        Ok(x) => x,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+    )?;
     let (sammel_netto, sammel_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
     // The bundle bills the § 42b GGV operator — a Kunde in vertragd, resolved
@@ -622,17 +605,77 @@ pub async fn post_ggv_billing(
             None
         });
 
-    // Consolidated GGV Sammelrechnung + its dispatch event commit atomically;
-    // the per-tenant detail records above are separate bookkeeping writes.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let sammel_id = match insert_sammelrechnung_record(
+    // The bundle is a document the operator receives, so it is scored like any
+    // other invoice.
+    let assessment = assess_risk(
+        &pool,
+        &cfg,
+        &ggv_id,
+        &sammel_invoice,
+        &rates,
+        period_from,
+        period_to,
+    )
+    .await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+
+    // ── Phase 2: one transaction for the whole run ────────────────────────────
+    // The participant records, the consolidated document and the links between
+    // them commit together. Writing the participants outside a transaction left
+    // orphan invoices behind whenever a later one failed, and those orphans then
+    // occupied `br_unique_original` so the retry could not succeed either.
+    let mut tx = pool.begin().await?;
+    let mut tenant_record_ids: Vec<Uuid> = Vec::with_capacity(priced.len());
+    let mut tenant_results: Vec<serde_json::Value> = Vec::with_capacity(priced.len());
+    for t in &priced {
+        let record_id = insert_billing_record(
+            &mut *tx,
+            &crate::pg::NewBillingRecord {
+                tenant: &cfg.tenant,
+                malo_id: &t.malo_id,
+                lf_mp_id: &req.lf_mp_id,
+                product_code: &t.product_code,
+                category: t.category,
+                rechnungsnummer: &t.rechnungsnummer,
+                period_from,
+                period_to,
+                rechnung_json: &t.invoice.to_rechnung_json(),
+                total_netto_eur: t.invoice.netto_eur,
+                total_brutto_eur: t.invoice.brutto_eur,
+            },
+        )
+        .await;
+        let record_id = match record_id {
+            Ok(id) => id,
+            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+        };
+        crate::einvoice::store(
+            &mut *tx,
+            record_id,
+            &t.invoice,
+            &cfg,
+            &t.malo_id,
+            t.buyer.as_ref(),
+        )
+        .await?;
+        tenant_results.push(serde_json::json!({
+            "record_id": record_id,
+            "malo_id": t.malo_id,
+            "rechnungsnummer": t.rechnungsnummer,
+            "netto_eur": t.invoice.netto_eur,
+            "brutto_eur": t.invoice.brutto_eur,
+        }));
+        tenant_record_ids.push(record_id);
+    }
+
+    let sammel_id = insert_sammelrechnung_record(
         &mut *tx,
         &cfg.tenant,
         &ggv_id,
         &req.lf_mp_id,
+        &sammel_nr,
         period_from,
         period_to,
         &sammel_rechnung,
@@ -640,20 +683,19 @@ pub async fn post_ggv_billing(
         sammel_brutto,
     )
     .await
-    {
-        Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    if cfg.erp_webhook_url.is_some() {
+    .map_err(crate::error::BillingError::from)?;
+    if held {
+        tracing::warn!(
+            %sammel_id, %ggv_id,
+            score = assessment.as_ref().map(|a| a.score),
+            "billingd: GGV bundle HELD by risk gate — issuance requires POST …/release"
+        );
+    } else {
         let ce = rechnung_erstellt_ce(sammel_id, &ggv_id, &req.lf_mp_id, &sammel_rechnung, false);
-        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-        if let Err(e) = mark_dispatched_tx(&mut *tx, sammel_id).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+        issue_record(&mut tx, &cfg, sammel_id, &ce).await?;
     }
-    if let Err(e) = crate::einvoice::store(
+    persist_risk(&mut *tx, sammel_id, assessment.as_ref()).await?;
+    crate::einvoice::store(
         &mut *tx,
         sammel_id,
         &sammel_invoice,
@@ -661,34 +703,30 @@ pub async fn post_ggv_billing(
         &ggv_id,
         sammel_buyer.as_ref(),
     )
-    .await
-    {
-        tracing::warn!(%sammel_id, error = %e, "billingd: attach en16931 model failed");
-    }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
+    .await?;
+    // Link the participant records to the bundle inside the same transaction:
+    // the risk baseline and the record listings treat them as its children, and
+    // a child that committed unlinked would be double-counted alongside the
+    // SAMMEL it belongs to.
+    link_to_sammelrechnung(&mut *tx, &tenant_record_ids, sammel_id).await?;
+    tx.commit().await?;
 
-    // Link the per-tenant detail records to the committed Sammelrechnung so the
-    // risk baseline and record listings treat them as its children, not as
-    // standalone invoices double-counted alongside the SAMMEL.
-    if let Err(e) = link_to_sammelrechnung(&pool, &tenant_record_ids, sammel_id).await {
-        tracing::warn!(error = %e, %sammel_id, "GGV: linking per-tenant records to Sammelrechnung failed");
-    }
-
-    (
+    Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "ggv_id": ggv_id,
             "sammel_id": sammel_id,
+            "rechnungsnummer": sammel_nr,
+            "billing_run_id": run_id,
             "period_from": period_from.to_string(),
             "period_to": period_to.to_string(),
             "total_kwh": total_kwh,
             "tenant_count": tenant_results.len(),
             "total_netto_eur": sammel_netto,
             "total_brutto_eur": sammel_brutto,
+            "risk": assessment,
+            "held": held,
             "tenants": tenant_results,
         })),
-    )
-        .into_response()
+    ))
 }

@@ -26,8 +26,15 @@
 -- those pins resolvable. Never UPDATE or DELETE here.
 
 CREATE TABLE document_templates (
-    -- SHA-256 of `source`, lowercase hex. The identity of the template.
-    hash            TEXT        PRIMARY KEY,
+    -- SHA-256 of `source`, lowercase hex. Together with the tenant, the
+    -- identity of the template: content-addressing is scoped to the operator
+    -- who published it. A globally unique hash would let one tenant's row
+    -- occupy an identity every other tenant computes for the same bytes — and
+    -- since outputd ships a reference layout operators are told to start from,
+    -- the very first tenant to publish it unchanged would lock all the others
+    -- out of it, and the refusal would disclose that some other tenant had
+    -- published that exact source.
+    hash            TEXT        NOT NULL,
     tenant          TEXT        NOT NULL,
     -- Which document this renders. Textform kinds share the engine and the
     -- store with the invoice kind so an operator maintains one template system.
@@ -60,7 +67,8 @@ CREATE TABLE document_templates (
         (kind = 'INVOICE'        AND proof = 'RENDERED_PDFA' AND pdf_standard IS NOT NULL)
      OR (kind = 'MAHNUNG'        AND proof = 'RENDERED_TEXTFORM')
      OR (kind = 'PREISANPASSUNG' AND proof = 'PARSED')
-    )
+    ),
+    PRIMARY KEY (tenant, hash)
 );
 
 COMMENT ON TABLE document_templates IS
@@ -73,9 +81,12 @@ COMMENT ON TABLE document_templates IS
 CREATE TABLE document_template_current (
     tenant          TEXT        NOT NULL,
     kind            TEXT        NOT NULL,
-    hash            TEXT        NOT NULL REFERENCES document_templates(hash),
+    hash            TEXT        NOT NULL,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant, kind)
+    PRIMARY KEY (tenant, kind),
+    -- Composite, because a hash alone no longer names a row: the pointer may
+    -- only reference a template this same tenant published.
+    FOREIGN KEY (tenant, hash) REFERENCES document_templates (tenant, hash)
 );
 
 COMMENT ON TABLE document_template_current IS

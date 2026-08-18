@@ -5,6 +5,12 @@
 //! Outputs canonical BO4E `Rechnung` objects and emits
 //! `de.billing.rechnung.erstellt` CloudEvents consumed by `accountingd`.
 //!
+//! ## Errors
+//!
+//! Every route answers failures with one envelope carrying a stable code —
+//! `{"error":{"code":"PERIOD_ALREADY_BILLED","message":…,"record_id":…}}`. See
+//! [`billingd::error::BillingError`].
+//!
 //! ## Design: user-defined pricing
 //!
 //! All commercial rates (Arbeitspreis, Grundpreis, etc.) are defined by the
@@ -19,8 +25,9 @@
 //! | `STROM` | `calculate_strom` | §41a EnWG (dynamic), §14a Modul 1/3 |
 //! | `GAS` | `calculate_gas` | §25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG |
 //! | `WAERME` | `calculate_waerme` | EnWG Fernwärme |
+//! | `WASSER` | `calculate_wasser` | §12 Abs. 2 Nr. 1 UStG Trinkwasser 7 %, gesplittete Abwassergebühr |
 //! | `SOLAR` | `calculate_solar` | §21 Abs. 3 EEG (Mieterstrom), §42b EnWG (GGV) |
-//! | `EEG` | `calculate_eeg` | §21 EEG (Vergütung), §38 EEG (Marktprämie), §53 EEG |
+//! | `EEG` | `calculate_eeg` | §19 Abs. 1 EEG (Zahlungsanspruch), §20 (Marktprämie), §21 Abs. 1 (Einspeisevergütung), §53 |
 //! | `EINSPEISUNG` | `calculate_einspeisung` | Direktvermarktung, Marktwert |
 //! | `WAERMEPUMPE` | `calculate_strom` + §14a | §14a EnWG Modul 1/3 |
 //! | `WALLBOX` | `calculate_strom` + §14a | §14a EnWG Modul 1/3 |
@@ -37,17 +44,21 @@
 //! |---|---|---|
 //! | `POST` | `/api/v1/billing/{malo_id}/calculate` | Calculate + persist + emit CloudEvent |
 //! | `POST` | `/api/v1/billing/{malo_id}/preview` | Dry-run (no persist) |
-//! | `POST` | `/api/v1/billing/{id}/correction` | Korrekturrechnung / Stornorechnung (\u00a722 Me\u00dfZV) |
+//! | `POST` | `/api/v1/billing/{id}/correction` | Stornorechnung; releases the period for re-billing |
+//! | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 XML (EN 16931) |
 //! | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated Sammelrechnung |
-//! | `POST` | `/api/v1/billing/ggv/{ggv_id}` | \u00a742b EnWG GGV multi-tenant community solar billing |
-//! | `POST` | `/api/v1/billing/vpp/{vpp_id}` | VPP aggregation settlement (Art. 17 RL (EU) 2019/944) |
-//! | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (\u00a727 EGovG 01.01.2027) |
+//! | `POST` | `/api/v1/billing/ggv/{ggv_id}` | §42b EnWG GGV multi-tenant community solar billing |
+//! | `POST` | `/api/v1/billing/vpp/{vpp_id}` | §41e VPP dispatch settlement (Gutschrift) |
+//! | `POST` | `/api/v1/billing/{id}/submit-b2g` | XRechnung B2G submission (§4a EGovG i.V.m. ERechV) |
 //! | `GET` | `/api/v1/billing` | List records (`?malo_id=&lf_mp_id=&outcome=`) |
 //! | `GET` | `/api/v1/billing/{id}` | Fetch single record |
 //! | `GET` | `/api/v1/billing/{id}/xrechnung` | ZUGFeRD 2.3 / XRechnung 3.0 CII XML |
-//! | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 XML (EN16931) |
 //! | `GET` | `/api/v1/billing/{id}/pdf` | ZUGFeRD PDF/A-3: the page with the CII XML embedded |
-//! | `GET` | `/health` | Liveness |
+//! | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice across a mid-period price change |
+//! | `GET` | `/api/v1/billing/review-queue` | Analyst work list (REVIEW + HELD) |
+//! | `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
+//! | `POST` | `/api/v1/webhooks/vpp-dispatch` | `de.vpp.dispatch.confirmed` auto-settlement |
+//! | `GET` | `/health/live` | Liveness |
 //! | `GET` | `/health/ready` | Readiness |
 
 use anyhow::Context as _;
@@ -114,6 +125,7 @@ impl Daemon for Billingd {
                  inbound_webhook_secret or set allow_insecure_no_auth = true (dev only)."
             );
         }
+        cfg.validate()?;
         if cfg.allow_insecure_no_auth {
             tracing::warn!(
                 "allow_insecure_no_auth is set — HTTP API authentication is degraded (dev mode)"
@@ -121,6 +133,20 @@ impl Daemon for Billingd {
         }
 
         let pool = ctx.pool().clone();
+
+        // ── Cedar ABAC ────────────────────────────────────────────────────────────
+        // Authentication says *who* is calling; this says what they may do.
+        // billingd enabled the `cedar` feature and enforced nothing, so any
+        // authenticated caller could Storno an invoice the customer had already
+        // received or release an invoice the risk gate was holding back — the
+        // gate's whole purpose. `einsd`, which likewise issues documents that
+        // create payment obligations, has had a policy from the start.
+        let cedar = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/billingd.cedar"
+            ))
+            .context("billingd.cedar must parse at startup")?,
+        );
 
         let tarifbd = Arc::new(clients::TarifbdClient::new(&cfg.tarifbd_url));
         let edmd = Arc::new(clients::EdmdClient::new(
@@ -144,6 +170,18 @@ impl Daemon for Billingd {
             cfg.outputd_api_key.clone(),
         ));
 
+        // One bundle instead of six extensions. Every handler needs some subset
+        // of these, and threading them individually is what pushed nearly every
+        // function in the service past clippy's argument limit.
+        let deps = Arc::new(clients::BillingDeps {
+            cfg: Arc::clone(&cfg),
+            tarifbd,
+            edmd,
+            marktd,
+            vertragd,
+            outputd,
+        });
+
         // ── Outbox drain worker (config-gated on the ERP webhook) ────────────────
         // Only runs when there is somewhere to deliver to; signs with the same
         // `erp_hmac_secret` the enqueued events are meant to be signed with.
@@ -160,12 +198,8 @@ impl Daemon for Billingd {
 
         // ── §40b EnWG scheduled billing runs (config-gated) ──────────────────────
         billing_runs::spawn_billing_run_worker(
-            Arc::clone(&cfg),
+            Arc::clone(&deps),
             pool.clone(),
-            Arc::clone(&tarifbd),
-            Arc::clone(&edmd),
-            Arc::clone(&marktd),
-            Arc::clone(&vertragd),
             ctx.shutdown.clone(),
         );
 
@@ -225,48 +259,37 @@ impl Daemon for Billingd {
                 "/api/v1/billing/ggv/{ggv_id}",
                 post(handlers::post_ggv_billing),
             )
-            // B12: VPP aggregation billing (Art. 17 RL (EU) 2019/944) — de.vpp.settlement.berechnet
+            // §41e VPP dispatch settlement (Gutschrift) — de.vpp.settlement.berechnet
             .route(
                 "/api/v1/billing/vpp/{vpp_id}",
                 post(handlers::post_vpp_billing),
             )
-            // B12: VPP dispatch-confirmed auto-billing webhook (de.vpp.dispatch.confirmed)
+            // §41e auto-settlement webhook (de.vpp.dispatch.confirmed, HMAC-signed)
             .route(
                 "/api/v1/webhooks/vpp-dispatch",
                 post(handlers::post_vpp_webhook),
             )
-            // B10: XRechnung B2G submission (\u00a727 EGovG — mandatory from 01.01.2027)
+            // XRechnung B2G submission (§4a EGovG i.V.m. ERechV — mandatory since 27.11.2020)
             .route(
                 "/api/v1/billing/{id}/submit-b2g",
                 post(handlers::post_submit_b2g),
             )
-            // B11: PEPPOL BIS Billing 3.0 UBL 2.1 XML (EN16931 — mandatory from 01.01.2028)
+            // PEPPOL BIS Billing 3.0 UBL 2.1 — EN 16931's other permitted syntax
             .route(
                 "/api/v1/billing/{id}/ubl",
                 axum::routing::get(handlers::get_ubl),
             )
             .layer(Extension(oidc))
-            .layer(Extension(Arc::clone(&cfg)))
-            .layer(Extension(tarifbd))
-            .layer(Extension(edmd))
-            .layer(Extension(marktd))
-            .layer(Extension(vertragd))
-            .layer(Extension(outputd))
+            .layer(Extension(cedar))
+            .layer(Extension(Arc::clone(&deps)))
             .layer(Extension(pool.clone()));
-
-        let port = cfg.port.unwrap_or(9280);
 
         // ── MCP server ────────────────────────────────────────────────────────────
         let mcp_state = std::sync::Arc::new(mcp_server::BillingdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
-            self_url: format!("http://localhost:{port}"),
-            seller_name: cfg
-                .seller_name
-                .clone()
-                .unwrap_or_else(|| cfg.tenant.clone()),
-            seller_vat_id: cfg.seller_vat_id.clone(),
+            deps: Arc::clone(&deps),
         });
         Ok(app.merge(mcp_server::router(mcp_state, ctx.shutdown.clone())))
     }

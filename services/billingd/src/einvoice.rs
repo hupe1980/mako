@@ -15,38 +15,6 @@ use energy_billing::en16931_map::{EN16931_SPEC_ID, XRECHNUNG_SPEC_ID};
 
 use crate::config::BillingdConfig;
 
-/// Split `"Straße 1, 12345 Ort"` into (line1, post_code, city) — best effort.
-fn parse_address(addr: &str) -> (Option<String>, Option<String>, Option<String>) {
-    match addr.rsplit_once(',') {
-        Some((street, rest)) => {
-            let rest = rest.trim();
-            let (plz, city) = rest.split_once(' ').unwrap_or((rest, ""));
-            (
-                Some(street.trim().to_owned()),
-                (!plz.is_empty()).then(|| plz.to_owned()),
-                (!city.is_empty()).then(|| city.trim().to_owned()),
-            )
-        }
-        None => (Some(addr.trim().to_owned()), None, None),
-    }
-}
-
-/// Pull (phone, email) out of a free-form `seller_contact` string.
-fn parse_contact(contact: &str) -> (Option<String>, Option<String>) {
-    let email = contact
-        .split_whitespace()
-        .find(|t| t.contains('@'))
-        .map(|t| {
-            t.trim_matches(|c: char| !c.is_alphanumeric() && c != '@' && c != '.')
-                .to_owned()
-        });
-    let phone = contact
-        .split(',')
-        .find(|t| t.chars().any(|c| c.is_ascii_digit()) && !t.contains('@'))
-        .map(|t| t.trim().to_owned());
-    (phone, email)
-}
-
 /// BT-34, the seller's own electronic address — but only if it is really a GLN.
 ///
 /// A BDEW-Codenummer is issued through GS1 and *is* a GLN, so declaring the
@@ -87,33 +55,36 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
         .seller_name
         .clone()
         .unwrap_or_else(|| cfg.tenant.clone());
-    let (line1, post_code, city) = cfg
-        .seller_address
-        .as_deref()
-        .map_or((None, None, None), parse_address);
-    let (phone, email) = cfg
-        .seller_contact
-        .as_deref()
-        .map_or((None, None), parse_contact);
+    let s = cfg.seller.as_ref();
     Party {
         name: Some(name.clone()),
         vat_identifier: cfg.seller_vat_id.clone(),
+        // BT-32 — the other half of the § 14 Abs. 4 Nr. 2 UStG disjunction,
+        // carried whenever configured. `config::validate` guarantees at least
+        // one of the two exists.
+        tax_registration: cfg.seller_tax_number.clone(),
         // BT-34 electronic address: the LF's own MP-ID under EAS 0088 (GLN).
         // A BDEW-Codenummer *is* a GLN — BDEW issues them through GS1 — so the
         // claim is true for a correctly configured operator, and `eas_checked`
         // is what makes "correctly configured" checkable rather than assumed.
         electronic_address: seller_electronic_address(&cfg.tenant),
         address: PostalAddress {
-            line1,
-            city,
-            post_code,
-            country: Some(Code::from("DE")),
+            line1: s.and_then(|s| s.street.clone()),
+            line2: s.and_then(|s| s.address_line2.clone()),
+            city: s.and_then(|s| s.city.clone()),
+            post_code: s.and_then(|s| s.post_code.clone()),
+            country: Some(Code::from(
+                s.and_then(|s| s.country.as_deref()).unwrap_or("DE"),
+            )),
             ..Default::default()
         },
         contact: Contact {
-            name: Some(name),
-            phone,
-            email,
+            // BT-41 defaults to the company name: XRechnung wants a contact
+            // point, and "the supplier" is a truthful one where the operator
+            // has not named a department.
+            name: s.and_then(|s| s.contact_name.clone()).or(Some(name)),
+            phone: s.and_then(|s| s.phone.clone()),
+            email: s.and_then(|s| s.email.clone()),
         },
         ..Default::default()
     }
@@ -131,16 +102,13 @@ fn seller_party(cfg: &BillingdConfig) -> Party {
 /// # Why there is no BT-49 electronic address
 ///
 /// A MaLo-ID is an **11-digit BDEW Marktlokations-ID**. It is not a GS1 GLN, and
-/// the EAS code list has no entry for it. This function used to emit it under
-/// EAS `0088` (GLN), which is a false claim about the identifier's registry:
-/// syntactically valid — `Identifier::eas` only checks that the *scheme code*
-/// exists, and BR-CL-25 only checks the same — but semantically wrong, and
-/// unresolvable for any receiver that takes it at face value.
-///
-/// `Identifier::eas_checked` now catches exactly this, and
-/// [`seller_electronic_address`] uses it on the seller side where the same
-/// mistake had survived. It refuses an 11-digit value for scheme `0088` with
-/// the reason: *"a GS1 GLN is exactly 13 digits, and this is 11"*.
+/// the EAS code list has no entry for it. Emitting it under EAS `0088` (GLN)
+/// would be a false claim about the identifier's registry — syntactically
+/// valid, since `Identifier::eas` and BR-CL-25 both check only that the
+/// *scheme code* exists, but semantically wrong and unresolvable for any
+/// receiver that takes it at face value. `Identifier::eas_checked` refuses an
+/// 11-digit value for scheme `0088`: *"a GS1 GLN is exactly 13 digits, and this
+/// is 11"*. [`seller_electronic_address`] applies it on the seller side.
 ///
 /// Omitting it is the honest encoding, and it is not a data gap that master data
 /// closes: a household has no Peppol endpoint (BT-49) and no Leitweg-ID (BT-10).
@@ -285,15 +253,36 @@ pub async fn store_model(
     crate::pg::attach_en16931(exec, record_id, &serde_json::to_value(model)?).await
 }
 
-/// Turn a stored model into its Stornorechnung/credit note: EN 16931 credit notes
-/// carry positive amounts and convey the reversal through the document kind (381),
-/// so only the number and the type change.
-#[must_use]
-pub fn to_credit_note(mut original: en16931::Invoice, new_number: &str) -> en16931::Invoice {
-    original.number = Some(new_number.to_owned());
-    original.type_code = Some(en16931::invoice::Code::from("381"));
-    original.kind = en16931::invoice::DocumentKind::CreditNote;
-    original
+/// Turn a stored model into its Stornorechnung.
+///
+/// Delegates to `en16931::Invoice::to_credit_note`, which is the crate's own
+/// definition of the transform: `DocumentKind::CreditNote`, BT-3 `381`, the new
+/// BT-1/BT-2, and — the part billingd's hand-rolled version omitted — a **BG-3
+/// `PrecedingInvoice`** naming the original's BT-1 and BT-2. `BR-55` requires
+/// BT-25 to have content, so a Storno without it is a credit note that does not
+/// say what it credits.
+///
+/// The issue date is **today**. A Storno is its own document issued on the day
+/// it is issued; inheriting the original's BT-2 would backdate it into a period
+/// that may already be sealed. This is the same legitimate use of a clock as the
+/// §40c deadline check — the *engine* stays clock-free, the service does not
+/// have to.
+///
+/// Amounts stay positive: under EN 16931 the document type carries the
+/// direction, and negating would fail `BR-S-08` against the document's own lines.
+///
+/// # Errors
+///
+/// Only if today's date cannot be represented in the EN 16931 calendar, which
+/// `time` guarantees it can — the conversion is fallible in the crate's API and
+/// is surfaced rather than unwrapped.
+pub fn to_credit_note(
+    original: &en16931::Invoice,
+    new_number: &str,
+) -> anyhow::Result<en16931::Invoice> {
+    let today = en16931::Date::try_from(time::OffsetDateTime::now_utc().date())
+        .map_err(|e| anyhow::anyhow!("today is not a representable EN 16931 date: {e}"))?;
+    Ok(original.to_credit_note(new_number, today))
 }
 
 /// Render CII (XRechnung 3.0 / ZUGFeRD CII) XML from the stored model.

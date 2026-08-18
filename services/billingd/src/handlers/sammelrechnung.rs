@@ -1,9 +1,8 @@
-//! B2B Sammelrechnung (L2), B2G submission and UBL rendering.
+//! B2B Sammelrechnung, B2G submission and UBL rendering.
 
-#[allow(unused_imports)]
 use super::*;
 
-// ── B2B Sammelrechnung (L2) ───────────────────────────────────────────────────
+// ── B2B Sammelrechnung ────────────────────────────────────────────────────────
 
 /// Request body for `POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}`.
 #[derive(Debug, serde::Deserialize)]
@@ -11,9 +10,20 @@ pub struct SammelrechnungRequest {
     pub lf_mp_id: String,
     pub period_from: String,
     pub period_to: String,
-    /// Rechnungsnummer for the consolidated invoice.
-    /// Auto-generated when absent.
+    /// Override the consolidated document's number. Absent — the normal case —
+    /// takes the next number of the tenant's `SR` series.
+    #[serde(default)]
     pub rechnungsnummer: Option<String>,
+}
+
+/// One site of a Rahmenvertrag, priced and ready to be written.
+struct SitePriced {
+    malo_id: String,
+    rechnungsnummer: String,
+    product_code: String,
+    category: &'static str,
+    invoice: Invoice,
+    buyer: Option<crate::clients::Rechnungsempfaenger>,
 }
 
 /// `POST /api/v1/billing/sammelrechnung/{rahmenvertrag_id}`
@@ -22,207 +32,240 @@ pub struct SammelrechnungRequest {
 ///
 /// ## Pipeline
 ///
-/// 1. Call `GET /api/v1/rahmenvertraege/{id}/malos` on `vertragd` to enumerate
-///    all active MaLo IDs for the Rahmenvertrag.
-/// 2. For each MaLo, run the standard billing calculator (same as `/calculate`).
-/// 3. Consolidate all `Rechnungsposition` items into one master `Rechnung`.
-/// 4. Persist one Sammelrechnung record (category=SAMMEL) + link per-MaLo records.
-/// 5. Emit one `de.billing.rechnung.erstellt` CloudEvent for the Sammelrechnung.
+/// 1. Enumerate the Rahmenvertrag's active MaLos from `vertragd`.
+/// 2. **Phase 1, no transaction:** price every site through the ordinary
+///    calculation pipeline and resolve its BG-7 buyer. Nothing is written, so a
+///    failure here leaves no trace.
+/// 3. Consolidate the per-site invoices into one document — VAT recomputed once
+///    over the combined base per rate.
+/// 4. **Phase 2, one transaction:** the per-MaLo records, the consolidated
+///    document, the links between them and the outbox event commit together.
 ///
-/// Per-MaLo detail records are also stored individually so that itemised dispute
-/// resolution and per-site audit trails remain available.
-#[allow(clippy::too_many_arguments)]
+/// Phase 2 is **one** transaction and not four independent writes. A site
+/// failing after two of its siblings have committed would leave orphan invoices
+/// occupying `br_unique_original`, so the retry cannot succeed either, and a
+/// dropped link would leave the children counted alongside the bundle that
+/// already contains them. The GGV endpoint has the same shape.
 pub async fn post_sammelrechnung(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
-    Extension(tarifbd): Extension<Arc<TarifbdClient>>,
-    Extension(edmd): Extension<Arc<EdmdClient>>,
-    Extension(marktd): Extension<Arc<mako_markt::marktd_client::MarktdClient>>,
-    Extension(vertragd): Extension<Arc<VertragdClient>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     Path(rahmenvertrag_id): Path<String>,
     Json(req): Json<SammelrechnungRequest>,
-) -> impl IntoResponse {
-    let (period_from, period_to) = match parse_period(&req.period_from, &req.period_to) {
-        Ok(pd) => pd,
-        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
-    };
+) -> BillingResult<impl IntoResponse> {
+    let cfg = Arc::clone(&deps.cfg);
+    let (tarifbd, vertragd) = (&deps.tarifbd, &deps.vertragd);
+    authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
+    let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
     // Enumerate MaLos for this Rahmenvertrag.
-    let sites = match vertragd.get_rahmenvertrag_malos(&rahmenvertrag_id).await {
-        Ok(m) if m.malos.is_empty() => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "no active MaLos in Rahmenvertrag",
-            )
-                .into_response();
-        }
-        Ok(m) => m,
-        Err(e) => return (StatusCode::BAD_GATEWAY, format!("vertragd: {e}")).into_response(),
-    };
+    let sites = vertragd
+        .get_rahmenvertrag_malos(&rahmenvertrag_id)
+        .await
+        .map_err(|e| BillingError::upstream("vertragd", e))?;
+    if sites.malos.is_empty() {
+        return Err(BillingError::unprocessable(
+            "NO_SITES",
+            format!("Rahmenvertrag {rahmenvertrag_id} has no active MaLos"),
+        ));
+    }
 
-    let rates = match cfg.try_regulatory_rates_for_period("STROM", period_from, period_to) {
-        Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                super::straddle_error_body(&e),
-            )
-                .into_response();
-        }
-    };
-    let sammel_nr = req
-        .rechnungsnummer
-        .clone()
-        .unwrap_or_else(|| format!("SAMMEL-{rahmenvertrag_id}-{period_from}"));
+    // The document-level rates govern the bundle's own VAT pass. A Rahmenvertrag
+    // is electricity in the overwhelming majority of cases; a mixed portfolio
+    // keeps each site on its own commodity rates below, and `build_aggregate_invoice`
+    // groups the combined base by each position's effective rate anyway.
+    let doc_rates = cfg.try_regulatory_rates_for_period("STROM", period_from, period_to)?;
 
-    // Calculate each MaLo independently.
-    let mut parts: Vec<(String, Invoice)> = Vec::with_capacity(sites.malos.len());
-    let mut per_malo_ids: Vec<Uuid> = Vec::new();
-    let mut errors: Vec<String> = Vec::new();
+    // ── Phase 1: price every site, touching no transaction ────────────────────
+    let mut priced: Vec<SitePriced> = Vec::with_capacity(sites.malos.len());
+    let mut errors: Vec<serde_json::Value> = Vec::new();
+    // One run: every per-MaLo record and the bundle share this id, so an ERP
+    // can reconcile the whole Sammelrechnung against what it received.
+    let run_id = Uuid::new_v4().to_string();
 
     for entry in &sites.malos {
-        let dummy_req = CalculateRequest {
-            schlussrechnung: false,
-            monatliche_abrechnung: false,
-            reverse_charge: false,
-            abschlaege: Vec::new(),
+        let site_req = CalculateRequest {
             lf_mp_id: req.lf_mp_id.clone(),
-            nb_mp_id: None,
             period_from: req.period_from.clone(),
             period_to: req.period_to.clone(),
-            tariff: None,
-            meter: None,
-            grid: None,
-            eeg_gutschrift_eur: None,
-            rechnungsnummer: Some(format!("{sammel_nr}-{}", entry.malo_id)),
-            gas_meter: None,
-            waerme_meter: None,
-            wasser_meter: None,
-            solar_meter: None,
-            eeg_meter: None,
-            hems_meter: None,
-            emobility_meter: None,
-            service_meter: None,
+            ..Default::default()
         };
 
-        let tariff = match resolve_tariff(&dummy_req, &tarifbd, &entry.malo_id).await {
+        let tariff = match resolve_tariff(&site_req, tarifbd, &entry.malo_id).await {
             Ok(t) => t,
-            Err((_, msg)) => {
-                errors.push(format!("{}: {msg}", entry.malo_id));
+            Err(e) => {
+                errors.push(site_error(&entry.malo_id, &e));
                 continue;
             }
         };
 
-        let result = match dispatch_calculator(
-            &cfg,
-            &tariff,
-            &dummy_req,
-            &entry.malo_id,
-            &format!("{sammel_nr}-{}", entry.malo_id),
+        // Each site is billed under the statutory rates of **its own** commodity.
+        // Resolving one STROM rate set for the whole Rahmenvertrag billed a gas
+        // site without its Energiesteuer/BEHG year table, and skipped the
+        // §28 Abs. 5/6 UStG straddle refusal that only gas and Fernwärme have.
+        let mut site_rates = match cfg.try_regulatory_rates_for_period(
+            tariff.category_str(),
             period_from,
             period_to,
-            &rates,
-            &edmd,
-            &marktd,
-            &tarifbd,
-            &vertragd,
+        ) {
+            Ok(r) => r,
+            Err(e) => {
+                errors.push(site_error(&entry.malo_id, &e.into()));
+                continue;
+            }
+        };
+        apply_nehs_market_price(
+            &mut site_rates,
+            tariff.category_str(),
+            period_from,
+            &cfg,
+            tarifbd,
+        )
+        .await;
+
+        // Each line of a Sammelrechnung is an invoice in its own right and takes
+        // its own number from the `RE` series.
+        let malo_nr =
+            next_rechnungsnummer(&pool, &cfg.tenant, series::INVOICE, None, period_from).await?;
+
+        let billed = match dispatch_invoice(
+            &deps,
+            &tariff,
+            &site_req,
+            &entry.malo_id,
+            &malo_nr,
+            period_from,
+            period_to,
+            &site_rates,
+            RunId(Some(&run_id)),
         )
         .await
         {
             Ok(r) => r,
-            Err((_, msg)) => {
-                errors.push(format!("{}: {msg}", entry.malo_id));
+            Err(e) => {
+                errors.push(site_error(&entry.malo_id, &e));
                 continue;
             }
         };
 
-        // Persist per-MaLo record.
-        if let Ok(record_id) = insert_billing_record(
-            &pool,
-            &cfg.tenant,
-            &entry.malo_id,
-            &req.lf_mp_id,
-            tariff.product_code().unwrap_or(tariff.category_str()),
-            tariff.category_str(),
-            period_from,
-            period_to,
-            &result.to_rechnung_json(),
-            result.netto_eur,
-            result.brutto_eur,
-        )
-        .await
-        {
+        priced.push(SitePriced {
             // Each per-MaLo line of a Sammelrechnung bills that site's own supply
-            // customer, so the ordinary BG-7 lookup is the right one.
-            let buyer = vertragd
-                .get_vertrag_by_malo(&entry.malo_id)
-                .await
-                .ok()
-                .flatten()
-                .and_then(|v| v.rechnungsempfaenger);
-            if let Err(e) = crate::einvoice::store(
-                &pool,
-                record_id,
-                &result,
-                &cfg,
-                &entry.malo_id,
-                buyer.as_ref(),
-            )
-            .await
-            {
-                tracing::warn!(%record_id, error = %e, "billingd: attach en16931 model failed");
-            }
-            per_malo_ids.push(record_id);
-        }
-        parts.push((entry.malo_id.clone(), result));
+            // customer, so the buyer that came back with the priced invoice is
+            // the right one.
+            buyer: billed.buyer,
+            malo_id: entry.malo_id.clone(),
+            rechnungsnummer: malo_nr,
+            product_code: tariff
+                .product_code()
+                .unwrap_or(tariff.category_str())
+                .to_owned(),
+            category: tariff.category_str(),
+            invoice: billed.invoice,
+        });
     }
 
-    if parts.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(
-                serde_json::json!({ "errors": errors, "message": "all MaLo calculations failed" }),
-            ),
-        )
-            .into_response();
+    if priced.is_empty() {
+        return Err(BillingError::unprocessable_with(
+            "ALL_SITES_FAILED",
+            "every MaLo calculation of this Rahmenvertrag failed",
+            serde_json::json!({ "errors": errors }),
+        ));
     }
 
     // Consolidated Sammelrechnung — through the engine: per-rate VAT over the
     // combined base, derived totals, deterministic rechnungsdatum. The per-MaLo
     // runs stay stored as calculation records linked below.
+    let sammel_nr = next_rechnungsnummer(
+        &pool,
+        &cfg.tenant,
+        series::CONSOLIDATED,
+        req.rechnungsnummer.as_deref(),
+        period_from,
+    )
+    .await?;
+    let parts: Vec<(String, Invoice)> = priced
+        .iter()
+        .map(|p| (p.malo_id.clone(), p.invoice.clone()))
+        .collect();
     let malos_count = parts.len();
-    let (sammel_invoice, sammel_json) = match build_aggregate_invoice(
+    let (sammel_invoice, sammel_json) = build_aggregate_invoice(
         &rahmenvertrag_id,
         &req.lf_mp_id,
         sammel_nr.clone(),
         period_from,
         period_to,
-        rates,
+        doc_rates.clone(),
         parts,
         vec![
             zusatz_attribut("rahmenvertragId", serde_json::json!(rahmenvertrag_id)),
             zusatz_attribut("malosCount", serde_json::json!(malos_count.to_string())),
+            zusatz_attribut("billingRunId", serde_json::json!(run_id)),
         ],
-    ) {
-        Ok(x) => x,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+    )?;
     let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);
 
-    // The Sammelrechnung row is the representing write for the emitted event:
-    // it and its `de.billing.rechnung.erstellt` outbox row commit in one
-    // transaction. The per-MaLo detail records above and the link below are
-    // separate bookkeeping writes, kept outside this atomic pair.
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let sammel_id = match insert_sammelrechnung_record(
+    // The bundle is the document the counterparty receives, so it goes through
+    // the same risk gate as any other invoice. Scoring only the standalone
+    // paths meant the largest documents this service produces were the ones
+    // nobody reviewed.
+    let assessment = assess_risk(
+        &pool,
+        &cfg,
+        &rahmenvertrag_id,
+        &sammel_invoice,
+        &doc_rates,
+        period_from,
+        period_to,
+    )
+    .await;
+    let held = assessment
+        .as_ref()
+        .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
+
+    // ── Phase 2: one transaction for the whole run ────────────────────────────
+    let mut tx = pool.begin().await?;
+    let mut per_malo_ids: Vec<Uuid> = Vec::with_capacity(priced.len());
+    for site in &priced {
+        let record_id = insert_billing_record(
+            &mut *tx,
+            &crate::pg::NewBillingRecord {
+                tenant: &cfg.tenant,
+                malo_id: &site.malo_id,
+                lf_mp_id: &req.lf_mp_id,
+                product_code: &site.product_code,
+                category: site.category,
+                rechnungsnummer: &site.rechnungsnummer,
+                period_from,
+                period_to,
+                rechnung_json: &site.invoice.to_rechnung_json(),
+                total_netto_eur: site.invoice.netto_eur,
+                total_brutto_eur: site.invoice.brutto_eur,
+            },
+        )
+        .await;
+        let record_id = match record_id {
+            Ok(id) => id,
+            Err(e) => return Err(period_conflict(&pool, &cfg.tenant, e).await),
+        };
+        crate::einvoice::store(
+            &mut *tx,
+            record_id,
+            &site.invoice,
+            &cfg,
+            &site.malo_id,
+            site.buyer.as_ref(),
+        )
+        .await?;
+        per_malo_ids.push(record_id);
+    }
+
+    let sammel_id = insert_sammelrechnung_record(
         &mut *tx,
         &cfg.tenant,
         &rahmenvertrag_id,
         &req.lf_mp_id,
+        &sammel_nr,
         period_from,
         period_to,
         &sammel_json,
@@ -230,11 +273,14 @@ pub async fn post_sammelrechnung(
         total_brutto,
     )
     .await
-    {
-        Ok(id) => id,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    if cfg.erp_webhook_url.is_some() {
+    .map_err(crate::error::BillingError::from)?;
+    if held {
+        tracing::warn!(
+            %sammel_id, %rahmenvertrag_id,
+            score = assessment.as_ref().map(|a| a.score),
+            "billingd: Sammelrechnung HELD by risk gate — issuance requires POST …/release"
+        );
+    } else {
         let ce = rechnung_erstellt_ce(
             sammel_id,
             &rahmenvertrag_id,
@@ -242,14 +288,10 @@ pub async fn post_sammelrechnung(
             &sammel_json,
             false,
         );
-        if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
-        if let Err(e) = mark_dispatched_tx(&mut *tx, sammel_id).await {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-        }
+        issue_record(&mut tx, &cfg, sammel_id, &ce).await?;
     }
-    if let Err(e) = crate::einvoice::store(
+    persist_risk(&mut *tx, sammel_id, assessment.as_ref()).await?;
+    crate::einvoice::store(
         &mut *tx,
         sammel_id,
         &sammel_invoice,
@@ -260,35 +302,45 @@ pub async fn post_sammelrechnung(
         // than the per-MaLo one used for the lines above.
         sites.rechnungsempfaenger.as_ref(),
     )
-    .await
-    {
-        tracing::warn!(%sammel_id, error = %e, "billingd: attach en16931 model failed");
-    }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
+    .await?;
+    // Inside the transaction: the risk baseline and the record listings treat
+    // the per-MaLo rows as the bundle's children, and a child that committed
+    // unlinked is counted alongside the bundle that already contains it.
+    link_to_sammelrechnung(&mut *tx, &per_malo_ids, sammel_id).await?;
+    tx.commit().await?;
 
-    // Link per-MaLo records to this Sammelrechnung.
-    let _ = link_to_sammelrechnung(&pool, &per_malo_ids, sammel_id).await;
-
-    (
+    Ok((
         StatusCode::CREATED,
         Json(serde_json::json!({
             "sammelrechnung_id": sammel_id,
             "rahmenvertrag_id": rahmenvertrag_id,
+            "billing_run_id": run_id,
             "period_from": period_from.to_string(),
             "period_to": period_to.to_string(),
             "malos_billed": per_malo_ids.len(),
             "total_netto_eur": total_netto,
             "total_brutto_eur": total_brutto,
+            "risk": assessment,
+            "held": held,
             "errors": errors,
             "rechnungsnummer": sammel_nr,
         })),
-    )
-        .into_response()
+    ))
 }
 
-// \u2500\u2500 B10: XRechnung B2G submission pipeline \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+/// One site's failure, as a structured entry in the run report.
+///
+/// Coded, not `"{malo}: {prose}"`: a caller distinguishes a missing product
+/// from an unreachable tarifbd without reading German.
+fn site_error(malo_id: &str, e: &BillingError) -> serde_json::Value {
+    serde_json::json!({
+        "malo_id": malo_id,
+        "code": e.code(),
+        "message": e.to_string(),
+    })
+}
+
+// ── XRechnung B2G submission pipeline ────────────────────────────────────────
 
 /// Request body for `POST /api/v1/billing/{id}/submit-b2g`.
 #[derive(Debug, serde::Deserialize)]
@@ -323,36 +375,47 @@ pub struct SubmitB2gRequest {
 ///
 /// ## Regulatory
 ///
-/// B2G e-invoicing mandatory from **01.01.2027** (\u00a7\u00a727 EGovG).
-/// `mako-as4` already implements PEPPOL AS4 transport for the MaKo EDIFACT
-/// layer; the same transport can be used for PEPPOL BIS once the ERP is
-/// registered as an AP.
+/// B2G e-invoicing to federal contracting authorities has been **mandatory
+/// since 27.11.2020** — § 4a EGovG plus the E-Rechnungsverordnung (ERechV,
+/// in force 27.11.2018), which transpose EU Directive 2014/55/EU; direct
+/// orders up to EUR 1 000 are exempt (§ 3 Abs. 3 ERechV). The 2027/2028 dates
+/// belong to the separate **B2B** mandate in § 14 UStG and have nothing to do
+/// with this endpoint.
 pub async fn post_submit_b2g(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     Path(id): Path<Uuid>,
     Json(req): Json<SubmitB2gRequest>,
-) -> impl IntoResponse {
-    let row = match fetch_billing_record(&pool, &cfg.tenant, id).await {
-        Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::NOT_FOUND, "billing record not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "submit-b2g", &cfg.tenant)?;
+    // Nothing can transmit the document without an ERP, so say so before doing
+    // the work rather than after.
+    if cfg.erp_webhook_url.is_none() {
+        return Err(BillingError::Unavailable {
+            code: "NO_ERP_WEBHOOK",
+            message: "no erp_webhook_url configured — nothing can transmit the XRechnung"
+                .to_owned(),
+        });
+    }
+    let row = fetch_billing_record(&pool, &cfg.tenant, id)
+        .await?
+        .ok_or_else(|| BillingError::not_found("RECORD_NOT_FOUND", "billing record not found"))?;
 
     // Render from the stored EN 16931 model and refuse to submit a document that
     // violates the rules — a B2G portal would reject it anyway.
-    let Some(model) = row
+    let model = row
         .en16931_json
         .as_ref()
         .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
-    else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "record has no EN 16931 model — re-run the billing calculation",
-        )
-            .into_response();
-    };
+        .ok_or_else(|| {
+            BillingError::unprocessable(
+                "MODEL_MISSING",
+                "record has no EN 16931 model — re-run the billing calculation",
+            )
+        })?;
     // Complete the buyer (the receiving authority, known to the caller) and stamp
     // its Leitweg-ID (BT-10).
     let model = match &req.buyer {
@@ -366,22 +429,18 @@ pub async fn post_submit_b2g(
     // Validate against the XRechnung 3.0 profile and render in one step — a B2G
     // submission must be profile-valid or the ZRE/OZG-RE portal rejects it. On
     // failure, report exactly what is missing (usually the buyer BG-7 terms).
-    let xml = match crate::einvoice::render_xrechnung_cii(&model) {
-        Ok(xml) => xml,
-        Err(rules) => {
-            let gaps = crate::einvoice::buyer_gaps(&model);
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": "XRechnung 3.0 conformance failed — not submitting",
-                    "violated_rules": rules,
-                    "buyer_gaps": gaps,
-                    "hint": "supply the recipient in `buyer` (name, address, contact) and `reference` (Leitweg-ID)",
-                })),
-            )
-                .into_response();
-        }
-    };
+    let xml = crate::einvoice::render_xrechnung_cii(&model).map_err(|rules| {
+        BillingError::unprocessable_with(
+            "XRECHNUNG_NOT_CONFORMANT",
+            "XRechnung 3.0 conformance failed — not submitting",
+            serde_json::json!({
+                "violated_rules": rules,
+                "buyer_gaps": crate::einvoice::buyer_gaps(&model),
+                "hint": "supply the recipient in `buyer` (name, address, contact) and \
+                         `reference` (Leitweg-ID)",
+            }),
+        )
+    })?;
 
     let portal = req.portal.as_deref().unwrap_or("ZRE");
 
@@ -389,18 +448,6 @@ pub async fn post_submit_b2g(
     // gateway transmits it. Posting the CloudEvent inline lost the submission
     // whenever the ERP was briefly down, while the caller was told "submitted";
     // the outbox row commits first and the dispatcher retries until it lands.
-    if cfg.erp_webhook_url.is_none() {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "billing_record_id": id,
-                "portal": portal,
-                "status": "not_submitted",
-                "error": "no erp_webhook_url configured — nothing can transmit the XRechnung",
-            })),
-        )
-            .into_response();
-    }
     let ce = mako_service::CloudEvent::new(
         mako_service::source("billingd", &cfg.tenant),
         mako_events::billing::XRECHNUNG_B2G_READY,
@@ -412,22 +459,15 @@ pub async fn post_submit_b2g(
             "portal": portal,
             "reference": req.reference,
             "xrechnung_xml": xml,
-            "standard": "XRechnung 3.0 / ZUGFeRD 2.3 (EN 16931)",
-            "regulatory": "§27 EGovG B2G e-invoicing mandatory from 01.01.2027",
+            "standard": "XRechnung 3.0 (EN 16931 CIUS)",
+            "regulatory": "§4a EGovG i.V.m. ERechV — B2G e-invoicing mandatory since 27.11.2020",
         }),
     );
-    let mut tx = match pool.begin().await {
-        Ok(tx) => tx,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
+    let mut tx = pool.begin().await?;
+    mako_service::outbox::enqueue(&mut tx, &ce).await?;
+    tx.commit().await?;
 
-    (
+    Ok((
         StatusCode::ACCEPTED,
         Json(serde_json::json!({
             "billing_record_id": id,
@@ -435,58 +475,47 @@ pub async fn post_submit_b2g(
             "status": "queued",
             "message": "de.billing.xrechnung.b2g.ready enqueued in the outbox for the ERP webhook",
             "note": "ERP PEPPOL AS4 gateway is responsible for actual transmission to ZRE/OZG-RE",
-            "regulatory": "§27 EGovG: B2G e-invoicing mandatory from 01.01.2027",
+            "regulatory": "§4a EGovG i.V.m. ERechV: B2G e-invoicing mandatory since 27.11.2020",
             "conformance": "XRechnung 3.0 (validated before dispatch)",
         })),
-    )
-        .into_response()
+    ))
 }
 
-// \u2500\u2500 B11: PEPPOL BIS Billing 3.0 UBL export \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
+// ── PEPPOL BIS Billing 3.0 UBL export ────────────────────────────────────────
 
 /// `GET /api/v1/billing/{id}/ubl`
 ///
-/// Generate a PEPPOL BIS Billing 3.0 (EN 16931) UBL 2.1 XML document from a
-/// billing record.  Distinct from ZUGFeRD CII (Germany-only); UBL is the
-/// pan-European standard required from **01.01.2028** (EU Directive 2014/55/EU).
+/// Render the stored EN 16931 model as PEPPOL BIS Billing 3.0 (UBL 2.1).
 ///
-/// The UBL XML can be transmitted via PEPPOL AS4 to any EU member-state portal.
+/// UBL and CII are the **two permitted syntaxes** of EN 16931, not a hierarchy:
+/// § 14 UStG requires conformance to the norm and accepts either, and so does
+/// Directive 2014/55/EU. CII is what German receivers overwhelmingly expect
+/// (XRechnung, ZUGFeRD); UBL is what a cross-border PEPPOL receiver usually
+/// wants, which is the reason both endpoints exist.
 pub async fn get_ubl(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<BillingdConfig>>,
+    Extension(deps): Extension<Arc<BillingDeps>>,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    let row = match fetch_billing_record(&pool, &cfg.tenant, id).await {
-        Ok(Some(r)) => r,
-        Ok(None) => return (StatusCode::NOT_FOUND, "billing record not found").into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    // PEPPOL BIS 3.0 UBL from the stored EN 16931 model.
-    let Some(model) = row
+) -> BillingResult<impl IntoResponse> {
+    let cfg = &deps.cfg;
+    authorize(&cedar, &claims, "read-billing", &cfg.tenant)?;
+    let row = fetch_billing_record(&pool, &cfg.tenant, id)
+        .await?
+        .ok_or_else(|| BillingError::not_found("RECORD_NOT_FOUND", "billing record not found"))?;
+    let model = row
         .en16931_json
         .as_ref()
         .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
-    else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "record has no EN 16931 model — re-run the billing calculation",
-        )
-            .into_response();
-    };
-    let ubl = crate::einvoice::render_ubl(&model);
-
-    (
-        StatusCode::OK,
-        [
-            ("Content-Type", "application/xml; charset=UTF-8"),
-            (
-                "Content-Disposition",
-                &format!("attachment; filename=\"peppol-bis-{id}.xml\""),
-            ),
-        ],
-        ubl,
-    )
-        .into_response()
+        .ok_or_else(|| {
+            BillingError::unprocessable(
+                "MODEL_MISSING",
+                "record has no EN 16931 model — re-run the billing calculation",
+            )
+        })?;
+    Ok(super::records::xml_download(
+        crate::einvoice::render_ubl(&model),
+        format!("peppol-bis-{id}.xml"),
+    ))
 }

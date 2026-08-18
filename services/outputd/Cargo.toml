@@ -1,6 +1,6 @@
 [package]
 name        = "outputd"
-description = "Customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, publish gates and the append-only template store. Renders what other services computed — billingd's invoices, accountingd's Mahnungen — and will own the delivery channel with per-document evidence. Port :9880."
+description = "Customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, publish gates and the append-only template store. Renders what other services computed — billingd's invoices today, the Mahnung contract is built and awaiting an accountingd client — and will own the delivery channel with per-document evidence. Port :9880."
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
