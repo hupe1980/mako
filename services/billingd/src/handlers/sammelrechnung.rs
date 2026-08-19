@@ -92,7 +92,8 @@ pub async fn post_sammelrechnung(
             ..Default::default()
         };
 
-        let tariff = match resolve_tariff(&site_req, tarifbd, &entry.malo_id).await {
+        let tariff = match resolve_tariff(&site_req, deps.as_ref(), &entry.malo_id, period_to).await
+        {
             Ok(t) => t,
             Err(e) => {
                 errors.push(site_error(&entry.malo_id, &e));

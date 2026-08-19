@@ -982,7 +982,8 @@ mod rest {
     ///
     /// Forwards to makod `gpke.lieferende.anmelden` (PID 55002). The notice
     /// period that governs *when* a Lieferende is valid is enforced upstream
-    /// in `vertragd` (§14 StromGVV); this endpoint validates only that the
+    /// in `vertragd` (§ 20 Abs. 1 StromGVV/GasGVV in der Grundversorgung, sonst
+    /// vertraglich); this endpoint validates only that the
     /// mandatory fields are present.
     pub async fn end_supply(
         State(state): State<ProcessdState>,

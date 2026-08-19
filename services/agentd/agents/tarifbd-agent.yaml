@@ -173,7 +173,7 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: "get product via tarifbd"
-    - ref: tool://tarifbd/get_customer_product
+    - ref: tool://tarifbd/resolve_product
       mutates: false
       max_sensitivity: internal
       description: "get customer product via tarifbd"
@@ -181,10 +181,10 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: "get epex price via tarifbd"
-    - ref: tool://tarifbd/list_expiring_contracts
+    - ref: tool://vertragd/list_expiring_contracts
       mutates: false
-      max_sensitivity: internal
-      description: "list expiring contracts via tarifbd"
+      max_sensitivity: confidential
+      description: "list expiring contracts via vertragd"
     - ref: tool://tarifbd/list_angebote
       mutates: false
       max_sensitivity: internal

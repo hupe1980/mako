@@ -6,7 +6,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_service::oidc::Claims;
+use mako_service::{ApiError, ApiResult, oidc::Claims};
 use rubo4e::current::{Energiemix, Tarifinfo, Tarifmerkmal, Tarifpreisblatt, Tariftyp};
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -15,13 +15,12 @@ use sqlx::PgPool;
 use crate::{
     config::TarifbdConfig,
     pg::{
-        AssignProductRequest, CreateAngebotRequest, EnergimixUpsertRequest, EpexImportRequest,
-        ProductListQuery, ProductUpsertRequest, accept_angebot, assign_product, decline_angebot,
-        delete_energiemix, expire_stale_angebote, fetch_angebot, fetch_energiemix, fetch_epex_day,
-        fetch_product, fetch_product_history, get_customer_product, insert_angebot,
-        link_angebot_rahmenvertrag, list_angebote, list_products, mark_angebot_versandt,
-        monthly_epex_average, next_angebotsnummer, soft_delete_product, upsert_energiemix,
-        upsert_epex_day, upsert_product,
+        CreateAngebotRequest, EnergimixUpsertRequest, EpexImportRequest, ProductListQuery,
+        ProductUpsertRequest, accept_angebot, decline_angebot, delete_energiemix,
+        expire_stale_angebote, fetch_angebot, fetch_energiemix, fetch_epex_day, fetch_product,
+        fetch_product_history, insert_angebot, link_angebot_rahmenvertrag, list_angebote,
+        list_products, mark_angebot_versandt, monthly_epex_average, next_angebotsnummer,
+        soft_delete_product, upsert_energiemix, upsert_epex_day, upsert_product,
     },
 };
 
@@ -457,7 +456,7 @@ pub async fn get_product(
     match fetch_product(&pool, &lf_mp_id, claims.tenant(), &product_code, None).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -470,7 +469,7 @@ pub async fn list_products_handler(
 ) -> impl IntoResponse {
     match list_products(&pool, &lf_mp_id, claims.tenant(), &q).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -482,7 +481,7 @@ pub async fn get_product_history(
 ) -> impl IntoResponse {
     match fetch_product_history(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -512,119 +511,62 @@ pub async fn delete_product(
     match soft_delete_product(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
-// ── Customer assignment ───────────────────────────────────────────────────────
+// ── Product resolution ────────────────────────────────────────────────────────
 
-/// `GET /api/v1/customer/{malo_id}/product`
-///
-/// Returns the currently active product for a MaLo, including the full
-/// `data` (Tarifpreisblatt JSONB).  Used by `billingd` to look up pricing.
-pub async fn get_customer_product_handler(
-    _claims: Claims,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
-    Path(malo_id): Path<String>,
-    Query(q): Query<CustomerProductQuery>,
-) -> impl IntoResponse {
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    match get_customer_product(&pool, &malo_id, lf_mp_id, &cfg.tenant, None).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /api/v1/customer/{malo_id}/product/history`
-///
-/// Returns the full product-assignment history for a MaLo — all historical
-/// `customer_products` rows ordered by `assigned_from DESC`.
-///
-/// Auditors and billing engineers use this to verify that price changes were
-/// applied at the correct effective date (Tarifwechsel Wirksamkeit).
-pub async fn get_customer_product_history_handler(
-    _claims: Claims,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
-    Path(malo_id): Path<String>,
-    Query(q): Query<CustomerProductQuery>,
-) -> impl IntoResponse {
-    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
-    let rows = sqlx::query(
-        r"SELECT cp.malo_id, cp.lf_mp_id, cp.product_code, cp.assigned_from, cp.assigned_to,
-                 p.name, p.category, p.sparte
-          FROM customer_products cp
-          LEFT JOIN products p
-                 ON p.lf_mp_id = cp.lf_mp_id
-                AND p.product_code = cp.product_code
-          WHERE cp.malo_id = $1 AND cp.lf_mp_id = $2
-          ORDER BY cp.assigned_from DESC",
-    )
-    .bind(&malo_id)
-    .bind(lf_mp_id)
-    .fetch_all(&pool)
-    .await;
-
-    match rows {
-        Ok(rows) => {
-            use sqlx::Row;
-            let history: Vec<serde_json::Value> = rows
-                .into_iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "malo_id":       r.get::<String, _>("malo_id"),
-                        "lf_mp_id":      r.get::<String, _>("lf_mp_id"),
-                        "product_code":  r.get::<String, _>("product_code"),
-                        "product_name":  r.try_get::<String, _>("name").ok(),
-                        "category":      r.try_get::<String, _>("category").ok(),
-                        "sparte":        r.try_get::<Option<String>, _>("sparte").ok().flatten(),
-                        "assigned_from": r.get::<time::Date, _>("assigned_from").to_string(),
-                        "assigned_to":   r.try_get::<Option<time::Date>, _>("assigned_to")
-                                          .ok().flatten().map(|d| d.to_string()),
-                        "is_active":     r.try_get::<Option<time::Date>, _>("assigned_to")
-                                          .ok().flatten().is_none(),
-                    })
-                })
-                .collect();
-            Json(serde_json::json!({
-                "malo_id": malo_id,
-                "lf_mp_id": lf_mp_id,
-                "history": history,
-                "count": history.len(),
-            }))
-            .into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `PUT /api/v1/customer/{malo_id}/product`  — Tarifwechsel
-pub async fn put_customer_product_handler(
-    _claims: Claims,
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
-    Path(malo_id): Path<String>,
-    Json(req): Json<AssignProductRequest>,
-) -> impl IntoResponse {
-    match assign_product(&pool, &malo_id, &cfg.tenant, &cfg.tenant, req).await {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => {
-            // Distinguish "product not found" (409) from other errors (422).
-            let msg = e.to_string();
-            if msg.contains("not found") {
-                (StatusCode::CONFLICT, msg).into_response()
-            } else {
-                (StatusCode::UNPROCESSABLE_ENTITY, msg).into_response()
-            }
-        }
-    }
+/// One product to resolve: a code and the day it has to be valid on.
+#[derive(Debug, Deserialize)]
+pub struct ProductQuery {
+    pub product_code: String,
+    /// The day the version must be in force on. Defaults to today (Berlin).
+    #[serde(default)]
+    pub as_of: Option<time::Date>,
 }
 
 #[derive(Debug, Deserialize)]
-pub struct CustomerProductQuery {
-    pub lf_mp_id: Option<String>,
+pub struct ResolveProductsRequest {
+    pub anfragen: Vec<ProductQuery>,
+}
+
+/// `POST /api/v1/products/{lf_mp_id}/resolve` — product versions by code+date.
+///
+/// A billing period split by a Tarifwechsel needs one product version per leg,
+/// each valid on that leg's own dates. Asking one request per leg is an N+1 on
+/// every invoice; asking here is one round trip.
+///
+/// A code with no version valid on its date comes back as `null` in place, so
+/// the caller can tell *which* of its legs is unpriceable rather than getting a
+/// shorter list than it asked for.
+pub async fn post_resolve_products(
+    _claims: Claims,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Path(lf_mp_id): Path<String>,
+    Json(req): Json<ResolveProductsRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    if req.anfragen.len() > 100 {
+        return Err(ApiError::bad_request(
+            "at most 100 products may be resolved per request",
+        ));
+    }
+    let mut produkte = Vec::with_capacity(req.anfragen.len());
+    for q in &req.anfragen {
+        let row = fetch_product(&pool, &lf_mp_id, &cfg.tenant, &q.product_code, q.as_of)
+            .await
+            .map_err(ApiError::Internal)?;
+        produkte.push(serde_json::json!({
+            "product_code": q.product_code,
+            "as_of": q.as_of.map(|d| d.to_string()),
+            "product": row,
+        }));
+    }
+    Ok(Json(serde_json::json!({
+        "lf_mp_id": lf_mp_id,
+        "produkte": produkte,
+    })))
 }
 
 // ── EPEX Spot day-ahead prices ────────────────────────────────────────────────
@@ -691,7 +633,7 @@ pub async fn get_epex_prices_quarter_hourly(
             .into_response()
         }
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -712,7 +654,7 @@ pub async fn get_epex_monthly_average(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -769,7 +711,7 @@ pub async fn get_nehs_price_latest(
         }))
         .into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -819,7 +761,7 @@ pub async fn put_energiemix(
              Json(serde_json::json!({ "error": format!("product {lf_mp_id}/{product_code} not found") })))
                 .into_response()
         }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -851,7 +793,7 @@ pub async fn get_energiemix(
             Json(serde_json::json!({ "error": "no Energiemix set for this product" })),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -879,7 +821,7 @@ pub async fn delete_energiemix_handler(
     match delete_energiemix(&pool, &lf_mp_id, claims.tenant(), &product_code).await {
         Ok(true) => StatusCode::NO_CONTENT.into_response(),
         Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -923,6 +865,12 @@ pub struct PositionCostBreakdown {
     /// free-text `standort_bezeichnung`, which is not a key — and the BO4E
     /// projection has nothing to put in `lieferstellenangebotsteil`.
     pub malo_id: Option<String>,
+    /// Messlokation — carried through so the accepted quotation can be
+    /// registered. A gas supply point without it produces a contract nothing
+    /// can file a Lieferbeginn for.
+    pub melo_id: Option<String>,
+    /// Netzbetreiber behind the supply point — the UTILMD's recipient.
+    pub nb_mp_id: Option<String>,
     pub standort_bezeichnung: Option<String>,
     pub jahresverbrauch_kwh: Decimal,
     /// Supply cost only (Grundpreis + Arbeitspreis + Leistungspreis, after discount).
@@ -1056,6 +1004,8 @@ fn compute_cost_breakdown(
         product_code: pos.product_code.clone(),
         sparte: pos.sparte.clone(),
         malo_id: pos.malo_id.clone(),
+        melo_id: pos.melo_id.clone(),
+        nb_mp_id: pos.nb_mp_id.clone(),
         standort_bezeichnung: pos.standort_bezeichnung.clone(),
         jahresverbrauch_kwh: pos.jahresverbrauch_kwh,
         supply_netto_eur: supply_netto_eur.round_dp(2),
@@ -1254,13 +1204,13 @@ pub async fn post_angebot(
                     .into_response();
             }
             Ok(None) => {}
-            Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            Err(e) => return ApiError::Internal(e).into_response(),
         }
     }
 
     let angebotsnummer = match next_angebotsnummer(&pool, &cfg.tenant).await {
         Ok(n) => n,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::Internal(e).into_response(),
     };
 
     match insert_angebot(
@@ -1292,7 +1242,7 @@ pub async fn post_angebot(
             })),
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -1354,7 +1304,7 @@ pub async fn list_angebote_handler(
     .await
     {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -1368,7 +1318,7 @@ pub async fn get_angebot_handler(
     match fetch_angebot(&pool, id, &cfg.tenant).await {
         Ok(Some(a)) => Json(a).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
     }
 }
 
@@ -1419,7 +1369,7 @@ pub async fn get_angebot_comparison(
     let angebot = match fetch_angebot(&pool, id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::Internal(e).into_response(),
     };
 
     let lf_mp_id = &angebot.lf_mp_id;
@@ -1710,11 +1660,12 @@ pub async fn post_angebot_ablehnen(
 pub async fn post_expire_angebote(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-) -> impl IntoResponse {
-    match expire_stale_angebote(&pool).await {
-        Ok(n) => Json(serde_json::json!({ "expired": n })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let expired = expire_stale_angebote(&pool, &cfg.tenant)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(serde_json::json!({ "expired": expired })))
 }
 
 /// Request body for `PUT /api/v1/angebote/{id}` — edit before sending.
@@ -1752,7 +1703,7 @@ pub async fn put_angebot(
     let existing = match fetch_angebot(&pool, id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => return ApiError::Internal(e).into_response(),
     };
     if existing.status != "ANGELEGT" {
         return (
@@ -1882,7 +1833,7 @@ pub async fn put_angebot(
             "Angebot not found or no longer in ANGELEGT state",
         )
             .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => ApiError::from(e).into_response(),
     }
 }
 
@@ -2122,7 +2073,7 @@ pub fn compute_feed_etag(
 
 /// Build a `rubo4e::current::Tarifinfo` BO4E envelope from a product row.
 ///
-/// This is the §42d EnWG canonical form: comparison portals (Verivox, Check24)
+/// This is the § 41c EnWG canonical form: comparison portals (Verivox, Check24)
 /// and the BNetzA Markttransparenzstelle can import this object directly without
 /// custom ETL, since it conforms to the published BO4E `Tarifinfo` JSON schema.
 ///
@@ -2258,7 +2209,7 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
 ///
 /// Returns the same feed as `GET /api/v1/comparison-feed` but wraps every tariff
 /// in a full BO4E `Tarifinfo` Business Object — the format expected by comparison
-/// portals (Verivox, Check24) and the BNetzA Markttransparenzstelle per §42d EnWG.
+/// portals (Verivox, Check24) and the BNetzA Markttransparenzstelle per § 41c EnWG.
 ///
 /// Unlike the standard feed which returns a mako-specific JSON structure alongside
 /// the BO4E `Tarifpreisblatt`, this endpoint returns a schema-validated BO4E array
@@ -2305,7 +2256,7 @@ pub async fn get_comparison_feed_bo4e(
     let mut rows = match crate::pg::fetch_comparison_feed(&pool, &lf_mp_id, &q).await {
         Ok(r) => r,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return ApiError::Internal(e).into_response();
         }
     };
 
@@ -2427,7 +2378,7 @@ pub async fn get_comparison_feed(
     let mut rows = match crate::pg::fetch_comparison_feed(&pool, &lf_mp_id, &q).await {
         Ok(r) => r,
         Err(e) => {
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return ApiError::Internal(e).into_response();
         }
     };
 

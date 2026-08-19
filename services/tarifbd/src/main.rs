@@ -116,14 +116,12 @@ impl Daemon for Tarifbd {
                 get(handlers::list_products_handler),
             )
             // ── Customer → product assignment ─────────────────────────────────────
+            // Resolve product definitions in one round trip: billingd needs
+            // one per leg of a period split by a Tarifwechsel, and asking per
+            // leg is an N+1 on every invoice.
             .route(
-                "/api/v1/customer/{malo_id}/product",
-                get(handlers::get_customer_product_handler)
-                    .put(handlers::put_customer_product_handler),
-            )
-            .route(
-                "/api/v1/customer/{malo_id}/product/history",
-                get(handlers::get_customer_product_history_handler),
+                "/api/v1/products/{lf_mp_id}/resolve",
+                post(handlers::post_resolve_products),
             )
             // ── EPEX Spot prices ──────────────────────────────────────────────────
             .route("/api/v1/epex-prices/{date}", put(handlers::put_epex_prices))
@@ -180,7 +178,7 @@ impl Daemon for Tarifbd {
                 "/api/v1/comparison-feed",
                 get(handlers::get_comparison_feed),
             )
-            // GET /api/v1/comparison-feed/bo4e — §42d EnWG: full BO4E Tarifinfo array
+            // GET /api/v1/comparison-feed/bo4e — § 41c EnWG: full BO4E Tarifinfo array
             // for direct schema-validated import by Verivox / Check24 / BNetzA MTS.
             .route(
                 "/api/v1/comparison-feed/bo4e",
@@ -198,6 +196,7 @@ impl Daemon for Tarifbd {
         // VERSANDT state and sales staff waste time on dead leads.
         {
             let pool_bg = pool.clone();
+            let tenant = cfg.tenant.clone();
             let shutdown = ctx.shutdown.clone();
             tokio::spawn(async move {
                 // Initial 60 s grace after startup, then sweep every 23 h.
@@ -211,7 +210,7 @@ impl Daemon for Tarifbd {
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 interval.tick().await; // consume the immediate first tick
                 loop {
-                    match tarifbd::pg::expire_stale_angebote(&pool_bg).await {
+                    match tarifbd::pg::expire_stale_angebote(&pool_bg, &tenant).await {
                         Ok(n) if n > 0 => {
                             tracing::info!(expired = n, "tarifbd: auto-expired stale Angebote")
                         }

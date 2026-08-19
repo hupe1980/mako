@@ -322,10 +322,13 @@ pub mod vertrag {
     pub const AKTIV: &str = "de.vertrag.aktiv";
     /// Lieferende dispatched (Rahmenvertrag cascade, per child).
     pub const GEKUENDIGT: &str = "de.vertrag.gekuendigt";
-    /// Kündigung accepted, Lieferende dispatched.
+    /// Kündigung accepted; the Lieferende and the Schlussablesung are
+    /// enqueued. Carries the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation the
+    /// supplier owes the customer — the document is produced downstream, the
+    /// instruction to produce it commits with the termination.
     ///
-    /// Documented in the vertragd event table; no code emitter exists
-    /// today (the cancel path emits [`GEKUENDIGT`]).
+    /// A cascade Kündigung over a Rahmenvertrag emits [`GEKUENDIGT`] per child
+    /// instead, because the framework contract is what was terminated.
     pub const KUENDIGUNG: &str = "de.vertrag.kuendigung";
     /// Kündigung withdrawn before Lieferende.
     pub const KUENDIGUNG_WIDERRUFEN: &str = "de.vertrag.kuendigung-widerrufen";
@@ -335,12 +338,20 @@ pub mod vertrag {
     pub const TARIFWECHSEL_GEPLANT: &str = "de.vertrag.tarifwechsel-geplant";
     /// Price guarantee stored/replaced.
     pub const PREISGARANTIE_HINTERLEGT: &str = "de.vertrag.preisgarantie-hinterlegt";
-    /// §41 Abs. 5 EnWG price-change notice (≤ 42 days before Wirksamkeit).
+    /// § 41 Abs. 5 EnWG price-change notice. Sent as soon as the change is
+    /// scheduled — Satz 2 is a floor, not a ceiling — and carrying the regime
+    /// that applied plus the Satz 4 Sonderkündigungsrecht.
     pub const PREISAENDERUNG_ANKUENDIGUNG: &str = "de.vertrag.preisaenderung.ankuendigung";
     /// 30 days before auto-renewal.
     pub const AUTOERNEUERUNG_ANKUENDIGUNG: &str = "de.vertrag.autoerneuerung.ankuendigung";
     /// 30 days before vertragsende / preisgarantie_bis.
     pub const ABLAUF_ANKUENDIGUNG: &str = "de.vertrag.ablauf.ankuendigung";
+    /// Supply has actually ended: every commodity has passed its Lieferende and
+    /// the contract is `ABGELAUFEN`. Distinct from [`GEKUENDIGT`], which is the
+    /// day the termination was *accepted* — months earlier for a notice period
+    /// that long, and with supply and invoicing running throughout. This is the
+    /// event a Schlussrechnung and the § 147 AO retention clock hang off.
+    pub const ABGESCHLOSSEN: &str = "de.vertrag.abgeschlossen";
 }
 
 /// Virtual-power-plant events (`de.vpp.*`).

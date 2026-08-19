@@ -129,12 +129,16 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/portal/{malo_id}/vertrag",
             get(handlers::get_portal_vertrag),
         )
-        // §41 Abs. 1 EnWG — Tarifwechsel (minimum 14 days notice)
+        // Tarifwechsel — the § 41 Abs. 5 EnWG notice period is enforced by vertragd
         .route(
             "/api/v1/portal/{malo_id}/tarifwechsel",
             post(handlers::post_portal_tarifwechsel),
         )
-        // §41 Abs. 3 EnWG — Kündigung (minimum 14 days, end-of-month billing boundary)
+        // Kündigung — the notice period is computed and enforced by vertragd
+        .route(
+            "/api/v1/portal/{malo_id}/kuendigungsfrist",
+            get(handlers::get_portal_kuendigungsfrist),
+        )
         .route(
             "/api/v1/portal/{malo_id}/kuendigen",
             post(handlers::post_portal_kuendigen),

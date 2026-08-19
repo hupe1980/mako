@@ -9,7 +9,20 @@
 --   └── [B2C] Versorgungsvertrag (single contract, no Rahmenvertrag)
 --         └── N × Vertragskomponente
 --
--- Regulatory: §41 EnWG (Preisgarantie, Preisanpassung), GDPR Art. 15/17/20.
+-- Regulatory anchors, verified against the primary sources:
+--   § 41 Abs. 5 EnWG      Preisänderungsanzeige (2 Wochen; Haushaltskunden 1 Monat)
+--                         + fristloses Sonderkündigungsrecht (Satz 4)
+--   § 41 Abs. 8 EnWG      Kündigungsbestätigung in Textform beim Lieferantenwechsel
+--   § 41b Abs. 1/5 EnWG   Textform; Umzugssonderkündigung mit 6 Wochen
+--   § 20 StromGVV/GasGVV  Kündigung der Grundversorgung: 2 Wochen, Textform
+--   § 5 Abs. 2/3 GVV      Grundversorgungspreise: 6 Wochen, nur zum Monatsersten
+--   § 38 Abs. 4 EnWG      Ersatzversorgung endet spätestens nach 3 Monaten
+--   § 309 Nr. 9 BGB       Verbraucher: ≤ 24 Monate, Verlängerung nur unbefristet
+--   DSGVO Art. 15/17/20   Auskunft, Löschung, Datenübertragbarkeit
+--
+-- The deadline arithmetic itself lives in `src/domain.rs`, not in SQL.
+
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ── Kunden ────────────────────────────────────────────────────────────────────
 
@@ -23,6 +36,13 @@ CREATE TABLE kunden (
                             'B2B_RLM',      -- commercial & industrial / RLM
                             'B2B_HV'        -- high-voltage / directly connected
                         )),
+    -- § 3 Nr. 57 EnWG: a Haushaltskunde buys energy predominantly for household
+    -- consumption *or* consumes no more than 10 000 kWh a year for commercial
+    -- purposes. It is therefore NOT the same fact as `kundentyp` — a small
+    -- business under the threshold is one — and it decides three deadlines
+    -- (§ 41 Abs. 5 notice, § 41b Abs. 5 Umzugskündigung, § 309 Nr. 9 BGB caps),
+    -- so it is stored explicitly rather than guessed from the segment label.
+    haushaltskunde      BOOLEAN     NOT NULL DEFAULT true,
     -- BO4E Geschaeftspartner (marktrolle=Endkunde)
     geschaeftspartner   JSONB,
     -- BO4E Person (B2C natural persons only; NULL = legal entity)
@@ -50,6 +70,10 @@ COMMENT ON TABLE kunden IS
     'Legal entity (B2C person or B2B company). Not the portal user. '
     'KundenIdentitaeten maps OIDC identities to a Kunde.';
 
+COMMENT ON COLUMN kunden.haushaltskunde IS
+    '§ 3 Nr. 57 EnWG Haushaltskunde. Drives the § 41 Abs. 5 notice period, the '
+    '§ 41b Abs. 5 Umzugskündigung and the § 309 Nr. 9 BGB term caps.';
+
 COMMENT ON COLUMN kunden.person IS
     'BO4E Person BO — B2C natural person (vorname, nachname, geburtsdatum, anrede). '
     'NULL = legal entity (B2B). Validated on PUT /kunden/{id}/person.';
@@ -58,12 +82,10 @@ COMMENT ON COLUMN kunden.zahlungsinformation IS
     'BO4E Zahlungsinformation COM (IBAN, BIC, Zahlungsart). '
     'IBAN validated via ISO 13616 mod-97 on PUT. NULL = no SEPA mandate.';
 
-CREATE INDEX kunden_erp     ON kunden (tenant, erp_kunde_id) WHERE erp_kunde_id IS NOT NULL;
 CREATE INDEX kunden_typ     ON kunden (tenant, kundentyp);
 -- UNIQUE partial index for ON CONFLICT (tenant, erp_kunde_id) DO UPDATE
 CREATE UNIQUE INDEX kunden_erp_unique ON kunden (tenant, erp_kunde_id)
     WHERE erp_kunde_id IS NOT NULL;
-CREATE INDEX kunden_person  ON kunden ((person IS NOT NULL)) WHERE person IS NOT NULL;
 
 -- ── KundenIdentitaeten (Portal Users) ────────────────────────────────────────
 
@@ -96,25 +118,31 @@ COMMENT ON TABLE kunden_identitaeten IS
     'B2C: 1:1. B2B: 1:N (different roles per employee). '
     'portald authorization: GET /kunden/authenticate?malo_id={malo_id}';
 
-CREATE INDEX identitaeten_sub   ON kunden_identitaeten (tenant, oidc_sub);
 CREATE INDEX identitaeten_kunde ON kunden_identitaeten (kunden_id, tenant) WHERE aktiv = true;
 CREATE INDEX identitaeten_email ON kunden_identitaeten (tenant, email) WHERE email IS NOT NULL;
 
 -- ── Rahmenverträge (B2B Framework Contracts) ─────────────────────────────────
 
+CREATE SEQUENCE rahmenvertrag_nr_seq;
+
 CREATE TABLE rahmenvertraege (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     kunden_id               UUID        NOT NULL REFERENCES kunden(id),
     tenant                  TEXT        NOT NULL,
-    rahmenvertrag_nr        TEXT,
-    vertrag                 JSONB,      -- rubo4e::current::Vertrag (vertragsart=RAHMENVERTRAG)
+    -- § 41 Abs. 1 Nr. 1 EnWG expects the contract to identify itself, and every
+    -- invoice, Mahnung and support call quotes this number. Generated, so no
+    -- contract can exist without one.
+    rahmenvertrag_nr        TEXT        NOT NULL DEFAULT
+                                'RV-' || to_char(now(), 'YYYY') || '-' ||
+                                lpad(nextval('rahmenvertrag_nr_seq')::TEXT, 8, '0'),
     status                  TEXT        NOT NULL DEFAULT 'AKTIV'
                             CHECK (status IN ('ENTWURF','AKTIV','GEKÜNDIGT','ABGELAUFEN')),
     gueltig_von             DATE        NOT NULL,
-    gueltig_bis             DATE,
-    kuendigungsfrist_monate INTEGER     NOT NULL DEFAULT 3,
+    gueltig_bis             DATE
+                            CHECK (gueltig_bis IS NULL OR gueltig_von <= gueltig_bis),
+    kuendigungsfrist_monate INTEGER     NOT NULL DEFAULT 3 CHECK (kuendigungsfrist_monate >= 0),
     auto_renewal            BOOLEAN     NOT NULL DEFAULT true,
-    renewal_monate          INTEGER     NOT NULL DEFAULT 12,
+    renewal_monate          INTEGER     NOT NULL DEFAULT 12 CHECK (renewal_monate >= 0),
     preisanpassungsformel   TEXT,
     portfolio_rabatt_prozent NUMERIC(5, 2),
     angebot_id              UUID,
@@ -126,11 +154,12 @@ CREATE TABLE rahmenvertraege (
     notizen                 TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (tenant, erp_rahmenvertrag_id)
+    UNIQUE (tenant, rahmenvertrag_nr)
 );
 
 CREATE INDEX rahmen_kunden ON rahmenvertraege (kunden_id, tenant, status);
-CREATE INDEX rahmen_status ON rahmenvertraege (tenant, status) WHERE status = 'AKTIV';
+CREATE UNIQUE INDEX rahmen_erp_unique ON rahmenvertraege (tenant, erp_rahmenvertrag_id)
+    WHERE erp_rahmenvertrag_id IS NOT NULL;
 
 -- ── GGV-Betreiber (§ 42b EnWG) ────────────────────────────────────────────────
 --
@@ -158,31 +187,43 @@ COMMENT ON TABLE ggv_betreiber IS
 
 -- ── Versorgungsverträge (Individual Supply Contracts) ─────────────────────────
 
+CREATE SEQUENCE vertrags_nr_seq;
+
 CREATE TABLE versorgungsvertraege (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     kunden_id               UUID        NOT NULL REFERENCES kunden(id),
     rahmenvertrag_id        UUID        REFERENCES rahmenvertraege(id),
     tenant                  TEXT        NOT NULL,
-    vertrags_nr             TEXT,
-    vertrag                 JSONB,      -- rubo4e::current::Vertrag (vertragsart=LIEFERVERTRAG)
+    vertrags_nr             TEXT        NOT NULL DEFAULT
+                                'VV-' || to_char(now(), 'YYYY') || '-' ||
+                                lpad(nextval('vertrags_nr_seq')::TEXT, 8, '0'),
+    -- Which supply regime governs this contract. Every notice period below
+    -- branches on it, so it is a stored fact rather than a derived guess.
+    vertragsart             TEXT        NOT NULL DEFAULT 'SONDERVERTRAG' CHECK (vertragsart IN (
+                                'GRUNDVERSORGUNG',  -- § 36 EnWG, StromGVV/GasGVV apply
+                                'ERSATZVERSORGUNG', -- § 38 EnWG, ends after 3 months
+                                'SONDERVERTRAG'     -- § 41b EnWG
+                            )),
     status                  TEXT        NOT NULL DEFAULT 'ANGELEGT' CHECK (status IN (
                                 'ANGELEGT',
                                 'IN_BEARBEITUNG',
                                 'TEILERFUELLUNG',
                                 'AKTIV',
-                                'ÄNDERUNG',
+                                'ABGELEHNT',
                                 'GEKÜNDIGT',
                                 'ABGELAUFEN',
                                 'STORNIERT'
                             )),
     vertragsbeginn          DATE        NOT NULL,
+    -- NULL = unbefristet. § 309 Nr. 9 lit. b BGB makes this the *only* lawful
+    -- shape for a consumer contract after a tacit extension.
     vertragsende            DATE
                         CHECK (vertragsende IS NULL OR vertragsbeginn <= vertragsende),
     kundentyp               TEXT        NOT NULL,
-    -- §41 EnWG Preisgarantie
+    -- § 41 EnWG Preisgarantie
     preisgarantie_bis       DATE,
     preisgarantie           JSONB,      -- BO4E Preisgarantie COM (synced with preisgarantie_bis)
-    kuendigungsfrist_monate INTEGER     NOT NULL DEFAULT 1,
+    kuendigungsfrist_monate INTEGER     NOT NULL DEFAULT 1 CHECK (kuendigungsfrist_monate >= 0),
     -- §40b EnWG: chosen billing cadence. The supplier must offer monthly,
     -- quarterly and semi-annual billing in addition to the annual default;
     -- the customer's choice is a contract fact and drives the billingd
@@ -191,28 +232,47 @@ CREATE TABLE versorgungsvertraege (
                                 'MONATLICH','VIERTELJAEHRLICH','HALBJAEHRLICH','JAEHRLICH'
                             )),
     auto_renewal            BOOLEAN     NOT NULL DEFAULT false,
-    renewal_monate          INTEGER     NOT NULL DEFAULT 12,
-    -- §13 GasGVV / §14 StromGVV: the vertragsende whose 30-day Ankündigung has
-    -- gone out. Compared against the current vertragsende, so the daily worker
-    -- sends the notice once per term instead of once per day.
+    -- 0 = extend into an unbefristeten Vertrag (§ 309 Nr. 9 lit. b BGB — the
+    -- only lawful tacit extension of a consumer contract). > 0 = a further
+    -- fixed term, permitted for business customers (§ 310 Abs. 1 BGB).
+    renewal_monate          INTEGER     NOT NULL DEFAULT 0 CHECK (renewal_monate >= 0),
+    -- The vertragsende whose advance Ankündigung has gone out. Compared against
+    -- the current vertragsende, so each notice fires once per term rather than
+    -- once per day.
     autoerneuerung_notif_fuer DATE,
-    naechste_moegliche_kuendigung DATE,
+    ablauf_notif_fuer         DATE,
+    -- ── Kündigung ────────────────────────────────────────────────────────────
+    -- The reason decides the notice period (see src/domain.rs), and § 41 Abs. 8
+    -- Nr. 2 EnWG obliges the supplier to confirm receipt in Textform — recorded
+    -- here so the obligation is auditable rather than assumed.
+    kuendigung_grund        TEXT        CHECK (kuendigung_grund IS NULL OR kuendigung_grund IN (
+                                'ORDENTLICH','PREISANPASSUNG','UMZUG','LIEFERANTENWECHSEL'
+                            )),
+    kuendigung_eingang      DATE,
+    kuendigung_zum          DATE,
+    kuendigungsbestaetigung_am TIMESTAMPTZ,
     bundle_code             TEXT,
     standort_bezeichnung    TEXT,       -- e.g. "Werk Nord" for B2B site identification
-    standort_adresse        JSONB,
+    standort_adresse        JSONB,      -- BO4E Adresse of the supply address (PII)
     zahlungsziel_tage       INTEGER,    -- NULL = use kunden.zahlungsziel_tage
     erp_contract_id         TEXT,
     notizen                 TEXT,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     completed_at            TIMESTAMPTZ,
-    UNIQUE (tenant, erp_contract_id)
+    UNIQUE (tenant, vertrags_nr)
 );
+
+COMMENT ON COLUMN versorgungsvertraege.standort_adresse IS
+    'BO4E Adresse of the supply location. Personal data — pseudonymised by the '
+    'DSGVO Art. 17 erasure path together with the Kunde''s own master data.';
 
 CREATE INDEX vv_kunden ON versorgungsvertraege (kunden_id, tenant, status);
 CREATE INDEX vv_rahmen ON versorgungsvertraege (rahmenvertrag_id) WHERE rahmenvertrag_id IS NOT NULL;
 CREATE INDEX vv_status ON versorgungsvertraege (tenant, status)
     WHERE status IN ('ANGELEGT','IN_BEARBEITUNG','TEILERFUELLUNG','AKTIV','GEKÜNDIGT');
+CREATE UNIQUE INDEX vv_erp_unique ON versorgungsvertraege (tenant, erp_contract_id)
+    WHERE erp_contract_id IS NOT NULL;
 
 -- ── Vertragskomponenten (Supply positions per commodity) ──────────────────────
 
@@ -228,9 +288,9 @@ CREATE TABLE vertragskomponenten (
     melo_id                 TEXT,
     lf_mp_id                TEXT        NOT NULL,
     nb_mp_id                TEXT,
-    product_code            TEXT        NOT NULL,
     lieferbeginn            DATE        NOT NULL,
-    lieferende              DATE,
+    lieferende              DATE
+                        CHECK (lieferende IS NULL OR lieferbeginn <= lieferende),
     status                  TEXT        NOT NULL DEFAULT 'ANGELEGT' CHECK (status IN (
                                 'ANGELEGT','ANGEMELDET','BESTAETIGT',
                                 'AKTIV','BEENDET','ABGELEHNT','STORNIERT'
@@ -238,24 +298,13 @@ CREATE TABLE vertragskomponenten (
     mako_process_id         TEXT,
     abgelehnt_erc           TEXT,
     abgelehnt_reason        TEXT,
+    -- edmd reading-order id for the Beginn-/Schlussablesung (GPKE
+    -- Ablesesteuerung) — the trail from a Schlussrechnung back to its reading.
     ablese_auftrag_id       UUID,
-    -- §41 Abs. 3 EnWG: planned Tarifwechsel pending approval
-    pending_product_code    TEXT,
-    pending_wirksamkeit     DATE,
-    -- TRUE once the 6-week §41 Abs. 3 price-change notification was dispatched
-    preisanpassung_notif_sent BOOLEAN   NOT NULL DEFAULT false,
     fulfillment_data        JSONB,
     created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-
-COMMENT ON COLUMN vertragskomponenten.pending_product_code IS
-    'New product_code for a planned Tarifwechsel taking effect on pending_wirksamkeit. '
-    'NULL = no pending change.';
-
-COMMENT ON COLUMN vertragskomponenten.preisanpassung_notif_sent IS
-    '§41 Abs. 3 EnWG: TRUE once the ≥6-week price-change notification '
-    '(de.vertrag.preisaenderung.ankuendigung) was dispatched.';
 
 CREATE INDEX komp_vertrag  ON vertragskomponenten (vertrag_id);
 CREATE INDEX komp_malo     ON vertragskomponenten (tenant, malo_id) WHERE malo_id IS NOT NULL;
@@ -263,8 +312,122 @@ CREATE INDEX komp_status   ON vertragskomponenten (tenant, status, sparte)
     WHERE status IN ('ANGELEGT','ANGEMELDET');
 CREATE INDEX komp_prozess  ON vertragskomponenten (mako_process_id)
     WHERE mako_process_id IS NOT NULL;
-CREATE INDEX komp_pending_wirksamkeit ON vertragskomponenten (pending_wirksamkeit)
-    WHERE pending_wirksamkeit IS NOT NULL;
+
+-- ── Produktzuordnung je Komponente (valid-time) ──────────────────────────────
+--
+-- Which product a supply component is on, over time. This is a **contract**
+-- fact: agreeing it is a Tarifwechsel, governed by § 41 Abs. 5 EnWG and by the
+-- contract's Preisgarantie, and it is decided here — so it is stored here, once.
+--
+-- It used to be stored twice: a current-value `product_code` column on the
+-- component and a valid-time projection in `tarifbd.customer_products`,
+-- delivered asynchronously. Two rows described one fact, and between the
+-- contract change and the projection landing the contract said one product
+-- while billing still priced the other. Now the slice and the contract change
+-- commit in the same transaction, and there is nothing to reconcile.
+--
+-- ## Half-open ranges
+--
+-- `[gueltig_von, gueltig_bis)` — `gueltig_bis` is the first day **not** covered,
+-- NULL means open-ended. That is what makes consecutive slices tile a billing
+-- period exactly: a Tarifwechsel on the 15th ends the old slice and starts the
+-- new one on the *same* date, and no day belongs to both.
+--
+-- ## A future-dated Tarifwechsel is just a future slice
+--
+-- There is no "pending" state and nothing to apply on the Wirksamkeit date. The
+-- slice already says when it starts; a reader asking for a date before it
+-- simply does not see it. That removed three columns, a CHECK constraint and a
+-- daily worker phase whose only job was to copy one column into another.
+
+CREATE TABLE komponenten_produkte (
+    id            UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant        TEXT        NOT NULL,
+    komp_id       UUID        NOT NULL REFERENCES vertragskomponenten(id) ON DELETE CASCADE,
+    product_code  TEXT        NOT NULL,
+    gueltig_von   DATE        NOT NULL,
+    gueltig_bis   DATE,       -- exclusive; NULL = open-ended
+    -- § 41 Abs. 5 EnWG: TRUE once the price-change notice announcing this slice
+    -- went out. The first slice of a contract announces nothing — the customer
+    -- agreed to it — so it is created already marked.
+    preisanpassung_notif_sent BOOLEAN NOT NULL DEFAULT false,
+    grund         TEXT,
+    created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT kp_range_nonempty CHECK (gueltig_bis IS NULL OR gueltig_von < gueltig_bis)
+);
+
+COMMENT ON TABLE komponenten_produkte IS
+    'Valid-time product assignment per Vertragskomponente. Half-open '
+    '[gueltig_von, gueltig_bis). The single source of truth for which product a '
+    'MaLo is billed on; billingd reads the slices covering its billing period.';
+
+-- Two products for one component on one day is not a state that should exist:
+-- it either double-bills or picks arbitrarily.
+ALTER TABLE komponenten_produkte
+    ADD CONSTRAINT kp_no_overlap
+    EXCLUDE USING gist (
+        komp_id WITH =,
+        daterange(gueltig_von, gueltig_bis, '[)') WITH &&
+    );
+
+CREATE INDEX kp_komp    ON komponenten_produkte (komp_id, gueltig_von DESC);
+CREATE INDEX kp_aktuell ON komponenten_produkte (komp_id) WHERE gueltig_bis IS NULL;
+-- The § 41 Abs. 5 notice worker: future slices whose notice is still owed.
+CREATE INDEX kp_notif   ON komponenten_produkte (tenant, gueltig_von)
+    WHERE preisanpassung_notif_sent = false;
+
+-- ── Outbound task queue (persist-before-dispatch) ─────────────────────────────
+--
+-- Every side effect vertragd owes another service is an obligation, not a best
+-- effort: the NB is waiting for a UTILMD, the customer for a Schlussablesung,
+-- billingd for the tariff the contract actually switched to. Firing those from
+-- detached tasks meant a restart between the database write and the HTTP call
+-- dropped them in silence, with nothing left to retry them.
+--
+-- The intent is therefore written in the SAME transaction as the contract
+-- change, and one worker drains it with backoff and a dead-letter — the same
+-- shape as the CloudEvent outbox, for the same reason.
+
+CREATE TABLE outbound_tasks (
+    id               UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant           TEXT        NOT NULL,
+    kind             TEXT        NOT NULL CHECK (kind IN (
+                         'LIEFERBEGINN',      -- processd  UTILMD Anmeldung
+                         'LIEFERENDE',        -- processd  UTILMD Abmeldung
+                         'ABLESUNG_BEGINN',   -- edmd      GPKE Beginnablesung
+                         'ABLESUNG_ENDE',     -- edmd      GPKE Schlussablesung
+                         'ABRECHNUNGSKONTO'   -- accountingd billing account
+                     )),
+    -- The component the task belongs to; NULL for contract-level tasks.
+    komp_id          UUID        REFERENCES vertragskomponenten(id) ON DELETE CASCADE,
+    -- Everything the worker needs to perform the call, captured at enqueue time
+    -- so a retry re-sends byte-identical content and cannot pick up a later,
+    -- unrelated state.
+    payload          JSONB       NOT NULL,
+    -- Exactly-once enqueue. A repeatable action varies the key by what makes it
+    -- distinct ('PRODUKTZUORDNUNG:{komp}:{wirksamkeit}:{code}'); a one-shot one
+    -- does not ('LIEFERBEGINN:{komp}'), so an idempotent re-POST of the same
+    -- erp_contract_id cannot enqueue a second UTILMD.
+    dedupe_key       TEXT        NOT NULL,
+    attempts         INTEGER     NOT NULL DEFAULT 0,
+    next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    completed_at     TIMESTAMPTZ,
+    dead_lettered_at TIMESTAMPTZ,
+    last_error       TEXT,
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, dedupe_key)
+);
+
+COMMENT ON TABLE outbound_tasks IS
+    'Durable queue for every outbound call vertragd owes processd / edmd / '
+    'tarifbd / accountingd. Written in the originating transaction and drained '
+    'by one worker with exponential backoff and a dead-letter.';
+
+CREATE INDEX outbound_pending ON outbound_tasks (next_attempt_at)
+    WHERE completed_at IS NULL AND dead_lettered_at IS NULL;
+CREATE INDEX outbound_dead ON outbound_tasks (tenant, dead_lettered_at)
+    WHERE dead_lettered_at IS NOT NULL;
 
 -- ── CloudEvent inbox (idempotent) ─────────────────────────────────────────────
 
@@ -274,6 +437,8 @@ CREATE TABLE received_events (
     payload     JSONB       NOT NULL,
     received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX received_events_age ON received_events (received_at);
 
 -- ── GDPR Art. 17 anonymization log (INSERT-only) ──────────────────────────────
 
@@ -314,7 +479,7 @@ CREATE TABLE preisgarantie_override_log (
 );
 
 COMMENT ON TABLE preisgarantie_override_log IS
-    'Audit trail for §41 EnWG Preisgarantie bypass (override_preisgarantie=true). '
+    'Audit trail for a Preisgarantie bypass (override_preisgarantie=true). '
     'Every override must be justifiable. INSERT-only.';
 
 CREATE INDEX pg_override_vertrag    ON preisgarantie_override_log (vertrag_id);

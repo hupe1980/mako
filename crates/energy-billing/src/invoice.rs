@@ -325,15 +325,17 @@ impl Invoice {
     ///
     /// ## Rechnungsdatum
     ///
-    /// Set to `period_to` (last day of the billing period). The library is pure
-    /// and has no concept of "today". Callers that need a different issue date
-    /// should set `rechnungsdatum` on the returned BO.
+    /// [`BillingContext::issue_date`] when the caller set one, else `period_to`.
+    /// The library is pure and has no concept of "today"; a caller that has a
+    /// clock supplies the real issue date there rather than patching the
+    /// returned BO, because the Fälligkeit below is derived from it.
     ///
     /// ## Fälligkeitsdatum
     ///
-    /// `period_to + 14 days` (§40c EnWG: payment due at the earliest two weeks
-    /// after receipt of the payment request). Override on the returned BO for
-    /// contract-specific payment terms.
+    /// Issue date **+ 14 days** (§ 40c Abs. 1 EnWG: due at the earliest two
+    /// weeks after the payment request reaches the customer). Counting from the
+    /// period end instead made every catch-up invoice and every late
+    /// Schlussrechnung arrive already overdue.
     ///
     /// ## Where mako-specific facts live
     ///
@@ -450,7 +452,7 @@ impl Invoice {
             })
             .collect();
 
-        let faelligkeitsdatum = ctx.period_to() + time::Duration::days(14);
+        let faelligkeitsdatum = ctx.faelligkeitsdatum();
 
         // Collect ZusatzAttribute from info positions tagged "gasqualitaet"
         let mut zusatz_attribute: Vec<bo::ZusatzAttribut> = self
@@ -515,6 +517,21 @@ impl Invoice {
         // Audit trail: billing run ID for ERP reconciliation and duplicate detection.
         if let Some(run_id) = &self.billing_run_id {
             zusatz_attribute.push(zusatz_attribut("billingRunId", serde_json::json!(run_id)));
+        }
+
+        // § 40c Abs. 3 EnWG — a credit balance carries a deadline and a rule
+        // about how it may be discharged. Downstream (ledger, payout run,
+        // customer document) can only honour it if the document says so.
+        if let Some(g) = self.guthabenerstattung() {
+            zusatz_attribute.push(zusatz_attribut(
+                "guthabenerstattung",
+                serde_json::json!({
+                    "betragEur": g.betrag_eur.to_string(),
+                    "spaetestens": g.spaetestens.to_string(),
+                    "verrechnungZulaessig": g.verrechnung_zulaessig,
+                    "rechtlicheGrundlage": g.rechtsgrundlage,
+                }),
+            ));
         }
 
         // Customer category for downstream ERP routing and regulatory rule selection.
@@ -636,7 +653,7 @@ impl Invoice {
             // BO4E marks a Stornorechnung with `istStorno`, not a Rechnungstyp.
             ist_storno: ctx.invoice_type.is_reversal().then_some(true),
             original_rechnungsnummer: ctx.invoice_type.original_invoice_id().map(str::to_owned),
-            rechnungsdatum: Some(ctx.period_to()), // deterministic: no now()
+            rechnungsdatum: Some(ctx.ausstellungsdatum()),
             faelligkeitsdatum: Some(faelligkeitsdatum),
             // The delivery point as a typed Marktlokation. `_id` always carries
             // the raw string; `marktlokationsId` only when it passes the BDEW
@@ -853,6 +870,51 @@ impl Invoice {
         self.warnings
             .iter()
             .any(|w| w.severity >= WarningSeverity::Warning)
+    }
+}
+
+/// What has to happen to a credit balance, and by when (§ 40c Abs. 3 EnWG).
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct Guthabenerstattung {
+    /// The amount owed back to the customer, positive.
+    pub betrag_eur: Decimal,
+    /// The last day it may be paid out.
+    pub spaetestens: time::Date,
+    /// Whether offsetting it against the next Abschlag discharges the
+    /// obligation. A Schlussrechnung has no next Abschlag, so it does not.
+    pub verrechnung_zulaessig: bool,
+    pub rechtsgrundlage: &'static str,
+}
+
+impl Invoice {
+    /// The § 40c Abs. 3 EnWG obligation this invoice creates, if any.
+    ///
+    /// A settling invoice whose advances exceeded the consumption owes the
+    /// customer the difference. The statute does not leave the timing open:
+    /// the credit is offset **in full** against the next Abschlag or paid out
+    /// **within two weeks** — and a credit from an Abschlussrechnung must be
+    /// paid out within two weeks regardless, because there is no next Abschlag
+    /// to offset it against.
+    ///
+    /// Stating it on the document is what lets the ledger and the payout run
+    /// act on it; computing the balance and saying nothing about it left the
+    /// obligation to whoever happened to read the sign of `zahlbetrag_eur`.
+    #[must_use]
+    pub fn guthabenerstattung(&self) -> Option<Guthabenerstattung> {
+        if self.zahlbetrag_eur >= Decimal::ZERO {
+            return None;
+        }
+        let ist_schlussrechnung = self.context.invoice_type == crate::context::InvoiceType::Final;
+        Some(Guthabenerstattung {
+            betrag_eur: -self.zahlbetrag_eur,
+            spaetestens: self.context.faelligkeitsdatum(),
+            verrechnung_zulaessig: !ist_schlussrechnung,
+            rechtsgrundlage: if ist_schlussrechnung {
+                "§ 40c Abs. 3 Satz 2 EnWG"
+            } else {
+                "§ 40c Abs. 3 Satz 1 EnWG"
+            },
+        })
     }
 }
 
@@ -1668,6 +1730,69 @@ mod rechnung_json_tests {
             .map(|s| s.tax_amount_eur)
             .sum();
         assert_eq!(sum, invoice.mwst_eur);
+    }
+}
+
+#[cfg(test)]
+mod guthaben_tests {
+    use super::*;
+    use crate::context::{BillingPeriod, InvoiceType};
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    fn invoice(zahlbetrag: Decimal, typ: InvoiceType) -> Invoice {
+        let context = BillingContext {
+            period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 12 - 31))
+                .expect("period"),
+            issue_date: Some(date!(2027 - 01 - 15)),
+            invoice_type: typ,
+            ..Default::default()
+        };
+        Invoice {
+            context,
+            positions: Vec::new(),
+            netto_eur: Decimal::ZERO,
+            mwst_eur: Decimal::ZERO,
+            brutto_eur: Decimal::ZERO,
+            abschlag_total_eur: Decimal::ZERO,
+            abschlag_ust_eur: Decimal::ZERO,
+            zahlbetrag_eur: zahlbetrag,
+            billing_run_id: None,
+            warnings: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn an_invoice_the_customer_owes_creates_no_refund_obligation() {
+        assert!(
+            invoice(dec!(240), InvoiceType::Final)
+                .guthabenerstattung()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_credit_on_an_ordinary_settlement_may_be_offset_or_paid_out() {
+        // § 40c Abs. 3 Satz 1: offset in full against the next Abschlag, or
+        // paid out within two weeks.
+        let g = invoice(dec!(-180.50), InvoiceType::Initial)
+            .guthabenerstattung()
+            .expect("a negative balance is a credit");
+        assert_eq!(g.betrag_eur, dec!(180.50), "reported positive, as owed");
+        assert!(g.verrechnung_zulaessig);
+        assert_eq!(g.spaetestens, date!(2027 - 01 - 29));
+        assert_eq!(g.rechtsgrundlage, "§ 40c Abs. 3 Satz 1 EnWG");
+    }
+
+    #[test]
+    fn a_credit_on_a_schlussrechnung_has_to_be_paid_out() {
+        // Satz 2: there is no next Abschlag to offset it against, so offsetting
+        // is not an option the supplier has.
+        let g = invoice(dec!(-90), InvoiceType::Final)
+            .guthabenerstattung()
+            .expect("credit");
+        assert!(!g.verrechnung_zulaessig);
+        assert_eq!(g.rechtsgrundlage, "§ 40c Abs. 3 Satz 2 EnWG");
     }
 }
 

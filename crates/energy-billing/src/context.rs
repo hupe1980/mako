@@ -707,6 +707,21 @@ pub struct BillingContext {
     /// Sourced from `billingd.toml [rates]` — never hardcoded in the library.
     pub regulatory_rates: RegulatoryRates,
 
+    /// The day the invoice is issued — the day it reaches the customer.
+    ///
+    /// `None` keeps the library clock-free and falls back to the period end.
+    /// A caller that has a clock should set it, because two statutory facts
+    /// hang off the issue date and neither is measurable from the period:
+    ///
+    /// - **§ 40c Abs. 1 EnWG** makes the amount due at the earliest **two weeks
+    ///   after the payment request reaches the customer**. Counting from the
+    ///   period end instead meant a catch-up run or a late Schlussrechnung
+    ///   issued an invoice that was *already overdue on arrival*, which the
+    ///   dunning downstream then acted on.
+    /// - § 14 Abs. 4 Nr. 3 UStG wants the actual Ausstellungsdatum.
+    #[serde(default)]
+    pub issue_date: Option<time::Date>,
+
     /// Optional contract reference (for LF internal use / ERP routing).
     #[serde(default)]
     pub contract_id: Option<String>,
@@ -848,6 +863,26 @@ impl BillingContext {
         self.period.to()
     }
 
+    /// The day the invoice is issued: [`Self::issue_date`], else the period end.
+    #[must_use]
+    pub fn ausstellungsdatum(&self) -> time::Date {
+        match self.issue_date {
+            Some(d) => d,
+            None => self.period.to(),
+        }
+    }
+
+    /// The day payment falls due — two weeks after issue.
+    ///
+    /// § 40c Abs. 1 EnWG: due at the earliest two weeks after the payment
+    /// request reaches the customer. Measured from the **issue** date, so an
+    /// invoice for an old period does not arrive already overdue.
+    #[must_use]
+    pub fn faelligkeitsdatum(&self) -> time::Date {
+        self.ausstellungsdatum()
+            .saturating_add(time::Duration::days(14))
+    }
+
     /// Number of calendar days in the billing period.
     ///
     /// Used for Grundpreis (daily rate × days) and pro-rata calculations.
@@ -964,6 +999,44 @@ impl BillingContext {
             .unwrap_or(self.period_to());
         let active = ((effective_to - effective_from).whole_days() + 1).max(0) as u32;
         (active.min(total), total)
+    }
+}
+
+#[cfg(test)]
+mod faelligkeit_tests {
+    use super::*;
+    use time::macros::date;
+
+    fn ctx(period_to: time::Date, issue: Option<time::Date>) -> BillingContext {
+        BillingContext {
+            period: BillingPeriod::new(date!(2026 - 01 - 01), period_to).expect("period"),
+            issue_date: issue,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn without_a_clock_the_period_end_stands_in_for_the_issue_date() {
+        // The library is pure; a caller with no clock still gets a document.
+        let c = ctx(date!(2026 - 01 - 31), None);
+        assert_eq!(c.ausstellungsdatum(), date!(2026 - 01 - 31));
+        assert_eq!(c.faelligkeitsdatum(), date!(2026 - 02 - 14));
+    }
+
+    #[test]
+    fn the_due_date_runs_from_the_issue_date_not_the_period_end() {
+        // § 40c Abs. 1 EnWG measures the two weeks from when the payment
+        // request reaches the customer. A catch-up run billing an old period
+        // used to issue an invoice whose due date had already passed — the
+        // customer received a document that was overdue on arrival, and the
+        // dunning downstream acted on it.
+        let c = ctx(date!(2026 - 01 - 31), Some(date!(2026 - 06 - 10)));
+        assert_eq!(c.ausstellungsdatum(), date!(2026 - 06 - 10));
+        assert_eq!(c.faelligkeitsdatum(), date!(2026 - 06 - 24));
+        assert!(
+            c.faelligkeitsdatum() > c.ausstellungsdatum(),
+            "an invoice is never due before it is issued"
+        );
     }
 }
 

@@ -7,9 +7,8 @@
 //! | `list_products` | List products for an LF MP-ID |
 //! | `get_product` | Get a single product with full Tarifpreisblatt JSONB |
 //! | `get_product_history` | Full version history for a product (includes energiemix) |
-//! | `get_customer_product` | Look up the active product for a MaLo |
+//! | `resolve_product` | The version of a product code in force on a given day |
 //! | `get_epex_price` | Get EPEX day-ahead 15-min MTU prices for a date |
-//! | `list_expiring_contracts` | Contracts ending within N days (churn prevention) |
 //! | `list_angebote` | List B2B quotations (Angebote) — filter by status |
 //! | `get_angebot` | Fetch a single Angebot with enriched positions and variants |
 //! | `get_angebot_summary` | Summarise an Angebot in plain text for sales staff |
@@ -17,14 +16,14 @@
 //! | `get_product_energiemix` | Get §42 EnWG Energiemix disclosure for a product |
 //! | `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
 //! | `explain_invoice_position` | Explain how a preistyp maps to a billing output + formula |
-//! | `get_comparison_feed` | Retrieve the §42d comparison portal feed (proxies the REST endpoint) |
+//! | `get_comparison_feed` | Retrieve the § 41c comparison portal feed (proxies the REST endpoint) |
 //!
 //! ## Prompts (3)
 //!
 //! | Prompt | Description |
 //! |---|---|
 //! | `configure-41a-tariff` | Step-by-step: configure a §41a EPEX dynamic tariff product |
-//! | `assign-product` | Step-by-step: assign a tariff product to a MaLo |
+//! | `assign-product` | Where a MaLo→product assignment is made (vertragd), and tarifbd's part in it |
 //! | `create-b2b-quotation` | Step-by-step: create a formal B2B Angebot for a C&I customer |
 
 use axum::{
@@ -75,6 +74,15 @@ pub struct GetProductParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct ResolveProductParams {
+    pub lf_mp_id: String,
+    pub product_code: String,
+    /// ISO date; defaults to today.
+    pub as_of: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
+#[allow(dead_code)]
 pub struct CustomerProductParams {
     pub malo_id: String,
     pub lf_mp_id: String,
@@ -212,36 +220,45 @@ impl TarifbdMcpHandler {
     }
 
     #[tool(
-        description = "Look up the currently active product assignment for a MaLo (delivery point). Returns product code, category, and supply period. Use this to verify a MaLo is billed under the correct tariff.",
+        description = "Resolve a product version: the definition of `product_code` that is in \
+                       force on `as_of` (default today). Which product a MaLo is billed on is a \
+                       contract fact and lives in vertragd — ask `vertragd/get_malo_produkt` for \
+                       that, then this for the prices.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn get_customer_product(
+    async fn resolve_product(
         &self,
-        Parameters(p): Parameters<CustomerProductParams>,
+        Parameters(p): Parameters<ResolveProductParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::get_customer_product;
-        match get_customer_product(
+        let as_of = match p.as_of.as_deref() {
+            Some(s) => Some(
+                time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
+                    .map_err(|_| McpError::invalid_params("as_of must be YYYY-MM-DD", None))?,
+            ),
+            None => None,
+        };
+        let row = crate::pg::fetch_product(
             &self.state.pool,
-            &p.malo_id,
             &p.lf_mp_id,
             &self.state.tenant,
-            None,
+            &p.product_code,
+            as_of,
         )
         .await
-        {
-            Ok(Some(assignment)) => ContentBlock::json(serde_json::to_value(assignment).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => ContentBlock::json(serde_json::json!({
-                "malo_id": p.malo_id,
-                "lf_mp_id": p.lf_mp_id,
-                "product": null,
-                "hint": "No active product assignment. Use PUT /api/v1/customer/{malo_id}/product to assign one.",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        ContentBlock::json(serde_json::json!({
+            "lf_mp_id": p.lf_mp_id,
+            "product_code": p.product_code,
+            "as_of": p.as_of,
+            "product": row,
+            "hinweis": if row.is_none() {
+                "Keine Version dieses Produkts ist an diesem Tag gültig —                  valid_from/valid_to prüfen."
+            } else {
+                "Beide Grenzen werden angewandt: ein zurückgezogenes Produkt bepreist                  die Vergangenheit weiter, aber keinen neuen Zeitraum."
+            },
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     #[tool(
@@ -286,32 +303,6 @@ impl TarifbdMcpHandler {
                 "mtus_available": 0,
                 "prices_ct_kwh": [],
                 "note": "No EPEX prices imported for this date. Use PUT /api/v1/epex-prices/{date} to import.",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    #[tool(
-        description = "List customer supply contracts (Liefervertrage) ending within N days. \
-Essential for churn prevention and proactive renewal campaigns. \
-Returns malo_id, product_code, assigned_from, assigned_to for each expiring assignment.",
-        annotations(read_only_hint = true, open_world_hint = false)
-    )]
-    async fn list_expiring_contracts(
-        &self,
-        Parameters(p): Parameters<ExpiringContractsParams>,
-    ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_expiring_assignments;
-        let days = p.days_ahead.unwrap_or(60);
-        match list_expiring_assignments(&self.state.pool, &p.lf_mp_id, days).await {
-            Ok(rows) => ContentBlock::json(serde_json::json!({
-                "lf_mp_id": p.lf_mp_id,
-                "days_ahead": days,
-                "expiring_count": rows.len(),
-                "contracts": rows,
-                "note": "assigned_to = Liefervertragsende. Null = open-ended supply. Renew via PUT /api/v1/customer/{malo_id}/product.",
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
@@ -687,7 +678,7 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
     }
 
     #[tool(
-        description = "Retrieve the §42d EnWG comparison portal feed for a given LF. \
+        description = "Retrieve the § 41c EnWG comparison portal feed for a given LF. \
                        Returns all currently valid PUBLISHED tariffs with estimated annual supply costs, \
                        price points (Grundpreis, Arbeitspreis HT/NT, Leistungspreis), Energiemix, \
                        Oekolabel certifications, and full BO4E Tarifpreisblatt payloads. \
@@ -832,9 +823,9 @@ impl TarifbdMcpHandler {
                  2. Import EPEX D-1 prices daily (cron at 13:00 CET after EPEX publication):\n\
                     PUT /api/v1/epex-prices/YYYY-MM-DD\n\
                     { \"prices\": [ct_h0, ct_h1, ..., ct_h23] }  -- 24 values\n\n\
-                 3. Assign to iMSys-eligible MaLos:\n\
-                    PUT /api/v1/customer/{malo_id}/product\n\
-                    { \"product_code\": \"STROM-EPEX-01\", \"assigned_from\": \"YYYY-MM-DD\" }\n\n\
+                 3. Put iMSys-eligible MaLos on it via vertragd:\n\
+                    POST vertragd /api/v1/vertraege/{id}/tarifwechsel\n\
+                    { \"komp_id\": \"…\", \"new_product_code\": \"STROM-EPEX-01\", \"wirksamkeit\": \"YYYY-MM-DD\" }\n\n\
                  4. billingd auto-detects dynamic_epex=true:\n\
                     - Fetches 15-min Lastgang from edmd\n\
                     - Joins each 15-min interval against the EPEX price for that MTU\n\
@@ -846,23 +837,24 @@ impl TarifbdMcpHandler {
 
     #[prompt(
         name = "assign-product",
-        description = "Step-by-step: assign a tariff product to a MaLo (delivery point)"
+        description = "Step-by-step: put a delivery point on a tariff product"
     )]
     async fn assign_product_prompt(&self) -> Vec<PromptMessage> {
         vec![
             PromptMessage::new_text(Role::User, "How do I assign a tariff product to a MaLo?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "To assign or change the tariff product for a delivery point:\n\n\
-                 PUT /api/v1/customer/{malo_id}/product\n\
-                 {\n\
-                   \"product_code\": \"STROM-SLP-01\",  -- product from list_products\n\
-                   \"assigned_from\": \"2026-01-01\",    -- effective date\n\
-                   \"assigned_to\":   null               -- null = open-ended\n\
-                 }\n\n\
-                 This closes any previous open-ended assignment at assigned_from.\n\
-                 billingd uses the product valid at period_from for each billing run.\n\n\
-                 Verify with: get_customer_product { malo_id, lf_mp_id }",
+                "Not here. Which product a MaLo is on is a contract fact — agreeing it is a \
+                 Tarifwechsel under § 41 Abs. 5 EnWG — so it lives in vertragd:\n\n\
+                 POST vertragd /api/v1/vertraege/{vertrag_id}/tarifwechsel\n\
+                 { \"komp_id\": \"…\", \"new_product_code\": \"STROM-SLP-01\",\n\
+                   \"wirksamkeit\": \"2026-01-01\" }\n\n\
+                 vertragd enforces the Preisgarantie and the § 41 Abs. 5 notice period, and \
+                 writes a valid-time slice. A future wirksamkeit is simply a slice that \
+                 starts then.\n\n\
+                 tarifbd's part is the catalogue: `list_products` to pick a code, \
+                 `resolve_product` to see what it costs on a given day.\n\
+                 Verify the assignment with vertragd `get_malo_produkt { malo_id }`.",
             ),
         ]
     }
@@ -946,7 +938,7 @@ impl ServerHandler for TarifbdMcpHandler {
              B2B Angebote (formal quotations) for C&I/RLM customers: lifecycle ANGELEGT→VERSANDT→ANGENOMMEN/ABGELEHNT/ABGELAUFEN.\n\n\
              Key tools:\n\
              - list_products: survey the tariff catalog\n\
-             - get_customer_product: check which tariff a MaLo is currently billed under\n\
+             - resolve_product: what a product code costs on a given day\n\
              - get_epex_price: verify D-1 EPEX prices are imported\n\
              - list_angebote: see open B2B quotations\n\
              - get_angebot_summary: human-readable quotation summary for sales review\n\n\

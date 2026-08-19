@@ -148,7 +148,10 @@ impl Daemon for Billingd {
             .context("billingd.cedar must parse at startup")?,
         );
 
-        let tarifbd = Arc::new(clients::TarifbdClient::new(&cfg.tarifbd_url));
+        let tarifbd = Arc::new(clients::TarifbdClient::new(
+            &cfg.tarifbd_url,
+            cfg.tarifbd_api_key.clone(),
+        ));
         let edmd = Arc::new(clients::EdmdClient::new(
             &cfg.edmd_url,
             cfg.edmd_api_key.clone(),
@@ -162,6 +165,7 @@ impl Daemon for Billingd {
             cfg.vertragd_url
                 .as_deref()
                 .unwrap_or("http://localhost:9780"),
+            cfg.vertragd_api_key.clone(),
         ));
         let outputd = Arc::new(clients::OutputdClient::new(
             cfg.outputd_url

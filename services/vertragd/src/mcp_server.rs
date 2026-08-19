@@ -40,6 +40,15 @@ pub struct ListParams {
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
+pub struct MaloProduktParams {
+    pub malo_id: String,
+    /// Period start (YYYY-MM-DD). With `to`, returns the slices covering it.
+    pub from: Option<String>,
+    /// Period end (YYYY-MM-DD), inclusive.
+    pub to: Option<String>,
+}
+
+#[derive(Debug, Deserialize, JsonSchema)]
 pub struct KundeIdParams {
     pub kunden_id: String,
 }
@@ -158,10 +167,10 @@ impl VertragdMcpHandler {
 
     /// List Versorgungsverträge expiring within N days (vertragsende or preisgarantie_bis).
     ///
-    /// Regulatory basis: §13 GasGVV / §14 StromGVV — 30-day advance notice for renewal.
+    /// Regulatory basis: § 309 Nr. 9 lit. b BGB — 30-day advance notice for renewal.
     /// §41 EnWG — customer notification before price-lock expiry.
     #[tool(
-        description = "List contracts expiring within N days (vertragsende or preisgarantie_bis). Default: 30 days. Use for proactive renewal outreach (§13 GasGVV / §41 EnWG).",
+        description = "List contracts expiring within N days (vertragsende or preisgarantie_bis). Default: 30 days. Use for proactive renewal outreach.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_expiring_contracts(
@@ -174,12 +183,12 @@ impl VertragdMcpHandler {
             .and_then(|v| v.as_i64())
             .unwrap_or(30)
             .clamp(1, 365);
-        match find_expiring_vertraege(&self.state.pool, &self.state.tenant, days).await {
+        match find_expiring_vertraege(&self.state.pool, &self.state.tenant, days, false).await {
             Ok(rows) => ContentBlock::json(serde_json::json!({
                 "count": rows.len(),
                 "look_ahead_days": days,
                 "vertraege": rows,
-                "hint": "Check auto_renewal field — contracts with auto_renewal=true should receive 30-day advance notice (§13 GasGVV / §14 StromGVV).",
+                "hint": "Check auto_renewal field — contracts with auto_renewal=true should receive 30-day advance notice (§ 309 Nr. 9 lit. b BGB).",
             }))
             .map(|b| CallToolResult::success(vec![b]))
             .map_err(|e| McpError::internal_error(e.message, None)),
@@ -187,38 +196,98 @@ impl VertragdMcpHandler {
         }
     }
 
-    /// List all upcoming Tarifwechsel (planned but not yet applied).
-    ///
-    /// Includes §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) 6-week notification status.
+    /// List scheduled Tarifwechsel whose price-change notice is still owed.
     #[tool(
-        description = "List all Vertragskomponenten with a pending future Tarifwechsel. Shows whether the §5 Abs. 2 StromGVV/GasGVV (6 Wochen) / §41 Abs. 5 EnWG (1 Monat) 6-week advance notification was sent.",
+        description = "List product slices that take effect in the future and whose § 41 Abs. 5 \
+                       EnWG price-change notice has not gone out yet. The required lead depends \
+                       on the contract: 6 weeks in the Grundversorgung (§ 5 Abs. 2 StromGVV / \
+                       GasGVV), 1 month for a Haushaltskunde in a Sondervertrag, 2 weeks \
+                       otherwise (§ 41 Abs. 5 Satz 2 EnWG). Each row states which applied and \
+                       whether the lead is actually met.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_pending_tarifwechsel(
         &self,
         Parameters(_): Parameters<serde_json::Value>,
     ) -> Result<CallToolResult, McpError> {
+        use crate::domain::{Vertragsart, preisanpassungsregime};
         let today = time::OffsetDateTime::now_utc().date();
-        // Fetch all rows with pending_wirksamkeit in the future.
-        let rows = sqlx::query_as::<_, crate::pg::PendingTarifwechselRow>(
-            r"SELECT k.id AS komp_id, k.vertrag_id, k.malo_id, k.lf_mp_id,
-                     k.product_code AS current_product_code, k.pending_product_code,
-                     k.pending_wirksamkeit, k.preisanpassung_notif_sent, k.tenant
-              FROM vertragskomponenten k
-              WHERE k.tenant = $1
-                AND k.pending_product_code IS NOT NULL
-                AND (k.pending_wirksamkeit IS NULL OR k.pending_wirksamkeit >= $2)
-              ORDER BY k.pending_wirksamkeit ASC",
-        )
-        .bind(&self.state.tenant)
-        .bind(today)
-        .fetch_all(&self.state.pool)
-        .await
-        .unwrap_or_default();
+        let rows = crate::pg::offene_preisanpassungen(&self.state.pool, &self.state.tenant, today)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let pending: Vec<serde_json::Value> = rows
+            .iter()
+            .map(|r| {
+                let regime =
+                    preisanpassungsregime(Vertragsart::from_db(&r.vertragsart), r.haushaltskunde);
+                let vorlauf = (r.wirksam_ab - today).whole_days();
+                serde_json::json!({
+                    "komp_id": r.komp_id,
+                    "vertrag_id": r.vertrag_id,
+                    "malo_id": r.malo_id,
+                    "sparte": r.sparte,
+                    "bisheriges_produkt": r.bisheriges_produkt,
+                    "neues_produkt": r.neues_produkt,
+                    "wirksam_ab": r.wirksam_ab.to_string(),
+                    "vorlauf_tage": vorlauf,
+                    "erforderlicher_vorlauf_tage": regime.vorlauf_tage,
+                    "frist_gewahrt": vorlauf >= regime.vorlauf_tage,
+                    "rechtsgrundlage": regime.rechtsgrundlage,
+                })
+            })
+            .collect();
         ContentBlock::json(serde_json::json!({
-            "count": rows.len(),
-            "pending": rows,
-            "regulatory_note": "Price-change notice: §5 Abs. 2 StromGVV/GasGVV requires six weeks (Grundversorgung); §41 Abs. 5 EnWG requires one month for Haushaltskunden in Sonderverträgen. vertragd notifies 42 days ahead, covering both. preisanpassung_notif_sent=false = notification still pending.",
+            "count": pending.len(),
+            "pending": pending,
+            "hinweis": "frist_gewahrt=false ist eine Fristverletzung, keine Warnung: die \
+                        Anzeige ist dann bereits zu spät.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+    }
+
+    /// Which product a MaLo is billed on, over time.
+    #[tool(
+        description = "Which product a Marktlokation is billed on. With `from`/`to` returns the \
+                       valid-time slices covering that period, in order — a Tarifwechsel inside \
+                       the period splits it, and each slice is billed under its own product. \
+                       Without them, the product in force today. This mapping is a contract \
+                       fact (§ 41 Abs. 5 EnWG); ask `tarifbd/resolve_product` for what the code \
+                       costs.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_malo_produkt(
+        &self,
+        Parameters(p): Parameters<MaloProduktParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let parse = |s: &str| {
+            time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
+                .map_err(|_| McpError::invalid_params("dates must be YYYY-MM-DD", None))
+        };
+        let heute = time::OffsetDateTime::now_utc().date();
+        let (von, bis) = match (p.from.as_deref(), p.to.as_deref()) {
+            (Some(f), Some(t)) => (parse(f)?, parse(t)?),
+            _ => (heute, heute),
+        };
+        let slices =
+            crate::pg::malo_slices(&self.state.pool, &self.state.tenant, &p.malo_id, von, bis)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        ContentBlock::json(serde_json::json!({
+            "malo_id": p.malo_id,
+            "von": von.to_string(),
+            "bis": bis.to_string(),
+            "slice_count": slices.len(),
+            "slices": slices,
+            "hinweis": if slices.len() > 1 {
+                "Mehr als eine Scheibe: der Zeitraum enthält einen Tarifwechsel und wird \
+                 abschnittsweise abgerechnet."
+            } else if slices.is_empty() {
+                "Keine Produktzuordnung — die Belieferung hat noch nicht begonnen oder \
+                 ist beendet."
+            } else {
+                "Ein Produkt über den gesamten Zeitraum."
+            },
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -311,46 +380,68 @@ impl VertragdMcpHandler {
         }
     }
 
-    /// Compute earliest valid Kündigung date for a contract.
-    ///
-    /// Returns the minimum `lieferende` that respects the notice period (§14 StromGVV / §13 GasGVV).
+    /// The earliest lawful Kündigungstermin for a contract, per reason.
     #[tool(
-        description = "Compute the earliest valid Kündigung date for a contract given today's date and the contract's kuendigungsfrist_monate. Returns regulatory minimum lieferende (§14 StromGVV / §13 GasGVV).",
+        description = "Compute the earliest lawful Kündigungstermin for a contract, for every \
+                       termination reason. The period comes from the reason and the Vertragsart: \
+                       § 20 Abs. 1 StromGVV/GasGVV (2 Wochen) in the Grundversorgung, § 41b Abs. 5 \
+                       EnWG (6 Wochen) on a move, § 41 Abs. 5 Satz 4 EnWG (fristlos) after a price \
+                       change, otherwise the contractual period capped for consumers by § 309 Nr. 9 \
+                       lit. c BGB. Each answer names the rule it applied.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn compute_kuendigungsfrist(
         &self,
         Parameters(p): Parameters<VertragIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::earliest_kuendigungsdatum;
+        use crate::domain::{Kuendigungsgrund, Vertragsart, kuendigungsfrist};
         let id = uuid::Uuid::parse_str(&p.id)
             .map_err(|_| McpError::invalid_params("invalid UUID", None))?;
-        match crate::pg::fetch_vertrag(&self.state.pool, id, &self.state.tenant).await {
-            Ok(Some(v)) => {
-                let today = time::OffsetDateTime::now_utc().date();
-                let earliest = earliest_kuendigungsdatum(today, v.kuendigungsfrist_monate);
-                ContentBlock::json(serde_json::json!({
-                    "vertrag_id": id,
-                    "today": today.to_string(),
-                    "kuendigungsfrist_monate": v.kuendigungsfrist_monate,
-                    "earliest_lieferende": earliest.to_string(),
-                    "preisgarantie_bis": v.preisgarantie_bis.map(|d| d.to_string()),
-                    "regulatory_basis": "§14 StromGVV / §13 GasGVV",
-                    "hint": if v.preisgarantie_bis.is_some_and(|g| g >= earliest) {
-                        "Note: Preisgarantie may restrict Tarifwechsel but not Kündigung itself."
-                    } else {
-                        "No active Preisgarantie restriction."
-                    },
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Ok(None) => Err(McpError::resource_not_found(
-                format!("Vertrag {id} not found"),
+        let vertrag = crate::pg::fetch_vertrag(&self.state.pool, id, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            .ok_or_else(|| McpError::resource_not_found(format!("Vertrag {id} not found"), None))?;
+        let kunde = crate::pg::fetch_kunde(&self.state.pool, vertrag.kunden_id, &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let haushaltskunde = kunde.is_none_or(|k| k.haushaltskunde);
+        let today = time::OffsetDateTime::now_utc().date();
+        let art = Vertragsart::from_db(&vertrag.vertragsart);
+        let fristen: serde_json::Map<String, serde_json::Value> = [
+            Kuendigungsgrund::Ordentlich,
+            Kuendigungsgrund::Preisanpassung,
+            Kuendigungsgrund::Umzug,
+            Kuendigungsgrund::Lieferantenwechsel,
+        ]
+        .into_iter()
+        .map(|grund| {
+            let f = kuendigungsfrist(
+                today,
+                art,
+                haushaltskunde,
+                grund,
+                vertrag.kuendigungsfrist_monate,
                 None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+            );
+            (
+                grund.as_db().to_owned(),
+                serde_json::to_value(f).unwrap_or(serde_json::Value::Null),
+            )
+        })
+        .collect();
+        ContentBlock::json(serde_json::json!({
+            "vertrag_id": id,
+            "vertrags_nr": vertrag.vertrags_nr,
+            "vertragsart": vertrag.vertragsart,
+            "haushaltskunde": haushaltskunde,
+            "today": today.to_string(),
+            "kuendigungsfrist_monate": vertrag.kuendigungsfrist_monate,
+            "vertragsende": vertrag.vertragsende.map(|d| d.to_string()),
+            "fristen": fristen,
+            "hinweis": "Eine Preisgarantie sperrt den Tarifwechsel, nicht die Kündigung.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
     }
 
     /// Get a Kunde profile by UUID (with active MaLo IDs and identities).
@@ -462,7 +553,6 @@ impl VertragdMcpHandler {
         &self,
         Parameters(p): Parameters<CheckPreisgarantieParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::check_preisgarantie_for_mcp;
         let vertrag_id = uuid::Uuid::parse_str(&p.vertrag_id)
             .map_err(|_| McpError::invalid_params("invalid vertrag_id UUID", None))?;
         let wirksamkeit = time::Date::parse(
@@ -471,15 +561,17 @@ impl VertragdMcpHandler {
         )
         .map_err(|_| McpError::invalid_params("wirksamkeit must be YYYY-MM-DD", None))?;
 
-        match check_preisgarantie_for_mcp(
-            &self.state.pool,
-            vertrag_id,
-            &self.state.tenant,
-            wirksamkeit,
-        )
-        .await
+        let garantie_bis: Option<time::Date> =
+            crate::pg::fetch_vertrag(&self.state.pool, vertrag_id, &self.state.tenant)
+                .await
+                .map_err(|e| McpError::internal_error(e.to_string(), None))?
+                .ok_or_else(|| {
+                    McpError::resource_not_found(format!("Vertrag {vertrag_id} not found"), None)
+                })?
+                .preisgarantie_bis;
+        let blocked = garantie_bis.is_some_and(|g| wirksamkeit <= g);
         {
-            Ok((blocked, garantie_bis)) => ContentBlock::json(serde_json::json!({
+            ContentBlock::json(serde_json::json!({
                 "vertrag_id": vertrag_id,
                 "wirksamkeit": p.wirksamkeit,
                 "status": if blocked { "BLOCKED" } else { "ALLOWED" },
@@ -492,8 +584,7 @@ impl VertragdMcpHandler {
                 },
             }))
             .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            .map_err(|e| McpError::internal_error(e.message, None))
         }
     }
 
@@ -530,7 +621,7 @@ impl VertragdMcpHandler {
 
     /// List contracts eligible for auto-renewal within N days.
     #[tool(
-        description = "List contracts with auto_renewal=true whose vertragsende falls within N days. These need a 30-day advance customer notification (§13 GasGVV / §14 StromGVV) before automatic renewal.",
+        description = "List contracts with auto_renewal=true whose vertragsende falls within N days. These need a 30-day advance customer notification (§ 309 Nr. 9 lit. b BGB) before automatic renewal.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_auto_renewal_due(
@@ -548,7 +639,7 @@ impl VertragdMcpHandler {
                 "count": rows.len(),
                 "look_ahead_days": days,
                 "contracts": rows,
-                "regulatory_note": "§13 GasGVV / §14 StromGVV: customer must receive 30-day advance notice before auto-renewal extends the contract.",
+                "regulatory_note": "§ 309 Nr. 9 lit. b BGB: customer must receive 30-day advance notice before auto-renewal extends the contract.",
                 "action_required": !rows.is_empty(),
             }))
             .map(|b| CallToolResult::success(vec![b]))
@@ -569,15 +660,69 @@ impl VertragdMcpHandler {
         &self,
         Parameters(p): Parameters<VertragIdParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::mako_trigger_status;
         let id = uuid::Uuid::parse_str(&p.id)
             .map_err(|_| McpError::invalid_params("invalid UUID", None))?;
-        match mako_trigger_status(&self.state.pool, id).await {
-            Ok(status) => ContentBlock::json(status)
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        let komps = crate::pg::list_komponenten(&self.state.pool, id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let mut by_status: std::collections::BTreeMap<&str, Vec<serde_json::Value>> =
+            std::collections::BTreeMap::new();
+        for k in &komps {
+            by_status
+                .entry(k.status.as_str())
+                .or_default()
+                .push(serde_json::json!({
+                    "komp_id": k.id,
+                    "sparte": k.sparte,
+                    "malo_id": k.malo_id,
+                    "mako_process_id": k.mako_process_id,
+                    "abgelehnt_erc": k.abgelehnt_erc,
+                    "abgelehnt_reason": k.abgelehnt_reason,
+                }));
         }
+        // A registration still sitting in the outbound queue has not reached
+        // processd at all — a different problem from one the NB has not
+        // answered, and the one an operator otherwise cannot see.
+        let offene_dispatches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM outbound_tasks t
+               JOIN vertragskomponenten k ON k.id = t.komp_id
+              WHERE k.vertrag_id = $1 AND t.kind IN ('LIEFERBEGINN','LIEFERENDE')
+                AND t.completed_at IS NULL AND t.dead_lettered_at IS NULL",
+        )
+        .bind(id)
+        .fetch_one(&self.state.pool)
+        .await
+        .unwrap_or(0);
+        let dead_dispatches: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM outbound_tasks t
+               JOIN vertragskomponenten k ON k.id = t.komp_id
+              WHERE k.vertrag_id = $1 AND t.dead_lettered_at IS NOT NULL",
+        )
+        .bind(id)
+        .fetch_one(&self.state.pool)
+        .await
+        .unwrap_or(0);
+        ContentBlock::json(serde_json::json!({
+            "vertrag_id": id,
+            "komponenten_count": komps.len(),
+            "abgeleiteter_vertragsstatus": crate::pg::derive_vertrag_status(&komps),
+            "by_status": by_status,
+            "offene_dispatches": offene_dispatches,
+            "dead_lettered_dispatches": dead_dispatches,
+            "all_confirmed": komps
+                .iter()
+                .all(|k| matches!(k.status.as_str(), "AKTIV" | "BESTAETIGT")),
+            "any_rejected": komps.iter().any(|k| k.status == "ABGELEHNT"),
+            "hinweis": if dead_dispatches > 0 {
+                "Aufgegebene Dispatches: GET /api/v1/outbound/dead und dort erneut einstellen."
+            } else if offene_dispatches > 0 {
+                "Die Anmeldung wartet noch in der Outbound-Queue; processd hat sie noch nicht gesehen."
+            } else {
+                "Alle Dispatches sind zugestellt; ein ANGEMELDET-Status wartet auf die Antwort des NB."
+            },
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
     }
 }
 
@@ -654,7 +799,7 @@ impl VertragdMcpHandler {
                  Use `get_kunde_gdpr_export` (via REST) to retrieve all PII fields for the record.\n\n\
                  **Step 3 — Check active contracts**\n\
                  Use `get_customer_portfolio` — active contracts must end before erasure.\n\
-                 If AKTIV contracts exist: coordinate Kündigung first (§14 StromGVV / §13 GasGVV notice).\n\n\
+                 If AKTIV contracts exist: coordinate Kündigung first (§ 20 Abs. 1 StromGVV / GasGVV notice).\n\n\
                  **Step 4 — Anonymize PII**\n\
                  `POST /api/v1/kunden/{id}/anonymize` with `requested_by = operator_sub`\n\
                  This pseudonymizes: geschaeftspartner, person, zahlungsinformation, umsatzsteuer_id, oidc_sub, email.\n\
@@ -730,9 +875,9 @@ impl ServerHandler for VertragdMcpHandler {
              - `find_stuck_workflows` — ANGEMELDET > 5WT (Strom) / 10WT (Gas) — §20 EnWG\n\
              - `get_customer_portfolio` — B2B MaLo/Sparte portfolio overview\n\
              - `get_zahlungsinformation` — SEPA/IBAN payment details for accountingd reconciliation\n\
-             - `list_auto_renewal_due` — auto-renewal contracts within N days (§13 GasGVV)\n\
+             - `list_auto_renewal_due` — auto-renewal contracts within N days (§ 309 Nr. 9 lit. b BGB)\n\
              - `list_alle_kunden` — all customers for CRM/ERP sync\n\
-             - `compute_kuendigungsfrist` — earliest valid Kündigung date (§14 StromGVV / §13 GasGVV)\n\n\
+             - `compute_kuendigungsfrist` — earliest valid Kündigung date (§ 20 Abs. 1 StromGVV / GasGVV)\n\n\
              ## Prompts (4)\n\
              - `o2c_review` — full O2C pipeline review + stuck/expiring detection\n\
              - `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge workflow\n\

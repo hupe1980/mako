@@ -43,7 +43,7 @@ graph LR
     tarifbd["tarifbd :9080"]
     STROM & GAS & WASSER & WAERME & EEG --> tarifbd
     SMART & SERV & BUNDLE & SHARING --> tarifbd
-    tarifbd -->|"GET customer/{malo_id}/product"| billingd["billingd :9280"]
+    tarifbd -->|"POST products/{lf}/resolve"| billingd["billingd :9280"]
     tarifbd -->|"GET epex-prices/{date}/quarter-hourly"| billingd
 ```
 
@@ -58,11 +58,10 @@ graph LR
 | `DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}` | **Soft-delete** — sets `valid_to = today`; product retained for billing history; excluded from comparison feed |
 | `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=&include_drafts=&include_expired=`) |
 | `GET` | `/api/v1/products/{lf_mp_id}/{product_code}/history` | Immutable version audit log (includes `energiemix` history for §42 audit trail) |
-| `GET/PUT` | `/api/v1/customer/{malo_id}/product` | Active product for a MaLo / Tarifwechsel (PUT validates product exists, is PUBLISHED, not expired, and `assigned_from >= product.valid_from`) |
-| `GET` | `/api/v1/customer/{malo_id}/product/history` | Full product-assignment history — auditors use this to verify Tarifwechsel Wirksamkeit |
+| `POST` | `/api/v1/products/{lf_mp_id}/resolve` | Product versions by code + date, batched — what `billingd` prices each leg of a period from |
 | `PUT/GET/DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}/energiemix` | §42 EnWG Energiemix sub-resource — does NOT archive product or trigger billing-period changes |
 | `GET` | `/api/v1/comparison-feed` | **Comparison portal feed** — ETag-cached, cursor-paginated tariff listing (PUBLISHED non-expired only); `jahreskosten_supply_*` for `verbrauch_kwh` |
-| `GET` | `/api/v1/comparison-feed/bo4e` | **BO4E Tarifinfo array** — §42d EnWG canonical form; direct import by Verivox / Check24 / BNetzA MTS |
+| `GET` | `/api/v1/comparison-feed/bo4e` | **BO4E Tarifinfo array** — § 41c EnWG canonical form; direct import by Verivox / Check24 / BNetzA MTS |
 | `PUT` | `/api/v1/epex-prices/{date}` | Import EPEX day-ahead prices (96/92/100 15-min MTUs, or 24 hourly; idempotent) |
 | `GET` | `/api/v1/epex-prices/{date}/quarter-hourly` | 15-min MTU points `{mtu_start, price_ct_kwh}` |
 | `GET` | `/api/v1/epex-prices/{year}/{month}/average` | Monthly average — used by `einsd` Direktvermarktung |
@@ -104,20 +103,34 @@ Content-Type: application/json
 
 ---
 
-## Assigning a product to a MaLo (Tarifwechsel)
+## What tarifbd is *not*
+
+**Which product a customer is on does not live here.** Agreeing it is a
+Tarifwechsel — a contract act under § 41 Abs. 5 EnWG, guarded by the contract's
+Preisgarantie — so the valid-time MaLo→product assignment lives in
+[`vertragd`](@/docs/services/vertragd.md), with the contract.
+
+`tarifbd` answers the other half — what a product **costs** on a given day:
 
 ```http
-PUT /api/v1/customer/51238696012/product
+POST /api/v1/products/{lf_mp_id}/resolve
 Content-Type: application/json
 
-{ "product_code": "STROM-H0-2026", "assigned_from": "2026-07-01" }
+{ "anfragen": [
+    { "product_code": "STROM-H0-2026", "as_of": "2026-03-01" },
+    { "product_code": "STROM-H0-2027", "as_of": "2026-03-15" } ] }
 ```
 
-The previous assignment is automatically closed (`assigned_to = 2026-07-01`).
-`GET /api/v1/customer/{malo_id}/product` returns the active product with the full
-`data` JSONB — `billingd` calls this at the start of every billing run.
+`billingd` bills a period as one leg per assignment slice, so it resolves every
+leg's product in **one** round trip. Asking per leg would be an N+1 on every
+invoice, and two calls could disagree if the catalogue changed between them. A
+code with no version valid on its date comes back as `null` **in place**, so the
+caller can name which leg is unpriceable rather than getting a shorter list than
+it asked for.
 
----
+Both validity bounds are applied, so a withdrawn product stops pricing new
+periods immediately and still prices the past — which is what a Schlussrechnung
+for a closed period needs.
 
 ## §41a EPEX Spot feed
 
@@ -149,17 +162,62 @@ monthly average used in `max(0, AW − EPEX)`.
 
 ---
 
-## Comparison portal feed
+## nEHS certificate prices (BEHG)
+
+The CO₂ component of every Gas and Wärme invoice is derived from what the
+supplier paid for its certificates (CO2KostAufG § 3 passes through the actual
+cost), so a decimal slip in this series mis-bills every gas customer at once and
+shows on no single invoice. § 10 BEHG fixes enough about the price to catch the
+mistake at import.
+
+| Phase | Period | Price | § 10 BEHG |
+|---|---|---|---|
+| **Einführungsphase** (`verkaufsphase`) | 2021–2025 | 25 / 30 / 30 / 45 / **55** EUR/t — checked exactly | Abs. 2 |
+| **Versteigerung** (`auktion`) | 2026 | clearing price inside the **55–65** EUR/t corridor | Abs. 1, Abs. 2 |
+| **Nachkauf** (`nachkauf`) | after the 2026 auctions | **68** EUR/t (Mehrmengenpreis) | Versteigerungsbedingungen |
+| `manual` | any | plausibility only (5–500 EUR/t) | — |
+
+68 EUR/t is the **Nachkauf** price for supplementary purchases once the
+auctioned volume no longer covers demand; the Verkaufsphase ended at 55 EUR/t in
+2025. From 2027 § 10 Abs. 2 fixes no figures of its own (it defers to the
+decision under § 24 Abs. 2 Nr. 2), so nothing is asserted about those years and
+any positive price is accepted.
+
+```bash
+PUT /api/v1/nehs-prices/2026-07-08   { "eur_per_t": "63.50", "source": "auktion" }
+
+# A decimal slip is refused with the rule named:
+PUT /api/v1/nehs-prices/2026-07-15   { "eur_per_t": "6.35", "source": "auktion" }
+# → 422 "der Zuschlagspreis 6.35 EUR/t liegt außerhalb des Preiskorridors
+#        55–65 EUR/t für 2026 (§ 10 Abs. 2 BEHG)"
+
+GET /api/v1/nehs-prices/latest?date=2026-08-01
+```
+
+The rules live in `src/behg.rs` as pure functions with a test per phase.
+
+---
+
+## § 41c EnWG comparison feed
+
+§ 41c EnWG obliges suppliers to let third parties operating **independent
+comparison tools** use offer-relevant information free of charge, **in open data
+formats**, for Haushaltskunden and Kleinstunternehmen with an expected annual
+consumption below 100 000 kWh. That obligation is why these two routes — and
+only these two — carry no token; every other route in the service is
+authenticated.
+
+
 
 `GET /api/v1/comparison-feed` returns a machine-readable tariff listing for **Verivox,
 Check24**, BNetzA Markttransparenzstelle, and similar integrators. The feed is also
-compliant with §42d EnWG (mandatory machine-readable tariff publication since 2024).
+compliant with § 41c EnWG (mandatory machine-readable tariff publication since 2024).
 
 Each entry includes a `tarifinfo` field — a pre-built **BO4E `Tarifinfo` Business
 Object** that portals can import directly without custom ETL.  For portals that require
 a pure BO4E array, use `GET /api/v1/comparison-feed/bo4e`.
 
-### BO4E Tarifinfo endpoint (§42d EnWG canonical form)
+### BO4E Tarifinfo endpoint (§ 41c EnWG canonical form)
 
 `GET /api/v1/comparison-feed/bo4e` returns the same products but wrapped entirely in
 standard BO4E `Tarifinfo` objects — the format Verivox, Check24, and the BNetzA
@@ -389,7 +447,7 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | Column | Type | Notes |
 |--------|------|-------|
 | `id` | UUID | Primary key |
-| `lf_mp_id` | TEXT | Operator BDEW-Codenummer |
+| `lf_mp_id` | TEXT | The **market identity** products are sold under. Not the tenant: the isolation key and the market identity are the same string in a single-mandant install and different in a shared one |
 | `product_code` | TEXT | Operator-assigned product identifier |
 | `category` | TEXT | 14 values: `STROM`/`GAS`/`WAERME`/`WASSER`/`SOLAR`/`EEG`/`EINSPEISUNG`/`WAERMEPUMPE`/`WALLBOX`/`HEMS`/`EMOBILITY`/`ENERGIEDIENSTLEISTUNG`/`BUNDLE`/`SHARING` |
 | `product_status` | TEXT | `PUBLISHED` (default) — visible to billingd and portals; `DRAFT` — staged, invisible until published |
@@ -398,16 +456,11 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | `register_count` | TEXT | `Eintarif` / `Zweitarif` / `Mehrtarif` |
 | `kundentyp` | TEXT | `Haushalt` / `Gewerbe` / `Waermepumpe` / `Ladesaeule` / `Einspeiser` / `HEMS` / `Gewerbe_RLM` |
 | `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed. Only this value is accepted — all others are rejected with 422 |
-| `valid_from` | DATE | Tariff validity start |
-| `valid_to` | DATE | Tariff validity end (soft-delete via `DELETE` sets this to today) |
+| `valid_from` | DATE | Tariff validity start. Staging a version with a later start end-dates the running one automatically; `products_no_overlap` (GiST) forbids two versions covering the same day |
+| `valid_to` | DATE | Tariff validity end, inclusive. `DELETE` is a withdrawal that sets it to today. Both bounds are applied on read, so a withdrawn product stops pricing new periods and still prices the past |
 | `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload (validated on PUT: `_typ`, `_version = v202607.0.0`, enum fields, 30-value `preistyp` whitelist) |
 | `energiemix` | JSONB | §42 EnWG `Energiemix` COM — CO₂ emissions, fuel mix, certification labels |
 | `oekolabel` | TEXT[] | Extracted from energiemix for GIN `@>` filter queries |
-
-### `customer_products`
-
-Temporal assignment: one row per `(malo_id, lf_mp_id, assigned_from)`.
-`assigned_to IS NULL` = currently active. Tarifwechsel closes the old row and inserts a new one.
 
 ### `epex_prices`
 
@@ -463,7 +516,7 @@ Content-Type: application/json
 | `get_product_energiemix` | §42 EnWG Energiemix disclosure (CO₂, fuel mix, certification) |
 | `validate_tariff_config` | Validate Tarifpreisblatt JSONB before PUT (same logic as REST) |
 | `explain_invoice_position` | How a `preistyp` maps to a billingd invoice output + formula |
-| `get_comparison_feed` | Retrieve the §42d comparison portal feed (proxies the REST endpoint) |
+| `get_comparison_feed` | Retrieve the § 41c comparison portal feed (proxies the REST endpoint) |
 
 **Prompts:**
 - `configure-41a-tariff` — Step-by-step: configure a §41a EPEX dynamic tariff product (iMSys requirement, §41a guard)

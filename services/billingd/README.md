@@ -278,11 +278,58 @@ months advances by that many months, so a January bill announces 28 February and
 a Q1 bill announces 30 June. Adding the day count instead would announce
 3 March for every January.
 
+## Two services answer half the question each
+
+Which product a MaLo is on is a **contract** fact — agreeing it is a
+Tarifwechsel under § 41 Abs. 5 EnWG — so `vertragd` owns it, as valid-time
+slices. What that product **costs** on a given day is a catalogue fact, so
+`tarifbd` owns it.
+
+```text
+vertragd  GET /api/v1/malo/{malo}/produkte?from=&to=   → the slices, in order
+tarifbd   POST /api/v1/products/{lf}/resolve            → one version per (code, date)
+```
+
+Both in one round trip each, however many legs the period has. Asking `tarifbd`
+per leg would be an N+1 on every invoice, and two calls could disagree if the
+catalogue changed between them.
+
+## A period is billed in legs
+
+An invoice covers a period, and two things can split it. Both are answered the
+same way: bill each leg under its own product and its own statutory rates, and
+merge the legs into one document — which is also what § 41 Abs. 1 Nr. 4 EnWG
+requires, the old and the new price itemised with the periods they applied to.
+
+| Split at | Because |
+|---|---|
+| a **Tarifwechsel** | `vertragd` reports more than one product-assignment slice covering the period |
+| a **statutory Stichtag** | a VAT or levy regime changes inside the period — gas at 31.03.2024 (§ 28 Abs. 5/6 UStG) is 7 % before and 19 % after |
+
+The scheduled sweep, `POST /calculate` and `POST /tarifwechsel` all take this
+path, and each leg's meter reading is fetched for **its own dates**.
+
+A leg whose reading the caller supplied by hand is not split further — nothing
+can apportion a given reading across a boundary — so those are refused with the
+Stichtage named.
+
 ## §40c and §41a
 
-Invoice generation checks the §40c EnWG deadline (issue time vs period end) and
-attaches `SECT40C_DEADLINE_EXCEEDED` when late — the engine is clock-free by
-design, so the deadline lives here, where a clock legitimately exists.
+**§ 40c Abs. 1** — the invoice is due two weeks after it is **issued**, since the
+statute measures from when the payment request reaches the customer. `billingd`
+supplies the issue date; the engine stays clock-free and falls back to the period
+end only for a caller that has no clock.
+
+**§ 40c Abs. 2** is the delivery deadline: six weeks after the period ends, six
+after the supply relationship ends for a Schlussrechnung, and three where § 40b
+Abs. 1 monthly billing applies. Missing it attaches
+`SECT40C_DEADLINE_EXCEEDED`.
+
+**§ 40c Abs. 3** — a credit balance is offset in full against the next Abschlag
+or paid out within two weeks; from an Abschlussrechnung it is always paid out,
+there being no next Abschlag. The document states amount and deadline as the
+`guthabenerstattung` ZusatzAttribut, so the ledger and the payout run act on it
+directly.
 
 **§41a has no fallback, and both halves of that are enforced.** A dynamic tariff
 is billed per market time unit against verifiable market prices or it is not
@@ -543,9 +590,8 @@ annual amount, instead of drifting up to 6 ct/year from naïve
   statutory Schlichtungsstelle/BNetzA/Energieberatung/Wechsel hints are part
   of every `rechnung_json`.
 - **Historic VAT is commodity-aware:** gas/Fernwärme carried 7 % from
-  01.10.2022 to 31.03.2024 (§28 Abs. 5/6 UStG) and 16 % in H2/2020; periods
-  straddling a boundary produce a `MWST_STICHTAG_IM_ZEITRAUM` warning — split
-  at the Stichtag (Tarifwechsel pattern) and merge.
+  01.10.2022 to 31.03.2024 (§28 Abs. 5/6 UStG) and 16 % in H2/2020. A period
+  straddling a boundary is split at the Stichtag and billed in legs.
 - **Rechnungsnummern (§14 Abs. 4 Nr. 4 UStG):** a fortlaufende number from the
   tenant's counter (`RE-`/`SR-`/`ST-`/`VG-` + year + sequence), stored in its own
   column under a unique index per tenant, so a collision is a write-time database

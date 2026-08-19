@@ -163,8 +163,6 @@ pub async fn post_tarifwechsel(
         ));
     }
 
-    let grid = req.grid.clone().unwrap_or_default();
-
     // The combined document's own number, from the ordinary invoice series; the
     // two legs carry `/A` and `/B` suffixes for the trace, but only the merged
     // invoice is issued, so only it consumes a number.
@@ -177,70 +175,52 @@ pub async fn post_tarifwechsel(
     )
     .await?;
 
-    // ── Sub-period A: period_from → switch_date - 1 ───────────────────────────
-    // Each leg is billed under the statutory rates of *its own* dates and
-    // commodity — that is the point of the split (§41 Abs. 5 EnWG price
-    // change; a leg inside a VAT window carries that window's rate).
-    let period_a_to = switch_date - time::Duration::days(1);
-    let rates_a = cfg.try_regulatory_rates_for_period(
-        req.old_tariff.category_str(),
-        period_from,
-        period_a_to,
-    )?;
-    let ctx_a = BillingContext {
-        malo_id: malo_id.clone(),
+    // Both legs go through the same pipeline every other invoice uses, with
+    // the readings the caller split by hand. Driving the engine directly here
+    // — which is what this did — produced a Tarifwechsel invoice with none of
+    // the § 40 content the law requires of it: no contract facts, no
+    // Zählernummer, no consumption comparison, no BG-7 buyer and no § 13b
+    // reverse-charge derivation. It looked like an invoice and was missing half
+    // of one.
+    let legs = vec![
+        TariffLeg {
+            tariff: req.old_tariff.clone(),
+            from: period_from,
+            to: switch_date - time::Duration::days(1),
+            meter: req.old_meter.clone(),
+        },
+        TariffLeg {
+            tariff: req.new_tariff.clone(),
+            from: switch_date,
+            to: period_to,
+            meter: req.new_meter.clone(),
+        },
+    ];
+    // A leg whose reading the caller supplied is billed as one span; one read
+    // from edmd is split further at any statutory boundary inside it.
+    let legs = split_on_rate_boundaries(cfg.as_ref(), legs);
+    let leg_req = CalculateRequest {
         lf_mp_id: req.lf_mp_id.clone(),
-        rechnungsnummer: format!("{base_nr}/A"),
-        period: BillingPeriod::new(period_from, period_a_to)
-            .expect("switch date is validated inside the period"),
-        invoice_type: InvoiceType::Initial,
-        regulatory_rates: rates_a.clone(),
         nb_mp_id: req.nb_mp_id.clone(),
-        billing_run_id: None,
+        period_from: req.period_from.clone(),
+        period_to: req.period_to.clone(),
+        grid: req.grid.clone(),
         ..Default::default()
     };
-    let quantities_a = Quantities {
-        electricity: req.old_meter.clone(),
-        ..Default::default()
-    };
-    let engine_a = req.old_tariff.build_engine(&grid, &rates_a);
-    let inv_a = engine_a.bill(ctx_a, &quantities_a)?;
-
-    // ── Sub-period B: switch_date → period_to ─────────────────────────────────
-    let rates_b =
-        cfg.try_regulatory_rates_for_period(req.new_tariff.category_str(), switch_date, period_to)?;
-    let ctx_b = BillingContext {
-        malo_id: malo_id.clone(),
-        lf_mp_id: req.lf_mp_id.clone(),
-        rechnungsnummer: format!("{base_nr}/B"),
-        period: BillingPeriod::new(switch_date, period_to)
-            .expect("switch date is validated inside the period"),
-        invoice_type: InvoiceType::Initial,
-        regulatory_rates: rates_b.clone(),
-        nb_mp_id: req.nb_mp_id.clone(),
-        billing_run_id: None,
-        ..Default::default()
-    };
-    let quantities_b = Quantities {
-        electricity: req.new_meter.clone(),
-        ..Default::default()
-    };
-    let engine_b = req.new_tariff.build_engine(&grid, &rates_b);
-    let inv_b = engine_b.bill(ctx_b, &quantities_b)?;
-
-    // ── Merge via billing::merge_period_documents semantics ───────────────────
-    let merged = inv_a.merge(inv_b);
-    merged.assert_valid();
+    let billed =
+        dispatch_invoice_multi(&deps, &legs, &leg_req, &malo_id, &base_nr, RunId(None)).await?;
+    let merged = billed.invoice;
+    let buyer = billed.buyer;
 
     let rechnung_json = merged.to_rechnung_json();
     let netto = merged.netto_eur;
     let brutto = merged.brutto_eur;
+    let summary = LegSummary::of(&legs);
+    let product_code = summary.product_code;
 
-    let product_code = format!(
-        "{}-{}",
-        req.old_tariff.category_str(),
-        req.new_tariff.category_str()
-    );
+    // The risk gate scores the document against the rates in force at its end.
+    let rates_b =
+        cfg.try_regulatory_rates_for_period(req.new_tariff.category_str(), switch_date, period_to)?;
 
     // A Tarifwechsel invoice is an invoice: it goes through the same risk gate
     // and stores the same EN 16931 model as every other document, or the
@@ -258,19 +238,6 @@ pub async fn post_tarifwechsel(
     let held = assessment
         .as_ref()
         .is_some_and(|a| cfg.risk.hold_dispatch && a.band == crate::risk::RiskBand::Held);
-    // A Tarifwechsel drives the engine twice directly, so the BG-7 buyer is
-    // looked up here rather than travelling with a priced invoice.
-    let buyer = deps
-        .vertragd
-        .get_vertrag_by_malo(&malo_id)
-        .await
-        .inspect_err(|e| {
-            tracing::warn!(%malo_id, error = %e, "billingd: BG-7 buyer lookup failed");
-        })
-        .ok()
-        .flatten()
-        .and_then(|v| v.rechnungsempfaenger);
-
     // Combined Tarifwechsel invoice + its dispatch event commit atomically.
     let mut tx = pool.begin().await?;
     let record_id = insert_billing_record(
@@ -280,7 +247,7 @@ pub async fn post_tarifwechsel(
             malo_id: &malo_id,
             lf_mp_id: &req.lf_mp_id,
             product_code: &product_code,
-            category: "TARIFWECHSEL",
+            category: &summary.category,
             rechnungsnummer: &base_nr,
             period_from,
             period_to,
@@ -358,7 +325,7 @@ pub async fn post_ggv_billing(
     Json(req): Json<GgvBillingRequest>,
 ) -> BillingResult<impl IntoResponse> {
     let cfg = Arc::clone(&deps.cfg);
-    let (tarifbd, vertragd) = (&deps.tarifbd, &deps.vertragd);
+    let vertragd = &deps.vertragd;
     authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
     if req.tenants.is_empty() {
         return Err(BillingError::bad_request(
@@ -430,12 +397,21 @@ pub async fn post_ggv_billing(
     let run_id = Uuid::new_v4().to_string();
 
     for tenant in &req.tenants {
-        // Build Product — prefer request overrides, fall back to tarifbd lookup.
-        let tariff = match tarifbd
-            .get_customer_product(&tenant.malo_id, &req.lf_mp_id)
-            .await
-            .map_err(|e| BillingError::upstream("tarifbd", e))?
-        {
+        // The assigned product, when the participant has a contract. A § 42b
+        // participant may be billed purely from the request — the community's
+        // own terms — so an unassigned MaLo is not an error here.
+        let assigned = resolve_tariff(
+            &CalculateRequest {
+                lf_mp_id: req.lf_mp_id.clone(),
+                ..Default::default()
+            },
+            &deps,
+            &tenant.malo_id,
+            period_to,
+        )
+        .await
+        .ok();
+        let tariff = match assigned {
             Some(t) => t,
             // No product in tarifbd — build a minimal Product from the request.
             None => {

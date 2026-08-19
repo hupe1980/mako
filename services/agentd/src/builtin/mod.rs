@@ -381,7 +381,7 @@ const TARIFF_OPTIMIZATION_AGENT: Specialist = Specialist {
 ))]
 const VERTRAGD_AGENT: Specialist = Specialist {
     name: "vertragd-agent",
-    specialty: "Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards (§41 EnWG), §41 Abs. 3 EnWG 6-week price-change notices, expiring contract alerts (§13 GasGVV / §14 StromGVV), stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.",
+    specialty: "Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards, § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.",
     trigger_patterns: &[
         "de.vertrag.*",
         mako_events::mako::APERAK_REJECTED,

@@ -12,46 +12,80 @@ use energy_billing::{DynamicInterval, MeterInput, Product};
 pub struct TarifbdClient {
     base_url: String,
     client: reqwest::Client,
+    api_key: Option<String>,
 }
 
 impl TarifbdClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             client: mako_service::http::default_client(),
+            api_key,
         }
     }
 
-    /// `GET /api/v1/customer/{malo_id}/product?lf_mp_id={lf_mp_id}`
+    /// A GET carrying this deployment's `tarifbd` credential.
     ///
-    /// Returns the active `TariffInput` for a MaLo, extracted from the
-    /// `Tarifpreisblatt` JSONB stored in `tarifbd`.
-    pub async fn get_customer_product(
-        &self,
-        malo_id: &str,
-        lf_mp_id: &str,
-    ) -> Result<Option<Product>> {
-        let url = format!(
-            "{}/api/v1/customer/{}/product?lf_mp_id={}",
-            self.base_url, malo_id, lf_mp_id
-        );
-        let resp = self
-            .client
-            .get(&url)
-            .send()
-            .await
-            .context("tarifbd GET customer/product")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
+    /// Every catalogue route is authenticated — only the § 41c EnWG comparison
+    /// feed is public — so a client that sent no credential got 401s on the
+    /// tariff, EPEX and nEHS lookups every invoice depends on.
+    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
+        let req = self.client.get(url);
+        match &self.api_key {
+            Some(key) => req.bearer_auth(key),
+            None => req,
         }
+    }
+
+    /// `POST /api/v1/products/{lf_mp_id}/resolve`
+    ///
+    /// The product definitions for a list of (code, date) pairs, in one round
+    /// trip. A period split by a Tarifwechsel needs one version per leg, each
+    /// valid on that leg's own dates; asking per leg is an N+1 on every invoice.
+    ///
+    /// A code with no version valid on its date comes back as `None` **in
+    /// place**, so the caller can name which leg is unpriceable rather than
+    /// getting a shorter list than it asked for.
+    pub async fn resolve_products(
+        &self,
+        lf_mp_id: &str,
+        anfragen: &[(String, time::Date)],
+    ) -> Result<Vec<Option<Product>>> {
+        if anfragen.is_empty() {
+            return Ok(Vec::new());
+        }
+        let url = format!("{}/api/v1/products/{}/resolve", self.base_url, lf_mp_id);
+        let body = serde_json::json!({
+            "anfragen": anfragen
+                .iter()
+                .map(|(code, as_of)| serde_json::json!({
+                    "product_code": code,
+                    "as_of": as_of.to_string(),
+                }))
+                .collect::<Vec<_>>(),
+        });
+        let mut req = self.client.post(&url).json(&body);
+        if let Some(key) = &self.api_key {
+            req = req.bearer_auth(key);
+        }
+        let resp = req.send().await.context("tarifbd POST products/resolve")?;
         resp.error_for_status_ref()
             .map_err(|e| anyhow::anyhow!("tarifbd {e}"))?;
-
-        let body: serde_json::Value = resp.json().await.context("parse customer product")?;
-        // Extract pricing fields from the nested product.data (Tarifpreisblatt JSONB).
-        let data = body.get("product").and_then(|p| p.get("data"));
-        let tariff = extract_tariff_from_product_data(data, body.get("product"))?;
-        Ok(Some(tariff))
+        let payload: serde_json::Value = resp.json().await.context("parse resolved products")?;
+        let mut out = Vec::with_capacity(anfragen.len());
+        for entry in payload
+            .get("produkte")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let product = entry.get("product").filter(|p| !p.is_null());
+            out.push(match product {
+                Some(p) => Some(extract_tariff_from_product_data(p.get("data"), Some(p))?),
+                None => None,
+            });
+        }
+        Ok(out)
     }
 
     /// `GET /api/v1/nehs-prices/latest?date=…` — most recent nEHS certificate
@@ -61,8 +95,7 @@ impl TarifbdClient {
     pub async fn get_latest_nehs_price(&self, date: time::Date) -> Result<Option<Decimal>> {
         let url = format!("{}/api/v1/nehs-prices/latest?date={}", self.base_url, date);
         let resp = self
-            .client
-            .get(&url)
+            .authed_get(&url)
             .send()
             .await
             .context("tarifbd GET nehs-prices latest")?;
@@ -100,8 +133,7 @@ impl TarifbdClient {
                 self.base_url, day,
             );
             let resp = self
-                .client
-                .get(&url)
+                .authed_get(&url)
                 .send()
                 .await
                 .context("tarifbd GET epex-prices quarter-hourly")?;
@@ -411,6 +443,85 @@ fn extract_tariff_from_product_data(
     });
     serde_json::from_value::<Product>(flat)
         .map_err(|e| anyhow::anyhow!("product deserialization from tarifbd JSONB: {e}"))
+}
+
+/// One valid-time slice of a MaLo's product assignment, clipped to the period.
+///
+/// Comes from `vertragd`: which product a customer is on is a contract fact,
+/// agreed under § 41 Abs. 5 EnWG, so it lives with the contract. The product's
+/// *prices* come from `tarifbd`, resolved by code and date.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ProductSlice {
+    pub product_code: String,
+    pub gueltig_von: time::Date,
+    /// Exclusive end; `None` when the slice runs past the requested period.
+    #[serde(default)]
+    pub gueltig_bis: Option<time::Date>,
+}
+
+impl ProductSlice {
+    /// The last day this slice covers. `gueltig_bis` is exclusive.
+    #[must_use]
+    pub fn last_day(&self, period_to: time::Date) -> time::Date {
+        self.gueltig_bis
+            .and_then(|to| to.previous_day())
+            .map_or(period_to, |d| d.min(period_to))
+    }
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+struct SliceResponse {
+    #[serde(default)]
+    slices: Vec<ProductSlice>,
+}
+
+#[cfg(test)]
+mod slice_tests {
+    use super::ProductSlice;
+    use time::macros::date;
+
+    fn slice(from: time::Date, to: Option<time::Date>) -> ProductSlice {
+        ProductSlice {
+            product_code: "P".into(),
+            gueltig_von: from,
+            gueltig_bis: to,
+        }
+    }
+
+    #[test]
+    fn an_exclusive_end_becomes_an_inclusive_last_day() {
+        // vertragd reports [01-03, 15-03); the leg it bills ends on the 14th.
+        // Reading the exclusive bound as the last day billed the 15th twice —
+        // once under each tariff.
+        let s = slice(date!(2026 - 03 - 01), Some(date!(2026 - 03 - 15)));
+        assert_eq!(s.last_day(date!(2026 - 03 - 31)), date!(2026 - 03 - 14));
+    }
+
+    #[test]
+    fn an_open_slice_ends_with_the_period() {
+        let s = slice(date!(2026 - 03 - 01), None);
+        assert_eq!(s.last_day(date!(2026 - 03 - 31)), date!(2026 - 03 - 31));
+    }
+
+    #[test]
+    fn a_slice_running_past_the_period_is_clipped_to_it() {
+        let s = slice(date!(2026 - 03 - 01), Some(date!(2026 - 06 - 01)));
+        assert_eq!(s.last_day(date!(2026 - 03 - 31)), date!(2026 - 03 - 31));
+    }
+
+    #[test]
+    fn consecutive_slices_tile_the_period_without_a_gap_or_an_overlap() {
+        let period_to = date!(2026 - 03 - 31);
+        let a = slice(date!(2026 - 03 - 01), Some(date!(2026 - 03 - 15)));
+        let b = slice(date!(2026 - 03 - 15), Some(date!(2026 - 04 - 01)));
+        assert_eq!(a.last_day(period_to), date!(2026 - 03 - 14));
+        assert_eq!(
+            b.gueltig_von,
+            a.last_day(period_to).next_day().unwrap(),
+            "the second leg starts the day after the first ends"
+        );
+        assert_eq!(b.last_day(period_to), period_to);
+    }
 }
 
 // ── EdmdClient ────────────────────────────────────────────────────────────────
@@ -730,13 +841,28 @@ pub struct GasQualityRecord {
 pub struct VertragdClient {
     base_url: String,
     client: reqwest::Client,
+    /// Bearer for `vertragd`. Every contract route there is authenticated —
+    /// the responses carry customer master data and the buyer terms an invoice
+    /// is addressed to — so a deployment without a key gets 401s rather than
+    /// silently unaddressed invoices.
+    api_key: Option<String>,
 }
 
 impl VertragdClient {
-    pub fn new(base_url: &str) -> Self {
+    pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_owned(),
             client: mako_service::http::default_client(),
+            api_key,
+        }
+    }
+
+    /// A GET carrying this deployment's `vertragd` credential.
+    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
+        let req = self.client.get(url);
+        match &self.api_key {
+            Some(key) => req.bearer_auth(key),
+            None => req,
         }
     }
 
@@ -754,8 +880,7 @@ impl VertragdClient {
             self.base_url, rahmenvertrag_id
         );
         let resp = self
-            .client
-            .get(&url)
+            .authed_get(&url)
             .send()
             .await
             .context("vertragd GET rahmenvertrag malos")?;
@@ -767,6 +892,41 @@ impl VertragdClient {
         resp.json().await.context("parse rahmenvertrag malos")
     }
 
+    /// `GET /api/v1/malo/{malo_id}/produkte?from=…&to=…`
+    ///
+    /// The product-assignment slices covering a billing period, in order.
+    ///
+    /// An invoice covers a period and a Tarifwechsel inside it splits that
+    /// period; asking only for "the current product" billed the whole period at
+    /// whichever tariff happened to be in force on the day the run executed.
+    /// More than one slice means the period contains a price change.
+    ///
+    /// The mapping lives in `vertragd` because agreeing it *is* a contract act
+    /// (§ 41 Abs. 5 EnWG); `tarifbd` then prices each code.
+    pub async fn get_product_slices(
+        &self,
+        malo_id: &str,
+        from: time::Date,
+        to: time::Date,
+    ) -> Result<Vec<ProductSlice>> {
+        let url = format!(
+            "{}/api/v1/malo/{}/produkte?from={}&to={}",
+            self.base_url, malo_id, from, to
+        );
+        let resp = self
+            .authed_get(&url)
+            .send()
+            .await
+            .context("vertragd GET malo produkte")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
+        let body: SliceResponse = resp.json().await.context("parse product slices")?;
+        Ok(body.slices)
+    }
+
     /// `GET /api/v1/vertraege/by-malo/{malo_id}`
     ///
     /// The active Versorgungsvertrag behind a MaLo — the source of the §40
@@ -776,8 +936,7 @@ impl VertragdClient {
     pub async fn get_vertrag_by_malo(&self, malo_id: &str) -> Result<Option<VertragByMalo>> {
         let url = format!("{}/api/v1/vertraege/by-malo/{}", self.base_url, malo_id);
         let resp = self
-            .client
-            .get(&url)
+            .authed_get(&url)
             .send()
             .await
             .context("vertragd GET vertrag by malo")?;
@@ -800,8 +959,7 @@ impl VertragdClient {
     pub async fn get_ggv_betreiber(&self, ggv_id: &str) -> Result<Option<Rechnungsempfaenger>> {
         let url = format!("{}/api/v1/ggv/{}/betreiber", self.base_url, ggv_id);
         let resp = self
-            .client
-            .get(&url)
+            .authed_get(&url)
             .send()
             .await
             .context("vertragd GET ggv betreiber")?;
@@ -838,8 +996,7 @@ impl VertragdClient {
             self.base_url, sr_id, on_date
         );
         let resp = self
-            .client
-            .get(&url)
+            .authed_get(&url)
             .send()
             .await
             .context("vertragd GET aggregatorvertrag")?;
@@ -858,8 +1015,7 @@ impl VertragdClient {
     pub async fn get_billing_candidates(&self) -> Result<Vec<BillingCandidate>> {
         let url = format!("{}/api/v1/vertraege/billing-candidates", self.base_url);
         let resp = self
-            .client
-            .get(&url)
+            .authed_get(&url)
             .send()
             .await
             .context("vertragd GET billing-candidates")?;

@@ -169,6 +169,12 @@ async fn a_future_dated_price_version_is_not_current_yet() {
         today.name, "alt",
         "a version valid from 2099 is not current"
     );
+    assert_eq!(
+        today.valid_to,
+        Some(time::macros::date!(2098 - 12 - 31)),
+        "staging the 2099 version end-dates the one it succeeds, so the two \
+         never claim the same day"
+    );
 
     let then = pg::fetch_product(
         &pool,
@@ -187,74 +193,6 @@ async fn a_future_dated_price_version_is_not_current_yet() {
 }
 
 // ── H4 — Tarifwechsel assignment is atomic and tenant-scoped ──────────────────
-
-#[tokio::test]
-#[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn product_assignment_and_tarifwechsel_preserve_one_active_row() {
-    let Some((pool, _pg)) = test_pool("assign").await else {
-        return;
-    };
-    let tenant = "9900000000001";
-    pg::upsert_product(&pool, tenant, tenant, "P-A", strom_product("P-A"))
-        .await
-        .expect("product A");
-    pg::upsert_product(&pool, tenant, tenant, "P-B", strom_product("P-B"))
-        .await
-        .expect("product B");
-
-    pg::assign_product(
-        &pool,
-        "51238696781",
-        tenant,
-        tenant,
-        pg::AssignProductRequest {
-            product_code: "P-A".to_owned(),
-            assigned_from: "2026-02-01".to_owned(),
-        },
-    )
-    .await
-    .expect("initial assignment");
-
-    // Tarifwechsel to P-B: the close+insert run in one transaction, so there is
-    // always exactly one active (assigned_to IS NULL) row.
-    pg::assign_product(
-        &pool,
-        "51238696781",
-        tenant,
-        tenant,
-        pg::AssignProductRequest {
-            product_code: "P-B".to_owned(),
-            assigned_from: "2026-06-01".to_owned(),
-        },
-    )
-    .await
-    .expect("tarifwechsel");
-
-    let active: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM customer_products
-         WHERE malo_id = '51238696781' AND assigned_to IS NULL",
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(
-        active, 1,
-        "exactly one active assignment after Tarifwechsel"
-    );
-
-    let cur = pg::get_customer_product(&pool, "51238696781", tenant, tenant, None)
-        .await
-        .expect("read")
-        .expect("has active product");
-    assert_eq!(cur.product_code, "P-B", "the new product is active");
-
-    let total: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM customer_products WHERE malo_id = '51238696781'")
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(total, 2, "the old assignment is preserved as history");
-}
 
 // ── H7 — erp_angebot_id idempotency ───────────────────────────────────────────
 
@@ -365,7 +303,7 @@ async fn nehs_price_upsert_latest_and_source_check() {
     );
 
     // Re-import on the same date replaces the row (ON CONFLICT DO UPDATE).
-    put(date!(2026 - 07 - 08), dec!(65.00), Some("nachkauf"))
+    put(date!(2026 - 07 - 08), dec!(65.00), Some("auktion"))
         .await
         .expect("same-date re-import");
     let hit = pg::latest_nehs_price(&pool, date!(2026 - 07 - 08))
@@ -373,6 +311,26 @@ async fn nehs_price_upsert_latest_and_source_check() {
         .expect("query")
         .expect("price expected");
     assert_eq!(hit, (date!(2026 - 07 - 08), dec!(65.00)));
+
+    // § 10 Abs. 2 BEHG fixes the 2026 corridor at 55–65 EUR/t, so a decimal
+    // slip in an auction price is refused rather than quietly under-billing
+    // the CO₂ component of every gas invoice by a factor of ten.
+    let err = put(date!(2026 - 07 - 15), dec!(6.35), Some("auktion"))
+        .await
+        .expect_err("6.35 EUR/t is a typo, not a clearing price");
+    assert!(err.to_string().contains("Preiskorridor"), "got: {err}");
+
+    // 68 EUR/t is the Mehrmengenpreis of the Nachkauf phase, not an auction
+    // clearing price — the two were documented as the same thing.
+    put(date!(2026 - 11 - 10), dec!(68), Some("nachkauf"))
+        .await
+        .expect("the Nachkauf price is valid for its own phase");
+    assert!(
+        put(date!(2026 - 11 - 17), dec!(68), Some("auktion"))
+            .await
+            .is_err(),
+        "68 EUR/t is above the auction corridor"
+    );
 
     // Omitted source defaults to 'manual'.
     put(date!(2026 - 07 - 15), dec!(68), None)
@@ -483,6 +441,122 @@ async fn epex_15min_and_hourly_roundtrip_to_quarter_hours() {
     assert_eq!(hpoints[3].avg_ct_kwh, dec!(0)); // 4th quarter of hour 0
     assert_eq!(hpoints[4].avg_ct_kwh, dec!(1)); // 1st quarter of hour 1
 }
+/// A withdrawn product stops pricing new periods but still prices the past.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_withdrawn_product_no_longer_prices_today_but_still_prices_the_past() {
+    let Some((pool, _pg)) = test_pool("valid_to").await else {
+        return;
+    };
+    let tenant = "9900000000027";
+    let mut req = strom_product("P-ALT");
+    req.valid_from = Some("2026-01-01".to_owned());
+    req.valid_to = Some("2026-06-30".to_owned());
+    pg::upsert_product(&pool, tenant, tenant, "P-ALT", req)
+        .await
+        .expect("product");
+
+    assert!(
+        pg::fetch_product(
+            &pool,
+            tenant,
+            tenant,
+            "P-ALT",
+            Some(time::macros::date!(2026 - 03 - 01))
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "an invoice for March still needs March's product"
+    );
+    assert!(
+        pg::fetch_product(
+            &pool,
+            tenant,
+            tenant,
+            "P-ALT",
+            Some(time::macros::date!(2026 - 09 - 01))
+        )
+        .await
+        .unwrap()
+        .is_none(),
+        "a product withdrawn on 30 June must not price September"
+    );
+}
+
+/// Scheduling a price change end-dates the version it succeeds, so two
+/// versions never claim the same day — and `products_no_overlap` is the
+/// backstop for anything that writes around that path.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_scheduled_price_change_closes_the_version_it_succeeds() {
+    let Some((pool, _pg)) = test_pool("product_overlap").await else {
+        return;
+    };
+    let tenant = "9900000000028";
+    let mut v1 = strom_product("P-X");
+    v1.valid_from = Some("2026-01-01".to_owned());
+    v1.valid_to = None;
+    pg::upsert_product(&pool, tenant, tenant, "P-X", v1)
+        .await
+        .expect("first version");
+
+    // The ordinary act: stage next year's prices. Requiring the operator to go
+    // back and end-date the running version first would turn one act into two,
+    // with an unpriced gap whenever they forget.
+    let mut v2 = strom_product("P-X");
+    v2.valid_from = Some("2027-01-01".to_owned());
+    v2.valid_to = None;
+    pg::upsert_product(&pool, tenant, tenant, "P-X", v2)
+        .await
+        .expect("scheduling next year's prices");
+
+    let heute = pg::fetch_product(
+        &pool,
+        tenant,
+        tenant,
+        "P-X",
+        Some(time::macros::date!(2026 - 06 - 01)),
+    )
+    .await
+    .unwrap()
+    .expect("2026 has a price");
+    assert_eq!(
+        heute.valid_to,
+        Some(time::macros::date!(2026 - 12 - 31)),
+        "the running version now ends the day before the new one starts"
+    );
+    assert!(
+        pg::fetch_product(
+            &pool,
+            tenant,
+            tenant,
+            "P-X",
+            Some(time::macros::date!(2027 - 06 - 01))
+        )
+        .await
+        .unwrap()
+        .is_some(),
+        "and 2027 is priced by the new one"
+    );
+
+    // The backstop: a direct write that would leave two versions covering one
+    // day is refused by the database, not merely by the code path above.
+    let clash = sqlx::query(
+        "INSERT INTO products
+             (tenant, lf_mp_id, product_code, category, name, data, valid_from, valid_to)
+         VALUES ($1, $1, 'P-X', 'STROM', 'schleichend', '{}'::jsonb,
+                 DATE '2026-06-01', DATE '2026-09-30')",
+    )
+    .bind(tenant)
+    .execute(&pool)
+    .await;
+    assert!(
+        clash.is_err(),
+        "products_no_overlap must refuse a version overlapping an existing one"
+    );
+}
+
 /// The Postgres container guard a test holds until it ends — dropping it removes
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;

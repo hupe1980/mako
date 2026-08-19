@@ -341,36 +341,94 @@ async fn bill_one(
         monatliche_abrechnung: cand.abrechnungszyklus.eq_ignore_ascii_case("MONATLICH"),
         ..Default::default()
     };
-    let tariff = handlers::resolve_tariff(&req, &deps.tarifbd, &cand.malo_id)
+    // The product assignments covering this period, from vertragd — the mapping
+    // is a contract fact. A Tarifwechsel inside the period splits it, and each
+    // leg is billed under its own product, its own statutory rates and its own
+    // meter reading; billing the whole period at whichever tariff happens to be
+    // in force on the day the run executes charged the new price for weeks the
+    // customer spent on the old one.
+    let slices = deps
+        .vertragd
+        .get_product_slices(&cand.malo_id, from, to)
         .await
-        .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
-    // A period crossing a statutory rate boundary has no correct single rate;
-    // billing it whole would overcharge or undercharge one part silently.
-    let rates = cfg
-        .try_regulatory_rates_for_period(tariff.category_str(), from, to)
-        .map_err(|e| anyhow::anyhow!("{e}"))?;
+        .unwrap_or_default();
+
+    let legs: Vec<handlers::TariffLeg> = if slices.is_empty() {
+        // No assignment on file — `resolve_tariff` reports it by name, and the
+        // request may still carry an explicit tariff override.
+        vec![handlers::TariffLeg {
+            tariff: handlers::resolve_tariff(&req, deps, &cand.malo_id, to)
+                .await
+                .map_err(|e| anyhow::anyhow!("tariff: {e}"))?,
+            from,
+            to,
+            meter: None,
+        }]
+    } else {
+        // One round trip prices every leg: asking tarifbd per leg is an N+1 on
+        // every invoice, and two calls could disagree if the catalogue changed
+        // between them.
+        let anfragen: Vec<(String, Date)> = slices
+            .iter()
+            .map(|s| (s.product_code.clone(), s.gueltig_von.max(from)))
+            .collect();
+        let produkte = deps
+            .tarifbd
+            .resolve_products(&cand.lf_mp_id, &anfragen)
+            .await
+            .map_err(|e| anyhow::anyhow!("tarifbd resolve: {e}"))?;
+        let mut legs = Vec::with_capacity(slices.len());
+        for (slice, produkt) in slices.iter().zip(produkte) {
+            let tariff = produkt.ok_or_else(|| {
+                anyhow::anyhow!(
+                    "product {} has no version valid on {}",
+                    slice.product_code,
+                    slice.gueltig_von.max(from)
+                )
+            })?;
+            legs.push(handlers::TariffLeg {
+                tariff,
+                from: slice.gueltig_von.max(from),
+                to: slice.last_day(to),
+                meter: None,
+            });
+        }
+        legs
+    };
+
+    // A statutory rate boundary inside the period splits it exactly as a price
+    // change does — same mechanism, same merge.
+    let legs = handlers::split_on_rate_boundaries(cfg, legs);
+
     // § 14 Abs. 4 Nr. 4 UStG: from the tenant's `RE` series, keyed on the
     // billed period's year, so a December period swept in January stays in the
     // year it belongs to.
     let rechnungsnummer =
         pg::allocate_rechnungsnummer(pool, &cfg.tenant, series::INVOICE, from.year()).await?;
-    let billed = handlers::dispatch_invoice(
+    let billed = handlers::dispatch_invoice_multi(
         deps,
-        &tariff,
+        &legs,
         &req,
         &cand.malo_id,
         &rechnungsnummer,
-        from,
-        to,
-        &rates,
         RunId(Some(run_id)),
     )
     .await
     .map_err(|e| anyhow::anyhow!("dispatch: {e}"))?;
     let (invoice, buyer) = (billed.invoice, billed.buyer);
+    let summary = handlers::LegSummary::of(&legs);
 
     // Same deterministic risk gate as the on-demand endpoint — scored read-only
     // before the outbox tx, because a HELD band withholds the dispatch enqueue.
+    // A split period is scored against the rates of its **last** leg: those are
+    // the ones in force when the document is issued, and the ones an anomaly in
+    // the total would be measured against.
+    let last_leg = legs
+        .last()
+        .expect("dispatch_invoice_multi rejected an empty period");
+    let rates = cfg
+        .try_regulatory_rates_for_period(last_leg.tariff.category_str(), last_leg.from, last_leg.to)
+        .map_err(|e| anyhow::anyhow!("{e}"))?;
     let assessment =
         handlers::assess_risk(pool, cfg, &cand.malo_id, &invoice, &rates, from, to).await;
     let held = assessment
@@ -387,8 +445,8 @@ async fn bill_one(
             tenant: &cfg.tenant,
             malo_id: &cand.malo_id,
             lf_mp_id: &cand.lf_mp_id,
-            product_code: tariff.product_code().unwrap_or(tariff.category_str()),
-            category: tariff.category_str(),
+            product_code: &summary.product_code,
+            category: &summary.category,
             rechnungsnummer: &rechnungsnummer,
             period_from: from,
             period_to: to,
@@ -490,7 +548,7 @@ async fn deliver_abrechnungsinfo(
         ..Default::default()
     };
     let preview = async {
-        let tariff = handlers::resolve_tariff(&req, &deps.tarifbd, &cand.malo_id)
+        let tariff = handlers::resolve_tariff(&req, deps, &cand.malo_id, to)
             .await
             .map_err(|e| anyhow::anyhow!("tariff: {e}"))?;
         let rates = cfg

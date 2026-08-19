@@ -49,6 +49,11 @@ pub struct BillingdConfig {
     /// `tarifbd` base URL — product catalog and EPEX prices.
     pub tarifbd_url: String,
 
+    /// `tarifbd` bearer token — register it there as an `[[oidc.service_keys]]`
+    /// entry. Without it every catalogue lookup is rejected and the invoice has
+    /// no prices, no EPEX series and no nEHS certificate cost.
+    pub tarifbd_api_key: Option<String>,
+
     /// `edmd` base URL — `MeterBillingPeriod` for consumption data.
     pub edmd_url: String,
 
@@ -64,6 +69,12 @@ pub struct BillingdConfig {
     /// `vertragd` base URL — contract facts, BG-7 buyers, Rahmenvertrag MaLo
     /// enumeration, §41e Aggregatorverträge and the §40b billing candidates.
     pub vertragd_url: Option<String>,
+
+    /// `vertragd` bearer token — register it there as an
+    /// `[[oidc.service_keys]]` entry. Without it every contract lookup is
+    /// rejected, and the invoice loses its § 40 Abs. 1 EnWG facts and its BG-7
+    /// buyer.
+    pub vertragd_api_key: Option<String>,
 
     /// `outputd` base URL — renders the ZUGFeRD PDF from the stored model.
     /// Defaults to `http://localhost:9880`. Without a reachable outputd the

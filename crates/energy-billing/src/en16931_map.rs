@@ -108,12 +108,17 @@ impl Invoice {
         let type_code = if is_credit { "381" } else { "380" };
         let default_rate = self.context.regulatory_rates.mwst_rate;
 
-        let issue = self.context.period_to();
+        // BT-2 — the actual Ausstellungsdatum (§ 14 Abs. 4 Nr. 3 UStG), which
+        // is the issue date the caller supplied and only falls back to the
+        // period end when it has no clock.
+        let issue = self.context.ausstellungsdatum();
         let issue_date = Date::new(issue.year(), issue.month() as u8, issue.day())
             .unwrap_or_else(|_| Date::new(2000, 1, 1).expect("epoch fallback is valid"));
-        // §40c EnWG: payment is due at the earliest two weeks after receipt. A
-        // due date (BT-9) also satisfies BR-CO-25 when an amount is owed.
-        let due = issue.saturating_add(time::Duration::days(14));
+        // BT-9 — § 40c Abs. 1 EnWG: due at the earliest two weeks after the
+        // payment request reaches the customer, so measured from the issue date
+        // and not from the period end. A due date also satisfies BR-CO-25 when
+        // an amount is owed.
+        let due = self.context.faelligkeitsdatum();
         let due_date = Date::new(due.year(), due.month() as u8, due.day())
             .unwrap_or_else(|_| Date::new(2000, 1, 15).expect("epoch fallback is valid"));
 

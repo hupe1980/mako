@@ -2,12 +2,15 @@
 --
 -- `products`: central product register with full BO4E Tarifpreisblatt JSONB.
 -- `product_history`: immutable version history of every product update.
--- `customer_products`: MaLo → active product assignment (used by billingd).
+-- The MaLo→product assignment is NOT here: which product a customer is on is a
+-- contract fact, agreed under § 41 Abs. 5 EnWG, and lives in `vertragd`.
 -- `epex_prices`: hourly EPEX Spot day-ahead prices for §41a dynamic tariffs.
 -- `angebote`: formal B2B quotation workflow (C&I / RLM customers).
 --
 -- All prices are user-defined in data.tarifpreispositionen.
 -- tarifbd contains no hardcoded commercial rates.
+
+CREATE EXTENSION IF NOT EXISTS btree_gist;
 
 -- ── Products ──────────────────────────────────────────────────────────────────
 
@@ -38,7 +41,7 @@ CREATE TABLE products (
     data            JSONB   NOT NULL,
     bo4e_version    TEXT    NOT NULL DEFAULT 'v202607.0.0',
     -- DRAFT = staged/preview — invisible to billingd and comparison feed.
-    -- PUBLISHED = active for billing, portald, and §42d comparison feed.
+    -- PUBLISHED = active for billing, portald, and § 41c comparison feed.
     product_status  TEXT    NOT NULL DEFAULT 'PUBLISHED'
                     CHECK (product_status IN ('DRAFT', 'PUBLISHED')),
     -- BO4E Energiemix COM (§42 EnWG energy source mix disclosure)
@@ -63,6 +66,26 @@ CREATE TABLE products (
 -- actually conflict on. It is never read back — `valid_from` stays NULL.
 CREATE UNIQUE INDEX products_identity ON products
     (tenant, lf_mp_id, product_code, (COALESCE(valid_from, DATE '0001-01-01')));
+
+-- Two versions of one product in force on the same day is not a state that
+-- should exist: `fetch_product`'s `ORDER BY valid_from DESC LIMIT 1` then picks
+-- one of them and bills it, with nothing to say which. The identity index above
+-- only stops two versions with the same *start*.
+--
+-- `valid_to` is inclusive here — a product is sellable up to and including that
+-- day — so the range is built as `[valid_from, valid_to + 1)`.
+ALTER TABLE products
+    ADD CONSTRAINT products_no_overlap
+    EXCLUDE USING gist (
+        tenant       WITH =,
+        lf_mp_id     WITH =,
+        product_code WITH =,
+        daterange(
+            COALESCE(valid_from, DATE '0001-01-01'),
+            CASE WHEN valid_to IS NULL THEN NULL ELSE valid_to + 1 END,
+            '[)'
+        ) WITH &&
+    );
 
 COMMENT ON TABLE products IS
     'Product catalog. ALL prices are user-defined in data.tarifpreispositionen. '
@@ -129,33 +152,6 @@ COMMENT ON TABLE product_history IS
     'Immutable audit log of every product PUT. INSERT-only.';
 
 CREATE INDEX ph_product ON product_history (lf_mp_id, product_code, changed_at DESC);
-
--- ── Customer → product assignment ─────────────────────────────────────────────
-
-CREATE TABLE customer_products (
-    malo_id         TEXT    NOT NULL,
-    lf_mp_id        TEXT    NOT NULL,
-    product_code    TEXT    NOT NULL,
-    assigned_from   DATE    NOT NULL,
-    assigned_to     DATE,               -- NULL = currently active
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (malo_id, lf_mp_id, assigned_from)
-    -- No FK to products: a customer is assigned from a date that need not equal
-    -- any single product version's `valid_from` (a Tarifwechsel assigns from an
-    -- arbitrary wirksamkeit date, while `products` may hold several versions per
-    -- code). A version-pinned FK — the previous
-    -- `(lf_mp_id, product_code, assigned_from) → products(...,valid_from)` —
-    -- both mismodels this and is rejected by PostgreSQL at commit for any
-    -- assignment where `assigned_from != valid_from`. Product existence is
-    -- enforced in `pg::assign_product` (exists + PUBLISHED + date-window guards).
-);
-
-COMMENT ON TABLE customer_products IS
-    'MaLo → active product assignment used by billingd for invoice calculation.';
-
-CREATE INDEX cp_malo_lf ON customer_products (malo_id, lf_mp_id);
-CREATE INDEX cp_active  ON customer_products (malo_id, lf_mp_id)
-    WHERE assigned_to IS NULL;
 
 -- ── EPEX Spot day-ahead prices ────────────────────────────────────────────────
 -- §41a EnWG: day-ahead auction prices (EPEX SPOT DE-LU).
@@ -234,8 +230,11 @@ CREATE TABLE angebote (
                         )),
     gueltig_bis         DATE        NOT NULL,
     lieferbeginn        DATE,
+    -- Any positive term. The old whitelist of (1,3,6,12,24,36,48,60) refused
+    -- an 18- or 9-month quotation for no reason a customer would recognise;
+    -- a B2B term is negotiated, not chosen from a list.
     laufzeit_monate     SMALLINT    NOT NULL DEFAULT 12
-                        CHECK (laufzeit_monate IN (1, 3, 6, 12, 24, 36, 48, 60)),
+                        CHECK (laufzeit_monate > 0 AND laufzeit_monate <= 240),
     -- Array of AngebotPosition: {product_code, sparte, malo_id, jahresverbrauch_kwh, ...}
     positionen          JSONB       NOT NULL DEFAULT '[]',
     -- Alternative scenarios for side-by-side comparison

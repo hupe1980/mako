@@ -11,6 +11,7 @@
 //! | `handlers` | see module docs |
 //! | `pg` | see module docs |
 
+pub mod behg;
 pub mod bo4e_angebot;
 pub mod config;
 pub mod handlers;

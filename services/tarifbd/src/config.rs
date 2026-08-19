@@ -2,7 +2,6 @@
 
 use serde::Deserialize;
 
-#[allow(dead_code)]
 #[derive(Debug, Deserialize)]
 pub struct TarifbdConfig {
     /// PostgreSQL connection + pool tuning (`[database]` block).
@@ -11,9 +10,21 @@ pub struct TarifbdConfig {
     /// HTTP listen port.  Defaults to `9080`.
     pub port: Option<u16>,
 
-    /// Operator BDEW-Codenummer used as the default `lf_mp_id` when not
-    /// supplied in the request.
+    /// Tenant identifier — the data-isolation key written to every row and
+    /// enforced on every token.
     pub tenant: String,
+
+    /// The Lieferant market-partner ID this catalogue's products are sold
+    /// under, and the default for requests that do not name one.
+    ///
+    /// Distinct from `tenant`: the isolation key and the market identity are
+    /// the same string in a single-mandant install and different in a shared
+    /// one. Using `tenant` for both — which is what this used to do — filed
+    /// every MaLo→product assignment under a market party that does not trade,
+    /// and `billingd`'s lookup by the real MP-ID found nothing. Defaults to
+    /// `tenant` so a single-mandant deployment need not repeat itself.
+    #[serde(default, rename = "lf_mp_id")]
+    lf_mp_id_override: Option<String>,
 
     /// OIDC/JWT authentication configuration.
     ///
@@ -34,6 +45,14 @@ pub struct TarifbdConfig {
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:TARIFBD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
+}
+
+impl TarifbdConfig {
+    /// The market identity products are sold under.
+    #[must_use]
+    pub fn lf_mp_id(&self) -> &str {
+        self.lf_mp_id_override.as_deref().unwrap_or(&self.tenant)
+    }
 }
 
 impl mako_service::ServiceConfig for TarifbdConfig {

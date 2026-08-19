@@ -27,12 +27,14 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
 
 async fn make_kunde(pool: &PgPool, tenant: &str) -> Uuid {
     let id = Uuid::new_v4();
-    sqlx::query("INSERT INTO kunden (id, tenant, kundentyp) VALUES ($1, $2, 'B2C')")
-        .bind(id)
-        .bind(tenant)
-        .execute(pool)
-        .await
-        .expect("insert kunde");
+    sqlx::query(
+        "INSERT INTO kunden (id, tenant, kundentyp, haushaltskunde) VALUES ($1, $2, 'B2C', true)",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .expect("insert kunde");
     id
 }
 
@@ -41,18 +43,23 @@ fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
     pg::CreateVersorgungsvertragInput {
         rahmenvertrag_id: None,
         kundentyp: "B2C".to_owned(),
+        vertragsart: None,
         bundle_code: None,
         vertragsbeginn: d,
         vertragsende: None,
         kuendigungsfrist_monate: None,
         preisgarantie_bis: None,
+        abrechnungszyklus: None,
         auto_renewal: None,
+        renewal_monate: None,
         standort_bezeichnung: None,
+        standort_adresse: None,
+        zahlungsziel_tage: None,
         erp_contract_id: Some(erp_id.to_owned()),
         notizen: None,
         komponenten: vec![pg::CreateKomponenteInput {
             sparte: "STROM".to_owned(),
-            malo_id: Some("51238696781".to_owned()),
+            malo_id: Some(MALO.to_owned()),
             melo_id: None,
             nb_mp_id: Some("9900000000001".to_owned()),
             product_code: "STROM-BASIS-2026".to_owned(),
@@ -62,6 +69,9 @@ fn vertrag_input(erp_id: &str) -> pg::CreateVersorgungsvertragInput {
         }],
     }
 }
+
+/// A MaLo-ID valid under both check-digit schemes in use across the workspace.
+const MALO: &str = "51238696012";
 
 // ── D3 — idempotent creation prevents a duplicate Lieferbeginn ────────────────
 
@@ -171,7 +181,7 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
             .expect("create contract");
     activate(&pool, v.id).await;
 
-    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, "51238696781", tenant)
+    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, MALO, tenant)
         .await
         .expect("query succeeds")
         .expect("a Kunde is on file for this MaLo");
@@ -190,7 +200,7 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
 
     // Tenant-scoped: another tenant must not read this customer's address.
     assert!(
-        pg::fetch_rechnungsempfaenger_by_malo(&pool, "51238696781", "9800000000008")
+        pg::fetch_rechnungsempfaenger_by_malo(&pool, MALO, "9800000000008")
             .await
             .expect("query succeeds")
             .is_none(),
@@ -225,7 +235,7 @@ async fn a_kunde_without_master_data_yields_empty_buyer_terms() {
             .expect("create contract");
     activate(&pool, v.id).await;
 
-    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, "51238696781", tenant)
+    let buyer = pg::fetch_rechnungsempfaenger_by_malo(&pool, MALO, tenant)
         .await
         .expect("query succeeds")
         .expect("the Kunde row exists even with no master data");
@@ -628,7 +638,812 @@ async fn a_confirmed_component_is_a_billing_candidate() {
         .await
         .expect("list");
     assert_eq!(candidates.len(), 1, "the confirmed component is billable");
-    assert_eq!(candidates[0].malo_id, "51238696781");
+    assert_eq!(candidates[0].malo_id, MALO);
+}
+
+// ── Kündigung — the whole termination is one transaction ─────────────────────
+
+/// Terminating a contract must set the term it now actually has, enqueue the
+/// Lieferende UTILMD *and* the Schlussablesung, and record that the § 41 Abs. 8
+/// Nr. 2 EnWG Textform confirmation is owed.
+///
+/// All of it is SQL — an UPDATE, two conditional enqueues keyed on a unique
+/// index, and a status guard — so only a real database proves it. The previous
+/// implementation left `vertragsende` untouched, which meant a terminated
+/// contract went on advertising its old term to billingd and the portal.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_kuendigung_ends_the_term_and_enqueues_both_obligations() {
+    let Some((pool, _pg)) = test_pool("kuendigung").await else {
+        return;
+    };
+    let tenant = "9800000000010";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("K-1"))
+            .await
+            .expect("create");
+    activate(&pool, created.id).await;
+
+    let vertrag = pg::fetch_vertrag(&pool, created.id, tenant)
+        .await
+        .expect("fetch")
+        .expect("exists");
+    let lieferende = time::macros::date!(2027 - 03 - 31);
+    let input = pg::KuendigungInput {
+        lieferende,
+        grund: vertragd::domain::Kuendigungsgrund::Ordentlich,
+        preisanpassung_wirksam_zum: None,
+        eingang: None,
+        bemerkung: None,
+    };
+
+    let mut tx = pool.begin().await.expect("begin");
+    let result = pg::kuendige_vertrag(
+        &mut tx,
+        &vertrag,
+        &input,
+        time::macros::date!(2026 - 10 - 01),
+        tenant,
+    )
+    .await
+    .expect("kuendigen");
+    pg::mark_kuendigung_bestaetigt(&mut *tx, created.id, tenant)
+        .await
+        .expect("confirm");
+    tx.commit().await.expect("commit");
+
+    assert_eq!(
+        result.dispatched.len(),
+        1,
+        "the STROM component is dispatched"
+    );
+
+    // Supply does not end today. The customer is supplied until 2027-03-31 and
+    // has to be invoiced for it, so the component stays billable until then —
+    // marking it BEENDET at once took the remaining months and the
+    // Schlussrechnung out of the § 40b feed.
+    let komp: (String, Option<time::Date>) =
+        sqlx::query_as("SELECT status, lieferende FROM vertragskomponenten WHERE vertrag_id=$1")
+            .bind(created.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(komp.0, "AKTIV", "supply runs until the Lieferende");
+    assert_eq!(komp.1, Some(lieferende), "and the date it ends is recorded");
+    assert_eq!(
+        pg::list_billing_candidates(&pool, tenant)
+            .await
+            .expect("candidates")
+            .len(),
+        1,
+        "a terminated contract stays billable until supply actually ends"
+    );
+
+    let after = pg::fetch_vertrag(&pool, created.id, tenant)
+        .await
+        .expect("refetch")
+        .expect("exists");
+    assert_eq!(after.status, "GEKÜNDIGT");
+    assert_eq!(
+        after.vertragsende,
+        Some(lieferende),
+        "the contract now ends when supply does"
+    );
+    assert_eq!(after.kuendigung_zum, Some(lieferende));
+    assert!(
+        !after.auto_renewal,
+        "a terminated contract must not renew itself while its notice runs out"
+    );
+    assert!(
+        after.kuendigungsbestaetigung_am.is_some(),
+        "§ 41 Abs. 8 Nr. 2 EnWG: the Textform confirmation is recorded as owed"
+    );
+
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT kind FROM outbound_tasks WHERE tenant=$1 ORDER BY kind")
+            .bind(tenant)
+            .fetch_all(&pool)
+            .await
+            .expect("tasks");
+    assert!(
+        kinds.contains(&"LIEFERENDE".to_owned()),
+        "the NB is told supply ends: {kinds:?}"
+    );
+    assert!(
+        kinds.contains(&"ABLESUNG_ENDE".to_owned()),
+        "the Schlussablesung is ordered independently of the UTILMD: {kinds:?}"
+    );
+}
+
+/// Creating a contract enqueues exactly one Lieferbeginn, and re-posting the
+/// same `erp_contract_id` enqueues none — the unique `dedupe_key` is the guard,
+/// so it only holds against a real database.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_registration_is_enqueued_once_however_often_the_contract_is_posted() {
+    let Some((pool, _pg)) = test_pool("dispatch_dedupe").await else {
+        return;
+    };
+    let tenant = "9800000000011";
+    let kunde = make_kunde(&pool, tenant).await;
+    let input = vertrag_input("D-1");
+
+    let first = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("create");
+    assert_eq!(first.dispatched, 1);
+    let second = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("replay");
+    assert_eq!(second.dispatched, 0, "a replay registers nothing again");
+
+    let n: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbound_tasks WHERE kind='LIEFERBEGINN' AND tenant=$1",
+    )
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(n, 1, "one queued UTILMD, not two");
+
+    // The contract is now waiting on the NB, which is what the API reports.
+    let v = pg::fetch_vertrag(&pool, first.id, tenant)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(v.status, "IN_BEARBEITUNG");
+}
+
+/// A Stornierung before supply began must also withdraw the registration still
+/// waiting in the queue — otherwise the worker registers a contract the
+/// customer cancelled.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn stornierung_withdraws_a_registration_that_has_not_left_the_queue() {
+    let Some((pool, _pg)) = test_pool("storno_withdraws").await else {
+        return;
+    };
+    let tenant = "9800000000012";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("S-1"))
+            .await
+            .expect("create");
+
+    pg::storniere_vertrag(&pool, created.id, tenant)
+        .await
+        .expect("storniere");
+
+    let offen: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbound_tasks
+          WHERE tenant=$1 AND kind='LIEFERBEGINN'
+            AND completed_at IS NULL AND dead_lettered_at IS NULL",
+    )
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(offen, 0, "nothing is left to register");
+}
+
+/// Once the Lieferende has passed, supply ends and the contract closes — the
+/// transition nothing used to perform, which left terminated contracts sitting
+/// in GEKÜNDIGT for ever with components nominally still in supply.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn supply_that_has_run_out_closes_its_contract() {
+    let Some((pool, _pg)) = test_pool("close_due").await else {
+        return;
+    };
+    let tenant = "9800000000016";
+    let kunde = make_kunde(&pool, tenant).await;
+    // Supply that actually started: the schema refuses a Lieferende before the
+    // Lieferbeginn, which is the point of the constraint.
+    let mut input = vertrag_input("C-1");
+    input.vertragsbeginn = time::macros::date!(2020 - 01 - 01);
+    input.komponenten[0].lieferbeginn = time::macros::date!(2020 - 01 - 01);
+    let created = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("create");
+    activate(&pool, created.id).await;
+
+    // A Lieferende still ahead changes nothing.
+    sqlx::query(
+        "UPDATE vertragskomponenten SET lieferende = CURRENT_DATE + 30 WHERE vertrag_id=$1",
+    )
+    .bind(created.id)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert!(
+        pg::close_due_supply(&pool, tenant)
+            .await
+            .unwrap()
+            .is_empty(),
+        "supply that is still running is not closed"
+    );
+
+    // A Lieferende in the past ends it.
+    sqlx::query("UPDATE vertragskomponenten SET lieferende = CURRENT_DATE - 1 WHERE vertrag_id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let closed = pg::close_due_supply(&pool, tenant).await.unwrap();
+    assert_eq!(closed, vec![created.id]);
+
+    let after = pg::fetch_vertrag(&pool, created.id, tenant)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(after.status, "ABGELAUFEN");
+    assert!(
+        after.completed_at.is_some(),
+        "the § 147 AO retention clock starts here"
+    );
+    assert!(
+        pg::list_billing_candidates(&pool, tenant)
+            .await
+            .unwrap()
+            .is_empty(),
+        "and the component leaves the billing feed"
+    );
+}
+
+// ── Outbound queue bookkeeping ───────────────────────────────────────────────
+
+/// A failing task is retried on a growing delay and then given up on, and an
+/// operator can put it back. All of it is SQL — an interval computed from a
+/// bind parameter and a boundary at which retrying stops — so only a real
+/// database proves the obligation neither spins for ever nor vanishes.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_failing_task_backs_off_then_dead_letters_then_can_be_requeued() {
+    let Some((pool, _pg)) = test_pool("outbound_backoff").await else {
+        return;
+    };
+    let tenant = "9800000000017";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("O-1"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+
+    let (id, attempts): (uuid::Uuid, i32) = sqlx::query_as(
+        "SELECT id, attempts FROM outbound_tasks WHERE komp_id=$1 AND kind='LIEFERBEGINN'",
+    )
+    .bind(komp)
+    .fetch_one(&pool)
+    .await
+    .expect("the registration was enqueued");
+    assert_eq!(attempts, 0);
+
+    // Two failures: still queued, and not before the backoff has elapsed.
+    let mut conn = pool.acquire().await.unwrap();
+    vertragd::outbound::record_failure(&mut conn, id, 1, "processd unreachable")
+        .await
+        .unwrap();
+    let due_now: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM outbound_tasks
+          WHERE id=$1 AND next_attempt_at <= now() AND dead_lettered_at IS NULL",
+    )
+    .bind(id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(due_now, 0, "the retry waits");
+
+    let (first, second): (time::OffsetDateTime, time::OffsetDateTime) = {
+        let a: time::OffsetDateTime =
+            sqlx::query_scalar("SELECT next_attempt_at FROM outbound_tasks WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        vertragd::outbound::record_failure(&mut conn, id, 4, "processd unreachable")
+            .await
+            .unwrap();
+        let b: time::OffsetDateTime =
+            sqlx::query_scalar("SELECT next_attempt_at FROM outbound_tasks WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        (a, b)
+    };
+    assert!(second > first, "the delay grows with the attempt count");
+
+    // Enough failures and it stops being retried and becomes visible instead.
+    vertragd::outbound::record_failure(&mut conn, id, 8, "processd unreachable")
+        .await
+        .unwrap();
+    let dead = vertragd::outbound::list_dead_lettered(&pool, tenant, 10)
+        .await
+        .unwrap();
+    assert_eq!(dead.len(), 1);
+    assert_eq!(dead[0].kind, "LIEFERBEGINN");
+    assert_eq!(dead[0].attempts, 8);
+
+    assert!(
+        vertragd::outbound::retry_dead_lettered(&pool, tenant, id)
+            .await
+            .unwrap()
+    );
+    assert!(
+        vertragd::outbound::list_dead_lettered(&pool, tenant, 10)
+            .await
+            .unwrap()
+            .is_empty(),
+        "the requeued task is no longer the operator's problem"
+    );
+    // Another tenant cannot requeue it.
+    assert!(
+        !vertragd::outbound::retry_dead_lettered(&pool, "9800000000099", id)
+            .await
+            .unwrap()
+    );
+}
+
+// ── The valid-time product assignment ────────────────────────────────────────
+
+/// A billing period containing a Tarifwechsel must come back as **two** slices
+/// that tile it exactly — that is the whole reason the assignment is temporal.
+/// Asking only for the current product billed the entire period at whichever
+/// tariff happened to be in force on the day the run executed.
+///
+/// The slice boundaries are SQL — a `daterange` overlap plus a `GREATEST`/`CASE`
+/// clip — so only a real database proves them.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_period_containing_a_tarifwechsel_comes_back_as_two_tiling_slices() {
+    let Some((pool, _pg)) = test_pool("produkt_slices").await else {
+        return;
+    };
+    let tenant = "9800000000020";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-1"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+
+    // The contract opened on STROM-BASIS-2026 from its Lieferbeginn.
+    let mut conn = pool.acquire().await.unwrap();
+    pg::produkte::tarifwechsel(
+        &mut conn,
+        tenant,
+        komp,
+        "STROM-NEU",
+        time::macros::date!(2026 - 11 - 15),
+        Some("Tarifwechsel"),
+        false,
+    )
+    .await
+    .expect("tarifwechsel");
+
+    let slices = pg::malo_slices(
+        &pool,
+        tenant,
+        MALO,
+        time::macros::date!(2026 - 11 - 01),
+        time::macros::date!(2026 - 11 - 30),
+    )
+    .await
+    .expect("slices");
+
+    assert_eq!(slices.len(), 2, "the switch splits the period");
+    assert_eq!(slices[0].product_code, "STROM-BASIS-2026");
+    assert_eq!(slices[0].gueltig_von, time::macros::date!(2026 - 11 - 01));
+    assert_eq!(
+        slices[0].gueltig_bis,
+        Some(time::macros::date!(2026 - 11 - 15)),
+        "exclusive end — the 15th belongs to the new product, not to both"
+    );
+    assert_eq!(slices[1].product_code, "STROM-NEU");
+    assert_eq!(slices[1].gueltig_von, time::macros::date!(2026 - 11 - 15));
+
+    // The slices tile the period exactly: no day billed twice, none unpriced.
+    let covered: i64 = slices
+        .iter()
+        .map(|s| (s.gueltig_bis.unwrap() - s.gueltig_von).whole_days())
+        .sum();
+    assert_eq!(covered, 30, "November has 30 days, each covered once");
+}
+
+/// A future-dated Tarifwechsel is simply a slice that starts in the future —
+/// there is no pending state and nothing applies it on the day.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_future_tarifwechsel_is_invisible_until_it_starts() {
+    let Some((pool, _pg)) = test_pool("produkt_future").await else {
+        return;
+    };
+    let tenant = "9800000000021";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-2"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+
+    let mut conn = pool.acquire().await.unwrap();
+    pg::produkte::tarifwechsel(
+        &mut conn,
+        tenant,
+        komp,
+        "STROM-NEU",
+        time::macros::date!(2027 - 01 - 01),
+        None,
+        false,
+    )
+    .await
+    .expect("schedule");
+
+    let vorher = pg::produkte::produkt_am(&pool, komp, time::macros::date!(2026 - 12 - 31))
+        .await
+        .unwrap()
+        .expect("a product is in force");
+    assert_eq!(vorher.product_code, "STROM-BASIS-2026");
+    let nachher = pg::produkte::produkt_am(&pool, komp, time::macros::date!(2027 - 01 - 01))
+        .await
+        .unwrap()
+        .expect("a product is in force");
+    assert_eq!(nachher.product_code, "STROM-NEU");
+
+    // And its § 41 Abs. 5 notice is owed, with the previous product named.
+    let offen = pg::offene_preisanpassungen(&pool, tenant, time::macros::date!(2026 - 10 - 01))
+        .await
+        .expect("query");
+    assert_eq!(offen.len(), 1);
+    assert_eq!(offen[0].neues_produkt, "STROM-NEU");
+    assert_eq!(
+        offen[0].bisheriges_produkt.as_deref(),
+        Some("STROM-BASIS-2026")
+    );
+    assert!(
+        offen[0].haushaltskunde,
+        "the query carries the § 3 Nr. 57 fact the notice period depends on"
+    );
+}
+
+/// The database itself must refuse two products for one component on one day.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn overlapping_product_slices_are_unrepresentable() {
+    let Some((pool, _pg)) = test_pool("produkt_overlap").await else {
+        return;
+    };
+    let tenant = "9800000000022";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-3"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+
+    let clash = sqlx::query(
+        "INSERT INTO komponenten_produkte (tenant, komp_id, product_code, gueltig_von, gueltig_bis)
+         VALUES ($1, $2, 'STROM-X', DATE '2026-11-01', DATE '2027-01-01')",
+    )
+    .bind(tenant)
+    .bind(komp)
+    .execute(&pool)
+    .await;
+    assert!(
+        clash.is_err(),
+        "kp_no_overlap must refuse a slice overlapping the initial one"
+    );
+
+    // Abutting is not overlapping: the half-open range makes the end date the
+    // first day of the next slice.
+    let ok = sqlx::query(
+        "UPDATE komponenten_produkte SET gueltig_bis = DATE '2027-01-01' WHERE komp_id = $1",
+    )
+    .bind(komp)
+    .execute(&pool)
+    .await;
+    assert!(ok.is_ok());
+    sqlx::query(
+        "INSERT INTO komponenten_produkte (tenant, komp_id, product_code, gueltig_von)
+         VALUES ($1, $2, 'STROM-X', DATE '2027-01-01')",
+    )
+    .bind(tenant)
+    .bind(komp)
+    .execute(&pool)
+    .await
+    .expect("abutting slices are fine");
+}
+
+/// A change dated behind a later one would silently reprice a period the
+/// operator already decided about — and, for an announced change, one the
+/// customer has been told about.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_replay_is_idempotent_and_a_backdated_change_is_refused() {
+    let Some((pool, _pg)) = test_pool("produkt_replay").await else {
+        return;
+    };
+    let tenant = "9800000000023";
+    let kunde = make_kunde(&pool, tenant).await;
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("P-4"))
+            .await
+            .expect("create");
+    let komp = created.komponenten[0].id;
+    let mut conn = pool.acquire().await.unwrap();
+
+    let wechsel = |c: &str, d: time::Date| (c.to_owned(), d);
+    for (code, d) in [
+        wechsel("STROM-NEU", time::macros::date!(2027 - 01 - 01)),
+        wechsel("STROM-NEU", time::macros::date!(2027 - 01 - 01)),
+    ] {
+        pg::produkte::tarifwechsel(&mut conn, tenant, komp, &code, d, None, false)
+            .await
+            .expect("a replay of the same change must succeed");
+    }
+    let n: i64 = sqlx::query_scalar("SELECT count(*) FROM komponenten_produkte WHERE komp_id = $1")
+        .bind(komp)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(n, 2, "the initial slice plus one change — not two changes");
+
+    let backdated = pg::produkte::tarifwechsel(
+        &mut conn,
+        tenant,
+        komp,
+        "STROM-ALT",
+        time::macros::date!(2026 - 12 - 01),
+        None,
+        true,
+    )
+    .await;
+    assert!(
+        backdated.is_err(),
+        "backdating behind a later change would reprice a decided period"
+    );
+}
+
+// ── DSGVO Art. 17 ─────────────────────────────────────────────────────────────
+
+/// Erasure is refused while supply runs, and succeeds once it has ended — and
+/// it must survive a customer with more than one portal login, which is every
+/// B2B customer. Writing one pseudonym into both identity rows violated
+/// `UNIQUE (tenant, oidc_sub)` and failed the whole request.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn erasure_waits_for_the_contract_to_end_and_survives_several_logins() {
+    let Some((pool, _pg)) = test_pool("erasure").await else {
+        return;
+    };
+    let tenant = "9800000000013";
+    let kunde = make_kunde(&pool, tenant).await;
+    for sub in ["auth0|ceo", "auth0|buchhaltung"] {
+        pg::upsert_identitaet(
+            &pool,
+            kunde,
+            tenant,
+            &pg::UpsertIdentitaetInput {
+                oidc_sub: sub.to_owned(),
+                email: Some(format!("{sub}@example.test")),
+                display_name: None,
+                rolle: None,
+                standort_filter: None,
+            },
+        )
+        .await
+        .expect("identity");
+    }
+    let created =
+        pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &vertrag_input("G-1"))
+            .await
+            .expect("create");
+    activate(&pool, created.id).await;
+
+    let refused = pg::anonymize_kunde(&pool, kunde, tenant, "dpo", None, false)
+        .await
+        .expect("query");
+    match refused {
+        vertragd::pg::gdpr::ErasureOutcome::Refused {
+            laufende_vertraege, ..
+        } => assert_eq!(laufende_vertraege.len(), 1, "the running contract is named"),
+        other => panic!("erasure must wait for the contract to end, got {other:?}"),
+    }
+
+    sqlx::query("UPDATE versorgungsvertraege SET status='ABGELAUFEN' WHERE id=$1")
+        .bind(created.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let done = pg::anonymize_kunde(&pool, kunde, tenant, "dpo", None, false)
+        .await
+        .expect("erase");
+    assert!(matches!(
+        done,
+        vertragd::pg::gdpr::ErasureOutcome::Anonymized { .. }
+    ));
+
+    let subs: Vec<String> =
+        sqlx::query_scalar("SELECT oidc_sub FROM kunden_identitaeten WHERE kunden_id=$1")
+            .bind(kunde)
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    assert_eq!(subs.len(), 2);
+    assert!(subs.iter().all(|s| s.starts_with("anon:")));
+    assert_ne!(subs[0], subs[1], "each login gets its own pseudonym");
+
+    let emails: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM kunden_identitaeten WHERE kunden_id=$1 AND email IS NOT NULL",
+    )
+    .bind(kunde)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(emails, 0);
+
+    // The contract row survives for § 147 Abs. 3 AO, without its personal data.
+    let (adresse, count): (Option<serde_json::Value>, i64) = sqlx::query_as(
+        "SELECT standort_adresse, count(*) OVER () FROM versorgungsvertraege WHERE kunden_id=$1",
+    )
+    .bind(kunde)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(count, 1, "the commercial record is retained");
+    assert!(adresse.is_none(), "the supply address is personal data too");
+}
+
+// ── Sammelrechnung site enumeration ──────────────────────────────────────────
+
+/// Every site of a Rahmenvertrag must report the product **that site** is on.
+/// Reading the contract's `bundle_code` here gave billingd a bundle name where
+/// it needed a tariff, and gave every site of the framework the same one.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn each_sammelrechnung_site_reports_its_own_product() {
+    let Some((pool, _pg)) = test_pool("sammelrechnung").await else {
+        return;
+    };
+    let tenant = "9800000000014";
+    let kunde = make_kunde(&pool, tenant).await;
+    let rahmen = pg::insert_rahmenvertrag(
+        &pool,
+        kunde,
+        tenant,
+        &pg::CreateRahmenvertragInput {
+            gueltig_von: time::macros::date!(2026 - 01 - 01),
+            gueltig_bis: None,
+            kuendigungsfrist_monate: None,
+            auto_renewal: None,
+            renewal_monate: None,
+            preisanpassungsformel: None,
+            portfolio_rabatt_prozent: None,
+            rechnungsstellung: Some("SAMMEL".to_owned()),
+            sammelrechnung_intervall: None,
+            erp_rahmenvertrag_id: Some("RV-1".to_owned()),
+            angebot_id: None,
+            notizen: None,
+        },
+    )
+    .await
+    .expect("rahmenvertrag");
+
+    for (i, (malo, produkt)) in [
+        (MALO, "STROM-NORD-2026"),
+        ("51238696782", "STROM-SUED-2026"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut input = vertrag_input(&format!("RV-SITE-{i}"));
+        input.rahmenvertrag_id = Some(rahmen);
+        input.bundle_code = Some("KONZERN-BUNDLE".to_owned());
+        input.standort_bezeichnung = Some(format!("Werk {i}"));
+        input.komponenten[0].malo_id = Some(malo.to_owned());
+        input.komponenten[0].product_code = produkt.to_owned();
+        let created = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+            .await
+            .expect("site");
+        activate(&pool, created.id).await;
+    }
+
+    // The sites' supply starts in the future, so no product is in force today —
+    // and they must still be enumerated, because a bundle that silently omits a
+    // site under-bills it.
+    let sites = pg::list_rahmenvertrag_malos(&pool, rahmen, tenant)
+        .await
+        .expect("sites");
+    assert_eq!(
+        sites.len(),
+        2,
+        "every site of the framework contract appears"
+    );
+    assert!(
+        sites.iter().all(|s| s.product_code.is_none()),
+        "supply has not started, so no product is in force today"
+    );
+
+    // Once supply is running, each site reports its own product — reading the
+    // contract's `bundle_code` here named a bundle where billing needed a
+    // tariff, and gave every site of the framework the same one.
+    sqlx::query("UPDATE komponenten_produkte SET gueltig_von = CURRENT_DATE - 1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let mut sites = pg::list_rahmenvertrag_malos(&pool, rahmen, tenant)
+        .await
+        .expect("sites");
+    sites.sort_by(|a, b| a.product_code.cmp(&b.product_code));
+    assert_eq!(sites[0].product_code.as_deref(), Some("STROM-NORD-2026"));
+    assert_eq!(sites[1].product_code.as_deref(), Some("STROM-SUED-2026"));
+    assert!(
+        sites
+            .iter()
+            .all(|s| s.product_code.as_deref() != Some("KONZERN-BUNDLE")),
+        "the bundle name is not a tariff"
+    );
+}
+
+// ── Auto-renewal (§ 309 Nr. 9 lit. b BGB) ────────────────────────────────────
+
+/// A consumer contract that renews must end up **unbefristet** with at most a
+/// month's notice. Extending it by another fixed term is the clause § 309 Nr. 9
+/// lit. b BGB forbids, and it is the customer who discovers that.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_consumer_contract_renews_into_an_open_ended_one() {
+    let Some((pool, _pg)) = test_pool("renewal").await else {
+        return;
+    };
+    let tenant = "9800000000015";
+    let kunde = make_kunde(&pool, tenant).await;
+    let mut input = vertrag_input("R-1");
+    input.vertragsende = Some(time::macros::date!(2026 - 10 - 31));
+    input.auto_renewal = Some(true);
+    input.renewal_monate = Some(12);
+    input.kuendigungsfrist_monate = Some(3);
+    let created = pg::insert_versorgungsvertrag(&pool, kunde, tenant, tenant, &input)
+        .await
+        .expect("create");
+    activate(&pool, created.id).await;
+
+    let today = time::macros::date!(2026 - 11 - 01);
+    let overdue = pg::find_auto_renewal_overdue(&pool, tenant, today)
+        .await
+        .expect("overdue");
+    assert_eq!(overdue.len(), 1);
+    assert!(
+        overdue[0].haushaltskunde,
+        "the query carries the § 3 Nr. 57 fact"
+    );
+
+    let neu = vertragd::domain::verlaengerung(
+        overdue[0].haushaltskunde,
+        overdue[0].vertragsende,
+        overdue[0].renewal_monate,
+        today,
+    );
+    pg::apply_auto_renewal(&pool, created.id, neu)
+        .await
+        .expect("renew");
+
+    let after = pg::fetch_vertrag(&pool, created.id, tenant)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        after.vertragsende.is_none(),
+        "the term is gone, not extended"
+    );
+    assert_eq!(after.kuendigungsfrist_monate, 1, "§ 309 Nr. 9 lit. b BGB");
+    assert!(
+        !after.auto_renewal,
+        "an open-ended contract has nothing left to renew"
+    );
 }
 
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).

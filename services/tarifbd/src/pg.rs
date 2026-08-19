@@ -99,6 +99,32 @@ pub async fn upsert_product(
     .await
     .context("archive product_history before upsert")?;
 
+    // Staging the next price version closes the one it succeeds. Scheduling a
+    // price change is the ordinary way this table is used, and requiring the
+    // operator to first go back and end-date the running version — the only
+    // alternative once versions may not overlap — turns one act into two, with
+    // an unpriced gap or a rejected write whenever they forget the first.
+    //
+    // Only a dated version can close anything: an open-ended one (`valid_from`
+    // NULL) claims all of time, and if another version exists the exclusion
+    // constraint says so rather than this silently truncating it.
+    if let Some(from) = valid_from {
+        sqlx::query(
+            r"UPDATE products
+              SET valid_to = $4 - 1, updated_at = now()
+              WHERE tenant = $1 AND lf_mp_id = $2 AND product_code = $3
+                AND COALESCE(valid_from, DATE '0001-01-01') < $4
+                AND (valid_to IS NULL OR valid_to >= $4)",
+        )
+        .bind(tenant)
+        .bind(lf_mp_id)
+        .bind(product_code)
+        .bind(from)
+        .execute(pool)
+        .await
+        .context("close the superseded product version")?;
+    }
+
     let row = sqlx::query(
         r"INSERT INTO products
               (lf_mp_id, product_code, category, name, sparte, register_count, kundentyp,
@@ -148,10 +174,18 @@ pub async fn upsert_product(
 
 /// The product version in force at `as_of`.
 ///
-/// `as_of` defaults to today in Berlin. Without the filter the highest
-/// `valid_from` won outright, so a price version dated next quarter became the
-/// current one the moment it was staged — and a retroactive billing run read
-/// today's version instead of the one that was valid in the period it bills.
+/// `as_of` defaults to today in Berlin.
+///
+/// Both bounds are applied here. Without `valid_from` the highest version won
+/// outright, so a price staged for next quarter became the current one the
+/// moment it was written. Without `valid_to` a withdrawn product — including
+/// one soft-deleted through `DELETE /products/…` — went on pricing invoices
+/// for ever, because the only thing that ever checked the end date was a
+/// sentence in a doc comment telling callers to check it themselves.
+///
+/// # Errors
+///
+/// Propagates storage errors.
 pub async fn fetch_product(
     pool: &PgPool,
     lf_mp_id: &str,
@@ -162,6 +196,7 @@ pub async fn fetch_product(
     sqlx::query_as::<_, ProductRow>(
         "SELECT * FROM products WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
            AND (valid_from IS NULL OR valid_from <= $4)
+           AND (valid_to   IS NULL OR valid_to   >= $4)
          ORDER BY valid_from DESC NULLS LAST LIMIT 1",
     )
     .bind(lf_mp_id)
@@ -173,15 +208,17 @@ pub async fn fetch_product(
     .context("fetch product")
 }
 
-/// Soft-delete a product by setting `valid_to = today`.
+/// Withdraw a product by setting `valid_to = today`.
 ///
-/// Only touches `valid_to` and `updated_at` — the product remains in the
-/// database for historical billing lookups and the audit log.  Billing engines
-/// should call `fetch_product` and check `valid_to` when deciding whether a
-/// product is still applicable for a given billing period.
+/// The row stays for historical lookups and the audit log; [`fetch_product`]
+/// stops returning it for any date after today, so nothing new can be priced
+/// from it while an invoice for a past period still can.
 ///
-/// Returns `true` if a row was found and updated, `false` if the product did
-/// not exist.
+/// Returns `true` if a row was found and updated.
+///
+/// # Errors
+///
+/// Propagates storage errors.
 pub async fn soft_delete_product(
     pool: &PgPool,
     lf_mp_id: &str,
@@ -415,150 +452,6 @@ pub async fn list_products(
 
 // ── Customer → product assignment ─────────────────────────────────────────────
 
-#[derive(Debug, Serialize)]
-pub struct CustomerProductRow {
-    pub malo_id: String,
-    pub lf_mp_id: String,
-    pub product_code: String,
-    pub assigned_from: Date,
-    pub assigned_to: Option<Date>,
-    pub product: Option<ProductRow>,
-}
-
-/// The customer's current assignment plus the product version in force at
-/// `as_of` (default: today in Berlin).
-pub async fn get_customer_product(
-    pool: &PgPool,
-    malo_id: &str,
-    lf_mp_id: &str,
-    tenant: &str,
-    as_of: Option<Date>,
-) -> anyhow::Result<Option<CustomerProductRow>> {
-    let row = sqlx::query(
-        r"SELECT cp.malo_id, cp.lf_mp_id, cp.product_code, cp.assigned_from, cp.assigned_to
-          FROM customer_products cp
-          WHERE cp.malo_id = $1 AND cp.lf_mp_id = $2 AND cp.assigned_to IS NULL
-          ORDER BY cp.assigned_from DESC
-          LIMIT 1",
-    )
-    .bind(malo_id)
-    .bind(lf_mp_id)
-    .fetch_optional(pool)
-    .await
-    .context("get_customer_product")?;
-
-    if let Some(r) = row {
-        let product_code: String = r.try_get("product_code")?;
-        let product = fetch_product(pool, lf_mp_id, tenant, &product_code, as_of).await?;
-        Ok(Some(CustomerProductRow {
-            malo_id: r.try_get("malo_id")?,
-            lf_mp_id: r.try_get("lf_mp_id")?,
-            product_code,
-            assigned_from: r.try_get("assigned_from")?,
-            assigned_to: r.try_get("assigned_to")?,
-            product,
-        }))
-    } else {
-        Ok(None)
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AssignProductRequest {
-    pub product_code: String,
-    pub assigned_from: String,
-}
-
-pub async fn assign_product(
-    pool: &PgPool,
-    malo_id: &str,
-    lf_mp_id: &str,
-    tenant: &str,
-    req: AssignProductRequest,
-) -> anyhow::Result<()> {
-    use time::format_description::well_known::Iso8601;
-    let assigned_from =
-        Date::parse(&req.assigned_from, &Iso8601::DEFAULT).context("parse assigned_from")?;
-
-    // Guard: product must exist and be PUBLISHED.
-    let product = sqlx::query(
-        r"SELECT valid_from, valid_to, sparte, product_status
-          FROM products
-          WHERE lf_mp_id = $1 AND product_code = $2 AND tenant = $3
-          ORDER BY valid_from DESC NULLS LAST
-          LIMIT 1",
-    )
-    .bind(lf_mp_id)
-    .bind(&req.product_code)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await
-    .context("check product exists")?;
-
-    let product = product
-        .ok_or_else(|| anyhow::anyhow!("product {}/{} not found", lf_mp_id, req.product_code))?;
-
-    // Reject DRAFT products — operators must publish before assigning.
-    let status: String = product.try_get("product_status").unwrap_or_default();
-    if status == "DRAFT" {
-        anyhow::bail!(
-            "product {} is DRAFT; publish it before assigning to a MaLo",
-            req.product_code
-        );
-    }
-
-    // Guard: assigned_from must not predate the product's valid_from.
-    let prod_valid_from: Option<Date> = product.try_get("valid_from").ok().flatten();
-    if let Some(vf) = prod_valid_from.filter(|&vf| assigned_from < vf) {
-        anyhow::bail!(
-            "assigned_from ({assigned_from}) is before product valid_from ({vf}); \
-             retroactive assignment is not allowed"
-        );
-    }
-
-    // Guard: product must not be expired at the assignment date.
-    let prod_valid_to: Option<Date> = product.try_get("valid_to").ok().flatten();
-    if let Some(vt) = prod_valid_to.filter(|&vt| assigned_from > vt) {
-        anyhow::bail!(
-            "product {} expired on {vt}; cannot assign after expiry",
-            req.product_code
-        );
-    }
-
-    // Close the previous assignment and open the new one in ONE transaction.
-    // Two separate statements let a failure between them leave the MaLo with
-    // no active product (a Tarifwechsel that lost the customer's tariff), and
-    // the DEFERRABLE INITIALLY DEFERRED FK only has effect inside a shared tx.
-    let mut tx = pool.begin().await.context("begin assign tx")?;
-    sqlx::query(
-        r"UPDATE customer_products SET assigned_to = $3, updated_at = now()
-          WHERE malo_id = $1 AND lf_mp_id = $2 AND assigned_to IS NULL",
-    )
-    .bind(malo_id)
-    .bind(lf_mp_id)
-    .bind(assigned_from)
-    .execute(&mut *tx)
-    .await
-    .context("close previous assignment")?;
-
-    sqlx::query(
-        r"INSERT INTO customer_products (malo_id, lf_mp_id, product_code, assigned_from)
-          VALUES ($1, $2, $3, $4)
-          ON CONFLICT (malo_id, lf_mp_id, assigned_from) DO UPDATE
-          SET product_code = EXCLUDED.product_code, updated_at = now()",
-    )
-    .bind(malo_id)
-    .bind(lf_mp_id)
-    .bind(&req.product_code)
-    .bind(assigned_from)
-    .execute(&mut *tx)
-    .await
-    .context("assign product")?;
-    tx.commit().await.context("commit assign tx")?;
-
-    Ok(())
-}
-
 // ── EPEX day-ahead prices ─────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -739,44 +632,43 @@ pub async fn monthly_epex_average(
 
 #[derive(Debug, Deserialize)]
 pub struct NehsImportRequest {
-    /// EUR per tonne CO₂ (auction clearing / Verkaufsphase price).
+    /// EUR per tonne CO₂ — an auction clearing price, an Einführungsphase
+    /// Festpreis, or the Mehrmengenpreis of a Nachkauf.
     pub eur_per_t: Decimal,
     /// `auktion` | `verkaufsphase` | `nachkauf` | `manual`.
     pub source: Option<String>,
 }
 
-/// Valid `nehs_prices.source` values — mirrored by the SQL CHECK constraint.
-pub const NEHS_SOURCES: &[&str] = &["auktion", "verkaufsphase", "nachkauf", "manual"];
-
-/// Validate an nEHS import request; returns the effective source on success
-/// (`None` defaults to `"manual"`). Rejects non-positive prices and unknown
-/// sources — the handler maps the error to 422, and the table's CHECK
-/// constraint backstops writes that bypass this layer.
-pub fn validate_nehs_import(req: &NehsImportRequest) -> anyhow::Result<&str> {
-    if req.eur_per_t <= Decimal::ZERO {
-        anyhow::bail!("eur_per_t must be positive");
-    }
+/// Check an nEHS price point against § 10 BEHG for its date.
+///
+/// The CO₂ component of every Gas and Wärme invoice is derived from this
+/// series, so a decimal slip here mis-bills every gas customer at once and is
+/// invisible on any single invoice. What the statute pins is checked exactly,
+/// what it bounds is bounded, and what it leaves open is accepted — see
+/// [`crate::behg`].
+///
+/// # Errors
+///
+/// The value cannot be right for that date and source.
+pub fn validate_nehs_import(req: &NehsImportRequest, price_date: Date) -> anyhow::Result<&str> {
     let source = req.source.as_deref().unwrap_or("manual");
-    if !NEHS_SOURCES.contains(&source) {
-        anyhow::bail!(
-            "unknown source {source:?} — expected one of: {}",
-            NEHS_SOURCES.join(", ")
-        );
+    let quelle = crate::behg::Quelle::parse(source).ok_or_else(|| {
+        anyhow::anyhow!(
+            "unknown source {source:?} — expected one of: auktion, verkaufsphase, nachkauf, manual"
+        )
+    })?;
+    if let Err(b) = crate::behg::pruefe(price_date, req.eur_per_t, quelle) {
+        anyhow::bail!("{} ({})", b.grund, b.rechtsgrundlage);
     }
     Ok(source)
 }
 
-/// Upsert one dated nEHS certificate price.
-///
-/// Rejects unknown `source` values before the database does (the table has a
-/// matching CHECK constraint), so the handler surfaces a clean 422 instead of
-/// a raw constraint-violation message.
 pub async fn upsert_nehs_price(
     pool: &PgPool,
     date: Date,
     req: NehsImportRequest,
 ) -> anyhow::Result<()> {
-    let source = validate_nehs_import(&req)?;
+    let source = validate_nehs_import(&req, date)?;
     sqlx::query(
         r"INSERT INTO nehs_prices (price_date, eur_per_t, source)
           VALUES ($1, $2, $3)
@@ -845,45 +737,6 @@ pub async fn fetch_epex_latest_date(pool: &PgPool) -> anyhow::Result<Option<Date
     Ok(row.map(|(d,)| d))
 }
 
-/// Returns customer product assignments (Lieferverträge) ending within `days_ahead` days.
-/// Used by `list_expiring_contracts` MCP tool for churn prevention / renewal campaigns.
-#[allow(dead_code)]
-pub async fn list_expiring_assignments(
-    pool: &sqlx::PgPool,
-    lf_mp_id: &str,
-    days_ahead: i64,
-) -> anyhow::Result<Vec<serde_json::Value>> {
-    use sqlx::Row;
-    let rows = sqlx::query(
-        r"SELECT malo_id, lf_mp_id, product_code, assigned_from, assigned_to
-          FROM customer_products
-          WHERE lf_mp_id = $1
-            AND assigned_to IS NOT NULL
-            AND assigned_to <= CURRENT_DATE + ($2 * INTERVAL '1 day')
-            AND assigned_to >= CURRENT_DATE
-          ORDER BY assigned_to ASC",
-    )
-    .bind(lf_mp_id)
-    .bind(days_ahead)
-    .fetch_all(pool)
-    .await
-    .context("list_expiring_assignments")?;
-
-    let out: Vec<serde_json::Value> = rows
-        .iter()
-        .map(|r| {
-            serde_json::json!({
-                "malo_id":       r.try_get::<String, _>("malo_id").unwrap_or_default(),
-                "lf_mp_id":      r.try_get::<String, _>("lf_mp_id").unwrap_or_default(),
-                "product_code":  r.try_get::<String, _>("product_code").unwrap_or_default(),
-                "assigned_from": r.try_get::<time::Date, _>("assigned_from").map(|d| d.to_string()).unwrap_or_default(),
-                "assigned_to":   r.try_get::<Option<time::Date>, _>("assigned_to").ok().flatten().map(|d| d.to_string()),
-            })
-        })
-        .collect();
-    Ok(out)
-}
-
 // ── Angebot (B2B Quotation, L4) ───────────────────────────────────────────────
 
 /// Stored Angebot row.
@@ -949,6 +802,15 @@ pub struct AngebotPositionInput {
     pub product_code: String,
     pub sparte: String,
     pub malo_id: Option<String>,
+    /// Messlokation of the supply point. **Mandatory for GAS**: the
+    /// registration `vertragd` files on acceptance carries it as the
+    /// Zählpunktbezeichnung (RFF+Z13), and a MaLo-ID is not one — a quotation
+    /// accepted without it produced a contract that could never be registered.
+    pub melo_id: Option<String>,
+    /// The Netzbetreiber behind the supply point — the UTILMD's recipient.
+    /// Without it the contract created on acceptance has nothing to register
+    /// against and sits in ANGELEGT for ever.
+    pub nb_mp_id: Option<String>,
     pub standort_bezeichnung: Option<String>,
     /// Estimated annual consumption (kWh).  Required for price calculation.
     pub jahresverbrauch_kwh: Decimal,
@@ -979,7 +841,11 @@ pub struct AngebotPositionInput {
     pub stromsteuer_ct_per_kwh: Option<Decimal>,
     /// Energiesteuer Gas override in ct/kWh_Hs (Gas). Default 0.55 (§2 EnergieStG).
     pub energiesteuer_gas_ct_per_kwh: Option<Decimal>,
-    /// BEHG CO₂ levy override in ct/kWh_Hs (Gas only). Default 1.109 (55 EUR/t, 2025).
+    /// BEHG CO₂ levy override in ct/kWh_Hs (Gas only).
+    ///
+    /// Absent, the rate is derived from the dated `nehs_prices` series — the
+    /// certificate price is market-formed since the 2026 auctions (§ 10 Abs. 1
+    /// BEHG), so a constant baked in here quotes last year's CO₂ cost.
     pub behg_gas_ct_per_kwh: Option<Decimal>,
 }
 
@@ -1272,18 +1138,28 @@ pub async fn link_angebot_rahmenvertrag(
 
 /// Auto-expire all Angebote past their gueltig_bis date.
 /// Called periodically by the background task.
-pub async fn expire_stale_angebote(pool: &PgPool) -> anyhow::Result<u64> {
-    let r = sqlx::query(
+/// Mark this tenant's open Angebote whose Bindefrist has passed as ABGELAUFEN.
+///
+/// Tenant-scoped: a sweep that ran across every tenant let one deployment's
+/// worker close another's quotations, and neither operator could see why.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn expire_stale_angebote(pool: &PgPool, tenant: &str) -> anyhow::Result<u64> {
+    let res = sqlx::query(
         r"UPDATE angebote
           SET status = 'ABGELAUFEN', updated_at = now()
-          WHERE status IN ('ANGELEGT', 'VERSANDT')
-            AND gueltig_bis < $1",
+          WHERE tenant = $1
+            AND status IN ('ANGELEGT', 'VERSANDT')
+            AND gueltig_bis < $2",
     )
+    .bind(tenant)
     .bind(berlin_today())
     .execute(pool)
     .await
     .context("expire_stale_angebote")?;
-    Ok(r.rows_affected())
+    Ok(res.rows_affected())
 }
 
 /// Generate the next Angebotsnummer in sequence.
@@ -1419,7 +1295,7 @@ pub struct ComparisonFeedEntry {
     /// Full validated BO4E `Tarifpreisblatt` payload.
     /// Portal integrators may use this for deep tariff analysis.
     pub tarifpreisblatt: serde_json::Value,
-    /// §42d EnWG: Full BO4E `Tarifinfo` Business Object envelope.
+    /// § 41c EnWG: Full BO4E `Tarifinfo` Business Object envelope.
     ///
     /// Ready for direct schema-validated import by Verivox, Check24, and the
     /// BNetzA Markttransparenzstelle.  Eliminates the manual ETL step for portal
@@ -1599,40 +1475,58 @@ mod angebot_pricing_tests {
 
 #[cfg(test)]
 mod nehs_validation_tests {
-    use super::{NEHS_SOURCES, NehsImportRequest, validate_nehs_import};
+    use super::{NehsImportRequest, validate_nehs_import};
     use rust_decimal::dec;
+    use time::macros::date;
 
-    #[test]
-    fn every_known_source_is_accepted() {
-        for &src in NEHS_SOURCES {
-            let req = NehsImportRequest {
-                eur_per_t: dec!(63.50),
-                source: Some(src.to_owned()),
-            };
-            assert_eq!(
-                validate_nehs_import(&req).expect("known source"),
-                src,
-                "source {src:?} must validate"
-            );
+    fn req(eur: rust_decimal::Decimal, source: Option<&str>) -> NehsImportRequest {
+        NehsImportRequest {
+            eur_per_t: eur,
+            source: source.map(str::to_owned),
         }
     }
 
     #[test]
-    fn omitted_source_defaults_to_manual() {
-        let req = NehsImportRequest {
-            eur_per_t: dec!(68),
-            source: None,
-        };
-        assert_eq!(validate_nehs_import(&req).unwrap(), "manual");
+    fn an_auction_price_inside_the_corridor_is_accepted() {
+        assert_eq!(
+            validate_nehs_import(&req(dec!(63.50), Some("auktion")), date!(2026 - 07 - 08))
+                .unwrap(),
+            "auktion"
+        );
     }
 
     #[test]
-    fn unknown_source_is_rejected() {
-        let req = NehsImportRequest {
-            eur_per_t: dec!(63.50),
-            source: Some("boerse".to_owned()),
-        };
-        let err = validate_nehs_import(&req).expect_err("unknown source must fail");
+    fn a_decimal_slip_is_refused_with_the_corridor_named() {
+        let err = validate_nehs_import(&req(dec!(6.35), Some("auktion")), date!(2026 - 07 - 08))
+            .expect_err("6.35 EUR/t is a typo, not a clearing price");
+        let msg = err.to_string();
+        assert!(msg.contains("Preiskorridor"), "got: {msg}");
+        assert!(msg.contains("§ 10 Abs. 2 BEHG"), "got: {msg}");
+    }
+
+    #[test]
+    fn the_nachkauf_price_is_not_the_corridor() {
+        assert!(
+            validate_nehs_import(&req(dec!(68), Some("nachkauf")), date!(2026 - 11 - 10)).is_ok()
+        );
+        assert!(
+            validate_nehs_import(&req(dec!(68), Some("auktion")), date!(2026 - 11 - 10)).is_err(),
+            "68 EUR/t is above the auction corridor — it is the Mehrmengenpreis"
+        );
+    }
+
+    #[test]
+    fn omitted_source_defaults_to_manual() {
+        assert_eq!(
+            validate_nehs_import(&req(dec!(68), None), date!(2026 - 11 - 10)).unwrap(),
+            "manual"
+        );
+    }
+
+    #[test]
+    fn unknown_source_is_rejected_with_the_valid_ones_listed() {
+        let err = validate_nehs_import(&req(dec!(63.50), Some("boerse")), date!(2026 - 07 - 08))
+            .expect_err("unknown source must fail");
         let msg = err.to_string();
         assert!(msg.contains("unknown source"), "got: {msg}");
         assert!(
@@ -1642,16 +1536,9 @@ mod nehs_validation_tests {
     }
 
     #[test]
-    fn non_positive_price_is_rejected() {
-        for eur in [dec!(0), dec!(-1)] {
-            let req = NehsImportRequest {
-                eur_per_t: eur,
-                source: None,
-            };
-            assert!(
-                validate_nehs_import(&req).is_err(),
-                "{eur} must be rejected"
-            );
-        }
+    fn a_non_positive_price_is_rejected() {
+        assert!(
+            validate_nehs_import(&req(dec!(0), Some("manual")), date!(2026 - 07 - 08)).is_err()
+        );
     }
 }

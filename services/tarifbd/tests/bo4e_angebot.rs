@@ -7,7 +7,8 @@
 use rubo4e::current::{Angebot, Angebotsstatus, Mengeneinheit, Waehrungscode};
 use rust_decimal::dec;
 use tarifbd::bo4e_angebot::{
-    ATTR_IST_BASIS, ATTR_LABEL, ATTR_PRODUCT_CODE, ATTR_RABATT_PCT, build_angebot, status_from_str,
+    ATTR_IST_BASIS, ATTR_LABEL, ATTR_MELO, ATTR_PRODUCT_CODE, ATTR_RABATT_PCT, build_angebot,
+    status_from_str,
 };
 use tarifbd::handlers::{PositionCostBreakdown, ScenarioCostBreakdown};
 
@@ -16,6 +17,8 @@ fn position(malo: Option<&str>) -> PositionCostBreakdown {
         product_code: "STROM-B2B-12".to_owned(),
         sparte: "STROM".to_owned(),
         malo_id: malo.map(str::to_owned),
+        melo_id: Some("DE0001112223334445556667778889".to_owned()),
+        nb_mp_id: Some("9900000000001".to_owned()),
         standort_bezeichnung: Some("Werk Nord".to_owned()),
         jahresverbrauch_kwh: dec!(250000),
         supply_netto_eur: dec!(50000),
@@ -270,4 +273,44 @@ fn each_variant_carries_its_own_delivery_period() {
         end(0) > end(1),
         "the 24-month variant must end after the 12-month one"
     );
+}
+
+/// The registration `vertragd` files on acceptance needs two identifiers the
+/// BO4E `Marktlokation` alone does not carry both of: the Messlokation (a gas
+/// Lieferbeginn cannot be filed without it) and the Netzbetreiber (the UTILMD's
+/// recipient). A quotation that drops them produces a contract nothing can
+/// register, months after anyone was looking.
+#[test]
+fn a_supply_point_carries_the_identifiers_its_registration_needs() {
+    let angebot = build_angebot(
+        "AN-2026-0001",
+        "ANGENOMMEN",
+        time::macros::date!(2026 - 09 - 30),
+        None,
+        Some("STROM"),
+        &[scenario("Basis", true, None)],
+    );
+    let teil = angebot
+        .varianten
+        .as_ref()
+        .and_then(|v| v.first())
+        .and_then(|v| v.teile.as_ref())
+        .and_then(|t| t.first())
+        .expect("one Angebotsteil");
+
+    let melo = teil
+        .zusatz_attribute
+        .as_ref()
+        .and_then(|z| z.iter().find(|a| a.name.as_deref() == Some(ATTR_MELO)))
+        .and_then(|a| a.wert.as_ref())
+        .and_then(serde_json::Value::as_str);
+    assert_eq!(melo, Some("DE0001112223334445556667778889"));
+
+    let nb = teil
+        .lieferstellenangebotsteil
+        .as_ref()
+        .and_then(|l| l.first())
+        .and_then(|m| m.netzbetreibercodenr.as_ref())
+        .map(|id| id.as_ref().to_owned());
+    assert_eq!(nb.as_deref(), Some("9900000000001"));
 }

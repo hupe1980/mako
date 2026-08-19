@@ -631,25 +631,76 @@ pub async fn post_portal_tarifwechsel(
 pub struct PortalKuendigungRequest {
     /// Last day of supply (YYYY-MM-DD).
     ///
-    /// **§41 Abs. 3 EnWG** — for rolling (unbefristet) B2C contracts:
-    /// must be at least 14 days from today and must fall on the last day of
-    /// a calendar month (end-of-billing-period).
+    /// The notice period is `vertragd`'s to decide — it depends on the
+    /// Vertragsart, on whether the customer is a Haushaltskunde and on the
+    /// reason. `GET /api/v1/portal/{malo_id}/kuendigungsfrist` answers what is
+    /// possible before this is sent.
     pub lieferende: String,
-    /// Cancellation reason (stored in audit trail, required for self-service).
+    /// Why. Decides the notice period: `ORDENTLICH` (default),
+    /// `PREISANPASSUNG` (§ 41 Abs. 5 Satz 4 EnWG), `UMZUG` (§ 41b Abs. 5 EnWG)
+    /// or `LIEFERANTENWECHSEL`.
     pub grund: Option<String>,
+    /// Free-text note kept with the contract.
+    pub bemerkung: Option<String>,
+}
+
+/// `GET /api/v1/portal/{malo_id}/kuendigungsfrist`
+///
+/// The earliest date this contract can end, for every termination reason, with
+/// the rule that produced it. A portal that offers self-service termination has
+/// to show the customer the date *before* they pick one, and the four statutes
+/// behind it (§ 20 Abs. 1 StromGVV/GasGVV, § 41b Abs. 5 EnWG, § 41 Abs. 5 Satz 4
+/// EnWG, § 309 Nr. 9 lit. c BGB) belong in `vertragd` rather than in a second
+/// implementation here.
+pub async fn get_portal_kuendigungsfrist(
+    Extension(cfg): Extension<Arc<PortaldConfig>>,
+    Extension(clients): Extension<Arc<PortalClients>>,
+    headers: axum::http::HeaderMap,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
+        Ok(ctx) => ctx,
+        Err(resp) => return resp,
+    };
+    let vertragd = match &clients.vertragd {
+        Some(c) => c.as_ref(),
+        None => {
+            return (StatusCode::SERVICE_UNAVAILABLE, "vertragd not configured").into_response();
+        }
+    };
+    let Some((vtid, _)) = resolve_vertrag_for_malo(vertragd, auth_ctx.kunden_id, &malo_id).await
+    else {
+        return (
+            StatusCode::NOT_FOUND,
+            "no active supply contract for this delivery point",
+        )
+            .into_response();
+    };
+    match vertragd
+        .get_json(&format!("/api/v1/vertraege/{vtid}/kuendigungsfrist"))
+        .await
+    {
+        Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
 }
 
 /// `POST /api/v1/portal/{malo_id}/kuendigen`
 ///
-/// Customer-initiated contract cancellation (§41 Abs. 3 EnWG).
+/// Customer-initiated termination.
 ///
-/// Validates:
-/// - JWT authentication + MaLo ownership
-/// - `lieferende >= today + 14 days` (§41 minimum notice for rolling contracts)
-/// - `lieferende` falls on the last calendar day of a month (end of billing cycle)
+/// Validates JWT authentication and MaLo ownership, then proxies to
+/// `POST /api/v1/vertraege/{id}/kuendigen` on `vertragd`.
 ///
-/// Proxies to `POST /api/v1/vertraege/{id}/kuendigen` on `vertragd`, which
-/// triggers UTILMD Lieferendemeldung via `processd`.
+/// **The notice period is not checked here.** It depends on the Vertragsart
+/// (§ 20 Abs. 1 StromGVV/GasGVV in the Grundversorgung), on whether the
+/// customer is a Haushaltskunde (§ 3 Nr. 57 EnWG) and on the reason
+/// (§ 41b Abs. 5 EnWG on a move, § 41 Abs. 5 Satz 4 EnWG after a price change),
+/// and `vertragd` owns all four facts. A second, simpler rule here — the flat
+/// "14 days to a month end" this used to apply — could only ever disagree with
+/// the one that decides, and rejected lawful terminations. `vertragd` answers
+/// 422 with the rule it applied, and that answer is relayed unchanged.
 pub async fn post_portal_kuendigen(
     Extension(cfg): Extension<Arc<PortaldConfig>>,
     Extension(clients): Extension<Arc<PortalClients>>,
@@ -662,32 +713,14 @@ pub async fn post_portal_kuendigen(
         Err(resp) => return resp,
     };
 
-    // Validate lieferende.
-    let lieferende = match time::Date::parse(
+    // Only the format is this service's business; the period is vertragd's.
+    if time::Date::parse(
         &req.lieferende,
         &time::format_description::well_known::Iso8601::DATE,
-    ) {
-        Ok(d) => d,
-        Err(_) => {
-            return (StatusCode::BAD_REQUEST, "lieferende must be YYYY-MM-DD").into_response();
-        }
-    };
-    let today = time::OffsetDateTime::now_utc().date();
-    if lieferende < today + time::Duration::days(14) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "lieferende must be at least 14 days from today (§41 EnWG minimum notice)",
-        )
-            .into_response();
-    }
-    // Must be last day of calendar month (billing cycle boundary).
-    let next_day = lieferende.next_day().unwrap_or(lieferende);
-    if next_day.day() != 1 {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "lieferende must be the last day of a calendar month (end of billing cycle)",
-        )
-            .into_response();
+    )
+    .is_err()
+    {
+        return (StatusCode::BAD_REQUEST, "lieferende must be YYYY-MM-DD").into_response();
     }
 
     let vertragd = match &clients.vertragd {
@@ -710,7 +743,11 @@ pub async fn post_portal_kuendigen(
 
     let body = serde_json::json!({
         "lieferende": req.lieferende,
-        "grund": req.grund.as_deref().unwrap_or("Kundenkündigung über Kundenportal"),
+        "grund": req.grund.as_deref().unwrap_or("ORDENTLICH"),
+        "bemerkung": req
+            .bemerkung
+            .as_deref()
+            .unwrap_or("Kündigung über das Kundenportal"),
     });
 
     match vertragd

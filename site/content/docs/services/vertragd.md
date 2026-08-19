@@ -1,642 +1,456 @@
 +++
 title = "vertragd Operator Guide"
-description = "vertragd operator guide: B2C + B2B Contract & Customer Management. Kunden, Rahmenverträge (B2B), Versorgungsverträge, Tarifwechsel, Kündigung, multi-user portal access via kunden_identitaeten, and OIDC → MaLo authorization for portald."
+description = "vertragd operator guide: retail contract lifecycle for B2C and B2B. The statutory notice periods (§ 20 GVV, § 41 Abs. 5 and § 41b Abs. 5 EnWG, § 309 Nr. 9 BGB) as testable rules, durable outbound dispatch, DSGVO Art. 15/17, and OIDC → MaLo authorization for portald."
 weight = 35
 [extra]
 mermaid = true
 +++
 # `vertragd` — Contract & Customer Management
 
-`vertragd` is the **customer registry and retail contract lifecycle engine** for both
-B2C (private households) and B2B (commercial, RLM) customers. It owns the complete
-chain from customer identity to supply contract to billing account provisioning —
-and serves as the single authorization gateway between OIDC identities and MaLo IDs.
+`vertragd` is the **customer registry and retail contract lifecycle engine** for
+both B2C (private households) and B2B (commercial, RLM) customers. It owns the
+chain from customer identity to supply contract to billing-account provisioning,
+and it is the single authorization gateway between OIDC identities and MaLo IDs.
 
-Port: **`:9780`** · PostgreSQL · OIDC/JWT + API-key auth
+Port: **`:9780`** · PostgreSQL · OIDC/JWT on every route
 
-## The deployment's tenant is enforced on the token, not assumed
+## The rules live in one module
 
-`vertragd` pins one tenant in configuration, which makes every query
-tenant-scoped by construction — but a configured tenant does not by itself
-*reject* a token carrying a different one. A validly signed JWT issued for
-another operator in the same OIDC realm is otherwise indistinguishable from a
-local one, and would be served this tenant's customer data.
+Every deadline `vertragd` enforces comes from a statute, and the statute differs
+by *which* contract and *which* customer. Spreading that across handlers is how
+a service ends up with four notice periods and no way to say which one is right,
+so they are pure functions in `src/domain.rs` — no HTTP, no SQL, no clock.
 
-The router layers `ExpectedTenant`, and the `Claims` extractor rejects any token
-whose `mako_tenant` differs. Putting the check in extraction rather than in each
-handler matters: a route added later cannot skip it without also dropping
-authentication, so the failure mode is loud rather than silent.
+| Rule | Source | Value |
+|---|---|---|
+| Kündigung Grundversorgung | § 20 Abs. 1 StromGVV / GasGVV | 2 Wochen, jederzeit |
+| Kündigungsbestätigung | § 41 Abs. 8 Nr. 2 EnWG, § 20 Abs. 2 GVV | unverzüglich, Textform |
+| Kündigung Sondervertrag | Vertrag, gedeckelt durch § 309 Nr. 9 lit. c BGB | ≤ 1 Monat für Verbraucher |
+| Sonderkündigung Preisanpassung | § 41 Abs. 5 Satz 4 EnWG, § 5 Abs. 3 GVV | fristlos zum Wirksamwerden |
+| Sonderkündigung Umzug | § 41b Abs. 5 EnWG | 6 Wochen (Haushaltskunden) |
+| Preisänderungsanzeige Sondervertrag | § 41 Abs. 5 Satz 2 EnWG | 1 Monat (Haushaltskunde), sonst 2 Wochen |
+| Preisänderungsanzeige Grundversorgung | § 5 Abs. 2 StromGVV / GasGVV | 6 Wochen, nur zum Monatsersten |
+| Erstlaufzeit Verbrauchervertrag | § 309 Nr. 9 lit. a BGB | ≤ 24 Monate |
+| Stillschweigende Verlängerung | § 309 Nr. 9 lit. b BGB | nur unbefristet, ≤ 1 Monat kündbar |
+| Ersatzversorgung | § 38 Abs. 4 EnWG | endet spätestens nach 3 Monaten |
 
-The `401` body carries a generic detail on purpose. A caller reaching that
-branch has already proved realm membership, so naming the expected tenant would
-hand a foreign operator this deployment's identifier; the full comparison is
-logged at `WARN` instead.
+### Two stored facts pick the column
 
----
+- **`versorgungsvertraege.vertragsart`** — `GRUNDVERSORGUNG`,
+  `ERSATZVERSORGUNG` or `SONDERVERTRAG`. An unrecognised value reads as
+  `SONDERVERTRAG`, the regime with the least statutory privilege, so a typo
+  cannot silently claim Grundversorgungs-Fristen.
+- **`kunden.haushaltskunde`** — § 3 Nr. 57 EnWG. This is deliberately **not** the
+  same fact as `kundentyp`: a commercial customer consuming no more than
+  10 000 kWh a year is a Haushaltskunde, and three deadlines turn on it. It
+  defaults to `kundentyp == "B2C"` and is correctable afterwards, because
+  consumption changes.
 
-## Contract creation from the BO4E Angebot
+## Nothing is dispatched from a detached task
 
-`POST /api/v1/webhooks/angebot` receives `de.tarif.angebot.angenommen` from `tarifbd`.
-The CloudEvent carries the priced quotation as a BO4E `Angebot` under
-`data.bo4e`, and the contract is built from that document rather than from the
-parallel scalar fields — so what was quoted and what is contracted cannot drift
-apart.
+A Lieferbeginn is an obligation — the customer has a contract and the NB is
+waiting for the UTILMD. Firing it from a `tokio::spawn` meant a restart between
+the contract insert and the `processd` call dropped the registration in silence,
+leaving the component in `ANGELEGT` with nothing left to retry it. The same held
+for the Schlussablesung, the tariff assignment and the billing account.
 
-### The accepted variant supplies the terms
+So the *intent* is written in the same transaction as the contract change, and
+workers perform it afterwards.
 
-A quotation carries several `Angebotsvariante`s (12 months fixed, 24 months
-fixed with a discount, …), each with its own Lieferzeitraum. `gewaehlte_variante`
-selects one; `None` means the base offer, which is the first variant.
+```mermaid
+flowchart LR
+    H["handler<br/>one transaction"] --> W1["contract write"]
+    H --> W2["outbound_tasks"]
+    H --> W3["event_outbox"]
+    W2 --> OW["outbound worker<br/>backoff · dead-letter"]
+    W3 --> XW["outbox worker<br/>HMAC-signed"]
+    OW --> P["processd"]
+    OW --> E["edmd"]
+    OW --> A["accountingd"]
+    XW --> ERP["ERP webhook"]
+```
 
-`angebot_bo4e::read_accepted` therefore takes the Laufzeit and the Lieferbeginn
-from **the accepted variant**, not from the quotation header. Reading the term
-from the header is exactly the drift this path exists to prevent.
+**`outbound_tasks`** carries every service-to-service call — `LIEFERBEGINN`,
+`LIEFERENDE`, `ABLESUNG_BEGINN`, `ABLESUNG_ENDE`, `ABRECHNUNGSKONTO`. Exponential backoff from 30 s to an hour, dead-lettered
+after eight attempts, claimed with `FOR UPDATE SKIP LOCKED` so several replicas
+share one queue. A unique `dedupe_key` makes the enqueue exactly-once: a
+repeatable action varies its key by what makes it distinct
+(`PRODUKTZUORDNUNG:{komp}:{wirksamkeit}:{code}`), a one-shot one does not
+(`LIEFERBEGINN:{komp}`) — which is what stops an idempotent re-POST of the same
+`erp_contract_id` producing a second UTILMD.
 
-| Contract field | Source in the BO4E document |
-|---|---|
-| `rahmenvertrag_nr` | `Angebot.angebotsnummer` |
-| `gueltig_von` | accepted `Angebotsteil.lieferzeitraum.startdatum` |
-| Laufzeit | whole months between the variant's start and end dates |
-| MaLo per supply point | `Angebotsteil.lieferstellenangebotsteil[].marktlokationsId` |
-| product code | `mako.angebot.teil.produktCode` (zusatz_attribut) |
+**`event_outbox`** carries every customer-facing `de.vertrag.*` CloudEvent,
+including the statutory notices. A notice the supplier owes must not depend on
+the ERP being reachable at the moment a worker happens to run.
 
-An out-of-range `gewaehlte_variante` falls back to the base offer rather than
-contracting a variant the customer never chose, and a document with **no**
-variants yields nothing at all — guessing would contract terms the customer
-never saw.
+A crash therefore costs a retry, never an obligation. What the retries could not
+discharge is the operator's work queue:
 
-The scalar fields remain as a fallback for a quotation accepted before it was
-ever priced (`bo4e` is `{}` until `GET /angebote/{id}/comparison` runs).
+```bash
+curl -s http://vertragd:9780/api/v1/outbound/dead
+curl -X POST http://vertragd:9780/api/v1/outbound/dead/{id}/retry
+```
 
-## Core responsibilities
+## Authentication
 
-| Responsibility | Description |
-|---|---|
-| **Customer registry** | `Kunden` (B2C persons + B2B companies); `Geschaeftspartner` typed with schema validation |
-| **B2B portal access** | `kunden_identitaeten` — N OIDC logins per company; role-based + site-scoped |
-| **Framework contracts** | `Rahmenverträge` for B2B — portfolio pricing, indexation, Sammelrechnung |
-| **Supply contracts** | `Versorgungsverträge` per site/commodity with status lifecycle |
-| **MaKo triggering** | `POST processd /start-supply` per commodity on contract creation |
-| **Tarifwechsel** | Changes product code without new UTILMD — §41 EnWG notification boundary; **Preisgarantie guard** blocks changes within a price-lock window |
-| **Kündigung** | Coordinated Lieferende + Schlussablesung across all commodities |
-| **portald auth** | `GET /kunden/authenticate?malo_id=` — OIDC sub → MaLo ownership check |
-| **Billing provisioning** | Auto-provisions `tarifbd` product + `accountingd` account on NB confirmation |
-| **Preisgarantie** | Typed BO4E `Preisgarantie` COM — `PUT/GET /api/v1/vertraege/{id}/preisgarantie`; blocks `tarifwechsel` within the guarantee window |
-| **Person (B2C)** | `PUT/GET /api/v1/kunden/{id}/person` — `rubo4e::current::Person` BO (GDPR Art. 15) |
+Every REST route extracts `Claims`. The extractor verifies the token *and*
+rejects one whose `mako_tenant` is not this deployment's — a validly signed
+token from another operator in the same OIDC realm is otherwise
+indistinguishable from a local one. The check sits in extraction rather than in
+the handlers, so a route added later cannot skip it without also dropping
+authentication; the `401` detail is generic and the mismatch is logged at `WARN`.
 
----
+The two webhook routes carry no operator token and are authenticated by the
+shared `X-Mako-Signature` HMAC over the raw body. `vertragd` refuses to start
+without **both** `[oidc]` and `inbound_secret` unless the deployment sets
+`allow_insecure_no_auth = true`: a forged event on `POST /api/v1/events`
+confirms supply, and one on `POST /api/v1/webhooks/angebot` creates a contract.
+
+`billingd` and `portald` read contract data with an `[[oidc.service_keys]]`
+credential.
 
 ## Data model
 
-```mermaid
-erDiagram
-    KUNDEN {
-        uuid id PK
-        text kunden_nr
-        text kundentyp "B2C | B2B_SLP | B2B_RLM | B2B_HV"
-        jsonb geschaeftspartner
-        text umsatzsteuer_id "B2B only"
-        bool stromwiederverkaeufer "§13b Abs. 2 Nr. 5 lit. b UStG — billingd derives reverse charge"
-        bool sepa_erlaubt
-        int  zahlungsziel_tage
-        text tenant
-    }
-    KUNDEN_IDENTITAETEN {
-        uuid id PK
-        uuid kunden_id FK
-        text oidc_sub
-        text email
-        text rolle "VOLLZUGRIFF|ADMIN|FINANZEN|TECHNIK|READONLY"
-        text standort_filter "NULL = all sites"
-        bool aktiv
-        timestamptz letzter_login
-    }
-    RAHMENVERTRAEGE {
-        uuid id PK
-        uuid kunden_id FK
-        text rechnungsstellung "EINZEL|SAMMEL|POSITIONEN"
-        decimal portfolio_rabatt_prozent "volume discount %"
-        text preisanpassungsformel "index formula e.g. CPI+1%"
-        int  kuendigungsfrist_monate
-        date gueltig_von
-        date gueltig_bis
-        bool auto_renewal
-        uuid angebot_id "CPQ traceability → tarifbd.angebote"
-        text erp_rahmenvertrag_id "idempotency key"
-    }
-    VERSORGUNGSVERTRAEGE {
-        uuid id PK
-        uuid kunden_id FK
-        uuid rahmenvertrag_id FK "nullable, B2B"
-        text status "ANGELEGT|IN_BEARBEITUNG|TEILERFUELLUNG|AKTIV|GEKÜNDIGT|ABGELAUFEN"
-        text standort_bezeichnung "B2B site label"
-        date vertragsbeginn
-        date vertragsende
-        date preisgarantie_bis
-        int  kuendigungsfrist_monate
-    }
-    VERTRAGSKOMPONENTEN {
-        uuid id PK
-        uuid versorgungsvertrag_id FK
-        text sparte "STROM|GAS|WAERME|SOLAR|HEMS|..."
-        text malo_id
-        text nb_mp_id
-        text product_code
-        text status "ANGEMELDET|BESTAETIGT|GEKÜNDIGT"
-        text process_id "makod process UUID"
-    }
-
-    KUNDEN ||--o{ KUNDEN_IDENTITAETEN : "N logins"
-    KUNDEN ||--o{ RAHMENVERTRAEGE : "B2B framework"
-    KUNDEN ||--o{ VERSORGUNGSVERTRAEGE : "B2C direct"
-    RAHMENVERTRAEGE ||--o{ VERSORGUNGSVERTRAEGE : "B2B sites"
-    VERSORGUNGSVERTRAEGE ||--o{ VERTRAGSKOMPONENTEN : "commodities"
+```text
+Kunde (B2C: Haushalt/SLP, B2B: Unternehmen/RLM/HV)
+├── N × KundenIdentitaet   OIDC portal users; 1:1 for B2C, 1:N for B2B
+├── [B2B] Rahmenvertrag    shared pricing, Sammelrechnung, indexation, angebot_id
+│    └── N × Versorgungsvertrag        one per site
+│          └── N × Vertragskomponente  one per commodity
+└── [B2C] Versorgungsvertrag
+       └── N × Vertragskomponente
 ```
 
----
+`vertrags_nr` and `rahmenvertrag_nr` come from a sequence, so no contract exists
+without the number § 41 Abs. 1 Nr. 1 EnWG expects it to identify itself by — and
+that every invoice, Mahnung and support call quotes.
 
-## B2C vs B2B model
-
-### B2C (private household)
-
-One customer → one `Versorgungsvertrag` → N `Vertragskomponenten` (STROM, GAS, HEMS, …).
-Typically one `KundenIdentitaet` (the customer's own OIDC login).
-
-### B2B (commercial / RLM)
-
-One `Kunde` (the legal entity) → one `Rahmenvertrag` → N `Versorgungsverträge` (one per site).
-Multiple employees each have their own `KundenIdentitaet` with role-based access:
-
-```
-Unternehmen GmbH (Kunde)
-  │
-  ├── KundenIdentitaet: CEO         (rolle=ADMIN,    standort_filter=NULL → all sites)
-  ├── KundenIdentitaet: Accountant  (rolle=FINANZEN, standort_filter=NULL → invoices only)
-  ├── KundenIdentitaet: Site Mgr 1  (rolle=TECHNIK,  standort_filter="Werk Nord")
-  └── KundenIdentitaet: Site Mgr 2  (rolle=TECHNIK,  standort_filter="Büro Hamburg")
-  │
-  └── Rahmenvertrag (portfolio discount 5%, SAMMEL billing, 3-month notice)
-       ├── Versorgungsvertrag "Werk Nord"    → STROM 55001, GAS 44001
-       └── Versorgungsvertrag "Büro Hamburg" → STROM 55001
-```
-
----
-
-## Supply contract lifecycle
-
-```mermaid
-flowchart TD
-    ERP["ERP / CRM"] --> create_kunde
-    create_kunde["POST /api/v1/kunden<br/>Create or upsert customer"] --> create_vtrag
-    create_vtrag["POST /api/v1/kunden/{id}/vertraege<br/>Create Versorgungsvertrag + Komponenten"]
-
-    create_vtrag --> strom["processd POST /start-supply<br/>→ UTILMD 55001 via makod"]
-    create_vtrag --> gas["processd POST /start-supply-gas<br/>→ UTILMD 44001 via makod"]
-    create_vtrag --> hems["HEMS/EMOBILITY: direct<br/>(no MaKo)"]
-
-    strom & gas --> angemeldet["Vertragskomponente: ANGEMELDET<br/>Vertrag: IN_BEARBEITUNG"]
-    hems --> angemeldet
-
-    angemeldet --> nb_ok["NB confirms<br/>de.mako.gpke.lieferbeginn.bestaetigt"]
-    nb_ok --> ablese["POST edmd /reading-orders<br/>(LIEFERBEGINN Ablesesteuerung)"]
-    nb_ok --> tarifbd["PUT tarifbd /customer/{malo}/product"]
-    ablese & tarifbd --> aktiv["Vertrag: AKTIV"]
-    aktiv --> acct["POST accountingd /accounts<br/>(provision billing account)"]
-    acct --> billing["billingd: monthly Rechnung<br/>de.billing.rechnung.erstellt"]
-
-    aktiv --> kuendigen["POST /vertraege/{id}/kuendigen<br/>{ lieferende: '2026-12-31' }"]
-    kuendigen --> end_supply["processd /end-supply per commodity<br/>+ edmd LIEFERENDE Ablesesteuerung"]
-    end_supply --> beendet["Vertrag: ABGELAUFEN<br/>Schlussrechnung basis → billingd"]
-
-    style aktiv fill:#22c55e,color:#fff
-    style beendet fill:#94a3b8,color:#fff
-```
-
----
-
-## Vertrag status machine
+### Contract status
 
 ```mermaid
 stateDiagram-v2
-    [*] --> ANGELEGT: POST /vertraege
-    ANGELEGT --> IN_BEARBEITUNG: MaKo dispatched
-    IN_BEARBEITUNG --> TEILERFUELLUNG: First Komponente BESTAETIGT
-    TEILERFUELLUNG --> AKTIV: All Komponenten confirmed
-    IN_BEARBEITUNG --> AKTIV: All confirmed simultaneously
-    AKTIV --> GEKÜNDIGT: POST /kuendigen
-    GEKÜNDIGT --> ABGELAUFEN: All Lieferende confirmed
-    ANGELEGT --> STORNIERT: cancelled before MaKo
-    IN_BEARBEITUNG --> STORNIERT: all positions ABGELEHNT
-
-    note right of AKTIV: billingd bills monthly<br/>per Vertragskomponente
-    note right of ABGELAUFEN: Schlussrechnung basis (billingd)
+    [*] --> ANGELEGT
+    ANGELEGT --> IN_BEARBEITUNG: registration enqueued
+    IN_BEARBEITUNG --> TEILERFUELLUNG: first commodity confirmed
+    IN_BEARBEITUNG --> AKTIV: all confirmed
+    TEILERFUELLUNG --> AKTIV
+    IN_BEARBEITUNG --> ABGELEHNT: every commodity refused
+    ANGELEGT --> STORNIERT: cancelled before supply
+    IN_BEARBEITUNG --> STORNIERT
+    AKTIV --> GEKÜNDIGT
+    GEKÜNDIGT --> AKTIV: Widerruf before the Lieferende
+    GEKÜNDIGT --> ABGELAUFEN
+    AKTIV --> ABGELAUFEN
 ```
 
----
+The status is derived from the component statuses and never returns from a
+terminal state: a late or replayed MaKo outcome re-derives it, and that
+derivation knows nothing about a Kündigung. Note that `ABGELEHNT` and
+`STORNIERT` are different answers — a registration the NB refused is not a
+cancellation by the customer.
 
 ## Portal authorization (OIDC → MaLo)
 
-`vertragd` is the **sole authorization gateway** between OIDC identities and energy data.
-`portald`, `billingd`, and `accountingd` never decode JWTs independently.
+`vertragd` decouples the **legal entity** (Kunde) from **portal users**
+(KundenIdentitaeten). A B2B company has one Kunde record and N employee logins.
 
-```
-1.  Customer logs in → portald receives JWT
-2.  portald: GET vertragd /api/v1/kunden/authenticate?malo_id=51238696012
-    (forwards the customer's Bearer token; vertragd verifies it via the same
-     OIDC Claims check as every other endpoint)
-    → { kunden_id, kundentyp, malo_id }   on 200, else a uniform 403
-3.  portald scopes all further requests to the returned kunden_id
-
-The `GET /api/v1/kunden/by-sub/{sub}` endpoint resolves a sub to a Kunde +
-scoped MaLo IDs for operator/MCP use; the portald request path uses
-`authenticate`, which returns a uniform 403 for every not-authorized outcome
-(unknown sub, unowned MaLo, out-of-site MaLo) so a token holder cannot
-enumerate which subjects or MaLo IDs exist.
-    → 200 OK   (sub owns this MaLo within standort_filter scope)
-    → 403      (no matching active KundenIdentitaet or site out of scope)
+```text
+Customer logs into portald
+  → portald extracts the verified JWT `sub`
+  → GET vertragd /api/v1/kunden/by-sub/{sub}
+     → { kunde, rolle, standort_filter, active_malo_ids }
+  → portald scopes every later request to those MaLos
 ```
 
-| `rolle` | Portal access |
+| rolle | Portal access |
 |---|---|
-| `VOLLZUGRIFF` | Full read/write to all portal features |
-| `ADMIN` | All data + identity management (add/remove portal users) |
-| `FINANZEN` | Invoices, account balance, SEPA mandates only |
-| `TECHNIK` | Lastgang, meter readings, device status — no billing data |
-| `READONLY` | Read-only view within standort scope |
+| `VOLLZUGRIFF` | Full read/write |
+| `ADMIN` | All data + identity management |
+| `FINANZEN` | Invoices, balance, SEPA mandates |
+| `TECHNIK` | Lastgang, readings, device status — no billing |
+| `READONLY` | Read-only within the site scope |
 
----
+`GET /api/v1/kunden/authenticate?malo_id=…` is the per-request check. Every
+"not authorized" outcome — unknown sub, sub with no customer, customer that does
+not own the MaLo, MaLo outside the identity's `standort_filter` — returns the
+**same `403`**. A distinct `404` for "no such customer" would let a holder of any
+valid token probe which subjects and MaLo IDs exist (DSGVO Art. 32).
 
-## Tarifwechsel
+`portald`, `billingd` and `accountingd` never decode JWTs or keep their own
+customer↔MaLo maps. All authorization flows through here, which is what closes
+IDOR and enables DSGVO Art. 5 Abs. 1 lit. f data minimisation.
 
-Changes the product/pricing of an existing `Vertragskomponente` without triggering a
-new UTILMD Lieferbeginn. The MaKo supply relationship stays intact.
+## Kündigung
 
-```http
-POST /api/v1/vertraege/{id}/tarifwechsel
-Content-Type: application/json
+The notice period comes from the **reason**, not from the contract record, so
+the API answers what is possible before it is asked to do it:
 
-{
-  "komp_id":          "...",
-  "new_product_code": "STROM-PREMIUM-2027",
-  "wirksamkeit":      "2027-01-01"
-}
+```bash
+curl -s http://vertragd:9780/api/v1/vertraege/{id}/kuendigungsfrist
 ```
-
-`vertragd` responds by updating `vertragskomponenten.product_code` and calling
-`PUT tarifbd /customer/{malo_id}/product`. It then emits `de.vertrag.tarifwechsel`
-for ERP-side customer notification (§41 Abs. 3 EnWG: ≥ 6 weeks notice required before
-price increases).
-
-### Preisgarantie guard
-
-If the contract has an active price guarantee (`preisgarantie_bis ≥ today`), the
-`tarifwechsel` endpoint **rejects requests whose `wirksamkeit` falls within the guarantee
-window** with `HTTP 422` and a structured error body:
 
 ```json
 {
-  "error": "Tarifwechsel blocked by Preisgarantie",
-  "preisgarantie_bis": "2027-06-30",
-  "wirksamkeit": "2027-01-01",
-  "hint": "Set override_preisgarantie=true to bypass (operator use only)"
+  "vertragsart": "GRUNDVERSORGUNG",
+  "haushaltskunde": true,
+  "eingang": "2026-09-01",
+  "fristen": {
+    "ORDENTLICH":         { "fruehestens": "2026-09-15", "frist": "2 Wochen",
+                            "rechtsgrundlage": "§ 20 Abs. 1 StromGVV / GasGVV" },
+    "UMZUG":              { "fruehestens": "2026-10-13", "frist": "6 Wochen",
+                            "rechtsgrundlage": "§ 41b Abs. 5 EnWG" },
+    "PREISANPASSUNG":     { "fruehestens": "2026-09-01",
+                            "frist": "fristlos zum Wirksamwerden der Änderung",
+                            "rechtsgrundlage": "§ 5 Abs. 3 StromGVV / GasGVV" },
+    "LIEFERANTENWECHSEL": { "fruehestens": "2026-09-15", "frist": "2 Wochen" }
+  }
 }
 ```
 
-Operators can bypass with `"override_preisgarantie": true` — use only with documented
-customer consent (contractual waiver of price-lock).
+```bash
+curl -X POST http://vertragd:9780/api/v1/vertraege/{id}/kuendigen \
+  -H 'Content-Type: application/json' \
+  -d '{"lieferende":"2026-10-13","grund":"UMZUG","eingang":"2026-09-01"}'
+# → 202 { "status": "GEKÜNDIGT", "frist": "6 Wochen",
+#         "rechtsgrundlage": "§ 41b Abs. 5 EnWG", "mako_dispatched": 1 }
+```
 
-The `Preisgarantie` itself is stored as a typed `rubo4e::current::Preisgarantie` BO via:
+A `lieferende` earlier than the rule allows is a **422 that quotes the rule**.
+One transaction then records the end date on each live component, enqueues the
+Lieferende UTILMDs *and* the Schlussablesung, sets `vertragsende` to the
+Kündigungstermin, clears `auto_renewal`, and emits `de.vertrag.kuendigung`
+carrying the § 41 Abs. 8 Nr. 2 EnWG Textform confirmation the supplier owes the
+customer.
+
+**Supply does not end when the Kündigung is filed.** A termination three months
+out leaves the customer supplied — and billable — for those three months, so the
+components keep their status until the date arrives. The daily worker then ends
+them and closes the contract, emitting `de.vertrag.abgeschlossen`, which is what
+a Schlussrechnung and the § 147 AO retention clock hang off. Ending them at
+filing time took the remaining months and the Schlussrechnung out of the § 40b
+feed, and left the contract in `GEKÜNDIGT` for ever.
+
+`eingang` exists because the notice period runs from **receipt**: an operator
+keying in a letter that arrived last week has to be able to say so.
+
+The Schlussablesung is enqueued as a task of its own rather than as a step of
+the Lieferende, because it is the LF's own obligation — a `processd` outage must
+not cost the customer the reading their Schlussrechnung is built from.
+
+### Widerruf and Stornierung
+
+`POST /api/v1/vertraege/{id}/widerruf-kuendigung` reverts a Kündigung while its
+Lieferende is still ahead, restoring exactly the components it ended.
+`POST /api/v1/vertraege/{id}/stornieren` cancels a contract that never went into
+supply and **withdraws a registration still waiting in the queue**; one already
+sent to `processd` is cancelled there, and the response says which case it was.
+
+## Tarifwechsel
+
+A Tarifwechsel changes price, not supply — no UTILMD, no MaKo status change.
+Three things are enforced at the API boundary, so compliance is structural
+rather than something a worker notices afterwards:
+
+| Refusal | Rule |
+|---|---|
+| Wirksamkeit inside the price-guarantee window | the contract's `preisgarantie_bis` |
+| Wirksamkeit closer than the notice period | § 41 Abs. 5 Satz 2 EnWG / § 5 Abs. 2 GVV |
+| Grundversorgungspreis mid-month | § 5 Abs. 2 StromGVV / GasGVV |
+
+```bash
+curl -X POST …/tarifwechsel -d '{"komp_id":"…","new_product_code":"STROM-PREMIUM-2027","wirksamkeit":"2026-09-05"}'
+# → 422 { "error": "die Wirksamkeit wahrt die gesetzliche Ankündigungsfrist nicht",
+#         "fruehestens": "2026-09-18", "frist": "1 Monat",
+#         "rechtsgrundlage": "§ 41 Abs. 5 Satz 2 EnWG" }
+```
+
+An operator bypass of the price guarantee requires a documented customer waiver
+and is written to `preisgarantie_override_log` with the operator's token
+subject. A retroactive correction (`wirksamkeit ≤ today`) applies immediately
+and is exempt from the notice rules: it is not an announced price change but the
+repair of one already agreed.
+
+Whichever branch runs, the change is **one slice write in the contract's own
+transaction**. There is nothing to project anywhere and nothing to reconcile.
+
+### Which product a MaLo is on lives here
+
+Agreeing it is a Tarifwechsel — a contract act under § 41 Abs. 5 EnWG, guarded
+by the Preisgarantie — so it is a contract fact, stored once, as valid-time
+slices on the component:
+
+```text
+[gueltig_von, gueltig_bis)   gueltig_bis is the first day NOT covered
+```
+
+`kp_no_overlap` (GiST) makes two products for one component on one day
+unrepresentable, and half-open ranges make consecutive slices tile a billing
+period exactly.
 
 ```http
-PUT /api/v1/vertraege/{id}/preisgarantie
-Content-Type: application/json
+GET /api/v1/malo/{malo_id}/produkte?from=2026-11-01&to=2026-11-30
+```
 
+```json
 {
-  "_typ": "PREISGARANTIE",
-  "preisgarantietyp": "ALLE_PREISBESTANDTEILE",
-  "zeitlicheGueltigkeit": {
-    "_typ": "ZEITRAUM",
-    "startdatum": "2025-01-01",
-    "enddatum":   "2027-06-30"
-  },
-  "beschreibung": "3-Jahres-Preisgarantie laut Rahmenvertrag"
+  "slice_count": 2,
+  "fully_covered": true,
+  "slices": [
+    { "product_code": "STROM-ALT", "gueltig_von": "2026-11-01", "gueltig_bis": "2026-11-15" },
+    { "product_code": "STROM-NEU", "gueltig_von": "2026-11-15", "gueltig_bis": "2026-12-01" }
+  ]
 }
 ```
 
----
+`billingd` bills one leg per slice; [`tarifbd`](@/docs/services/tarifbd.md)
+answers what each code costs on its own dates and does not know who is on it.
 
-## Person sub-object (B2C customers)
+**A future-dated Tarifwechsel is a slice that starts in the future** — no
+pending state, nothing to apply on the day. Re-applying the same change is
+idempotent; a change dated *behind* a later one is refused, because it would
+reprice a period already decided.
 
-B2C customers have an optional `rubo4e::current::Person` sub-object for natural-person
-details (GDPR Art. 15 right-to-access and correct Anrede in correspondence):
+## DSGVO
 
-```http
-PUT /api/v1/kunden/{id}/person
-Content-Type: application/json
+### Art. 15 / Art. 20 — access and portability
 
-{
-  "_typ": "PERSON",
-  "vorname":     "Max",
-  "nachname":    "Mustermann",
-  "geburtstag":  "1985-03-15",
-  "anrede":      "HERR",
-  "titel":       null
-}
+`GET /api/v1/kunden/{id}/export` returns the complete record: Kunde, Person,
+Zahlungsinformation, portal identities, contracts and components. Every read
+propagates its error rather than being swallowed — an Auskunft that silently
+omits a category because a query failed is worse than no answer.
+
+### Art. 17 — erasure
+
+```bash
+curl -X POST http://vertragd:9780/api/v1/kunden/{id}/anonymize \
+  -d '{"requested_by":"dpo"}'
 ```
 
-Returns `HTTP 422` with a precise error if any field violates the BO4E schema.
-Returns `HTTP 404` for B2B `Geschaeftspartner` records that have no Person stored.
+**`409` while supply runs.** The data is needed to perform the contract
+(Art. 6 Abs. 1 lit. b DSGVO), so Art. 17 Abs. 1 lit. a does not apply and
+Art. 17 Abs. 3 lit. b keeps what the § 41 EnWG obligations require. The response
+names the contracts, so the answer to the data subject writes itself. `force`
+covers the cases where erasure applies regardless (Art. 17 Abs. 1 lit. d,
+unlawful processing) and demands a `request_reason` on record.
 
----
-
-## Zahlungsinformation (IBAN / SEPA)
-
-Payment details are stored as a typed `rubo4e::current::Zahlungsinformation` COM. IBAN is
-validated with ISO 13616 mod-97 checksum on every `PUT`.
-
-```http
-PUT /api/v1/kunden/{id}/zahlungsinformation
-Content-Type: application/json
-
-{
-  "_typ": "ZAHLUNGSINFORMATION",
-  "iban":           "DE89370400440532013000",
-  "bic":            "COBADEFFXXX",
-  "kontoinhaber":   "Max Mustermann",
-  "sepaReferenz":   "MAKO-2025-001",
-  "zahlungsart":    "SEPA_LASTSCHRIFT"
-}
-```
-
-The stored `zahlungsart` controls `accountingd` SEPA batch generation:
-- `SEPA_LASTSCHRIFT` — included in pain.008 direct-debit runs when `sepa_erlaubt = true`
-- `UEBERWEISUNG` / `BAR` — invoice-only; excluded from SEPA batches
-
----
-
-## GDPR compliance
-
-### Art. 15 — Right of access
-
-`GET /api/v1/kunden/{id}/export` returns a complete structured JSON export of all stored PII:
-Kunde, Person, Zahlungsinformation, KundenIdentitaeten, Versorgungsverträge, and
-Vertragskomponenten. Suitable for the statutory data-subject access request.
-
-### Art. 17 — Right to erasure
-
-`POST /api/v1/kunden/{id}/anonymize` pseudonymizes all PII while retaining contract
-records for the legal retention period (§ 147 Abs. 3 AO: Handelsbriefe 6 years,
-Buchungsbelege 8 years — kept 8, the longest applicable):
-
-```http
-POST /api/v1/kunden/{id}/anonymize
-Content-Type: application/json
-
-{ "requested_by": "operator-1" }
-```
-
-**What is anonymized:**
-- `kunden.geschaeftspartner` — replaced with an opaque pseudonym token
-- `kunden.person` — nulled
-- `kunden.zahlungsinformation` — IBAN/BIC replaced with `ANONYMIZED`
-- `kunden.umsatzsteuer_id` — nulled
-- `kunden_identitaeten.oidc_sub` — replaced with `anon:{uuid}` (portal access revoked)
-- `kunden_identitaeten.email` / `display_name` — nulled
-
-**Retention:** Contract history (Versorgungsverträge, Vertragskomponenten, Rechnungen)
-is retained unmodified for § 147 AO compliance — contracts as Handelsbriefe/
-Buchungsbelege up to 8 years, invoices 8 years (§ 14b UStG).
-
-**Audit trail:** Every anonymization is written to the immutable `anonymization_log`
-table with `requested_by`, `anonymized_at`, and the list of affected fields.
-Required by GDPR Art. 5(2) accountability principle.
-
-The operation is **irreversible**. Returns `HTTP 200` on success, `HTTP 404` when the
-customer does not exist.
-
----
-
----
-
-## Kündigung Widerruf
-
-When a Kündigung was dispatched but the customer changes their mind before `lieferende`,
-operators can revoke it via `POST /api/v1/vertraege/{id}/widerruf-kuendigung`:
-
-- Contract reverts from `GEKÜNDIGT` → `AKTIV`
-- BEENDET components revert to `AKTIV`
-- Emits `de.vertrag.kuendigung-widerrufen` CloudEvent
-- **Caller must separately cancel the in-flight Lieferende UTILMD via processd** — `vertragd` does not send a UTILMD cancellation automatically
-
-```mermaid
-stateDiagram-v2
-    AKTIV --> GEKÜNDIGT: POST /kuendigen
-(Lieferende dispatched)
-    GEKÜNDIGT --> AKTIV: POST /widerruf-kuendigung
-(before lieferende date)
-    GEKÜNDIGT --> ABGELAUFEN: All Lieferende confirmed
-```
-
----
-
-## B2B Cascade Kündigung
-
-`POST /api/v1/rahmenvertraege/{id}/kuendigen` terminates all active Versorgungsverträge
-under a Rahmenvertrag in one operation:
-
-- Each child contract's `kuendigungsfrist_monate` is respected individually
-- Contracts that fail the notice-period check are **skipped** (returned in `skipped_details`)
-- Returns a summary: `{ dispatched, skipped, skipped_details }`
-
-This is the standard path for B2B portfolio termination — faster than calling
-`/kuendigen` per site for large C&I customers with 10–100 delivery points.
-
----
+Once it applies, **one transaction** pseudonymises the Geschäftspartner, the
+Person, the Zahlungsinformation, the VAT-ID, the notes, **the supply address**
+and every portal login — each with its own pseudonym, because a B2B customer has
+several and one token for all of them violates `UNIQUE (tenant, oidc_sub)`.
+The contract rows survive without personal data for § 147 Abs. 3 AO
+(Handelsbriefe 6 Jahre, Buchungsbelege 8 Jahre), and `anonymization_log` records
+what was overwritten, by whom and why.
 
 ## Background workers
 
-| Worker | Schedule | Emit | Regulatory basis |
-|---|---|---|---|
-| Tarifwechsel apply | Daily | `de.vertrag.tarifwechsel` | §41 Abs. 3 EnWG |
-| Preisanpassungsbenachrichtigung | Daily (42-day window) | `de.vertrag.preisaenderung.ankuendigung` | §41 Abs. 3 EnWG ≥ 6 weeks notice |
-| Auto-renewal | Daily | `de.vertrag.autoerneuerung.ankuendigung` (30 days before) | §13 GasGVV / §14 StromGVV |
-| Expiry notification | Daily | `de.vertrag.ablauf.ankuendigung` (30-day lookahead) | §13 GasGVV / §41 EnWG |
-
-All workers run on a **23-hour DST-safe interval** (not 24h) to prevent phase drift.
-Initial startup delay staggers workers to avoid DB contention.
-
----
-
-
-## REST API
-
-| Method | Path | Description |
+| Worker | Cadence | What it does |
 |---|---|---|
-| `POST` | `/api/v1/kunden` | Create / upsert customer (idempotent on `erp_kunde_id`) |
-| `GET` | `/api/v1/kunden` | List customers (`?kundentyp=&limit=`) |
-| `GET` | `/api/v1/kunden/{id}` | Customer + active identities + malo_ids |
-| `PUT` | `/api/v1/kunden/{id}` | Update customer (name, address, SEPA, …) |
-| `GET` | `/api/v1/kunden/by-sub/{sub}` | Resolve OIDC sub → Kunde + scoped malo_ids |
-| `GET` | `/api/v1/kunden/authenticate` | `?malo_id=` auth check for portald; 200 / 403 |
-| `GET\|PUT` | `/api/v1/kunden/{id}/person` | `rubo4e::current::Person` BO — B2C natural-person details (GDPR Art. 15) |
-| `GET\|PUT` | `/api/v1/kunden/{id}/zahlungsinformation` | `rubo4e::current::Zahlungsinformation` COM — IBAN mod-97 validated |
-| `GET` | `/api/v1/kunden/{id}/export` | **GDPR Art. 15/20** — full PII export |
-| `POST` | `/api/v1/kunden/{id}/anonymize` | **GDPR Art. 17** — right to erasure (irreversible pseudonymization) |
-| `POST` | `/api/v1/kunden/{id}/identitaeten` | Add portal user (idempotent on `oidc_sub`) |
-| `GET` | `/api/v1/kunden/{id}/identitaeten` | List active portal users |
-| `DELETE` | `/api/v1/kunden/{id}/identitaeten/{sub}` | Revoke portal access for a user |
-| `GET` | `/api/v1/kunden/{id}/portfolio` | B2B portfolio: all active MaLo/Sparte pairs |
-| `POST` | `/api/v1/kunden/{id}/rahmenvertraege` | Create B2B Rahmenvertrag |
-| `GET` | `/api/v1/kunden/{id}/rahmenvertraege` | List Rahmenverträge |
-| `POST` | `/api/v1/kunden/{id}/vertraege` | Create Versorgungsvertrag (idempotent on `erp_contract_id`) |
-| `GET` | `/api/v1/kunden/{id}/vertraege` | List supply contracts for customer |
-| `GET` | `/api/v1/vertraege` | All active contracts (`?tenant=&status=`) |
-| `GET` | `/api/v1/vertraege/billing-candidates` | §40b EnWG: active supply components + `abrechnungszyklus` — billingd's billing-run work list |
-| `GET` | `/api/v1/vertraege/expiring` | Near-expiry contracts (`?days=30`) — §13 GasGVV / §41 EnWG |
-| `GET` | `/api/v1/rahmenvertraege/{id}/malos` | Active MaLos under a Rahmenvertrag **plus** the `rechnungsempfaenger` (BG-7 holder) a Sammelrechnung is addressed to |
-| `GET`/`PUT` | `/api/v1/ggv/{ggv_id}/betreiber` | The § 42b GGV operator behind a community id, as a Kunde — the BG-7 buyer of the bundled GGV Sammelrechnung |
-| `GET` | `/api/v1/vertraege/by-malo/{malo_id}` | Active contract behind a MaLo — §40 Abs. 1 EnWG invoice facts, next Kündigungstermin, and the `rechnungsempfaenger` block (BG-7 buyer: BT-44 name, BT-50/52/53 address, BT-48 VAT-ID) `billingd` needs for EN 16931 |
-| `GET` | `/api/v1/vertraege/{id}` | Contract + Komponenten + status |
-| `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product code; blocked within Preisgarantie window |
-| `POST` | `/api/v1/vertraege/{id}/stornieren` | Cancel pre-activation contract (`ANGELEGT`/`IN_BEARBEITUNG` only) |
-| `POST` | `/api/v1/vertraege/{id}/kuendigen` | Initiate Lieferende for all commodities (§14 StromGVV / §13 GasGVV notice enforced) |
-| `POST` | `/api/v1/vertraege/{id}/widerruf-kuendigung` | **Revoke Kündigung** — revert to AKTIV before lieferende; caller must cancel in-flight Lieferende UTILMD via processd |
-| `POST` | `/api/v1/rahmenvertraege/{id}/kuendigen` | **Cascade Kündigung** — terminate all child Versorgungsverträge; individual notice periods respected; returns dispatched/skipped summary |
-| `GET` | `/api/v1/rahmenvertraege` | List all Rahmenverträge for tenant (`?status=&limit=`) |
-| `GET` | `/api/v1/rahmenvertraege/{id}` | Single Rahmenvertrag with all child Versorgungsverträge |
-| `GET\|PUT` | `/api/v1/vertraege/{id}/preisgarantie` | Typed `rubo4e::current::Preisgarantie` COM |
-| `GET` | `/api/v1/aggregatorvertraege` | §41e EnWG Aggregatorverträge; with `?sr_id=&on=YYYY-MM-DD` returns the one in force on that date (404 if none) — the lookup `billingd` performs per VPP dispatch |
-| `PUT` | `/api/v1/aggregatorvertraege/{sr_id}` | Create/replace an Aggregatorvertrag; `409` when the validity window overlaps an existing one for that SR |
-| `POST` | `/api/v1/events` | Inbound CloudEvents from `makod` / `processd` |
-| `POST` | `/api/v1/webhooks/angebot` | CPQ: `de.tarif.angebot.angenommen` → auto-create Rahmenvertrag + Versorgungsverträge from Angebot |
-| `GET` | `/health` | Liveness |
-| `GET` | `/health/ready` | Readiness |
+| Outbound | 5 s | Drains `outbound_tasks`, up to 64 per wake-up |
+| Outbox | per `mako_service::outbox` | Delivers `de.vertrag.*` to the ERP webhook |
+| Preisanpassung | daily | Sends the § 41 Abs. 5 notice for every scheduled Tarifwechsel whose notice is still owed |
+| Auto-renewal | daily | Announces the extension once per term, then applies it |
+| Ablauf | daily | Ends supply whose Lieferende has passed and closes the contract behind it; announces a term or price guarantee running out, once per date |
 
----
+### The price-change notice
 
+The notice is sent as soon as the change is scheduled, not inside a window
+before it. § 41 Abs. 5 Satz 1 EnWG wants it *rechtzeitig* and Satz 2 sets a
+floor, not a ceiling, so a window could only ever make the notice later — and
+skipped it entirely whenever the worker missed the one day the window was open.
+The event carries the regime that applied, whether the statutory lead was
+actually met, and the Sonderkündigungsrecht § 41 Abs. 5 Satz 4 EnWG grants the
+customer to the day the change lands, free of charge.
 
-## §41e EnWG Aggregatorverträge
+### The automatic extension
 
-Contracts between an Aggregator (VPP operator) and the operator of a generation
-plant or a Letztverbraucher — §41e EnWG, transposing Art. 17 RL (EU) 2019/944
-("Demand response through aggregation").
+For a **consumer** the contract becomes **unbefristet** with at most a month's
+notice — the only tacit extension § 309 Nr. 9 lit. b BGB permits. Rolling such a
+contract into another twelve-month term is an unenforceable clause, and it is
+the customer who finds that out. A **business** contract may take a further
+fixed term (§ 310 Abs. 1 BGB puts it outside § 309).
 
-This is Contract-context master data and lives here, not in `billingd`:
-`aggregatorvertraege` holds the parties, the agreed Einsatzkosten
-(`capacity_price_eur_per_kwh`) and the validity window. When a
-`de.vpp.dispatch.confirmed` event arrives, `billingd` reads the contract in force
-**on the dispatch execution date** and settles against it — so a replayed or
-delayed event still bills under the contract that applied when the flexibility
-was actually delivered.
+Each notice is tracked against the term or date it announces
+(`autoerneuerung_notif_fuer`, `ablauf_notif_fuer`), so the daily loop sends it
+once instead of once a day — and the next term's notice is still due.
 
-A `btree_gist` exclusion constraint (`agg_no_overlap`) makes two simultaneously
-active Aggregatorverträge for one SteuerbareRessource unrepresentable; a
-back-to-back succession is accepted because the validity range is half-open
-`[von, bis)`.
+## § 40b EnWG billing cadence
 
----
+Every Versorgungsvertrag carries an `abrechnungszyklus` (`MONATLICH` /
+`VIERTELJAEHRLICH` / `HALBJAEHRLICH` / `JAEHRLICH`, default annual). § 40b EnWG
+obliges the supplier to offer the shorter cadences; the customer's choice is a
+contract fact. `GET /api/v1/vertraege/billing-candidates` lists every active
+supply component with its cadence and supply window, and billingd's billing-run
+worker consumes it.
 
-## §40b EnWG billing cadence
+A component is in supply from the moment the MaKo Lieferbeginn is confirmed —
+`BESTAETIGT` is that state, and nothing ever promotes it to `AKTIV`, so the feed
+accepts both.
 
-Every Versorgungsvertrag carries an `abrechnungszyklus`
-(`MONATLICH` / `VIERTELJAEHRLICH` / `HALBJAEHRLICH` / `JAEHRLICH`, default
-annual). §40b EnWG obliges the supplier to *offer* the shorter cadences —
-the customer's choice is a contract fact, stored on the contract and
-CHECK-pinned in the schema. `GET /api/v1/vertraege/billing-candidates`
-projects all active Vertragskomponenten with their cadence, supply window
-(`lieferbeginn`/`lieferende`) and market-partner IDs; billingd's daily
-billing-run worker consumes it to compute each contract's most recently
-completed period and issue §40c-compliant invoices without an operator in
-the loop.
+## § 41e EnWG Aggregatorverträge
 
-## CloudEvents emitted
+VPP contracts between an Aggregator and a plant operator or Letztverbraucher,
+the German transposition of Art. 17 RL (EU) 2019/944. `PUT`/`GET
+/api/v1/aggregatorvertraege` map an SR-ID to the agreed Einsatzkosten and a
+validity window; `billingd` reads them per dispatch and keeps no copy. An
+`EXCLUDE USING gist` constraint makes two simultaneously active contracts per
+resource unrepresentable, surfaced as a `409`.
 
-All events are delivered as CloudEvents 1.0 JSON to `erp.webhook_url` with an
-`X-Mako-Signature: sha256=<hex>` header when `erp.hmac_secret` is configured.
-Delivery is durable — each event is persisted to the `event_outbox` table in the
-same transaction as the contract change and drained by a background worker with
-retry and a dead-letter queue.
+## § 42b EnWG GGV-Betreiber
 
-| Event type | When |
-|---|---|
-| `de.vertrag.aktiv` | All commodity Komponenten confirmed by NB |
-| `de.vertrag.gekuendigt` | Lieferende dispatched (Rahmenvertrag cascade, per child contract) |
-| `de.vertrag.kuendigung-widerrufen` | Kündigung revoked via `POST /widerruf-kuendigung`; contract returned to AKTIV |
-| `de.vertrag.tarifwechsel` | Product change committed immediately (handler or due-worker) |
-| `de.vertrag.tarifwechsel-geplant` | Future-dated Tarifwechsel stored (applied later by the due-worker) |
-| `de.vertrag.preisgarantie-hinterlegt` | Price guarantee stored or replaced |
-| `de.vertrag.preisaenderung.ankuendigung` | ≤ 42 days before `wirksamkeit` (§5 Abs. 2 StromGVV/GasGVV six weeks; §41 Abs. 5 EnWG one month for Haushaltskunden) |
-| `de.vertrag.autoerneuerung.ankuendigung` | 30 days before auto-renewal (§13 GasGVV / §14 StromGVV) |
-| `de.vertrag.ablauf.ankuendigung` | 30 days before `vertragsende` or `preisgarantie_bis` expiry (§13 GasGVV / §41 EnWG) |
-
-Every event goes through the same builder — CloudEvents 1.0 with `tenantid`
-and `correlationid` (the Vertrag id) — and is HMAC-signed (`X-Mako-Signature:
-sha256=…`) when an `erp_hmac_secret` is configured, background workers
-included. The price-change notice advances its `preisanpassung_notif_sent`
-flag only on a confirmed 2xx delivery, so a failed webhook is retried rather
-than silently skipped.
-
----
+The operator of a Gemeinschaftliche Gebäudeversorgung is the LF's *customer* for
+the bundled GGV Sammelrechnung — the BG-7 buyer of that document. It is
+deliberately not a Marktpartner: a GGV-Betreiber has no MP-ID and never appears
+in MaKo, so its master data lives here with every other buyer rather than in
+`marktd`. `GET`/`PUT /api/v1/ggv/{ggv_id}/betreiber` maps the operator-assigned
+`ggv_id` to a Kunde.
 
 ## Configuration
 
 ```toml
 # vertragd.toml
-port          = 9780
-tenant        = "9900357000004"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
-lf_mp_id      = "9900357000004"
-
-max_identitaeten_per_kunde = 50   # default; prevents resource exhaustion from unbounded identity creation
+port     = 9780
+tenant   = "9900357000004"   # data-isolation key (here: the operator's BDEW-Codenummer)
+lf_mp_id = "9900357000004"   # market identity registered on the UTILMD
 
 processd_url    = "http://processd:8580"
 tarifbd_url     = "http://tarifbd:9080"
 accountingd_url = "http://accountingd:9380"
 edmd_url        = "http://edmd:8380"
+edmd_api_key    = "env:VERTRAGD_EDMD_SERVICE_KEY"
 
-# PostgreSQL connection + pool tuning
+erp_webhook_url = "http://erp:8000/events"
+erp_hmac_secret = "env:VERTRAGD_ERP_HMAC_SECRET"
+inbound_secret  = "env:VERTRAGD_INBOUND_SECRET"
+
+max_identitaeten_per_kunde = 50
+
 [database]
-url = "postgresql://..."
+url = "postgresql://vertragd:secret@db:5432/vertragd"
 
-# OIDC/JWT — required in production; omit for dev mode (all write endpoints open)
 [oidc]
-issuer   = "https://auth.example.com"
+issuer   = "https://auth.example.de/realms/mako"
 audience = "vertragd"
-
-[erp]
-webhook_url   = "http://erp:8000/events"   # optional; CloudEvents 1.0 + HMAC-SHA256
-hmac_secret   = "${ERP_HMAC_SECRET}"       # env-var interpolation; omit = header not sent
-
-mako_timeout_werktage = 10   # operator escalation after N Werktage without NB response
 ```
 
----
+`tenant` and `lf_mp_id` are the same string in a single-mandant install and
+different in a shared one. Sending the wrong one produces UTILMDs from a party
+the NB does not know, which is why they are separate settings rather than one.
 
-## MCP tools
+## MCP
 
-`vertragd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
-**16 read-only tools** and **4 prompts**.
+17 read-only tools and 4 prompts at `/mcp`, behind an independent API-key or
+OIDC layer. `compute_kuendigungsfrist` returns the earliest lawful end date for
+**every** termination reason with the rule that produced it;
+`check_mako_trigger_status` distinguishes a registration still waiting in the
+outbound queue from one the NB has not answered — a distinction an operator
+otherwise cannot see.
 
-| Tool | Annotations | Description |
-|---|---|---|
-| `get_vertrag_status` | `read_only` | Full contract + Komponenten + pending MaKo process IDs |
-| `list_offene_vertraege` | `read_only` | All AKTIV/IN_BEARBEITUNG/TEILERFUELLUNG/GEKÜNDIGT (`limit` param) |
-| `get_kunde` | `read_only` | Customer profile by UUID (Geschaeftspartner, malo_ids, identities) |
-| `get_kunde_by_sub` | `read_only` | OIDC sub → Kunde + scoped MaLo IDs (portald auth path) |
-| `get_rahmenvertrag` | `read_only` | B2B framework contract with all child Versorgungsverträge |
-| `list_expiring_contracts` | `read_only` | Near-expiry by `vertragsende` or `preisgarantie_bis` (`days` param, default 30) |
-| `list_pending_tarifwechsel` | `read_only` | Upcoming Tarifwechsel + `preisanpassung_notif_sent` flag (§41 Abs. 3 EnWG) |
-| `list_pending_kuendigungen` | `read_only` | GEKÜNDIGT contracts with future lieferende — prep Schlussrechnung |
-| `check_preisgarantie` | `read_only` | Is a Tarifwechsel blocked for this contract on a given `wirksamkeit`? BLOCKED/ALLOWED + `preisgarantie_bis` |
-| `check_mako_trigger_status` | `read_only` | Did Lieferbeginn UTILMD fire? Component breakdown by status; stuck detection |
-| `find_stuck_workflows` | `read_only` | ANGEMELDET > N Werktage — requires operator escalation (§20 EnWG) |
-| `get_customer_portfolio` | `read_only` | B2B portfolio: all active MaLo/Sparte for one Kunde |
-| `get_zahlungsinformation` | `read_only` | SEPA/IBAN payment details for `accountingd` reconciliation |
-| `list_auto_renewal_due` | `read_only` | Contracts eligible for auto-renewal within N days (§13 GasGVV / §14 StromGVV) |
-| `list_alle_kunden` | `read_only` | All Kunden for CRM/ERP sync (`kundentyp` filter, max 500) |
-| `compute_kuendigungsfrist` | `read_only` | Earliest valid Kündigung date (§14 StromGVV / §13 GasGVV) |
+## Related
 
-**Prompts:**
-- `o2c_review` — full Order-to-Cash pipeline review: stuck contracts, expiring prices, pending Tarifwechsel
-- `b2b_onboarding` — step-by-step Rahmenvertrag + N Versorgungsverträge onboarding guide
-- `gdpr_erasure_workflow` — GDPR Art. 17 right-to-erasure: verify, anonymize PII, document audit trail (§147 AO retention)
-- `preisgarantie_dispute` — §41 EnWG Preisgarantie conflict: wait vs. operator override with customer consent
+| | |
+|---|---|
+| [`portald`](@/docs/services/portald.md) | Customer portal; authorizes every request here |
+| [`billingd`](@/docs/services/billingd.md) | Reads § 40 Abs. 1 facts, BG-7 buyers, § 40b candidates |
+| [`tarifbd`](@/docs/services/tarifbd.md) | Product catalog; receives the tariff assignments |
+| [`processd`](@/docs/services/processd.md) | Runs the GPKE / GeLi Gas Lieferbeginn and Lieferende |
+| [`edmd`](@/docs/services/edmd.md) | Beginn- and Schlussablesung reading orders |

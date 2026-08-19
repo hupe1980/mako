@@ -1,73 +1,17 @@
-//! `vertragd` — B2B + B2C Contract & Customer Management.
+//! `vertragd` — B2C and B2B contract & customer management (LF role), `:9780`.
 //!
-//! Manages the full retail contract lifecycle for both B2C (Haushalt/SLP) and
-//! B2B (Gewerbe/RLM/HV) customers:
-//!
-//! ## Data model
-//!
-//! ```text
-//! Kunde (B2C: Person/Haushalt, B2B: Unternehmen/Gewerbe)
-//! ├── [B2B] Rahmenvertrag (Master Framework Contract)
-//! │    └── N × Versorgungsvertrag  (one per delivery location / site)
-//! │          └── N × Vertragskomponente  (STROM|GAS|HEMS|...)
-//! └── [B2C] Versorgungsvertrag  (bundle, no Rahmenvertrag)
-//!       └── N × Vertragskomponente
-//! ```
-//!
-//! ## Key capabilities
-//!
-//! - **Kundenverwaltung**: typed `rubo4e::current::Geschaeftspartner` with OIDC sub for
-//!   `portald` resource-level authorization (OIDC `sub` → Kunde → MaLo IDs)
-//! - **B2B Rahmenverträge**: portfolio pricing, consolidated invoicing, indexation clauses,
-//!   multi-site Lieferbeginn orchestration, auto-renewal
-//! - **Vertragsmanagement**: notice periods, price guarantees, Tarifwechsel,
-//!   Kündigung with coordinated Schlussablesung
-//! - **MaKo orchestration**: triggers GPKE/GeLi Gas Lieferbeginn/-ende via `processd`
-//! - **Ablesesteuerung**: automatic LIEFERBEGINN/LIEFERENDE reading orders to `edmd`
-//! - **Post-confirmation provisioning**: `tarifbd` product assignment + `accountingd`
-//!   billing account
-//!
-//! ## CloudEvents emitted
-//!
-//! | Event | Trigger |
-//! |---|---|
-//! | `de.vertrag.aktiv` | All components confirmed, billing can start |
-//! | `de.vertrag.teilerfuellung` | First component confirmed |
-//! | `de.vertrag.gekuendigt` | Lieferende dispatched |
-//! | `de.vertrag.abgeschlossen` | All components ended |
-//!
-//! Port: `:9780`
-//!
-//! ## Endpoints
-//!
-//! | Method | Path | Description |
-//! |---|---|---|
-//! | `POST` | `/api/v1/kunden` | Create / upsert customer (idempotent on erp_kunde_id) |
-//! | `GET`  | `/api/v1/kunden/{id}` | Get customer + active MaLo IDs |
-//! | `GET`  | `/api/v1/kunden/by-sub/{sub}` | portald authorization: OIDC sub → customer + MaLos |
-//! | `POST` | `/api/v1/kunden/{id}/rahmenvertraege` | Create B2B framework contract |
-//! | `GET`/`PUT` | `/api/v1/ggv/{ggv_id}/betreiber` | § 42b GGV operator as a Kunde — BG-7 buyer of the GGV bundle |
-//! | `POST` | `/api/v1/kunden/{id}/vertraege` | Create supply contract (B2C or B2B) |
-//! | `GET`  | `/api/v1/vertraege` | List open contracts |
-//! | `GET`  | `/api/v1/vertraege/{id}` | Get contract + components |
-//! | `POST` | `/api/v1/vertraege/{id}/kuendigen` | Terminate contract (Lieferende) |
-//! | `POST` | `/api/v1/events` | Inbound CloudEvents from makod / processd |
+//! See the crate documentation in `lib.rs` for the data model and the two
+//! durability rails. This binary owns only the wiring: fail-closed
+//! authentication checks, the router, and the background workers.
 
 use std::sync::Arc;
 
 use anyhow::Context as _;
-use axum::{
-    Extension, Router,
-    routing::{get, post},
-};
+use axum::{Extension, Router};
 use mako_service::{Daemon, ServiceContext};
 use sqlx::PgPool;
-use tracing::info;
-use vertragd::{config, events, handlers, mcp_server, pg};
+use vertragd::{config, handlers, mcp_server, outbound, workers};
 
-/// The `vertragd` daemon. `mako_service::run` owns the lifecycle (tracing, tuned
-/// pool, real DB-ping readiness, graceful shutdown); this supplies the migrations
-/// and the domain router + background workers.
 struct Vertragd;
 
 impl Daemon for Vertragd {
@@ -75,12 +19,11 @@ impl Daemon for Vertragd {
     const NAME: &'static str = "vertragd";
 
     async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
-        // Run migrations automatically on startup.
         sqlx::migrate!("./migrations")
             .run(pool)
             .await
             .context("run migrations")?;
-        // Transactional outbox: persist-before-dispatch table for CloudEvents.
+        // Transactional outbox for customer-facing CloudEvents.
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure event_outbox schema")?;
@@ -91,189 +34,35 @@ impl Daemon for Vertragd {
         cfg: Arc<config::VertragdConfig>,
         ctx: ServiceContext,
     ) -> anyhow::Result<Router> {
+        cfg.check_auth_posture()?;
+
         let pool = ctx.pool().clone();
+        let http = ctx.http.clone();
+        let shutdown = ctx.shutdown.clone();
 
-        // Shared HTTP client (tuned timeouts + SSRF guard) — avoids TCP handshake
-        // overhead per request.
-        let http_client: Arc<reqwest::Client> = Arc::new(ctx.http.clone());
-
-        // ── OIDC/JWT authentication ───────────────────────────────────────────
-        // Fail closed: without an [oidc] section every request is admitted with
-        // synthetic dev claims, which would expose the GDPR export, the IBAN write
-        // path, and every customer record unauthenticated. That posture must be
-        // asked for by name, never reached by omission.
-        if cfg.oidc.is_none() && !cfg.allow_insecure_no_auth {
-            anyhow::bail!(
-                "no [oidc] section configured. Without it every request is admitted with \
-             dev claims — GDPR customer data, IBANs and contract mutation included. \
-             Configure [oidc], or set allow_insecure_no_auth = true to accept an \
-             unauthenticated deployment."
-            );
-        }
-        if cfg.allow_insecure_no_auth {
-            tracing::warn!(
-                "vertragd: allow_insecure_no_auth is set — every request is admitted with dev claims"
-            );
-        }
-        let ct = ctx.shutdown.clone();
         let oidc = mako_service::oidc::OidcConfig::build_verifier(
             cfg.oidc.as_ref(),
-            &http_client,
+            &http,
             &cfg.tenant,
-            ct.clone(),
+            shutdown.clone(),
         )
         .await
         .context("OIDC setup")?;
+
         let mcp_state = Arc::new(mcp_server::VertragdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
         });
 
-        let app = Router::new()
-            // Customer management
-            .route(
-                "/api/v1/kunden",
-                get(handlers::list_kunden_handler).post(handlers::post_create_kunde),
-            )
-            .route(
-                "/api/v1/kunden/{id}",
-                get(handlers::get_kunde).put(handlers::put_update_kunde),
-            )
-            .route(
-                "/api/v1/kunden/by-sub/{sub}",
-                get(handlers::get_kunde_by_sub),
-            )
-            .route(
-                "/api/v1/kunden/authenticate",
-                get(handlers::get_authenticate),
-            )
-            // Identity management (B2B portal users: 1 company → N logins)
-            .route(
-                "/api/v1/kunden/{id}/identitaeten",
-                post(handlers::post_upsert_identitaet).get(handlers::list_kunde_identitaeten),
-            )
-            .route(
-                "/api/v1/kunden/{id}/identitaeten/{sub}",
-                axum::routing::delete(handlers::delete_identitaet),
-            )
-            // GDPR Art. 15 full data export
-            .route(
-                "/api/v1/kunden/{id}/export",
-                get(handlers::get_kunde_gdpr_export),
-            )
-            // GDPR Art. 17 — right to erasure (anonymize PII, retain contract records)
-            .route(
-                "/api/v1/kunden/{id}/anonymize",
-                post(handlers::post_anonymize_kunde),
-            )
-            // Person sub-object — B2C natural person details (L13 — GDPR Art. 15)
-            .route(
-                "/api/v1/kunden/{id}/person",
-                get(handlers::get_person).put(handlers::put_person),
-            )
-            // Zahlungsinformation typed BO4E REST (IBAN + BIC + SEPA)
-            .route(
-                "/api/v1/kunden/{id}/zahlungsinformation",
-                get(handlers::get_zahlungsinformation_kunde)
-                    .put(handlers::put_zahlungsinformation_kunde),
-            )
-            // Rahmenverträge — list all (operator CRM) and single fetch
-            .route(
-                "/api/v1/rahmenvertraege",
-                get(handlers::list_rahmenvertraege_handler),
-            )
-            .route(
-                "/api/v1/rahmenvertraege/{id}",
-                get(handlers::get_rahmenvertrag_handler),
-            )
-            // Rahmenvertrag MaLo enumeration for Sammelrechnung (L2)
-            .route(
-                "/api/v1/rahmenvertraege/{id}/malos",
-                get(handlers::get_rahmenvertrag_malos),
-            )
-            // GGV-Betreiber (§ 42b EnWG): the operator behind a ggv_id, as a
-            // Kunde — the BG-7 buyer of the bundled GGV Sammelrechnung.
-            .route(
-                "/api/v1/ggv/{ggv_id}/betreiber",
-                get(handlers::get_ggv_betreiber).put(handlers::put_ggv_betreiber),
-            )
-            // Framework + supply contracts
-            .route(
-                "/api/v1/kunden/{id}/rahmenvertraege",
-                get(handlers::list_kunde_rahmenvertraege).post(handlers::post_create_rahmenvertrag),
-            )
-            .route(
-                "/api/v1/kunden/{id}/vertraege",
-                get(handlers::list_kunde_vertraege).post(handlers::post_create_vertrag),
-            )
-            // Supply contracts (B2C + B2B)
-            .route("/api/v1/vertraege", get(handlers::list_vertraege))
-            // §41e EnWG Aggregatorverträge — read by billingd on VPP dispatch settlement
-            .route(
-                "/api/v1/aggregatorvertraege",
-                get(handlers::get_aggregatorvertraege),
-            )
-            .route(
-                "/api/v1/aggregatorvertraege/{sr_id}",
-                axum::routing::put(handlers::put_aggregatorvertrag),
-            )
-            .route(
-                "/api/v1/vertraege/by-malo/{malo_id}",
-                get(handlers::get_vertrag_by_malo),
-            )
-            // §40b EnWG billing cadence — consumed by billingd's billing-run worker
-            .route(
-                "/api/v1/vertraege/billing-candidates",
-                get(handlers::list_billing_candidates_handler),
-            )
-            // Expiring contracts monitor (§13 GasGVV / §14 StromGVV / §41 EnWG)
-            .route(
-                "/api/v1/vertraege/expiring",
-                get(handlers::list_expiring_vertraege),
-            )
-            .route("/api/v1/vertraege/{id}", get(handlers::get_vertrag))
-            .route(
-                "/api/v1/vertraege/{id}/kuendigen",
-                post(handlers::kuendige_vertrag),
-            )
-            // Stornieren (cancel before AKTIV — ANGELEGT/IN_BEARBEITUNG only)
-            .route(
-                "/api/v1/vertraege/{id}/stornieren",
-                post(handlers::stornieren_vertrag),
-            )
-            // Kündigung Widerruf (GPKE §20 EnWG: LF may withdraw Lieferende before effective date)
-            .route(
-                "/api/v1/vertraege/{id}/widerruf-kuendigung",
-                post(handlers::widerruf_kuendigung_handler),
-            )
-            // B2B Rahmenvertrag cascade Kündigung (terminates all child Versorgungsverträge)
-            .route(
-                "/api/v1/rahmenvertraege/{id}/kuendigen",
-                post(handlers::kuendige_rahmenvertrag_handler),
-            )
-            .route(
-                "/api/v1/vertraege/{id}/tarifwechsel",
-                post(handlers::tarifwechsel_vertrag),
-            )
-            // Preisgarantie typed BO4E REST resource (guard on tarifwechsel enforces it)
-            .route(
-                "/api/v1/vertraege/{id}/preisgarantie",
-                get(handlers::get_preisgarantie).put(handlers::put_preisgarantie),
-            )
-            // B2B portfolio summary (all active MaLo/Sparte per Kunde)
-            .route(
-                "/api/v1/kunden/{id}/portfolio",
-                get(handlers::get_kunde_portfolio),
-            )
-            // CloudEvent webhook
-            .route("/api/v1/events", post(handlers::post_cloud_event))
-            // CPQ: de.tarif.angebot.angenommen → auto-create Rahmenvertrag + Versorgungsverträge
-            .route(
-                "/api/v1/webhooks/angebot",
-                axum::routing::post(handlers::post_angebot_webhook),
-            )
-            .merge(mcp_server::router(mcp_state, ct.clone()))
+        let handler_ctx = Arc::new(handlers::Ctx {
+            pool: pool.clone(),
+            cfg: Arc::clone(&cfg),
+            http: http.clone(),
+        });
+
+        let app = handlers::router(handler_ctx)
+            .merge(mcp_server::router(mcp_state, shutdown.clone()))
             // Every authenticated handler extracts `Claims`, and the extractor
             // rejects a token whose `mako_tenant` is not this deployment's. A
             // route added later cannot forget the check without also dropping
@@ -281,286 +70,17 @@ impl Daemon for Vertragd {
             .layer(Extension(mako_service::oidc::ExpectedTenant(
                 cfg.tenant.clone(),
             )))
-            .layer(Extension(oidc))
-            .layer(Extension(Arc::clone(&cfg)))
-            .layer(Extension(Arc::clone(&http_client)))
-            .layer(Extension(pool.clone()));
+            .layer(Extension(oidc));
 
-        info!("vertragd router built");
+        // ── Durable outbound calls (processd / edmd / tarifbd / accountingd) ──
+        tokio::spawn(
+            outbound::OutboundWorker::new(pool.clone(), Arc::clone(&cfg), http.clone())
+                .run(shutdown.clone()),
+        );
 
-        // \u2500\u2500 Auto-renewal background worker (§13 GasGVV / §14 StromGVV) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
-        // Runs daily. Finds AKTIV vertr\u00e4ge with auto_renewal=true whose vertragsende
-        // is within the next 30 days, emits a 30-day advance notification CloudEvent
-        // (`de.vertrag.autoerneuerung.ankuendigung`), and extends vertragsende
-        // by renewal_monate on the vertragsende date itself.
-        {
-            let pool_ar = pool.clone();
-            let cfg_ar = Arc::clone(&cfg);
-            let client_ar = Arc::clone(&http_client);
-            tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(30)).await;
-                loop {
-                    let today = time::OffsetDateTime::now_utc().date();
-                    // Phase 1: 30-day advance notification, once per term.
-                    if let Ok(due) = pg::find_auto_renewal_due(&pool_ar, &cfg_ar.tenant, 30).await {
-                        for row in &due {
-                            if let Some(ref url) = cfg_ar.erp_webhook_url {
-                                let ce = events::build_cloud_event(
-                                    mako_events::vertrag::AUTOERNEUERUNG_ANKUENDIGUNG,
-                                    row.id,
-                                    &cfg_ar.tenant,
-                                    serde_json::json!({
-                                        "vertrag_id": row.id.to_string(),
-                                        "vertrags_nr": row.vertrags_nr,
-                                        "kunden_id": row.kunden_id.to_string(),
-                                        "vertragsende": row.vertragsende.to_string(),
-                                        "renewal_monate": row.renewal_monate,
-                                        "regulatory_basis": "§13 GasGVV / §14 StromGVV"
-                                    }),
-                                );
-                                handlers::emit_event(
-                                    &client_ar,
-                                    url,
-                                    cfg_ar.erp_hmac_secret.as_deref(),
-                                    ce,
-                                )
-                                .await;
-                            }
-                            // Recorded even without a webhook: the notice is
-                            // due once per term either way, and re-deriving it
-                            // daily is what made the ERP see 30 of them.
-                            if let Err(e) =
-                                pg::mark_auto_renewal_notified(&pool_ar, row.id, row.vertragsende)
-                                    .await
-                            {
-                                tracing::error!(vertrag_id = %row.id, error = %e, "vertragd: marking the renewal notice failed");
-                            }
-                        }
-                    }
-                    // Phase 2: apply renewals whose term has ended, including
-                    // any the worker missed while it was down.
-                    if let Ok(due) =
-                        pg::find_auto_renewal_overdue(&pool_ar, &cfg_ar.tenant, today).await
-                    {
-                        for row in &due {
-                            let Some(new_end) = pg::renewed_vertragsende(
-                                row.vertragsende,
-                                row.renewal_monate,
-                                today,
-                            ) else {
-                                tracing::warn!(
-                                    vertrag_id = %row.id, renewal_monate = row.renewal_monate,
-                                    "vertragd: auto-renewal skipped — renewal_monate is not positive"
-                                );
-                                continue;
-                            };
-                            if let Err(e) = pg::apply_auto_renewal(&pool_ar, row.id, new_end).await
-                            {
-                                tracing::error!(vertrag_id = %row.id, error = %e, "vertragd: auto-renewal failed");
-                            } else {
-                                tracing::info!(vertrag_id = %row.id, new_end = %new_end, "vertragd: auto-renewal applied");
-                            }
-                        }
-                    }
-                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
-                }
-            });
-        }
-        // Runs daily and:
-        //   1. Applies pending Tarifwechsel whose wirksamkeit date has arrived.
-        //   2. Emits `de.vertrag.preisaenderung.ankuendigung` CE for Tarifwechsel
-        //      whose wirksamkeit is ~42 days away (\u00a741 Abs. 3 EnWG: \u22656 weeks advance notice).
-        {
-            let pool_bg = pool.clone();
-            let cfg_bg = Arc::clone(&cfg);
-            let client_bg = Arc::clone(&http_client);
-            tokio::spawn(async move {
-                tokio::time::sleep(tokio::time::Duration::from_secs(15)).await;
-                loop {
-                    let today = time::OffsetDateTime::now_utc().date();
-
-                    // Phase 1: Apply due Tarifwechsel
-                    match pg::find_tarifwechsel_due_today(&pool_bg, &cfg_bg.tenant, today).await {
-                        Ok(due) => {
-                            for row in &due {
-                                if let Err(e) =
-                                    pg::apply_pending_tarifwechsel(&pool_bg, row.komp_id).await
-                                {
-                                    tracing::error!(
-                                        komp_id = %row.komp_id,
-                                        error = %e,
-                                        "vertragd: apply_pending_tarifwechsel failed"
-                                    );
-                                    continue;
-                                }
-                                tracing::info!(
-                                    komp_id = %row.komp_id,
-                                    new_product = %row.pending_product_code,
-                                    wirksamkeit = %row.pending_wirksamkeit,
-                                    "vertragd: Tarifwechsel applied"
-                                );
-                                // Emit tarifwechsel CE
-                                if let Some(ref url) = cfg_bg.erp_webhook_url {
-                                    let ce = events::build_cloud_event(
-                                        mako_events::vertrag::TARIFWECHSEL,
-                                        row.vertrag_id,
-                                        &cfg_bg.tenant,
-                                        serde_json::json!({
-                                            "komp_id": row.komp_id.to_string(),
-                                            "malo_id": row.malo_id,
-                                            "new_product_code": row.pending_product_code,
-                                            "wirksamkeit": row.pending_wirksamkeit.to_string(),
-                                        }),
-                                    );
-                                    handlers::emit_event(
-                                        &client_bg,
-                                        url,
-                                        cfg_bg.erp_hmac_secret.as_deref(),
-                                        ce,
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "vertragd: find_tarifwechsel_due_today failed");
-                        }
-                    }
-
-                    // Phase 2: Emit 6-week advance notifications (\u00a741 Abs. 3 EnWG)
-                    match pg::find_tarifwechsel_needing_notif(&pool_bg, &cfg_bg.tenant, today).await
-                    {
-                        Ok(pending) => {
-                            for row in &pending {
-                                tracing::info!(
-                                    komp_id = %row.komp_id,
-                                    wirksamkeit = %row.pending_wirksamkeit,
-                                    product = %row.pending_product_code,
-                                    "vertragd: emitting Preisanpassungsbenachrichtigung (§41 Abs. 3 EnWG)"
-                                );
-                                if let Some(ref url) = cfg_bg.erp_webhook_url {
-                                    let days_until = (row.pending_wirksamkeit - today).whole_days();
-                                    let ce = events::build_cloud_event(
-                                        mako_events::vertrag::PREISAENDERUNG_ANKUENDIGUNG,
-                                        row.vertrag_id,
-                                        &cfg_bg.tenant,
-                                        serde_json::json!({
-                                            "komp_id": row.komp_id.to_string(),
-                                            "malo_id": row.malo_id,
-                                            "current_product_code": row.current_product_code,
-                                            "new_product_code": row.pending_product_code,
-                                            "wirksamkeit": row.pending_wirksamkeit.to_string(),
-                                            "days_until_change": days_until,
-                                            "regulatory_basis": "\u{00a7}5 Abs. 2 StromGVV/GasGVV (6 Wochen) / \u{00a7}41 Abs. 5 EnWG (1 Monat)",
-                                        }),
-                                    );
-                                    // Advance the notified flag ONLY on confirmed
-                                    // delivery — a lost notice is still owed, so a
-                                    // failed send is retried on the next daily run.
-                                    if handlers::emit_event(
-                                        &client_bg,
-                                        url,
-                                        cfg_bg.erp_hmac_secret.as_deref(),
-                                        ce,
-                                    )
-                                    .await
-                                    {
-                                        let _ = pg::mark_preisanpassung_notif_sent(
-                                            &pool_bg,
-                                            row.komp_id,
-                                        )
-                                        .await;
-                                    } else {
-                                        tracing::warn!(
-                                            komp_id = %row.komp_id,
-                                            "vertragd: Preisanpassungsbenachrichtigung webhook failed -- will retry"
-                                        );
-                                    }
-                                } else {
-                                    // No webhook configured: mark sent anyway so we don't log endlessly.
-                                    tracing::warn!(
-                                        komp_id = %row.komp_id,
-                                        "vertragd: Preisanpassungsbenachrichtigung -- no erp_webhook_url configured"
-                                    );
-                                    let _ =
-                                        pg::mark_preisanpassung_notif_sent(&pool_bg, row.komp_id)
-                                            .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "vertragd: find_tarifwechsel_needing_notif failed");
-                        }
-                    }
-
-                    // Run daily; 23h interval is DST-safe.
-                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
-                }
-            });
-        }
-
-        // ── §41 EnWG / §13 GasGVV expiry notification worker ─────────────────────
-        // Runs daily. Finds contracts expiring within 30 days and emits
-        // `de.vertrag.ablauf.ankuendigung` per contract so the ERP can trigger
-        // proactive renewal or churn-prevention workflows.
-        {
-            let pool_exp = pool.clone();
-            let cfg_exp = Arc::clone(&cfg);
-            let client_exp = Arc::clone(&http_client);
-            tokio::spawn(async move {
-                // Initial delay: stagger workers to avoid DB contention at startup.
-                tokio::time::sleep(tokio::time::Duration::from_secs(45)).await;
-                loop {
-                    match pg::find_expiring_vertraege(&pool_exp, &cfg_exp.tenant, 30).await {
-                        Ok(rows) => {
-                            if !rows.is_empty() {
-                                tracing::info!(
-                                    count = rows.len(),
-                                    "vertragd: dispatching expiry notifications"
-                                );
-                            }
-                            for row in &rows {
-                                if let Some(ref url) = cfg_exp.erp_webhook_url {
-                                    let ce = events::build_cloud_event(
-                                        mako_events::vertrag::ABLAUF_ANKUENDIGUNG,
-                                        row.id,
-                                        &cfg_exp.tenant,
-                                        serde_json::json!({
-                                            "vertrag_id": row.id.to_string(),
-                                            "kunden_id": row.kunden_id.to_string(),
-                                            "vertrags_nr": row.vertrags_nr,
-                                            "vertragsende": row.vertragsende.map(|d| d.to_string()),
-                                            "preisgarantie_bis": row.preisgarantie_bis.map(|d| d.to_string()),
-                                            "auto_renewal": row.auto_renewal,
-                                            "kundentyp": row.kundentyp,
-                                            "standort_bezeichnung": row.standort_bezeichnung,
-                                            "regulatory_basis": "§13 GasGVV / §14 StromGVV / §41 EnWG",
-                                        }),
-                                    );
-                                    handlers::emit_event(
-                                        &client_exp,
-                                        url,
-                                        cfg_exp.erp_hmac_secret.as_deref(),
-                                        ce,
-                                    )
-                                    .await;
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "vertragd: find_expiring_vertraege failed");
-                        }
-                    }
-                    // 23h interval is DST-safe.
-                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
-                }
-            });
-        }
-
-        // ── Transactional-outbox drain worker ────────────────────────────────────
-        // Delivers persisted CloudEvents to the ERP webhook via the shared signed
-        // publisher (retries transient, dead-letters permanent). Only spawned when a
-        // webhook is configured — otherwise nothing would drain the outbox.
+        // ── Customer-facing CloudEvents to the ERP ───────────────────────────
+        // Only spawned with a webhook configured; without one the events stay
+        // in the outbox, which is where an operator can still find them.
         if let Some(url) = cfg.erp_webhook_url.clone() {
             tokio::spawn(
                 mako_service::outbox::OutboxWorker::new(
@@ -568,10 +88,19 @@ impl Daemon for Vertragd {
                     url,
                     cfg.erp_hmac_secret.clone().map(Into::into),
                 )
-                .run(ct.clone()),
+                .run(shutdown.clone()),
+            );
+        } else {
+            tracing::warn!(
+                "vertragd: no erp_webhook_url — statutory notices accumulate in event_outbox \
+                 undelivered"
             );
         }
 
+        // ── Daily contract-lifecycle workers ─────────────────────────────────
+        workers::spawn_all(pool, Arc::clone(&cfg), shutdown);
+
+        tracing::info!("vertragd: router and workers ready");
         Ok(app)
     }
 }

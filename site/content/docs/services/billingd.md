@@ -390,9 +390,35 @@ let invoice = engine.bill(ctx, &quantities)?;
 | `Sect41aAnnualComparison` in Quantities | §41a Abs. 6 EnWG |
 | `InvoiceType::PartialInvoice` | §41 EnWG, StromGVV §17 |
 
+### A period is billed in legs
+
+An invoice covers a period, and two things can split it. Both get the same
+answer: bill each leg under its own product and its own statutory rates, and
+merge the legs into one document — which is what § 41 Abs. 1 Nr. 4 EnWG asks
+for anyway, the old and the new price itemised with the periods they applied to.
+
+| Split at | Detected from |
+|---|---|
+| a **Tarifwechsel** | `vertragd` reports more than one product-assignment slice covering the period |
+| a **statutory Stichtag** | a VAT or levy regime changes inside the period — gas at 31.03.2024 (§ 28 Abs. 5/6 UStG) is 7 % before and 19 % after |
+
+The § 40b sweep, `POST /calculate` and `POST /tarifwechsel` all take this path.
+Each leg's **meter reading is fetched for its own dates**, and each leg gets the
+§ 40 enrichment every other invoice has: contract facts, Zählernummer,
+consumption comparison, BG-7 buyer, § 13b derivation.
+
+A leg whose reading the **caller supplied by hand** is not split further —
+nothing can apportion a given reading across a boundary — and is refused with the
+Stichtage named.
+
+The billing record of a split period is filed under `category = TARIFWECHSEL`
+and a `product_code` naming every product the period touched
+(`STROM-ALT+STROM-NEU`), so the record says which prices the document contains.
+
 ### Tarifwechsel endpoint
 
-Mid-period price changes (§41 EnWG transparency requirement) are supported natively:
+For a switch whose two meter readings the operator already holds — a hand-split
+that `edmd` cannot reproduce:
 
 ```http
 POST /api/v1/billing/{malo_id}/tarifwechsel
@@ -410,21 +436,8 @@ Content-Type: application/json
 }
 ```
 
-Two sub-period invoices are calculated and merged via `Invoice::merge()`. Positions from
-both sub-periods appear on one combined invoice. Tax is applied independently per sub-period
-(correct per §41 EnWG for mid-month rate changes), and each leg resolves the
-statutory rates of *its own* dates — that is the point of the split.
-
-The combined document takes one number from the `RE` series; the two legs carry
-`/A` and `/B` suffixes for the trace, and only the merged invoice is issued.
-
-> This endpoint answered `400 period_from must be before period_to` for **every**
-> request ever made to it. It parsed `switch_date` by passing it as both bounds of
-> `parse_period`, whose `from < to` check refused every equal pair. The same bound
-> also refused legitimate one-day periods — a same-day move-in and move-out, a
-> §41e settlement of one day's dispatches — although `BillingPeriod::new` has
-> always accepted `from == to`. Both bounds are inclusive; the period check is now
-> `from > to`, and a single date is parsed as a single date.
+The scheduled sweep needs none of this: it reads the slices from `tarifbd` and
+the per-leg readings from `edmd` itself.
 
 ### Pro-rata Grundpreis (move-in / move-out)
 
@@ -975,7 +988,8 @@ ERP's PEPPOL AS4 gateway.
 **Every document is complete for the profile:** BT-23 business process and the BG-16
 SEPA payment instruction (means code 58 + the seller IBAN) are stamped from config; the
 seller party is filled from `[seller]` with a split address and contact (BR-DE-2..7);
-the due date (BT-9) is issue + 14 days (§40c EnWG); and **BG-14 carries the billing
+the due date (BT-9) is issue + 14 days (§ 40c Abs. 1 EnWG, measured from the real
+issue date); and **BG-14 carries the billing
 period** — § 14 Abs. 4 Nr. 6 UStG requires the Leistungszeitraum on the document, and
 XRechnung's BR-DE-TMP-32 requires BT-72, BG-14 or a period on every line.
 
@@ -1074,7 +1088,7 @@ panel (veraPDF + Mustang) are documented in the
   `rechnungstyp`; the exact label rides as the `rechnungsart` ZusatzAttribut) and
   settles the paid advances passed as `"abschlaege": [{datum, betrag_eur,
   ust_satz}]` — each at the VAT rate it was invoiced at (§ 14 Abs. 5 UStG).
-- **§40c Abs. 1 issue deadline**: six weeks after the end of the billed period,
+- **§ 40c Abs. 2 issue deadline**: six weeks after the end of the billed period,
   six weeks after the end of the Lieferverhältnis for a Schlussrechnung, and
   **three weeks** where §40b Abs. 1 monthly billing applies. The short deadline
   follows the agreed **cadence** — send `"monatliche_abrechnung": true`, which
@@ -1082,6 +1096,14 @@ panel (veraPDF + Mustang) are documented in the
   not inferred from how long the period happens to be: a ten-day move-out
   Schlussrechnung is not monthly billing and keeps its six weeks. Missing the
   deadline raises `SECT40C_DEADLINE_EXCEEDED` on the invoice.
+- **§ 40c Abs. 1 Fälligkeit**: due at the earliest two weeks after the payment
+  request reaches the customer, so the due date runs from the **issue date**.
+  `billingd` supplies it; the engine stays clock-free and falls back to the
+  period end only for a caller that has no clock.
+- **§ 40c Abs. 3 Guthaben**: a credit balance is offset in full against the next
+  Abschlag or paid out within two weeks; from an Abschlussrechnung it is always
+  paid out. The document states amount and deadline as the `guthabenerstattung`
+  ZusatzAttribut, so the ledger and the payout run act on it directly.
 - **Verbraucherinformationen (§40 Abs. 2 EnWG)**: every `rechnung_json`
   carries the supplier identity from config plus the statutory hints
   (Schlichtungsstelle Energie § 111b EnWG, BNetzA Verbraucherservice,

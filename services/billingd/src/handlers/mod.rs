@@ -314,30 +314,51 @@ pub(crate) fn parse_period(from: &str, to: &str) -> BillingResult<(time::Date, t
     Ok((pf, pt))
 }
 
-/// The product to bill: the request override, else tarifbd's active assignment.
+/// The product to bill: the request override, else the assignment in force.
+///
+/// Two services answer half the question each, and that is the point:
+/// **vertragd** says which product the customer is on — agreeing it is a
+/// Tarifwechsel under § 41 Abs. 5 EnWG, so it is a contract fact — and
+/// **tarifbd** says what that product costs on the day in question.
 ///
 /// # Errors
 ///
-/// `422` when the MaLo has no active product, `502` when tarifbd is unreachable.
+/// `422` when the MaLo has no assignment or the assigned code has no version
+/// valid on `am`; `502` when either service is unreachable.
 pub(crate) async fn resolve_tariff(
     req: &CalculateRequest,
-    tarifbd: &TarifbdClient,
+    deps: &BillingDeps,
     malo_id: &str,
+    am: time::Date,
 ) -> BillingResult<Product> {
     if let Some(t) = req.tariff.clone() {
         return Ok(t);
     }
-    match tarifbd.get_customer_product(malo_id, &req.lf_mp_id).await {
-        Ok(Some(t)) => Ok(t),
-        Ok(None) => Err(BillingError::unprocessable(
+    let slices = deps
+        .vertragd
+        .get_product_slices(malo_id, am, am)
+        .await
+        .map_err(|e| BillingError::upstream("vertragd", e))?;
+    let Some(slice) = slices.into_iter().next() else {
+        return Err(BillingError::unprocessable(
+            "NO_ACTIVE_PRODUCT",
+            format!("MaLo {malo_id} has no product assignment on {am} in vertragd"),
+        ));
+    };
+    let produkte = deps
+        .tarifbd
+        .resolve_products(&req.lf_mp_id, &[(slice.product_code.clone(), am)])
+        .await
+        .map_err(|e| BillingError::upstream("tarifbd", e))?;
+    produkte.into_iter().next().flatten().ok_or_else(|| {
+        BillingError::unprocessable(
             "NO_ACTIVE_PRODUCT",
             format!(
-                "no active product for MaLo {malo_id} / LF {} in tarifbd",
-                req.lf_mp_id
+                "product {} assigned to MaLo {malo_id} has no version valid on {am} in tarifbd",
+                slice.product_code
             ),
-        )),
-        Err(e) => Err(BillingError::upstream("tarifbd", e)),
-    }
+        )
+    })
 }
 
 /// Issue a persisted document: enqueue its event and stamp it `dispatched`.

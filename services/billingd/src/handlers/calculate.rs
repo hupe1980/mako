@@ -9,7 +9,7 @@ use super::*;
 /// All `*_meter` fields are optional — the engine selects the correct one based on
 /// `tariff.category`.  Unsupported meter inputs for the active category are silently
 /// ignored.  Supply `tariff` and/or `meter` as overrides to skip external lookups.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Default, Clone, Deserialize)]
 pub struct CalculateRequest {
     pub lf_mp_id: String,
     /// §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification on the invoice.
@@ -72,15 +72,20 @@ pub struct CalculateRequest {
     pub reverse_charge: bool,
     /// §40b Abs. 1 EnWG — this contract is billed **monthly**.
     ///
-    /// Drives the §40c Abs. 1 deadline: monthly billing must reach the customer
-    /// within three weeks of the period end, everything else within six. The
-    /// trigger is the agreed cadence, not the length of this particular period —
-    /// a 30-day Teilrechnung for a move-out is not monthly billing.
+    /// Drives the **§ 40c Abs. 2** deadline: monthly billing must reach the
+    /// customer within three weeks of the period end, everything else within
+    /// six. (Abs. 1 is the two-week Fälligkeit, a different rule.) The trigger
+    /// is the agreed cadence, not the length of this particular period — a
+    /// 30-day Teilrechnung for a move-out is not monthly billing.
     #[serde(default)]
     pub monatliche_abrechnung: bool,
-    /// Paid advance payments to settle on this invoice (§40c Abs. 2 EnWG:
-    /// credits are offset with the next Abschlag or refunded within two
-    /// weeks). Each entry carries the VAT rate it was invoiced at.
+    /// Paid advance payments to settle on this invoice.
+    ///
+    /// § 40 Abs. 1 EnWG requires the settling invoice to itemise and deduct
+    /// them. A resulting credit is then governed by **§ 40c Abs. 3**: offset in
+    /// full against the next Abschlag, or paid out within two weeks — and from
+    /// an Abschlussrechnung, paid out within two weeks either way. Each entry
+    /// carries the VAT rate it was invoiced at.
     #[serde(default)]
     pub abschlaege: Vec<energy_billing::AbschlagDeduction>,
 }
@@ -108,7 +113,7 @@ pub async fn post_calculate(
     let cfg = Arc::clone(&deps.cfg);
     authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
-    let tariff = resolve_tariff(&req, &deps.tarifbd, &malo_id).await?;
+    let tariff = resolve_tariff(&req, &deps, &malo_id, period_to).await?;
 
     // A period straddling a statutory boundary has no correct single rate; the
     // 422 names the Stichtage so the caller can split and retry.
@@ -436,7 +441,7 @@ pub async fn compute_preview(
 ) -> BillingResult<Preview> {
     let cfg = deps.cfg.as_ref();
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
-    let tariff = resolve_tariff(req, &deps.tarifbd, malo_id).await?;
+    let tariff = resolve_tariff(req, deps, malo_id, period_to).await?;
     let mut rates =
         cfg.try_regulatory_rates_for_period(tariff.category_str(), period_from, period_to)?;
     apply_nehs_market_price(

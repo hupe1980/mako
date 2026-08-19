@@ -46,6 +46,12 @@ pub const ATTR_IST_BASIS: &str = "mako.angebot.variante.istBasis";
 pub const ATTR_PRODUCT_CODE: &str = "mako.angebot.teil.produktCode";
 /// `zusatz_attribut` name for the free-text site label.
 pub const ATTR_STANDORT: &str = "mako.angebot.teil.standortBezeichnung";
+/// `zusatz_attribut` name for the Messlokation of a supply point.
+///
+/// BO4E's `Marktlokation` carries no Messlokations-ID, but a gas registration
+/// cannot be filed without one, so the quotation carries it here — the same
+/// sanctioned extension point the product code uses.
+pub const ATTR_MELO: &str = "mako.angebot.teil.messlokationsId";
 
 fn attr(name: &str, value: impl Into<serde_json::Value>) -> ZusatzAttribut {
     ZusatzAttribut {
@@ -159,6 +165,9 @@ fn teil(pos: &PositionCostBreakdown, lieferzeitraum: Option<&Zeitraum>) -> Angeb
     if let Some(ref s) = pos.standort_bezeichnung {
         zusatz.push(attr(ATTR_STANDORT, s.clone()));
     }
+    if let Some(ref melo) = pos.melo_id {
+        zusatz.push(attr(ATTR_MELO, melo.clone()));
+    }
 
     Angebotsteil {
         gesamtkostenangebotsteil: Some(eur(pos.total_netto_eur)),
@@ -174,6 +183,13 @@ fn teil(pos: &PositionCostBreakdown, lieferzeitraum: Option<&Zeitraum>) -> Angeb
                 id: Some(id.clone()),
                 marktlokations_id: rubo4e::identifiers::MaloId::new(id).ok(),
                 sparte: sparte_from_str(&pos.sparte),
+                // The UTILMD's recipient. Same tolerance as the MaLo-ID: a
+                // malformed code is dropped from the typed field rather than
+                // dropping the whole delivery point.
+                netzbetreibercodenr: pos
+                    .nb_mp_id
+                    .as_ref()
+                    .and_then(|nb| rubo4e::identifiers::MarktpartnerId::new(nb).ok()),
                 ..Default::default()
             })]
         }),
