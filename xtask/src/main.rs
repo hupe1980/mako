@@ -24,6 +24,7 @@ Commands:
   check-release-coverage  Fail when no profile covers the current (or --date) date
   check-prompt-tools  Refuse a procedure step naming a tool the agent cannot reach
   check-routes        Refuse axum 0.7 `/:param` route literals, which panic at startup
+  check-bo4e-attributes Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
   check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
@@ -122,6 +123,7 @@ Exit codes:
 mod add_release;
 mod audit_ahb;
 mod bump_version;
+mod check_bo4e_attributes;
 mod check_malo_ids;
 mod check_prompt_tools;
 mod check_release_coverage;
@@ -149,6 +151,7 @@ fn main() {
         Some("check-release-coverage") => check_release_coverage::check_release_coverage(),
         Some("check-prompt-tools") => check_prompt_tools(),
         Some("check-routes") => check_routes(),
+        Some("check-bo4e-attributes") => check_bo4e_attributes(),
         Some("check-malo-ids") => check_malo_ids(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
         Some("check-tool-grants") => check_tool_grants(),
@@ -213,6 +216,13 @@ fn check_routes() {
 fn check_prompt_tools() {
     let (workspace_root, _) = workspace_info();
     if !check_prompt_tools::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_bo4e_attributes() {
+    let (workspace_root, _) = workspace_info();
+    if !check_bo4e_attributes::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

@@ -90,6 +90,26 @@ impl PartnerRepository for PgPartnerRepository {
     }
 }
 
+/// Decode a BO4E enum column, reporting a value the schema does not define.
+///
+/// Returns `None` so one bad row cannot fail every read, but says so — the
+/// previous `.parse().ok()` discarded it without a trace.
+fn decode_enum<T: rubo4e::Bo4eEnum>(column: &str, raw: &str) -> Option<T> {
+    match T::from_wire(raw) {
+        Ok(v) => Some(v),
+        Err(e) => {
+            tracing::error!(
+                column,
+                value = raw,
+                error = %e,
+                "partners: stored value is not a BO4E wire value — the CHECK \
+                 constraint should have refused it; serving the partner without it"
+            );
+            None
+        }
+    }
+}
+
 fn row_to_partner(r: PgRow) -> PartnerRecord {
     let sparte_str: Option<String> = r.get("sparte");
     let makoadresse: Option<Vec<String>> = r.try_get("makoadresse").unwrap_or(None);
@@ -98,11 +118,18 @@ fn row_to_partner(r: PgRow) -> PartnerRecord {
     PartnerRecord {
         mp_id: r.get("mp_id"),
         display_name: r.get("display_name"),
-        // Stored as the BDEW code strings the enums serialise to; a legacy
-        // value the enum does not know maps to None rather than failing reads.
-        marktrolle: marktrolle_str.and_then(|s| s.parse().ok()),
+        // Stored as the BO4E wire strings, and `CHECK`-constrained to them.
+        //
+        // `from_wire` rather than `.parse().ok()`: both refuse a value the
+        // schema does not define, but the silent `None` was indistinguishable
+        // from "this partner has no market role" — and this field is served
+        // verbatim in `GET /partners/{id}/marktteilnehmer`, so a dropped role
+        // reads to the counterparty as a fact rather than a fault. The column
+        // constraint makes this unreachable; the log is what tells us if it
+        // ever is not.
+        marktrolle: marktrolle_str.and_then(|s| decode_enum("marktrolle", &s)),
         sparte: sparte_str.as_deref().map(parse_sparte),
-        rollencodetyp: rollencodetyp_str.and_then(|s| s.parse().ok()),
+        rollencodetyp: rollencodetyp_str.and_then(|s| decode_enum("rollencodetyp", &s)),
         makoadresse: makoadresse.unwrap_or_default(),
         channels: r.get("channels"),
         version: r.get("version"),

@@ -879,29 +879,24 @@ async fn two_puts_with_the_same_if_match_cannot_both_win() {
     };
     let repo = PgMaloRepository::new(pool.clone());
     let m = malo();
-    let data = serde_json::json!({"_typ": "MARKTLOKATION"});
+    let data: rubo4e::current::Marktlokation =
+        serde_json::from_value(serde_json::json!({"_typ": "MARKTLOKATION"}))
+            .expect("valid BO4E Marktlokation");
 
     let v1 = repo
-        .upsert(&m, Sparte::Strom, data.clone(), vec![], None, "v202607.0.0")
+        .upsert(&m, Sparte::Strom, &data, vec![], None, "v202607.0.0")
         .await
         .expect("create");
     assert_eq!(v1, 1);
 
     let v2 = repo
-        .upsert(
-            &m,
-            Sparte::Strom,
-            data.clone(),
-            vec![],
-            Some(v1),
-            "v202607.0.0",
-        )
+        .upsert(&m, Sparte::Strom, &data, vec![], Some(v1), "v202607.0.0")
         .await
         .expect("first If-Match write wins");
     assert_eq!(v2, 2, "the returned version is the one actually stored");
 
     let conflict = repo
-        .upsert(&m, Sparte::Strom, data, vec![], Some(v1), "v202607.0.0")
+        .upsert(&m, Sparte::Strom, &data, vec![], Some(v1), "v202607.0.0")
         .await;
     assert!(
         matches!(

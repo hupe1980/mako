@@ -49,8 +49,9 @@ pub type NbContractRepoExt = Arc<PgNbContractRepository>;
 ///
 /// 1. Auto-inject `_typ: "VERTRAG"` when absent.
 /// 2. Reject 422 if `_typ` is present but does not equal `"VERTRAG"`.
-/// 3. Deserialise as `rubo4e::current::Vertrag` — validates all enum fields.
-/// 4. Re-serialise to canonical camelCase form for durable storage.
+/// 3. Deserialise as `rubo4e::current::Vertrag`.
+/// 4. Reject 422 on any out-of-schema enum anywhere in the tree.
+/// 5. Re-serialise to canonical camelCase form for durable storage.
 fn normalize_vertrag(
     mut data: serde_json::Value,
 ) -> Result<(Vertrag, serde_json::Value), (StatusCode, serde_json::Value)> {
@@ -72,7 +73,17 @@ fn normalize_vertrag(
             serde_json::json!({ "error": format!("invalid Vertrag payload: {e}") }),
         )
     })?;
-    let canonical = serde_json::to_value(&vertrag).unwrap_or_default();
+    // Strict enum gate. Without it `vertragsart` / `vertragsstatus` — the two
+    // fields this endpoint's own docs claim to validate — decode any
+    // unrecognised value to `Unknown` and store it, which is the opposite of
+    // validation. Same gate as the MaLo/MeLo/NeLo/Partner/Preisblatt handlers.
+    rubo4e::Bo4eStrict::ensure_known_enums(&vertrag).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({ "error": format!("Vertrag has out-of-schema enum values: {e}") }),
+        )
+    })?;
+    let canonical = super::serialise_or_500(&vertrag, "Vertrag")?;
     Ok((vertrag, canonical))
 }
 

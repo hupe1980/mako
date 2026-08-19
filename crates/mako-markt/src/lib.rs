@@ -29,6 +29,7 @@
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::missing_errors_doc)]
 
+pub mod bo4e;
 pub mod cloudevents;
 pub mod commands;
 pub mod domain;

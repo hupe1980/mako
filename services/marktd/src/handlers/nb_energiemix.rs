@@ -129,6 +129,17 @@ pub async fn put_nb_energiemix(
                 .into_response();
         }
     };
+    // Strict enum gate: an unrecognised `erzeugungsart` would otherwise decode
+    // to `Unknown` and be published as a §42 EnWG Stromkennzeichnung disclosure.
+    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("Energiemix has out-of-schema enum values: {e}")
+            })),
+        )
+            .into_response();
+    }
     // §42 Abs. 2 Nr. 2 EnWG completeness: the grid-area Reststrommix must carry
     // an energy-source breakdown that accounts for the whole supply. An empty
     // Energiemix satisfies neither the invoice nor the portal disclosure
@@ -164,7 +175,10 @@ pub async fn put_nb_energiemix(
         }
     }
 
-    let canonical = serde_json::to_value(&typed).unwrap_or_default();
+    let canonical = match super::serialise_or_500(&typed, "Energiemix") {
+        Ok(v) => v,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
 
     let year = req
         .gueltig_fuer

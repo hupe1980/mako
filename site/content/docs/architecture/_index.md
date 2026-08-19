@@ -179,7 +179,7 @@ Product::Sharing(SharingProduct)               → ElectricityProvider + EnergyS
 
 `ControllableLoadProduct` uses `#[serde(flatten)] base: ElectricityProduct` — the standard
 electricity billing is delegated to `ElectricityProvider`, then §14a credit positions are appended.
-This eliminates the old category-string check (`matches!(tariff.category, "WAERMEPUMPE"|"WALLBOX")`).
+
 
 The engine runs in passes:
 
@@ -201,7 +201,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`metering`](https://crates.io/crates/metering) | `0.16` | German energy metering domain — `MeterInterval`, `aggregate`, `fill_gaps` / `fill_gaps_with_config` (§ 60 Abs. 2 MsbG — `FillGapsConfig` supports `PriorPeriodAverage`), `gas_m3_to_kwh_hs` (§ 25 Nr. 4 MessEV / DVGW G 685), `score_intervals` (Hampel A/B/C/F), SLP/RLM/iMSys classification, BDEW 2025 load profiles; pure computation, no storage — used by `edmd`, `marktd`, `mabis-syncd`, `mako-gabi-gas` and `mako-mabis` |
 | [`meterstore`](https://crates.io/crates/meterstore) | `0.2` | Metering time-series store — the persistence layer beneath `edmd`: PostgreSQL hot window + Apache Iceberg/S3 settled history, version-resolved reads, and `as_known_at` transaction-time reads across both tiers (what backs `edmd`'s `?as_of=` reproducible settlement snapshots) |
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.6` | General-purpose double-entry ledger — append-only BLAKE3 Merkle log with `O(log n)` inclusion, consistency and balance proofs (all verified against a tree head, never a bare root), period seals over the journal, the trial balance and the account bindings; deliberately domain-neutral, with the energy and SEPA specifics kept in `accountingd` |
-| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.8` | BO4E business-object types — the `rubo4e::current` versioned schema, validated at every read/write boundary |
+| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.9` | BO4E business-object types — the `rubo4e::current` versioned schema, validated at every read/write boundary |
 
 ---
 

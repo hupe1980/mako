@@ -180,7 +180,7 @@ async fn storno(pool: &PgPool, original: Uuid, nr: &str, reason: Option<&str>) -
     let json = serde_json::json!({
         "_typ": "RECHNUNG",
         "istOriginal": false,
-        "zusatzAttribute": [{ "name": "rechnungsart", "wert": "STORNORECHNUNG" }]
+        "zusatzAttribute": [{ "name": "mako:rechnungsart", "wert": "STORNORECHNUNG" }]
     });
     let mut tx = pool.begin().await.expect("begin");
     let id = pg::insert_correction_record(

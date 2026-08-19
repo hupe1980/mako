@@ -83,7 +83,7 @@ fn normalize_geschaeftspartner(
             serde_json::json!({ "error": format!("Geschaeftspartner has out-of-schema enum values: {e}") }),
         )
     })?;
-    Ok(serde_json::to_value(&partner).unwrap_or_default())
+    super::serialise_or_500(&partner, "Geschaeftspartner")
 }
 
 /// `PUT /api/v1/partners/:gln`

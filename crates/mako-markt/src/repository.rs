@@ -84,11 +84,12 @@ pub type MaloPayload = serde_json::Value;
 /// Full BO4E `MESSLOKATION` payload.
 pub type MeloPayload = serde_json::Value;
 
-/// Default BO4E schema version used by `#[serde(default = ...)]` on record
-/// structs. Returns `"v202607.0.0"` so that records written before M5
-/// (the `bo4e_version` migration) are read as the baseline version.
+/// Default BO4E schema version for `#[serde(default = ...)]` on record structs.
+///
+/// Derived from the linked `rubo4e` — see [`crate::bo4e::SCHEMA_VERSION`] for
+/// why the value is asked for rather than written down.
 fn default_bo4e_version() -> String {
-    "v202607.0.0".to_owned()
+    crate::bo4e::schema_version()
 }
 
 // ── MaLo ─────────────────────────────────────────────────────────────────────
@@ -121,7 +122,8 @@ pub struct Rollenzuordnung {
 pub struct MaloRecord {
     pub malo_id: MaloId,
     pub sparte: Sparte,
-    /// Voltage/pressure level extracted from `Marktlokation.netzebene` (e.g. `"NS"`, `"MS"`).
+    /// Voltage/pressure level — BO4E `Netzebene` wire value (`NSP`/`MSP`/`HSP`/`HSS`
+    /// and their `*_UMSP` transformation levels for Strom; `HD`/`MD`/`ND` for Gas).
     /// `None` when the incoming BO4E payload did not carry the field.
     pub netzebene: Option<String>,
     /// Bilanzierungsgebiet EIC code (`LOC+237` in UTILMD) extracted from `Marktlokation`.
@@ -129,17 +131,19 @@ pub struct MaloRecord {
     pub bilanzierungsgebiet: Option<String>,
     /// Gas quality extracted from `Marktlokation.standorteigenschaften.gasqualitaet`.
     ///
-    /// Canonical form: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"` | `"FLUESSIGGAS"`.
-    ///
-    /// Legacy values received via UTILMD G (`"HGas"`, `"LGas"`) are normalized to
-    /// the canonical form on write via `mako_geli_gas::gas_quality::normalize_gasqualitaet()`.
+    /// BO4E `Gasqualitaet` wire value: `"H_GAS"` | `"L_GAS"`. Those are the
+    /// only two the schema defines, so those are the only two the API accepts;
+    /// see `mako_geli_gas::gas_quality` for why no speculative H2 spelling is
+    /// written here (that crate is not a dependency of this one, so the
+    /// reference is deliberately not an intra-doc link).
     ///
     /// Used for:
     /// - Gas tariff routing in `billingd` (Brennwert/Zustandszahl defaults differ by quality)
     /// - Invoice audit annotation (`ZusatzAttribut.gasqualitaet` per § 147 AO / GoBD)
-    /// - H2-blend detection for future DVGW G 260 billing compliance
     pub gasqualitaet: Option<String>,
-    /// Energy direction (`Aussp` = generation, `Einsp` = consumption).
+    /// BO4E `Energierichtung` wire value, named from the **grid's** point of
+    /// view: `EINSP` (Einspeisung) is a *generating* location that feeds the
+    /// grid, `AUSSP` (Ausspeisung) a *consuming* one that draws from it.
     pub energierichtung: Option<String>,
     /// Billing mode extracted from `Marktlokation.bilanzierungsmethode`.
     ///
@@ -386,12 +390,10 @@ pub struct MaloTypedFields {
     pub netzebene: Option<String>,
     /// Bilanzierungsgebiet EIC code — primary input for `processd` NB check 4.
     pub bilanzierungsgebiet: Option<String>,
-    /// Gas quality — canonical form: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"`.
-    ///
-    /// Legacy UTILMD G values (`"HGas"`, `"LGas"`) are normalized to the canonical
-    /// form by the `marktd` GeLi Gas event handler.
+    /// BO4E `Gasqualitaet` wire value: `"H_GAS"` | `"L_GAS"`.
     pub gasqualitaet: Option<String>,
-    /// Energy direction (`"Aussp"` = generation, `"Einsp"` = consumption).
+    /// BO4E `Energierichtung` wire value — `EINSP` feeds the grid (generation),
+    /// `AUSSP` draws from it (consumption).
     pub energierichtung: Option<String>,
     /// Billing mode — `"SLP"` | `"RLM"` | `"IMS"`.
     ///
@@ -414,13 +416,15 @@ pub struct MaloTypedFields {
 /// that `marktd` applies via [`MaloRepository::patch_stammdaten`].
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct MaloStammdatenPatch {
-    /// `netzebene` (e.g. `NSP7`).
+    /// `netzebene` — BO4E `Netzebene` wire value (`NSP`/`MSP`/`HSP`/`HSS`,
+    /// their `*_UMSP` transformation levels, or `HD`/`MD`/`ND` for Gas).
     pub netzebene: Option<String>,
     /// `bilanzierungsgebiet` EIC.
     pub bilanzierungsgebiet: Option<String>,
-    /// Gas quality (`HGAS`/`LGAS`).
+    /// Gas quality — BO4E `Gasqualitaet` wire value (`H_GAS`/`L_GAS`).
     pub gasqualitaet: Option<String>,
-    /// `energierichtung` (`AUSSP`/`EINSP`).
+    /// `energierichtung` — BO4E `Energierichtung` wire value, from
+    /// `CCI+Z30++Z06` (Erzeugung → `EINSP`) / `Z07` (Verbrauch → `AUSSP`).
     pub energierichtung: Option<String>,
     /// Bilanzierungsmethode (`RLM`/`SLP`/`IMS`/`TLP_*`).
     pub bilanzierungsmethode: Option<String>,
@@ -457,11 +461,16 @@ pub trait MaloRepository: Send + Sync {
     /// Pass `None` for unconditional upsert (first write).
     ///
     /// Returns the new version number.
+    /// `data` is the **typed** BO — not a `serde_json::Value`. The repository
+    /// serialises the JSONB and derives the shadow columns from it
+    /// ([`MaloShadowColumns`](crate::bo4e::MaloShadowColumns)), so a payload
+    /// that has not been through BO4E validation cannot reach storage and a
+    /// column cannot disagree with the document it shadows.
     async fn upsert(
         &self,
         malo_id: &MaloId,
         sparte: Sparte,
-        data: MaloPayload,
+        data: &rubo4e::current::Marktlokation,
         rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,
         bo4e_version: &str,
@@ -553,12 +562,16 @@ impl MeloStammdatenPatch {
 pub trait MeloRepository: Send + Sync {
     /// Insert or update a `MESSLOKATION`.
     ///
+    /// Takes the **typed** BO for the same reason
+    /// [`MaloRepository::upsert`] does — see
+    /// [`MeloShadowColumns`](crate::bo4e::MeloShadowColumns).
+    ///
     /// Returns the new version number.
     async fn upsert(
         &self,
         melo_id: &MeloId,
         malo_id: Option<&MaloId>,
-        data: MeloPayload,
+        data: &rubo4e::current::Messlokation,
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError>;
@@ -1737,7 +1750,9 @@ pub struct NeLoRecord {
     /// Human-readable Bezeichnung.
     pub name: Option<String>,
     pub sparte: Sparte,
-    /// Voltage / pressure level (`NS`, `MS`, …, `HöS/HS`).
+    /// Voltage / pressure level — a BO4E `Netzebene` wire value
+    /// (`NSP`/`MSP`/`HSP`/`HSS`, their `*_UMSP` transformation levels, or
+    /// `HD`/`MD`/`ND` for Gas), same vocabulary as `malo` and `melo`.
     pub netzebene: Option<String>,
     /// Owning Netzbetreiber GLN.
     pub nb_mp_id: String,
@@ -1747,8 +1762,9 @@ pub struct NeLoRecord {
     pub steuerkanal: Option<bool>,
     /// `eigenschaftMsbLokation` — which Marktrolle is responsible for MSB at this NeLo.
     ///
-    /// E.g. `"NB"` (grundzuständiger MSB = NB) or `"MSB"` (wechselbar).
-    /// Used for WiM Gas gMSB routing.
+    /// A BO4E `Marktrolle` **wire** value — `"NB"` (grundzuständiger MSB = NB)
+    /// or `"MSB"` (wechselbar), not the Rust variant spelling. Used for WiM Gas
+    /// gMSB routing.
     pub eigenschaft_msb_lokation: Option<String>,
     /// `grundzustaendigerMsbCodenr` — gMSB MP-ID (13-digit BDEW/DVGW Codenummer).
     pub grundzustaendiger_msb_codenr: Option<String>,
@@ -2627,14 +2643,16 @@ pub struct GeraetRecord {
 pub trait DeviceRepository: Send + Sync {
     /// Upsert a `Zaehler` record.
     #[allow(clippy::too_many_arguments)]
+    /// `zaehler_typ` and `eichung_bis` are **derived from `data`**
+    /// ([`ZaehlerShadowColumns`](crate::bo4e::ZaehlerShadowColumns)), not passed
+    /// alongside it: `Zaehler` declares both, and asking for them twice let the
+    /// column contradict the document it shadows.
     async fn upsert_zaehler(
         &self,
         zaehler_id: &str,
         tenant: &str,
         melo_id: &str,
-        zaehler_typ: Option<&str>,
-        eichung_bis: Option<time::Date>,
-        data: serde_json::Value,
+        data: &rubo4e::current::Zaehler,
         bo4e_version: &str,
     ) -> Result<(), MdmError>;
 
@@ -2653,13 +2671,14 @@ pub trait DeviceRepository: Send + Sync {
     ) -> Result<Option<ZaehlerRecord>, MdmError>;
 
     /// Upsert a `Geraet` record.
+    /// `geraet_typ` is derived from `data.geraetetyp`, for the same reason
+    /// [`upsert_zaehler`](Self::upsert_zaehler) derives its columns.
     async fn upsert_geraet(
         &self,
         geraet_id: &str,
         tenant: &str,
         zaehler_id: &str,
-        geraet_typ: Option<&str>,
-        data: serde_json::Value,
+        data: &rubo4e::current::Geraet,
         bo4e_version: &str,
     ) -> Result<(), MdmError>;
 

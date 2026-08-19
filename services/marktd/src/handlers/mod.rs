@@ -155,6 +155,28 @@ pub fn etag(version: i64) -> String {
     format!("\"{version}\"")
 }
 
+/// Serialise a validated BO4E object for storage, or fail the request.
+///
+/// The obvious spelling, `serde_json::to_value(&bo).unwrap_or_default()`, yields
+/// `Value::Null` on failure — and PostgreSQL accepts a JSON `null` into a
+/// `JSONB NOT NULL` column, because SQL `NULL` and JSON `null` are different
+/// things. A validated document would therefore have been replaced by the JSON
+/// literal `null` with a `204` in reply. Failure here is not reachable for the
+/// generated BO4E types, which is exactly why it should be stated rather than
+/// defaulted: if it ever becomes reachable, the write must not happen.
+pub(crate) fn serialise_or_500<T: serde::Serialize>(
+    value: &T,
+    what: &str,
+) -> Result<serde_json::Value, (axum::http::StatusCode, serde_json::Value)> {
+    serde_json::to_value(value).map_err(|e| {
+        tracing::error!(bo = what, error = %e, "validated BO4E object is not serialisable");
+        (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": format!("could not serialise {what}: {e}") }),
+        )
+    })
+}
+
 #[cfg(test)]
 mod if_match_tests {
     use super::{IfMatch, parse_if_match};

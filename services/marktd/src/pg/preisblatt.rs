@@ -124,7 +124,7 @@ impl PreisblattRepository for PgPreisblattRepository {
                 data: r.get("data"),
                 bo4e_version: r
                     .try_get("bo4e_version")
-                    .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                    .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
                 source,
                 created_at: r.get("created_at"),
                 updated_at: r.get("updated_at"),
@@ -226,7 +226,7 @@ impl PreisblattMessungRepository for PgPreisblattMessungRepository {
                 data: r.get("data"),
                 bo4e_version: r
                     .try_get("bo4e_version")
-                    .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                    .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
                 source,
                 auf_abschlaege: r
                     .try_get::<serde_json::Value, _>("auf_abschlaege")
@@ -330,7 +330,7 @@ impl PreisblattKaRepository for PgPreisblattKaRepository {
                 data: r.get("data"),
                 bo4e_version: r
                     .try_get("bo4e_version")
-                    .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                    .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
                 source: source_str.parse().unwrap_or(PreisblattSource::Api),
                 created_at: r.get("created_at"),
                 updated_at: r.get("updated_at"),
@@ -399,7 +399,7 @@ impl PreisblattDienstleistungRepository for PgPreisblattDienstleistungRepository
             data: r.get("data"),
             bo4e_version: r
                 .try_get("bo4e_version")
-                .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
             source: r
                 .try_get::<String, _>("source")
                 .unwrap_or_else(|_| "api".to_owned())
@@ -471,7 +471,7 @@ impl PreisblattHardwareRepository for PgPreisblattHardwareRepository {
             data: r.get("data"),
             bo4e_version: r
                 .try_get("bo4e_version")
-                .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
             source: r
                 .try_get::<String, _>("source")
                 .unwrap_or_else(|_| "api".to_owned())

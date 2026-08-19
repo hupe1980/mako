@@ -617,7 +617,7 @@ fn eeg_verguetung_is_credit_note() {
         "GUTSCHRIFT has no Rechnungstyp"
     );
     assert_eq!(
-        zusatz_wert(&_j_r, "rechnungsart"),
+        zusatz_wert(&_j_r, "mako:rechnungsart"),
         "GUTSCHRIFT",
         "EEG invoice must be tagged GUTSCHRIFT"
     );
@@ -727,7 +727,7 @@ fn einspeisung_net_settlement_is_gutschrift() {
         "Direktvermarktung brutto must be positive"
     );
     let _j_r = r.to_rechnung_json();
-    assert_eq!(zusatz_wert(&_j_r, "rechnungsart"), "GUTSCHRIFT");
+    assert_eq!(zusatz_wert(&_j_r, "mako:rechnungsart"), "GUTSCHRIFT");
 }
 
 // ── GasQualitaet audit annotation ─────────────────────────────────────────────
@@ -780,7 +780,7 @@ fn gas_gasqualitaet_added_as_zusatz_attribut() {
     let attrs = _j_r["zusatzAttribute"].as_array();
     assert!(attrs.is_some(), "zusatzAttribute must be present");
     let has_gq = attrs.unwrap().iter().any(|a| {
-        a["name"].as_str() == Some("gasqualitaet") && a["wert"].as_str() == Some("H2_BLEND")
+        a["name"].as_str() == Some("mako:gasqualitaet") && a["wert"].as_str() == Some("H2_BLEND")
     });
     assert!(
         has_gq,
@@ -815,7 +815,10 @@ fn gas_no_gasqualitaet_no_zusatz_attribut() {
     let _j_r = r.to_rechnung_json();
     let gq_found = _j_r["zusatzAttribute"]
         .as_array()
-        .map(|a| a.iter().any(|v| v["name"].as_str() == Some("gasqualitaet")))
+        .map(|a| {
+            a.iter()
+                .any(|v| v["name"].as_str() == Some("mako:gasqualitaet"))
+        })
         .unwrap_or(false);
     assert!(!gq_found, "gasqualitaet must not appear when not set");
 }
@@ -1436,7 +1439,10 @@ fn rechnung_json_has_rechnungstyp_and_rechnungsersteller() {
     // Issuer: BO4E Geschaeftspartner has no Marktpartner-code field, so the
     // code rides as a ZusatzAttribut on rechnungsersteller.
     let ersteller = &obj["rechnungsersteller"];
-    assert_eq!(zusatz_wert(ersteller, "marktpartnercode"), "9900000000001");
+    assert_eq!(
+        zusatz_wert(ersteller, "mako:marktpartnercode"),
+        "9900000000001"
+    );
 }
 
 /// A subject id that fails the BDEW check digit must never reach
@@ -1828,7 +1834,7 @@ fn rechnung_json_has_rechnungsempfaenger_and_faelligkeitsdatum() {
         "rechnung_json must have rechnungsempfaenger"
     );
     let emp = &obj["rechnungsempfaenger"];
-    assert_eq!(zusatz_wert(emp, "externeKundenId"), "51238696781");
+    assert_eq!(zusatz_wert(emp, "mako:externe_kunden_id"), "51238696781");
     // faelligkeitsdatum (BO4E due date, was zahlungsziel) must be a date
     // string in the future: period_to + 14 days per §40c EnWG.
     assert!(
@@ -2651,10 +2657,10 @@ fn strom_verbrauchshistorie_produces_info_positions() {
     let attrs = json["zusatzAttribute"]
         .as_array()
         .expect("zusatzAttribute must exist");
-    let has_vj = attrs.iter().any(|a| a["name"] == "verbrauchVorjahr");
+    let has_vj = attrs.iter().any(|a| a["name"] == "mako:verbrauch_vorjahr");
     let has_avg = attrs
         .iter()
-        .any(|a| a["name"] == "verbrauchBundesdurchschnitt");
+        .any(|a| a["name"] == "mako:verbrauch_bundesdurchschnitt");
     assert!(has_vj, "verbrauchVorjahr must be in zusatzAttribute");
     assert!(
         has_avg,
@@ -2676,7 +2682,7 @@ fn strom_rechnung_json_includes_sect40_kilowattstundenpreis() {
 
     let json = invoice.to_rechnung_json();
     // §40 data has no BO4E field; it rides as a structured ZusatzAttribut.
-    let kw_preis = zusatz_wert(&json, "kilowattstundenpreisGesamt");
+    let kw_preis = zusatz_wert(&json, "mako:kilowattstundenpreis_gesamt");
     assert!(
         !kw_preis.is_null(),
         "kilowattstundenpreisGesamt must be present for electricity"
@@ -2735,7 +2741,7 @@ fn strom_energiemix_appears_in_rechnung_json() {
         .expect("zusatzAttribute must exist");
     let em = attrs
         .iter()
-        .find(|a| a["name"] == "stromkennzeichnung")
+        .find(|a| a["name"] == "mako:stromkennzeichnung")
         .expect("stromkennzeichnung ZusatzAttribut must exist");
     // Structured, not prose: the CO₂ figure §42 Abs. 2 Nr. 2 names is a field,
     // and the human description travels inside the structure.
@@ -3968,7 +3974,7 @@ fn sect40b_preisvergleichsdaten_in_rechnung_json() {
 
     let json = invoice.to_rechnung_json();
     // §40b data has no BO4E field; it rides as a structured ZusatzAttribut.
-    let pvd = zusatz_wert(&json, "preisvergleichsdaten");
+    let pvd = zusatz_wert(&json, "mako:preisvergleichsdaten");
     assert!(!pvd.is_null(), "preisvergleichsdaten must be present");
     assert_eq!(pvd["rechtlicheGrundlage"].as_str(), Some("§40b EnWG"));
 
@@ -4074,7 +4080,7 @@ fn cancellation_invoice_reverses_all_signs() {
         json["originalRechnungsnummer"].as_str(),
         Some("INV-2026-001")
     );
-    assert_eq!(zusatz_wert(&json, "rechnungsart"), "STORNORECHNUNG");
+    assert_eq!(zusatz_wert(&json, "mako:rechnungsart"), "STORNORECHNUNG");
 
     // Netto and Brutto of cancellation = -(original)
     assert_eq!(
@@ -4113,7 +4119,7 @@ fn correction_invoice_has_original_reference_in_json() {
     invoice.assert_valid();
 
     let json = invoice.to_rechnung_json();
-    assert_eq!(zusatz_wert(&json, "rechnungsart"), "KORREKTURRECHNUNG");
+    assert_eq!(zusatz_wert(&json, "mako:rechnungsart"), "KORREKTURRECHNUNG");
     assert!(
         json["istStorno"].is_null(),
         "a Korrektur is not a Storno — it bills the corrected amount"
@@ -4680,7 +4686,7 @@ fn billing_run_id_propagated_to_invoice_and_json() {
 
     let json = invoice.to_rechnung_json();
     let attrs = json["zusatzAttribute"].as_array().unwrap();
-    let run_id_attr = attrs.iter().find(|a| a["name"] == "billingRunId");
+    let run_id_attr = attrs.iter().find(|a| a["name"] == "mako:billing_run_id");
     assert!(
         run_id_attr.is_some(),
         "billingRunId must appear in zusatzAttribute"
@@ -5281,7 +5287,7 @@ fn ersatzversorgung_within_three_months_bills_and_names_the_regime() {
     assert!(
         attrs
             .iter()
-            .any(|a| a["name"] == "vertragsart" && a["wert"] == "ERSATZVERSORGUNG"),
+            .any(|a| a["name"] == "mako:vertragsart" && a["wert"] == "ERSATZVERSORGUNG"),
         "vertragsart attribute must name the regime"
     );
 }
@@ -5314,7 +5320,7 @@ fn sondervertrag_is_stated_explicitly() {
     assert!(
         attrs
             .iter()
-            .any(|a| a["name"] == "vertragsart" && a["wert"] == "SONDERVERTRAG")
+            .any(|a| a["name"] == "mako:vertragsart" && a["wert"] == "SONDERVERTRAG")
     );
 }
 

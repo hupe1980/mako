@@ -240,12 +240,19 @@ operator taking the decision themselves.
 Supply `gas_meter.messung_qm3` + `brennwert_kwh_per_qm3` + `zustandszahl` in the request.
 `billingd` computes `kWh_Hs = m³ × Hs × Z` and uses it for all price positions.
 
-**H2-blend / `gasqualitaet`:** Supply the optional `gasqualitaet` field from
-`marktd.malo.gasqualitaet` (e.g. `"H_GAS"`, `"L_GAS"`, `"H2_BLEND"`). The field does **not**
-alter the billing amount — per DVGW G 260, `edmd` already reports the measured Brennwert
-reflecting the actual gas blend. `billingd` records `gasqualitaet` as a `ZusatzAttribut` on
-the `Rechnung` for regulatory audit transparency, enabling operators to trace billing periods
-during H2-blend transitions.
+**`gasqualitaet`:** Supply the optional `gasqualitaet` field from
+`marktd.malo.gasqualitaet` — `"H_GAS"` or `"L_GAS"`, the only two values BO4E
+v202607 defines and the only two the column's `CHECK` constraint accepts. The
+field does **not** alter the billing amount: per DVGW G 260, `edmd` already
+reports the measured Brennwert, which reflects the actual gas composition.
+`billingd` records `gasqualitaet` as a `ZusatzAttribut` on the `Rechnung` for
+audit transparency.
+
+An H2-blend quality is **not** representable today, and deliberately so: BO4E has
+not standardised a wire value for it, and inventing one would persist rows that
+stay wrong when the 2026–2028 DVGW/BNetzA wave lands with a different spelling.
+Adopting one is a BO4E schema bump plus an AHB code, at which point the mapping
+goes in `mako_geli_gas::gas_quality`.
 
 ### WAERME — District Heat (Fernwärme)
 
@@ -460,7 +467,7 @@ Every billing run generates a unique `billing_run_id` (UUID v4). It is stored on
 `Invoice.billing_run_id` and propagated to:
 
 - `billing_records.billing_run_id` in PostgreSQL
-- `rechnung_json.zusatzAttribute["billingRunId"]`
+- `rechnung_json.zusatzAttribute["mako:billing_run_id"]`
 
 This links each database record to the exact calculation output for § 147 AO / GoBD compliance.
 

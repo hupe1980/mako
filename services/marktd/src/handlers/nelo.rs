@@ -85,7 +85,7 @@ fn normalize_netzlokation(
             serde_json::json!({ "error": format!("Netzlokation has out-of-schema enum values: {e}") }),
         )
     })?;
-    let canonical = serde_json::to_value(&nelo).unwrap_or_default();
+    let canonical = super::serialise_or_500(&nelo, "Netzlokation")?;
     Ok((nelo, canonical))
 }
 
@@ -244,16 +244,15 @@ pub async fn put_nelo(
         Err((status, json)) => return (status, Json(json)).into_response(),
     };
 
-    // Extract typed SQL columns from the validated BO4E struct.
+    // Typed SQL columns, derived from the validated BO4E struct — the single
+    // derivation. `as_wire()` and not `format!("{r:?}")`: `Debug` renders
+    // `Marktrolle::Nb` as `"Nb"`, not the BO4E wire value `"NB"`.
     let steuerkanal = typed_nelo.steuerkanal;
-    let eigenschaft_msb_lokation = typed_nelo
-        .eigenschaft_msb_lokation
-        .as_ref()
-        .map(|r| format!("{r:?}"));
+    let eigenschaft_msb_lokation = typed_nelo.eigenschaft_msb_lokation.map(|r| r.as_wire());
     let grundzustaendiger_msb_codenr = typed_nelo
         .grundzustaendiger_msb_codenr
         .as_ref()
-        .map(|id| id.to_string());
+        .map(ToString::to_string);
 
     let if_match = match parse_if_match(&headers) {
         IfMatch::Absent | IfMatch::Any => None,
@@ -270,7 +269,7 @@ pub async fn put_nelo(
         netzebene: None,
         nb_mp_id: body.nb_mp_id,
         steuerkanal,
-        eigenschaft_msb_lokation,
+        eigenschaft_msb_lokation: eigenschaft_msb_lokation.map(ToOwned::to_owned),
         grundzustaendiger_msb_codenr,
         data: canonical_data,
         version: 0,

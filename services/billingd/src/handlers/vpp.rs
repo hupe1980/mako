@@ -199,17 +199,17 @@ pub async fn post_vpp_billing(
     .await?;
 
     let attrs = vec![
-        zusatz_attribut("vpp_id", serde_json::json!(vpp_id)),
+        zusatz_attribut("mako:vpp_id", serde_json::json!(vpp_id)),
         zusatz_attribut(
-            "total_flexibility_kwh",
+            "mako:total_flexibility_kwh",
             serde_json::json!(total_flex_kwh.to_string()),
         ),
         zusatz_attribut(
-            "dispatch_event_count",
+            "mako:dispatch_event_count",
             serde_json::json!(billed_events.to_string()),
         ),
         zusatz_attribut(
-            "dispatch_process_ids",
+            "mako:dispatch_process_ids",
             serde_json::json!(
                 req.dispatch_events
                     .iter()
@@ -586,11 +586,11 @@ pub async fn post_vpp_webhook(
     );
 
     let attrs = vec![
-        zusatz_attribut("vpp_id", serde_json::json!(contract.vpp_id.clone())),
-        zusatz_attribut("tx_id", serde_json::json!(tx_id.clone())),
-        zusatz_attribut("sr_id", serde_json::json!(location_id.clone())),
+        zusatz_attribut("mako:vpp_id", serde_json::json!(contract.vpp_id.clone())),
+        zusatz_attribut("mako:tx_id", serde_json::json!(tx_id.clone())),
+        zusatz_attribut("mako:sr_id", serde_json::json!(location_id.clone())),
         zusatz_attribut(
-            "flexibility_kwh",
+            "mako:flexibility_kwh",
             serde_json::json!(flexibility_kwh.to_string()),
         ),
     ];

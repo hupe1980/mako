@@ -560,10 +560,13 @@ pub async fn post_ggv_billing(
         rates.clone(),
         parts,
         vec![
-            zusatz_attribut("ggv_id", serde_json::json!(ggv_id)),
-            zusatz_attribut("tenant_count", serde_json::json!(priced.len().to_string())),
-            zusatz_attribut("total_kwh", serde_json::json!(total_kwh.to_string())),
-            zusatz_attribut("billingRunId", serde_json::json!(run_id)),
+            zusatz_attribut("mako:ggv_id", serde_json::json!(ggv_id)),
+            zusatz_attribut(
+                "mako:tenant_count",
+                serde_json::json!(priced.len().to_string()),
+            ),
+            zusatz_attribut("mako:total_kwh", serde_json::json!(total_kwh.to_string())),
+            zusatz_attribut("mako:billing_run_id", serde_json::json!(run_id)),
         ],
     )?;
     let (sammel_netto, sammel_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);

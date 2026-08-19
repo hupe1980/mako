@@ -259,8 +259,9 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                         .find(|s| s.category.as_deref() == Some("7"))
                         .and_then(|s| s.status_code.clone())
                 }),
-                // H2-readiness: gas quality type (placeholder — maps AHB qualifier when published)
-                gasqualitaet: extract_gasqualitaet(u.segments()),
+                // No gas-quality characteristic exists in UTILMD G; see
+                // `extract_gasqualitaet`. Always `None` until an AHB defines one.
+                gasqualitaet: extract_gasqualitaet(u.segments()).map(str::to_owned),
             })
         },
     ));

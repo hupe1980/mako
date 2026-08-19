@@ -34,7 +34,7 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 /// Validate and normalise a `Messlokation` payload (L4 hard cut).
 fn normalize_messlokation(
     mut data: serde_json::Value,
-) -> Result<serde_json::Value, (axum::http::StatusCode, serde_json::Value)> {
+) -> Result<Messlokation, (axum::http::StatusCode, serde_json::Value)> {
     if let Some(obj) = data.as_object_mut() {
         obj.entry("_typ")
             .or_insert_with(|| serde_json::json!("MESSLOKATION"));
@@ -61,7 +61,7 @@ fn normalize_messlokation(
             serde_json::json!({ "error": format!("Messlokation has out-of-schema enum values: {e}") }),
         )
     })?;
-    Ok(serde_json::to_value(&melo).unwrap_or_default())
+    Ok(melo)
 }
 
 /// Deserialise stored JSONB as `Messlokation`. Returns `None` on schema drift.
@@ -81,7 +81,7 @@ fn deserialize_stored_melo(data: serde_json::Value, melo_id: &str) -> Option<Mes
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 fn default_bo4e_version() -> String {
-    "v202607.0.0".to_owned()
+    mako_markt::bo4e::schema_version()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -90,7 +90,9 @@ pub struct MeloUpsertRequest {
     pub malo_id: Option<String>,
     /// Full BO4E MESSLOKATION payload.
     pub data: serde_json::Value,
-    /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
+    /// BO4E schema version this payload is interpreted under. Server-derived;
+    /// a value sent by the client is recorded but never changes how `data` is
+    /// parsed, so prefer omitting it.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -214,7 +216,7 @@ where
         .is_some();
 
     // L4 hard cut: validate and normalise the incoming BO4E Messlokation payload.
-    let canonical_data = match normalize_messlokation(req.data) {
+    let melo = match normalize_messlokation(req.data) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -224,7 +226,7 @@ where
         .upsert(
             &melo_id,
             malo_id.as_ref(),
-            canonical_data,
+            &melo,
             if_match,
             &req.bo4e_version,
         )

@@ -53,7 +53,7 @@ graph LR
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version in `product_history`; validates `_typ`, `_version`, enum fields, 30-value `preistyp` whitelist |
+| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version in `product_history`; validates `_typ`, `_version`, enum fields, and the `preistyp` whitelist (mako-only types move to the `mako:preistyp` ZusatzAttribut) |
 | `GET` | `/api/v1/products/{lf_mp_id}/{product_code}` | Fetch latest product |
 | `DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}` | **Soft-delete** — sets `valid_to = today`; product retained for billing history; excluded from comparison feed |
 | `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=&include_drafts=&include_expired=`) |
@@ -100,6 +100,32 @@ Content-Type: application/json
 
 `billingd` extracts `grundpreis_ct_per_day` (20 ct/day) and `arbeitspreis_ct_per_kwh`
 (32 ct/kWh) by traversing `data.tarifpreispositionen` keyed on `preistyp`.
+
+### Two vocabularies, one field — and why they are kept apart
+
+BO4E `Preistyp` defines **ten** values. mako prices things the standard does not
+model — an EEG-Marktprämie, a HEMS optimisation event, an E-Mobility roaming fee
+— so the accepted whitelist is a superset of about thirty.
+
+Those extras do **not** go in the BO4E field. A document stamped
+`_typ: "TARIFPREISBLATT"` carrying `preistyp: "EEG_MARKTPRAEMIE"` is not valid
+BO4E: every conforming reader (BO4E-python, go-bo4e, BO4E-dotnet) resolves it to
+`Unknown`, silently, because forward-compatible decoding is what they are
+supposed to do. A mako-only price type therefore travels in the `mako:preistyp`
+`ZusatzAttribut` — BO4E's own mechanism for carrying what the schema does not
+define — with `preistyp` left absent, which the schema permits:
+
+```json
+{
+  "preisstaffeln": [{ "preis": "8.20" }],
+  "zusatzAttribute": [{ "name": "mako:preistyp", "wert": "EEG_MARKTPRAEMIE" }]
+}
+```
+
+Readers do not branch: `mako_markt::bo4e::position_preistyp()` checks the BO4E
+field, then the attribute, and both `tarifbd` and `billingd` go through it.
+`tests/bo4e_conformance.rs` pins the result — whatever a `PUT` stores must
+round-trip through `rubo4e` with no enum anywhere falling through to `Unknown`.
 
 ---
 
@@ -458,7 +484,7 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed. Only this value is accepted — all others are rejected with 422 |
 | `valid_from` | DATE | Tariff validity start. Staging a version with a later start end-dates the running one automatically; `products_no_overlap` (GiST) forbids two versions covering the same day |
 | `valid_to` | DATE | Tariff validity end, inclusive. `DELETE` is a withdrawal that sets it to today. Both bounds are applied on read, so a withdrawn product stops pricing new periods and still prices the past |
-| `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload (validated on PUT: `_typ`, `_version = v202607.0.0`, enum fields, 30-value `preistyp` whitelist) |
+| `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload (validated on PUT: `_typ`, `_version = v202607.0.0`, enum fields, `preistyp` whitelist; always a *valid* BO4E document — mako-only price types ride in `zusatzAttribute`) |
 | `energiemix` | JSONB | §42 EnWG `Energiemix` COM — CO₂ emissions, fuel mix, certification labels |
 | `oekolabel` | TEXT[] | Extracted from energiemix for GIN `@>` filter queries |
 

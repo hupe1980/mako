@@ -35,17 +35,35 @@ CREATE TABLE malo (
     sparte       TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
     -- Typed columns extracted from BO4E Marktlokation JSONB at write time.
     -- NULL when the incoming data does not carry the field.
-    netzebene            TEXT,
+    -- Every enum column below holds a BO4E wire value and nothing else. The
+    -- CHECK lists are the schema's own VARIANTS, pinned by the
+    -- `bo4e_check_constraints_match_the_schema` test in `mako-markt`. Two
+    -- writers reach these columns — the REST payload and the UTILMD
+    -- Stammdatenänderung patch — so one vocabulary is a constraint, not a
+    -- convention.
+    netzebene            TEXT CHECK (netzebene IN (
+                                'NSP', 'MSP', 'HSP', 'HSS',
+                                'MSP_NSP_UMSP', 'HSP_MSP_UMSP', 'HSS_HSP_UMSP',
+                                'HD', 'MD', 'ND')),
     bilanzierungsgebiet  TEXT,  -- Bilanzierungsgebiet-EIC; drives processd NB check 4
-    gasqualitaet         TEXT,  -- 'HGas' | 'LGas'; Gas routing
-    energierichtung      TEXT,  -- 'Aussp' | 'Einsp'; generation vs consumption
-    bilanzierungsmethode TEXT,  -- 'RLM' | 'SLP' | 'IMS' | 'TLP_*'; drives netzbilanzd Leistungspreis routing
+    gasqualitaet         TEXT CHECK (gasqualitaet IN ('H_GAS', 'L_GAS')),
+    -- Named from the grid's point of view: EINSP (Einspeisung) feeds the grid
+    -- and is the *generating* location; AUSSP (Ausspeisung) draws from it.
+    energierichtung      TEXT CHECK (energierichtung IN ('AUSSP', 'EINSP')),
+    bilanzierungsmethode TEXT CHECK (bilanzierungsmethode IN (
+                                'RLM', 'SLP', 'TLP_GEMEINSAM', 'TLP_GETRENNT',
+                                'PAUSCHAL', 'IMS')),
     regelzone            TEXT,  -- Regelzone EIC code; maps MaLo → ÜNB for MABIS IFTSTA + Redispatch 2.0
-    fallgruppe           TEXT,  -- Gas GaBi RLM Fallgruppe: 'GABI_RLM_MIT_TAGESBAND' | 'GABI_RLM_OHNE_TAGESBAND'
-                                --   | 'GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN'
-                                -- Determines GaBi billing category for Gas RLM MaLos.
+    -- Gas GaBi RLM Fallgruppe. A Bilanzierung field, not a Marktlokation one:
+    -- written by the Bilanzierung resource and the UTILMD TM+Z10 patch; a MaLo
+    -- PUT leaves it alone.
+    fallgruppe           TEXT CHECK (fallgruppe IN (
+                                'GABI_RLM_MIT_TAGESBAND', 'GABI_RLM_OHNE_TAGESBAND',
+                                'GABI_RLM_IM_NOMINIERUNGSERSATZVERFAHREN')),
     lokationsbuendel_objektcode TEXT,  -- Marktlokation.lokationsbuendelObjektcode (UTILMD Lokationsbündelstruktur)
-    fernsteuerbar        BOOLEAN,  -- §14a EnWG Status der Fernsteuerbarkeit (UTILMD CCI+7037 Z97=true / Z96=false)
+    -- §14a EnWG Status der Fernsteuerbarkeit (UTILMD CCI+Z24++Z97 = true /
+    -- Z96 = false). No BO4E field exists for it; a MaLo PUT leaves it alone.
+    fernsteuerbar        BOOLEAN,
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MARKTLOKATION
     bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
@@ -91,12 +109,22 @@ CREATE TABLE melo (
     melo_id      TEXT        PRIMARY KEY,           -- DE + 31 alphanumeric chars
     malo_id      TEXT        REFERENCES malo (malo_id) ON DELETE SET NULL,
     -- Typed columns extracted from BO4E Messlokation JSONB at write time.
-    netzebene_messung      TEXT,   -- voltage / pressure level at the metering point
+    -- BO4E `Netzebene` wire value, same vocabulary and same CHECK-drift guard
+    -- as malo.netzebene.
+    netzebene_messung      TEXT CHECK (netzebene_messung IN (
+                                'NSP', 'MSP', 'HSP', 'HSS',
+                                'MSP_NSP_UMSP', 'HSP_MSP_UMSP', 'HSS_HSP_UMSP',
+                                'HD', 'MD', 'ND')),
     regelzone              TEXT,   -- Regelzone EIC (Standorteigenschaften.eigenschaftenStrom[0].regelzone)
                                    -- maps MeLo → ÜNB for Redispatch 2.0 Stammdaten + MABIS IFTSTA 21000
-    -- Full BO4E Standorteigenschaften JSONB — stored for Redispatch 2.0 NetworkConstraintDocument
-    -- and Gas billing zone lookup (StandorteigenschaftenGas.druckstufe, bilanzierungsgebietEic).
-    -- NULL when the incoming PUT does not carry standorteigenschaften.
+    -- Full BO4E Standorteigenschaften — stored for Redispatch 2.0
+    -- NetworkConstraintDocument and Gas billing zone lookup
+    -- (StandorteigenschaftenGas.druckstufe, bilanzierungsgebietEic).
+    --
+    -- Standorteigenschaften is a standalone BO (#25), not a Messlokation
+    -- field, so it arrives in the extension map where typed deserialization
+    -- does not reach. The write path parses it as the BO it names and derives
+    -- regelzone from the typed value. NULL when the PUT does not carry it.
     standorteigenschaften  JSONB,
     lokationsbuendel_objektcode TEXT,  -- Messlokation.lokationsbuendelObjektcode (UTILMD Lokationsbündelstruktur)
     version      BIGINT      NOT NULL DEFAULT 1,
@@ -526,6 +554,32 @@ CREATE INDEX preisblaetter_hw_gin ON preisblaetter_hardware USING GIN (data json
 --   3. On de.markt.partner.activated { role: "LF" }, latest pricat_version for
 --      the NB is dispatched to the new partner only.
 
+-- ── PRICAT 27003 dispatch ledger ──────────────────────────────────────────────
+--
+-- `pricat_versions` is not a second copy of `preisblaetter`. The two answer
+-- different questions and carry different constraints:
+--
+--   preisblaetter    — "which Preisblatt Netznutzung is valid on date X?"
+--                      State. One answer per party per day, enforced by an
+--                      EXCLUDE … USING gist no-overlap constraint. A correction
+--                      replaces the row.
+--
+--   pricat_versions  — "which document did we transmit to the LFs, and when?"
+--                      An audit trail. Deliberately has NO no-overlap
+--                      constraint: a superseded version stays queryable,
+--                      because a PRICAT sent last quarter remains a fact after
+--                      the price sheet behind it is corrected. `data` is a
+--                      snapshot taken at dispatch time for exactly that reason —
+--                      pointing at the live sheet instead would let a later
+--                      correction retroactively rewrite what was sent.
+--
+-- Both are written in the same transaction as the `de.markt.pricat.published`
+-- outbox row (handlers/preisblatt.rs), so the sheet, the snapshot and the
+-- dispatch trigger cannot diverge.
+--
+-- Only the NNE sheet feeds this ledger. PRICAT 27003 is the NB→LF Preisblatt
+-- Netznutzung transmission; `preisblaetter_messung` (MSB) and
+-- `preisblaetter_konzessionsabgabe` have no PRICAT of their own.
 CREATE TABLE pricat_versions (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     nb_mp_id              TEXT        NOT NULL,
@@ -616,10 +670,19 @@ CREATE TABLE subscriptions (
 CREATE TABLE partners (
     mp_id          TEXT        PRIMARY KEY,           -- 13-digit BDEW/DVGW/GS1 MP-ID
     display_name   TEXT,
-    marktrolle     TEXT,
+    -- BO4E Marktrolle and Rollencodetyp wire values. Both are served verbatim
+    -- from GET /partners/{id}/marktteilnehmer, so the column is constrained and
+    -- the read path parses with from_wire: a value outside the vocabulary is
+    -- reported, not silently dropped.
+    marktrolle     TEXT CHECK (marktrolle IN (
+                       'BIKO', 'BKV', 'BTR', 'DP', 'EIV', 'ESA', 'KN',
+                       'LF', 'MGV', 'MSB', 'NB', 'RB', 'UENB')),
     sparte         TEXT        CHECK (sparte IN ('STROM', 'GAS')),
     -- B2 typed fields extracted from BO4E Marktteilnehmer.
-    rollencodetyp  TEXT,                              -- 'BDEW' | 'DVGW' | 'GS1'; coding authority
+    -- The coding authority. Note the third value is BO4E's `GLN`, not `GS1`:
+    -- GS1 is the issuing organisation, GLN the code it issues, and only the
+    -- latter is a `Rollencodetyp`.
+    rollencodetyp  TEXT CHECK (rollencodetyp IN ('BDEW', 'DVGW', 'GLN')),
     makoadresse    TEXT[],                            -- AS4 endpoint URL list (makoadresse: Vec<String>)
     channels       JSONB       NOT NULL DEFAULT '[]',
     version        BIGINT      NOT NULL DEFAULT 1,
@@ -699,9 +762,14 @@ CREATE TABLE nelo (
     tenant       TEXT        NOT NULL,
     name         TEXT,                                        -- human-readable Bezeichnung
     sparte       TEXT        NOT NULL CHECK (sparte IN ('STROM', 'GAS')),
-    netzebene    TEXT        CHECK (
-                     netzebene IN ('NS', 'MS', 'MSP', 'HSP', 'HS', 'HöS', 'HöS/HS')
-                 ),
+    -- BO4E Netzebene wire value. Netzlokation carries no netzebene field in
+    -- BO4E, so the column is mako's — but the UTILMD Stammdatenänderung patch
+    -- is one shared map routed by object type and writes into malo, melo and
+    -- nelo alike, so the vocabulary is the schema's.
+    netzebene    TEXT        CHECK (netzebene IN (
+                     'NSP', 'MSP', 'HSP', 'HSS',
+                     'MSP_NSP_UMSP', 'HSP_MSP_UMSP', 'HSS_HSP_UMSP',
+                     'HD', 'MD', 'ND')),
     nb_mp_id       TEXT        NOT NULL,                        -- owning Netzbetreiber GLN
     -- ── Typed columns extracted from the BO4E Netzlokation payload (B6) ──────
     steuerkanal              BOOLEAN,     -- Redispatch 2.0: can be remote-controlled
@@ -861,8 +929,14 @@ CREATE TABLE zaehler (
     melo_id      TEXT        NOT NULL,   -- owning MeLo
     -- BO4E `Zaehlertyp` wire value. Constrained because §42c Energy-Sharing
     -- eligibility reads this column: an unrecognised value there silently
-    -- degrades a delivery point to UNKNOWN. The `zaehler_typ_matches_bo4e`
-    -- guard test pins this list to `rubo4e::current::Zaehlertyp`.
+    -- degrades a delivery point to UNKNOWN. `mako-markt`'s
+    -- `bo4e_check_constraints_match_the_schema` test pins this list to
+    -- `rubo4e::current::Zaehlertyp::VARIANTS`.
+    --
+    -- 'UNKNOWN' is absent: it is BO4E's forward-compatibility catch-all, not a
+    -- schema variant. The write path runs Bo4eStrict::ensure_known_enums before
+    -- deriving the column, so an unrecognised Zählertyp is a 422 naming the
+    -- field.
     -- Note: `Zaehlertyp` spells it INTELLIGENTES_MESSSYSTEM (three S);
     -- `Geraetetyp` uses INTELLIGENTES_MESSYSTEM (two). That is a BO4E quirk,
     -- not a typo here.
@@ -879,8 +953,7 @@ CREATE TABLE zaehler (
                      'ULTRASCHALLGASZAEHLER',
                      'WASSERZAEHLER',
                      'WECHSELSTROMZAEHLER',
-                     'WIRBELGASZAEHLER',
-                     'UNKNOWN'
+                     'WIRBELGASZAEHLER'
                  )),
     eichung_bis  DATE,                   -- calibration valid until (Eichgültigkeitsdatum)
     data         JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Zaehler object

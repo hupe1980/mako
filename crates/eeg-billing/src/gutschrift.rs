@@ -259,4 +259,31 @@ mod tests {
             .expect("§19 exempt still carries a breakdown");
         assert!(steuer[0].steuerwert.unwrap().is_zero());
     }
+
+    // ── Outbound BO4E conformance ────────────────────────────────────────────
+
+    /// The §14 UStG Gutschrift this module emits must be valid BO4E.
+    ///
+    /// It is issued *by the NB to the Anlagenbetreiber* — a document that
+    /// leaves the building — and BO4E `Rechnungstyp` has no Gutschrift value,
+    /// so the shape here is the one `energy-billing` uses: leave the typed
+    /// field absent and label the process in a `mako:` `ZusatzAttribut`. What
+    /// this test forbids is the other resolution — forcing a near-enough
+    /// `Rechnungstyp` in, or letting any enum fall through to `Unknown`.
+    ///
+    /// Typed only: this crate carries no `serde_json` (it stays publishable and
+    /// rubo4e-free by default, `bo4e` being an opt-in feature), and the JSON
+    /// form is the same document — `einsd` is where that round-trip is
+    /// exercised.
+    #[test]
+    fn every_emitted_gutschrift_is_valid_bo4e() {
+        // Both VAT statuses — they set different `Steuerart` values, which is
+        // the branch most likely to reach for an enum BO4E does not define.
+        for vat in [VatStatus::Regelbesteuerung, VatStatus::Kleinunternehmer] {
+            let g = settlement_to_gutschrift(&feed_in_output(), vat, meta())
+                .unwrap_or_else(|e| panic!("{vat:?}: settlement failed: {e}"));
+            rubo4e::Bo4eStrict::ensure_known_enums(&g)
+                .unwrap_or_else(|e| panic!("{vat:?}: emitted out-of-schema enums: {e}"));
+        }
+    }
 }

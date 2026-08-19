@@ -48,18 +48,12 @@ fn map_row(row: &PgRow) -> Result<NeLoRecord, sqlx::Error> {
 
 impl NeLoRepository for PgNeLoRepository {
     async fn upsert(&self, rec: NeLoRecord, if_match: Option<i64>) -> Result<i64, MdmError> {
-        // Extract typed columns from the BO4E Netzlokation payload (B6).
-        let steuerkanal = rec.data.get("steuerkanal").and_then(|v| v.as_bool());
-        let eigenschaft_msb = rec
-            .data
-            .get("eigenschaftMsbLokation")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
-        let grundzustaendiger_msb = rec
-            .data
-            .get("grundzustaendigerMsbCodenr")
-            .and_then(|v| v.as_str())
-            .map(str::to_owned);
+        // The typed columns come from the record, which the handler derived
+        // from the validated `Netzlokation` — one derivation, so a column
+        // cannot disagree with the document it shadows.
+        let steuerkanal = rec.steuerkanal;
+        let eigenschaft_msb = rec.eigenschaft_msb_lokation.clone();
+        let grundzustaendiger_msb = rec.grundzustaendiger_msb_codenr.clone();
 
         let rows_affected: u64 = if let Some(expected) = if_match {
             // Conditional update — only succeeds when version matches.

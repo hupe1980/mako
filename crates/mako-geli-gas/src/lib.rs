@@ -183,7 +183,7 @@ pub use stornierung::{
     STORNIERUNG_RESPONSE_WINDOW_LABEL, WORKFLOW_NAME as STORNIERUNG_WORKFLOW_NAME,
 };
 
-pub use gas_quality::{GasQualitaet, normalize_gasqualitaet};
+pub use gas_quality::normalize_gasqualitaet;
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 

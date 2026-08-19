@@ -9,15 +9,17 @@
 //! `VARIANTS` / `COUNT` / `from_wire` / `as_wire` without the `strum` feature, so
 //! the CHECK list is proved against the enum itself rather than a hand-maintained
 //! magic number.
+//!
+//! `UNKNOWN` is not admitted. It is BO4E's forward-compatibility catch-all, not
+//! a schema variant, and the device `PUT` handlers run
+//! `Bo4eStrict::ensure_known_enums` before deriving the column — an
+//! unrecognised Zählertyp is a 422 naming the field, so the column never needs
+//! to hold one.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use rubo4e::current::Zaehlertyp;
-
-/// The catch-all wire value the CHECK list keeps so a lenient-decoded `Unknown`
-/// (a forward-compat value from a newer schema) can still round-trip to storage.
-const UNKNOWN_SENTINEL: &str = "UNKNOWN";
 
 fn migration_sql() -> String {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("migrations/0001_initial.sql");
@@ -47,12 +49,10 @@ fn check_values(sql: &str, column: &str) -> Vec<String> {
         .collect()
 }
 
-/// Every value in the `zaehler_typ` CHECK list must be a real BO4E `Zaehlertyp`
-/// (or the `UNKNOWN` sentinel).
+/// Every value in the `zaehler_typ` CHECK list must be a real BO4E `Zaehlertyp`.
 ///
-/// `Zaehlertyp::from_wire` is the strict parse: unlike the lenient serde path it
-/// returns `Err` for typos, legacy codes, and the literal `"UNKNOWN"`, so it is
-/// exactly the check we need — no manual `== Unknown` exclusion.
+/// `from_wire` is the strict parse: it returns `Err` for typos, legacy codes and
+/// the literal `"UNKNOWN"`.
 #[test]
 fn zaehler_typ_check_values_are_real_bo4e_values() {
     let sql = migration_sql();
@@ -60,9 +60,6 @@ fn zaehler_typ_check_values_are_real_bo4e_values() {
     assert!(!values.is_empty(), "CHECK list parsed as empty");
 
     for v in &values {
-        if v == UNKNOWN_SENTINEL {
-            continue; // intentional forward-compat catch-all, not a schema variant
-        }
         assert!(
             Zaehlertyp::from_wire(v).is_ok(),
             "`{v}` in the zaehler_typ CHECK list is not a real BO4E Zaehlertyp wire value"
@@ -76,15 +73,11 @@ fn zaehler_typ_check_values_are_real_bo4e_values() {
 /// Proved by set-equality against `Zaehlertyp::VARIANTS` (via `as_wire()`), which
 /// is stable for the schema version and available without `strum`. When a BO4E
 /// release adds or removes a Zaehlertyp this fails with the precise delta — the
-/// list needs a deliberate decision, not silent divergence. Replaces the former
-/// hand-pinned `= 14` magic-count guard.
+/// list needs a deliberate decision, not silent divergence.
 #[test]
 fn zaehler_typ_check_covers_every_bo4e_variant() {
     let sql = migration_sql();
-    let list: BTreeSet<String> = check_values(&sql, "zaehler_typ")
-        .into_iter()
-        .filter(|v| v != UNKNOWN_SENTINEL)
-        .collect();
+    let list: BTreeSet<String> = check_values(&sql, "zaehler_typ").into_iter().collect();
 
     let enum_wire: BTreeSet<String> = Zaehlertyp::VARIANTS
         .iter()

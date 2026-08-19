@@ -582,3 +582,33 @@ println!("Fully settled: {}",       balance.is_fully_settled());
 | DVGW-Codenummer (NB) | 13 digits, starts `98` | DVGW registry | `9800357000001` |
 | BDEW-Codenummer (LF) | 13 digits, starts `99` | BDEW registry | `9900357000004` |
 | Gas Zählpunkt (MeLo) | 11 chars | DVGW G 2000 | `DE000123400M` |
+
+## BO4E extensions: `ZusatzAttribut`
+
+BO4E cannot model everything mako bills for, and its answer is `ZusatzAttribut`
+— a `{name, wert}` pair on every BO and most COMs. The standard mandates no
+naming convention for it.
+
+mako's is `mako:<snake_case>`, enforced. Without a prefix, `rechnungsart` is
+indistinguishable from a field BO4E might introduce later and from an attribute
+the ERP on the other side already writes — and several crates emit into the same
+document.
+
+`cargo xtask check-bo4e-attributes` (part of `just ci`) refuses any emitted
+attribute that is not namespaced **and** listed in its registry. The registry
+carries a one-line description per attribute and is the discoverable list: a
+consumer cannot learn mako's extensions from the BO4E schema, because not being
+in the schema is the point.
+
+Two rules follow:
+
+- **A mako value never occupies a BO4E field.** Where mako's vocabulary exceeds
+  the standard's, the extra value goes in a `ZusatzAttribut` and the BO4E field
+  is left absent. `Rechnungstyp` has no Gutschrift value, so a credit note
+  leaves `rechnungstyp` unset and labels itself `mako:rechnungsart`; BO4E
+  `Preistyp` has ten values against mako's thirty, so an EEG-Marktprämie rides
+  as `mako:preistyp`.
+- **What mako emits is checked, not just what it receives.** Every `Rechnung`,
+  `Angebot` and stored `Tarifpreisblatt` must round-trip through `rubo4e` with
+  no enum falling through to `Unknown` — otherwise the document is one a
+  conforming reader silently cannot understand.

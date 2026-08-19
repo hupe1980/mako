@@ -1190,7 +1190,7 @@ impl MdmdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_malo` with the 11-digit malo_id.\n                 2. Key fields to check:\n                    - netzebene: HSS/HS/MS/NS — determines NNE tariff tier\n                    - bilanzierungsgebiet: Bilanzierungsgebiet-EIC (required for UTILMD)\n                    - energierichtung: EINSP (feed-in) or VERB (consumption)\n                    - sparte: STROM or GAS\n                    - gasqualitaet: H_GAS or L_GAS (Gas only)\n\n                 3. Use `get_versorgungsstatus` to check if the MaLo is currently supplied.\n                 4. Use `get_nb_contract` to find the active network contract (billing_schedule, RLM/SLP).",
+                "1. Use `get_malo` with the 11-digit malo_id.\n                 2. Key fields to check:\n                    - netzebene: BO4E Netzebene — HSS/HSP/MSP/NSP, the *_UMSP transformation levels, or HD/MD/ND for Gas; determines NNE tariff tier\n                    - bilanzierungsgebiet: Bilanzierungsgebiet-EIC (required for UTILMD)\n                    - energierichtung: EINSP (Einspeisung — feeds the grid, a generating MaLo) or AUSSP (Ausspeisung — draws from it, a consuming MaLo)\n                    - sparte: STROM or GAS\n                    - gasqualitaet: H_GAS or L_GAS (Gas only)\n\n                 3. Use `get_versorgungsstatus` to check if the MaLo is currently supplied.\n                 4. Use `get_nb_contract` to find the active network contract (billing_schedule, RLM/SLP).",
             ),
         ]
     }

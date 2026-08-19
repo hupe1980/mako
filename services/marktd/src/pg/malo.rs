@@ -1,10 +1,12 @@
 //! PostgreSQL implementation of [`MaloRepository`].
 
 use mako_markt::{
+    bo4e::MaloShadowColumns,
     domain::{MaloId, Sparte},
     error::MdmError,
     repository::{MaloFilter, MaloRecord, MaloRepository, PageResult, Rollenzuordnung},
 };
+use rubo4e::current::Marktlokation;
 use sqlx::{PgConnection, PgPool, Row, postgres::PgRow};
 use time::Date;
 
@@ -32,53 +34,22 @@ impl PgMaloRepository {
         conn: &mut PgConnection,
         malo_id: &MaloId,
         sparte: Sparte,
-        data: serde_json::Value,
+        data: &Marktlokation,
         rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError> {
         let sparte_str = sparte.to_string();
-        // Extract typed fields from the BO4E Marktlokation JSONB payload.
-        // These are stored as indexed columns for efficient SQL queries.
-        // All are optional — missing fields in the JSONB produce NULL.
-        let netzebene = data
-            .get("netzebene")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let bilanzierungsgebiet = data
-            .get("bilanzierungsgebiet")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let gasqualitaet = data
-            .get("gasqualitaet")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let energierichtung = data
-            .get("energierichtung")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let bilanzierungsmethode = data
-            .get("bilanzierungsmethode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let regelzone = data
-            .get("regelzone")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let fallgruppe = data
-            .get("fallgruppenzuordnung")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let lokationsbuendel_objektcode = data
-            .get("lokationsbuendelObjektcode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-        let fernsteuerbar = data
-            .get("fernsteuerbar")
-            .and_then(serde_json::Value::as_bool);
+        // Typed columns, derived from the validated BO rather than from string
+        // lookups on its JSON. Every value is a BO4E wire value by construction.
+        let cols = MaloShadowColumns::from_marktlokation(data);
+        let payload = serde_json::to_value(data)
+            .map_err(|e| MdmError::Internal(format!("Marktlokation is not serialisable: {e}")))?;
 
-        // Optimistic concurrency in SQL: with If-Match the UPDATE is guarded on
-        // the expected version, so two concurrent PUTs cannot both win.
+        // `fallgruppe` and `fernsteuerbar` are deliberately not in this list:
+        // neither is a `Marktlokation` field (the GaBi Fallgruppe belongs to
+        // `Bilanzierung`, the §14a Fernsteuerbarkeit to no BO at all), so both
+        // are owned by `patch_stammdaten` / `patch_typenmerkmal`.
         let new_version: Option<i64> = if let Some(expected) = if_match {
             sqlx::query_scalar(
                 r#"UPDATE malo
@@ -89,28 +60,24 @@ impl PgMaloRepository {
                        energierichtung      = $6,
                        bilanzierungsmethode = $7,
                        regelzone            = $8,
-                       fallgruppe           = $9,
-                       lokationsbuendel_objektcode = $10,
-                       fernsteuerbar        = $11,
-                       data                 = $12,
-                       bo4e_version         = $13,
+                       lokationsbuendel_objektcode = $9,
+                       data                 = $10,
+                       bo4e_version         = $11,
                        version              = version + 1,
                        updated_at           = now()
-                   WHERE malo_id = $1 AND version = $14
+                   WHERE malo_id = $1 AND version = $12
                    RETURNING version"#,
             )
             .bind(malo_id)
             .bind(&sparte_str)
-            .bind(&netzebene)
-            .bind(&bilanzierungsgebiet)
-            .bind(&gasqualitaet)
-            .bind(&energierichtung)
-            .bind(&bilanzierungsmethode)
-            .bind(&regelzone)
-            .bind(&fallgruppe)
-            .bind(&lokationsbuendel_objektcode)
-            .bind(fernsteuerbar)
-            .bind(&data)
+            .bind(cols.netzebene)
+            .bind(&cols.bilanzierungsgebiet)
+            .bind(cols.gasqualitaet)
+            .bind(cols.energierichtung)
+            .bind(cols.bilanzierungsmethode)
+            .bind(&cols.regelzone)
+            .bind(&cols.lokationsbuendel_objektcode)
+            .bind(&payload)
             .bind(bo4e_version)
             .bind(expected)
             .fetch_optional(&mut *conn)
@@ -118,8 +85,8 @@ impl PgMaloRepository {
             .map_err(|e| MdmError::Internal(e.to_string()))?
         } else {
             sqlx::query_scalar(
-                r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, fallgruppe, lokationsbuendel_objektcode, fernsteuerbar, version, data, bo4e_version, updated_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, $12, $13, now())
+                r#"INSERT INTO malo (malo_id, sparte, netzebene, bilanzierungsgebiet, gasqualitaet, energierichtung, bilanzierungsmethode, regelzone, lokationsbuendel_objektcode, version, data, bo4e_version, updated_at)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, now())
                    ON CONFLICT (malo_id) DO UPDATE
                    SET sparte               = EXCLUDED.sparte,
                        netzebene            = EXCLUDED.netzebene,
@@ -128,9 +95,7 @@ impl PgMaloRepository {
                        energierichtung      = EXCLUDED.energierichtung,
                        bilanzierungsmethode = EXCLUDED.bilanzierungsmethode,
                        regelzone            = EXCLUDED.regelzone,
-                       fallgruppe           = EXCLUDED.fallgruppe,
                        lokationsbuendel_objektcode = EXCLUDED.lokationsbuendel_objektcode,
-                       fernsteuerbar        = EXCLUDED.fernsteuerbar,
                        version              = malo.version + 1,
                        data                 = EXCLUDED.data,
                        bo4e_version         = EXCLUDED.bo4e_version,
@@ -139,16 +104,14 @@ impl PgMaloRepository {
             )
             .bind(malo_id)
             .bind(&sparte_str)
-            .bind(&netzebene)
-            .bind(&bilanzierungsgebiet)
-            .bind(&gasqualitaet)
-            .bind(&energierichtung)
-            .bind(&bilanzierungsmethode)
-            .bind(&regelzone)
-            .bind(&fallgruppe)
-            .bind(&lokationsbuendel_objektcode)
-            .bind(fernsteuerbar)
-            .bind(&data)
+            .bind(cols.netzebene)
+            .bind(&cols.bilanzierungsgebiet)
+            .bind(cols.gasqualitaet)
+            .bind(cols.energierichtung)
+            .bind(cols.bilanzierungsmethode)
+            .bind(&cols.regelzone)
+            .bind(&cols.lokationsbuendel_objektcode)
+            .bind(&payload)
             .bind(bo4e_version)
             .fetch_optional(&mut *conn)
             .await
@@ -236,7 +199,7 @@ impl MaloRepository for PgMaloRepository {
         &self,
         malo_id: &MaloId,
         sparte: Sparte,
-        data: serde_json::Value,
+        data: &Marktlokation,
         rollenzuordnung: Vec<Rollenzuordnung>,
         if_match: Option<i64>,
         bo4e_version: &str,
@@ -464,6 +427,6 @@ fn row_to_malo(r: PgRow) -> MaloRecord {
         updated_at: r.get("updated_at"),
         bo4e_version: r
             .try_get("bo4e_version")
-            .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+            .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
     }
 }

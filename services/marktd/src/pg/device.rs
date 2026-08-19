@@ -2,6 +2,7 @@
 //! [`TechnischeRessourceRepository`], and [`DeviceRepository`].
 
 use mako_markt::{
+    bo4e::ZaehlerShadowColumns,
     error::MdmError,
     repository::{
         DeviceRepository, GeraetKonfiguration, GeraetRecord, SteuerbareRessourceRecord,
@@ -90,7 +91,7 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
             konfigurationsprodukte: r.try_get("konfigurationsprodukte").unwrap_or(None),
             bo4e_version: r
                 .try_get("bo4e_version")
-                .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
             version: r.try_get("version").unwrap_or(1),
             updated_at: r.get("updated_at"),
         }))
@@ -124,7 +125,7 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
                 konfigurationsprodukte: r.try_get("konfigurationsprodukte").unwrap_or(None),
                 bo4e_version: r
                     .try_get("bo4e_version")
-                    .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                    .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
                 version: r.try_get("version").unwrap_or(1),
                 updated_at: r.get("updated_at"),
             })
@@ -177,11 +178,12 @@ impl DeviceRepository for PgDeviceRepository {
         zaehler_id: &str,
         tenant: &str,
         melo_id: &str,
-        zaehler_typ: Option<&str>,
-        eichung_bis: Option<time::Date>,
-        data: serde_json::Value,
+        data: &rubo4e::current::Zaehler,
         bo4e_version: &str,
     ) -> Result<(), MdmError> {
+        let cols = ZaehlerShadowColumns::from_zaehler(data);
+        let payload = serde_json::to_value(data)
+            .map_err(|e| MdmError::Internal(format!("Zaehler is not serialisable: {e}")))?;
         sqlx::query(
             r"INSERT INTO zaehler
                   (zaehler_id, tenant, melo_id, zaehler_typ, eichung_bis, data, bo4e_version, version, updated_at)
@@ -198,9 +200,9 @@ impl DeviceRepository for PgDeviceRepository {
         .bind(zaehler_id)
         .bind(tenant)
         .bind(melo_id)
-        .bind(zaehler_typ)
-        .bind(eichung_bis)
-        .bind(&data)
+        .bind(cols.zaehler_typ)
+        .bind(cols.eichung_bis)
+        .bind(&payload)
         .bind(bo4e_version)
         .execute(&self.pool)
         .await
@@ -252,10 +254,12 @@ impl DeviceRepository for PgDeviceRepository {
         geraet_id: &str,
         tenant: &str,
         zaehler_id: &str,
-        geraet_typ: Option<&str>,
-        data: serde_json::Value,
+        data: &rubo4e::current::Geraet,
         bo4e_version: &str,
     ) -> Result<(), MdmError> {
+        let typ = mako_markt::bo4e::geraet_typ(data);
+        let payload = serde_json::to_value(data)
+            .map_err(|e| MdmError::Internal(format!("Geraet is not serialisable: {e}")))?;
         sqlx::query(
             r"INSERT INTO geraete
                   (geraet_id, tenant, zaehler_id, geraet_typ, data, bo4e_version, version, updated_at)
@@ -271,8 +275,8 @@ impl DeviceRepository for PgDeviceRepository {
         .bind(geraet_id)
         .bind(tenant)
         .bind(zaehler_id)
-        .bind(geraet_typ)
-        .bind(&data)
+        .bind(typ)
+        .bind(&payload)
         .bind(bo4e_version)
         .execute(&self.pool)
         .await
@@ -368,7 +372,7 @@ fn row_to_zaehler(r: sqlx::postgres::PgRow) -> ZaehlerRecord {
         data: r.get("data"),
         bo4e_version: r
             .try_get("bo4e_version")
-            .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+            .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
         version: r.try_get("version").unwrap_or(1),
         updated_at: r.get("updated_at"),
     }
@@ -392,7 +396,7 @@ fn row_to_geraet(r: sqlx::postgres::PgRow) -> GeraetRecord {
         konfigurationen,
         bo4e_version: r
             .try_get("bo4e_version")
-            .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+            .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
         version: r.try_get("version").unwrap_or(1),
         updated_at: r.get("updated_at"),
     }
@@ -486,7 +490,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
             data: r.get("data"),
             bo4e_version: r
                 .try_get("bo4e_version")
-                .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
             version: r.try_get("version").unwrap_or(1),
             updated_at: r.get("updated_at"),
         }))
@@ -522,7 +526,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
                 data: r.get("data"),
                 bo4e_version: r
                     .try_get("bo4e_version")
-                    .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                    .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
                 version: r.try_get("version").unwrap_or(1),
                 updated_at: r.get("updated_at"),
             })
@@ -559,7 +563,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
                 data: r.get("data"),
                 bo4e_version: r
                     .try_get("bo4e_version")
-                    .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                    .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
                 version: r.try_get("version").unwrap_or(1),
                 updated_at: r.get("updated_at"),
             })

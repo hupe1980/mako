@@ -23,6 +23,8 @@ mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 rubo4e       = { workspace = true }
+# Shared BO4E boundary helpers (`preistyp` carrier, schema version).
+mako-markt   = { workspace = true }
 axum         = { version = "0.8" }
 sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }
 tokio        = { version = "1", features = ["full"] }

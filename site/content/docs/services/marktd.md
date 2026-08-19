@@ -485,12 +485,39 @@ WHERE preisblaetter.source <> 'api' OR EXCLUDED.source = 'api';
 
 ### PRICAT 27003 dispatch pipeline
 
-Every `PUT /api/v1/preisblaetter/{nb_mp_id}` call:
+#### `preisblaetter` vs `pricat_versions` — why both
 
-1. Writes or updates the current price sheet in `preisblaetter` (existing behaviour)
+The two tables hold the same JSON and are not redundant. They answer different
+questions, so they carry opposite constraints:
+
+| | `preisblaetter` | `pricat_versions` |
+|---|---|---|
+| Question | *Which Preisblatt is valid on date X?* | *Which document did we transmit, to whom, and when?* |
+| Kind | Current state | Audit trail |
+| Overlap | Forbidden — `EXCLUDE USING gist` guarantees one answer per party per day | Allowed by design |
+| Correction | Replaces the row | Adds a version; earlier ones stay queryable |
+| Read by | `invoic-checker`, `netzbilanzd`, `invoicd` for tariff resolution | Operators and auditors, via `/pricat/{nb}/history` |
+
+`pricat_versions.data` is a **snapshot**, not a reference. A PRICAT sent last
+quarter remains a fact after the sheet behind it is corrected, and pointing at
+the live row would let that correction retroactively rewrite what was
+transmitted.
+
+Only the NNE sheet feeds this ledger: PRICAT 27003 is the NB→LF *Preisblatt
+Netznutzung* transmission, so `preisblaetter_messung` (MSB) and
+`preisblaetter_konzessionsabgabe` have no PRICAT of their own.
+
+#### The write path
+
+Every `PUT /api/v1/preisblaetter/{nb_mp_id}` call, in **one transaction**:
+
+1. Writes or updates the current price sheet in `preisblaetter`
 2. Inserts a versioned snapshot in `pricat_versions` keyed on `(nb_mp_id, tenant, valid_from)`
-3. Emits `de.markt.pricat.published` → fan-out to ERP webhook subscribers
-4. A background task dispatches PRICAT 27003 per active LF partner via `MakodClient`
+3. Enqueues `de.markt.pricat.published` on the outbox → fan-out to ERP webhook subscribers
+
+A background task then dispatches PRICAT 27003 per active LF partner via
+`MakodClient`. The three writes share one transaction so the sheet, the
+snapshot and the dispatch trigger cannot diverge.
 
 The dispatch audit log (`pricat_dispatch_log`) records every outbound dispatch attempt
 (NB × LF pair) with outcome and `makod` process ID.
@@ -632,7 +659,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `malo_grid` | MaLo grid topology — Netzgebiet, Bilanzierungsgebiet, sourced from NIS/GIS |
 | `steuerbare_ressourcen` | WiM iMS controllable resources — keyed by SR-ID (`C[A-Z0-9]{9}[0-9]`), linked to MaLo; `konfigurationsprodukte JSONB` for contracted iMS control products  |
 | `technische_ressourcen` | E-mobility, generation, storage resources — keyed by TrId; BO4E-aligned `nutzung` (`TechnischeRessourceNutzung`) + `verbrauchsart` (`TechnischeRessourceVerbrauchsart`) + `ist_fernschaltbar` typed columns; linked to MaLo/MeLo |
-| `zaehler` | Meter registry — linked to MeLo; `zaehler_typ` (CHECK-constrained to BO4E `Zaehlertyp`), `eichung_bis` typed columns; BO4E payload with `zaehlwerke` array |
+| `zaehler` | Meter registry — linked to MeLo; `zaehler_typ` (CHECK-constrained to BO4E `Zaehlertyp`) and `eichung_bis` are **derived from** the BO4E payload, which also carries the `zaehlwerke` array |
 | `geraete` | Device registry — linked to Zaehler, stores `geraet_typ`, BO4E payload, and `geraet_konfigurationen JSONB` (typed `GeraetKonfiguration[]` per MsbG §23; GIN-indexed for cert-expiry queries) |
 | `event_log` | Durable CloudEvent replay log — keyed by `event_id` (unique); indexed by `ce_type` + `received_at` |
 
@@ -780,21 +807,35 @@ Every `PUT /api/v1/malos/{malo_id}` call:
    - Returns **422** if `_typ` is present but not `MARKTLOKATION`
    - Returns **422** if any typed field contains an unknown enum value
      (e.g. `"bilanzierungsmethode": "UNKNOWN"`)
-2. **Normalises** to canonical camelCase BO4E form before storage
-   (non-standard keys like `fallgruppenzuordnung` are preserved via the
-    `_additional` extension map)
-3. **Extracts typed columns** for efficient SQL queries:
+2. **Normalises** to canonical camelCase BO4E form before storage. The
+   repository serialises the *typed* `Marktlokation`, so the canonical form is
+   the only shape that reaches the `data JSONB` column; keys the schema does
+   not define round-trip losslessly through the `_additional` extension map.
+3. **Derives typed columns** from that same typed object — never from string
+   lookups on its JSON:
 
-| Column | Source field | Purpose |
-|---|---|---|
-| `netzebene` | `data.netzebene` | Voltage/pressure level for NNE billing tier |
-| `bilanzierungsgebiet` | `data.bilanzierungsgebiet` | EIC code; drives `processd` NB check 4 |
-| `gasqualitaet` | `data.gasqualitaet` | `HGas` \| `LGas`; Gas tariff routing |
-| `energierichtung` | `data.energierichtung` | `Aussp` = generation, `Einsp` = consumption |
-| `bilanzierungsmethode` | `data.bilanzierungsmethode` | `RLM` \| `SLP` \| `IMS` \| `TLP_*`; drives `netzbilanzd` Leistungspreis routing — RLM requires `spitzenleistung_kw` |
-| `regelzone` | `data.regelzone` | Regelzone EIC code → maps MaLo to ÜNB for MABIS IFTSTA 21000 routing and Redispatch 2.0 Stammdaten forwarding |
+| Column | `Marktlokation` field | Vocabulary | Purpose |
+|---|---|---|---|
+| `netzebene` | `netzebene` | `NSP` \| `MSP` \| `HSP` \| `HSS` \| `MSP_NSP_UMSP` \| `HSP_MSP_UMSP` \| `HSS_HSP_UMSP` \| `HD` \| `MD` \| `ND` | Voltage/pressure level for the NNE billing tier |
+| `bilanzierungsgebiet` | `bilanzierungsgebiet` | EIC (object type `Y`, Area) | Drives `processd` NB check 4 |
+| `gasqualitaet` | `gasqualitaet` | `H_GAS` \| `L_GAS` | Gas tariff routing |
+| `energierichtung` | `energierichtung` | `EINSP` \| `AUSSP` | `EINSP` (Einspeisung) **feeds** the grid — a generating MaLo; `AUSSP` (Ausspeisung) **draws** from it — a consuming one. The direction is named from the grid's point of view |
+| `bilanzierungsmethode` | `bilanzierungsmethode` | `RLM` \| `SLP` \| `IMS` \| `TLP_GEMEINSAM` \| `TLP_GETRENNT` \| `PAUSCHAL` | Drives `netzbilanzd` Leistungspreis routing — RLM requires `spitzenleistung_kw` |
+| `regelzone` | `regelzone` | EIC | Maps the MaLo to its ÜNB for MABIS IFTSTA 21000 routing and Redispatch 2.0 Stammdaten forwarding |
+
+Every enum column holds a **BO4E wire value and nothing else**: the value comes
+from the enum's own `as_wire()`, and a SQL `CHECK` constraint listing that
+enum's `VARIANTS` refuses anything else. A test in `mako-markt` compares the
+`CHECK` lists against the schema, so a `rubo4e` bump that adds a variant fails
+the build instead of rejecting valid data at run time.
 
 All columns are `NULL` when the BO4E payload does not carry the field.
+
+**Two columns are deliberately not in that table.** `fallgruppe` (the GaBi RLM
+Fallgruppe) is a `Bilanzierung` field and `fernsteuerbar` (§14a EnWG) has no
+BO4E field at all — neither is on `Marktlokation`, so a `PUT /malos/{id}` leaves
+both alone. They are written by the `Bilanzierung` resource and by the UTILMD
+Stammdatenänderung path (`TM+Z10`, `CCI+Z24++Z96/Z97`) respectively.
 
 The call also automatically pushes the NB and MSB GLNs to `makod`'s MaLo cache
 via `PUT /admin/malo/{malo_id}` — fire-and-forget; `makod` failure does not fail
@@ -806,22 +847,23 @@ Fields forwarded to `makod`:
 |---|---|
 | `nb_mp_id` | `rollenzuordnung[]` entry with `zuordnungstyp == "NB"` or `"GNB"` |
 | `msb_mp_id` | `rollenzuordnung[]` entry with `zuordnungstyp == "MSB"` or `"GMSB"` |
-| `bilanzierungsgebiet` | `data.bilanzierungsgebiet` |
-| `netzgebiet` | `data.netzgebietsnummer` or `data.netzgebiet` |
+| `bilanzierungsgebiet` | `Marktlokation.bilanzierungsgebiet` |
+| `netzgebiet` | `Marktlokation.netzgebietsnr` |
 | `sparte` | `sparte` field |
 
-**`MaloResponse`** (GET) exposes all typed columns as top-level fields alongside
-the raw `data` JSONB for backward compatibility:
+**`MaloResponse`** (GET) exposes the typed columns as top-level fields
+alongside the validated `data` payload, so a caller can filter without parsing
+the BO:
 
 ```json
 {
   "malo_id": "10001234558",
   "sparte": "STROM",
   "version": 3,
-  "netzebene": "NS",
+  "netzebene": "NSP",
   "bilanzierungsgebiet": "11YDE-RWE-NETZ-1",
   "gasqualitaet": null,
-  "energierichtung": "Einsp",
+  "energierichtung": "AUSSP",
   "bilanzierungsmethode": "SLP",
   "regelzone": "10YDE-EON------1",
   "rollenzuordnung": [...],
@@ -1442,22 +1484,33 @@ MeLo ──► Zaehler ──► Geraete
 ```
 
 A `Zaehler` carries:
-- `zaehler_typ` — BO4E `Zaehlertyp`, **CHECK-constrained** to the 14 v202607 wire
-  values (`DREHSTROMZAEHLER`, `INTELLIGENTES_MESSSYSTEM`, `MODERNE_MESSEINRICHTUNG`, …).
-  `GASZAEHLER` is *not* one of them. §42c Energy-Sharing eligibility reads this
-  column, so an unrecognised value would silently degrade a delivery point to
-  `UNKNOWN`; the `schema_enum_guard` test pins the list to `rubo4e`.
+- `data` — the full BO4E `Zaehler` payload. `_typ` is auto-injected if absent,
+  and every enum in the tree is strict-decoded on write
+  (`Bo4eStrict::ensure_known_enums`), so an unrecognised value is a **422**
+  naming the field rather than a row that reads `UNKNOWN`.
+- `zaehler_typ` — **derived** from `data.zaehlertyp`, not supplied beside it.
+  A BO4E `Zaehlertyp` wire value, `CHECK`-constrained to the 13 v202607
+  variants (`DREHSTROMZAEHLER`, `INTELLIGENTES_MESSSYSTEM`,
+  `MODERNE_MESSEINRICHTUNG`, …). `GASZAEHLER` is *not* one of them, and neither
+  is `UNKNOWN`. §42c Energy-Sharing eligibility reads this column;
+  `mako-markt`'s `bo4e_check_constraints_match_the_schema` test pins the list
+  to `rubo4e::current::Zaehlertyp::VARIANTS`.
   Watch the spelling: `Zaehlertyp` uses `INTELLIGENTES_MESSSYSTEM` (three `s`),
   while `Geraetetyp` uses `INTELLIGENTES_MESSYSTEM` (two). That is a BO4E quirk.
-- `eichung_bis` — calibration valid-until date (Eichgültigkeitsdatum)
-- `data` — full BO4E `Zaehler` payload (the `_typ` discriminator is **auto-injected**
-  to `"Zaehler"` if absent, ensuring every stored object is self-describing)
+- `eichung_bis` — calibration valid-until date (Eichgültigkeitsdatum), derived
+  from `data.eichungBis`. Neither it nor `zaehler_typ` is a request field: the
+  column drives the replacement workflow, so it must not be able to disagree
+  with the meter record it shadows.
 - `data.zaehlwerke` — list of `Zaehlwerk` OBIS registers; exposed via
   `GET /api/v1/zaehler/{id}/zaehlwerke` as typed `Vec<Zaehlwerk>`
 
 A `Geraet` carries:
-- `geraet_typ` — e.g. `SMARTMETER_GATEWAY`, `WANDLER`, `MULTIPLEXANLAGE`
-- `data` — full BO4E `Geraet` payload (`_typ` auto-injected to `"Geraet"` if absent)
+- `data` — full BO4E `Geraet` payload (`_typ` auto-injected if absent,
+  strict-decoded on write)
+- `geraet_typ` — derived from `data.geraetetyp`; a BO4E `Geraetetyp` wire value
+  such as `STROMWANDLER`, `MODEM_GSM` or `MULTIPLEXANLAGE`. Deliberately **not**
+  `CHECK`-constrained: the enum has 48 variants and turns over between BO4E
+  versions, so an inline list would be the next thing to drift.
 - `konfigurationen` — typed `Vec<GeraetKonfiguration>` for MSB device management (see below)
 
 > **BO4E `_typ` discriminator.** All four PUT device endpoints

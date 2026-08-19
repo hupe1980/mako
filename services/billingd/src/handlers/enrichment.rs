@@ -4,40 +4,16 @@ use super::*;
 
 // ── Gas meter auto-enrichment ─────────────────────────────────────────────────
 
-/// Normalize a raw `gasqualitaet` string to a canonical BO4E / BNetzA MaStR form.
+/// Normalize a raw `gasqualitaet` string to its BO4E `Gasqualitaet` wire value.
 ///
-/// ## Canonical values
+/// Delegates to [`mako_geli_gas::gas_quality::normalize_gasqualitaet`] — the one
+/// implementation — and returns `None` for anything BO4E does not define.
 ///
-/// | Canonical | Aliases accepted |
-/// |---|---|
-/// | `H_GAS` | `HGas`, `H-Gas`, `H-gas`, `HGAS`, `HIGH_CALORIFIC` |
-/// | `L_GAS` | `LGas`, `L-Gas`, `L-gas`, `LGAS`, `LOW_CALORIFIC` |
-/// | `H2_BLEND` | `H2Blend`, `H2-Blend`, `HYDROGEN_BLEND` |
-/// | `BIOGAS` | `BioGas`, `Bio-Gas` |
-/// | `FLUESSIGGAS` | `LPG`, `FlüssigGas` |
-///
-/// Unknown values are returned as-is (upper-case, underscores).
-///
-/// ## Why normalization matters
-///
-/// `marktd` stores `gasqualitaet` as extracted from the UTILMD G `STS+E01+Z12`
-/// qualifier — typically `"HGas"` or `"LGas"` (legacy German abbreviations).
-/// The BO4E schema (`rubo4e::GasQualitaet`) and BNetzA MaStR use `"H_GAS"` /
-/// `"L_GAS"` / `"H2_BLEND"`.  Billing invoices, comparison portals, and AI agents
-/// all benefit from a single canonical form.
-pub(crate) fn normalize_gasqualitaet(raw: &str) -> String {
-    // Normalize to UPPER_SNAKE_CASE first for uniform matching.
-    let norm = raw.trim().to_uppercase().replace(['-', ' '], "_");
-    match norm.as_str() {
-        "HGAS" | "H_GAS" | "HIGH_CALORIFIC" | "HOCHKALORISCH" | "ERDGAS_H" => "H_GAS".to_owned(),
-        "LGAS" | "L_GAS" | "LOW_CALORIFIC" | "NIEDERKALORISCH" | "ERDGAS_L" => "L_GAS".to_owned(),
-        "H2_BLEND" | "H2BLEND" | "HYDROGEN_BLEND" | "HYDROGEN_GAS" | "H2_GAS" => {
-            "H2_BLEND".to_owned()
-        }
-        "BIOGAS" | "BIO_GAS" | "BIOMETHANE" | "BIOMETHAN" => "BIOGAS".to_owned(),
-        "FLUESSIGGAS" | "FLUSSIGGAS" | "LPG" | "LIQUID_GAS" => "FLUESSIGGAS".to_owned(),
-        other => other.to_owned(),
-    }
+/// One implementation, because the value is annotated onto an invoice: an
+/// unrecognised string would be a `ZusatzAttribut` claiming to be a gas
+/// quality.
+pub(crate) fn normalize_gasqualitaet(raw: &str) -> Option<&'static str> {
+    mako_geli_gas::gas_quality::normalize_gasqualitaet(raw)
 }
 
 /// Auto-enrich a `GasMeterInput` with data from `edmd` and `marktd`.
@@ -196,15 +172,22 @@ pub(crate) async fn enrich_gas_meter(
     }
 
     // ── Step 3: gasqualitaet annotation from marktd MaLo ──────────────────────
-    // Informational only — billing always uses the measured Brennwert.
-    // Annotated on the invoice as `ZusatzAttribut` for § 147 AO / GoBD audit trail
-    // and for H2-blend detection in downstream AI agents (eeg-compliance-agent).
+    // Informational only — billing always uses the measured Brennwert. Annotated
+    // on the invoice as a `ZusatzAttribut` for the § 147 AO / GoBD audit trail.
+    //
+    // A value the BO4E schema does not define is dropped rather than passed
+    // through: the annotation claims to be a gas quality, so writing an
+    // unrecognised string onto an invoice would be an audit trail that asserts
+    // something the standard does not.
     if meter.gasqualitaet.is_none() {
         match marktd.get_malo(malo_id).await {
             Ok(Some(malo_fields)) => {
-                if let Some(raw_gq) = malo_fields.gasqualitaet {
-                    let canonical = normalize_gasqualitaet(&raw_gq);
-                    meter.gasqualitaet = Some(canonical);
+                if let Some(canonical) = malo_fields
+                    .gasqualitaet
+                    .as_deref()
+                    .and_then(normalize_gasqualitaet)
+                {
+                    meter.gasqualitaet = Some(canonical.to_owned());
                     enriched_gq_from_marktd = true;
                 }
             }
@@ -362,109 +345,35 @@ mod gas_enrichment_tests {
 
     // ── normalize_gasqualitaet ────────────────────────────────────────────────
 
+    /// The alias table itself lives in `mako-geli-gas` and is tested there.
+    /// What this asserts is the *boundary*: billingd annotates an invoice with
+    /// the value, so only a value BO4E defines may come out.
     #[test]
-    fn normalize_hgas_variants() {
-        // All aliases for H-Gas must map to "H_GAS"
-        for raw in &[
-            "HGas",
-            "H-Gas",
-            "H-gas",
-            "HGAS",
-            "H_GAS",
-            "HIGH_CALORIFIC",
-            "ERDGAS_H",
-        ] {
-            assert_eq!(
-                normalize_gasqualitaet(raw),
-                "H_GAS",
-                "expected H_GAS for input {raw:?}"
-            );
+    fn only_bo4e_gas_qualities_reach_an_invoice_annotation() {
+        for raw in ["HGas", "H-Gas", "  H_GAS  ", "HIGH_CALORIFIC", "ERDGAS_H"] {
+            assert_eq!(normalize_gasqualitaet(raw), Some("H_GAS"), "for {raw:?}");
         }
-    }
-
-    #[test]
-    fn normalize_lgas_variants() {
-        for raw in &[
-            "LGas",
-            "L-Gas",
-            "L-gas",
-            "LGAS",
-            "L_GAS",
-            "LOW_CALORIFIC",
-            "ERDGAS_L",
-        ] {
-            assert_eq!(
-                normalize_gasqualitaet(raw),
-                "L_GAS",
-                "expected L_GAS for input {raw:?}"
-            );
+        for raw in ["LGas", "L-Gas", "\tLGas\n", "LOW_CALORIFIC", "ERDGAS_L"] {
+            assert_eq!(normalize_gasqualitaet(raw), Some("L_GAS"), "for {raw:?}");
         }
-    }
 
-    #[test]
-    fn normalize_h2_blend_variants() {
-        for raw in &[
+        // Everything else is dropped, not passed through. The previous version
+        // returned an upper-snake-cased copy of whatever it was given, so
+        // `"syngas"` became a `ZusatzAttribut` on a real invoice asserting a gas
+        // quality no standard defines — as did the speculative `H2_BLEND`,
+        // `BIOGAS` and `FLUESSIGGAS` values it claimed as canonical.
+        for raw in [
+            "syngas",
+            "Compressed Natural Gas",
             "H2_BLEND",
-            "H2Blend",
-            "H2-Blend",
             "HYDROGEN_BLEND",
-            "H2BLEND",
+            "BIOGAS",
+            "FLUESSIGGAS",
+            "LPG",
+            "",
         ] {
-            assert_eq!(
-                normalize_gasqualitaet(raw),
-                "H2_BLEND",
-                "expected H2_BLEND for input {raw:?}"
-            );
+            assert_eq!(normalize_gasqualitaet(raw), None, "for {raw:?}");
         }
-    }
-
-    #[test]
-    fn normalize_biogas_variants() {
-        for raw in &["BIOGAS", "BioGas", "Bio-Gas", "BIOMETHANE", "BIOMETHAN"] {
-            assert_eq!(
-                normalize_gasqualitaet(raw),
-                "BIOGAS",
-                "expected BIOGAS for input {raw:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn normalize_fluessiggas_variants() {
-        for raw in &["FLUESSIGGAS", "LPG", "LIQUID_GAS"] {
-            assert_eq!(
-                normalize_gasqualitaet(raw),
-                "FLUESSIGGAS",
-                "expected FLUESSIGGAS for input {raw:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn normalize_unknown_returns_uppercase_underscored() {
-        // Unknown values are normalized to UPPER_SNAKE_CASE but preserved.
-        assert_eq!(normalize_gasqualitaet("syngas"), "SYNGAS");
-        assert_eq!(
-            normalize_gasqualitaet("Compressed Natural Gas"),
-            "COMPRESSED_NATURAL_GAS"
-        );
-    }
-
-    #[test]
-    fn normalize_already_canonical_is_idempotent() {
-        for canonical in &["H_GAS", "L_GAS", "H2_BLEND", "BIOGAS", "FLUESSIGGAS"] {
-            let result = normalize_gasqualitaet(canonical);
-            assert_eq!(
-                &result, canonical,
-                "normalize_gasqualitaet should be idempotent on canonical value {canonical}"
-            );
-        }
-    }
-
-    #[test]
-    fn normalize_trims_whitespace() {
-        assert_eq!(normalize_gasqualitaet("  HGas  "), "H_GAS");
-        assert_eq!(normalize_gasqualitaet("\tLGas\n"), "L_GAS");
     }
 
     // ── build_aggregate_invoice ───────────────────────────────────────────────

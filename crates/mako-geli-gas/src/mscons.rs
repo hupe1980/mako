@@ -75,7 +75,9 @@ pub struct GasMsconsDatenData {
     pub zustandszahl: Option<String>,
     /// Gas quality type (PID 13007 only).
     ///
-    /// Normalized to canonical form: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"`.
+    /// Normalized to the BO4E `Gasqualitaet` wire value: `"H_GAS"` | `"L_GAS"`.
+    /// Those are the only two the schema defines — see
+    /// [`crate::gas_quality`] for why no H2 spelling is invented here.
     /// `None` until the DVGW/BNetzA EDIFACT qualifier for gas quality type in
     /// MSCONS is standardized (expected 2026–2028 AHB wave).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -104,7 +106,7 @@ pub enum GasMsconsDatenEvent {
         zustandszahl: Option<String>,
         /// Gas quality type (PID 13007 only).
         ///
-        /// Canonical: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"` | `"BIOGAS"`.
+        /// BO4E `Gasqualitaet` wire value: `"H_GAS"` | `"L_GAS"`.
         /// `None` until the DVGW/BNetzA H2-blend AHB qualifier is published.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         gasqualitaet: Option<String>,
@@ -199,7 +201,7 @@ pub enum GasMsconsDatenCommand {
         zustandszahl: Option<String>,
         /// Gas quality type (PID 13007 only).
         ///
-        /// Canonical: `"H_GAS"` | `"L_GAS"` | `"H2_BLEND"`. `None` until AHB is published.
+        /// BO4E `Gasqualitaet` wire value: `"H_GAS"` | `"L_GAS"`; `None` when absent.
         gasqualitaet: Option<String>,
     },
 }

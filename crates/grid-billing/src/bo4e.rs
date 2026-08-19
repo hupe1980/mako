@@ -761,6 +761,50 @@ mod tests {
             .any(|a| a.name.as_deref() == Some("mako:settlement_warnings"));
         assert!(!has_warnings);
     }
+
+    // ── Outbound BO4E conformance ────────────────────────────────────────────
+
+    /// Every `Rechnung` this adapter emits must round-trip with no `Unknown`.
+    ///
+    /// `into_rechnung` is what reaches the LF over AS4. An enum in it that a
+    /// conforming reader resolves to `Unknown` is a settlement position the
+    /// recipient cannot classify — and neither side errors, because
+    /// forward-compatible decoding is what BO4E-python and go-bo4e are for.
+    ///
+    /// The cases below are the branches that differ in which BO4E enums get
+    /// set: the Sparte, the tax treatment (`Steuerart::Ust` vs `Rcv`), the
+    /// reversal (`Rechnungstyp::Stornorechnung`), and the settlement types this
+    /// adapter deliberately leaves untyped.
+    #[test]
+    fn every_emitted_rechnung_is_valid_bo4e() {
+        let mut cases: Vec<(&str, crate::InvoiceDocument)> = Vec::new();
+
+        let strom = crate::settle_nne(&sample_nne()).expect("settle strom");
+        cases.push(("nne strom", as_document(strom.clone())));
+
+        let mut gas_input = sample_nne();
+        gas_input.sparte = crate::Sparte::Gas;
+        let gas = crate::settle_nne(&gas_input).expect("settle gas");
+        cases.push(("nne gas", as_document(gas)));
+
+        // A reversal sets `Rechnungstyp::Stornorechnung` and negates the tax.
+        let mut storno = as_document(strom);
+        storno.correction_of = Some("NNE-2026-000".to_owned());
+        cases.push(("storno", storno));
+
+        for (label, doc) in cases {
+            let rechnung = into_rechnung(&doc);
+            rubo4e::Bo4eStrict::ensure_known_enums(&rechnung)
+                .unwrap_or_else(|e| panic!("{label}: emitted out-of-schema enums: {e}"));
+
+            let json = serde_json::to_value(&rechnung)
+                .unwrap_or_else(|e| panic!("{label}: not serialisable: {e}"));
+            let back: Rechnung = serde_json::from_value(json)
+                .unwrap_or_else(|e| panic!("{label}: does not round-trip: {e}"));
+            rubo4e::Bo4eStrict::ensure_known_enums(&back)
+                .unwrap_or_else(|e| panic!("{label}: JSON form has unknowns: {e}"));
+        }
+    }
 }
 
 #[cfg(test)]

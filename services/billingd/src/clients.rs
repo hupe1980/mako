@@ -289,8 +289,11 @@ fn extract_tariff_from_product_data(
     let mut dropped: Vec<String> = Vec::new();
 
     for pp in &preispositionen {
-        // preistyp is stored in ALLCAPS after tarifbd normalisation.
-        let pt = pp.get("preistyp").and_then(|v| v.as_str()).unwrap_or("");
+        // ALLCAPS after tarifbd normalisation. A BO4E-defined type sits in
+        // `preistyp`; a mako extension (EEG_MARKTPRAEMIE, HEMS_*, EMOBILITY_*)
+        // sits in the `mako:preistyp` ZusatzAttribut, because writing it into
+        // BO4E's own enum field made the stored Tarifpreisblatt invalid BO4E.
+        let pt = mako_markt::bo4e::position_preistyp(pp);
 
         // preisstaffeln[0].preis is a scalar Decimal (string or number) —
         // the old nested {"wert": "..."} form was non-BO4E and is no longer stored.

@@ -14,11 +14,13 @@
 //! open edge is closed (`valid_to = today`) and a new one opened
 //! (`valid_from = today`).
 
+use mako_markt::bo4e::MeloShadowColumns;
 use mako_markt::{
     domain::{MaloId, MeloId},
     error::MdmError,
     repository::{MeloRecord, MeloRepository},
 };
+use rubo4e::current::Messlokation;
 use sqlx::{PgPool, Row, postgres::PgRow};
 
 /// PostgreSQL-backed MeLo repository.
@@ -55,7 +57,7 @@ impl MeloRepository for PgMeloRepository {
         &self,
         melo_id: &MeloId,
         malo_id: Option<&MaloId>,
-        data: serde_json::Value,
+        data: &Messlokation,
         if_match: Option<i64>,
         bo4e_version: &str,
     ) -> Result<i64, MdmError> {
@@ -83,30 +85,15 @@ impl MeloRepository for PgMeloRepository {
             (None, _) => 1,
         };
 
-        let netzebene_messung = data
-            .get("netzebeneMessung")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-
-        // Extract `regelzone` from `standorteigenschaften.eigenschaftenStrom[0].regelzone`.
-        // This maps the MeLo to the ÜNB responsible for Redispatch 2.0 Stammdaten routing.
-        let regelzone = data
-            .get("standorteigenschaften")
-            .and_then(|s| s.get("eigenschaftenStrom"))
-            .and_then(|v| v.as_array())
-            .and_then(|arr| arr.first())
-            .and_then(|first| first.get("regelzone"))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
-
-        // Extract full standorteigenschaften JSONB for Redispatch 2.0 and Gas billing zone.
-        let standorteigenschaften = data.get("standorteigenschaften").cloned();
-
-        // Extract `lokationsbuendelObjektcode` (BO4E Messlokation) as a typed column.
-        let lokationsbuendel_objektcode = data
-            .get("lokationsbuendelObjektcode")
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_owned());
+        // Typed columns, derived from the validated BO. The Regelzone comes off
+        // the parsed `Standorteigenschaften` rather than a chain of JSON
+        // lookups, so a malformed EIC is a rejected write, not a bad row.
+        let cols =
+            MeloShadowColumns::from_messlokation(data).map_err(|e| MdmError::Unprocessable {
+                reason: e.to_string(),
+            })?;
+        let payload = serde_json::to_value(data)
+            .map_err(|e| MdmError::Internal(format!("Messlokation is not serialisable: {e}")))?;
 
         sqlx::query(
             r#"INSERT INTO melo (melo_id, malo_id, netzebene_messung, regelzone, standorteigenschaften, lokationsbuendel_objektcode, version, data, bo4e_version, updated_at)
@@ -125,12 +112,12 @@ impl MeloRepository for PgMeloRepository {
         )
         .bind(melo_id)
         .bind(malo_id)
-        .bind(&netzebene_messung)
-        .bind(&regelzone)
-        .bind(standorteigenschaften.as_ref())
-        .bind(&lokationsbuendel_objektcode)
+        .bind(cols.netzebene_messung)
+        .bind(&cols.regelzone)
+        .bind(cols.standorteigenschaften.as_ref())
+        .bind(&cols.lokationsbuendel_objektcode)
         .bind(new_version)
-        .bind(&data)
+        .bind(&payload)
         .bind(bo4e_version)
         .execute(&mut *tx)
         .await
@@ -231,7 +218,7 @@ impl MeloRepository for PgMeloRepository {
             updated_at: r.get("updated_at"),
             bo4e_version: r
                 .try_get("bo4e_version")
-                .unwrap_or_else(|_| "v202607.0.0".to_owned()),
+                .unwrap_or_else(|_| mako_markt::bo4e::schema_version()),
         }))
     }
 

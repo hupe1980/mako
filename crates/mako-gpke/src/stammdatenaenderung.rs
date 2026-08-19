@@ -905,7 +905,7 @@ mod tests {
 
     #[test]
     fn malo_change_applied_and_answered_a01() {
-        let patch = serde_json::json!({ "bilanzierungsmethode": "RLM", "netzebene": "NSP7" });
+        let patch = serde_json::json!({ "bilanzierungsmethode": "RLM", "netzebene": "NSP" });
         let out = GpkeStammdatenaenderungWorkflow::handle(
             &StammdatenState::New,
             receive_malo_cmd(patch, true),
@@ -961,7 +961,7 @@ mod tests {
         // NeLo change (55615) with a grounded attribute now emits an
         // `objekt`-tagged apply intent alongside the APERAK — marktd routes it
         // to NeLoRepository::patch_stammdaten.
-        let mut cmd = receive_malo_cmd(serde_json::json!({ "netzebene": "NSP7" }), true);
+        let mut cmd = receive_malo_cmd(serde_json::json!({ "netzebene": "NSP" }), true);
         if let StammdatenCommand::ReceiveAenderung { pid: p, .. } = &mut cmd {
             *p = pid(55615); // NeLo
         }
@@ -972,7 +972,7 @@ mod tests {
         assert_eq!(out.outbox[1].payload["objekt"], "NETZLOKATION");
         assert_eq!(
             out.outbox[1].payload["stammdaten_patch"]["netzebene"],
-            "NSP7"
+            "NSP"
         );
     }
 
@@ -1025,7 +1025,7 @@ mod tests {
     fn rueckmeldung_timeout_is_tacit_acceptance() {
         let out = GpkeStammdatenaenderungWorkflow::handle(
             &StammdatenState::New,
-            receive_malo_cmd(serde_json::json!({ "netzebene": "NSP7" }), true),
+            receive_malo_cmd(serde_json::json!({ "netzebene": "NSP" }), true),
         )
         .unwrap();
         let state = apply_all(StammdatenState::New, &out.events);

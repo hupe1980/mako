@@ -927,7 +927,7 @@ With BO4E:
 | `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
 | `POST /api/v1/commands` | `makod/src/orchestrator/commands_api/` | ERP-initiated process commands |
 | `PUT /admin/malo/{malo_id}` · `PUT /admin/partners/{mp_id}` | `makod` | Master-data cache sync |
-| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.8"`, BO4E schema v202607; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) |
+| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.9"`, BO4E schema v202607; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) |
 
 ---
 

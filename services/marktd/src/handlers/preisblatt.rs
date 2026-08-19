@@ -59,7 +59,7 @@ pub struct PreisblattUpsertRequest {
 }
 
 fn default_bo4e_version() -> String {
-    "v202607.0.0".to_owned()
+    mako_markt::bo4e::schema_version()
 }
 
 /// Response body for `GET /api/v1/preisblaetter/{nb_mp_id}`.

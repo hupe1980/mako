@@ -36,15 +36,20 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 ///
 /// 1. Auto-inject `_typ: "MARKTLOKATION"` when absent.
 /// 2. Reject 422 if `_typ` is present but does not equal `MARKTLOKATION`.
-/// 3. Deserialise as `rubo4e::current::Marktlokation` to validate all enum
-///    fields (`bilanzierungsmethode`, `netzebene`, `gasqualitaet`, …).
-/// 4. Re-serialise to canonical BO4E form (camelCase, correct `_typ`).
+/// 3. Deserialise as `rubo4e::current::Marktlokation`, which types every field.
+/// 4. Reject 422 on any out-of-schema enum anywhere in the tree
+///    (`Bo4eStrict::ensure_known_enums`), with the offending JSON-paths.
+///
+/// The caller stores the returned **value**, not the input: `PgMaloRepository`
+/// serialises the BO itself and derives the typed columns from the same object,
+/// so the canonical BO4E form (camelCase, correct `_typ`) is the only shape
+/// that reaches the `data JSONB` column and a column cannot disagree with it.
 ///
 /// Non-standard keys (e.g. `fallgruppenzuordnung`) are preserved through the
 /// `_additional` extension map (serde `flatten`) — round-trip is lossless.
 fn normalize_marktlokation(
     mut data: serde_json::Value,
-) -> Result<(Marktlokation, serde_json::Value), (StatusCode, serde_json::Value)> {
+) -> Result<Marktlokation, (StatusCode, serde_json::Value)> {
     if let Some(obj) = data.as_object_mut() {
         obj.entry("_typ")
             .or_insert_with(|| serde_json::json!("MARKTLOKATION"));
@@ -72,8 +77,7 @@ fn normalize_marktlokation(
             serde_json::json!({ "error": format!("Marktlokation has out-of-schema enum values: {e}") }),
         )
     })?;
-    let canonical = serde_json::to_value(&malo).unwrap_or_default();
-    Ok((malo, canonical))
+    Ok(malo)
 }
 
 /// Deserialise stored JSONB as `Marktlokation`. Returns `None` and logs an
@@ -94,7 +98,7 @@ fn deserialize_stored_malo(data: serde_json::Value, malo_id: &str) -> Option<Mar
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
 fn default_bo4e_version() -> String {
-    "v202607.0.0".to_owned()
+    mako_markt::bo4e::schema_version()
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -123,7 +127,8 @@ pub struct MaloResponse {
     /// and `netzebene` are rejected with 422 if they contain unknown values.
     #[schema(value_type = Object)]
     pub data: Marktlokation,
-    /// Voltage/pressure level extracted from `data.netzebene` (e.g. `"NS"`, `"MS"`, `"HöS"`).
+    /// Voltage/pressure level extracted from `data.netzebene` — a BO4E
+    /// `Netzebene` wire value (`"NSP"`, `"MSP"`, `"HSP"`, `"HSS"`, `"MSP_NSP_UMSP"`, …).
     /// Available immediately on write; no separate grid provisioning needed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub netzebene: Option<String>,
@@ -131,10 +136,11 @@ pub struct MaloResponse {
     /// Used by `processd` NB check 4 as primary source; falls back to `malo_grid` when absent.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bilanzierungsgebiet: Option<String>,
-    /// Gas quality extracted from `data.gasqualitaet` (`"HGas"` | `"LGas"`).
+    /// Gas quality extracted from `data.gasqualitaet` (`"H_GAS"` | `"L_GAS"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gasqualitaet: Option<String>,
-    /// Energy direction (`"Aussp"` = generation, `"Einsp"` = consumption).
+    /// BO4E `Energierichtung`, named from the grid's point of view:
+    /// `"EINSP"` = generation (feeds the grid), `"AUSSP"` = consumption.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub energierichtung: Option<String>,
     /// Billing mode extracted from `Marktlokation.bilanzierungsmethode`.
@@ -269,7 +275,7 @@ where
     // L4 hard cut: validate and normalise the incoming BO4E payload.
     // Returns 422 on wrong _typ or invalid enum values (bilanzierungsmethode, netzebene, …).
     // Re-serialises to canonical camelCase form before storage.
-    let (_, canonical_data) = match normalize_marktlokation(req.data) {
+    let malo = match normalize_marktlokation(req.data) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -294,15 +300,12 @@ where
     };
     let nb_mp_id = current_role("NB", "GNB").unwrap_or_else(|| state.tenant_gln.clone());
     let msb_mp_id = current_role("MSB", "GMSB");
-    let bilanzierungsgebiet = canonical_data
-        .get("bilanzierungsgebiet")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
-    let netzgebiet = canonical_data
-        .get("netzgebietsnummer")
-        .or_else(|| canonical_data.get("netzgebiet"))
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    // Read off the typed BO, not its JSON: the previous string lookups asked
+    // for `netzgebietsnummer` / `netzgebiet`, neither of which is a BO4E field
+    // name (the schema calls it `netzgebietsnr`), so the cache push carried a
+    // permanent `None`.
+    let bilanzierungsgebiet = malo.bilanzierungsgebiet.clone();
+    let netzgebiet = malo.netzgebietsnr.clone();
     let sparte_str = req.sparte.to_string();
     let malo_id_str = malo_id.to_string();
 
@@ -321,7 +324,7 @@ where
         &mut tx,
         &malo_id,
         req.sparte,
-        canonical_data,
+        &malo,
         req.rollenzuordnung,
         if_match,
         &req.bo4e_version,

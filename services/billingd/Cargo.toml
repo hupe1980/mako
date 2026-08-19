@@ -25,6 +25,8 @@ energy-billing = { workspace = true, features = ["eeg", "bo4e", "en16931"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
 mako-markt   = { workspace = true, features = ["marktd-client"] }
+# The single gas-quality normaliser; see `mako_geli_gas::gas_quality`.
+mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 rubo4e       = { workspace = true }
 axum         = { version = "0.8" }
 sqlx         = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "rust_decimal"] }

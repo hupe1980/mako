@@ -44,14 +44,21 @@ fn inject_bo4e_typ(data: &mut serde_json::Value, typ_name: &str) {
     }
 }
 
-/// Validate `_typ` and deserialise as `T`, then re-serialise to canonical BO4E form.
-/// Returns 422 on type mismatch or schema violation.
-fn validate_and_normalise<T>(
+/// Validate `_typ`, deserialise as `T`, and reject any out-of-schema enum.
+///
+/// Returns the **typed** BO: the repository derives both the JSONB payload and
+/// the shadow columns from it, so the two cannot disagree.
+///
+/// The strict enum gate is not optional here. `serde` maps an unrecognised wire
+/// value to `Unknown`, which would reach `zaehler.zaehler_typ` as the literal
+/// `"UNKNOWN"` — a value the column's `CHECK` refuses, turning a caller's typo
+/// into a 500 at the database instead of a 422 naming the field.
+fn validate_typed<T>(
     data: serde_json::Value,
     expected_typ: &str,
-) -> Result<serde_json::Value, (StatusCode, serde_json::Value)>
+) -> Result<T, (StatusCode, serde_json::Value)>
 where
-    T: serde::de::DeserializeOwned + serde::Serialize,
+    T: serde::de::DeserializeOwned + rubo4e::Bo4eStrict,
 {
     if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
         && typ.to_uppercase() != expected_typ.to_uppercase()
@@ -67,7 +74,15 @@ where
             serde_json::json!({ "error": format!("invalid {expected_typ} payload: {e}") }),
         )
     })?;
-    Ok(serde_json::to_value(&typed).unwrap_or_default())
+    rubo4e::Bo4eStrict::ensure_known_enums(&typed).map_err(|e| {
+        (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            serde_json::json!({
+                "error": format!("{expected_typ} has out-of-schema enum values: {e}")
+            }),
+        )
+    })?;
+    Ok(typed)
 }
 
 pub type DeviceRepoExt = Arc<PgDeviceRepository>;
@@ -132,11 +147,12 @@ pub struct UpsertSrRequest {
 pub struct UpsertZaehlerRequest {
     /// Owning MeLo-ID.
     pub melo_id: String,
-    /// Zähler type (e.g. `"DREHSTROMZAEHLER"`).
-    pub zaehler_typ: Option<String>,
-    /// Calibration valid-until date (`YYYY-MM-DD`).
-    pub eichung_bis: Option<String>,
     /// Full BO4E `Zaehler` payload.
+    ///
+    /// The `zaehler_typ` and `eichung_bis` columns are derived from
+    /// `data.zaehlertyp` and `data.eichungBis`, never supplied beside them —
+    /// the column drives the replacement workflow, so it must not be able to
+    /// disagree with the meter record it shadows.
     pub data: serde_json::Value,
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
@@ -147,16 +163,15 @@ pub struct UpsertZaehlerRequest {
 pub struct UpsertGeraetRequest {
     /// Owning `zaehler_id`.
     pub zaehler_id: String,
-    /// Gerätetyp (e.g. `"WANDLER"`).
-    pub geraet_typ: Option<String>,
-    /// Full BO4E `Geraet` payload.
+    /// Full BO4E `Geraet` payload. The `geraet_typ` column is derived from
+    /// `data.geraetetyp`, not supplied beside it.
     pub data: serde_json::Value,
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
 
 fn default_bo4e_version() -> String {
-    "v202607.0.0".to_owned()
+    mako_markt::bo4e::schema_version()
 }
 
 /// Query params for list endpoints.
@@ -593,11 +608,10 @@ pub async fn put_zaehler(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let eichung_bis = req.eichung_bis.as_deref().and_then(|s| parse_date(s).ok());
     let mut data = req.data;
     inject_bo4e_typ(&mut data, "ZAEHLER");
     // Hard cut: validate schema on write.
-    let canonical_data = match validate_and_normalise::<Zaehler>(data, "ZAEHLER") {
+    let zaehler = match validate_typed::<Zaehler>(data, "ZAEHLER") {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -607,9 +621,7 @@ pub async fn put_zaehler(
             &zaehler_id,
             &tenant_gln,
             &req.melo_id,
-            req.zaehler_typ.as_deref(),
-            eichung_bis,
-            canonical_data,
+            &zaehler,
             &req.bo4e_version,
         )
         .await
@@ -741,7 +753,7 @@ pub async fn put_geraet(
     let mut data = req.data;
     inject_bo4e_typ(&mut data, "GERAET");
     // Hard cut: validate schema on write.
-    let canonical_data = match validate_and_normalise::<Geraet>(data, "GERAET") {
+    let geraet = match validate_typed::<Geraet>(data, "GERAET") {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -751,8 +763,7 @@ pub async fn put_geraet(
             &geraet_id,
             &tenant_gln,
             &req.zaehler_id,
-            req.geraet_typ.as_deref(),
-            canonical_data,
+            &geraet,
             &req.bo4e_version,
         )
         .await
@@ -1001,13 +1012,6 @@ pub async fn put_geraet_konfigurationen(
             .into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
-}
-
-// ── Helper ────────────────────────────────────────────────────────────────────
-
-fn parse_date(s: &str) -> Result<time::Date, time::error::Parse> {
-    use time::format_description::well_known::Iso8601;
-    time::Date::parse(s, &Iso8601::DEFAULT)
 }
 
 // ── TechnischeRessource handlers (B9) ────────────────────────────────────────
@@ -1417,16 +1421,13 @@ pub async fn get_zaehlzeitdefinitionen(
 
     if registers.is_empty() {
         // Return an empty but schema-valid Zaehlzeitdefinition
+        // `..Default::default()` also stamps `_version` — rubo4e pre-fills it on
+        // construction, matching BO4E-python and go-bo4e, so setting it by hand
+        // would only reintroduce a literal that goes stale on a schema bump.
         let empty = Zaehlzeitdefinition {
             id: Some(zaehler_id.clone()),
             typ: Some(BoTyp::Zaehlzeitdefinition),
-            version: Some("v202607.0.0".to_owned()),
-            saisons: None,
-            saisonprofil: None,
-            feiertagskalender: None,
-            urheber: None,
-            zusatz_attribute: None,
-            _additional: Default::default(),
+            ..Default::default()
         };
         return Json(empty).into_response();
     }
@@ -1474,35 +1475,26 @@ pub async fn get_zaehlzeitdefinitionen(
                     let umschaltzeiten: Vec<Umschaltzeit> = switch_points
                         .into_iter()
                         .map(|(zeit_von, registercode)| Umschaltzeit {
-                            id: None,
                             registercode: Some(registercode),
                             umschaltzeit: Some(zeit_von),
                             typ: Some(ComTyp::Umschaltzeit),
-                            version: Some("v202607.0.0".to_owned()),
-                            zusatz_attribute: None,
-                            _additional: Default::default(),
+                            ..Default::default()
                         })
                         .collect();
                     Zaehlzeittagtyp {
-                        id: None,
                         tagtyp: Some(wochentage_key_to_wiederholungstyp(&wochentage_key)),
                         umschaltzeiten: Some(umschaltzeiten),
                         typ: Some(ComTyp::Zaehlzeittagtyp),
-                        version: Some("v202607.0.0".to_owned()),
-                        zusatz_attribute: None,
-                        _additional: Default::default(),
+                        ..Default::default()
                     }
                 })
                 .collect();
 
             Zaehlzeitsaison {
-                id: None,
                 bezeichnung: Some(saison_name),
                 tagtypen: Some(tagtypen),
                 typ: Some(ComTyp::Zaehlzeitsaison),
-                version: Some("v202607.0.0".to_owned()),
-                zusatz_attribute: None,
-                _additional: Default::default(),
+                ..Default::default()
             }
         })
         .collect();
@@ -1510,13 +1502,9 @@ pub async fn get_zaehlzeitdefinitionen(
     let definition = Zaehlzeitdefinition {
         id: Some(zaehler_id.clone()),
         typ: Some(BoTyp::Zaehlzeitdefinition),
-        version: Some("v202607.0.0".to_owned()),
         saisons: Some(saisons),
-        saisonprofil: None, // could be set to "Sommer/Winter" if seasons detected
-        feiertagskalender: None, // BDEW standard not encoded in DB rows
-        urheber: None,
-        zusatz_attribute: None,
-        _additional: Default::default(),
+        // saisonprofil / feiertagskalender: the DB rows encode neither.
+        ..Default::default()
     };
 
     Json(definition).into_response()

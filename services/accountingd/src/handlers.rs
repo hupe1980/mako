@@ -2046,7 +2046,28 @@ pub async fn put_vorauszahlung(
                 .into_response();
         }
     };
-    let canonical = serde_json::to_value(&typed).unwrap_or_default();
+    // Strict enum gate — the same one the marktd BO4E endpoints apply. Without
+    // it an unrecognised enum decodes to `Unknown` and is stored as if valid.
+    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("Vorauszahlung has out-of-schema enum values: {e}")
+            })),
+        )
+            .into_response();
+    }
+    let canonical = match serde_json::to_value(&typed) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "validated Vorauszahlung is not serialisable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "could not serialise Vorauszahlung" })),
+            )
+                .into_response();
+        }
+    };
 
     // Derive abschlag_ct from betrag.wert (EUR → ct).
     let abschlag_ct: Option<i64> =
@@ -2697,6 +2718,18 @@ pub async fn put_zahlungsinformation(
                 .into_response();
         }
     };
+    // Strict enum gate: `zahlungsart` drives the SEPA collection path, so an
+    // unrecognised value degrading to `Unknown` would be stored as a mandate
+    // instruction nobody can act on.
+    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("Zahlungsinformation has out-of-schema enum values: {e}")
+            })),
+        )
+            .into_response();
+    }
 
     // Validate IBAN when present.
     if let Some(ref iban) = typed.iban
@@ -2709,7 +2742,17 @@ pub async fn put_zahlungsinformation(
             .into_response();
     }
 
-    let canonical = serde_json::to_value(&typed).unwrap_or_default();
+    let canonical = match serde_json::to_value(&typed) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "validated Zahlungsinformation is not serialisable");
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": "could not serialise Zahlungsinformation" })),
+            )
+                .into_response();
+        }
+    };
 
     // Ensure account row exists.
     let account_id = match upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await {

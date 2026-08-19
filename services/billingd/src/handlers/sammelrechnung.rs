@@ -199,9 +199,12 @@ pub async fn post_sammelrechnung(
         doc_rates.clone(),
         parts,
         vec![
-            zusatz_attribut("rahmenvertragId", serde_json::json!(rahmenvertrag_id)),
-            zusatz_attribut("malosCount", serde_json::json!(malos_count.to_string())),
-            zusatz_attribut("billingRunId", serde_json::json!(run_id)),
+            zusatz_attribut("mako:rahmenvertrag_id", serde_json::json!(rahmenvertrag_id)),
+            zusatz_attribut(
+                "mako:malos_count",
+                serde_json::json!(malos_count.to_string()),
+            ),
+            zusatz_attribut("mako:billing_run_id", serde_json::json!(run_id)),
         ],
     )?;
     let (total_netto, total_brutto) = (sammel_invoice.netto_eur, sammel_invoice.brutto_eur);

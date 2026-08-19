@@ -48,6 +48,18 @@ fn malo_id(s: &str) -> MaloId {
     s.parse().expect("valid MaLo-ID")
 }
 
+/// Build a typed `Messlokation` from a partial BO4E payload.
+fn bo4e_melo(mut body: serde_json::Value) -> rubo4e::current::Messlokation {
+    body["_typ"] = serde_json::json!("MESSLOKATION");
+    serde_json::from_value(body).expect("valid BO4E Messlokation")
+}
+
+/// Build a typed `Marktlokation` from a partial BO4E payload.
+fn bo4e_malo(mut body: serde_json::Value) -> rubo4e::current::Marktlokation {
+    body["_typ"] = serde_json::json!("MARKTLOKATION");
+    serde_json::from_value(body).expect("valid BO4E Marktlokation")
+}
+
 fn melo_id(s: &str) -> MeloId {
     s.parse().expect("valid MeLo-ID")
 }
@@ -59,7 +71,7 @@ async fn seed_malos(pool: &PgPool) {
         repo.upsert(
             &malo_id(id),
             Sparte::Strom,
-            serde_json::json!({ "_typ": "MARKTLOKATION", "marktlokationsId": id }),
+            &bo4e_malo(serde_json::json!({ "marktlokationsId": id })),
             vec![],
             None,
             "v202607.0.0",
@@ -99,14 +111,14 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
     let melo_repo = PgMeloRepository::new(pool.clone(), TENANT);
     let lz = PgLokationszuordnungRepository::new(pool.clone());
     let today = time::OffsetDateTime::now_utc().date();
-    let data = serde_json::json!({ "_typ": "MESSLOKATION", "messlokationsId": MELO });
+    let data = bo4e_melo(serde_json::json!({ "messlokationsId": MELO }));
 
     // 1. Initial PUT with parent A.
     melo_repo
         .upsert(
             &melo_id(MELO),
             Some(&malo_id(MALO_A)),
-            data.clone(),
+            &data,
             None,
             "v202607.0.0",
         )
@@ -132,7 +144,7 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
         .upsert(
             &melo_id(MELO),
             Some(&malo_id(MALO_A)),
-            data.clone(),
+            &data,
             None,
             "v202607.0.0",
         )
@@ -149,7 +161,7 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
         .upsert(
             &melo_id(MELO),
             Some(&malo_id(MALO_B)),
-            data.clone(),
+            &data,
             None,
             "v202607.0.0",
         )
@@ -185,7 +197,7 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
         .upsert(
             &melo_id(MELO),
             Some(&malo_id(MALO_A)),
-            data.clone(),
+            &data,
             None,
             "v202607.0.0",
         )
@@ -198,7 +210,7 @@ async fn melo_put_keeps_fk_and_graph_in_agreement() {
 
     // 5. Unparent: FK NULL, no open melo→malo edges remain.
     melo_repo
-        .upsert(&melo_id(MELO), None, data, None, "v202607.0.0")
+        .upsert(&melo_id(MELO), None, &data, None, "v202607.0.0")
         .await
         .expect("unparent PUT");
     let rec = melo_repo
@@ -243,7 +255,7 @@ async fn melo_put_respects_existing_open_ended_edge() {
         .upsert(
             &melo_id(MELO),
             Some(&malo_id(MALO_A)),
-            serde_json::json!({ "_typ": "MESSLOKATION" }),
+            &bo4e_melo(serde_json::json!({})),
             None,
             "v202607.0.0",
         )
@@ -281,10 +293,9 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
         .upsert(
             &malo_id(MALO_A),
             Sparte::Strom,
-            serde_json::json!({
-                "_typ": "MARKTLOKATION",
+            &bo4e_malo(serde_json::json!({
                 "lokationsbuendelObjektcode": "9992000000125"
-            }),
+            })),
             vec![],
             None,
             "v202607.0.0",
@@ -306,10 +317,9 @@ async fn lokationsbuendel_codes_are_extracted_into_typed_columns() {
         .upsert(
             &melo_id(MELO),
             Some(&malo_id(MALO_A)),
-            serde_json::json!({
-                "_typ": "MESSLOKATION",
+            &bo4e_melo(serde_json::json!({
                 "lokationsbuendelObjektcode": "9992000000125"
-            }),
+            })),
             None,
             "v202607.0.0",
         )
@@ -385,7 +395,7 @@ async fn patch_stammdaten_updates_typed_columns_only() {
         .patch_stammdaten(
             &m,
             &MaloStammdatenPatch {
-                netzebene: Some("NSP7".to_owned()),
+                netzebene: Some("NSP".to_owned()),
                 ..Default::default()
             },
         )
@@ -397,11 +407,10 @@ async fn patch_stammdaten_updates_typed_columns_only() {
     repo.upsert(
         &m,
         Sparte::Strom,
-        serde_json::json!({
-            "_typ": "MARKTLOKATION",
+        &bo4e_malo(serde_json::json!({
             "marktlokationsId": MALO_A,
             "bilanzierungsmethode": "SLP"
-        }),
+        })),
         vec![],
         None,
         "v202607.0.0",
@@ -478,7 +487,7 @@ async fn melo_patch_stammdaten_updates_typed_columns_only() {
     repo.upsert(
         &m,
         None,
-        serde_json::json!({ "_typ": "MESSLOKATION", "messlokationsId": MELO }),
+        &bo4e_melo(serde_json::json!({ "messlokationsId": MELO })),
         None,
         "v202607.0.0",
     )
@@ -490,7 +499,7 @@ async fn melo_patch_stammdaten_updates_typed_columns_only() {
         .patch_stammdaten(
             &m,
             &MeloStammdatenPatch {
-                netzebene_messung: Some("NSP7".to_owned()),
+                netzebene_messung: Some("NSP".to_owned()),
                 regelzone: Some("10YDE-EON------1".to_owned()),
             },
         )
@@ -499,7 +508,7 @@ async fn melo_patch_stammdaten_updates_typed_columns_only() {
     assert!(applied);
 
     let after = repo.find(&m).await.unwrap().unwrap();
-    assert_eq!(after.netzebene_messung.as_deref(), Some("NSP7"));
+    assert_eq!(after.netzebene_messung.as_deref(), Some("NSP"));
     assert_eq!(after.regelzone.as_deref(), Some("10YDE-EON------1"));
     assert_eq!(after.version, before.version, "version untouched");
 }
@@ -521,7 +530,7 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
             NELO,
             TENANT,
             &NeloStammdatenPatch {
-                netzebene: Some("HS".to_owned()),
+                netzebene: Some("HSP".to_owned()),
                 ..Default::default()
             },
         )
@@ -535,7 +544,7 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
             tenant: TENANT.to_owned(),
             name: None,
             sparte: Sparte::Strom,
-            netzebene: Some("MS".to_owned()),
+            netzebene: Some("MSP".to_owned()),
             nb_mp_id: TENANT.to_owned(),
             steuerkanal: None,
             eigenschaft_msb_lokation: None,
@@ -556,7 +565,7 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
             NELO,
             TENANT,
             &NeloStammdatenPatch {
-                netzebene: Some("HS".to_owned()),
+                netzebene: Some("HSP".to_owned()),
                 steuerkanal: Some(true),
             },
         )
@@ -565,7 +574,7 @@ async fn nelo_patch_stammdaten_updates_netzebene() {
     assert!(applied);
 
     let after = repo.find(NELO, TENANT).await.unwrap().unwrap();
-    assert_eq!(after.netzebene.as_deref(), Some("HS"));
+    assert_eq!(after.netzebene.as_deref(), Some("HSP"));
     assert_eq!(after.steuerkanal, Some(true), "§14a Steuerkanal applied");
     // patch_stammdaten does not bump the optimistic version.
     assert_eq!(after.version, before.version, "version untouched");
@@ -589,7 +598,7 @@ async fn melo_msb_zuordnung_from_stammdatenaenderung() {
         .upsert(
             &melo_id(MELO),
             None,
-            serde_json::json!({ "_typ": "MESSLOKATION", "messlokationsId": MELO }),
+            &bo4e_melo(serde_json::json!({ "messlokationsId": MELO })),
             None,
             "v202607.0.0",
         )
@@ -834,8 +843,8 @@ async fn tranche_patch_stammdaten_updates_typed_columns() {
             TENANT,
             &TrancheStammdatenPatch {
                 bilanzierungsgebiet: Some("11YW-EXAMPLE-BGG".to_owned()),
-                netzebene: Some("NSP7".to_owned()),
-                energierichtung: Some("ENTNAHME".to_owned()),
+                netzebene: Some("NSP".to_owned()),
+                energierichtung: Some("AUSSP".to_owned()),
             },
         )
         .await
@@ -847,8 +856,8 @@ async fn tranche_patch_stammdaten_updates_typed_columns() {
         after.bilanzierungsgebiet.as_deref(),
         Some("11YW-EXAMPLE-BGG")
     );
-    assert_eq!(after.netzebene.as_deref(), Some("NSP7"));
-    assert_eq!(after.energierichtung.as_deref(), Some("ENTNAHME"));
+    assert_eq!(after.netzebene.as_deref(), Some("NSP"));
+    assert_eq!(after.energierichtung.as_deref(), Some("AUSSP"));
     // list_by_malo groups Tranchen under their parent MaLo.
     let listed = repo.list_by_malo(MALO_A, TENANT, 0, 10).await.unwrap();
     assert_eq!(listed.total, 1);

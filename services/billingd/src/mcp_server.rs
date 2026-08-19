@@ -35,7 +35,7 @@
 //! | `check-dynamic-tariff` | Step-by-step: verify §41a dynamic tariff configuration |
 //! | `14a-steuerungsrabatt` | Configure §14a EnWG Steuerungsrabatt (Wärmepumpe / Wallbox) |
 //! | `eeg-billing` | Configure EEG/EINSPEISUNG billing for feed-in plants |
-//! | `gas-billing` | Configure Gas billing — Brennwertkorrektur, BEHG CO₂, H2-blend |
+//! | `gas-billing` | Configure Gas billing — Brennwertkorrektur, BEHG CO₂, H-Gas / L-Gas |
 
 use std::sync::Arc;
 
@@ -898,7 +898,7 @@ unpriced intervals would silently under-bill.",
 
     #[prompt(
         name = "gas-billing",
-        description = "Configure Gas billing — Brennwertkorrektur (§25 Nr. 4 MessEV), BEHG CO₂, H2-blend, L-Gas"
+        description = "Configure Gas billing — Brennwertkorrektur (§25 Nr. 4 MessEV), BEHG CO₂, H-Gas / L-Gas"
     )]
     async fn gas_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
@@ -917,12 +917,17 @@ unpriced intervals would silently under-bill.",
                 Supply `messung_qm3`, `brennwert_kwh_per_qm3`, `zustandszahl`.\n\
                 billingd computes: kWh_Hs = m³ × Hs × Z (rounded to 3dp).\n\
                 ```json\n{ \"gas_meter\": { \"messung_qm3\": 42.3, \"brennwert_kwh_per_qm3\": 10.68, \"zustandszahl\": 0.964 } }\n```\n\n\
-                **H2-Blend Gas (hydrogen-blended natural gas)**\n\
-                For H2-blended gas, set `gasqualitaet: \"H2_BLEND\"` in gas_meter.\n\
-                IMPORTANT: The Brennwert used for billing is ALWAYS the measured value from\n\
-                edmd/marktd (already reflects actual H2 blend ratio). Do NOT apply an\n\
-                additional correction — that would double-correct. `gasqualitaet` is\n\
-                a ZusatzAttribut annotation only (regulatory audit trail, DVGW G 260).\n\
+                **`gasqualitaet` (including hydrogen-blended gas)**\n\
+                BO4E v202607 defines exactly two values, `H_GAS` and `L_GAS`, and those\n\
+                are the only ones billingd accepts — there is no `H2_BLEND` wire value\n\
+                yet, and inventing one would persist rows that go wrong when the\n\
+                DVGW/BNetzA wave standardises a different spelling.\n\
+                This does NOT block billing an H2-blended supply: the Brennwert used is\n\
+                ALWAYS the measured value from edmd/marktd, which already reflects the\n\
+                actual blend ratio. Do NOT apply an additional correction — that would\n\
+                double-correct. `gasqualitaet` is a ZusatzAttribut annotation only\n\
+                (regulatory audit trail, DVGW G 260), and an unrecognised value is\n\
+                dropped rather than annotated.\n\
                 To auto-fetch gasqualitaet: billingd fetches from marktd if not supplied.\n\n\
                 **Regulatory rates (configure in billingd.toml `[rates]`):**\n\
                 | Rate | Default | Legal basis |\n\

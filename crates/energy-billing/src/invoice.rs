@@ -111,6 +111,15 @@ pub struct Invoice {
     pub warnings: Vec<BillingWarning>,
 }
 
+/// The attribute carrying the process label BO4E's `Rechnungstyp` cannot
+/// express (Gutschrift, Storno, Korrektur, Teilrechnung).
+///
+/// Every `ZusatzAttribut` mako emits is namespaced `mako:<snake_case>` and
+/// listed in the registry `cargo xtask check-bo4e-attributes` enforces — BO4E
+/// mandates no convention for its extension slot, so an unprefixed name could
+/// collide with a future BO4E field or the counterparty's own attributes.
+pub(crate) const RECHNUNGSART_ATTRIBUT: &str = "mako:rechnungsart";
+
 impl Invoice {
     /// The EN16931 BG-23 VAT breakdown — one entry per distinct rate.
     ///
@@ -461,7 +470,7 @@ impl Invoice {
             .filter(|p| p.has_tag("gasqualitaet") && p.category == PositionCategory::Info)
             .map(|p| {
                 zusatz_attribut(
-                    "gasqualitaet",
+                    "mako:gasqualitaet",
                     serde_json::json!(p.legal_basis.as_deref().unwrap_or("")),
                 )
             })
@@ -472,15 +481,15 @@ impl Invoice {
         // so a renderer can place them individually.
         if let Some(vi) = &ctx.vertragsinformationen {
             for (name, wert) in [
-                ("vertragsdauer", vi.vertragsdauer.clone()),
-                ("kuendigungsfrist", vi.kuendigungsfrist.clone()),
+                ("mako:vertragsdauer", vi.vertragsdauer.clone()),
+                ("mako:kuendigungsfrist", vi.kuendigungsfrist.clone()),
                 (
-                    "naechstmoeglicher_kuendigungstermin",
+                    "mako:naechstmoeglicher_kuendigungstermin",
                     vi.naechstmoeglicher_kuendigungstermin
                         .map(|d| d.to_string()),
                 ),
                 (
-                    "naechster_abrechnungstermin",
+                    "mako:naechster_abrechnungstermin",
                     vi.naechster_abrechnungstermin.map(|d| d.to_string()),
                 ),
             ] {
@@ -495,20 +504,20 @@ impl Invoice {
         if let Some(quellen) = &ctx.energiequellen
             && let Ok(wert) = serde_json::to_value(quellen)
         {
-            zusatz_attribute.push(zusatz_attribut("stromkennzeichnung", wert));
+            zusatz_attribute.push(zusatz_attribut("mako:stromkennzeichnung", wert));
         }
 
         // §40 Abs. 2 EnWG — Verbrauchshistorie summary as ZusatzAttribut
         if let Some(vh) = &ctx.verbrauchshistorie {
             if let Some(vj) = vh.vorjahr_kwh {
                 zusatz_attribute.push(zusatz_attribut(
-                    "verbrauchVorjahr",
+                    "mako:verbrauch_vorjahr",
                     serde_json::json!(vj.to_string()),
                 ));
             }
             if let Some(avg) = vh.bundesdurchschnitt_kwh {
                 zusatz_attribute.push(zusatz_attribut(
-                    "verbrauchBundesdurchschnitt",
+                    "mako:verbrauch_bundesdurchschnitt",
                     serde_json::json!(avg.to_string()),
                 ));
             }
@@ -516,7 +525,10 @@ impl Invoice {
 
         // Audit trail: billing run ID for ERP reconciliation and duplicate detection.
         if let Some(run_id) = &self.billing_run_id {
-            zusatz_attribute.push(zusatz_attribut("billingRunId", serde_json::json!(run_id)));
+            zusatz_attribute.push(zusatz_attribut(
+                "mako:billing_run_id",
+                serde_json::json!(run_id),
+            ));
         }
 
         // § 40c Abs. 3 EnWG — a credit balance carries a deadline and a rule
@@ -524,7 +536,7 @@ impl Invoice {
         // customer document) can only honour it if the document says so.
         if let Some(g) = self.guthabenerstattung() {
             zusatz_attribute.push(zusatz_attribut(
-                "guthabenerstattung",
+                "mako:guthabenerstattung",
                 serde_json::json!({
                     "betragEur": g.betrag_eur.to_string(),
                     "spaetestens": g.spaetestens.to_string(),
@@ -536,7 +548,7 @@ impl Invoice {
 
         // Customer category for downstream ERP routing and regulatory rule selection.
         zusatz_attribute.push(zusatz_attribut(
-            "kundenkategorie",
+            "mako:kundenkategorie",
             serde_json::json!(format!("{:?}", ctx.kundenkategorie)),
         ));
 
@@ -545,7 +557,7 @@ impl Invoice {
         // Ersatzversorgung the §38 EnWG fallback terms. Emitted for every
         // invoice so the regime is explicit, not inferred from the tariff.
         zusatz_attribute.push(zusatz_attribut(
-            "vertragsart",
+            "mako:vertragsart",
             serde_json::json!(ctx.vertragsart.label()),
         ));
 
@@ -557,7 +569,7 @@ impl Invoice {
             || ctx.invoice_type == crate::context::InvoiceType::PartialInvoice
         {
             zusatz_attribute.push(zusatz_attribut(
-                "rechnungsart",
+                "mako:rechnungsart",
                 serde_json::json!(ctx.invoice_type.rechnungsart()),
             ));
         }
@@ -587,7 +599,7 @@ impl Invoice {
         // Only set when consumption positions exist (electricity commodity kWh known).
         if let Some(ct) = kilowattstundenpreis_ct {
             zusatz_attribute.push(zusatz_attribut(
-                "kilowattstundenpreisGesamt",
+                "mako:kilowattstundenpreis_gesamt",
                 serde_json::json!({
                     "wert": ct.to_string(),
                     "einheit": "ct/kWh",
@@ -602,7 +614,7 @@ impl Invoice {
         // to ingest tariff structure from the invoice machine-readably. No BO4E
         // home exists, so it rides as a structured ZusatzAttribut.
         zusatz_attribute.push(zusatz_attribut(
-            "preisvergleichsdaten",
+            "mako:preisvergleichsdaten",
             serde_json::json!({
                 "grundpreisEurProJahr": self.positions.iter()
                     .filter(|p| p.has_tag("commodity") && p.unit == "Tage")
@@ -628,7 +640,7 @@ impl Invoice {
         if let Ok(vi) =
             serde_json::to_value(ctx.verbraucherinformationen.clone().unwrap_or_default())
         {
-            zusatz_attribute.push(zusatz_attribut("verbraucherinformationen", vi));
+            zusatz_attribute.push(zusatz_attribut("mako:verbraucherinformationen", vi));
         }
 
         // §41 Abs. 1 Nr. 5 EnWG — Netzbetreiber identification (mandatory on
@@ -637,9 +649,12 @@ impl Invoice {
         // Marktpartner-ID still survives, as a ZusatzAttribut on the BO.
         let netzbetreiber = ctx.nb_mp_id.as_deref().map(|id| {
             let rollencodenummer = rubo4e::identifiers::MarktpartnerId::new(id).ok();
-            let zusatz_attribute = rollencodenummer
-                .is_none()
-                .then(|| vec![zusatz_attribut("marktpartnercode", serde_json::json!(id))]);
+            let zusatz_attribute = rollencodenummer.is_none().then(|| {
+                vec![zusatz_attribut(
+                    "mako:marktpartnercode",
+                    serde_json::json!(id),
+                )]
+            });
             Box::new(bo::Marktteilnehmer {
                 rollencodenummer,
                 zusatz_attribute,
@@ -682,7 +697,7 @@ impl Invoice {
                     .as_ref()
                     .and_then(|vi| vi.lieferant_name.clone()),
                 zusatz_attribute: Some(vec![zusatz_attribut(
-                    "marktpartnercode",
+                    "mako:marktpartnercode",
                     serde_json::json!(ctx.lf_mp_id),
                 )]),
                 ..Default::default()
@@ -718,7 +733,7 @@ impl Invoice {
             // MaLo; the reference survives as a ZusatzAttribut on the BO.
             rechnungsempfaenger: Some(Box::new(bo::Geschaeftspartner {
                 zusatz_attribute: Some(vec![zusatz_attribut(
-                    "externeKundenId",
+                    "mako:externe_kunden_id",
                     serde_json::json!(ctx.malo_id),
                 )]),
                 ..Default::default()
@@ -731,12 +746,19 @@ impl Invoice {
     /// `serde_json::to_value(self.to_rechnung())`.
     ///
     /// Kept for callers that store or transport the document as JSONB.
-    /// Serialising a fully-owned BO cannot fail, so an error is unreachable in
-    /// practice; it would surface as `Value::Null` rather than a panic.
+    ///
+    /// # Panics
+    ///
+    /// Never, for any `Invoice` this crate can build: a `Rechnung` is a tree of
+    /// `Decimal`, `String` and BO4E enums, none of which `serde_json` can fail
+    /// on. Stated rather than defaulted, because the callers store and dispatch
+    /// the result — and PostgreSQL accepts a JSON `null` into a `JSONB NOT
+    /// NULL` column, so a defaulted failure would travel as the invoice.
     #[must_use]
     #[cfg(feature = "bo4e")]
     pub fn to_rechnung_json(&self) -> serde_json::Value {
-        serde_json::to_value(self.to_rechnung()).unwrap_or(serde_json::Value::Null)
+        serde_json::to_value(self.to_rechnung())
+            .expect("a Rechnung is always serialisable; see the note on this method")
     }
 
     /// Merge two invoices for adjacent billing periods (§41 EnWG Tarifwechsel).
@@ -1054,11 +1076,11 @@ fn upsert_rechnungsart_attribut(obj: &mut serde_json::Map<String, serde_json::Va
     if let Some(arr) = attrs.as_array_mut() {
         if let Some(existing) = arr
             .iter_mut()
-            .find(|a| a.get("name").and_then(|n| n.as_str()) == Some("rechnungsart"))
+            .find(|a| a.get("name").and_then(|n| n.as_str()) == Some(RECHNUNGSART_ATTRIBUT))
         {
             existing["wert"] = serde_json::json!(label);
         } else {
-            arr.push(serde_json::json!({ "name": "rechnungsart", "wert": label }));
+            arr.push(serde_json::json!({ "name": RECHNUNGSART_ATTRIBUT, "wert": label }));
         }
     }
 }
@@ -1605,19 +1627,19 @@ mod rechnung_json_tests {
         let attrs = rechnung.zusatz_attribute.as_ref().expect("zusatzAttribute");
         let names: Vec<&str> = attrs.iter().filter_map(|a| a.name.as_deref()).collect();
         for required in [
-            "vertragsdauer",                       // §40 Abs. 1
-            "kuendigungsfrist",                    // §40 Abs. 1
-            "naechstmoeglicher_kuendigungstermin", // §40 Abs. 1
-            "naechster_abrechnungstermin",         // §40 Abs. 1
-            "verbraucherinformationen",            // §40 Abs. 2 Nr. 1/9/10/11/12
-            "kilowattstundenpreisGesamt",          // §40
-            "preisvergleichsdaten",                // §40b
-            "verbrauchVorjahr",                    // §40 Abs. 2 Nr. 7
-            "verbrauchBundesdurchschnitt",         // §40 Abs. 2 Nr. 8
-            "stromkennzeichnung",                  // §42
-            "billingRunId",                        // audit trail
-            "kundenkategorie",                     // ERP routing
-            "vertragsart",                         // §36/§38/§41 regime
+            "mako:vertragsdauer",                       // §40 Abs. 1
+            "mako:kuendigungsfrist",                    // §40 Abs. 1
+            "mako:naechstmoeglicher_kuendigungstermin", // §40 Abs. 1
+            "mako:naechster_abrechnungstermin",         // §40 Abs. 1
+            "mako:verbraucherinformationen",            // §40 Abs. 2 Nr. 1/9/10/11/12
+            "mako:kilowattstundenpreis_gesamt",         // §40
+            "mako:preisvergleichsdaten",                // §40b
+            "mako:verbrauch_vorjahr",                   // §40 Abs. 2 Nr. 7
+            "mako:verbrauch_bundesdurchschnitt",        // §40 Abs. 2 Nr. 8
+            "mako:stromkennzeichnung",                  // §42
+            "mako:billing_run_id",                      // audit trail
+            "mako:kundenkategorie",                     // ERP routing
+            "mako:vertragsart",                         // §36/§38/§41 regime
         ] {
             assert!(
                 names.contains(&required),
@@ -1629,7 +1651,7 @@ mod rechnung_json_tests {
         // silently absent from a Letztverbraucher invoice.
         let vi = attrs
             .iter()
-            .find(|a| a.name.as_deref() == Some("verbraucherinformationen"))
+            .find(|a| a.name.as_deref() == Some("mako:verbraucherinformationen"))
             .and_then(|a| a.wert.clone())
             .expect("verbraucherinformationen wert");
         for key in [

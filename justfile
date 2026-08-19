@@ -203,7 +203,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -411,6 +411,10 @@ check-wire-timestamps:
 # validate it at the parse, so a bad fixture is refused by the storage layer)
 check-malo-ids:
     cargo xtask check-malo-ids
+
+# Refuse a ZusatzAttribut that is not `mako:`-namespaced and registered
+check-bo4e-attributes:
+    cargo xtask check-bo4e-attributes
 
 # Refuse a specialist procedure that tells a model to call a tool the manifest
 # does not grant. `check-tool-grants` validates the grant list; this validates

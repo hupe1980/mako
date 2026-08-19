@@ -499,7 +499,7 @@ fn golden_eeg_gutschrift_kleinunternehmer_jan_2026() {
     );
     let rechnungsart = json["zusatzAttribute"]
         .as_array()
-        .and_then(|attrs| attrs.iter().find(|a| a["name"] == "rechnungsart"))
+        .and_then(|attrs| attrs.iter().find(|a| a["name"] == "mako:rechnungsart"))
         .map(|a| a["wert"].clone())
         .unwrap_or(serde_json::Value::Null);
     assert_eq!(
@@ -921,25 +921,25 @@ fn sect41_rechnung_json_contains_mandatory_fields() {
 
     // §41 Abs. 1 Nr. 3 — Verbrauchshistorie in ZusatzAttribute
     assert!(
-        has_attr("verbrauchVorjahr"),
+        has_attr("mako:verbrauch_vorjahr"),
         "§41 Abs. 1 Nr. 3: verbrauchVorjahr ZusatzAttribut required when Verbrauchshistorie set"
     );
 
     // §42 EnWG — Energiemix
     assert!(
-        has_attr("stromkennzeichnung"),
+        has_attr("mako:stromkennzeichnung"),
         "§42 EnWG: Stromkennzeichnung ZusatzAttribut required"
     );
 
     // CustomerKategorie for ERP routing
     assert!(
-        has_attr("kundenkategorie"),
+        has_attr("mako:kundenkategorie"),
         "kundenkategorie ZusatzAttribut required for ERP routing"
     );
 
     // BillingRunId for audit trail
     assert!(
-        has_attr("billingRunId"),
+        has_attr("mako:billing_run_id"),
         "billingRunId ZusatzAttribut required for audit trail"
     );
 }
@@ -1112,4 +1112,116 @@ fn industrie_customer_stromsteuer_befreiung_removes_levy() {
         !exemption_info.is_empty(),
         "§9 StromStG: industrial exemption must generate an informational position with tag 'stromsteuer_befreiung'"
     );
+}
+
+// ── Outbound BO4E conformance ────────────────────────────────────────────────
+//
+// mako strict-decodes every BO4E document it *receives* (`ensure_known_enums`
+// at each ingest boundary), and until now checked nothing about what it
+// *emits*. That asymmetry mattered here more than anywhere: `to_rechnung()` is
+// what reaches a counterparty, and a `Rechnung` carrying an enum that resolves
+// to `Unknown` in BO4E-python or go-bo4e is an invoice the recipient cannot
+// fully read — with no error on either side, because forward-compatible
+// decoding is what those implementations are built to do.
+//
+// The convention this pins is already the crate's own: a concept BO4E does not
+// model rides in a `ZusatzAttribut` rather than being forced into a typed
+// field. `Rechnungstyp` has no Gutschrift value, so a credit note leaves
+// `rechnungstyp` absent and labels itself via the `rechnungsart` attribute
+// (see `golden_eeg_gutschrift_kleinunternehmer_jan_2026`).
+
+/// Every `Rechnung` this crate emits must round-trip with no `Unknown` enum
+/// anywhere in the tree.
+#[test]
+fn every_emitted_rechnung_is_valid_bo4e() {
+    for (label, invoice) in emitted_invoices() {
+        let rechnung = invoice.to_rechnung();
+        rubo4e::Bo4eStrict::ensure_known_enums(&rechnung).unwrap_or_else(|e| {
+            panic!("{label}: emitted a Rechnung with out-of-schema enums: {e}")
+        });
+
+        // …and the JSON a caller stores is the same document, not a null.
+        let json = invoice.to_rechnung_json();
+        assert!(
+            json.is_object(),
+            "{label}: to_rechnung_json must yield the document, not {json}"
+        );
+        let round_tripped: rubo4e::current::Rechnung =
+            serde_json::from_value(json).unwrap_or_else(|e| panic!("{label}: not a Rechnung: {e}"));
+        rubo4e::Bo4eStrict::ensure_known_enums(&round_tripped)
+            .unwrap_or_else(|e| panic!("{label}: JSON form has out-of-schema enums: {e}"));
+    }
+}
+
+/// One invoice per shape the crate can emit, so the guard above covers the
+/// branches that differ in which BO4E enums they set: the commodity, and the
+/// VAT category (`Steuerart::Ust` vs `Rcv`, the two `to_rechnung` can produce).
+fn emitted_invoices() -> Vec<(&'static str, energy_billing::Invoice)> {
+    let rates = RegulatoryRates {
+        stromsteuer_ct_per_kwh: dec!(2.05),
+        energiesteuer_gas_ct_per_kwh: dec!(0.55),
+        behg_gas_ct_per_kwh: dec!(1.3104),
+        mwst_rate: dec!(0.19),
+    };
+
+    let ctx = |nr: &str| BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: nr.to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+
+    let strom: Product = serde_json::from_str(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":28.50,"grundpreis_ct_per_day":8.00}"#,
+    )
+    .expect("strom fixture");
+    let gas: Product = serde_json::from_str(
+        r#"{"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.50,"gas_grundpreis_ct_per_day":5.00}"#,
+    )
+    .expect("gas fixture");
+
+    let strom_q = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(320),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    let gas_q = Quantities {
+        gas: Some(GasMeterInput {
+            kwh_hs: Some(dec!(1200)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    // Reverse charge exercises the other `Steuerart` branch (§13b UStG).
+    let mut rc_ctx = ctx("CONF-STROM-RCV");
+    rc_ctx.reverse_charge = true;
+
+    vec![
+        (
+            "strom",
+            strom
+                .build_engine(&GridInput::default(), &rates)
+                .bill(ctx("CONF-STROM-001"), &strom_q)
+                .expect("strom invoice"),
+        ),
+        (
+            "strom reverse charge",
+            strom
+                .build_engine(&GridInput::default(), &rates)
+                .bill(rc_ctx, &strom_q)
+                .expect("reverse-charge invoice"),
+        ),
+        (
+            "gas",
+            gas.build_engine(&GridInput::default(), &rates)
+                .bill(ctx("CONF-GAS-001"), &gas_q)
+                .expect("gas invoice"),
+        ),
+    ]
 }

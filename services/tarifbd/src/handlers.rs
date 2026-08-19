@@ -184,8 +184,29 @@ pub fn normalize_tarifpreisblatt(
                         }),
                     ));
                 }
+                // A value BO4E defines stays in the BO4E field. A mako
+                // extension moves to the `mako:preistyp` ZusatzAttribut and
+                // `preistyp` is dropped — see `mako_markt::bo4e` for why
+                // writing it into the standard's own enum field was wrong.
                 if let Some(obj) = pos.as_object_mut() {
-                    obj.insert("preistyp".to_owned(), serde_json::json!(upper));
+                    if mako_markt::bo4e::is_bo4e_preistyp(&upper) {
+                        obj.insert("preistyp".to_owned(), serde_json::json!(upper));
+                    } else {
+                        obj.remove("preistyp");
+                        let attrs = obj
+                            .entry("zusatzAttribute")
+                            .or_insert_with(|| serde_json::json!([]));
+                        if let Some(arr) = attrs.as_array_mut() {
+                            arr.retain(|a| {
+                                a.get("name").and_then(|v| v.as_str())
+                                    != Some(mako_markt::bo4e::MAKO_PREISTYP_ATTRIBUT)
+                            });
+                            arr.push(serde_json::json!({
+                                "name": mako_markt::bo4e::MAKO_PREISTYP_ATTRIBUT,
+                                "wert": upper,
+                            }));
+                        }
+                    }
                 }
             }
 
@@ -218,10 +239,9 @@ pub fn normalize_tarifpreisblatt(
     // ── 3. BO4E envelope roundtrip (BO4E categories only) ────────────────────
     //    Validates sparte, tariftyp, kundentypen, registeranzahl,
     //    berechnungsparameter, preisgarantie, vertragskonditionen, tarifmerkmale.
-    //    Extended preistyp values (e.g. "EEG_VERGUETUNG") map to
-    //    Preistyp::Unknown — already validated in step 2, so safe.
-    //    Restore the normalised positionen after re-serialisation so that
-    //    the stored JSONB has ALLCAPS preistyp, not "UNKNOWN".
+    //    Step 2 has already moved every mako-only preistyp into the
+    //    `mako:preistyp` ZusatzAttribut, so nothing in the tree decodes to
+    //    `Preistyp::Unknown` and the round-trip is lossless.
     if is_bo4e_category {
         let typed: Tarifpreisblatt = serde_json::from_value(data.clone()).map_err(|e| {
             (
@@ -264,10 +284,17 @@ pub fn normalize_tarifpreisblatt(
             }
         }
 
-        let mut canonical = serde_json::to_value(&typed).unwrap_or_default();
-        if let Some(positionen) = data.get("tarifpreispositionen") {
-            canonical["tarifpreispositionen"] = positionen.clone();
-        }
+        // With mako-only price types carried in `zusatzAttribute` rather than
+        // in `preistyp`, the typed round-trip is lossless, so the canonical
+        // form is what gets stored.
+        let canonical = serde_json::to_value(&typed).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                serde_json::json!({
+                    "error": format!("could not serialise Tarifpreisblatt: {e}")
+                }),
+            )
+        })?;
         return Ok(canonical);
     }
 
@@ -325,7 +352,12 @@ fn normalize_energiemix(
         )));
     }
 
-    let canonical = serde_json::to_value(&mix).unwrap_or_default();
+    let canonical = serde_json::to_value(&mix).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            serde_json::json!({ "error": format!("could not serialise Energiemix: {e}") }),
+        )
+    })?;
     Ok((mix, canonical))
 }
 
@@ -930,7 +962,7 @@ fn compute_cost_breakdown(
     let mut leistungspreis_ct: Option<Decimal> = None;
 
     for pp in positionen {
-        let pt = pp.get("preistyp").and_then(|v| v.as_str()).unwrap_or("");
+        let pt = mako_markt::bo4e::position_preistyp(pp);
         let preis = pp
             .get("preisstaffeln")
             .and_then(|v| v.as_array())
