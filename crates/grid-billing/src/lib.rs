@@ -1,7 +1,7 @@
 //! Role-neutral **German grid settlement calculation** engine.
 //!
 //! Covers all DSO/TSO-side INVOIC documents:
-//! - **NNE** (Netznutzungsentgelt) — PID 31002 (NN-Rechnung, Strom + Gas); Abschlag 31001
+//! - **NNE** (Netznutzungsentgelt) — PID 31002 (NN-Rechnung, Strom + Gas)
 //! - **MMM** (Mehr-/Mindermengensaldo) — PIDs 31005/31006 (aggregiert Gas 31007/31008)
 //! - **MSB** (Messstellenbetrieb) — PID 31009
 //!
@@ -49,8 +49,8 @@
 //!     nb_mp_id: "9900357000004".into(),
 //!     lf_mp_id: "9900012345678".into(),
 //!     period: SettlementPeriod::new(date!(2025-01-01), date!(2025-01-31))?,
-//!     // One value, not twelve loose fields: flat rate, §14a Modul 1, Modul 2
-//!     // HT/NT and Modul 3 are mutually exclusive by construction.
+//!     // One value, not twelve loose fields: flat rate and the three §14a
+//!     // modules are mutually exclusive by construction.
 //!     arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
 //!         menge_kwh: d("1500"),
 //!         preis_ct_per_kwh: d("3.5"),
@@ -94,6 +94,10 @@
 //!     correction_of: None,
 //!     invoice_date: date!(2025-02-15),
 //!     due_date: date!(2025-03-15),
+//!     // Cadence is a document fact (`IMD+7081`), and Abschläge are deducted
+//!     // from what is owed rather than from what was supplied.
+//!     cadence: Some(grid_billing::Rechnungscharakter::Monatsrechnung),
+//!     abschlaege: Vec::new(),
 //! };
 //! for (number, pos) in document.numbered_positions() {
 //!     println!("{number}. {}", pos.text);
@@ -117,6 +121,7 @@ pub mod sect18;
 pub mod sect19;
 pub mod types;
 pub mod umlagen;
+pub mod umsatzsteuer;
 
 /// A monetary amount in euro at 10⁻⁵-EUR resolution.
 ///
@@ -126,8 +131,11 @@ pub mod umlagen;
 /// here; it just belongs to the domain crate rather than the engine.
 pub type EuroAmount = ::billing::Amount<5>;
 
-pub use billing::{correct, reverse, settle_gas_awh, settle_mmm, settle_msb, settle_nne};
+pub use billing::{
+    correct, reverse, settle_abschlag, settle_gas_awh, settle_mmm, settle_msb, settle_nne,
+};
 pub use error::BillingError;
+pub use gas::GasKapazitaet;
 pub use redispatch::{
     AusfallarbeitBasis, RedispatchVerguetung, RedispatchVerguetungInput, RedispatchVerguetungsart,
     bilarem_finanzielle_korrektur, eeg_entgangene_einnahmen, redispatch_verguetung,
@@ -142,12 +150,18 @@ pub use regulatory::{
     SECT19_ABS3_UEBERGANG_ENDE,
 };
 pub use types::{
+    // Abschlagsrechnung — a payment on account, and its later deduction.
+    AbschlagGrundlage,
+    AbschlagInput,
+    Abschlagsverrechnung,
     // The settlement — what is owed and why.
     ArbeitspreisModell,
     // AWH positions
     AwhPositionInput,
     // BDEW Artikelnummer bridge — maps SettlementPosition.kind → BdewArtikelnummer in service layer
     BillingPositionKind,
+    // Reactive energy and the terms its excess is charged on.
+    Blindarbeit,
     // Domain types for explainability + audit
     CalculationTrace,
     // Input types
@@ -171,6 +185,7 @@ pub use types::{
     PriceReference,
     PriceStep,
     QuantityUnit,
+    Rechnungscharakter,
     Reduktionsfaktor,
     // §14a module type (replaces module: u8 for type safety)
     Sect14aModule,
@@ -191,4 +206,8 @@ pub use types::{
     validate_gas_awh_input,
     validate_mmm_input,
     validate_msb_input,
+};
+pub use umsatzsteuer::{
+    Leistungsart, Steuerausweis, TaxCategory, Wiederverkaeuferstatus, regelsatz_prozent,
+    steuerausweis,
 };

@@ -295,14 +295,26 @@ and `KA_CHARGED_WHILE_EXEMPT` when a rate is applied to a §2 Abs. 7 exemption.
 
 - **NNE Strom** (PID 31002, NN-Rechnung) — flat-rate Arbeit, Leistung (RLM), Konzessionsabgabe
 - **NNE Gas** (PID 31002, NN-Rechnung) — GasNEV §14 legal basis, auto-set when `Sparte::Gas`
-- **§14a Modul 2 ToU** — mandatory HT/NT Arbeit split for controllable loads (BNetzA BK6-22-300)
+- **§14a modules** — Modul 1 (pauschale Reduzierung), Modul 2 (prozentuale Reduzierung des Arbeitspreises), Modul 3 (zeitvariable Netzentgelte HT/ST/NT, opt-in since 01.04.2025) — BNetzA BK6-22-300 / BK8-22/010-A
 - **MMM Strom** (PID 31005) — Mehr-/Mindermengensaldo, GPKE (BK6-24-174) Teil 1 Kap. 8.4
 - **MMM Gas** (PID 31005) — Gas imbalance, GaBi Gas 2.1 (BK7-24-01-008)
+- **NNE Gas** (PID 31002) — GasNEV §14 Arbeits-/Grundpreis and §15 Kapazitätsentgelt
+- **Abschlagsrechnung** (PID 31001) — a payment on account: one Positionszeile, no quantity, no
+  Arbeitspreis (INVOIC AHB 1.0b Änd-ID 26817). The invoice that settles the period deducts it
+  from what is **owed** via `InvoiceDocument::abschlaege`, never from the net or the tax, because
+  §14 Abs. 5 UStG taxed the Anzahlung when it was received
 - **MMM Mehrmenge selbst ausgestellt** (PID 31006) — Mehr-/Mindermenge als Lieferung, self-issued (INVOIC AHB Selbstausstellung)
 - **MSB-Rechnung** (PID 31009) — Grundgebühr Messstellenbetrieb + optional Messdienstleistung
 - **GeLi Gas AWH Sperrprozesse** (PID 31011) — abrechnungswürdige Handlungen (BK7-24-01-009 §5.4)
 - **§13a EnWG Redispatch-Vergütung** — `redispatch_verguetung()` computes the angemessene Vergütung per activation (entgangene Einnahmen + zusätzliche − ersparte Aufwendungen; `eeg_entgangene_einnahmen()` for the Nr. 5 EEG basis)
 - **Reversal (Stornorechnung)** — `reverse()` negates any prior settlement immutably
+
+- **Umsatzsteuer** — every settlement states its tax (§14 Abs. 4 Nr. 8 UStG). Network services
+  are 19 % and never reverse-charged (UStAE 13b.3a excludes them by name); a Mehr-/Mindermenge is
+  a *Lieferung* and takes the §13b Abs. 2 Nr. 5 Buchst. b reverse charge on the asymmetric
+  condition the statute sets — electricity needs both parties to hold §3g status, gas needs the
+  recipient alone. A delivery period straddling a rate change is refused rather than billed at
+  one of the two.
 
 All calculations are **pure functions** — zero I/O, zero async, no side effects.
 All monetary arithmetic uses `rust_decimal::Decimal` via `EuroAmount` — no `f64` anywhere.
@@ -742,7 +754,7 @@ use grid_billing::types::{ArbeitspreisModell, MengePreis};
 
 // Only Sparte changes — GasNEV §14 legal refs and SettlementType::NneGas are automatic:
 let settlement = settle_nne(&NneInput {
-    sparte: Sparte::Gas,  // ← drives GasNEV §14 + NneGas (PID 31005)
+    sparte: Sparte::Gas,  // ← drives GasNEV §14 + NneGas (PID 31002)
     arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
         menge_kwh: d("3000"),        // already kWh_Hs from edmd gas conversion
         preis_ct_per_kwh: d("1.80"),
@@ -754,10 +766,10 @@ let settlement = settle_nne(&NneInput {
 }).unwrap();
 
 assert_eq!(settlement.settlement_type, SettlementType::NneGas);
-assert_eq!(settlement.settlement_type.default_pid(), 31005);
+assert_eq!(settlement.settlement_type.default_pid(), 31002);
 ```
 
-### §14a Modul 2 ToU (HT/NT split, mandatory since 2024-01-01)
+### §14a Modul 3 — zeitvariable Netzentgelte (HT/ST/NT, opt-in since 2025-04-01)
 
 ```rust,no_run
 use grid_billing::{NneInput, Sparte, settle_nne};
@@ -766,7 +778,7 @@ use grid_billing::types::{
 };
 
 let settlement = settle_nne(&NneInput {
-    // Modul 2 requires both bands; the enum makes the flat/HT-NT states exclusive.
+    // Modul 3 requires all three bands; the enum makes the flat/ToU states exclusive.
     arbeitspreis: ArbeitspreisModell::Modul3ZeitVariabel {
         ht: MengePreis { menge_kwh: d("600"), preis_ct_per_kwh: d("4.20") },
         nt: MengePreis { menge_kwh: d("400"), preis_ct_per_kwh: d("1.50") },
@@ -1112,12 +1124,14 @@ Source: BDEW Codeliste Artikelnummern und Artikel-ID v5.6, Section 3.2 (valid 01
 | **No floating-point money** | `rust_decimal::Decimal` throughout; `EuroAmount` for overflow guard. No `f64`. |
 | **No rubo4e dependency** | Returns `SettlementResult`; service layer owns `into_rechnung()`. |
 | **`recipient_mp_id` auto-populated** | `lf_mp_id` (NNE/MMM) or `empfaenger.mp_id` (PID 31009) copied automatically; `sender_mp_id` is the NB, or the **MSB** for 31009. |
-| **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`, PID 31005. No manual override needed. |
+| **`Sparte` drives settlement type** | `Sparte::Gas` → `SettlementType::NneGas`, `GasNEV §14`. NN-Rechnung is PID 31002 for both Sparten — the Sparte rides on `Rechnung.sparte`, not on the Prüfidentifikator. |
 | **Every position cites regulation** | `trace.legal_refs` is non-empty for every position. Enables BNetzA audit without re-calculation. |
 | **Artikelnummer on every position** | `BillingPositionKind::artikelnummer()` in this crate. Never empty. |
 | **`MmmGas` ≠ `MmmStrom`** | Separate `SettlementType` variants ensure correct legal refs (`GaBi Gas 2.1 (BK7-24-01-008)` vs `GPKE (BK6-24-174) Teil 1 Kap. 8.4`) per position. |
 | **Immutable correction chain** | `reverse()` mirrors positions, sets `status = Reversal`, links via `correction_of`. Original never mutated. |
 | **`correct()` pair** | Returns `(reversal, replacement)` — both get status set atomically; caller dispatches both. |
+| **Abschläge reduce `zuZahlen` only** | `gesamtnetto` and `gesamtsteuer` stand; §14 Abs. 5 UStG taxes an Anzahlung on receipt, so the settling invoice does not tax it again. |
+| **Cadence is a document fact** | `IMD+7081` (Turnus-, Monats-, Abschlags-, Abschluss-, Zwischenrechnung) rides on `InvoiceDocument`, not on `SettlementType`: the same settlement is the same arithmetic at any billing rhythm. |
 | **Pure functions** | All settlement functions are sync with no side effects. |
 | **`recomputed_total` guard** | `debug_assert_eq!(result.total_eur, result.recomputed_total())` inside every settlement function — catches rounding bugs in debug builds. |
 

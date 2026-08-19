@@ -1,48 +1,64 @@
 //! HTTP handlers for `netzbilanzd`.
+//!
+//! Every handler returns [`mako_service::ApiResult`], so failures render as one
+//! JSON problem body with the right status, and an internal error is logged
+//! rather than echoed. Hand-rolled `(StatusCode, e.to_string())` tuples return
+//! bare text and put database error strings — table names, constraint names,
+//! sometimes the connection string — in the response body.
+
+use std::sync::Arc;
 
 use axum::{
     Extension, Json,
     extract::{Path, Query},
     http::StatusCode,
-    response::IntoResponse,
 };
-use mako_markt::makod_client::MakodClient;
-use mako_markt::marktd_client::MarktdClient;
+use mako_markt::{makod_client::MakodClient, marktd_client::MarktdClient};
+use mako_service::{ApiError, ApiResult};
 use serde::Deserialize;
 use sqlx::PgPool;
-use std::sync::Arc;
 use uuid::Uuid;
 
-use crate::billing::{BillingPosition, BillingRunRequest, run_billing_internal};
+use crate::billing::{self, Resolver};
 use crate::config::NetzbilanzConfig;
-use crate::pg::{
-    AuditQuery, UpsertFremdkostenRequest, UpsertKostenblattRequest, approve_and_dispatch,
-    billing_history_for_malo, billing_summary, dispatch_batch, fetch_draft, fetch_fremdkosten,
-    fetch_kostenblatt, list_audit, list_drafts_pg, list_kostenblatt, list_kostenblatt_gaps,
-    mark_draft_disputed, mark_draft_paid, mark_kostenblatt_submitted, reject_draft_pg,
-    upsert_fremdkosten, upsert_kostenblatt,
-};
+use crate::pg::{self, AuditQuery, DraftFilter, InsertDraftError, NewDraft};
+use crate::request::{BillingRunRequest, SettlementRequest};
 
-// ── CloudEvent helper ─────────────────────────────────────────────────────────
+/// Shorthand for the handler's shared state.
+type Cfg = Extension<Arc<NetzbilanzConfig>>;
 
-/// Enqueue a business CloudEvent into the transactional outbox **within the
-/// caller's transaction**.
+// Every JSON request body in this service is `deny_unknown_fields`, for the
+// reason [`crate::request`] spells out: a field that is accepted and ignored is
+// a charge that silently does not happen. A misspelt `konzessionsabgabe` on a
+// GGV run drops the Konzessionsabgabe; a misspelt `dispatch_kwh_override` on a
+// Kostenblatt compute falls back to `edmd` without saying so. Query strings are
+// deliberately not strict — an unknown query parameter is a cache-buster or a
+// proxy artefact, not a missing charge.
+
+/// Positions one `POST /billing/run` may carry.
 ///
-/// The event and the domain write it represents commit together (or not at all).
-/// The [`mako_service::outbox::OutboxWorker`] drains the outbox and delivers the
-/// event to the configured ERP webhook with at-least-once semantics + signing +
-/// dead-lettering — so a webhook outage can no longer lose a domain event.
+/// A GGV building, a Turnus batch or a monthly MMM sweep all sit far below
+/// this; anything above it is a portfolio job that belongs in several runs.
+const MAX_POSITIONS_PER_RUN: usize = 1_000;
+
+// ── CloudEvents ───────────────────────────────────────────────────────────────
+
+/// Enqueue a business CloudEvent in the caller's transaction.
 ///
-/// Pass the open transaction (`&mut *tx`); gate the call on
-/// `cfg.erp_webhook_url.is_some()` at each site (no worker runs without a URL).
-async fn emit_cloud_event(
+/// The event and the write it describes commit together; the outbox worker
+/// delivers it with at-least-once semantics, signing and dead-lettering.
+async fn emit(
     conn: &mut sqlx::PgConnection,
-    tenant: &str,
+    cfg: &NetzbilanzConfig,
     ce_type: &'static str,
     payload: serde_json::Value,
 ) -> Result<(), sqlx::Error> {
+    if cfg.erp_webhook_url.is_none() {
+        // No worker runs without a URL, so enqueuing would grow the table forever.
+        return Ok(());
+    }
     let ce = mako_service::CloudEvent::new(
-        mako_service::source("netzbilanzd", tenant),
+        mako_service::source("netzbilanzd", &cfg.tenant),
         ce_type,
         String::new(),
         payload,
@@ -55,1802 +71,1345 @@ async fn emit_cloud_event(
 
 /// `POST /api/v1/billing/run`
 ///
-/// Generates invoice drafts for the given MaLos in the specified billing period.
-/// Each draft is stored with `status = 'draft'` and validated against
-/// `invoic-checker` checks 1–3 before storage.
+/// Settle every position, render each as a BO4E `Rechnung`, check it, and store
+/// it as a draft. The whole run is one transaction: invoice numbers, drafts and
+/// `invoic.drafted` events commit together, so a failed run consumes no invoice
+/// number and leaves no orphaned event.
+///
+/// # Errors
+///
+/// - `422` when a position does not describe a computable settlement.
+/// - `409` when a position's MaLo, period and Prüfidentifikator are already billed.
 pub async fn run_billing(
     Extension(pool): Extension<PgPool>,
     Extension(marktd): Extension<Arc<MarktdClient>>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Json(req): Json<BillingRunRequest>,
-) -> impl IntoResponse {
-    // The invoice INSERTs and the `invoic.drafted` outbox rows commit together:
-    // a webhook outage can no longer lose a drafted event, and a rolled-back run
-    // leaves no orphan events. `upsert_draft` is idempotent, so a retried run is
-    // safe.
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let ids =
-        match run_billing_internal(&mut tx, &marktd, &cfg.tenant, cfg.vnb_mp_id.as_deref(), req)
-            .await
-        {
-            Ok(ids) => ids,
-            Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-        };
-    if cfg.erp_webhook_url.is_some() {
-        for id in &ids {
-            if let Err(e) = emit_cloud_event(
-                &mut tx,
-                &cfg.tenant,
-                mako_events::netzbilanz::INVOIC_DRAFTED,
-                serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
-            )
-            .await
-            {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-        }
+    Extension(cfg): Cfg,
+    Json(mut req): Json<BillingRunRequest>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    if req.positions.is_empty() {
+        return Err(ApiError::bad_request("positions must not be empty"));
     }
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    // The whole run is one transaction, so its size is how long a pooled
+    // connection and the Rechnungskreis row lock are held. An unbounded run
+    // blocks every concurrent billing job behind it for as long as it takes.
+    if req.positions.len() > MAX_POSITIONS_PER_RUN {
+        return Err(ApiError::bad_request(format!(
+            "a billing run carries at most {MAX_POSITIONS_PER_RUN} positions ({} supplied) — \
+             split it; every run is one transaction",
+            req.positions.len()
+        )));
     }
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({ "draft_ids": ids })),
+    let drafted = draft_positions(
+        &pool,
+        &marktd,
+        &cfg,
+        &mut req.positions,
+        req.invoice_date,
+        req.due_date,
+        req.rechnungskreis.as_deref(),
     )
-        .into_response()
+    .await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "drafted": drafted.len(), "drafts": drafted })),
+    ))
+}
+
+/// Resolve, settle, render, check and store a batch of positions in one
+/// transaction, emitting one `invoic.drafted` event per draft.
+///
+/// The whole batch is atomic. A run that bills six of nine tenants of a §42b
+/// building and reports success is worse than one that bills none: the missing
+/// three are invisible, and re-running trips the double-billing guard on the six
+/// that did land.
+///
+/// # Errors
+///
+/// - `409` when a position's MaLo, period and Prüfidentifikator are already billed.
+/// - `422` when a position does not describe a computable settlement.
+pub async fn draft_positions(
+    pool: &PgPool,
+    marktd: &Arc<MarktdClient>,
+    cfg: &NetzbilanzConfig,
+    positions: &mut [crate::request::BillingPositionRequest],
+    invoice_date: time::Date,
+    due_date: time::Date,
+    rechnungskreis: Option<&str>,
+) -> ApiResult<Vec<serde_json::Value>> {
+    if due_date < invoice_date {
+        return Err(ApiError::unprocessable(format!(
+            "due_date {due_date} is before invoice_date {invoice_date}"
+        )));
+    }
+
+    // Auto-fetch runs before the transaction opens: it is network I/O, and
+    // holding a transaction across it pins a pooled connection for the duration
+    // of every marktd round-trip.
+    let mut resolver = Resolver::new(marktd, cfg.vnb_mp_id.as_deref());
+    for position in &mut *positions {
+        resolver
+            .resolve(position)
+            .await
+            .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+    }
+
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    let mut drafted = Vec::with_capacity(positions.len());
+
+    for position in &*positions {
+        let settlement =
+            billing::settle(position).map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+
+        let rechnungsnummer =
+            pg::next_rechnungsnummer(&mut tx, &cfg.tenant, rechnungskreis, invoice_date.year())
+                .await
+                .map_err(ApiError::Internal)?;
+
+        let abschlaege = pg::load_abschlaege(
+            &mut tx,
+            &cfg.tenant,
+            &position.malo_id,
+            &position.abschlaege,
+        )
+        .await
+        .map_err(ApiError::Internal)?
+        .map_err(|problems| {
+            ApiError::unprocessable(format!(
+                "these Abschlagsrechnungen cannot be deducted: {}",
+                problems.join("; ")
+            ))
+        })?;
+
+        let settled = billing::render_and_check(
+            settlement,
+            rechnungsnummer.clone(),
+            invoice_date,
+            due_date,
+            billing::DocumentFacts {
+                cadence: position.cadence,
+                abschlaege,
+                ..billing::DocumentFacts::default()
+            },
+        );
+        let id = store(
+            &mut tx,
+            cfg,
+            position,
+            &settled,
+            "RECHNUNG",
+            None,
+            None,
+            invoice_date,
+            due_date,
+        )
+        .await?;
+
+        emit(
+            &mut tx,
+            cfg,
+            mako_events::netzbilanz::INVOIC_DRAFTED,
+            serde_json::json!({
+                "draft_id": id,
+                "tenant": cfg.tenant,
+                "malo_id": position.malo_id,
+                "rechnungsnummer": rechnungsnummer,
+                "pid": settled.pid,
+                "check_outcome": pg::outcome_str(settled.report.outcome),
+                // What the ERP books: the gross, and what is left to collect
+                // after any Abschläge. They differ whenever the invoice settles
+                // payments already received, and an ERP given only one of them
+                // books the wrong figure.
+                "brutto_eur": settled.settlement.steuer.brutto_eur().to_string(),
+                "zu_zahlen_eur": settled.zu_zahlen_eur.to_string(),
+            }),
+        )
+        .await
+        .map_err(ApiError::from)?;
+
+        drafted.push(serde_json::json!({
+            "draft_id": id,
+            "malo_id": position.malo_id,
+            "rechnungsnummer": rechnungsnummer,
+            "pid": settled.pid,
+            "sparte": sparte_code(position.settlement.sparte()),
+            "check_outcome": pg::outcome_str(settled.report.outcome),
+            // Surfaced, not merely stored: a run that produced ten Warn drafts
+            // and said nothing is a run whose warnings nobody read.
+            "check_findings": settled.report.findings,
+            "settlement_warnings": settled.settlement.warnings,
+            "netto_eur": settled.settlement.total_eur.to_string(),
+            "steuer_eur": settled.settlement.steuer.steuer_eur.to_string(),
+            "brutto_eur": settled.settlement.steuer.brutto_eur().to_string(),
+            // What is owed after any Abschläge — the figure the payment run uses.
+            "zu_zahlen_eur": settled.zu_zahlen_eur.to_string(),
+        }));
+    }
+
+    tx.commit().await.map_err(ApiError::from)?;
+    Ok(drafted)
+}
+
+/// Persist one settled invoice, translating a double-billing conflict into 409.
+#[allow(clippy::too_many_arguments)]
+async fn store(
+    conn: &mut sqlx::PgConnection,
+    cfg: &NetzbilanzConfig,
+    position: &crate::request::BillingPositionRequest,
+    settled: &billing::SettledInvoice,
+    rechnungsart: &str,
+    original_draft_id: Option<Uuid>,
+    korrektur_grund: Option<&str>,
+    invoice_date: time::Date,
+    due_date: time::Date,
+) -> ApiResult<Uuid> {
+    let sparte = sparte_code(position.settlement.sparte());
+    let settlement_type = format!("{:?}", settled.settlement.settlement_type);
+    let draft = NewDraft {
+        tenant: &cfg.tenant,
+        malo_id: &position.malo_id,
+        sender_mp_id: &settled.settlement.sender_mp_id,
+        recipient_mp_id: &settled.settlement.recipient_mp_id,
+        pid: i32::try_from(settled.pid).unwrap_or_default(),
+        sparte,
+        settlement_type: &settlement_type,
+        period_from: position.period_from,
+        period_to: position.period_to,
+        rechnungsnummer: &settled.rechnungsnummer,
+        invoice_date,
+        due_date,
+        settlement_input: serde_json::to_value(&position.settlement)
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?,
+        rechnung: serde_json::to_value(&settled.rechnung)
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?,
+        netto_eur_units: billing::eur_units(settled.settlement.total_eur)
+            .map_err(ApiError::Internal)?,
+        steuer_eur_units: billing::eur_units(settled.settlement.steuer.steuer_eur)
+            .map_err(ApiError::Internal)?,
+        brutto_eur_units: billing::eur_units(settled.settlement.steuer.brutto_eur())
+            .map_err(ApiError::Internal)?,
+        zu_zahlen_eur_units: billing::eur_units(settled.zu_zahlen_eur)
+            .map_err(ApiError::Internal)?,
+        steuer_kategorie: settled.settlement.steuer.kategorie.code(),
+        steuer_satz_prozent: settled.settlement.steuer.satz_prozent,
+        check_outcome: settled.report.outcome,
+        check_findings: serde_json::to_value(&settled.report.findings)
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?,
+        settlement_warnings: serde_json::to_value(&settled.settlement.warnings)
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?,
+        rechnungsart,
+        original_draft_id,
+        korrektur_grund,
+    };
+    pg::insert_draft(conn, &draft).await.map_err(|e| match e {
+        InsertDraftError::AlreadyBilled
+        | InsertDraftError::AbschlagAlreadyBilled
+        | InsertDraftError::DuplicateRechnungsnummer
+        | InsertDraftError::AlreadyReversed => {
+            ApiError::conflict(format!("{} ({e})", position.malo_id))
+        }
+        InsertDraftError::Database(e) => ApiError::Internal(e),
+    })
+}
+
+/// The three amounts an invoice states, in units of 10⁻⁵ EUR.
+///
+/// Compared as a whole rather than field by field: a reversal that matches the
+/// net but not the tax is not a reversal, and asserting on one number is how
+/// that goes unnoticed.
+#[derive(Debug, PartialEq, Eq)]
+struct Totals {
+    netto: i64,
+    steuer: i64,
+    brutto: i64,
+}
+
+impl Totals {
+    /// The totals a settlement result carries.
+    fn of(settlement: &grid_billing::SettlementResult) -> anyhow::Result<Self> {
+        Ok(Self {
+            netto: billing::eur_units(settlement.total_eur)?,
+            steuer: billing::eur_units(settlement.steuer.steuer_eur)?,
+            brutto: billing::eur_units(settlement.steuer.brutto_eur())?,
+        })
+    }
+}
+
+impl std::fmt::Display for Totals {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "netto {} + Steuer {} = brutto {} EUR",
+            billing::format_eur(self.netto),
+            billing::format_eur(self.steuer),
+            billing::format_eur(self.brutto),
+        )
+    }
+}
+
+/// The `sparte` column's value for a settlement.
+const fn sparte_code(sparte: grid_billing::Sparte) -> &'static str {
+    match sparte {
+        grid_billing::Sparte::Strom => "STROM",
+        grid_billing::Sparte::Gas => "GAS",
+    }
 }
 
 // ── GET /api/v1/billing/drafts ────────────────────────────────────────────────
 
+/// Query string for the draft listing.
 #[derive(Debug, Deserialize)]
 pub struct DraftsQuery {
+    /// Lifecycle status.
     pub status: Option<String>,
+    /// MaLo-ID.
     pub malo_id: Option<String>,
-    pub nb_mp_id: Option<String>,
+    /// Issuing party.
+    pub sender_mp_id: Option<String>,
+    /// Billed party.
+    pub recipient_mp_id: Option<String>,
+    /// BDEW Prüfidentifikator.
+    pub pid: Option<i32>,
+    /// `STROM` or `GAS` — PID 31002 and 31005 are shared between the Sparten,
+    /// so the Prüfidentifikator alone cannot separate them.
+    pub sparte: Option<String>,
+    /// `invoic-checker` verdict.
+    pub check_outcome: Option<String>,
+    /// `RECHNUNG` / `STORNORECHNUNG` / `KORREKTURRECHNUNG`.
+    pub rechnungsart: Option<String>,
+    /// `next_cursor` from the previous page.
+    pub after: Option<String>,
+    /// Maximum rows (capped at 1 000).
     pub limit: Option<i64>,
 }
 
-/// `GET /api/v1/billing/drafts`
-pub async fn list_drafts(
-    Extension(pool): Extension<PgPool>,
-    Query(q): Query<DraftsQuery>,
-) -> impl IntoResponse {
-    match list_drafts_pg(
-        &pool,
-        q.status.as_deref(),
-        q.malo_id.as_deref(),
-        q.nb_mp_id.as_deref(),
-        q.limit.unwrap_or(100).min(1000),
-    )
-    .await
-    {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+/// Normalise a caller-supplied Sparte to the stored code, or refuse it.
+///
+/// `sparte=strom` and `sparte=Strom` are the same question; `sparte=STORM` is a
+/// typo that would otherwise return an empty page and read as "no gas invoices
+/// exist".
+fn sparte_filter(raw: Option<&str>) -> ApiResult<Option<&'static str>> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(v) if v.eq_ignore_ascii_case("strom") => Ok(Some("STROM")),
+        Some(v) if v.eq_ignore_ascii_case("gas") => Ok(Some("GAS")),
+        Some(other) => Err(ApiError::bad_request(format!(
+            "sparte must be Strom or Gas, not {other:?}"
+        ))),
     }
 }
 
-// ── GET /api/v1/billing/drafts/{id} ──────────────────────────────────────────
+/// Parse a page cursor, refusing a malformed one rather than silently
+/// restarting at page one — a caller walking pages would loop forever.
+fn cursor(raw: Option<&str>) -> ApiResult<Option<pg::Cursor>> {
+    match raw {
+        None => Ok(None),
+        Some(raw) => pg::Cursor::parse(raw).map(Some).ok_or_else(|| {
+            ApiError::bad_request("after must be a next_cursor from a previous page")
+        }),
+    }
+}
+
+/// The cursor that resumes after the last row of a page, if the page is full.
+///
+/// A short page is the last one, and handing back a cursor there invites one
+/// more round-trip that returns nothing.
+fn next_cursor(rows: &[pg::DraftSummaryRow], limit: i64) -> Option<String> {
+    let last = rows.last()?;
+    (i64::try_from(rows.len()).unwrap_or(i64::MAX) >= limit)
+        .then(|| pg::Cursor::encode(last.created_at, last.id))
+        .flatten()
+}
+
+/// `GET /api/v1/billing/drafts`
+///
+/// # Errors
+///
+/// Propagates database failures as 500.
+pub async fn list_drafts(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
+    Query(q): Query<DraftsQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let limit = q.limit.unwrap_or(100).clamp(1, 1_000);
+    let filter = DraftFilter {
+        status: q.status.as_deref(),
+        malo_id: q.malo_id.as_deref(),
+        sender_mp_id: q.sender_mp_id.as_deref(),
+        recipient_mp_id: q.recipient_mp_id.as_deref(),
+        pid: q.pid,
+        sparte: sparte_filter(q.sparte.as_deref())?,
+        check_outcome: q.check_outcome.as_deref(),
+        rechnungsart: q.rechnungsart.as_deref(),
+        after: cursor(q.after.as_deref())?,
+        limit,
+    };
+    let rows = pg::list_drafts(&pool, &cfg.tenant, &filter)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(serde_json::json!({
+        "count": rows.len(),
+        "next_cursor": next_cursor(&rows, limit),
+        "drafts": rows,
+    })))
+}
 
 /// `GET /api/v1/billing/drafts/{id}`
+///
+/// # Errors
+///
+/// `404` when the draft does not exist for this tenant.
 pub async fn get_draft(
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    match fetch_draft(&pool, id).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
+) -> ApiResult<Json<pg::DraftRow>> {
+    pg::fetch_draft(&pool, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+        .map(Json)
+        .ok_or(ApiError::NotFound)
 }
 
 // ── PUT /api/v1/billing/drafts/{id}/dispatch ─────────────────────────────────
 
 /// `PUT /api/v1/billing/drafts/{id}/dispatch`
 ///
-/// Validates the draft via `invoic-checker`, then dispatches it via `makod`
-/// if the check outcome is not `Dispute`.  Updates status to `dispatched`.
+/// Attaches any Fremdkosten, re-checks the document that will actually leave the
+/// house, then hands it to `makod`. The re-check runs on the amended document,
+/// not on the verdict stored at drafting time — that one describes a document
+/// the counterparty never sees.
+///
+/// # Errors
+///
+/// - `404` when the draft does not exist for this tenant.
+/// - `409` when it is no longer in `draft` status.
+/// - `422` when the checker disputes the document, or `makod` refuses it.
 pub async fn dispatch_draft(
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
+    Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
-) -> impl IntoResponse {
-    // The status→dispatched UPDATE and the `invoic.dispatched` outbox row commit
-    // atomically. If enqueue/commit fails the dispatch is rolled back (status
-    // stays 'draft'); makod's own idempotency key dedups a re-dispatch.
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    match approve_and_dispatch(&mut tx, &makod, id).await {
-        Ok(ref_id) => {
-            if cfg.erp_webhook_url.is_some()
-                && let Err(e) = emit_cloud_event(
-                    &mut tx,
-                    &cfg.tenant,
-                    mako_events::netzbilanz::INVOIC_DISPATCHED,
-                    serde_json::json!({ "draft_id": id, "dispatch_ref": ref_id, "tenant": cfg.tenant }),
-                )
-                .await
-            {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({ "dispatch_ref": ref_id })),
-            )
-                .into_response()
-        }
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+) -> ApiResult<Json<serde_json::Value>> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    let outcome = dispatch_one(&mut tx, &makod, &cfg, id).await?;
+    emit(
+        &mut tx,
+        &cfg,
+        mako_events::netzbilanz::INVOIC_DISPATCHED,
+        serde_json::json!({
+            "draft_id": id,
+            "tenant": cfg.tenant,
+            "dispatch_ref": outcome.dispatch_ref,
+            "rechnungsnummer": outcome.rechnungsnummer,
+        }),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    tx.commit().await.map_err(ApiError::from)?;
+
+    Ok(Json(serde_json::json!({
+        "draft_id": id,
+        "status": "dispatched",
+        "dispatch_ref": outcome.dispatch_ref,
+        "rechnungsnummer": outcome.rechnungsnummer,
+        "check_outcome": outcome.check_outcome,
+    })))
+}
+
+/// What a successful dispatch produced.
+struct DispatchOutcome {
+    dispatch_ref: String,
+    rechnungsnummer: String,
+    check_outcome: &'static str,
+}
+
+/// Validate, amend and dispatch one draft inside an open transaction.
+async fn dispatch_one(
+    conn: &mut sqlx::PgConnection,
+    makod: &MakodClient,
+    cfg: &NetzbilanzConfig,
+    id: Uuid,
+) -> ApiResult<DispatchOutcome> {
+    let row = pg::fetch_draft(&mut *conn, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound)?;
+
+    if row.status != "draft" {
+        return Err(ApiError::conflict(format!(
+            "draft is already {}",
+            row.status
+        )));
+    }
+
+    let mut rechnung: rubo4e::current::Rechnung = serde_json::from_value(row.rechnung.clone())
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e).context("stored Rechnung")))?;
+
+    // BO4E models external cost pass-through as a first-class `fremdkosten`
+    // field. It does not need to travel as a free-text ZusatzAttribut, and the
+    // LF's own parser reads the typed field.
+    if let Some(fk) = pg::fetch_fremdkosten(&mut *conn, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        let typed: rubo4e::current::Fremdkosten = serde_json::from_value(fk.fremdkosten_json)
+            .map_err(|e| ApiError::Internal(anyhow::Error::new(e).context("stored Fremdkosten")))?;
+        rechnung.fremdkosten = Some(Box::new(typed));
+    }
+
+    let pid = u32::try_from(row.pid).unwrap_or_default();
+    let report = billing::check(&rechnung, &row.sender_mp_id, pid);
+    if report.outcome == invoic_checker::CheckOutcome::Dispute {
+        return Err(ApiError::unprocessable(format!(
+            "invoic-checker disputes this invoice — fix it before dispatching: {}",
+            report
+                .findings
+                .iter()
+                .filter(|f| f.is_dispute)
+                .map(|f| f.message.as_str())
+                .collect::<Vec<_>>()
+                .join("; ")
+        )));
+    }
+
+    let command = makod_command(pid, &row.sparte)?;
+    let payload =
+        serde_json::to_value(&rechnung).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    let accepted = makod
+        .post_command(
+            &format!("netzbilanzd-invoic-{id}"),
+            &mako_markt::makod_client::ForwardCommand {
+                command: command.to_owned(),
+                marktrolle: Some(marktrolle_for(pid, &row.sparte).to_owned()),
+                malo_id: Some(row.malo_id.clone()),
+                melo_id: None,
+                payload: serde_json::json!({
+                    // The business key the inbound REMADV correlates on. It has
+                    // to be the number printed on the document the counterparty
+                    // received, and makod rejects the command without it.
+                    "invoice_ref":     row.rechnungsnummer,
+                    "sender_mp_id":    row.sender_mp_id,
+                    "recipient_mp_id": row.recipient_mp_id,
+                    "pid":             pid,
+                    "sparte":          row.sparte,
+                    "rechnung":        payload,
+                }),
+            },
+        )
+        .await
+        .map_err(|e| {
+            tracing::warn!(error = %e, %id, "netzbilanzd: makod refused the INVOIC");
+            ApiError::Unprocessable(format!("dispatch to makod failed: {e}"))
+        })?;
+
+    let dispatch_ref = accepted.process_id.to_string();
+    let stored =
+        serde_json::to_value(&rechnung).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    let findings = serde_json::to_value(&report.findings)
+        .map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
+    // The stored document is now the dispatched one, so the stored verdict has
+    // to be the verdict on *it*. Keeping the drafting verdict beside an amended
+    // document would describe something that was never sent.
+    if !pg::mark_dispatched(
+        &mut *conn,
+        &cfg.tenant,
+        id,
+        &dispatch_ref,
+        &stored,
+        report.outcome,
+        &findings,
+    )
+    .await
+    .map_err(ApiError::Internal)?
+    {
+        return Err(ApiError::conflict("draft changed status concurrently"));
+    }
+
+    Ok(DispatchOutcome {
+        dispatch_ref,
+        rechnungsnummer: row.rechnungsnummer,
+        check_outcome: pg::outcome_str(report.outcome),
+    })
+}
+
+/// The `makod` command that carries a given Prüfidentifikator and Sparte.
+///
+/// NN-Rechnung Strom and Gas share PID 31002 but not the command: the Gas one is
+/// permitted for the `GNB` role, so a gas network operator's deployment would be
+/// refused the Strom command on role grounds alone.
+fn makod_command(pid: u32, sparte: &str) -> ApiResult<&'static str> {
+    match (pid, sparte) {
+        // A payment on account. One command for both Sparten: the Abschlag
+        // prices no energy, so nothing about it is Sparte-specific.
+        (31001, _) => Ok("gpke.nne-abschlag.rechnung.stellen"),
+        (31002, "GAS") => Ok("gpke.nne-gas.rechnung.stellen"),
+        (31002, _) => Ok("gpke.nne.rechnung.stellen"),
+        (31005, _) => Ok("gpke.mmm.rechnung.stellen"),
+        (31009, _) => Ok("wim.msb-rechnung.stellen"),
+        // BK7-24-01-009 §5.4 — the GNB bills the LFG for abrechnungswürdige
+        // Handlungen performed during the Sperrprozess.
+        (31011, _) => Ok("geli.gas.awh-rechnung.stellen"),
+        (other, _) => Err(ApiError::Internal(anyhow::anyhow!(
+            "no makod command for Prüfidentifikator {other}"
+        ))),
+    }
+}
+
+/// Which market role issues a given Prüfidentifikator and Sparte.
+///
+/// For a command permitted to more than one role, `makod` checks the assertion
+/// against the deployment's licensed roles. Three of the six here are permitted
+/// to `NB` **and** `GNB` (Abschlag, NN-Rechnung Gas, GeLi Gas AWH), so a gas
+/// invoice asserts `GNB`: a `--marktrollen GNB` deployment is the only kind that
+/// issues those three, and asserting `NB` fails its licence check. Picking the
+/// Gas *command* is only half of it; the role follows the Sparte too.
+///
+/// PID 31009 is the other direction: the Messstellenbetreiber issues it in all
+/// seven of its Anwendungsfälle, so the assertion is `MSB` regardless of Sparte.
+fn marktrolle_for(pid: u32, sparte: &str) -> &'static str {
+    match (pid, sparte) {
+        (31009, _) => "MSB",
+        // 31011 is Gas by construction; 31001 and 31002 carry both Sparten.
+        (31011, _) | (_, "GAS") => "GNB",
+        _ => "NB",
     }
 }
 
 // ── PUT /api/v1/billing/drafts/{id}/reject ───────────────────────────────────
 
+/// Request body for a rejection.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RejectRequest {
+    /// Why the operator is discarding the draft.
     pub reason: String,
 }
 
 /// `PUT /api/v1/billing/drafts/{id}/reject`
+///
+/// # Errors
+///
+/// `404` when the draft does not exist for this tenant or is no longer a draft.
 pub async fn reject_draft(
     Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<RejectRequest>,
-) -> impl IntoResponse {
-    match reject_draft_pg(&pool, id, &req.reason).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+) -> ApiResult<StatusCode> {
+    if req.reason.trim().is_empty() {
+        return Err(ApiError::bad_request("reason must not be empty"));
     }
-}
-
-// ── N6: MMM auto-run (Mehr-/Mindermenge claim automation) ────────────────────
-
-/// Request body for `POST /api/v1/billing/mmm-run/{malo_id}`.
-#[derive(Debug, Deserialize)]
-pub struct MmmAutoRunRequest {
-    pub nb_mp_id: String,
-    pub lf_mp_id: String,
-    /// Billing year (calendar year).
-    pub period_year: i32,
-    /// Billing month (1–12).
-    pub period_month: u8,
-    /// Invoice issue date (`YYYY-MM-DD`). Defaults to today.
-    pub invoice_date: Option<String>,
-    /// Payment due date (`YYYY-MM-DD`). Defaults to 30 days after invoice_date.
-    pub due_date: Option<String>,
-    /// Rechnungsnummer prefix (auto-generated when absent).
-    pub rechnungsnummer_prefix: Option<String>,
-    /// Override: supply Mehrmengen price ct/kWh instead of auto-fetching from marktd.
-    pub mehr_preis_ct_per_kwh: Option<rust_decimal::Decimal>,
-    /// Override: supply Mindermengen price ct/kWh instead of auto-fetching from marktd.
-    pub minder_preis_ct_per_kwh: Option<rust_decimal::Decimal>,
-    /// SLP Lastprofil designation (e.g. "H0"). Auto-derived from marktd when absent.
-    pub lastprofil: Option<String>,
-    /// The **bilanzierte** (profile-allocated) quantity for the month, in kWh.
-    ///
-    /// Required. The Mehr-/Mindermengensaldo compares this against the measured
-    /// quantity, and only the measured half is a metering figure: the
-    /// bilanzierte Menge is what the Bilanzkreis was charged from the load
-    /// profile, which lives on the balancing side, not in `edmd`.
-    ///
-    /// This used to be read out of edmd\'s imbalance response as
-    /// `nb_quantity_kwh` — a field that held the *measured* total under a
-    /// balancing name, so the profile and the measurement were the same number
-    /// and the saldo was structurally zero.
-    pub bilanziert_kwh: rust_decimal::Decimal,
-}
-
-/// `POST /api/v1/billing/mmm-run/{malo_id}`
-///
-/// **Automatic Mehr-/Mindermenge (MMM) billing — N6 (hard cut).**
-///
-/// Operators need only supply `nb_mp_id`, `lf_mp_id`, `period_year`,
-/// `period_month`.  Everything else is auto-fetched:
-///
-/// - `arbeitsmenge_kwh` (the measured quantity) ←
-///   `edmd GET /api/v1/imbalance/{malo_id}/{year}/{month}?bilanziert_kwh=…`
-/// - `profil_kwh` ← the caller\'s `bilanziert_kwh`, echoed back by edmd
-/// - `mehr_preis` / `minder_preis` ← `marktd GET /api/v1/mmm-preise/strom/{year}/{month}`
-///   (when not overridden in request)
-///
-/// Both halves of the saldo are now supplied. The position used to be built with
-/// `arbeitsmenge_kwh: None`, which `run_billing_internal` rejects outright
-/// ("arbeitsmenge_kwh (actual) required for MMM") — so this endpoint could not
-/// complete a single run.
-///
-/// Then runs `run_billing_internal` → INVOIC 31002 draft + self-validation.
-pub async fn post_mmm_auto_run(
-    Extension(pool): Extension<PgPool>,
-    Extension(marktd): Extension<Arc<MarktdClient>>,
-    Extension(cfg): Extension<Arc<crate::config::NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
-    Path(malo_id): Path<String>,
-    Json(req): Json<MmmAutoRunRequest>,
-) -> impl IntoResponse {
-    use rust_decimal::Decimal;
-    use time::{Date, Month};
-
-    // ── Fetch imbalance from edmd ─────────────────────────────────────────────
-    let edmd_url = match cfg.edmd_url.as_deref() {
-        Some(u) => u.trim_end_matches('/').to_owned(),
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "edmd_url not configured in netzbilanzd.toml",
-            )
-                .into_response();
-        }
-    };
-
-    let url = format!(
-        "{edmd_url}/api/v1/imbalance/{}/{}/{}?bilanziert_kwh={}",
-        malo_id, req.period_year, req.period_month, req.bilanziert_kwh
-    );
-    let mut http_req = http_client.get(&url);
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        http_req = http_req.bearer_auth(key);
-    }
-
-    let imbalance_body: serde_json::Value = match http_req.send().await {
-        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
-            return (
-                StatusCode::NOT_FOUND,
-                format!(
-                    "no edmd imbalance for MaLo {malo_id} {}/{}",
-                    req.period_year, req.period_month
-                ),
-            )
-                .into_response();
-        }
-        Ok(r) if !r.status().is_success() => {
-            return (StatusCode::BAD_GATEWAY, format!("edmd: {}", r.status())).into_response();
-        }
-        Ok(r) => r.json().await.unwrap_or_default(),
-        Err(e) => return (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-    };
-
-    let decimal_field = |key: &str| -> Option<Decimal> {
-        imbalance_body.get(key).and_then(|v| {
-            v.as_str()
-                .and_then(|s| s.parse().ok())
-                .or_else(|| v.as_f64().and_then(|f| Decimal::try_from(f).ok()))
-        })
-    };
-    // The measured half comes from edmd; the bilanzierte half is the caller\'s,
-    // echoed back so the invoice records the pair edmd actually compared.
-    let Some(gemessen_kwh) = decimal_field("gemessen_kwh") else {
-        return (
-            StatusCode::BAD_GATEWAY,
-            "edmd imbalance response carries no `gemessen_kwh`",
-        )
-            .into_response();
-    };
-    let profil_kwh = decimal_field("bilanziert_kwh").unwrap_or(req.bilanziert_kwh);
-
-    if gemessen_kwh == Decimal::ZERO && profil_kwh == Decimal::ZERO {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "both the measured and the bilanzierte quantity are zero — nothing to settle",
-        )
-            .into_response();
-    }
-
-    // ── Build dates ───────────────────────────────────────────────────────────
-    let today = time::OffsetDateTime::now_utc().date().to_string();
-    let invoice_date = req.invoice_date.clone().unwrap_or_else(|| today.clone());
-    let due_date = req.due_date.clone().unwrap_or_else(|| {
-        (time::OffsetDateTime::now_utc() + time::Duration::days(30))
-            .date()
-            .to_string()
-    });
-    let period_from = format!("{:04}-{:02}-01", req.period_year, req.period_month);
-    let period_to = {
-        let m = Month::try_from(req.period_month).unwrap_or(Month::December);
-        let last = if req.period_month == 12 {
-            Date::from_calendar_date(req.period_year + 1, Month::January, 1)
-                .map(|d| d.previous_day().unwrap_or(d))
-        } else {
-            Date::from_calendar_date(
-                req.period_year,
-                Month::try_from(req.period_month + 1).unwrap(),
-                1,
-            )
-            .map(|d| d.previous_day().unwrap_or(d))
-        };
-        last.unwrap_or_else(|_| Date::from_calendar_date(req.period_year, m, 28).unwrap())
-            .to_string()
-    };
-    let prefix = req.rechnungsnummer_prefix.clone().unwrap_or_else(|| {
-        format!(
-            "MMM-{malo_id}-{:04}-{:02}",
-            req.period_year, req.period_month
-        )
-    });
-
-    let billing_req = BillingRunRequest {
-        nb_mp_id: req.nb_mp_id.clone(),
-        lf_mp_id: req.lf_mp_id.clone(),
-        invoice_date,
-        due_date,
-        rechnungsnummer_prefix: prefix,
-        positions: vec![BillingPosition {
-            malo_id: malo_id.clone(),
-            period_from,
-            period_to,
-            billing_type: "mmm".to_owned(),
-            arbeitsmenge_kwh: Some(gemessen_kwh),
-            arbeitspreis_ct_per_kwh: None,
-            arbeitsmenge_ht_kwh: None,
-            arbeitspreis_ht_ct_per_kwh: None,
-            arbeitsmenge_nt_kwh: None,
-            arbeitspreis_nt_ct_per_kwh: None,
-            spitzenleistung_kw: None,
-            leistungspreis_eur_per_kw: None,
-            ka_satz_ct_per_kwh: None,
-            profil_kwh: Some(profil_kwh),
-            mehr_preis_ct_per_kwh: req.mehr_preis_ct_per_kwh,
-            minder_preis_ct_per_kwh: req.minder_preis_ct_per_kwh,
-            lastprofil: req.lastprofil.clone(),
-            msb_mp_id: None,
-            msb_empfaenger_rolle: None,
-            msb_empfaenger_mp_id: None,
-            grundgebuehr_eur_per_month: None,
-            billing_months: None,
-            messdienstleistung_eur: None,
-        }],
-    };
-
-    // MMM auto-run does not emit a CloudEvent, so no outbox transaction is
-    // needed — run the billing on a plain pooled connection (each draft INSERT
-    // autocommits, as before).
-    let mut conn = match pool.acquire().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    match run_billing_internal(
-        &mut conn,
-        &marktd,
-        &cfg.tenant,
-        cfg.vnb_mp_id.as_deref(),
-        billing_req,
-    )
-    .await
-    {
-        Ok(draft_ids) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "draft_ids": draft_ids,
-                "malo_id": malo_id,
-                "period_year": req.period_year,
-                "period_month": req.period_month,
-                "profil_kwh_from_edmd": profil_kwh,
-                "source": "edmd_auto",
-            })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    }
-}
-
-// ── N4: Kostenblatt REST API (Redispatch 2.0, BK6-20-061) ────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct KostenblattListQuery {
-    pub year: i16,
-    pub month: i16,
-    pub status: Option<String>,
-}
-
-/// `PUT /api/v1/redispatch/kostenblatt/{activation_id}`
-///
-/// Create or update a Kostenblatt entry for a Redispatch 2.0 activation.
-///
-/// `einsatzkosten_eur = dispatch_kwh × arbeitspreis_eur_per_kwh` is stored as
-/// a generated column.  `kosten_json` optionally carries the full typed
-/// `rubo4e::current::Kosten` payload for CIM XML export.
-pub async fn put_kostenblatt(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path(activation_id): Path<String>,
-    Json(req): Json<UpsertKostenblattRequest>,
-) -> impl IntoResponse {
-    // Validate the optional payload by typed round-trip — the stored JSON must
-    // actually be a `rubo4e::current::Kosten`, not merely claim to be one.
-    if let Some(kosten_json) = &req.kosten_json
-        && let Err(e) = serde_json::from_value::<rubo4e::current::Kosten>(kosten_json.clone())
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("invalid Kosten payload: {e}"),
-        )
-            .into_response();
-    }
-    let einsatzkosten = req.dispatch_kwh * req.arbeitspreis_eur_per_kwh;
-    match upsert_kostenblatt(&pool, &cfg.tenant, &activation_id, &req).await {
-        Ok(id) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": id,
-                "activation_id": activation_id,
-                "einsatzkosten_eur": einsatzkosten.to_string(),
-            })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /api/v1/redispatch/kostenblatt/{activation_id}`
-pub async fn get_kostenblatt(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path(activation_id): Path<String>,
-) -> impl IntoResponse {
-    match fetch_kostenblatt(&pool, &activation_id, &cfg.tenant).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /api/v1/redispatch/kostenblatt?year=&month=&status=`
-///
-/// List Kostenblatt records for a billing period.
-/// `?status=pending` → records due for 15th-of-month submission.
-pub async fn list_kostenblatt_handler(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Query(q): Query<KostenblattListQuery>,
-) -> impl IntoResponse {
-    match list_kostenblatt(&pool, &cfg.tenant, q.year, q.month, q.status.as_deref()).await {
-        Ok(rows) => Json(rows).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `POST /api/v1/redispatch/kostenblatt/submit/{year}/{month}`
-///
-/// Mark all `pending` Kostenblatt records for the month as `submitted` and
-/// return the aggregated summary for ERP / manual ÜNB submission.
-///
-/// **BK6-20-061:** Kostenblatt due 15th of following month.
-/// The operator reviews the summary and dispatches the CIM XML to the ÜNB
-/// via `makod` or direct AS4.
-pub async fn post_submit_kostenblatt(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path((year, month)): Path<(i16, i16)>,
-) -> impl IntoResponse {
-    use rust_decimal::Decimal;
-
-    let pending = match list_kostenblatt(&pool, &cfg.tenant, year, month, Some("pending")).await {
-        Ok(r) => r,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    if pending.is_empty() {
-        return (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "submitted": 0,
-                "message": format!("no pending Kostenblatt records for {year}-{month:02}"),
-            })),
-        )
-            .into_response();
-    }
-
-    let mut submitted = 0u32;
-    let mut total_einsatzkosten = Decimal::ZERO;
-    let mut summaries: Vec<serde_json::Value> = Vec::new();
-
-    for record in &pending {
-        let einsatzkosten = record
-            .einsatzkosten_eur
-            .unwrap_or_else(|| record.dispatch_kwh * record.arbeitspreis_eur_per_kwh);
-        total_einsatzkosten += einsatzkosten;
-
-        // Mark as submitted (dispatch ref = auto-generated ref for ÜNB)
-        let dispatch_ref = format!(
-            "KB-{year}-{month:02}-{}",
-            &record.activation_id[..record.activation_id.len().min(8)]
-        );
-        let _ = mark_kostenblatt_submitted(&pool, record.id, &dispatch_ref).await;
-        submitted += 1;
-
-        summaries.push(serde_json::json!({
-            "activation_id": record.activation_id,
-            "tr_id": record.tr_id,
-            "dispatch_kwh": record.dispatch_kwh,
-            "einsatzkosten_eur": einsatzkosten,
-            "dispatch_ref": dispatch_ref,
-        }));
-    }
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "submitted": submitted,
-            "total_einsatzkosten_eur": total_einsatzkosten.to_string(),
-            "period": format!("{year}-{month:02}"),
-            "positions": summaries,
-        })),
-    )
-        .into_response()
-}
-
-// ── N5: Kostenblatt edmd auto-compute (Redispatch 2.0, BK6-20-061) ────────────
-
-/// Request body for
-/// `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`.
-///
-/// The endpoint auto-fetches the dispatched energy quantity from `edmd` using
-/// the activation window, computes `Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh`,
-/// generates a typed BO4E `Kosten`/`KostenBlock`/`KostenPosition` JSON payload,
-/// and upserts the Kostenblatt record.
-///
-/// ## Energy source priority (BK6-20-061 §4.2)
-///
-/// 1. `dispatch_kwh_override` — manual operator value (bypasses edmd entirely)
-/// 2. **`edmd Lastgang sum`** — sum of 15-min intervals in the exact activation window
-///    (most precise; mandatory for short activations; source = `"lastgang_sum"`)
-/// 3. `edmd billing-period` — monthly aggregate fallback when Lastgang absent
-///    (source = `"billing_period"`; triggers a warning log)
-///
-/// For a 15-minute Redispatch activation, using the monthly billing-period
-/// aggregate would give the wrong value by several orders of magnitude.
-/// The Lastgang sum is the correct BK6-20-061 §4.2 approach.
-#[derive(Debug, serde::Deserialize)]
-pub struct KostenblattComputeRequest {
-    /// `TechnischeRessource`-ID of the dispatched resource.
-    pub tr_id: String,
-    /// 11-digit MaLo-ID of the resource's grid connection point.
-    pub malo_id: String,
-    /// Calendar year of the activation month (for Kostenblatt period).
-    pub period_year: i16,
-    /// Calendar month of the activation (1–12).
-    pub period_month: i16,
-    /// ÜNB MP-ID receiving the Kostenblatt.
-    pub uenb_mp_id: String,
-    /// VNB MP-ID (sender).
-    pub vnb_mp_id: String,
-    /// UTC activation start — RFC 3339 e.g. `"2026-01-15T10:00:00Z"`.
-    pub activation_start_utc: String,
-    /// UTC activation end — RFC 3339 e.g. `"2026-01-15T10:15:00Z"`.
-    pub activation_end_utc: String,
-    /// Contract rate EUR/kWh from the Redispatch 2.0 bilateral agreement.
-    pub arbeitspreis_eur_per_kwh: rust_decimal::Decimal,
-    /// Manual override for `dispatch_kwh`.  When set, `edmd` is **not** queried.
-    /// Use when the operator has a verified meter reading outside `edmd`.
-    pub dispatch_kwh_override: Option<rust_decimal::Decimal>,
-}
-
-/// `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`
-///
-/// **N5 — Redispatch Kostenblatt energy-quantity link (BK6-20-061 §4.2).**
-///
-/// Steps:
-/// 1. Parse + validate the activation window (RFC 3339 UTC timestamps).
-/// 2. Fetch dispatched energy from `edmd Lastgang` (15-min sum — primary) or
-///    `edmd billing-period` (monthly aggregate — fallback).
-///    Override with `dispatch_kwh_override` to skip edmd entirely.
-/// 3. Compute `Einsatzkosten = dispatch_kwh × arbeitspreis_eur_per_kwh`.
-/// 4. Build typed BO4E `Kosten`/`KostenBlock`/`KostenPosition` JSON for CIM export.
-/// 5. Upsert the `kostenblatt_records` row (idempotent on `activation_id` + `tr_id`).
-/// 6. Emit `de.netzbilanz.kostenblatt.computed` CloudEvent.
-///
-/// Stores `activation_start_utc`, `activation_end_utc`, and `dispatch_source`
-/// for audit trail and re-computation capability.
-///
-/// Returns `503` when `edmd_url` is not configured and no override is supplied.
-#[allow(clippy::too_many_lines)]
-pub async fn post_kostenblatt_compute(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<crate::config::NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
-    Path(activation_id): Path<String>,
-    Json(req): Json<KostenblattComputeRequest>,
-) -> impl IntoResponse {
-    use rust_decimal::Decimal;
-    use time::format_description::well_known::Rfc3339;
-
-    // Parse activation window to typed OffsetDateTime for DB storage and validation.
-    let activation_start = match time::OffsetDateTime::parse(&req.activation_start_utc, &Rfc3339) {
-        Ok(t) => t,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "invalid activation_start_utc '{}' — expected RFC 3339 e.g. '2026-01-15T10:00:00Z'",
-                    req.activation_start_utc
-                ),
-            )
-                .into_response();
-        }
-    };
-    let activation_end = match time::OffsetDateTime::parse(&req.activation_end_utc, &Rfc3339) {
-        Ok(t) => t,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                format!(
-                    "invalid activation_end_utc '{}' — expected RFC 3339 e.g. '2026-01-15T10:15:00Z'",
-                    req.activation_end_utc
-                ),
-            )
-                .into_response();
-        }
-    };
-    if activation_end <= activation_start {
-        return (
-            StatusCode::BAD_REQUEST,
-            "activation_end_utc must be strictly after activation_start_utc",
-        )
-            .into_response();
-    }
-
-    // ── Step 1: Resolve dispatch_kwh (Lastgang → billing-period → override) ──
-    //
-    // Priority order per BK6-20-061 §4.2:
-    //   1. `dispatch_kwh_override` — operator-supplied (e.g. from manual meter read)
-    //   2. `edmd Lastgang sum`     — sum of 15-min intervals in activation window
-    //                                (most precise; covers short activations correctly)
-    //   3. `edmd billing-period`   — monthly aggregate (fallback when Lastgang absent)
-    //
-    // For a 15-minute Redispatch activation, using the billing-period monthly
-    // aggregate would massively over-count (e.g. 2,500 kWh/month ≠ 2.5 kWh/15min).
-    // The Lastgang sum over the exact window is the correct approach.
-    let (dispatch_kwh, dispatch_source) = if let Some(override_kwh) = req.dispatch_kwh_override {
-        (override_kwh, "manual_override")
-    } else {
-        let edmd_url = match cfg.edmd_url.as_deref() {
-            Some(u) => u.trim_end_matches('/').to_owned(),
-            None => {
-                return (
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "edmd_url not configured in netzbilanzd.toml — supply dispatch_kwh_override \
-                     or configure [edmd] url in netzbilanzd.toml",
-                )
-                    .into_response();
-            }
-        };
-
-        // ── Primary: Lastgang 15-min interval sum ────────────────────────────
-        let lastgang_kwh =
-            fetch_dispatch_kwh_from_lastgang(&http_client, &edmd_url, &req.malo_id, &cfg, &req)
-                .await;
-
-        if let Some(kwh) = lastgang_kwh {
-            (kwh, "lastgang_sum")
-        } else {
-            // ── Fallback: billing-period aggregate ───────────────────────────
-            // Only useful when Lastgang data is absent (e.g. SLP metering or
-            // data not yet ingested).  Uses activation_start date as period key.
-            let period_date = activation_start.date().to_string(); // YYYY-MM-DD
-            let bp_url = format!(
-                "{edmd_url}/api/v1/billing-period/{}?from={}&to={}",
-                req.malo_id, period_date, period_date
-            );
-            let mut bp_req = http_client.get(&bp_url);
-            if let Some(key) = cfg.edmd_api_key.as_deref() {
-                bp_req = bp_req.bearer_auth(key);
-            }
-            let bp_kwh = match bp_req.send().await {
-                Ok(r) if r.status().is_success() => {
-                    let body: serde_json::Value = r.json().await.unwrap_or_default();
-                    body.get("arbeitsmenge_kwh")
-                        .and_then(decimal_from_json_value)
-                        .filter(|&v| v > Decimal::ZERO)
-                }
-                _ => None,
-            };
-            match bp_kwh {
-                Some(kwh) => {
-                    tracing::warn!(
-                        malo_id = %req.malo_id,
-                        activation_start = %req.activation_start_utc,
-                        "N5 Kostenblatt: Lastgang empty — using billing-period aggregate as fallback. \
-                         Monthly total, not window-specific. Verify meter data in edmd."
-                    );
-                    (kwh, "billing_period")
-                }
-                None => {
-                    return (
-                        StatusCode::NOT_FOUND,
-                        format!(
-                            "no Lastgang or billing-period data for MaLo {} in activation \
-                             window {} / {}. Ingest Redispatch MSCONS (PIDs 13020–13023, 13026) or \
-                             supply dispatch_kwh_override.",
-                            req.malo_id, req.activation_start_utc, req.activation_end_utc
-                        ),
-                    )
-                        .into_response();
-                }
-            }
-        }
-    };
-
-    if dispatch_kwh <= Decimal::ZERO {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "dispatch_kwh is zero for MaLo {} — no energy data recorded for the activation \
-                 window. Check edmd Lastgang or supply dispatch_kwh_override.",
-                req.malo_id
-            ),
-        )
-            .into_response();
-    }
-
-    let einsatzkosten_eur = dispatch_kwh * req.arbeitspreis_eur_per_kwh;
-
-    // ── Step 2: Build typed BO4E Kosten/KostenBlock/KostenPosition JSON ───────
-    //
-    // Maps to `rubo4e::current::Kosten` + nested types.
-    // Stored as JSONB for CIM XML export; format follows BO4E v202607.
-    let kosten_json = serde_json::json!({
-        "_typ": "KOSTEN",
-        "summe": [{
-            "_typ": "KOSTENBLOCK",
-            "kostenblockbezeichnung": "Redispatch 2.0 Einsatzkosten",
-            "kostenpositionen": [{
-                "_typ": "KOSTENPOSITION",
-                "positionsbezeichnung": "Arbeitspreis Redispatch",
-                "artikelId": req.tr_id,
-                "menge": {
-                    "_typ": "MENGE",
-                    "wert": dispatch_kwh.to_string(),
-                    "einheit": "KWH"
-                },
-                "einzelpreis": {
-                    "_typ": "PREIS",
-                    "wert": req.arbeitspreis_eur_per_kwh.to_string(),
-                    "einheit": "EUR"
-                },
-                "betragKostenstelle": {
-                    "_typ": "BETRAG",
-                    "wert": einsatzkosten_eur.to_string(),
-                    "waehrung": "EUR"
-                },
-                "zeitraum": {
-                    "_typ": "ZEITRAUM",
-                    "startdatum": req.activation_start_utc,
-                    "enddatum": req.activation_end_utc
-                }
-            }]
-        }],
-        "aktivierungszeitraum": {
-            "_typ": "ZEITRAUM",
-            "startdatum": req.activation_start_utc,
-            "enddatum": req.activation_end_utc
-        },
-        "dispatchSource": dispatch_source
-    });
-
-    // ── Step 3: Upsert the Kostenblatt record (idempotent on activation_id + tr_id) ──
-    let upsert_req = UpsertKostenblattRequest {
-        tr_id: req.tr_id.clone(),
-        malo_id: Some(req.malo_id.clone()),
-        period_year: req.period_year,
-        period_month: req.period_month,
-        uenb_mp_id: req.uenb_mp_id.clone(),
-        vnb_mp_id: req.vnb_mp_id.clone(),
-        dispatch_kwh,
-        arbeitspreis_eur_per_kwh: req.arbeitspreis_eur_per_kwh,
-        kosten_json: Some(kosten_json),
-        activation_start_utc: Some(activation_start),
-        activation_end_utc: Some(activation_end),
-        dispatch_source: Some(dispatch_source.to_owned()),
-    };
-
-    // ── Step 3+4: Upsert + emit atomically via the transactional outbox ───────
-    // The Kostenblatt row and the `kostenblatt.computed` outbox row commit
-    // together (idempotent upsert, so a retried compute is safe).
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let record_id =
-        match upsert_kostenblatt(&mut *tx, &cfg.tenant, &activation_id, &upsert_req).await {
-            Ok(id) => id,
-            Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-        };
-
-    if cfg.erp_webhook_url.is_some()
-        && let Err(e) = emit_cloud_event(
-            &mut tx,
-            &cfg.tenant,
-            mako_events::netzbilanz::KOSTENBLATT_COMPUTED,
-            serde_json::json!({
-                "record_id":              record_id,
-                "activation_id":          activation_id,
-                "tr_id":                  req.tr_id,
-                "malo_id":                req.malo_id,
-                "period_year":            req.period_year,
-                "period_month":           req.period_month,
-                "dispatch_kwh":           dispatch_kwh.to_string(),
-                "arbeitspreis_eur_per_kwh": req.arbeitspreis_eur_per_kwh.to_string(),
-                "einsatzkosten_eur":      einsatzkosten_eur.to_string(),
-                "dispatch_source":        dispatch_source,
-                "activation_start_utc":   req.activation_start_utc,
-                "activation_end_utc":     req.activation_end_utc,
-            }),
-        )
+    if pg::reject_draft(&pool, &cfg.tenant, id, &req.reason)
         .await
+        .map_err(ApiError::Internal)?
     {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
-
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-    }
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "id":                       record_id,
-            "activation_id":            activation_id,
-            "tr_id":                    req.tr_id,
-            "malo_id":                  req.malo_id,
-            "dispatch_kwh":             dispatch_kwh.to_string(),
-            "arbeitspreis_eur_per_kwh": req.arbeitspreis_eur_per_kwh.to_string(),
-            "einsatzkosten_eur":        einsatzkosten_eur.to_string(),
-            "dispatch_source":          dispatch_source,
-            "activation_start_utc":     req.activation_start_utc,
-            "activation_end_utc":       req.activation_end_utc,
-        })),
-    )
-        .into_response()
-}
-
-/// Fetch the total dispatched energy (kWh) for an activation window from edmd Lastgang.
-///
-/// Calls `GET /api/v1/lastgang/{malo_id}?from={start}&to={end}` and deserialises
-/// the response as the shape edmd actually emits: `Vec<rubo4e::current::Lastgang>`
-/// (one entry per OBIS group), each carrying its interval values under
-/// `werte: Vec<Zeitreihenwert>` with `wert` (kWh) and `zeitraum` (interval bounds).
-///
-/// Values are additionally filtered to the activation window via each value's
-/// `zeitraum` where present (defensive — edmd already filters server-side by
-/// `from`/`to`); values without a parseable `zeitraum` are trusted as-is.
-///
-/// Returns `None` when the Lastgang endpoint returns 404, a non-2xx status, an
-/// unparseable body, or a sum of zero — the caller falls back to the
-/// billing-period aggregate in that case.
-async fn fetch_dispatch_kwh_from_lastgang(
-    client: &reqwest::Client,
-    edmd_url: &str,
-    malo_id: &str,
-    cfg: &NetzbilanzConfig,
-    req: &KostenblattComputeRequest,
-) -> Option<rust_decimal::Decimal> {
-    use time::format_description::well_known::Rfc3339;
-    let url = format!(
-        "{edmd_url}/api/v1/lastgang/{malo_id}?from={}&to={}",
-        req.activation_start_utc, req.activation_end_utc
-    );
-    let mut http_req = client.get(&url);
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        http_req = http_req.bearer_auth(key);
-    }
-    let lastgaenge: Vec<rubo4e::current::Lastgang> = match http_req.send().await {
-        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => return None,
-        Ok(r) if !r.status().is_success() => {
-            tracing::debug!(
-                malo_id,
-                status = r.status().as_u16(),
-                "N5 Kostenblatt: lastgang non-2xx — falling back to billing-period"
-            );
-            return None;
-        }
-        Ok(r) => match r.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    %e, malo_id,
-                    "N5 Kostenblatt: lastgang body is not a BO4E Lastgang list — \
-                     falling back to billing-period"
-                );
-                return None;
-            }
-        },
-        Err(e) => {
-            tracing::warn!(%e, malo_id, "N5 Kostenblatt: lastgang fetch error");
-            return None;
-        }
-    };
-
-    let window_start = time::OffsetDateTime::parse(&req.activation_start_utc, &Rfc3339).ok();
-    let window_end = time::OffsetDateTime::parse(&req.activation_end_utc, &Rfc3339).ok();
-    sum_lastgang_kwh(&lastgaenge, window_start, window_end)
-}
-
-/// Sum all interval `wert` values across the OBIS groups of an edmd Lastgang
-/// response, filtered to the activation window `[window_start, window_end)`.
-///
-/// Returns `None` for an empty response or a sum of zero (the caller's fallback
-/// signal). Values whose `zeitraum` cannot be resolved to a UTC instant are
-/// included — edmd has already filtered server-side.
-fn sum_lastgang_kwh(
-    lastgaenge: &[rubo4e::current::Lastgang],
-    window_start: Option<time::OffsetDateTime>,
-    window_end: Option<time::OffsetDateTime>,
-) -> Option<rust_decimal::Decimal> {
-    use rust_decimal::Decimal;
-    let total: Decimal = lastgaenge
-        .iter()
-        .flat_map(|lg| lg.werte.iter().flatten())
-        .filter(|zw| {
-            // A value with no resolvable interval start is kept (see doc comment).
-            let Some(t) = zw.zeitraum.as_ref().and_then(zeitraum_start_utc) else {
-                return true;
-            };
-            window_start.is_none_or(|s| t >= s) && window_end.is_none_or(|e| t < e)
-        })
-        .filter_map(|zw| zw.wert)
-        .sum();
-
-    if total > Decimal::ZERO {
-        Some(total)
+        Ok(StatusCode::NO_CONTENT)
     } else {
-        None
-    }
-}
-
-/// Resolve a BO4E `Zeitraum` interval start to a UTC instant.
-///
-/// edmd emits `startdatum` (date) + `startuhrzeit` (`"HH:MM:SS+00:00"`, always
-/// UTC). Returns `None` when either part is missing or unparseable.
-fn zeitraum_start_utc(z: &rubo4e::current::Zeitraum) -> Option<time::OffsetDateTime> {
-    let date = z.startdatum?;
-    let hms = z.startuhrzeit.as_deref()?.get(..8)?;
-    let format = time::macros::format_description!("[hour]:[minute]:[second]");
-    let t = time::Time::parse(hms, &format).ok()?;
-    Some(date.with_time(t).assume_utc())
-}
-
-/// Parse a JSON value as `rust_decimal::Decimal`.
-fn decimal_from_json_value(v: &serde_json::Value) -> Option<rust_decimal::Decimal> {
-    match v {
-        serde_json::Value::String(s) => s.parse().ok(),
-        serde_json::Value::Number(n) => n.to_string().parse().ok(),
-        _ => None,
-    }
-}
-
-// ── N5a: Kostenblatt gap detection ────────────────────────────────────────────
-
-/// `GET /api/v1/redispatch/kostenblatt/gaps/{year}/{month}`
-///
-/// Lists Kostenblatt records for the month where `dispatch_kwh = 0` and
-/// `dispatch_source IS NULL` — activations that were registered but whose
-/// energy quantity was never computed.
-///
-/// Operators should call
-/// `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`
-/// for each gap before the 15th-of-month submission deadline (BK6-20-061).
-pub async fn get_kostenblatt_gaps(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path((year, month)): Path<(i16, i16)>,
-) -> impl IntoResponse {
-    match list_kostenblatt_gaps(&pool, &cfg.tenant, year, month).await {
-        Ok(rows) => Json(serde_json::json!({
-            "year":     year,
-            "month":    month,
-            "gaps":     rows.len(),
-            "hint": format!(
-                "For each gap, call POST /api/v1/redispatch/kostenblatt/{{activation_id}}/compute \
-                 before the 15th of {}-{:02} (BK6-20-061)",
-                year + if month == 12 { 1 } else { 0 },
-                if month == 12 { 1 } else { month + 1 }
-            ),
-            "records":  rows,
-        }))
-        .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-// ── §42b EnWG GGV NNE NB side (N8: Gemeinschaftliche Gebäudeversorgung) ────────────
-
-/// Request body for `POST /api/v1/billing/ggv-nne/{ggv_malo_id}`.
-///
-/// The NB bills each GGV tenant MaLo for its proportional NNE share.
-/// §42b EnWG requires the NB to treat each tenant as an individual
-/// Marktlokation for NNE purposes.
-#[derive(Debug, serde::Deserialize)]
-pub struct GgvNneRequest {
-    /// NB MP-ID (invoice sender).
-    pub nb_mp_id: String,
-    /// LF MP-ID (invoice recipient — the GGV LF or each tenant's LF).
-    pub lf_mp_id: String,
-    /// Billing period start (`YYYY-MM-DD`).
-    pub period_from: String,
-    /// Billing period end (`YYYY-MM-DD`).
-    pub period_to: String,
-    /// Invoice issue date (defaults to today).
-    pub invoice_date: Option<String>,
-    /// Payment due date (defaults to today + 30 days).
-    pub due_date: Option<String>,
-    /// NNE Arbeitspreis ct/kWh for this GGV (from `PreisblattNetznutzung`).
-    pub arbeitspreis_ct_per_kwh: rust_decimal::Decimal,
-    /// NNE Grundpreis EUR/year for this GGV (from `PreisblattNetznutzung`).
-    pub grundpreis_eur_per_year: Option<rust_decimal::Decimal>,
-    /// KA rate ct/kWh (KAV §2, optional).
-    pub ka_satz_ct_per_kwh: Option<rust_decimal::Decimal>,
-    /// Per-tenant consumption in kWh.
-    ///
-    /// If not provided, NNE is split equally among tenants from the
-    /// `Lokationszuordnung` graph.  When provided, each key is an 11-digit
-    /// MaLo-ID and the value is the metered consumption kWh.
-    pub tenant_consumption: Option<std::collections::HashMap<String, rust_decimal::Decimal>>,
-    /// Total GGV output kWh (PV generation + grid purchase) for equal-split fallback.
-    pub total_kwh: Option<rust_decimal::Decimal>,
-}
-
-/// `POST /api/v1/billing/ggv-nne/{ggv_malo_id}`
-///
-/// **N8 — §42b EnWG GGV Netzentgelt NB-side billing.**
-///
-/// §42b EnWG (mandatory from 01.01.2024): The NB must bill each GGV
-/// tenant Marktlokation for its individual NNE share.  Attribution is
-/// proportional to measured consumption (`tenant_consumption`) or equal
-/// split when consumption data is absent.
-///
-/// Pipeline:
-/// 1. Fetch GGV topology from `marktd` `GET /api/v1/malo/{ggv_malo_id}/lokationen`
-///    — returns `Lokationszuordnung` graph edges where `beziehungstyp = "GGV_MIETER"`.
-/// 2. Determine tenant MaLo-IDs from graph edges (typ `MALO`).
-/// 3. For each tenant: compute proportional `arbeitsmenge_kwh` and generate INVOIC 31002
-///    draft via `run_billing_internal`.
-/// 4. Return all draft IDs plus attribution summary.
-#[allow(clippy::too_many_lines)]
-pub async fn post_ggv_nne(
-    Extension(pool): Extension<PgPool>,
-    Extension(marktd): Extension<Arc<MarktdClient>>,
-    Extension(cfg): Extension<Arc<crate::config::NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
-    Path(ggv_malo_id): Path<String>,
-    Json(req): Json<GgvNneRequest>,
-) -> impl IntoResponse {
-    use rust_decimal::Decimal;
-
-    // ── Step 1: Fetch GGV Lokationszuordnung from marktd ─────────────────────
-    let tenant_malos: Vec<String> = if let Some(ref consumption) = req.tenant_consumption {
-        // Use explicitly provided tenant list (caller already knows the topology).
-        consumption.keys().cloned().collect()
-    } else {
-        // Auto-discover tenant MaLos via marktd Lokationszuordnung graph.
-        let marktd_base = cfg.marktd_url.trim_end_matches('/').to_owned();
-        let url = format!("{marktd_base}/api/v1/malo/{ggv_malo_id}/lokationen");
-        let mut http_req = http_client.get(&url);
-        http_req = http_req.bearer_auth(&cfg.marktd_api_key);
-
-        let edges: serde_json::Value = match http_req.send().await {
-            Ok(r) if r.status().is_success() => r.json().await.unwrap_or_default(),
-            Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    format!("GGV MaLo {ggv_malo_id} not found in marktd"),
-                )
-                    .into_response();
-            }
-            Ok(r) => {
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    format!("marktd returned HTTP {}", r.status()),
-                )
-                    .into_response();
-            }
-            Err(e) => return (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-        };
-
-        // Extract tenant MaLo-IDs from graph edges.
-        // Edges where beziehungstyp = "GGV_MIETER" or lokationstyp_ziel = "MALO".
-        edges
-            .as_array()
-            .unwrap_or(&vec![])
-            .iter()
-            .filter_map(|edge| {
-                let typ = edge
-                    .get("beziehungstyp")
-                    .or_else(|| edge.get("lokationstyp_ziel"))
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let id = edge
-                    .get("ziel_id")
-                    .or_else(|| edge.get("lokation_id"))
-                    .and_then(|v| v.as_str());
-                // Include MALO edges that are tenants, exclude the PV MaLo itself.
-                if (typ == "GGV_MIETER" || typ.contains("MALO"))
-                    && id.is_some_and(|s| s != ggv_malo_id)
-                {
-                    id.map(ToOwned::to_owned)
-                } else {
-                    None
-                }
-            })
-            .collect()
-    };
-
-    if tenant_malos.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!(
-                "no GGV tenant MaLos found for {ggv_malo_id} — provision Lokationszuordnung in marktd or supply tenant_consumption"
-            ),
-        )
-            .into_response();
-    }
-
-    let n_tenants = tenant_malos.len();
-    let today = time::OffsetDateTime::now_utc().date().to_string();
-    let invoice_date = req.invoice_date.clone().unwrap_or_else(|| today.clone());
-    let due_date = req.due_date.clone().unwrap_or_else(|| {
-        (time::OffsetDateTime::now_utc() + time::Duration::days(30))
-            .date()
-            .to_string()
-    });
-
-    // ── Step 2: Generate N × NNE drafts ──────────────────────────────────────
-    let mut all_draft_ids: Vec<String> = Vec::new();
-    let mut attribution: Vec<serde_json::Value> = Vec::new();
-
-    // GGV NNE billing does not emit CloudEvents, so no outbox transaction is
-    // needed — run each tenant's billing on a plain pooled connection.
-    let mut conn = match pool.acquire().await {
-        Ok(c) => c,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-
-    for (i, tenant_malo) in tenant_malos.iter().enumerate() {
-        // Proportional or equal-split consumption.
-        let kwh_tenant = if let Some(ref consumption_map) = req.tenant_consumption {
-            *consumption_map.get(tenant_malo).unwrap_or(&Decimal::ZERO)
-        } else if let Some(total_kwh) = req.total_kwh {
-            // Equal split.
-            (total_kwh / Decimal::from(n_tenants)).round_dp(3)
-        } else {
-            // No consumption data — cannot generate invoice.
-            tracing::warn!(
-                ggv_malo_id = %ggv_malo_id,
-                tenant_malo = %tenant_malo,
-                "netzbilanzd GGV NNE: no consumption data — skipping tenant"
-            );
-            continue;
-        };
-
-        if kwh_tenant <= Decimal::ZERO {
-            continue;
-        }
-
-        let rechnungsnummer_prefix = format!(
-            "GGV-NNE-{}-{}-{}",
-            ggv_malo_id, tenant_malo, &req.period_from
-        );
-
-        let billing_req = BillingRunRequest {
-            nb_mp_id: req.nb_mp_id.clone(),
-            lf_mp_id: req.lf_mp_id.clone(),
-            invoice_date: invoice_date.clone(),
-            due_date: due_date.clone(),
-            rechnungsnummer_prefix,
-            positions: vec![BillingPosition {
-                malo_id: tenant_malo.clone(),
-                period_from: req.period_from.clone(),
-                period_to: req.period_to.clone(),
-                billing_type: "nne_strom".to_owned(),
-                arbeitsmenge_kwh: Some(kwh_tenant),
-                arbeitspreis_ct_per_kwh: Some(req.arbeitspreis_ct_per_kwh),
-                arbeitsmenge_ht_kwh: None,
-                arbeitspreis_ht_ct_per_kwh: None,
-                arbeitsmenge_nt_kwh: None,
-                arbeitspreis_nt_ct_per_kwh: None,
-                spitzenleistung_kw: None,
-                leistungspreis_eur_per_kw: None,
-                ka_satz_ct_per_kwh: req.ka_satz_ct_per_kwh,
-                profil_kwh: None,
-                mehr_preis_ct_per_kwh: None,
-                minder_preis_ct_per_kwh: None,
-                lastprofil: None,
-                msb_mp_id: None,
-                msb_empfaenger_rolle: None,
-                msb_empfaenger_mp_id: None,
-                grundgebuehr_eur_per_month: req
-                    .grundpreis_eur_per_year
-                    .map(|gp| gp / Decimal::from(12)),
-                billing_months: None,
-                messdienstleistung_eur: None,
-            }],
-        };
-
-        match run_billing_internal(
-            &mut conn,
-            &marktd,
-            &cfg.tenant,
-            cfg.vnb_mp_id.as_deref(),
-            billing_req,
-        )
-        .await
-        {
-            Ok(ids) => {
-                let share_pct = Decimal::from(100) / Decimal::from(n_tenants);
-                attribution.push(serde_json::json!({
-                    "tenant_malo": tenant_malo,
-                    "kwh": kwh_tenant.to_string(),
-                    "share_pct": if req.tenant_consumption.is_some() {
-                        (kwh_tenant / req.total_kwh.unwrap_or(Decimal::ONE) * Decimal::from(100)).round_dp(2).to_string()
-                    } else {
-                        share_pct.round_dp(2).to_string()
-                    },
-                    "draft_ids": ids,
-                }));
-                for id in ids {
-                    all_draft_ids.push(id.to_string());
-                }
-            }
-            Err(e) => {
-                tracing::warn!(
-                    tenant_malo = %tenant_malo,
-                    i,
-                    error = %e,
-                    "netzbilanzd GGV NNE: billing failed for tenant MaLo"
-                );
-            }
-        }
-    }
-
-    if all_draft_ids.is_empty() {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "all GGV tenant billing runs failed — check arbeitspreis and period",
-        )
-            .into_response();
-    }
-
-    (
-        StatusCode::CREATED,
-        Json(serde_json::json!({
-            "ggv_malo_id": ggv_malo_id,
-            "tenant_count": n_tenants,
-            "drafted_count": all_draft_ids.len(),
-            "draft_ids": all_draft_ids,
-            "period_from": req.period_from,
-            "period_to": req.period_to,
-            "attribution": attribution,
-            "source": "§42b_ggv_nne_nb",
-        })),
-    )
-        .into_response()
-}
-
-// ── Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail) ───────────────
-
-/// Request body for `POST /api/v1/billing/drafts/{id}/correction`.
-#[derive(Debug, serde::Deserialize)]
-pub struct DraftCorrectionRequest {
-    /// Human-readable correction reason (mandatory, stored as `korrekturGrund`).
-    pub reason: String,
-    /// Amended Rechnung JSONB.  When `None`, a pure Stornorechnung (negative clone)
-    /// is generated.  When supplied, a Korrekturrechnung with the amended positions
-    /// is generated instead.
-    pub amended_rechnung: Option<serde_json::Value>,
-}
-
-/// `POST /api/v1/billing/drafts/{id}/correction`
-///
-/// **Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD).**
-///
-/// Creates a correction or reversal for an existing INVOIC draft.
-///
-/// - No `amended_rechnung` → **Stornorechnung**: clones original with negated
-///   `gross_eur_units` and `rechnungsart = "STORNORECHNUNG"`.
-/// - With `amended_rechnung` → **Korrekturrechnung**: stores the amended Rechnung
-///   with `rechnungsart = "KORREKTURRECHNUNG"`.
-///
-/// Both cases embed `zusatzAttribute.originalRechnungsnummer` and
-/// `zusatzAttribute.korrekturGrund` for BNetzA §20 audit compliance.
-///
-/// The original record is **never modified** — corrections produce new rows.
-pub async fn post_draft_correction(
-    Extension(pool): Extension<PgPool>,
-    Path(id): Path<Uuid>,
-    Json(req): Json<DraftCorrectionRequest>,
-) -> impl IntoResponse {
-    let is_storno = req.amended_rechnung.is_none();
-    match crate::pg::insert_correction_draft(&pool, id, &req.reason, req.amended_rechnung).await {
-        Ok(new_id) => (
-            StatusCode::CREATED,
-            Json(serde_json::json!({
-                "correction_draft_id": new_id,
-                "original_draft_id": id,
-                "rechnungsart": if is_storno { "STORNORECHNUNG" } else { "KORREKTURRECHNUNG" },
-                "reason": req.reason,
-                "status": "draft",
-                "hint": "Review the correction draft, then PUT /api/v1/billing/drafts/{correction_draft_id}/dispatch to send INVOIC to makod.",
-            })),
-        )
-            .into_response(),
-        Err(e) if e.to_string().contains("not found") => {
-            (StatusCode::NOT_FOUND, e.to_string()).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-// ── Fremdkosten REST API (§ 147 AO / GoBD external cost pass-through, BO4E typed) ──
-
-/// `PUT /api/v1/billing/fremdkosten/{draft_id}`
-///
-/// **§ 147 AO / GoBD — typed external cost pass-through.**
-///
-/// Associates a typed `rubo4e::current::Fremdkosten` + `FremdkostenBlock` +
-/// `FremdkostenPosition` payload with an existing INVOIC draft.
-///
-/// External fees (ÜNB balancing charges, third-party MSB charges) currently appear
-/// as free-text `ZusatzAttribut` positions in INVOIC 31002.  This endpoint stores
-/// them as typed BO4E objects — on dispatch the `fremdkosten_json` is merged into
-/// the `Rechnung.zusatzAttribute` so the LF receives the full breakdown.
-///
-/// **Idempotent** — subsequent PUT replaces the existing record for this draft.
-pub async fn put_fremdkosten(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path(draft_id): Path<Uuid>,
-    Json(req): Json<UpsertFremdkostenRequest>,
-) -> impl IntoResponse {
-    // Validate _typ when present.
-    if let Some(typ) = req.fremdkosten_json.get("_typ").and_then(|v| v.as_str())
-        && typ.to_uppercase() != "FREMDKOSTEN"
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("expected _typ FREMDKOSTEN, got {typ:?}"),
-        )
-            .into_response();
-    }
-    // Validate by typed round-trip — the stored JSON must actually deserialize
-    // as `rubo4e::current::Fremdkosten`, not merely carry the right `_typ`.
-    if let Err(e) =
-        serde_json::from_value::<rubo4e::current::Fremdkosten>(req.fremdkosten_json.clone())
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            format!("invalid Fremdkosten payload: {e}"),
-        )
-            .into_response();
-    }
-    match upsert_fremdkosten(&pool, &cfg.tenant, draft_id, &req).await {
-        Ok(id) => (
-            StatusCode::OK,
-            Json(serde_json::json!({
-                "id": id,
-                "draft_id": draft_id,
-                "total_eur": req.total_eur.to_string(),
-                "bezeichnung": req.bezeichnung,
-            })),
-        )
-            .into_response(),
-        Err(e) if e.to_string().contains("violates foreign key") => {
-            (StatusCode::NOT_FOUND, format!("draft {draft_id} not found")).into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /api/v1/billing/fremdkosten/{draft_id}`
-///
-/// Retrieve the typed `Fremdkosten` record for an invoice draft.
-pub async fn get_fremdkosten(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path(draft_id): Path<Uuid>,
-) -> impl IntoResponse {
-    match fetch_fremdkosten(&pool, draft_id, &cfg.tenant).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(ApiError::NotFound)
     }
 }
 
 // ── POST /api/v1/billing/drafts/dispatch-batch ────────────────────────────────
 
-/// Request body for `POST /api/v1/billing/drafts/dispatch-batch`.
+/// Request body for a batch dispatch.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct DispatchBatchRequest {
-    /// List of draft UUIDs to dispatch.
+    /// The drafts to dispatch.
     pub draft_ids: Vec<Uuid>,
 }
 
 /// `POST /api/v1/billing/drafts/dispatch-batch`
 ///
-/// Dispatch multiple approved drafts in a single operation.
-/// Each draft is dispatched independently — partial failures are reported
-/// without blocking remaining dispatches.
+/// Each draft dispatches in its own transaction, so one refusal does not roll
+/// back the ones that already went out.
 ///
-/// Returns a summary with `succeeded` count and a list of failures.
+/// # Errors
+///
+/// `400` for an empty or oversized batch.
 pub async fn post_dispatch_batch(
     Extension(pool): Extension<PgPool>,
     Extension(makod): Extension<Arc<MakodClient>>,
+    Extension(cfg): Cfg,
     Json(req): Json<DispatchBatchRequest>,
-) -> impl IntoResponse {
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
     if req.draft_ids.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "draft_ids must not be empty" })),
-        )
-            .into_response();
+        return Err(ApiError::bad_request("draft_ids must not be empty"));
     }
     if req.draft_ids.len() > 500 {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "batch size must not exceed 500" })),
-        )
-            .into_response();
+        return Err(ApiError::bad_request("batch size must not exceed 500"));
     }
 
-    match dispatch_batch(&pool, &makod, &req.draft_ids).await {
-        Ok((succeeded, failures)) => (
-            if failures.is_empty() {
-                StatusCode::OK
-            } else {
-                StatusCode::MULTI_STATUS
-            },
-            Json(serde_json::json!({
-                "succeeded": succeeded,
-                "failed": failures.len(),
-                "total": req.draft_ids.len(),
-                "failures": failures.iter().map(|(id, reason)| serde_json::json!({
-                    "draft_id": id,
-                    "reason": reason,
-                })).collect::<Vec<_>>(),
-            })),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let mut succeeded = Vec::new();
+    let mut failures = Vec::new();
+    for id in req.draft_ids {
+        let mut tx = pool.begin().await.map_err(ApiError::from)?;
+        match dispatch_one(&mut tx, &makod, &cfg, id).await {
+            Ok(outcome) => {
+                let committed = async {
+                    emit(
+                        &mut tx,
+                        &cfg,
+                        mako_events::netzbilanz::INVOIC_DISPATCHED,
+                        serde_json::json!({
+                            "draft_id": id,
+                            "tenant": cfg.tenant,
+                            "dispatch_ref": outcome.dispatch_ref,
+                            "rechnungsnummer": outcome.rechnungsnummer,
+                        }),
+                    )
+                    .await?;
+                    tx.commit().await
+                }
+                .await;
+                match committed {
+                    Ok(()) => succeeded.push(serde_json::json!({
+                        "draft_id": id,
+                        "dispatch_ref": outcome.dispatch_ref,
+                        "rechnungsnummer": outcome.rechnungsnummer,
+                    })),
+                    Err(e) => failures.push(failure(id, &e.to_string())),
+                }
+            }
+            Err(e) => {
+                // The transaction rolls back on drop, so a refused dispatch
+                // leaves the draft exactly as it was.
+                failures.push(failure(id, &e.to_string()));
+            }
+        }
     }
+
+    let status = if failures.is_empty() {
+        StatusCode::OK
+    } else {
+        StatusCode::MULTI_STATUS
+    };
+    Ok((
+        status,
+        Json(serde_json::json!({
+            "succeeded": succeeded.len(),
+            "failed": failures.len(),
+            "dispatched": succeeded,
+            "failures": failures,
+        })),
+    ))
 }
 
-// ── GET /api/v1/billing/malo/{malo_id} ───────────────────────────────────────
+fn failure(id: Uuid, reason: &str) -> serde_json::Value {
+    serde_json::json!({ "draft_id": id, "reason": reason })
+}
 
+// ── POST /api/v1/billing/drafts/{id}/storno ───────────────────────────────────
+
+/// Request body for a Stornorechnung.
 #[derive(Debug, Deserialize)]
-pub struct MaloBillingHistoryQuery {
-    pub limit: Option<i64>,
+#[serde(deny_unknown_fields)]
+pub struct StornoRequest {
+    /// Why the settlement is being reversed.
+    pub grund: grid_billing::KorrekturGrund,
+    /// Issue date of the Stornorechnung. Defaults to today.
+    #[serde(default)]
+    pub invoice_date: Option<time::Date>,
+    /// Payment due date. Defaults to 30 days after the issue date.
+    #[serde(default)]
+    pub due_date: Option<time::Date>,
 }
 
-/// `GET /api/v1/billing/malo/{malo_id}`
+/// `POST /api/v1/billing/drafts/{id}/storno`
 ///
-/// Returns the billing history for a MaLo (lightweight — no Rechnung JSONB).
-/// Useful for ERP reconciliation and per-MaLo payment status checks.
-pub async fn get_malo_billing_history(
+/// Reverses a settled invoice by **recomputing** it from its stored input and
+/// negating the result through `grid_billing::reverse`, then rendering that as
+/// a Stornorechnung with its own invoice number.
+///
+/// Recomputing is what makes the reversal honest. Editing the stored document
+/// instead — negating the total and leaving the positions positive — produces a
+/// Storno whose parts do not sum to its whole, and one that never sets
+/// `ist_storno` or `original_rechnungsnummer` is not a Storno to the receiving
+/// LF at all: it runs the same `invoic-checker`, and stage 0 reads exactly those
+/// two fields.
+///
+/// # Errors
+///
+/// - `404` when the original does not exist for this tenant.
+/// - `409` when the original was never dispatched or was rejected (reject it, or
+///   leave it rejected, and bill again), when it is already reversed, or when
+///   replaying its stored input no longer reproduces the amounts it was issued
+///   for.
+pub async fn post_storno(
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Path(malo_id): Path<String>,
-    Query(q): Query<MaloBillingHistoryQuery>,
-) -> impl IntoResponse {
-    let limit = q.limit.unwrap_or(100).min(1000);
-    match billing_history_for_malo(&pool, &cfg.tenant, &malo_id, limit).await {
-        Ok(rows) => Json(serde_json::json!({
-            "malo_id": malo_id,
-            "count": rows.len(),
-            "records": rows,
-        }))
-        .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    Extension(cfg): Cfg,
+    Path(id): Path<Uuid>,
+    Json(req): Json<StornoRequest>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+
+    let (original, input) = pg::load_settlement_input(&mut tx, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound)?;
+
+    if original.rechnungsart != "RECHNUNG" {
+        return Err(ApiError::conflict(
+            "only an original RECHNUNG can be reversed",
+        ));
+    }
+    // `draft` and `rejected` both mean "never left the house". Reversing either
+    // issues a credit note against an invoice no counterparty received, booking
+    // a negative amount an ERP will happily pay out.
+    if matches!(original.status.as_str(), "draft" | "rejected") {
+        return Err(ApiError::conflict(format!(
+            "this invoice is '{}' — it was never dispatched, so there is nothing to reverse. \
+             Reject the draft (or leave it rejected) and bill the period again.",
+            original.status
+        )));
+    }
+
+    let invoice_date = req
+        .invoice_date
+        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let due_date = req
+        .due_date
+        .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
+
+    let position = crate::request::BillingPositionRequest {
+        malo_id: original.malo_id.clone(),
+        period_from: original.period_from,
+        period_to: original.period_to,
+        // A reversal mirrors the original document, and the original's own
+        // Abschlag deductions are cancelled with it rather than re-applied.
+        cadence: None,
+        abschlaege: Vec::new(),
+        settlement: input,
+    };
+    let recomputed =
+        billing::settle(&position).map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+
+    // A reversal has to negate the invoice that was actually sent — exactly.
+    // Recomputation normally reproduces it, but the engine reads tabled figures
+    // (the EnFG levy rates for the delivery year, the KAV ceilings, the
+    // regulatory regime for the period), and a table corrected since the
+    // original was issued would produce a near-miss: a Storno that cancels most
+    // of an invoice and silently leaves a residue nothing downstream reconciles.
+    //
+    // So it is checked, and a mismatch is refused rather than rounded past.
+    //
+    // All three amounts are compared, not only the net. The tax is derived from
+    // facts the input carries (the §13b Wiederverkäufer status, the rate window
+    // the period falls in), so a corrected table can leave the net identical and
+    // the tax different — and a reversal that cancels the net but not the
+    // Umsatzsteuer leaves a §14c Abs. 1 liability standing.
+    let replayed = Totals::of(&recomputed).map_err(ApiError::Internal)?;
+    let issued = Totals {
+        netto: original.netto_eur_units,
+        steuer: original.steuer_eur_units,
+        brutto: original.brutto_eur_units,
+    };
+    if replayed != issued {
+        return Err(ApiError::conflict(format!(
+            "recomputing this invoice from its stored settlement input yields {replayed}, but it \
+             was issued for {issued} — a reversal must negate what was sent, exactly. Something \
+             the engine reads has changed since (a published levy rate, a statutory ceiling, a \
+             tax-rate window, the regime for the period). Investigate before reversing."
+        )));
+    }
+
+    let reversal = grid_billing::reverse(&recomputed, req.grund);
+
+    let rechnungsnummer = pg::next_rechnungsnummer(
+        &mut tx,
+        &cfg.tenant,
+        rechnungskreis_of(&original.rechnungsnummer),
+        invoice_date.year(),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+
+    let settled = billing::render_and_check(
+        reversal,
+        rechnungsnummer.clone(),
+        invoice_date,
+        due_date,
+        billing::DocumentFacts {
+            correction_of: Some(original.rechnungsnummer.clone()),
+            ..billing::DocumentFacts::default()
+        },
+    );
+    let storno_id = store(
+        &mut tx,
+        &cfg,
+        &position,
+        &settled,
+        "STORNORECHNUNG",
+        Some(id),
+        Some(req.grund.code()),
+        invoice_date,
+        due_date,
+    )
+    .await?;
+
+    emit(
+        &mut tx,
+        &cfg,
+        mako_events::netzbilanz::INVOIC_DRAFTED,
+        serde_json::json!({
+            "draft_id": storno_id,
+            "tenant": cfg.tenant,
+            "rechnungsart": "STORNORECHNUNG",
+            "original_draft_id": id,
+            "rechnungsnummer": rechnungsnummer,
+        }),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    tx.commit().await.map_err(ApiError::from)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "storno_draft_id": storno_id,
+            "original_draft_id": id,
+            "rechnungsnummer": rechnungsnummer,
+            "original_rechnungsnummer": original.rechnungsnummer,
+            "korrektur_grund": req.grund.code(),
+            "total_eur": settled.settlement.total_eur.to_string(),
+            "next": "review, then PUT /api/v1/billing/drafts/{storno_draft_id}/dispatch",
+        })),
+    ))
+}
+
+/// Request body for a Korrekturrechnung.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct KorrekturRequest {
+    /// Why the settlement is being recalculated.
+    pub grund: grid_billing::KorrekturGrund,
+    /// The corrected settlement input. Same shape as a billing-run position.
+    pub settlement: SettlementRequest,
+    /// The billing cadence of the corrected document.
+    #[serde(default)]
+    pub cadence: Option<grid_billing::Rechnungscharakter>,
+    /// Abschlagsrechnungen the corrected invoice settles, by draft ID.
+    #[serde(default)]
+    pub abschlaege: Vec<Uuid>,
+    /// Issue date. Defaults to today.
+    #[serde(default)]
+    pub invoice_date: Option<time::Date>,
+    /// Payment due date. Defaults to 30 days after the issue date.
+    #[serde(default)]
+    pub due_date: Option<time::Date>,
+}
+
+/// `POST /api/v1/billing/drafts/{id}/korrektur`
+///
+/// Issues the corrected invoice for a period. A correction is a **new
+/// settlement**, computed from corrected inputs by the same engine — not an
+/// operator-supplied `Rechnung` JSON blob.
+///
+/// **The original must be reversed first.** A Korrekturrechnung here carries the
+/// *whole* corrected amount, not the difference, so issuing one against a live
+/// original bills the period twice — and both documents are well-formed, so
+/// nothing downstream notices. The Storno is what makes the pair net out, which
+/// is the Storno-und-Neuberechnung flow German accounting expects. A draft that
+/// was never dispatched needs no correction at all: reject it and bill again.
+///
+/// **And it must correct the same invoice.** `original_draft_id` says which one,
+/// but the corrected settlement arrives from the caller: it could name a
+/// different settlement kind, Sparte or counterparty. Corrections are exempt
+/// from the double-billing guard, so such a document would be stored without
+/// complaint — a second, unrelated invoice wearing a correction's clothes.
+///
+/// # Errors
+///
+/// - `404` when the original does not exist for this tenant.
+/// - `409` when the original is still live — reverse it first — or was never
+///   dispatched at all.
+/// - `422` when the corrected inputs do not describe a computable settlement,
+///   or describe a different invoice than the one being corrected.
+pub async fn post_korrektur(
+    Extension(pool): Extension<PgPool>,
+    Extension(marktd): Extension<Arc<MarktdClient>>,
+    Extension(cfg): Cfg,
+    Path(id): Path<Uuid>,
+    Json(req): Json<KorrekturRequest>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    let original = pg::fetch_draft(&mut *tx, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound)?;
+
+    if original.rechnungsart != "RECHNUNG" {
+        return Err(ApiError::conflict(
+            "corrections attach to the original RECHNUNG, not to another correction",
+        ));
+    }
+    if matches!(original.status.as_str(), "draft" | "rejected") {
+        return Err(ApiError::conflict(format!(
+            "this invoice is '{}' — it was never dispatched, so there is nothing to correct. \
+             Reject the draft and run the billing again.",
+            original.status
+        )));
+    }
+    if !pg::has_storno(&mut tx, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        return Err(ApiError::conflict(
+            "reverse the original first (POST /storno). This Korrekturrechnung carries the \
+             whole corrected amount, not the difference, so issuing it against a live invoice \
+             bills the period twice — and both documents look correct.",
+        ));
+    }
+
+    let invoice_date = req
+        .invoice_date
+        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    let due_date = req
+        .due_date
+        .unwrap_or_else(|| invoice_date.saturating_add(time::Duration::days(30)));
+
+    let mut position = crate::request::BillingPositionRequest {
+        malo_id: original.malo_id.clone(),
+        period_from: original.period_from,
+        period_to: original.period_to,
+        cadence: req.cadence,
+        abschlaege: req.abschlaege.clone(),
+        settlement: req.settlement,
+    };
+    Resolver::new(&marktd, cfg.vnb_mp_id.as_deref())
+        .resolve(&mut position)
+        .await
+        .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+
+    let mut replacement =
+        billing::settle(&position).map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;
+
+    // A correction replaces one specific document, and `original_draft_id` says
+    // which. Nothing else pinned the two together: the corrected settlement is
+    // a caller-supplied `SettlementRequest`, so it could name a different
+    // Sparte, a different counterparty, or a different settlement kind
+    // altogether — and corrections are exempt from the double-billing guard, so
+    // a "correction" that is really a second, unrelated invoice would be stored
+    // without complaint, linked to an original it has nothing to do with.
+    let settlement_type = format!("{:?}", replacement.settlement_type);
+    corrects_the_same_invoice(
+        &Identity {
+            settlement_type: &settlement_type,
+            sparte: sparte_code(position.settlement.sparte()),
+            sender_mp_id: &replacement.sender_mp_id,
+            recipient_mp_id: &replacement.recipient_mp_id,
+        },
+        &Identity {
+            settlement_type: &original.settlement_type,
+            sparte: &original.sparte,
+            sender_mp_id: &original.sender_mp_id,
+            recipient_mp_id: &original.recipient_mp_id,
+        },
+    )?;
+
+    // What `grid_billing::correct` does to the replacement, without building the
+    // reversal it would return alongside — the Storno already exists, and this
+    // handler refuses to run until it does.
+    replacement.status = grid_billing::SettlementStatus::Correction;
+    replacement.korrektur_grund = Some(req.grund);
+
+    let rechnungsnummer = pg::next_rechnungsnummer(
+        &mut tx,
+        &cfg.tenant,
+        rechnungskreis_of(&original.rechnungsnummer),
+        invoice_date.year(),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+
+    let abschlaege = pg::load_abschlaege(&mut tx, &cfg.tenant, &original.malo_id, &req.abschlaege)
+        .await
+        .map_err(ApiError::Internal)?
+        .map_err(|problems| {
+            ApiError::unprocessable(format!(
+                "these Abschlagsrechnungen cannot be deducted: {}",
+                problems.join("; ")
+            ))
+        })?;
+    let settled = billing::render_and_check(
+        replacement,
+        rechnungsnummer.clone(),
+        invoice_date,
+        due_date,
+        billing::DocumentFacts {
+            correction_of: Some(original.rechnungsnummer.clone()),
+            cadence: req.cadence,
+            abschlaege,
+        },
+    );
+    let korrektur_id = store(
+        &mut tx,
+        &cfg,
+        &position,
+        &settled,
+        "KORREKTURRECHNUNG",
+        Some(id),
+        Some(req.grund.code()),
+        invoice_date,
+        due_date,
+    )
+    .await?;
+
+    emit(
+        &mut tx,
+        &cfg,
+        mako_events::netzbilanz::INVOIC_DRAFTED,
+        serde_json::json!({
+            "draft_id": korrektur_id,
+            "tenant": cfg.tenant,
+            "rechnungsart": "KORREKTURRECHNUNG",
+            "original_draft_id": id,
+            "rechnungsnummer": rechnungsnummer,
+        }),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    tx.commit().await.map_err(ApiError::from)?;
+
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({
+            "korrektur_draft_id": korrektur_id,
+            "original_draft_id": id,
+            "rechnungsnummer": rechnungsnummer,
+            "korrektur_grund": req.grund.code(),
+            "total_eur": settled.settlement.total_eur.to_string(),
+            "check_outcome": pg::outcome_str(settled.report.outcome),
+        })),
+    ))
+}
+
+/// What makes two invoices the same invoice for correction purposes.
+struct Identity<'a> {
+    settlement_type: &'a str,
+    sparte: &'a str,
+    sender_mp_id: &'a str,
+    recipient_mp_id: &'a str,
+}
+
+/// Refuse a "correction" that is really a different invoice.
+///
+/// # Errors
+///
+/// `422` naming the first field that differs.
+fn corrects_the_same_invoice(corrected: &Identity<'_>, original: &Identity<'_>) -> ApiResult<()> {
+    let differing = [
+        (
+            "settlement_type",
+            corrected.settlement_type,
+            original.settlement_type,
+        ),
+        ("sparte", corrected.sparte, original.sparte),
+        (
+            "sender_mp_id",
+            corrected.sender_mp_id,
+            original.sender_mp_id,
+        ),
+        (
+            "recipient_mp_id",
+            corrected.recipient_mp_id,
+            original.recipient_mp_id,
+        ),
+    ]
+    .into_iter()
+    .find(|(_, now, was)| now != was);
+
+    match differing {
+        None => Ok(()),
+        Some((field, now, was)) => Err(ApiError::unprocessable(format!(
+            "the corrected settlement changes {field} from {was:?} to {now:?}. A \
+             Korrekturrechnung re-issues the *same* invoice with corrected figures; a different \
+             settlement kind, Sparte or counterparty is a different invoice, and belongs in its \
+             own billing run."
+        ))),
     }
 }
 
-// ── REMADV payment lifecycle ──────────────────────────────────────────────────
+/// The Rechnungskreis a previous invoice number was issued under.
+///
+/// Numbers are `[<kreis>-]<year>-<seq>`, so a correction stays in the series
+/// its original belongs to rather than starting a new one.
+fn rechnungskreis_of(rechnungsnummer: &str) -> Option<&str> {
+    let parts: Vec<&str> = rechnungsnummer.rsplitn(3, '-').collect();
+    (parts.len() == 3).then(|| parts[2])
+}
 
-/// Request body for `PUT /api/v1/billing/drafts/{id}/mark-paid`.
+// ── REMADV lifecycle ──────────────────────────────────────────────────────────
+
+/// Request body for `mark-paid`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MarkPaidRequest {
-    /// EDIFACT reference from the REMADV 33001 (Bestätigung) message.
+    /// The reference carried on the REMADV 33001.
     pub remadv_ref: String,
 }
 
 /// `PUT /api/v1/billing/drafts/{id}/mark-paid`
 ///
-/// **REMADV 33001 — Zahlungsbestätigung** (the only Bestätigung PID; 33002/33003/
-/// 33004 are Abweisungen and go to `mark-disputed`).
+/// REMADV **33001** is the only Zahlungsbestätigung; 33002, 33003 and 33004 are
+/// all Abweisungen and belong on `mark-disputed`.
 ///
-/// Updates `invoice_drafts.status` → `'paid'`.  Called by ERP or `makod` outbox
-/// when a REMADV 33001 payment confirmation is received from the LF.
+/// # Errors
 ///
-/// Regulatory basis: INVOIC AHB 1.0 §3 — NB must track payment status for
-/// § 147 AO / GoBD retention (invoices: Buchungsbelege, 8 years) and BNetzA
-/// audit readiness.
+/// `404` when the draft does not exist for this tenant or is not dispatched.
 pub async fn mark_paid(
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
+    Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<MarkPaidRequest>,
-) -> impl IntoResponse {
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    match mark_draft_paid(&mut *tx, id, &req.remadv_ref).await {
-        Ok(true) => {
-            // status→paid and the `invoic.paid` outbox row commit together.
-            if cfg.erp_webhook_url.is_some()
-                && let Err(e) = emit_cloud_event(
-                    &mut tx,
-                    &cfg.tenant,
-                    mako_events::netzbilanz::INVOIC_PAID,
-                    serde_json::json!({
-                        "draft_id": id,
-                        "remadv_ref": req.remadv_ref,
-                        "tenant": cfg.tenant,
-                    }),
-                )
-                .await
-            {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "draft_id": id,
-                    "status": "paid",
-                    "remadv_ref": req.remadv_ref,
-                })),
-            )
-                .into_response()
-        }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            format!("draft {id} not found or not in 'dispatched' status"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+) -> ApiResult<Json<serde_json::Value>> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    if !pg::mark_paid(&mut tx, &cfg.tenant, id, &req.remadv_ref)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        return Err(ApiError::NotFound);
     }
+    emit(
+        &mut tx,
+        &cfg,
+        mako_events::netzbilanz::INVOIC_PAID,
+        serde_json::json!({ "draft_id": id, "tenant": cfg.tenant, "remadv_ref": req.remadv_ref }),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    tx.commit().await.map_err(ApiError::from)?;
+    Ok(Json(
+        serde_json::json!({ "draft_id": id, "status": "paid", "remadv_ref": req.remadv_ref }),
+    ))
 }
 
-/// Request body for `PUT /api/v1/billing/drafts/{id}/mark-disputed`.
+/// Request body for `mark-disputed`.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MarkDisputedRequest {
-    /// EDIFACT ERC reason code from REMADV 33002 (e.g. "Z32", "Z34", "Z35").
+    /// The EDIFACT ERC code from the REMADV Abweisung.
     pub erc_code: String,
-    /// Free-text reason from the LF.
+    /// The counterparty's stated reason.
     pub reason: String,
 }
 
 /// `PUT /api/v1/billing/drafts/{id}/mark-disputed`
 ///
-/// **REMADV 33002 — Zahlungsablehnung.**
+/// REMADV 33002/33003/33004. The dispute lands in its own status and its own
+/// columns; the NB's pre-dispatch verdict is left intact, because it is the
+/// evidence that says whether the invoice was defensible when it was sent.
 ///
-/// Updates `invoice_drafts.check_outcome` → `'Dispute'` and stores the ERC code.
-/// The NB can then issue a COMDIS 29001 via makod for formal escalation.
+/// # Errors
+///
+/// `404` when the draft does not exist for this tenant or is not dispatched.
 pub async fn mark_disputed(
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
+    Extension(cfg): Cfg,
     Path(id): Path<Uuid>,
     Json(req): Json<MarkDisputedRequest>,
-) -> impl IntoResponse {
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    match mark_draft_disputed(&mut *tx, id, &req.erc_code, &req.reason).await {
-        Ok(true) => {
-            // Dispute mark and the `invoic.disputed` outbox row commit together.
-            if cfg.erp_webhook_url.is_some()
-                && let Err(e) = emit_cloud_event(
-                    &mut tx,
-                    &cfg.tenant,
-                    mako_events::netzbilanz::INVOIC_DISPUTED,
-                    serde_json::json!({
-                        "draft_id": id,
-                        "erc_code": req.erc_code,
-                        "reason": req.reason,
-                        "tenant": cfg.tenant,
-                    }),
-                )
-                .await
-            {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "draft_id": id,
-                    "check_outcome": "Dispute",
-                    "erc_code": req.erc_code,
-                    "hint": "Use makod COMDIS 29001 for formal escalation.",
-                })),
-            )
-                .into_response()
-        }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            format!("draft {id} not found or not in 'dispatched' status"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+) -> ApiResult<Json<serde_json::Value>> {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    if !pg::mark_disputed(&mut tx, &cfg.tenant, id, &req.erc_code, &req.reason)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        return Err(ApiError::NotFound);
     }
+    emit(
+        &mut tx,
+        &cfg,
+        mako_events::netzbilanz::INVOIC_DISPUTED,
+        serde_json::json!({
+            "draft_id": id,
+            "tenant": cfg.tenant,
+            "erc_code": req.erc_code,
+            "reason": req.reason,
+        }),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    tx.commit().await.map_err(ApiError::from)?;
+    Ok(Json(serde_json::json!({
+        "draft_id": id,
+        "status": "disputed",
+        "erc_code": req.erc_code,
+        "next": "issue a Storno + Korrektur, or escalate via makod COMDIS 29001",
+    })))
 }
 
-// ── GET /api/v1/billing/summary ───────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct SummaryQuery {
-    pub year: Option<i32>,
-    pub month: Option<u8>,
-}
-
-/// `GET /api/v1/billing/summary?year=&month=`
-///
-/// Monthly billing totals by PID and status.  Used for ERP month-end reconciliation
-/// and BNetzA §20 reporting.  Also exposed via the `get_billing_summary` MCP tool.
-pub async fn get_billing_summary_rest(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Query(q): Query<SummaryQuery>,
-) -> impl IntoResponse {
-    let now = time::OffsetDateTime::now_utc();
-    let year = q.year.unwrap_or(now.year());
-    let month = q.month.unwrap_or(now.month() as u8);
-    if !(1..=12).contains(&month) {
-        return (StatusCode::BAD_REQUEST, "month must be 1–12").into_response();
-    }
-    match billing_summary(&pool, &cfg.tenant, year, month).await {
-        Ok(rows) => {
-            let total: i64 = rows.iter().map(|r| r.total_gross_eur_units).sum();
-            Json(serde_json::json!({
-                "year": year, "month": month,
-                "total_gross_eur": format!("{:.5}", total as f64 / 100_000.0),
-                "by_pid_status": rows,
-            }))
-            .into_response()
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-// ── GET /api/v1/billing/audit ─────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct AuditExportQuery {
-    pub from: Option<String>, // ISO date YYYY-MM-DD
-    pub to: Option<String>,   // ISO date YYYY-MM-DD
-    pub pid: Option<i32>,
-    pub status: Option<String>,
-    pub limit: Option<i64>,
-}
-
-/// `GET /api/v1/billing/audit`
-///
-/// **§ 147 AO / GoBD BNetzA audit export.**
-///
-/// Returns all invoice records (lightweight, no Rechnung JSONB) filtered by
-/// date range, PID, and status.  Used for:
-/// - BNetzA § 147 AO / GoBD retention audit (invoices: 8-year Buchungsbelege; Prüfung der Abrechnungsunterlagen)
-/// - Annual NNE portfolio reconciliation
-/// - Automated ERP import jobs
-///
-/// Note: full Rechnung JSONB is retrievable via `GET /api/v1/billing/drafts/{id}`.
-pub async fn get_billing_audit(
-    Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
-    Query(q): Query<AuditExportQuery>,
-) -> impl IntoResponse {
-    let from = q.from.as_deref().and_then(parse_date_opt);
-    let to = q.to.as_deref().and_then(parse_date_opt);
-    let query = AuditQuery {
-        tenant: cfg.tenant.clone(),
-        from,
-        to,
-        pid: q.pid,
-        status: q.status.clone(),
-        limit: q.limit.unwrap_or(10_000).min(50_000),
-    };
-    match list_audit(&pool, query).await {
-        Ok(rows) => Json(serde_json::json!({
-            "count": rows.len(),
-            "records": rows,
-            "regulatory_note": "§ 147 Abs. 3 AO / § 14b UStG: invoices are Buchungsbelege (8-year retention); full Rechnung via GET /api/v1/billing/drafts/{id}",
-        })).into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    }
-}
-
-fn parse_date_opt(s: &str) -> Option<time::Date> {
-    use time::format_description::well_known::Iso8601;
-    time::Date::parse(s, &Iso8601::DEFAULT).ok()
-}
-
-// ── POST /api/v1/webhooks/remadv ──────────────────────────────────────────────
-
-/// CloudEvent body for REMADV ingest from makod/ERP.
+/// Inbound REMADV CloudEvent.
 #[derive(Debug, Deserialize)]
 pub struct RemadvWebhookBody {
-    /// CloudEvent `type` — expected: `de.invoic.receipt.settled` or `de.invoic.receipt.disputed`.
+    /// The CloudEvent type.
     #[serde(rename = "type")]
     pub ce_type: String,
+    /// The event payload.
     pub data: serde_json::Value,
 }
 
 /// `POST /api/v1/webhooks/remadv`
 ///
-/// **REMADV CloudEvent ingest.**
+/// Closes the payment lifecycle from `makod` or an ERP bridge without operator
+/// intervention.
 ///
-/// Receives `de.invoic.receipt.settled` (REMADV 33001/33003/33004) and
-/// `de.invoic.receipt.disputed` (REMADV 33002) CloudEvents from `makod` or
-/// an ERP webhook bridge.
+/// # Errors
 ///
-/// Updates `invoice_drafts.status` accordingly.
-/// The `data.draft_id` field must contain the UUID of the invoice draft.
-///
-/// Used to close the NB payment lifecycle without manual operator intervention.
+/// - `401` when the HMAC signature does not verify.
+/// - `400` on a malformed body or a `data.draft_id` that is not a UUID.
+/// - `404` when the referenced draft is not in a state the event applies to.
 pub async fn post_remadv_webhook(
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<Arc<NetzbilanzConfig>>,
+    Extension(cfg): Cfg,
     headers: axum::http::HeaderMap,
     raw: axum::body::Bytes,
-) -> impl IntoResponse {
-    // Inbound HMAC: a forged REMADV would mark a Bilanzkreis INVOIC paid/disputed.
+) -> ApiResult<StatusCode> {
+    // A forged REMADV would mark an invoice paid, or contest one that was not.
     if let Some(secret) = &cfg.inbound_secret {
         let provided = headers
             .get("x-mako-signature")
             .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
+            .unwrap_or_default();
         if !mako_service::webhook::verify_hmac(secret.as_bytes(), &raw, provided) {
             tracing::warn!("netzbilanzd: inbound REMADV signature mismatch — rejected");
-            return StatusCode::UNAUTHORIZED.into_response();
+            return Err(ApiError::Unauthorized);
         }
     }
-    let body: RemadvWebhookBody = match serde_json::from_slice(&raw) {
-        Ok(v) => v,
-        Err(e) => {
-            tracing::warn!(error = %e, "netzbilanzd: malformed inbound REMADV body");
-            return StatusCode::BAD_REQUEST.into_response();
-        }
-    };
-    let id_str = body
+
+    let body: RemadvWebhookBody = serde_json::from_slice(&raw)
+        .map_err(|e| ApiError::bad_request(format!("malformed CloudEvent: {e}")))?;
+    let id: Uuid = body
         .data
         .get("draft_id")
         .and_then(|v| v.as_str())
-        .unwrap_or_default();
-    let Ok(id) = id_str.parse::<Uuid>() else {
-        return (
-            StatusCode::BAD_REQUEST,
-            "data.draft_id must be a valid UUID",
-        )
-            .into_response();
-    };
+        .and_then(|s| s.parse().ok())
+        .ok_or_else(|| ApiError::bad_request("data.draft_id must be a UUID"))?;
 
-    // The status update and the downstream outbox row commit together.
-    let mut tx = match pool.begin().await {
-        Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
-    };
-    let result = match body.ce_type.as_str() {
-        mako_events::invoic::RECEIPT_SETTLED | mako_events::netzbilanz::INVOIC_PAID => {
+    let mut tx = pool.begin().await.map_err(ApiError::from)?;
+    // Delivery is at-least-once, so the same REMADV arrives more than once.
+    // The status is read inside the transaction, before the transition, so a
+    // replay can be told apart from an event that genuinely does not apply.
+    let before = pg::fetch_draft(&mut *tx, &cfg.tenant, id)
+        .await
+        .map_err(ApiError::Internal)?
+        .map(|row| row.status);
+
+    let (applied, ce_type, terminal) = match body.ce_type.as_str() {
+        mako_events::invoic::RECEIPT_SETTLED => {
             let remadv_ref = body
                 .data
                 .get("remadv_ref")
                 .and_then(|v| v.as_str())
-                .unwrap_or("webhook");
-            mark_draft_paid(&mut *tx, id, remadv_ref).await
+                .unwrap_or("REMADV");
+            (
+                pg::mark_paid(&mut tx, &cfg.tenant, id, remadv_ref)
+                    .await
+                    .map_err(ApiError::Internal)?,
+                mako_events::netzbilanz::INVOIC_PAID,
+                "paid",
+            )
         }
-        mako_events::invoic::RECEIPT_DISPUTED | mako_events::netzbilanz::INVOIC_DISPUTED => {
+        mako_events::invoic::RECEIPT_DISPUTED => {
             let erc = body
                 .data
                 .get("erc_code")
@@ -1860,470 +1419,437 @@ pub async fn post_remadv_webhook(
                 .data
                 .get("reason")
                 .and_then(|v| v.as_str())
-                .unwrap_or("REMADV dispute");
-            mark_draft_disputed(&mut *tx, id, erc, reason).await
+                .unwrap_or("REMADV Abweisung");
+            (
+                pg::mark_disputed(&mut tx, &cfg.tenant, id, erc, reason)
+                    .await
+                    .map_err(ApiError::Internal)?,
+                mako_events::netzbilanz::INVOIC_DISPUTED,
+                "disputed",
+            )
         }
         other => {
-            tracing::debug!(
-                ce_type = other,
-                "netzbilanzd: unhandled REMADV CloudEvent type"
-            );
-            return StatusCode::NO_CONTENT.into_response();
+            tracing::debug!(ce_type = other, "netzbilanzd: REMADV event not handled");
+            return Ok(StatusCode::NO_CONTENT);
         }
     };
 
-    match result {
-        Ok(true) => {
-            // Emit downstream CloudEvent
-            let ce_type = if body.ce_type.contains("settled") {
-                mako_events::netzbilanz::INVOIC_PAID
-            } else {
-                mako_events::netzbilanz::INVOIC_DISPUTED
-            };
-            if cfg.erp_webhook_url.is_some()
-                && let Err(e) = emit_cloud_event(
-                    &mut tx,
-                    &cfg.tenant,
-                    ce_type,
-                    serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
-                )
-                .await
-            {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            if let Err(e) = tx.commit().await {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
-            }
-            StatusCode::NO_CONTENT.into_response()
+    if !applied {
+        // The invoice already holds the state this event asks for, so this is a
+        // redelivery and there is nothing to do; answering 404 would tell a
+        // retrying sender it had failed. Anything else really is a 404: an
+        // unknown draft, or one in a status the transition does not reach.
+        if before.as_deref() == Some(terminal) {
+            tracing::debug!(%id, ce_type = %body.ce_type, "netzbilanzd: REMADV already applied");
+            return Ok(StatusCode::NO_CONTENT);
         }
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            format!("draft {id} not found or wrong status"),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        return Err(ApiError::NotFound);
     }
+    emit(
+        &mut tx,
+        &cfg,
+        ce_type,
+        serde_json::json!({ "draft_id": id, "tenant": cfg.tenant }),
+    )
+    .await
+    .map_err(ApiError::from)?;
+    tx.commit().await.map_err(ApiError::from)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Reporting ─────────────────────────────────────────────────────────────────
+
+/// Query string for the monthly summary.
+#[derive(Debug, Deserialize)]
+pub struct SummaryQuery {
+    /// Calendar year. Defaults to the current one.
+    pub year: Option<i32>,
+    /// Calendar month. Defaults to the current one.
+    pub month: Option<u8>,
+}
+
+/// `GET /api/v1/billing/summary?year=&month=`
+///
+/// # Errors
+///
+/// `400` for a month outside 1–12.
+pub async fn get_billing_summary(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
+    Query(q): Query<SummaryQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let now = time::OffsetDateTime::now_utc();
+    let year = q.year.unwrap_or_else(|| now.year());
+    let month = q.month.unwrap_or(now.month() as u8);
+    if !(1..=12).contains(&month) {
+        return Err(ApiError::bad_request("month must be 1–12"));
+    }
+    let rows = pg::billing_summary(&pool, &cfg.tenant, year, month)
+        .await
+        .map_err(ApiError::Internal)?;
+    let sum = |f: fn(&pg::BillingSummaryRow) -> i64| rows.iter().map(f).sum::<i64>();
+    Ok(Json(serde_json::json!({
+        "year": year,
+        "month": month,
+        // Formatted from the integers, never through an f64: these are the
+        // figures a month-end reconciliation is checked against.
+        "total_netto_eur":  billing::format_eur(sum(|r| r.netto_eur_units)),
+        "total_steuer_eur": billing::format_eur(sum(|r| r.steuer_eur_units)),
+        "total_brutto_eur": billing::format_eur(sum(|r| r.brutto_eur_units)),
+        // What is left to collect. On a portfolio with Abschläge this is below
+        // the gross, and it is the figure a month-end reconciliation wants —
+        // the gross is what was invoiced, not what anyone will pay.
+        "total_zu_zahlen_eur": billing::format_eur(sum(|r| r.zu_zahlen_eur_units)),
+        "by_group": rows,
+    })))
+}
+
+/// Query string for the audit export.
+#[derive(Debug, Deserialize)]
+pub struct AuditExportQuery {
+    /// Earliest delivery-period start.
+    pub from: Option<time::Date>,
+    /// Latest delivery-period end.
+    pub to: Option<time::Date>,
+    /// BDEW Prüfidentifikator.
+    pub pid: Option<i32>,
+    /// Lifecycle status.
+    pub status: Option<String>,
+    /// `next_cursor` from the previous page.
+    pub after: Option<String>,
+    /// Maximum rows (capped at 50 000).
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/v1/billing/audit`
+///
+/// § 147 Abs. 3 AO / § 14b UStG export. Invoices are Buchungsbelege: eight
+/// years, reduced from ten with effect from 01.01.2025.
+///
+/// # Errors
+///
+/// Propagates database failures as 500.
+pub async fn get_billing_audit(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
+    Query(q): Query<AuditExportQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let limit = q.limit.unwrap_or(10_000).clamp(1, 50_000);
+    let rows = pg::list_audit(
+        &pool,
+        &AuditQuery {
+            tenant: cfg.tenant.clone(),
+            from: q.from,
+            to: q.to,
+            pid: q.pid,
+            status: q.status,
+            after: cursor(q.after.as_deref())?,
+            limit,
+        },
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    let next = rows.last().and_then(|last| {
+        (i64::try_from(rows.len()).unwrap_or(i64::MAX) >= limit)
+            .then(|| pg::Cursor::encode(last.created_at, last.id))
+            .flatten()
+    });
+    Ok(Json(serde_json::json!({
+        "count": rows.len(),
+        "next_cursor": next,
+        "records": rows,
+        "retention": "§ 147 Abs. 3 AO / § 14b UStG — invoices are Buchungsbelege, 8 years",
+        "full_document": "GET /api/v1/billing/drafts/{id}",
+    })))
+}
+
+/// Query string for the per-MaLo history.
+#[derive(Debug, Deserialize)]
+pub struct MaloHistoryQuery {
+    /// Maximum rows (capped at 1 000).
+    pub limit: Option<i64>,
+}
+
+/// `GET /api/v1/billing/malo/{malo_id}`
+///
+/// # Errors
+///
+/// Propagates database failures as 500.
+pub async fn get_malo_billing_history(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
+    Path(malo_id): Path<String>,
+    Query(q): Query<MaloHistoryQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let rows = pg::billing_history_for_malo(
+        &pool,
+        &cfg.tenant,
+        &malo_id,
+        q.limit.unwrap_or(100).clamp(1, 1_000),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    Ok(Json(serde_json::json!({
+        "malo_id": malo_id,
+        "count": rows.len(),
+        "records": rows,
+    })))
+}
+
+// ── Fremdkosten ───────────────────────────────────────────────────────────────
+
+/// `PUT /api/v1/billing/fremdkosten/{draft_id}`
+///
+/// Attaches typed external costs to a draft. They are merged into the
+/// `Rechnung`'s own `fremdkosten` field at dispatch.
+///
+/// Fremdkosten are **informational**: BO4E models them as a cost breakdown
+/// beside the invoice rather than positions that add to it, so attaching them
+/// changes what the document explains and not what it charges. Third-party
+/// costs the counterparty actually owes belong in the settlement.
+///
+/// Only a `draft` accepts them, because the merge happens at dispatch. Taking
+/// them on a dispatched or paid invoice stored costs that would never reach the
+/// counterparty, and `GET` would then show a document nobody was sent.
+///
+/// # Errors
+///
+/// - `404` when the draft does not exist for this tenant.
+/// - `409` when the draft has already left the house.
+/// - `422` when the payload is not a `rubo4e::current::Fremdkosten`.
+pub async fn put_fremdkosten(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
+    Path(draft_id): Path<Uuid>,
+    Json(req): Json<pg::UpsertFremdkostenRequest>,
+) -> ApiResult<Json<serde_json::Value>> {
+    // Typed round-trip: the stored JSON has to *be* a Fremdkosten, not merely
+    // carry the right `_typ`, because dispatch deserialises it into the document.
+    serde_json::from_value::<rubo4e::current::Fremdkosten>(req.fremdkosten_json.clone())
+        .map_err(|e| ApiError::unprocessable(format!("invalid Fremdkosten payload: {e}")))?;
+
+    // Checked before the insert so a missing draft is a 404 rather than a
+    // foreign-key violation matched on its error text.
+    let draft = pg::fetch_draft(&pool, &cfg.tenant, draft_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound)?;
+    if draft.status != "draft" {
+        return Err(ApiError::conflict(format!(
+            "this invoice is '{}' — Fremdkosten are merged into the document at dispatch, so \
+             attaching them now would store costs the counterparty never receives. Reverse and \
+             re-issue the invoice if they belong on it.",
+            draft.status
+        )));
+    }
+
+    let id = pg::upsert_fremdkosten(&pool, &cfg.tenant, draft_id, &req)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "draft_id": draft_id,
+        "total_eur": req.total_eur.to_string(),
+        "applied": "merged into Rechnung.fremdkosten on dispatch",
+    })))
+}
+
+/// `GET /api/v1/billing/fremdkosten/{draft_id}`
+///
+/// # Errors
+///
+/// `404` when no Fremdkosten are attached for this tenant.
+pub async fn get_fremdkosten(
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Cfg,
+    Path(draft_id): Path<Uuid>,
+) -> ApiResult<Json<pg::FremdkostenRow>> {
+    pg::fetch_fremdkosten(&pool, &cfg.tenant, draft_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .map(Json)
+        .ok_or(ApiError::NotFound)
+}
 
 #[cfg(test)]
-mod kostenblatt_tests {
-    use super::decimal_from_json_value;
-    use rust_decimal::dec;
+mod tests {
+    use super::*;
 
-    // ── typed BO4E round-trip validation (PUT kostenblatt / fremdkosten) ─────
-
+    /// A correction stays in the series its original was issued under.
     #[test]
-    fn kosten_roundtrip_accepts_valid_payload() {
-        // BO4E is Option-heavy: a minimal payload with correct shapes passes.
-        let v = serde_json::json!({
-            "_typ": "KOSTEN",
-            "kostenbloecke": [{ "kostenblockbezeichnung": "UENB" }],
-        });
-        assert!(serde_json::from_value::<rubo4e::current::Kosten>(v).is_ok());
+    fn a_correction_keeps_the_rechnungskreis() {
+        assert_eq!(rechnungskreis_of("NNE-2026-000001"), Some("NNE"));
+        assert_eq!(rechnungskreis_of("NNE-GAS-2026-000001"), Some("NNE-GAS"));
+        // No Rechnungskreis was named, so the correction names none either.
+        assert_eq!(rechnungskreis_of("2026-000001"), None);
     }
 
+    /// The asserted Marktrolle follows the PID **and** the Sparte.
+    ///
+    /// `makod` checks the assertion against the deployment's licensed roles for
+    /// any command permitted to more than one, so a flat `NB` would lock a gas
+    /// network operator out of the gas invoices it alone issues.
     #[test]
-    fn kosten_roundtrip_rejects_wrong_shape() {
-        // `kostenbloecke` must be an array of blocks, not a scalar.
-        let v = serde_json::json!({ "kostenbloecke": 42 });
-        assert!(serde_json::from_value::<rubo4e::current::Kosten>(v).is_err());
+    fn the_marktrolle_follows_the_pid_and_the_sparte() {
+        // 31009 is inverted: the MSB issues it, in either Sparte.
+        assert_eq!(marktrolle_for(31009, "STROM"), "MSB");
+        assert_eq!(marktrolle_for(31009, "GAS"), "MSB");
+        // Abschlag and NN-Rechnung carry both Sparten; the role follows.
+        assert_eq!(marktrolle_for(31001, "STROM"), "NB");
+        assert_eq!(marktrolle_for(31001, "GAS"), "GNB");
+        assert_eq!(marktrolle_for(31002, "STROM"), "NB");
+        assert_eq!(marktrolle_for(31002, "GAS"), "GNB");
+        assert_eq!(marktrolle_for(31005, "STROM"), "NB");
+        // GeLi Gas AWH exists only in the gas Sperrprozess.
+        assert_eq!(marktrolle_for(31011, "GAS"), "GNB");
     }
 
+    /// A correction that is really a different invoice is refused.
+    ///
+    /// `original_draft_id` links the two, but the corrected settlement is
+    /// caller-supplied — and corrections are exempt from the double-billing
+    /// guard, so an unrelated second invoice would be stored without complaint.
     #[test]
-    fn fremdkosten_roundtrip_rejects_wrong_shape() {
-        let v = serde_json::json!({ "kostenbloecke": "not-a-list" });
-        assert!(serde_json::from_value::<rubo4e::current::Fremdkosten>(v).is_err());
-    }
+    fn a_correction_must_correct_the_same_invoice() {
+        let original = Identity {
+            settlement_type: "NneStrom",
+            sparte: "STROM",
+            sender_mp_id: "9900357000004",
+            recipient_mp_id: "9900012345678",
+        };
+        let same = Identity {
+            ..original_copy(&original)
+        };
+        assert!(corrects_the_same_invoice(&same, &original).is_ok());
 
-    // ── decimal_from_json_value ───────────────────────────────────────────────
-
-    #[test]
-    fn decimal_from_string_value() {
-        let v = serde_json::json!("1.25");
-        assert_eq!(decimal_from_json_value(&v), Some(dec!(1.25)));
-    }
-
-    #[test]
-    fn decimal_from_numeric_value() {
-        let v = serde_json::json!(2.5);
-        assert_eq!(decimal_from_json_value(&v), Some(dec!(2.5)));
-    }
-
-    #[test]
-    fn decimal_from_invalid_value_returns_none() {
-        let v = serde_json::json!({ "wert": "1.25" });
-        assert!(decimal_from_json_value(&v).is_none());
-    }
-
-    // ── KostenblattComputeRequest validation ──────────────────────────────────
-
-    #[test]
-    fn activation_window_parse_rfc3339() {
-        // Verify that typical Redispatch timestamps round-trip correctly.
-        let start = "2026-01-15T10:00:00Z";
-        let end = "2026-01-15T10:15:00Z";
-        let s = time::OffsetDateTime::parse(start, &time::format_description::well_known::Rfc3339);
-        let e = time::OffsetDateTime::parse(end, &time::format_description::well_known::Rfc3339);
-        assert!(s.is_ok(), "activation_start_utc must parse as RFC 3339");
-        assert!(e.is_ok(), "activation_end_utc must parse as RFC 3339");
-        assert!(e.unwrap() > s.unwrap(), "end must be after start");
-    }
-
-    #[test]
-    fn activation_window_15min_gap() {
-        let start = time::OffsetDateTime::parse(
-            "2026-01-15T10:00:00Z",
-            &time::format_description::well_known::Rfc3339,
-        )
-        .unwrap();
-        let end = time::OffsetDateTime::parse(
-            "2026-01-15T10:15:00Z",
-            &time::format_description::well_known::Rfc3339,
-        )
-        .unwrap();
-        let gap = end - start;
-        assert_eq!(
-            gap.whole_minutes(),
-            15,
-            "typical Redispatch activation = 15 min"
-        );
-    }
-
-    // ── Lastgang response parsing ─────────────────────────────────────────────
-
-    use super::sum_lastgang_kwh;
-    use time::format_description::well_known::Rfc3339;
-
-    fn utc(s: &str) -> time::OffsetDateTime {
-        time::OffsetDateTime::parse(s, &Rfc3339).expect("valid RFC 3339")
-    }
-
-    /// Realistic edmd response: `Vec<Lastgang>`, one per OBIS group, values under
-    /// `werte[].wert` with `zeitraum` interval bounds (the shape emitted by
-    /// edmd `get_lastgang` / `read_to_zeitreihenwert`).
-    fn edmd_shaped_response() -> Vec<rubo4e::current::Lastgang> {
-        let body = serde_json::json!([
-            {
-                "_typ": "LASTGANG",
-                "obisKennzahl": "1-0:1.29.0",
-                "sparte": "STROM",
-                "zeitIntervallLaenge": { "wert": "15", "einheit": "VIERTEL_STUNDE" },
-                "werte": [
-                    {
-                        "wert": "1.25",
-                        "status": "ENERGIEMENGE_SUMMIERT",
-                        "zeitraum": {
-                            "startdatum": "2026-01-15",
-                            "startuhrzeit": "10:00:00+00:00",
-                            "enddatum": "2026-01-15",
-                            "enduhrzeit": "10:15:00+00:00"
-                        }
-                    },
-                    {
-                        "wert": "1.30",
-                        "zeitraum": {
-                            "startdatum": "2026-01-15",
-                            "startuhrzeit": "10:15:00+00:00",
-                            "enddatum": "2026-01-15",
-                            "enduhrzeit": "10:30:00+00:00"
-                        }
-                    },
-                    {
-                        "wert": "0.80",
-                        "zeitraum": {
-                            "startdatum": "2026-01-15",
-                            "startuhrzeit": "10:30:00+00:00",
-                            "enddatum": "2026-01-15",
-                            "enduhrzeit": "10:45:00+00:00"
-                        }
-                    }
-                ]
-            }
-        ]);
-        serde_json::from_value(body).expect("edmd-shaped JSON parses as Vec<Lastgang>")
-    }
-
-    /// The typed parser sums `werte[].wert` from the shape edmd actually emits.
-    #[test]
-    fn sum_lastgang_edmd_shape() {
-        let lastgaenge = edmd_shaped_response();
-        let total = sum_lastgang_kwh(&lastgaenge, None, None);
-        assert_eq!(total, Some(dec!(3.35)));
-    }
-
-    /// The activation window filters out intervals starting outside it.
-    #[test]
-    fn sum_lastgang_filters_to_activation_window() {
-        let lastgaenge = edmd_shaped_response();
-        // Window covers only the first two 15-min intervals.
-        let total = sum_lastgang_kwh(
-            &lastgaenge,
-            Some(utc("2026-01-15T10:00:00Z")),
-            Some(utc("2026-01-15T10:30:00Z")),
-        );
-        assert_eq!(total, Some(dec!(2.55)));
-    }
-
-    /// Regression documentation: the shapes the OLD parser probed — a top-level
-    /// array of `{ "wert": ... }` items, or `werteliste` — are NOT what edmd
-    /// emits, and would have yielded `None` (silent billing-period fallback) had
-    /// they reached the typed sum. Deserialising them as `Vec<Lastgang>` either
-    /// fails outright or produces no `werte`, so the sum is `None`.
-    #[test]
-    fn old_probed_shapes_yield_none() {
-        // Old shape 1: flat array of interval objects.
-        let flat = serde_json::json!([
-            { "wert": "1.25", "timestamp_utc": "2026-01-15T10:00:00Z" },
-            { "kwh": "1.30", "timestamp_utc": "2026-01-15T10:15:00Z" }
-        ]);
-        if let Ok(parsed) = serde_json::from_value::<Vec<rubo4e::current::Lastgang>>(flat) {
-            assert_eq!(sum_lastgang_kwh(&parsed, None, None), None);
-        }
-
-        // Old shape 2: single object with "werteliste" — not a JSON array,
-        // so it cannot even deserialise as Vec<Lastgang>.
-        let werteliste = serde_json::json!({
-            "werteliste": [{ "wert": "2.50", "zeitstempel": "2026-01-15T10:00:00Z" }]
-        });
-        assert!(serde_json::from_value::<Vec<rubo4e::current::Lastgang>>(werteliste).is_err());
-    }
-
-    /// Empty response → `None` (billing-period fallback preserved).
-    #[test]
-    fn empty_lastgang_returns_none() {
-        assert_eq!(sum_lastgang_kwh(&[], None, None), None);
-    }
-
-    // ── Einsatzkosten calculation ─────────────────────────────────────────────
-
-    #[test]
-    fn einsatzkosten_calculation_precision() {
-        // 2.5 kWh × 0.12345 EUR/kWh = 0.30863 EUR
-        let dispatch_kwh = dec!(2.5);
-        let arbeitspreis = dec!(0.12345);
-        let einsatzkosten = dispatch_kwh * arbeitspreis;
-        assert_eq!(einsatzkosten, dec!(0.308625));
-        // Verify no floating-point drift
-        assert_ne!(einsatzkosten.to_string(), "0.3086249");
-    }
-
-    #[test]
-    fn dispatch_source_values_are_canonical() {
-        // Canonical dispatch_source values match DB CHECK constraint
-        let valid = &["lastgang_sum", "billing_period", "manual_override"];
-        for v in valid {
-            assert!(
-                !v.is_empty(),
-                "dispatch_source value must not be empty: {v}"
-            );
+        for (label, changed) in [
+            (
+                "settlement kind",
+                Identity {
+                    settlement_type: "MmmStrom",
+                    ..original_copy(&original)
+                },
+            ),
+            (
+                "Sparte",
+                Identity {
+                    sparte: "GAS",
+                    ..original_copy(&original)
+                },
+            ),
+            (
+                "issuer",
+                Identity {
+                    sender_mp_id: "9900999000001",
+                    ..original_copy(&original)
+                },
+            ),
+            (
+                "billed party",
+                Identity {
+                    recipient_mp_id: "9900111000002",
+                    ..original_copy(&original)
+                },
+            ),
+        ] {
+            let err = corrects_the_same_invoice(&changed, &original)
+                .expect_err("a changed {label} is a different invoice");
             assert_eq!(
-                *v,
-                v.to_lowercase(),
-                "dispatch_source must be lowercase: {v}"
+                err.status(),
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "changed {label}"
             );
         }
     }
-}
 
-// ── §13a EnWG Vergütung (Redispatch 2.0 compensation) ─────────────────────────
-
-/// Request body for `POST /api/v1/redispatch/verguetung/{activation_id}/compute`.
-#[derive(Debug, serde::Deserialize)]
-pub struct VerguetungComputeRequest {
-    /// 11-digit MaLo-ID of the affected resource's grid connection.
-    pub malo_id: String,
-    /// UTC activation start — RFC 3339.
-    pub activation_start_utc: String,
-    /// UTC activation end — RFC 3339.
-    pub activation_end_utc: String,
-    /// Z01 EEG / Z02 KWKG / Z03 sonstige (Redispatch Stammdaten).
-    pub verguetungsart: grid_billing::RedispatchVerguetungsart,
-    /// EEG/KWKG plants: the anzulegender Wert in ct/kWh — the lost statutory
-    /// remuneration basis (§13a Abs. 2 S. 3 Nr. 5 EnWG). Ignored when
-    /// `entgangene_einnahmen_eur_override` is supplied.
-    #[serde(default)]
-    pub anzulegender_wert_ct_per_kwh: Option<rust_decimal::Decimal>,
-    /// Proven lost revenue in EUR (Nr. 3) — required for Z03, optional
-    /// override for Z01/Z02.
-    #[serde(default)]
-    pub entgangene_einnahmen_eur_override: Option<rust_decimal::Decimal>,
-    /// Zusätzliche Aufwendungen in EUR (Nr. 1/2/4). Default 0.
-    #[serde(default)]
-    pub zusaetzliche_aufwendungen_eur: rust_decimal::Decimal,
-    /// Ersparte Aufwendungen in EUR (Satz 4). Default 0.
-    #[serde(default)]
-    pub ersparte_aufwendungen_eur: rust_decimal::Decimal,
-    /// Manual Ausfallarbeit override — when set, edmd is not queried.
-    ///
-    /// For an Aufforderungsfall this is **required**: the counterfactual is the
-    /// schedule transmitted to the EIV, which edmd does not hold.
-    #[serde(default)]
-    pub ausfallarbeit_kwh_override: Option<rust_decimal::Decimal>,
-    /// Which redispatch case this activation was — Aufforderungsfall (the EIV
-    /// steers to a transmitted schedule) or Duldungsfall (the NB steers via the
-    /// Steuerkanal).
-    ///
-    /// Required, because the two use different §13a counterfactuals and picking
-    /// one silently misstates the compensation. Take it from the activation's
-    /// `Abwicklung`.
-    pub abwicklung: RedispatchFall,
-}
-
-/// The redispatch case, as the compensation endpoint receives it.
-#[derive(Debug, Clone, Copy, serde::Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum RedispatchFall {
-    /// EIV steers to a transmitted schedule.
-    Aufforderungsfall,
-    /// NB steers the resource via the Steuerkanal.
-    Duldungsfall,
-}
-
-/// `POST /api/v1/redispatch/verguetung/{activation_id}/compute`
-///
-/// §13a Abs. 2 EnWG: compute the angemessene Vergütung for one redispatch
-/// activation. The Ausfallarbeit comes from the same edmd Lastgang window
-/// resolution the Kostenblatt uses (15-min interval sum over the activation
-/// window); the compensation arithmetic is `grid_billing::redispatch_verguetung`
-/// (entgangene Einnahmen + zusätzliche Aufwendungen − ersparte Aufwendungen).
-///
-/// This is a **calculation endpoint** — the figure and its per-component
-/// trace are returned for the operator's payment run; nothing is persisted.
-pub async fn post_verguetung_compute(
-    Extension(cfg): Extension<Arc<crate::config::NetzbilanzConfig>>,
-    Extension(http_client): Extension<Arc<reqwest::Client>>,
-    Path(activation_id): Path<String>,
-    Json(req): Json<VerguetungComputeRequest>,
-) -> impl IntoResponse {
-    use rust_decimal::Decimal;
-    use time::format_description::well_known::Rfc3339;
-
-    if time::OffsetDateTime::parse(&req.activation_start_utc, &Rfc3339).is_err()
-        || time::OffsetDateTime::parse(&req.activation_end_utc, &Rfc3339).is_err()
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            "activation_start_utc/activation_end_utc must be RFC 3339",
-        )
-            .into_response();
+    /// Copy an identity so a test can vary one field of it.
+    fn original_copy<'a>(from: &Identity<'a>) -> Identity<'a> {
+        Identity {
+            settlement_type: from.settlement_type,
+            sparte: from.sparte,
+            sender_mp_id: from.sender_mp_id,
+            recipient_mp_id: from.recipient_mp_id,
+        }
     }
 
-    // The §13a counterfactual differs by case, so the case decides the basis.
-    //
-    // Duldungsfall: the NB steered the resource, so what the plant would have
-    // produced was never transmitted — it is derived from the measured Lastgang.
-    // Aufforderungsfall: the EIV steered to a transmitted schedule, and that
-    // schedule *is* the counterfactual. Using the Lastgang there would settle
-    // against what happened rather than against what was instructed, which is a
-    // money error in whichever direction the plant deviated.
-    let basis = match req.abwicklung {
-        RedispatchFall::Duldungsfall => grid_billing::AusfallarbeitBasis::GemessenerLastgang,
-        RedispatchFall::Aufforderungsfall => {
-            grid_billing::AusfallarbeitBasis::UebermittelterFahrplan
-        }
-    };
-    if matches!(req.abwicklung, RedispatchFall::Aufforderungsfall)
-        && req.ausfallarbeit_kwh_override.is_none()
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "Aufforderungsfall: supply ausfallarbeit_kwh_override from the \
-                          transmitted schedule — the measured Lastgang is the Duldungsfall \
-                          basis and would settle §13a Abs. 2 against the wrong counterfactual",
-                "legal_basis": "§13a Abs. 2 EnWG",
-            })),
-        )
-            .into_response();
+    /// The Sparte filter accepts what an operator would type, and refuses a typo.
+    #[test]
+    fn the_sparte_filter_normalises_and_refuses_a_typo() {
+        assert_eq!(sparte_filter(Some("Strom")).expect("ok"), Some("STROM"));
+        assert_eq!(sparte_filter(Some("gas")).expect("ok"), Some("GAS"));
+        assert_eq!(sparte_filter(Some(" GAS ")).expect("ok"), Some("GAS"));
+        assert_eq!(sparte_filter(None).expect("ok"), None);
+        // A typo must not read as "no gas invoices exist".
+        assert!(sparte_filter(Some("STORM")).is_err());
     }
 
-    // Ausfallarbeit: override → edmd Lastgang window sum.
-    let (ausfallarbeit_kwh, source) = if let Some(kwh) = req.ausfallarbeit_kwh_override {
-        (kwh, "manual_override")
-    } else {
-        let Some(edmd_url) = cfg.edmd_url.as_deref().map(|u| u.trim_end_matches('/')) else {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "edmd_url not configured — supply ausfallarbeit_kwh_override",
-            )
-                .into_response();
-        };
-        let shim = KostenblattComputeRequest {
-            tr_id: String::new(),
-            malo_id: req.malo_id.clone(),
-            period_year: 0,
-            period_month: 1,
-            uenb_mp_id: String::new(),
-            vnb_mp_id: String::new(),
-            activation_start_utc: req.activation_start_utc.clone(),
-            activation_end_utc: req.activation_end_utc.clone(),
-            arbeitspreis_eur_per_kwh: Decimal::ZERO,
-            dispatch_kwh_override: None,
-        };
-        match fetch_dispatch_kwh_from_lastgang(&http_client, edmd_url, &req.malo_id, &cfg, &shim)
-            .await
-        {
-            Some(kwh) => (kwh, "lastgang_sum"),
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    format!(
-                        "no Lastgang data for MaLo {} in the activation window — ingest \
-                         Redispatch MSCONS (PIDs 13020–13023, 13026) or supply \
-                         ausfallarbeit_kwh_override",
-                        req.malo_id
-                    ),
-                )
-                    .into_response();
-            }
-        }
-    };
+    /// A page cursor round-trips, and a malformed one is refused.
+    #[test]
+    fn a_page_cursor_round_trips() {
+        // A non-UTC instant, because that is the one that breaks: `+01:00`
+        // renders a `+`, and a `+` in a query string decodes as a space.
+        let local = time::macros::datetime!(2026-02-01 09:30:00 +1);
+        let encoded_local = pg::Cursor::encode(local, Uuid::nil()).expect("encodes");
+        assert!(
+            encoded_local.contains('Z') && !encoded_local.contains('+'),
+            "a cursor must survive a query string: {encoded_local}"
+        );
+        assert_eq!(
+            cursor(Some(&encoded_local))
+                .expect("parses")
+                .expect("some")
+                .created_at,
+            local,
+            "normalising to UTC must not move the instant"
+        );
 
-    // Entgangene Einnahmen basis by Vergütungsart.
-    let entgangene = match (
-        req.entgangene_einnahmen_eur_override,
-        req.anzulegender_wert_ct_per_kwh,
-        req.verguetungsart,
-    ) {
-        (Some(eur), _, _) => eur,
-        (None, Some(aw_ct), _) => grid_billing::eeg_entgangene_einnahmen(ausfallarbeit_kwh, aw_ct),
-        (None, None, grid_billing::RedispatchVerguetungsart::Sonstige) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Z03 (sonstige) requires entgangene_einnahmen_eur_override — lost market \
-                 revenue must be proven, not derived (§13a Abs. 2 S. 3 Nr. 3 EnWG)",
-            )
-                .into_response();
-        }
-        (None, None, _) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "EEG/KWKG plants require anzulegender_wert_ct_per_kwh (or an explicit \
-                 entgangene_einnahmen_eur_override)",
-            )
-                .into_response();
-        }
-    };
+        let at = time::macros::datetime!(2026-02-01 08:30:00 UTC);
+        let id = Uuid::from_u128(0x1234_5678_90ab_cdef_1234_5678_90ab_cdef);
+        let encoded = pg::Cursor::encode(at, id).expect("encodes");
+        let parsed = cursor(Some(&encoded)).expect("parses").expect("some");
+        assert_eq!(parsed.created_at, at);
+        assert_eq!(parsed.id, id);
+        // A caller walking pages must be told, not silently restarted at page one.
+        assert!(cursor(Some("not-a-cursor")).is_err());
+        assert!(cursor(None).expect("none is fine").is_none());
+    }
 
-    let input = grid_billing::RedispatchVerguetungInput {
-        ausfallarbeit_kwh,
-        basis,
-        verguetungsart: req.verguetungsart,
-        entgangene_einnahmen_eur: entgangene,
-        zusaetzliche_aufwendungen_eur: req.zusaetzliche_aufwendungen_eur,
-        ersparte_aufwendungen_eur: req.ersparte_aufwendungen_eur,
-    };
-    match grid_billing::redispatch_verguetung(&input) {
-        Ok(v) => Json(serde_json::json!({
-            "activation_id": activation_id,
-            "malo_id": req.malo_id,
-            "ausfallarbeit_source": source,
-            "verguetung": v,
-            "legal_basis": "§13a Abs. 2 EnWG",
-        }))
-        .into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+    /// The last page hands back no cursor — a full page does.
+    #[test]
+    fn only_a_full_page_offers_a_next_cursor() {
+        assert_eq!(next_cursor(&[], 10), None);
+    }
+
+    /// NN-Rechnung Strom and Gas share PID 31002 but not the makod command —
+    /// the Gas one is what a GNB-role deployment is permitted to send.
+    #[test]
+    fn the_makod_command_follows_the_pid_and_the_sparte() {
+        assert_eq!(
+            makod_command(31002, "STROM").expect("strom NNE"),
+            "gpke.nne.rechnung.stellen"
+        );
+        assert_eq!(
+            makod_command(31002, "GAS").expect("gas NNE"),
+            "gpke.nne-gas.rechnung.stellen"
+        );
+        assert_eq!(
+            makod_command(31005, "STROM").expect("MMM"),
+            "gpke.mmm.rechnung.stellen"
+        );
+        assert_eq!(
+            makod_command(31009, "STROM").expect("MSB"),
+            "wim.msb-rechnung.stellen"
+        );
+        assert_eq!(
+            makod_command(31011, "GAS").expect("AWH"),
+            "geli.gas.awh-rechnung.stellen"
+        );
+        // An Abschlag prices no energy, so one command serves both Sparten.
+        for sparte in ["STROM", "GAS"] {
+            assert_eq!(
+                makod_command(31001, sparte).expect("Abschlag"),
+                "gpke.nne-abschlag.rechnung.stellen"
+            );
+        }
     }
 }

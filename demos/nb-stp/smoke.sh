@@ -18,7 +18,8 @@
 #   7.   makod dispatches UTILMD 55002 (Bestätigung Lieferbeginn)
 #   8.   webhook receives UTILMD 55002 ✓
 #   m1-m5. marktd smoke tests (health, MaLo, preisblatt, correlations)
-#   n1-n6. netzbilanzd smoke tests (health, NNE draft, list, summary, audit, MCP)
+#   n1-n7. netzbilanzd smoke tests (health, NNE draft, list, Sparte filter,
+#          summary, audit, MCP)
 #         — enabled when NETZBILANZD_URL is set
 #
 # Prerequisites: docker compose up -d (builds makod:dev + marktd:dev + processd:dev)
@@ -654,58 +655,89 @@ if [[ -n "$NETZBILANZD_URL" ]]; then
     }
 
     # n1. Health
-    info "[n1/6] netzbilanzd health"
+    info "[n1/7] netzbilanzd health"
     resp=$(netzbilanzd_get "/health")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "netzbilanzd /health returned $code"
     pass "GET /health → $code"
 
     # n2. Generate NNE draft
-    info "[n2/6] POST /api/v1/billing/run — NNE Strom draft"
+    info "[n2/7] POST /api/v1/billing/run — NNE Strom draft"
     INVOICE_DATE=$(date +%Y-%m-01)
     PERIOD_FROM="$(date -d 'last month' +%Y-%m-01 2>/dev/null || date -v-1m +%Y-%m-01)"
     PERIOD_TO="$(date -d 'last month' +%Y-%m-28 2>/dev/null || date -v-1m +%Y-%m-28)"
+    # The Konzessionsabgabe carries its KAV §2 customer group, so the statutory
+    # Höchstbetrag is checked: 0.11 ct/kWh is the Sondervertragskunden ceiling.
     resp=$(netzbilanzd_post "/api/v1/billing/run" "{
-        \"nb_mp_id\": \"9900357000004\",
-        \"lf_mp_id\": \"9900012345678\",
         \"invoice_date\": \"$INVOICE_DATE\",
         \"due_date\": \"$(date -d "$INVOICE_DATE + 30 days" +%Y-%m-%d 2>/dev/null || date -v+30d +%Y-%m-%d)\",
-        \"rechnungsnummer_prefix\": \"SMOKE-NNE-$SMOKE_RUN_ID\",
+        \"rechnungskreis\": \"SMOKE-$SMOKE_RUN_ID\",
         \"positions\": [{
             \"malo_id\": \"$SMOKE_MALO_ID\",
             \"period_from\": \"$PERIOD_FROM\",
             \"period_to\": \"$PERIOD_TO\",
-            \"billing_type\": \"nne_strom\",
-            \"arbeitsmenge_kwh\": \"1500.000\",
-            \"arbeitspreis_ct_per_kwh\": \"3.500\",
-            \"ka_satz_ct_per_kwh\": \"1.320\"
+            \"settlement\": {
+                \"billing_type\": \"nne\",
+                \"nb_mp_id\": \"9900357000004\",
+                \"lf_mp_id\": \"9900012345678\",
+                \"sparte\": \"Strom\",
+                \"arbeitspreis\": {
+                    \"Einheitlich\": {
+                        \"menge_kwh\": \"1500.000\",
+                        \"preis_ct_per_kwh\": \"3.500\"
+                    }
+                },
+                \"konzessionsabgabe\": {
+                    \"satz_ct_per_kwh\": \"0.110\",
+                    \"klasse\": \"Sondervertragskunde\"
+                }
+            }
         }]
     }")
     code=$(status "$resp")
-    # Accept 201 (created) or 409 (conflict = draft already exists for this period — idempotent)
-    [[ "$code" == "201" || "$code" == "409" || "$code" == "422" ]] \
+    # 201 created, or 409 when a previous run already billed this MaLo and period.
+    [[ "$code" == "201" || "$code" == "409" ]] \
         || fail "POST /billing/run returned $code: $(body "$resp")"
-    DRAFT_IDS=$(body "$resp" | jq -r '.draft_ids[0] // "none"')
-    pass "POST /api/v1/billing/run → $code  first_draft_id=$DRAFT_IDS"
+    DRAFT_IDS=$(body "$resp" | jq -r '.drafts[0].draft_id // "none"')
+    NUMMER=$(body "$resp" | jq -r '.drafts[0].rechnungsnummer // "-"')
+    pass "POST /api/v1/billing/run → $code  draft=$DRAFT_IDS  rechnungsnummer=$NUMMER"
 
     # n3. List drafts
-    info "[n3/6] GET /api/v1/billing/drafts — list"
+    info "[n3/7] GET /api/v1/billing/drafts — list"
     resp=$(netzbilanzd_get "/api/v1/billing/drafts?limit=5")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "GET /billing/drafts returned $code"
-    COUNT=$(body "$resp" | jq '. | length' 2>/dev/null || echo "?")
+    COUNT=$(body "$resp" | jq '.count // 0' 2>/dev/null || echo "?")
     pass "GET /api/v1/billing/drafts → $code  count=$COUNT"
 
-    # n4. Monthly summary
-    info "[n4/6] GET /api/v1/billing/summary — monthly totals"
+    # n4. Sparte filter — PID 31002 is shared between Strom and Gas, so the
+    # Prüfidentifikator alone cannot separate them. A typo must be refused
+    # rather than answered with the wider set.
+    info "[n4/7] GET /api/v1/billing/drafts?sparte= — Sparte filter"
+    resp=$(netzbilanzd_get "/api/v1/billing/drafts?sparte=Strom&limit=5")
+    code=$(status "$resp")
+    [[ "$code" == "200" ]] || fail "GET /billing/drafts?sparte=Strom returned $code"
+    STROM_COUNT=$(body "$resp" | jq '.count // 0')
+    resp=$(netzbilanzd_get "/api/v1/billing/drafts?sparte=STORM")
+    code=$(status "$resp")
+    [[ "$code" == "400" ]] || fail "a mistyped sparte must be a 400, got $code"
+    pass "GET /api/v1/billing/drafts?sparte=Strom → 200 count=$STROM_COUNT, typo → 400"
+
+    # n5. Monthly summary
+    info "[n5/7] GET /api/v1/billing/summary — monthly totals"
     resp=$(netzbilanzd_get "/api/v1/billing/summary")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "GET /billing/summary returned $code"
-    TOTAL=$(body "$resp" | jq -r '.total_gross_eur // "?"')
-    pass "GET /api/v1/billing/summary → $code  total_gross_eur=$TOTAL"
+    NETTO=$(body "$resp" | jq -r '.total_netto_eur // "?"')
+    STEUER=$(body "$resp" | jq -r '.total_steuer_eur // "?"')
+    BRUTTO=$(body "$resp" | jq -r '.total_brutto_eur // "?"')
+    # What is left to collect after any Abschlag — the reconciliation figure.
+    ZU_ZAHLEN=$(body "$resp" | jq -r '.total_zu_zahlen_eur // "?"')
+    [[ "$ZU_ZAHLEN" != "?" ]] || fail "summary must state total_zu_zahlen_eur"
+    pass "GET /api/v1/billing/summary → $code  netto=$NETTO steuer=$STEUER brutto=$BRUTTO zu_zahlen=$ZU_ZAHLEN"
 
-    # n5. Audit export
-    info "[n5/6] GET /api/v1/billing/audit — § 147 AO / GoBD BNetzA export"
+    # n6. Audit export
+    info "[n6/7] GET /api/v1/billing/audit — § 147 AO / GoBD BNetzA export"
     resp=$(netzbilanzd_get "/api/v1/billing/audit?limit=10")
     code=$(status "$resp")
     [[ "$code" == "200" ]] || fail "GET /billing/audit returned $code"
@@ -713,7 +745,7 @@ if [[ -n "$NETZBILANZD_URL" ]]; then
     pass "GET /api/v1/billing/audit → $code  count=$AUDIT_COUNT"
 
     # n6. MCP server info
-    info "[n6/6] POST /mcp — MCP server initialize"
+    info "[n7/7] POST /mcp — MCP server initialize"
     resp=$(curl -sS -w '\n%{http_code}' -X POST "$NETZBILANZD_URL/mcp" \
         -H "Authorization: Bearer ${NETZBILANZD_AUTH_TOKEN:-demo-secret}" \
         -H "Content-Type: application/json" \

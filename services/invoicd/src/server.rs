@@ -1102,6 +1102,11 @@ async fn post_selbstausstellen(
         correction_of: None,
         invoice_date,
         due_date,
+        // The Mehrmenge leg the LF self-issues has its own dedicated
+        // `netznutzungrechnungstyp`, so it states no separate cadence — and a
+        // self-issued invoice settles no Abschläge.
+        cadence: None,
+        abschlaege: Vec::new(),
     };
     let billing_result = &document.settlement;
     let rechnung = grid_billing::bo4e::into_rechnung(&document);

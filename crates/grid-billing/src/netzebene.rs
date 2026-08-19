@@ -34,7 +34,9 @@ use rust_decimal::Decimal;
 /// level it takes supply from. Transformation levels exist because a customer
 /// supplied out of a transformer pays for that transformer as well as for the
 /// network above it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Netzebene {
     /// Höchstspannung — 380/220 kV.
     Hoechstspannung,

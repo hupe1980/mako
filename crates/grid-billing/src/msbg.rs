@@ -18,7 +18,7 @@ use rust_decimal::Decimal;
 use rust_decimal::dec;
 
 /// Which §30 MsbG case a metering point falls under.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MessstellenKategorie {
     /// **§30 Abs. 1** — Pflichteinbaufall.
     Pflichteinbau(PflichtBand),
@@ -34,7 +34,9 @@ pub enum MessstellenKategorie {
 /// capacity — whichever is higher. `Ueber100000` has no fixed total: §30 Abs. 1
 /// allows an "angemessenes jährliches Entgelt", so only the Netzbetreiber's
 /// share is capped.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum PflichtBand {
     /// > 6 000 – ≤ 10 000 kWh.
     Bis10000,
@@ -49,7 +51,7 @@ pub enum PflichtBand {
 }
 
 /// Who owes the charge.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Entgeltschuldner {
     /// The Netzbetreiber's share.
     Netzbetreiber,

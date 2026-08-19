@@ -45,13 +45,16 @@ pub struct NetzbilanzConfig {
     /// (Mehr-/Mindermengen) settlement prices from `marktd` when not explicitly
     /// supplied in a billing run request.
     ///
-    /// Required for `billing_type = "mmm_strom"` auto-fetch path.
+    /// Required for the Strom MMM auto-fetch path (`billing_type = "mmm"`, `sparte = "Strom"`).
     /// Identify your ÜNB from BDEW Codenummernbericht or
     /// `marktd GET /api/v1/partners` (rol: ÜNB).
     pub vnb_mp_id: Option<String>,
-    /// How often (seconds) to check for undispatched drafts older than 48 h.
-    /// Default: 3600 (1 hour). Set to 0 to disable.
+    /// How often (seconds) to look for drafts stuck undispatched.
+    /// Default: 3600 (1 hour). Set to 0 to disable the worker.
     pub dispatch_alert_interval_secs: Option<u64>,
+    /// How old (hours) an undispatched draft must be before it is reported.
+    /// Default: 48. Set it to your Zahlungsziel minus the AS4 transit time.
+    pub dispatch_stale_hours: Option<i64>,
     /// How often (seconds) to check for pending Kostenblatt near the 15th-of-month deadline.
     /// Default: 86400 (1 day). Set to 0 to disable.
     pub kostenblatt_alert_interval_secs: Option<u64>,

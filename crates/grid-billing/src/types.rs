@@ -31,7 +31,19 @@ use rust_decimal::Decimal;
 /// Controls which legal references are applied to each settlement position:
 /// - `Strom` → `StromNEV`, BK6 Festlegungen
 /// - `Gas` → `GasNEV`, BK7 Festlegungen
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Default,
+    serde::Serialize,
+    serde::Deserialize,
+)]
 pub enum Sparte {
     /// Electricity (Strom). Default.
     #[default]
@@ -46,7 +58,7 @@ pub enum Sparte {
 ///
 /// KAV bands Tarifkunden rates by the municipality's **inhabitant count**, not by
 /// the customer's annual consumption.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum GemeindeGroesse {
     /// bis 25 000 Einwohner.
     Bis25k,
@@ -63,7 +75,7 @@ pub enum GemeindeGroesse {
 /// The Tarifkunde/Sondervertragskunde split is a **contract-type** test, not a
 /// consumption threshold: KAV §2 Abs. 3 applies to Sondervertragskunden whatever
 /// they consume, and Abs. 2 bands Tarifkunden by municipality size.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum KaKundengruppe {
     /// Tarifkunde — KAV §2 Abs. 2. Rate depends on [`GemeindeGroesse`].
     ///
@@ -188,7 +200,7 @@ pub enum QuantityUnit {
 /// All three modules are **mandatory** for eligible controllable loads (heat pumps,
 /// EV chargers, battery storage ≥ 4.2 kW) registered with the NB. The LF/NB
 /// must offer at least Modul 1 to all eligible customers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Sect14aModule {
     /// Modul 1 — **pauschale Reduzierung des Netzentgelts**.
     ///
@@ -253,6 +265,14 @@ impl Sect14aModule {
 /// Determines which BDEW PIDs are applicable and which regulatory references apply.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SettlementType {
+    /// Abschlagsrechnung Netznutzung — PID 31001 (NB → LF).
+    ///
+    /// A payment on account, not a settled period: it prices no energy and
+    /// carries **exactly one** Positionszeile (INVOIC AHB 1.0b, Änd-ID 26817 —
+    /// "Eine Abschlagsrechnung kann und muss genau eine Positionszeile
+    /// enthalten"). What settles it is the Abschlussrechnung that follows,
+    /// which deducts it by invoice number.
+    NneAbschlag,
     /// Netznutzungsentgelt (NNE) Strom — PID 31002 (NN-Rechnung, NB → LF).
     NneStrom,
     /// Netznutzungsentgelt (NNE) Gas — PID 31002 (NN-Rechnung, NB → LF, GasNEV).
@@ -298,6 +318,7 @@ impl SettlementType {
     #[must_use]
     pub fn default_pid(self) -> u32 {
         match self {
+            Self::NneAbschlag => 31001,
             Self::NneStrom => 31002,
             Self::NneGas => 31002,
             Self::MmmStrom => 31005,
@@ -438,6 +459,14 @@ pub enum LegalReference {
         /// Paragraph citation, e.g. `"§§21 ff."`.
         paragraph: &'static str,
     },
+    /// UStG — Umsatzsteuergesetz.
+    ///
+    /// Cited where the tax treatment is itself part of what the position claims:
+    /// an Anzahlung under §14 Abs. 5, a reverse charge under §13b.
+    Ustg {
+        /// Paragraph citation, e.g. `"§14 Abs. 5"`.
+        paragraph: &'static str,
+    },
     /// §14a EnWG — Steuerbare Verbrauchseinrichtungen (controllable loads).
     ///
     /// Governs time-variable (ToU) NNE for heat pumps, EV chargers, etc.
@@ -506,6 +535,7 @@ impl LegalReference {
             Self::StromNev { paragraph } => format!("StromNEV {paragraph}"),
             Self::GasNev { paragraph } => format!("GasNEV {paragraph}"),
             Self::Kav { paragraph } => format!("KAV {paragraph}"),
+            Self::Ustg { paragraph } => format!("UStG {paragraph}"),
             Self::Kwkg { paragraph } => format!("KWKG {paragraph}"),
             Self::EnFG { paragraph } => format!("EnFG {paragraph}"),
             Self::Sect14aEnwg { module } => format!("§14a EnWG {}", module.label()),
@@ -666,6 +696,12 @@ pub enum WarningSeverity {
 /// | `Blindmehrarbeit` | `Blindmehrarbeit` | Reactive energy excess |
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum BillingPositionKind {
+    /// The single line of an Abschlagsrechnung — a payment on account.
+    ///
+    /// Carries an amount and nothing else: no quantity, no unit price, because
+    /// an Abschlag prices no energy. What it is *for* is the delivery period on
+    /// the settlement.
+    NneAbschlag,
     /// Netznutzungsentgelt Arbeit — flat-rate active energy charge (kWh).
     /// SLP or Gas. → `BdewArtikelnummer::Wirkarbeit`
     NneArbeit,
@@ -862,6 +898,9 @@ impl BillingPositionKind {
         use BillingPositionKind as K;
         use SettlementType as ST;
         match (self, settlement_type) {
+            // An Abschlag prices nothing, so it carries no Artikelnummer: the
+            // codelist names charges, and a payment on account is not one.
+            (K::NneAbschlag, _) => None,
             // Gas NNE keeps the classic codes — BK6-20-160 changed Strom only.
             (
                 K::NneArbeit
@@ -915,7 +954,11 @@ impl BillingPositionKind {
 
 // ── Arbeitspreis model ────────────────────────────────────────────────────────
 
-/// A §14a Modul 1 reduction factor — the fraction of the published rate paid.
+/// A §14a **Modul 2** reduction factor — the fraction of the published
+/// Arbeitspreis actually paid.
+///
+/// Modul 2 is the *prozentuale* reduction; Modul 1 is the flat annual pauschale
+/// and carries no factor at all (see [`ArbeitspreisModell::Modul1Pauschal`]).
 ///
 /// A newtype because the range matters: `0.85` is a 15 % reduction, and a value
 /// outside `(0, 1]` is not a reduction at all. The unconstrained `Decimal` this
@@ -925,7 +968,11 @@ impl BillingPositionKind {
 pub struct Reduktionsfaktor(Decimal);
 
 impl Reduktionsfaktor {
-    /// The regulatory default, BNetzA BK6-22-300 Anlage 2 — 85 % of the tariff.
+    /// A commonly published factor — 85 % of the tariff, i.e. a 15 % reduction.
+    ///
+    /// Not a statutory rate: BK8-22/010-A leaves the Modul-2 percentage to each
+    /// Netzbetreiber's published Preisblatt, so this is a convenience default
+    /// and never a substitute for the operator's own figure.
     pub const REGELFALL: Self = Self(rust_decimal::dec!(0.85));
 
     /// Build a factor.
@@ -936,7 +983,7 @@ impl Reduktionsfaktor {
     pub fn new(factor: Decimal) -> Result<Self, crate::error::BillingError> {
         if factor <= Decimal::ZERO || factor > Decimal::ONE {
             return Err(crate::error::BillingError::InvalidInput {
-                reason: format!("§14a Modul 1 reduction factor must be in (0, 1], got {factor}"),
+                reason: format!("§14a Modul 2 reduction factor must be in (0, 1], got {factor}"),
             });
         }
         Ok(Self(factor))
@@ -949,8 +996,21 @@ impl Reduktionsfaktor {
     }
 }
 
+/// Deserialising goes through [`Reduktionsfaktor::new`], so a factor that
+/// arrives over the wire is range-checked exactly like one built in process.
+///
+/// Deriving it would have reintroduced the unconstrained `Decimal` this newtype
+/// exists to prevent: a request body carrying `5` would then multiply the
+/// Arbeitspreis by five with no error anywhere.
+impl<'de> serde::Deserialize<'de> for Reduktionsfaktor {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = <Decimal as serde::Deserialize>::deserialize(d)?;
+        Self::new(raw).map_err(serde::de::Error::custom)
+    }
+}
+
 /// A metered quantity priced at a rate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MengePreis {
     /// Metered energy in kWh.
     pub menge_kwh: Decimal,
@@ -973,7 +1033,7 @@ pub struct MengePreis {
 ///
 /// Those were runtime warnings in a validator the engine never called. They are
 /// now unrepresentable.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum ArbeitspreisModell {
     /// A single rate for all metered energy.
     Einheitlich(MengePreis),
@@ -1085,7 +1145,7 @@ impl ArbeitspreisModell {
 /// The share is therefore an **input**, not a constant: it is a term of the
 /// Netzbetreiber's price sheet, and hard-coding one would bill some networks
 /// wrongly. [`Blindarbeit::COS_PHI_0_9`] is the documented default.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Blindarbeit {
     /// Reactive energy drawn in the period, in kvarh.
     pub blindarbeit_kvarh: Decimal,
@@ -1118,7 +1178,7 @@ impl Blindarbeit {
 ///
 /// A pair, because billing one without the other is meaningless. The two used to
 /// be independent `Option`s checked at runtime in two separate places.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Leistungspreis {
     /// Peak demand in kW.
     pub spitzenleistung_kw: Decimal,
@@ -1127,7 +1187,7 @@ pub struct Leistungspreis {
 }
 
 /// A Gas NNE Grundpreis — monthly rate and the months billed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Grundpreis {
     /// Rate in EUR per month.
     pub eur_per_month: Decimal,
@@ -1140,7 +1200,7 @@ pub struct Grundpreis {
 /// Paired so the KAV §2 Höchstbetrag check can always run. They were independent
 /// `Option`s, and the ceiling check was skipped entirely when the group was
 /// absent — which is exactly when an over-charge is most likely to go unnoticed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Konzessionsabgabe {
     /// Published rate in ct/kWh.
     pub satz_ct_per_kwh: Decimal,
@@ -1249,6 +1309,13 @@ pub struct SettlementResult {
     pub positions: Vec<SettlementPosition>,
     /// Net total in EUR, rounded to 2 decimal places.
     pub total_eur: Decimal,
+    /// The Umsatzsteuer on that net total.
+    ///
+    /// §14 Abs. 4 Nr. 8 UStG requires the rate and the amount on every invoice,
+    /// or a note saying why neither is stated. A settlement that carries only a
+    /// net figure cannot be rendered as a lawful Rechnung, and the recipient
+    /// gets no Vorsteuerabzug from one.
+    pub steuer: crate::umsatzsteuer::Steuerausweis,
     /// What the engine could not do, or did with a caveat.
     pub warnings: Vec<SettlementWarning>,
 }
@@ -1279,6 +1346,35 @@ impl SettlementResult {
     }
 }
 
+// ── Abschlagsverrechnung ──────────────────────────────────────────────────────
+
+/// An Abschlagsrechnung a later invoice deducts.
+///
+/// The INVOIC AHB puts these in the Summenteil, not among the positions:
+/// `SG50 MOA+113` carries the **gross** amount already paid, `SG51 RFF+AFL` the
+/// invoice number it was billed under and `SG51 DTM+3` that invoice's date. They
+/// therefore reduce what is *owed*, never the net or the tax — §14 Abs. 5 UStG
+/// taxes the Anzahlung when it is received, so the Abschlussrechnung does not
+/// tax it a second time.
+///
+/// Two rules from the AHB travel with this type:
+///
+/// - **\[526\]** — the amount stated must equal the referenced Abschlagsrechnung's
+///   own Rechnungsbetrag. A deduction that does not match what was billed is a
+///   deduction the counterparty will reject.
+/// - **\[519\]** — a *stornierte* Abschlagsrechnung is not listed. It was
+///   reversed, so nothing was paid on it, and deducting it would credit money
+///   that never moved.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct Abschlagsverrechnung {
+    /// The Abschlagsrechnung's invoice number (`SG51 RFF+AFL`).
+    pub rechnungsnummer: String,
+    /// That invoice's date (`SG51 DTM+3`).
+    pub rechnungsdatum: time::Date,
+    /// The **gross** amount already billed on it (`SG50 MOA+113`, inkl. USt.).
+    pub betrag_brutto_eur: Decimal,
+}
+
 // ── InvoiceDocument ───────────────────────────────────────────────────────────
 
 /// A settlement presented as an invoice.
@@ -1304,6 +1400,37 @@ pub struct InvoiceDocument {
     pub invoice_date: time::Date,
     /// Payment due date (Zahlungsziel, §271 BGB).
     pub due_date: time::Date,
+    /// The billing cadence — `IMD+7081` on the wire.
+    ///
+    /// A document fact, not a calculation one: an NNE settlement is the same
+    /// arithmetic whether it is billed monthly, per Turnus or as the
+    /// Abschlussrechnung that closes a year. `None` leaves the field unset
+    /// rather than guessing a rhythm nothing supports.
+    pub cadence: Option<Rechnungscharakter>,
+    /// Abschlagsrechnungen this document settles, deducted from what is owed.
+    ///
+    /// Empty on an Abschlagsrechnung itself and on every document that has no
+    /// payments on account to reconcile.
+    pub abschlaege: Vec<Abschlagsverrechnung>,
+}
+
+/// The billing cadence of a Netznutzungsrechnung — `IMD+7081`.
+///
+/// Named for what the AHB calls it. The set is closed: these are the codes the
+/// INVOIC AHB 1.0b permits for a Netznutzungsrechnung, and inventing a rhythm
+/// outside them would put a claim on the wire the standard does not carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum Rechnungscharakter {
+    /// `ABS` — a payment on account (PID 31001).
+    Abschlagsrechnung,
+    /// `ABR` — the invoice that closes a period and settles its Abschläge.
+    Abschlussrechnung,
+    /// `JVR` — the periodic invoice of a billing cycle.
+    Turnusrechnung,
+    /// `MVR` — a monthly invoice.
+    Monatsrechnung,
+    /// `ZVR` — an invoice between two Turnus invoices.
+    Zwischenrechnung,
 }
 
 impl InvoiceDocument {
@@ -1529,7 +1656,7 @@ pub struct NneInput {
 /// The NNE varies per 15-min interval based on the spot market price.
 /// All controllable loads ≥ 3.7 kW registered under §14a must have Modul 1 at minimum;
 /// Modul 3 is the opt-in premium variant (lower NNE when spot prices are low).
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct SpotpreisInterval {
     /// UTC start of this controlled dispatch interval (ISO-8601).
     ///
@@ -1594,6 +1721,75 @@ pub struct MmmInput {
     pub mehr_preis_ct_per_kwh: Decimal,
     /// Mindermengen price in **ct/kWh** (from `PreisblattNetznutzung` MMM position).
     pub minder_preis_ct_per_kwh: Decimal,
+    /// Who holds §3g Wiederverkäufer status, evidenced by a *USt 1 TH*.
+    ///
+    /// A Mehr-/Mindermenge is a **Lieferung** of electricity or gas, not a
+    /// network service, so §13b Abs. 2 Nr. 5 Buchst. b UStG can shift the tax to
+    /// the recipient. The condition differs by Sparte — electricity needs both
+    /// parties, gas needs the recipient — which is why this is a status rather
+    /// than a `reverse_charge: bool` the caller has to reason out.
+    pub wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus,
+}
+
+// ── AbschlagInput ─────────────────────────────────────────────────────────────
+
+/// Input for an Abschlagsrechnung Netznutzung (PID 31001).
+///
+/// A payment on account. There is no metered quantity and no Arbeitspreis: the
+/// Netzbetreiber asks for an amount against a period it has not settled yet, and
+/// the Abschlussrechnung that follows deducts it by invoice number.
+///
+/// How the amount is arrived at — a share of last year's Turnusrechnung, a
+/// forecast from the Jahresarbeit, a figure agreed in the
+/// Lieferantenrahmenvertrag — is the operator's judgement, not arithmetic this
+/// crate can check. [`Self::grundlage`] records which of them it was, so an
+/// auditor can see the basis rather than infer it from a bare number.
+#[derive(Debug, Clone)]
+pub struct AbschlagInput {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// Invoice sender — the Netzbetreiber.
+    pub nb_mp_id: String,
+    /// Invoice recipient — the Lieferant.
+    pub lf_mp_id: String,
+    /// The period the payment is on account of.
+    pub period: SettlementPeriod,
+    /// Commodity.
+    pub sparte: Sparte,
+    /// The **net** amount requested, in EUR.
+    ///
+    /// Net rather than gross: the tax is stated separately on the invoice, as
+    /// §14 Abs. 4 Nr. 8 UStG requires of an Anzahlungsrechnung like any other.
+    pub betrag_netto_eur: Decimal,
+    /// How the amount was arrived at.
+    pub grundlage: AbschlagGrundlage,
+}
+
+/// How an Abschlag's amount was arrived at.
+///
+/// Recorded rather than computed. The engine cannot check a forecast, but an
+/// audit can ask which basis was used, and an invoice that answers "a share of
+/// the prior Turnusrechnung" is defensible where a bare figure is not.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub enum AbschlagGrundlage {
+    /// A share of the previous settled period's invoice.
+    Vorjahresverbrauch,
+    /// A forecast of the period being paid for.
+    Prognose,
+    /// A figure fixed in the Lieferantenrahmenvertrag.
+    Vereinbarung,
+}
+
+impl AbschlagGrundlage {
+    /// Short label for the position text and the trace.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Vorjahresverbrauch => "auf Basis des Vorjahresverbrauchs",
+            Self::Prognose => "auf Basis einer Verbrauchsprognose",
+            Self::Vereinbarung => "gemäß Vereinbarung im Lieferantenrahmenvertrag",
+        }
+    }
 }
 
 // ── MsbInput ──────────────────────────────────────────────────────────────────
@@ -1620,6 +1816,13 @@ pub struct MsbInput {
     pub empfaenger: MsbRechnungsempfaenger,
     /// The delivery period being settled.
     pub period: SettlementPeriod,
+    /// The Sparte of the metering point.
+    ///
+    /// §30 MsbG prices metering, not energy, so this changes no arithmetic — but
+    /// it is what the invoice states, and a service that stores one Sparte on
+    /// the draft while the settlement carries another cannot answer which is
+    /// right.
+    pub sparte: Sparte,
     /// Grundgebühr Messstellenbetrieb in **EUR/month** (from `PreisblattMessung`).
     pub grundgebuehr_eur_per_month: Decimal,
     /// Number of full calendar months in the billing period.
@@ -1667,7 +1870,7 @@ pub struct MsbInput {
 /// receives the invoice. The LF commonly receives an invoice for the
 /// Letztverbraucher share under the Rechnungsabwicklung über den LF, so the two
 /// axes do not coincide.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MsbRechnungsempfaenger {
     /// Which market role receives the invoice.
     pub rolle: MsbEmpfaengerRolle,
@@ -1676,7 +1879,7 @@ pub struct MsbRechnungsempfaenger {
 }
 
 /// Market role a MSB-Rechnung (PID 31009) may be addressed to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum MsbEmpfaengerRolle {
     /// Netzbetreiber — GPKE Teil 3, WiM Strom Teil 1, AWH Technikänderung.
     Netzbetreiber,
@@ -1751,7 +1954,7 @@ pub struct GasAwhInput {
 ///     artikel_id: Some("2-01-7-001".to_owned()),
 /// };
 /// ```
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct AwhPositionInput {
     /// Human-readable action description, e.g. `"Sperrung Gaszähler"`.
     pub beschreibung: String,
@@ -1925,6 +2128,50 @@ pub fn validate_gas_awh_input(input: &GasAwhInput) -> ValidationResult {
 
 #[cfg(test)]
 mod input_model_tests {
+
+    /// A factor arriving over the wire is range-checked, not merely parsed.
+    ///
+    /// The whole point of the newtype is that an out-of-range value cannot
+    /// exist; a derived `Deserialize` would have let one in through a request
+    /// body and multiplied the Arbeitspreis by it.
+    #[test]
+    fn a_wire_reduktionsfaktor_is_range_checked() {
+        let ok: Reduktionsfaktor = serde_json::from_str("0.85").expect("in range");
+        assert_eq!(ok.get(), dec!(0.85));
+
+        for bad in ["0", "-0.5", "1.01", "5"] {
+            assert!(
+                serde_json::from_str::<Reduktionsfaktor>(bad).is_err(),
+                "{bad} must be refused"
+            );
+        }
+        // The boundary is inclusive at 1 — no reduction is still a valid factor.
+        assert!(serde_json::from_str::<Reduktionsfaktor>("1").is_ok());
+    }
+
+    /// The Arbeitspreis model round-trips, so a settlement input can be stored
+    /// and recomputed rather than a rendered document being edited in place.
+    #[test]
+    fn the_arbeitspreis_model_round_trips() {
+        let model = ArbeitspreisModell::Modul3ZeitVariabel {
+            ht: MengePreis {
+                menge_kwh: dec!(600),
+                preis_ct_per_kwh: dec!(4.2),
+            },
+            st: MengePreis {
+                menge_kwh: dec!(100),
+                preis_ct_per_kwh: dec!(3.0),
+            },
+            nt: MengePreis {
+                menge_kwh: dec!(400),
+                preis_ct_per_kwh: dec!(1.5),
+            },
+        };
+        let json = serde_json::to_string(&model).expect("serialize");
+        let back: ArbeitspreisModell = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(back, model);
+    }
+
     use super::*;
     use rust_decimal::dec;
 
@@ -2178,6 +2425,14 @@ mod korrektur_grund_tests {
             recipient_mp_id: "9900000000002".to_owned(),
             positions: Vec::new(),
             total_eur: rust_decimal::Decimal::ZERO,
+            steuer: crate::umsatzsteuer::Steuerausweis {
+                kategorie: crate::umsatzsteuer::TaxCategory::Standard,
+                satz_prozent: crate::umsatzsteuer::REGELSTEUERSATZ,
+                bemessungsgrundlage_eur: rust_decimal::Decimal::ZERO,
+                steuer_eur: rust_decimal::Decimal::ZERO,
+                hinweis: None,
+                rechtsgrundlage: "§12 Abs. 1 UStG",
+            },
             warnings: Vec::new(),
         }
     }

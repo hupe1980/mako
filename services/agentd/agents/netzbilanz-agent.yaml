@@ -39,16 +39,39 @@ spec:
 
       ## STEP-BY-STEP PROCEDURE
 
-      1. Extract `malo_id`, `draft_id` from event payload.
-      2. Call netzbilanzd `get_billing_summary` for MaLo billing history.
-      3. For overdue alerts: call netzbilanzd `list_billing_records` with `outcome=generated` to find undispatched drafts.
-      4. Check CalculationTrace completeness: each position must have `explanation`, `legal_refs`, and `tariff_source`.
-      5. Verify § 147 AO / GoBD: check if the billing period has historical audit records.
-      6. Recommend dispatch or flag issues.
+      1. Extract `draft_id` and `malo_id` from the event payload.
+      2. Call `get_draft` for the invoice in full.
+      3. Read `check_findings` and `settlement_warnings` FIRST. They are the
+         service's own verdict on the document, and they say what is wrong before
+         you look for it yourself. `KA_ABOVE_KAV_MAXIMUM` means the
+         Konzessionsabgabe exceeds the KAV §2 Höchstbetrag for the customer group
+         named on the settlement; `UMLAGE_RATE_MISSING` means a network levy was
+         omitted for want of a published rate, so the invoice understates.
+         Either is BLOCKED, not NEEDS_REVIEW.
+      4. Check the trace: every position carries `mako:calculation_trace` with
+         `explanation`, `legal_refs` and `tariff_source`. A position without one
+         cannot be defended in a §20 EnWG audit.
+      5. Sanity-check the Sparte. PID 31002 and 31005 are shared between Strom and
+         Gas, so read `sparte` on the draft — a Gas invoice carrying the three EnFG
+         network levies (§19 StromNEV, Offshore, KWKG) is billing electricity
+         charges on gas. To sweep for that across a portfolio, call `list_drafts`
+         with `sparte: "Gas"`: the Prüfidentifikator cannot make the distinction,
+         so filtering on `pid` alone answers the wrong question.
+      6. For overdue alerts: `list_undispatched` (drafts the checker disputed are
+         already excluded — those are blocked, not overdue). Each row carries
+         `zu_zahlen_eur_units` — what is still to collect after the Abschläge this
+         invoice settles. Report that, not the gross: on a period billed on
+         account the gross overstates the exposure.
+      7. Recommend dispatch, or report the blocking issues.
 
       ## KOSTENBLATT & MMM DEADLINES
       - Mehr-/Mindermengenabrechnung: flag MMM drafts older than 2 months as OVERDUE.
-      - Kostenblatt: before an MMM invoice dispatches, verify the period's Kostenblatt was fetched and reconciled; missing at dispatch time: WARNING KOSTENBLATT_MISSING.
+      - Kostenblatt (BK6-20-061 §4.2, due the 15th of the following month): call
+        `list_kostenblatt_gaps` for the period. A gap is an activation registered
+        but never quantified, and it would be submitted to the ÜNB as zero cost.
+        Also check `dispatch_source` on quantified records — `billing_period` means
+        a monthly aggregate stood in for a 15-minute window and is wrong by orders
+        of magnitude: WARNING KOSTENBLATT_FALLBACK_QUANTITY.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -116,7 +139,7 @@ spec:
         audience: [netzbilanz]
         priority: urgent
         summary: >-
-          A Bilanzkreis INVOIC cannot be dispatched. The MaBiS window closes on a fixed Werktag — this does not wait.
+          A Netzbetreiber invoice cannot be dispatched — its own pre-dispatch check disputes it. Every day it waits is a day of Netznutzungsentgelt unbilled.
         when:
           - path: /draft_status
             equals: "BLOCKED"
@@ -186,46 +209,38 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: "list billing records via billingd"
-    - ref: tool://netzbilanzd/list_nne_drafts
+    - ref: tool://netzbilanzd/list_drafts
       mutates: false
       max_sensitivity: internal
-      description: "list nne drafts via netzbilanzd"
+      description: "list invoices via netzbilanzd"
     - ref: tool://netzbilanzd/list_disputed
       mutates: false
       max_sensitivity: internal
       description: "list disputed via netzbilanzd"
-    - ref: tool://netzbilanzd/get_nne_draft
+    - ref: tool://netzbilanzd/get_draft
       mutates: false
       max_sensitivity: internal
-      description: "get nne draft via netzbilanzd"
+      description: "get one invoice in full via netzbilanzd"
     - ref: tool://netzbilanzd/list_pending_kostenblatt
       mutates: false
       max_sensitivity: internal
       description: "list pending kostenblatt via netzbilanzd"
+    - ref: tool://netzbilanzd/list_kostenblatt_gaps
+      mutates: false
+      max_sensitivity: internal
+      description: "list unquantified redispatch activations via netzbilanzd"
     - ref: tool://netzbilanzd/get_billing_summary
       mutates: false
       max_sensitivity: internal
       description: "get billing summary via netzbilanzd"
-    - ref: tool://netzbilanzd/list_undispatched_drafts
+    - ref: tool://netzbilanzd/list_undispatched
       mutates: false
       max_sensitivity: internal
-      description: "list undispatched drafts via netzbilanzd"
-    - ref: tool://netzbilanzd/trigger_mmm_auto_run
-      mutates: false
-      max_sensitivity: internal
-      description: "trigger mmm auto run via netzbilanzd"
+      description: "list drafts past their dispatch window via netzbilanzd"
     - ref: tool://netzbilanzd/list_corrections
       mutates: false
       max_sensitivity: internal
       description: "list corrections via netzbilanzd"
-    - ref: tool://netzbilanzd/get_payment_stats
-      mutates: false
-      max_sensitivity: internal
-      description: "get payment stats via netzbilanzd"
-    - ref: tool://netzbilanzd/list_paid_invoices
-      mutates: false
-      max_sensitivity: internal
-      description: "list paid invoices via netzbilanzd"
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential

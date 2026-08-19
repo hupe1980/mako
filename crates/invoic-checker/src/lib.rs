@@ -47,6 +47,9 @@
 //!
 //! let preisblatt_store = InMemoryPreisblattStore::default();
 //!
+//! // A `Rechnung` that states no Umsatzsteuer is disputed: §14 Abs. 4 Nr. 8
+//! // UStG makes the rate and the amount mandatory, and without them the
+//! // recipient has no Vorsteuerabzug.
 //! let rechnung = Rechnung::default();
 //! let report = InvoicCheckEngine::check(
 //!     31001,
@@ -55,7 +58,7 @@
 //!     &preisblatt_store,
 //!     &CheckConfig::default(),
 //! );
-//! assert_eq!(report.outcome, CheckOutcome::Ok);
+//! assert_eq!(report.outcome, CheckOutcome::Dispute);
 //! ```
 #![deny(unsafe_code)]
 

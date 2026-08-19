@@ -470,6 +470,13 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
 
     let gesamtnetto = moa_betrag(header, "79");
     let gesamtbrutto = moa_betrag(header, "9");
+    // MOA+124 is the Steuerbetrag. It used to be dropped, so every inbound
+    // invoice reached `invoic-checker` looking like one that stated no tax —
+    // and an invoice without a stated tax is one the LF cannot deduct
+    // (§14 Abs. 4 Nr. 8 UStG). The checker could not tell that from an invoice
+    // whose tax simply had not been read.
+    let gesamtsteuer = moa_betrag(header, "124");
+    let steuerbetraege = build_steuerbetraege(header, gesamtnetto.as_ref(), gesamtsteuer.as_ref());
 
     let rechnungsnummer = segs
         .iter()
@@ -494,10 +501,56 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
         rechnungsdatum: invoice_date,
         rechnungsperiode,
         gesamtnetto,
+        gesamtsteuer,
         gesamtbrutto,
+        steuerbetraege,
         rechnungspositionen,
         ..Default::default()
     }
+}
+
+/// Build the VAT breakdown from the `TAX` segments, or from `MOA+124` alone.
+///
+/// EDIFACT states the rate on `TAX` (`TAX+7+VAT+++:::<rate>+<category>`) and the
+/// amount on `MOA+124`. Where a `TAX` segment carries category `AE`, the supply
+/// is reverse-charged: the recipient owes the tax, and the invoice states none.
+fn build_steuerbetraege(
+    header: &[OwnedSegment],
+    netto: Option<&bo4e::Betrag>,
+    steuer: Option<&bo4e::Betrag>,
+) -> Option<Vec<bo4e::Steuerbetrag>> {
+    let tax = header.iter().find(|s| s.tag == "TAX");
+    let (steuerart, satz) = match tax {
+        Some(seg) => {
+            // C243 component 4 carries the rate; the category code follows in
+            // element 5. `AE` is the reverse charge (UNCL 5305).
+            let satz = seg
+                .component_str(4, 3)
+                .and_then(|r| r.replace(',', ".").parse::<Decimal>().ok());
+            let kategorie = seg.component_str(5, 0).unwrap_or_default();
+            let art = if kategorie.eq_ignore_ascii_case("AE") {
+                bo4e::Steuerart::Rcv
+            } else {
+                bo4e::Steuerart::Ust
+            };
+            (art, satz)
+        }
+        // No TAX segment: only an amount was stated, so only an amount is
+        // reported. Inventing a rate here would assert something the wire did
+        // not say.
+        None => (bo4e::Steuerart::Ust, None),
+    };
+
+    if tax.is_none() && steuer.is_none() {
+        return None;
+    }
+    Some(vec![bo4e::Steuerbetrag {
+        steuerart: Some(steuerart),
+        steuersatz: satz,
+        basiswert: netto.and_then(|b| b.wert),
+        steuerwert: steuer.and_then(|b| b.wert),
+        ..Default::default()
+    }])
 }
 
 /// Build a `Vec<Rechnungsposition>` by splitting on `LIN` segment boundaries.

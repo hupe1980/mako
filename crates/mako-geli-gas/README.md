@@ -138,7 +138,7 @@ on the retail gas side; no APERAK response is required unless validation fails.
 | `datenabruf`   | `geli-gas-datenabruf`       | PIDs 17103/17104 Gas Datenabruf (ORDERS) + ORDRSP 19103/19104                      |
 | `sperrung_lf`  | `geli-gas-sperrung-lf`      | PIDs 17115/17117 Gas Sperrung LF-initiated; ORDRSP 19116/19117/19128/19129; ORDCHG 39000 |
 | `sperrung_nb`  | `geli-gas-sperrung-nb`      | PIDs 17115/17116/17117 (GNB receives); ORDERS 17116 → gMSB; ORDRSP 19118/19119; ORDCHG 39000/39001 |
-| `sperrprozesse_invoic` | `geli-gas-sperrprozesse-invoic` | PID 31011 (INVOIC AWH Sperrprozesse Gas, NB → LF)                      |
+| `sperrprozesse_invoic` | `geli-gas-sperrprozesse-invoic` | PID 31011 (INVOIC AWH Sperrprozesse Gas). **Both roles:** the GNB issues one (`SendInvoic` → REMADV correlation), the LFG receives one (`ReceiveInvoic` → settle/dispute) |
 | `stammdatenaenderung` | `geli-gas-stammdatenaenderung` | GeLi Gas Stammdatenänderung 44109–44182 — inbound MaLo change → Zustimmung (E15, apply) / Ablehnung (E13/E17); Monatserster rule for bilanzierungsrelevante changes; 10-WT Antwort-Frist |
 | `mscons`       | `geli-gas-mscons`           | PIDs 13002/13007/13008/13009 (MSCONS Messdaten Gas, GNB/gMSB → LF)               |
 | `partin`       | `geli-gas-partin`           | PIDs 37008–37014 Gas Kommunikationsdaten (LF, GNB, gMSB, MGV, ÜNB)               |

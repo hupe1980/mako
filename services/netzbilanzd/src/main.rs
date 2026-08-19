@@ -1,8 +1,4 @@
-//! `netzbilanzd` — NNE/KA/MMM billing daemon.
-//!
-//! Generates INVOIC 31002/31005/31009/31011 invoices (NB → LF/MSB/LFG) from
-//! meter readings and tariff data.  Integrates with `marktd` (tariffs) and `edmd`
-//! (billing data).
+//! `netzbilanzd` — the Netzbetreiber's outbound billing daemon.
 //!
 //! Port: `:8680`
 //!
@@ -10,29 +6,34 @@
 //!
 //! | Method | Path | Description |
 //! |---|---|---|
-//! | `POST` | `/api/v1/billing/run` | Generate invoice drafts for a billing period |
-//! | `GET`  | `/api/v1/billing/drafts` | List drafts (`?status=&malo_id=&limit=`) |
-//! | `GET`  | `/api/v1/billing/drafts/{id}` | Fetch single draft with Rechnung JSONB |
-//! | `PUT`  | `/api/v1/billing/drafts/{id}/dispatch` | Validate + dispatch via `makod` |
-//! | `PUT`  | `/api/v1/billing/drafts/{id}/reject` | Reject with reason |
-//! | `PUT`  | `/api/v1/billing/drafts/{id}/mark-paid` | REMADV 33001: payment confirmed |
-//! | `PUT`  | `/api/v1/billing/drafts/{id}/mark-disputed` | REMADV 33002: dispute received |
-//! | `POST` | `/api/v1/billing/mmm-run/{malo_id}` | MMM auto-run (edmd auto-fetch) |
-//! | `POST` | `/api/v1/billing/ggv-nne/{ggv_malo_id}` | §42b EnWG GGV NNE NB-side billing |
-//! | `POST` | `/api/v1/billing/drafts/dispatch-batch` | Batch dispatch |
-//! | `POST` | `/api/v1/billing/drafts/{id}/correction` | Stornorechnung / Korrekturrechnung |
-//! | `GET`  | `/api/v1/billing/malo/{malo_id}` | Billing history per MaLo (lightweight) |
-//! | `GET`  | `/api/v1/billing/summary` | Monthly billing totals by PID and status |
-//! | `GET`  | `/api/v1/billing/audit` | § 147 AO / GoBD BNetzA audit export |
-//! | `POST` | `/api/v1/webhooks/remadv` | REMADV CloudEvent ingest (status update) |
-//! | `GET/PUT` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Redispatch 2.0 Kostenblatt |
-//! | `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Auto-compute from edmd Lastgang (15-min sum) |
-//! | `GET`  | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Activations without dispatch_kwh data |
-//! | `POST` | `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit pending |
-//! | `GET/PUT` | `/api/v1/billing/fremdkosten/{draft_id}` | Fremdkosten (§ 147 AO / GoBD) |
-//! | `GET`  | `/health` | Liveness check |
-//! | `GET`  | `/health/ready` | Readiness check |
-//! | `POST` | `/mcp` | MCP server (13 tools, 6 prompts) — NB billing AI tooling |
+//! | `POST` | `/api/v1/billing/run` | Settle, check and store invoices for a period |
+//! | `GET`  | `/api/v1/billing/drafts` | List invoices — filter by Sparte, page by cursor |
+//! | `GET`  | `/api/v1/billing/drafts/{id}` | One invoice in full |
+//! | `PUT`  | `/api/v1/billing/drafts/{id}/dispatch` | Merge Fremdkosten, re-check, send via `makod` |
+//! | `PUT`  | `/api/v1/billing/drafts/{id}/reject` | Discard a draft and reopen the period |
+//! | `POST` | `/api/v1/billing/drafts/dispatch-batch` | Dispatch many, each in its own transaction |
+//! | `POST` | `/api/v1/billing/drafts/{id}/storno` | Stornorechnung — recomputed and negated |
+//! | `POST` | `/api/v1/billing/drafts/{id}/korrektur` | Korrekturrechnung from corrected inputs |
+//! | `PUT`  | `/api/v1/billing/drafts/{id}/mark-paid` | REMADV 33001 |
+//! | `PUT`  | `/api/v1/billing/drafts/{id}/mark-disputed` | REMADV 33002/33003/33004 |
+//! | `POST` | `/api/v1/billing/mmm-run/{malo_id}` | Monthly MMM saldo, measured half from `edmd` |
+//! | `POST` | `/api/v1/billing/ggv-nne/{ggv_malo_id}` | §42b EnWG per-tenant NNE |
+//! | `GET`  | `/api/v1/billing/malo/{malo_id}` | Billing history for one MaLo |
+//! | `GET`  | `/api/v1/billing/summary` | Monthly totals by PID, Sparte, status, Rechnungsart |
+//! | `GET`  | `/api/v1/billing/audit` | § 147 AO / § 14b UStG export |
+//! | `GET/PUT` | `/api/v1/billing/fremdkosten/{draft_id}` | Typed external-cost pass-through |
+//! | `POST` | `/api/v1/webhooks/remadv` | REMADV CloudEvent ingest |
+//! | `GET/PUT` | `/api/v1/redispatch/kostenblatt/{activation_id}` | Redispatch 2.0 cost sheet |
+//! | `POST` | `/api/v1/redispatch/kostenblatt/{activation_id}/compute` | Quantify from `edmd` Lastgang |
+//! | `GET`  | `/api/v1/redispatch/kostenblatt` | List a month's records |
+//! | `GET`  | `/api/v1/redispatch/kostenblatt/gaps/{year}/{month}` | Unquantified activations |
+//! | `POST` | `/api/v1/redispatch/kostenblatt/submit/{year}/{month}` | Submit the month |
+//! | `POST` | `/api/v1/redispatch/verguetung/{activation_id}/compute` | §13a Abs. 2 EnWG |
+//! | `POST` | `/api/v1/redispatch/ausfallarbeit/*` | BilAReM Kap. 3 compute surface |
+//! | `POST` | `/mcp` | Read-only MCP tooling |
+//!
+//! Liveness and readiness (`/health`, `/health/ready`) are mounted by
+//! `mako_service::run`.
 
 use std::sync::Arc;
 
@@ -41,19 +42,18 @@ use axum::{
     Extension, Router,
     routing::{get, post, put},
 };
-use mako_markt::makod_client::MakodClient;
-use mako_markt::marktd_client::MarktdClient;
+use mako_markt::{makod_client::MakodClient, marktd_client::MarktdClient};
 use mako_service::{Daemon, ServiceContext};
-use netzbilanzd::{config, handlers, mcp_server, pg};
+use netzbilanzd::{ausfallarbeit_api, autorun, config, handlers, kostenblatt, mcp_server};
 use secrecy::SecretString;
 use sqlx::PgPool;
 use tracing::info;
 
 pub use config::NetzbilanzConfig;
 
-/// The `netzbilanzd` daemon. `mako_service::run` owns the lifecycle (tracing,
-/// tuned pool, real DB-ping readiness, graceful shutdown); this supplies the
-/// migrations and the domain router + background workers.
+/// The daemon. `mako_service::run` owns the lifecycle — tracing, the tuned pool,
+/// real DB-ping readiness, graceful shutdown; this supplies the migrations, the
+/// domain router and the background workers.
 struct Netzbilanzd;
 
 impl Daemon for Netzbilanzd {
@@ -65,8 +65,6 @@ impl Daemon for Netzbilanzd {
             .run(pool)
             .await
             .context("run netzbilanzd migrations")?;
-        // Transactional outbox table for business CloudEvents (drafted / dispatched /
-        // paid / disputed / kostenblatt.computed). Idempotent.
         mako_service::outbox::ensure_schema(pool)
             .await
             .context("ensure outbox schema")?;
@@ -76,162 +74,38 @@ impl Daemon for Netzbilanzd {
     async fn build(cfg: Arc<NetzbilanzConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         let pool = ctx.pool().clone();
         let shutdown = ctx.shutdown.clone();
+        let http = Arc::new(ctx.http.clone());
 
         let makod = Arc::new(MakodClient::new(
             &cfg.makod_url,
             SecretString::from(cfg.makod_api_key.clone()),
         ));
-
-        // Shared HTTP client (tuned timeouts + SSRF guard) — used by all handlers
-        // that call edmd/marktd REST APIs. Do NOT create per-request clients.
-        let http_client: Arc<reqwest::Client> = Arc::new(ctx.http.clone());
-
         let marktd = Arc::new(MarktdClient::new(
             &cfg.marktd_url,
-            secrecy::SecretString::from(cfg.marktd_api_key.clone()),
-            (*http_client).clone(),
+            SecretString::from(cfg.marktd_api_key.clone()),
+            (*http).clone(),
         ));
 
-        // MCP server setup.
         let mcp_state = Arc::new(mcp_server::NetzbilanzMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
         });
 
-        // ── Background workers ─────────────────────────────────────────────────
-        //
-        // Worker 1: Undispatched draft alert.
-        //   Emits `de.netzbilanz.invoic.dispatch-overdue` CloudEvent for each draft
-        //   older than 48 h that is still in 'draft' status.  Runs hourly by default.
-        //
-        // Worker 2: Kostenblatt 15th-of-month deadline alert.
-        //   Emits `de.netzbilanz.kostenblatt.deadline-approaching` when the 15th is
-        //   ≤5 days away and pending Kostenblatt records exist.  Runs daily by default.
-
-        if cfg.erp_webhook_url.is_some() {
-            // Transactional-outbox drain worker: delivers business CloudEvents that
-            // handlers enqueue in-transaction, with at-least-once + signing + retry +
-            // dead-lettering (replaces the old fire-and-forget post-commit spawn).
-            if let Some(url) = cfg.erp_webhook_url.clone() {
-                let worker = mako_service::outbox::OutboxWorker::new(
-                    pool.clone(),
-                    url,
-                    cfg.erp_webhook_secret.clone().map(Into::into),
-                );
-                tokio::spawn(worker.run(shutdown.clone()));
-                info!("netzbilanzd: transactional outbox worker started");
-            }
-
-            let alert_pool = pool.clone();
-            let alert_cfg = Arc::clone(&cfg);
-            let alert_client = Arc::clone(&http_client);
-            let interval_secs = cfg.dispatch_alert_interval_secs.unwrap_or(3_600);
-
-            if interval_secs > 0 {
-                tokio::spawn(async move {
-                    let mut ticker =
-                        tokio::time::interval(std::time::Duration::from_secs(interval_secs));
-                    ticker.tick().await; // skip first immediate tick
-                    loop {
-                        ticker.tick().await;
-                        spawn_dispatch_alert(&alert_pool, &alert_cfg, &alert_client).await;
-                    }
-                });
-                info!(
-                    interval_secs,
-                    "netzbilanzd: undispatched-draft alert worker started"
-                );
-            }
-
-            let kb_pool = pool.clone();
-            let kb_cfg = Arc::clone(&cfg);
-            let kb_client = Arc::clone(&http_client);
-            let kb_interval = cfg.kostenblatt_alert_interval_secs.unwrap_or(86_400);
-
-            if kb_interval > 0 {
-                tokio::spawn(async move {
-                    let mut ticker =
-                        tokio::time::interval(std::time::Duration::from_secs(kb_interval));
-                    ticker.tick().await; // skip first immediate tick
-                    loop {
-                        ticker.tick().await;
-                        spawn_kostenblatt_alert(&kb_pool, &kb_cfg, &kb_client).await;
-                    }
-                });
-                info!(
-                    kb_interval,
-                    "netzbilanzd: Kostenblatt 15th deadline alert worker started"
-                );
-            }
-        }
+        spawn_workers(&pool, &cfg, &shutdown);
 
         let app = Router::new()
             .nest("/api/v1/billing", billing_routes())
-            // N4: Kostenblatt REST API (Redispatch 2.0, BK6-20-061)
-            .route(
-                "/api/v1/redispatch/kostenblatt",
-                get(handlers::list_kostenblatt_handler),
-            )
-            .route(
-                "/api/v1/redispatch/kostenblatt/{activation_id}",
-                put(handlers::put_kostenblatt).get(handlers::get_kostenblatt),
-            )
-            // N5: Kostenblatt edmd auto-compute (BK6-20-061 §4.2)
-            // Lastgang 15-min sum primary; billing-period fallback; manual override.
-            .route(
-                "/api/v1/redispatch/kostenblatt/{activation_id}/compute",
-                post(handlers::post_kostenblatt_compute),
-            )
-            // §13a Abs. 2 EnWG — angemessene Vergütung for one activation
-            .route(
-                "/api/v1/redispatch/verguetung/{activation_id}/compute",
-                post(handlers::post_verguetung_compute),
-            )
-            // BilAReM Kap. 3 (BK6-23-241) — stateless Ausfallarbeit engine:
-            // per-TR W_A series for all Abrechnungsvarianten, the Kap.-3.4
-            // Überbauung cap, and the Kap.-3.2.3.2 offshore Wind-Bin factor.
-            .route(
-                "/api/v1/redispatch/ausfallarbeit/compute",
-                post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_compute),
-            )
-            .route(
-                "/api/v1/redispatch/ausfallarbeit/ueberbauung",
-                post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_ueberbauung),
-            )
-            .route(
-                "/api/v1/redispatch/ausfallarbeit/kf-bin",
-                post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_kf_bin),
-            )
-            .route(
-                "/api/v1/redispatch/ausfallarbeit/malo-split",
-                post(netzbilanzd::ausfallarbeit_api::post_ausfallarbeit_malo_split),
-            )
-            // N5a: Kostenblatt gap detection — activations without dispatch_kwh data.
-            .route(
-                "/api/v1/redispatch/kostenblatt/gaps/{year}/{month}",
-                get(handlers::get_kostenblatt_gaps),
-            )
-            // Fremdkosten typed BO4E REST (§ 147 AO / GoBD external cost pass-through)
-            .route(
-                "/api/v1/billing/fremdkosten/{draft_id}",
-                put(handlers::put_fremdkosten).get(handlers::get_fremdkosten),
-            )
-            .route(
-                "/api/v1/redispatch/kostenblatt/submit/{year}/{month}",
-                post(handlers::post_submit_kostenblatt),
-            )
-            // REMADV CloudEvent ingest (status update webhook)
+            .nest("/api/v1/redispatch", redispatch_routes())
             .route(
                 "/api/v1/webhooks/remadv",
                 post(handlers::post_remadv_webhook),
             )
-            // MCP server at /mcp — NB billing AI tooling
-            .merge(mcp_server::router(mcp_state, shutdown.clone()))
+            .merge(mcp_server::router(mcp_state, shutdown))
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(makod))
             .layer(Extension(marktd))
-            .layer(Extension(Arc::clone(&http_client)))
+            .layer(Extension(http))
             .layer(Extension(pool));
 
         info!(tenant = %cfg.tenant, "netzbilanzd router built");
@@ -247,161 +121,160 @@ async fn main() -> anyhow::Result<()> {
 fn billing_routes() -> Router {
     Router::new()
         .route("/run", post(handlers::run_billing))
-        // N6: MMM auto-run — auto-fetches profil_kwh from edmd (GPKE (BK6-24-174) Teil 1 Kap. 8.4)
-        .route("/mmm-run/{malo_id}", post(handlers::post_mmm_auto_run))
-        // N8: §42b EnWG GGV NNE NB-side billing — N × NNE per tenant from Lokationszuordnung
-        .route("/ggv-nne/{ggv_malo_id}", post(handlers::post_ggv_nne))
         .route("/drafts", get(handlers::list_drafts))
-        .route("/drafts/{id}", get(handlers::get_draft))
-        .route("/drafts/{id}/dispatch", put(handlers::dispatch_draft))
-        .route("/drafts/{id}/reject", put(handlers::reject_draft))
-        // REMADV payment lifecycle
-        .route("/drafts/{id}/mark-paid", put(handlers::mark_paid))
-        .route("/drafts/{id}/mark-disputed", put(handlers::mark_disputed))
-        // Batch dispatch — dispatch all approved drafts at once
+        // Registered before `/drafts/{id}` so the literal segment is not
+        // captured as a UUID path parameter.
         .route(
             "/drafts/dispatch-batch",
             post(handlers::post_dispatch_batch),
         )
-        // Korrekturrechnung / Stornorechnung (§ 147 AO / GoBD audit trail)
-        .route(
-            "/drafts/{id}/correction",
-            post(handlers::post_draft_correction),
-        )
-        // Billing history per MaLo (lightweight, no Rechnung JSONB)
+        .route("/drafts/{id}", get(handlers::get_draft))
+        .route("/drafts/{id}/dispatch", put(handlers::dispatch_draft))
+        .route("/drafts/{id}/reject", put(handlers::reject_draft))
+        .route("/drafts/{id}/storno", post(handlers::post_storno))
+        .route("/drafts/{id}/korrektur", post(handlers::post_korrektur))
+        .route("/drafts/{id}/mark-paid", put(handlers::mark_paid))
+        .route("/drafts/{id}/mark-disputed", put(handlers::mark_disputed))
+        .route("/mmm-run/{malo_id}", post(autorun::post_mmm_run))
+        .route("/ggv-nne/{ggv_malo_id}", post(autorun::post_ggv_nne))
         .route("/malo/{malo_id}", get(handlers::get_malo_billing_history))
-        // Monthly billing summary (REST equivalent of get_billing_summary MCP tool)
-        .route("/summary", get(handlers::get_billing_summary_rest))
-        // § 147 AO / GoBD BNetzA audit export
+        .route("/summary", get(handlers::get_billing_summary))
         .route("/audit", get(handlers::get_billing_audit))
+        .route(
+            "/fremdkosten/{draft_id}",
+            put(handlers::put_fremdkosten).get(handlers::get_fremdkosten),
+        )
 }
 
-// ── Background worker helpers ─────────────────────────────────────────────────
+fn redispatch_routes() -> Router {
+    Router::new()
+        .route("/kostenblatt", get(kostenblatt::list_kostenblatt))
+        // Both literals precede `/kostenblatt/{activation_id}`.
+        .route(
+            "/kostenblatt/gaps/{year}/{month}",
+            get(kostenblatt::get_kostenblatt_gaps),
+        )
+        .route(
+            "/kostenblatt/submit/{year}/{month}",
+            post(kostenblatt::post_submit_kostenblatt),
+        )
+        .route(
+            "/kostenblatt/{activation_id}",
+            put(kostenblatt::put_kostenblatt).get(kostenblatt::get_kostenblatt),
+        )
+        .route(
+            "/kostenblatt/{activation_id}/compute",
+            post(kostenblatt::post_compute),
+        )
+        // §13a Abs. 2 EnWG — the compensation owed to a curtailed operator.
+        .route(
+            "/verguetung/{activation_id}/compute",
+            post(kostenblatt::post_verguetung),
+        )
+        // BilAReM Kap. 3 (BK6-23-241) — the stateless Ausfallarbeit engine.
+        .route(
+            "/ausfallarbeit/compute",
+            post(ausfallarbeit_api::post_ausfallarbeit_compute),
+        )
+        .route(
+            "/ausfallarbeit/ueberbauung",
+            post(ausfallarbeit_api::post_ausfallarbeit_ueberbauung),
+        )
+        .route(
+            "/ausfallarbeit/kf-bin",
+            post(ausfallarbeit_api::post_ausfallarbeit_kf_bin),
+        )
+        .route(
+            "/ausfallarbeit/malo-split",
+            post(ausfallarbeit_api::post_ausfallarbeit_malo_split),
+        )
+}
 
-/// Emit `de.netzbilanz.invoic.dispatch-overdue` for drafts stuck in 'draft' > 48 h.
-async fn spawn_dispatch_alert(
+/// Start the outbox drain and the two alert workers.
+///
+/// All three are gated on `erp_webhook_url`: without a delivery target the
+/// outbox would grow unbounded and the alerts would have nowhere to go. The
+/// alerts enqueue on that same outbox rather than posting for themselves, so
+/// every `de.netzbilanz.*` event takes one path with one retry policy.
+fn spawn_workers(
     pool: &PgPool,
-    cfg: &NetzbilanzConfig,
-    client: &Arc<reqwest::Client>,
+    cfg: &Arc<NetzbilanzConfig>,
+    shutdown: &tokio_util::sync::CancellationToken,
 ) {
-    let webhook_url = match &cfg.erp_webhook_url {
-        Some(u) => u.clone(),
-        None => return,
+    let Some(url) = cfg.erp_webhook_url.clone() else {
+        info!("netzbilanzd: no erp_webhook_url — outbox and alert workers not started");
+        return;
     };
-    let rows = match pg::list_undispatched_stale(pool, &cfg.tenant, 48, 100).await {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "dispatch alert: DB query failed");
-            return;
-        }
-    };
-    if rows.is_empty() {
+
+    let worker = mako_service::outbox::OutboxWorker::new(
+        pool.clone(),
+        url,
+        cfg.erp_webhook_secret.clone().map(Into::into),
+    );
+    tokio::spawn(worker.run(shutdown.clone()));
+    info!("netzbilanzd: transactional outbox worker started");
+
+    let stale_hours = cfg.dispatch_stale_hours.unwrap_or(48);
+    spawn_ticker(
+        cfg.dispatch_alert_interval_secs.unwrap_or(3_600),
+        "undispatched-draft alert",
+        shutdown.clone(),
+        {
+            let (pool, cfg) = (pool.clone(), Arc::clone(cfg));
+            move || {
+                let (pool, cfg) = (pool.clone(), Arc::clone(&cfg));
+                async move {
+                    autorun::dispatch_overdue_alert(&pool, &cfg, stale_hours).await;
+                }
+            }
+        },
+    );
+
+    spawn_ticker(
+        cfg.kostenblatt_alert_interval_secs.unwrap_or(86_400),
+        "Kostenblatt 15th-of-month alert",
+        shutdown.clone(),
+        {
+            let (pool, cfg) = (pool.clone(), Arc::clone(cfg));
+            move || {
+                let (pool, cfg) = (pool.clone(), Arc::clone(&cfg));
+                async move {
+                    autorun::kostenblatt_deadline_alert(&pool, &cfg).await;
+                }
+            }
+        },
+    );
+}
+
+/// Run `tick` every `interval_secs`, until shutdown. `0` disables the worker.
+///
+/// The loop selects on the shutdown token as well as the ticker, so a daily
+/// worker does not hold the process open until its next tick.
+fn spawn_ticker<F, Fut>(
+    interval_secs: u64,
+    name: &'static str,
+    shutdown: tokio_util::sync::CancellationToken,
+    tick: F,
+) where
+    F: Fn() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = ()> + Send,
+{
+    if interval_secs == 0 {
+        info!(name, "netzbilanzd: worker disabled by configuration");
         return;
     }
-    tracing::warn!(
-        count = rows.len(),
-        "netzbilanzd: undispatched drafts > 48h, emitting alert"
-    );
-    let payload = serde_json::json!({
-        "tenant": cfg.tenant,
-        "undispatched_count": rows.len(),
-        "draft_ids": rows.iter().map(|r| &r.id).collect::<Vec<_>>(),
-        "hint": "Drafts are approaching Zahlungsziel. Dispatch or reject via PUT /api/v1/billing/drafts/{id}/dispatch.",
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(interval_secs));
+        ticker.tick().await; // the first tick is immediate; skip it
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    info!(name, "netzbilanzd: worker stopping");
+                    return;
+                }
+                _ = ticker.tick() => tick().await,
+            }
+        }
     });
-    let ce = mako_service::CloudEvent::new(
-        mako_service::source("netzbilanzd", &cfg.tenant),
-        mako_events::netzbilanz::INVOIC_DISPATCH_OVERDUE,
-        String::new(),
-        payload,
-    )
-    .without_subject();
-    if let Err(e) = mako_service::post_ce_with_retry(
-        client,
-        &webhook_url,
-        &ce,
-        cfg.erp_webhook_secret.as_deref().map(str::as_bytes),
-    )
-    .await
-    {
-        tracing::warn!(error = %e, "netzbilanzd: dispatch-overdue webhook delivery failed");
-    }
-}
-
-/// Emit `de.netzbilanz.kostenblatt.deadline-approaching` when the 15th-of-month
-/// Redispatch 2.0 Kostenblatt deadline is ≤5 days away and pending records exist.
-async fn spawn_kostenblatt_alert(
-    pool: &PgPool,
-    cfg: &NetzbilanzConfig,
-    client: &Arc<reqwest::Client>,
-) {
-    let webhook_url = match &cfg.erp_webhook_url {
-        Some(u) => u.clone(),
-        None => return,
-    };
-    let now = time::OffsetDateTime::now_utc();
-    let day = now.day();
-    // Alert window: day 10–14 of month (15th is the submission deadline)
-    if !(10..=14).contains(&day) {
-        return;
-    }
-
-    let days_left = 15u8.saturating_sub(day);
-    // Check PREVIOUS month (deadline is for submissions of prior month's activations)
-    let (year, month) = if now.month() as u8 > 1 {
-        (now.year(), now.month() as u8 - 1)
-    } else {
-        (now.year() - 1, 12u8)
-    };
-
-    let pending = match pg::list_kostenblatt(
-        pool,
-        &cfg.tenant,
-        year as i16,
-        month as i16,
-        Some("pending"),
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(error = %e, "kostenblatt alert: DB query failed");
-            return;
-        }
-    };
-    if pending.is_empty() {
-        return;
-    }
-
-    tracing::warn!(
-        count = pending.len(),
-        year,
-        month,
-        days_left,
-        "netzbilanzd: pending Kostenblatt — 15th deadline in {days_left} days"
-    );
-    let ce = mako_service::CloudEvent::new(
-        mako_service::source("netzbilanzd", &cfg.tenant),
-        mako_events::netzbilanz::KOSTENBLATT_DEADLINE_APPROACHING,
-        String::new(),
-        serde_json::json!({
-            "tenant": cfg.tenant,
-            "period_year": year,
-            "period_month": month,
-            "pending_count": pending.len(),
-            "days_until_deadline": days_left,
-            "deadline": format!("{year}-{:02}-15", month),
-            "action": format!("POST /api/v1/redispatch/kostenblatt/submit/{year}/{month}"),
-        }),
-    )
-    .without_subject();
-    if let Err(e) = mako_service::post_ce_with_retry(
-        client,
-        &webhook_url,
-        &ce,
-        cfg.erp_webhook_secret.as_deref().map(str::as_bytes),
-    )
-    .await
-    {
-        tracing::warn!(error = %e, "netzbilanzd: kostenblatt-deadline webhook delivery failed");
-    }
+    info!(name, interval_secs, "netzbilanzd: worker started");
 }

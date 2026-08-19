@@ -27,10 +27,19 @@ prevent an immediate dispute.
 | 1 | **Period validity** — `rechnungsperiode_start < end`, both within plausible range | `Dispute` |
 | 1.5 | **Zahlungsziel** — `faelligkeitsdatum < rechnungsdatum` (invalid) or `> max_zahlungsziel_days` (exceeded; default 30 per §7 Allg. Festlegungen) | `Dispute` or `Warn` |
 | 2 | **Position arithmetic** — every `Rechnungsposition` `menge × preis ≈ betrag` (±1%) | `Dispute` |
-| 3 | **Document total** — sum of all positions ≈ `gesamtbrutto` (±1%) | `Warn` |
+| 3 | **Document total** — sum of all positions ≈ `gesamtnetto` (±1%) | `Warn` |
+| 3.5 | **Umsatzsteuer** — the invoice states a rate and an amount (§14 Abs. 4 Nr. 8 UStG), `gesamtbrutto = gesamtnetto + gesamtsteuer`, and a reverse-charged invoice states **no** tax | `Dispute` |
 | 4 | **Tariff match** — `einzelpreis` within tolerance of PRICAT tariff. **Skipped for Stornorechnungen** (`ist_storno=true`). | `Dispute` |
 | 5 | **Tariff found** — a PRICAT tariff record exists for the sender GLN | `Warn` (auto-accept) |
 | 6 | **MMM settlement price** — for PIDs 31005/31006/31007/31008: Mehr-/Mindermengen prices match MMMA store | `Warn` or `Dispute` |
+
+### Why a missing tax block is a dispute
+
+§14 Abs. 4 Nr. 8 UStG makes the rate and the tax amount mandatory content, or a note saying why
+neither is stated. Paying an invoice without them means paying tax that cannot be recovered —
+the receiving LF's money — so this is a refusal rather than a note. A reverse-charged invoice
+states no tax *by design* and is accepted on that footing; one that states tax anyway is a
+dispute, because that tax is owed under §14c Abs. 1 UStG and is still not deductible.
 
 ### Stornierung handling (`ist_storno = true`)
 
@@ -104,6 +113,9 @@ For PID 31009 (MSB-Rechnung), use `check_msb_rechnung()` which applies
 | `ZahlungszielExceeded` | 1.5 | ✗ | Payment term exceeds `max_zahlungsziel_days` |
 | `ArithmeticError` | 2 | ✓ | Line `qty × price ≠ net` |
 | `TotalMismatch` | 3 | ✗ | Σ line nets ≠ `gesamtnetto` |
+| `SteuerMissing` | 3.5 | ✓ | No Umsatzsteuer stated at all — no Vorsteuerabzug for the recipient |
+| `SteuerMismatch` | 3.5 | ✓ | `gesamtbrutto ≠ gesamtnetto + gesamtsteuer` |
+| `ReverseChargeStatesTax` | 3.5 | ✓ | A §13b invoice states tax anyway — owed under §14c Abs. 1 and still not deductible |
 | `TariffDeviation` | 4 | ✓ | Unit price deviates from PRICAT |
 | `TariffNotFound` | 5 | config | No PRICAT tariff for sender GLN |
 

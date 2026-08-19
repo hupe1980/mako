@@ -12,7 +12,8 @@
 use crate::{InvoiceDocument, QuantityUnit, SettlementResult};
 use rubo4e::current::{
     Betrag, Menge, Mengeneinheit, NetznutzungRechnungsart, NetznutzungRechnungstyp, Preis,
-    Rechnung, Rechnungsposition, Rechnungstyp, Zeitraum, ZusatzAttribut,
+    Rechnung, Rechnungsposition, Rechnungstyp, Steuerart, Steuerbetrag, Vorauszahlung,
+    Waehrungscode, Zeitraum, ZusatzAttribut,
 };
 
 /// Parse the BDEW Artikelnummer that `grid-billing` decided on.
@@ -55,7 +56,7 @@ pub fn rechnungstyp_for(settlement_type: crate::SettlementType) -> Option<Rechnu
     use crate::SettlementType as S;
     matches!(
         settlement_type,
-        S::NneStrom | S::NneGas | S::MmmStrom | S::MmmGas | S::MmmSelbstausstellt
+        S::NneAbschlag | S::NneStrom | S::NneGas | S::MmmStrom | S::MmmGas | S::MmmSelbstausstellt
     )
     .then_some(Rechnungstyp::Netznutzungsrechnung)
 }
@@ -72,32 +73,49 @@ pub fn netznutzungrechnungsart_for(
     use crate::SettlementType as S;
     match settlement_type {
         S::MmmSelbstausstellt => Some(NetznutzungRechnungsart::Selbstausgestellt),
-        S::NneStrom | S::NneGas | S::MmmStrom | S::MmmGas => {
+        S::NneAbschlag | S::NneStrom | S::NneGas | S::MmmStrom | S::MmmGas => {
             Some(NetznutzungRechnungsart::Handelsrechnung)
         }
         _ => None,
     }
 }
 
-/// The BO4E `netznutzungrechnungstyp` — which kind of Netznutzungsrechnung.
+/// The BO4E `netznutzungrechnungstyp` — `IMD+7081` on the wire.
 ///
-/// Only the Mehr-/Mindermengen family is derivable from the settlement type. The
-/// remaining variants (Turnus-, Monats-, Abschlags-, Abschluss-, Zwischen-,
-/// WiM-Rechnung) describe the **billing cadence**, which `SettlementType` does
-/// not carry: an NNE settlement is the same computation whether it is billed
-/// monthly or annually. Guessing one would put a specific claim about billing
-/// rhythm on the wire that nothing in the settlement supports, so NNE is left
-/// unset until the cadence is modelled.
+/// Two things decide it, and they are different in kind. The Mehr-/Mindermengen
+/// family follows from the settlement itself. Everything else is the **billing
+/// cadence**, which the settlement does not carry — an NNE settlement is the
+/// same computation whether it is billed monthly, per Turnus, or as the
+/// Abschlussrechnung that closes a year — so it comes from the document, where
+/// the operator states it. An Abschlagsrechnung is the one cadence the
+/// settlement does imply, because PID 31001 *is* that document.
+///
+/// Absent both, the field stays unset rather than guessing a rhythm nothing
+/// supports.
 #[must_use]
 pub fn netznutzungrechnungstyp_for(
     settlement_type: crate::SettlementType,
+    cadence: Option<crate::Rechnungscharakter>,
 ) -> Option<NetznutzungRechnungstyp> {
+    use crate::Rechnungscharakter as C;
     use crate::SettlementType as S;
-    matches!(
+
+    if matches!(
         settlement_type,
         S::MmmStrom | S::MmmGas | S::MmmSelbstausstellt
-    )
-    .then_some(NetznutzungRechnungstyp::Mehrmindermengenrechnung)
+    ) {
+        return Some(NetznutzungRechnungstyp::Mehrmindermengenrechnung);
+    }
+    if settlement_type == S::NneAbschlag {
+        return Some(NetznutzungRechnungstyp::Abschlagsrechnung);
+    }
+    cadence.map(|c| match c {
+        C::Abschlagsrechnung => NetznutzungRechnungstyp::Abschlagsrechnung,
+        C::Abschlussrechnung => NetznutzungRechnungstyp::Abschlussrechnung,
+        C::Turnusrechnung => NetznutzungRechnungstyp::Turnusrechnung,
+        C::Monatsrechnung => NetznutzungRechnungstyp::Monatsrechnung,
+        C::Zwischenrechnung => NetznutzungRechnungstyp::Zwischenrechnung,
+    })
 }
 
 /// Render a settlement, presented as an invoice, into a BO4E `Rechnung`.
@@ -157,7 +175,19 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
         .rechnungsdatum(document.invoice_date)
         .faelligkeitsdatum(document.due_date)
         .rechnungsperiode(lz)
-        .gesamtnetto(Betrag::builder().wert(invoice.total_eur).build())
+        .gesamtnetto(betrag(invoice.total_eur))
+        // §14 Abs. 4 Nr. 8 UStG: the rate and the tax amount, or the note
+        // saying why neither is stated. An invoice carrying only a net figure
+        // gives its recipient no Vorsteuerabzug.
+        .gesamtsteuer(betrag(invoice.steuer.steuer_eur))
+        .gesamtbrutto(betrag(invoice.steuer.brutto_eur()))
+        // What is actually owed: the gross, less the Abschläge already billed
+        // and taxed. §14 Abs. 5 UStG taxes an Anzahlung when it is received, so
+        // this deduction never touches `gesamtnetto` or `gesamtsteuer` — it
+        // reduces the payment, not the supply. The INVOIC AHB puts it in the
+        // Summenteil for the same reason (`SG50 MOA+113`).
+        .zu_zahlen(betrag(zu_zahlen_eur(document)))
+        .steuerbetraege(vec![steuerbetrag(invoice)])
         .rechnungspositionen(positions)
         // Every paragraph the settlement rests on, deduplicated across
         // positions, plus any warnings the engine raised.
@@ -169,8 +199,115 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
     // `setter(into)` would coerce an `Option` into `Some(None)`-shaped noise.
     rechnung.rechnungstyp = rechnungstyp_for(settlement_type);
     rechnung.netznutzungrechnungsart = netznutzungrechnungsart_for(settlement_type);
-    rechnung.netznutzungrechnungstyp = netznutzungrechnungstyp_for(settlement_type);
+    rechnung.netznutzungrechnungstyp =
+        netznutzungrechnungstyp_for(settlement_type, document.cadence);
+
+    // The Sparte, on the field that carries it. NN-Rechnung Strom and Gas share
+    // Prüfidentifikator 31002, so the Prüfidentifikator does not distinguish
+    // them — `Rechnung.sparte` is the only place a receiver can read which
+    // Sparte the document settles, and leaving it unset made a GasNEV invoice
+    // indistinguishable from a StromNEV one on the wire.
+    rechnung.sparte = Some(match invoice.sparte {
+        crate::Sparte::Strom => rubo4e::current::Sparte::Strom,
+        crate::Sparte::Gas => rubo4e::current::Sparte::Gas,
+    });
+
+    // A reversal says so in the fields `invoic-checker` stage 0 reads. A
+    // Stornorechnung whose `ist_storno` is unset is not a Stornorechnung to any
+    // receiver — and one that sets it without `original_rechnungsnummer` is
+    // disputed on arrival (BK6-24-174 §5; Allgemeine Festlegungen §8).
+    if invoice.status == crate::types::SettlementStatus::Reversal {
+        rechnung.ist_storno = Some(true);
+    }
+    rechnung.original_rechnungsnummer = document.correction_of.clone();
+
+    // Each Abschlag as its own Vorauszahlung, carrying the invoice number it was
+    // billed under. The AHB requires the reference (`SG51 RFF+AFL`) and its date
+    // (`SG51 DTM+3`) per deduction, not one lump sum: the counterparty
+    // reconciles them against invoices it actually received, and a total it
+    // cannot break down is a total it will dispute.
+    if !document.abschlaege.is_empty() {
+        rechnung.vorauszahlungen = Some(
+            document
+                .abschlaege
+                .iter()
+                .map(|a| Vorauszahlung {
+                    betrag: Some(betrag(a.betrag_brutto_eur)),
+                    // BO4E types this as a datetime; an invoice date carries no
+                    // time of day, so it is pinned to midnight UTC.
+                    datum: Some(a.rechnungsdatum.midnight().assume_utc()),
+                    referenz: Some(a.rechnungsnummer.clone()),
+                    ..Default::default()
+                })
+                .collect(),
+        );
+    }
     rechnung
+}
+
+/// What the recipient actually pays: the gross, less the Abschläge deducted.
+fn zu_zahlen_eur(document: &InvoiceDocument) -> rust_decimal::Decimal {
+    document.settlement.steuer.brutto_eur()
+        - document
+            .abschlaege
+            .iter()
+            .map(|a| a.betrag_brutto_eur)
+            .sum::<rust_decimal::Decimal>()
+}
+
+/// A EUR amount as BO4E states one.
+fn betrag(wert: rust_decimal::Decimal) -> Betrag {
+    Betrag::builder()
+        .wert(wert)
+        .waehrung(Waehrungscode::Eur)
+        .build()
+}
+
+/// The settlement's tax as a BO4E `Steuerbetrag`.
+///
+/// One entry, because every settlement this crate produces is taxed uniformly:
+/// a Netznutzungsrechnung, a Mehr-/Mindermengensaldo, a MSB-Rechnung and an AWH
+/// invoice each carry a single treatment across all their positions. A mixed-rate
+/// document would need one entry per rate, and would be a model change with a
+/// reason rather than a shape to leave open.
+fn steuerbetrag(invoice: &SettlementResult) -> Steuerbetrag {
+    Steuerbetrag::builder()
+        .steuerart(match invoice.steuer.kategorie {
+            // `RCV` is BO4E's reverse-charge marker; everything else this crate
+            // issues is ordinary Umsatzsteuer.
+            crate::TaxCategory::ReverseCharge => Steuerart::Rcv,
+            _ => Steuerart::Ust,
+        })
+        .steuersatz(invoice.steuer.satz_prozent)
+        .basiswert(invoice.steuer.bemessungsgrundlage_eur)
+        .steuerwert(invoice.steuer.steuer_eur)
+        .waehrungscode(Waehrungscode::Eur)
+        // The note §14a Abs. 5 Satz 2 UStG requires on a reverse-charge
+        // invoice, alongside the paragraph the treatment rests on. BO4E models
+        // no exemption-reason field on `Steuerbetrag` — EN 16931 carries it as
+        // BT-120 on the same breakdown entry — so it travels as a ZusatzAttribut
+        // on the entry it belongs to, rather than loose on the document.
+        .zusatz_attribute(steuer_attribute(invoice))
+        .build()
+}
+
+/// The legally required note and citation for a tax treatment.
+fn steuer_attribute(invoice: &SettlementResult) -> Vec<ZusatzAttribut> {
+    let mut attrs = vec![ZusatzAttribut {
+        name: Some("mako:steuer_rechtsgrundlage".to_owned()),
+        wert: Some(serde_json::Value::String(
+            invoice.steuer.rechtsgrundlage.to_owned(),
+        )),
+        ..Default::default()
+    }];
+    if let Some(hinweis) = invoice.steuer.hinweis {
+        attrs.push(ZusatzAttribut {
+            name: Some("mako:umsatzsteuer_hinweis".to_owned()),
+            wert: Some(serde_json::Value::String(hinweis.to_owned())),
+            ..Default::default()
+        });
+    }
+    attrs
 }
 
 /// Serialise a position's [`crate::CalculationTrace`] into a BO4E
@@ -227,6 +364,8 @@ mod tests {
             correction_of: None,
             invoice_date: time::macros::date!(2026 - 02 - 15),
             due_date: time::macros::date!(2026 - 03 - 15),
+            cadence: None,
+            abschlaege: Vec::new(),
         }
     }
 
@@ -260,6 +399,269 @@ mod tests {
             tariff_sheet_id: None,
             sparte: crate::Sparte::Strom,
         }
+    }
+
+    /// §14 Abs. 4 Nr. 8 UStG: the rate, the tax and the gross reach the document.
+    ///
+    /// An invoice carrying only `gesamtnetto` is not a Rechnung — its recipient
+    /// has no Vorsteuerabzug from it.
+    #[test]
+    fn the_tax_block_reaches_the_rechnung() {
+        let settlement = crate::settle_nne(&sample_nne()).expect("settle");
+        let netto = settlement.total_eur;
+        let rechnung = into_rechnung(&as_document(settlement));
+
+        let wert = |b: &Option<Betrag>| b.as_ref().and_then(|b| b.wert).expect("amount");
+        let steuer = wert(&rechnung.gesamtsteuer);
+        assert_eq!(wert(&rechnung.gesamtnetto), netto);
+        assert_eq!(
+            steuer,
+            (netto * rust_decimal::Decimal::from(19) / rust_decimal::Decimal::from(100))
+                .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        );
+        assert_eq!(wert(&rechnung.gesamtbrutto), netto + steuer);
+        assert_eq!(
+            wert(&rechnung.zu_zahlen),
+            netto + steuer,
+            "what is actually owed is the gross"
+        );
+
+        let breakdown = rechnung.steuerbetraege.expect("a VAT breakdown");
+        let entry = breakdown.first().expect("one entry");
+        assert_eq!(entry.steuerart, Some(Steuerart::Ust));
+        assert_eq!(entry.steuersatz, Some(rust_decimal::Decimal::from(19)));
+        assert_eq!(entry.basiswert, Some(netto));
+        assert_eq!(entry.steuerwert, Some(steuer));
+    }
+
+    /// A reverse-charged MMM states no tax and carries the §14a Abs. 5 wording.
+    #[test]
+    fn a_reverse_charged_supply_states_no_tax_and_says_why() {
+        let settlement = crate::settle_mmm(&crate::MmmInput {
+            malo_id: "51238696012".to_owned(),
+            nb_mp_id: "9900357000004".to_owned(),
+            lf_mp_id: "9900012345678".to_owned(),
+            period: crate::SettlementPeriod::new(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            )
+            .expect("valid period"),
+            sparte: crate::Sparte::Strom,
+            actual_kwh: rust_decimal::Decimal::from(1200),
+            profil_kwh: rust_decimal::Decimal::from(1000),
+            mehr_preis_ct_per_kwh: rust_decimal::Decimal::from(5),
+            minder_preis_ct_per_kwh: rust_decimal::Decimal::from(4),
+            // Both parties hold §3g status — what electricity requires.
+            wiederverkaeufer: crate::Wiederverkaeuferstatus::BEIDE,
+        })
+        .expect("settle");
+        let netto = settlement.total_eur;
+        let rechnung = into_rechnung(&as_document(settlement));
+
+        let wert = |b: &Option<Betrag>| b.as_ref().and_then(|b| b.wert).expect("amount");
+        assert_eq!(wert(&rechnung.gesamtsteuer), rust_decimal::Decimal::ZERO);
+        assert_eq!(
+            wert(&rechnung.gesamtbrutto),
+            netto,
+            "under a reverse charge the gross is the net"
+        );
+
+        let breakdown = rechnung.steuerbetraege.expect("a VAT breakdown");
+        let entry = breakdown.first().expect("one entry");
+        assert_eq!(entry.steuerart, Some(Steuerart::Rcv));
+        assert_eq!(entry.steuerwert, Some(rust_decimal::Decimal::ZERO));
+
+        let note = entry
+            .zusatz_attribute
+            .as_ref()
+            .expect("the entry carries its note")
+            .iter()
+            .find(|a| a.name.as_deref() == Some("mako:umsatzsteuer_hinweis"))
+            .and_then(|a| a.wert.as_ref())
+            .and_then(serde_json::Value::as_str)
+            .expect("the §14a Abs. 5 wording");
+        assert_eq!(note, crate::umsatzsteuer::HINWEIS_REVERSE_CHARGE);
+    }
+
+    /// A reversal mirrors the tax it cancels, sign and all.
+    #[test]
+    fn a_reversal_mirrors_the_tax_it_cancels() {
+        let original = crate::settle_nne(&sample_nne()).expect("settle");
+        let reversal = crate::reverse(&original, crate::KorrekturGrund::Messwertkorrektur);
+        assert_eq!(reversal.steuer.steuer_eur, -original.steuer.steuer_eur);
+        assert_eq!(reversal.steuer.brutto_eur(), -original.steuer.brutto_eur());
+        assert_eq!(reversal.steuer.kategorie, original.steuer.kategorie);
+
+        // Net of the pair: nothing owed, and nothing owed in tax either.
+        assert_eq!(
+            original.total_eur + reversal.total_eur,
+            rust_decimal::Decimal::ZERO
+        );
+        assert_eq!(
+            original.steuer.steuer_eur + reversal.steuer.steuer_eur,
+            rust_decimal::Decimal::ZERO
+        );
+    }
+
+    /// An Abschlagsrechnung is one line, an amount, and its tax.
+    ///
+    /// INVOIC AHB 1.0b Änd-ID 26817: "Eine Abschlagsrechnung kann und muss genau
+    /// eine Positionszeile enthalten", with `LIN DE1082` fixed at 1.
+    #[test]
+    fn an_abschlagsrechnung_is_exactly_one_position() {
+        let settlement = crate::settle_abschlag(&crate::AbschlagInput {
+            malo_id: "51238696012".to_owned(),
+            nb_mp_id: "9900357000004".to_owned(),
+            lf_mp_id: "9900012345678".to_owned(),
+            period: crate::SettlementPeriod::new(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            )
+            .expect("valid period"),
+            sparte: crate::Sparte::Strom,
+            betrag_netto_eur: rust_decimal::Decimal::from(1000),
+            grundlage: crate::AbschlagGrundlage::Vorjahresverbrauch,
+        })
+        .expect("settle");
+
+        assert_eq!(settlement.settlement_type.default_pid(), 31001);
+        assert_eq!(settlement.positions.len(), 1);
+        assert_eq!(settlement.total_eur, rust_decimal::Decimal::from(1000));
+
+        let rechnung = into_rechnung(&as_document(settlement));
+        let positions = rechnung.rechnungspositionen.expect("positions");
+        assert_eq!(positions.len(), 1);
+        assert_eq!(positions[0].positionsnummer, Some(1));
+        assert_eq!(
+            rechnung.netznutzungrechnungstyp,
+            Some(NetznutzungRechnungstyp::Abschlagsrechnung)
+        );
+        // The tax is stated: an Anzahlung is taxed on receipt (§14 Abs. 5 UStG),
+        // so the Abschlagsrechnung is a Rechnung like any other.
+        assert_eq!(
+            rechnung.gesamtsteuer.as_ref().and_then(|b| b.wert),
+            Some(rust_decimal::Decimal::from(190))
+        );
+    }
+
+    /// Abschläge reduce what is owed, never what was supplied.
+    ///
+    /// §14 Abs. 5 UStG taxes an Anzahlung when it is received, so the invoice
+    /// that settles the period must not tax the same money again: the deduction
+    /// belongs on `zuZahlen`, and `gesamtnetto` / `gesamtsteuer` stand.
+    #[test]
+    fn abschlaege_reduce_what_is_owed_not_what_was_supplied() {
+        let settlement = crate::settle_nne(&sample_nne()).expect("settle");
+        let netto = settlement.total_eur;
+        let steuer = settlement.steuer.steuer_eur;
+        let brutto = settlement.steuer.brutto_eur();
+
+        let mut document = as_document(settlement);
+        document.cadence = Some(crate::Rechnungscharakter::Abschlussrechnung);
+        document.abschlaege = vec![
+            crate::Abschlagsverrechnung {
+                rechnungsnummer: "ABS-2026-000001".to_owned(),
+                rechnungsdatum: time::macros::date!(2026 - 01 - 05),
+                betrag_brutto_eur: rust_decimal::Decimal::from(100),
+            },
+            crate::Abschlagsverrechnung {
+                rechnungsnummer: "ABS-2026-000002".to_owned(),
+                rechnungsdatum: time::macros::date!(2026 - 02 - 05),
+                betrag_brutto_eur: rust_decimal::Decimal::from(50),
+            },
+        ];
+
+        let rechnung = into_rechnung(&document);
+        let wert = |b: &Option<Betrag>| b.as_ref().and_then(|b| b.wert).expect("amount");
+
+        assert_eq!(
+            wert(&rechnung.gesamtnetto),
+            netto,
+            "the supply is unchanged"
+        );
+        assert_eq!(wert(&rechnung.gesamtsteuer), steuer, "and so is its tax");
+        assert_eq!(wert(&rechnung.gesamtbrutto), brutto);
+        assert_eq!(
+            wert(&rechnung.zu_zahlen),
+            brutto - rust_decimal::Decimal::from(150),
+            "only what is owed moves"
+        );
+        assert_eq!(
+            rechnung.netznutzungrechnungstyp,
+            Some(NetznutzungRechnungstyp::Abschlussrechnung)
+        );
+
+        // Each deduction names the invoice it reconciles against — the AHB wants
+        // `RFF+AFL` per Abschlag, not one lump sum the counterparty cannot break down.
+        let vz = rechnung.vorauszahlungen.expect("prepayments");
+        assert_eq!(vz.len(), 2);
+        assert_eq!(vz[0].referenz.as_deref(), Some("ABS-2026-000001"));
+        assert_eq!(vz[1].referenz.as_deref(), Some("ABS-2026-000002"));
+    }
+
+    /// Without Abschläge, what is owed is simply the gross.
+    #[test]
+    fn without_abschlaege_what_is_owed_is_the_gross() {
+        let settlement = crate::settle_nne(&sample_nne()).expect("settle");
+        let brutto = settlement.steuer.brutto_eur();
+        let rechnung = into_rechnung(&as_document(settlement));
+        assert_eq!(
+            rechnung.zu_zahlen.as_ref().and_then(|b| b.wert),
+            Some(brutto)
+        );
+        assert!(rechnung.vorauszahlungen.is_none());
+    }
+
+    /// A Gas settlement says so on `Rechnung.sparte`.
+    ///
+    /// NN-Rechnung Strom and Gas share Prüfidentifikator 31002, so the PID
+    /// cannot tell them apart. This field is the only thing that can.
+    #[test]
+    fn the_sparte_reaches_the_rechnung() {
+        for (sparte, want) in [
+            (crate::Sparte::Strom, rubo4e::current::Sparte::Strom),
+            (crate::Sparte::Gas, rubo4e::current::Sparte::Gas),
+        ] {
+            let mut input = sample_nne();
+            input.sparte = sparte;
+            let settlement = crate::settle_nne(&input).expect("settle");
+            let rechnung = into_rechnung(&as_document(settlement));
+            assert_eq!(rechnung.sparte, Some(want));
+        }
+    }
+
+    /// A reversal renders as a Stornorechnung: `ist_storno` set, and the
+    /// original invoice number in the field `invoic-checker` stage 0 reads.
+    #[test]
+    fn a_reversal_renders_as_a_stornorechnung() {
+        let settlement = crate::settle_nne(&sample_nne()).expect("settle");
+        let reversal = crate::reverse(&settlement, crate::KorrekturGrund::Messwertkorrektur);
+        let mut document = as_document(reversal);
+        document.rechnungsnummer = "NNE-2026-002".to_owned();
+        document.correction_of = Some("NNE-2026-001".to_owned());
+
+        let rechnung = into_rechnung(&document);
+        assert_eq!(rechnung.ist_storno, Some(true));
+        assert_eq!(
+            rechnung.original_rechnungsnummer.as_deref(),
+            Some("NNE-2026-001")
+        );
+        // The engine negated the amounts; the renderer must not undo that.
+        let total = rechnung
+            .gesamtnetto
+            .as_ref()
+            .and_then(|b| b.wert)
+            .expect("total");
+        assert!(total < rust_decimal::Decimal::ZERO, "storno total {total}");
+    }
+
+    /// An ordinary invoice is not marked as a Storno.
+    #[test]
+    fn an_initial_settlement_is_not_a_storno() {
+        let settlement = crate::settle_nne(&sample_nne()).expect("settle");
+        let rechnung = into_rechnung(&as_document(settlement));
+        assert_eq!(rechnung.ist_storno, None);
+        assert_eq!(rechnung.original_rechnungsnummer, None);
     }
 
     /// The calculation trace must survive into the rendered Rechnung.
@@ -470,7 +872,7 @@ mod rechnungstyp_tests {
                 "{st:?} is not a Netznutzungsrechnung"
             );
             assert_eq!(netznutzungrechnungsart_for(st), None);
-            assert_eq!(netznutzungrechnungstyp_for(st), None);
+            assert_eq!(netznutzungrechnungstyp_for(st, None), None);
         }
     }
 
@@ -494,7 +896,7 @@ mod rechnungstyp_tests {
         // Mehr-/Mindermengen has a dedicated code, so it can be stated.
         for st in [S::MmmStrom, S::MmmGas, S::MmmSelbstausstellt] {
             assert_eq!(
-                netznutzungrechnungstyp_for(st),
+                netznutzungrechnungstyp_for(st, None),
                 Some(NetznutzungRechnungstyp::Mehrmindermengenrechnung)
             );
         }
@@ -503,7 +905,7 @@ mod rechnungstyp_tests {
         // unsupported claim about billing cadence on the wire.
         for st in [S::NneStrom, S::NneGas] {
             assert_eq!(
-                netznutzungrechnungstyp_for(st),
+                netznutzungrechnungstyp_for(st, None),
                 None,
                 "{st:?} has no cadence to state"
             );

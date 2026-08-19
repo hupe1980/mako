@@ -25,9 +25,9 @@ use rust_decimal::Decimal;
 
 use crate::error::BillingError;
 use crate::types::{
-    ArbeitspreisModell, BillingPositionKind, CalculationTrace, GasAwhInput, KaKundengruppe,
-    KorrekturGrund, LegalReference, MmmInput, MsbInput, NneInput, PriceReference, PriceStep,
-    QuantityUnit, Sect14aModule, SettlementPosition, SettlementResult, SettlementStatus,
+    AbschlagInput, ArbeitspreisModell, BillingPositionKind, CalculationTrace, GasAwhInput,
+    KaKundengruppe, KorrekturGrund, LegalReference, MmmInput, MsbInput, NneInput, PriceReference,
+    PriceStep, QuantityUnit, Sect14aModule, SettlementPosition, SettlementResult, SettlementStatus,
     SettlementType, SettlementWarning, Sparte, SpotPriceFormula, SpotpreisInterval,
     TariffCalculationMethod, TariffSource, WarningSeverity,
 };
@@ -623,14 +623,30 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         ArbeitspreisModell::SpotpreisNetzentgelt { .. } => {}
     }
 
-    // Leistung (RLM only) — StromNEV §17
+    // Leistung (RLM only) — StromNEV §17.
+    //
+    // Sparte-guarded like the Grundpreis and the Kapazitätsentgelt: §17 StromNEV
+    // is the Leistungspreis authorisation for electricity, and gas prices
+    // capacity through §15 GasNEV instead. Citing §17 on a gas invoice claims a
+    // basis the ordinance does not give.
     if let Some(lp) = input.leistungspreis {
+        if input.sparte == Sparte::Gas {
+            warnings.push(SettlementWarning {
+                severity: WarningSeverity::Warning,
+                code: "LEISTUNGSPREIS_ON_GAS",
+                message: "a Leistungspreis was supplied on a Gas settlement — §17 StromNEV                           does not apply to gas, which prices capacity through the                           Kapazitätsentgelt of §15 GasNEV"
+                    .to_owned(),
+            });
+        }
         let p = kw_pos_traced(
             "Netznutzung Leistung",
             BillingPositionKind::NneLeistung,
             lp.spitzenleistung_kw,
             lp.preis_eur_per_kw,
-            vec![LegalReference::StromNev { paragraph: "§17" }],
+            vec![match input.sparte {
+                Sparte::Strom => LegalReference::StromNev { paragraph: "§17" },
+                Sparte::Gas => LegalReference::GasNev { paragraph: "§15" },
+            }],
             tariff_src.clone(),
         );
         total += p.net_eur;
@@ -1041,6 +1057,16 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     let total_eur = total.round_dp(2);
     ensure_representable_eur(total_eur)?;
 
+    // Netznutzung is a sonstige Leistung: UStAE 13b.3a excludes it from §13b by
+    // name, so the Netzbetreiber always owes the tax at the Regelsteuersatz.
+    let steuer = crate::umsatzsteuer::steuerausweis(
+        total_eur,
+        crate::umsatzsteuer::Leistungsart::SonstigeLeistung,
+        crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+        input.period,
+    )?;
+    ensure_representable_eur(steuer.brutto_eur().abs())?;
+
     let result = SettlementResult {
         malo_id: input.malo_id.clone(),
         sparte: input.sparte,
@@ -1053,6 +1079,7 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         recipient_mp_id: input.lf_mp_id.clone(),
         positions,
         total_eur,
+        steuer,
         warnings,
     };
     debug_assert_eq!(
@@ -1220,6 +1247,21 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
     let total_eur = (p1.net_eur + p2.net_eur).round_dp(2);
     ensure_representable_eur(total_eur.abs())?;
 
+    // A Mehr-/Mindermenge is a **Lieferung** of the commodity, not a network
+    // service, so §13b Abs. 2 Nr. 5 Buchst. b can shift the tax to the recipient
+    // — and the gas rate reduction of §28 Abs. 5 UStG can reach it.
+    let leistungsart = match input.sparte {
+        Sparte::Strom => crate::umsatzsteuer::Leistungsart::LieferungStrom,
+        Sparte::Gas => crate::umsatzsteuer::Leistungsart::LieferungGas,
+    };
+    let steuer = crate::umsatzsteuer::steuerausweis(
+        total_eur,
+        leistungsart,
+        input.wiederverkaeufer,
+        input.period,
+    )?;
+    ensure_representable_eur(steuer.brutto_eur().abs())?;
+
     Ok(SettlementResult {
         malo_id: input.malo_id.clone(),
         sparte: input.sparte,
@@ -1232,6 +1274,110 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
         recipient_mp_id: input.lf_mp_id.clone(),
         positions: vec![p1, p2],
         total_eur,
+        steuer,
+        warnings,
+    })
+}
+
+// ── Abschlagsrechnung (PID 31001) ─────────────────────────────────────────────
+
+/// Calculate an Abschlagsrechnung Netznutzung (PID 31001): a payment on account.
+///
+/// This settles nothing. It asks the Lieferant for an amount against a period
+/// the Netzbetreiber has not yet billed, and the Abschlussrechnung that follows
+/// deducts it by invoice number ([`crate::Abschlagsverrechnung`]).
+///
+/// **Exactly one position**, per INVOIC AHB 1.0b Änd-ID 26817 — "Eine
+/// Abschlagsrechnung kann und muss genau eine Positionszeile enthalten", with
+/// `LIN DE1082` fixed at 1. So there is no quantity and no unit price here: an
+/// Abschlag prices no energy, and giving it a kWh figure would assert a
+/// measurement nobody took.
+///
+/// # Errors
+///
+/// [`BillingError::InvalidInput`] when the amount is not positive — an Abschlag
+/// asking for nothing, or crediting money, is not an Abschlag. Reverse it with
+/// [`reverse`] instead.
+#[must_use = "handle the BillingError"]
+pub fn settle_abschlag(input: &AbschlagInput) -> Result<SettlementResult, BillingError> {
+    if input.betrag_netto_eur <= Decimal::ZERO {
+        return Err(BillingError::InvalidInput {
+            reason: format!(
+                "an Abschlag must ask for a positive amount, got {} EUR — to give money back, \
+                 reverse the Abschlagsrechnung rather than issuing a negative one",
+                input.betrag_netto_eur
+            ),
+        });
+    }
+
+    // The Abschlag rests on the same charge authorisation as the invoice it
+    // anticipates, so a period AgNeS governs is refused here too.
+    let regime =
+        crate::regulatory::RegulatoryRegime::for_period(input.period.from(), input.period.to());
+    regime.ensure_berechenbar()?;
+
+    let mut warnings: Vec<SettlementWarning> = Vec::new();
+    warn_if_straddles_turnover(input.period.from(), input.period.to(), &mut warnings);
+
+    let betrag = input.betrag_netto_eur.round_dp(2);
+    ensure_representable_eur(betrag)?;
+
+    let position = SettlementPosition {
+        text: format!("Abschlag Netznutzung ({})", input.grundlage.label()),
+        kind: BillingPositionKind::NneAbschlag,
+        // No quantity and no unit price: the amount *is* the position.
+        quantity: Decimal::ONE,
+        unit: QuantityUnit::Monat,
+        unit_price_eur: betrag,
+        net_eur: betrag,
+        spot_price_formula: None,
+        trace: CalculationTrace {
+            explanation: format!(
+                "Abschlag {betrag:.2} EUR für {} – {} ({})",
+                input.period.from(),
+                input.period.to(),
+                input.grundlage.label(),
+            ),
+            input_quantity: Decimal::ONE,
+            input_unit_price_eur: betrag,
+            gross_eur: betrag,
+            legal_refs: vec![
+                match input.sparte {
+                    Sparte::Strom => LegalReference::StromNev { paragraph: "§21" },
+                    Sparte::Gas => LegalReference::GasNev { paragraph: "§14" },
+                },
+                LegalReference::Ustg {
+                    paragraph: "§14 Abs. 5",
+                },
+            ],
+            tariff_source: None,
+            regulatory_reduction_factor: None,
+            rounding_note: Some("amount rounded to 2 dp"),
+        },
+    };
+
+    Ok(SettlementResult {
+        malo_id: input.malo_id.clone(),
+        sparte: input.sparte,
+        regime,
+        settlement_type: SettlementType::NneAbschlag,
+        status: SettlementStatus::Initial,
+        korrektur_grund: None,
+        period: input.period,
+        sender_mp_id: input.nb_mp_id.clone(),
+        recipient_mp_id: input.lf_mp_id.clone(),
+        positions: vec![position],
+        total_eur: betrag,
+        // An Anzahlung is taxed when it is received (§14 Abs. 5 UStG), so the
+        // Abschlagsrechnung states the tax like any other — and the
+        // Abschlussrechnung must then not tax the same money twice, which is why
+        // the deduction happens on `zu_zahlen` rather than on the net.
+        steuer: crate::umsatzsteuer::steuerausweis(
+            betrag,
+            crate::umsatzsteuer::Leistungsart::SonstigeLeistung,
+            crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            input.period,
+        )?,
         warnings,
     })
 }
@@ -1298,6 +1444,28 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         });
     }
 
+    // The months billed have to be the months served. `billing_months` and the
+    // delivery period were independent, so a request could bill twelve months of
+    // Grundgebühr over a one-month period — a twelvefold over-charge that adds
+    // up perfectly and reads as a normal annual invoice.
+    //
+    // The comparison is deliberately loose: a period may run from the 15th to
+    // the 14th, or cover a Gerätewechsel mid-month, so anything within a month
+    // of the calendar length passes. What it catches is an order-of-magnitude
+    // mismatch, which is the error worth catching.
+    let period_months = Decimal::from(input.period.days()) / rust_decimal::dec!(30.44);
+    let billed = Decimal::from(input.billing_months);
+    if (billed - period_months).abs() > Decimal::ONE {
+        warnings.push(SettlementWarning {
+            severity: WarningSeverity::Warning,
+            code: "BILLING_MONTHS_MISMATCH",
+            message: format!(
+                "billing {billed} months of Messstellenbetrieb over a period of {} days                  (≈ {period_months:.1} months) — check the period or the month count",
+                input.period.days()
+            ),
+        });
+    }
+
     let mut positions: Vec<SettlementPosition> = Vec::new();
     let mut total = Decimal::ZERO;
 
@@ -1351,8 +1519,9 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
 
     Ok(SettlementResult {
         malo_id: input.malo_id.clone(),
-        // Messstellenbetrieb is billed per metering point, not per commodity.
-        sparte: Sparte::Strom,
+        // §30 MsbG prices metering rather than energy, so the Sparte drives no
+        // arithmetic here — it is carried because it is what the invoice states.
+        sparte: input.sparte,
         regime: crate::regulatory::RegulatoryRegime::for_period(
             input.period.from(),
             input.period.to(),
@@ -1368,6 +1537,13 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         recipient_mp_id: input.empfaenger.mp_id.clone(),
         positions,
         total_eur,
+        // Messstellenbetrieb is a sonstige Leistung — never reverse-charged.
+        steuer: crate::umsatzsteuer::steuerausweis(
+            total_eur,
+            crate::umsatzsteuer::Leistungsart::SonstigeLeistung,
+            crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            input.period,
+        )?,
         warnings,
     })
 }
@@ -1440,6 +1616,18 @@ pub fn reverse(original: &SettlementResult, grund: KorrekturGrund) -> Settlement
         recipient_mp_id: original.recipient_mp_id.clone(),
         positions: reversed_positions,
         total_eur: -original.total_eur,
+        // The tax is mirrored, not recomputed. A reversal cancels the invoice
+        // that was issued, so it has to carry that invoice's treatment even if
+        // the rate or the counterparty's §3g status has since changed —
+        // recomputing would leave a tax residue the reversal never cancels.
+        steuer: crate::umsatzsteuer::Steuerausweis {
+            kategorie: original.steuer.kategorie,
+            satz_prozent: original.steuer.satz_prozent,
+            bemessungsgrundlage_eur: -original.steuer.bemessungsgrundlage_eur,
+            steuer_eur: -original.steuer.steuer_eur,
+            hinweis: original.steuer.hinweis,
+            rechtsgrundlage: original.steuer.rechtsgrundlage,
+        },
         warnings,
     }
 }
@@ -1614,6 +1802,14 @@ pub fn settle_gas_awh(input: &GasAwhInput) -> Result<SettlementResult, BillingEr
         recipient_mp_id: input.lf_mp_id.clone(),
         positions,
         total_eur,
+        // Abrechnungswürdige Handlungen are services performed during the
+        // Sperrprozess — a sonstige Leistung, never reverse-charged.
+        steuer: crate::umsatzsteuer::steuerausweis(
+            total_eur,
+            crate::umsatzsteuer::Leistungsart::SonstigeLeistung,
+            crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            input.period,
+        )?,
         warnings,
     };
     debug_assert_eq!(
@@ -1686,8 +1882,86 @@ mod tests {
         }
     }
 
+    /// Billing more months than the period serves is caught.
+    ///
+    /// `billing_months` and the delivery period were independent, so a request
+    /// could bill twelve months of Grundgebühr over one month of service — a
+    /// twelvefold over-charge that adds up perfectly and reads as an annual
+    /// invoice.
+    #[test]
+    fn billing_more_months_than_the_period_serves_is_flagged() {
+        let mut input = base_msb();
+        input.billing_months = 12; // period is one month
+        let r = settle_msb(&input).expect("settles");
+        assert!(
+            r.warnings
+                .iter()
+                .any(|w| w.code == "BILLING_MONTHS_MISMATCH"),
+            "{:#?}",
+            r.warnings
+        );
+
+        // The matching case is silent.
+        let matching = settle_msb(&base_msb()).expect("settles");
+        assert!(
+            !matching
+                .warnings
+                .iter()
+                .any(|w| w.code == "BILLING_MONTHS_MISMATCH"),
+            "{:#?}",
+            matching.warnings
+        );
+
+        // A full year over a full year is silent too.
+        let mut annual = base_msb();
+        annual.period =
+            SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 12 - 31)).unwrap();
+        annual.billing_months = 12;
+        let annual = settle_msb(&annual).expect("settles");
+        assert!(
+            !annual
+                .warnings
+                .iter()
+                .any(|w| w.code == "BILLING_MONTHS_MISMATCH"),
+            "{:#?}",
+            annual.warnings
+        );
+    }
+
+    /// A Leistungspreis on a Gas settlement cites GasNEV, and says it is odd.
+    ///
+    /// §17 StromNEV is the electricity Leistungspreis authorisation; gas prices
+    /// capacity through §15 GasNEV. Citing §17 on a gas invoice claims a basis
+    /// the ordinance does not give.
+    #[test]
+    fn a_leistungspreis_on_gas_does_not_cite_stromnev() {
+        let mut input = base_nne();
+        input.sparte = Sparte::Gas;
+        input.leistungspreis = Some(Leistungspreis {
+            spitzenleistung_kw: d("40"),
+            preis_eur_per_kw: d("12.50"),
+        });
+        let r = settle_nne(&input).expect("settles");
+        assert!(
+            r.warnings.iter().any(|w| w.code == "LEISTUNGSPREIS_ON_GAS"),
+            "{:#?}",
+            r.warnings
+        );
+        let refs: Vec<String> = r
+            .positions
+            .iter()
+            .filter(|p| p.kind == BillingPositionKind::NneLeistung)
+            .flat_map(|p| p.trace.legal_refs.iter().map(LegalReference::citation))
+            .collect();
+        assert!(
+            refs.iter().all(|r| !r.contains("StromNEV")),
+            "a gas Leistungspreis must not cite StromNEV: {refs:?}"
+        );
+    }
+
     fn base_msb() -> MsbInput {
         MsbInput {
+            sparte: Sparte::Strom,
             malo_id: "51238696012".to_owned(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
@@ -1714,6 +1988,7 @@ mod tests {
             profil_kwh: d("1500"),
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
+            wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
         }
     }
 
@@ -2032,6 +2307,7 @@ mod tests {
             profil_kwh: d("1500"),
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
+            wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
         };
         let r = settle_mmm(&input).unwrap();
         // 100 kWh over profile × 2.0 ct = 2.00 EUR charged at the Mindermengen price.
@@ -2059,6 +2335,7 @@ mod tests {
             profil_kwh: d("1500"),
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
+            wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
         };
         let r = settle_mmm(&input).unwrap();
         // 100 kWh under profile × 4.0 ct = 4.00 EUR credited at the Mehrmengen price.
@@ -2090,6 +2367,7 @@ mod tests {
     #[test]
     fn msb_grundgebuehr_only() {
         let input = MsbInput {
+            sparte: Sparte::Strom,
             malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
@@ -2112,6 +2390,7 @@ mod tests {
     #[test]
     fn msb_with_messdienstleistung() {
         let input = MsbInput {
+            sparte: Sparte::Strom,
             malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
@@ -2145,6 +2424,8 @@ mod tests {
             correction_of: None,
             invoice_date: date!(2025 - 02 - 15),
             due_date: date!(2025 - 03 - 15),
+            cadence: None,
+            abschlaege: Vec::new(),
         };
         assert_eq!(doc.pid, 31002);
         // and numbering is assigned at rendering time
@@ -2275,6 +2556,7 @@ mod tests {
     #[test]
     fn msb_has_msbg_reference() {
         let input = MsbInput {
+            sparte: Sparte::Strom,
             malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,
@@ -2539,6 +2821,7 @@ mod tests {
             (MsbEmpfaengerRolle::Energieserviceanbieter, "9905550000005"),
         ] {
             let input = MsbInput {
+                sparte: Sparte::Strom,
                 malo_id: "51238696012".into(),
                 msb_mp_id: "9900999000001".into(),
                 empfaenger: MsbRechnungsempfaenger {
@@ -2748,6 +3031,7 @@ mod tests {
     #[test]
     fn validate_msb_zero_months_is_error() {
         let input = MsbInput {
+            sparte: Sparte::Strom,
             malo_id: "51238696012".into(),
             empfaenger: MsbRechnungsempfaenger {
                 rolle: MsbEmpfaengerRolle::Netzbetreiber,

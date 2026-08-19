@@ -7,8 +7,14 @@
 //! # State machine
 //!
 //! ```text
+//! ── Recipient (LFN/LFA) ───────────────────────────────────────────────────
 //! New ──ReceiveInvoic──► InvoicReceived ──[valid]──► ValidationPassed ──SettleInvoice──► Settled
 //!                                        ╰──[invalid]──► Rejected      ╰─DisputeInvoice──► Disputed
+//!
+//! ── Issuer (GNB/VNB) ──────────────────────────────────────────────────────
+//! New ──SendInvoic──► InvoicSent ──ReceiveRemadv 33001──► PaymentConfirmed
+//!                                ╰─ReceiveRemadv 33002/3/4──► PaymentDisputed
+//!
 //! Any active state ──TimeoutExpired──► Rejected
 //! ```
 //!
@@ -231,5 +237,112 @@ fn settlement_label_is_set() {
     assert!(
         !SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL.is_empty(),
         "SPERRPROZESSE_INVOIC_SETTLEMENT_LABEL must be non-empty",
+    );
+}
+
+// ── Issuer role (GNB/VNB) ──────────────────────────────────────────────────────
+
+fn send_invoic_cmd(pid: u32) -> GeliGasSperrprozesseInvoicCommand {
+    GeliGasSperrprozesseInvoicCommand::SendInvoic {
+        pid: Pruefidentifikator::new(pid).expect("valid PID"),
+        sender: gnb_gln(),
+        recipient: lf_mp_id(),
+        document_date: "20260131".to_owned(),
+        invoice_ref: msg("AWH-2026-000001"),
+    }
+}
+
+fn remadv_cmd(pid: u32) -> GeliGasSperrprozesseInvoicCommand {
+    GeliGasSperrprozesseInvoicCommand::ReceiveRemadv {
+        pid: Pruefidentifikator::new(pid).expect("valid PID"),
+        remadv_ref: msg("REMADV-0001"),
+        sender: lf_mp_id(),
+    }
+}
+
+/// The GNB issues a 31011 and the payer confirms it.
+///
+/// This leg did not exist: the workflow modelled only the LFG receiving an
+/// invoice, so a gas network operator could settle an AWH invoice and had
+/// nowhere to dispatch it.
+#[tokio::test]
+async fn the_issuer_records_an_outbound_invoice_and_its_confirmation() {
+    let p = make_process();
+    p.execute(send_invoic_cmd(31011))
+        .await
+        .expect("the GNB may issue a 31011");
+    assert!(matches!(
+        p.state().await.expect("state"),
+        GeliGasSperrprozesseInvoicState::InvoicSent(_)
+    ));
+
+    p.execute(remadv_cmd(33001))
+        .await
+        .expect("the payer confirms");
+    let GeliGasSperrprozesseInvoicState::PaymentConfirmed(data) = p.state().await.expect("state")
+    else {
+        panic!(
+            "expected PaymentConfirmed, got {:?}",
+            p.state().await.expect("state")
+        );
+    };
+    assert_eq!(data.invoice_ref, msg("AWH-2026-000001"));
+    assert_eq!(data.sender, gnb_gln());
+}
+
+/// 33001 is the only Zahlungsbestätigung — 33002, 33003 and 33004 are all
+/// Abweisungen, and 33003/33004 are itemised rejections rather than partial
+/// payments. Treating any of them as a confirmation books money that never came.
+#[tokio::test]
+async fn only_33001_confirms_payment() {
+    for pid in [33002, 33003, 33004] {
+        let p = make_process();
+        p.execute(send_invoic_cmd(31011)).await.expect("issue");
+        p.execute(remadv_cmd(pid)).await.expect("answer");
+        let GeliGasSperrprozesseInvoicState::PaymentDisputed { remadv_pid, .. } =
+            p.state().await.expect("state")
+        else {
+            panic!(
+                "REMADV {pid} must not confirm payment: {:?}",
+                p.state().await.expect("state")
+            );
+        };
+        assert_eq!(remadv_pid.as_u32(), pid);
+    }
+}
+
+/// The issuer leg accepts only its own Prüfidentifikator.
+#[tokio::test]
+async fn the_issuer_leg_refuses_a_foreign_pid() {
+    let p = make_process();
+    assert!(
+        p.execute(send_invoic_cmd(31009)).await.is_err(),
+        "31009 is the MSB-Rechnung and belongs to mako-wim"
+    );
+}
+
+/// A REMADV cannot answer an invoice this deployment never issued.
+#[tokio::test]
+async fn a_remadv_without_an_outbound_invoice_is_refused() {
+    let p = make_process();
+    assert!(p.execute(remadv_cmd(33001)).await.is_err());
+}
+
+/// A duplicate REMADV does not overwrite the answer that already landed.
+#[tokio::test]
+async fn a_late_remadv_does_not_overwrite_the_first_answer() {
+    let p = make_process();
+    p.execute(send_invoic_cmd(31011)).await.expect("issue");
+    p.execute(remadv_cmd(33001)).await.expect("confirm");
+    p.execute(remadv_cmd(33002))
+        .await
+        .expect("a late Abweisung is accepted, not an error");
+    assert!(
+        matches!(
+            p.state().await.expect("state"),
+            GeliGasSperrprozesseInvoicState::PaymentConfirmed(_)
+        ),
+        "the first answer stands: {:?}",
+        p.state().await.expect("state")
     );
 }

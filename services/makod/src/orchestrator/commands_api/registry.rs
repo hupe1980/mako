@@ -213,8 +213,22 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // via these commands.  `GpkeAbrechnungWorkflow` spawns in invoicer role so
     // the inbound REMADV from the LF can be routed back to the correct process.
     //
-    // Payload: { "invoice_ref": "<uuid>", "nb_mp_id": "<GLN>", "lf_mp_id": "<GLN>",
-    //            "pid": <PID>, "rechnung": <BO4E Rechnung JSON> }
+    // Payload: { "invoice_ref": "<rechnungsnummer>", "sender_mp_id": "<GLN>",
+    //            "recipient_mp_id": "<GLN>", "pid": <PID>, "sparte": "STROM"|"GAS",
+    //            "rechnung": <BO4E Rechnung JSON> }
+    //
+    // `invoice_ref` is the invoice number, not a UUID: it is the business key the
+    // inbound REMADV correlates on, so it has to be the number printed on the
+    // document the counterparty received.
+    // PID 31001 — Abschlagsrechnung Netznutzung: a payment on account, settled
+    // later by the Abschlussrechnung that deducts it (INVOIC AHB `SG50 MOA+113`
+    // + `SG51 RFF+AFL`).
+    CommandDescriptor {
+        name: "gpke.nne-abschlag.rechnung.stellen",
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
+        primary_pid: pid(31001),
+        dispatch: cmd_gpke_nne_abschlag_rechnung_stellen,
+    },
     CommandDescriptor {
         name: "gpke.nne.rechnung.stellen",
         permitted_roles: &[Marktrolle::Nb],
@@ -233,9 +247,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31002),
         dispatch: cmd_gpke_nne_gas_rechnung_stellen,
     },
+    // PID 31009 is issued **by** the Messstellenbetreiber in all seven of its
+    // Anwendungsfälle (PID overview 4.0), so `MSB` is a permitted role here.
+    // Listing only `NB` made this a single-role command, which silently ignores
+    // the asserted role — and, worse, locked out the one deployment shape that
+    // most needs it: a `--marktrollen MSB` instance failed the licence check on
+    // the invoice it is the only party entitled to send. `NB` stays because the
+    // grundzuständige MSB is commonly the network operator's own arm.
     CommandDescriptor {
         name: "wim.msb-rechnung.stellen",
-        permitted_roles: &[Marktrolle::Nb],
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
         primary_pid: pid(31009),
         dispatch: cmd_wim_msb_rechnung_stellen,
     },
@@ -596,6 +617,16 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     // GeLi Gas AWH Sperrprozesse INVOIC (PID 31011): VNB bills LFN/LFA for services
     // rendered during the gas disconnection/reconnection process.
+    //
+    // Payload (issuer side): { "invoice_ref": "<rechnungsnummer>",
+    //   "sender_mp_id": "<GNB GLN>", "recipient_mp_id": "<LFG GLN>",
+    //   "pid": 31011, "sparte": "GAS", "rechnung": <BO4E Rechnung JSON> }
+    CommandDescriptor {
+        name: "geli.gas.awh-rechnung.stellen",
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
+        primary_pid: pid(31011),
+        dispatch: cmd_geli_gas_awh_rechnung_stellen,
+    },
     CommandDescriptor {
         name: "geli.gas.rechnung.annehmen",
         permitted_roles: &[Marktrolle::Lf, Marktrolle::Lfg],
@@ -786,6 +817,45 @@ mod tests {
     }
 
     /// PID 31004 Stornorechnung is dispatched under the **Sparte-neutral**
+    /// Every outbound INVOIC command is reachable by the role that issues it.
+    ///
+    /// The role a caller asserts is checked against the deployment's licensed
+    /// roles for any command permitted to more than one — so a descriptor that
+    /// names the wrong role does not merely mislabel the sender, it locks the
+    /// issuing party out of its own invoice. Two cases here are inverted from
+    /// the obvious one: PID 31009 is issued by the **MSB**, and the three gas
+    /// invoices are issued by a **GNB**.
+    #[test]
+    fn every_outbound_invoic_permits_the_role_that_issues_it() {
+        let roles = |name: &str| {
+            COMMAND_REGISTRY
+                .iter()
+                .find(|d| d.name == name)
+                .unwrap_or_else(|| panic!("{name} must be registered"))
+                .permitted_roles
+        };
+
+        // PID 31009 — the Messstellenbetreiber is the sender in all seven of
+        // its Anwendungsfälle (PID overview 4.0). A `--marktrollen MSB`
+        // deployment must be able to send it.
+        assert!(
+            roles("wim.msb-rechnung.stellen").contains(&Marktrolle::Msb),
+            "the MSB issues PID 31009 and must be permitted to send it"
+        );
+
+        // The gas invoices: a gas network operator is licensed as GNB.
+        for name in [
+            "gpke.nne-abschlag.rechnung.stellen",
+            "gpke.nne-gas.rechnung.stellen",
+            "geli.gas.awh-rechnung.stellen",
+        ] {
+            assert!(
+                roles(name).contains(&Marktrolle::Gnb),
+                "{name} carries a gas invoice and must permit the GNB role"
+            );
+        }
+    }
+
     /// `invoic.stornorechnung.*` names (not the retired Gas-only
     /// `wim.gas.stornorechnung.*`), bound to PID 31004, and reachable by both
     /// Strom (NB) and Gas (GNB) receivers — so a Strom storno is no longer

@@ -276,18 +276,18 @@ spec:
       mutates: false
       max_sensitivity: confidential
       description: "get versorgung at via marktd"
-    - ref: tool://netzbilanzd/list_nne_drafts
+    - ref: tool://netzbilanzd/list_drafts
       mutates: false
       max_sensitivity: internal
-      description: "list nne drafts via netzbilanzd"
+      description: "list invoices via netzbilanzd"
     - ref: tool://netzbilanzd/list_disputed
       mutates: false
       max_sensitivity: internal
       description: "list disputed via netzbilanzd"
-    - ref: tool://netzbilanzd/get_nne_draft
+    - ref: tool://netzbilanzd/get_draft
       mutates: false
       max_sensitivity: internal
-      description: "get nne draft via netzbilanzd"
+      description: "get one invoice in full via netzbilanzd"
     - ref: tool://netzbilanzd/list_pending_kostenblatt
       mutates: false
       max_sensitivity: internal
@@ -296,23 +296,11 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: "get billing summary via netzbilanzd"
-    - ref: tool://netzbilanzd/list_undispatched_drafts
+    - ref: tool://netzbilanzd/list_undispatched
       mutates: false
       max_sensitivity: internal
-      description: "list undispatched drafts via netzbilanzd"
-    - ref: tool://netzbilanzd/trigger_mmm_auto_run
-      mutates: false
-      max_sensitivity: internal
-      description: "trigger mmm auto run via netzbilanzd"
+      description: "list drafts past their dispatch window via netzbilanzd"
     - ref: tool://netzbilanzd/list_corrections
       mutates: false
       max_sensitivity: internal
       description: "list corrections via netzbilanzd"
-    - ref: tool://netzbilanzd/get_payment_stats
-      mutates: false
-      max_sensitivity: internal
-      description: "get payment stats via netzbilanzd"
-    - ref: tool://netzbilanzd/list_paid_invoices
-      mutates: false
-      max_sensitivity: internal
-      description: "list paid invoices via netzbilanzd"

@@ -648,6 +648,56 @@ pub(super) async fn dispatch_geli_gas_invoic(
     .await
 }
 
+/// Dispatch an outbound INVOIC 31011 (GNB/VNB issuer role).
+///
+/// `netzbilanzd` settles the AWH positions and renders the document; this
+/// records the process so the payer's inbound REMADV correlates back to it.
+/// Mirrors `wim.msb-rechnung.stellen`, which does the same for PID 31009.
+async fn dispatch_geli_gas_awh_send_invoic(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let invoice_ref = extract_invoice_ref(payload)?;
+    let sender = payload
+        .get("sender_mp_id")
+        .or_else(|| payload.get("nb_mp_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_owned();
+    let recipient = payload
+        .get("recipient_mp_id")
+        .or_else(|| payload.get("lf_mp_id"))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_owned();
+    let invoice_ref_clone = invoice_ref.clone();
+    dispatch_to_process::<GeliGasSperrprozesseInvoicWorkflow, _>(
+        state,
+        &invoice_ref,
+        GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
+        move || GeliGasSperrprozesseInvoicCommand::SendInvoic {
+            pid: mako_engine::types::Pruefidentifikator::new(31011)
+                .expect("valid AWH Sperrprozesse PID"),
+            sender: mako_engine::types::MarktpartnerCode::new(sender.as_str()),
+            recipient: mako_engine::types::MarktpartnerCode::new(recipient.as_str()),
+            document_date: time::OffsetDateTime::now_utc()
+                .format(&time::format_description::well_known::Iso8601::DEFAULT)
+                .unwrap_or_default(),
+            invoice_ref: mako_engine::types::MessageRef::new(invoice_ref_clone.clone()),
+        },
+    )
+    .await
+}
+
+pub(super) fn cmd_geli_gas_awh_rechnung_stellen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_gas_awh_send_invoic(s, p))
+}
+
 pub(super) fn cmd_geli_gas_rechnung_annehmen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,

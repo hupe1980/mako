@@ -238,15 +238,15 @@ pub mod accounting {
 /// MaBiS/Netzbilanzierung INVOIC events (`de.netzbilanz.*`), emitted by
 /// `netzbilanzd`.
 pub mod netzbilanz {
-    /// Bilanzkreis INVOIC drafted.
+    /// A Netzbetreiber invoice was settled and stored as a draft.
     pub const INVOIC_DRAFTED: &str = "de.netzbilanz.invoic.drafted";
-    /// Bilanzkreis INVOIC dispatched.
+    /// The invoice was handed to `makod` for EDIFACT dispatch.
     pub const INVOIC_DISPATCHED: &str = "de.netzbilanz.invoic.dispatched";
-    /// Bilanzkreis INVOIC not dispatched before its deadline.
+    /// A draft is still undispatched past its window.
     pub const INVOIC_DISPATCH_OVERDUE: &str = "de.netzbilanz.invoic.dispatch-overdue";
-    /// Bilanzkreis INVOIC paid (REMADV settled).
+    /// The counterparty confirmed payment (REMADV 33001, the only Bestätigung).
     pub const INVOIC_PAID: &str = "de.netzbilanz.invoic.paid";
-    /// Bilanzkreis INVOIC disputed.
+    /// The counterparty rejected the invoice (REMADV 33002/33003/33004).
     pub const INVOIC_DISPUTED: &str = "de.netzbilanz.invoic.disputed";
     /// Kostenblatt computed.
     pub const KOSTENBLATT_COMPUTED: &str = "de.netzbilanz.kostenblatt.computed";

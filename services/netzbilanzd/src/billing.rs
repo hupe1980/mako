@@ -1,1883 +1,755 @@
-//! Billing orchestration — bridges HTTP requests to `grid-billing` pure library.
+//! Settlement orchestration — the seam between an HTTP request and the pure
+//! `grid-billing` engine.
 //!
-//! `grid-billing` returns [`grid_billing::SettlementResult`] (pure domain types, no BO4E).
-//! The conversion to `rubo4e::current::Rechnung` lives in the shared
-//! feature-gated `grid_billing::bo4e` bridge module.
+//! Everything here is a *translation*: a [`crate::request::SettlementRequest`]
+//! becomes one of the four `grid-billing` inputs, the engine returns a
+//! [`grid_billing::SettlementResult`], and that becomes an
+//! [`grid_billing::InvoiceDocument`] rendered as a BO4E `Rechnung`. No money is
+//! computed in this file, and none should be: the arithmetic, the legal
+//! references and the statutory ceilings all live in the engine, where they are
+//! tested against the ordinances rather than against a service's expectations.
+//!
+//! ## What this module deliberately does not decide
+//!
+//! - **The Prüfidentifikator.** It comes from `settlement_type.default_pid()`,
+//!   not from a literal beside each match arm — a second copy of a mapping the
+//!   engine already owns is free to drift from it.
+//! - **The Sparte.** It arrives on the request. Hard-coding it would put
+//!   StromNEV citations and the three electricity EnFG levies on gas invoices.
+//! - **The invoice number.** Allocated by the database (§14 Abs. 4 Nr. 4 UStG).
 
-use anyhow::{Context as _, bail};
+use std::sync::Arc;
+
+use anyhow::Context as _;
+use grid_billing::{
+    GasAwhInput, InvoiceDocument, MmmInput, MsbInput, MsbRechnungsempfaenger, NneInput,
+    SettlementPeriod, SettlementResult, Sparte, settle_abschlag, settle_gas_awh, settle_mmm,
+    settle_msb, settle_nne,
+};
 use invoic_checker::{InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore};
 use mako_markt::marktd_client::MarktdClient;
 use rust_decimal::Decimal;
-use serde::Deserialize;
-use std::sync::Arc;
-use uuid::Uuid;
 
-use grid_billing::{
-    MmmInput, MsbEmpfaengerRolle, MsbInput, MsbRechnungsempfaenger, NneInput, settle_mmm,
-    settle_msb, settle_nne,
-};
+use crate::request::{BillingPositionRequest, SettlementRequest};
 
-use crate::pg::upsert_draft;
-
-// ── BO4E conversion ───────────────────────────────────────────────────────────
-//
-// The `InvoiceDocument` → `Rechnung` rendering lives in the shared
-// feature-gated `grid_billing::bo4e` module (also used by invoicd), so the two services
-// cannot drift apart again: the bridge sets `rechnungsnummer` AND emits
-// `mako:calculation_trace` / `mako:legal_references` /
-// `mako:settlement_warnings` ZusatzAttribute.
-
-// ── BillingRunRequest ─────────────────────────────────────────────────────────
-
-/// Request body for `POST /api/v1/billing/run`.
-///
-/// Each entry in `positions` describes one MaLo to bill.
-/// The operator fetches meter data from `edmd` and tariff from `marktd`
-/// before calling this endpoint.
-#[derive(Debug, Deserialize)]
-pub struct BillingRunRequest {
-    /// Netzbetreiber MP-ID — invoice sender.
-    pub nb_mp_id: String,
-    /// Lieferant MP-ID — invoice recipient.
-    pub lf_mp_id: String,
-    /// Invoice issue date (`YYYY-MM-DD`).
-    pub invoice_date: String,
-    /// Payment due date (`YYYY-MM-DD`).
-    pub due_date: String,
-    /// Prefix for auto-generated invoice numbers (`rechnungsnummer = prefix + "-" + index`).
-    pub rechnungsnummer_prefix: String,
-    /// Billing positions — one per MaLo.
-    pub positions: Vec<BillingPosition>,
+/// A settled position, ready to be persisted as a draft.
+pub struct SettledInvoice {
+    /// What the recipient actually pays — the gross less any Abschläge.
+    pub zu_zahlen_eur: Decimal,
+    /// The invoice number this was issued under.
+    ///
+    /// Carried here rather than read back out of the rendered document: it is a
+    /// NOT NULL unique business key, and recovering it from an `Option` field
+    /// means deciding what an absent invoice number should become.
+    pub rechnungsnummer: String,
+    /// What the engine computed.
+    pub settlement: SettlementResult,
+    /// The rendered BO4E document.
+    pub rechnung: rubo4e::current::Rechnung,
+    /// The invoice-checker verdict on the rendered document.
+    pub report: invoic_checker::CheckReport,
+    /// The Prüfidentifikator, derived from the settlement type.
+    pub pid: u32,
 }
 
-/// One MaLo billing entry inside [`BillingRunRequest`].
-#[derive(Debug, Deserialize)]
-pub struct BillingPosition {
-    /// 11-digit MaLo-ID.
-    pub malo_id: String,
-    /// Start of billing period (`YYYY-MM-DD`).
-    pub period_from: String,
-    /// End of billing period (`YYYY-MM-DD`).
-    pub period_to: String,
-    /// Invoice type: `"nne_strom"` / `"nne_gas"` (both PID 31002, NN-Rechnung),
-    /// `"mmm_strom"` (31005, Strom MMM), `"mmm_gas"` (31005, Gas MMM with Trading
-    /// Hub Europe prices), or `"msb_31009"` (31009).
+/// Prices and master data a settlement needs but the request did not carry.
+///
+/// Resolved *before* the engine runs, so the engine stays I/O-free and the
+/// resolved values are what gets stored as the settlement input — an audit
+/// replays the same numbers rather than re-querying a service whose data has
+/// since moved on.
+pub struct Resolver<'a> {
+    /// `marktd`, for published MMM prices and MaLo master data.
+    pub marktd: &'a Arc<MarktdClient>,
+    /// The ÜNB whose Strom MMM price series this operator settles against.
+    pub vnb_mp_id: Option<&'a str>,
+    /// Published MMM prices already fetched during this run, keyed by
+    /// `(Sparte, year, month)`.
     ///
-    /// The legacy value `"mmm"` is **deprecated** — use `"mmm_strom"` or `"mmm_gas"` to avoid
-    /// ambiguous price auto-fetch (the old `"mmm"` path tried Gas THE prices first, which is wrong
-    /// for Strom MMM). `"mmm"` is kept as an alias for `"mmm_strom"` until all callers migrate.
-    pub billing_type: String,
-    // ── NNE fields ────────────────────────────────────────────────────────────
-    /// Total energy in kWh (NNE and MMM).
-    pub arbeitsmenge_kwh: Option<Decimal>,
-    /// Arbeitspreis in ct/kWh (NNE only, from `PreisblattNetznutzung`).
-    pub arbeitspreis_ct_per_kwh: Option<Decimal>,
-    /// HT consumption in kWh (§14a Modul 2 ToU, from `edmd MeterBillingPeriod`).
-    pub arbeitsmenge_ht_kwh: Option<Decimal>,
-    /// HT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
-    pub arbeitspreis_ht_ct_per_kwh: Option<Decimal>,
-    /// NT consumption in kWh (§14a Modul 2 ToU, from `edmd MeterBillingPeriod`).
-    pub arbeitsmenge_nt_kwh: Option<Decimal>,
-    /// NT Arbeitspreis in ct/kWh (from `PreisblattNetznutzung.zeitvariablePreispositionen`).
-    pub arbeitspreis_nt_ct_per_kwh: Option<Decimal>,
-    /// Spitzenleistung in kW (NNE RLM only).
-    pub spitzenleistung_kw: Option<Decimal>,
-    /// Leistungspreis in EUR/kW (NNE RLM only).
-    pub leistungspreis_eur_per_kw: Option<Decimal>,
-    /// Konzessionsabgabe rate in ct/kWh (optional).
-    pub ka_satz_ct_per_kwh: Option<Decimal>,
-    // ── MMM fields ────────────────────────────────────────────────────────────
-    /// SLP profil consumption in kWh (MMM only).
-    pub profil_kwh: Option<Decimal>,
-    /// Mehrmengen price in ct/kWh (MMM only).
-    pub mehr_preis_ct_per_kwh: Option<Decimal>,
-    /// Mindermengen price in ct/kWh (MMM only).
-    pub minder_preis_ct_per_kwh: Option<Decimal>,
-    /// SLP Lastprofil designation for this MaLo (optional, MMM only).
-    ///
-    /// When absent, auto-fetched from `marktd GET /api/v1/malo/{malo_id}` via the
-    /// stored `bilanzierungsmethode` column that was populated from UTILMD `TM+EM`
-    /// at supply-start.
-    ///
-    /// Standard values: `"H0"` (household), `"G0"`–`"G6"` (commercial),
-    /// `"L0"`/`"L1"`/`"L2"` (agricultural), `"P0"` (pumping station).
-    /// Used to embed the SLP profile in the generated `Rechnung` `bemerkung` field
-    /// for `netzbilanzd` audit trail and downstream ERP import.
-    pub lastprofil: Option<String>,
-    // ── MSB fields (31009) ───────────────────────────────────────────────────
-    /// MSB (Messstellenbetreiber) MP-ID — the invoice **sender** for
-    /// `"msb_31009"`.
-    ///
-    /// PID 31009 is issued by the MSB in all seven of its Anwendungsfälle
-    /// (PID overview 4.0); it is never addressed to one. The recipient is
-    /// [`Self::msb_empfaenger_rolle`] + [`Self::msb_empfaenger_mp_id`].
-    pub msb_mp_id: Option<String>,
-    /// Which market role receives the MSB-Rechnung — `"NB"`, `"LF"` or `"ESA"`.
-    ///
-    /// Defaults to `"NB"` when absent, the GPKE Teil 3 / WiM Teil 1 case.
-    pub msb_empfaenger_rolle: Option<String>,
-    /// MP-ID of the MSB-Rechnung recipient.
-    ///
-    /// Defaults to the request's `nb_mp_id` when absent, which pairs with the
-    /// `"NB"` default above.
-    pub msb_empfaenger_mp_id: Option<String>,
-    /// Grundgebühr Messstellenbetrieb in EUR/month (from `PreisblattMessung`).
-    pub grundgebuehr_eur_per_month: Option<Decimal>,
-    /// Number of full calendar months in the billing period.
-    pub billing_months: Option<u32>,
-    /// Optional Messdienstleistung flat fee in EUR for the full period.
-    pub messdienstleistung_eur: Option<Decimal>,
+    /// A monthly MMM sweep settles every MaLo of one Sparte against the *same*
+    /// published series, so fetching per position would mean up to a thousand
+    /// identical round-trips to `marktd` before the transaction opens. The memo
+    /// is per-run and dropped with it, so a later run reads the current series.
+    prices: std::collections::HashMap<(Sparte, i32, u8), (Decimal, Decimal)>,
 }
 
-fn parse_date(s: &str) -> anyhow::Result<time::Date> {
-    use time::format_description::well_known::Iso8601;
-    time::Date::parse(s, &Iso8601::DEFAULT).context("parse date")
-}
-
-/// Core billing orchestration called by the handler.
-///
-/// For each position:
-/// 1. For MMM: auto-fetch `mehr_preis` / `minder_preis` from `marktd` when not
-///    supplied in the request (eliminates the monthly manual ERP lookup — C18).
-/// 2. Calculate invoice via `grid-billing`
-/// 3. Self-validate via `invoic-checker`
-/// 4. Store as draft in PostgreSQL
-///
-/// Returns the list of generated draft UUIDs.
-pub async fn run_billing_internal(
-    conn: &mut sqlx::PgConnection,
-    marktd: &Arc<MarktdClient>,
-    tenant: &str,
-    vnb_mp_id: Option<&str>,
-    req: BillingRunRequest,
-) -> anyhow::Result<Vec<Uuid>> {
-    let invoice_date = parse_date(&req.invoice_date)?;
-    let due_date = parse_date(&req.due_date)?;
-    let empty_store = InMemoryPreisblattStore::new();
-    let config = CheckConfig::default();
-
-    let mut draft_ids = Vec::new();
-
-    for (i, pos) in req.positions.iter().enumerate() {
-        // Constructing the period is the ordering check; the engine no longer
-        // repeats it per calculation.
-        let period = grid_billing::SettlementPeriod::new(
-            parse_date(&pos.period_from)?,
-            parse_date(&pos.period_to)?,
-        )?;
-        let rechnungsnummer = format!("{}-{:04}", req.rechnungsnummer_prefix, i + 1);
-
-        let mut extra_zusatz: Vec<rubo4e::current::ZusatzAttribut> = Vec::new();
-        let (result, pid) = match pos.billing_type.as_str() {
-            "nne_strom" | "nne_gas" => {
-                let arbeit = pos
-                    .arbeitsmenge_kwh
-                    .context("arbeitsmenge_kwh required for NNE")?;
-                let ap = pos
-                    .arbeitspreis_ct_per_kwh
-                    .context("arbeitspreis_ct_per_kwh required for NNE")?;
-                let input = NneInput {
-                    blindarbeit: None,
-                    malo_id: pos.malo_id.clone(),
-                    nb_mp_id: req.nb_mp_id.clone(),
-                    lf_mp_id: req.lf_mp_id.clone(),
-                    period,
-                    arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(
-                        grid_billing::MengePreis {
-                            menge_kwh: arbeit,
-                            preis_ct_per_kwh: ap,
-                        },
-                    ),
-                    leistungspreis: match (pos.spitzenleistung_kw, pos.leistungspreis_eur_per_kw) {
-                        (Some(kw), Some(p)) => Some(grid_billing::Leistungspreis {
-                            spitzenleistung_kw: kw,
-                            preis_eur_per_kw: p,
-                        }),
-                        _ => None,
-                    },
-                    letztverbrauchergruppe: Default::default(),
-                    sect19_umlage_ct_per_kwh: None,
-                    offshore_umlage_ct_per_kwh: None,
-                    kwkg_umlage_ct_per_kwh: None,
-                    netzebene: None,
-                    sect19: None,
-                    gas_kapazitaet: None,
-                    jahreshoechstleistung_kw: None,
-                    jahresarbeit_kwh: None,
-                    // The request carries a bare rate; pairing it with the KAV
-                    // group is what lets the Höchstbetrag be checked. Absent a
-                    // group in the request, Sondervertragskunde is the safe
-                    // reading for an NB→LF grid invoice.
-                    konzessionsabgabe: pos.ka_satz_ct_per_kwh.map(|satz| {
-                        grid_billing::Konzessionsabgabe {
-                            satz_ct_per_kwh: satz,
-                            klasse: grid_billing::KaKundengruppe::Sondervertragskunde,
-                        }
-                    }),
-                    grundpreis: None,
-                    tariff_sheet_id: None,
-                    sparte: grid_billing::Sparte::Strom,
-                };
-                let r = settle_nne(&input)
-                    .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
-                // NN-Rechnung is PID 31002 for both Strom and Gas — the Sparte is
-                // carried in the message content, not the Prüfidentifikator
-                // (BDEW INVOIC AHB §3.1.1).
-                (r, 31002)
-            }
-            "mmm" | "mmm_strom" | "mmm_gas" => {
-                let actual = pos
-                    .arbeitsmenge_kwh
-                    .context("arbeitsmenge_kwh (actual) required for MMM")?;
-                let profil = pos.profil_kwh.context("profil_kwh required for MMM")?;
-
-                // Auto-fetch MMMA prices from marktd when the caller does not supply them.
-                //
-                // `"mmm_gas"` → ALWAYS auto-fetches from Trading Hub Europe (THE).
-                //               Fail hard when THE prices are not imported for the month.
-                //
-                // `"mmm_strom"` / `"mmm"` → tries VNB-specific Strom MMM prices first.
-                //                          Falls back to caller-supplied values (manual path).
-                //                          Never tries Gas THE prices for Strom billing.
-                let (mp, mnp) = if let (Some(m), Some(mn)) =
-                    (pos.mehr_preis_ct_per_kwh, pos.minder_preis_ct_per_kwh)
-                {
-                    // Caller explicitly supplied both prices — use them regardless of type.
-                    (m, mn)
-                } else {
-                    let d = parse_date(&pos.period_from)?;
-                    let (y, m) = (d.year(), d.month() as u8);
-
-                    if pos.billing_type == "mmm_gas" {
-                        // Gas MMM: must have THE prices in marktd.
-                        let fetched = marktd
-                            .get_mmma_gas(y, m, "THE")
-                            .await
-                            .context("auto-fetch MMMA Gas prices (THE) from marktd")?;
-                        match fetched {
-                            Some(r) => (r.mehr_ct_kwh, r.minder_ct_kwh),
-                            None => {
-                                anyhow::bail!(
-                                    "Gas MMM billing for {}/{}: THE MMMA prices not yet imported \
-                                     into marktd. Import via PUT /api/v1/mmma-preise/gas/{y}/{m} \
-                                     before running Gas MMM billing.",
-                                    y,
-                                    m
-                                );
-                            }
-                        }
-                    } else {
-                        // Strom MMM ("mmm" / "mmm_strom"): auto-fetch when config has the VNB MP-ID.
-                        // Strom MMM prices are VNB-specific (GPKE (BK6-24-174) Teil 1 Kap. 8.4); each NB publishes
-                        // to exactly one ÜNB Regelzone. Configure `vnb_mp_id` in netzbilanzd.toml.
-                        if let (None, None, Some(unb)) = (
-                            pos.mehr_preis_ct_per_kwh,
-                            pos.minder_preis_ct_per_kwh,
-                            vnb_mp_id,
-                        ) {
-                            // Auto-fetch Strom MMM prices from marktd.
-                            let d = parse_date(&pos.period_from)?;
-                            let (y, m) = (d.year(), d.month() as u8);
-                            let fetched = marktd
-                                .get_mmm_strom(y, m, unb)
-                                .await
-                                .context("auto-fetch Strom MMM prices from marktd")?;
-                            match fetched {
-                                Some(r) => (r.mehr_ct_kwh, r.minder_ct_kwh),
-                                None => anyhow::bail!(
-                                    "Strom MMM billing for {y}/{m}: prices not yet imported for \
-                                     VNB {unb}. Import via PUT marktd /api/v1/mmm-preise/strom/{y}/{m}."
-                                ),
-                            }
-                        } else {
-                            // Caller supplied both prices (or vnb_mp_id not configured).
-                            let mp = pos.mehr_preis_ct_per_kwh.context(
-                                "mehr_preis_ct_per_kwh required for Strom MMM. \
-                                          Configure vnb_mp_id in netzbilanzd.toml for auto-fetch, \
-                                          or supply prices explicitly.",
-                            )?;
-                            let mnp = pos
-                                .minder_preis_ct_per_kwh
-                                .context("minder_preis_ct_per_kwh required for Strom MMM")?;
-                            (mp, mnp)
-                        }
-                    }
-                };
-
-                let input = MmmInput {
-                    malo_id: pos.malo_id.clone(),
-                    nb_mp_id: req.nb_mp_id.clone(),
-                    lf_mp_id: req.lf_mp_id.clone(),
-                    period,
-                    actual_kwh: actual,
-                    profil_kwh: profil,
-                    mehr_preis_ct_per_kwh: mp,
-                    minder_preis_ct_per_kwh: mnp,
-                    sparte: grid_billing::Sparte::Strom,
-                };
-                let result = settle_mmm(&input)
-                    .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
-
-                // Auto-embed lastprofil in Rechnung.zusatz_attribute for audit trail.
-                // When the caller does not supply `lastprofil`, fetch bilanzierungsmethode
-                // from marktd (populated from UTILMD TM+EM at supply-start via
-                // patch_typenmerkmal).  SLP type feeds downstream ERP MMM profile selection.
-                let lastprofil = if let Some(lp) = pos.lastprofil.as_deref() {
-                    lp.to_owned()
-                } else {
-                    marktd
-                        .get_malo(&pos.malo_id)
-                        .await
-                        .context("fetch bilanzierungsmethode from marktd")?
-                        .and_then(|f| f.bilanzierungsmethode)
-                        .unwrap_or_else(|| "SLP".to_owned())
-                };
-                extra_zusatz.push(rubo4e::current::ZusatzAttribut {
-                    name: Some("lastprofil".to_owned()),
-                    wert: Some(serde_json::Value::String(lastprofil)),
-                    ..Default::default()
-                });
-                (result, 31005)
-            }
-            "msb_31009" => {
-                let msb_mp_id = pos
-                    .msb_mp_id
-                    .as_deref()
-                    .context("msb_mp_id required for msb_31009")?
-                    .to_owned();
-                let grundgebuehr = pos
-                    .grundgebuehr_eur_per_month
-                    .context("grundgebuehr_eur_per_month required for msb_31009")?;
-                let months = pos
-                    .billing_months
-                    .context("billing_months required for msb_31009")?;
-                let rolle = match pos
-                    .msb_empfaenger_rolle
-                    .as_deref()
-                    .unwrap_or("NB")
-                    .to_ascii_uppercase()
-                    .as_str()
-                {
-                    "NB" => MsbEmpfaengerRolle::Netzbetreiber,
-                    "LF" => MsbEmpfaengerRolle::Lieferant,
-                    "ESA" => MsbEmpfaengerRolle::Energieserviceanbieter,
-                    other => anyhow::bail!(
-                        "msb_empfaenger_rolle must be NB, LF or ESA (PID 31009 has no other \
-                         recipient role in the PID overview 4.0), got {other:?}"
-                    ),
-                };
-                let empfaenger_mp_id = pos
-                    .msb_empfaenger_mp_id
-                    .clone()
-                    .unwrap_or_else(|| req.nb_mp_id.clone());
-                let input = MsbInput {
-                    malo_id: pos.malo_id.clone(),
-                    msb_mp_id,
-                    empfaenger: MsbRechnungsempfaenger {
-                        rolle,
-                        mp_id: empfaenger_mp_id,
-                    },
-                    period,
-                    grundgebuehr_eur_per_month: grundgebuehr,
-                    billing_months: months,
-                    messdienstleistung_eur: pos.messdienstleistung_eur,
-                    messstellen_kategorie: None,
-                    entgeltschuldner: None,
-                };
-                let r = settle_msb(&input)
-                    .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
-                (r, 31009)
-            }
-            // PID 31011: Rechnung sonstige Leistung (GeLi Gas AWH Sperrprozesse, GNB → LFG).
-            // Regulatory basis: BK7-24-01-009 §5.4.
-            // AWH = Abrechnungswürdige Handlungen (billable actions during Sperrprozess).
-            // Calculation: flat Arbeitspreis per kWh or fixed AWH fee — treat as NNE Gas
-            // with PID override.  The GNB supplies the Sperrpauschale or measured energy.
-            "nne_gas_awh_31011" => {
-                let arbeit = pos.arbeitsmenge_kwh.context(
-                    "arbeitsmenge_kwh required for nne_gas_awh_31011 (AWH Sperrprozesse)",
-                )?;
-                let ap = pos
-                    .arbeitspreis_ct_per_kwh
-                    .context("arbeitspreis_ct_per_kwh required for nne_gas_awh_31011")?;
-                let input = NneInput {
-                    blindarbeit: None,
-                    malo_id: pos.malo_id.clone(),
-                    nb_mp_id: req.nb_mp_id.clone(),
-                    lf_mp_id: req.lf_mp_id.clone(),
-                    period,
-                    arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(
-                        grid_billing::MengePreis {
-                            menge_kwh: arbeit,
-                            preis_ct_per_kwh: ap,
-                        },
-                    ),
-                    leistungspreis: match (None, None) {
-                        (Some(kw), Some(p)) => Some(grid_billing::Leistungspreis {
-                            spitzenleistung_kw: kw,
-                            preis_eur_per_kw: p,
-                        }),
-                        _ => None,
-                    },
-                    letztverbrauchergruppe: Default::default(),
-                    sect19_umlage_ct_per_kwh: None,
-                    offshore_umlage_ct_per_kwh: None,
-                    kwkg_umlage_ct_per_kwh: None,
-                    netzebene: None,
-                    sect19: None,
-                    gas_kapazitaet: None,
-                    jahreshoechstleistung_kw: None,
-                    jahresarbeit_kwh: None,
-                    konzessionsabgabe: None,
-                    grundpreis: None,
-                    tariff_sheet_id: None,
-                    sparte: grid_billing::Sparte::Strom,
-                };
-                let r = settle_nne(&input)
-                    .map_err(|e| anyhow::anyhow!("billing calc failed for {}: {e}", pos.malo_id))?;
-                // 31011 = GeLi Gas AWH Sperrprozesse Rechnung.
-                (r, 31011)
-            }
-            t => bail!("unknown billing_type: {t}"),
-        };
-
-        // Self-validate via invoic-checker (checks 1–3 pass by construction;
-        // check 4–5 may warn if tariff store is empty, but won't dispute).
-        // The settlement becomes a document exactly here: this is the only place
-        // an invoice number, an issue date and a Prüfidentifikator enter.
-        let document = grid_billing::InvoiceDocument {
-            settlement: result,
-            pid,
-            rechnungsnummer,
-            correction_of: None,
-            invoice_date,
-            due_date,
-        };
-        let result = &document.settlement;
-        let mut rechnung = grid_billing::bo4e::into_rechnung(&document);
-        if !extra_zusatz.is_empty() {
-            // Append — never replace: the bridge already attached the legal
-            // references and settlement warnings, which must survive.
-            rechnung
-                .zusatz_attribute
-                .get_or_insert_with(Vec::new)
-                .extend(extra_zusatz);
+impl<'a> Resolver<'a> {
+    /// A resolver for one billing run.
+    #[must_use]
+    pub fn new(marktd: &'a Arc<MarktdClient>, vnb_mp_id: Option<&'a str>) -> Self {
+        Self {
+            marktd,
+            vnb_mp_id,
+            prices: std::collections::HashMap::new(),
         }
-        let report = InvoicCheckEngine::check(
-            document.pid,
-            &result.sender_mp_id,
-            &rechnung,
-            &empty_store,
-            &config,
-        );
-
-        let rechnung_json = serde_json::to_value(&rechnung).context("serialize Rechnung")?;
-
-        // The settlement already resolved both parties. Reading them back keeps
-        // the persisted draft consistent with the calculated document — for
-        // msb_31009 that means the MSB as sender and the NB/LF/ESA as recipient,
-        // which is the inverse of what this used to store.
-        let sender = result.sender_mp_id.as_str();
-        let counterparty = result.recipient_mp_id.as_str();
-
-        let draft_id = upsert_draft(
-            &mut *conn,
-            tenant,
-            &pos.malo_id,
-            sender,
-            counterparty,
-            document.pid as i32,
-            document.settlement.period.from(),
-            document.settlement.period.to(),
-            rechnung_json,
-            result.total_eur,
-            report.outcome,
-        )
-        .await
-        .context("persist draft")?;
-
-        draft_ids.push(draft_id);
     }
 
-    Ok(draft_ids)
+    /// Fill in whatever the request left to `netzbilanzd` to look up.
+    ///
+    /// Returns the position with every auto-fetched field materialised, so the
+    /// stored settlement input is self-contained.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when a price or profile the request left open cannot be
+    /// resolved.
+    pub async fn resolve(&mut self, position: &mut BillingPositionRequest) -> anyhow::Result<()> {
+        let SettlementRequest::Mmm(mmm) = &position.settlement else {
+            return Ok(());
+        };
+
+        // The published series, if this position left it open.
+        let needs_prices =
+            mmm.mehr_preis_ct_per_kwh.is_none() || mmm.minder_preis_ct_per_kwh.is_none();
+        let key = (
+            mmm.sparte,
+            position.period_from.year(),
+            position.period_from.month() as u8,
+        );
+        let prices = match (needs_prices, self.prices.get(&key).copied()) {
+            (false, _) => None,
+            (true, Some(hit)) => Some(hit),
+            (true, None) => {
+                let fetched = self.fetch_prices(key).await?;
+                self.prices.insert(key, fetched);
+                Some(fetched)
+            }
+        };
+
+        // The SLP designation is per-MaLo, so it is fetched per position.
+        let lastprofil = if mmm.lastprofil.is_none() {
+            // Recorded from UTILMD `TM+EM` at supply start. It explains which
+            // profile the bilanzierte Menge came from, which is the first thing
+            // an LF asks about an MMM saldo.
+            self.marktd
+                .get_malo(&position.malo_id)
+                .await
+                .context("fetch bilanzierungsmethode from marktd")?
+                .and_then(|f| f.bilanzierungsmethode)
+        } else {
+            None
+        };
+
+        let SettlementRequest::Mmm(mmm) = &mut position.settlement else {
+            unreachable!("the variant was matched above and nothing moved it")
+        };
+        if let Some((mehr, minder)) = prices {
+            mmm.mehr_preis_ct_per_kwh.get_or_insert(mehr);
+            mmm.minder_preis_ct_per_kwh.get_or_insert(minder);
+        }
+        if let Some(profil) = lastprofil {
+            mmm.lastprofil = Some(profil);
+        }
+        Ok(())
+    }
+
+    /// The published Mehr-/Mindermengen prices for a Sparte and month.
+    async fn fetch_prices(
+        &self,
+        (sparte, year, month): (Sparte, i32, u8),
+    ) -> anyhow::Result<(Decimal, Decimal)> {
+        match sparte {
+            // Gas MMM prices are the Trading Hub Europe monthly series
+            // (GaBi Gas 2.1, BK7-24-01-008) — one national market area, so
+            // there is nothing operator-specific to configure.
+            Sparte::Gas => self
+                .marktd
+                .get_mmma_gas(year, month, "THE")
+                .await
+                .context("fetch Gas MMMA prices (THE) from marktd")?
+                .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
+                .with_context(|| {
+                    format!(
+                        "Gas MMM {year}-{month:02}: no THE MMMA prices in marktd. \
+                         Import them via PUT /api/v1/mmma-preise/gas/{year}/{month}, \
+                         or supply mehr_preis_ct_per_kwh and minder_preis_ct_per_kwh."
+                    )
+                }),
+            // Strom MMM prices are published per ÜNB Regelzone (GPKE
+            // BK6-24-174 Teil 1 Kap. 8.4), so the operator's own ÜNB has to
+            // be configured before anything can be fetched.
+            Sparte::Strom => {
+                let unb = self.vnb_mp_id.context(
+                    "Strom MMM: neither prices in the request nor `vnb_mp_id` in \
+                     netzbilanzd.toml — one of the two is required",
+                )?;
+                self.marktd
+                    .get_mmm_strom(year, month, unb)
+                    .await
+                    .context("fetch Strom MMM prices from marktd")?
+                    .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
+                    .with_context(|| {
+                        format!(
+                            "Strom MMM {year}-{month:02}: no prices in marktd for ÜNB {unb}. \
+                             Import them via PUT /api/v1/mmm-preise/strom/{year}/{month}."
+                        )
+                    })
+            }
+        }
+    }
 }
 
-// ── Unit tests ────────────────────────────────────────────────────────────────
+/// Run the engine for one fully-resolved position.
+///
+/// # Errors
+///
+/// Returns the engine's [`grid_billing::BillingError`] as context when the
+/// inputs do not describe a computable settlement.
+pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementResult> {
+    let period = SettlementPeriod::new(position.period_from, position.period_to)
+        .context("billing period")?;
 
-/// Present a settlement as a document, so an adapter can render it.
-#[cfg(test)]
-fn as_document(settlement: grid_billing::SettlementResult) -> grid_billing::InvoiceDocument {
-    grid_billing::InvoiceDocument {
+    let result = match &position.settlement {
+        SettlementRequest::Abschlag(a) => settle_abschlag(&grid_billing::AbschlagInput {
+            malo_id: position.malo_id.clone(),
+            nb_mp_id: a.nb_mp_id.clone(),
+            lf_mp_id: a.lf_mp_id.clone(),
+            period,
+            sparte: a.sparte,
+            betrag_netto_eur: a.betrag_netto_eur,
+            grundlage: a.grundlage,
+        }),
+        SettlementRequest::Nne(nne) => settle_nne(&NneInput {
+            malo_id: position.malo_id.clone(),
+            nb_mp_id: nne.nb_mp_id.clone(),
+            lf_mp_id: nne.lf_mp_id.clone(),
+            period,
+            sparte: nne.sparte,
+            arbeitspreis: nne.arbeitspreis.clone(),
+            leistungspreis: nne.leistungspreis,
+            grundpreis: nne.grundpreis,
+            konzessionsabgabe: nne.konzessionsabgabe,
+            blindarbeit: nne.blindarbeit,
+            gas_kapazitaet: nne.gas_kapazitaet,
+            letztverbrauchergruppe: nne.letztverbrauchergruppe,
+            sect19_umlage_ct_per_kwh: nne.sect19_umlage_ct_per_kwh,
+            offshore_umlage_ct_per_kwh: nne.offshore_umlage_ct_per_kwh,
+            kwkg_umlage_ct_per_kwh: nne.kwkg_umlage_ct_per_kwh,
+            netzebene: nne.netzebene,
+            sect19: nne.sect19.clone(),
+            jahreshoechstleistung_kw: nne.jahreshoechstleistung_kw,
+            jahresarbeit_kwh: nne.jahresarbeit_kwh,
+            tariff_sheet_id: nne.tariff_sheet_id.clone(),
+        }),
+        SettlementRequest::Mmm(mmm) => {
+            // Resolved before the engine runs; reaching here without a price is
+            // a programming error in the resolver, not a caller error.
+            let mehr = mmm
+                .mehr_preis_ct_per_kwh
+                .context("MMM Mehrmengenpreis was not resolved")?;
+            let minder = mmm
+                .minder_preis_ct_per_kwh
+                .context("MMM Mindermengenpreis was not resolved")?;
+            settle_mmm(&MmmInput {
+                malo_id: position.malo_id.clone(),
+                nb_mp_id: mmm.nb_mp_id.clone(),
+                lf_mp_id: mmm.lf_mp_id.clone(),
+                period,
+                sparte: mmm.sparte,
+                actual_kwh: mmm.gemessen_kwh,
+                profil_kwh: mmm.bilanziert_kwh,
+                mehr_preis_ct_per_kwh: mehr,
+                minder_preis_ct_per_kwh: minder,
+                wiederverkaeufer: mmm.wiederverkaeufer,
+            })
+        }
+        SettlementRequest::Msb(msb) => settle_msb(&MsbInput {
+            malo_id: position.malo_id.clone(),
+            msb_mp_id: msb.msb_mp_id.clone(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: msb.empfaenger_rolle,
+                mp_id: msb.empfaenger_mp_id.clone(),
+            },
+            period,
+            sparte: msb.sparte,
+            grundgebuehr_eur_per_month: msb.grundgebuehr_eur_per_month,
+            billing_months: msb.billing_months,
+            messdienstleistung_eur: msb.messdienstleistung_eur,
+            messstellen_kategorie: msb.messstellen_kategorie,
+            entgeltschuldner: msb.entgeltschuldner,
+        }),
+        SettlementRequest::GasAwh(awh) => settle_gas_awh(&GasAwhInput {
+            malo_id: position.malo_id.clone(),
+            nb_mp_id: awh.nb_mp_id.clone(),
+            lf_mp_id: awh.lf_mp_id.clone(),
+            period,
+            awh_positionen: awh.positionen.clone(),
+            tariff_sheet_id: awh.tariff_sheet_id.clone(),
+        }),
+    };
+
+    result.map_err(|e| anyhow::anyhow!("settlement failed for MaLo {}: {e}", position.malo_id))
+}
+
+/// Everything about a document that is not the settlement itself.
+#[derive(Debug, Default, Clone)]
+pub struct DocumentFacts {
+    /// The `rechnungsnummer` this corrects, if any.
+    pub correction_of: Option<String>,
+    /// The billing cadence — `IMD+7081`.
+    pub cadence: Option<grid_billing::Rechnungscharakter>,
+    /// Abschlagsrechnungen deducted from what is owed.
+    pub abschlaege: Vec<grid_billing::Abschlagsverrechnung>,
+}
+
+/// Present a settlement as an invoice and check the rendered document.
+///
+/// The check runs on what will actually be sent, not on the settlement: the
+/// receiving LF runs the same library over the same BO4E object, so an NB that
+/// checks anything else is checking the wrong thing.
+#[must_use]
+pub fn render_and_check(
+    settlement: SettlementResult,
+    rechnungsnummer: String,
+    invoice_date: time::Date,
+    due_date: time::Date,
+    facts: DocumentFacts,
+) -> SettledInvoice {
+    let pid = settlement.settlement_type.default_pid();
+    let document = InvoiceDocument {
         settlement,
-        pid: 31002,
-        rechnungsnummer: "NNE-2026-001".to_owned(),
-        correction_of: None,
-        invoice_date: time::macros::date!(2026 - 02 - 15),
-        due_date: time::macros::date!(2026 - 03 - 15),
+        pid,
+        rechnungsnummer,
+        correction_of: facts.correction_of,
+        invoice_date,
+        due_date,
+        cadence: facts.cadence,
+        abschlaege: facts.abschlaege,
+    };
+    let rechnung = grid_billing::bo4e::into_rechnung(&document);
+    let report = check(&rechnung, document.settlement.sender_mp_id.as_str(), pid);
+    SettledInvoice {
+        rechnungsnummer: document.rechnungsnummer,
+        // What is actually owed, after any Abschläge — the figure the ledger
+        // and the payment run care about.
+        zu_zahlen_eur: document.settlement.steuer.brutto_eur()
+            - document
+                .abschlaege
+                .iter()
+                .map(|a| a.betrag_brutto_eur)
+                .sum::<Decimal>(),
+        settlement: document.settlement,
+        rechnung,
+        report,
+        pid,
     }
+}
+
+/// Run `invoic-checker` over a rendered document.
+///
+/// The Preisblatt store is empty: `netzbilanzd` is the *issuer*, and the rates
+/// it billed are the rates it published, so a tariff cross-check here would
+/// compare a price sheet against itself. Stages 0–3 — Storno reference, period
+/// validity, arithmetic and total consistency — are the ones that catch an
+/// invoice the counterparty would dispute, and they need no store.
+#[must_use]
+pub fn check(
+    rechnung: &rubo4e::current::Rechnung,
+    sender_mp_id: &str,
+    pid: u32,
+) -> invoic_checker::CheckReport {
+    InvoicCheckEngine::check(
+        pid,
+        sender_mp_id,
+        rechnung,
+        &InMemoryPreisblattStore::new(),
+        &CheckConfig::default(),
+    )
+}
+
+/// An amount in units of 10⁻⁵ EUR, as stored.
+///
+/// # Errors
+///
+/// Returns an error when the amount does not fit an `i64` — at 10⁻⁵ EUR
+/// resolution that is roughly ±92 billion EUR, so it means the inputs are
+/// nonsense rather than that the invoice is large.
+pub fn eur_units(amount_eur: Decimal) -> anyhow::Result<i64> {
+    use rust_decimal::prelude::ToPrimitive as _;
+    // `checked_mul`, not `*`: `Decimal`'s multiplication *panics* on overflow,
+    // and a panic inside a billing run takes down the request rather than
+    // refusing the one nonsensical position that caused it.
+    amount_eur
+        .checked_mul(Decimal::from(100_000_i64))
+        .and_then(|units: Decimal| units.round().to_i64())
+        .with_context(|| format!("{amount_eur} EUR does not fit an i64 at 10⁻⁵ EUR"))
+}
+
+/// Render an amount in 10⁻⁵ EUR units as a decimal string.
+///
+/// Padded to five places, so every amount reported has the same shape and the
+/// stored resolution is visible rather than trimmed away.
+#[must_use]
+pub fn format_eur(units: i64) -> String {
+    format!("{:.5}", Decimal::from(units) / Decimal::from(100_000_i64))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rust_decimal::Decimal;
+    use crate::request::{GasAwhRequest, MmmRequest, NneRequest};
+    use grid_billing::{
+        ArbeitspreisModell, AwhPositionInput, KaKundengruppe, Konzessionsabgabe, MengePreis,
+        SettlementType,
+    };
     use rust_decimal::dec;
 
-    fn make_nne_position(
-        malo_id: &str,
-        billing_type: &str,
-        kwh: rust_decimal::Decimal,
-        ap: rust_decimal::Decimal,
-    ) -> BillingPosition {
-        BillingPosition {
-            malo_id: malo_id.to_owned(),
-            billing_type: billing_type.to_owned(),
-            period_from: "2026-01-01".to_owned(),
-            period_to: "2026-01-31".to_owned(),
-            arbeitsmenge_kwh: Some(kwh),
-            arbeitspreis_ct_per_kwh: Some(ap),
-            arbeitsmenge_ht_kwh: None,
-            arbeitspreis_ht_ct_per_kwh: None,
-            arbeitsmenge_nt_kwh: None,
-            arbeitspreis_nt_ct_per_kwh: None,
-            spitzenleistung_kw: None,
-            leistungspreis_eur_per_kw: None,
-            ka_satz_ct_per_kwh: None,
-            profil_kwh: None,
-            mehr_preis_ct_per_kwh: None,
-            minder_preis_ct_per_kwh: None,
-            lastprofil: None,
-            msb_mp_id: None,
-            msb_empfaenger_rolle: None,
-            msb_empfaenger_mp_id: None,
-            grundgebuehr_eur_per_month: None,
-            billing_months: None,
-            messdienstleistung_eur: None,
+    fn position(settlement: SettlementRequest) -> BillingPositionRequest {
+        BillingPositionRequest {
+            malo_id: "51238696012".to_owned(),
+            period_from: time::macros::date!(2026 - 01 - 01),
+            period_to: time::macros::date!(2026 - 01 - 31),
+            cadence: None,
+            abschlaege: Vec::new(),
+            settlement,
         }
     }
 
-    /// NNE Strom: 1 000 kWh × 28.50 ct/kWh = 285.00 EUR
-    #[test]
-    fn nne_strom_arbeit_basic() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
+    fn nne(sparte: Sparte) -> BillingPositionRequest {
+        position(SettlementRequest::Nne(Box::new(NneRequest {
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
+            sparte,
+            arbeitspreis: ArbeitspreisModell::Einheitlich(MengePreis {
                 menge_kwh: dec!(1000),
-                preis_ct_per_kwh: dec!(28.50),
+                preis_ct_per_kwh: dec!(3.5),
             }),
             leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
+            grundpreis: None,
+            konzessionsabgabe: None,
+            blindarbeit: None,
+            gas_kapazitaet: None,
+            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::default(),
             sect19_umlage_ct_per_kwh: None,
             offshore_umlage_ct_per_kwh: None,
             kwkg_umlage_ct_per_kwh: None,
             netzebene: None,
             sect19: None,
-            gas_kapazitaet: None,
             jahreshoechstleistung_kw: None,
             jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
             tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("nne calculation must succeed");
-        // 1000 kWh × 28.50 ct/kWh ÷ 100 = 285.00 EUR
-        let expected_eur = dec!(285.00);
-        let actual_eur = result.total_eur;
-        let diff = (actual_eur - expected_eur).abs();
+        })))
+    }
+
+    /// A Gas NN-Rechnung carries no electricity levies.
+    ///
+    /// The three EnFG levies (§19 StromNEV, Offshore-Netzumlage, KWKG-Umlage)
+    /// ride on the *electricity* Netzentgelt. Settling gas as `Sparte::Strom`
+    /// adds roughly 2.95 ct/kWh to a gas invoice — on a 3 000 kWh month, about
+    /// 88 EUR with no legal basis whatever.
+    #[test]
+    fn a_gas_nne_carries_no_electricity_levies() {
+        use grid_billing::BillingPositionKind as K;
+        let gas = settle(&nne(Sparte::Gas)).expect("settle gas");
+        let levies: Vec<_> = gas
+            .positions
+            .iter()
+            .filter(|p| {
+                matches!(
+                    p.kind,
+                    K::Sect19StromNevUmlage | K::OffshoreNetzumlage | K::KwkgUmlage
+                )
+            })
+            .collect();
         assert!(
-            diff < dec!(0.01),
-            "total_eur {actual_eur} expected ~285.00 EUR (diff {diff})"
+            levies.is_empty(),
+            "gas invoice carries electricity levies: {levies:#?}"
+        );
+        assert_eq!(gas.settlement_type, SettlementType::NneGas);
+        assert_eq!(gas.total_eur, dec!(35.00), "1000 kWh × 3.5 ct");
+
+        // The Strom counterpart does carry them — the guard is the Sparte, not
+        // a blanket removal.
+        let strom = settle(&nne(Sparte::Strom)).expect("settle strom");
+        assert!(
+            strom.positions.iter().any(|p| matches!(
+                p.kind,
+                K::Sect19StromNevUmlage | K::OffshoreNetzumlage | K::KwkgUmlage
+            )),
+            "a Strom NN-Rechnung must carry the EnFG levies"
         );
     }
 
-    /// §14a Modul 2 ToU: HT + NT positions must sum to correct total.
+    /// NN-Rechnung is PID 31002 for both Sparten, taken from the engine.
     #[test]
-    fn nne_strom_tou_ht_nt() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
+    fn the_pid_comes_from_the_settlement_type() {
+        for sparte in [Sparte::Strom, Sparte::Gas] {
+            let s = settle(&nne(sparte)).expect("settle");
+            assert_eq!(s.settlement_type.default_pid(), 31002);
+        }
+    }
+
+    /// AWH is billed per action under GeLi Gas, not per kWh under StromNEV.
+    #[test]
+    fn awh_is_billed_per_action_under_geli_gas() {
+        let settled = settle(&position(SettlementRequest::GasAwh(GasAwhRequest {
             nb_mp_id: "9900357000004".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
-                ht: grid_billing::MengePreis {
+            positionen: vec![
+                AwhPositionInput {
+                    beschreibung: "Sperrung Gaszähler".to_owned(),
+                    anzahl: 1,
+                    preis_eur: dec!(45.00),
+                    artikel_id: Some("2-01-7-001".to_owned()),
+                },
+                AwhPositionInput {
+                    beschreibung: "Erfolglose Unterbrechung".to_owned(),
+                    anzahl: 2,
+                    preis_eur: dec!(20.00),
+                    artikel_id: Some("2-01-7-003".to_owned()),
+                },
+            ],
+            tariff_sheet_id: None,
+        })))
+        .expect("settle AWH");
+
+        assert_eq!(settled.settlement_type.default_pid(), 31011);
+        assert_eq!(settled.total_eur, dec!(85.00), "45 + 2 × 20");
+        assert_eq!(settled.sparte, Sparte::Gas);
+
+        let refs: Vec<String> = settled
+            .all_legal_refs()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            refs.iter().any(|r| r.contains("GeLi Gas 3.0")),
+            "AWH must cite BK7-24-01-009 §5.4, got {refs:?}"
+        );
+        assert!(
+            !refs.iter().any(|r| r.contains("StromNEV")),
+            "a gas Sperrprozess invoice must not cite StromNEV, got {refs:?}"
+        );
+    }
+
+    /// A Gas MMM settles under GaBi Gas, not under the Strom GPKE chapter.
+    #[test]
+    fn a_gas_mmm_cites_gabi_gas() {
+        let settled = settle(&position(SettlementRequest::Mmm(MmmRequest {
+            nb_mp_id: "9900357000004".to_owned(),
+            lf_mp_id: "9900012345678".to_owned(),
+            sparte: Sparte::Gas,
+            gemessen_kwh: dec!(1200),
+            bilanziert_kwh: dec!(1000),
+            mehr_preis_ct_per_kwh: Some(dec!(5.0)),
+            minder_preis_ct_per_kwh: Some(dec!(4.0)),
+            lastprofil: None,
+            wiederverkaeufer: grid_billing::Wiederverkaeuferstatus::KEINER,
+        })))
+        .expect("settle gas MMM");
+
+        assert_eq!(settled.settlement_type, SettlementType::MmmGas);
+        let refs: Vec<String> = settled
+            .all_legal_refs()
+            .iter()
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            refs.iter().any(|r| r.contains("GaBi Gas 2.1")),
+            "Gas MMM must cite BK7-24-01-008, got {refs:?}"
+        );
+        assert!(
+            !refs.iter().any(|r| r.contains("BK6-24-174")),
+            "Gas MMM must not cite the Strom GPKE decision, got {refs:?}"
+        );
+    }
+
+    /// A Konzessionsabgabe above the KAV §2 ceiling is reported, not billed silently.
+    ///
+    /// 1.32 ct/kWh is the Tarifkunden Höchstsatz for a Gemeinde up to 25 000 —
+    /// on a Sondervertragskunde, whose ceiling is 0.11, it is twelve times the
+    /// lawful maximum. The rate and the group travel together so the ceiling is
+    /// checkable at all.
+    #[test]
+    fn a_konzessionsabgabe_above_the_kav_ceiling_is_reported() {
+        let with_ka = |klasse| {
+            let mut pos = nne(Sparte::Strom);
+            let SettlementRequest::Nne(nne) = &mut pos.settlement else {
+                unreachable!()
+            };
+            nne.konzessionsabgabe = Some(Konzessionsabgabe {
+                satz_ct_per_kwh: dec!(1.32),
+                klasse,
+            });
+            settle(&pos).expect("settle")
+        };
+        let breached = |s: &grid_billing::SettlementResult| {
+            s.warnings.iter().any(|w| w.code == "KA_ABOVE_KAV_MAXIMUM")
+        };
+
+        let sondervertrag = with_ka(KaKundengruppe::Sondervertragskunde);
+        assert!(
+            breached(&sondervertrag),
+            "1.32 ct/kWh is twelve times the 0.11 Sondervertragskunden ceiling: {:#?}",
+            sondervertrag.warnings
+        );
+
+        // The same rate on a Tarifkunde in a small Gemeinde *is* the ceiling.
+        let tarifkunde = with_ka(KaKundengruppe::Tarifkunde {
+            gemeinde: grid_billing::GemeindeGroesse::Bis25k,
+            nur_kochen_warmwasser: false,
+        });
+        assert!(
+            !breached(&tarifkunde),
+            "1.32 ct/kWh is the lawful Tarifkunden maximum: {:#?}",
+            tarifkunde.warnings
+        );
+    }
+
+    /// §14a Modul 3 produces one position per Tarifstufe, and they are billed.
+    #[test]
+    fn modul_3_bills_all_three_bands() {
+        let mut pos = nne(Sparte::Strom);
+        {
+            let SettlementRequest::Nne(nne) = &mut pos.settlement else {
+                unreachable!()
+            };
+            nne.arbeitspreis = ArbeitspreisModell::Modul3ZeitVariabel {
+                ht: MengePreis {
                     menge_kwh: dec!(500),
                     preis_ct_per_kwh: dec!(32.0),
                 },
-                st: grid_billing::MengePreis {
-                    menge_kwh: dec!(0),
-                    preis_ct_per_kwh: dec!(0),
+                st: MengePreis {
+                    menge_kwh: dec!(300),
+                    preis_ct_per_kwh: dec!(28.0),
                 },
-                nt: grid_billing::MengePreis {
+                nt: MengePreis {
                     menge_kwh: dec!(200),
                     preis_ct_per_kwh: dec!(24.0),
                 },
-            },
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("tou calculation must succeed");
-        // HT: 500 × 32.0 ct = 160.00 EUR; NT: 200 × 24.0 ct = 48.00 EUR; total = 208.00 EUR
-        let expected_eur = dec!(208.00);
-        let diff = (result.total_eur - expected_eur).abs();
-        assert!(
-            diff < dec!(0.01),
-            "ToU total {total} expected 208.00 EUR (diff {diff})",
-            total = result.total_eur
-        );
-        // Two energy positions (HT + NT) must appear in the Rechnung.
-        let pos_count = result.positions.len();
-        assert!(
-            pos_count >= 2,
-            "ToU billing must produce at least 2 positions (HT + NT), got {pos_count}"
-        );
-    }
-
-    /// MMM Strom: actual > profil → Mehrmenge credit to NB.
-    #[test]
-    fn mmm_strom_mehrmengen() {
-        use grid_billing::{MmmInput, settle_mmm};
-        let input = MmmInput {
-            malo_id: "51238696012".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(1200),
-            profil_kwh: dec!(1000),
-            mehr_preis_ct_per_kwh: dec!(5.0),
-            minder_preis_ct_per_kwh: dec!(4.0),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_mmm(&input).expect("mmm calculation must succeed");
-        // Over-consumption is an ungewollte Mindermenge, charged at the
-        // Mindermengen price: 200 kWh × 4 ct = 8.00 EUR.
-        let diff = (result.total_eur - dec!(8.0)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "MMM Mindermenge expected 8.00 EUR, got {}",
-            result.total_eur
-        );
-    }
-
-    /// MMM Strom: profil > actual → Mindermenge (negative = credit to LF).
-    #[test]
-    fn mmm_strom_mindermengen() {
-        use grid_billing::{MmmInput, settle_mmm};
-        let input = MmmInput {
-            malo_id: "51238696012".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(800),
-            profil_kwh: dec!(1000),
-            mehr_preis_ct_per_kwh: dec!(5.0),
-            minder_preis_ct_per_kwh: dec!(4.0),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_mmm(&input).expect("mmm calculation must succeed");
-        // Under-consumption is an ungewollte Mehrmenge, credited at the
-        // Mehrmengen price: 200 kWh × 5 ct = -10.00 EUR.
-        let diff = (result.total_eur - dec!(-10.0)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "MMM Mehrmenge expected -10.00 EUR, got {}",
-            result.total_eur
-        );
-    }
-
-    /// KA: when ka_satz_ct_per_kwh is provided, a KA position appears.
-    #[test]
-    fn nne_strom_with_konzessionsabgabe() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(1000),
-                preis_ct_per_kwh: dec!(28.50),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: Some(grid_billing::Konzessionsabgabe {
-                satz_ct_per_kwh: dec!(1.32),
-                klasse: grid_billing::KaKundengruppe::Tarifkunde {
-                    gemeinde: grid_billing::GemeindeGroesse::Bis25k,
-                    nur_kochen_warmwasser: false,
-                },
-            }),
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("nne+ka calculation must succeed");
-        // NNE: 1000 × 28.50ct = 285.00 EUR; KA: 1000 × 1.32ct = 13.20 EUR; total = 298.20 EUR
-        let expected_eur = dec!(298.20);
-        let diff = (result.total_eur - expected_eur).abs();
-        assert!(
-            diff < dec!(0.01),
-            "NNE+KA total {total} expected 298.20 EUR",
-            total = result.total_eur
-        );
-        let pos_count = result.positions.len();
-        assert!(
-            pos_count >= 2,
-            "NNE+KA must produce at least 2 positions (Arbeit + KA), got {pos_count}"
-        );
-    }
-
-    /// MSB-Rechnung: 12 months × grundgebühr + optional messdienstleistung.
-    #[test]
-    fn msb_rechnung_grundgebuehr() {
-        use grid_billing::{MsbInput, settle_msb};
-        let input = MsbInput {
-            malo_id: "10001234558".to_owned(),
-            empfaenger: MsbRechnungsempfaenger {
-                rolle: MsbEmpfaengerRolle::Netzbetreiber,
-                mp_id: "9900357000004".to_owned(),
-            },
-            msb_mp_id: "4012345000023".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 12 - 31),
-            )
-            .expect("valid period"),
-            grundgebuehr_eur_per_month: dec!(9.50),
-            billing_months: 12,
-            messdienstleistung_eur: Some(dec!(24.00)),
-            messstellen_kategorie: None,
-            entgeltschuldner: None,
-        };
-        let result = settle_msb(&input).expect("msb calculation must succeed");
-        // 12 × 9.50 = 114.00 EUR + 24.00 = 138.00 EUR
-        let expected_eur = dec!(138.00);
-        let diff = (result.total_eur - expected_eur).abs();
-        assert!(
-            diff < dec!(0.01),
-            "MSB total {total} expected 138.00 EUR",
-            total = result.total_eur
-        );
-    }
-
-    /// Billing type guard: unknown billing_type returns an error.
-    #[test]
-    fn unknown_billing_type_is_error() {
-        let pos = make_nne_position("10001234558", "unknown_type", dec!(1000), dec!(28.5));
-        // Verify the string "unknown_type" would reach the error branch.
-        assert!(matches!(pos.billing_type.as_str(), t if t == "unknown_type"));
-    }
-
-    // ── MMM tests ─────────────────────────────────────────────────────────────
-
-    /// MMM Strom: actual > profil → Mehrmenge → positive claim (NB bills LF).
-    #[test]
-    fn mmm_strom_mehrmenge() {
-        use grid_billing::{MmmInput, settle_mmm};
-        let input = MmmInput {
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(1100), // actual metered
-            profil_kwh: dec!(1000), // SLP profile forecast
-            mehr_preis_ct_per_kwh: dec!(3.00),
-            minder_preis_ct_per_kwh: dec!(2.50),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_mmm(&input).expect("mmm calc must succeed");
-        // Mindermenge = 100 kWh, charged at 2.50 ct = 2.50 EUR.
-        let diff = (result.total_eur - dec!(2.50)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "MMM Mindermenge: expected 2.50 EUR, got {total}",
-            total = result.total_eur,
-        );
-    }
-
-    /// MMM Strom: actual < profil → Mehrmenge → negative claim (NB credits LF).
-    #[test]
-    fn mmm_strom_mindermenge() {
-        use grid_billing::{MmmInput, settle_mmm};
-        let input = MmmInput {
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(900),  // actual less than forecast
-            profil_kwh: dec!(1000), // SLP profile forecast
-            mehr_preis_ct_per_kwh: dec!(3.00),
-            minder_preis_ct_per_kwh: dec!(2.50),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_mmm(&input).expect("mmm calc must succeed");
-        // Mindermenge = 100 kWh; credit to LF = -100 × 2.50ct = -2.50 EUR
-        assert!(
-            result.total_eur <= dec!(0),
-            "MMM Mindermenge: total_eur should be ≤ 0 (credit), got {total}",
-            total = result.total_eur,
-        );
-    }
-
-    /// MMM balanced: actual == profil → zero settlement.
-    #[test]
-    fn mmm_strom_balanced_zero() {
-        use grid_billing::{MmmInput, settle_mmm};
-        let input = MmmInput {
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(1000),
-            profil_kwh: dec!(1000),
-            mehr_preis_ct_per_kwh: dec!(3.00),
-            minder_preis_ct_per_kwh: dec!(2.50),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_mmm(&input).expect("mmm calc must succeed");
-        let diff = result.total_eur.abs();
-        assert!(
-            diff < dec!(0.001),
-            "balanced MMM must be ~0, got {}",
-            result.total_eur
-        );
-    }
-
-    // ── §14a Modul 2 ToU tests ────────────────────────────────────────────────
-
-    /// §14a Modul 2 ToU: separate HT + NT positions; total must match manual calc.
-    #[test]
-    fn nne_tou_position_count_and_total() {
-        use grid_billing::{NneInput, settle_nne};
-        // 600 kWh HT × 4.00 ct = 24.00 EUR; 400 kWh NT × 1.50 ct = 6.00 EUR; total 30.00 EUR
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
-                ht: grid_billing::MengePreis {
-                    menge_kwh: dec!(600),
-                    preis_ct_per_kwh: dec!(4.00),
-                },
-                st: grid_billing::MengePreis {
-                    menge_kwh: dec!(0),
-                    preis_ct_per_kwh: dec!(0),
-                },
-                nt: grid_billing::MengePreis {
-                    menge_kwh: dec!(400),
-                    preis_ct_per_kwh: dec!(1.50),
-                },
-            },
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("§14a ToU calc must succeed");
-        let expected = dec!(30.00);
-        let diff = (result.total_eur - expected).abs();
-        assert!(
-            diff < dec!(0.01),
-            "§14a ToU total {total} expected 30.00 EUR",
-            total = result.total_eur
-        );
-
-        // HT + NT → 2 Rechnungspositionen minimum (no single blended Arbeit)
-        let pos_count = result.positions.len();
-        assert!(
-            pos_count >= 2,
-            "§14a ToU needs ≥2 positions, got {pos_count}"
-        );
-    }
-
-    /// §14a ToU + KA: 4 positions expected (HT, NT, KA, total).
-    #[test]
-    fn nne_tou_with_ka_position_count() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
-                ht: grid_billing::MengePreis {
-                    menge_kwh: dec!(600),
-                    preis_ct_per_kwh: dec!(4.00),
-                },
-                st: grid_billing::MengePreis {
-                    menge_kwh: dec!(0),
-                    preis_ct_per_kwh: dec!(0),
-                },
-                nt: grid_billing::MengePreis {
-                    menge_kwh: dec!(400),
-                    preis_ct_per_kwh: dec!(1.50),
-                },
-            },
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: Some(grid_billing::Konzessionsabgabe {
-                satz_ct_per_kwh: dec!(1.32),
-                klasse: grid_billing::KaKundengruppe::Tarifkunde {
-                    gemeinde: grid_billing::GemeindeGroesse::Bis25k,
-                    nur_kochen_warmwasser: false,
-                },
-            }),
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("§14a ToU+KA must succeed");
-        // HT: 600×4.00ct=24.00; NT: 400×1.50ct=6.00; KA: 1000×1.32ct=13.20; total=43.20
-        let expected = dec!(43.20);
-        let diff = (result.total_eur - expected).abs();
-        assert!(
-            diff < dec!(0.01),
-            "§14a ToU+KA total {total} expected 43.20 EUR",
-            total = result.total_eur
-        );
-        let pos_count = result.positions.len();
-        assert!(
-            pos_count >= 3,
-            "§14a ToU+KA needs ≥3 positions (HT+NT+KA), got {pos_count}"
-        );
-    }
-
-    // ── RLM billing tests ─────────────────────────────────────────────────────
-
-    /// NNE RLM: Arbeit + Leistung billing — large C&I customer.
-    #[test]
-    fn nne_rlm_arbeit_leistung() {
-        use grid_billing::{NneInput, settle_nne};
-        // 50 000 kWh × 3.80ct + 120 kW × 8.50 EUR/kW
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(50000),
-                preis_ct_per_kwh: dec!(3.80),
-            }),
-            leistungspreis: Some(grid_billing::Leistungspreis {
-                spitzenleistung_kw: dec!(120),
-                preis_eur_per_kw: dec!(8.50),
-            }),
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("RLM calc must succeed");
-        // 50000 × 3.80ct = 1900 EUR; 120 × 8.50 EUR = 1020 EUR; total = 2920 EUR
-        let expected = dec!(2920.00);
-        let diff = (result.total_eur - expected).abs();
-        assert!(
-            diff < dec!(0.01),
-            "RLM total {total} expected 2920.00 EUR",
-            total = result.total_eur
-        );
-        let pos_count = result.positions.len();
-        assert!(
-            pos_count >= 2,
-            "RLM needs ≥2 positions (Arbeit+Leistung), got {pos_count}"
-        );
-    }
-
-    // ── NNE Gas tests ─────────────────────────────────────────────────────────
-
-    /// NNE Gas: billing formula is the same as Strom (NN-Rechnung PID 31002 for both).
-    #[test]
-    fn nne_gas_billing_matches_strom_formula() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(2000),
-                preis_ct_per_kwh: dec!(2.10),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("NNE Gas calc must succeed");
-        // 2000 kWh × 2.10ct = 42.00 EUR
-        let diff = (result.total_eur - dec!(42.00)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "NNE Gas total {total} expected 42.00 EUR",
-            total = result.total_eur
-        );
-        let _ = input.malo_id.len();
-    }
-
-    // ── PID 31011 AWH Sperrprozesse tests ─────────────────────────────────────
-
-    /// PID 31011 (GeLi Gas AWH): billing_type nne_gas_awh_31011 must set PID 31011.
-    #[test]
-    fn awh_31011_pid_override() {
-        use grid_billing::{NneInput, settle_nne};
-        // Simulate the billing.rs path: calculate NNE then override PID to 31011
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            // AWH Sperrpauschale: 50 EUR flat (expressed as 1 kWh × 5000 ct)
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(1),
-                preis_ct_per_kwh: dec!(5000),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("AWH calc must succeed");
-        // 1 × 5000 ct = 50.00 EUR
-        let diff = (result.total_eur - dec!(50.00)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "AWH 31011 total {total} expected 50.00 EUR",
-            total = result.total_eur
-        );
-    }
-
-    // ── Decimal precision tests ───────────────────────────────────────────────
-
-    /// Decimal precision: no floating-point rounding error on typical tariff value.
-    /// Regression guard: 1 234.567 kWh × 12.345 ct/kWh = 152.395_eur exact.
-    #[test]
-    fn decimal_precision_no_float_error() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: Decimal::from_str_exact("1234.567").unwrap(),
-                preis_ct_per_kwh: Decimal::from_str_exact("12.345").unwrap(),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("precision calc must succeed");
-        // 1234.567 × 12.345ct / 100 = 152.39553915 EUR (rounded to 5dp: 152.39554)
-        // Key assertion: total must not use f64 intermediate (no 152.3955391500001 etc.)
-        let total_str = format!("{}", result.total_eur);
-        // No repeating decimals from f64 conversion
-        assert!(
-            !total_str.contains("99999") && !total_str.contains("00000"),
-            "decimal result shows float residue: {total_str}",
-        );
-    }
-
-    /// MSB Rechnung: billing_months = 1 (monthly MSB settlement).
-    #[test]
-    fn msb_rechnung_single_month() {
-        use grid_billing::{MsbInput, settle_msb};
-        let input = MsbInput {
-            malo_id: "10001234558".to_owned(),
-            empfaenger: MsbRechnungsempfaenger {
-                rolle: MsbEmpfaengerRolle::Netzbetreiber,
-                mp_id: "9900357000004".to_owned(),
-            },
-            msb_mp_id: "4012345000023".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            grundgebuehr_eur_per_month: dec!(9.50),
-            billing_months: 1,
-            messdienstleistung_eur: None,
-            messstellen_kategorie: None,
-            entgeltschuldner: None,
-        };
-        let result = settle_msb(&input).expect("msb 1-month must succeed");
-        let diff = (result.total_eur - dec!(9.50)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "1-month MSB should be 9.50 EUR, got {}",
-            result.total_eur
-        );
-    }
-
-    // ── invoic-checker integration ────────────────────────────────────────────
-
-    /// invoic-checker check 1–3 must not return Dispute for generated NNE invoice.
-    #[test]
-    fn invoic_checker_accepts_generated_nne() {
-        use grid_billing::{NneInput, settle_nne};
-        use invoic_checker::{
-            InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
-        };
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(1000),
-                preis_ct_per_kwh: dec!(28.50),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("calc must succeed");
-        let store = InMemoryPreisblattStore::new();
-        let config = CheckConfig::default();
-        let rechnung = grid_billing::bo4e::into_rechnung(&super::as_document(result.clone()));
-        let report =
-            InvoicCheckEngine::check(31001, &result.sender_mp_id, &rechnung, &store, &config);
-        use invoic_checker::check::CheckOutcome;
-        assert_ne!(
-            report.outcome,
-            CheckOutcome::Dispute,
-            "generated NNE INVOIC must not fail invoic-checker checks 1–3; findings: {:?}",
-            report.findings,
-        );
-    }
-
-    /// invoic-checker must not return Dispute for generated MMM invoice.
-    #[test]
-    fn invoic_checker_accepts_generated_mmm() {
-        use grid_billing::{MmmInput, settle_mmm};
-        use invoic_checker::{
-            InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
-        };
-        let input = MmmInput {
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(1100),
-            profil_kwh: dec!(1000),
-            mehr_preis_ct_per_kwh: dec!(3.00),
-            minder_preis_ct_per_kwh: dec!(2.50),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_mmm(&input).expect("mmm calc must succeed");
-        let store = InMemoryPreisblattStore::new();
-        let config = CheckConfig::default();
-        let rechnung = grid_billing::bo4e::into_rechnung(&super::as_document(result.clone()));
-        let report =
-            InvoicCheckEngine::check(31001, &result.sender_mp_id, &rechnung, &store, &config);
-        use invoic_checker::check::CheckOutcome;
-        assert_ne!(
-            report.outcome,
-            CheckOutcome::Dispute,
-            "generated MMM INVOIC must not fail invoic-checker checks 1–3; findings: {:?}",
-            report.findings,
-        );
-    }
-
-    // ── BillingRunRequest parsing tests ──────────────────────────────────────
-
-    /// parse_date rejects invalid ISO dates.
-    #[test]
-    fn parse_date_rejects_invalid() {
-        assert!(parse_date("not-a-date").is_err());
-        assert!(parse_date("2026-13-01").is_err()); // month 13
-        assert!(parse_date("2026-02-30").is_err()); // Feb 30 doesn't exist
-    }
-
-    /// parse_date accepts valid ISO dates.
-    #[test]
-    fn parse_date_accepts_valid() {
-        assert!(parse_date("2026-01-01").is_ok());
-        assert!(parse_date("2026-12-31").is_ok());
-        assert!(parse_date("2024-02-29").is_ok()); // leap year
-    }
-
-    // ── Regulatory correctness tests ─────────────────────────────────────────
-
-    /// Lieferantenrahmenvertrag Strom Zahlungsziel: invoice must carry a valid due_date > invoice_date.
-    #[test]
-    fn nne_due_date_after_invoice_date() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(1000),
-                preis_ct_per_kwh: dec!(28.50),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let settlement = settle_nne(&input).expect("must succeed");
-        // Lieferantenrahmenvertrag Strom Zahlungsziel is a property of the document, not of what was
-        // calculated — so it is asserted where the dates now live.
-        let document = super::as_document(settlement);
-        assert!(
-            document.due_date > document.invoice_date,
-            "due_date must be after invoice_date"
-        );
-    }
-
-    /// PID correctness: each billing_type maps to exactly one PID.
-    #[test]
-    fn pid_mapping_correctness() {
-        use grid_billing::{MmmInput, MsbInput, NneInput, settle_mmm, settle_msb, settle_nne};
-        let base_nne = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(100),
-                preis_ct_per_kwh: dec!(10),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-
-        // The same settlement can be routed as three different documents — which
-        // is the point of keeping the Prüfidentifikator off the calculation.
-        let settlement = settle_nne(&base_nne).unwrap();
-        for pid in [31002, 31005, 31011] {
-            let document = grid_billing::InvoiceDocument {
-                settlement: settlement.clone(),
-                pid,
-                rechnungsnummer: format!("DOC-{pid}"),
-                correction_of: None,
-                invoice_date: time::macros::date!(2026 - 02 - 15),
-                due_date: time::macros::date!(2026 - 03 - 15),
             };
-            assert_eq!(document.pid, pid);
-            assert_eq!(document.settlement.total_eur, settlement.total_eur);
+            // §21 EnFG exemption keeps the levies out of the arithmetic asserted here.
+            nne.letztverbrauchergruppe = grid_billing::umlagen::Letztverbrauchergruppe::Befreit;
         }
 
-        // MMM identifies itself by settlement type; the PID that routes it is
-        // chosen when the document is built.
-        let mmm_input = MmmInput {
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(100),
-            profil_kwh: dec!(100),
-            mehr_preis_ct_per_kwh: dec!(3),
-            minder_preis_ct_per_kwh: dec!(2),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let mmm = settle_mmm(&mmm_input).unwrap();
-        assert_eq!(mmm.settlement_type, grid_billing::SettlementType::MmmStrom);
-
-        // msb_31009 → 31009
-        let msb_input = MsbInput {
-            malo_id: "10001234558".to_owned(),
-            empfaenger: MsbRechnungsempfaenger {
-                rolle: MsbEmpfaengerRolle::Netzbetreiber,
-                mp_id: "9900357000004".to_owned(),
-            },
-            msb_mp_id: "4012345000023".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            grundgebuehr_eur_per_month: dec!(9.50),
-            billing_months: 1,
-            messdienstleistung_eur: None,
-            messstellen_kategorie: None,
-            entgeltschuldner: None,
-        };
-        let settlement = settle_msb(&msb_input).unwrap();
-        // MsbG §§6–7: one Grundgebühr position for the billed month.
-        assert_eq!(settlement.positions.len(), 1);
-        assert_eq!(settlement.total_eur, dec!(9.50));
+        let settled = settle(&pos).expect("settle");
+        // 500×32 + 300×28 + 200×24 = 160 + 84 + 48 = 292.00 EUR
+        assert_eq!(settled.total_eur, dec!(292.00));
         assert_eq!(
-            settlement.settlement_type,
-            grid_billing::SettlementType::MsbRechnung
+            settled.positions.len(),
+            3,
+            "one position per Tarifstufe: {:#?}",
+            settled.positions
         );
     }
 
-    /// §14a EnWG Modul 2: HT+NT split must produce separate positions.
-    /// When HT=0 kWh or NT=0 kWh, the billing must still produce 2 positions
-    /// (one may have zero amount) — no silent omission of a rate band.
+    /// A rendered invoice is checked, and a well-formed one passes.
     #[test]
-    fn tou_zero_nt_still_produces_positions() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Modul3ZeitVariabel {
-                ht: grid_billing::MengePreis {
-                    menge_kwh: dec!(1000),
-                    preis_ct_per_kwh: dec!(4.00),
-                },
-                // A zero NT band is still a band: it must produce a position, so
-                // that a rate band is never silently omitted from the invoice.
-                st: grid_billing::MengePreis {
-                    menge_kwh: dec!(0),
-                    preis_ct_per_kwh: dec!(0),
-                },
-                nt: grid_billing::MengePreis {
-                    menge_kwh: dec!(0),
-                    preis_ct_per_kwh: dec!(1.50),
-                },
-            },
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("zero-NT §14a must succeed");
-        // HT: 1000 × 4.00ct = 40.00 EUR; NT: 0 × 1.50ct = 0; total = 40.00
-        let diff = (result.total_eur - dec!(40.00)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "zero-NT total expected 40.00 EUR, got {}",
-            result.total_eur
+    fn a_rendered_invoice_passes_its_own_check() {
+        let settlement = settle(&nne(Sparte::Strom)).expect("settle");
+        let settled = render_and_check(
+            settlement,
+            "NNE-2026-000001".to_owned(),
+            time::macros::date!(2026 - 02 - 01),
+            time::macros::date!(2026 - 03 - 03),
+            DocumentFacts::default(),
         );
-    }
-
-    /// KA Konzessionsabgabe: KAV §2 — two KA bands residential vs commercial.
-    /// Residential (H0): 1.32 ct/kWh; commercial (G0): 0.11 ct/kWh.
-    /// Both rates must be accepted by the billing engine.
-    #[test]
-    fn ka_rates_residential_and_commercial() {
-        use grid_billing::{NneInput, settle_nne};
-        // Residential: 1000 kWh × 28.50 ct + 1000 × 1.32 ct KA = 285.00 + 13.20 = 298.20
-        let residential = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(1000),
-                preis_ct_per_kwh: dec!(28.50),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: Some(grid_billing::Konzessionsabgabe {
-                satz_ct_per_kwh: dec!(1.32),
-                klasse: grid_billing::KaKundengruppe::Tarifkunde {
-                    gemeinde: grid_billing::GemeindeGroesse::Bis25k,
-                    nur_kochen_warmwasser: false,
-                },
-            }),
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let r_res = settle_nne(&residential).unwrap();
-        let diff = (r_res.total_eur - dec!(298.20)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "residential KA expected 298.20 EUR, got {}",
-            r_res.total_eur
-        );
-
-        // Commercial G0: 0.11 ct/kWh KA
-        let commercial = NneInput {
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: Some(grid_billing::Konzessionsabgabe {
-                satz_ct_per_kwh: dec!(0.11),
-                klasse: grid_billing::KaKundengruppe::Tarifkunde {
-                    gemeinde: grid_billing::GemeindeGroesse::Bis25k,
-                    nur_kochen_warmwasser: false,
-                },
-            }),
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-            ..residential
-        };
-        let r_com = settle_nne(&commercial).unwrap();
-        // 1000 × 28.50ct + 1000 × 0.11ct = 285.00 + 1.10 = 286.10 EUR
-        let diff = (r_com.total_eur - dec!(286.10)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "commercial KA expected 286.10 EUR, got {}",
-            r_com.total_eur
-        );
-    }
-
-    /// GPKE (BK6-24-174) Teil 1 Kap. 8.4 MMM: Strom MMM billing type "mmm" (alias for mmm_strom) should use
-    /// the same formula as "mmm_strom". Regression guard for billing_type alias.
-    #[test]
-    fn mmm_billing_type_alias_consistent() {
-        use grid_billing::{MmmInput, settle_mmm};
-        let base = MmmInput {
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            actual_kwh: dec!(1100),
-            profil_kwh: dec!(1000),
-            mehr_preis_ct_per_kwh: dec!(3.00),
-            minder_preis_ct_per_kwh: dec!(2.50),
-            sparte: grid_billing::Sparte::Strom,
-        };
-        // Both "mmm" and "mmm_strom" map to the same grid_billing::MmmInput path.
-        // Verify the formula produces the same result for any label.
-        let r1 = settle_mmm(&base).unwrap();
-        let r2 = settle_mmm(&MmmInput { ..base }).unwrap();
-        let diff = (r1.total_eur - r2.total_eur).abs();
-        assert!(
-            diff < dec!(0.00001),
-            "mmm alias must yield same total as mmm_strom"
-        );
-    }
-
-    /// RLM spitzenleistung: zero kW must be handled gracefully (no Leistung position).
-    #[test]
-    fn rlm_zero_spitzenleistung_no_leistung_position() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(50000),
-                preis_ct_per_kwh: dec!(3.80),
-            }),
-            leistungspreis: Some(grid_billing::Leistungspreis {
-                spitzenleistung_kw: dec!(0),
-                preis_eur_per_kw: dec!(8.50),
-            }),
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("zero Spitze must succeed");
-        // Only Arbeit: 50000 × 3.80ct = 1900 EUR; Leistung = 0 × 8.50 = 0
-        // Total might be 1900 or include a zero-amount Leistung position — either is valid
-        assert!(
-            result.total_eur >= dec!(1900.00),
-            "at minimum 1900 EUR Arbeit"
-        );
-        assert!(
-            result.total_eur <= dec!(1901.00),
-            "no unexpected amount above 1900"
-        );
-    }
-
-    /// BNetzA § 147 AO / GoBD retention: billing period must be recorded accurately.
-    /// Guards that a short 2-day period (e.g. partial month on supply start) works.
-    #[test]
-    fn period_ordering_validity() {
-        use grid_billing::{NneInput, settle_nne};
-        let input = NneInput {
-            blindarbeit: None,
-            malo_id: "10001234558".to_owned(),
-            nb_mp_id: "9900357000004".to_owned(),
-            lf_mp_id: "9900012345678".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 15),
-                time::macros::date!(2026 - 01 - 16),
-            )
-            .expect("valid period"),
-            arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-                menge_kwh: dec!(48),
-                preis_ct_per_kwh: dec!(28.50),
-            }),
-            leistungspreis: None,
-            // These fixtures verify the Arbeits-/Leistungspreis arithmetic; §21 EnFG
-            // exemption keeps the network levies out of the totals they assert.
-            letztverbrauchergruppe: grid_billing::umlagen::Letztverbrauchergruppe::Befreit,
-            sect19_umlage_ct_per_kwh: None,
-            offshore_umlage_ct_per_kwh: None,
-            kwkg_umlage_ct_per_kwh: None,
-            netzebene: None,
-            sect19: None,
-            gas_kapazitaet: None,
-            jahreshoechstleistung_kw: None,
-            jahresarbeit_kwh: None,
-            konzessionsabgabe: None,
-            grundpreis: None,
-            tariff_sheet_id: None,
-            sparte: grid_billing::Sparte::Strom,
-        };
-        let result = settle_nne(&input).expect("2-day billing must succeed");
-        let diff = (result.total_eur - dec!(13.68)).abs(); // 48 × 28.50ct = 13.68 EUR
-        assert!(
-            diff < dec!(0.01),
-            "2-day billing expected 13.68 EUR, got {}",
-            result.total_eur
-        );
-    }
-
-    /// MSB-Rechnung: Messdienstleistung is optional; without it only Grundgebühr.
-    #[test]
-    fn msb_without_messdienstleistung() {
-        use grid_billing::{MsbInput, settle_msb};
-        let input = MsbInput {
-            malo_id: "10001234558".to_owned(),
-            empfaenger: MsbRechnungsempfaenger {
-                rolle: MsbEmpfaengerRolle::Netzbetreiber,
-                mp_id: "9900357000004".to_owned(),
-            },
-            msb_mp_id: "4012345000023".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 01 - 31),
-            )
-            .expect("valid period"),
-            grundgebuehr_eur_per_month: dec!(15.00),
-            billing_months: 3,
-            messdienstleistung_eur: None, // no MDL
-            messstellen_kategorie: None,
-            entgeltschuldner: None,
-        };
-        let result = settle_msb(&input).expect("MSB no-MDL must succeed");
-        // 3 × 15.00 = 45.00 EUR, no MDL
-        let diff = (result.total_eur - dec!(45.00)).abs();
-        assert!(
-            diff < dec!(0.01),
-            "MSB no-MDL expected 45.00 EUR, got {}",
-            result.total_eur
-        );
-    }
-
-    /// Invoic-checker accepts generated MSB invoice (PID 31009).
-    #[test]
-    fn invoic_checker_accepts_generated_msb() {
-        use grid_billing::{MsbInput, settle_msb};
-        use invoic_checker::{
-            InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore,
-        };
-        let input = MsbInput {
-            malo_id: "10001234558".to_owned(),
-            empfaenger: MsbRechnungsempfaenger {
-                rolle: MsbEmpfaengerRolle::Netzbetreiber,
-                mp_id: "9900357000004".to_owned(),
-            },
-            msb_mp_id: "4012345000023".to_owned(),
-            period: grid_billing::SettlementPeriod::new(
-                time::macros::date!(2026 - 01 - 01),
-                time::macros::date!(2026 - 12 - 31),
-            )
-            .expect("valid period"),
-            grundgebuehr_eur_per_month: dec!(9.50),
-            billing_months: 12,
-            messdienstleistung_eur: Some(dec!(24.00)),
-            messstellen_kategorie: None,
-            entgeltschuldner: None,
-        };
-        let result = settle_msb(&input).expect("MSB calc must succeed");
-        let store = InMemoryPreisblattStore::new();
-        let config = CheckConfig::default();
-        let rechnung = grid_billing::bo4e::into_rechnung(&super::as_document(result.clone()));
-        let report =
-            InvoicCheckEngine::check(31001, &result.sender_mp_id, &rechnung, &store, &config);
-        use invoic_checker::check::CheckOutcome;
+        assert_eq!(settled.pid, 31002);
         assert_ne!(
-            report.outcome,
-            CheckOutcome::Dispute,
-            "generated MSB INVOIC must not fail invoic-checker; findings: {:?}",
-            report.findings,
+            settled.report.outcome,
+            invoic_checker::CheckOutcome::Dispute,
+            "{:#?}",
+            settled.report.findings
         );
+        assert_eq!(
+            settled.rechnung.sparte,
+            Some(rubo4e::current::Sparte::Strom),
+            "the Sparte must reach the wire — PID 31002 does not carry it"
+        );
+    }
+
+    /// Amounts render from the integer, padded to the stored resolution.
+    #[test]
+    fn an_amount_renders_at_full_resolution() {
+        assert_eq!(format_eur(123_456_000), "1234.56000");
+        assert_eq!(format_eur(-1), "-0.00001");
+        assert_eq!(format_eur(0), "0.00000");
+    }
+
+    /// A settled invoice states its Umsatzsteuer, and its own gate accepts it.
+    ///
+    /// The gate is `invoic-checker`, which the receiving LF runs on the same
+    /// document. An invoice carrying a net figure and nothing else is not a
+    /// Rechnung under §14 Abs. 4 Nr. 8 UStG, and is worth no Vorsteuerabzug to
+    /// the counterparty.
+    #[test]
+    fn a_settled_invoice_states_its_tax_and_passes_its_own_gate() {
+        let settlement = settle(&nne(Sparte::Strom)).expect("settle");
+        let netto = settlement.total_eur;
+        assert_eq!(settlement.steuer.satz_prozent, dec!(19));
+        assert_eq!(
+            settlement.steuer.brutto_eur(),
+            netto + settlement.steuer.steuer_eur
+        );
+
+        let settled = render_and_check(
+            settlement,
+            "NNE-2026-000001".to_owned(),
+            time::macros::date!(2026 - 02 - 01),
+            time::macros::date!(2026 - 03 - 03),
+            DocumentFacts::default(),
+        );
+        assert_ne!(
+            settled.report.outcome,
+            invoic_checker::CheckOutcome::Dispute,
+            "{:#?}",
+            settled.report.findings
+        );
+        assert!(
+            settled.rechnung.gesamtsteuer.is_some() && settled.rechnung.gesamtbrutto.is_some(),
+            "the tax block must reach the document"
+        );
+    }
+
+    /// A Gas Mehr-/Mindermenge to a Wiederverkäufer is reverse-charged; the same
+    /// settlement to a counterparty without §3g status is taxed at 19 %.
+    ///
+    /// A Mehr-/Mindermenge is a Lieferung, not a network service, so §13b
+    /// Abs. 2 Nr. 5 Buchst. b reaches it — and for gas the recipient's status
+    /// alone decides.
+    #[test]
+    fn a_gas_mmm_follows_the_recipients_wiederverkaeufer_status() {
+        let settle_with = |status: grid_billing::Wiederverkaeuferstatus| {
+            settle(&position(SettlementRequest::Mmm(MmmRequest {
+                nb_mp_id: "9900357000004".to_owned(),
+                lf_mp_id: "9900012345678".to_owned(),
+                sparte: Sparte::Gas,
+                gemessen_kwh: dec!(1200),
+                bilanziert_kwh: dec!(1000),
+                mehr_preis_ct_per_kwh: Some(dec!(5.0)),
+                minder_preis_ct_per_kwh: Some(dec!(4.0)),
+                lastprofil: None,
+                wiederverkaeufer: status,
+            })))
+            .expect("settle")
+        };
+
+        let taxed = settle_with(grid_billing::Wiederverkaeuferstatus::KEINER);
+        assert_eq!(taxed.steuer.satz_prozent, dec!(19));
+        assert!(taxed.steuer.steuer_eur > rust_decimal::Decimal::ZERO);
+
+        // For gas the recipient's status alone shifts it — the issuer's does not
+        // matter, which is the opposite of the electricity condition.
+        let verlagert = settle_with(grid_billing::Wiederverkaeuferstatus {
+            leistender: false,
+            empfaenger: true,
+        });
+        assert_eq!(verlagert.steuer.steuer_eur, rust_decimal::Decimal::ZERO);
+        assert_eq!(
+            verlagert.steuer.hinweis,
+            Some("Steuerschuldnerschaft des Leistungsempfängers")
+        );
+    }
+
+    /// The stored total is exact at 10⁻⁵ EUR, and absurd inputs are refused
+    /// rather than silently truncated.
+    #[test]
+    fn the_stored_total_is_exact() {
+        assert_eq!(eur_units(dec!(1234.56)).expect("fits"), 123_456_000);
+        assert_eq!(eur_units(dec!(-10.0)).expect("fits"), -1_000_000);
+        // ±92 billion EUR at 10⁻⁵ resolution is the i64 boundary. Beyond it the
+        // inputs are nonsense, and truncating silently would report a plausible
+        // total for an invoice that was never computable.
+        assert!(eur_units(Decimal::MAX).is_err());
     }
 }
-
-// The trace-persistence and Artikelnummer bridge tests moved to the
-// `grid_billing::bo4e` module alongside the conversion they exercise.

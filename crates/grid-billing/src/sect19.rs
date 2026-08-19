@@ -29,7 +29,7 @@ use rust_decimal::Decimal;
 use rust_decimal::dec;
 
 /// The two §19 Abs. 2 forms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Sect19Art {
     /// Satz 1 — annual peak predictably in the network's low-load windows.
     AtypischeNetznutzung,
@@ -70,7 +70,7 @@ pub fn bandlast_mindestentgelt(
 pub const ATYPISCH_MINDESTENTGELT: Decimal = dec!(0.20);
 
 /// An agreed §19 Abs. 2 individual charge, as a fraction of the published one.
-#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Sect19Vereinbarung {
     /// Which form the agreement takes.
     pub art: Sect19Art,

@@ -29,13 +29,14 @@
 //! # Example
 //!
 //! ```rust
-//! use invoic_checker::check::{CheckConfig, CheckOutcome, InvoicCheckEngine};
+//! use invoic_checker::check::{CheckConfig, CheckOutcome, FindingKind, InvoicCheckEngine};
 //! use invoic_checker::tariff::InMemoryPreisblattStore;
 //! use rubo4e::current::Rechnung;
 //!
-//! // An empty preisblatt store yields a TariffNotFound *warning* (not a dispute)
-//! // even for an invoice with no line items, because the tariff check always
-//! // runs and flags unknown sender GLNs with is_dispute = require_tariff.
+//! // A default `Rechnung` states no Umsatzsteuer, and §14 Abs. 4 Nr. 8 UStG
+//! // makes the rate and the amount mandatory content — so it is disputed
+//! // before any tariff question arises. An invoice the recipient cannot deduct
+//! // is one the recipient does not pay.
 //! let report = InvoicCheckEngine::check(
 //!     31001,
 //!     "9900357000004",
@@ -43,7 +44,8 @@
 //!     &InMemoryPreisblattStore::new(),
 //!     &CheckConfig::default(),
 //! );
-//! assert_eq!(report.outcome, CheckOutcome::Warn);
+//! assert_eq!(report.outcome, CheckOutcome::Dispute);
+//! assert!(report.findings.iter().any(|f| f.kind == FindingKind::SteuerMissing));
 //! ```
 
 use rubo4e::convenience::{BetragExt, MengeExt, PreisExt};
@@ -150,6 +152,19 @@ pub enum FindingKind {
     ZahlungszielExceeded,
     /// `faelligkeitsdatum` (DTM+92) is in the past or before `rechnungsdatum`.
     ZahlungszielInvalid,
+    /// The invoice states no Umsatzsteuer at all.
+    ///
+    /// §14 Abs. 4 Nr. 8 UStG requires the rate and the tax amount, or a note
+    /// saying why neither is stated. An invoice carrying only a net figure gives
+    /// its recipient no Vorsteuerabzug — which is the receiving LF's money.
+    SteuerMissing,
+    /// `gesamtbrutto` does not equal `gesamtnetto + gesamtsteuer`.
+    SteuerMismatch,
+    /// A reverse-charge invoice (`RCV`) nonetheless states a tax amount.
+    ///
+    /// Tax shown on a §13b invoice is owed under §14c Abs. 1 UStG and is still
+    /// not deductible, because the recipient owes it too.
+    ReverseChargeStatesTax,
 }
 
 // ── Finding ───────────────────────────────────────────────────────────────────
@@ -353,6 +368,9 @@ impl InvoicCheckEngine {
         // ── Stage 3: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ──────────
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
+        // ── Stage 3.5: The Umsatzsteuer block ─────────────────────────────────
+        Self::check_steuer(rechnung, config, &mut findings);
+
         // ── Stage 4: Tariff check (PRICAT vs INVOIC unit price) ───────────────
         // Skipped for Stornorechnungen: they carry negated original amounts,
         // not tariff positions. Skipping prevents false TariffDeviation disputes.
@@ -523,6 +541,79 @@ impl InvoicCheckEngine {
     /// Stage 3: Verify Σ `gesamtpreis` ≈ `gesamtnetto`.
     ///
     /// Returns the computed sum (used in the `CheckReport`).
+    /// Stage 3.5: the Umsatzsteuer block.
+    ///
+    /// §14 Abs. 4 Nr. 8 UStG makes the rate and the tax amount mandatory content
+    /// — or, where the supply is not taxed by the issuer, a note saying so. An
+    /// invoice without either is one the recipient cannot deduct, so this is a
+    /// **dispute**: paying it means paying tax that cannot be recovered.
+    ///
+    /// The arithmetic is checked too. `gesamtbrutto` is what is actually owed,
+    /// and an invoice whose parts do not sum to its whole is the one error
+    /// nobody catches by reading it.
+    fn check_steuer(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
+        let netto = rechnung
+            .gesamtnetto
+            .wert_decimal()
+            .and_then(euro_from_decimal);
+        let steuer = rechnung
+            .gesamtsteuer
+            .wert_decimal()
+            .and_then(euro_from_decimal);
+        let brutto = rechnung
+            .gesamtbrutto
+            .wert_decimal()
+            .and_then(euro_from_decimal);
+        let breakdown = rechnung.steuerbetraege.as_deref().unwrap_or_default();
+
+        // A reverse charge states no tax by design, so its absence is only a
+        // defect when nothing explains it.
+        let reverse_charge = breakdown
+            .iter()
+            .any(|b| b.steuerart == Some(rubo4e::current::Steuerart::Rcv));
+
+        if steuer.is_none() && breakdown.is_empty() {
+            findings.push(Finding::dispute(
+                FindingKind::SteuerMissing,
+                "The invoice states no Umsatzsteuer and no Steuerbetrag breakdown.                  §14 Abs. 4 Nr. 8 UStG requires the rate and the amount, or a note                  that the recipient owes the tax — without either there is no                  Vorsteuerabzug.",
+                None,
+                None,
+                None,
+            ));
+            return;
+        }
+
+        if reverse_charge
+            && let Some(steuer) = steuer
+            && steuer != EuroAmount::ZERO
+        {
+            findings.push(Finding::dispute(
+                FindingKind::ReverseChargeStatesTax,
+                format!(
+                    "The invoice is reverse-charged (§13b UStG) and states {steuer} EUR of                      Umsatzsteuer anyway. That tax is owed under §14c Abs. 1 UStG and is                      still not deductible, because the recipient owes it too."
+                ),
+                None,
+                Some(EuroAmount::ZERO),
+                Some(steuer),
+            ));
+        }
+
+        if let (Some(netto), Some(steuer), Some(brutto)) = (netto, steuer, brutto)
+            && !brutto.within_tolerance_ppm(netto + steuer, config.total_tolerance_ppm)
+        {
+            findings.push(Finding::dispute(
+                FindingKind::SteuerMismatch,
+                format!(
+                    "gesamtbrutto = {brutto} EUR, but gesamtnetto + gesamtsteuer = {} EUR",
+                    netto + steuer
+                ),
+                None,
+                Some(netto + steuer),
+                Some(brutto),
+            ));
+        }
+    }
+
     fn check_total(
         rechnung: &Rechnung,
         config: &CheckConfig,
@@ -1167,10 +1258,36 @@ mod tests {
         positions: Vec<Rechnungsposition>,
         gesamtnetto: Option<EuroAmount>,
     ) -> Rechnung {
+        // Every fixture carries a lawful tax block: §14 Abs. 4 Nr. 8 UStG makes
+        // it mandatory content, so an invoice without one is not a realistic
+        // subject for the other checks — it is already a dispute.
+        let netto =
+            gesamtnetto.map(|n| Decimal::from_str_exact(&n.to_string()).unwrap_or_default());
+        let steuer = netto.map(|n| {
+            (n * Decimal::from(19) / Decimal::from(100))
+                .round_dp_with_strategy(2, rust_decimal::RoundingStrategy::MidpointAwayFromZero)
+        });
         Rechnung {
             rechnungsperiode: Some(periode("2024-12-01", "2024-12-31")),
             rechnungsdatum: Some(parse_date("2025-01-15")),
             gesamtnetto: gesamtnetto.map(betrag),
+            gesamtsteuer: steuer.map(|w| Betrag {
+                wert: Some(w),
+                ..Default::default()
+            }),
+            gesamtbrutto: netto.zip(steuer).map(|(n, t)| Betrag {
+                wert: Some(n + t),
+                ..Default::default()
+            }),
+            steuerbetraege: steuer.map(|w| {
+                vec![rubo4e::current::Steuerbetrag {
+                    steuerart: Some(rubo4e::current::Steuerart::Ust),
+                    steuersatz: Some(Decimal::from(19)),
+                    basiswert: netto,
+                    steuerwert: Some(w),
+                    ..Default::default()
+                }]
+            }),
             rechnungspositionen: if positions.is_empty() {
                 None
             } else {
@@ -1358,11 +1475,188 @@ mod tests {
         );
     }
 
+    // ── Umsatzsteuer ──────────────────────────────────────────────────────────
+
+    /// An invoice stating no tax is disputed, not merely flagged.
+    ///
+    /// §14 Abs. 4 Nr. 8 UStG makes the rate and the amount mandatory content.
+    /// Paying an invoice without them means paying tax that cannot be recovered,
+    /// which is the receiving LF's money.
+    #[test]
+    fn an_invoice_without_a_tax_block_is_disputed() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtsteuer = None;
+        r.gesamtbrutto = None;
+        r.steuerbetraege = None;
+
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMissing)
+        );
+    }
+
+    /// A reverse charge states no tax, and that is correct rather than missing.
+    #[test]
+    fn a_reverse_charge_without_a_tax_amount_is_accepted() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::ZERO));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(100_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Rcv),
+            steuersatz: Some(Decimal::ZERO),
+            steuerwert: Some(Decimal::ZERO),
+            ..Default::default()
+        }]);
+
+        let report =
+            InvoicCheckEngine::check(31005, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMissing),
+            "a §13b invoice states no tax by design: {:#?}",
+            report.findings
+        );
+    }
+
+    /// A reverse charge that states tax anyway is disputed.
+    ///
+    /// That tax is owed under §14c Abs. 1 UStG *and* undeductible, because the
+    /// recipient owes it too under §13b — the worst of both.
+    #[test]
+    fn a_reverse_charge_stating_tax_is_disputed() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(19_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(119_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Rcv),
+            steuersatz: Some(Decimal::ZERO),
+            steuerwert: Some(Decimal::from(190)),
+            ..Default::default()
+        }]);
+
+        let report =
+            InvoicCheckEngine::check(31005, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::ReverseChargeStatesTax)
+        );
+    }
+
+    /// The gross must equal net plus tax.
+    ///
+    /// An invoice whose parts do not sum to its whole is the one error nobody
+    /// catches by reading it.
+    #[test]
+    fn a_gross_that_does_not_equal_net_plus_tax_is_disputed() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(100_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(999_999)));
+
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert_eq!(report.outcome, CheckOutcome::Dispute);
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMismatch)
+        );
+    }
+
+    /// A Stornorechnung passes the tax stage: every amount is negative, and the
+    /// arithmetic holds with the signs.
+    ///
+    /// Every reversal `netzbilanzd` issues goes through this gate, so a stage
+    /// that only reasons about positive amounts would block them all.
+    #[test]
+    fn a_storno_with_negative_amounts_passes_the_tax_stage() {
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(-100_000)),
+        );
+        let mut r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(-100_000)));
+        r.ist_storno = Some(true);
+        r.original_rechnungsnummer = Some("NNE-2026-000001".to_owned());
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(-19_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(-119_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Ust),
+            steuersatz: Some(Decimal::from(19)),
+            basiswert: Some(Decimal::from(-1)),
+            steuerwert: Some(Decimal::from_str_exact("-0.19").expect("decimal")),
+            ..Default::default()
+        }]);
+
+        let report =
+            InvoicCheckEngine::check(31002, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report.findings.iter().any(|f| {
+                matches!(
+                    f.kind,
+                    FindingKind::SteuerMissing
+                        | FindingKind::SteuerMismatch
+                        | FindingKind::ReverseChargeStatesTax
+                )
+            }),
+            "a reversal is a lawful document: {:#?}",
+            report.findings
+        );
+    }
+
     // ── Tariff check ──────────────────────────────────────────────────────────
 
     #[test]
     fn no_tariff_warn_by_default() {
-        let r = make_rechnung(vec![], None);
+        // A realistic invoice, so the assertion isolates the tariff stage: an
+        // empty document fails §14 UStG on its own and would dispute for that.
+        let pos = make_pos(
+            1,
+            "DE001",
+            None,
+            None,
+            Some(EuroAmount::from_raw_units(3_456_000)),
+        );
+        let r = make_rechnung(vec![pos], Some(EuroAmount::from_raw_units(3_456_000)));
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
         assert!(!report.has_dispute());

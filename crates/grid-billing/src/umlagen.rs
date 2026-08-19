@@ -36,7 +36,7 @@ use rust_decimal::dec;
 /// Letztverbrauchergruppe for the network levies (EnFG §§ 21 ff.).
 ///
 /// The bands are per Entnahmestelle and per calendar year, not per contract.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Letztverbrauchergruppe {
     /// **A′** — the full levy. Applies to the first 1 GWh at an Entnahmestelle,
     /// and to every Entnahmestelle that does not exceed it.

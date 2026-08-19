@@ -19,7 +19,9 @@ use rust_decimal::Decimal;
 /// The gas analogue of the Strom [`crate::netzebene::Netzebene`]: charges are
 /// published per level, so the level is what makes a rate checkable against a
 /// price sheet.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum Druckstufe {
     /// Hochdruck — above 1 bar, the transmission-adjacent networks.
     Hochdruck,
@@ -46,7 +48,7 @@ impl Druckstufe {
 /// §15 Abs. 5 GasNEV requires the charge system to account for interruptible
 /// products; the discount itself comes from the price sheet, which is why the
 /// rate on [`GasKapazitaet`] is per product rather than derived here.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Kapazitaetsprodukt {
     /// Feste Kapazität — firm, not curtailable by the network operator.
     Fest,
@@ -71,7 +73,7 @@ impl Kapazitaetsprodukt {
 /// The rate is annual (EUR per kWh/h per year, the standard price-sheet unit);
 /// the engine pro-rates it over the settlement period by calendar days, and
 /// records that convention in the trace where an auditor can see it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct GasKapazitaet {
     /// Booked capacity in kWh/h.
     pub bestellte_kapazitaet_kwh_h: Decimal,

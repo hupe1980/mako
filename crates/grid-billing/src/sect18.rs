@@ -231,6 +231,19 @@ pub fn settle_dezentrale_einspeisung(
             .map(|p| p.net_eur)
             .sum::<Decimal>()
             .round_dp(2),
+        // The Entgelt für dezentrale Einspeisung is consideration for a service
+        // the Anlagenbetreiber renders to the network (§18 StromNEV), settled by
+        // Gutschrift. It is not a supply of energy, so §13b never reaches it.
+        steuer: crate::umsatzsteuer::steuerausweis(
+            positions
+                .iter()
+                .map(|p| p.net_eur)
+                .sum::<Decimal>()
+                .round_dp(2),
+            crate::umsatzsteuer::Leistungsart::SonstigeLeistung,
+            crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            input.period,
+        )?,
         positions,
         warnings,
     })

@@ -7,6 +7,16 @@ use super::*;
 
 // ── netzbilanzd NNE/MMM invoice generation (NB role, outbound INVOIC) ─────────
 
+/// Read a party MP-ID, preferring the role-neutral name over the legacy one.
+fn party(payload: &serde_json::Value, preferred: &str, legacy: &str) -> String {
+    payload
+        .get(preferred)
+        .or_else(|| payload.get(legacy))
+        .and_then(|v| v.as_str())
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Helper: dispatch `AbrechnungCommand::SendInvoic` for a given PID.
 ///
 /// Called by `gpke.nne.rechnung.stellen` and `gpke.nne-gas.rechnung.stellen`
@@ -25,16 +35,12 @@ pub(super) async fn dispatch_nne_send_invoic(
     pid: u32,
 ) -> Result<DispatchOutcome, DispatchError> {
     let invoice_ref_str = extract_invoice_ref(payload)?;
-    let nb_mp_id = payload
-        .get("nb_mp_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
-    let lf_mp_id = payload
-        .get("lf_mp_id")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .to_owned();
+    // `sender_mp_id` / `recipient_mp_id` are what the settlement resolved and
+    // what `netzbilanzd` stores; `nb_mp_id` / `lf_mp_id` are the older names and
+    // stay accepted. Reading only the old pair left both parties empty, and an
+    // INVOIC with no sender and no recipient is not a message anyone can route.
+    let nb_mp_id = party(payload, "sender_mp_id", "nb_mp_id");
+    let lf_mp_id = party(payload, "recipient_mp_id", "lf_mp_id");
     let invoice_ref_clone = invoice_ref_str.clone();
     dispatch_to_process::<GpkeAbrechnungWorkflow, _>(
         state,
@@ -51,6 +57,15 @@ pub(super) async fn dispatch_nne_send_invoic(
         },
     )
     .await
+}
+
+pub(super) fn cmd_gpke_nne_abschlag_rechnung_stellen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_nne_send_invoic(s, p, 31001))
 }
 
 pub(super) fn cmd_gpke_nne_rechnung_stellen<'a>(

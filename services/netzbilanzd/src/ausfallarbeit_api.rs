@@ -21,9 +21,8 @@
 //!   (§ 24 Abs. 3 S. 2 EEG 2023).
 
 use axum::Json;
-use axum::http::StatusCode;
-use axum::response::{IntoResponse, Response};
 use mako_redispatch::ausfallarbeit as engine;
+use mako_service::{ApiError, ApiResult};
 use rust_decimal::Decimal;
 use serde::{Deserialize, Serialize};
 
@@ -35,6 +34,7 @@ const MAX_INTERVALLE: usize = 35_136;
 /// One quarter-hour of a Wind-Spitzabrechnung (Kap. 3.2.2.1 / 3.2.2.2) — with
 /// `kf` = `KF_Bin` this is also the Wind-Bin-Verfahren (Kap. 3.2.3.2).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WindSpitzIntervall {
     /// Kap.-3.1 inputs for `P_lim,i`.
     pub limitierung: engine::Leistungslimitierung,
@@ -42,8 +42,10 @@ pub struct WindSpitzIntervall {
     pub kf: Decimal,
     /// Theoretischer Leistungsmittelwert in kW.
     pub p_theo: Decimal,
+    /// Marktbedingte Anpassung in kW, where one applies.
     #[serde(default)]
     pub p_mba: Option<Decimal>,
+    /// Beanspruchbare Leistung in kW — caps `P_theo` when supplied.
     #[serde(default)]
     pub p_bean: Option<Decimal>,
     /// Nennleistung of the TR in kW (plausibility cap).
@@ -52,22 +54,28 @@ pub struct WindSpitzIntervall {
 
 /// One quarter-hour of the Wind Pauschal-Abrechnung (Kap. 3.2.2.3).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct WindPauschalIntervall {
+    /// Kap.-3.1 inputs for `P_lim,i`.
     pub limitierung: engine::Leistungslimitierung,
     /// Last fully measured unrestricted quarter-hour before the Maßnahme
     /// (or the Referenzprofilverfahren value), in kW.
     pub p_0: Decimal,
     /// Installierte Leistung of the TR in kW.
     pub p_inst: Decimal,
+    /// Marktbedingte Anpassung in kW, where one applies.
     #[serde(default)]
     pub p_mba: Option<Decimal>,
+    /// Beanspruchbare Leistung in kW.
     #[serde(default)]
     pub p_bean: Option<Decimal>,
 }
 
 /// One quarter-hour of a Solar-Spitzabrechnung (Kap. 3.2.4.1 / 3.2.4.2).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SolarSpitzIntervall {
+    /// Kap.-3.1 inputs for `P_lim,i`.
     pub limitierung: engine::Leistungslimitierung,
     /// Durchschnittliche Ist-Einspeisung im Vergleichszeitraum in kW.
     pub p_vz_ist: Decimal,
@@ -77,8 +85,10 @@ pub struct SolarSpitzIntervall {
     pub g_i: Decimal,
     /// Wechselrichterleistung je TR in kW.
     pub p_wr: Decimal,
+    /// Marktbedingte Anpassung in kW, where one applies.
     #[serde(default)]
     pub p_mba: Option<Decimal>,
+    /// Beanspruchbare Leistung in kW.
     #[serde(default)]
     pub p_bean: Option<Decimal>,
     /// Nennleistung of the TR in kW (plausibility cap).
@@ -88,7 +98,9 @@ pub struct SolarSpitzIntervall {
 /// One quarter-hour of the Solar Pauschal-Abrechnung (Kap. 3.2.4.3). The
 /// Anlagenfaktor comes from the fixed season/time-of-day table (UTC+1).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SolarPauschalIntervall {
+    /// Kap.-3.1 inputs for `P_lim,i`.
     pub limitierung: engine::Leistungslimitierung,
     /// Start of the Viertelstunde (date), UTC+1.
     pub datum: time::Date,
@@ -98,15 +110,19 @@ pub struct SolarPauschalIntervall {
     pub p_inst_module: Decimal,
     /// Wechselrichterleistung je TR in kW.
     pub p_wr: Decimal,
+    /// Marktbedingte Anpassung in kW, where one applies.
     #[serde(default)]
     pub p_mba: Option<Decimal>,
+    /// Beanspruchbare Leistung in kW.
     #[serde(default)]
     pub p_bean: Option<Decimal>,
 }
 
 /// One quarter-hour of a nicht-fluktuierende Abrechnung (Kap. 3.3).
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NichtfluktuierendIntervall {
+    /// Kap.-3.1 inputs for `P_lim,i`.
     pub limitierung: engine::Leistungslimitierung,
     /// Spitz: geplante Leistung per Ex-ante-Planungsdaten in kW.
     /// Pauschal: last fully measured quarter-hour `P_0` in kW.
@@ -121,7 +137,7 @@ pub struct NichtfluktuierendIntervall {
 /// Fluktuierende variants (Kap. 3.2) are defined for negativen Redispatch
 /// only; the nicht-fluktuierenden variants (Kap. 3.3) carry the direction.
 #[derive(Debug, Deserialize)]
-#[serde(tag = "verfahren", rename_all = "snake_case")]
+#[serde(tag = "verfahren", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AusfallarbeitComputeRequest {
     /// Kap. 3.2.2.1/3.2.2.2 (and 3.2.3.2 with `kf` = `KF_Bin`).
     WindSpitz { intervalle: Vec<WindSpitzIntervall> },
@@ -139,12 +155,16 @@ pub enum AusfallarbeitComputeRequest {
     },
     /// Kap. 3.3.1 (Planwertmodell; Prognosemodell on request).
     NichtfluktuierendSpitz {
+        /// Positiver or negativer Redispatch.
         richtung: engine::RedispatchRichtung,
+        /// The quarter-hour series.
         intervalle: Vec<NichtfluktuierendIntervall>,
     },
     /// Kap. 3.3.2 (Prognosemodell default).
     NichtfluktuierendPauschal {
+        /// Positiver or negativer Redispatch.
         richtung: engine::RedispatchRichtung,
+        /// The quarter-hour series.
         intervalle: Vec<NichtfluktuierendIntervall>,
     },
 }
@@ -161,6 +181,7 @@ pub struct AusfallarbeitComputeResponse {
 
 /// Kap.-3.4 Überbauung request — one Viertelstunde of one Netzlokation.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct UeberbauungRequest {
     /// All TR behind the Netzlokation with their Kap.-3.2/3.3 Ausfallarbeit.
     pub trs: Vec<engine::UeberbauungTr>,
@@ -173,6 +194,7 @@ pub struct UeberbauungRequest {
 /// Gekürzte Ausfallarbeit per TR (same order as the request).
 #[derive(Debug, Serialize)]
 pub struct UeberbauungResponse {
+    /// The capped `W_A` per TR, in the order the request listed them.
     pub w_a_gekuerzt_kwh: Vec<Decimal>,
 }
 
@@ -282,36 +304,44 @@ fn interval_count(req: &AusfallarbeitComputeRequest) -> usize {
 // ── Handlers ────────────────────────────────────────────────────────────────
 
 /// `POST /api/v1/redispatch/ausfallarbeit/compute`
-pub async fn post_ausfallarbeit_compute(Json(req): Json<AusfallarbeitComputeRequest>) -> Response {
+///
+/// # Errors
+///
+/// - `400` for an empty or oversized interval series.
+/// - `422` when a variant's inputs do not describe a computable Ausfallarbeit.
+pub async fn post_ausfallarbeit_compute(
+    Json(req): Json<AusfallarbeitComputeRequest>,
+) -> ApiResult<Json<AusfallarbeitComputeResponse>> {
     let n = interval_count(&req);
     if n == 0 {
-        return (StatusCode::BAD_REQUEST, "intervalle is empty").into_response();
+        return Err(ApiError::bad_request("intervalle is empty"));
     }
     if n > MAX_INTERVALLE {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!("too many intervalle: {n} (max {MAX_INTERVALLE})"),
-        )
-            .into_response();
+        return Err(ApiError::bad_request(format!(
+            "too many intervalle: {n} (max {MAX_INTERVALLE}, about one year of quarter-hours)"
+        )));
     }
-    match compute(&req) {
-        Ok(w_a_kwh) => {
-            let summe_kwh = w_a_kwh.iter().copied().sum();
-            Json(AusfallarbeitComputeResponse { w_a_kwh, summe_kwh }).into_response()
-        }
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e).into_response(),
-    }
+    let w_a_kwh = compute(&req).map_err(ApiError::Unprocessable)?;
+    let summe_kwh = w_a_kwh.iter().copied().sum();
+    Ok(Json(AusfallarbeitComputeResponse { w_a_kwh, summe_kwh }))
 }
 
 /// `POST /api/v1/redispatch/ausfallarbeit/ueberbauung`
-pub async fn post_ausfallarbeit_ueberbauung(Json(req): Json<UeberbauungRequest>) -> Response {
+///
+/// # Errors
+///
+/// - `400` when no TechnischeRessource is named.
+/// - `422` when the Kap.-3.4 cap cannot be applied to the given series.
+pub async fn post_ausfallarbeit_ueberbauung(
+    Json(req): Json<UeberbauungRequest>,
+) -> ApiResult<Json<UeberbauungResponse>> {
     if req.trs.is_empty() {
-        return (StatusCode::BAD_REQUEST, "trs is empty").into_response();
+        return Err(ApiError::bad_request("trs is empty"));
     }
-    match engine::ueberbauung_kuerzung(&req.trs, req.p_anschl_kw, req.einspeisung_kwh) {
-        Ok(w_a_gekuerzt_kwh) => Json(UeberbauungResponse { w_a_gekuerzt_kwh }).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    }
+    let w_a_gekuerzt_kwh =
+        engine::ueberbauung_kuerzung(&req.trs, req.p_anschl_kw, req.einspeisung_kwh)
+            .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    Ok(Json(UeberbauungResponse { w_a_gekuerzt_kwh }))
 }
 
 // ── Kap. 3.2.3.2 — Wind-Bin-Verfahren (KF_Bin) ──────────────────────────────
@@ -323,6 +353,7 @@ pub async fn post_ausfallarbeit_ueberbauung(Json(req): Json<UeberbauungRequest>)
 /// [`engine::WIND_BIN_MINDEST_WERTEPAARE`] pairs makes the bin invalid and the
 /// Ersatzwert chain below applies.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct KfBinRequest {
     /// Wind speed in m/s identifying the bin. Echoed back as `bin_index`.
     pub windgeschwindigkeit_ms: Decimal,
@@ -366,11 +397,17 @@ pub struct KfBinResponse {
 /// An underoccupied bin is not an error: Kap. 3.2.3.2 prescribes a binding
 /// Ersatzwert order (Vormonat → Folgemonat → 12-Monats-Mittel → 1), and the
 /// response names which step applied so the operator can evidence it.
-pub async fn post_ausfallarbeit_kf_bin(Json(req): Json<KfBinRequest>) -> Response {
-    let kf_v = match engine::verlustfaktor(req.e_einsp_kwh, req.summe_e_wea_kwh) {
-        Ok(v) => v,
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    };
+///
+/// # Errors
+///
+/// `422` when `KF_V` falls outside `]0;1[`, or when the bin is unusable for a
+/// reason the Ersatzwert order does not cover.
+pub async fn post_ausfallarbeit_kf_bin(
+    Json(req): Json<KfBinRequest>,
+) -> ApiResult<Json<KfBinResponse>> {
+    let unprocessable = |e: engine::AusfallarbeitError| ApiError::unprocessable(e.to_string());
+    let kf_v =
+        engine::verlustfaktor(req.e_einsp_kwh, req.summe_e_wea_kwh).map_err(unprocessable)?;
 
     let (kf_lbin, kf_lbin_quelle) = match engine::kf_lbin(&req.leistungswerte_kw, req.p_zert_lk) {
         Ok(v) => (v, engine::KfLbinQuelle::Monat),
@@ -379,23 +416,23 @@ pub async fn post_ausfallarbeit_kf_bin(Json(req): Json<KfBinRequest>) -> Respons
             req.kf_lbin_folgemonat,
             req.kf_lbin_zwoelf_monats_mittel,
         ),
-        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
+        Err(e) => return Err(unprocessable(e)),
     };
 
-    Json(KfBinResponse {
+    Ok(Json(KfBinResponse {
         bin_index: engine::wind_bin_index(req.windgeschwindigkeit_ms),
         kf_lbin,
         kf_lbin_quelle,
         kf_v,
         kf_bin: engine::kf_bin(kf_lbin, kf_v),
-    })
-    .into_response()
+    }))
 }
 
 // ── § 24 Abs. 3 S. 2 EEG 2023 — MaLo → TR split ─────────────────────────────
 
 /// One marktlokationsscharfer Wert and the installed capacities to split it by.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MaloSplitRequest {
     /// The MaLo-level value to distribute (kWh or kW — the split is linear, so
     /// the unit is whatever the caller supplied).
@@ -416,14 +453,20 @@ pub struct MaloSplitResponse {
 /// Ressourcen behind it before any Kap.-3 variant can be applied per TR. The
 /// split is pro rata by installed capacity; `Σ P_inst ≤ 0` is refused rather
 /// than divided by.
-pub async fn post_ausfallarbeit_malo_split(Json(req): Json<MaloSplitRequest>) -> Response {
+///
+/// # Errors
+///
+/// - `400` when no TechnischeRessource capacity is given.
+/// - `422` when the installed capacities sum to zero or less.
+pub async fn post_ausfallarbeit_malo_split(
+    Json(req): Json<MaloSplitRequest>,
+) -> ApiResult<Json<MaloSplitResponse>> {
     if req.p_inst_kw.is_empty() {
-        return (StatusCode::BAD_REQUEST, "p_inst_kw is empty").into_response();
+        return Err(ApiError::bad_request("p_inst_kw is empty"));
     }
-    match engine::malo_wert_auf_tr(req.malo_wert, &req.p_inst_kw) {
-        Ok(anteile) => Json(MaloSplitResponse { anteile }).into_response(),
-        Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),
-    }
+    let anteile = engine::malo_wert_auf_tr(req.malo_wert, &req.p_inst_kw)
+        .map_err(|e| ApiError::unprocessable(e.to_string()))?;
+    Ok(Json(MaloSplitResponse { anteile }))
 }
 
 #[cfg(test)]
@@ -433,23 +476,6 @@ mod tests {
 
     fn dec(v: f64) -> Decimal {
         Decimal::from_f64(v).expect("finite")
-    }
-
-    /// Read a handler `Response` back as JSON.
-    async fn body_json(resp: Response) -> serde_json::Value {
-        let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
-            .await
-            .expect("body");
-        serde_json::from_slice(&bytes).expect("json body")
-    }
-
-    /// Decimals serialise as strings; compare them numerically.
-    fn dec_field(v: &serde_json::Value, key: &str) -> Decimal {
-        v[key]
-            .as_str()
-            .expect("decimal string")
-            .parse()
-            .expect("decimal")
     }
 
     #[test]
@@ -512,12 +538,14 @@ mod tests {
             "summe_e_wea_kwh": "1000000"
         }))
         .expect("valid request");
-        let body = body_json(post_ausfallarbeit_kf_bin(Json(req)).await).await;
+        let Json(body) = post_ausfallarbeit_kf_bin(Json(req))
+            .await
+            .expect("computes");
         // Bin index = round(8.2 / 0.5) = 16; KF_LBin = 1000/2000 = 0.5;
         // KF_V = 0.9 → KF_Bin = 0.45.
-        assert_eq!(body["bin_index"], serde_json::json!(16));
-        assert_eq!(body["kf_lbin_quelle"], serde_json::json!("monat"));
-        assert_eq!(dec_field(&body, "kf_bin"), dec(0.45));
+        assert_eq!(body.bin_index, 16);
+        assert_eq!(body.kf_lbin_quelle, engine::KfLbinQuelle::Monat);
+        assert_eq!(body.kf_bin, dec(0.45));
     }
 
     /// An underoccupied bin must fall through the binding Ersatzwert order
@@ -533,9 +561,11 @@ mod tests {
             "summe_e_wea_kwh": "1000000"
         }))
         .expect("valid request");
-        let body = body_json(post_ausfallarbeit_kf_bin(Json(req)).await).await;
-        assert_eq!(body["kf_lbin_quelle"], serde_json::json!("folgemonat"));
-        assert_eq!(dec_field(&body, "kf_bin"), dec(0.54));
+        let Json(body) = post_ausfallarbeit_kf_bin(Json(req))
+            .await
+            .expect("computes");
+        assert_eq!(body.kf_lbin_quelle, engine::KfLbinQuelle::Folgemonat);
+        assert_eq!(body.kf_bin, dec(0.54));
     }
 
     /// `KF_V` outside `]0;1[` is a data error, not a silent clamp.
@@ -549,8 +579,10 @@ mod tests {
             "summe_e_wea_kwh": "1000000"
         }))
         .expect("valid request");
-        let resp = post_ausfallarbeit_kf_bin(Json(req)).await;
-        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let err = post_ausfallarbeit_kf_bin(Json(req))
+            .await
+            .expect_err("KF_V above 1 is a data error");
+        assert_eq!(err.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     /// The split is pro rata by installed capacity and conserves the total.
@@ -561,20 +593,11 @@ mod tests {
             "p_inst_kw": ["3000", "1000"]
         }))
         .expect("valid request");
-        let body = body_json(post_ausfallarbeit_malo_split(Json(req)).await).await;
-        let anteile: Vec<Decimal> = body["anteile"]
-            .as_array()
-            .expect("array")
-            .iter()
-            .map(|v| {
-                v.as_str()
-                    .expect("decimal string")
-                    .parse()
-                    .expect("decimal")
-            })
-            .collect();
-        assert_eq!(anteile, vec![dec(750.0), dec(250.0)]);
-        assert_eq!(anteile.iter().copied().sum::<Decimal>(), dec(1000.0));
+        let Json(body) = post_ausfallarbeit_malo_split(Json(req))
+            .await
+            .expect("splits");
+        assert_eq!(body.anteile, vec![dec(750.0), dec(250.0)]);
+        assert_eq!(body.anteile.iter().copied().sum::<Decimal>(), dec(1000.0));
     }
 
     /// Zero installed capacity is a data error, not a division.
@@ -585,7 +608,32 @@ mod tests {
             "p_inst_kw": ["0", "0"]
         }))
         .expect("valid request");
-        let resp = post_ausfallarbeit_malo_split(Json(req)).await;
-        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let err = post_ausfallarbeit_malo_split(Json(req))
+            .await
+            .expect_err("zero installed capacity cannot be divided by");
+        assert_eq!(err.status(), axum::http::StatusCode::UNPROCESSABLE_ENTITY);
+    }
+
+    /// A misspelt field is refused, not ignored.
+    ///
+    /// `p_bean` caps the Ausfallarbeit. Dropping a typo'd one silently removes
+    /// the cap and over-reports the curtailed energy — the same failure the
+    /// billing request model uses `deny_unknown_fields` to prevent.
+    #[test]
+    fn a_misspelt_field_is_refused_rather_than_dropped() {
+        let with = |key: &str| {
+            serde_json::from_value::<AusfallarbeitComputeRequest>(serde_json::json!({
+                "verfahren": "wind_spitz",
+                "intervalle": [{
+                    "limitierung": { "fall": "duldung", "p_ist": "400" },
+                    "kf": "0.9", "p_theo": "2000", "p_nenn": "3000", key: "1000"
+                }]
+            }))
+        };
+        assert!(with("p_bean").is_ok(), "the real field parses");
+        assert!(
+            with("p_beam").is_err(),
+            "a typo must not silently remove the beanspruchbare-Leistung cap"
+        );
     }
 }

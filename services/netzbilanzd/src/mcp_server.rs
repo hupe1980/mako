@@ -1,25 +1,28 @@
-//! MCP server for `netzbilanzd` — NNE/KA/MMM Billing Daemon (NB role).
+//! MCP server for `netzbilanzd` — **read-only**.
+//!
+//! # Why nothing here mutates
+//!
+//! An invoice is a legally binding document; dispatching one sends EDIFACT to a
+//! counterparty and starts a payment obligation, and a Stornorechnung is the
+//! only way back. Model output is untrusted input, so a tool that dispatches or
+//! rejects on a model's say-so is a tool that can bill the wrong counterparty
+//! from a hallucinated draft ID. Reads live here; the operator acts through the
+//! REST API, where the action is attributable.
 //!
 //! ## Tools
 //!
-//! | Tool | Description |
+//! | Tool | Purpose |
 //! |---|---|
-//! | `list_nne_drafts` | List NNE/MMM invoice drafts (filter by malo_id, lf_mp_id, status) |
-//! | `list_disputed` | List invoices with `Disputed` check outcome |
-//! | `get_nne_draft` | Get a single invoice draft with full Rechnung BO4E |
-//! | `list_pending_kostenblatt` | List Redispatch 2.0 Kostenblatt records due for submission |
-//! | `compute_kostenblatt` | Compute Kostenblatt for an activation (dispatch_kwh_override required) |
-//! | `get_billing_summary` | Monthly billing totals by PID and status |
-//! | `list_undispatched_drafts` | Drafts still in draft status older than N hours |
-//!
-//! ## Prompts
-//!
-//! | Prompt | Description |
-//! |---|---|
-//! | `trigger-nne-billing` | Step-by-step: run an NNE billing run for a MaLo |
-//! | `investigate-dispute` | Step-by-step: investigate a disputed REMADV 33002 |
-//! | `mmm-monthly-run` | Step-by-step: run monthly MMM auto-billing |
-//! | `redispatch-monthly-submit` | Step-by-step: prepare and submit monthly Kostenblatt to ÜNB |
+//! | `list_drafts` | filter invoices by MaLo, party, PID, Sparte, status, Rechnungsart, verdict |
+//! | `get_draft` | one invoice: full BO4E document, checker findings, engine warnings |
+//! | `list_disputed` | invoices the counterparty rejected, with their ERC codes |
+//! | `list_undispatched` | drafts sitting past their dispatch window |
+//! | `list_corrections` | the Storno / Korrektur chain |
+//! | `get_billing_summary` | monthly totals by PID, Sparte, status and Rechnungsart |
+//! | `list_pending_kostenblatt` | Redispatch cost sheets awaiting the 15th |
+//! | `list_kostenblatt_gaps` | activations registered but never quantified |
+
+use std::sync::Arc;
 
 use axum::{
     Router,
@@ -40,33 +43,88 @@ use rmcp::{
 use schemars::JsonSchema;
 use serde::Deserialize;
 use sqlx::PgPool;
-use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::pg::{self, DraftFilter};
+
+/// Shared state for the MCP tools.
 #[derive(Clone)]
 pub struct NetzbilanzMcpState {
+    /// Database pool.
     pub pool: PgPool,
+    /// The tenant every query is scoped to.
     pub tenant: String,
+    /// API-key / OIDC / dev-mode authentication.
     pub auth: mako_service::mcp_auth::McpAuth,
 }
 
+/// Filters for `list_drafts`.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct ListBillingParams {
-    /// Filter by MaLo-ID.
+pub struct ListDraftsParams {
+    /// 11-digit MaLo-ID.
     pub malo_id: Option<String>,
-    /// Filter by LF MP-ID.
-    pub lf_mp_id: Option<String>,
-    /// Filter by outcome (Sent/Paid/PartialPaid/Disputed/ValidationFailed/Error).
-    pub outcome: Option<String>,
+    /// Issuing party MP-ID — the MSB for PID 31009, the NB otherwise.
+    pub sender_mp_id: Option<String>,
+    /// Billed party MP-ID.
+    pub recipient_mp_id: Option<String>,
+    /// BDEW Prüfidentifikator: 31001, 31002, 31005, 31009 or 31011.
+    pub pid: Option<i32>,
+    /// `Strom` or `Gas`. PID 31002 (NN-Rechnung) and 31005 (Mehr-/Mindermengen)
+    /// are shared between the Sparten, so the Prüfidentifikator alone cannot
+    /// separate a gas invoice from an electricity one.
+    pub sparte: Option<String>,
+    /// `draft` · `dispatched` · `paid` · `disputed` · `rejected`.
+    pub status: Option<String>,
+    /// `RECHNUNG` · `STORNORECHNUNG` · `KORREKTURRECHNUNG`.
+    pub rechnungsart: Option<String>,
+    /// `invoic-checker` verdict: `Ok` · `Warn` · `Dispute`.
+    pub check_outcome: Option<String>,
+    /// Maximum rows (default 50, capped at 500).
     pub limit: Option<i64>,
 }
 
+/// Narrow a model-supplied Sparte to the stored code.
+///
+/// A value that is neither Strom nor Gas is an error rather than an ignored
+/// filter: silently dropping it would answer a narrower question with the wider
+/// answer, and the caller has no way to tell.
+fn sparte_code(raw: Option<&str>) -> Result<Option<&'static str>, McpError> {
+    match raw.map(str::trim) {
+        None | Some("") => Ok(None),
+        Some(v) if v.eq_ignore_ascii_case("strom") => Ok(Some("STROM")),
+        Some(v) if v.eq_ignore_ascii_case("gas") => Ok(Some("GAS")),
+        Some(other) => Err(McpError::invalid_params(
+            format!("sparte must be Strom or Gas, not {other:?}"),
+            None,
+        )),
+    }
+}
+
+/// A single draft by UUID.
 #[derive(Debug, Deserialize, JsonSchema)]
-pub struct GetRecordParams {
+pub struct DraftIdParams {
+    /// The draft UUID.
     pub id: String,
 }
 
+/// A calendar month.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct MonthParams {
+    /// Calendar year.
+    pub year: i32,
+    /// Calendar month, 1–12.
+    pub month: u8,
+}
+
+/// Age threshold for the undispatched listing.
+#[derive(Debug, Deserialize, JsonSchema)]
+pub struct StaleParams {
+    /// Report drafts older than this many hours (default 48).
+    pub older_than_hours: Option<i64>,
+}
+
+/// The MCP handler.
 #[derive(Clone)]
 pub struct NetzbilanzMcpHandler {
     state: Arc<NetzbilanzMcpState>,
@@ -74,6 +132,20 @@ pub struct NetzbilanzMcpHandler {
     tool_router: ToolRouter<NetzbilanzMcpHandler>,
     #[allow(dead_code)]
     prompt_router: PromptRouter<NetzbilanzMcpHandler>,
+}
+
+/// Render a serialisable value as an MCP tool result.
+fn json_result<T: serde::Serialize>(value: &T) -> Result<CallToolResult, McpError> {
+    let value =
+        serde_json::to_value(value).map_err(|e| McpError::internal_error(e.to_string(), None))?;
+    ContentBlock::json(value)
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
+}
+
+fn internal(e: &anyhow::Error) -> McpError {
+    tracing::warn!(error = ?e, "netzbilanzd MCP: query failed");
+    McpError::internal_error("query failed", None)
 }
 
 #[tool_router]
@@ -87,813 +159,439 @@ impl NetzbilanzMcpHandler {
     }
 
     #[tool(
-        description = "List NNE/KA/MMM invoice drafts (INVOIC 31002 NN-Rechnung / 31005 MMM). Filter by malo_id, lf_mp_id, or status (draft/dispatched/paid/disputed). Returns summary without full Rechnung. Use after POST /api/v1/billing/run.",
+        description = "List invoices this Netzbetreiber issued: Abschlagsrechnung (PID 31001), \
+                       NN-Rechnung (31002, Strom and Gas), Mehr-/Mindermengensaldo (31005), \
+                       MSB-Rechnung (31009) and GeLi Gas AWH (31011). Filter by MaLo, party, \
+                       Prüfidentifikator, Sparte, status, Rechnungsart or invoic-checker verdict. \
+                       Returns summaries; use get_draft for the full document.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn list_nne_drafts(
+    async fn list_drafts(
         &self,
-        Parameters(p): Parameters<ListBillingParams>,
+        Parameters(p): Parameters<ListDraftsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
-        match list_billing_records(
-            &self.state.pool,
-            &self.state.tenant,
-            p.malo_id.as_deref(),
-            p.lf_mp_id.as_deref(),
-            p.outcome.as_deref(),
-            p.limit.unwrap_or(50),
-        )
-        .await
+        let filter = DraftFilter {
+            malo_id: p.malo_id.as_deref(),
+            sender_mp_id: p.sender_mp_id.as_deref(),
+            recipient_mp_id: p.recipient_mp_id.as_deref(),
+            pid: p.pid,
+            sparte: sparte_code(p.sparte.as_deref())?,
+            status: p.status.as_deref(),
+            check_outcome: p.check_outcome.as_deref(),
+            rechnungsart: p.rechnungsart.as_deref(),
+            after: None,
+            limit: p.limit.unwrap_or(50).clamp(1, 500),
+        };
+        let rows = pg::list_drafts(&self.state.pool, &self.state.tenant, &filter)
+            .await
+            .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({ "count": rows.len(), "drafts": rows }))
+    }
+
+    #[tool(
+        description = "Fetch one invoice in full: the BO4E Rechnung, the settlement input it was \
+                       computed from, every invoic-checker finding, and every engine warning \
+                       (an omitted levy, a Konzessionsabgabe above the KAV §2 ceiling).",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn get_draft(
+        &self,
+        Parameters(p): Parameters<DraftIdParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let id: Uuid =
+            p.id.parse()
+                .map_err(|_| McpError::invalid_params("id must be a UUID", None))?;
+        match pg::fetch_draft(&self.state.pool, &self.state.tenant, id)
+            .await
+            .map_err(|e| internal(&e))?
         {
-            Ok(rows) => ContentBlock::json(serde_json::to_value(rows).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+            Some(row) => json_result(&row),
+            None => Err(McpError::invalid_params(
+                format!("no draft {id} for this tenant"),
+                None,
+            )),
         }
     }
 
     #[tool(
-        description = "List all NNE/KA/MMM invoices with Disputed outcome (REMADV 33002 received). Shows records requiring COMDIS 29001 escalation or re-billing.",
+        description = "List invoices the counterparty rejected by REMADV (33002/33003/33004), with \
+                       the EDIFACT ERC code and the stated reason. These need a Storno plus a \
+                       Korrekturrechnung, or a COMDIS 29001 escalation.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_disputed(
         &self,
-        Parameters(_): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<ListDraftsParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
-        match list_billing_records(
-            &self.state.pool, &self.state.tenant,
-            None, None, Some("Disputed"), 100,
-        ).await {
-            Ok(rows) => ContentBlock::json(serde_json::json!({
-                "disputed_count": rows.len(),
-                "records": rows,
-                "hint": "Use COMDIS 29001 (mako-gpke) for formal dispute escalation after REMADV 33002.",
-            })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        let filter = DraftFilter {
+            malo_id: p.malo_id.as_deref(),
+            sparte: sparte_code(p.sparte.as_deref())?,
+            status: Some("disputed"),
+            limit: p.limit.unwrap_or(50).clamp(1, 500),
+            ..DraftFilter::default()
+        };
+        let rows = pg::list_drafts(&self.state.pool, &self.state.tenant, &filter)
+            .await
+            .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({
+            "count": rows.len(),
+            "disputed": rows,
+            "next": "POST /api/v1/billing/drafts/{id}/storno, then /korrektur with fixed inputs",
+        }))
     }
 
     #[tool(
-        description = "Get a single NNE invoice draft by UUID, including the full BO4E Rechnung JSON payload (Grundpreis, Arbeitspreis, Leistungspreis, KA, invoic-checker findings).",
+        description = "List drafts still undispatched after N hours (default 48). Drafts the checker \
+                       disputed are excluded — those are blocked, not overdue.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn get_nne_draft(
+    async fn list_undispatched(
         &self,
-        Parameters(p): Parameters<GetRecordParams>,
+        Parameters(p): Parameters<StaleParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::fetch_billing_record;
-        let Ok(id) = p.id.parse::<Uuid>() else {
-            return Err(McpError::invalid_params("id must be a valid UUID", None));
-        };
-        match fetch_billing_record(&self.state.pool, id, &self.state.tenant).await {
-            Ok(Some(row)) => ContentBlock::json(serde_json::to_value(row).unwrap_or_default())
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(None) => Err(McpError::invalid_params(
-                format!("record {id} not found"),
-                None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        let hours = p.older_than_hours.unwrap_or(48).clamp(1, 8_760);
+        let rows = pg::list_undispatched_stale(&self.state.pool, &self.state.tenant, hours, 200)
+            .await
+            .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({
+            "older_than_hours": hours,
+            "count": rows.len(),
+            "drafts": rows,
+        }))
     }
 
     #[tool(
-        description = "List Redispatch 2.0 Kostenblatt records for a billing period. Use ?status=pending to find records due for 15th-of-month submission to ÜNB (BK6-20-061).",
-        annotations(read_only_hint = true, open_world_hint = false)
-    )]
-    async fn list_pending_kostenblatt(
-        &self,
-        Parameters(p): Parameters<serde_json::Value>,
-    ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_kostenblatt;
-        let now = time::OffsetDateTime::now_utc();
-        let year = p
-            .get("year")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| now.year() as i64) as i16;
-        let month = p
-            .get("month")
-            .and_then(|v| v.as_i64())
-            .unwrap_or_else(|| now.month() as i64) as i16;
-        let status = p
-            .get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("pending");
-        match list_kostenblatt(&self.state.pool, &self.state.tenant, year, month, Some(status)).await {
-            Ok(rows) => ContentBlock::json(serde_json::json!({
-                "period": format!("{year}-{month:02}"),
-                "count": rows.len(),
-                "records": rows,
-                "hint": "POST /api/v1/redispatch/kostenblatt/{activation_id}/compute to auto-fetch dispatch_kwh from edmd. POST /api/v1/redispatch/kostenblatt/submit/{year}/{month} to mark all pending as submitted.",
-            })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    #[tool(
-        description = "Compute Redispatch 2.0 Kostenblatt for an activation: auto-fetches dispatch energy (kWh) from edmd for the activation window, generates BO4E Kosten/KostenBlock/KostenPosition JSON, and upserts the record. BK6-20-061 §4.2 compliance.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn compute_kostenblatt(
-        &self,
-        Parameters(p): Parameters<serde_json::Value>,
-    ) -> Result<CallToolResult, McpError> {
-        let activation_id = p
-            .get("activation_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let tr_id = p
-            .get("tr_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let malo_id = p
-            .get("malo_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let uenb_mp_id = p
-            .get("uenb_mp_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let vnb_mp_id = p
-            .get("vnb_mp_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let start = p
-            .get("activation_start_utc")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let end_t = p
-            .get("activation_end_utc")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default()
-            .to_owned();
-        let arbeitspreis: rust_decimal::Decimal = p
-            .get("arbeitspreis_eur_per_kwh")
-            .and_then(|v| {
-                v.as_str().and_then(|s| s.parse().ok()).or_else(|| {
-                    v.as_f64()
-                        .and_then(|f| rust_decimal::Decimal::try_from(f).ok())
-                })
-            })
-            .unwrap_or(rust_decimal::Decimal::ZERO);
-        let period_year =
-            p.get("period_year")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(time::OffsetDateTime::now_utc().year() as i64) as i16;
-        let period_month =
-            p.get("period_month")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(time::OffsetDateTime::now_utc().month() as i64) as i16;
-        let dispatch_kwh_override: Option<rust_decimal::Decimal> =
-            p.get("dispatch_kwh_override").and_then(|v| {
-                v.as_str().and_then(|s| s.parse().ok()).or_else(|| {
-                    v.as_f64()
-                        .and_then(|f| rust_decimal::Decimal::try_from(f).ok())
-                })
-            });
-
-        if activation_id.is_empty() || tr_id.is_empty() || malo_id.is_empty() {
-            return Err(McpError::invalid_params(
-                "activation_id, tr_id, and malo_id are required",
-                None,
-            ));
-        }
-
-        // Build typed BO4E Kosten JSON inline (same logic as POST /compute handler).
-        let dispatch_kwh = if let Some(override_kwh) = dispatch_kwh_override {
-            override_kwh
-        } else {
-            return Ok(CallToolResult::success(vec![ContentBlock::text(
-                "dispatch_kwh_override required when called via MCP — provide measured kWh from edmd. Use POST /api/v1/redispatch/kostenblatt/{activation_id}/compute for automatic edmd fetch.",
-            )]));
-        };
-
-        let einsatzkosten_eur = dispatch_kwh * arbeitspreis;
-        let kosten_json = serde_json::json!({
-            "_typ": "KOSTEN",
-            "summe": [{ "_typ": "KOSTENBLOCK", "kostenblockbezeichnung": "Redispatch 2.0 Einsatzkosten",
-                "kostenpositionen": [{ "_typ": "KOSTENPOSITION", "positionsbezeichnung": "Arbeitspreis Redispatch",
-                    "artikelId": tr_id, "menge": { "_typ": "MENGE", "wert": dispatch_kwh.to_string(), "einheit": "KWH" },
-                    "einzelpreis": { "_typ": "PREIS", "wert": arbeitspreis.to_string(), "einheit": "EUR" },
-                    "betragKostenstelle": { "_typ": "BETRAG", "wert": einsatzkosten_eur.to_string(), "waehrung": "EUR" },
-                    "zeitraum": { "_typ": "ZEITRAUM", "startdatum": start, "enddatum": end_t }
-                }]
-            }]
-        });
-
-        let req = crate::pg::UpsertKostenblattRequest {
-            tr_id,
-            malo_id: Some(malo_id),
-            period_year,
-            period_month,
-            uenb_mp_id,
-            vnb_mp_id,
-            dispatch_kwh,
-            arbeitspreis_eur_per_kwh: arbeitspreis,
-            kosten_json: Some(kosten_json),
-            activation_start_utc: None,
-            activation_end_utc: None,
-            dispatch_source: Some("manual_override".to_owned()),
-        };
-        match crate::pg::upsert_kostenblatt(
-            &self.state.pool,
-            &self.state.tenant,
-            &activation_id,
-            &req,
-        )
-        .await
-        {
-            Ok(id) => ContentBlock::json(serde_json::json!({
-                "id": id, "activation_id": activation_id, "dispatch_kwh": dispatch_kwh.to_string(),
-                "einsatzkosten_eur": einsatzkosten_eur.to_string(), "source": "mcp_override",
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    /// Monthly billing totals grouped by PID and status.
-    ///
-    /// Provides a concise financial summary for a billing month:
-    /// - NNE (PID 31002, NN-Rechnung Strom + Gas): total kWh invoiced and total EUR
-    /// - MMM (PID 31005): Mehrmengen / Mindermengen net
-    /// - MSB-Rechnung (PID 31009): metering fees
-    ///
-    /// Used for end-of-month reconciliation and ERP journal entry preparation.
-    #[tool(
-        description = "Monthly billing summary: totals by PID (31002 NN-Rechnung / 31005 MMM / 31009 MSB / 31011 AWH) and status (draft/dispatched/paid). Use for end-of-month ERP reconciliation.",
-        annotations(read_only_hint = true, open_world_hint = false)
-    )]
-    async fn get_billing_summary(
-        &self,
-        Parameters(p): Parameters<serde_json::Value>,
-    ) -> Result<CallToolResult, McpError> {
-        use crate::pg::billing_summary;
-        let now = time::OffsetDateTime::now_utc();
-        let year = p
-            .get("year")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(now.year() as i64) as i32;
-        let month = p
-            .get("month")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(now.month() as i64) as u8;
-        if !(1..=12).contains(&month) {
-            return Err(McpError::invalid_params("month must be 1-12", None));
-        }
-        match billing_summary(&self.state.pool, &self.state.tenant, year, month).await {
-            Ok(rows) => {
-                let total_gross: i64 = rows.iter().map(|r| r.total_gross_eur_units).sum();
-                ContentBlock::json(serde_json::json!({
-                    "year": year,
-                    "month": month,
-                    "total_gross_eur": format!("{:.5}", total_gross as f64 / 100_000.0),
-                    "by_pid_status": rows,
-                    "note": "gross_eur_units are integer × 10⁻⁵ EUR. total_gross_eur is pre-computed.",
-                })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    /// List drafts that are still in `draft` status and older than the specified hours.
-    ///
-    /// Undispatched invoices older than 24–48 hours are approaching the typical
-    /// Zahlungsziel (30 days from invoice_date) without the NB having dispatched
-    /// them. Use this to detect stuck drafts before the LF notices late billing.
-    ///
-    /// Also catches invoices blocked by `check_outcome = 'Warn'` that need
-    /// operator review before dispatch.
-    #[tool(
-        description = "List draft invoices older than N hours still not dispatched. Default: 48h. Alert threshold for billing cycle compliance.",
-        annotations(read_only_hint = true, open_world_hint = false)
-    )]
-    async fn list_undispatched_drafts(
-        &self,
-        Parameters(p): Parameters<serde_json::Value>,
-    ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_undispatched_stale;
-        let hours = p
-            .get("older_than_hours")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(48);
-        let limit = p.get("limit").and_then(|v| v.as_i64()).unwrap_or(50);
-        match list_undispatched_stale(&self.state.pool, &self.state.tenant, hours, limit).await {
-            Ok(rows) => ContentBlock::json(serde_json::json!({
-                "undispatched_count": rows.len(),
-                "older_than_hours": hours,
-                "alert": !rows.is_empty(),
-                "records": rows,
-                "hint": "Use POST /api/v1/billing/drafts/dispatch-batch with the draft_ids to dispatch all at once.",
-            })).map(|b| CallToolResult::success(vec![b])).map_err(|e| McpError::internal_error(e.message, None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    /// Dispatch a single draft by UUID (validate + send INVOIC to makod).
-    ///
-    /// Blocks when check_outcome = 'Dispute'. Reports the makod command dispatch_ref
-    /// on success. Idempotent — re-dispatching an already-dispatched draft is a no-op
-    /// (returns the existing dispatch_ref).
-    #[tool(
-        description = "Dispatch a draft INVOIC to makod (sends INVOIC 31001/31002/31005/31009/31011 to LF/MSB/LFG). Blocked when invoic-checker outcome is Dispute.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = true,
-            open_world_hint = false
-        )
-    )]
-    async fn dispatch_draft(
-        &self,
-        Parameters(p): Parameters<GetRecordParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let Ok(id) = p.id.parse::<Uuid>() else {
-            return Err(McpError::invalid_params("id must be a valid UUID", None));
-        };
-        // Load draft to get makod client — use a stub for the MCP path (no makod in MCP state).
-        // Provide guidance to use REST endpoint for actual dispatch.
-        match crate::pg::fetch_draft(&self.state.pool, id).await {
-            Ok(Some(row)) => {
-                if row.status == "dispatched" {
-                    return ContentBlock::json(serde_json::json!({
-                        "status": "already_dispatched",
-                        "dispatch_ref": row.dispatch_ref,
-                        "hint": "This draft has already been dispatched."
-                    }))
-                    .map(|b| CallToolResult::success(vec![b]))
-                    .map_err(|e| McpError::internal_error(e.message, None));
-                }
-                if row.check_outcome.as_deref() == Some("Dispute") {
-                    return Err(McpError::invalid_params(
-                        format!(
-                            "draft {id} has check_outcome=Dispute — fix invoice before dispatching"
-                        ),
-                        None,
-                    ));
-                }
-                ContentBlock::json(serde_json::json!({
-                    "draft_id": id,
-                    "status": row.status,
-                    "check_outcome": row.check_outcome,
-                    "pid": row.pid,
-                    "action": "call PUT /api/v1/billing/drafts/{id}/dispatch to dispatch this draft",
-                    "hint": "MCP cannot dispatch directly (no makod credentials in MCP state). Use the REST API: PUT /api/v1/billing/drafts/{id}/dispatch",
-                })).map(|b| CallToolResult::success(vec![b]))
-                  .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Ok(None) => Err(McpError::invalid_params(
-                format!("draft {id} not found"),
-                None,
-            )),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    /// Reject a draft with a reason (status → 'rejected').
-    ///
-    /// Rejected drafts are excluded from the no-double-billing constraint so
-    /// a corrected billing run can be submitted for the same period.
-    #[tool(
-        description = "Reject an invoice draft (status → rejected). Supply a reason string. Rejected drafts allow re-billing the same MaLo/period.",
-        annotations(
-            read_only_hint = false,
-            destructive_hint = false,
-            idempotent_hint = false,
-            open_world_hint = false
-        )
-    )]
-    async fn reject_draft(
-        &self,
-        Parameters(p): Parameters<serde_json::Value>,
-    ) -> Result<CallToolResult, McpError> {
-        let id_str = p.get("id").and_then(|v| v.as_str()).unwrap_or_default();
-        let reason = p
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .unwrap_or("operator rejection via MCP");
-        let Ok(id) = id_str.parse::<Uuid>() else {
-            return Err(McpError::invalid_params("id must be a valid UUID", None));
-        };
-        match crate::pg::reject_draft_pg(&self.state.pool, id, reason).await {
-            Ok(true) => ContentBlock::json(serde_json::json!({
-                "draft_id": id,
-                "status": "rejected",
-                "reason": reason,
-                "hint": "Draft rejected. Run a new billing cycle to re-generate for this MaLo/period.",
-            })).map(|b| CallToolResult::success(vec![b]))
-              .map_err(|e| McpError::internal_error(e.message, None)),
-            Ok(false) => Err(McpError::invalid_params(format!("draft {id} not found or not in draft status"), None)),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
-    /// Trigger a single-MaLo MMM auto-run for a specific billing month.
-    ///
-    /// Shortcut for `POST /api/v1/billing/mmm-run/{malo_id}` — returns guidance
-    /// and the required request body so the operator can execute via REST.
-    #[tool(
-        description = "Prepare a Mehr-/Mindermengen (MMM) auto-run for one MaLo. Returns the required REST request body. Prerequisite: MMMA prices imported in marktd.",
-        annotations(read_only_hint = true, open_world_hint = false)
-    )]
-    async fn trigger_mmm_auto_run(
-        &self,
-        Parameters(p): Parameters<serde_json::Value>,
-    ) -> Result<CallToolResult, McpError> {
-        let malo_id = p
-            .get("malo_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or_default();
-        let nb_mp_id = p
-            .get("nb_mp_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<nb_mp_id>");
-        let lf_mp_id = p
-            .get("lf_mp_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or("<lf_mp_id>");
-        let now = time::OffsetDateTime::now_utc();
-        let year = p
-            .get("period_year")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(now.year() as i64);
-        let month = p
-            .get("period_month")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(now.month() as i64 - 1);
-        let month = month.clamp(1, 12);
-        if malo_id.is_empty() {
-            return Err(McpError::invalid_params("malo_id is required", None));
-        }
-        let example_body = serde_json::json!({
-            "nb_mp_id": nb_mp_id,
-            "lf_mp_id": lf_mp_id,
-            "period_year": year,
-            "period_month": month,
-        });
-        ContentBlock::json(serde_json::json!({
-            "instruction": format!("POST /api/v1/billing/mmm-run/{malo_id}"),
-            "body": example_body,
-            "description": "Fetches nb_quantity_kwh from edmd, auto-fetches Strom/Gas MMM prices from marktd if not supplied.",
-            "prerequisites": [
-                "MMMA Gas prices imported: PUT marktd /api/v1/mmma-preise/gas/{year}/{month}",
-                "MMMA Strom prices imported: PUT marktd /api/v1/mmm-preise/strom/{year}/{month}",
-                "edmd has imbalance data for the period"
-            ]
-        })).map(|b| CallToolResult::success(vec![b]))
-          .map_err(|e| McpError::internal_error(e.message, None))
-    }
-
-    /// List Korrekturrechnung and Stornorechnung records.
-    ///
-    /// Corrections are drafts with `rechnungsart` = `KORREKTURRECHNUNG` or
-    /// `STORNORECHNUNG` and a non-null `original_draft_id`.  Used for § 147 AO / GoBD
-    /// 3-year audit trail and COMDIS 29001 dispute resolution.
-    #[tool(
-        description = "List all Korrekturrechnung and Stornorechnung drafts (§ 147 AO / GoBD audit trail). Filter by malo_id.",
+        description = "List Stornorechnungen and Korrekturrechnungen — the § 147 AO / GoBD \
+                       correction chain. Each links to the invoice it corrects and records why.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_corrections(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<ListDraftsParams>,
     ) -> Result<CallToolResult, McpError> {
-        let malo_id = p.get("malo_id").and_then(|v| v.as_str());
-        let limit = p.get("limit").and_then(|v| v.as_i64()).unwrap_or(50);
-        // Reuse list_billing_records but without outcome filter; client-side filter rechnungsart.
-        match crate::pg::list_billing_records(
+        // One query over both Rechnungsarten: two separately limited listings
+        // concatenated return up to twice the limit, each truncated against its
+        // own window.
+        let rows = pg::list_corrections(
             &self.state.pool,
             &self.state.tenant,
-            malo_id,
-            None,
-            None,
-            limit * 3, // fetch more to filter
+            p.malo_id.as_deref(),
+            p.limit.unwrap_or(50).clamp(1, 500),
         )
         .await
-        {
-            Ok(rows) => {
-                let corrections: Vec<_> = rows
-                    .into_iter()
-                    .filter(|r| r.rechnungsart != "RECHNUNG")
-                    .take(limit as usize)
-                    .collect();
-                ContentBlock::json(serde_json::json!({
-                    "correction_count": corrections.len(),
-                    "records": corrections,
-                    "hint": "Use get_nne_draft with original_draft_id to compare original vs. correction.",
-                })).map(|b| CallToolResult::success(vec![b]))
-                  .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({ "count": rows.len(), "corrections": rows }))
     }
 
-    /// Payment statistics: count + EUR totals by PID × status.
-    ///
-    /// Used for ERP month-end reconciliation to verify that all dispatched
-    /// invoices have been either paid or disputed.  Outstanding `dispatched`
-    /// invoices are at risk of Zahlungsverzug (payment default).
-    ///
-    /// Statuses: `draft` | `dispatched` | `paid` | `disputed` | `rejected`
     #[tool(
-        description = "Payment stats for ERP month-end: count and EUR totals by PID × status. Identifies outstanding dispatched invoices approaching Zahlungsziel.",
+        description = "Monthly billing totals — net, Umsatzsteuer and gross — grouped by \
+                       Prüfidentifikator, Sparte, status and Rechnungsart. Amounts are in units \
+                       of 10⁻⁵ EUR, so divide by 100000 for euro.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn get_payment_stats(
+    async fn get_billing_summary(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<MonthParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::payment_stats;
-        let now = time::OffsetDateTime::now_utc();
-        let year = p
-            .get("year")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(now.year() as i64) as i32;
-        let month = p
-            .get("month")
-            .and_then(|v| v.as_i64())
-            .unwrap_or(now.month() as i64) as u8;
-        if !(1..=12).contains(&month) {
-            return Err(McpError::invalid_params("month must be 1-12", None));
+        if !(1..=12).contains(&p.month) {
+            return Err(McpError::invalid_params("month must be 1–12", None));
         }
-        match payment_stats(&self.state.pool, &self.state.tenant, year, month).await {
-            Ok(rows) => {
-                let paid_count: i64 = rows
-                    .iter()
-                    .filter(|r| r.status == "paid")
-                    .map(|r| r.count)
-                    .sum();
-                let dispatched_count: i64 = rows
-                    .iter()
-                    .filter(|r| r.status == "dispatched")
-                    .map(|r| r.count)
-                    .sum();
-                let disputed_count: i64 = rows
-                    .iter()
-                    .filter(|r| r.status == "dispatched" && r.total_gross_eur_units < 0)
-                    .map(|r| r.count)
-                    .sum();
-                let total_outstanding: i64 = rows
-                    .iter()
-                    .filter(|r| r.status == "dispatched")
-                    .map(|r| r.total_gross_eur_units)
-                    .sum();
-                ContentBlock::json(serde_json::json!({
-                    "period": format!("{year}-{month:02}"),
-                    "paid_count": paid_count,
-                    "dispatched_count": dispatched_count,
-                    "disputed_count": disputed_count,
-                    "total_outstanding_eur": format!("{:.5}", total_outstanding as f64 / 100_000.0),
-                    "by_pid_status": rows,
-                    "alert": dispatched_count > 0,
-                    "hint": if dispatched_count > 0 {
-                        "Outstanding dispatched invoices exist — check Zahlungsziel and REMADV status."
-                    } else {
-                        "All invoices settled for this period."
-                    },
-                })).map(|b| CallToolResult::success(vec![b]))
-                  .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        let rows = pg::billing_summary(&self.state.pool, &self.state.tenant, p.year, p.month)
+            .await
+            .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({
+            "year": p.year,
+            "month": p.month,
+            "by_group": rows,
+        }))
     }
 
-    /// List all paid invoices for a period (REMADV 33001 confirmed).
-    ///
-    /// Used for ERP accounts-receivable confirmation and BNetzA § 147 AO / GoBD audit.
     #[tool(
-        description = "List all paid invoice drafts (REMADV 33001 confirmed). For ERP AR reconciliation and § 147 AO / GoBD audit.",
+        description = "List Redispatch 2.0 Kostenblatt records still pending submission to the ÜNB. \
+                       BK6-20-061 §4.2 makes them due on the 15th of the following month.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn list_paid_invoices(
+    async fn list_pending_kostenblatt(
         &self,
-        Parameters(p): Parameters<serde_json::Value>,
+        Parameters(p): Parameters<MonthParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::list_billing_records;
-        let malo_id = p.get("malo_id").and_then(|v| v.as_str());
-        let limit = p.get("limit").and_then(|v| v.as_i64()).unwrap_or(100);
-        match list_billing_records(
+        let (year, month) = month_key(&p)?;
+        let rows = pg::list_kostenblatt(
             &self.state.pool,
             &self.state.tenant,
-            malo_id,
-            None,
-            None,
-            limit,
+            year,
+            month,
+            Some("pending"),
         )
         .await
-        {
-            Ok(rows) => {
-                let paid: Vec<_> = rows.into_iter().filter(|r| r.status == "paid").collect();
-                ContentBlock::json(serde_json::json!({
-                    "paid_count": paid.len(),
-                    "records": paid,
-                }))
-                .map(|b| CallToolResult::success(vec![b]))
-                .map_err(|e| McpError::internal_error(e.message, None))
-            }
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
+        .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({
+            "year": p.year,
+            "month": p.month,
+            "pending": rows.len(),
+            "deadline": format!("{}-{:02}-15", if p.month == 12 { p.year + 1 } else { p.year },
+                                if p.month == 12 { 1 } else { p.month + 1 }),
+            "records": rows,
+        }))
     }
+
+    #[tool(
+        description = "List Redispatch activations registered for a month whose dispatched energy \
+                       was never established. Each needs a compute call before the 15th, or its \
+                       Einsatzkosten go to the ÜNB as zero.",
+        annotations(read_only_hint = true, open_world_hint = false)
+    )]
+    async fn list_kostenblatt_gaps(
+        &self,
+        Parameters(p): Parameters<MonthParams>,
+    ) -> Result<CallToolResult, McpError> {
+        let (year, month) = month_key(&p)?;
+        let rows = pg::list_kostenblatt_gaps(&self.state.pool, &self.state.tenant, year, month)
+            .await
+            .map_err(|e| internal(&e))?;
+        json_result(&serde_json::json!({
+            "year": p.year,
+            "month": p.month,
+            "gaps": rows.len(),
+            "action": "POST /api/v1/redispatch/kostenblatt/{activation_id}/compute",
+            "records": rows,
+        }))
+    }
+}
+
+/// Validate and narrow a month key to the column types.
+fn month_key(p: &MonthParams) -> Result<(i16, i16), McpError> {
+    if !(1..=12).contains(&p.month) {
+        return Err(McpError::invalid_params("month must be 1–12", None));
+    }
+    let year = i16::try_from(p.year)
+        .map_err(|_| McpError::invalid_params("year is out of range", None))?;
+    Ok((year, i16::from(p.month)))
 }
 
 #[prompt_router]
 impl NetzbilanzMcpHandler {
     #[prompt(
-        name = "trigger-nne-billing",
-        description = "Step-by-step: run NNE billing for a MaLo"
+        name = "nb-invoic-overview",
+        description = "What the NB bills, under which Prüfidentifikator, and in which direction"
     )]
-    async fn trigger_nne_billing_prompt(&self) -> Vec<PromptMessage> {
+    async fn nb_invoic_overview_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "Trigger an NNE billing run for a MaLo."),
+            PromptMessage::new_text(
+                Role::User,
+                "Which invoices does netzbilanzd issue, and how are they structured?",
+            ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. POST /api/v1/billing/run with malo_id, nb_mp_id, lf_mp_id, period_from, period_to.\n\
-                 2. For §42b EnWG GGV tenants: POST /api/v1/billing/ggv-nne/{ggv_malo_id} instead.\n\
-                 3. The draft is validated by invoic-checker before dispatch.\n\
-                 4. GET /api/v1/billing/drafts to review the draft Rechnung BO4E.\n\
-                 5. PUT /api/v1/billing/drafts/{id}/dispatch → sends INVOIC 31002 (NN-Rechnung) to makod.\n\
-                 6. If a correction is needed: POST /api/v1/billing/drafts/{id}/correction.\n\n\
-                 Use `list_nne_drafts` to monitor draft status.\n\
-                 PID 31005 (MMM-Rechnung) and 31009 (MSB) follow the same flow.\n\
-                 Redispatch Kostenblatt: POST /api/v1/redispatch/kostenblatt/{activation_id}/compute.",
+                "**Outbound invoices**\n\n\
+                 | PID | Document | Direction | `billing_type` |\n\
+                 |---|---|---|---|\n\
+                 | 31001 | Abschlagsrechnung (payment on account) | NB → LF | `abschlag` |\n\
+                 | 31002 | NN-Rechnung (Netznutzungsentgelt + Konzessionsabgabe) | NB → LF | `nne` |\n\
+                 | 31005 | Mehr-/Mindermengensaldo | NB → LF | `mmm` |\n\
+                 | 31009 | MSB-Rechnung (Messstellenbetrieb) | **MSB → NB/LF/ESA** | `msb` |\n\
+                 | 31011 | Rechnung sonstige Leistung (GeLi Gas AWH Sperrprozesse) | GNB → LFG | `gas_awh` |\n\n\
+                 **Sparte is a field, not a Prüfidentifikator.** NN-Rechnung Strom and Gas \
+                 share 31002, and so do the two MMM variants share 31005. Every position \
+                 carries `sparte`, which selects StromNEV §21 or GasNEV §14, decides whether \
+                 the three EnFG network levies apply, and reaches the wire on `Rechnung.sparte`.\n\n\
+                 **31009 is inverted.** The Messstellenbetreiber issues it in all seven of its \
+                 Anwendungsfälle (PID overview 4.0); it is never addressed to one. The draft \
+                 stores the MSB as `sender_mp_id`.\n\n\
+                 **Lifecycle:** `draft` → `dispatched` → `paid` | `disputed`; `draft` → `rejected`. \
+                 Rejecting reopens the period for re-billing. Once dispatched, the way back is a \
+                 Stornorechnung, then a Korrekturrechnung.\n\n\
+                 **Abschläge.** A PID 31001 Abschlagsrechnung prices no energy — one \
+                 Positionszeile, one amount. The invoice that closes the period lists the \
+                 Abschläge it settles and deducts them from what is **owed**: §14 Abs. 5 UStG \
+                 taxed each Anzahlung on receipt, so the net and the tax stand and only \
+                 `zuZahlen` moves. A reversed Abschlag is refused (INVOIC AHB [519]) and the \
+                 amount always comes from the stored document ([526]). A period carries many \
+                 instalments but at most **one per Rechnungsdatum** — that is what separates a \
+                 cadence from a replayed billing run.\n\n\
+                 Every draft stores `zu_zahlen_eur_units` beside the three amounts the invoice \
+                 states, so `get_billing_summary` can answer what is owed rather than only what \
+                 was invoiced.\n\n\
+                 **Retention:** § 147 Abs. 3 AO / § 14b UStG — invoices are Buchungsbelege, \
+                 eight years (reduced from ten with effect from 01.01.2025).",
             ),
         ]
     }
 
     #[prompt(
-        name = "investigate-dispute",
-        description = "Step-by-step: investigate a REMADV 33002 dispute"
+        name = "run-nne-billing",
+        description = "Step-by-step: settle and dispatch a Netznutzungsentgelt invoice"
     )]
-    async fn investigate_dispute_prompt(&self) -> Vec<PromptMessage> {
+    async fn run_nne_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(
-                Role::User,
-                "A REMADV 33002 dispute was received. What should I do?",
-            ),
+            PromptMessage::new_text(Role::User, "How do I bill Netznutzungsentgelt for a MaLo?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `list_nne_drafts` with outcome=Dispute to find disputed invoices.\n\
-                 2. Use `get_nne_draft` for the full Rechnung BO4E and invoic-checker findings.\n\
-                 3. Identify the ERC code in the REMADV (Z32=Tariff deviation, Z34=Period invalid, Z35=MMM price).\n\
-                 4. Fix root cause: update tariff in marktd, correct Messreihe in edmd, or verify MMMA prices.\n\
-                 5. POST /api/v1/billing/drafts/{id}/correction to generate a Korrekturrechnung (§ 147 AO / GoBD).\n\
-                 6. Dispatch the correction and confirm with the LF.",
+                "**1. Settle** — `POST /api/v1/billing/run`\n\
+                 ```json\n\
+                 {\n  \"invoice_date\": \"2026-02-01\",\n  \"due_date\": \"2026-03-03\",\n\
+                 \x20 \"rechnungskreis\": \"NNE\",\n  \"positions\": [{\n\
+                 \x20   \"malo_id\": \"51238696012\",\n\
+                 \x20   \"period_from\": \"2026-01-01\", \"period_to\": \"2026-01-31\",\n\
+                 \x20   \"settlement\": {\n\
+                 \x20     \"billing_type\": \"nne\",\n\
+                 \x20     \"nb_mp_id\": \"9900357000004\", \"lf_mp_id\": \"9900012345678\",\n\
+                 \x20     \"sparte\": \"Strom\",\n\
+                 \x20     \"arbeitspreis\": { \"Einheitlich\": { \"menge_kwh\": \"1500\", \"preis_ct_per_kwh\": \"3.5\" } },\n\
+                 \x20     \"konzessionsabgabe\": { \"satz_ct_per_kwh\": \"0.11\", \"klasse\": \"Sondervertragskunde\" }\n\
+                 \x20   }\n  }]\n}\n\
+                 ```\n\
+                 The invoice states 19 % Umsatzsteuer: Netznutzung is a sonstige Leistung, which \
+                 UStAE 13b.3a excludes from §13b. A Mehr-/Mindermenge is a Lieferung and may be \
+                 reverse-charged — see `mmm-monthly-run`.\n\n\
+                 The invoice number is allocated by the service (§14 Abs. 4 Nr. 4 UStG); \
+                 `rechnungskreis` only names the series.\n\n\
+                 **2. Read the verdict.** The response carries `check_outcome` plus every \
+                 invoic-checker finding and engine warning. `Warn` is worth reading — a \
+                 `KA_ABOVE_KAV_MAXIMUM` warning means the Konzessionsabgabe exceeds the KAV §2 \
+                 Höchstbetrag for the customer group you named.\n\n\
+                 **3. Review** — `get_draft`, or `GET /api/v1/billing/drafts/{id}`.\n\n\
+                 **4. Dispatch** — `PUT /api/v1/billing/drafts/{id}/dispatch`. Any Fremdkosten \
+                 attached to the draft are merged into the document first, and the whole thing \
+                 is re-checked; a `Dispute` verdict blocks the send.\n\n\
+                 **§14a EnWG**: pass `arbeitspreis` as `Modul1Pauschal`, \
+                 `Modul2ProzentualeReduzierung` or `Modul3ZeitVariabel` (all three HT/ST/NT \
+                 bands) instead of `Einheitlich`.",
             ),
         ]
     }
 
     #[prompt(
         name = "mmm-monthly-run",
-        description = "Step-by-step: run monthly Mehr-/Mindermenge (MMM) billing for all SLP MaLos"
+        description = "Step-by-step: the monthly Mehr-/Mindermengen settlement"
     )]
     async fn mmm_monthly_run_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(Role::User, "How do I run the monthly MMM billing?"),
+            PromptMessage::new_text(Role::User, "How do I run the monthly MMM settlement?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**Monthly MMM Billing (INVOIC 31005, GPKE (BK6-24-174) Teil 1 Kap. 8.4)**\n\n\
-                 **Prerequisites:**\n\
-                 - Import MMMA Gas prices (THE): PUT marktd /api/v1/mmma-preise/gas/{year}/{month}\n\
-                 - Import Strom MMM prices (VNB): PUT marktd /api/v1/mmm-preise/strom/{year}/{month}\n\
-                 - Ensure edmd has SLP imbalance data for the period (MSCONS from NB)\n\n\
-                 **Step 1 — Per-MaLo MMM auto-run (recommended):**\n\
-                 For each SLP MaLo in your portfolio:\n\
-                 `POST /api/v1/billing/mmm-run/{malo_id}` with nb_mp_id, lf_mp_id, period_year, period_month\n\
-                 - Auto-fetches profil_kwh (SLP profile) from edmd\n\
-                 - Use `billing_type = \"mmm_strom\"` for Strom, `\"mmm_gas\"` for Gas\n\n\
-                 **Step 2 — Review generated drafts:**\n\
-                 Call `list_nne_drafts` with pid=31005 to see all MMM drafts.\n\
-                 Call `get_billing_summary` for the month to verify totals.\n\
-                 Check `list_undispatched_drafts` for any stuck drafts.\n\n\
-                 **Step 3 — Batch dispatch:**\n\
-                 `POST /api/v1/billing/drafts/dispatch-batch` with all approved draft_ids.\n\
-                 Expected command: `gpke.mmm.rechnung.stellen` to makod.\n\n\
-                 **Step 4 — Monitor for REMADV responses:**\n\
-                 Use `list_nne_drafts` with status=dispatched to confirm delivery.\n\
-                 Disputes (REMADV 33002) appear as outcome=Dispute — use `investigate-dispute` prompt.\n\n\
-                 **Regulatory basis:** GPKE (BK6-24-174) Teil 1 Kap. 8.4; BDEW INVOIC AHB PID 31005 (MMM-Rechnung).",
+                "**Prerequisites** — the published prices must be in `marktd`:\n\
+                 - Gas: `PUT /api/v1/mmma-preise/gas/{year}/{month}` (Trading Hub Europe)\n\
+                 - Strom: `PUT /api/v1/mmm-preise/strom/{year}/{month}` (your ÜNB; configure \
+                   `vnb_mp_id` in netzbilanzd.toml)\n\n\
+                 **Per MaLo** — `POST /api/v1/billing/mmm-run/{malo_id}` with `nb_mp_id`, \
+                 `lf_mp_id`, `sparte`, `period_year`, `period_month` and `bilanziert_kwh`.\n\n\
+                 `bilanziert_kwh` is **required and cannot be auto-fetched**: it is what the \
+                 Bilanzkreis was charged from the load profile, which lives on the balancing \
+                 side. `edmd` holds only the measured half. Supplying the measured total for \
+                 both halves makes every saldo structurally zero.\n\n\
+                 `sparte` also decides the balancing day `edmd` aggregates over — gas balances \
+                 on the 06:00 Gastag, not the calendar day.\n\n\
+                 **Umsatzsteuer.** A Mehr-/Mindermenge is a *Lieferung*, not a network service, \
+                 so §13b Abs. 2 Nr. 5 Buchst. b can shift the tax to the recipient. State both \
+                 facts on `wiederverkaeufer` — electricity needs supplier **and** recipient to \
+                 hold §3g status, gas needs the recipient alone — evidenced by a valid USt 1 TH. \
+                 Getting it wrong is a §14c Abs. 1 liability, not a rounding error.\n\n\
+                 **Sign convention** (GPKE BK6-24-174 Teil 1 Kap. 8.4, GaBi Gas 2.1 Tenor Nr. 5), \
+                 defined from the network operator's side and the opposite of the intuitive \
+                 reading:\n\
+                 - measured **below** profiled → ungewollte *Mehrmenge* → the NB **credits** the LF\n\
+                 - measured **above** profiled → ungewollte *Mindermenge* → the NB **charges** the LF\n\n\
+                 **Then** review with `list_drafts` (`pid=31005`) and \
+                 `POST /api/v1/billing/drafts/dispatch-batch`.",
             ),
         ]
     }
 
     #[prompt(
-        name = "redispatch-monthly-submit",
-        description = "Step-by-step: prepare and submit monthly Redispatch 2.0 Kostenblatt to ÜNB"
+        name = "investigate-dispute",
+        description = "Step-by-step: work a REMADV Abweisung"
     )]
-    async fn redispatch_monthly_submit_prompt(&self) -> Vec<PromptMessage> {
+    async fn investigate_dispute_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(
-                Role::User,
-                "How do I submit the monthly Redispatch 2.0 Kostenblatt to the ÜNB?",
-            ),
+            PromptMessage::new_text(Role::User, "A REMADV Abweisung came back. What now?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**Redispatch 2.0 Kostenblatt (BK6-20-061 §4.2)**\n\n\
-                 Deadline: 15th of the month following the billing month.\n\n\
-                 **Step 1 — Compute Kostenblatt for each activation:**\n\
-                 For each Redispatch 2.0 activation in the billing month:\n\
-                 `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute`\n\
-                 with tr_id, malo_id, period_year/month, uenb_mp_id, vnb_mp_id, arbeitspreis_eur_per_kwh\n\
-                 → auto-fetches dispatch_kwh from edmd, computes einsatzkosten_eur\n\n\
-                 **Step 2 — Review pending records:**\n\
-                 Call `list_pending_kostenblatt` with year/month and status=pending.\n\
-                 Verify dispatch_kwh and einsatzkosten_eur are correct.\n\
-                 For corrections: PUT /api/v1/redispatch/kostenblatt/{activation_id} with updated values.\n\n\
-                 **Step 3 — Submit all pending:**\n\
-                 `POST /api/v1/redispatch/kostenblatt/submit/{year}/{month}`\n\
-                 → marks all pending records as submitted, returns aggregated summary for ÜNB.\n\n\
-                 **Step 4 — ERP handover:**\n\
-                 The response contains total_einsatzkosten_eur and per-activation breakdown.\n\
-                 Export to CIM XML if required: kosten_json is typed rubo4e::current::Kosten.\n\n\
-                 **Regulatory basis:** BK6-20-061 §4.2 — VNB must submit by 15th of following month.",
+                "REMADV **33001** is the only Zahlungsbestätigung. 33002, 33003 and 33004 are \
+                 all Abweisungen — 33003/33004 are the itemised Strom rejections, not partial \
+                 payments.\n\n\
+                 **1.** `list_disputed` — the invoices, their ERC codes and the stated reasons.\n\
+                 **2.** `get_draft` — read `check_findings` and `settlement_warnings` first. If \
+                 the NB's own checker already warned, the counterparty is usually right.\n\
+                 **3.** Fix the cause where it lives: the price sheet in `marktd`, the readings \
+                 in `edmd`, the master data behind the KAV group or Netzebene.\n\
+                 **4.** `POST /api/v1/billing/drafts/{id}/storno` with a `grund` \
+                 (`Messwertkorrektur`, `Tarifkorrektur`, `Stammdatenkorrektur`, \
+                 `RegulatorischeAenderung`, `Rechenfehler`, `Clearing`, `Sonstiges`). The \
+                 reversal is recomputed from the stored settlement input and negated, and it \
+                 declares itself a Storno on `ist_storno` + `original_rechnungsnummer`. The \
+                 recomputation must reproduce the original's net, tax **and** gross exactly, or \
+                 the reversal is refused with both figures named.\n\
+                 **5.** `POST /api/v1/billing/drafts/{id}/korrektur` with the corrected \
+                 settlement — a new settlement from corrected inputs, not an edited document. \
+                 It carries the *whole* corrected amount, so step 4 is required first and the \
+                 endpoint answers 409 without it; otherwise the period is billed twice. The \
+                 corrected settlement must keep the original's settlement kind, Sparte and both \
+                 counterparties: a different one of any of those is a different invoice, not a \
+                 correction, and answers 422.\n\
+                 Only a **dispatched** invoice can be reversed or corrected. A draft or a \
+                 rejected draft never reached the counterparty, so both answer 409.\n\
+                 **6.** Dispatch both, or escalate through makod COMDIS 29001.\n\n\
+                 The reason matters: `Rechenfehler` and `Stammdatenkorrektur` indicate a defect \
+                 worth counting, `RegulatorischeAenderung` is a lawful recalculation.",
             ),
         ]
     }
 
     #[prompt(
         name = "ggv-nne-billing",
-        description = "Step-by-step: §42b EnWG GGV community solar multi-tenant NNE billing (NB side)"
+        description = "Step-by-step: §42b EnWG Gemeinschaftliche Gebäudeversorgung"
     )]
     async fn ggv_nne_billing_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(
-                Role::User,
-                "How do I bill NNE for a §42b EnWG GGV community solar MaLo?",
-            ),
+            PromptMessage::new_text(Role::User, "How do I bill NNE for a §42b GGV building?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**§42b EnWG GGV Netzentgelt NB-side billing (INVOIC 31001)**\n\n\
-                 Mandatory since 01.01.2024 (§42b EnWG, BNetzA BK6-22-300):\n\
-                 each GGV tenant Marktlokation is billed individually for its NNE share.\n\n\
-                 **Prerequisites:**\n\
-                 - GGV MaLo provisioned in marktd with Lokationszuordnung edges (beziehungstyp=GGV_MIETER)\n\
-                 - Tenant MaLo-IDs registered with their LF in marktd\n\
-                 - NNE Arbeitspreis from PreisblattNetznutzung\n\n\
-                 **Option A — Proportional by measured consumption (recommended):**\n\
-                 ```json\n\
-                 POST /api/v1/billing/ggv-nne/{ggv_malo_id}\n\
-                 {\n\
-                   \"nb_mp_id\": \"...\", \"lf_mp_id\": \"...\",\n\
-                   \"period_from\": \"2026-01-01\", \"period_to\": \"2026-01-31\",\n\
-                   \"arbeitspreis_ct_per_kwh\": \"5.50\",\n\
-                   \"tenant_consumption\": {\n\
-                     \"<tenant_malo_1>\": \"450.000\",\n\
-                     \"<tenant_malo_2>\": \"550.000\"\n\
-                   }\n\
-                 }\n\
-                 ```\n\n\
-                 **Option B — Equal split fallback (when consumption data unavailable):**\n\
-                 Supply `total_kwh` only (no `tenant_consumption`).\n\
-                 NB auto-discovers tenant MaLos from marktd Lokationszuordnung.\n\n\
-                 **Result:** N × INVOIC 31001 drafts, one per tenant MaLo.\n\
-                 Review with `list_nne_drafts`, dispatch with `dispatch-batch`.\n\n\
-                 **Regulatory basis:** §42b EnWG; BK6-22-300 (§14a integration).",
+                "`POST /api/v1/billing/ggv-nne/{ggv_malo_id}` with `nb_mp_id`, `lf_mp_id`, the \
+                 period, `arbeitspreis_ct_per_kwh` and `tenant_consumption` — a map from each \
+                 tenant MaLo-ID to its **metered** kWh.\n\n\
+                 `tenant_consumption` is required. §42b attributes the Netzentgelt to each \
+                 tenant Marktlokation, and an equal split is not an attribution: it bills one \
+                 tenant for another's consumption. Meter the tenants, or do not bill them \
+                 individually.\n\n\
+                 The whole building is settled in one transaction, so either every tenant is \
+                 billed or none is — a partial run would leave the unbilled tenants invisible \
+                 and trip the double-billing guard on a retry.\n\n\
+                 The response reports each tenant's share of the metered total; the shares add \
+                 to 100 %.",
             ),
         ]
     }
 
     #[prompt(
-        name = "nb-invoic-overview",
-        description = "NB INVOIC portfolio overview: all PIDs, processes, and regulatory deadlines"
+        name = "redispatch-monthly-submit",
+        description = "Step-by-step: the monthly Redispatch 2.0 Kostenblatt"
     )]
-    async fn nb_invoic_overview_prompt(&self) -> Vec<PromptMessage> {
+    async fn redispatch_monthly_submit_prompt(&self) -> Vec<PromptMessage> {
         vec![
-            PromptMessage::new_text(
-                Role::User,
-                "Give me an overview of all INVOIC types the NB sends.",
-            ),
+            PromptMessage::new_text(Role::User, "How do I submit the monthly Kostenblatt?"),
             PromptMessage::new_text(
                 Role::Assistant,
-                "**NB Outbound INVOIC Portfolio (netzbilanzd)**\n\n\
-                 | PID | Process | Direction | Deadline | `billing_type` |\n\
-                 |---|---|---|---|---|\n\
-                 | 31002 | NNE Strom (Netznutzungsentgelt, NN-Rechnung) | NB → LF | per NbContract.billing_schedule | `nne_strom` |\n\
-                 | 31002 | GGV NNE (§42b EnWG tenant split) | NB → LF | per NbContract.billing_schedule | `nne_strom` via `/ggv-nne` |\n\
-                 | 31005 | MMM Strom (Mehr-/Mindermenge) | NB → LF | annual settlement GPKE (BK6-24-174) Teil 1 Kap. 8.4 | `mmm_strom` |\n\
-                 | 31002 | NNE Gas (Netznutzung Gas, NN-Rechnung) | GNB → LFG | per NbContract | `nne_gas` |\n\
-                 | 31009 | MSB-Rechnung (metering service) | NB → MSB | per MSB contract | `msb_31009` |\n\
-                 | 31011 | AWH Sperrprozesse Gas (GeLi Gas) | GNB → LFG | per Sperrprozess close | `nne_gas_awh_31011` |\n\n\
-                 **Key compliance rules:**\n\
-                 - § 147 Abs. 3 AO / § 14b UStG: invoices are Buchungsbelege, 8-year retention; Stornorechnung/Korrekturrechnung for corrections\n\
-                 - invoic-checker blocks dispatch on Dispute outcome (NB can only send defensible invoices)\n\
-                 - REMADV 33002 (dispute) → COMDIS 29001 (makod) for formal escalation\n\
-                 - GPKE (BK6-24-174) Teil 1 Kap. 8.4: MMM settlement due annually; `mmm-run/{malo_id}` auto-fetches profil_kwh\n\
-                 - BK6-20-061: Redispatch Kostenblatt due 15th of following month\n\n\
-                 **CloudEvents emitted:**\n\
-                 - `de.netzbilanz.invoic.drafted` — after POST /billing/run\n\
-                 - `de.netzbilanz.invoic.dispatched` — after PUT /billing/drafts/{id}/dispatch",
+                "Due the 15th of the following month (BK6-20-061 §4.2).\n\n\
+                 **1. Find what is missing** — `list_kostenblatt_gaps` for the month: \
+                 activations registered but never quantified. Each would otherwise be submitted \
+                 with zero Einsatzkosten.\n\n\
+                 **2. Quantify each** — `POST /api/v1/redispatch/kostenblatt/{activation_id}/compute` \
+                 with `tr_id`, `malo_id`, the period, `uenb_mp_id`, `vnb_mp_id`, the activation \
+                 window and `arbeitspreis_eur_per_kwh`.\n\n\
+                 The energy comes from the `edmd` Lastgang summed over the exact activation \
+                 window. Check `dispatch_source` on the result: `lastgang_sum` is the intended \
+                 path, `billing_period` means the monthly aggregate was used because no Lastgang \
+                 existed — for a 15-minute activation that is wrong by three orders of \
+                 magnitude and should be replaced with a verified `dispatch_kwh_override`.\n\n\
+                 **3. Review** — `list_pending_kostenblatt`.\n\n\
+                 **4. Submit** — `POST /api/v1/redispatch/kostenblatt/submit/{year}/{month}`. \
+                 The response carries the aggregate and the per-activation breakdown; \
+                 `kosten_json` is a typed BO4E `Kosten` for CIM export.\n\n\
+                 Compensation to the curtailed operator is a separate document: \
+                 `POST /api/v1/redispatch/verguetung/{activation_id}/compute` (§13a Abs. 2 EnWG). \
+                 Note that an Aufforderungsfall settles against the transmitted schedule, not \
+                 against the measured Lastgang.",
             ),
         ]
     }
@@ -904,41 +602,33 @@ impl NetzbilanzMcpHandler {
 impl ServerHandler for NetzbilanzMcpHandler {
     fn get_info(&self) -> ServerInfo {
         InitializeResult::new(
-            ServerCapabilities::builder().enable_tools().enable_prompts().build()
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
         )
         .with_server_info(Implementation::new("netzbilanzd", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "netzbilanzd MCP — NNE/KA/MMM Billing Daemon (NB role).\n\
-             Generates INVOIC 31002 (NN-Rechnung, NNE Strom + Gas), 31005 (MMM),\n\
-             31009 (MSB-Rechnung), 31011 (AWH Sperrprozesse Gas, GeLi Gas 3.0 (BK7-24-01-009)).\n\
-             Pre-dispatch self-validation via invoic-checker (period · arithmetic · total · tariff).\n\
-             Dispatches to makod via gpke.nne.rechnung.stellen / gpke.mmm.rechnung.stellen.\n\n\
-             ## Tools (13)\n\
-             - `list_nne_drafts` — filter by malo_id, lf_mp_id, status, outcome; returns draft summaries\n\
-             - `list_disputed` — invoices with check_outcome=Dispute (ERC codes in REMADV 33002)\n\
-             - `get_nne_draft` — full Rechnung BO4E + invoic-checker findings for one draft\n\
-             - `get_billing_summary` — monthly totals by PID/status for ERP reconciliation\n\
-             - `list_undispatched_drafts` — stuck drafts older than N hours (default 48h)\n\
-             - `list_pending_kostenblatt` — Redispatch 2.0 Kostenblatt pending 15th-of-month submission\n\
-             - `compute_kostenblatt` — compute Kostenblatt for activation (manual kWh override)\n\
-             - `dispatch_draft` — check status + provide REST dispatch instruction\n\
-             - `reject_draft` — reject a draft (re-enables billing for same MaLo/period)\n\
-             - `trigger_mmm_auto_run` — prepare MMM auto-run request body for a MaLo\n\
-             - `list_corrections` — list Stornorechnung/Korrekturrechnung (§ 147 AO / GoBD audit)\n\
-             - `get_payment_stats` — payment totals by PID × status (Zahlungsverzug detection)\n\
-             - `list_paid_invoices` — REMADV 33001 confirmed paid invoices\n\n\
-             ## Billing types\n\
-             - nne_strom / nne_gas → INVOIC 31002 (NN-Rechnung; Sparte in message content)\n\
-             - mmm_strom → INVOIC 31005 (Strom MMM, auto-fetches prices when vnb_mp_id configured)\n\
-             - mmm_gas → INVOIC 31005 (Gas MMM, THE prices auto-fetched from marktd)\n\
-             - msb_31009 → INVOIC 31009 (MSB-Rechnung, metering fee)\n\
-             - nne_gas_awh_31011 → INVOIC 31011 (GeLi Gas AWH Sperrprozesse, GNB → LFG)\n\n\
+            "netzbilanzd — the Netzbetreiber's outbound billing daemon.\n\n\
+             Issues NN-Rechnung (PID 31002, Strom and Gas), Mehr-/Mindermengensaldo (31005), \
+             MSB-Rechnung (31009, issued by the MSB) and GeLi Gas AWH (31011); carries the \
+             Redispatch 2.0 Kostenblatt and the §13a Abs. 2 Vergütung.\n\n\
+             **This surface is read-only.** Dispatching an invoice sends EDIFACT to a \
+             counterparty and starts a payment obligation, and the only way back is a \
+             Stornorechnung — so settling, dispatching, rejecting and correcting all live on \
+             the REST API, where the action is attributable to an operator. Read here; act there.\n\n\
+             ## Tools (8)\n\
+             - `list_drafts` — filter by MaLo, party, PID, Sparte, status, Rechnungsart, verdict\n\
+             - `get_draft` — one invoice in full: BO4E document, settlement input, findings, warnings\n\
+             - `list_disputed` — REMADV Abweisungen with their ERC codes\n\
+             - `list_undispatched` — drafts past their dispatch window\n\
+             - `list_corrections` — the Storno / Korrektur chain\n\
+             - `get_billing_summary` — monthly totals by PID, Sparte, status, Rechnungsart\n\
+             - `list_pending_kostenblatt` — Redispatch cost sheets awaiting the 15th\n\
+             - `list_kostenblatt_gaps` — activations registered but never quantified\n\n\
              ## Prompts (6)\n\
-             - `trigger-nne-billing` · `investigate-dispute` · `mmm-monthly-run`\n\
-             - `redispatch-monthly-submit` · `ggv-nne-billing` · `nb-invoic-overview`\n\n\
-             ## CloudEvents emitted\n\
-             - `de.netzbilanz.invoic.drafted` — draft created\n\
-             - `de.netzbilanz.invoic.dispatched` — INVOIC sent to makod",
+             `nb-invoic-overview` · `run-nne-billing` · `mmm-monthly-run` · \
+             `investigate-dispute` · `ggv-nne-billing` · `redispatch-monthly-submit`",
         )
     }
 }
@@ -951,6 +641,7 @@ async fn mcp_auth_middleware(
     state.auth.authenticate(request, next).await
 }
 
+/// The MCP router, mounted at `/mcp`.
 pub fn router(state: Arc<NetzbilanzMcpState>, _shutdown: CancellationToken) -> Router {
     let handler = NetzbilanzMcpHandler::new(Arc::clone(&state));
     let service = StreamableHttpService::new(
