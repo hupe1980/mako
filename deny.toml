@@ -683,7 +683,7 @@ reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (buil
 # ── rustix 0.38 / linux-raw-sys 0.4 / socket2 0.5 (prometheus + krafka) ───────
 # These older versions are pulled by:
 # - prometheus 0.14 → procfs 0.17 → rustix 0.38 (mako-service metrics)
-# - krafka 0.12 → socket2 0.5 (mako-service Kafka EventBus feature)
+# - krafka 0.12 → socket2 0.5 (edmd kafka_ingest)
 # Modern stack (asx-rs, foyer/slatedb, tokio) uses rustix 1.x / socket2 0.6.
 
 [[bans.skip]]
@@ -699,7 +699,7 @@ reason  = "companion to rustix 0.38 (prometheus/procfs chain); modern stack pull
 [[bans.skip]]
 name    = "socket2"
 version = "0.5"
-reason  = "krafka 0.12 (mako-service kafka feature) pins socket2 0.5; tokio/modern stack uses 0.6."
+reason  = "krafka 0.12 (edmd kafka_ingest) pins socket2 0.5; tokio/modern stack uses 0.6."
 
 [[bans.skip]]
 name    = "windows-sys"

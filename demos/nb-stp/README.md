@@ -12,7 +12,7 @@ Bestätigung is delivered to the ERP webhook within seconds.
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `:8000` | In-memory ERP event receiver (Python) |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, EventBus fan-out |
-| `processd` | `:8580` | NB STP auto-responder — netz-checker (6 checks), LF E_0624 (45 min) |
+| `processd` | `:8580` | NB STP auto-responder — netz-checker Anmeldung (`E_0622`, 6 checks) and Abmeldung (`E_0607`); LF answers 55007/55010 inside their per-PID Frist |
 | `makod` | `:8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
 The full platform has [17 production services](https://hupe1980.github.io/mako/docs/services/) — `invoicd`,
@@ -78,7 +78,7 @@ docker buildx bake makod marktd processd
 ```
 
 > The `processd-runtime` target compiles with `--features integrated`
-> (NB netz-checker + LF E_0624 auto-response in one binary).
+> (NB netz-checker + LF answer automation in one binary).
 
 ## Quick start
 
@@ -126,8 +126,8 @@ Expected output:
 ✓ marktd is ready
 ✓ PUT /api/v1/preisblaetter/9900357000004 → 204 (FV2026 preisblatt stored)
 ✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for netz-checker)
-✓ PUT /api/v1/malo/17841584119 → 201  (version=1, makod cache push triggered)
-✓ PUT /api/v1/malo/17841584119/grid → 204  (grid record ready for netz-checker)
+✓ PUT /api/v1/malos/17841584119 → 201  (version=1, makod cache push triggered)
+✓ PUT /api/v1/malos/17841584119/grid → 204  (grid record ready for netz-checker)
 ✓ PUT /api/v1/subscriptions/smoke-test-sub → 200
 ✓ GET /health → ok  (instance: ...)
 ✓ PUT /admin/partners/4012345000023 → 200
@@ -208,11 +208,11 @@ curl -X PUT http://localhost:8180/api/v1/partners/4012345000023 \
   -d '{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[],"channels":{}}'
 
 # MaLo with NB rollenzuordnung
-curl -X PUT http://localhost:8180/api/v1/malo/51238696012 \
+curl -X PUT http://localhost:8180/api/v1/malos/51238696012 \
   -H "Content-Type: application/json" --data-binary "@fixtures/malo-nb.json"
 
 # MaLo grid record (check 1)
-curl -X PUT http://localhost:8180/api/v1/malo/51238696012/grid \
+curl -X PUT http://localhost:8180/api/v1/malos/51238696012/grid \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}'
 ```

@@ -130,6 +130,15 @@ pub struct MarktEvent {
     /// Canonical `marktrole` value (e.g. `"NB"`, `"LF"`, `"MSB"`, `"BIKO"`, `"UNB"`).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marktrole: Option<String>,
+    /// Sparte this event is about — `"STROM"` or `"GAS"`.
+    ///
+    /// A subscriber's `sparten` filter is matched against this. Absent means the
+    /// event is not Sparte-scoped (a Marktpartner, a subscription test) and
+    /// therefore matches every filter; it must never be omitted merely because
+    /// the producer did not bother to set it, since that silently turns the
+    /// filter off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub marktsparte: Option<String>,
     /// ERP-supplied `Idempotency-Key` from the originating command.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub markterpref: Option<String>,
@@ -196,6 +205,7 @@ impl MarktEvent {
             marktmaloid: None,
             marktmeloid: None,
             marktrole: None,
+            marktsparte: None,
             markterpref: None,
             makoconvid: None,
             makopid: None,
@@ -213,6 +223,7 @@ impl MarktEvent {
         self.marktmaloid = ext.marktmaloid;
         self.marktmeloid = ext.marktmeloid;
         self.marktrole = ext.marktrole;
+        self.marktsparte = ext.marktsparte;
         self.markterpref = ext.markterpref;
         self.makoconvid = ext.makoconvid;
         self.makopid = ext.makopid;
@@ -230,6 +241,8 @@ pub struct EventExtensions {
     pub marktmaloid: Option<String>,
     pub marktmeloid: Option<String>,
     pub marktrole: Option<String>,
+    /// `"STROM"` / `"GAS"` — the subscriber `sparten` filter matches on this.
+    pub marktsparte: Option<String>,
     pub markterpref: Option<String>,
     /// Forwarded `makoconvid` from originating `InboundMakoEvent`.
     pub makoconvid: Option<String>,
@@ -249,8 +262,8 @@ pub struct EventExtensions {
 }
 
 // CloudEvent webhook signing/verification lives in `mako_service::webhook`
-// (`sign` / `verify_hmac`) — the one canonical HMAC-SHA256 implementation shared
-// by every emitter and verifier. `mako-markt` no longer carries its own copy.
+// (`sign` / `verify_hmac`) — the one canonical HMAC-SHA256 implementation, shared
+// by every emitter and verifier. Do not add a second copy here.
 
 #[cfg(test)]
 mod tests {

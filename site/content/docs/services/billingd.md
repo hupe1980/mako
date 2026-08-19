@@ -911,9 +911,9 @@ layer that still has each position's own amount, VAT category and rate — into 
 `en16931::Invoice`, and billingd stores it in `billing_records.en16931_json`. The
 external [`en16931`](https://docs.rs/en16931) crate derives the BG-23 VAT breakdown
 and BG-22 totals from the lines via `reconcile` (so BR-CO/BR-S hold by construction),
-and [`en16931-formats`](https://docs.rs/en16931-formats) writes the syntaxes. The
-hand-rolled CII/UBL builders that once walked the BO4E `steuerbetraege` are gone;
-every render path reads the stored model and answers **422** if it is missing.
+and [`en16931-formats`](https://docs.rs/en16931-formats) writes the syntaxes. Every
+render path reads the stored model and answers **422** if it is missing — no path
+walks the BO4E `steuerbetraege` to rebuild one.
 
 ```mermaid
 graph LR
@@ -933,8 +933,8 @@ graph LR
 ```
 
 **Per-line VAT is correct.** A mixed-rate invoice (gas 19 % + Fernwärme 7 % + PV 0 %)
-carries a distinct BT-151/BT-152 per line that reconciles with the BG-23 breakdown —
-the single-blended-rate defect of the old renderer is gone.
+carries a distinct BT-151/BT-152 per line that reconciles with the BG-23 breakdown,
+rather than one blended rate across the document.
 
 **`GET /api/v1/billing/{id}/xrechnung`** → XRechnung 3.0 CII (`en16931-formats::cii`).
 Profile identifier `urn:cen.eu:en16931:2017#compliant#urn:xeinkauf.de:kosit:xrechnung_3.0` — the namespace moved from XÖV to XStandards Einkauf at 3.0, so a `xoev-de` URN with a `_3.0` version matches no published version and fails BR-DE-21.
@@ -1348,7 +1348,7 @@ inbound_webhook_secret = "env:BILLINGD_INBOUND_HMAC_SECRET"
 ```
 
 **3. Register `billingd` as a subscriber** in `marktd` so it receives
-`de.vpp.dispatch.confirmed` events from `makod`'s outbox via the `marktd` EventBus fan-out:
+`de.vpp.dispatch.confirmed` events from `makod`'s outbox via the `marktd` durable fan-out:
 
 ```bash
 curl -s -X PUT "http://marktd:8180/api/v1/subscriptions/billingd-vpp" \

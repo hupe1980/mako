@@ -3,10 +3,26 @@
 -- Single authoritative schema. Drop and recreate the database to reset;
 -- all application data is reproducible from the EDIFACT event streams in makod.
 --
+-- Required extensions:
+--   btree_gist — lets a GiST exclusion constraint mix equality columns (a MaLo
+--     ID, a role) with a range column, which is how every "no two of these may
+--     be valid at the same time" rule below is expressed. PostgreSQL 18's
+--     native `WITHOUT OVERLAPS` would remove the need for it; the platform
+--     targets 15+.
+--   (pgcrypto is NOT required: gen_random_uuid() is built in since PG 13.)
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+
 -- Design decisions:
 --   • All timestamps: TIMESTAMPTZ (UTC).
 --   • Date columns (valid_from/valid_to): plain DATE — the business meaning is a
---     calendar date in German local time, not a wall-clock instant.
+--     calendar date in German local time, not a wall-clock instant. Validity is
+--     half-open [valid_from, valid_to): the day a successor starts is the day
+--     the predecessor stops, with no ambiguous shared day.
+--   • Overlap is a constraint, not a convention. Every dated assignment carries
+--     an EXCLUDE … USING gist over daterange(valid_from, valid_to, \'[)\'), so
+--     "who was the NB on this date" can never have two answers. A NULL
+--     valid_from reads as -infinity and a NULL valid_to as +infinity, so an
+--     open-ended row still collides with an overlapping one.
 --   • bo4e_version on JSONB tables: enables zero-downtime schema migrations when
 --     BO4E v202601 ships. Write path always records current version.
 --   • preisblaetter.source / pricat_versions.source: discriminates operator API
@@ -50,7 +66,18 @@ CREATE TABLE rollenzuordnungen (
     rollencodenummer TEXT  NOT NULL,                -- 13-digit BDEW/DVGW GLN
     valid_from       DATE  NOT NULL,
     valid_to         DATE,                          -- NULL = currently valid
-    PRIMARY KEY (malo_id, zuordnungstyp, valid_from)
+    PRIMARY KEY (malo_id, zuordnungstyp, valid_from),
+
+    -- `GET /api/v1/malos/{id}` answers with every assignment whose window
+    -- contains the query date. Without this, two overlapping NB rows are both
+    -- "currently valid" and the API returns two Netzbetreiber for one MaLo —
+    -- a contradiction the caller has no way to resolve and which the primary
+    -- key above does not prevent (the start dates differ).
+    CONSTRAINT rollenzuordnungen_no_overlap EXCLUDE USING gist (
+        malo_id       WITH =,
+        zuordnungstyp WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 CREATE INDEX rollenzuordnungen_malo_id
@@ -97,7 +124,16 @@ CREATE TABLE melo_msb_zuordnungen (
     valid_from   DATE        NOT NULL,
     valid_to     DATE,                              -- NULL = currently valid
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    PRIMARY KEY (tenant, melo_id, valid_from)
+    PRIMARY KEY (tenant, melo_id, valid_from),
+
+    -- `find_msb_at` must resolve to exactly one MSB for any past date; a
+    -- backdated correction that failed to close the later row would otherwise
+    -- make the answer depend on row order.
+    CONSTRAINT melo_msb_no_overlap EXCLUDE USING gist (
+        tenant  WITH =,
+        melo_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 -- Point-in-time lookup: newest assignment at or before a given date.
@@ -177,6 +213,14 @@ CREATE TABLE nb_contracts (
 
 CREATE UNIQUE INDEX nb_contracts_malo_nb_from
     ON nb_contracts (malo_id, nb_mp_id, valid_from, tenant);
+-- One network contract per MaLo per NB at any instant: two overlapping ones
+-- would let a settlement pick either Netzebene or Bilanzierungsmethode.
+ALTER TABLE nb_contracts ADD CONSTRAINT nb_contracts_no_overlap EXCLUDE USING gist (
+    tenant   WITH =,
+    malo_id  WITH =,
+    nb_mp_id WITH =,
+    daterange(valid_from, valid_to, '[)') WITH &&
+);
 CREATE INDEX nb_contracts_nb_gln
     ON nb_contracts (nb_mp_id, tenant);
 CREATE INDEX nb_contracts_malo_id
@@ -205,15 +249,23 @@ CREATE TABLE versorgungsstatus (
                           'Stillgelegt'
                       )),
     lf_mp_id            TEXT,                -- MP-ID of the active Lieferant (set when lieferstatus = 'Beliefert')
-    lf_mp_id_next       TEXT,                -- MP-ID of the announced future LF (WHO; set on 55001/44001 receipt; cleared on 55003/44003 or 55004/44004)
+    -- MP-ID of the announced future LF (WHO). Set on receipt of an Anmeldung
+    -- (55001 / 55077 / 44001) and cleared by its Ablehnung (55003 / 55080 /
+    -- 44003) or by the Bestätigung that promotes it. The *first* announcement
+    -- wins: a competing supplier's Anmeldung does not overwrite it, because
+    -- netz-checker decides EBD E_0622 A06 „Andere Anmeldung in Bearbeitung"
+    -- by comparing this column against the requesting supplier.
+    lf_mp_id_next       TEXT,
     lf_next_lieferbeginn DATE,               -- Announced Lieferbeginn of the future LF (WHEN; paired with lf_mp_id_next)
     lieferbeginn      DATE,
     lieferende        DATE,
     msb_mp_id           TEXT,
     nb_mp_id            TEXT        NOT NULL,
     eog_seit          DATE,               -- Start of the running Ersatz-/Grundversorgung (§38/§36 EnWG);
-                                          -- anchors the §38 Abs. 2 3-month maximum. Set by begin_eog_supply,
-                                          -- cleared on confirm_supply / end_supply.
+                                          -- anchors the §38 Abs. 4 maximum: the Ersatzversorgung
+                                          -- relationship ends at the latest three months after it began.
+                                          -- (Abs. 1 establishes the relationship; the cap is in Abs. 4.)
+                                          -- Set by begin_eog_supply, cleared on confirm_supply / end_supply.
     last_process_id   UUID,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
     version           BIGINT      NOT NULL DEFAULT 1,
@@ -232,7 +284,7 @@ CREATE INDEX versorgungsstatus_tenant_lf
     WHERE lf_mp_id IS NOT NULL;
 CREATE INDEX versorgungsstatus_tenant_nb
     ON versorgungsstatus (tenant, nb_mp_id);
--- §38 timer scans: all running Ersatzversorgungen ordered by start date.
+-- §38 Abs. 4 timer scans: all running Ersatzversorgungen ordered by start date.
 CREATE INDEX versorgungsstatus_eog
     ON versorgungsstatus (tenant, eog_seit)
     WHERE lieferstatus = 'Ersatzversorgung';
@@ -276,7 +328,20 @@ CREATE TABLE preisblaetter (
                              CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (nb_mp_id, valid_from)
+    -- NULLS NOT DISTINCT: `valid_from IS NULL` means "open-started", of which
+    -- there can only be one per party. Under the default NULLS DISTINCT,
+    -- PostgreSQL treats every NULL as unique, so repeated PUTs of an
+    -- open-started sheet silently accumulate rows and the point-in-time read
+    -- (`ORDER BY valid_from DESC NULLS LAST LIMIT 1`) picks an arbitrary one.
+    UNIQUE NULLS NOT DISTINCT (nb_mp_id, valid_from),
+
+    -- Two price sheets valid on the same day for the same party would make the
+    -- tariff a lottery — invoic-checker validates INVOIC plausibility against
+    -- whichever one the read happened to return.
+    CONSTRAINT preisblaetter_no_overlap EXCLUDE USING gist (
+        nb_mp_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 CREATE INDEX preisblaetter_nb_gln_valid_from
@@ -307,7 +372,20 @@ CREATE TABLE preisblaetter_messung (
                              CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (msb_mp_id, valid_from)
+    -- NULLS NOT DISTINCT: `valid_from IS NULL` means "open-started", of which
+    -- there can only be one per party. Under the default NULLS DISTINCT,
+    -- PostgreSQL treats every NULL as unique, so repeated PUTs of an
+    -- open-started sheet silently accumulate rows and the point-in-time read
+    -- (`ORDER BY valid_from DESC NULLS LAST LIMIT 1`) picks an arbitrary one.
+    UNIQUE NULLS NOT DISTINCT (msb_mp_id, valid_from),
+
+    -- Two price sheets valid on the same day for the same party would make the
+    -- tariff a lottery — invoic-checker validates INVOIC plausibility against
+    -- whichever one the read happened to return.
+    CONSTRAINT preisblaetter_messung_no_overlap EXCLUDE USING gist (
+        msb_mp_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 CREATE INDEX preisblaetter_messung_msb_valid_from
@@ -341,7 +419,17 @@ CREATE TABLE preisblaetter_konzessionsabgabe (
                                 CHECK (source IN ('api', 'mako')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (nb_mp_id, sparte, kundengruppe_ka, valid_from)
+    -- `kundengruppe_ka IS NULL` means "both customer groups" and `valid_from
+    -- IS NULL` means "open-started" — each a single distinguished row, not an
+    -- unlimited family of them.
+    UNIQUE NULLS NOT DISTINCT (nb_mp_id, sparte, kundengruppe_ka, valid_from),
+
+    CONSTRAINT preisblaetter_ka_no_overlap EXCLUDE USING gist (
+        nb_mp_id        WITH =,
+        sparte          WITH =,
+        kundengruppe_ka WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 CREATE INDEX preisblaetter_ka_nb_valid_from
@@ -368,7 +456,20 @@ CREATE TABLE preisblaetter_dienstleistung (
     source       TEXT        NOT NULL DEFAULT 'api' CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (msb_mp_id, valid_from)
+    -- NULLS NOT DISTINCT: `valid_from IS NULL` means "open-started", of which
+    -- there can only be one per party. Under the default NULLS DISTINCT,
+    -- PostgreSQL treats every NULL as unique, so repeated PUTs of an
+    -- open-started sheet silently accumulate rows and the point-in-time read
+    -- (`ORDER BY valid_from DESC NULLS LAST LIMIT 1`) picks an arbitrary one.
+    UNIQUE NULLS NOT DISTINCT (msb_mp_id, valid_from),
+
+    -- Two price sheets valid on the same day for the same party would make the
+    -- tariff a lottery — invoic-checker validates INVOIC plausibility against
+    -- whichever one the read happened to return.
+    CONSTRAINT preisblaetter_dienstleistung_no_overlap EXCLUDE USING gist (
+        msb_mp_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 CREATE INDEX preisblaetter_dl_msb ON preisblaetter_dienstleistung (msb_mp_id, valid_from DESC NULLS LAST);
@@ -390,7 +491,20 @@ CREATE TABLE preisblaetter_hardware (
     source       TEXT        NOT NULL DEFAULT 'api' CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (msb_mp_id, valid_from)
+    -- NULLS NOT DISTINCT: `valid_from IS NULL` means "open-started", of which
+    -- there can only be one per party. Under the default NULLS DISTINCT,
+    -- PostgreSQL treats every NULL as unique, so repeated PUTs of an
+    -- open-started sheet silently accumulate rows and the point-in-time read
+    -- (`ORDER BY valid_from DESC NULLS LAST LIMIT 1`) picks an arbitrary one.
+    UNIQUE NULLS NOT DISTINCT (msb_mp_id, valid_from),
+
+    -- Two price sheets valid on the same day for the same party would make the
+    -- tariff a lottery — invoic-checker validates INVOIC plausibility against
+    -- whichever one the read happened to return.
+    CONSTRAINT preisblaetter_hardware_no_overlap EXCLUDE USING gist (
+        msb_mp_id WITH =,
+        daterange(valid_from, valid_to, '[)') WITH &&
+    )
 );
 
 CREATE INDEX preisblaetter_hw_msb ON preisblaetter_hardware (msb_mp_id, valid_from DESC NULLS LAST);
@@ -686,7 +800,8 @@ CREATE TABLE malo_grid (
     bilanzierungsgebiet  TEXT,                   -- Bilanzierungsgebiet-EIC (LOC+237)
     netzgebiet           TEXT,                   -- NB-internal grid area code
     sparte               TEXT        NOT NULL,   -- 'STROM' | 'GAS'
-    source               TEXT        NOT NULL DEFAULT 'manual',  -- 'mastr' | 'nis' | 'manual'
+    source               TEXT        NOT NULL DEFAULT 'manual'
+                         CHECK (source IN ('mastr', 'manual')),  -- NB-role PUT or MaStR import
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     PRIMARY KEY (malo_id, tenant)
@@ -700,10 +815,6 @@ CREATE INDEX malo_grid_nb_gln
 CREATE INDEX malo_grid_big
     ON malo_grid (bilanzierungsgebiet, tenant)
     WHERE bilanzierungsgebiet IS NOT NULL;
-
--- The fan-out dead-letter queue is no longer a standalone table: dead-lettering
--- is a status column (dead_lettered_at) on event_delivery, defined alongside the
--- durable event_log outbox below.
 
 -- ── SteuerbareRessource (B4b) ─────────────────────────────────────────────────
 --
@@ -857,14 +968,23 @@ CREATE INDEX tr_nutzung ON technische_ressourcen (tenant, nutzung) WHERE nutzung
 
 CREATE TABLE event_log (
     event_id      TEXT        PRIMARY KEY,
+    -- Monotonic publication order. `received_at` cannot serve as one: it defaults
+    -- to now(), the *transaction start* time, so every event from one ingest
+    -- shares a timestamp and their relative order is undefined.
+    seq           BIGSERIAL   NOT NULL UNIQUE,
     ce_type       TEXT        NOT NULL,
     marktrole     TEXT,
+    -- 'STROM' / 'GAS' from the `marktsparte` CloudEvents extension. NULL means
+    -- the event is not Sparte-scoped and matches every subscriber filter.
     sparte        TEXT,
+    -- Aggregate this event is about (the MaLo-ID, else the MeLo-ID). Deliveries
+    -- to one subscriber are ordered within an ordering_key; NULL is unordered.
+    ordering_key  TEXT,
     envelope      JSONB       NOT NULL,        -- the ENTIRE serialized MarktEvent
     fanned_out_at TIMESTAMPTZ,
     received_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX event_log_pending   ON event_log (received_at) WHERE fanned_out_at IS NULL;
+CREATE INDEX event_log_pending   ON event_log (seq) WHERE fanned_out_at IS NULL;
 CREATE INDEX event_log_type_time ON event_log (ce_type, received_at DESC);
 
 -- ── Per-subscriber delivery ledger ────────────────────────────────────────────
@@ -878,10 +998,18 @@ CREATE INDEX event_log_type_time ON event_log (ce_type, received_at DESC);
 -- invoicd announces a message that becomes a Buchungsbeleg (8-year retention);
 -- silently dropping it would break the audit trail's completeness.
 -- Dead-lettering (never dropping) provides the recovery path.
+--
+-- Ordering: per **aggregate**, not per endpoint. `seq` and `ordering_key` are
+-- denormalised from event_log so the claim can hold a delivery back while an
+-- earlier event for the same Marktlokation is still outstanding to the same
+-- subscriber. Events about different MaLos never wait for each other, and a
+-- dead-lettered row stops blocking its key.
 CREATE TABLE event_delivery (
     event_id         TEXT        NOT NULL REFERENCES event_log(event_id) ON DELETE CASCADE,
     subscriber_id    TEXT        NOT NULL,
     webhook_url      TEXT        NOT NULL,
+    seq              BIGINT      NOT NULL,
+    ordering_key     TEXT,
     attempts         SMALLINT    NOT NULL DEFAULT 0,
     next_attempt_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     delivered_at     TIMESTAMPTZ,
@@ -890,7 +1018,11 @@ CREATE TABLE event_delivery (
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (event_id, subscriber_id)
 );
-CREATE INDEX event_delivery_due  ON event_delivery (next_attempt_at) WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
+CREATE INDEX event_delivery_due  ON event_delivery (seq)
+    WHERE delivered_at IS NULL AND dead_lettered_at IS NULL;
+-- Backs the "is an earlier event for this aggregate still outstanding?" probe.
+CREATE INDEX event_delivery_order ON event_delivery (subscriber_id, ordering_key, seq)
+    WHERE delivered_at IS NULL AND dead_lettered_at IS NULL AND ordering_key IS NOT NULL;
 CREATE INDEX event_delivery_dead ON event_delivery (dead_lettered_at) WHERE dead_lettered_at IS NOT NULL;
 
 -- Migration 0002: MMMA / MMM settlement price store
@@ -927,27 +1059,44 @@ CREATE TABLE mmma_preise_gas (
 CREATE INDEX mmma_gas_month
     ON mmma_preise_gas (price_month DESC, marktgebiet);
 
--- ── Strom MMM Ausgleichsenergie prices (VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4) ────────────────
+-- ── Strom Mehr-/Mindermengenpreise (BDEW, bundesweit einheitlich) ────────────
+--
+-- § 13 Abs. 3 StromNZV requires *einheitliche* Mehr-/Mindermengenpreise
+-- calculated from monthly market prices. Since 2016 the BDEW determines and
+-- publishes them centrally, as one nationwide series with a Mehr and a Minder
+-- value per application month. Every Netzbetreiber settles against that same
+-- series.
+--
+-- The month is therefore the whole key. An earlier `vnb_mp_id` column modelled
+-- a per-ÜNB (or per-VNB — the comments disagreed with each other) series that
+-- does not exist: it let several rows claim the same month with different
+-- prices and no rule for choosing between them, and it made netzbilanzd refuse
+-- every Strom MMM settlement until an operator configured an ÜNB whose price
+-- series was never published.
+--
+-- Gas is genuinely different and keeps its `marktgebiet` key: there the
+-- Marktgebietsverantwortliche (THE) publishes per market area.
 
 CREATE TABLE mmm_preise_strom (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    -- First day of the billing month (German local time).
-    price_month     DATE        NOT NULL,
-    -- ÜNB MP-ID (BDEW-Codenummer 99…): 50Hertz, TenneT, Amprion, TransnetBW.
-    vnb_mp_id       TEXT        NOT NULL,
-    -- Surplus energy price (Mehrmengen, LF over-consumed) ct/kWh.
+    -- First day of the application month (German local time).
+    price_month     DATE        PRIMARY KEY,
+    -- Surplus price (Mehrmengen, LF over-delivered) ct/kWh.
+    -- Published to four decimals in ct/kWh; NUMERIC keeps that exactly.
     mehr_ct_kwh     NUMERIC     NOT NULL CHECK (mehr_ct_kwh >= 0),
-    -- Deficit energy price (Mindermengen, LF under-consumed) ct/kWh.
+    -- Deficit price (Mindermengen, LF under-delivered) ct/kWh.
     minder_ct_kwh   NUMERIC     NOT NULL CHECK (minder_ct_kwh >= 0),
     source          TEXT        NOT NULL DEFAULT 'manual'
-                                CHECK (source IN ('manual', 'uenb-api', 'csv-import')),
+                                CHECK (source IN ('manual', 'bdew-csv', 'csv-import')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (price_month, vnb_mp_id)
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX mmm_strom_month
-    ON mmm_preise_strom (price_month DESC, vnb_mp_id);
+COMMENT ON TABLE mmm_preise_strom IS
+    'Bundesweit einheitliche Mehr-/Mindermengenpreise Strom (§ 13 Abs. 3 StromNZV), '
+    'monatlich vom BDEW ermittelt und veroeffentlicht. Keyed by month alone — there '
+    'is no per-Netzbetreiber series.';
+
+CREATE INDEX mmm_strom_month ON mmm_preise_strom (price_month DESC);
 
 -- ── marktd migration 0003 — ZaehlzeitRegister + ZaehlzeitSaison ─────────────
 --
@@ -995,14 +1144,24 @@ CREATE TABLE zaehler_saisons (
     -- Season key: SOMMER | WINTER | GESAMT (year-round)
     saison           TEXT        NOT NULL
                      CHECK (saison IN ('SOMMER', 'WINTER', 'GESAMT')),
-    -- Days-of-week bitmask stored as a JSONB integer array.
-    -- ISO weekday: 1=Mon … 7=Sun.  Example: [1,2,3,4,5] = Mon–Fri.
-    wochentage       JSONB       NOT NULL,
-    -- Window start/end in local German time (HH:MM, 24-h clock).
-    -- Start is inclusive; end is exclusive (standard half-open interval).
-    zeit_von         TEXT        NOT NULL,    -- e.g. "07:00"
-    zeit_bis         TEXT        NOT NULL,    -- e.g. "22:00"
-    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now()
+    -- ISO weekdays the window applies to: 1=Mon … 7=Sun. `SMALLINT[]` rather
+    -- than JSONB so the values are typed and constrained — a JSONB array
+    -- accepted `["monday"]` and `[0]` just as happily as `[1,2,3,4,5]`.
+    wochentage       SMALLINT[]  NOT NULL
+                     CHECK (array_length(wochentage, 1) BETWEEN 1 AND 7
+                            AND wochentage <@ ARRAY[1,2,3,4,5,6,7]::SMALLINT[]),
+    -- Window in German local time, half-open [zeit_von, zeit_bis).
+    -- `TIME` rather than `TEXT`: as text, '7:00' and '07:00' were different
+    -- values that compared and sorted differently, and nothing rejected '25:00'.
+    zeit_von         TIME        NOT NULL,
+    zeit_bis         TIME        NOT NULL,
+    updated_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- A zero-length or inverted window classifies no reading at all, which
+    -- shows up as silently missing HT/NT energy rather than as an error.
+    CONSTRAINT zaehler_saisons_window_ordered CHECK (zeit_von < zeit_bis),
+    -- One definition per (register, season, window start).
+    UNIQUE (register_id, saison, zeit_von)
 );
 
 CREATE INDEX zs_register ON zaehler_saisons (register_id);
@@ -1218,8 +1377,10 @@ CREATE TABLE mabis_zaehlpunkte (
     tenant               TEXT        NOT NULL,
     mabis_zp_id          TEXT        NOT NULL    -- Meldepunkt (LOC+172)
                          CHECK (length(trim(mabis_zp_id)) > 0),
-    sparte               TEXT        NOT NULL DEFAULT 'STROM'
-                         CHECK (sparte IN ('STROM', 'GAS')),
+    -- No `sparte`: MaBiS is the Marktregeln für die Durchführung der
+    -- Bilanzkreisabrechnung **Strom**. Gas balancing runs under GaBi Gas, which
+    -- has no MaBiS-Zählpunkt at all, so a row with sparte = 'GAS' described
+    -- something that does not exist and invited an operator to record one.
     source               TEXT        NOT NULL DEFAULT 'manual',
     updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
 

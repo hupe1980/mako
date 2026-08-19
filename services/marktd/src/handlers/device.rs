@@ -341,7 +341,7 @@ pub async fn get_konfigurationsprodukte(
 ///
 /// ## CloudEvent
 ///
-/// Emits `de.markt.sr.konfigurationsprodukt.updated` to the EventBus fan-out
+/// Emits `de.markt.sr.konfigurationsprodukt.updated` to the durable fan-out
 /// on every successful write so ERP subscribers and `processd` see the change.
 ///
 /// Returns `204 No Content` on success.
@@ -907,7 +907,7 @@ pub async fn get_geraet_konfigurationen(
 ///
 /// - Server-side deduplication: last entry wins for duplicate `parameter` values.
 /// - `updated_at` on each stored entry is set server-side (UTC now).
-/// - Emits `de.markt.geraet.konfiguration.updated` via the EventBus fan-out so
+/// - Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out so
 ///   `edmd` certificate-expiry worker and `processd` §14a Steuerungsauftrag handler
 ///   receive SMGW cert / CLS-capability updates in near-real-time.
 ///
@@ -1055,7 +1055,7 @@ fn bo4e_wire<T: serde::Serialize>(x: Option<&T>) -> Option<String> {
 )]
 pub async fn put_technische_ressource(
     Extension(repo): Extension<TrRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(tr_id): Path<String>,
@@ -1164,7 +1164,7 @@ pub async fn put_technische_ressource(
 )]
 pub async fn get_technische_ressource(
     Extension(repo): Extension<TrRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(tr_id): Path<String>,
@@ -1196,7 +1196,7 @@ pub async fn get_technische_ressource(
 )]
 pub async fn list_technische_ressourcen_by_malo(
     Extension(repo): Extension<TrRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(malo_id): Path<String>,
@@ -1228,7 +1228,7 @@ use mako_markt::repository::{ZaehlzeitRegisterRecord, ZaehlzeitRepository, Zaehl
 /// adapter extracts them.  Also supports manual operator import.
 pub async fn put_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
@@ -1257,7 +1257,7 @@ pub async fn put_zaehler_register(
 /// Returns HT + NT registers for iMSys TOU meters; EINZEL for single-tariff meters.
 pub async fn list_zaehler_register(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
@@ -1283,7 +1283,7 @@ pub async fn list_zaehler_register(
 /// season × weekday combination.  Example: "HT applies Mon–Fri 07:00–22:00 in WINTER".
 pub async fn put_zaehler_saison(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(register_id): Path<uuid::Uuid>,
@@ -1311,7 +1311,7 @@ pub async fn put_zaehler_saison(
 /// Used by `billingd` / `edmd` to classify 15-min intervals into HT/NT bands.
 pub async fn list_zaehler_saisons(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(register_id): Path<uuid::Uuid>,
@@ -1382,7 +1382,7 @@ pub async fn list_zaehler_saisons(
 /// consumption.
 pub async fn get_zaehlzeitdefinitionen(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
@@ -1448,7 +1448,7 @@ pub async fn get_zaehlzeitdefinitionen(
             switch_map
                 .entry(key)
                 .or_default()
-                .push((saison.zeit_von.clone(), reg.zaehlerauspraegung.clone()));
+                .push((hhmm(saison.zeit_von), reg.zaehlerauspraegung.clone()));
         }
     }
 
@@ -1534,14 +1534,12 @@ pub struct ZaehlzeitdefinitionQuery {
 ///
 /// Normalises the weekday array to a sorted comma-separated string so that
 /// `[1,2,3,4,5]` and `[3,1,5,2,4]` produce the same key.
-fn normalize_wochentage_key(wochentage: &serde_json::Value) -> String {
-    let mut days: Vec<i64> = wochentage
-        .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_i64()).collect())
-        .unwrap_or_default();
+fn normalize_wochentage_key(wochentage: &[i16]) -> String {
+    let mut days = wochentage.to_vec();
     days.sort_unstable();
+    days.dedup();
     days.iter()
-        .map(|d| d.to_string())
+        .map(ToString::to_string)
         .collect::<Vec<_>>()
         .join(",")
 }
@@ -1587,7 +1585,7 @@ fn wochentage_key_to_wiederholungstyp(key: &str) -> rubo4e::current::Wiederholun
 /// Used by `billingd` during 15-min interval classification.
 pub async fn get_tariff_zone(
     Extension(repo): Extension<ZaehlzeitRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(zaehler_id): Path<String>,
@@ -1709,10 +1707,9 @@ pub struct SharingEligibilityEvidence {
 
 /// BO4E `Zaehlertyp` wire value → the § 42c distinction `metering` models.
 ///
-/// `metering` 0.17 takes typed inputs where it used to take free text and match
-/// on strings internally. The parse belongs here: this is the boundary that
-/// reads the column, and it is the layer that knows the value came from BO4E
-/// rather than from somewhere else.
+/// `metering` takes typed inputs rather than free text. The parse belongs here:
+/// this is the boundary that reads the column and the layer that knows the value
+/// came from BO4E rather than from somewhere else.
 ///
 /// Everything that is a meter but neither an iMSys nor a moderne Messeinrichtung
 /// is `Conventional` — Drehstrom-, Wechselstrom- and Ferrariszähler differ in
@@ -1861,4 +1858,10 @@ pub async fn get_sharing_eligibility(
         },
     })
     .into_response()
+}
+
+/// Render a window boundary as `HH:MM` for the BO4E `Zaehlzeitdefinition`
+/// projection, which carries switch times as strings.
+fn hhmm(t: time::Time) -> String {
+    format!("{:02}:{:02}", t.hour(), t.minute())
 }

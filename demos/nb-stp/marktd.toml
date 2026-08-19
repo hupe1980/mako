@@ -10,8 +10,8 @@
 # STP auto-responder.
 allow_insecure_no_auth = true
 
-[storage.postgres]
-# url is injected via MARKTD_STORAGE__POSTGRES__URL env var
+[database]
+# url is injected via MARKTD_DATABASE__URL env var
 url = "postgres://demo:demo-secret@postgres/marktd"
 
 [http]
@@ -20,11 +20,13 @@ addr = "0.0.0.0:8180"
 # [oidc] is intentionally absent — authentication is disabled in demo mode.
 # All API requests are accepted with synthetic dev-admin claims.
 
+[markt]
+tenant = "9900357000004"
+
 [makod]
 base_url  = "http://makod:8080"
 # api_key is injected via MARKTD_MAKOD__API_KEY env var
 api_key   = ""
-tenant = "9900357000004"
 
 [webhook]
 inbound_path   = "/api/v1/events"

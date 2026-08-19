@@ -1,9 +1,11 @@
-# processd.toml — demo configuration (PostgreSQL, auth disabled, NB_AUTO_ACCEPT=true)
+# processd.toml — demo configuration (PostgreSQL, auth disabled, auto_accept on)
 # DO NOT use in production.
 #
 # processd is the **process decision engine**:
-#   - NB module: evaluates each Anmeldung via netz-checker (6 checks → Accept/Reject/Escalate)
-#   - LF module: auto-responds to E_0624 queries within the 45-min LFW24 window
+#   - NB module: evaluates each Anmeldung (55001/55077/44001, EBD E_0622) and
+#     Abmeldung (55004/44004, EBD E_0607) via netz-checker
+#   - LF module: answers the NB-initiated GPKE processes (55007, 55010) within
+#     their per-PID business Frist
 #
 # It subscribes to marktd for de.mako.process.initiated events and self-registers
 # on startup — no manual curl call is required.
@@ -42,7 +44,12 @@ api_key = "demo-processd-key"  # any value accepted (OIDC disabled)
 # No manual curl required — topology is fully config-driven.
 webhook_url   = "http://processd:8580/webhook"
 subscriber_id = "processd-demo"
-event_types   = "de.mako.process.initiated"
+# event_types is left at the code default, which is the full set the compiled
+# modules need: de.mako.process.initiated for the NB/LF/MSB STP modules plus
+# de.markt.versorgung.gap-detected / .eog-begonnen / .changed for the §36/§38
+# EoG gap closure. Narrowing it here disables a module without any other signal.
+# marktd requires a bearer on subscription writes and treats subscription
+# management as an operator capability; processd sends `[marktd] api_key`.
 
 [nb]
 # NB Anmeldung STP: automatically dispatch bestaetigen when all 6 netz-checker
@@ -52,16 +59,23 @@ event_types   = "de.mako.process.initiated"
 auto_accept = true
 
 [lf]
-# E_0624 auto-response: automatically dispatch einwilligung/ablehnen within the
-# 45-min LFW24 window without ERP involvement.
-auto_respond   = true
-queue_ttl_secs = 2700   # 45 min — LFW24 regulatory deadline
+# Answer the NB-initiated processes automatically from VersorgungsStatus, without
+# ERP involvement. The queue deadline comes from the process's own Antwortfrist
+# (05:00 Uhr des 1. WT nach dem ÜT for 55007, 09:00 for 55010 — GPKE Teil 2),
+# less an hour of headroom. There is no separate TTL knob.
+auto_respond = true
 
 [msb]
-# M3: REQOTE auto-response — when an nMSB sends a Preisanfrage (PIDs 35001–35005),
-# processd automatically dispatches QUOTES from the current PreisblattMessung.
-# If no PreisblattMessung is found in marktd, the REQOTE is escalated to the operator.
-# Set to false to require manual QUOTES dispatch via ERP.
+# MSB-Wechsel auto-accept — when false (the default), an Accept verdict goes to
+# the approval queue with its WiM Antwortfrist attached instead of dispatching
+# the Bestätigung. Enabled here so the demo runs end to end unattended.
+auto_accept = true
+
+# REQOTE auto-response — on an inbound Preisanfrage (35001/35002/35004/35005;
+# 35003 is the ESA Werteanfrage and is NOT a Preisanfrage), processd dispatches
+# QUOTES from the current PreisblattMessung. When no PreisblattMessung is in
+# force — or when this is false — the REQOTE lands in the approval queue with
+# its 5-Werktage Frist, never as a bare log line.
 auto_preisanfrage = true
 
 # [oidc] — intentionally absent: authentication is disabled in demo mode.

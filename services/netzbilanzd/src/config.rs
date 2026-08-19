@@ -41,14 +41,6 @@ pub struct NetzbilanzConfig {
     /// Bilanzkreis INVOIC paid/disputed.
     #[serde(default)]
     pub inbound_secret: Option<String>,
-    /// VNB MP-ID used to auto-fetch this operator's published Strom MMM
-    /// (Mehr-/Mindermengen) settlement prices from `marktd` when not explicitly
-    /// supplied in a billing run request.
-    ///
-    /// Required for the Strom MMM auto-fetch path (`billing_type = "mmm"`, `sparte = "Strom"`).
-    /// Identify your ÜNB from BDEW Codenummernbericht or
-    /// `marktd GET /api/v1/partners` (rol: ÜNB).
-    pub vnb_mp_id: Option<String>,
     /// How often (seconds) to look for drafts stuck undispatched.
     /// Default: 3600 (1 hour). Set to 0 to disable the worker.
     pub dispatch_alert_interval_secs: Option<u64>,

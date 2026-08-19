@@ -6,19 +6,31 @@
 //
 // Resource attribute:
 //   context.resource_tenant   — owning tenant passed by the handler
-//                                (= cfg.makod.tenant_id for this instance)
+//                                (= `[markt] tenant` for this instance)
 //
 // Isolation model:
-//   A token issued by the IDP carries `mako_tenant = "<operator-MP-ID>".
-//   The running marktd instance is configured with the same MP-ID in `tenant_id`.
-//   Access is permitted only when the two match.  This prevents cross-tenant
+//   A token issued by the IDP carries `mako_tenant = "<operator-MP-ID>"`.
+//   The running marktd instance is configured with the same MP-ID in `tenant`.
+//   Access is permitted only when the two match. This prevents cross-tenant
 //   data leakage even if a valid token for another tenant reaches this instance.
 //
+// Completeness:
+//   Cedar is default-deny, so an action string that appears in a handler but in
+//   no policy below makes that endpoint permanently return 403. The
+//   `cedar_action_coverage` guard test pins both directions — every action
+//   checked in code is permitted here, and every action permitted here is
+//   checked somewhere in code.
+//
 // Role model:
-//   Any authenticated user can read resources in their own tenant.
-//   Any authenticated user can write MaLo/MeLo/contract/partner data.
-//   Only the NB (Netzbetreiber) role may write price sheets (INVOIC billing),
-//   NeLo/Tranche balancing topology and MaLo grid topology.
+//   Reads are open to any authenticated principal of the tenant.
+//   Writes to *counterparty-facing authority data* — price sheets, grid and
+//   balancing topology, the §36 Grundversorger Feststellung, the §42 Energiemix
+//   — require the NB role, because the NB is the party the regulation makes
+//   responsible for publishing them.
+//   Writes that shape *this deployment's own behaviour* — webhook subscriptions,
+//   the dead-letter queue — require the ADMIN role: a subscription is an
+//   outbound data-export channel for every event this hub emits, so it is an
+//   operator-level capability rather than a market-role one.
 
 // ── Read access — any role, same tenant ──────────────────────────────────────
 
@@ -42,6 +54,12 @@ permit(
         Action::"read-melo-msb",
         Action::"read-bilanzierung",
         Action::"read-mabis-zp",
+        Action::"read-grundversorger",
+        Action::"read-energiemix",
+        Action::"read-correlation",
+        Action::"read-lokationszuordnung",
+        Action::"read-pricat",
+        Action::"read-mmma-preis",
         Action::"use-mcp"
     ],
     resource
@@ -65,62 +83,86 @@ permit(
         Action::"write-msb-rv-gas",
         Action::"write-melo-msb",
         Action::"write-bilanzierung",
-        Action::"write-mabis-zp"
+        Action::"write-mabis-zp",
+        Action::"write-lokationszuordnung"
     ],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant
 };
 
-// ── Price-sheet writes — NB role required ────────────────────────────────────
+// ── NB-authority writes — NB role required ───────────────────────────────────
 //
-// The NB (Netzbetreiber / Gasnetzbetreiber) is the billing party in INVOIC
-// processes.  Only NB operators create and update PreisblattNetznutzung records
-// used by invoic-checker to validate INVOIC plausibility (§22 MessZV).
-
-permit(
-    principal,
-    action == Action::"write-preisblatt",
-    resource
-) when {
-    context.principal_tenant == context.resource_tenant &&
-    context.principal_roles.contains("NB")
-};
-
-// ── NeLo writes — NB role required ───────────────────────────────────────────
+// Each of these is data the Netzbetreiber publishes to counterparties and that
+// another service then treats as authoritative:
 //
-// Netz-Element-Lokationen (NeLo) for Redispatch 2.0 are owned and managed by
-// the Netzbetreiber.  Reads are open to all authenticated users in the tenant
-// (see read-access block above); writes require the NB role to prevent
-// unauthorized modification of network topology data.
+//   write-preisblatt     PreisblattNetznutzung / -Messung / -KA / -Dienstleistung
+//                        / -Hardware — the tariff basis invoic-checker validates
+//                        INVOIC plausibility against (§ 22 MessZV).
+//   write-nelo           Netz-Element-Lokationen for Redispatch 2.0.
+//   write-tranche        GPKE Teil 4 „Daten der Tranche" balancing topology.
+//   write-malo-grid      NB grid topology feeding processd's Anmeldung STP.
+//   write-grundversorger §36 Abs. 2 EnWG Feststellung — addresses the UTILMD
+//                        55013/44013 EoG Zuordnung, so a wrong value routes the
+//                        statutory fallback supply to the wrong supplier.
+//   write-energiemix     §42 EnWG grid-area Energiemix — LFs disclose the
+//                        Reststrommix from it.
+//   write-mmma-preis     MMMA Gas / MMM Strom settlement prices used by
+//                        netzbilanzd's MMM billing and invoicd's check 6.
+//   dispatch-pricat      (Re-)sends PRICAT 27003 to every active LF partner.
 
 permit(
     principal,
-    action == Action::"write-nelo",
+    action in [
+        Action::"write-preisblatt",
+        Action::"write-nelo",
+        Action::"write-tranche",
+        Action::"write-malo-grid",
+        Action::"write-grundversorger",
+        Action::"write-energiemix",
+        Action::"write-mmma-preis",
+        Action::"dispatch-pricat"
+    ],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&
     context.principal_roles.contains("NB")
 };
 
-// Tranchen (GPKE Teil 4 „Daten der Tranche") are balancing topology owned by the
-// Netzbetreiber — reads open to the tenant, writes require the NB role.
+// ── ESA consent registry — MSB or ESA role ───────────────────────────────────
+//
+// §49 Abs. 2 Nr. 9 MsbG. The registry records the existence and lifecycle of an
+// Anschlussnutzer's consent, and a revocation fires the ORDERS 17008
+// Abbestellung at makod. Only the two parties to that relationship — the MSB
+// that holds the metering point and the ESA the consent authorises — may read
+// or change it; an unrelated LF has no lawful interest in it.
+
 permit(
     principal,
-    action == Action::"write-tranche",
+    action in [Action::"read-einwilligung", Action::"write-einwilligung"],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&
-    context.principal_roles.contains("NB")
+    (context.principal_roles.contains("MSB") ||
+     context.principal_roles.contains("ESA"))
 };
 
-// MaLo grid topology comes from the NB's own NIS/GIS and feeds processd's
-// Anmeldung STP decisions — reads open to the tenant, writes require the NB role.
+// ── Operator-level capabilities — ADMIN role ─────────────────────────────────
+//
+// manage-subscription — a webhook subscription receives *every* event this hub
+//   emits that matches its filter, including MaLo/MeLo master data and
+//   VersorgungsStatus transitions. Registering one is an outbound data-export
+//   decision, and `POST /subscriptions/{id}/test` returns the target's HTTP
+//   status, which makes an unrestricted version of it a network probe. Both are
+//   operator capabilities, not market-role ones.
+// manage-fanout — the dead-letter queue and the CloudEvent replay log. § 147 AO
+//   / GoBD evidence; requeueing a dead letter re-emits a market event.
+
 permit(
     principal,
-    action == Action::"write-malo-grid",
+    action in [Action::"manage-subscription", Action::"manage-fanout"],
     resource
 ) when {
     context.principal_tenant == context.resource_tenant &&
-    context.principal_roles.contains("NB")
+    context.principal_roles.contains("ADMIN")
 };

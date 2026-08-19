@@ -77,15 +77,15 @@ echo "════ Pre-load: seed master data into marktd ════"
 echo
 
 info "[P1] PUT MaLo ${MALO_ID} into marktd (Einspeiser)"
-HTTP=$(curl -sf -w '\n%{http_code}' -X PUT "${MARKTD_URL}/api/v1/malo/${MALO_ID}" \
+HTTP=$(curl -sf -w '\n%{http_code}' -X PUT "${MARKTD_URL}/api/v1/malos/${MALO_ID}" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer demo-secret-change-me" \
     -d @fixtures/malo.json 2>/dev/null || echo -e "\n000")
 CODE=$(echo "$HTTP" | tail -1)
 if [[ "$CODE" == "200" || "$CODE" == "201" ]]; then
-    pass "PUT /api/v1/malo/${MALO_ID} → ${CODE}"
+    pass "PUT /api/v1/malos/${MALO_ID} → ${CODE}"
 else
-    fail "PUT /api/v1/malo/${MALO_ID} → ${CODE}"
+    fail "PUT /api/v1/malos/${MALO_ID} → ${CODE}"
 fi
 
 # ── Einsd tests ───────────────────────────────────────────────────────────────

@@ -36,7 +36,21 @@ use sqlx::{PgPool, Row as _};
 use time::OffsetDateTime;
 use utoipa::IntoParams;
 
-use super::TenantGln;
+use std::sync::Arc;
+
+use mako_service::cedar::CedarEnforcer;
+
+use super::{Claims, TenantGln};
+
+/// Deny response for the §42 EnWG Energiemix authority.
+fn forbidden(action: &'static str) -> axum::response::Response {
+    use axum::response::IntoResponse as _;
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": action })),
+    )
+        .into_response()
+}
 
 // ── DTOs ─────────────────────────────────────────────────────────────────────
 
@@ -89,11 +103,19 @@ pub struct NbEnergiemixResponse {
 /// to Lieferanten annually.  LFs incorporate this into their §42 Abs. 5
 /// Reststrommix statement on customer bills.
 pub async fn put_nb_energiemix(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Path(nb_mp_id): Path<String>,
     Json(req): Json<PutNbEnergiemixRequest>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-energiemix", &tenant)
+        .is_err()
+    {
+        return forbidden("write-energiemix denied");
+    }
     // Validate + canonicalise via rubo4e deserialization.
     let typed: Energiemix = match serde_json::from_value(req.energiemix) {
         Ok(e) => e,
@@ -190,11 +212,19 @@ pub async fn put_nb_energiemix(
 /// - `portald` to display the local grid-area energy mix to customers
 /// - `agentd` for grid sustainability analytics
 pub async fn get_nb_energiemix(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Path(nb_mp_id): Path<String>,
     Query(q): Query<NbEnergiemixQuery>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-energiemix", &tenant)
+        .is_err()
+    {
+        return forbidden("read-energiemix denied");
+    }
     let row = if let Some(year) = q.year {
         sqlx::query(
             r"SELECT nb_mp_id, gueltig_fuer, energiemix,
@@ -256,10 +286,18 @@ pub async fn get_nb_energiemix(
 /// Return all available years of grid-area Energiemix for a NB.
 /// Used for audit and multi-year trend analysis.
 pub async fn get_nb_energiemix_history(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Path(nb_mp_id): Path<String>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-energiemix", &tenant)
+        .is_err()
+    {
+        return forbidden("read-energiemix denied");
+    }
     let rows = sqlx::query(
         r"SELECT nb_mp_id, gueltig_fuer, energiemix,
                  eeg_einspeisung_kwh, gesamtentnahme_kwh, updated_at

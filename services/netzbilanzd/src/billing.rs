@@ -61,8 +61,6 @@ pub struct SettledInvoice {
 pub struct Resolver<'a> {
     /// `marktd`, for published MMM prices and MaLo master data.
     pub marktd: &'a Arc<MarktdClient>,
-    /// The ÜNB whose Strom MMM price series this operator settles against.
-    pub vnb_mp_id: Option<&'a str>,
     /// Published MMM prices already fetched during this run, keyed by
     /// `(Sparte, year, month)`.
     ///
@@ -76,10 +74,9 @@ pub struct Resolver<'a> {
 impl<'a> Resolver<'a> {
     /// A resolver for one billing run.
     #[must_use]
-    pub fn new(marktd: &'a Arc<MarktdClient>, vnb_mp_id: Option<&'a str>) -> Self {
+    pub fn new(marktd: &'a Arc<MarktdClient>) -> Self {
         Self {
             marktd,
-            vnb_mp_id,
             prices: std::collections::HashMap::new(),
         }
     }
@@ -165,26 +162,26 @@ impl<'a> Resolver<'a> {
                          or supply mehr_preis_ct_per_kwh and minder_preis_ct_per_kwh."
                     )
                 }),
-            // Strom MMM prices are published per ÜNB Regelzone (GPKE
-            // BK6-24-174 Teil 1 Kap. 8.4), so the operator's own ÜNB has to
-            // be configured before anything can be fetched.
-            Sparte::Strom => {
-                let unb = self.vnb_mp_id.context(
-                    "Strom MMM: neither prices in the request nor `vnb_mp_id` in \
-                     netzbilanzd.toml — one of the two is required",
-                )?;
-                self.marktd
-                    .get_mmm_strom(year, month, unb)
-                    .await
-                    .context("fetch Strom MMM prices from marktd")?
-                    .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
-                    .with_context(|| {
-                        format!(
-                            "Strom MMM {year}-{month:02}: no prices in marktd for ÜNB {unb}. \
-                             Import them via PUT /api/v1/mmm-preise/strom/{year}/{month}."
-                        )
-                    })
-            }
+            // The Strom Mehr-/Mindermengenpreise are einheitlich across the
+            // German market (§ 13 Abs. 3 StromNZV) and published monthly by the
+            // BDEW, so the month alone identifies them. There is no operator
+            // dimension to configure — an earlier `vnb_mp_id` setting made
+            // every Strom MMM settlement refuse until an operator named an ÜNB
+            // whose own series was never published.
+            Sparte::Strom => self
+                .marktd
+                .get_mmm_strom(year, month)
+                .await
+                .context("fetch Strom Mehr-/Mindermengenpreise from marktd")?
+                .map(|r| (r.mehr_ct_kwh, r.minder_ct_kwh))
+                .with_context(|| {
+                    format!(
+                        "Strom MMM {year}-{month:02}: no Mehr-/Mindermengenpreise in marktd. \
+                         Import the BDEW publication via \
+                         PUT /api/v1/mmm-preise/strom/{year}/{month}, or supply \
+                         mehr_preis_ct_per_kwh and minder_preis_ct_per_kwh."
+                    )
+                }),
         }
     }
 }

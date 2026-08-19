@@ -314,7 +314,7 @@ pub enum SupplierChangeState {
     AntwortGesendet {
         /// Process data from the Anfrage.
         data: InitiatedData,
-        /// Derived outbound response PID (e.g. 55003 for accepted 55001, 55017 for accepted 55016).
+        /// Derived outbound response PID (e.g. 55002 for accepted 55001, 55017 for accepted 55016).
         response_pid: Option<Pruefidentifikator>,
     },
     /// Supply relationship is active (or Kündigung is complete).
@@ -536,7 +536,7 @@ impl CommandPayload for SupplierChangeCommand {}
 ///
 /// Note: PID 55079 does not exist in BDEW UTILMD AHB Strom (no such PID
 /// assigned), which is why 55077 rejects with 55080.
-fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikator> {
+pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruefidentifikator> {
     let code: u32 = match anfrage_pid {
         55001 => {
             if accepted {

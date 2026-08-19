@@ -1,26 +1,37 @@
-//! `marktd` configuration — loaded from `marktd.toml` + environment overrides.
+//! `marktd` configuration.
 //!
-//! Values can be resolved from the environment by using `"env:VAR_NAME"` as
-//! the string value in the TOML file.  Call [`resolve_env_secret`] for
-//! sensitive fields before use.
+//! Loaded by [`mako_service::load_config`], so the layering is the platform's:
+//! `marktd.toml` (path overridable with `MARKTD_CONFIG`) as the base, then
+//! `MARKTD_*` environment variables with `__` as the section separator, then
+//! `*_FILE` variables read from a file for Kubernetes/Swarm secrets. A
+//! container therefore needs no config file at all — every key can arrive as an
+//! environment variable:
+//!
+//! ```text
+//! MARKTD_DATABASE__URL=postgres://…            # [database] url
+//! MARKTD_MARKT__TENANT=9900357000004           # [markt] tenant
+//! MARKTD_MAKOD__API_KEY_FILE=/run/secrets/key  # [makod] api_key, from a file
+//! ```
 //!
 //! # Example `marktd.toml`
 //!
 //! ```toml
-//! [storage.postgres]
+//! [database]
 //! url = "env:DATABASE_URL"
 //!
 //! [http]
 //! addr = "0.0.0.0:8180"
+//!
+//! [markt]
+//! tenant = "9900357000004"
 //!
 //! [oidc]
 //! issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 //! audience = "api://mako-markt"
 //!
 //! [makod]
-//! base_url  = "http://makod:8080"
-//! api_key   = "env:MAKOD_API_KEY"
-//! tenant   = "9900357000004"
+//! base_url = "http://makod:8080"
+//! api_key  = "env:MAKOD_API_KEY"
 //!
 //! [webhook]
 //! inbound_path   = "/api/v1/mako/events"
@@ -37,18 +48,24 @@
 //! ```
 
 use serde::Deserialize;
-use std::path::Path;
+
+pub use mako_service::config::{DatabaseConfig, HttpConfig, resolve_env, resolve_env_secret};
+use mako_service::service::ServiceConfig;
 
 // ── Top-level config ──────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    pub storage: StorageConfig,
+    /// `[database]` — connection URL plus the shared pool tuning knobs.
+    pub database: DatabaseConfig,
+    #[serde(default = "default_http")]
     pub http: HttpConfig,
-    /// OIDC configuration.  When omitted, authentication is **disabled** and
-    /// all API requests are accepted with synthetic dev-admin claims.
-    /// **Never omit this in production.**
+    /// This deployment's own identity.
+    pub markt: MarktConfig,
+    /// OIDC configuration. When omitted, authentication is **disabled** and all
+    /// API requests are accepted with synthetic dev-admin claims — which is why
+    /// `allow_insecure_no_auth` must then be set explicitly.
     #[serde(default)]
     pub oidc: Option<OidcConfig>,
     pub makod: MakodConfig,
@@ -58,65 +75,49 @@ pub struct Config {
     pub otel: OtelConfig,
     #[serde(default)]
     pub mcp: McpConfig,
-    /// B12: Automated monthly MMMA Gas / MMM Strom price import.
-    /// When omitted or `enabled = false`, prices must be imported via
-    /// `PUT /api/v1/mmma-preise/gas/{year}/{month}` by the ERP.
+    /// Automated monthly MMMA Gas / MMM Strom price import. When omitted or
+    /// `enabled = false`, prices are imported by the ERP via
+    /// `PUT /api/v1/mmma-preise/gas/{year}/{month}`.
     #[serde(default)]
     pub mmma_import: MmmaImportConfig,
     /// Start without token verification AND without inbound webhook signing.
     ///
     /// Without `[oidc]` every request is admitted with synthetic dev claims,
-    /// and without `webhook.inbound_secret` the `POST /events` endpoint accepts
+    /// and without `webhook.inbound_secret` the inbound events endpoint accepts
     /// unsigned events that mutate VersorgungsStatus and the device registry.
-    /// Both postures must be asked for by name — `main` refuses to start when
-    /// either is missing unless this flag is set.
+    /// Both postures must be asked for by name — startup refuses when either is
+    /// missing unless this flag is set.
     #[serde(default)]
     pub allow_insecure_no_auth: bool,
 }
 
-// ── Storage ───────────────────────────────────────────────────────────────────
+impl ServiceConfig for Config {
+    fn database(&self) -> Option<&DatabaseConfig> {
+        Some(&self.database)
+    }
+
+    fn bind_addr(&self) -> String {
+        self.http.addr.clone()
+    }
+}
+
+fn default_http() -> HttpConfig {
+    HttpConfig {
+        addr: "0.0.0.0:8180".to_owned(),
+    }
+}
+
+// ── Identity ──────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StorageConfig {
-    pub postgres: PostgresConfig,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PostgresConfig {
-    /// PostgreSQL URL, e.g. `postgres://marktd:secret@postgres:5432/marktd`.
-    /// Use `"env:DATABASE_URL"` to defer to the `DATABASE_URL` environment variable.
-    pub url: String,
-    #[serde(default = "default_max_connections")]
-    pub max_connections: u32,
-    #[serde(default = "default_min_connections")]
-    pub min_connections: u32,
-    #[serde(default = "default_acquire_timeout_secs")]
-    pub acquire_timeout_secs: u64,
-}
-
-fn default_max_connections() -> u32 {
-    20
-}
-fn default_min_connections() -> u32 {
-    2
-}
-fn default_acquire_timeout_secs() -> u64 {
-    5
-}
-
-// ── HTTP ──────────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct HttpConfig {
-    #[serde(default = "default_http_addr")]
-    pub addr: String,
-}
-
-fn default_http_addr() -> String {
-    "0.0.0.0:8180".to_owned()
+pub struct MarktConfig {
+    /// Tenant identifier — this deployment's own operator identity. Typically
+    /// the BDEW- or DVGW-Codenummer. It is the `resource_tenant` every Cedar
+    /// check compares the caller's `mako_tenant` claim against, the `tenant`
+    /// column written on tenant-scoped rows, and the source URN of every
+    /// outbound CloudEvent.
+    pub tenant: String,
 }
 
 // ── OIDC ──────────────────────────────────────────────────────────────────────
@@ -133,10 +134,6 @@ pub struct MakodConfig {
     pub base_url: String,
     /// Bearer token / API key.  Use `"env:MAKOD_API_KEY"` for env-var resolution.
     pub api_key: String,
-    /// Tenant identifier — data-isolation key written to every database row.
-    /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable
-    /// unique string is valid. Also used in outbound CloudEvents source URNs.
-    pub tenant: String,
 }
 
 // ── Inbound webhooks (from makod) ─────────────────────────────────────────────
@@ -188,22 +185,7 @@ pub use mako_service::telemetry::OtelConfig;
 /// Supports `api_key` (Bearer token for agentd) and optional named keys.
 pub use mako_service::mcp_auth::McpAuthConfig as McpConfig;
 
-// ── Loader + env resolution ───────────────────────────────────────────────────
-
-/// Load configuration from a TOML file.
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be read or the TOML is invalid.
-pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
-    let cfg: Config = toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))?;
-    Ok(cfg)
-}
-
-// ── MMMA/MMM price import (B12) ──────────────────────────────────────────────
+// ── MMMA/MMM price import ────────────────────────────────────────────────────
 
 /// Configuration for the automated monthly MMMA Gas / MMM Strom price import.
 ///
@@ -211,7 +193,7 @@ pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
 /// (default 06:00 UTC, after THE publishes the monthly prices) and fetches
 /// from the configured URLs.
 ///
-/// Both Gas and Strom import URLs support:
+/// Both import URLs support:
 /// - `http(s)://...` — HTTP fetch; response body must be CSV or JSON
 /// - `file:///...`   — local file (for testing / CSV drop-in)
 /// - Empty string    — skip this commodity
@@ -230,7 +212,7 @@ pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
 /// ```
 ///
 /// A CloudEvent `de.markt.mmma.import.success` or `de.markt.mmma.import.failed`
-/// is emitted to the EventBus fan-out on each run.
+/// is emitted to the durable fan-out on each run.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MmmaImportConfig {
@@ -238,21 +220,15 @@ pub struct MmmaImportConfig {
     #[serde(default)]
     pub enabled: bool,
     /// URL of the THE Gas MMMA CSV/JSON file.  Leave empty to skip Gas import.
-    /// Example: `https://www.the-group.de/gas/market/market-area-manager/mmma`
     #[serde(default)]
     pub gas_url: String,
     /// URL of the VNB Strom MMM CSV/JSON file.  Leave empty to skip Strom import.
-    /// Example: `https://www.netztransparenz.de/de-de/strommarkt/mmm`
     #[serde(default)]
     pub strom_url: String,
     /// UTC hour (0–23) at which the import runs on the 1st of each month.
     /// Default: 6 (06:00 UTC — after THE typically publishes around 05:00 UTC).
     #[serde(default = "default_mmma_check_hour")]
     pub check_hour_utc: u8,
-    /// ERP webhook URL for import success/failure CloudEvents.
-    /// If empty, the EventBus fan-out is used instead.
-    #[serde(default)]
-    pub erp_webhook_url: String,
 }
 
 fn default_mmma_check_hour() -> u8 {
@@ -266,28 +242,6 @@ impl Default for MmmaImportConfig {
             gas_url: String::new(),
             strom_url: String::new(),
             check_hour_utc: default_mmma_check_hour(),
-            erp_webhook_url: String::new(),
         }
     }
-}
-
-/// If the value starts with `"env:"`, the remainder is looked up in the
-/// environment.  Otherwise the value is returned as-is.
-///
-/// # Errors
-///
-/// Returns an error if the `env:` reference is not set in the environment.
-pub fn resolve_env(value: &str) -> anyhow::Result<String> {
-    if let Some(var) = value.strip_prefix("env:") {
-        std::env::var(var).map_err(|_| {
-            anyhow::anyhow!("environment variable {var:?} is not set (referenced in marktd.toml)")
-        })
-    } else {
-        Ok(value.to_owned())
-    }
-}
-
-/// Like [`resolve_env`] but wraps the result in `secrecy::SecretString`.
-pub fn resolve_env_secret(value: &str) -> anyhow::Result<secrecy::SecretString> {
-    resolve_env(value).map(secrecy::SecretString::from)
 }

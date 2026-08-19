@@ -1,36 +1,50 @@
-//! MSB process decision module — WiM Strom MSB-Wechsel STP (M6).
+//! MSB process decision module — the Messstellenbetreiber's own answers.
 //!
-//! Consumes `de.mako.process.initiated` events for WiM MSB device-change PIDs:
-//! - **55039** WiM Kündigung MSB (nMSB → aMSB, answered by the incumbent MSB)
-//! - **55042** WiM Anmeldung MSB (nMSB → NB, answered by the NB)
+//! | Inbound PID | Process | Direction | Answered by | Frist |
+//! |---|---|---|---|---|
+//! | **55042** | WiM Anmeldung MSB | MSBN → NB | the **NB** | 5 WT |
+//! | **55051** | WiM Ende MSB | MSBA → NB | the **NB** | 7 WT |
+//! | **55039** | WiM Kündigung MSB | MSBN → MSBA | the **MSB** | 3 WT |
+//! | **55168** | WiM Verpflichtungsanfrage | NB → gMSB | the **MSB** | 1 WT |
+//! | **35001/35002/35004/35005** | REQOTE Preisanfrage | nMSB → aMSB | the **MSB** | 5 WT |
 //!
-//! # Decision pipeline
+//! The directions are not uniform, which is why the PID sets are two constants
+//! gated by separate Cargo features: a Kündigung MSB never reaches the NB at
+//! all, so an NB-role handler that answered it would be answering a message the
+//! NB cannot receive.
 //!
 //! ```text
-//! Event arrives → parse MsbWechselAnfrage
-//!   → GET /api/v1/melos/{melo_id}/zaehler        ← marktd (device exists?)
-//!   → GET /api/v1/malo/{malo_id}                  ← marktd (bilanzierungsmethode)
-//!   → GET /api/v1/steuerbare-ressourcen/{sr_id}   ← marktd (§14a SR linked?)
-//!   → evaluate_msb_wechsel(anfrage, zaehler_count, malo, sr)
-//!       Accept   → MakodClient { wim.geraetewechsel.bestaetigen }
-//!       Reject   → MakodClient { wim.geraetewechsel.ablehnen, erc_code }
-//!       Escalate → operator alert (requires manual decision)
+//! Event arrives → parse MsbWechselPayload
+//!   → GET /api/v1/melos/{melo_id}                 ← marktd (does the MeLo exist?)
+//!   → GET /api/v1/melos/{melo_id}/zaehler         ← marktd (meters + Zählertyp)
+//!   → GET /api/v1/partners/{nmsb_mp_id}           ← marktd (nMSB registered?)
+//!   → GET /api/v1/technische-ressourcen/{sr_id}   ← marktd (§14a SR linked?)
+//!   → evaluate_msb_anmeldung / evaluate_msb_kuendigung
+//!       Accept   → wim.geraetewechsel.bestaetigen [if auto_accept]
+//!                  else approval_queue with the WiM Frist
+//!       Reject   → wim.geraetewechsel.ablehnen (ERC)
+//!       Escalate → approval_queue with the WiM Frist
 //! ```
 //!
-//! # STP target
+//! Two rules the checks depend on:
 //!
-//! ≥ 80 % automatic (Accept or Reject); ≤ 20 % Escalate.
-//! Escalation criteria:
-//! - NB's device inventory is not in `marktd` (grid data missing)
-//! - SR-linked §14a controllable load with complex eligibility (manual review)
+//! - **A transport error is not evidence of absence.** Every `marktd` lookup
+//!   failure propagates so the caller answers 5xx and the fan-out redelivers;
+//!   only a genuine 404 may become an `A02`. The existence check reads the
+//!   **MeLo** rather than inferring it from the MaLo, because a rejection that
+//!   names the wrong object is still a rejection.
+//! - **§ 14a iMSys eligibility is decided from the `Zaehlertyp`**
+//!   (`INTELLIGENTES_MESSSYSTEM` — three `s`; `Geraetetyp` spells the same
+//!   concept with two). A MeLo that already carries one escalates: only the
+//!   grundzuständige MSB may be displaced there.
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-24-174** (WiM Strom) — 5 Werktage response window
-//! - **§21 MsbG** — nMSB has right to register; NB may only reject on enumerated grounds
-//! - **§14a EnWG** — controllable loads require MSB eligibility check
+//! - **BK6-24-174** (WiM Strom) — per-PID Antwortfristen, REQOTE/QUOTES
+//! - **§ 21 MsbG** — the nMSB has a right to register; the NB may reject only
+//!   on enumerated grounds
+//! - **§ 14a EnWG** — controllable loads require an MSB eligibility check
 
-use secrecy::SecretString;
 use tracing::{info, warn};
 
 use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
@@ -38,20 +52,39 @@ use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 // ── Configuration ─────────────────────────────────────────────────────────────
 
 /// Runtime configuration for the MSB module.
+///
+/// Carries no `marktd` connection details: the webhook path is handed an
+/// already-connected client.
 #[derive(Debug, Clone)]
 pub struct MsbModuleConfig {
-    pub marktd_url: String,
-    pub marktd_api_key: SecretString,
     pub own_mp_id: String,
     pub tenant: String,
-    /// When `true`, auto-accept is enabled for STP-eligible requests.
-    /// When `false`, all decisions require operator approval.
+    /// `[msb] auto_accept`. When `true`, an `Accept` verdict dispatches the
+    /// Bestätigung itself; when `false`, it goes to the approval queue with its
+    /// Frist attached.
     pub auto_accept: bool,
+    /// When `true`, an inbound REQOTE is answered with a QUOTES built from the
+    /// current `PreisblattMessung`. `[msb] auto_preisanfrage` in TOML.
+    pub auto_preisanfrage: bool,
 }
 
 // ── Decision types ────────────────────────────────────────────────────────────
 
-/// Fields extracted from `de.mako.process.initiated` for WiM PIDs 55039/55042.
+/// The WiM MSB-Wechsel PIDs **this deployment's NB role** answers.
+///
+/// Per `mako_wim::geraetewechsel`, directions are not uniform: 55042
+/// (Anmeldung) is MSBN → NB and 55051 (Ende MSB) is MSBA → NB, so the NB owes
+/// both answers. 55039 and 55168 never reach the NB.
+pub const NB_ANSWERED_PIDS: &[u32] = &[55_042, 55_051];
+
+/// The WiM MSB-Wechsel PIDs **this deployment's MSB role** answers.
+///
+/// 55039 (Kündigung MSB) is MSBN → MSBA — it never reaches the NB at all, so
+/// routing it into an NB-role handler answers a message the NB cannot receive.
+/// 55168 (Verpflichtungsanfrage) is NB → gMSB.
+pub const MSB_ANSWERED_PIDS: &[u32] = &[55_039, 55_168];
+
+/// Fields extracted from `de.mako.process.initiated` for a WiM MSB-Wechsel PID.
 #[derive(Debug, Clone)]
 pub struct MsbWechselPayload {
     pub process_id: uuid::Uuid,
@@ -66,14 +99,15 @@ pub struct MsbWechselPayload {
 }
 
 impl MsbWechselPayload {
-    /// Parse from a `de.mako.process.initiated` CloudEvent for PIDs 55039/55042.
+    /// Parse from a `de.mako.process.initiated` CloudEvent for any WiM
+    /// MSB-Wechsel PID this deployment could be asked to answer.
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
         let data = &event["data"];
         let pid = event
             .get("makopid")
             .and_then(|v| v.as_u64())
             .or_else(|| data.get("pid")?.as_u64())? as u32;
-        if !matches!(pid, 55039 | 55042) {
+        if !NB_ANSWERED_PIDS.contains(&pid) && !MSB_ANSWERED_PIDS.contains(&pid) {
             return None;
         }
         let subject = event["subject"].as_str()?;
@@ -110,6 +144,24 @@ impl MsbWechselPayload {
             sr_id,
             received_at: time::OffsetDateTime::now_utc(),
         })
+    }
+}
+
+impl MsbModuleConfig {
+    /// The config the webhook path needs, from the shared handler state.
+    #[must_use]
+    pub fn for_state(
+        own_mp_id: &str,
+        tenant: &str,
+        auto_accept: bool,
+        auto_preisanfrage: bool,
+    ) -> Self {
+        Self {
+            own_mp_id: own_mp_id.to_owned(),
+            tenant: tenant.to_owned(),
+            auto_accept,
+            auto_preisanfrage,
+        }
     }
 }
 
@@ -268,7 +320,11 @@ fn geraetewechsel_answer_command(pid: u32, accept: bool) -> (&'static str, &'sta
     } else {
         mako_markt::commands::WIM_GERAETEWECHSEL_ABLEHNEN
     };
-    let marktrolle = if pid == 55042 { "NB" } else { "MSB" };
+    let marktrolle = if NB_ANSWERED_PIDS.contains(&pid) {
+        "NB"
+    } else {
+        "MSB"
+    };
     (command, marktrolle)
 }
 
@@ -296,8 +352,8 @@ fn geraetewechsel_answer_command(pid: u32, accept: bool) -> (&'static str, &'sta
 ///
 /// Every `marktd` lookup failure is propagated so the caller answers 5xx and
 /// `marktd`'s durable fan-out redelivers. A transport error is **not** evidence
-/// of absence: treating it as one used to dispatch a wrongful A02 "MeLo not
-/// found" rejection into the market against a valid §21 MsbG registration.
+/// of absence: treating it as one dispatches a wrongful A02 "MeLo not found"
+/// rejection into the market against a valid §21 MsbG registration.
 pub async fn handle_msb_wechsel(
     cfg: &MsbModuleConfig,
     payload: MsbWechselPayload,
@@ -306,14 +362,25 @@ pub async fn handle_msb_wechsel(
     queue: &PgApprovalQueue,
 ) -> anyhow::Result<()> {
     // ── Query marktd in parallel ──────────────────────────────────────────────
-    let (versorgung_result, nmsb_known, zaehler_result, sr_result) = tokio::join!(
-        marktd.get_versorgung(&payload.malo_id),
+    let (melo_result, nmsb_known, zaehler_result, sr_result) = tokio::join!(
+        async {
+            if payload.melo_id.is_empty() {
+                // No MeLo on the order: fall back to the MaLo, which is the only
+                // location this message names. `Ok(None)` is the 404.
+                marktd
+                    .get_versorgung(&payload.malo_id)
+                    .await
+                    .map(|v| v.is_some())
+            } else {
+                marktd.melo_known(&payload.melo_id).await
+            }
+        },
         marktd.partner_known(&payload.nmsb_mp_id),
         async {
             if payload.melo_id.is_empty() {
                 Ok(Vec::new())
             } else {
-                marktd.list_zaehler_ids(&payload.melo_id).await
+                marktd.list_zaehler(&payload.melo_id).await
             }
         },
         async {
@@ -325,31 +392,57 @@ pub async fn handle_msb_wechsel(
         },
     );
 
-    // `Ok(None)` is the 404 — a genuinely absent MaLo, and the A02 ground.
-    // MeLo considered to exist when the MaLo is in marktd; a finer check (via
-    // `GET /api/v1/melos/{melo_id}`) would require a new MarktdClient method.
-    let melo_exists = versorgung_result?.is_some();
+    // Every `?` here propagates a *transport* failure so the caller answers 5xx
+    // and the fan-out redelivers. A transport error is not evidence of absence:
+    // treating it as one dispatches a wrongful A02 into the market against a
+    // valid § 21 MsbG registration.
+    let melo_exists = melo_result?;
     let nmsb_registered = nmsb_known?;
-    let zaehler_count = u32::try_from(zaehler_result?.len()).unwrap_or(u32::MAX);
+    let zaehler = zaehler_result?;
+    let zaehler_count = u32::try_from(zaehler.len()).unwrap_or(u32::MAX);
     let sr_linked = sr_result?.is_some();
 
-    // iMSys detection needs the Zählertyp, which `MarktdClient` does not expose
-    // (`list_zaehler_ids` returns identifiers only). Unknown, so check 4
-    // escalates rather than fabricating a value that auto-accepts.
-    let is_ima_device = None;
+    // § 14a / § 21 MsbG turns on whether the MeLo already carries an iMSys, so
+    // the Zählertyp decides it. `None` only when the registry lists no meter at
+    // all — check 3 stops there anyway — so the eligibility question is now
+    // answered from data instead of escalating unconditionally.
+    let is_ima_device = if zaehler.is_empty() {
+        None
+    } else {
+        Some(
+            zaehler
+                .iter()
+                .any(mako_markt::marktd_client::ZaehlerSummary::ist_imsys),
+        )
+    };
 
     // ── Evaluate ──────────────────────────────────────────────────────────────
-    let outcome = if payload.pid == 55042 {
-        evaluate_msb_anmeldung(
+    //
+    // Only the Anmeldung (55042) and the Kündigung (55039) have STP rules that
+    // this codebase can state from the AHB. The Ende MSB (55051) and the
+    // Verpflichtungsanfrage (55168) are escalated to the operator with their
+    // own answer window rather than auto-decided: inventing a rule for them
+    // would put an unfounded Bestätigung or Ablehnung on the market, and doing
+    // nothing at all — which is what happened before, since neither PID was
+    // routed anywhere — leaves the message unanswered past its Frist.
+    let outcome = match payload.pid {
+        55_042 => evaluate_msb_anmeldung(
             &payload,
             melo_exists,
             nmsb_registered,
             zaehler_count,
             is_ima_device,
             sr_linked,
-        )
-    } else {
-        evaluate_msb_kuendigung(&payload, melo_exists, nmsb_registered)
+        ),
+        55_039 => evaluate_msb_kuendigung(&payload, melo_exists, nmsb_registered),
+        pid => MsbDecisionOutcome::Escalate {
+            reason: format!(
+                "PID {pid} ({}) has no automatable decision rule — operator must answer \
+                 within {} Werktage (WiM Strom Teil 1)",
+                msb_wechsel_process_name(pid),
+                mako_wim::antwort_frist_werktage(pid).unwrap_or(0),
+            ),
+        },
     };
 
     match &outcome {
@@ -361,7 +454,30 @@ pub async fn handle_msb_wechsel(
                 melo_id = %payload.melo_id,
                 "processd MSB STP: Accept"
             );
-            if cfg.auto_accept {
+            if !cfg.auto_accept {
+                // auto_accept off is "an operator decides", not "nobody
+                // answers": without a queue row the order goes unanswered and
+                // unseen past its WiM Antwortfrist.
+                let (approve, reject) = (
+                    geraetewechsel_answer_command(payload.pid, true),
+                    geraetewechsel_answer_command(payload.pid, false),
+                );
+                let window = crate::fristen::operator_window(payload.pid, payload.received_at);
+                let entry = ApprovalQueueEntry::pending(
+                    payload.process_id,
+                    payload.pid as i32,
+                    Some(payload.malo_id.clone()),
+                    format!(
+                        "auto_accept disabled — STP says Accept for {} (Antwortfrist {})",
+                        msb_wechsel_process_name(payload.pid),
+                        window.deadline
+                    ),
+                    window.expires_at,
+                    cfg.tenant.clone(),
+                )
+                .with_commands(approve.0, reject.0, Some(approve.1));
+                queue.enqueue(&entry).await?;
+            } else {
                 let (command_name, marktrolle) = geraetewechsel_answer_command(payload.pid, true);
                 let cmd = mako_markt::makod_client::ForwardCommand {
                     marktrolle: Some(marktrolle.to_owned()),
@@ -452,15 +568,23 @@ pub async fn handle_msb_wechsel(
     Ok(())
 }
 
+/// Human-readable name for a WiM MSB-Wechsel PID, for operator-facing reasons.
+fn msb_wechsel_process_name(pid: u32) -> &'static str {
+    match pid {
+        55_039 => "Kündigung MSB",
+        55_042 => "Anmeldung MSB",
+        55_051 => "Ende MSB",
+        55_168 => "Verpflichtungsanfrage",
+        _ => "unknown MSB-Wechsel process",
+    }
+}
+
 /// Operator deadline for an escalated MSB-Wechsel: the per-PID WiM Antwortfrist
-/// (3 / 5 / 7 / 1 Werktage, BK6-24-174 Teil 1), minus an hour of headroom.
+/// (3 / 5 / 7 / 1 Werktage, BK6-24-174 Teil 1), less an hour of headroom.
 ///
-/// A warn!-only escalation let this Frist lapse unseen.
+/// A `warn!`-only escalation let this Frist lapse unseen.
 fn msb_wechsel_expires_at(pid: u32, received_at: time::OffsetDateTime) -> time::OffsetDateTime {
-    use mako_engine::fristen::{HolidayCalendar, deadline_at_werktage};
-    let werktage = mako_wim::antwort_frist_werktage(pid).unwrap_or(3);
-    deadline_at_werktage(received_at, werktage, HolidayCalendar::BdewMaKo)
-        - time::Duration::hours(1)
+    crate::fristen::operator_window(pid, received_at).expires_at
 }
 
 // ── M3: Preisanfrage REQOTE auto-response ──────────────────────────────────────
@@ -472,51 +596,60 @@ fn msb_wechsel_expires_at(pid: u32, received_at: time::OffsetDateTime) -> time::
 /// request for measurement values was answered with a PreisblattMessung quote.
 use mako_wim::preisanfrage::REQOTE_PIDS;
 
-/// Process an inbound `de.mako.process.initiated` event for PIDs 35001–35005
-/// (REQOTE Preisanfrage, nMSB → aMSB).
+/// Answer an inbound REQOTE Preisanfrage (PIDs 35001/35002/35004/35005,
+/// nMSB → aMSB) with a QUOTES built from the current `PreisblattMessung`.
 ///
-/// ## Decision logic
+/// ## Every branch ends somewhere
 ///
-/// 1. Extract `process_id`, `pid`, `melo_id` from the CloudEvent.
-/// 2. Fetch the **current** `PreisblattMessung` from `marktd` for our aMSB MP-ID.
-///    The `PreisblattMessung` contains the QUOTES price data the aMSB would quote.
-/// 3. If a valid `PreisblattMessung` exists → dispatch `wim.preisanfrage.angebot-senden`
-///    to `makod`.  `makod` builds the QUOTES EDIFACT message from the process state.
-/// 4. If no `PreisblattMessung` found → **skip auto-response** and log a warning.
-///    The operator must respond manually.  This prevents a blind QUOTES with zero prices.
+/// Answering HTTP 200 on a path that automated nothing lets the fan-out mark
+/// the event delivered while the five-Werktage window runs out with no queue
+/// row and no operator surface. Each outcome therefore has a distinct ending:
 ///
-/// ## Regulatory basis
-///
-/// - **BK6-24-174** REQOTE/QUOTES AHB 1.2 — response window per APERAK deadline.
-/// - Escalation on missing PreisblattMessung prevents an APERAK-Frist breach from
-///   auto-dispatching wrong prices.
+/// | Situation | Ending |
+/// |---|---|
+/// | `auto_preisanfrage = false` | approval-queue entry with the WiM Frist |
+/// | No active `PreisblattMessung` | approval-queue entry — an operator must quote |
+/// | `marktd` unreachable | `Err` → the caller answers 5xx and the fan-out redelivers |
+/// | `makod` dispatch failed | `Err` → same; the QUOTES has not gone out |
+/// | Quote dispatched | `Ok(true)` |
 ///
 /// ## Returns
 ///
-/// `true` when the event was handled (PID matched), `false` when not a REQOTE PID.
+/// `Ok(true)` when the event was handled, `Ok(false)` when the PID is not a
+/// REQOTE Preisanfrage. `Err` means *retry*, never *decided*.
+///
+/// ## Regulatory basis
+///
+/// BK6-24-174 (WiM Strom), REQOTE/QUOTES AHB 1.2 — the aMSB answers within
+/// [`mako_wim::PREISANFRAGE_ANTWORT_FRIST_WT`] Werktage.
 pub async fn handle_preisanfrage_reqote(
     event: &serde_json::Value,
     cfg: &MsbModuleConfig,
     marktd: &mako_markt::marktd_client::MarktdClient,
     makod: &mako_markt::makod_client::MakodClient,
-) -> bool {
+    queue: &PgApprovalQueue,
+) -> anyhow::Result<bool> {
     let pid = event["makopid"]
         .as_u64()
         .or_else(|| event["data"]["pid"].as_u64())
         .unwrap_or(0) as u32;
 
     if !REQOTE_PIDS.contains(&pid) {
-        return false;
+        return Ok(false);
     }
 
-    let process_id = event["subject"].as_str().unwrap_or("").to_owned();
-    if process_id.is_empty() {
-        warn!(
-            pid,
-            "processd M3: REQOTE event missing process_id in subject — skipping"
+    // The subject is the makod process UUID. A non-UUID is a broken producer
+    // contract: acking it would drop the answer obligation silently.
+    let Ok(process_id) = event["subject"]
+        .as_str()
+        .unwrap_or("")
+        .parse::<uuid::Uuid>()
+    else {
+        anyhow::bail!(
+            "REQOTE (PID {pid}) CloudEvent subject {:?} is not a process UUID",
+            event["subject"]
         );
-        return true;
-    }
+    };
 
     let data = &event["data"];
     let melo_id = data["melo_id"]
@@ -530,86 +663,102 @@ pub async fn handle_preisanfrage_reqote(
         .unwrap_or("")
         .to_owned();
 
-    if !cfg.auto_accept {
-        // auto_accept = false is the "require manual review for all decisions" switch.
-        // Honour it for M3 as well.
-        info!(
-            process_id = %process_id, pid,
-            "processd M3: auto_preisanfrage disabled — skipping REQOTE auto-response"
+    let received_at = event["time"]
+        .as_str()
+        .and_then(|s| {
+            time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+        })
+        .unwrap_or_else(time::OffsetDateTime::now_utc);
+
+    // Escalation is an approval-queue row carrying the WiM answer Frist and the
+    // command that sends the quote, so an operator can dispatch it from the
+    // queue rather than reconstructing it in the ERP.
+    let escalate = async |reason: String| -> anyhow::Result<bool> {
+        let window = crate::fristen::operator_window(pid, received_at);
+        let entry = ApprovalQueueEntry::pending(
+            process_id,
+            pid as i32,
+            None,
+            format!(
+                "{reason} (Antwortfrist {}: {})",
+                window.deadline, window.source
+            ),
+            window.expires_at,
+            cfg.tenant.clone(),
+        )
+        .with_approve_command(
+            mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN,
+            Some("MSB"),
         );
-        return true;
+        queue.enqueue(&entry).await?;
+        warn!(
+            %process_id, pid, %melo_id, %nmsb_mp_id,
+            deadline = %window.deadline,
+            "processd MSB: REQOTE escalated to the approval queue"
+        );
+        Ok(true)
+    };
+
+    if !cfg.auto_preisanfrage {
+        return escalate(
+            "auto_preisanfrage disabled — the QUOTES is dispatched on operator approval".to_owned(),
+        )
+        .await;
     }
 
-    // Fetch current PreisblattMessung for our aMSB MP-ID.
+    // A marktd outage is not a business finding: only a genuine *absence* of a
+    // PreisblattMessung may escalate. A transport error propagates so the
+    // fan-out redelivers.
     let today = time::OffsetDateTime::now_utc().date();
-    let preisblatt = marktd.get_preisblatt_messung(&cfg.own_mp_id, today).await;
+    let preisblatt = marktd
+        .get_preisblatt_messung(&cfg.own_mp_id, today)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, own_mp_id = %cfg.own_mp_id, %process_id,
+                  "processd MSB: PreisblattMessung lookup failed — fan-out will redeliver");
+            anyhow::anyhow!("marktd PreisblattMessung lookup failed: {e}")
+        })?;
 
-    match preisblatt {
-        Err(e) => {
-            warn!(
-                error = %e,
-                own_mp_id = %cfg.own_mp_id,
-                process_id = %process_id,
-                "processd M3: could not fetch PreisblattMessung from marktd — escalating REQOTE"
-            );
-            // No auto-response — operator must act before APERAK deadline.
-            return true;
-        }
-        Ok(None) => {
-            warn!(
-                own_mp_id = %cfg.own_mp_id,
-                process_id = %process_id,
-                "processd M3: no active PreisblattMessung found — escalating REQOTE (PID {pid})"
-            );
-            return true;
-        }
-        Ok(Some(preisblatt)) => {
-            // PreisblattMessung found — dispatch QUOTES auto-response.
-            let cmd = mako_markt::makod_client::ForwardCommand {
-                command: mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN.to_owned(),
-                marktrolle: Some("MSB".to_owned()),
-                malo_id: None,
-                melo_id: if melo_id.is_empty() {
-                    None
-                } else {
-                    Some(melo_id.clone())
-                },
-                payload: serde_json::json!({
-                    "process_id": process_id,
-                    "auto_response": true,
-                    "source_pid": pid,
-                    // Forward the Gueltigkeit / Preispositionen so makod can build QUOTES.
-                    "preisblatt_gueltigkeit": preisblatt
-                        .gueltigkeit
-                        .as_ref()
-                        .map(|g| serde_json::to_value(g).unwrap_or_default()),
-                }),
-            };
-            let idem_key = format!("preisanfrage-angebot-{process_id}");
-            match makod.post_command(&idem_key, &cmd).await {
-                Ok(resp) => {
-                    info!(
-                        process_id = %process_id,
-                        pid,
-                        melo_id = %melo_id,
-                        nmsb_mp_id = %nmsb_mp_id,
-                        response_process_id = %resp.process_id,
-                        "processd M3: auto-dispatched QUOTES (wim.preisanfrage.angebot-senden)"
-                    );
-                }
-                Err(e) => {
-                    warn!(
-                        error = %e,
-                        process_id = %process_id,
-                        pid,
-                        "processd M3: failed to dispatch QUOTES — operator must act"
-                    );
-                }
-            }
-        }
-    }
+    let Some(preisblatt) = preisblatt else {
+        return escalate(format!(
+            "no PreisblattMessung is in force for aMSB {} on {today} — a QUOTES with no \
+             prices must not go out automatically",
+            cfg.own_mp_id
+        ))
+        .await;
+    };
 
-    true
+    let cmd = mako_markt::makod_client::ForwardCommand {
+        command: mako_markt::commands::WIM_PREISANFRAGE_ANGEBOT_SENDEN.to_owned(),
+        marktrolle: Some("MSB".to_owned()),
+        malo_id: None,
+        melo_id: (!melo_id.is_empty()).then(|| melo_id.clone()),
+        payload: serde_json::json!({
+            "process_id": process_id,
+            "auto_response": true,
+            "source_pid": pid,
+            // Forward the Gueltigkeit so makod can build the QUOTES.
+            "preisblatt_gueltigkeit": preisblatt
+                .gueltigkeit
+                .as_ref()
+                .map(|g| serde_json::to_value(g).unwrap_or_default()),
+        }),
+    };
+    let resp = makod
+        .post_command(&format!("preisanfrage-angebot-{process_id}"), &cmd)
+        .await
+        .map_err(|e| {
+            warn!(error = %e, %process_id, pid,
+                  "processd MSB: QUOTES dispatch failed — fan-out will redeliver");
+            anyhow::anyhow!("makod QUOTES dispatch failed: {e}")
+        })?;
+
+    info!(
+        %process_id, pid, %melo_id, %nmsb_mp_id,
+        response_process_id = %resp.process_id,
+        "processd MSB: auto-dispatched QUOTES (wim.preisanfrage.angebot-senden)"
+    );
+    Ok(true)
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -696,10 +845,10 @@ mod tests {
 
     // ── Command name mapping ───────────────────────────────────────────────────
     //
-    // The posted names must come from the shared `mako_markt::commands` list —
-    // makod's registry test asserts every name in that list is registered, so
-    // the pair of tests closes the processd → makod drift gap that previously
-    // let `wim.msb-wechsel.*` (an unregistered name) fail every answer with 422.
+    // The posted names must come from the shared `mako_markt::commands` list;
+    // makod's registry test asserts every name in that list is registered. The
+    // pair of tests is what keeps processd from posting a name makod rejects
+    // with 422.
 
     #[test]
     fn answer_command_anmeldung_is_nb() {

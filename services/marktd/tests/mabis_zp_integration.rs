@@ -14,10 +14,7 @@
 //! just test-marktd-db
 //! ```
 
-use mako_markt::{
-    domain::Sparte,
-    repository::{MabisZpRecord, MabisZpRepository},
-};
+use mako_markt::repository::{MabisZpRecord, MabisZpRepository};
 use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
 use marktd::pg::PgMabisZpRepository;
 use sqlx::PgPool;
@@ -43,7 +40,6 @@ fn record(eic: &str, zp: &str, tenant: &str) -> MabisZpRecord {
     MabisZpRecord {
         bilanzierungsgebiet: eic.to_owned(),
         mabis_zp_id: zp.to_owned(),
-        sparte: Sparte::Strom,
         source: "manual".to_owned(),
         tenant: tenant.to_owned(),
         updated_at: OffsetDateTime::now_utc(),

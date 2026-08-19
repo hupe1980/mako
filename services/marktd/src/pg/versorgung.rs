@@ -274,6 +274,20 @@ impl PgVersorgungsStatusRepository {
     }
 
     /// NB received Lieferbeginn Anfrage — record the pending transition.
+    ///
+    /// **The first announcement wins.** A second Anmeldung by a *different*
+    /// supplier while one is pending is the situation EBD `E_0622` Prüfschritt
+    /// 70 rejects with `A06` „Andere Anmeldung in Bearbeitung", and
+    /// `netz-checker` decides it by comparing `lf_mp_id_next` against the
+    /// requesting supplier. Overwriting the marker makes that comparison always
+    /// succeed — the check runs after the ingest, so the second Anmeldung would
+    /// find its own MP-ID there.
+    ///
+    /// The same supplier re-sending (a corrected date, an at-least-once
+    /// redelivery) still updates the announcement.
+    ///
+    /// Returns `true` when a row actually changed — a losing announcement is a
+    /// genuine no-op and must not emit `versorgung.changed`.
     pub async fn announce_lf_next_tx(
         conn: &mut PgConnection,
         malo_id: &MaloId,
@@ -282,20 +296,22 @@ impl PgVersorgungsStatusRepository {
         lf_next_lieferbeginn: Option<Date>,
         nb_mp_id: &str,
         process_id: Option<uuid::Uuid>,
-    ) -> Result<(), MdmError> {
+    ) -> Result<bool, MdmError> {
         // Partial upsert: insert as Unbeliefert if new, otherwise only update
         // the announcement fields — never overwrite lieferstatus / lf_mp_id.
-        sqlx::query(
+        let r = sqlx::query(
             r#"INSERT INTO versorgungsstatus
                (malo_id, tenant, lieferstatus, nb_mp_id,
                 lf_mp_id_next, lf_next_lieferbeginn, last_process_id, updated_at, version)
                VALUES ($1, $2, 'Unbeliefert', $3, $4, $5, $6, now(), 1)
                ON CONFLICT (malo_id, tenant) DO UPDATE
-               SET lf_mp_id_next          = EXCLUDED.lf_mp_id_next,
+               SET lf_mp_id_next        = EXCLUDED.lf_mp_id_next,
                    lf_next_lieferbeginn = EXCLUDED.lf_next_lieferbeginn,
                    last_process_id      = EXCLUDED.last_process_id,
                    updated_at           = now(),
-                   version              = versorgungsstatus.version + 1"#,
+                   version              = versorgungsstatus.version + 1
+               WHERE versorgungsstatus.lf_mp_id_next IS NULL
+                  OR versorgungsstatus.lf_mp_id_next = EXCLUDED.lf_mp_id_next"#,
         )
         .bind(malo_id)
         .bind(tenant)
@@ -307,7 +323,11 @@ impl PgVersorgungsStatusRepository {
         .await
         .map_err(internal)?;
 
-        append_history_snapshot(conn, malo_id, tenant).await
+        if r.rows_affected() == 0 {
+            return Ok(false);
+        }
+        append_history_snapshot(conn, malo_id, tenant).await?;
+        Ok(true)
     }
 
     /// Atomic SQL promotion: `lf_mp_id_next` → `lf_mp_id`.  No-op (no version
@@ -318,7 +338,7 @@ impl PgVersorgungsStatusRepository {
         malo_id: &MaloId,
         tenant: &str,
         process_id: Option<uuid::Uuid>,
-    ) -> Result<(), MdmError> {
+    ) -> Result<bool, MdmError> {
         let updated = sqlx::query(
             r#"UPDATE versorgungsstatus
                SET lieferstatus         = 'Beliefert',
@@ -339,10 +359,11 @@ impl PgVersorgungsStatusRepository {
         .await
         .map_err(internal)?;
 
-        if updated.rows_affected() > 0 {
-            append_history_snapshot(conn, malo_id, tenant).await?;
+        if updated.rows_affected() == 0 {
+            return Ok(false);
         }
-        Ok(())
+        append_history_snapshot(conn, malo_id, tenant).await?;
+        Ok(true)
     }
 
     /// Clear active LF fields; preserve `lf_mp_id_next` / `lf_next_lieferbeginn`
@@ -355,7 +376,7 @@ impl PgVersorgungsStatusRepository {
         nb_mp_id: &str,
         lieferende: Option<Date>,
         process_id: Option<uuid::Uuid>,
-    ) -> Result<(), MdmError> {
+    ) -> Result<bool, MdmError> {
         let lieferende = lieferende.unwrap_or_else(crate::handlers::malo::today_berlin);
         sqlx::query(
             r#"INSERT INTO versorgungsstatus
@@ -381,7 +402,8 @@ impl PgVersorgungsStatusRepository {
         .await
         .map_err(internal)?;
 
-        append_history_snapshot(conn, malo_id, tenant).await
+        append_history_snapshot(conn, malo_id, tenant).await?;
+        Ok(true)
     }
 
     /// The E/G becomes the supplier of record; preserve a pending regular
@@ -397,7 +419,7 @@ impl PgVersorgungsStatusRepository {
         eog_status: LieferStatus,
         eog_seit: Option<Date>,
         process_id: Option<uuid::Uuid>,
-    ) -> Result<(), MdmError> {
+    ) -> Result<bool, MdmError> {
         if !matches!(
             eog_status,
             LieferStatus::Ersatzversorgung | LieferStatus::Grundversorgung
@@ -437,7 +459,8 @@ impl PgVersorgungsStatusRepository {
         .await
         .map_err(internal)?;
 
-        append_history_snapshot(conn, malo_id, tenant).await
+        append_history_snapshot(conn, malo_id, tenant).await?;
+        Ok(true)
     }
 
     /// Drop the announced future Lieferant.  Only touches rows that actually
@@ -448,7 +471,7 @@ impl PgVersorgungsStatusRepository {
         malo_id: &MaloId,
         tenant: &str,
         process_id: Option<uuid::Uuid>,
-    ) -> Result<(), MdmError> {
+    ) -> Result<bool, MdmError> {
         let updated = sqlx::query(
             r#"UPDATE versorgungsstatus
                SET lf_mp_id_next       = NULL,
@@ -466,10 +489,11 @@ impl PgVersorgungsStatusRepository {
         .await
         .map_err(internal)?;
 
-        if updated.rows_affected() > 0 {
-            append_history_snapshot(conn, malo_id, tenant).await?;
+        if updated.rows_affected() == 0 {
+            return Ok(false);
         }
-        Ok(())
+        append_history_snapshot(conn, malo_id, tenant).await?;
+        Ok(true)
     }
 }
 

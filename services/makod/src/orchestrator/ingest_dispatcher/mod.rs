@@ -925,6 +925,34 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
     }
 }
 
+/// The business answer Frist for an inbound GPKE Strom / GeLi Gas PID.
+///
+/// Single-sourced from the Festlegungen via
+/// [`mako_gpke::antwort_deadline`] and [`mako_geli_gas::antwortfrist::antwort_deadline`],
+/// so the deadline makod registers on the process and the one `processd` sizes
+/// its operator queue by are the same number read from the same table.
+///
+/// The windows are **not** a flat 24 hours: GPKE Teil 2 states each one as a
+/// wall-clock instant on the first Werktag after the ÜT (11:00 Anmeldung, 06:00
+/// Abmeldung, 05:00 NB-seitiges Lieferende, 09:00 Anfrage zur Beendigung), and
+/// GeLi Gas as „Ablauf des n. Werktags nach Eingang" (4 WT Anmeldung, 3 WT
+/// Abmeldung). A 24-hour approximation expires a Friday arrival on Saturday and
+/// — the quiet failure — still calls a Tuesday-evening arrival healthy nine
+/// hours after its Frist has lapsed.
+///
+/// `fallback` is used for a PID neither table quantifies. It must stay a real
+/// value: a process with no registered deadline never transitions out of
+/// `Initiated` and is invisible to the deadline scheduler.
+pub(crate) fn antwort_due_at(
+    pid: u32,
+    received: OffsetDateTime,
+    fallback: OffsetDateTime,
+) -> OffsetDateTime {
+    mako_gpke::antwort_deadline(pid, received)
+        .or_else(|| mako_geli_gas::antwortfrist::antwort_deadline(pid, received))
+        .unwrap_or(fallback)
+}
+
 /// Extract the **Fälligkeitsdatum** (Zahlungsziel) from an INVOIC — `SG8 DTM+265`
 /// per INVOIC AHB 1.0b. Returns the latest such date when several are present.
 ///

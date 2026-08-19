@@ -17,7 +17,7 @@
 //! On success: `de.markt.mmma.import.success`
 //! On failure: `de.markt.mmma.import.failed`
 //!
-//! Both are sent to the EventBus fan-out (all ERP webhooks subscribed to
+//! Both are sent to the durable fan-out (all ERP webhooks subscribed to
 //! `de.markt.*` receive them automatically).
 //!
 //! ## Manual trigger
@@ -49,29 +49,53 @@ pub struct ImportResult {
     pub error: Option<String>,
 }
 
-/// Fetch raw bytes from a URL or local file path.
+/// Fetch a price file as text from a URL or local path.
 ///
-/// Supports `http(s)://...` and `file:///...`.
-/// Returns `None` when the URL is empty (commodity import disabled).
-async fn fetch_raw(url: &str) -> Option<Result<String, String>> {
+/// Supports `http(s)://…` and `file://…`. Returns `None` when the URL is empty
+/// (that commodity's import is switched off).
+///
+/// `http` is the shared inter-service client, which carries a connect timeout
+/// and refuses redirects. Both matter here: this is the one place marktd
+/// reaches out to the public internet on a schedule, and the target is an
+/// operator-supplied URL, so a redirect would let a compromised or mistyped
+/// source point the fetch at cluster-internal infrastructure.
+async fn fetch_raw(http: &reqwest::Client, url: &str) -> Option<Result<String, String>> {
     if url.is_empty() {
         return None;
     }
     if let Some(path) = url.strip_prefix("file://") {
-        match std::fs::read_to_string(path) {
-            Ok(s) => Some(Ok(s)),
-            Err(e) => Some(Err(format!("file read error {path}: {e}"))),
-        }
-    } else {
-        match reqwest::get(url).await {
-            Ok(resp) if resp.status().is_success() => match resp.text().await {
-                Ok(t) => Some(Ok(t)),
-                Err(e) => Some(Err(format!("HTTP body error from {url}: {e}"))),
-            },
-            Ok(resp) => Some(Err(format!("HTTP {} from {url}", resp.status().as_u16()))),
-            Err(e) => Some(Err(format!("HTTP request error for {url}: {e}"))),
-        }
+        // On a blocking pool: a file read is not instantaneous on a network
+        // mount, and this runs on the same runtime that serves HTTP.
+        let path = path.to_owned();
+        let joined = tokio::task::spawn_blocking(move || std::fs::read_to_string(&path)).await;
+        return Some(match joined {
+            Ok(read) => read.map_err(|e| format!("file read error {url}: {e}")),
+            Err(e) => Err(format!("file read task failed: {e}")),
+        });
     }
+    match http.get(url).send().await {
+        Ok(resp) if resp.status().is_success() => match resp.text().await {
+            Ok(t) => Some(Ok(t)),
+            Err(e) => Some(Err(format!("HTTP body error from {url}: {e}"))),
+        },
+        Ok(resp) => Some(Err(format!("HTTP {} from {url}", resp.status().as_u16()))),
+        Err(e) => Some(Err(format!("HTTP request error for {url}: {e}"))),
+    }
+}
+
+/// Read one price field as an exact [`Decimal`].
+///
+/// A JSON number is taken from its literal text rather than through `f64`:
+/// these are settlement prices to four decimal places in ct/kWh, and a detour
+/// through binary floating point is a rounding error on money for no reason.
+fn decimal_field(item: &serde_json::Value, field: &str) -> Result<Decimal, String> {
+    let raw = item.get(field).ok_or_else(|| format!("missing {field}"))?;
+    let text = match raw {
+        serde_json::Value::String(s) => s.trim().to_owned(),
+        serde_json::Value::Number(n) => n.to_string(),
+        other => return Err(format!("{field}: expected a number or string, got {other}")),
+    };
+    Decimal::from_str(&text).map_err(|e| format!("{field}: {e}"))
 }
 
 /// Parse Gas MMMA prices from a CSV or JSON body.
@@ -98,44 +122,19 @@ fn parse_gas_prices(
     if body.starts_with('{') || body.starts_with('[') {
         let v: serde_json::Value =
             serde_json::from_str(body).map_err(|e| format!("JSON parse error: {e}"))?;
-        let items: Vec<&serde_json::Value> = if v.is_array() {
-            v.as_array().unwrap().iter().collect()
-        } else {
-            vec![&v]
+        let items: Vec<&serde_json::Value> = match v.as_array() {
+            Some(arr) => arr.iter().collect(),
+            None => vec![&v],
         };
         let mut result = Vec::new();
         for item in items {
             let marktgebiet = item
                 .get("marktgebiet")
-                .and_then(|v| v.as_str())
+                .and_then(serde_json::Value::as_str)
                 .unwrap_or("THE")
                 .to_owned();
-            let mehr = item
-                .get("mehr_ct_kwh")
-                .and_then(|v| v.as_str().or_else(|| v.as_f64().map(|_| "")))
-                .unwrap_or("");
-            let mehr: Decimal = mehr
-                .parse()
-                .or_else(|_| {
-                    item.get("mehr_ct_kwh")
-                        .and_then(|v| v.as_f64())
-                        .map(|f| Decimal::from_str(&format!("{f:.5}")).unwrap_or_default())
-                        .ok_or_else(|| "missing mehr_ct_kwh".to_string())
-                })
-                .map_err(|e| format!("mehr_ct_kwh: {e}"))?;
-            let minder_str = item
-                .get("minder_ct_kwh")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let minder: Decimal = minder_str
-                .parse()
-                .or_else(|_| {
-                    item.get("minder_ct_kwh")
-                        .and_then(|v| v.as_f64())
-                        .map(|f| Decimal::from_str(&format!("{f:.5}")).unwrap_or_default())
-                        .ok_or_else(|| "missing minder_ct_kwh".to_string())
-                })
-                .map_err(|e| format!("minder_ct_kwh: {e}"))?;
+            let mehr = decimal_field(item, "mehr_ct_kwh")?;
+            let minder = decimal_field(item, "minder_ct_kwh")?;
             result.push((marktgebiet, mehr, minder));
         }
         return Ok(result);
@@ -190,14 +189,27 @@ fn parse_gas_prices(
     }
 }
 
-/// Parse Strom MMM prices.  Same format as Gas MMMA but `uenb` field instead of `marktgebiet`.
-fn parse_strom_prices(
-    body: &str,
-    year: i32,
-    month: u8,
-) -> Result<Vec<(String, Decimal, Decimal)>, String> {
-    // Re-use Gas parser — the field name mapping happens at the call site.
-    parse_gas_prices(body, year, month)
+/// Parse the nationwide Strom Mehr-/Mindermengenpreise for one month.
+///
+/// The wire format matches the Gas file, minus the market-area dimension: the
+/// BDEW series has no operator or area column, so any such field in the source
+/// is ignored and a file carrying several rows for the month is a source error
+/// rather than several valid prices.
+fn parse_strom_prices(body: &str, year: i32, month: u8) -> Result<Vec<(Decimal, Decimal)>, String> {
+    let rows = parse_gas_prices(body, year, month)?;
+    if rows.len() > 1 {
+        return Err(format!(
+            "Strom Mehr-/Mindermengenpreise are nationwide and uniform (§ 13 Abs. 3 \
+             StromNZV), so {}-{month:02} must carry exactly one price pair — the source \
+             returned {}",
+            year,
+            rows.len()
+        ));
+    }
+    Ok(rows
+        .into_iter()
+        .map(|(_, mehr, minder)| (mehr, minder))
+        .collect())
 }
 
 /// Run one import cycle for the given year/month.
@@ -205,6 +217,7 @@ fn parse_strom_prices(
 pub async fn run_import_cycle(
     year: i32,
     month: u8,
+    http: &reqwest::Client,
     gas_url: &str,
     strom_url: &str,
     gas_repo: &PgMmmaPreisGasRepository,
@@ -215,7 +228,7 @@ pub async fn run_import_cycle(
     let mut results = Vec::new();
 
     // ── Gas MMMA ─────────────────────────────────────────────────────────────
-    if let Some(fetch_result) = fetch_raw(gas_url).await {
+    if let Some(fetch_result) = fetch_raw(http, gas_url).await {
         match fetch_result {
             Err(e) => {
                 warn!(year, month, error = %e, "MMMA import: Gas fetch failed");
@@ -318,7 +331,7 @@ pub async fn run_import_cycle(
     }
 
     // ── Strom MMM ─────────────────────────────────────────────────────────────
-    if let Some(fetch_result) = fetch_raw(strom_url).await {
+    if let Some(fetch_result) = fetch_raw(http, strom_url).await {
         match fetch_result {
             Err(e) => {
                 warn!(year, month, error = %e, "MMM import: Strom fetch failed");
@@ -365,7 +378,7 @@ pub async fn run_import_cycle(
                 }
                 Ok(prices) => {
                     let mut ok = true;
-                    for (uenb, mehr, minder) in &prices {
+                    for (mehr, minder) in &prices {
                         let price_month = time::Date::from_calendar_date(
                             year,
                             time::Month::try_from(month).unwrap_or(time::Month::January),
@@ -373,7 +386,7 @@ pub async fn run_import_cycle(
                         )
                         .unwrap_or_else(|_| time::OffsetDateTime::now_utc().date());
                         if let Err(e) = strom_repo
-                            .upsert_strom(price_month, uenb, *mehr, *minder, "uenb-api")
+                            .upsert_strom(price_month, *mehr, *minder, "bdew-csv")
                             .await
                         {
                             warn!(year, month, error = %e, "MMM import: Strom DB upsert failed");
@@ -395,7 +408,7 @@ pub async fn run_import_cycle(
                                 "commodity": "strom",
                                 "year": year, "month": month,
                                 "count": prices.len(),
-                                "source": "uenb-api",
+                                "source": "bdew-csv",
                             }),
                         )
                         .await;
@@ -424,7 +437,18 @@ pub async fn run_import_cycle(
 }
 
 async fn emit_event(sink: &EventSink<'_>, tenant: &str, event_type: &str, data: serde_json::Value) {
-    let evt = MarktEvent::new(tenant, event_type, "marktd/mmma-worker".to_owned(), data);
+    // Every import event names its commodity; that *is* the Sparte, so a
+    // subscriber that only settles Strom is not woken by the THE Gas import.
+    let sparte = match data.get("commodity").and_then(serde_json::Value::as_str) {
+        Some("gas") => Some("GAS".to_owned()),
+        Some("strom") => Some("STROM".to_owned()),
+        _ => None,
+    };
+    let evt = MarktEvent::new(tenant, event_type, "marktd/mmma-worker".to_owned(), data)
+        .with_extensions(mako_markt::cloudevents::EventExtensions {
+            marktsparte: sparte,
+            ..Default::default()
+        });
     // Background worker: no HTTP request to fail, so an enqueue failure is
     // logged at error level (the event is not silently dropped). Correctness of
     // the fan-out still holds — nothing is fanned out unless it is durable.
@@ -445,8 +469,10 @@ pub struct EventSink<'a> {
 /// Wakes every hour, checks whether today is the 1st and the `check_hour_utc`
 /// has been reached, then runs `run_import_cycle` if a price record for the
 /// current month does not already exist.
+#[allow(clippy::too_many_arguments)] // injected handles, each independently owned
 pub fn spawn_mmma_worker(
     cfg: Arc<crate::config::MmmaImportConfig>,
+    http: reqwest::Client,
     gas_repo: Arc<PgMmmaPreisGasRepository>,
     strom_repo: Arc<PgMmmPreisStromRepository>,
     tenant: String,
@@ -466,49 +492,55 @@ pub fn spawn_mmma_worker(
     );
 
     tokio::spawn(async move {
-        // Wake every hour to check if import is needed.
+        // Wake hourly and import whatever the current month is still missing.
+        //
+        // The previous schedule fired only *on the 1st* at or after
+        // `check_hour_utc`, so a deployment that was down for that one day
+        // never imported that month at all — and its idempotency check looked
+        // only at Gas, so a month where Gas succeeded and Strom failed was
+        // treated as complete and Strom stayed missing until someone noticed a
+        // billing run refusing. Both are now per-commodity "is it there yet"
+        // checks that keep retrying for as long as the month is incomplete.
         let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(3_600));
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
                 _ = interval.tick() => {}
-                _ = shutdown.cancelled() => {
+                () = shutdown.cancelled() => {
                     info!("MMMA import worker: shutting down");
                     break;
                 }
             }
 
             let now = time::OffsetDateTime::now_utc();
-            let day = now.day();
-            let hour = now.hour();
-            let year = now.year();
-            let month = now.month() as u8;
+            // The publications describe the current application month, and are
+            // not there before `check_hour_utc` on its first day.
+            if now.day() == 1 && now.hour() < cfg.check_hour_utc {
+                continue;
+            }
+            let (year, month) = (now.year(), now.month() as u8);
+            let price_month =
+                time::Date::from_calendar_date(year, now.month(), 1).unwrap_or_else(|_| now.date());
 
-            // Only import on 1st of month at or after check_hour_utc.
-            if day != 1 || hour < cfg.check_hour_utc {
+            let gas_missing = !cfg.gas_url.is_empty()
+                && !matches!(gas_repo.find_gas(price_month, "THE").await, Ok(Some(_)));
+            let strom_missing = !cfg.strom_url.is_empty()
+                && !matches!(strom_repo.find_strom(price_month).await, Ok(Some(_)));
+
+            if !gas_missing && !strom_missing {
                 continue;
             }
 
-            // Check if Gas prices already exist for this month (idempotency).
-            let price_month = time::Date::from_calendar_date(
+            info!(
                 year,
-                time::Month::try_from(month).unwrap_or(time::Month::January),
-                1,
-            )
-            .unwrap_or(now.date());
-            let already_exists = matches!(gas_repo.find_gas(price_month, "THE").await, Ok(Some(_)));
-
-            if already_exists {
-                // Already imported for this month — no-op.
-                continue;
-            }
-
-            info!(year, month, "MMMA import worker: running monthly import");
+                month, gas_missing, strom_missing, "MMMA import worker: fetching missing prices"
+            );
             run_import_cycle(
                 year,
                 month,
-                &cfg.gas_url,
-                &cfg.strom_url,
+                &http,
+                if gas_missing { &cfg.gas_url } else { "" },
+                if strom_missing { &cfg.strom_url } else { "" },
                 &gas_repo,
                 &strom_repo,
                 &tenant,

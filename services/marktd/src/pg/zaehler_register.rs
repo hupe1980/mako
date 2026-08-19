@@ -84,8 +84,8 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         .bind(rec.register_id)
         .bind(&rec.saison)
         .bind(&rec.wochentage)
-        .bind(&rec.zeit_von)
-        .bind(&rec.zeit_bis)
+        .bind(rec.zeit_von)
+        .bind(rec.zeit_bis)
         .execute(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
@@ -118,12 +118,8 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
         local_datetime: time::PrimitiveDateTime,
     ) -> Result<Option<String>, MdmError> {
         use time::Weekday;
-        let time_str = format!(
-            "{:02}:{:02}",
-            local_datetime.hour(),
-            local_datetime.minute()
-        );
-        let weekday_iso: i32 = match local_datetime.weekday() {
+        let at = local_datetime.time();
+        let weekday_iso: i16 = match local_datetime.weekday() {
             Weekday::Monday => 1,
             Weekday::Tuesday => 2,
             Weekday::Wednesday => 3,
@@ -140,15 +136,15 @@ impl ZaehlzeitRepository for PgZaehlzeitRepository {
               JOIN zaehler_saisons  s ON s.register_id = r.id
               WHERE r.zaehler_id = $1 AND r.tenant = $2
                 AND r.valid_to IS NULL
-                AND s.wochentage @> $3::jsonb
+                AND $3 = ANY(s.wochentage)
                 AND s.zeit_von <= $4
                 AND s.zeit_bis  > $4
               LIMIT 1",
         )
         .bind(zaehler_id)
         .bind(tenant)
-        .bind(serde_json::json!([weekday_iso]))
-        .bind(&time_str)
+        .bind(weekday_iso)
+        .bind(at)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;

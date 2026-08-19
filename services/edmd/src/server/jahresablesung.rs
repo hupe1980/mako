@@ -31,7 +31,7 @@ pub struct JahresablesungCampaignRequest {
 ///
 /// ## Pipeline
 ///
-/// 1. Query `marktd GET /api/v1/malo?bilanzierungsmethode=SLP&size=500` (paginated)
+/// 1. Query `marktd GET /api/v1/malos?bilanzierungsmethode=SLP&size=500` (paginated)
 ///    to enumerate SLP MaLos in the NB's grid area.
 /// 2. For each MaLo: check `ablese_auftraege` — skip those already having an
 ///    OFFEN/BEAUFTRAGT/AUSGEFUEHRT `JAHRESABLESUNG` for this year.
@@ -205,7 +205,7 @@ pub async fn run_jahresablesung_campaign(
 
     loop {
         let url = format!(
-            "{marktd_base}/api/v1/malo\
+            "{marktd_base}/api/v1/malos\
              ?bilanzierungsmethode=SLP\
              &zuordnungstyp=NB\
              &rollencodenummer={nb_mp_id}\

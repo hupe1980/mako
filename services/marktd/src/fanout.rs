@@ -1,7 +1,7 @@
 //! Durable two-phase fan-out worker.
 //!
-//! marktd persists every produced event to the `event_log` outbox *before*
-//! fan-out (see [`crate::outbox`]). This worker is the sole consumer and is
+//! marktd persists every produced event to the `event_log` outbox (see
+//! [`crate::outbox`]) *before* fan-out. This worker is the sole consumer and is
 //! crash-safe end to end:
 //!
 //! **Phase 1 — fan-out.** Claim undelivered `event_log` rows
@@ -14,15 +14,25 @@
 //!
 //! **Phase 2 — deliver.** Claim-with-lease due `event_delivery` rows (the same
 //! `FOR UPDATE SKIP LOCKED` + push-`next_attempt_at`-forward pattern as
-//! [`mako_service::outbox`]). Load the envelope, HMAC-sign per subscriber
-//! secret, POST `application/cloudevents+json`. On 2xx mark `delivered_at`; on
-//! failure back off, and after `max_attempts` set `dead_lettered_at` (the
-//! status-column DLQ — § 147 AO / GoBD: events are never silently dropped).
+//! [`mako_service::outbox`]). The claim returns the envelope and the
+//! subscriber's signing secret in the same round trip, so a delivery is one
+//! query plus one POST. On 2xx mark `delivered_at`; on failure back off with
+//! jitter, and after `max_attempts` set `dead_lettered_at` (the status-column
+//! DLQ — § 147 AO / GoBD: events are never silently dropped).
 //!
-//! The [`SubscriptionRepository`] futures are `!Send` (AFIT), so the loop runs
-//! on a dedicated thread with a current-thread runtime + `LocalSet`. Delivery
-//! POSTs are awaited inline within a batch; concurrency across replicas/rows is
-//! provided by `SKIP LOCKED`, not by spawning `Send` tasks.
+//! # Ordering
+//!
+//! Deliveries are **ordered per aggregate**, by `event_log.seq`: a delivery is
+//! held back while an earlier event about the same Marktlokation is still
+//! outstanding to the same subscriber. Events about different MaLos, and events
+//! tied to no MaLo, never wait for each other.
+//!
+//! One Marktlokation's supply lifecycle is the only sequence here whose order
+//! carries meaning, so that is the scope the guarantee covers. Per-endpoint FIFO
+//! would serialise the hub behind its slowest subscriber; unordered delivery
+//! would let a retried `versorgung.changed` arrive after the transition that
+//! superseded it. Head-of-line blocking is bounded — a dead-lettered row stops
+//! blocking its key.
 
 use std::{sync::Arc, time::Duration};
 
@@ -48,8 +58,7 @@ pub struct FanoutConfig {
     /// Max `event_delivery` rows delivered per Phase-2 batch.
     pub deliver_batch: i64,
     /// How many deliveries run concurrently within a batch, so one slow/hung
-    /// subscriber cannot stall the others (the futures are polled concurrently
-    /// on the single worker thread — I/O-bound, so this is real concurrency).
+    /// subscriber cannot stall the others.
     pub deliver_concurrency: usize,
     /// Back-off per prior attempt; the last entry repeats.
     pub backoff: Vec<Duration>,
@@ -78,7 +87,7 @@ impl Default for FanoutConfig {
     }
 }
 
-/// Spawn the durable fan-out worker on its own thread.
+/// Spawn the durable fan-out worker.
 ///
 /// No receiver: the worker is driven entirely by the `event_log` /
 /// `event_delivery` tables. `notify` is a low-latency wake-up hint from
@@ -94,36 +103,26 @@ pub fn spawn<S>(
 ) where
     S: SubscriptionRepository + Clone + Send + Sync + 'static,
 {
-    // AFIT SubscriptionRepository futures are !Send, so drive the loop on a
-    // dedicated blocking thread with its own current-thread runtime + LocalSet.
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("fanout: failed to build single-thread runtime");
-
-        let local = tokio::task::LocalSet::new();
-        local.block_on(&rt, async move {
-            let worker = Worker {
-                pool,
-                sub_repo,
-                http,
-                config,
-            };
-            let mut interval = tokio::time::interval(worker.config.poll_interval);
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            info!("fanout: durable worker started");
-            loop {
-                tokio::select! {
-                    () = shutdown.cancelled() => {
-                        debug!("fanout: shutdown signal received");
-                        break;
-                    }
-                    _ = interval.tick() => worker.drain().await,
-                    () = notify.notified() => worker.drain().await,
+    tokio::spawn(async move {
+        let worker = Worker {
+            pool,
+            sub_repo,
+            http,
+            config,
+        };
+        let mut interval = tokio::time::interval(worker.config.poll_interval);
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        info!("fanout: durable worker started");
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    debug!("fanout: shutdown signal received");
+                    break;
                 }
+                _ = interval.tick() => worker.drain().await,
+                () = notify.notified() => worker.drain().await,
             }
-        });
+        }
     });
 }
 
@@ -167,46 +166,72 @@ where
     /// Claim pending `event_log` rows, snapshot their subscriber sets into
     /// `event_delivery`, and stamp `fanned_out_at`. Returns rows fanned out.
     async fn fanout_phase(&self) -> Result<usize, sqlx::Error> {
-        let mut tx = self.pool.begin().await?;
-
         let rows: Vec<PendingEvent> = sqlx::query_as(
-            "SELECT event_id, ce_type, marktrole, sparte
+            "SELECT event_id, seq, ce_type, marktrole, sparte, ordering_key
                FROM event_log
               WHERE fanned_out_at IS NULL
-              ORDER BY received_at
-              LIMIT $1
-              FOR UPDATE SKIP LOCKED",
+              ORDER BY seq
+              LIMIT $1",
         )
         .bind(self.config.fanout_batch)
-        .fetch_all(&mut *tx)
+        .fetch_all(&self.pool)
         .await?;
 
-        let n = rows.len();
-        for row in &rows {
+        if rows.is_empty() {
+            return Ok(0);
+        }
+
+        // Resolve subscriber sets *before* opening the transaction. Doing it
+        // inside meant a second pool connection was taken while the first held
+        // `FOR UPDATE SKIP LOCKED` on up to `fanout_batch` rows, so a small pool
+        // could deadlock against itself. A subscription changing in the gap is
+        // harmless: the claim below re-checks that the row is still pending.
+        let mut resolved = Vec::with_capacity(rows.len());
+        for row in rows {
             let role = row.marktrole.as_deref().unwrap_or("");
-            let subs = match self
+            match self
                 .sub_repo
                 .list_matching(&row.ce_type, role, row.sparte.as_deref())
                 .await
             {
-                Ok(s) => s,
+                Ok(subs) => resolved.push((row, subs)),
+                // Leave the row pending (do NOT stamp fanned_out_at) so it is
+                // retried on the next cycle rather than fanned out to nobody.
                 Err(e) => {
-                    // Leave the row pending (do NOT stamp fanned_out_at) so it is
-                    // retried on the next cycle rather than fanned out to nobody.
                     warn!(event_id = %row.event_id, error = %e, "fanout: list_matching failed; leaving pending");
-                    continue;
                 }
-            };
+            }
+        }
+
+        let mut tx = self.pool.begin().await?;
+        let mut fanned = 0usize;
+        for (row, subs) in resolved {
+            // Re-claim under the lock; another replica may have taken it since
+            // the unlocked read above.
+            let claimed: Option<String> = sqlx::query_scalar(
+                "SELECT event_id FROM event_log
+                  WHERE event_id = $1 AND fanned_out_at IS NULL
+                  FOR UPDATE SKIP LOCKED",
+            )
+            .bind(&row.event_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if claimed.is_none() {
+                continue;
+            }
 
             for sub in subs {
                 sqlx::query(
-                    "INSERT INTO event_delivery (event_id, subscriber_id, webhook_url)
-                     VALUES ($1, $2, $3)
+                    "INSERT INTO event_delivery
+                         (event_id, subscriber_id, webhook_url, seq, ordering_key)
+                     VALUES ($1, $2, $3, $4, $5)
                      ON CONFLICT (event_id, subscriber_id) DO NOTHING",
                 )
                 .bind(&row.event_id)
                 .bind(&sub.subscriber_id)
                 .bind(&sub.webhook_url)
+                .bind(row.seq)
+                .bind(&row.ordering_key)
                 .execute(&mut *tx)
                 .await?;
             }
@@ -215,10 +240,11 @@ where
                 .bind(&row.event_id)
                 .execute(&mut *tx)
                 .await?;
+            fanned += 1;
         }
 
         tx.commit().await?;
-        Ok(n)
+        Ok(fanned)
     }
 
     // ── Phase 2: deliver ──────────────────────────────────────────────────────
@@ -226,18 +252,42 @@ where
     /// Claim-with-lease due deliveries and POST them. Returns rows processed.
     async fn deliver_phase(&self) -> Result<usize, sqlx::Error> {
         let lease_secs = i64::try_from(self.config.lease.as_secs()).unwrap_or(i64::MAX);
+        // The claim carries the envelope and the signing secret out with it.
+        // Loading them per delivery instead cost two extra round trips each, and
+        // the secret lookup was allowed to fail silently — which downgraded a
+        // delivery to *unsigned* on a transient database error, exactly when a
+        // subscriber's integrity check matters most.
         let claimed: Vec<ClaimedDelivery> = sqlx::query_as(
-            "UPDATE event_delivery
-                SET next_attempt_at = now() + ($1 * INTERVAL '1 second')
-              WHERE (event_id, subscriber_id) IN (
-                  SELECT event_id, subscriber_id FROM event_delivery
-                   WHERE delivered_at IS NULL AND dead_lettered_at IS NULL
-                     AND next_attempt_at <= now()
-                   ORDER BY next_attempt_at
-                   LIMIT $2
-                   FOR UPDATE SKIP LOCKED
-              )
-              RETURNING event_id, subscriber_id, webhook_url, attempts",
+            "WITH due AS (
+                 SELECT d.event_id, d.subscriber_id FROM event_delivery d
+                  WHERE d.delivered_at IS NULL AND d.dead_lettered_at IS NULL
+                    AND d.next_attempt_at <= now()
+                    -- Per-aggregate FIFO: hold this delivery back while an
+                    -- earlier event about the same Marktlokation is still
+                    -- outstanding to the same subscriber. Dead-lettered rows do
+                    -- not block, bounding the stall by max_attempts.
+                    AND (d.ordering_key IS NULL OR NOT EXISTS (
+                          SELECT 1 FROM event_delivery e
+                           WHERE e.subscriber_id = d.subscriber_id
+                             AND e.ordering_key  = d.ordering_key
+                             AND e.seq           < d.seq
+                             AND e.delivered_at     IS NULL
+                             AND e.dead_lettered_at IS NULL))
+                  ORDER BY d.seq
+                  LIMIT $2
+                  FOR UPDATE SKIP LOCKED
+             ), claimed AS (
+                 UPDATE event_delivery d
+                    SET next_attempt_at = now() + ($1 * INTERVAL '1 second')
+                   FROM due
+                  WHERE d.event_id = due.event_id AND d.subscriber_id = due.subscriber_id
+                  RETURNING d.event_id, d.subscriber_id, d.webhook_url, d.attempts
+             )
+             SELECT c.event_id, c.subscriber_id, c.webhook_url, c.attempts,
+                    l.envelope, s.webhook_secret
+               FROM claimed c
+               JOIN event_log l ON l.event_id = c.event_id
+               LEFT JOIN subscriptions s ON s.subscriber_id = c.subscriber_id",
         )
         .bind(lease_secs)
         .bind(self.config.deliver_batch)
@@ -246,8 +296,7 @@ where
 
         let n = claimed.len();
         // Deliver concurrently (bounded) so a hung subscriber cannot stall the
-        // batch. The futures borrow `&self` and are polled concurrently within
-        // this one task — no spawning, so the `!Send` repository stays fine.
+        // batch.
         use futures::StreamExt as _;
         futures::stream::iter(claimed)
             .for_each_concurrent(self.config.deliver_concurrency, |d| self.deliver_one(d))
@@ -256,26 +305,7 @@ where
     }
 
     async fn deliver_one(&self, d: ClaimedDelivery) {
-        // Load the full envelope from the durable outbox.
-        let envelope: Option<Value> =
-            match sqlx::query_scalar("SELECT envelope FROM event_log WHERE event_id = $1")
-                .bind(&d.event_id)
-                .fetch_optional(&self.pool)
-                .await
-            {
-                Ok(v) => v,
-                Err(e) => {
-                    warn!(event_id = %d.event_id, error = %e, "fanout: envelope load failed");
-                    return;
-                }
-            };
-        let Some(envelope) = envelope else {
-            // event_log row gone (should not happen — FK CASCADE) — dead-letter.
-            let _ = self.record_failure(&d, "event_log envelope missing").await;
-            return;
-        };
-
-        let body = match serde_json::to_vec(&envelope) {
+        let body = match serde_json::to_vec(&d.envelope) {
             Ok(b) => b,
             Err(e) => {
                 let _ = self
@@ -285,15 +315,10 @@ where
             }
         };
 
-        // Per-subscriber HMAC signing — look up the current secret.
-        let secret = self
-            .sub_repo
-            .find(&d.subscriber_id)
-            .await
-            .ok()
-            .flatten()
-            .and_then(|s| s.webhook_secret);
-        let sig = secret.as_deref().map(|s| sign(s.as_bytes(), &body));
+        let sig = d
+            .webhook_secret
+            .as_deref()
+            .map(|s| sign(s.as_bytes(), &body));
 
         let mut req = self
             .http
@@ -364,7 +389,7 @@ where
         // The last configured entry repeats; an empty backoff falls back to the
         // poll interval rather than underflowing the index.
         let idx = usize::try_from(d.attempts).unwrap_or(0);
-        let delay = self
+        let base = self
             .config
             .backoff
             .get(idx)
@@ -373,7 +398,8 @@ where
                 || self.config.poll_interval.as_secs(),
                 std::time::Duration::as_secs,
             );
-        let delay = i64::try_from(delay).unwrap_or(i64::MAX);
+        let delay =
+            i64::try_from(jittered(base, &d.subscriber_id, new_attempts)).unwrap_or(i64::MAX);
         sqlx::query(
             "UPDATE event_delivery
                 SET attempts = $3,
@@ -392,12 +418,35 @@ where
     }
 }
 
+/// Spread retries over ±12.5 % of the base delay.
+///
+/// A subscriber that went down takes its whole backlog with it, and without
+/// jitter every one of those deliveries becomes due in the same second and
+/// arrives as one burst the moment it comes back — the thundering herd that
+/// knocks it over again. The offset is derived from the subscriber ID and the
+/// attempt number rather than from a random source so the schedule is
+/// reproducible in a test.
+fn jittered(base_secs: u64, subscriber_id: &str, attempt: i16) -> u64 {
+    if base_secs == 0 {
+        return 0;
+    }
+    let spread = (base_secs / 4).max(1);
+    let hash = subscriber_id
+        .bytes()
+        .fold(u64::from(attempt.unsigned_abs()), |acc, b| {
+            acc.wrapping_mul(31).wrapping_add(u64::from(b))
+        });
+    base_secs.saturating_sub(spread / 2) + (hash % spread)
+}
+
 #[derive(sqlx::FromRow)]
 struct PendingEvent {
     event_id: String,
+    seq: i64,
     ce_type: String,
     marktrole: Option<String>,
     sparte: Option<String>,
+    ordering_key: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -406,4 +455,42 @@ struct ClaimedDelivery {
     subscriber_id: String,
     webhook_url: String,
     attempts: i16,
+    envelope: Value,
+    webhook_secret: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::jittered;
+
+    #[test]
+    fn jitter_stays_within_an_eighth_of_the_base_delay() {
+        let base = 300;
+        for subscriber in ["erp", "processd", "invoicd", "edmd", "obsd"] {
+            for attempt in 1..5 {
+                let d = jittered(base, subscriber, attempt);
+                assert!(
+                    (base - base / 8..=base + base / 8).contains(&d),
+                    "{subscriber}/{attempt} produced {d}, outside ±12.5 % of {base}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn different_subscribers_do_not_all_become_due_together() {
+        let delays: std::collections::BTreeSet<u64> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .into_iter()
+            .map(|s| jittered(300, s, 1))
+            .collect();
+        assert!(
+            delays.len() > 1,
+            "every subscriber got the same retry instant — the herd is not spread"
+        );
+    }
+
+    #[test]
+    fn a_zero_base_delay_stays_zero() {
+        assert_eq!(jittered(0, "erp", 1), 0);
+    }
 }

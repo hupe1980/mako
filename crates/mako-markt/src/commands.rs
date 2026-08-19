@@ -15,18 +15,32 @@
 
 /// LF: initiate a Lieferbeginn Anmeldung (UTILMD 55001).
 pub const GPKE_LIEFERBEGINN_ANMELDEN: &str = "gpke.lieferbeginn.anmelden";
-/// NB: confirm an inbound Lieferbeginn Anmeldung (UTILMD 55003).
+/// NB: confirm an inbound Lieferbeginn Anmeldung (UTILMD 55002 / 55078).
 pub const GPKE_LIEFERBEGINN_BESTAETIGEN: &str = "gpke.lieferbeginn.bestaetigen";
 /// NB: assign a contractless `MaLo` to the Grundversorger (UTILMD 55013, §38 `EnWG`).
 pub const GPKE_EOG_ANMELDEN: &str = "gpke.eog.anmelden";
-/// NB: reject an inbound Lieferbeginn Anmeldung (UTILMD 55004).
+/// NB: reject an inbound Lieferbeginn Anmeldung (UTILMD 55003 / 55080).
 pub const GPKE_LIEFERBEGINN_ABLEHNEN: &str = "gpke.lieferbeginn.ablehnen";
-/// LF: initiate a Lieferende Abmeldung (UTILMD 55002).
+/// LF: initiate a Lieferende Abmeldung (UTILMD 55004).
 pub const GPKE_LIEFERENDE_ANMELDEN: &str = "gpke.lieferende.anmelden";
-/// LF: confirm an NB-initiated Lieferende (UTILMD 55008 answer).
+/// NB: confirm an inbound Abmeldung (inbound 55004 → UTILMD 55005, EBD `E_0607`).
+pub const GPKE_LIEFERENDE_BESTAETIGEN: &str = "gpke.lieferende.bestaetigen";
+/// NB: reject an inbound Abmeldung (inbound 55004 → UTILMD 55006, EBD `E_0607`).
+pub const GPKE_LIEFERENDE_ABLEHNEN: &str = "gpke.lieferende.ablehnen";
+/// LF: confirm an NB-initiated Lieferende — inbound 55007, answered
+/// UTILMD 55008 (EBD `E_0609`).
 pub const GPKE_NB_LIEFERENDE_BESTAETIGEN: &str = "gpke.nb-lieferende.bestaetigen";
-/// LF: reject an NB-initiated Lieferende.
+/// LF: reject an NB-initiated Lieferende — inbound 55007, answered
+/// UTILMD 55009 (EBD `E_0609`).
 pub const GPKE_NB_LIEFERENDE_ABLEHNEN: &str = "gpke.nb-lieferende.ablehnen";
+/// LFA: confirm an NB `Anfrage zur Beendigung der Zuordnung` (UTILMD 55011).
+///
+/// The inbound PID is 55010 and the EBD is **`E_0624`** ("Anfrage zur Beendigung
+/// der Zuordnung prüfen") — distinct from the NB-seitiges Lieferende above
+/// (55007 → 55008/55009, EBD `E_0609`).
+pub const GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN: &str = "gpke.beendigung-zuordnung.bestaetigen";
+/// LFA: reject an NB `Anfrage zur Beendigung der Zuordnung` (UTILMD 55012).
+pub const GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN: &str = "gpke.beendigung-zuordnung.ablehnen";
 
 // ── GeLi Gas ──────────────────────────────────────────────────────────────────
 
@@ -36,8 +50,12 @@ pub const GELI_LIEFERBEGINN_ANMELDEN: &str = "geli.lieferbeginn.anmelden";
 pub const GELI_LIEFERBEGINN_BESTAETIGEN: &str = "geli.lieferbeginn.bestaetigen";
 /// NB: reject an inbound gas Lieferbeginn Anmeldung.
 pub const GELI_LIEFERBEGINN_ABLEHNEN: &str = "geli.lieferbeginn.ablehnen";
-/// LF: initiate a gas Lieferende Abmeldung.
+/// LF: initiate a gas Lieferende Abmeldung (UTILMD 44004).
 pub const GELI_LIEFERENDE_ANMELDEN: &str = "geli.lieferende.anmelden";
+/// GNB: confirm an inbound gas Abmeldung (inbound 44004 → UTILMD 44005).
+pub const GELI_LIEFERENDE_BESTAETIGEN: &str = "geli.lieferende.bestaetigen";
+/// GNB: reject an inbound gas Abmeldung (inbound 44004 → UTILMD 44006).
+pub const GELI_LIEFERENDE_ABLEHNEN: &str = "geli.lieferende.ablehnen";
 /// LF: initiate a `GeLi` Gas Stornierung (UTILMD 44022/44023).
 pub const GELI_GAS_STORNIERUNG_INITIIEREN: &str = "geli.gas.stornierung.initiieren";
 
@@ -70,12 +88,18 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_LIEFERBEGINN_BESTAETIGEN,
     GPKE_LIEFERBEGINN_ABLEHNEN,
     GPKE_LIEFERENDE_ANMELDEN,
+    GPKE_LIEFERENDE_BESTAETIGEN,
+    GPKE_LIEFERENDE_ABLEHNEN,
     GPKE_NB_LIEFERENDE_BESTAETIGEN,
     GPKE_NB_LIEFERENDE_ABLEHNEN,
+    GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
+    GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
     GELI_LIEFERBEGINN_ANMELDEN,
     GELI_LIEFERBEGINN_BESTAETIGEN,
     GELI_LIEFERBEGINN_ABLEHNEN,
     GELI_LIEFERENDE_ANMELDEN,
+    GELI_LIEFERENDE_BESTAETIGEN,
+    GELI_LIEFERENDE_ABLEHNEN,
     GELI_GAS_STORNIERUNG_INITIIEREN,
     WIM_GERAETEWECHSEL_BESTAETIGEN,
     WIM_GERAETEWECHSEL_ABLEHNEN,

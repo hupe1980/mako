@@ -1,8 +1,20 @@
-//! `processd` configuration — loaded from `processd.toml` + `env:` substitution.
+//! `processd` configuration.
 //!
-//! All secrets can be deferred to environment variables by writing `"env:VAR_NAME"`
-//! as the value in the TOML file.  Call [`resolve_env`] / [`resolve_env_secret`]
-//! before use.
+//! Loaded by [`mako_service::load_config`]: `processd.toml` first (path from
+//! `PROCESSD_CONFIG`, default `./processd.toml`), then `PROCESSD_*` environment
+//! variables with `__` as the section separator, then any `*_FILE` variable read
+//! from a file. The file is optional — a container can be configured entirely
+//! from the environment:
+//!
+//! ```text
+//! PROCESSD_DATABASE__URL=postgres://processd:secret@postgres/processd
+//! PROCESSD_IDENTITY__OWN_MP_ID=9900000000002
+//! PROCESSD_MAKOD__API_KEY_FILE=/run/secrets/makod-api-key
+//! ```
+//!
+//! Individual values may additionally use the `"env:VAR_NAME"` indirection;
+//! [`resolve_env`] / [`resolve_env_secret`] resolve those, and every secret
+//! field is resolved in `main` before use.
 //!
 //! # Minimal `processd.toml`
 //!
@@ -35,8 +47,11 @@
 //! auto_accept = false   # true: dispatch bestaetigen automatically on Accept
 //!
 //! [lf]
-//! auto_respond   = true
-//! queue_ttl_secs = 2700  # 45 min — LFW24 E_0624 window
+//! auto_respond = true
+//!
+//! [msb]
+//! auto_accept       = false   # true: dispatch the MSB-Wechsel Bestätigung
+//! auto_preisanfrage = true    # false: the REQOTE goes to the approval queue
 //!
 //! # [oidc]                # omit to disable auth (dev mode only)
 //! # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -47,7 +62,6 @@
 //! ```
 
 use serde::Deserialize;
-use std::path::Path;
 
 // ── Top-level ─────────────────────────────────────────────────────────────────
 
@@ -272,9 +286,12 @@ pub struct EogConfig {
     #[serde(default)]
     pub notify_webhook_url: Option<String>,
     /// HMAC-SHA256 secret for signing the outbound `notify_webhook_url`
-    /// CloudEvents (`X-Mako-Signature: sha256=<hex>`). Use `"env:VAR_NAME"`.
-    /// Leave unset only in dev — a receiver verifying the signature rejects
-    /// unsigned events.
+    /// CloudEvents (`X-Mako-Signature: sha256=<hex>`). Supports `"env:VAR_NAME"`,
+    /// which `main` resolves before use — an unresolved reference would sign
+    /// with the ASCII bytes of the literal `env:VAR_NAME` and every receiver
+    /// verifying the signature would reject the event.
+    ///
+    /// Leave unset only in dev.
     #[serde(default)]
     pub notify_webhook_secret: Option<String>,
 }
@@ -307,25 +324,16 @@ pub struct LfConfig {
     /// `einwilligung` / `ablehnen` for E_0624 queries without ERP involvement.
     #[serde(default = "default_lf_auto_respond")]
     pub auto_respond: bool,
-    /// Approval queue entry TTL in seconds.  Default: 2700 (= 45 min, LFW24 window).
-    ///
-    /// Entries older than this are auto-expired (status = `Expired`).
-    #[serde(default = "default_queue_ttl_secs")]
-    pub queue_ttl_secs: u64,
 }
 
 fn default_lf_auto_respond() -> bool {
     true
-}
-fn default_queue_ttl_secs() -> u64 {
-    2700
 }
 
 impl Default for LfConfig {
     fn default() -> Self {
         Self {
             auto_respond: default_lf_auto_respond(),
-            queue_ttl_secs: default_queue_ttl_secs(),
         }
     }
 }
@@ -343,8 +351,15 @@ impl Default for LfConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MsbConfig {
-    /// When `true` (default), dispatch QUOTES automatically from `PreisblattMessung`.
-    /// Set `false` to require manual QUOTES dispatch via ERP.
+    /// When `true`, an MSB-Wechsel `Accept` verdict dispatches the Bestätigung
+    /// automatically. When `false` (default), it goes to the approval queue
+    /// with its WiM Antwortfrist attached and an operator dispatches it.
+    #[serde(default)]
+    pub auto_accept: bool,
+
+    /// When `true` (default), dispatch QUOTES automatically from
+    /// `PreisblattMessung`. Set `false` to require operator approval — the
+    /// REQOTE still lands in the approval queue with its Frist either way.
     #[serde(default = "default_msb_auto_preisanfrage")]
     pub auto_preisanfrage: bool,
 }
@@ -356,6 +371,7 @@ fn default_msb_auto_preisanfrage() -> bool {
 impl Default for MsbConfig {
     fn default() -> Self {
         Self {
+            auto_accept: false,
             auto_preisanfrage: default_msb_auto_preisanfrage(),
         }
     }
@@ -372,19 +388,6 @@ pub use mako_service::oidc::OidcConfig;
 pub use mako_service::telemetry::OtelConfig;
 
 // ── Loader + env resolution ───────────────────────────────────────────────────
-
-/// Load configuration from a TOML file.
-///
-/// # Errors
-///
-/// Returns an error if the file cannot be read or the TOML is malformed.
-pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cannot read config file {}: {e}", path.display()))?;
-    let cfg: Config = toml::from_str(&text)
-        .map_err(|e| anyhow::anyhow!("config parse error in {}: {e}", path.display()))?;
-    Ok(cfg)
-}
 
 /// Resolve an `"env:VAR_NAME"` reference or return the value as-is.
 ///

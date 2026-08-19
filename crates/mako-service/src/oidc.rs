@@ -206,7 +206,17 @@ impl ServiceKey {
             sub: sub.into(),
             tenant: tenant.into(),
             roles: if roles.is_empty() {
-                vec!["NB".to_owned(), "LF".to_owned(), "MSB".to_owned()]
+                // An unscoped service key is a full peer principal; withholding
+                // one role here would make a peer service fail on exactly one
+                // endpoint, which reads as a bug rather than as a policy. Set
+                // `roles` explicitly to grant less.
+                vec![
+                    "NB".to_owned(),
+                    "LF".to_owned(),
+                    "MSB".to_owned(),
+                    "ESA".to_owned(),
+                    "ADMIN".to_owned(),
+                ]
             } else {
                 roles
             },
@@ -323,7 +333,16 @@ impl OidcVerifier {
         JwtClaims {
             sub: "dev-admin".to_owned(),
             mako_tenant: Some(self.inner.disabled_tenant.clone()),
-            mako_roles: vec!["NB".to_owned(), "LF".to_owned(), "MSB".to_owned()],
+            mako_roles: vec![
+                "NB".to_owned(),
+                "LF".to_owned(),
+                "MSB".to_owned(),
+                "ESA".to_owned(),
+                // Dev mode is "admin" by name and by intent: operator-level
+                // capabilities (marktd subscription management, DLQ) must not
+                // silently 403 in the very mode that exists to have no auth.
+                "ADMIN".to_owned(),
+            ],
             mako_sparte: vec!["STROM".to_owned(), "GAS".to_owned()],
         }
     }

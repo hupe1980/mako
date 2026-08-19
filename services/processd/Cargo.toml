@@ -16,15 +16,26 @@ publish          = false
 # `lf-only` and `nb-only` respectively. BNetzA examines binary SHA.
 #
 # Features:
-#   role-lf-strom  — LFA E_0624 auto-response, LFN Strom bootstrap
-#   role-lf-gas    — LFA GeLi Gas auto-response
-#   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via netz-checker
+#   role-lf-strom  — LF answers to NB-initiated GPKE processes, LFN bootstrap
+#   role-lf-gas    — LF answers to NB-initiated GeLi Gas processes
+#   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via netz-checker;
+#                    EoG gap closure; the MSB-Wechsel PIDs the *NB* answers
 #   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via netz-checker
+#   role-msb-strom — the MSB's own obligations: REQOTE→QUOTES, §14a
+#                    Steuerungsauftrag ORDRSP, and the MSB-Wechsel PIDs the
+#                    *MSB* answers
+#
+# The MSB role is its own feature because its work is its own: a Kündigung MSB
+# (55039) is MSBN → MSBA and never reaches the NB, and a Steuerungsauftrag
+# ORDRSP is the MSB's answer. Compiling those into an `nb-only` binary is
+# exactly what §7 EnWG separation exists to prevent, and it left a pure MSB
+# unable to deploy the automation at all.
 #
 # Compound feature flags:
 #   lf-only    = ["role-lf-strom", "role-lf-gas"]
 #   nb-only    = ["role-nb-strom", "role-nb-gas"]
-#   integrated = all four roles (§6b EnWG combined deployment)
+#   msb-only   = ["role-msb-strom"]
+#   integrated = every role (§6b EnWG combined deployment)
 [features]
 default = []
 
@@ -36,13 +47,18 @@ role-lf-gas   = []
 role-nb-strom = []
 ## GeLi Gas Anmeldung STP (PID 44001) via `netz-checker`.
 role-nb-gas   = []
+## MSB obligations: REQOTE→QUOTES, §14a Steuerungsauftrag ORDRSP, MSB-answered
+## MSB-Wechsel PIDs.
+role-msb-strom = []
 
 ## Pure LF deployment (§7 EnWG separated binary — no NB logic compiled in).
 lf-only    = ["role-lf-strom", "role-lf-gas"]
-## Pure NB deployment (§7 EnWG separated binary — no LF logic compiled in).
+## Pure NB deployment (§7 EnWG separated binary — no LF or MSB logic compiled in).
 nb-only    = ["role-nb-strom", "role-nb-gas"]
-## Integrated §6b EnWG deployment (both LF and NB in one binary).
-integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas"]
+## Pure MSB deployment (§7 EnWG separated binary).
+msb-only   = ["role-msb-strom"]
+## Integrated §6b EnWG deployment (every role in one binary).
+integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb-strom"]
 
 [[bin]]
 name = "processd"
@@ -56,6 +72,10 @@ path = "src/lib.rs"
 mako-events = { workspace = true }
 mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
 mako-engine   = { workspace = true }
+# The GPKE / GeLi Gas answer-Frist tables. The operator queue must expire on the
+# same instant makod registers on the process, so both read one table.
+mako-gpke     = { path = "../../crates/mako-gpke" }
+mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 mako-wim      = { workspace = true }
 netz-checker  = { path = "../../crates/netz-checker" }
 
@@ -71,17 +91,20 @@ uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
 tracing            = "0.1"
-mako-service       = { workspace = true, features = ["otel", "cedar", "oidc"] }
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "metrics"] }
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
 secrecy            = "0.10"
 subtle             = "2"
 reqwest            = { workspace = true }
+prometheus         = "0.14"
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json"] }
 
 [dev-dependencies]
-mako-markt   = { workspace = true, features = ["testing"] }
+mako-markt   = { workspace = true }
 netz-checker = { path = "../../crates/netz-checker" }
+# The PID-contract guard compares processd's trigger PIDs against the canonical
+# workflow constants that drive makod's spawn table.
 tokio        = { version = "1", features = ["full"] }
 serde_json   = { workspace = true }
 testcontainers = { workspace = true }

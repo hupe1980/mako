@@ -1,6 +1,6 @@
 +++
 title = "marktd Operator Guide"
-description = "marktd operator guide: Market Data Hub for Marktlokation, Messlokation, VersorgungsStatus (with history + point-in-time queries), NeLo (Redispatch 2.0), MaLo grid topology (NB STP), trading-partner management, price sheets, Cedar ABAC, EventBus fan-out. PostgreSQL-backed, OIDC-secured, OpenAPI 3.1, CloudEvents 1.0 outbound webhooks."
+description = "marktd operator guide: Market Data Hub for Marktlokation, Messlokation, VersorgungsStatus (with history + point-in-time queries), NeLo (Redispatch 2.0), MaLo grid topology (NB STP), trading-partner management, price sheets, Cedar ABAC, durable fan-out. PostgreSQL-backed, OIDC-secured, OpenAPI 3.1, CloudEvents 1.0 outbound webhooks."
 weight = 22
 [extra]
 mermaid = true
@@ -15,18 +15,18 @@ energy contracts, trading partners, network contracts (`nb_contracts`) with full
 (`vertragsart`, `vertragsstatus` as indexed columns for ERP digital LRV exchange), price sheets
 (PreisblattNetznutzung), **VersorgungsStatus per MaLo** (with full history and
 point-in-time queries), **MaLo grid topology** (`malo_grid` — sourced from the NB's
-NIS/GIS system and provisioned via `PUT /api/v1/malo/{id}/grid`; read by `processd`
+NIS/GIS system and provisioned via `PUT /api/v1/malos/{id}/grid`; read by `processd`
 for Anmeldung STP decisions), and
 **Netz-Element-Lokationen (NeLo)** for Redispatch 2.0.
 
 Beyond data storage, `marktd` includes:
 
-- **EventBus fan-out** — enriches inbound `de.mako.*` events with `marktrole` and fans out
+- **durable fan-out** — enriches inbound `de.mako.*` events with `marktrole` and fans out
   to all registered subscribers (ERP, `processd`, `invoicd`, `obsd`) via HMAC-signed webhooks.
-- **VersorgungsStatus derivation** — five-phase lifecycle: `announce_lf_next` (55001/44001 `process.initiated`), `confirm_supply` (55002/44002 `process.completed` — Bestätigung Anmeldung), `end_supply` (55005/44005 `process.completed` — Bestätigung Lieferende; without an announced successor it emits `de.markt.versorgung.gap-detected`, the §38 EnWG gap-closure trigger), `begin_eog_supply` (55013/44013 `process.completed` — Anmeldung/Zuordnung EOG: the Grundversorger becomes the supplier of record, `eog_seit` anchors the §38 Abs. 4 3-month maximum), `clear_lf_next` (55003/44003 `process.completed` — Ablehnung Anmeldung resets the announced future supplier). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
+- **VersorgungsStatus derivation** — five-phase lifecycle: `announce_lf_next` (55001/55077/44001 `process.initiated`; the **first** announcement wins), `confirm_supply` (55002/55078/44002 `process.completed` — Bestätigung Anmeldung), `end_supply` (55005/44005 `process.completed` — Bestätigung Lieferende, recording the contractual Lieferende the process carries; when it leaves an uncovered interval it emits `de.markt.versorgung.gap-detected` with `gap_from`/`gap_until`, the §38 EnWG gap-closure trigger), `begin_eog_supply` (55013/44013 `process.completed` — Anmeldung/Zuordnung EOG: the Grundversorger becomes the supplier of record, `eog_seit` anchors the §38 Abs. 4 3-month maximum), `clear_lf_next` (55003/55080/44003 `process.completed` — Ablehnung Anmeldung resets the announced future supplier). Tracks `lf_mp_id_next` + `lf_next_lieferbeginn` (pending transition), appends every change to `versorgungsstatus_history`, and supports `?at=YYYY-MM-DD` point-in-time queries.
 
 `marktd` is a **pure data hub**. Automated Anmeldung STP decisions are the
-responsibility of `processd`'s NB module, which subscribes to `marktd`'s EventBus
+responsibility of `processd`'s NB module, which subscribes to `marktd`'s fan-out
 and uses the pure `netz-checker` library for all decisions.
 This separation keeps `marktd` free of domain policy and makes `processd` independently
 scalable and testable.
@@ -35,7 +35,7 @@ scalable and testable.
 graph TB
     makod["makod :8080<br/>EDIFACT ↔ BO4E"]
     marktd["marktd :8180<br/>Market Data Hub<br/>(this service)"]
-    processd["processd :8580<br/>Process decisions<br/>(NB STP + LF E_0624)"]
+    processd["processd :8580<br/>Process decisions<br/>(NB STP + LF answers)"]
     erp["ERP<br/>(Powercloud / SAP IS-U)"]
     invoicd["invoicd :8280<br/>Billing"]
     edmd["edmd :8380<br/>Energy Data"]
@@ -50,9 +50,9 @@ graph TB
     marktd -->|"de.mako.*"| edmd
     marktd -->|"de.mako.*"| obsd
     marktd --- pg
-    erp -->|"PUT /api/v1/malo<br/>PUT /api/v1/partners"| marktd
+    erp -->|"PUT /api/v1/malos<br/>PUT /api/v1/partners"| marktd
     invoicd -->|"GET /api/v1/preisblaetter<br/>GET /api/v1/nb-contracts"| marktd
-    processd -->|"GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid<br/>GET /api/v1/partners"| marktd
+    processd -->|"GET /api/v1/versorgung<br/>GET /api/v1/malos/{id}/grid<br/>GET /api/v1/partners"| marktd
     processd -->|"POST /api/v1/commands"| makod
 ```
 
@@ -61,8 +61,8 @@ The clean separation of concerns:
 | Service | Responsibility |
 |---------|----------------|
 | `makod` | EDIFACT parsing, BDEW process rules, AS4 delivery, regulatory deadlines |
-| `marktd` | Market data, VersorgungsStatus, ERP subscriptions, EventBus fan-out |
-| `processd` | Automated STP decisions (NB: netz-checker; LF: E_0624 auto-response) |
+| `marktd` | Market data, VersorgungsStatus, ERP subscriptions, durable fan-out |
+| `processd` | Automated STP decisions (NB: netz-checker; LF: answers to 55007 / 55010) |
 
 ---
 
@@ -81,8 +81,8 @@ The clean separation of concerns:
 │  POST /api/v1/events  ← makod CloudEvents ingest               │
 │   ├─ Verify HMAC signature                                     │
 │   ├─ Deduplicate via processed_events table                    │
-│   ├─ Fan-out to all EventBus subscribers                       │
-│   └─ Derive VersorgungsStatus (55003/55005/55013 + Gas twins) │
+│   ├─ Fan-out to all fan-out subscribers                       │
+│   └─ Derive VersorgungsStatus (55002/55078/55005/55013 + Gas)  │
 │                                                                 │
 │  GET  /admin/fanout/dlq                       ← DLQ inspection │
 │  POST /admin/fanout/dlq/{event}/{sub}/retry   ← re-deliver     │
@@ -92,9 +92,8 @@ The clean separation of concerns:
 │  Note: Automated STP decisions live in processd :8580          │
 │  marktd is a pure data hub — no domain policy.                  │
 │                                                                 │
-│  GET /health        — liveness (no DB check)                   │
 │  GET /health/live   — liveness (no DB check)                   │
-│  GET /health/ready  — readiness (PostgreSQL ping)              │
+│  GET /health/ready  — readiness (bounded PostgreSQL ping)      │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -155,17 +154,30 @@ with secrets deferred to environment variables via `"env:VAR_NAME"` values.
 
 ### Full `marktd.toml` reference
 
+Config is loaded by `mako_service::load_config`: `marktd.toml` first (path from
+`MARKTD_CONFIG`, default `./marktd.toml`), then `MARKTD_*` environment variables with `__`
+as the section separator, then any `*_FILE` variable read from a file. The file is
+optional — a container can be configured entirely from the environment
+(`MARKTD_DATABASE__URL`, `MARKTD_MARKT__TENANT`, `MARKTD_MAKOD__API_KEY_FILE`, …).
+
 ```toml
 [http]
 addr = "0.0.0.0:8180"     # default
 
-[storage.postgres]
-url = "env:DATABASE_URL"  # required; use env: for secrets
+[database]
+url             = "env:DATABASE_URL"  # required; use env: for secrets
+pool_size       = 20
+min_connections = 2
+
+[markt]
+# This deployment's own operator identity: the `resource_tenant` every Cedar check
+# compares the caller's `mako_tenant` claim against, the `tenant` column on
+# tenant-scoped rows, and the source URN of every outbound CloudEvent.
+tenant = "9900357000004"           # required
 
 [makod]
 base_url  = "http://makod:8080"   # required
 api_key   = "env:MAKOD_API_KEY"   # required
-tenant = "9900357000004"           # required — operator primary MP-ID
 
 [webhook]
 inbound_path   = "/api/v1/events"             # must match makod's [erp] webhook_url (code default: /api/v1/mako/events)
@@ -305,26 +317,26 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 
 | Method | Path | Cedar action | Description |
 |---|---|---|---|
-| `GET` | `/health` | — | Health check (no auth) |
-| `GET` | `/health/live` | — | Liveness check (no DB, no auth) |
-| `GET` | `/health/ready` | — | Readiness check (DB ping, no auth) |
-| `PUT` | `/api/v1/malo/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path); pushes to makod MaLo cache |
-| `GET` | `/api/v1/malo/{malo_id}` | `read-malo` | Get Marktlokation as typed `rubo4e::current::Marktlokation` (canonical BO4E camelCase) |
-| `GET` | `/api/v1/malo` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
-| `PUT` | `/api/v1/melo/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path) |
-| `GET` | `/api/v1/melo/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
+| `GET` | `/health/live` | — | Liveness (no DB, no auth) |
+| `GET` | `/health/ready` | — | Readiness (bounded DB ping, no auth). Mounted by `mako_service::run` |
+| `GET` | `/metrics` | — | Prometheus (no auth) |
+| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path); pushes to makod MaLo cache |
+| `GET` | `/api/v1/malos/{malo_id}` | `read-malo` | Get Marktlokation as typed `rubo4e::current::Marktlokation` (canonical BO4E camelCase) |
+| `GET` | `/api/v1/malos` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
+| `PUT` | `/api/v1/melos/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path) |
+| `GET` | `/api/v1/melos/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
 | `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner — validates payload as `rubo4e::current::Geschaeftspartner` (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`; canonicalises camelCase) |
 | `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner — returns a `geschaeftspartner` field with the typed `rubo4e::current::Geschaeftspartner` payload (graceful fallback for legacy records) |
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
 | `GET` | `/api/v1/partners/{mp_id}/marktteilnehmer` | `read-partner` | BO4E `Marktteilnehmer` view of a partner (typed `marktrolle`/`rollencodetyp`, mp_id → `rollencodenummer`). Note: partner PUTs with the legacy literal role `"LFG"` are rejected 422 — model gas suppliers as `LF` + Rollencodetyp `DVGW` |
-| `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read/write-preisblatt` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
-| `GET` | `/api/v1/mmma-preise/gas` | `read-preisblatt` | List all Gas MMM price records (newest first; `?limit=`) |
-| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-preisblatt` | Strom MMM prices (VNB per GPKE BK6-24-174 Teil 1 Kap. 8.4) — `{vnb_mp_id, mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for MMM INVOIC 31005/31006 and `invoicd` check 6 |
+| `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read/write-mmma-preis` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
+| `GET` | `/api/v1/mmma-preise/gas` | `read-mmma-preis` | List all Gas MMM price records (newest first; `?limit=`) |
+| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-mmma-preis` | Strom Mehr-/Mindermengenpreise — `{mehr_ct_kwh, minder_ct_kwh}`. **One nationwide series**: § 13 Abs. 3 StromNZV requires *einheitliche* prices computed from monthly market prices, and the BDEW determines and publishes them centrally, so the application month is the entire key. There is no per-VNB and no per-ÜNB variant. Queried by `netzbilanzd` for MMM INVOIC 31005/31006 and `invoicd` check 6 |
 | `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Get price sheet valid on date |
-| `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-preisblatt` | List PRICAT version history (newest first) |
-| `GET` | `/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` | `read-preisblatt` | PRICAT dispatch audit log for a version |
-| `POST` | `/api/v1/pricat/{nb_mp_id}/dispatch` | `write-preisblatt` | Enqueue (re-)dispatch of latest PRICAT to all active LF partners |
+| `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-pricat` | List PRICAT version history (newest first) |
+| `GET` | `/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}` | `read-pricat` | PRICAT dispatch audit log for a version |
+| `POST` | `/api/v1/pricat/{nb_mp_id}/dispatch` | `dispatch-pricat` | Enqueue (re-)dispatch of latest PRICAT to all active LF partners |
 | `GET` | `/api/v1/versorgung/{malo_id}` | `read-versorgungsstatus` | Current VersorgungsStatus; add `?at=YYYY-MM-DD` for point-in-time |
 | `GET` | `/api/v1/versorgung/{malo_id}/history` | `read-versorgungsstatus` | Full supply-state change history (newest first, paged) |
 | `PUT` | `/api/v1/versorgung/{malo_id}` | `write-versorgungsstatus` | Upsert VersorgungsStatus (ERP-driven override) |
@@ -337,8 +349,8 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `PUT`/`GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | — | Bilateral EDI@Energy framework agreement + AS4 cert state |
 | `GET` | `/api/v1/esa/consent-check` | — | Gate an ESA message (`?esa_mp_id=&msb_mp_id=&location_id=&perspective=`) → `{allowed, code, reason}`. `perspective=msb_inbound` (default, lenient: missing record = self-assertion) or `esa_outbound` (strict: missing record = no lawful basis). makod calls this before running the Wertebestellung workflow |
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt assignment for the tenant |
-| `GET` | `/api/v1/bilanzierungsgebiet/{eic}/mabis-zp` | `read-mabis-zp` | Resolve the MaBiS-Zählpunkt (MSCONS SG6 `LOC+172`) for a territory. `404` is the signal `mabis-syncd` turns into a refused submission — it must never be read as "use the Bilanzierungsgebiet EIC instead" |
-| `PUT` | `/api/v1/bilanzierungsgebiet/{eic}/mabis-zp` | `write-mabis-zp` | Assign the MaBiS-Zählpunkt (NB role). Rejects a Meldepunkt equal to the EIC **and** one that is not a 33-character Zählpunktbezeichnung, with `400`. The length check catches *another* territory's 16-character EIC, which the inequality alone lets through and which would read as valid master data until a submission run refused it. Both are enforced at the API *and* by table `CHECK`s — the substitution is invisible once on the wire |
+| `GET` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `read-mabis-zp` | Resolve the MaBiS-Zählpunkt (MSCONS SG6 `LOC+172`) for a territory. `404` is the signal `mabis-syncd` turns into a refused submission — it must never be read as "use the Bilanzierungsgebiet EIC instead" |
+| `PUT` | `/api/v1/bilanzierungsgebiete/{eic}/mabis-zp` | `write-mabis-zp` | Assign the MaBiS-Zählpunkt (NB role). Rejects a Meldepunkt equal to the EIC **and** one that is not a 33-character Zählpunktbezeichnung, with `400`. The length check catches *another* territory's 16-character EIC, which the inequality alone lets through and which would read as valid master data until a submission run refused it. Both are enforced at the API *and* by table `CHECK`s — the substitution is invisible once on the wire |
 | `PUT` | `/api/v1/netzzugang/antraege` | `write-netzzugang` | Upsert a §20b EnWG Netzzugangsplattform request (makod `netzzugang` adapter projection). Emits `de.markt.netzzugang.antrag.updated` |
 | `GET` | `/api/v1/netzzugang/antraege` | `read-netzzugang` | List §20b requests (`?status=&netzanschluss_id=`) |
 | `GET` | `/api/v1/netzzugang/antraege/{id}` | `read-netzzugang` | Get a §20b request |
@@ -346,14 +358,14 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `PUT` | `/api/v1/msb-rahmenvertraege-gas` | `write-msb-rv-gas` | Upsert a Gas MSB-Rahmenvertrag conclusion (GeLi Gas 3.0 Tenor 13–16: KoV XV Anlage 8 from 01.10.2026; `status=anpassung_erforderlich` tracks the BK7-17-026 migration duty). Idempotent on the natural key `(tenant, gnb_mp_id, msb_mp_id, valid_from)`; optimistic `version` (mismatch → 412); rejects `valid_to < valid_from`. Emits `de.markt.msb-rahmenvertrag-gas.updated` (incl. `version`, `valid_from`, `valid_to`, `signed_at`) |
 | `GET` | `/api/v1/msb-rahmenvertraege-gas` | `read-msb-rv-gas` | List Gas MSB framework contracts (`?msb_mp_id=&status=`) |
 | `GET` | `/api/v1/msb-rahmenvertraege-gas/{id}` | `read-msb-rv-gas` | Get one Gas MSB framework contract |
-| `GET` | `/api/v1/nelo` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
-| `GET` | `/api/v1/nelo/{id}` | `read-nelo` | Get a NeLo by EIC / BDEW Codenummer |
-| `PUT` | `/api/v1/nelo/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |
-| `GET` | `/api/v1/tranche` | `read-tranche` | List Tranchen (`?malo_id=` filters by parent MaLo) |
-| `GET` | `/api/v1/tranche/{id}` | `read-tranche` | Get a Tranche |
-| `PUT` | `/api/v1/tranche/{id}` | `write-tranche` (NB role) | Insert or update a Tranche (GPKE Teil 4 „Daten der Tranche") |
-| `GET` | `/api/v1/malo/{malo_id}/grid` | `read-malo` | MaLo grid topology (Netzgebiet, Bilanzierungsgebiet) |
-| `PUT` | `/api/v1/malo/{malo_id}/grid` | `write-malo` (NB role) | Upsert grid record from NIS/GIS |
+| `GET` | `/api/v1/nelos` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
+| `GET` | `/api/v1/nelos/{id}` | `read-nelo` | Get a NeLo by EIC / BDEW Codenummer |
+| `PUT` | `/api/v1/nelos/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |
+| `GET` | `/api/v1/tranchen` | `read-tranche` | List Tranchen (`?malo_id=` filters by parent MaLo) |
+| `GET` | `/api/v1/tranchen/{id}` | `read-tranche` | Get a Tranche |
+| `PUT` | `/api/v1/tranchen/{id}` | `write-tranche` (NB role) | Insert or update a Tranche (GPKE Teil 4 „Daten der Tranche") |
+| `GET` | `/api/v1/malos/{malo_id}/grid` | `read-malo` | MaLo grid topology (Netzgebiet, Bilanzierungsgebiet) |
+| `PUT` | `/api/v1/malos/{malo_id}/grid` | `write-malo` (NB role) | Upsert grid record from NIS/GIS |
 | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` | `PreisblattMessung` valid on date (MSB metering tariffs); includes `auf_abschlaege` |
 | `PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `write-preisblatt` | Upsert MSB metering price sheet |
 | `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `read-sr` | Get a `SteuerbareRessource` by SR-ID |
@@ -362,7 +374,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/technische-ressourcen/{tr_id}` | `read-device` | Get a `TechnischeRessource` by `TrId` |
 | `PUT` | `/api/v1/technische-ressourcen/{tr_id}` | `write-device` | Upsert a `TechnischeRessource` (E-mobility, generation, storage) |
 | `GET` | `/api/v1/malos/{malo_id}/technische-ressourcen` | `read-device` | List `TechnischeRessource` for a `MaLo` |
-| `GET` | `/api/v1/malo/{id}/lokationen` | `read-malo` | Recursive `Lokationszuordnung` graph from a MaLo (`?at=YYYY-MM-DD`) |
+| `GET` | `/api/v1/malos/{id}/lokationen` | `read-malo` | Recursive `Lokationszuordnung` graph from a MaLo (`?at=YYYY-MM-DD`) |
 | `GET` | `/api/v1/malos/{id}/buendel` | `read-malo` | First-class **Lokationsbündel** rooted at a MaLo — the bundle projected from the typed graph plus its structural-integrity status (`valid` + `validation_error`; ≥1 MeLo required) |
 | `GET` | `/api/v1/melos/{id}/lokationen` | `read-melo` | Recursive `Lokationszuordnung` graph from a MeLo |
 | `PUT` | `/api/v1/lokationszuordnungen` | `write-malo` | Upsert a directed location graph edge (`lokationsbuendelcode` extracted into a typed column). Note the single-write-path invariant: a MeLo `PUT` reconciles the `melo→malo` graph edge in the same transaction (previous edges closed with `valid_to`, never deleted), so the `melo.malo_id` FK and the graph cannot drift |
@@ -371,9 +383,9 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` | The MSB responsible for the MeLo on `?at=YYYY-MM-DD` (default today) — WiM Teil 2 UC 4.1.1 historical Werteanfrage routing |
 | `PUT` | `/api/v1/melos/{melo_id}/msb` | `write-melo-msb` | Record a dated MSB assignment (`{ msb_mp_id, valid_from }`); closes the previously-open assignment atomically |
 | `GET` | `/api/v1/melos/{melo_id}/msb/history` | `read-melo-msb` | Full dated MSB timeline for the MeLo (newest first) |
-| `PUT` | `/api/v1/malo/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) — type-validated, keyed on `(malo, bilanzierungsbeginn)`; typed columns (Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/Fallgruppe) extracted, full BO stored as JSONB |
-| `GET` | `/api/v1/malo/{malo_id}/bilanzierung` | `read-bilanzierung` | The Bilanzierung effective at `?at=<RFC3339\|YYYY-MM-DD>` (default now) — point-in-time by validity window |
-| `GET` | `/api/v1/malo/{malo_id}/bilanzierung/history` | `read-bilanzierung` | Full Bilanzierung history for the MaLo (newest validity-start first) |
+| `PUT` | `/api/v1/malos/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) — type-validated, keyed on `(malo, bilanzierungsbeginn)`; typed columns (Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/Fallgruppe) extracted, full BO stored as JSONB |
+| `GET` | `/api/v1/malos/{malo_id}/bilanzierung` | `read-bilanzierung` | The Bilanzierung effective at `?at=<RFC3339\|YYYY-MM-DD>` (default now) — point-in-time by validity window |
+| `GET` | `/api/v1/malos/{malo_id}/bilanzierung/history` | `read-bilanzierung` | Full Bilanzierung history for the MaLo (newest validity-start first) |
 | `GET` | `/api/v1/melos/{melo_id}/sharing-eligibility` | `read-sharing-eligibility` | §42c EnWG metering **capability** — qualifies via Zählerstandsgangmessung (§2 Satz 1 Nr. 27 MsbG) **or** viertelstündliche RLM. Returns `capability`, `basis`, `required_action`, `reasons`, `bilanzierungsgebiet`, and the master-data `evidence` it decided from. |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | List `Zaehlwerk` registers for a Zaehler (typed `Vec<Zaehlwerk>` from JSONB) |
 | `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler`; validates `_typ = ZAEHLER` and schema (422 on violation) |
@@ -737,7 +749,7 @@ acknowledged without re-processing.
 
 ### Automatic `malo.bilanzierungsmethode` + `malo.fallgruppe` update
 
-When `marktd` receives `de.mako.process.initiated` for PIDs 55001 (GPKE) or 44001 (GeLi
+When `marktd` receives `de.mako.process.initiated` for PIDs 55001/55077 (GPKE) or 44001 (GeLi
 Gas), it calls `MaloRepository::patch_typenmerkmal()` to update the `malo` table:
 
 | Payload field | Column | Source |
@@ -746,13 +758,13 @@ Gas), it calls `MaloRepository::patch_typenmerkmal()` to update the `malo` table
 | `fallgruppe` | `malo.fallgruppe` | UTILMD `TM+Z10` segment (Gas GaBi RLM category) extracted by `makod` adapter |
 
 This keeps the MaLo's billing mode and GaBi Gas Fallgruppe in sync with the UTILMD
-without requiring a separate ERP `PUT /api/v1/malo` call. The update is best-effort:
+without requiring a separate ERP `PUT /api/v1/malos` call. The update is best-effort:
 if the MaLo row does not yet exist, the patch silently no-ops (the values will be set
-on the first `PUT /api/v1/malo`).
+on the first `PUT /api/v1/malos`).
 
 ```bash
 # After a 55001 Anmeldung, verify the update:
-curl -s "http://marktd:8180/api/v1/malo/10001234558" \
+curl -s "http://marktd:8180/api/v1/malos/10001234558" \
   -H "Authorization: Bearer <token>" | jq '.bilanzierungsmethode, .fallgruppe'
 # → "SLP", null     (for a Strom SLP point)
 # → "RLM", "Z01"   (for a Gas RLM point with GaBi category Z01)
@@ -760,9 +772,9 @@ curl -s "http://marktd:8180/api/v1/malo/10001234558" \
 
 ---
 
-## `PUT /api/v1/malo` — MaLo Typed Columns & Schema Validation
+## `PUT /api/v1/malos` — MaLo Typed Columns & Schema Validation
 
-Every `PUT /api/v1/malo/{malo_id}` call:
+Every `PUT /api/v1/malos/{malo_id}` call:
 1. **Validates** the incoming `data` payload as `rubo4e::current::Marktlokation`:
    - Auto-injects `_typ: "MARKTLOKATION"` if absent
    - Returns **422** if `_typ` is present but not `MARKTLOKATION`
@@ -823,17 +835,27 @@ the raw `data` JSONB for backward compatibility:
 
 `marktd` delivers CloudEvents 1.0 to every matching ERP subscriber when master data changes or when `makod` lifecycle events arrive. The fan-out worker runs in a dedicated Tokio task and delivers independently per subscriber — a slow or unavailable ERP does not block other subscribers.
 
+**Ordering is per aggregate.** A delivery is held back while an earlier event about the
+same Marktlokation (`event_log.seq`, `event_delivery.ordering_key`) is still outstanding to
+the same subscriber; events about different MaLos never wait for each other. A dead-lettered
+delivery stops blocking its key, so head-of-line blocking is bounded by `max_retry_attempts`.
+
+**`roles` and `sparten` filter on CloudEvents extensions.** An empty array matches
+everything; otherwise the event's `marktrole` / `marktsparte` must appear in it. An event
+with no `marktsparte` is not Sparte-scoped (a Marktpartner, a subscription test) and matches
+every `sparten` filter.
+
 ### Event types
 
 | Source | Event type | Trigger |
 |---|---|---|
-| marktd master data | `de.markt.malo.updated` | `PUT /api/v1/malo/{malo_id}` |
+| marktd master data | `de.markt.malo.updated` | `PUT /api/v1/malos/{malo_id}` |
 | marktd master data | `de.markt.malo.stammdaten-geaendert` | UTILMD Stammdatenänderung applied to a MaLo (GPKE Teil 4 / GeLi Gas) — carries the applied `patch` |
 | marktd master data | `de.markt.stammdaten.geaendert` | UTILMD Stammdatenänderung applied to a non-MaLo object (MeLo/NeLo/Tranche) — carries `objekt` + the applied `patch` |
 | marktd master data | `de.markt.partner.updated` | `PUT /api/v1/partners/{mp_id}` |
 | marktd NB contract | `de.markt.nb-contract.updated` | `PUT /api/v1/nb-contracts/{id}` — carries `vertragsart`, `version`, `tenant` in `data` |
 | marktd PRICAT | `de.markt.pricat.published` | `PUT /api/v1/preisblaetter/{nb_mp_id}` |
-| marktd supply | `de.markt.versorgung.changed` | any VersorgungsStatus transition (announce/confirm/end/clear), incl. PIDs 55002/44002 |
+| marktd supply | `de.markt.versorgung.changed` | **every** VersorgungsStatus transition — announce (55001/55077/44001), confirm (55002/55078/44002), reject (55003/55080/44003), end (55005/44005), EoG (55013/44013) — and the REST upsert. Carries the resulting `lieferstatus`, `lf_mp_id`, `lf_mp_id_next`, `lieferbeginn`, `lieferende`, `eog_seit`, `sparte`, `version` |
 | marktd supply | `de.markt.versorgung.gap-detected` | 55005/44005 completed with no announced successor — §38 EnWG gap-closure trigger (consumer: `processd`) |
 | marktd supply | `de.markt.versorgung.eog-begonnen` | 55013/44013 completed → `begin_eog_supply` (Ersatz-/Grundversorgung active; consumer: `processd`) |
 | makod process relay | `de.mako.process.initiated` | forwarded from `makod` ingest |
@@ -851,7 +873,7 @@ the raw `data` JSONB for backward compatibility:
 ### Register a subscription
 
 ```bash
-curl -X POST http://localhost:8180/api/v1/subscriptions \
+curl -X PUT http://localhost:8180/api/v1/subscriptions/erp \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
@@ -969,7 +991,7 @@ Requeuing redelivers with the subscriber's current webhook secret.
 | Metric | Description |
 |--------|-------------|
 | `marktd_fanout_dlq_depth` | Dead-lettered deliveries in `event_delivery` |
-| `marktd_active_subscriptions` | Registered EventBus subscribers |
+| `marktd_active_subscriptions` | Registered fan-out subscribers |
 | `marktd_processed_events_total` | Events ingested from `makod` (all time) |
 | `marktd_db_pool_size` | Current PostgreSQL connection pool size |
 | `marktd_db_pool_idle` | Idle connections in the pool |
@@ -1031,7 +1053,7 @@ docker run -d \
 ## Common Issues
 
 **`401 Unauthorized`**
-JWT validation failed. Check: correct `--auth-issuer`, token not expired,
+JWT validation failed. Check: correct `[oidc] issuer`, token not expired,
 `mako_tenant` claim present.
 
 **`403 Forbidden`**
@@ -1050,11 +1072,11 @@ to update operator-controlled price sheets.
 **Auto-responder dispatching ablehnen for all requests**
 Check rule 3 (NB in grid): your operator MP-ID (`tenant` in `marktd.toml`)
 must appear in the MaLo's `rollenzuordnung` as `zuordnungstyp = "NB"`.
-Upload the MaLo with `PUT /api/v1/malo/{malo_id}` including the NB entry.
+Upload the MaLo with `PUT /api/v1/malos/{malo_id}` including the NB entry.
 
 **Auto-responder deferring all requests (no commands dispatched)**
 Check rule 1 (MaLo exists): the MaLo referenced in the UTILMD has not been
-pre-loaded into marktd.  Use `PUT /api/v1/malo/{malo_id}` to register it.
+pre-loaded into marktd.  Use `PUT /api/v1/malos/{malo_id}` to register it.
 
 **Auto-responder rejecting with Z0C (Preisblatt missing)**
 Only triggered when `auto_accept = true`.  Upload a price sheet covering the
@@ -1081,7 +1103,7 @@ Migrations have not run. Check `DATABASE_URL` and PostgreSQL connectivity.
 | `get_melo` / `get_melo_standorteigenschaften` | MeLo record / site properties |
 | `get_partner` / `list_partners` | Market-partner registry (MP-ID, name, roles) |
 | `get_preisblatt` | Price sheet for an NB MP-ID and date (Netznutzung) |
-| `list_pricat_versions` / `dispatch_pricat` | PRICAT version history / dispatch |
+| `list_pricat_versions` | PRICAT version history. Dispatch is REST-only (`POST /api/v1/pricat/{nb_mp_id}/dispatch`, Cedar `dispatch-pricat`, NB role) — `use-mcp` is one blanket gate over the whole MCP surface and cannot tell a read tool from a destructive one |
 | `get_versorgungsstatus` / `get_versorgungsstatus_history` / `get_versorgung_at` | Supply state — current, history, point-in-time |
 | `get_rollenzuordnung` | Temporal NB/MSB/LF role assignments for a MaLo |
 | `get_nb_contract` | NB contract record for a MaLo |
@@ -1106,14 +1128,15 @@ A Lieferantenwechsel spans three distinct phases, each triggering a targeted par
 
 | Phase | CloudEvent | PID | Operation | Effect |
 |---|---|---|---|---|
-| **Announce** | `process.initiated` | 55001 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` (WHO) + `lf_next_lieferbeginn` (WHEN). Does **not** change `lieferstatus`. |
-| **Confirm** | `process.completed` | 55002 / 44002 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
+| **Announce** | `process.initiated` | 55001 / 55077 / 44001 | `announce_lf_next` | Sets `lf_mp_id_next` (WHO) + `lf_next_lieferbeginn` (WHEN). Does **not** change `lieferstatus`, and does **not** displace an announcement another supplier already holds. |
+| **Confirm** | `process.completed` | 55002 / 55078 / 44002 | `confirm_supply` | Atomic SQL: `lf_mp_id ← lf_mp_id_next`, `lieferbeginn ← lf_next_lieferbeginn`, `lieferstatus = Beliefert`, clears `lf_mp_id_next`. |
 | **End** | `process.completed` | 55005 / 44005 | `end_supply` | `lieferstatus = Unbeliefert`, clears `lf_mp_id`/`lieferbeginn`/`eog_seit` — preserves `lf_mp_id_next` if another transition is already announced. No successor → emits `de.markt.versorgung.gap-detected`. |
 | **EoG** | `process.completed` | 55013 / 44013 | `begin_eog_supply` | `lieferstatus = Ersatzversorgung`/`Grundversorgung` (per `data.eog_art`), `lf_mp_id = E/G`, `eog_seit = Zuordnungsbeginn` (may be retroactive — anchors §38 Abs. 4). Resolves the Bilanzkreis from the completion payload, else the NB's deposited `default_bilanzkreis` (EoG ohne Antwort). Emits `de.markt.versorgung.eog-begonnen` (incl. `bilanzkreis`). |
 | **Stammdatenänderung** | `process.completed` | GPKE Teil 4 / GeLi Gas Änderung PIDs | `patch_stammdaten` | **Object-generic apply.** Dispatches by the `data.objekt` marker to the matching typed-column patch — `MARKTLOKATION`→`malo` (incl. §14a `fernsteuerbar`), `MESSLOKATION`→`melo` + the **MSB-Zuordnung** (zugeordneter MSB `CAV+7111=Z91`) recorded on the dated `melo_msb_zuordnungen` timeline via `assign_msb` effective the Änderungsdatum, `NETZLOKATION`→`nelo` (incl. §14a `steuerkanal`), `TECHNISCHE_RESSOURCE`→`technische_ressourcen` (`nutzung` `CCI+7059` Z17/Z50/Z56, `verbrauchsart` `CAV+7111` Z64/Z65/ZE5/ZA8, `ist_fernschaltbar`), `STEUERBARE_RESSOURCE`→`steuerbare_ressourcen` (**Konfigurationsprodukte** — each SG8 `SEQ+Z79` product group → a BO4E `Konfigurationsprodukt` with `produktcode` `PIA+5` DE7140, zugeordneter Marktpartner `CAV+Z91`/`ZF0`, and `leistungskurvendefinition` from `CCI+Z66`; the full contracted array is **replaced**, not merged), `TRANCHE`→`tranche`. Each `Some` field overwrites its column via `COALESCE`; JSONB payload and `version` untouched; no-op when the object is unknown locally. Emits `de.markt.malo.stammdaten-geaendert` (MaLo) / `de.markt.stammdaten.geaendert` (other objects). Deep MeLo `standorteigenschaften` are acknowledged without a typed apply (structural-MIG level). |
-| **Clear** | `process.completed` | 55003 / 44003 | `clear_lf_next` | Lieferbeginn rejected (Ablehnung Anmeldung): resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
+| **Clear** | `process.completed` | 55003 / 55080 / 44003 | `clear_lf_next` | Lieferbeginn rejected (Ablehnung Anmeldung): resets `lf_mp_id_next` + `lf_next_lieferbeginn` so no consumer acts on a switch that will not happen. Idempotent — a no-op when nothing is announced. |
 
-All three operations are idempotent under at-least-once EventBus delivery.
+All operations are idempotent under at-least-once fan-out delivery, and each emits
+`de.markt.versorgung.changed` carrying the state it produced.
 
 ### Schema
 
@@ -1122,7 +1145,7 @@ VersorgungsStatusRecord
 ├── malo_id              — 11-digit Marktlokations-ID
 ├── lieferstatus         — Beliefert | Unbeliefert | Grundversorgung | Ersatzversorgung | Ruhend | Stillgelegt
 ├── lf_mp_id             — active Lieferant MP-ID (set when Beliefert)
-├── lf_mp_id_next        — announced future Lieferant MP-ID (WHO; set on 55001/44001)
+├── lf_mp_id_next        — announced future Lieferant MP-ID (WHO; set on 55001/55077/44001)
 ├── lf_next_lieferbeginn — announced Lieferbeginn date (WHEN; paired with lf_mp_id_next)
 ├── lieferbeginn         — current supply start date
 ├── lieferende           — announced supply end date
@@ -1139,10 +1162,10 @@ VersorgungsStatusRecord
 stateDiagram-v2
     [*] --> Unbeliefert : MaLo registered
 
-    Unbeliefert --> Unbeliefert : 55001/44001 process.initiated<br/>→ lf_mp_id_next + lf_next_lieferbeginn set
-    Unbeliefert --> Beliefert   : 55003/44003 process.completed<br/>→ confirm_supply (lf_mp_id_next → lf_mp_id)
+    Unbeliefert --> Unbeliefert : 55001/55077/44001 process.initiated<br/>→ lf_mp_id_next + lf_next_lieferbeginn set
+    Unbeliefert --> Beliefert   : 55002/55078/44002 process.completed<br/>→ confirm_supply (lf_mp_id_next → lf_mp_id)
 
-    Beliefert --> Beliefert     : 55001/44001 process.initiated<br/>→ next LF announced; current LF still active
+    Beliefert --> Beliefert     : 55001/55077/44001 process.initiated<br/>→ next LF announced; current LF still active
     Beliefert --> Unbeliefert   : 55005/44005 process.completed<br/>→ end_supply (lf_mp_id_next preserved if set)
 
     Unbeliefert --> Ersatzversorgung : 55013/44013 process.completed<br/>→ begin_eog_supply (§38 EnWG, eog_seit set)
@@ -1163,8 +1186,15 @@ and `lf_mp_id_next IS NULL`, marktd emits `de.markt.versorgung.gap-detected`; th
 and dispatches `gpke.eog.anmelden` (UTILMD 55013). When `lf_mp_id_next IS NOT NULL`,
 no gap exists — the announced transition proceeds.
 
-**GPKE rule A06.** `processd` reads `lf_mp_id_next` before accepting a new 55001.  If
-`lf_mp_id_next IS NOT NULL`, a second Anmeldung is already pending → `Reject A06`.
+**GPKE rule A06.** `processd` reads `lf_mp_id_next` before accepting a new Anmeldung and
+compares it against the *requesting* supplier. `marktd` writes the marker while ingesting
+the `process.initiated`, before fanning the event out, so the Anmeldung under evaluation
+has already written its own MP-ID by the time the check runs — a bare `IS NOT NULL` test
+would reject every first-time Anmeldung against itself.
+
+The comparison only means anything because `announce_lf_next` keeps the **first**
+announcement; a competing supplier does not displace it. The holder of the announcement
+may still correct its own date.
 
 **Optimistic concurrency.** Every write uses `WHERE malo_id = $1 AND tenant = $2 AND version = $3`.
 Conflict → `412 Precondition Failed` → retry after re-read.
@@ -1220,7 +1250,7 @@ sequenceDiagram
     marktd-->>ERP: 200 OK + VersorgungsStatusResponse
 ```
 
-`processd` reads `GET /api/v1/versorgung/{malo_id}` to drive automated LFA E_0624
+`processd` reads `GET /api/v1/versorgung/{malo_id}` to drive the LF's automated
 responses without ERP involvement (GPKE Teil 1 §5).
 
 ---
@@ -1334,14 +1364,13 @@ curl -s -X PUT "http://marktd:8180/api/v1/mmm-preise/strom/2026/7" \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "vnb_mp_id": "9900823780008",
     "mehr_ct_kwh": "2.10",
     "minder_ct_kwh": "1.45",
     "source": "manual"
   }'
 
 # Query
-curl -s "http://marktd:8180/api/v1/mmm-preise/strom/2026/7?vnb_mp_id=9900823780008" \
+curl -s "http://marktd:8180/api/v1/mmm-preise/strom/2026/7" \
   -H "Authorization: Bearer <token>"
 ```
 
@@ -1857,9 +1886,9 @@ curl -s -X DELETE "http://marktd:8180/api/v1/steuerbare-ressourcen/C000123456789
 
 ---
 
-## `PUT /api/v1/melo` — MeLo Typed Columns & Schema Validation
+## `PUT /api/v1/melos` — MeLo Typed Columns & Schema Validation
 
-Every `PUT /api/v1/melo/{melo_id}` call:
+Every `PUT /api/v1/melos/{melo_id}` call:
 1. **Validates** the incoming `data` as `rubo4e::current::Messlokation`: auto-injects `_typ: "MESSLOKATION"`, rejects wrong `_typ` or invalid enum values with 422.
 2. **Normalises** to canonical camelCase BO4E form before storage.
 3. **Extracts typed columns** for efficient SQL queries:
@@ -1914,14 +1943,14 @@ for additional Redispatch 2.0 attributes.
 
 ```http
 # List all NeLos for this tenant (optionally filter by Netzbetreiber GLN)
-GET  /api/v1/nelo
-GET  /api/v1/nelo?nb_mp_id=9900357000004&page=0&size=50
+GET  /api/v1/nelos
+GET  /api/v1/nelos?nb_mp_id=9900357000004&page=0&size=50
 
 # Get a single NeLo by EIC or BDEW Codenummer
-GET  /api/v1/nelo/{nelo_id}
+GET  /api/v1/nelos/{nelo_id}
 
 # Insert or update a NeLo (NB role required; supply If-Match for OCC)
-PUT  /api/v1/nelo/{nelo_id}
+PUT  /api/v1/nelos/{nelo_id}
 ```
 
 **Request body for PUT** (includes typed NeLo columns):
@@ -1969,15 +1998,15 @@ graph LR
 
 ### Graph traversal
 
-`GET /api/v1/malo/{id}/lokationen` runs a recursive-CTE BFS query (max depth 8) and returns
+`GET /api/v1/malos/{id}/lokationen` runs a recursive-CTE BFS query (max depth 8) and returns
 all reachable edges from the given MaLo, ordered by depth.
 
 ```http
 # Full graph from a MaLo (all edges regardless of validity)
-GET /api/v1/malo/51238696012/lokationen
+GET /api/v1/malos/51238696012/lokationen
 
 # Graph valid on a specific date (temporal filter)
-GET /api/v1/malo/51238696012/lokationen?at=2025-01-15
+GET /api/v1/malos/51238696012/lokationen?at=2025-01-15
 
 # Graph from a MeLo
 GET /api/v1/melos/DE-MEL-001/lokationen?at=2025-01-15

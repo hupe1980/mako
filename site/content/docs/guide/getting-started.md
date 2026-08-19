@@ -16,8 +16,8 @@ complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 5500
 |---|---|---|
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `8000` | Demo ERP event receiver (Python, in-memory) |
-| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, EventBus fan-out, `event_log` replay |
-| `processd` | `8580` | NB STP auto-responder — netz-checker (6 checks), LF E_0624 (45 min) |
+| `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, durable fan-out, `event_log` replay |
+| `processd` | `8580` | NB STP auto-responder — netz-checker (6 checks), LF answers 55007/55010 (24 h) |
 | `makod` | `8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
 ```mermaid
@@ -34,7 +34,7 @@ sequenceDiagram
     marktd->>processd: de.mako.process.initiated<br/>HMAC POST /webhook
     marktd-->>webhook: de.mako.process.initiated<br/>(ERP subscription)
     processd->>marktd: GET /api/v1/versorgung/{malo_id}
-    processd->>marktd: GET /api/v1/malo/{malo_id}/grid
+    processd->>marktd: GET /api/v1/malos/{malo_id}/grid
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}
     Note over processd: netz-checker: 6 checks → Accept
     processd->>makod: gpke.lieferbeginn.bestaetigen
@@ -71,7 +71,7 @@ docker build --target processd-runtime -t processd:dev  .
 ```
 
 > The `processd-runtime` stage builds with `--features integrated` (includes
-> both NB netz-checker and LF E_0624 auto-response modules).
+> both the NB netz-checker and the LF answer modules).
 
 ---
 
@@ -95,7 +95,7 @@ nb-stp-makod-1       makod:dev          Up             0.0.0.0:8080->8080/tcp
 ```
 
 **What happens at startup:**  
-`processd` self-registers its EventBus subscription with `marktd` on startup —
+`processd` self-registers its fan-out subscription with `marktd` on startup —
 no manual subscription curl required. Both `marktd` and `processd` run SQLx
 migrations automatically on first boot (databases are created by `init-db.sh`).
 
@@ -137,14 +137,14 @@ curl -s -X PUT http://localhost:8180/api/v1/preisblaetter/9900357000004 \
 MALO_ID=51238696012
 
 # MaLo (NB=9900357000004, no active LF)
-curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID" \
+curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID" \
   -H "Content-Type: application/json" \
   --data-binary "$(jq --arg m "$MALO_ID" '.data.marktlokationsId=$m' demos/nb-stp/fixtures/malo-nb.json)" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
 # MaLo grid record (netz-checker check 1)
-curl -s -X PUT "http://localhost:8180/api/v1/malo/$MALO_ID/grid" \
+curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \
   -w "\nHTTP %{http_code}\n"
@@ -201,7 +201,7 @@ Expected response:
 ## Step 6 — Automatic NB decision
 
 Within ~200 ms, `processd` receives the `de.mako.process.initiated` event from
-`marktd`'s EventBus and runs all 6 netz-checker validation checks synchronously.
+`marktd`'s fan-out and runs all 6 netz-checker validation checks synchronously.
 
 ```bash
 # Check the decision log
@@ -284,7 +284,7 @@ docker compose down -v   # destroy all volumes (full reset)
 | ERP integration — CloudEvents, HMAC | [ERP integration](@/docs/architecture/erp-integration.md) |
 | makod operator reference | [makod guide](@/docs/services/makod.md) |
 | marktd operator reference | [marktd guide](@/docs/services/marktd.md) |
-| processd — NB STP + LF E_0624 | [processd guide](@/docs/services/processd.md) |
+| processd — NB STP + LF answer automation | [processd guide](@/docs/services/processd.md) |
 | INVOIC plausibility, § 147 AO / GoBD | [invoicd guide](@/docs/services/invoicd.md) |
 | Energy data, imbalance, billing periods | [edmd guide](@/docs/services/edmd.md) |
 | Process observability, §20 parity | [obsd guide](@/docs/services/obsd.md) |

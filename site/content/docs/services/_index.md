@@ -18,7 +18,7 @@ mako consists of **17 independently deployable services**, each built as a self-
 - MCP server at `/mcp` (Streamable HTTP) on 15 of the 17 services — all except outputd and agentd (the MCP host)
 - Structured health endpoints (`/health`, `/health/ready`)
 
-All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, `EventBus`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
+All services are built on **[`mako-service`](https://github.com/hupe1980/mako/tree/main/crates/mako-service)** — the shared SDK that provides `shutdown::token/serve` (SIGINT+SIGTERM graceful drain), `OidcConfig::build_verifier`, `McpAuth`+`McpAuthConfig`, `init_tracing_from_env`, `DatabaseConfig`, `HttpConfig`, `CedarEnforcer`, the transactional `outbox`, and more. This means zero copy-pasted infrastructure code across the 17 daemons.
 
 `DatabaseConfig::connect(url, service_name)` is the single PostgreSQL pool builder every daemon uses: it applies the configured `pool_size` plus `acquire_timeout_secs` / `idle_timeout_secs` / `max_lifetime_secs` (so a pool never queues unboundedly or pins a connection across a failover) and tags each connection with the service name in `pg_stat_activity`. Tuning lives in one place rather than being re-derived per service.
 
@@ -32,8 +32,8 @@ graph TB
 
     subgraph protocol ["Protocol & Market Data"]
         makod[":8080 makod<br/>EDIFACT runtime · 69 workflows<br/>AS4 · SlateDB · MCP"]
-        marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · EventBus"]
-        processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF E_0624 auto · §14a"]
+        marktd[":8180 marktd<br/>MaLo/MeLo/NeLo · contracts<br/>VersorgungsStatus · fan-out"]
+        processd[":8580 processd<br/>Anmeldung STP ≥95%<br/>LF answers · §14a"]
     end
 
     subgraph nb_billing ["Invoice & Grid Billing (NB)"]
@@ -81,8 +81,8 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [makod](@/docs/services/makod.md) | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 69 GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS |
-| [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, EventBus fan-out, MMMA monthly import worker |
-| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check |
+| [marktd](@/docs/services/marktd.md) | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus, typed BO4E API, durable fan-out, MMMA monthly import worker |
+| [processd](@/docs/services/processd.md) | `:8580` | NB + LF + MSB | Process Decision Engine — Anmeldung STP ≥95%, LF answers to the NB-initiated GPKE processes, MSB REQOTE auto-response, §14a Steuerungsauftrag produktcode check; role-gated binaries (§ 7 EnWG) |
 
 ## Invoice & Grid Billing
 

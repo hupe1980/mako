@@ -2,16 +2,18 @@
 # DO NOT use in production.
 allow_insecure_no_auth = true
 
-[storage.postgres]
+[database]
 url = "postgres://demo:demo-secret@postgres/marktd"
 
 [http]
 addr = "0.0.0.0:8180"
 
+[markt]
+tenant = "9900357000004"
+
 [makod]
 base_url  = "http://makod:8080"
 api_key   = ""
-tenant = "9900357000004"
 
 [webhook]
 inbound_path = "/api/v1/events"

@@ -476,10 +476,10 @@ impl SyncEngine {
             }
 
             let szr = builder.build();
-            // The Meldepunkt/territory swap that used to be checked here is now
-            // refused at the parse: a Zählpunktbezeichnung is 33 characters and a
-            // Bilanzierungsgebiet is a 16-character Y-type EIC, so neither value
-            // can inhabit the other's type.
+            // No Meldepunkt/territory swap check is needed here: the parse
+            // refuses one. A Zählpunktbezeichnung is 33 characters and a
+            // Bilanzierungsgebiet a 16-character Y-type EIC, so neither value can
+            // inhabit the other's type.
             // MaBiS settles against a gap-free grid, so an empty slot omits energy
             // rather than reporting zero for it. That under-reports the territory,
             // and the BIKO cannot tell a short series from a complete one — the
@@ -552,7 +552,7 @@ impl SyncEngine {
     ) -> anyhow::Result<mako_mabis::MabisZaehlpunktId> {
         let cfg = &self.cfg;
         let url = format!(
-            "{}/api/v1/bilanzierungsgebiet/{gebiet}/mabis-zp",
+            "{}/api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp",
             cfg.marktd.url
         );
         let resp = self
@@ -571,7 +571,7 @@ impl SyncEngine {
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             anyhow::bail!(
                 "no MaBiS-Zählpunkt assigned to Bilanzierungsgebiet {gebiet} — assign one via \
-                 PUT /api/v1/bilanzierungsgebiet/{gebiet}/mabis-zp on marktd; the \
+                 PUT /api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp on marktd; the \
                  Summenzeitreihe cannot be submitted without the SG6 LOC+172 Meldepunkt"
             );
         }
@@ -620,7 +620,7 @@ impl SyncEngine {
         let mut missing_gebiet: Vec<String> = Vec::new();
 
         for malo_id in malo_ids {
-            let url = format!("{}/api/v1/malo/{malo_id}", cfg.marktd.url);
+            let url = format!("{}/api/v1/malos/{malo_id}", cfg.marktd.url);
             let gebiet = match self
                 .marktd_client
                 .get(&url)

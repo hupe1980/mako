@@ -14,6 +14,18 @@ pub enum AnmeldungDecision {
     Escalate,
 }
 
+impl AnmeldungDecision {
+    /// The wire/label form — matches the SQL `CHECK` and the Prometheus label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Accept => "Accept",
+            Self::Reject => "Reject",
+            Self::Escalate => "Escalate",
+        }
+    }
+}
+
 impl std::fmt::Display for AnmeldungDecision {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -86,7 +98,14 @@ impl PgAnmeldungRepository {
         Self { pool }
     }
 
-    pub async fn insert(&self, rec: &AnmeldungDecisionRecord) -> Result<(), sqlx::Error> {
+    /// Record a decision, ignoring a redelivery of the same process.
+    ///
+    /// Returns `true` when a row was actually written. The fan-out is
+    /// at-least-once, so the same `de.mako.process.initiated` can arrive more
+    /// than once; the unique key makes the write idempotent, and the caller
+    /// needs to know whether this delivery was the one that counted so the STP
+    /// counter measures decisions rather than deliveries.
+    pub async fn insert(&self, rec: &AnmeldungDecisionRecord) -> Result<bool, sqlx::Error> {
         sqlx::query(
             "INSERT INTO anmeldung_decisions (id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, initiator_is_affiliate, decided_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
@@ -102,8 +121,8 @@ impl PgAnmeldungRepository {
         .bind(rec.decided_at)
         .bind(&rec.tenant)
         .execute(&self.pool)
-        .await?;
-        Ok(())
+        .await
+        .map(|r| r.rows_affected() > 0)
     }
 
     pub async fn list(

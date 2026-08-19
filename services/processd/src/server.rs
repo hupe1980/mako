@@ -15,7 +15,6 @@ use mako_service::{ServiceContext, cedar::CedarEnforcer, oidc::OidcVerifier};
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 use crate::pg::PgAnmeldungRepository;
-#[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
 use crate::pg::PgApprovalQueue;
 use crate::{handler::handle_webhook, mcp_server::ProcessdMcpState};
 
@@ -28,6 +27,7 @@ pub struct NbState {
     pub reader: mako_markt::marktd_client::MarktdClient,
     pub makod: MakodClient,
     pub repo: PgAnmeldungRepository,
+    pub queue: PgApprovalQueue,
 }
 
 /// State bundle for the LF module.
@@ -56,7 +56,10 @@ pub struct ProcessdState {
     pub own_mp_id: String,
     /// `marktd` client — used by the §14a Steuerungsauftrag auto-ORDRSP module (N5).
     pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
-    /// M3: When `true`, auto-dispatch QUOTES from PreisblattMessung on REQOTE arrival.
+    /// When `true`, an `Accept` MSB-Wechsel verdict dispatches the Bestätigung
+    /// itself; when `false` it goes to the approval queue.
+    pub msb_auto_accept: bool,
+    /// When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE arrival.
     pub msb_auto_preisanfrage: bool,
     /// Shared PG pool — used by the EoG module and REST case queries.
     pub pool: sqlx::PgPool,
@@ -78,8 +81,9 @@ pub struct RunConfig {
     pub nb_auto_accept: bool,
     pub nb_gas_bearbeitungsfrist_wt: u32,
     pub lf_auto_respond: bool,
-    pub lf_queue_ttl_secs: u64,
-    /// M3: When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE (PID 35001–35005) arrival.
+    /// See [`ProcessdState::msb_auto_accept`].
+    pub msb_auto_accept: bool,
+    /// See [`ProcessdState::msb_auto_preisanfrage`].
     pub msb_auto_preisanfrage: bool,
     /// EoG gap-closure automation (§36/§38 EnWG) — see `[eog]` in TOML.
     pub eog_auto_activate: bool,
@@ -180,7 +184,19 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         );
         let mut remaining = 15u32;
         loop {
-            match http.put(&sub_url).json(&body).send().await {
+            // Authenticated: `marktd` requires a bearer on every write, and
+            // subscription management is an operator-level capability there.
+            // Without this the PUT is a 401 against any marktd that has OIDC
+            // configured, the retry loop exhausts, and `build_router` returns
+            // an error — processd refuses to start. It only ever worked because
+            // the demo runs marktd with `allow_insecure_no_auth`.
+            match http
+                .put(&sub_url)
+                .bearer_auth(cfg.marktd_api_key.expose_secret())
+                .json(&body)
+                .send()
+                .await
+            {
                 Ok(resp) if resp.status().is_success() => {
                     info!(
                         subscriber_id = %cfg.subscriber_id,
@@ -191,6 +207,18 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
                 }
                 Ok(resp) => {
                     let status = resp.status();
+                    // 401/403 will not fix itself by waiting: the key or the
+                    // principal's role is wrong. Fail immediately with the
+                    // reason rather than after 30 s of identical retries.
+                    if status == reqwest::StatusCode::UNAUTHORIZED
+                        || status == reqwest::StatusCode::FORBIDDEN
+                    {
+                        return Err(anyhow::anyhow!(
+                            "processd: self-registration rejected by marktd with HTTP {status} — \
+                             check `[marktd] api_key` and that its principal may manage \
+                             subscriptions (marktd Cedar action `manage-subscription`, ADMIN role)"
+                        ));
+                    }
                     remaining -= 1;
                     if remaining == 0 {
                         return Err(anyhow::anyhow!(
@@ -240,6 +268,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             ),
             makod: makod.clone(),
             repo: PgAnmeldungRepository::new(pool.clone()),
+            queue: PgApprovalQueue::new(pool.clone()),
         }))
     };
 
@@ -252,7 +281,6 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             own_mp_id: cfg.own_mp_id.clone(),
             tenant: cfg.tenant.clone(),
             auto_respond: cfg.lf_auto_respond,
-            queue_ttl_secs: cfg.lf_queue_ttl_secs,
         };
         Some(Arc::new(LfState {
             config: lf_config,
@@ -267,7 +295,10 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
     };
 
     // ── Background: expire stale approval queue entries ───────────────────
-    #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+    //
+    // Deliberately not role-gated: the NB, LF and MSB modules all enqueue, so
+    // every role build needs its entries to reach `Expired` — that status is the
+    // operator's reconciliation surface.
     {
         let expiry_pool = pool.clone();
         let expiry_shutdown = ctx.shutdown.clone();
@@ -280,13 +311,15 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
                     _ = interval.tick() => {
                         match queue.expire_stale().await {
                             Ok(n) if n > 0 => {
-                                    // REGULATORY WARNING: Expired entries mean the LFA did not
-                                    // respond within the 45-minute deadline (BK6-22-024 §5).
-                                    // Operator must reconcile via GET /api/v1/queue?status=Expired.
+                                    // REGULATORY WARNING: an expired entry is a market
+                                    // message whose *business* answer Frist has run out —
+                                    // 24 h GPKE, 3/5/7/1 WT WiM, 10 WT GeLi Gas. (The
+                                    // 45-minute APERAK clock is makod's.) Reconcile via
+                                    // GET /api/v1/queue?status=Expired.
                                     tracing::warn!(
                                         expired = n,
-                                        "processd: {n} approval queue entries expired past \
-                                         LFA E_0624 45-min deadline — operator must reconcile"
+                                        "processd: {n} approval queue entries expired past their \
+                                         business answer Frist — operator must reconcile"
                                     );
                             }
                             Err(e) => {
@@ -317,6 +350,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         tenant: cfg.tenant.clone(),
         own_mp_id: cfg.own_mp_id.clone(),
         marktd: marktd_for_state,
+        msb_auto_accept: cfg.msb_auto_accept,
         msb_auto_preisanfrage: cfg.msb_auto_preisanfrage,
         pool: pool.clone(),
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
@@ -370,6 +404,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         });
     }
 
+    // ── Background: Prometheus gauge sampling ──────────────────────────────
+    crate::metrics::spawn_sampler(pool.clone(), cfg.tenant.clone(), ctx.shutdown.clone());
+
     // ── MCP state ──────────────────────────────────────────────────────────
     let mcp_state = Arc::new(ProcessdMcpState {
         pool: pool.clone(),
@@ -386,9 +423,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 
     // ── Router ─────────────────────────────────────────────────────────────
     // Infra routes (`/health/live`, `/health/ready`, `/metrics`, trace) are
-    // owned by `mako_service::run`; the domain Prometheus endpoint therefore
-    // lives at `/processd/metrics` to avoid colliding with the generic
-    // request-counter `/metrics` the runner mounts.
+    // owned by `mako_service::run`. processd's own metrics register on the same
+    // Prometheus registry (see `crate::metrics`), so they are served from that
+    // one `/metrics` rather than a second endpoint of its own.
     let app = Router::new()
         .route("/webhook", post(handle_webhook))
         .route("/api/v1/decisions", get(rest::list_decisions))
@@ -403,7 +440,6 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         .route("/api/v1/end-supply", post(rest::end_supply))
         .route("/api/v1/end-supply-gas", post(rest::end_supply_gas))
         .route("/api/v1/eog", get(rest::list_eog_cases))
-        .route("/processd/metrics", get(rest::metrics))
         .with_state(state)
         .layer(axum::Extension(cfg.oidc.clone()))
         .layer(axum::Extension(cfg.cedar.clone()))
@@ -417,6 +453,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
 // ── REST handlers ──────────────────────────────────────────────────────────────
 
 mod rest {
+    use std::sync::Arc;
+
     use axum::{
         Extension, Json,
         extract::{Path, State},
@@ -424,12 +462,52 @@ mod rest {
         response::IntoResponse,
     };
 
+    use mako_service::{cedar::CedarEnforcer, oidc::Claims};
     use sqlx::PgPool;
 
     use crate::{
         pg::{PgAnmeldungRepository, PgApprovalQueue},
         server::ProcessdState,
     };
+
+    /// Authorize `action` for the caller, or produce the `403`.
+    ///
+    /// processd does not merely report decisions, it makes them: approving a
+    /// queue entry dispatches the market answer, and `start-supply` /
+    /// `end-supply` commit the operator to a market position. Every route below
+    /// therefore takes a `Claims` extractor (which is what authenticates the
+    /// request — there is no global auth middleware) and passes through here.
+    // The `Err` is a fully-formed HTTP response the caller returns as-is, the
+    // same shape `mako_service::mcp_auth::authorize` uses; boxing it would add
+    // an allocation on every denial for no benefit.
+    #[allow(clippy::result_large_err)]
+    fn authorize(
+        enforcer: &CedarEnforcer,
+        claims: &Claims,
+        action: &'static str,
+        tenant: &str,
+    ) -> Result<(), axum::response::Response> {
+        enforcer
+            .check(&claims.principal(), action, tenant)
+            .map_err(|_| {
+                (
+                    StatusCode::FORBIDDEN,
+                    Json(serde_json::json!({
+                        "error":   "FORBIDDEN",
+                        "message": format!("{action} denied for this principal"),
+                    })),
+                )
+                    .into_response()
+            })
+    }
+
+    /// The principal to record as the deciding operator.
+    ///
+    /// § 20 Abs. 1 EnWG parity evidence and the GoBD trail both need to say
+    /// *who* decided, so this is the principal's `sub`, never a fixed label.
+    fn decided_by(claims: &Claims) -> String {
+        claims.principal().sub
+    }
 
     /// Turn a failed `makod` command dispatch into a response.
     ///
@@ -466,7 +544,12 @@ mod rest {
     pub async fn list_decisions(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "read-decisions", &state.tenant) {
+            return deny;
+        }
         let repo = PgAnmeldungRepository::new(pool);
         match repo.list(&state.tenant, 100).await {
             Ok(records) => Json(serde_json::to_value(records).unwrap_or_default()).into_response(),
@@ -477,7 +560,12 @@ mod rest {
     pub async fn list_queue(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "read-queue", &state.tenant) {
+            return deny;
+        }
         let queue = PgApprovalQueue::new(pool);
         match queue.list(&state.tenant, None, 100).await {
             Ok(entries) => Json(serde_json::to_value(entries).unwrap_or_default()).into_response(),
@@ -489,8 +577,13 @@ mod rest {
     pub async fn list_eog_cases(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "read-eog", &state.tenant) {
+            return deny;
+        }
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         {
             match crate::eog_module::list_cases(
@@ -511,20 +604,6 @@ mod rest {
         }
     }
 
-    /// Default `makod` command for an entry that carries no pre-resolved one.
-    ///
-    /// Strom: `gpke.nb-lieferende.*` → PID 55008 (LF Zustimmung/Ablehnung Lieferende).
-    /// Gas 44022/44023: the operator decision is whether to initiate the
-    /// Stornierung at all, so only the approve side has a market message.
-    fn legacy_command(pid: u32, approve: bool) -> Option<&'static str> {
-        match (pid, approve) {
-            (44022 | 44023, true) => Some(mako_markt::commands::GELI_GAS_STORNIERUNG_INITIIEREN),
-            (44022 | 44023, false) => None,
-            (_, true) => Some(mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN),
-            (_, false) => Some(mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN),
-        }
-    }
-
     /// Claim a pending entry, dispatch its market command, release the claim on
     /// failure.
     ///
@@ -537,6 +616,7 @@ mod rest {
         pool: PgPool,
         id_str: &str,
         approve: bool,
+        decided_by: &str,
     ) -> axum::response::Response {
         let Ok(id) = id_str.parse::<uuid::Uuid>() else {
             return StatusCode::BAD_REQUEST.into_response();
@@ -548,23 +628,30 @@ mod rest {
             crate::pg::approval::QueueStatus::Rejected
         };
 
-        let entry = match queue.claim(id, &state.tenant, target).await {
+        let entry = match queue.claim(id, &state.tenant, target, decided_by).await {
             Ok(Some(e)) => e,
             // Absent or already decided — nothing to dispatch.
             Ok(None) => return StatusCode::NOT_FOUND.into_response(),
             Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
         };
 
+        // Every enqueuing module resolves both commands from the trigger PID at
+        // enqueue time, so a stored `None` means "this decision has no market
+        // message" — never "derive one from the PID here". A guess would answer
+        // the wrong process, to the wrong counterparty, with a valid message.
         let stored = if approve {
             entry.approve_command.as_deref()
         } else {
             entry.reject_command.as_deref()
         };
-        let Some(command) = stored.or_else(|| legacy_command(entry.pid as u32, approve)) else {
+        let Some(command) = stored else {
             tracing::info!(%id, pid = entry.pid, approve, "processd: queue entry decided without a market message");
             return StatusCode::NO_CONTENT.into_response();
         };
 
+        // The key names the queue entry, not a role — the NB, LF and MSB all
+        // enqueue here. The UUID makes it unique; the prefix is what an
+        // operator reads in makod's idempotency log.
         let verb = if approve { "approve" } else { "reject" };
         let cmd = mako_markt::makod_client::ForwardCommand {
             marktrolle: entry.marktrolle.clone(),
@@ -574,19 +661,19 @@ mod rest {
             payload: if approve {
                 serde_json::json!({
                     "process_id": entry.process_id,
-                    "approved_by": "operator",
+                    "approved_by": decided_by,
                 })
             } else {
                 serde_json::json!({
                     "process_id": entry.process_id,
                     "reason": entry.reason,
-                    "rejected_by": "operator",
+                    "rejected_by": decided_by,
                 })
             },
         };
         if let Err(e) = state
             .makod
-            .post_command(&format!("processd-lf-{verb}-{id}"), &cmd)
+            .post_command(&format!("processd-queue-{verb}-{id}"), &cmd)
             .await
         {
             tracing::warn!(
@@ -613,88 +700,34 @@ mod rest {
 
     /// Approve an approval-queue entry: claim it, then dispatch its command.
     ///
-    /// **Regulatory note:** The 45-min deadline applies from the original
-    /// process.initiated event.  Operators must act before `expires_at`.
+    /// **Regulatory note:** `expires_at` carries the *business* answer Frist of
+    /// the queued process — 24 h (GPKE), 3/5/7/1 WT (WiM), 10 WT (GeLi Gas) —
+    /// less an hour of headroom. Operators must act before it.
     pub async fn approve_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         Path(id_str): Path<String>,
     ) -> impl IntoResponse {
-        decide_queue_entry(&state, pool, &id_str, true).await
+        if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
+            return deny;
+        }
+        decide_queue_entry(&state, pool, &id_str, true, &decided_by(&claims)).await
     }
 
     /// Reject an approval-queue entry: claim it, then dispatch its command.
     pub async fn reject_queue_entry(
         State(state): State<ProcessdState>,
         Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         Path(id_str): Path<String>,
     ) -> impl IntoResponse {
-        decide_queue_entry(&state, pool, &id_str, false).await
-    }
-
-    pub async fn metrics(
-        axum::Extension(pool): axum::Extension<sqlx::PgPool>,
-    ) -> impl IntoResponse {
-        let mut out = String::with_capacity(1024);
-
-        // ── NB STP decision counters ──────────────────────────────────────────
-        // processd_decisions_total{decision, pid} — sourced from anmeldung_decisions table.
-        let decisions: Vec<(String, i32, i64)> = sqlx::query_as(
-            r"SELECT decision::text, pid, COUNT(*)::bigint
-              FROM anmeldung_decisions
-              GROUP BY decision, pid
-              ORDER BY pid, decision",
-        )
-        .fetch_all(&pool)
-        .await
-        .unwrap_or_default();
-
-        out.push_str("# HELP processd_decisions_total NB STP Anmeldung decisions (Accept/Reject/Escalate) by PID.\n");
-        out.push_str("# TYPE processd_decisions_total counter\n");
-        for (decision, pid, count) in &decisions {
-            out.push_str(&format!(
-                "processd_decisions_total{{decision=\"{decision}\",pid=\"{pid}\"}} {count}\n"
-            ));
+        if let Err(deny) = authorize(&enforcer, &claims, "decide-queue", &state.tenant) {
+            return deny;
         }
-
-        // ── LF approval queue depth ───────────────────────────────────────────
-        // `resolved_at` is not a column here (the timestamp is `decided_at`),
-        // and Pending is the state that needs an operator — the old query
-        // errored into a permanent 0 and hid the 45-min E_0624 escalations.
-        let queue_depth: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM approval_queue WHERE status = 'Pending'")
-                .fetch_one(&pool)
-                .await
-                .inspect_err(
-                    |e| tracing::warn!(error = %e, "processd: approval-queue depth query failed"),
-                )
-                .unwrap_or(0);
-
-        out.push_str(
-            "# HELP processd_approval_queue_depth Pending LF E_0624 approval-queue entries.\n",
-        );
-        out.push_str("# TYPE processd_approval_queue_depth gauge\n");
-        out.push_str(&format!("processd_approval_queue_depth {queue_depth}\n"));
-
-        // ── DB pool health ────────────────────────────────────────────────────
-        let pool_size = pool.size();
-        let pool_idle = pool.num_idle();
-
-        out.push_str("# HELP processd_db_pool_size Current PostgreSQL connection pool size.\n");
-        out.push_str("# TYPE processd_db_pool_size gauge\n");
-        out.push_str(&format!("processd_db_pool_size {pool_size}\n"));
-        out.push_str("# HELP processd_db_pool_idle Idle PostgreSQL connections.\n");
-        out.push_str("# TYPE processd_db_pool_idle gauge\n");
-        out.push_str(&format!("processd_db_pool_idle {pool_idle}\n"));
-
-        (
-            axum::http::StatusCode::OK,
-            [(
-                axum::http::header::CONTENT_TYPE,
-                "text/plain; version=0.0.4",
-            )],
-            out,
-        )
+        decide_queue_entry(&state, pool, &id_str, false, &decided_by(&claims)).await
     }
 
     /// `POST /api/v1/start-supply` — ERP initiates a GPKE Lieferbeginn (Strom SLP).
@@ -722,8 +755,13 @@ mod rest {
     /// - Retroactive dates (`lieferbeginn_datum` < today Berlin) are always rejected.
     pub async fn start_supply(
         State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
+            return deny;
+        }
         use mako_engine::fristen::{self, HolidayCalendar};
         use time_tz::{OffsetDateTimeExt as _, timezones};
 
@@ -895,8 +933,13 @@ mod rest {
     /// API-Webdienste Strom — the ERP must supply the Gas-MaLo-ID upfront.
     pub async fn start_supply_gas(
         State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
+            return deny;
+        }
         // Validate mandatory Gas fields before forwarding.
         let malo_id = match body.get("malo_id").and_then(|v| v.as_str()) {
             Some(id) if !id.is_empty() => id.to_owned(),
@@ -980,15 +1023,20 @@ mod rest {
 
     /// `POST /api/v1/end-supply` — ERP initiates a GPKE Lieferende (Strom).
     ///
-    /// Forwards to makod `gpke.lieferende.anmelden` (PID 55002). The notice
+    /// Forwards to makod `gpke.lieferende.anmelden` (PID 55004 Abmeldung). The notice
     /// period that governs *when* a Lieferende is valid is enforced upstream
     /// in `vertragd` (§ 20 Abs. 1 StromGVV/GasGVV in der Grundversorgung, sonst
     /// vertraglich); this endpoint validates only that the
     /// mandatory fields are present.
     pub async fn end_supply(
         State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
+            return deny;
+        }
         end_supply_inner(
             state,
             &body,
@@ -1001,8 +1049,13 @@ mod rest {
     /// `POST /api/v1/end-supply-gas` — ERP initiates a GeLi Gas Lieferende (44002).
     pub async fn end_supply_gas(
         State(state): State<ProcessdState>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
         axum::Json(body): axum::Json<serde_json::Value>,
     ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
+            return deny;
+        }
         end_supply_inner(
             state,
             &body,

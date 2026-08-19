@@ -30,11 +30,6 @@ cedar = ["dep:cedar-policy"]
 ## Provides the `Claims` Axum extractor for use in handlers.
 oidc = ["dep:jsonwebtoken"]
 
-## Enables the Kafka-backed EventBus via `krafka` (pure Rust, MSRV 1.88, zero-unsafe).
-## Use only when webhook fan-out is a measured bottleneck (>500 MaLo, >20 subscribers).
-## Requires a running Kafka 3.9+ broker; not needed for webhook-based deployments.
-kafka = ["dep:krafka"]
-
 ## Enables real Prometheus metrics at `GET /metrics`.
 ## Registers `mako_http_requests_total` and `mako_http_request_duration_seconds`
 ## on the default Prometheus registry. `ServiceBuilder::with_metrics()` mounts the
@@ -91,8 +86,6 @@ cedar-policy              = { workspace = true, optional = true }
 # Optional OIDC dep — only compiled when feature=oidc is enabled
 jsonwebtoken              = { workspace = true, optional = true }
 
-# Optional Kafka dep — only compiled when feature=kafka is enabled
-krafka                    = { workspace = true, optional = true }
 
 # Optional Prometheus dep — only compiled when feature=metrics is enabled
 prometheus                = { version = "0.14", default-features = false, features = ["process"], optional = true }

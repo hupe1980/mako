@@ -67,6 +67,23 @@ impl SubscriptionRepository for PgSubscriptionRepository {
         Ok(row.map(row_to_sub))
     }
 
+    async fn deactivate(&self, subscriber_id: &str) -> Result<bool, MdmError> {
+        // Bumps `version` too, so a concurrent GET/PUT round-trip observes the
+        // change rather than re-writing a stale `active = true`.
+        let affected = sqlx::query(
+            "UPDATE subscriptions
+                SET active = false, version = version + 1, updated_at = now()
+              WHERE subscriber_id = $1 AND active = true",
+        )
+        .bind(subscriber_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| MdmError::Internal(e.to_string()))?
+        .rows_affected();
+
+        Ok(affected > 0)
+    }
+
     async fn list_active(&self) -> Result<Vec<Subscription>, MdmError> {
         let rows: Vec<PgRow> = sqlx::query(&format!(
             "SELECT {SELECT_COLS} FROM subscriptions WHERE active = true ORDER BY subscriber_id"

@@ -13,6 +13,9 @@
 //! 2. An `event_log` row written directly (as if by a producer that crashed
 //!    before fan-out) is picked up and delivered by a *fresh* worker with no
 //!    in-memory state — the crash-recovery guarantee.
+//! 3. Events about one Marktlokation reach a subscriber in publication order
+//!    even when the first delivery fails — the per-aggregate ordering guarantee.
+//! 4. A subscriber's `sparten` filter actually filters.
 
 use std::sync::{
     Arc,
@@ -232,4 +235,214 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let port = container.get_host_port_ipv4(5432).await.ok()?;
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
+}
+
+// ── Per-aggregate ordering ────────────────────────────────────────────────────
+
+/// A receiver that rejects the first `fail_first` requests, then records the
+/// subjects it accepts in arrival order.
+#[derive(Default)]
+struct OrderCapture {
+    seen: std::sync::Mutex<Vec<String>>,
+    remaining_failures: AtomicUsize,
+}
+
+async fn spawn_ordering_webhook(state: Arc<OrderCapture>) -> String {
+    async fn handler(
+        axum::extract::State(state): axum::extract::State<Arc<OrderCapture>>,
+        body: axum::body::Bytes,
+    ) -> axum::http::StatusCode {
+        if state
+            .remaining_failures
+            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
+                (n > 0).then(|| n - 1)
+            })
+            .is_ok()
+        {
+            return axum::http::StatusCode::INTERNAL_SERVER_ERROR;
+        }
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        state
+            .seen
+            .lock()
+            .unwrap()
+            .push(v["subject"].as_str().unwrap_or_default().to_owned());
+        axum::http::StatusCode::OK
+    }
+    let app = Router::new()
+        .route("/hook", post(handler))
+        .with_state(state);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/hook")
+}
+
+/// Three events about **one** Marktlokation, where the first delivery fails
+/// once. Unordered delivery would hand the subscriber #2 and #3 while #1 backed
+/// off, so an ERP would persist the superseded supply state last and keep it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn events_about_one_malo_arrive_in_order_even_when_the_first_fails() {
+    let Some((pool, _pg)) = test_pool("ordering").await else {
+        eprintln!("skipping: Docker unavailable");
+        return;
+    };
+    let captured = Arc::new(OrderCapture::default());
+    captured.remaining_failures.store(1, Ordering::SeqCst);
+    let url = spawn_ordering_webhook(Arc::clone(&captured)).await;
+    insert_subscription(&pool, &url).await;
+
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown = CancellationToken::new();
+    fanout::spawn(
+        pool.clone(),
+        PgSubscriptionRepository::new(pool.clone()),
+        mako_service::http::default_client(),
+        FanoutConfig {
+            // Retry the failed first event promptly so the test does not sit out
+            // the production 30 s back-off.
+            backoff: vec![Duration::from_secs(1)],
+            poll_interval: Duration::from_millis(200),
+            ..FanoutConfig::default()
+        },
+        Arc::clone(&notify),
+        shutdown.clone(),
+    );
+
+    let malo = "51238696012";
+    let mut ids = Vec::new();
+    for version in 1..=3 {
+        let ev = MarktEvent::new(
+            TENANT,
+            CE_TYPE,
+            malo.to_owned(),
+            serde_json::json!({ "version": version }),
+        )
+        .with_extensions(mako_markt::cloudevents::EventExtensions {
+            marktmaloid: Some(malo.to_owned()),
+            ..Default::default()
+        });
+        marktd::outbox::enqueue(&pool, &ev, &notify)
+            .await
+            .expect("enqueue");
+        ids.push(ev.id.clone());
+    }
+
+    for id in &ids {
+        assert!(
+            wait_delivered(&pool, id).await,
+            "event {id} never delivered"
+        );
+    }
+
+    let seen = captured.seen.lock().unwrap().clone();
+    assert_eq!(
+        seen.len(),
+        3,
+        "every event about the MaLo must be delivered exactly once"
+    );
+    // All three carry the same subject; what the ordering guarantee actually
+    // pins is that none was delivered before its predecessor, which the
+    // delivery timestamps record.
+    let order: Vec<(i64, Option<time::OffsetDateTime>)> =
+        sqlx::query_as("SELECT d.seq, d.delivered_at FROM event_delivery d ORDER BY d.seq")
+            .fetch_all(&pool)
+            .await
+            .unwrap();
+    for pair in order.windows(2) {
+        let (prev, next) = (&pair[0], &pair[1]);
+        assert!(
+            prev.1.unwrap() <= next.1.unwrap(),
+            "seq {} was delivered after seq {} — per-aggregate order was not held",
+            prev.0,
+            next.0
+        );
+    }
+
+    shutdown.cancel();
+}
+
+/// A STROM-only subscriber must not receive the Gas stream. The `sparten` filter
+/// was documented and inert: only one event type ever populated the column it
+/// matched on, so every other event fanned out to every subscriber.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_strom_only_subscriber_is_not_woken_by_a_gas_event() {
+    let Some((pool, _pg)) = test_pool("sparten").await else {
+        eprintln!("skipping: Docker unavailable");
+        return;
+    };
+    let captured = Arc::new(Captured::default());
+    let url = spawn_mock_webhook(Arc::clone(&captured)).await;
+    sqlx::query(
+        "INSERT INTO subscriptions
+             (subscriber_id, webhook_url, webhook_secret, roles, event_types, sparten, active)
+         VALUES ('erp-1', $1, $2, '{}', $3, ARRAY['STROM'], true)",
+    )
+    .bind(&url)
+    .bind(SECRET)
+    .bind(vec![CE_TYPE.to_owned()])
+    .execute(&pool)
+    .await
+    .expect("insert subscription");
+
+    let notify = Arc::new(tokio::sync::Notify::new());
+    let shutdown = CancellationToken::new();
+    fanout::spawn(
+        pool.clone(),
+        PgSubscriptionRepository::new(pool.clone()),
+        mako_service::http::default_client(),
+        FanoutConfig::default(),
+        Arc::clone(&notify),
+        shutdown.clone(),
+    );
+
+    let gas = MarktEvent::new(
+        TENANT,
+        CE_TYPE,
+        "GAS-MALO".to_owned(),
+        serde_json::json!({}),
+    )
+    .with_extensions(mako_markt::cloudevents::EventExtensions {
+        marktsparte: Some("GAS".to_owned()),
+        ..Default::default()
+    });
+    marktd::outbox::enqueue(&pool, &gas, &notify)
+        .await
+        .expect("enqueue gas");
+
+    let strom = MarktEvent::new(
+        TENANT,
+        CE_TYPE,
+        "STROM-MALO".to_owned(),
+        serde_json::json!({}),
+    )
+    .with_extensions(mako_markt::cloudevents::EventExtensions {
+        marktsparte: Some("STROM".to_owned()),
+        ..Default::default()
+    });
+    marktd::outbox::enqueue(&pool, &strom, &notify)
+        .await
+        .expect("enqueue strom");
+
+    assert!(
+        wait_delivered(&pool, &strom.id).await,
+        "the STROM event must be delivered"
+    );
+    let gas_rows: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM event_delivery WHERE event_id = $1")
+            .bind(&gas.id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        gas_rows, 0,
+        "a STROM-only subscriber must get no delivery row for a GAS event"
+    );
+    assert_eq!(captured.hits.load(Ordering::SeqCst), 1);
+
+    shutdown.cancel();
 }

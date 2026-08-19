@@ -4,7 +4,7 @@
 //! process-dispatch helpers live in `super`.
 
 use super::*;
-use mako_gpke::GpkeEogWorkflow;
+use mako_gpke::{GpkeBeendigungZuordnungWorkflow, GpkeEogWorkflow};
 
 // ── Per-command wrapper functions ─────────────────────────────────────────────
 //
@@ -63,6 +63,24 @@ pub(super) fn cmd_gpke_nb_lieferende_ablehnen<'a>(
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
     Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p, false))
+}
+
+pub(super) fn cmd_gpke_beendigung_zuordnung_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_beendigung_zuordnung_antwort(s, p, true))
+}
+
+pub(super) fn cmd_gpke_beendigung_zuordnung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_gpke_beendigung_zuordnung_antwort(s, p, false))
 }
 
 pub(super) fn cmd_gpke_zuordnung_lf_bestaetigen<'a>(
@@ -540,6 +558,44 @@ pub(super) async fn dispatch_gpke_nb_lieferende_antwort(
         malo_id.as_str(),
         "gpke-lf-abmeldung",
         move || mako_gpke::LfAbmeldungCommand::SendAntwort { accepted, reason },
+    )
+    .await
+}
+
+/// Dispatch the LFA's response to an `Anfrage zur Beendigung der Zuordnung`
+/// (inbound PID 55010, EBD **E_0624**).
+///
+/// Called for `gpke.beendigung-zuordnung.bestaetigen` (→ 55011 Bestätigung) and
+/// `gpke.beendigung-zuordnung.ablehnen` (→ 55012 Ablehnung).
+///
+/// The ingest dispatcher spawns `gpke-beendigung-zuordnung` on an inbound 55010
+/// and registers the 24 h business Frist (BK6-22-024 § 4). Until these two
+/// commands existed the spawned process had no way to be answered at all — it
+/// could only run out its deadline.
+///
+/// ## Required payload fields
+///
+/// | Field | Type | Notes |
+/// |---|---|---|
+/// | `malo_id` | string | Marktlokations-ID identifying the process |
+/// | `reason` | string (opt.) | Rejection reason — mandatory when `accepted = false` |
+pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    accepted: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+
+    let reason = payload
+        .get("reason")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
+    dispatch_to_process::<GpkeBeendigungZuordnungWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        "gpke-beendigung-zuordnung",
+        move || mako_gpke::BeendigungZuordnungCommand::SendAntwort { accepted, reason },
     )
     .await
 }

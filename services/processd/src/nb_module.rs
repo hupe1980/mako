@@ -1,30 +1,54 @@
-//! NB process decision module — GPKE and GeLi Gas Anmeldung STP.
+//! NB process decision module — the Netzbetreiber's own GPKE / GeLi Gas
+//! answer obligations.
 //!
-//! Consumes `de.mako.process.initiated` events for Lieferbeginn PIDs:
-//! - **55001** GPKE Lieferbeginn Standard (Strom) — 24h deadline
-//! - **55016** GPKE Lieferbeginn Netzentnahme (Strom) — 24h deadline
-//! - **44001** GeLi Gas Lieferbeginn — 10 Werktage deadline
+//! # What the NB owes an answer to
+//!
+//! | Inbound PID | Process | Answers | EBD | Frist |
+//! |---|---|---|---|---|
+//! | **55001** | Anmeldung verb. MaLo (Lieferbeginn) | 55002 / 55003 | `E_0622` | 11:00 Uhr des 1. WT nach dem ÜT |
+//! | **55077** | Anmeldung erz. MaLo (Lieferbeginn) | 55078 / 55080 | `E_0622` | 11:00 Uhr des 1. WT nach dem ÜT |
+//! | **55004** | Abmeldung (Lieferende von LF an NB) | 55005 / 55006 | `E_0607` | 06:00 Uhr des 1. WT nach dem ÜT |
+//! | **44001** | Anmeldung NN (Gas Lieferbeginn) | 44002 / 44003 | — | Ablauf des 4. Werktags |
+//! | **44004** | Abmeldung NN (Gas Lieferende) | 44005 / 44006 | — | Ablauf des 3. Werktags |
+//!
+//! Every Frist comes from [`crate::fristen`], which reads the same tables
+//! `makod` registers the process deadline from.
+//!
+//! ## What is deliberately *not* here
+//!
+//! **55016 „Kündigung" is not an NB process** and is answered by no role here.
+//! The Anwendungsübersicht der Prüfidentifikatoren 4.0 (lfd. Nr. 20030) has it
+//! going **LFN → LFA**, answered 55017/55018 by the *Altlieferant* under EBD
+//! `E_0614`. Evaluating it here would make an `nb-only` binary answer a
+//! supplier-role message — the § 7 EnWG separation the Cargo features exist for
+//! — with grid-topology checks the LFA has no basis for. `ROADMAP.md` records
+//! what the LFA answer path needs first.
 //!
 //! # Decision pipeline
 //!
 //! ```text
-//! Event arrives → parse AnmeldungAnfrage
-//!   → GET /api/v1/versorgung/{malo_id}          ← marktd (VersorgungsStatus)
-//!   → GET /api/v1/malo/{malo_id}/grid            ← marktd (MaloGridRecord)
-//!   → GET /api/v1/partners/{lf_mp_id}              ← marktd (partner_known)
-//!   → netz_checker::evaluate(anfrage, vs, grid, partner_known, now)
-//!       Accept   → write anmeldung_decisions(Accept)
-//!                  → MakodClient::post_command(bestaetigen)   [if auto_accept]
-//!       Reject   → write anmeldung_decisions(Reject, erc_code)
-//!                  → MakodClient::post_command(ablehnen, erc_code)
-//!       Escalate → write anmeldung_decisions(Escalate)
-//!                  → alert operator
+//! Anmeldung (55001 / 55077 / 44001)          Abmeldung (55004 / 44004)
+//!   → GET /api/v1/versorgung/{malo}            → GET /api/v1/versorgung/{malo}
+//!   → GET /api/v1/malos/{malo}/grid
+//!   → GET /api/v1/partners/{lf}
+//!   → netz_checker::evaluate                   → netz_checker::evaluate_abmeldung
+//!       Accept   → bestaetigen [auto_accept]       Accept   → bestaetigen [auto_accept]
+//!                  else approval_queue                        else approval_queue
+//!       Reject   → ablehnen (ERC)                  Reject   → ablehnen (ERC)
+//!       Escalate → approval_queue                  Escalate → approval_queue
 //! ```
+//!
+//! The two decision trees have **separate ERC code spaces** — `A02` is
+//! „Marktlokation nimmt nicht an der Marktkommunikation teil" in `E_0622` and
+//! „Vorlauffrist nicht eingehalten" in `E_0607` — which is why they are
+//! separate functions in `netz-checker` rather than one with a flag.
 //!
 //! # Regulatory basis
 //!
-//! - GPKE: BK6-22-024 §5 + UTILMD Strom AHB
-//! - GeLi Gas: BK7-24-01-009 §3 + UTILMD Gas AHB
+//! - GPKE: BK6-24-174 Teil 2 (SD Lieferbeginn, SD Lieferende von LF an NB)
+//! - GeLi Gas: BK7-24-01-009 Kap. 3.2.2 / 3.2.3
+//! - EBD 4.3 Kap. 6.6.1 (`E_0622`), 6.3.1 (`E_0607`)
+//! - § 20 EnWG parity: `initiator_is_affiliate` recorded on every decision
 
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use netz_checker::types::RejectReason;
@@ -37,6 +61,7 @@ use mako_markt::domain::Sparte;
 use secrecy::SecretString;
 
 use crate::pg::anmeldung::{AnmeldungDecision, AnmeldungDecisionRecord, PgAnmeldungRepository};
+use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 
 // ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -65,7 +90,44 @@ impl NbModuleConfig {
     }
 }
 
-// MarktdReader replaced by mako_markt::marktd_client::MarktdClient
+// ── PID sets ──────────────────────────────────────────────────────────────────
+
+/// Inbound **Anmeldung** PIDs the NB answers.
+///
+/// 55001 verbrauchende MaLo, 55077 erzeugende MaLo (both LFN → NB, GPKE Teil 2
+/// SD Lieferbeginn), 44001 Anmeldung NN (GeLi Gas 3.0 Kap. 3.2.3).
+///
+/// 55016 is **not** here: it is the Kündigung, LFN → LFA, and belongs to the
+/// supplier role (see the module docs).
+pub const ANMELDUNG_PIDS: &[u32] = &[55_001, 55_077, 44_001];
+
+/// Inbound **Abmeldung** PIDs the NB answers.
+///
+/// 55004 „Abmeldung" (LF → NB, GPKE Teil 2 SD Lieferende von LF an NB) and
+/// 44004 „Abmeldung NN" (GeLi Gas 3.0 Kap. 3.2.2). Neither was routed anywhere
+/// before, so every Lieferende a supplier initiated ran out its Frist unseen.
+pub const ABMELDUNG_PIDS: &[u32] = &[55_004, 44_004];
+
+/// Every inbound PID this module answers.
+#[must_use]
+pub fn answered_pids() -> Vec<u32> {
+    let mut v: Vec<u32> = ANMELDUNG_PIDS
+        .iter()
+        .chain(ABMELDUNG_PIDS)
+        .copied()
+        .collect();
+    v.sort_unstable();
+    v
+}
+
+/// The Sparte an NB PID belongs to — Strom in the 55xxx band, Gas in 44xxx.
+const fn sparte_of(pid: u32) -> Sparte {
+    if pid >= 44_000 && pid < 45_000 {
+        Sparte::Gas
+    } else {
+        Sparte::Strom
+    }
+}
 
 // ── NB module payload ─────────────────────────────────────────────────────────
 
@@ -99,8 +161,7 @@ impl AnmeldungPayload {
             .and_then(|v| v.as_u64())
             .or_else(|| data.get("pid")?.as_u64())? as u32;
 
-        // Only handle Lieferbeginn PIDs.
-        if !matches!(pid, 55001 | 55016 | 44001) {
+        if !ANMELDUNG_PIDS.contains(&pid) {
             return None;
         }
 
@@ -152,11 +213,12 @@ impl AnmeldungPayload {
 
     /// Derive `AnmeldungAnfrage` for passing to `netz-checker`.
     pub fn into_anfrage(self) -> AnmeldungAnfrage {
-        let sparte = if self.pid == 44001 {
-            Sparte::Gas
-        } else {
-            Sparte::Strom
-        };
+        let sparte = sparte_of(self.pid);
+        // PID 55077 *is* the „Anmeldung erz. MaLo" use case, so the § 10c EEG
+        // Monatserster rule applies whether or not the adapter also surfaced
+        // the ZW3 Transaktionsgrundergänzung. Relying on the flag alone let a
+        // message without it take the ordinary LFW24 Werktag rule.
+        let ist_erzeugende_marktlokation = self.ist_erzeugende_marktlokation || self.pid == 55_077;
         // Messtyp from the UTILMD TM+EM marker carried in the payload
         // (Z01=SLP, Z02=RLM, Z04=IMS → adapter emits "SLP"/"RLM"/"IMS").
         // Default SLP when absent — the conservative Vorlauffrist bound.
@@ -176,33 +238,31 @@ impl AnmeldungPayload {
             sparte,
             messtyp,
             transaktionsgrund: self.transaktionsgrund,
-            ist_erzeugende_marktlokation: self.ist_erzeugende_marktlokation,
+            ist_erzeugende_marktlokation,
         }
     }
 }
 
 // ── evaluate_and_decide ───────────────────────────────────────────────────────
 
-/// Orchestrate the full NB STP decision for one `de.mako.process.initiated` event.
+/// Decide one `de.mako.process.initiated` event addressed to the NB.
 ///
-/// # Steps
-///
-/// 1. Parse `AnmeldungPayload` from the event.
-/// 2. Fetch `VersorgungsStatus`, `MaloGridRecord`, and partner presence from `marktd`.
-/// 3. Call `netz_checker::evaluate`.
-/// 4. Write `anmeldung_decisions` row.
-/// 5. If `auto_accept` and result is `Accept`, call `MakodClient::post_command`.
-///    If result is `Reject`, always call `MakodClient::post_command` with ERC code.
-///
-/// Returns `true` if the event was handled (even if the decision was Escalate).
-/// Returns `false` if the event is not a Lieferbeginn PID.
+/// Routes to the Anmeldung pipeline (55001 / 55077 / 44001) or the Abmeldung
+/// pipeline (55004 / 44004). Returns `true` when this module handled the event
+/// — including when it escalated — and `false` when the PID belongs to another
+/// role or another module.
 pub async fn evaluate_and_decide(
     event: &serde_json::Value,
     config: &NbModuleConfig,
     reader: &mako_markt::marktd_client::MarktdClient,
     makod: &MakodClient,
     repo: &PgAnmeldungRepository,
+    queue: &PgApprovalQueue,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(payload) = AbmeldungPayload::parse(event) {
+        return decide_abmeldung(payload, event, config, reader, makod, repo, queue).await;
+    }
+
     // ── 1. Parse payload ──────────────────────────────────────────────────
     let Some(payload) = AnmeldungPayload::parse(event) else {
         return Ok(false);
@@ -219,6 +279,18 @@ pub async fn evaluate_and_decide(
     let process_id = payload.process_id;
     let malo_id = payload.malo_id.clone();
     let lf_mp_id = payload.new_supplier_gln.clone();
+    // The answer Frist runs from receipt of the market message; the CloudEvent
+    // `time` is when makod emitted it.
+    let received_at = event["time"]
+        .as_str()
+        .and_then(|s| OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+    let payload_meta = AnmeldungMeta {
+        pid,
+        process_id,
+        malo_id: malo_id.clone(),
+        received_at,
+    };
 
     info!(
         %process_id, pid, %malo_id, lf_mp_id = %lf_mp_id,
@@ -318,7 +390,12 @@ pub async fn evaluate_and_decide(
         tenant: config.tenant.clone(),
     };
 
-    repo.insert(&rec).await?;
+    // `insert` is ON CONFLICT DO NOTHING on (process_id, tenant), so a
+    // redelivered event does not double-count. Report the counter from the rows
+    // actually written rather than from every delivery attempt.
+    if repo.insert(&rec).await? {
+        crate::metrics::record_decision(decision.as_str(), pid);
+    }
 
     // ── 6. Dispatch command to makod ──────────────────────────────────────
     match &result {
@@ -334,10 +411,21 @@ pub async fn evaluate_and_decide(
                     "processd NB: §20 EnWG — affiliate Anmeldung detected; \
                      auto_accept overridden to false — operator must review"
                 );
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &payload_meta,
+                    &format!(
+                        "§20 EnWG affiliate Anmeldung (LF {lf_mp_id} is this operator) — \
+                         netz-checker says Accept, but an affiliate may not take the \
+                         automatic path a third party does not get"
+                    ),
+                )
+                .await?;
             } else if config.auto_accept {
                 let cmd_body = ForwardCommand {
-                    marktrolle: None,
-                    command: lieferbeginn_accept_command(pid, &malo_id),
+                    marktrolle: Some("NB".to_owned()),
+                    command: answer_commands(pid).0.to_owned(),
                     malo_id: Some(malo_id.clone()),
                     melo_id: None,
                     payload: serde_json::json!({ "process_id": process_id }),
@@ -350,13 +438,21 @@ pub async fn evaluate_and_decide(
                     )?;
                 info!(%process_id, pid, %malo_id, "processd NB: dispatched bestaetigen");
             } else {
-                info!(%process_id, pid, %malo_id, "processd NB: Accept (auto_accept=false or §20 EnWG affiliate — operator must confirm)");
+                info!(%process_id, pid, %malo_id, "processd NB: Accept held for operator confirmation (auto_accept = false)");
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &payload_meta,
+                    "netz-checker says Accept; auto_accept is off, so the \
+                     Bestätigung is dispatched on operator approval",
+                )
+                .await?;
             }
         }
         NetzCheckResult::Reject(reason) => {
             let cmd_body = ForwardCommand {
-                marktrolle: None,
-                command: lieferbeginn_reject_command(pid, &malo_id),
+                marktrolle: Some("NB".to_owned()),
+                command: answer_commands(pid).1.to_owned(),
                 malo_id: Some(malo_id.clone()),
                 melo_id: None,
                 payload: serde_json::json!({
@@ -373,26 +469,378 @@ pub async fn evaluate_and_decide(
         }
         NetzCheckResult::Escalate { reason } => {
             warn!(%process_id, pid, %malo_id, %reason, "processd NB: Escalate — operator action required");
+            enqueue_for_operator(queue, config, &payload_meta, reason).await?;
         }
     }
 
     Ok(true)
 }
 
-// ── Command name helpers ───────────────────────────────────────────────────────
+/// The trigger PID, process and MaLo an escalated Anmeldung is queued under.
+struct AnmeldungMeta {
+    pid: u32,
+    process_id: Uuid,
+    malo_id: String,
+    received_at: OffsetDateTime,
+}
 
-fn lieferbeginn_accept_command(pid: u32, _malo_id: &str) -> String {
+/// Put a decision the NB may not dispatch automatically in front of an operator,
+/// with the answer deadline attached.
+///
+/// Escalations, and Accepts held back by `auto_accept = false` or by the § 20
+/// EnWG affiliate rule, all take this path. `anmeldung_decisions` is the audit
+/// log and carries no Frist: only a queue entry expires, surfaces in
+/// `processd_approval_queue_overdue`, and gives the operator something to act on.
+async fn enqueue_for_operator(
+    queue: &PgApprovalQueue,
+    config: &NbModuleConfig,
+    meta: &AnmeldungMeta,
+    reason: &str,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let window = crate::fristen::operator_window(meta.pid, meta.received_at);
+    let (accept, reject) = answer_commands(meta.pid);
+    let entry = ApprovalQueueEntry::pending(
+        meta.process_id,
+        meta.pid as i32,
+        Some(meta.malo_id.clone()),
+        format!(
+            "{reason} (Antwortfrist {}: {})",
+            window.deadline, window.source
+        ),
+        window.expires_at,
+        config.tenant.clone(),
+    )
+    .with_commands(accept, reject, Some("NB"));
+    queue.enqueue(&entry).await?;
+    info!(
+        process_id = %meta.process_id,
+        pid = meta.pid,
+        malo_id = %meta.malo_id,
+        deadline = %window.deadline,
+        "processd NB: queued for operator decision"
+    );
+    Ok(())
+}
+
+/// The `makod` command pair that answers an inbound NB PID.
+///
+/// Anmeldung and Abmeldung take **different commands**, and both resolve from
+/// the PID alone: an Abmeldung answered with `gpke.lieferbeginn.bestaetigen`
+/// would drive the wrong response PID onto the wire.
+fn answer_commands(pid: u32) -> (&'static str, &'static str) {
     match pid {
-        44001 => mako_markt::commands::GELI_LIEFERBEGINN_BESTAETIGEN.to_owned(),
-        _ => mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN.to_owned(),
+        44_001 => (
+            mako_markt::commands::GELI_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GELI_LIEFERBEGINN_ABLEHNEN,
+        ),
+        44_004 => (
+            mako_markt::commands::GELI_LIEFERENDE_BESTAETIGEN,
+            mako_markt::commands::GELI_LIEFERENDE_ABLEHNEN,
+        ),
+        55_004 => (
+            mako_markt::commands::GPKE_LIEFERENDE_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERENDE_ABLEHNEN,
+        ),
+        // 55001 / 55077 — makod derives 55002/55003 and 55078/55080 from the
+        // inbound PID the process was spawned with, so one command pair covers
+        // both Anmeldung variants.
+        _ => (
+            mako_markt::commands::GPKE_LIEFERBEGINN_BESTAETIGEN,
+            mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN,
+        ),
     }
 }
 
-fn lieferbeginn_reject_command(pid: u32, _malo_id: &str) -> String {
-    match pid {
-        44001 => mako_markt::commands::GELI_LIEFERBEGINN_ABLEHNEN.to_owned(),
-        _ => mako_markt::commands::GPKE_LIEFERBEGINN_ABLEHNEN.to_owned(),
+// ── Abmeldung ─────────────────────────────────────────────────────────────────
+
+/// Fields extracted from a `de.mako.process.initiated` for an Abmeldung PID.
+#[derive(Debug, Clone)]
+pub struct AbmeldungPayload {
+    pub pid: u32,
+    pub process_id: Uuid,
+    pub malo_id: String,
+    /// The supplier ending the assignment. `makod`'s adapter surfaces it as
+    /// `current_supplier` where it can tell, else as `new_supplier` (the UTILMD
+    /// NAD sender is the same party in both directions of this process).
+    pub lf_mp_id: String,
+    pub grid_operator_gln: String,
+    pub abmeldedatum: time::Date,
+    pub transaktionsgrund: Option<String>,
+    pub ist_erzeugende_marktlokation: bool,
+    pub bilanzierungsmethode: Option<String>,
+}
+
+impl AbmeldungPayload {
+    /// Parse an Abmeldung event, or `None` when the PID is not one.
+    #[must_use]
+    pub fn parse(event: &serde_json::Value) -> Option<Self> {
+        let data = &event["data"];
+        let pid = event
+            .get("makopid")
+            .and_then(|v| v.as_u64())
+            .or_else(|| data.get("pid")?.as_u64())? as u32;
+        if !ABMELDUNG_PIDS.contains(&pid) {
+            return None;
+        }
+        let process_id: Uuid = event["subject"].as_str()?.parse().ok()?;
+        let malo_id = data.get("malo_id")?.as_str()?.to_owned();
+        let lf_mp_id = data
+            .get("current_supplier")
+            .or_else(|| data.get("new_supplier"))
+            .or_else(|| data.get("sender"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let grid_operator_gln = data
+            .get("grid_operator")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_owned();
+        let abmeldedatum = parse_civil_date(data.get("process_date")?.as_str()?)?;
+        Some(Self {
+            pid,
+            process_id,
+            malo_id,
+            lf_mp_id,
+            grid_operator_gln,
+            abmeldedatum,
+            transaktionsgrund: data
+                .get("transaktionsgrund")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned),
+            ist_erzeugende_marktlokation: data
+                .get("ist_erzeugende_marktlokation")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false),
+            bilanzierungsmethode: data
+                .get("bilanzierungsmethode")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned),
+        })
     }
+
+    /// Derive the `netz-checker` input.
+    #[must_use]
+    pub fn into_anfrage(self) -> netz_checker::AbmeldungAnfrage {
+        netz_checker::AbmeldungAnfrage {
+            pid: self.pid,
+            process_id: self.process_id,
+            malo_id: self.malo_id,
+            lf_mp_id: self.lf_mp_id,
+            grid_operator_gln: self.grid_operator_gln,
+            abmeldedatum: self.abmeldedatum,
+            sparte: sparte_of(self.pid),
+            messtyp: messtyp_of(self.bilanzierungsmethode.as_deref()),
+            transaktionsgrund: self.transaktionsgrund,
+            ist_erzeugende_marktlokation: self.ist_erzeugende_marktlokation,
+        }
+    }
+}
+
+/// `YYYYMMDD` or `YYYY-MM-DD`, the two shapes the `makod` adapters emit.
+fn parse_civil_date(raw: &str) -> Option<time::Date> {
+    if raw.len() == 8 {
+        time::Date::parse(raw, time::macros::format_description!("[year][month][day]")).ok()
+    } else {
+        time::Date::parse(
+            raw,
+            time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .ok()
+    }
+}
+
+/// UTILMD TM+EM marker → `netz-checker` metering class. SLP is the default: it
+/// is the class with the *widest* retroactive window, so an unknown marker can
+/// never turn an admissible date into an auto-reject.
+fn messtyp_of(bilanzierungsmethode: Option<&str>) -> Messtyp {
+    match bilanzierungsmethode {
+        Some("RLM") => Messtyp::Rlm,
+        Some("IMS") => Messtyp::Imsys,
+        _ => Messtyp::Slp,
+    }
+}
+
+/// The NB's decision on an inbound Abmeldung (55004 / 44004), EBD `E_0607`.
+#[allow(clippy::too_many_arguments)]
+async fn decide_abmeldung(
+    payload: AbmeldungPayload,
+    event: &serde_json::Value,
+    config: &NbModuleConfig,
+    reader: &mako_markt::marktd_client::MarktdClient,
+    makod: &MakodClient,
+    repo: &PgAnmeldungRepository,
+    queue: &PgApprovalQueue,
+) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
+    // Not addressed to this NB — another operator's message on a shared bus.
+    if !payload.grid_operator_gln.is_empty() && payload.grid_operator_gln != config.own_mp_id {
+        return Ok(false);
+    }
+
+    let pid = payload.pid;
+    let process_id = payload.process_id;
+    let malo_id = payload.malo_id.clone();
+    let lf_mp_id = payload.lf_mp_id.clone();
+    let initiator_is_affiliate = lf_mp_id == config.own_mp_id;
+    let received_at = received_at(event);
+
+    info!(%process_id, pid, %malo_id, %lf_mp_id, "processd NB: evaluating Abmeldung");
+
+    // A transport failure is not evidence of absence: propagate so the fan-out
+    // redelivers rather than deciding on a missing projection.
+    let versorgung = reader
+        .get_versorgung(&malo_id)
+        .await
+        .inspect_err(|e| warn!(%e, %malo_id, "processd NB: marktd versorgung fetch failed"))?;
+
+    let anfrage = payload.into_anfrage();
+    let now = OffsetDateTime::now_utc();
+    let result = netz_checker::evaluate_abmeldung(
+        &anfrage,
+        versorgung.as_ref(),
+        now,
+        &config.netz_check_config(),
+    );
+
+    info!(%process_id, pid, %malo_id, outcome = ?result, "processd NB: E_0607 result");
+
+    let (decision, erc_code, detail) = classify(&result);
+    let rec = AnmeldungDecisionRecord {
+        id: Uuid::new_v4(),
+        process_id,
+        pid: pid as i32,
+        malo_id: malo_id.clone(),
+        lf_mp_id: lf_mp_id.clone(),
+        decision,
+        erc_code,
+        detail,
+        initiator_is_affiliate,
+        decided_at: now,
+        tenant: config.tenant.clone(),
+    };
+    if repo.insert(&rec).await? {
+        crate::metrics::record_decision(decision.as_str(), pid);
+    }
+
+    let meta = AnmeldungMeta {
+        pid,
+        process_id,
+        malo_id: malo_id.clone(),
+        received_at,
+    };
+
+    match &result {
+        NetzCheckResult::Accept => {
+            // § 20 EnWG parity applies to the Abmeldung too: an affiliate must
+            // not get an automatic path a third party does not get.
+            if initiator_is_affiliate {
+                warn!(%process_id, pid, %malo_id, %lf_mp_id,
+                      "processd NB: § 20 EnWG — affiliate Abmeldung held for operator review");
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &meta,
+                    &format!(
+                        "§ 20 EnWG affiliate Abmeldung (LF {lf_mp_id} is this operator) — \
+                         E_0607 says Accept, but an affiliate may not take the automatic path"
+                    ),
+                )
+                .await?;
+            } else if config.auto_accept {
+                dispatch(makod, pid, &malo_id, process_id, true, None).await?;
+                info!(%process_id, pid, %malo_id, "processd NB: dispatched Bestätigung Abmeldung");
+            } else {
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &meta,
+                    "E_0607 says Accept; auto_accept is off, so the Bestätigung is \
+                     dispatched on operator approval",
+                )
+                .await?;
+            }
+        }
+        NetzCheckResult::Reject(reason) => {
+            dispatch(
+                makod,
+                pid,
+                &malo_id,
+                process_id,
+                false,
+                Some((&reason.erc_code, &reason.detail)),
+            )
+            .await?;
+            info!(%process_id, pid, %malo_id, erc = %reason.erc_code,
+                  "processd NB: dispatched Ablehnung Abmeldung");
+        }
+        NetzCheckResult::Escalate { reason } => {
+            warn!(%process_id, pid, %malo_id, %reason, "processd NB: Abmeldung escalated");
+            enqueue_for_operator(queue, config, &meta, reason).await?;
+        }
+    }
+
+    Ok(true)
+}
+
+/// The answer Frist runs from receipt of the market message; the CloudEvent
+/// `time` is when `makod` emitted it, which is the closest instant available.
+fn received_at(event: &serde_json::Value) -> OffsetDateTime {
+    event["time"]
+        .as_str()
+        .and_then(|s| OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc)
+}
+
+/// Map a `netz-checker` verdict onto the audit-log columns.
+fn classify(result: &NetzCheckResult) -> (AnmeldungDecision, Option<String>, Option<String>) {
+    match result {
+        NetzCheckResult::Accept => (AnmeldungDecision::Accept, None, None),
+        NetzCheckResult::Reject(RejectReason {
+            erc_code, detail, ..
+        }) => (
+            AnmeldungDecision::Reject,
+            Some(erc_code.clone()),
+            Some(detail.clone()),
+        ),
+        NetzCheckResult::Escalate { reason } => {
+            (AnmeldungDecision::Escalate, None, Some(reason.clone()))
+        }
+    }
+}
+
+/// Post the answer command for `pid` to `makod`.
+async fn dispatch(
+    makod: &MakodClient,
+    pid: u32,
+    malo_id: &str,
+    process_id: Uuid,
+    accept: bool,
+    reject_reason: Option<(&str, &str)>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let (accept_cmd, reject_cmd) = answer_commands(pid);
+    let cmd = ForwardCommand {
+        marktrolle: Some("NB".to_owned()),
+        command: if accept { accept_cmd } else { reject_cmd }.to_owned(),
+        malo_id: Some(malo_id.to_owned()),
+        melo_id: None,
+        payload: match reject_reason {
+            Some((erc, detail)) => serde_json::json!({
+                "process_id": process_id,
+                "erc_code": erc,
+                // makod forwards `reason` onto the APERAK; carry the code
+                // inside it so the ground survives the hop.
+                "reason": format!("{erc}: {detail}"),
+                "detail": detail,
+            }),
+            None => serde_json::json!({ "process_id": process_id }),
+        },
+    };
+    let verb = if accept { "accept" } else { "reject" };
+    makod
+        .post_command(&format!("processd-nb-{verb}-{process_id}"), &cmd)
+        .await
+        .inspect_err(|e| warn!(%e, %process_id, "processd NB: dispatch failed"))?;
+    Ok(())
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -491,41 +939,165 @@ mod tests {
     }
 
     // ── Command name mapping ───────────────────────────────────────────────────
+    //
+    // Anmeldung and Abmeldung answer through *different* commands. Answering an
+    // Abmeldung with `gpke.lieferbeginn.bestaetigen` puts the wrong response PID
+    // on the wire, and both names are plausible enough to survive review.
 
     #[test]
-    fn accept_command_strom() {
+    fn anmeldung_and_abmeldung_take_different_commands() {
         assert_eq!(
-            lieferbeginn_accept_command(55001, "51238696012"),
-            "gpke.lieferbeginn.bestaetigen"
+            answer_commands(55_001),
+            (
+                "gpke.lieferbeginn.bestaetigen",
+                "gpke.lieferbeginn.ablehnen"
+            )
         );
         assert_eq!(
-            lieferbeginn_accept_command(55016, "51238696012"),
-            "gpke.lieferbeginn.bestaetigen"
+            answer_commands(55_077),
+            (
+                "gpke.lieferbeginn.bestaetigen",
+                "gpke.lieferbeginn.ablehnen"
+            ),
+            "makod derives 55078/55080 from the inbound PID it spawned with"
+        );
+        assert_eq!(
+            answer_commands(55_004),
+            ("gpke.lieferende.bestaetigen", "gpke.lieferende.ablehnen")
+        );
+        assert_eq!(
+            answer_commands(44_001),
+            (
+                "geli.lieferbeginn.bestaetigen",
+                "geli.lieferbeginn.ablehnen"
+            )
+        );
+        assert_eq!(
+            answer_commands(44_004),
+            ("geli.lieferende.bestaetigen", "geli.lieferende.ablehnen")
         );
     }
 
+    /// Every posted name must be in the shared list `makod`'s registry test
+    /// cross-checks — an unregistered name comes back as HTTP 422.
     #[test]
-    fn accept_command_gas() {
-        assert_eq!(
-            lieferbeginn_accept_command(44001, "51238696012"),
-            "geli.lieferbeginn.bestaetigen"
-        );
+    fn every_answer_command_is_registered() {
+        for pid in answered_pids() {
+            let (accept, reject) = answer_commands(pid);
+            for name in [accept, reject] {
+                assert!(
+                    mako_markt::commands::DISPATCHED_BY_SERVICES.contains(&name),
+                    "{name:?} (PID {pid}) missing from DISPATCHED_BY_SERVICES"
+                );
+            }
+        }
+    }
+
+    /// 55016 „Kündigung" is LFN → LFA: parsing it here would make an `nb-only`
+    /// binary answer a supplier obligation.
+    #[test]
+    fn the_kuendigung_is_not_an_nb_anmeldung() {
+        assert!(!ANMELDUNG_PIDS.contains(&55_016));
+        let event = serde_json::json!({
+            "makopid": 55_016,
+            "subject": "550e8400-e29b-41d4-a716-446655440009",
+            "data": {
+                "malo_id": "51238696012",
+                "new_supplier": "9900357000004",
+                "grid_operator": "9900000000001",
+                "process_date": "20261001"
+            }
+        });
+        assert!(AnmeldungPayload::parse(&event).is_none());
+        assert!(AbmeldungPayload::parse(&event).is_none());
+    }
+
+    // ── Abmeldung ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_strom_abmeldung_event() {
+        let event = serde_json::json!({
+            "makopid": 55_004,
+            "subject": "550e8400-e29b-41d4-a716-446655440010",
+            "data": {
+                "malo_id": "51238696012",
+                "current_supplier": "9900357000004",
+                "grid_operator": "9900000000001",
+                "process_date": "20261101",
+                "transaktionsgrund": "E01"
+            }
+        });
+        let p = AbmeldungPayload::parse(&event).expect("parses");
+        assert_eq!(p.pid, 55_004);
+        assert_eq!(p.lf_mp_id, "9900357000004");
+        let a = p.into_anfrage();
+        assert!(matches!(a.sparte, Sparte::Strom));
+        assert_eq!(a.messtyp, Messtyp::Slp);
     }
 
     #[test]
-    fn reject_command_strom() {
-        assert_eq!(
-            lieferbeginn_reject_command(55001, "51238696012"),
-            "gpke.lieferbeginn.ablehnen"
-        );
+    fn parse_gas_abmeldung_event() {
+        let event = serde_json::json!({
+            "makopid": 44_004,
+            "subject": "550e8400-e29b-41d4-a716-446655440011",
+            "data": {
+                "malo_id": "51238696012",
+                "current_supplier": "9800357000004",
+                "grid_operator": "9800000000001",
+                "process_date": "2026-11-01",
+                "bilanzierungsmethode": "RLM"
+            }
+        });
+        let a = AbmeldungPayload::parse(&event)
+            .expect("parses")
+            .into_anfrage();
+        assert!(matches!(a.sparte, Sparte::Gas));
+        assert_eq!(a.messtyp, Messtyp::Rlm);
     }
 
+    /// An Anmeldung PID must not parse as an Abmeldung and vice versa —
+    /// the two pipelines dispatch different market messages.
     #[test]
-    fn reject_command_gas() {
-        assert_eq!(
-            lieferbeginn_reject_command(44001, "51238696012"),
-            "geli.lieferbeginn.ablehnen"
-        );
+    fn the_two_payloads_do_not_overlap() {
+        for pid in answered_pids() {
+            let event = serde_json::json!({
+                "makopid": pid,
+                "subject": "550e8400-e29b-41d4-a716-446655440012",
+                "data": {
+                    "malo_id": "51238696012",
+                    "new_supplier": "9900357000004",
+                    "grid_operator": "9900000000001",
+                    "process_date": "20261101"
+                }
+            });
+            let anmeldung = AnmeldungPayload::parse(&event).is_some();
+            let abmeldung = AbmeldungPayload::parse(&event).is_some();
+            assert!(
+                anmeldung ^ abmeldung,
+                "PID {pid} parses as {} — exactly one pipeline must claim it",
+                if anmeldung { "both" } else { "neither" }
+            );
+        }
+    }
+
+    /// PID 55077 *is* the „Anmeldung erz. MaLo" use case, so the § 10c EEG
+    /// Monatserster rule must apply even when the adapter omitted the ZW3 flag.
+    #[test]
+    fn pid_55077_is_always_an_erzeugende_marktlokation() {
+        let event = serde_json::json!({
+            "makopid": 55_077,
+            "subject": "550e8400-e29b-41d4-a716-446655440013",
+            "data": {
+                "malo_id": "51238696012",
+                "new_supplier": "9900357000004",
+                "grid_operator": "9900000000001",
+                "process_date": "20261101"
+            }
+        });
+        let a = AnmeldungPayload::parse(&event)
+            .expect("parses")
+            .into_anfrage();
+        assert!(a.ist_erzeugende_marktlokation);
     }
 
     // ── Misdirection check ─────────────────────────────────────────────────────

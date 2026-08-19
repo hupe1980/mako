@@ -8,7 +8,7 @@ mermaid = true
 # `invoicd` Operator Guide
 
 `invoicd` is the **INVOIC plausibility-check daemon** for the LF (Lieferant) role.
-It subscribes to `marktd`'s EventBus, receives inbound INVOIC events, and:
+It subscribes to `marktd`'s fan-out, receives inbound INVOIC events, and:
 
 1. Fetches the `PreisblattNetznutzung` and `NbContractRecord` from `marktd`.
 2. Runs **5+1 deterministic checks** via `invoic-checker` (check 6 applies to MMM PIDs only).
@@ -18,7 +18,7 @@ It subscribes to `marktd`'s EventBus, receives inbound INVOIC events, and:
 
 ```mermaid
 graph TB
-    marktd["marktd :8180<br/>EventBus"]
+    marktd["marktd :8180<br/>fan-out"]
     invoicd["invoicd :8280<br/>(this service)"]
     makod["makod :8080"]
     pg["PostgreSQL<br/>invoic_receipts<br/>(§ 147 AO / GoBD, 3y)"]
@@ -379,7 +379,7 @@ url = "http://edmd:8380"
 
 ## marktd subscription
 
-`invoicd` **auto-registers** its EventBus subscription with `marktd` on startup
+`invoicd` **auto-registers** its fan-out subscription with `marktd` on startup
 when `subscription.webhook_url` is set in the config — no manual `curl` required.
 
 To force re-registration or verify the subscription:

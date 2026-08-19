@@ -55,7 +55,11 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     CommandDescriptor {
         name: "gpke.lieferende.anmelden",
         permitted_roles: &[Marktrolle::Lf],
-        primary_pid: pid(55002),
+        // UTILMD 55004 „Abmeldung" (LF → NB), answered 55005/55006. It was
+        // registered as 55002, which is the NB's *Bestätigung Anmeldung* — a
+        // different message in the opposite direction, and the value Cedar
+        // evaluates as the command's PID attribute.
+        primary_pid: pid(55004),
         dispatch: cmd_gpke_lieferende_anmelden,
     },
     CommandDescriptor {
@@ -91,6 +95,24 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55009),
         dispatch: cmd_gpke_nb_lieferende_ablehnen,
+    },
+    // ── GPKE Beendigung der Zuordnung (PID 55010 NB→LFA, EBD E_0624) ─────────
+    // The NB asks the LFA to end the network assignment; the LFA answers 55011
+    // (Bestätigung) or 55012 (Ablehnung) within the 24 h Frist (BK6-22-024 §4).
+    // The ingest dispatcher has always spawned this workflow on an inbound
+    // 55010, but without these two commands the process had no answer path and
+    // could only run out its deadline.
+    CommandDescriptor {
+        name: "gpke.beendigung-zuordnung.bestaetigen",
+        permitted_roles: &[Marktrolle::Lf],
+        primary_pid: pid(55011),
+        dispatch: cmd_gpke_beendigung_zuordnung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.beendigung-zuordnung.ablehnen",
+        permitted_roles: &[Marktrolle::Lf],
+        primary_pid: pid(55012),
+        dispatch: cmd_gpke_beendigung_zuordnung_ablehnen,
     },
     // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG, PIDs 55013–55015) ─────────
     // The NB assigns a contractless MaLo to the Grundversorger; the E/G
@@ -270,20 +292,24 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     CommandDescriptor {
         name: "geli.lieferbeginn.bestaetigen",
         permitted_roles: &[Marktrolle::Gnb],
-        primary_pid: pid(44003),
+        // UTILMD 44002 „Bestätigung Anmeldung NN". 44003 is the *Ablehnung*.
+        primary_pid: pid(44002),
         dispatch: cmd_geli_lieferbeginn_bestaetigen,
     },
     CommandDescriptor {
         name: "geli.lieferbeginn.ablehnen",
         permitted_roles: &[Marktrolle::Gnb],
-        primary_pid: pid(44004),
+        // UTILMD 44003 „Ablehnung Anmeldung NN". 44004 is the *Abmeldung*, an
+        // inbound message from the supplier in the opposite direction.
+        primary_pid: pid(44003),
         dispatch: cmd_geli_lieferbeginn_ablehnen,
     },
     // ── GeLi Gas Lieferende (gas) ─────────────────────────────────────────────
     CommandDescriptor {
         name: "geli.lieferende.anmelden",
         permitted_roles: &[Marktrolle::Lfg],
-        primary_pid: pid(44002),
+        // UTILMD 44004 „Abmeldung NN" (LF → GNB), answered 44005/44006.
+        primary_pid: pid(44004),
         dispatch: cmd_geli_lieferende_anmelden,
     },
     CommandDescriptor {
@@ -856,10 +882,10 @@ mod tests {
         }
     }
 
-    /// `invoic.stornorechnung.*` names (not the retired Gas-only
-    /// `wim.gas.stornorechnung.*`), bound to PID 31004, and reachable by both
-    /// Strom (NB) and Gas (GNB) receivers — so a Strom storno is no longer
-    /// mislabelled Gas. Regression guard for INVOIC AHB §3.1.2.
+    /// The storno commands are `invoic.stornorechnung.*`, bound to PID 31004 and
+    /// reachable by both Strom (NB) and Gas (GNB) receivers. PID 31004 is
+    /// Sparte-neutral (INVOIC AHB §3.1.2), so a `wim.gas.*` name would mislabel
+    /// every Strom storno as Gas.
     #[test]
     fn storno_command_is_sparte_neutral() {
         for name in [
@@ -877,12 +903,11 @@ mod tests {
                 "{name} must permit both Strom (Nb) and Gas (Gnb) receivers"
             );
         }
-        // The Gas-only names are gone (hard cut — no backward compatibility).
         assert!(
             !COMMAND_REGISTRY
                 .iter()
                 .any(|d| d.name.starts_with("wim.gas.stornorechnung")),
-            "retired Gas-only storno command names must not linger"
+            "a Gas-only storno command name would mislabel every Strom storno"
         );
     }
 }

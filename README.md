@@ -119,7 +119,7 @@ flowchart LR
 |---|---|---|---|
 | `makod` | `:8080` · `:4080` · `:8090` | All | Protocol daemon — 67+ GPKE/WiM/GeLi Gas/MaBiS/GaBi Gas workflows, AS4/REST/iMS, Cedar ABAC, OIDC/JWT, MCP server |
 | `marktd` | `:8180` | All | Market Data Hub — MaLo/MeLo/contracts, VersorgungsStatus incl. Ersatz-/Grundversorgung, Grundversorger registry (§36 Abs. 2), typed BO4E API, EventBus fan-out, MMMA monthly import worker |
-| `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, EoG gap closure + §38 timer, LF E_0624 45-min auto-response, MSB REQOTE auto-response, §14a Steuerungsauftrag |
+| `processd` | `:8580` | NB+LF+MSB | Process Decision Engine — Anmeldung STP ≥ 95%, EoG gap closure + §38 timer, LF answer automation (55007/55010), MSB REQOTE auto-response, §14a Steuerungsauftrag |
 | `invoicd` | `:8280` | LF | INVOIC plausibility-check — 6 checks, auto-settle/dispute, § 147 AO / GoBD receipts |
 | `netzbilanzd` | `:8680` | NB | NNE/KA/MMM/MSB/AWH settlement — INVOIC 31001 (Abschlagsrechnung, deducted from what is owed by the invoice that settles the period), 31002 (NN-Rechnung, Sparte on the document not the PID), 31005, 31009 (issued **by** the MSB), 31011; consecutive invoice numbering per §14 Abs. 4 Nr. 4 UStG; 19 % Umsatzsteuer with §13b reverse charge on Mehr-/Mindermengen; all three §14a modules; §42b GGV per metered tenant; Storno/Korrektur recomputed from the stored settlement input; Redispatch Kostenblatt, §13a Vergütung and BilAReM Ausfallarbeit; 8-tool **read-only** MCP server |
 | `sperrd` | `:8780` | NB | Sperrung execution tracking — IFTSTA 21039 auto-dispatch, `GET /stats` compliance snapshot, 5-tool MCP server |
@@ -193,7 +193,7 @@ flowchart LR
 
 | Category | Detail |
 |---|---|
-| 📦 **Typed responses** | `GET /api/v1/malo` → `Marktlokation`; `GET /api/v1/melo` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
+| 📦 **Typed responses** | `GET /api/v1/malos` → `Marktlokation`; `GET /api/v1/melos` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
 | 🔍 **Schema validation on write** | `PUT` endpoints reject wrong `_typ` with 422; validate enum fields (`bilanzierungsmethode`, `netzebene`, `vertragsart`, …) against `rubo4e::current` types |
 | 📋 **`Vertrag` for LRV exchange** | `nb_contracts` stores full BO4E `Vertrag` JSONB + typed SQL columns; `PUT /api/v1/nb-contracts` validates `vertragsart` / `vertragsstatus`; emits `de.markt.nb-contract.updated` CloudEvent |
 | 👤 **`Geschaeftspartner` typed partners** | `PUT /api/v1/partners/{mp_id}` validates the BO4E `Geschaeftspartner` payload (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`). `GET` returns the typed `geschaeftspartner` field. |

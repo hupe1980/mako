@@ -197,7 +197,7 @@ Escalate = data gap (grid record missing) or affiliate initiator \
                             "erc_code": erc_str,
                             "count": count,
                             "remediation": match erc.as_deref() {
-                                Some("A02") => "PUT /api/v1/malo/{malo_id}/grid in marktd (NB-role grid provisioning)",
+                                Some("A02") => "PUT /api/v1/malos/{malo_id}/grid in marktd (NB-role grid provisioning)",
                                 Some("A05") => "PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff",
                                 Some("A06") => "LF submitted a date outside the valid Vorlauffrist window",
                                 Some("A99") => "Internal error — check processd logs for details",
@@ -449,7 +449,7 @@ impl ProcessdMcpHandler {
                  3. AFFILIATE (not an ERC): the decision carries `initiator_is_affiliate = true` — \
                     auto-accept was blocked under §20 EnWG parity even though the checks passed. \
                     These surface via `list_affiliate_decisions`, not the ERC breakdown.\n\
-                 4. Fix A02: PUT /api/v1/malo/{malo_id}/grid in marktd with correct netzebene/bilanzierungsgebiet.\n\
+                 4. Fix A02: PUT /api/v1/malos/{malo_id}/grid in marktd with correct netzebene/bilanzierungsgebiet.\n\
                  5. Fix A05: PUT /api/v1/preisblaetter/{nb_mp_id} in marktd with current tariff.\n\
                  6. Fix AFFILIATE: submit manual approval via PUT /api/v1/approval-queue/{id}/approve.",
             ),
@@ -472,8 +472,8 @@ impl ProcessdMcpHandler {
                  2. Call `get_stp_breakdown_by_erc(days=7)` to identify the dominant ERC code.\n\n\
                  ## By ERC code:\n\n\
                  **A02 (MaLo not found / grid data missing)**\n\
-                 → Provision the grid record: PUT `/api/v1/malo/{malo_id}/grid` in marktd (NB role).\n\
-                 → Verify `GET /api/v1/malo/{malo_id}/grid` returns netzebene + bilanzierungsgebiet.\n\n\
+                 → Provision the grid record: PUT `/api/v1/malos/{malo_id}/grid` in marktd (NB role).\n\
+                 → Verify `GET /api/v1/malos/{malo_id}/grid` returns netzebene + bilanzierungsgebiet.\n\n\
                  **A05 (Preisblatt / NB not registered)**\n\
                  → Check `GET /api/v1/partners/{nb_mp_id}` in marktd — partner must exist.\n\
                  → Check `GET /api/v1/preisblaetter/{nb_mp_id}` — must have active Preisblatt.\n\

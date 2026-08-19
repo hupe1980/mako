@@ -4,7 +4,7 @@
 #   • postgres     — PostgreSQL (one database per service)
 #   • webhook   :8000 — ERP CloudEvent receiver (Python, in-memory)
 #   • marktd    :8180 — Market Data Hub (MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, event_log replay)
-#   • processd  :8580 — NB STP auto-responder + LF E_0624 auto-response (netz-checker, §20 parity)
+#   • processd  :8580 — NB STP auto-responder + LF answer automation (netz-checker, §20 parity)
 #   • makod     :8080 — EDIFACT process engine (in-memory; use slatedb feature for persistent storage)
 #
 # Excluded from demo (run separately when needed):
@@ -84,11 +84,12 @@ services:
     volumes:
       - ./marktd.toml:/etc/marktd/marktd.toml:ro
     environment:
-      MARKTD_STORAGE__POSTGRES__URL: postgres://demo:demo-secret@postgres/marktd
-      MARKTD_MAKOD__API_KEY:         demo-secret-change-me
+      # The runner reads MARKTD_CONFIG for the config-file path; the rest layer
+      # on top of the file (`__` separates TOML sections).
+      MARKTD_CONFIG:                  /etc/marktd/marktd.toml
+      MARKTD_DATABASE__URL:           postgres://demo:demo-secret@postgres/marktd
+      MARKTD_MAKOD__API_KEY:          demo-secret-change-me
       MARKTD_WEBHOOK__INBOUND_SECRET: ""  # no HMAC in demo — accepts all events from makod
-    command:
-      - "--config=/etc/marktd/marktd.toml"
     # distroless has no shell — use service_started dependency instead of healthcheck
     healthcheck:
       disable: true

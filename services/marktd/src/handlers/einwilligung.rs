@@ -34,7 +34,18 @@ use mako_markt::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use mako_service::cedar::CedarEnforcer;
+
 use super::{Claims, IntoMdmResponse as _, TenantGln};
+
+/// Deny response for the consent registry.
+///
+/// Both actions are gated on the MSB or ESA role: the registry records the
+/// relationship between exactly those two parties, and a revocation fires the
+/// ORDERS 17008 Abbestellung at makod. An LF has no lawful interest in it.
+fn forbidden(action: &'static str) -> axum::response::Response {
+    mako_markt::error::MdmError::Forbidden { reason: action }.into_response()
+}
 
 /// Injected `Arc<PgEinwilligungRepository>`.
 pub type EinwilligungRepoExt = Arc<crate::pg::PgEinwilligungRepository>;
@@ -70,13 +81,20 @@ pub struct GrantBody {
 
 /// `POST /api/v1/esa/einwilligungen` — grant an ESA consent.
 pub async fn grant_einwilligung(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
     Json(body): Json<GrantBody>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("write-einwilligung denied");
+    }
     if body.location_ids.is_empty() {
         return (
             StatusCode::BAD_REQUEST,
@@ -133,10 +151,18 @@ pub struct ListQuery {
 
 /// `GET /api/v1/esa/einwilligungen?esa_mp_id=…` — list active consents.
 pub async fn list_einwilligungen(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
     match repo.list_for_esa(&tenant, &q.esa_mp_id).await {
         Ok(rows) => Json(serde_json::json!({
             "esa_mp_id": q.esa_mp_id,
@@ -150,10 +176,18 @@ pub async fn list_einwilligungen(
 
 /// `GET /api/v1/esa/einwilligungen/:id`.
 pub async fn get_einwilligung(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
     match repo.get(&tenant, id).await {
         Ok(Some(rec)) => Json(rec).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -167,8 +201,10 @@ pub async fn get_einwilligung(
 /// at makod for the covered locations. The Abbestellung dispatch is best-effort
 /// (logged on failure) — the revocation itself always succeeds and is the
 /// durable signal a consumer can act on.
+#[allow(clippy::too_many_arguments)] // axum extractors, not a parameter list
 pub async fn revoke_einwilligung(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Extension(pool): Extension<sqlx::PgPool>,
@@ -176,6 +212,12 @@ pub async fn revoke_einwilligung(
     Extension(makod): Extension<Arc<MakodClient>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("write-einwilligung denied");
+    }
     let revoked = match repo.revoke(&tenant, id).await {
         Ok(Some(rec)) => rec,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -253,10 +295,18 @@ pub struct ConsentCheckQuery {
 /// rejection); `esa_outbound` treats it as no lawful basis and blocks — the ESA
 /// is the consent holder and must not originate a request it has no consent for.
 pub async fn consent_check(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Query(q): Query<ConsentCheckQuery>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
     match repo
         .consent_check(
             &tenant,
@@ -284,12 +334,19 @@ pub struct FrameworkBody {
 
 /// `PUT /api/v1/esa/framework/:msb_mp_id/:esa_mp_id`.
 pub async fn put_framework(
-    _claims: Claims,
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
     Json(body): Json<FrameworkBody>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("write-einwilligung denied");
+    }
     let rec = EsaFrameworkAgreement {
         tenant,
         msb_mp_id,
@@ -306,10 +363,18 @@ pub async fn put_framework(
 
 /// `GET /api/v1/esa/framework/:msb_mp_id/:esa_mp_id`.
 pub async fn get_framework(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(repo): Extension<EinwilligungRepoExt>,
     Extension(TenantGln(tenant)): Extension<TenantGln>,
     Path((msb_mp_id, esa_mp_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einwilligung", &tenant)
+        .is_err()
+    {
+        return forbidden("read-einwilligung denied");
+    }
     match repo.get_framework(&tenant, &msb_mp_id, &esa_mp_id).await {
         Ok(Some(rec)) => Json(rec).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),

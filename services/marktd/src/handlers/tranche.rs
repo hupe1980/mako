@@ -1,9 +1,9 @@
 //! Tranche REST handlers.
 //!
 //! Routes:
-//!   PUT  /api/v1/tranche/{id}   — upsert a Tranche
-//!   GET  /api/v1/tranche/{id}   — get a single Tranche
-//!   GET  /api/v1/tranche        — list Tranchen (?malo_id=… filters by parent MaLo)
+//!   PUT  /api/v1/tranchen/{id}   — upsert a Tranche
+//!   GET  /api/v1/tranchen/{id}   — get a single Tranche
+//!   GET  /api/v1/tranchen        — list Tranchen (?malo_id=… filters by parent MaLo)
 //!
 //! A Tranche is a share of a Marktlokation's energy assigned to a distinct
 //! balancing responsibility (BO4E `Tranche`; GPKE Teil 4 „Daten der Tranche").
@@ -27,7 +27,9 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::pg::PgTrancheRepository;
 
-use super::{Claims, IntoMdmResponse as _, TenantGln, etag, parse_if_match};
+use super::{
+    Claims, IfMatch, IntoMdmResponse as _, TenantGln, etag, malformed_if_match, parse_if_match,
+};
 
 /// Extension alias — concrete type so AFIT dispatches statically.
 pub type TrancheRepoExt = Arc<PgTrancheRepository>;
@@ -127,7 +129,7 @@ fn default_size() -> u32 {
     50
 }
 
-/// PUT /api/v1/tranche/{id} — insert or update a Tranche (NB role).
+/// PUT /api/v1/tranchen/{id} — insert or update a Tranche (NB role).
 pub async fn put_tranche(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
@@ -147,7 +149,13 @@ pub async fn put_tranche(
         .into_response();
     }
 
-    let if_match = parse_if_match(&headers);
+    let if_match = match parse_if_match(&headers) {
+        IfMatch::Absent | IfMatch::Any => None,
+        IfMatch::Version(v) => Some(v),
+        // Refuse rather than fall back to an unconditional write: the caller
+        // asked for a conditional one and would otherwise be told it succeeded.
+        IfMatch::Malformed => return malformed_if_match(),
+    };
     let rec = TrancheRecord {
         tranche_id,
         tenant: tenant_gln,
@@ -171,7 +179,7 @@ pub async fn put_tranche(
     }
 }
 
-/// GET /api/v1/tranche/{id}
+/// GET /api/v1/tranchen/{id}
 pub async fn get_tranche(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,
@@ -205,7 +213,7 @@ pub async fn get_tranche(
     }
 }
 
-/// GET /api/v1/tranche — list Tranchen (`?malo_id=` filters by parent MaLo).
+/// GET /api/v1/tranchen — list Tranchen (`?malo_id=` filters by parent MaLo).
 pub async fn list_tranchen(
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     claims: Claims,

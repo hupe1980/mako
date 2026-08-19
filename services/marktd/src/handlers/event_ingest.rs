@@ -10,13 +10,16 @@
 //! # Architecture
 //!
 //! `marktd` is a **pure data hub** — it does not make Anmeldung decisions.
-//! Automated STP decisions (NB role, PIDs 55001/55016/44001) are handled by
-//! `processd` via the EventBus subscription.  `marktd` simply:
+//! Automated STP decisions (NB role) are handled by `processd` via the fan-out
+//! subscription.  `marktd` simply:
 //!
 //! 1. Verifies the HMAC signature
 //! 2. Deduplicates via `processed_events`
 //! 3. Enriches the event with `marktrole` and emits to all subscribers
-//! 4. Derives `VersorgungsStatus` for PIDs 55001/44001 (announce), 55002/44002 (confirm), 55003/44003 (clear on Ablehnung), 55005/44005 (end + gap detection), 55013/44013 (begin Ersatz-/Grundversorgung)
+//! 4. Derives `VersorgungsStatus` for the Anmeldung PIDs 55001/55077/44001
+//!    (announce), their confirmations 55002/55078/44002, their rejections
+//!    55003/55080/44003 (clear the announcement), 55005/44005 (end + gap
+//!    detection) and 55013/44013 (begin Ersatz-/Grundversorgung)
 //!
 //! Idempotency: duplicate event IDs return `202 Accepted` without re-processing.
 
@@ -146,6 +149,9 @@ where
     let event_id_for_vs = event.id.clone();
     let pid_for_vs = event.makopid;
     let data_for_vs = event.data.clone();
+    // The makod process UUID is the CloudEvent *subject*, not its `id`: the id
+    // names a delivery envelope, `last_process_id` names the market process.
+    let process_id_for_vs = event.process_id();
 
     let marktrole = marktrole_from_workflow(event.makoworkflow.as_deref());
     let markt_event = MarktEvent::new(
@@ -170,14 +176,15 @@ where
     //
     // Event → action mapping (GPKE BK6-24-174 + GeLi Gas 3.0 (BK7-24-01-009)):
     //
-    //   process.initiated  + PID 55001/44001
+    //   process.initiated  + PID 55001/55077/44001
     //     → announce_lf_next: set lf_mp_id_next + lf_next_lieferbeginn
-    //       (NB side: new_supplier + process_date from ProcessInitiated payload)
+    //       (NB side: new_supplier + process_date from ProcessInitiated payload).
+    //       The *first* announcement wins — see announce_lf_next_tx.
     //
-    //   process.completed  + PID 55002/44002 (Bestätigung Anmeldung)
+    //   process.completed  + PID 55002/55078/44002 (Bestätigung Anmeldung)
     //     → confirm_supply: promote lf_mp_id_next → lf_mp_id (atomic SQL)
     //
-    //   process.completed  + PID 55003/44003 (Ablehnung Anmeldung)
+    //   process.completed  + PID 55003/55080/44003 (Ablehnung Anmeldung)
     //     → clear_lf_next: drop the announced future Lieferant
     //
     //   process.completed  + PID 55005/44005 (Bestätigung Lieferende)
@@ -202,7 +209,7 @@ where
         &ce_type_for_vs,
         pid_for_vs,
         &data_for_vs,
-        &event_id_for_vs,
+        process_id_for_vs,
     )
     .await
     {
@@ -335,14 +342,34 @@ where
 
 // ── VersorgungsStatus derivation ─────────────────────────────────────────────
 
+/// Inbound Anmeldung PIDs that announce a future Lieferant.
+///
+/// **55077** „Anmeldung erz. MaLo" is the erzeugende-Marktlokation twin of
+/// 55001 (Anwendungsübersicht 4.0 lfd. Nr. 20080, LFN → NB) and drives the
+/// identical projection — an EEG-/KWKG-MaLo's supplier change is a supplier
+/// change.
+const ANMELDUNG_PIDS: &[u32] = &[55_001, 55_077, 44_001];
+
+/// Outbound answers that confirm an Anmeldung — 55002 for 55001, **55078** for
+/// 55077, 44002 for 44001.
+const ANMELDUNG_BESTAETIGT_PIDS: &[u32] = &[55_002, 55_078, 44_002];
+
+/// Outbound answers that reject one — 55003 for 55001, **55080** for 55077
+/// (55079 is unassigned), 44003 for 44001.
+const ANMELDUNG_ABGELEHNT_PIDS: &[u32] = &[55_003, 55_080, 44_003];
+
 /// Apply the supply-state transition an inbound makod CloudEvent implies, on the
 /// caller's transaction.
 ///
-/// Returns the secondary `MarktEvent`s the transition produces
-/// (`versorgung.gap-detected`, `versorgung.eog-begonnen`); the caller enqueues
-/// them on the same transaction. Every DB error propagates — the projection that
+/// Returns the `MarktEvent`s the transition produces; the caller enqueues them
+/// on the same transaction. Every DB error propagates — the projection that
 /// processd's automated LFA answers read must never silently diverge from the
 /// acknowledged event.
+///
+/// Every transition emits `de.markt.versorgung.changed` carrying the resulting
+/// state, plus the specific trigger event where one exists
+/// (`versorgung.gap-detected`, `versorgung.eog-begonnen`). Subscribers track the
+/// supply lifecycle from that one event type, so no transition may be silent.
 ///
 /// # Errors
 ///
@@ -353,7 +380,7 @@ pub async fn derive_supply_state(
     ce_type: &str,
     pid: Option<u32>,
     data: &serde_json::Value,
-    event_id: &str,
+    process_id: Option<uuid::Uuid>,
 ) -> Result<Vec<MarktEvent>, mako_markt::error::MdmError> {
     use crate::pg::{PgMaloRepository, PgVersorgungsStatusRepository as Vs};
 
@@ -372,17 +399,24 @@ pub async fn derive_supply_state(
         .or_else(|| data.get("grid_operator"))
         .and_then(|v| v.as_str())
         .map_or_else(|| tenant_gln.to_owned(), str::to_owned);
-    let process_id = uuid::Uuid::parse_str(event_id).ok();
+    // The Sparte is carried by the PID itself: GPKE Strom processes are 55xxx,
+    // the GeLi Gas twins 44xxx. Subscribers filter on it and processd keys its
+    // EoG case log on it, so it goes on every event this function emits.
+    let sparte = sparte_of_pid(pid);
     let mut events = Vec::new();
 
-    if is_initiated && matches!(pid, 55001 | 44001) {
+    // Set by every branch that actually wrote a new state, so the
+    // `versorgung.changed` announcement below is emitted exactly when one happened.
+    let mut transitioned = false;
+
+    if is_initiated && ANMELDUNG_PIDS.contains(&pid) {
         // NB received Lieferbeginn Anfrage — record the pending transition.
         if let Some(lf_mp_id_next) = data.get("new_supplier").and_then(|v| v.as_str()) {
             let lf_next_lieferbeginn = data
                 .get("process_date")
                 .and_then(|v| v.as_str())
                 .and_then(parse_civil_date);
-            Vs::announce_lf_next_tx(
+            transitioned = Vs::announce_lf_next_tx(
                 conn,
                 &malo_id,
                 tenant_gln,
@@ -392,6 +426,16 @@ pub async fn derive_supply_state(
                 process_id,
             )
             .await?;
+            if !transitioned {
+                // A different supplier already holds the announcement. Keeping
+                // it is what lets `netz-checker` reject the second Anmeldung
+                // with A06 „Andere Anmeldung in Bearbeitung"; overwriting it
+                // made that check compare the new Anmeldung against itself.
+                warn!(
+                    malo_id = %malo_str, pid, lf_mp_id_next,
+                    "event_ingest: competing Anmeldung — the pending announcement is kept"
+                );
+            }
         }
 
         // L1/N1: patch malo.bilanzierungsmethode + malo.fallgruppe from the
@@ -401,18 +445,33 @@ pub async fn derive_supply_state(
         let fallgruppe = data.get("fallgruppe").and_then(|v| v.as_str());
         PgMaloRepository::patch_typenmerkmal_tx(conn, &malo_id, bilanzierungsmethode, fallgruppe)
             .await?;
-    } else if is_completed && matches!(pid, 55002 | 44002) {
+    } else if is_completed && ANMELDUNG_BESTAETIGT_PIDS.contains(&pid) {
         // Bestätigung Anmeldung — promote the announced LF to active.
-        Vs::confirm_supply_tx(conn, &malo_id, tenant_gln, process_id).await?;
+        transitioned = Vs::confirm_supply_tx(conn, &malo_id, tenant_gln, process_id).await?;
     } else if is_completed && matches!(pid, 55005 | 44005) {
         // Bestätigung Lieferende — active LF removed; the pending transition is
-        // preserved. With no successor announced the MaLo is in a §38 EnWG
-        // supply gap: emit the trigger for the processd EoG automation.
-        Vs::end_supply_tx(conn, &malo_id, tenant_gln, &nb_mp_id, None, process_id).await?;
+        // preserved. The Lieferende is the *contractual* end date carried by the
+        // process, not the day the confirmation happened to be ingested; billing
+        // period boundaries and the EoG Zuordnungsbeginn are both derived from it.
+        let lieferende = data
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .and_then(parse_civil_date);
+        Vs::end_supply_tx(
+            conn, &malo_id, tenant_gln, &nb_mp_id, lieferende, process_id,
+        )
+        .await?;
+        transitioned = true;
 
-        let row: Option<(Option<String>, String)> = sqlx::query_as(
-            "SELECT lf_mp_id_next, nb_mp_id FROM versorgungsstatus
-              WHERE malo_id = $1 AND tenant = $2",
+        let row: Option<(
+            Option<String>,
+            Option<time::Date>,
+            Option<time::Date>,
+            String,
+        )> = sqlx::query_as(
+            "SELECT lf_mp_id_next, lf_next_lieferbeginn, lieferende, nb_mp_id
+                   FROM versorgungsstatus
+                  WHERE malo_id = $1 AND tenant = $2",
         )
         .bind(&malo_id)
         .bind(tenant_gln)
@@ -420,22 +479,45 @@ pub async fn derive_supply_state(
         .await
         .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
 
-        if let Some((None, row_nb_mp_id)) = row {
+        // A supply gap is an uncovered *interval*, not merely "no successor at
+        // all": an announced Lieferbeginn later than the day after the Lieferende
+        // leaves the MaLo unversorgt in between, and §38 Abs. 1 EnWG attaches to
+        // that interval exactly as it does to an open-ended gap.
+        let gap = row.as_ref().and_then(|(next, next_beginn, ende, nb)| {
+            let ende = (*ende)?;
+            let gap_from = ende.next_day()?;
+            match (next, next_beginn) {
+                (None, _) => Some((gap_from, None, nb.clone())),
+                (Some(_), Some(beginn)) if *beginn > gap_from => {
+                    Some((gap_from, Some(*beginn), nb.clone()))
+                }
+                // A successor announced without a date cannot be shown to leave a
+                // gap; the 55002 confirmation settles it either way.
+                (Some(_), _) => None,
+            }
+        });
+
+        if let Some((gap_from, gap_until, row_nb_mp_id)) = gap {
             events.push(
                 MarktEvent::new(
                     tenant_gln,
                     mako_events::markt::VERSORGUNG_GAP_DETECTED,
                     malo_str.to_owned(),
                     serde_json::json!({
-                        "malo_id":  malo_str,
-                        "nb_mp_id": row_nb_mp_id,
-                        "pid":      pid,
-                        "sparte":   if pid == 55005 { "STROM" } else { "GAS" },
+                        "malo_id":   malo_str,
+                        "nb_mp_id":  row_nb_mp_id,
+                        "pid":       pid,
+                        "sparte":    sparte,
+                        // The uncovered interval. `gap_until` is null for an
+                        // open-ended gap (no successor announced at all).
+                        "gap_from":  gap_from.to_string(),
+                        "gap_until": gap_until.map(|d| d.to_string()),
                     }),
                 )
                 .with_extensions(EventExtensions {
                     marktmaloid: Some(malo_str.to_owned()),
                     makopid: Some(pid),
+                    marktsparte: Some(sparte.to_owned()),
                     ..Default::default()
                 }),
             );
@@ -490,7 +572,7 @@ pub async fn derive_supply_state(
             )
             .bind(tenant_gln)
             .bind(&nb_mp_id)
-            .bind(if pid == 44013 { "GAS" } else { "STROM" })
+            .bind(sparte)
             .fetch_optional(&mut *conn)
             .await
             .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?
@@ -502,6 +584,7 @@ pub async fn derive_supply_state(
         )
         .await?;
 
+        transitioned = true;
         events.push(
             MarktEvent::new(
                 tenant_gln,
@@ -511,6 +594,8 @@ pub async fn derive_supply_state(
                     "malo_id":     malo_str,
                     "gv_mp_id":    gv,
                     "nb_mp_id":    nb_mp_id,
+                    // processd keys its EoG case log on this.
+                    "sparte":      sparte,
                     "eog_art":     status.to_string(),
                     "eog_seit":    eog_seit.map(|d| d.to_string()),
                     "bilanzkreis": bilanzkreis,
@@ -520,16 +605,111 @@ pub async fn derive_supply_state(
             .with_extensions(EventExtensions {
                 marktmaloid: Some(malo_str.to_owned()),
                 makopid: Some(pid),
+                marktsparte: Some(sparte.to_owned()),
                 ..Default::default()
             }),
         );
-    } else if is_completed && matches!(pid, 55003 | 44003) {
-        // Ablehnung Anmeldung (GPKE 55003 / GeLi Gas 44003): reset the announced
-        // future Lieferant so no consumer acts on a switch that will not happen.
-        Vs::clear_lf_next_tx(conn, &malo_id, tenant_gln, process_id).await?;
+    } else if is_completed && ANMELDUNG_ABGELEHNT_PIDS.contains(&pid) {
+        // Ablehnung Anmeldung: reset the announced future Lieferant so no
+        // consumer acts on a switch that will not happen — and so the next
+        // supplier's Anmeldung is not rejected against a stale announcement.
+        transitioned = Vs::clear_lf_next_tx(conn, &malo_id, tenant_gln, process_id).await?;
+    }
+
+    if transitioned {
+        events.push(versorgung_changed(conn, tenant_gln, &malo_id, malo_str, sparte, pid).await?);
     }
 
     Ok(events)
+}
+
+/// The Sparte a GPKE / GeLi Gas Prüfidentifikator belongs to.
+///
+/// The two process families are numbered disjointly — GPKE Strom in the 55xxx
+/// band, its GeLi Gas twin in 44xxx — so the PID alone decides it.
+const fn sparte_of_pid(pid: u32) -> &'static str {
+    if pid >= 44_000 && pid < 45_000 {
+        "GAS"
+    } else {
+        "STROM"
+    }
+}
+
+/// Build `de.markt.versorgung.changed` from the state the transition left behind.
+///
+/// Read back rather than reconstructed: the transitions are `ON CONFLICT` upserts
+/// whose result depends on the prior row, so only the row itself describes the
+/// state that actually resulted.
+async fn versorgung_changed(
+    conn: &mut sqlx::PgConnection,
+    tenant_gln: &str,
+    malo_id: &mako_markt::domain::MaloId,
+    malo_str: &str,
+    sparte: &str,
+    pid: u32,
+) -> Result<MarktEvent, mako_markt::error::MdmError> {
+    #[allow(clippy::type_complexity)]
+    let row: Option<(
+        String,
+        Option<String>,
+        Option<String>,
+        Option<time::Date>,
+        Option<time::Date>,
+        Option<time::Date>,
+        Option<time::Date>,
+        i64,
+    )> = sqlx::query_as(
+        "SELECT lieferstatus, lf_mp_id, lf_mp_id_next, lf_next_lieferbeginn,
+                lieferbeginn, lieferende, eog_seit, version
+           FROM versorgungsstatus
+          WHERE malo_id = $1 AND tenant = $2",
+    )
+    .bind(malo_id)
+    .bind(tenant_gln)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
+
+    let data = row.map_or_else(
+        || serde_json::json!({ "malo_id": malo_str, "sparte": sparte, "pid": pid }),
+        |(
+            lieferstatus,
+            lf_mp_id,
+            lf_mp_id_next,
+            lf_next_lieferbeginn,
+            lieferbeginn,
+            lieferende,
+            eog_seit,
+            version,
+        )| {
+            serde_json::json!({
+                "malo_id":              malo_str,
+                "sparte":               sparte,
+                "pid":                  pid,
+                "lieferstatus":         lieferstatus,
+                "lf_mp_id":             lf_mp_id,
+                "lf_mp_id_next":        lf_mp_id_next,
+                "lf_next_lieferbeginn": lf_next_lieferbeginn.map(|d| d.to_string()),
+                "lieferbeginn":         lieferbeginn.map(|d| d.to_string()),
+                "lieferende":           lieferende.map(|d| d.to_string()),
+                "eog_seit":             eog_seit.map(|d| d.to_string()),
+                "version":              version,
+            })
+        },
+    );
+
+    Ok(MarktEvent::new(
+        tenant_gln,
+        mako_events::markt::VERSORGUNG_CHANGED,
+        malo_str.to_owned(),
+        data,
+    )
+    .with_extensions(EventExtensions {
+        marktmaloid: Some(malo_str.to_owned()),
+        makopid: Some(pid),
+        marktsparte: Some(sparte.to_owned()),
+        ..Default::default()
+    }))
 }
 
 // ── ZaehlzeitRegister auto-update (WiM Stammdaten) ───────────────────────────
@@ -640,23 +820,62 @@ async fn upsert_zaehlzeitregister_from_zaehlwerke(
                             .get("tagtyp")
                             .and_then(|v| v.as_str())
                             .unwrap_or("WERKTAG");
-                        let wochentage = tt_val
+                        // ISO weekdays; anything outside 1..=7 is dropped
+                        // rather than stored, since the column rejects it and a
+                        // failed upsert would lose the whole window.
+                        let wochentage: Vec<i16> = tt_val
                             .get("wochentage")
-                            .cloned()
-                            .unwrap_or(serde_json::json!([1, 2, 3, 4, 5]));
+                            .and_then(serde_json::Value::as_array)
+                            .map(|arr| {
+                                arr.iter()
+                                    .filter_map(serde_json::Value::as_i64)
+                                    .filter_map(|d| i16::try_from(d).ok())
+                                    .filter(|d| (1..=7).contains(d))
+                                    .collect()
+                            })
+                            .filter(|v: &Vec<i16>| !v.is_empty())
+                            .unwrap_or_else(|| vec![1, 2, 3, 4, 5]);
 
                         if let Some(fenster) = tt_val.get("fenster").and_then(|v| v.as_array()) {
                             for f in fenster {
-                                let zeit_von = f
+                                let Some(zeit_von) = f
                                     .get("von")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("00:00")
-                                    .to_owned();
-                                let zeit_bis = f
+                                    .and_then(serde_json::Value::as_str)
+                                    .and_then(parse_hhmm)
+                                else {
+                                    tracing::warn!(
+                                        zaehler_id,
+                                        %register_id,
+                                        "event_ingest: ZaehlzeitSaison window has no parsable `von` — skipped"
+                                    );
+                                    continue;
+                                };
+                                let Some(zeit_bis) = f
                                     .get("bis")
-                                    .and_then(|v| v.as_str())
-                                    .unwrap_or("00:00")
-                                    .to_owned();
+                                    .and_then(serde_json::Value::as_str)
+                                    .and_then(parse_hhmm)
+                                else {
+                                    tracing::warn!(
+                                        zaehler_id,
+                                        %register_id,
+                                        "event_ingest: ZaehlzeitSaison window has no parsable `bis` — skipped"
+                                    );
+                                    continue;
+                                };
+                                // A zero-length or inverted window classifies no
+                                // reading at all; the table refuses it, so drop
+                                // it here with a reason rather than as a
+                                // constraint violation deep in the upsert.
+                                if zeit_von >= zeit_bis {
+                                    tracing::warn!(
+                                        zaehler_id,
+                                        %register_id,
+                                        von = %zeit_von,
+                                        bis = %zeit_bis,
+                                        "event_ingest: ZaehlzeitSaison window is empty or inverted — skipped"
+                                    );
+                                    continue;
+                                }
 
                                 // Deterministic UUID so repeated deliveries are idempotent.
                                 let saison_id = uuid::Uuid::new_v5(
@@ -670,7 +889,7 @@ async fn upsert_zaehlzeitregister_from_zaehlwerke(
                                     register_id,
                                     saison: saison.clone(),
                                     wochentage: wochentage.clone(),
-                                    zeit_von: zeit_von.clone(),
+                                    zeit_von,
                                     zeit_bis,
                                     updated_at: time::OffsetDateTime::now_utc(),
                                 };
@@ -983,6 +1202,26 @@ async fn apply_object_stammdaten<Ma, Me, Su, Ci, Pa>(
             "event_ingest: Stammdatenänderung apply for this object is source-gated (§14a AHB) — acknowledged only"
         ),
     }
+}
+
+/// Parse a `HH:MM` (or `HH:MM:SS`) wall-clock string from a market message.
+///
+/// Returns `None` rather than a default: a window that silently became
+/// `00:00–00:00` classified no reading at all, and the caller can only report
+/// that if it is told the value was unusable.
+fn parse_hhmm(raw: &str) -> Option<time::Time> {
+    let raw = raw.trim();
+    let mut parts = raw.split(':');
+    let h: u8 = parts.next()?.parse().ok()?;
+    let m: u8 = parts.next()?.parse().ok()?;
+    let sec: u8 = match parts.next() {
+        Some(s) => s.parse().ok()?,
+        None => 0,
+    };
+    if parts.next().is_some() {
+        return None;
+    }
+    time::Time::from_hms(h, m, sec).ok()
 }
 
 #[cfg(test)]

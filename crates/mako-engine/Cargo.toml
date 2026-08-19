@@ -36,7 +36,7 @@ thiserror  = { workspace = true }
 time       = { workspace = true }
 time-tz    = { workspace = true }
 uuid       = { workspace = true }
-tokio      = { version = "1", features = ["sync", "time", "rt"] }
+tokio      = { version = "1", features = ["sync", "time", "rt", "macros"] }
 tokio-util = { workspace = true }
 tracing    = { version = "0.1", default-features = false, features = ["log", "attributes"] }
 rand       = { version = "0.10", default-features = false, features = ["std", "std_rng", "thread_rng"] }

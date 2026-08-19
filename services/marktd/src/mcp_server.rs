@@ -8,6 +8,17 @@
 //! Every request requires `Authorization: Bearer <token>` (OIDC JWT).
 //! The principal is checked against Cedar policy action `use-mcp`.
 //!
+//! ## Read-only by construction
+//!
+//! `use-mcp` is one blanket gate over the whole MCP surface — it cannot tell a
+//! read tool from a destructive one, so any principal allowed to use MCP at all
+//! would be allowed to use every tool here. Every tool is therefore a read.
+//! Nothing on this surface writes, and nothing dispatches a market message.
+//! PRICAT (re-)dispatch is REST-only (`POST /api/v1/pricat/{nb_mp_id}/dispatch`,
+//! Cedar `dispatch-pricat`, NB role): sending PRICAT 27003 to every LF
+//! counterparty is not something an LLM tool call should reach through a
+//! blanket gate.
+//!
 //! ## Tools
 //!
 //! | Tool | Description |
@@ -26,7 +37,6 @@
 //! | `get_nb_contract`                 | Read the NB contract for a MaLo |
 //! | `get_correlation`                 | Correlate process ID or ERP order ref |
 //! | `list_pricat_versions`            | List available PRICAT versions for an NB |
-//! | `dispatch_pricat`                 | Trigger PRICAT dispatch to LF |
 //! | `get_nb_energiemix`               | Read §42 EnWG Energiemix for an NB |
 //! | `get_technische_ressource`        | Read a TechnischeRessource (TR) record |
 //! | `get_steuerbare_ressource`        | Read a SteuerbareRessource (SR) + §14a config |
@@ -706,42 +716,6 @@ Use after a tariff change to verify the new PRICAT was dispatched to all LF coun
         }
     }
 
-    #[tool(
-        description = "Trigger (re-)dispatch of the latest PRICAT 27003 version for an NB to all active LF counterparties. \
-Use after an AS4 connectivity incident or to force distribution to newly on-boarded LF partners. \
-Returns the version_id that was queued. Actual dispatch is asynchronous. \
-⚠ NB-role only — Informatorisches Unbundling: LF actors must not trigger NB PRICAT dispatch.",
-        annotations(read_only_hint = false, idempotent_hint = true, open_world_hint = true)
-    )]
-    async fn dispatch_pricat(
-        &self,
-        Parameters(p): Parameters<PricatParams>,
-    ) -> Result<CallToolResult, McpError> {
-        use crate::pg::PgPriCatRepository;
-        use mako_markt::repository::PriCatRepository as _;
-        let repo = PgPriCatRepository::new(self.state.pool.clone());
-        match repo.find_latest(&p.nb_mp_id, &self.state.tenant).await {
-            Ok(Some(v)) => {
-                match repo.mark_queued(v.id).await {
-                    Ok(()) => ContentBlock::json(serde_json::json!({
-                        "version_id": v.id,
-                        "nb_mp_id": p.nb_mp_id,
-                        "valid_from": v.valid_from,
-                        "status": "queued",
-                        "note": "PRICAT dispatch enqueued. Check list_pricat_versions in ~30s for dispatch_state=done.",
-                    }))
-                    .map(|b| CallToolResult::success(vec![b]))
-                    .map_err(|e| McpError::internal_error(e.message, None)),
-                    Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-                }
-            }
-            Ok(None) => Ok(CallToolResult::error(vec![ContentBlock::text(
-                format!("No PRICAT version found for NB GLN {}", p.nb_mp_id),
-            )])),
-            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
-        }
-    }
-
     // ── New tools ──────────────────────────────────────────────────────────
 
     #[tool(
@@ -1330,7 +1304,6 @@ impl ServerHandler for MdmdMcpHandler {
              - `get_nb_contract` — active NB network contract (netzebene, billing_schedule, RLM/SLP)\n\
              - `get_correlation` — look up a process correlation by process_id or erp_order_id\n\
              - `list_pricat_versions` — PRICAT 27003 version history for an NB\n\
-             - `dispatch_pricat` — trigger PRICAT re-dispatch to LF counterparties (NB-only)\n\
              - `get_nb_energiemix` — §42 EnWG annual grid-area renewable mix for an NB\n\
              - `get_technische_ressource` — smart meter / generation unit by TR-ID\n\
              - `get_steuerbare_ressource` — §14a EnWG controllable load + Konfigurationsprodukte by SR-ID\n\

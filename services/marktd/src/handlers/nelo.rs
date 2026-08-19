@@ -1,9 +1,9 @@
 //! NeLo (Netz-Element-Lokation) REST handlers.
 //!
 //! Routes:
-//!   PUT  /api/v1/nelo/:id           — upsert a NeLo (schema-validated `Netzlokation` BO4E)
-//!   GET  /api/v1/nelo/:id           — get a single NeLo — returns typed `Netzlokation`
-//!   GET  /api/v1/nelo               — list NeLos (?nb_mp_id=… filters by Netzbetreiber)
+//!   PUT  /api/v1/nelos/:id           — upsert a NeLo (schema-validated `Netzlokation` BO4E)
+//!   GET  /api/v1/nelos/:id           — get a single NeLo — returns typed `Netzlokation`
+//!   GET  /api/v1/nelos               — list NeLos (?nb_mp_id=… filters by Netzbetreiber)
 //!
 //! NeLos are network element locations used in BDEW Redispatch 2.0 processes.
 //! The `nelo_id` is typically a 16-char EIC code (ENTSO-E) or a 13-digit BDEW
@@ -41,7 +41,9 @@ use utoipa::{IntoParams, ToSchema};
 
 use crate::pg::PgNeLoRepository;
 
-use super::{Claims, IntoMdmResponse as _, TenantGln, etag, parse_if_match};
+use super::{
+    Claims, IfMatch, IntoMdmResponse as _, TenantGln, etag, malformed_if_match, parse_if_match,
+};
 
 /// Extension alias — concrete type so AFIT dispatches statically.
 pub type NeLoRepoExt = Arc<PgNeLoRepository>;
@@ -210,7 +212,7 @@ fn default_size() -> u32 {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// PUT /api/v1/nelo/:id
+/// PUT /api/v1/nelos/:id
 ///
 /// Insert or update a Netz-Element-Lokation.
 ///
@@ -253,7 +255,13 @@ pub async fn put_nelo(
         .as_ref()
         .map(|id| id.to_string());
 
-    let if_match = parse_if_match(&headers);
+    let if_match = match parse_if_match(&headers) {
+        IfMatch::Absent | IfMatch::Any => None,
+        IfMatch::Version(v) => Some(v),
+        // Refuse rather than fall back to an unconditional write: the caller
+        // asked for a conditional one and would otherwise be told it succeeded.
+        IfMatch::Malformed => return malformed_if_match(),
+    };
     let rec = NeLoRecord {
         nelo_id,
         tenant: tenant_gln,
@@ -280,7 +288,7 @@ pub async fn put_nelo(
     }
 }
 
-/// GET /api/v1/nelo/:id
+/// GET /api/v1/nelos/:id
 ///
 /// Retrieve a single NeLo. Returns a typed `NetzlokationResponse` with the
 /// full `rubo4e::current::Netzlokation` BO4E payload in the `data` field.
@@ -317,7 +325,7 @@ pub async fn get_nelo(
     }
 }
 
-/// GET /api/v1/nelo
+/// GET /api/v1/nelos
 ///
 /// List NeLos for this tenant.  Pass `?nb_mp_id=<GLN>` to filter by Netzbetreiber.
 pub async fn list_nelos(

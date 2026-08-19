@@ -112,11 +112,19 @@ impl EdifactIngestDispatcher {
                 44001..=44021 => {
                     let cmd = adapters::geli_gas_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // APERAK Frist: 10 Werktage (BK7-24-01-009).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        10,
-                        HolidayCalendar::BdewMaKo,
+                    // Business answer Frist, per PID, from the GeLi Gas 3.0
+                    // table in `mako_geli_gas::antwortfrist` — Ablauf des
+                    // 4. WT for an Anmeldung (44001), des 3. WT for an
+                    // Abmeldung (44004), des 2. WT for the EoG Zuordnung
+                    // (44013). The often-quoted 10 Werktage is the *supplier's*
+                    // Vorlauffrist for a Lieferantenwechsel, not the GNB's
+                    // answer window; using it left a Gas Anmeldung looking
+                    // healthy six Werktage past its Frist.
+                    let received = OffsetDateTime::now_utc();
+                    let due_at = antwort_due_at(
+                        pid,
+                        received,
+                        fristen::deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo),
                     );
                     self.spawn_or_resume_guarded::<GeliGasSupplierChangeWorkflow>(
                         malo_id.as_str(),

@@ -82,7 +82,7 @@ tests.
 
 ```mermaid
 graph TB
-    marktd["marktd :8180<br/>EventBus"]
+    marktd["marktd :8180<br/>fan-out"]
     smgw["SMGW / iMSys<br/>(direct push)"]
     edmd["edmd :8380<br/>(this service)"]
 
@@ -1312,8 +1312,7 @@ the group's first commit are a backlog to drain, not a feed to tail.
 The path runs the full pipeline against krafka's in-process `FakeBroker`
 (`test-broker` feature) over an actual TCP socket — produce → group join → fetch
 → V-rules → audited store → offset commit, poison pill included, with no Kafka
-container. A dedicated end-to-end suite for it is follow-up work (the previous one
-was removed with the embedded-Iceberg storage layer it depended on).
+container. A dedicated end-to-end suite against a real broker is follow-up work.
 
 ## Hampel-filter quality scoring
 
@@ -2050,7 +2049,7 @@ take effect and every connection is tagged `edmd` in `pg_stat_activity`.
 
 ## marktd subscription
 
-`edmd` **auto-registers** its EventBus subscription with `marktd` on startup
+`edmd` **auto-registers** its fan-out subscription with `marktd` on startup
 when `subscription.webhook_url` is set in the config — no manual `curl` required.
 
 To force re-registration or verify the subscription:

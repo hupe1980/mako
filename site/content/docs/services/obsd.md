@@ -20,7 +20,7 @@ Key responsibilities:
 
 ```mermaid
 graph TB
-    marktd["marktd :8180<br/>EventBus"]
+    marktd["marktd :8180<br/>fan-out"]
     obsd["obsd :8480<br/>(this service)"]
     pg["PostgreSQL<br/>process_projections"]
     alert["Alertmanager /<br/>Grafana"]
@@ -278,7 +278,7 @@ event_types   = [
 
 ## marktd subscription
 
-`obsd` **auto-registers** its EventBus subscription with `marktd` on startup
+`obsd` **auto-registers** its fan-out subscription with `marktd` on startup
 when `subscription.webhook_url` is set in the config — no manual `curl` required.
 
 To force re-registration or verify the subscription:

@@ -40,7 +40,7 @@ test-integration name:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-tarifbd-db test-marktd-db
+test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-tarifbd-db test-marktd-db test-processd-db
 
 # Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
 # filesystem Iceberg warehouse).
@@ -74,12 +74,20 @@ test-tarifbd-db:
     cargo test -p tarifbd --test catalog_integration -- --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
-# durable fan-out).
+# durable fan-out, MaBiS-Zählpunkt, temporal constraints).
 test-marktd-db:
     cargo test -p marktd \
         --test versorgung_integration --test melo_graph_integration \
         --test esa_integration --test registries_integration \
-        --test fanout_durable_integration -- --include-ignored --test-threads=1
+        --test fanout_durable_integration --test mabis_zp_integration \
+        --test temporal_constraints_integration \
+        -- --include-ignored --test-threads=1
+
+# processd's SQL suite (approval queue claim/dispatch, decision audit log).
+# It existed but was in no recipe, so nothing ran it.
+test-processd-db:
+    cargo test -p processd --no-default-features --features integrated \
+        --test sql_integration -- --include-ignored --test-threads=1
 
 # Lint with warnings as errors
 clippy:
@@ -149,6 +157,15 @@ clippy-roles:
              "role-lf,role-nb,role-msb"; do
         echo "==> cargo clippy -p makod --no-default-features --features $f"
         cargo clippy -p makod --no-default-features --features "$f" --all-targets -- -D warnings
+    done
+    # processd's role features are § 7 EnWG binary separation: an nb-only build
+    # must contain no LF or MSB answer path. They were never linted, which is
+    # how `msb-only` came to not compile at all — the MSB module was gated on
+    # the NB features, so every MSB obligation shipped inside the NB binary.
+    for f in "lf-only" "nb-only" "msb-only" "integrated"; do
+        echo "==> cargo clippy -p processd --no-default-features --features $f"
+        cargo clippy -p processd --no-default-features --features "$f" --all-targets -- -D warnings
+        cargo test   -p processd --no-default-features --features "$f" --test role_separation
     done
     # agentd carries the same role flags: it is the one service that reaches all
     # the others, so a role-scoped build must exclude the other arm's

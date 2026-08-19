@@ -135,9 +135,10 @@ pub use invoic::{
     WimInvoicEvent, WimInvoicProjection, WimInvoicRecord, WimInvoicState, WimInvoicWorkflow,
 };
 pub use preisanfrage::{
-    PREISANFRAGE_DEADLINE_LABEL, PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent,
-    PreisanfrageState, QUOTES_PIDS, REQOTE_PIDS, WORKFLOW_NAME as PREISANFRAGE_WORKFLOW_NAME,
-    WimPreisanfrageWorkflow,
+    ANTWORT_FRIST_WT as PREISANFRAGE_ANTWORT_FRIST_WT, PREISANFRAGE_DEADLINE_LABEL,
+    PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent, PreisanfrageState, QUOTES_PIDS,
+    REQOTE_PIDS, WORKFLOW_NAME as PREISANFRAGE_WORKFLOW_NAME, WimPreisanfrageWorkflow,
+    antwort_frist_werktage as preisanfrage_antwort_frist_werktage,
 };
 pub use preisliste::{
     PRICAT_PIDS, PreislisteCommand, PreislisteData, PreislisteEvent, PreislisteState,

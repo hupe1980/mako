@@ -37,7 +37,7 @@ constant from this catalog as the `type`; the two layers meet there.
 - Every constant appears in [`all()`] — enforced by tests — so catalogs,
   subscription UIs, and docs can enumerate the full event surface.
 - `matches()` implements the shared glob matcher (`de.markt.*`) used by every
-  subscription mechanism (marktd EventBus, agentd triggers, ERP webhooks).
+  subscription mechanism (marktd fan-out, agentd triggers, ERP webhooks).
 - Events that are **subscribed but not yet emitted** (or vice versa) carry a
   `⚠ phantom:` / `orphan emit:` doc note at the constant — honest drift
   tracking instead of silent divergence.

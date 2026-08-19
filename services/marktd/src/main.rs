@@ -1,23 +1,29 @@
-//! `marktd` — Master Data Manager daemon.
+//! `marktd` — the market data hub.
 //!
-//! Assembles all modules, connects to PostgreSQL, runs migrations, starts the
-//! background fan-out worker, and serves the axum HTTP API.
+//! Port: `:8180`
+//!
+//! `mako_service::run` owns the lifecycle — tracing, the tuned pool, migrations,
+//! real DB-ping readiness, `/health/*`, `/metrics`, the HTTP trace layer, and
+//! graceful SIGINT **and SIGTERM** shutdown. This file supplies only what is
+//! marktd's own: the repositories, the domain router, and the two background
+//! workers.
+//!
+//! The full endpoint surface is documented in the crate README and in
+//! `site/content/docs/services/marktd.md`; `/swagger-ui/` serves it live.
 #![deny(unsafe_code)]
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
-use anyhow::Context;
+use anyhow::Context as _;
 use axum::{
     Extension, Router,
-    routing::{delete, get, post, put},
+    routing::{delete, get, patch, post, put},
 };
-use clap::Parser;
 use mako_markt::repository::AppState;
-use sqlx::postgres::PgPoolOptions;
-use tokio_util::sync::CancellationToken;
+use mako_service::{Daemon, ServiceContext, cedar::CedarEnforcer};
+use sqlx::PgPool;
 use tracing::info;
 
-use mako_service::cedar::CedarEnforcer;
 use marktd::{
     config::{self, Config},
     fanout::{FanoutConfig, spawn as spawn_fanout},
@@ -42,7 +48,6 @@ use marktd::{
         event_ingest::{InboundWebhookSecret, ingest_event},
         event_log::list_event_log,
         grundversorger::{get_grundversorger, put_grundversorger},
-        health::{health, health_ready},
         lokationszuordnung::{
             delete_lokationszuordnung, get_malo_buendel, get_malo_lokationen, get_melo_lokationen,
             put_lokationszuordnung,
@@ -52,7 +57,6 @@ use marktd::{
         malo_grid::{get_malo_grid, put_malo_grid},
         melo::{get_melo, get_melo_standorteigenschaften, put_melo},
         melo_msb::{get_melo_msb_at, get_melo_msb_history, put_melo_msb},
-        metrics::metrics_handler,
         mmma_preise,
         msb_rahmenvertrag_gas::{get_msb_rv_gas, list_msb_rv_gas, upsert_msb_rv_gas},
         nb_contract::{get_nb_contract, list_nb_contracts, put_nb_contract},
@@ -69,532 +73,241 @@ use marktd::{
             put_preisblatt_messung,
         },
         pricat::{get_dispatch_log, get_pricat_history, post_pricat_dispatch},
-        subscription::{get_subscription, list_subscriptions, put_subscription, test_subscription},
+        subscription::{
+            delete_subscription, get_subscription, list_subscriptions, put_subscription,
+            test_subscription,
+        },
         tranche::{get_tranche, list_tranchen, put_tranche},
         versorgung::{get_versorgungsstatus, get_versorgungsstatus_history, put_versorgungsstatus},
     },
     openapi::swagger_ui,
-    pg::{
-        PgBilanzierungRepository, PgCorrelationIndex, PgDeviceRepository, PgEinwilligungRepository,
-        PgGrundversorgerRepository, PgLokationszuordnungRepository, PgMabisZpRepository,
-        PgMaloGridRepository, PgMaloRepository, PgMeloMsbRepository, PgMeloRepository,
-        PgMmmPreisStromRepository, PgMmmaPreisGasRepository, PgMsbRahmenvertragGasRepository,
-        PgNbContractRepository, PgNeLoRepository, PgNetzzugangRepository, PgPartnerRepository,
-        PgPreisblattDienstleistungRepository, PgPreisblattHardwareRepository,
-        PgPreisblattKaRepository, PgPreisblattMessungRepository, PgPreisblattRepository,
-        PgPriCatRepository, PgSteuerbareRessourceRepository, PgSubscriptionRepository,
-        PgTechnischeRessourceRepository, PgVersorgungsStatusRepository, PgZaehlzeitRepository,
-    },
+    pg,
 };
 
-// ── CLI ───────────────────────────────────────────────────────────────────────
+/// The daemon.
+struct Marktd;
 
-#[derive(Debug, Parser)]
-#[command(
-    name = "marktd",
-    about = "Master Data Manager for German energy market (MaKo)"
-)]
-struct Cli {
-    /// Path to the `marktd.toml` configuration file.
-    #[arg(short, long, default_value = "marktd.toml", env = "MARKTD_CONFIG")]
-    config: std::path::PathBuf,
+impl Daemon for Marktd {
+    type Config = Config;
+    const NAME: &'static str = "marktd";
 
-    /// Log level override (default: INFO).
-    #[arg(long, default_value = "info", env = "RUST_LOG")]
-    log_level: String,
-
-    /// Validate configuration and database connectivity, then exit 0.
-    ///
-    /// Parses the TOML file, resolves all `env:` secrets, connects to
-    /// PostgreSQL, runs migrations, and exits 0 on success, non-zero on
-    /// any failure. No HTTP server or background workers are started.
-    /// Suitable for Dockerfile HEALTHCHECK and Kubernetes init containers.
-    #[arg(long, env = "MARKTD_CHECK", default_value_t = false)]
-    check: bool,
-}
-
-// ── Main ──────────────────────────────────────────────────────────────────────
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    let cli = Cli::parse();
-
-    // ── Logging + OpenTelemetry ────────────────────────────────────────────
-    // Config not yet loaded — use a temporary plain-logging setup so startup
-    // errors are visible. Re-init happens after config is read below.
-    //
-    // NOTE: init_tracing is called once with the OTel config from the file.
-    // We parse config first (plain logging), then hand off to init_tracing.
-    // Use a two-stage approach: bootstrap logging here, then reinitialise
-    // below after the config is available.
-    //
-    // Actually: parse config first, then init tracing with OTel endpoint.
-    // We cannot init before config, so skip bootstrap and do it after.
-
-    info!(config = %cli.config.display(), "marktd: starting");
-
-    // ── Config ────────────────────────────────────────────────────────────────
-    let cfg: Config = config::load_from_file(&cli.config)
-        .with_context(|| format!("loading config from {}", cli.config.display()))?;
-
-    // ── Logging + OpenTelemetry (uses config) ─────────────────────────────────
-    let _otel_guard = mako_service::init_tracing(
-        "marktd",
-        &cli.log_level,
-        cfg.otel.is_enabled().then_some(&cfg.otel),
-    );
-
-    // Resolve env-var references in secrets.
-    let db_url =
-        config::resolve_env(&cfg.storage.postgres.url).context("resolving DATABASE_URL")?;
-    let makod_api_key =
-        config::resolve_env_secret(&cfg.makod.api_key).context("resolving MAKOD_API_KEY")?;
-    let inbound_secret = cfg
-        .webhook
-        .inbound_secret
-        .as_deref()
-        .map(config::resolve_env)
-        .transpose()
-        .context("resolving MAKOD_WEBHOOK_SECRET")?;
-
-    // ── PostgreSQL ────────────────────────────────────────────────────────────
-    info!("marktd: connecting to PostgreSQL");
-    // Tag every connection `marktd` in `pg_stat_activity` for attribution (a bare
-    // `.connect(url)` leaves it as the generic driver default).
-    let connect_options = db_url
-        .parse::<sqlx::postgres::PgConnectOptions>()
-        .context("parsing DATABASE_URL")?
-        .application_name("marktd");
-    let pool = PgPoolOptions::new()
-        .max_connections(cfg.storage.postgres.max_connections)
-        .min_connections(cfg.storage.postgres.min_connections)
-        .acquire_timeout(Duration::from_secs(
-            cfg.storage.postgres.acquire_timeout_secs,
-        ))
-        .connect_with(connect_options)
-        .await
-        .context("connecting to PostgreSQL")?;
-
-    // Apply schema migrations.
-    sqlx::migrate!("./migrations")
-        .run(&pool)
-        .await
-        .context("marktd: running database migrations")?;
-
-    // ── --check mode early exit ────────────────────────────────────────────────
-    //
-    // Config parsed, secrets resolved, PostgreSQL reachable, migrations applied.
-    // In check mode we exit here — no HTTP server, no background workers.
-    if cli.check {
-        info!("marktd: check mode — config, secrets, and database connectivity verified");
-        return Ok(());
+    async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations")
+            .run(pool)
+            .await
+            .context("run marktd migrations")
     }
 
-    // ── Repositories ──────────────────────────────────────────────────────────
-    let malo_repo = PgMaloRepository::new(pool.clone());
-    let melo_repo = PgMeloRepository::new(pool.clone(), cfg.makod.tenant.clone());
-    let sub_repo = PgSubscriptionRepository::new(pool.clone());
-    let ci = PgCorrelationIndex::new(pool.clone());
-    let partner_repo = PgPartnerRepository::new(pool.clone());
-    let preisblatt_repo = std::sync::Arc::new(PgPreisblattRepository::new(pool.clone()));
-    let preisblatt_messung_repo =
-        std::sync::Arc::new(PgPreisblattMessungRepository::new(pool.clone()));
-    let preisblatt_ka_repo = std::sync::Arc::new(PgPreisblattKaRepository::new(pool.clone()));
-    let preisblatt_dl_repo =
-        std::sync::Arc::new(PgPreisblattDienstleistungRepository::new(pool.clone()));
-    let preisblatt_hw_repo = std::sync::Arc::new(PgPreisblattHardwareRepository::new(pool.clone()));
-    let sr_repo = std::sync::Arc::new(PgSteuerbareRessourceRepository::new(pool.clone()));
-    let tr_repo = std::sync::Arc::new(PgTechnischeRessourceRepository::new(pool.clone()));
-    let lz_repo = std::sync::Arc::new(PgLokationszuordnungRepository::new(pool.clone()));
-    let device_repo = std::sync::Arc::new(PgDeviceRepository::new(pool.clone()));
-    let einwilligung_repo = std::sync::Arc::new(PgEinwilligungRepository::new(pool.clone()));
-    let netzzugang_repo = std::sync::Arc::new(PgNetzzugangRepository::new(pool.clone()));
-    let msb_rv_gas_repo = std::sync::Arc::new(PgMsbRahmenvertragGasRepository::new(pool.clone()));
-    let zaehzeit_repo = std::sync::Arc::new(PgZaehlzeitRepository::new(pool.clone()));
-    let nb_contract_repo = std::sync::Arc::new(PgNbContractRepository::new(pool.clone()));
-    let vs_repo = std::sync::Arc::new(PgVersorgungsStatusRepository::new(pool.clone()));
-    let pricat_repo = std::sync::Arc::new(PgPriCatRepository::new(pool.clone()));
-    let nelo_repo = std::sync::Arc::new(PgNeLoRepository::new(pool.clone()));
-    let tranche_repo = std::sync::Arc::new(marktd::pg::PgTrancheRepository::new(pool.clone()));
-    let malo_grid_repo = Arc::new(PgMaloGridRepository::new(pool.clone()));
-    let mabis_zp_repo = Arc::new(PgMabisZpRepository::new(pool.clone()));
-    let grundversorger_repo = Arc::new(PgGrundversorgerRepository::new(pool.clone()));
-    let melo_msb_repo = Arc::new(PgMeloMsbRepository::new(pool.clone()));
-    let bilanzierung_repo = Arc::new(PgBilanzierungRepository::new(pool.clone()));
-    let mmma_gas_repo = std::sync::Arc::new(PgMmmaPreisGasRepository::new(pool.clone()));
-    let mmm_strom_repo = std::sync::Arc::new(PgMmmPreisStromRepository::new(pool.clone()));
+    async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        let pool = ctx.pool().clone();
+        let shutdown = ctx.shutdown.clone();
+        // The shared client: 5 s connect timeout and, critically for a hub that
+        // POSTs to operator-supplied webhook URLs, no redirect following — so a
+        // subscriber endpoint cannot bounce a delivery onto internal
+        // infrastructure (see handlers::subscription::validate_webhook_url).
+        let http = ctx.http.clone();
+        let tenant = cfg.markt.tenant.clone();
 
-    // ── Graceful shutdown token ───────────────────────────────────────────────
-    let shutdown = CancellationToken::new();
-
-    // ── Background tasks ──────────────────────────────────────────────────────
-    // OIDC JWKS refresh is handled by OidcConfig::build_verifier above.
-
-    // ── OIDC verifier ─────────────────────────────────────────────────────────
-    let http = reqwest::Client::builder()
-        .user_agent("marktd/0.1 (+https://github.com/hupe1980/edi-energy-rs)")
-        .timeout(Duration::from_secs(10))
-        .build()
-        .context("building HTTP client")?;
-
-    // Fail closed: without [oidc] every request is admitted with dev claims,
-    // and without webhook.inbound_secret the POST /events endpoint accepts
-    // unsigned events that mutate VersorgungsStatus and the device registry.
-    // Either gap must be asked for by name, never reached by omission.
-    if !cfg.allow_insecure_no_auth {
-        if cfg.oidc.is_none() {
-            anyhow::bail!(
-                "no [oidc] section configured — every request would be admitted with \
-                 dev claims. Configure [oidc], or set allow_insecure_no_auth = true."
+        // Fail closed: without [oidc] every request is admitted with dev claims,
+        // and without webhook.inbound_secret the inbound events endpoint accepts
+        // unsigned events that mutate VersorgungsStatus and the device registry.
+        // Either gap must be asked for by name, never reached by omission.
+        if cfg.allow_insecure_no_auth {
+            tracing::warn!(
+                "marktd: allow_insecure_no_auth is set — dev claims accepted and unsigned \
+                 inbound events accepted"
             );
-        }
-        if cfg.webhook.inbound_secret.is_none() {
-            anyhow::bail!(
-                "no webhook.inbound_secret configured — POST /events would accept unsigned \
-                 events that mutate master data. Configure it, or set \
+        } else {
+            anyhow::ensure!(
+                cfg.oidc.is_some(),
+                "no [oidc] section configured — every request would be admitted with dev \
+                 claims. Configure [oidc], or set allow_insecure_no_auth = true."
+            );
+            anyhow::ensure!(
+                cfg.webhook.inbound_secret.is_some(),
+                "no webhook.inbound_secret configured — the inbound events endpoint would \
+                 accept unsigned events that mutate master data. Configure it, or set \
                  allow_insecure_no_auth = true."
             );
         }
-    } else {
-        tracing::warn!(
-            "marktd: allow_insecure_no_auth is set — dev claims accepted and unsigned \
-             inbound events accepted"
-        );
-    }
 
-    let verifier = mako_service::oidc::OidcConfig::build_verifier(
-        cfg.oidc.as_ref(),
-        &http,
-        &cfg.makod.tenant,
-        shutdown.clone(),
-    )
-    .await?;
+        let makod_api_key =
+            config::resolve_env_secret(&cfg.makod.api_key).context("resolve makod.api_key")?;
+        let inbound_secret = cfg
+            .webhook
+            .inbound_secret
+            .as_deref()
+            .map(config::resolve_env)
+            .transpose()
+            .context("resolve webhook.inbound_secret")?;
 
-    // ── MaKod client ──────────────────────────────────────────────────────────
-    let makod_client = Arc::new(mako_markt::makod_client::MakodClient::new(
-        &cfg.makod.base_url,
-        makod_api_key,
-    ));
-    // Clone for the ESA consent handler's Extension — the revocation path fires
-    // the 17008 Abbestellung at makod.
-    let makod_client_ext = Arc::clone(&makod_client);
-
-    // ── Durable fan-out wake-up hint ───────────────────────────────────────────
-    // No in-memory event channel anymore: producers persist every event to the
-    // `event_log` outbox (marktd::outbox::enqueue) BEFORE any fan-out, and the
-    // durable fan-out worker is the sole consumer of `event_log`/`event_delivery`.
-    // `notify` is only a low-latency wake-up hint — correctness rests on the
-    // tables, so a missed notification only delays, never drops, delivery.
-    let notify = Arc::new(tokio::sync::Notify::new());
-
-    // ── AppState ──────────────────────────────────────────────────────────────
-    let state = Arc::new(AppState {
-        malo_repo,
-        melo_repo,
-        subscription_repo: sub_repo.clone(),
-        correlation_index: ci,
-        partner_repo,
-        makod_client,
-        notify: notify.clone(),
-        tenant_gln: cfg.makod.tenant.clone(),
-    });
-
-    spawn_fanout(
-        pool.clone(),
-        sub_repo,
-        http.clone(),
-        FanoutConfig {
-            delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
-            max_attempts: i16::try_from(cfg.webhook.max_retry_attempts).unwrap_or(5),
-            ..Default::default()
-        },
-        notify.clone(),
-        shutdown.clone(),
-    );
-
-    // ── processed_events TTL cleanup ────────────────────────────────────────────
-    // DELETE processed_events rows older than 7 days every hour so the
-    // idempotency table does not grow without bound.
-    {
-        let cleanup_pool = pool.clone();
-        let cleanup_shutdown = shutdown.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(Duration::from_secs(3_600));
-            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        let cutoff = time::OffsetDateTime::now_utc()
-                            - time::Duration::days(7);
-                        match sqlx::query(
-                            "DELETE FROM processed_events WHERE processed_at < $1",
-                        )
-                        .bind(cutoff)
-                        .execute(&cleanup_pool)
-                        .await
-                        {
-                            Ok(r) => {
-                                if r.rows_affected() > 0 {
-                                    tracing::info!(
-                                        rows = r.rows_affected(),
-                                        "processed_events: pruned old entries"
-                                    );
-                                }
-                            }
-                            Err(e) => {
-                                tracing::warn!(error = %e, "processed_events: cleanup failed");
-                            }
-                        }
-                    }
-                    _ = cleanup_shutdown.cancelled() => break,
-                }
-            }
-        });
-    }
-
-    // ── Cedar ABAC enforcer ──────────────────────────────────────────────────
-    let cedar = Arc::new(
-        CedarEnforcer::from_policy_str(include_str!("../policies/marktd.cedar"))
-            .context("loading Cedar policies from policies/marktd.cedar")?,
-    );
-
-    // ── B12: MMMA/MMM price import background worker ──────────────────────────
-    {
-        use marktd::mmma_worker::spawn_mmma_worker;
-        let mmma_gas_repo = Arc::new(marktd::pg::mmma_preise::PgMmmaPreisGasRepository::new(
-            pool.clone(),
-        ));
-        let mmma_strom_repo = Arc::new(marktd::pg::mmma_preise::PgMmmPreisStromRepository::new(
-            pool.clone(),
-        ));
-        spawn_mmma_worker(
-            Arc::new(cfg.mmma_import.clone()),
-            mmma_gas_repo,
-            mmma_strom_repo,
-            cfg.makod.tenant.clone(),
-            pool.clone(),
-            notify.clone(),
+        let verifier = mako_service::oidc::OidcConfig::build_verifier(
+            cfg.oidc.as_ref(),
+            &http,
+            &tenant,
             shutdown.clone(),
-        );
-    }
+        )
+        .await?;
 
-    // ── MCP server ────────────────────────────────────────────────────────────
-    let mcp_state = Arc::new(marktd::mcp_server::MdmdMcpState {
-        pool: pool.clone(),
-        tenant: cfg.makod.tenant.clone(),
-        auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
-            &cfg.mcp,
-            verifier.clone(),
-            Some(cedar.clone()),
-            &cfg.makod.tenant,
-        ),
-    });
-    let inbound_path = cfg.webhook.inbound_path.clone();
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/health/live", get(health))
-        .route("/health/ready", get(health_ready))
-        // MaLo
-        .route("/api/v1/malo", get(list_malo::<_, _, _, _, _>))
-        .route("/api/v1/malo/{id}", put(put_malo::<_, _, _, _, _>))
-        .route("/api/v1/malo/{id}", get(get_malo::<_, _, _, _, _>))
-        // Lastprofil derivation — SLP profile for NNE tariff zone + billingd (L7)
+        let cedar = Arc::new(
+            CedarEnforcer::from_policy_str(include_str!("../policies/marktd.cedar"))
+                .context("load Cedar policies from policies/marktd.cedar")?,
+        );
+
+        let makod_client = Arc::new(mako_markt::makod_client::MakodClient::new(
+            &cfg.makod.base_url,
+            makod_api_key,
+        ));
+
+        // No in-memory event channel: producers persist every event to the
+        // `event_log` outbox (marktd::outbox::enqueue) BEFORE any fan-out, and
+        // the durable fan-out worker is the sole consumer of
+        // `event_log`/`event_delivery`. `notify` is only a low-latency wake-up
+        // hint — correctness rests on the tables, so a missed notification
+        // delays delivery, never drops it.
+        let notify = Arc::new(tokio::sync::Notify::new());
+
+        let sub_repo = pg::PgSubscriptionRepository::new(pool.clone());
+        let state = Arc::new(AppState {
+            malo_repo: pg::PgMaloRepository::new(pool.clone()),
+            melo_repo: pg::PgMeloRepository::new(pool.clone(), tenant.clone()),
+            subscription_repo: sub_repo.clone(),
+            correlation_index: pg::PgCorrelationIndex::new(pool.clone()),
+            partner_repo: pg::PgPartnerRepository::new(pool.clone()),
+            makod_client: Arc::clone(&makod_client),
+            notify: Arc::clone(&notify),
+            tenant_gln: tenant.clone(),
+        });
+
+        spawn_workers(&cfg, &pool, sub_repo, &http, &notify, &shutdown);
+
+        let mcp = marktd::mcp_server::router(
+            Arc::new(marktd::mcp_server::MdmdMcpState {
+                pool: pool.clone(),
+                tenant: tenant.clone(),
+                auth: mako_service::mcp_auth::McpAuth::from_auth_config_oidc(
+                    &cfg.mcp,
+                    verifier.clone(),
+                    Some(Arc::clone(&cedar)),
+                    &tenant,
+                ),
+            }),
+            shutdown,
+        );
+
+        let app = Router::new()
+            .merge(malo_routes())
+            .merge(melo_routes())
+            .merge(device_routes())
+            .merge(partner_routes())
+            .merge(preisblatt_routes())
+            .merge(registry_routes())
+            .merge(esa_routes())
+            .merge(subscription_routes())
+            .merge(admin_routes())
+            .route(
+                &cfg.webhook.inbound_path,
+                post(ingest_event::<_, _, _, _, _>),
+            )
+            .merge(swagger_ui())
+            .with_state(state)
+            .layer(Extension(verifier))
+            .layer(Extension(InboundWebhookSecret(inbound_secret)))
+            .layer(Extension(cedar))
+            .layer(Extension(TenantGln(tenant.clone())))
+            .layer(Extension(notify))
+            .layer(Extension(makod_client))
+            .layer(Extension(http))
+            .layer(Extension(Arc::new(cfg.mmma_import.clone())))
+            .layer(Extension(pool.clone()))
+            // Bound request bodies so an accidental bulk upload cannot exhaust
+            // memory. The largest legitimate body is a BO4E price sheet.
+            .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+            .merge(mcp);
+
+        let app = repository_layers(app, &pool);
+
+        info!(%tenant, "marktd router built");
+        Ok(app)
+    }
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    mako_service::run::<Marktd>().await
+}
+
+// ── Routes ────────────────────────────────────────────────────────────────────
+//
+// Collections are plural throughout (`/malos`, `/melos`, `/zaehler`), and a
+// sub-resource hangs off the collection member, so a caller never has to
+// memorise the pluralisation per endpoint.
+
+type S = Arc<
+    AppState<
+        pg::PgMaloRepository,
+        pg::PgMeloRepository,
+        pg::PgSubscriptionRepository,
+        pg::PgCorrelationIndex,
+        pg::PgPartnerRepository,
+    >,
+>;
+
+fn malo_routes() -> Router<S> {
+    Router::new()
+        .route("/api/v1/malos", get(list_malo::<_, _, _, _, _>))
         .route(
-            "/api/v1/malo/{id}/lastprofil",
+            "/api/v1/malos/{id}",
+            get(get_malo::<_, _, _, _, _>).put(put_malo::<_, _, _, _, _>),
+        )
+        // SLP profile for the NNE tariff zone and billingd.
+        .route(
+            "/api/v1/malos/{id}/lastprofil",
             get(get_malo_lastprofil::<_, _, _, _, _>),
         )
-        // MeLo
-        .route("/api/v1/melo/{id}", put(put_melo::<_, _, _, _, _>))
-        .route("/api/v1/melo/{id}", get(get_melo::<_, _, _, _, _>))
+        // NB grid topology (read by the processd NB module for Anmeldung STP).
         .route(
-            "/api/v1/melos/{id}/standorteigenschaften",
-            get(get_melo_standorteigenschaften::<_, _, _, _, _>),
+            "/api/v1/malos/{id}/grid",
+            get(get_malo_grid).put(put_malo_grid),
         )
-        // Subscriptions
+        // BO4E Bilanzierung — first-class temporal balancing resource.
         .route(
-            "/api/v1/subscriptions",
-            get(list_subscriptions::<_, _, _, _, _>),
+            "/api/v1/malos/{malo_id}/bilanzierung",
+            get(get_bilanzierung_at).put(put_bilanzierung),
         )
         .route(
-            "/api/v1/subscriptions/{id}",
-            put(put_subscription::<_, _, _, _, _>),
+            "/api/v1/malos/{malo_id}/bilanzierung/history",
+            get(get_bilanzierung_history),
         )
         .route(
-            "/api/v1/subscriptions/{id}",
-            get(get_subscription::<_, _, _, _, _>),
+            "/api/v1/malos/{malo_id}/technische-ressourcen",
+            get(list_technische_ressourcen_by_malo),
         )
-        .route(
-            "/api/v1/subscriptions/{id}/test",
-            post(test_subscription::<_, _, _, _, _>),
-        )
-        // Correlations
-        .route(
-            "/api/v1/correlations",
-            get(list_correlations::<_, _, _, _, _>),
-        )
-        .route(
-            "/api/v1/correlations/{id}",
-            get(get_correlation::<_, _, _, _, _>),
-        )
-        // Partners
-        // ESA consent registry (§49 Abs. 2 Nr. 9 MsbG)
-        .route(
-            "/api/v1/esa/einwilligungen",
-            axum::routing::post(grant_einwilligung).get(list_einwilligungen),
-        )
-        .route(
-            "/api/v1/esa/einwilligungen/{id}",
-            get(get_einwilligung).delete(revoke_einwilligung),
-        )
-        // §20b EnWG Netzzugangsplattform request registry
-        .route(
-            "/api/v1/netzzugang/antraege",
-            axum::routing::put(upsert_antrag).get(list_antraege),
-        )
-        .route("/api/v1/netzzugang/antraege/{id}", get(get_antrag))
-        .route(
-            "/api/v1/netzzugang/antraege/{id}/status",
-            axum::routing::patch(set_antrag_status),
-        )
-        // Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0 Tenor 13–16)
-        .route(
-            "/api/v1/msb-rahmenvertraege-gas",
-            axum::routing::put(upsert_msb_rv_gas).get(list_msb_rv_gas),
-        )
-        .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
-        .route(
-            "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
-            put(put_framework).get(get_framework),
-        )
-        // Inbound-message gate: revoked consent / unestablished framework
-        // → allowed:false (the Ablehnung clearing case).
-        .route("/api/v1/esa/consent-check", get(consent_check))
-        .route("/api/v1/partners", get(list_partners::<_, _, _, _, _>))
-        .route(
-            "/api/v1/partners/{mp_id}",
-            put(put_partner::<_, _, _, _, _>),
-        )
-        .route(
-            "/api/v1/partners/{mp_id}",
-            get(get_partner::<_, _, _, _, _>),
-        )
-        // Price sheets (PreisblattNetznutzung)
-        .route(
-            "/api/v1/preisblaetter/{nb_mp_id}",
-            get(get_preisblatt).put(put_preisblatt),
-        )
-        // Price sheets (PreisblattMessung — MSB metering tariffs, B5)
-        .route(
-            "/api/v1/preisblaetter-messung/{msb_mp_id}",
-            get(get_preisblatt_messung).put(put_preisblatt_messung),
-        )
-        // Konzessionsabgabe price sheets (B3 — KAV §2)
-        .route(
-            "/api/v1/preisblaetter-ka/{nb_mp_id}",
-            get(get_preisblatt_ka).put(put_preisblatt_ka),
-        )
-        // MMMA Gas settlement prices (C18 — Trading Hub Europe, monthly)
-        .route("/api/v1/mmma-preise/gas", get(mmma_preise::list_mmma_gas))
-        .route(
-            "/api/v1/mmma-preise/gas/{year}/{month}",
-            get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
-        )
-        // MMM Strom settlement prices (C18 — VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4, monthly)
-        .route(
-            "/api/v1/mmm-preise/strom/{year}/{month}",
-            get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
-        )
-        // B12: Manual import trigger — immediately runs the monthly import cycle.
-        // Useful for catch-up after downtime or testing the configured import URLs.
-        .route(
-            "/api/v1/mmma-preise/import-trigger",
-            axum::routing::post(mmma_preise::post_import_trigger),
-        )
-        // MSB service price sheets (PreisblattDienstleistung)
-        .route(
-            "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
-            get(get_preisblatt_dienstleistung).put(put_preisblatt_dienstleistung),
-        )
-        // MSB hardware rental price sheets (PreisblattHardware)
-        .route(
-            "/api/v1/preisblaetter-hardware/{msb_mp_id}",
-            get(get_preisblatt_hardware).put(put_preisblatt_hardware),
-        )
-        // B2: AS4 address lookup (Marktteilnehmer.makoadresse)
-        .route(
-            "/api/v1/partners/{mp_id}/as4-address",
-            get(get_as4_address::<_, _, _, _, _>),
-        )
-        // Typed BO4E Marktteilnehmer view of a stored partner
-        .route(
-            "/api/v1/partners/{mp_id}/marktteilnehmer",
-            get(get_partner_marktteilnehmer::<_, _, _, _, _>),
-        )
-        // PRICAT version history + manual dispatch (Phase 2)
-        .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
-        .route(
-            "/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}",
-            get(get_dispatch_log),
-        )
-        .route(
-            "/api/v1/pricat/{nb_mp_id}/dispatch",
-            post(post_pricat_dispatch),
-        )
-        // NB network contracts (typed: netzebene, bilanzierungsmethode, billing_schedule)
-        .route(
-            "/api/v1/nb-contracts/{id}",
-            get(get_nb_contract).put(put_nb_contract),
-        )
-        .route("/api/v1/nb-contracts", get(list_nb_contracts))
-        // VersorgungsStatus per MaLo (Phase 1) + history / point-in-time (Phase 3)
+        .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
+        .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
+        // VersorgungsStatus per MaLo, with point-in-time and full history.
         .route(
             "/api/v1/versorgung/{malo_id}",
-            get(get_versorgungsstatus::<_, _, _, _, _, marktd::pg::PgVersorgungsStatusRepository>)
+            get(get_versorgungsstatus::<_, _, _, _, _, pg::PgVersorgungsStatusRepository>)
                 .put(put_versorgungsstatus),
         )
         .route(
             "/api/v1/versorgung/{malo_id}/history",
-            get(get_versorgungsstatus_history::<
-                _,
-                _,
-                _,
-                _,
-                _,
-                marktd::pg::PgVersorgungsStatusRepository,
-            >),
+            get(get_versorgungsstatus_history::<_, _, _, _, _, pg::PgVersorgungsStatusRepository>),
         )
-        // NB Energiemix authority (§42 EnWG — N8)
-        // NB publishes annual grid-area renewable mix; LFs use for Reststrommix disclosure.
+}
+
+fn melo_routes() -> Router<S> {
+    Router::new()
         .route(
-            "/api/v1/energiemix/{nb_mp_id}",
-            get(get_nb_energiemix).put(put_nb_energiemix),
+            "/api/v1/melos/{id}",
+            get(get_melo::<_, _, _, _, _>).put(put_melo::<_, _, _, _, _>),
         )
         .route(
-            "/api/v1/energiemix/{nb_mp_id}/history",
-            get(get_nb_energiemix_history),
+            "/api/v1/melos/{id}/standorteigenschaften",
+            get(get_melo_standorteigenschaften::<_, _, _, _, _>),
         )
-        // Netz-Element-Lokationen (Redispatch 2.0, Phase 3)
-        .route("/api/v1/nelo", get(list_nelos))
-        .route("/api/v1/nelo/{id}", get(get_nelo).put(put_nelo))
-        .route("/api/v1/tranche", get(list_tranchen))
-        .route("/api/v1/tranche/{id}", get(get_tranche).put(put_tranche))
-        // MaLo grid topology (NB STP, N7)
-        .route(
-            "/api/v1/malo/{id}/grid",
-            get(get_malo_grid).put(put_malo_grid),
-        )
-        // MaBiS-Zählpunkt per Bilanzierungsgebiet (mabis-syncd LOC+172)
-        .route("/api/v1/mabis-zp", get(list_mabis_zp))
-        .route(
-            "/api/v1/bilanzierungsgebiet/{eic}/mabis-zp",
-            get(get_mabis_zp).put(put_mabis_zp),
-        )
-        // Grundversorger Feststellung (§36 Abs. 2 EnWG — EoG gap closure)
-        .route(
-            "/api/v1/grundversorger/{nb_mp_id}",
-            get(get_grundversorger).put(put_grundversorger),
-        )
-        // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1)
+        // Per-MeLo dated MSB timeline (WiM Teil 2 UC 4.1.1).
         .route(
             "/api/v1/melos/{melo_id}/msb",
             get(get_melo_msb_at).put(put_melo_msb),
@@ -603,62 +316,17 @@ async fn main() -> anyhow::Result<()> {
             "/api/v1/melos/{melo_id}/msb/history",
             get(get_melo_msb_history),
         )
-        // BO4E Bilanzierung (BO #3) — first-class temporal balancing resource
-        .route(
-            "/api/v1/malo/{malo_id}/bilanzierung",
-            get(get_bilanzierung_at).put(put_bilanzierung),
-        )
-        .route(
-            "/api/v1/malo/{malo_id}/bilanzierung/history",
-            get(get_bilanzierung_history),
-        )
-        // SteuerbareRessource registry (B4b — WiM iMS Steuerungsauftrag)
-        .route(
-            "/api/v1/steuerbare-ressourcen/{sr_id}",
-            get(get_steuerbare_ressource).put(put_steuerbare_ressource),
-        )
-        // typed Konfigurationsprodukte sub-resource — used by makod before
-        // dispatching wim.steuerungsauftrag.bestaetigen to validate produktcode
-        .route(
-            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
-            get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
-        )
-        // individual product DELETE by produktcode
-        .route(
-            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
-            axum::routing::delete(delete_konfigurationsprodukt),
-        )
-        // TechnischeRessource registry (B9 — EMobility/Redispatch 2.0)
-        .route(
-            "/api/v1/technische-ressourcen/{tr_id}",
-            get(get_technische_ressource).put(put_technische_ressource),
-        )
-        .route(
-            "/api/v1/malos/{malo_id}/technische-ressourcen",
-            get(list_technische_ressourcen_by_malo),
-        )
-        // Lokationszuordnung graph API (B5 — MaLo↔MeLo↔NeLo↔SR↔TR topology)
-        .route(
-            "/api/v1/lokationszuordnungen",
-            axum::routing::put(put_lokationszuordnung),
-        )
-        .route(
-            "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
-            axum::routing::delete(delete_lokationszuordnung),
-        )
-        .route("/api/v1/malos/{id}/lokationen", get(get_malo_lokationen))
-        .route("/api/v1/malos/{id}/buendel", get(get_malo_buendel))
         .route("/api/v1/melos/{id}/lokationen", get(get_melo_lokationen))
-        // Device registry: Zähler + Geräte (B3 — WiM MSB/NB device handover)
         .route("/api/v1/melos/{melo_id}/zaehler", get(list_zaehler))
         .route(
             "/api/v1/melos/{melo_id}/sharing-eligibility",
             get(get_sharing_eligibility),
         )
-        .route(
-            "/api/v1/zaehler/{zaehler_id}",
-            axum::routing::put(put_zaehler),
-        )
+}
+
+fn device_routes() -> Router<S> {
+    Router::new()
+        .route("/api/v1/zaehler/{zaehler_id}", put(put_zaehler))
         .route("/api/v1/zaehler/{zaehler_id}/geraete", get(list_geraete))
         .route(
             "/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}",
@@ -673,11 +341,6 @@ async fn main() -> anyhow::Result<()> {
             get(get_zaehlwerke),
         )
         .route(
-            "/api/v1/geraete/{geraet_id}",
-            axum::routing::put(put_geraet),
-        )
-        // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU register definitions)
-        .route(
             "/api/v1/zaehler/{zaehler_id}/register",
             get(list_zaehler_register).put(put_zaehler_register),
         )
@@ -686,16 +349,203 @@ async fn main() -> anyhow::Result<()> {
             get(get_zaehlzeitdefinitionen),
         )
         .route(
-            "/api/v1/zaehler-register/{register_id}/saisons",
-            get(list_zaehler_saisons).put(put_zaehler_saison),
-        )
-        .route(
             "/api/v1/zaehler/{zaehler_id}/tariff-zone",
             get(get_tariff_zone),
         )
-        // Inbound makod events
-        .route(&inbound_path, post(ingest_event::<_, _, _, _, _>))
-        // Dead-letter queue admin (F-003 — § 147 AO / GoBD compliance)
+        .route(
+            "/api/v1/zaehler-register/{register_id}/saisons",
+            get(list_zaehler_saisons).put(put_zaehler_saison),
+        )
+        .route("/api/v1/geraete/{geraet_id}", put(put_geraet))
+        // SteuerbareRessource + the §14a Konfigurationsprodukte processd reads
+        // before auto-confirming a wim-steuerungsauftrag ORDERS.
+        .route(
+            "/api/v1/steuerbare-ressourcen/{sr_id}",
+            get(get_steuerbare_ressource).put(put_steuerbare_ressource),
+        )
+        .route(
+            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte",
+            get(get_konfigurationsprodukte).put(put_konfigurationsprodukte),
+        )
+        .route(
+            "/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}",
+            delete(delete_konfigurationsprodukt),
+        )
+        .route(
+            "/api/v1/technische-ressourcen/{tr_id}",
+            get(get_technische_ressource).put(put_technische_ressource),
+        )
+        .route("/api/v1/lokationszuordnungen", put(put_lokationszuordnung))
+        .route(
+            "/api/v1/lokationszuordnungen/{von_id}/{nach_id}",
+            delete(delete_lokationszuordnung),
+        )
+}
+
+fn partner_routes() -> Router<S> {
+    Router::new()
+        .route("/api/v1/partners", get(list_partners::<_, _, _, _, _>))
+        .route(
+            "/api/v1/partners/{mp_id}",
+            get(get_partner::<_, _, _, _, _>).put(put_partner::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/partners/{mp_id}/as4-address",
+            get(get_as4_address::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/partners/{mp_id}/marktteilnehmer",
+            get(get_partner_marktteilnehmer::<_, _, _, _, _>),
+        )
+}
+
+fn preisblatt_routes() -> Router<S> {
+    Router::new()
+        .route(
+            "/api/v1/preisblaetter/{nb_mp_id}",
+            get(get_preisblatt).put(put_preisblatt),
+        )
+        .route(
+            "/api/v1/preisblaetter-messung/{msb_mp_id}",
+            get(get_preisblatt_messung).put(put_preisblatt_messung),
+        )
+        .route(
+            "/api/v1/preisblaetter-ka/{nb_mp_id}",
+            get(get_preisblatt_ka).put(put_preisblatt_ka),
+        )
+        .route(
+            "/api/v1/preisblaetter-dienstleistung/{msb_mp_id}",
+            get(get_preisblatt_dienstleistung).put(put_preisblatt_dienstleistung),
+        )
+        .route(
+            "/api/v1/preisblaetter-hardware/{msb_mp_id}",
+            get(get_preisblatt_hardware).put(put_preisblatt_hardware),
+        )
+        // MMMA Gas (Trading Hub Europe) and MMM Strom (VNB, GPKE Teil 1 Kap. 8.4).
+        .route("/api/v1/mmma-preise/gas", get(mmma_preise::list_mmma_gas))
+        .route(
+            "/api/v1/mmma-preise/gas/{year}/{month}",
+            get(mmma_preise::get_mmma_gas).put(mmma_preise::put_mmma_gas),
+        )
+        .route(
+            "/api/v1/mmm-preise/strom/{year}/{month}",
+            get(mmma_preise::get_mmm_strom).put(mmma_preise::put_mmm_strom),
+        )
+        .route(
+            "/api/v1/mmma-preise/import-trigger",
+            post(mmma_preise::post_import_trigger),
+        )
+        // PRICAT version history + manual (re-)dispatch.
+        .route("/api/v1/pricat/{nb_mp_id}/history", get(get_pricat_history))
+        .route(
+            "/api/v1/pricat/{nb_mp_id}/dispatch-log/{version_id}",
+            get(get_dispatch_log),
+        )
+        .route(
+            "/api/v1/pricat/{nb_mp_id}/dispatch",
+            post(post_pricat_dispatch),
+        )
+}
+
+fn registry_routes() -> Router<S> {
+    Router::new()
+        .route("/api/v1/nb-contracts", get(list_nb_contracts))
+        .route(
+            "/api/v1/nb-contracts/{id}",
+            get(get_nb_contract).put(put_nb_contract),
+        )
+        // §42 EnWG grid-area Energiemix (LFs disclose the Reststrommix from it).
+        .route(
+            "/api/v1/energiemix/{nb_mp_id}",
+            get(get_nb_energiemix).put(put_nb_energiemix),
+        )
+        .route(
+            "/api/v1/energiemix/{nb_mp_id}/history",
+            get(get_nb_energiemix_history),
+        )
+        // Netz-Element-Lokationen + Tranchen (Redispatch 2.0, GPKE Teil 4).
+        .route("/api/v1/nelos", get(list_nelos))
+        .route("/api/v1/nelos/{id}", get(get_nelo).put(put_nelo))
+        .route("/api/v1/tranchen", get(list_tranchen))
+        .route("/api/v1/tranchen/{id}", get(get_tranche).put(put_tranche))
+        // MaBiS-Zählpunkt per Bilanzierungsgebiet (read by mabis-syncd).
+        .route("/api/v1/mabis-zp", get(list_mabis_zp))
+        .route(
+            "/api/v1/bilanzierungsgebiete/{eic}/mabis-zp",
+            get(get_mabis_zp).put(put_mabis_zp),
+        )
+        // §36 Abs. 2 EnWG Grundversorger Feststellung (read by the processd EoG
+        // gap closure).
+        .route(
+            "/api/v1/grundversorger/{nb_mp_id}",
+            get(get_grundversorger).put(put_grundversorger),
+        )
+        // §20b EnWG Netzzugangsplattform request registry.
+        .route(
+            "/api/v1/netzzugang/antraege",
+            put(upsert_antrag).get(list_antraege),
+        )
+        .route("/api/v1/netzzugang/antraege/{id}", get(get_antrag))
+        .route(
+            "/api/v1/netzzugang/antraege/{id}/status",
+            patch(set_antrag_status),
+        )
+        // Gas MSB-Rahmenvertrag registry (GeLi Gas 3.0 Tenor 13–16).
+        .route(
+            "/api/v1/msb-rahmenvertraege-gas",
+            put(upsert_msb_rv_gas).get(list_msb_rv_gas),
+        )
+        .route("/api/v1/msb-rahmenvertraege-gas/{id}", get(get_msb_rv_gas))
+        .route(
+            "/api/v1/correlations",
+            get(list_correlations::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/correlations/{id}",
+            get(get_correlation::<_, _, _, _, _>),
+        )
+}
+
+fn esa_routes() -> Router<S> {
+    Router::new()
+        .route(
+            "/api/v1/esa/einwilligungen",
+            post(grant_einwilligung).get(list_einwilligungen),
+        )
+        .route(
+            "/api/v1/esa/einwilligungen/{id}",
+            get(get_einwilligung).delete(revoke_einwilligung),
+        )
+        .route(
+            "/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
+            put(put_framework).get(get_framework),
+        )
+        // Inbound-message gate: revoked consent / unestablished framework
+        // → allowed:false (the Ablehnung clearing case).
+        .route("/api/v1/esa/consent-check", get(consent_check))
+}
+
+fn subscription_routes() -> Router<S> {
+    Router::new()
+        .route(
+            "/api/v1/subscriptions",
+            get(list_subscriptions::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/subscriptions/{id}",
+            get(get_subscription::<_, _, _, _, _>)
+                .put(put_subscription::<_, _, _, _, _>)
+                .delete(delete_subscription::<_, _, _, _, _>),
+        )
+        .route(
+            "/api/v1/subscriptions/{id}/test",
+            post(test_subscription::<_, _, _, _, _>),
+        )
+}
+
+fn admin_routes() -> Router<S> {
+    Router::new()
+        // Dead-letter queue (§ 147 AO / GoBD: a delivery is never dropped).
         .route("/admin/fanout/dlq", get(list_dlq))
         .route(
             "/admin/fanout/dlq/{event_id}/{subscriber_id}",
@@ -705,102 +555,90 @@ async fn main() -> anyhow::Result<()> {
             "/admin/fanout/dlq/{event_id}/{subscriber_id}/retry",
             post(retry_dlq_entry),
         )
-        // CloudEvent replay log admin (B11)
+        // Full-envelope CloudEvent replay log.
         .route("/admin/events", get(list_event_log))
-        // Prometheus-compatible metrics (F-006)
-        .route("/metrics", get(metrics_handler))
-        // Swagger UI
-        .merge(swagger_ui())
-        // State + extensions
-        .with_state(state.clone())
-        .layer(Extension(verifier))
-        .layer(Extension(InboundWebhookSecret(inbound_secret)))
-        // Pool extension for idempotency check in ingest_event
-        .layer(Extension(pool.clone()))
-        // Preisblatt repository extension
-        .layer(Extension(preisblatt_repo))
-        // PreisblattMessung repository extension (B5 — MSB metering tariffs)
-        .layer(Extension(preisblatt_messung_repo))
-        // KA price sheet repository extension (B3)
-        .layer(Extension(preisblatt_ka_repo))
-        // MMMA Gas + MMM Strom settlement price repos (C18)
-        .layer(Extension(mmma_gas_repo))
-        .layer(Extension(mmm_strom_repo))
-        // B12: MMMA import config for manual trigger endpoint
-        .layer(Extension(Arc::new(cfg.mmma_import.clone())))
-        // MSB Dienstleistung + Hardware price sheet repos
-        .layer(Extension(preisblatt_dl_repo))
-        .layer(Extension(preisblatt_hw_repo))
-        // PRICAT version history + dispatch extension (Phase 2)
-        .layer(Extension(pricat_repo))
-        // NB contract repository extension
-        .layer(Extension(nb_contract_repo))
-        // VersorgungsStatus repository extension (Phase 1)
-        .layer(Extension(vs_repo))
-        // NeLo repository extension (Phase 3)
-        .layer(Extension(nelo_repo))
-        // Tranche repository extension (Stammdatenänderung object-generic apply)
-        .layer(Extension(tranche_repo))
-        // MaLo grid topology extension (N7)
-        .layer(Extension(malo_grid_repo))
-        .layer(Extension(mabis_zp_repo))
-        // Grundversorger Feststellung extension (§36 EnWG EoG)
-        .layer(Extension(grundversorger_repo))
-        // Per-MeLo dated MSB timeline extension (WiM Teil 2 UC 4.1.1)
-        .layer(Extension(melo_msb_repo))
-        // BO4E Bilanzierung temporal resource extension (BO #3)
-        .layer(Extension(bilanzierung_repo))
-        // SteuerbareRessource registry extension (B4b)
-        .layer(Extension(sr_repo))
-        // TechnischeRessource registry extension (B9)
-        .layer(Extension(tr_repo))
-        // Lokationszuordnung graph extension (B5)
-        .layer(Extension(lz_repo))
-        // Device registry extension (B3)
-        .layer(Extension(device_repo))
-        // ESA consent registry repo + makod client (for the 17008 wire)
-        .layer(Extension(einwilligung_repo))
-        .layer(Extension(netzzugang_repo))
-        .layer(Extension(msb_rv_gas_repo))
-        .layer(Extension(makod_client_ext))
-        // ZaehlzeitRegister + ZaehlzeitSaison (iMSys TOU)
-        .layer(Extension(zaehzeit_repo))
-        // Fan-out wake-up hint for handlers that emit CloudEvents without AppState.
-        // Paired with the global Extension(pool) layer above, handlers call
-        // marktd::outbox::enqueue(&pool, &evt, &notify).
-        .layer(Extension(notify.clone()))
-        // Cedar ABAC enforcer
-        .layer(Extension(cedar))
-        // Tenant GLN for handlers without AppState access (e.g. preisblatt)
-        .layer(Extension(TenantGln(cfg.makod.tenant.clone())))
-        // HTTP client extension for test_subscription direct delivery
-        .layer(Extension(http.clone()))
-        // Limit request bodies to 2 MiB to guard against accidental large payloads.
-        .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
-        // MCP server
-        .merge(marktd::mcp_server::router(mcp_state, shutdown.clone()));
+}
 
-    // ── Listen ────────────────────────────────────────────────────────────────
-    let addr: SocketAddr = cfg.http.addr.parse().context("parsing listen address")?;
-    info!(%addr, "marktd: listening");
+// ── Wiring ────────────────────────────────────────────────────────────────────
 
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding to {addr}"))?;
+/// Attach the repository handles that handlers pull as `Extension<Arc<Pg…>>`.
+///
+/// Kept in one function rather than trailing the router so that adding a
+/// repository is a one-line edit in a list, not another link in a 30-deep
+/// `.layer()` chain whose order carries no meaning.
+fn repository_layers(app: Router, pool: &PgPool) -> Router {
+    macro_rules! repos {
+        ($app:expr, $($repo:ident),+ $(,)?) => {{
+            let app = $app;
+            $( let app = app.layer(Extension(Arc::new(pg::$repo::new(pool.clone())))); )+
+            app
+        }};
+    }
 
-    // ── Shutdown handler ──────────────────────────────────────────────────────
-    let shutdown_clone = shutdown.clone();
-    tokio::spawn(async move {
-        tokio::signal::ctrl_c().await.ok();
-        info!("marktd: SIGINT received, shutting down");
-        shutdown_clone.cancel();
-    });
+    repos!(
+        app,
+        PgPreisblattRepository,
+        PgPreisblattMessungRepository,
+        PgPreisblattKaRepository,
+        PgPreisblattDienstleistungRepository,
+        PgPreisblattHardwareRepository,
+        PgMmmaPreisGasRepository,
+        PgMmmPreisStromRepository,
+        PgPriCatRepository,
+        PgNbContractRepository,
+        PgVersorgungsStatusRepository,
+        PgNeLoRepository,
+        PgTrancheRepository,
+        PgMaloGridRepository,
+        PgMabisZpRepository,
+        PgGrundversorgerRepository,
+        PgMeloMsbRepository,
+        PgBilanzierungRepository,
+        PgSteuerbareRessourceRepository,
+        PgTechnischeRessourceRepository,
+        PgLokationszuordnungRepository,
+        PgDeviceRepository,
+        PgEinwilligungRepository,
+        PgNetzzugangRepository,
+        PgMsbRahmenvertragGasRepository,
+        PgZaehlzeitRepository,
+    )
+}
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async move { shutdown.cancelled().await })
-        .await
-        .context("serving HTTP")?;
+/// Start the durable fan-out worker, the MMMA/MMM price import worker, and the
+/// `processed_events` retention sweep.
+fn spawn_workers(
+    cfg: &Arc<Config>,
+    pool: &PgPool,
+    sub_repo: pg::PgSubscriptionRepository,
+    http: &reqwest::Client,
+    notify: &Arc<tokio::sync::Notify>,
+    shutdown: &tokio_util::sync::CancellationToken,
+) {
+    spawn_fanout(
+        pool.clone(),
+        sub_repo,
+        http.clone(),
+        FanoutConfig {
+            delivery_timeout: Duration::from_secs(cfg.webhook.delivery_timeout_secs),
+            max_attempts: i16::try_from(cfg.webhook.max_retry_attempts).unwrap_or(i16::MAX),
+            ..Default::default()
+        },
+        Arc::clone(notify),
+        shutdown.clone(),
+    );
 
-    info!("marktd: shutdown complete");
-    Ok(())
+    marktd::mmma_worker::spawn_mmma_worker(
+        Arc::new(cfg.mmma_import.clone()),
+        http.clone(),
+        Arc::new(pg::PgMmmaPreisGasRepository::new(pool.clone())),
+        Arc::new(pg::PgMmmPreisStromRepository::new(pool.clone())),
+        cfg.markt.tenant.clone(),
+        pool.clone(),
+        Arc::clone(notify),
+        shutdown.clone(),
+    );
+
+    marktd::retention::spawn_processed_events_sweep(pool.clone(), shutdown.clone());
+    marktd::metrics::spawn_sampler(pool.clone(), shutdown.clone());
 }

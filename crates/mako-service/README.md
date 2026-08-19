@@ -12,7 +12,7 @@ code focuses on domain logic instead of plumbing.
              │                     mako-service SDK                          │
              │                                                              │
              │  config   shutdown  oidc       mcp_auth   telemetry           │
-             │  health   http      cedar      metrics    event_bus           │
+             │  health   http      cedar      metrics    outbox              │
              │  webhook  builder   rate_limit cloudevent mako-plugin         │
              └──────────────────────────────────────────────────────────────┘
                   ↑            ↑             ↑           ↑
@@ -39,7 +39,6 @@ code focuses on domain logic instead of plumbing.
 | `cloudevent` | `CloudEvent`, `source`, `post_ce_with_retry` | Canonical CloudEvents 1.0 envelope + signed, retried publisher |
 | `outbox` | `enqueue`, `OutboxWorker`, `ensure_schema` | Transactional outbox — persist-before-dispatch + drain worker + DLQ |
 | `builder` | `ServiceBuilder` | Composable Axum router with health, metrics, rate-limit |
-| `event_bus` | `EventBus`, `WebhookBus` | CloudEvent fan-out (webhook + optional Kafka) |
 | `metrics` | Prometheus handler | Real `GET /metrics` when feature `metrics` is enabled |
 | `rate_limit` | `RateLimitConfig` | GCRA rate limiting via `governor` |
 

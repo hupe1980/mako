@@ -248,6 +248,8 @@ pub async fn put_nb_contract(
         .clone()
         .unwrap_or_else(|| "NETZNUTZUNGSVERTRAG".into());
     let tenant = rec.tenant.clone();
+    let sparte = rec.sparte.to_string();
+    let evt_malo_id = rec.malo_id.to_string();
 
     match repo.upsert(rec).await {
         Ok(version) => {
@@ -260,9 +262,15 @@ pub async fn put_nb_contract(
                 serde_json::json!({
                     "version": version,
                     "vertragsart": vertragsart,
+                    "sparte": sparte,
                     "tenant": tenant,
                 }),
-            );
+            )
+            .with_extensions(mako_markt::cloudevents::EventExtensions {
+                marktmaloid: Some(evt_malo_id),
+                marktsparte: Some(sparte),
+                ..Default::default()
+            });
             if let Err(e) = crate::outbox::enqueue(&pool, &evt, &notify).await {
                 tracing::error!(error = %e, "nb_contract: durable enqueue failed");
                 return (

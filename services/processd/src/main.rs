@@ -43,6 +43,17 @@ impl Daemon for Processd {
             .map(config::resolve_env_secret)
             .transpose()
             .context("webhook.inbound_secret")?;
+        // Resolved, not passed through: the field documents `"env:VAR_NAME"`
+        // support, and an unresolved reference would be used as the HMAC key
+        // itself — signing every §38 expiry notification with the ASCII bytes
+        // `env:VAR_NAME`, which any verifying receiver rejects.
+        let eog_notify_webhook_secret = cfg
+            .eog
+            .notify_webhook_secret
+            .as_deref()
+            .map(config::resolve_env)
+            .transpose()
+            .context("eog.notify_webhook_secret")?;
 
         let tenant = if cfg.identity.tenant.is_empty() {
             cfg.identity.own_mp_id.clone()
@@ -79,13 +90,13 @@ impl Daemon for Processd {
                 nb_auto_accept: cfg.nb.auto_accept,
                 nb_gas_bearbeitungsfrist_wt: cfg.nb.gas_bearbeitungsfrist_wt,
                 lf_auto_respond: cfg.lf.auto_respond,
-                lf_queue_ttl_secs: cfg.lf.queue_ttl_secs,
+                msb_auto_accept: cfg.msb.auto_accept,
                 msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,
                 eog_auto_activate: cfg.eog.auto_activate,
                 eog_default_transaktionsgrund: cfg.eog.default_transaktionsgrund.clone(),
                 eog_warn_days_before_expiry: cfg.eog.warn_days_before_expiry,
                 eog_notify_webhook_url: cfg.eog.notify_webhook_url.clone(),
-                eog_notify_webhook_secret: cfg.eog.notify_webhook_secret.clone(),
+                eog_notify_webhook_secret,
                 self_register_webhook_url: cfg.subscription.webhook_url.clone(),
                 subscriber_id: cfg.subscription.subscriber_id.clone(),
                 subscriber_event_types: cfg.subscription.event_types.clone(),

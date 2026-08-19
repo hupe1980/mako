@@ -237,7 +237,8 @@ fn build_otel_provider(
 ///
 /// | Variable | Effect |
 /// |---|---|
-/// | `LOG_LEVEL` or `RUST_LOG` | Log level filter (default: `"info"`) |
+/// | `<SERVICE>_LOG_LEVEL` | Log level filter for this service specifically (e.g. `MARKTD_LOG_LEVEL`) |
+/// | `LOG_LEVEL` or `RUST_LOG` | Log level filter for all services (default: `"info"`) |
 /// | `OTEL_EXPORTER_OTLP_ENDPOINT` | Enables OTLP trace export when set |
 /// | `OTEL_SERVICE_NAME` | Overrides `service_name` in trace metadata |
 ///
@@ -257,7 +258,15 @@ fn build_otel_provider(
 /// Panics if called more than once per process.
 #[must_use]
 pub fn init_tracing_from_env(service_name: &str) -> OtelGuard {
-    let level = std::env::var("LOG_LEVEL")
+    // Service-prefixed first: every container image sets `<SERVICE>_LOG_LEVEL`,
+    // and `load_config` deliberately ignores that key so it does not collide
+    // with `deny_unknown_fields` — which left it read by nobody at all.
+    let prefixed = format!(
+        "{}_LOG_LEVEL",
+        service_name.to_uppercase().replace('-', "_")
+    );
+    let level = std::env::var(&prefixed)
+        .or_else(|_| std::env::var("LOG_LEVEL"))
         .or_else(|_| std::env::var("RUST_LOG"))
         .unwrap_or_else(|_| "info".to_owned());
 

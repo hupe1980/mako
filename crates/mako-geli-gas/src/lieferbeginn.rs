@@ -56,8 +56,13 @@ use time::OffsetDateTime;
 /// Stable workflow name used as the `WorkflowId.name` and in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "geli-gas-supplier-change";
 
-/// Deadline label for the 10-Werktage response window (GeLi Gas 3.0 (BK7-24-01-009)).
-pub const RESPONSE_WINDOW_LABEL: &str = "geli-gas-response-10-werktage";
+/// Deadline label for the GNB's business answer window.
+///
+/// The window itself is per PID and comes from [`crate::antwortfrist`] — Ablauf
+/// des 4. Werktags for an Anmeldung (44001), des 3. Werktags for an Abmeldung
+/// (44004), des 2. Werktags for the EoG Zuordnung (44013). The label carries no
+/// duration, because there is no single one to name.
+pub const RESPONSE_WINDOW_LABEL: &str = "geli-gas-antwortfrist";
 
 // ── PID sets ──────────────────────────────────────────────────────────────────
 

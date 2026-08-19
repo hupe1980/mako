@@ -100,7 +100,7 @@ flowchart LR
 MaBiS settles per territory, so `aggregate()` returns **one Summenzeitreihe per
 Bilanzierungsgebiet**, not one per run.
 
-Each MaLo's territory comes from `marktd` (`GET /api/v1/malo/{id}` →
+Each MaLo's territory comes from `marktd` (`GET /api/v1/malos/{id}` →
 `bilanzierungsgebiet`). `identity.bilanzierungsgebiet_id` is only a
 **fallback** for MaLos whose master data names none, and those MaLos are logged
 rather than silently folded into the fallback zone — energy filed against the
@@ -126,8 +126,8 @@ The assignment is **marktd master data**, not service configuration. Before each
 submission `mabis-syncd` resolves it over HTTP:
 
 ```
-GET /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
-PUT /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
+GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
+PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
 GET /api/v1/mabis-zp                             → every assignment for the tenant
 ```
 

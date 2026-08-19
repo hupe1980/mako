@@ -46,9 +46,9 @@ impl std::fmt::Display for Messtyp {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnmeldungAnfrage {
     /// BDEW Prüfidentifikator:
-    /// - `55001` GPKE Lieferbeginn Standard (Strom)
-    /// - `55016` GPKE Lieferbeginn Netzentnahme (Strom)
-    /// - `44001` GeLi Gas Lieferbeginn (Gas)
+    /// - `55001` Anmeldung verbrauchende Marktlokation (Strom)
+    /// - `55077` Anmeldung erzeugende Marktlokation (Strom)
+    /// - `44001` Anmeldung NN (Gas)
     pub pid: u32,
     /// mako process UUID (from `subject` CE field).
     pub process_id: Uuid,
@@ -93,12 +93,49 @@ pub struct AnmeldungAnfrage {
     pub ist_erzeugende_marktlokation: bool,
 }
 
+// ── AbmeldungAnfrage ──────────────────────────────────────────────────────────
+
+/// Parsed fields from a `de.mako.process.initiated` event for an **Abmeldung**
+/// PID — Strom `55004`, Gas `44004`.
+///
+/// Separate from [`AnmeldungAnfrage`] because the two carry different facts: an
+/// Anmeldung names the *incoming* supplier and a Bilanzierungsgebiet to check
+/// against the grid record; an Abmeldung names the *outgoing* one and nothing
+/// to reconcile topology with. Folding them into one struct would leave half
+/// its fields meaningless in either direction.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbmeldungAnfrage {
+    /// BDEW Prüfidentifikator: `55004` (Strom) or `44004` (Gas).
+    pub pid: u32,
+    /// mako process UUID (from the CloudEvent `subject`).
+    pub process_id: Uuid,
+    /// 11-digit Marktlokations-ID (Strom) or Gas-MaLo-ID.
+    pub malo_id: String,
+    /// MP-ID of the supplier ending the assignment.
+    pub lf_mp_id: String,
+    /// GLN of the grid operator the Abmeldung is directed to.
+    pub grid_operator_gln: String,
+    /// Requested Zuordnungsende („Abmeldedatum").
+    pub abmeldedatum: Date,
+    /// Energy commodity, derived from the PID.
+    pub sparte: Sparte,
+    /// Metering classification — drives the Gas retroactivity rules.
+    pub messtyp: Messtyp,
+    /// SG4 STS Transaktionsgrund (DE9013) — `E01`/`E02` Auszug, `E03`
+    /// Lieferantenwechsel. Drives the Gas date rules and the `A09`/`A10` split.
+    pub transaktionsgrund: Option<String>,
+    /// `true` for an Erzeugende (EEG-/KWKG-) Marktlokation (`9013=ZW3`), whose
+    /// Zuordnungsende must be a Monatserster a month ahead.
+    #[serde(default)]
+    pub ist_erzeugende_marktlokation: bool,
+}
+
 // ── MaloGridRecord ────────────────────────────────────────────────────────────
 
 /// NB grid topology record for a MaLo.
 ///
 /// Written by the NB's NIS/GIS adapter or provisioned manually via
-/// `PUT /api/v1/malo/{id}/grid` on `marktd`. Read by `processd` NB module.
+/// `PUT /api/v1/malos/{id}/grid` on `marktd`. Read by `processd` NB module.
 ///
 /// NOTE: This is NOT MaStR data. MaStR covers generation/consumption units,
 /// not NB grid topology or Bilanzierungsgebiet assignments.

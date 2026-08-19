@@ -176,16 +176,16 @@ how they relate.
 graph TB
     ERP["ERP System<br/>(SAP / Powercloud / custom)"]
     makod["makod :8080 / :4080<br/>EDIFACT ↔ AS4 · SlateDB<br/>GPKE / WiM / GeLi Gas / MABIS"]
-    marktd["marktd :8180 · PostgreSQL<br/>MaLo/MeLo/contracts · Vertrag<br/>typed rubo4e::current API<br/>EventBus fan-out"]
+    marktd["marktd :8180 · PostgreSQL<br/>MaLo/MeLo/contracts · Vertrag<br/>typed rubo4e::current API<br/>durable fan-out"]
     invoicd["invoicd :8280 · PostgreSQL<br/>INVOIC plausibility · REMADV<br/>§ 147 AO / GoBD receipts"]
     edmd["edmd :8380 · PostgreSQL<br/>Vec<Energiemenge> deliveries<br/>Lastgang · MeterBillingPeriod"]
     obsd["obsd :8480 · PostgreSQL<br/>process projections<br/>BNetzA §20 KPI reports"]
-    processd["processd :8580<br/>NB STP netz-checker<br/>LF E_0624 auto-response"]
+    processd["processd :8580<br/>NB STP netz-checker<br/>LF answers 55007 / 55010"]
     billingd["billingd :9280 · PostgreSQL<br/>energy billing · EN 16931<br/>XRechnung CII / PEPPOL UBL"]
     outputd["outputd :9880<br/>template store · ZUGFeRD PDF/A-3<br/>Textform proofs"]
     accountingd["accountingd :9380 · PostgreSQL<br/>double-entry ledger · Kontokorrent<br/>SEPA pain.008 / camt.05x"]
 
-    ERP -->|"PUT /api/v1/malo/{id}<br/>PUT /api/v1/nb-contracts/{id}<br/>(typed BO4E payload)"| marktd
+    ERP -->|"PUT /api/v1/malos/{id}<br/>PUT /api/v1/nb-contracts/{id}<br/>(typed BO4E payload)"| marktd
     ERP -->|"POST /api/v1/commands<br/>(initiate Lieferbeginn, …)"| makod
     ERP -->|"POST /receipts/{id}/confirm-payment"| invoicd
 
@@ -208,7 +208,7 @@ graph TB
     ERP -.->|"GET /open-items<br/>GET /trial-balance"| accountingd
 ```
 
-Every `de.mako.*` event from `makod` flows through `marktd`'s EventBus fan-out,
+Every `de.mako.*` event from `makod` flows through `marktd`'s durable fan-out,
 which is persist-before-fan-out: the event lands in the durable `event_log`
 outbox before any delivery, and each per-subscriber delivery is tracked (retried,
 then dead-lettered) in `event_delivery` so no regulatory notification is lost —

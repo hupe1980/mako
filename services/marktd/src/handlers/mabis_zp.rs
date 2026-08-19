@@ -1,4 +1,4 @@
-//! `GET|PUT /api/v1/bilanzierungsgebiet/{eic}/mabis-zp` and
+//! `GET|PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp` and
 //! `GET /api/v1/mabis-zp` — Bilanzierungsgebiet → MaBiS-Zählpunkt assignments.
 //!
 //! MSCONS Summenzeitreihen (PIDs 13003/13023) carry three distinct SG6 `LOC`
@@ -17,14 +17,18 @@
 //!
 //! - `GET` — any authenticated caller in the same tenant (`mabis-syncd`, ERP)
 //! - `PUT` — NB role only
+//!
+//! ## Strom only
+//!
+//! MaBiS is the *Marktregeln für die Durchführung der Bilanzkreisabrechnung
+//! **Strom***. Gas balancing runs under GaBi Gas and has no MaBiS-Zählpunkt, so
+//! there is no `sparte` on this resource — an earlier one accepted `GAS` and
+//! recorded an assignment that cannot exist.
 
 use std::sync::Arc;
 
 use axum::{Extension, Json, extract::Path, http::StatusCode, response::IntoResponse};
-use mako_markt::{
-    domain::Sparte,
-    repository::{MabisZpRecord, MabisZpRepository},
-};
+use mako_markt::repository::{MabisZpRecord, MabisZpRepository};
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use tracing::info;
@@ -43,16 +47,9 @@ pub type MabisZpRepoExt = Arc<PgMabisZpRepository>;
 pub struct PutMabisZpBody {
     /// The Meldepunkt filed as `LOC+172`.
     pub mabis_zp_id: String,
-    /// `STROM` or `GAS`; defaults to `STROM` (MaBiS is Strom-only today).
-    #[serde(default = "default_sparte")]
-    pub sparte: String,
     /// Origin of this assignment: `"manual"` | `"erp"` | import name.
     #[serde(default = "default_source")]
     pub source: String,
-}
-
-fn default_sparte() -> String {
-    "STROM".to_owned()
 }
 
 fn default_source() -> String {
@@ -63,7 +60,6 @@ fn default_source() -> String {
 pub struct MabisZpResponse {
     pub bilanzierungsgebiet: String,
     pub mabis_zp_id: String,
-    pub sparte: String,
     pub source: String,
     pub updated_at: String,
 }
@@ -74,7 +70,6 @@ impl From<MabisZpRecord> for MabisZpResponse {
         Self {
             bilanzierungsgebiet: r.bilanzierungsgebiet,
             mabis_zp_id: r.mabis_zp_id,
-            sparte: r.sparte.to_string(),
             source: r.source,
             updated_at: r.updated_at.format(&Rfc3339).unwrap_or_default(),
         }
@@ -83,7 +78,7 @@ impl From<MabisZpRecord> for MabisZpResponse {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `GET /api/v1/bilanzierungsgebiet/{eic}/mabis-zp`
+/// `GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp`
 pub async fn get_mabis_zp(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -142,7 +137,7 @@ pub async fn list_mabis_zp(
     }
 }
 
-/// `PUT /api/v1/bilanzierungsgebiet/{eic}/mabis-zp` — upsert the assignment.
+/// `PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp` — upsert the assignment.
 ///
 /// Requires the `write-mabis-zp` action in the Cedar policy. Idempotent.
 pub async fn put_mabis_zp(
@@ -160,17 +155,6 @@ pub async fn put_mabis_zp(
         )
             .into_response();
     }
-
-    let sparte: Sparte = match body.sparte.parse() {
-        Ok(s) => s,
-        Err(e) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": format!("invalid sparte: {e}") })),
-            )
-                .into_response();
-        }
-    };
 
     let mabis_zp_id = body.mabis_zp_id.trim().to_owned();
     if mabis_zp_id.is_empty() {
@@ -217,7 +201,6 @@ pub async fn put_mabis_zp(
     let rec = MabisZpRecord {
         bilanzierungsgebiet: eic.clone(),
         mabis_zp_id,
-        sparte,
         source: body.source,
         tenant: tenant.clone(),
         updated_at: OffsetDateTime::now_utc(),

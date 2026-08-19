@@ -294,8 +294,10 @@ curl -X POST http://localhost:8680/api/v1/billing/mmm-run/51238696012 \
 `bilanziert_kwh` is required and cannot be fetched: it is what the Bilanzkreis was charged from the
 load profile, which lives on the balancing side. `edmd` holds only the measured half. `sparte` also
 picks the balancing day `edmd` aggregates over — gas balances on the 06:00 Gastag, not the calendar
-day — and which price series is auto-fetched: Trading Hub Europe for Gas, the ÜNB configured as
-`vnb_mp_id` for Strom. The price fetch is memoised per run: one round-trip per
+day — and which price series is auto-fetched: Trading Hub Europe per Marktgebiet for Gas, and for Strom
+the nationwide BDEW series (§ 13 Abs. 3 StromNZV makes those prices *einheitlich*, so the
+application month is the whole key and there is no per-operator series to configure). The price
+fetch is memoised per run: one round-trip per
 `(Sparte, year, month)`, since a monthly sweep settles every MaLo against the same series.
 
 Every JSON request body rejects unknown fields: a misspelt `konzessionsabgabe` would otherwise drop
@@ -378,9 +380,6 @@ makod_url      = "http://makod:8080"
 makod_api_key  = "env:NETZBILANZD_MAKOD_API_KEY"
 edmd_url       = "http://edmd:8380"
 edmd_api_key   = "env:NETZBILANZD_EDMD_API_KEY"
-
-# Your Regelzone's ÜNB — required for the Strom MMM price auto-fetch.
-vnb_mp_id = "9907324000007"
 
 # All CloudEvents go here. Delivery is durable: each event is written to
 # `event_outbox` in the same transaction as the change it describes and drained

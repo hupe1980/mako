@@ -145,7 +145,7 @@ pub async fn draft_positions(
     // Auto-fetch runs before the transaction opens: it is network I/O, and
     // holding a transaction across it pins a pooled connection for the duration
     // of every marktd round-trip.
-    let mut resolver = Resolver::new(marktd, cfg.vnb_mp_id.as_deref());
+    let mut resolver = Resolver::new(marktd);
     for position in &mut *positions {
         resolver
             .resolve(position)
@@ -1076,7 +1076,7 @@ pub async fn post_korrektur(
         abschlaege: req.abschlaege.clone(),
         settlement: req.settlement,
     };
-    Resolver::new(&marktd, cfg.vnb_mp_id.as_deref())
+    Resolver::new(&marktd)
         .resolve(&mut position)
         .await
         .map_err(|e| ApiError::unprocessable(format!("{e:#}")))?;

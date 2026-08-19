@@ -170,10 +170,10 @@ async fn handle_gap_detected(
         .unwrap_or(mako_markt::domain::Sparte::Strom);
     let nb_mp_id = data["nb_mp_id"].as_str().unwrap_or(own_mp_id);
 
-    // Idempotency: one open case per MaLo. Re-detection of a closed case
-    // reopens it (a MaLo can fall into a gap repeatedly), and so does a stale
-    // `angemeldet` one — nothing else ever moves that state, so a dispatch whose
-    // Zuordnung never landed used to sit there permanently.
+    // Idempotency: one open case per MaLo. Re-detection reopens a closed case
+    // (a MaLo can fall into a gap repeatedly) and a stale `angemeldet` one —
+    // nothing else moves that state, so a dispatch whose Zuordnung never landed
+    // would otherwise sit there permanently.
     let inserted = sqlx::query(
         r"INSERT INTO eog_activations (tenant, malo_id, sparte, status, detail)
           VALUES ($1, $2, $3, 'detected', $4)

@@ -72,14 +72,14 @@ pub struct GraphQuery {
 /// Pass `?at=YYYY-MM-DD` to filter to edges valid on a specific date.
 pub async fn get_malo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(malo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-malo", &tenant_gln)
+        .check(&claims.principal(), "read-lokationszuordnung", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -114,14 +114,14 @@ pub struct BuendelResponse {
 /// reports `valid: false` rather than failing the request).
 pub async fn get_malo_buendel(
     Extension(repo): Extension<LzRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(malo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-malo", &tenant_gln)
+        .check(&claims.principal(), "read-lokationszuordnung", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -151,14 +151,14 @@ pub async fn get_malo_buendel(
 /// Returns all reachable edges ordered by depth.
 pub async fn get_melo_lokationen(
     Extension(repo): Extension<LzRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path(melo_id): Path<String>,
     Query(q): Query<GraphQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-melo", &tenant_gln)
+        .check(&claims.principal(), "read-lokationszuordnung", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -176,13 +176,13 @@ pub async fn get_melo_lokationen(
 /// Upserts a directed edge in the location graph.  Idempotent.
 pub async fn put_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Json(req): Json<UpsertEdgeRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-malo", &tenant_gln)
+        .check(&claims.principal(), "write-lokationszuordnung", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -214,13 +214,13 @@ pub async fn put_lokationszuordnung(
 /// Hard-deletes all temporal variants of an edge pair.
 pub async fn delete_lokationszuordnung(
     Extension(repo): Extension<LzRepoExt>,
-    Extension(claims): Extension<Claims>,
+    claims: Claims,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(enforcer): Extension<CedarEnforcer>,
     Path((von_id, nach_id)): Path<(String, String)>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-malo", &tenant_gln)
+        .check(&claims.principal(), "write-lokationszuordnung", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();

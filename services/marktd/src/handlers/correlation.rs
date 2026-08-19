@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use axum::{
+    Extension,
     extract::{Path, Query, State},
     http::StatusCode,
     response::IntoResponse,
@@ -22,6 +23,8 @@ use mako_markt::{
 use serde::Deserialize;
 use uuid::Uuid;
 
+use mako_service::cedar::CedarEnforcer;
+
 use super::{Claims, IntoMdmResponse as _};
 
 #[derive(Debug, Deserialize)]
@@ -34,7 +37,8 @@ pub struct CorrelationQuery {
 /// `GET /api/v1/correlations/:process_id`
 pub async fn get_correlation<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
-    _claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse
 where
@@ -44,6 +48,15 @@ where
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
+    if enforcer
+        .check(&claims.principal(), "read-correlation", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "read-correlation denied",
+        }
+        .into_response();
+    }
     match state.correlation_index.find_by_process_id(id).await {
         Ok(Some(e)) => axum::Json(e).into_response(),
         Ok(None) => mako_markt::error::MdmError::NotFound {
@@ -58,7 +71,8 @@ where
 /// `GET /api/v1/correlations`
 pub async fn list_correlations<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
-    _claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
     Query(q): Query<CorrelationQuery>,
 ) -> impl IntoResponse
 where
@@ -68,6 +82,15 @@ where
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
+    if enforcer
+        .check(&claims.principal(), "read-correlation", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "read-correlation denied",
+        }
+        .into_response();
+    }
     if q.erp_order_id.is_none() && q.malo_id.is_none() && q.status.is_none() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,

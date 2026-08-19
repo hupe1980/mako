@@ -116,7 +116,7 @@ pub const EEG_ERZEUGENDE_MARKTLOKATION_CODE: &str = "ZW3";
 /// All deadline arithmetic uses German local time.  An off-by-one-hour error
 /// at DST transitions would be a regulatory deadline violation.
 #[must_use]
-fn today_berlin(now: OffsetDateTime) -> Date {
+pub(crate) fn today_berlin(now: OffsetDateTime) -> Date {
     let berlin = timezones::db::europe::BERLIN;
     now.to_timezone(berlin).date()
 }
@@ -135,7 +135,7 @@ fn today_berlin(now: OffsetDateTime) -> Date {
 /// This is the operational form of the LFW24 rule „spätester ÜT ist der Tag
 /// vor dem letzten WT vor dem Zuordnungsbeginn": an Anmeldung received on
 /// day `a` may carry Zuordnungsbeginn `b` iff a full Werktag separates them.
-fn has_werktag_strictly_between(a: Date, b: Date, cal: HolidayCalendar) -> bool {
+pub(crate) fn has_werktag_strictly_between(a: Date, b: Date, cal: HolidayCalendar) -> bool {
     // The first Werktag strictly after `a` is the first Werktag on-or-after the
     // day following `a`. A Werktag lies strictly between iff it precedes `b`.
     let Some(day_after) = a.next_day() else {
@@ -182,7 +182,7 @@ fn check_date_strom(
 }
 
 /// First day of the month `months` whole months after `d`'s month.
-fn first_of_month_after(d: Date, months: u32) -> Date {
+pub(crate) fn first_of_month_after(d: Date, months: u32) -> Date {
     let mut year = d.year();
     let mut month = d.month();
     for _ in 0..months {
@@ -345,7 +345,7 @@ fn check_date_gas(
 /// - `anfrage` — parsed fields from the `de.mako.process.initiated` CloudEvent.
 /// - `versorgung` — current supply state from `GET /api/v1/versorgung/{malo_id}`
 ///   on `marktd`.  `None` if `marktd` returned 404 (MaLo unknown).
-/// - `grid` — NB grid topology record from `GET /api/v1/malo/{id}/grid` on
+/// - `grid` — NB grid topology record from `GET /api/v1/malos/{id}/grid` on
 ///   `marktd`.  `None` when the NB's NIS/GIS data has not yet been imported.
 /// - `partner_known` — `true` if the requesting LF GLN is in the operator's
 ///   partner directory (`GET /api/v1/partners/{mp_id}` returned 200).
@@ -381,7 +381,7 @@ pub fn evaluate(
             reason: format!(
                 "No grid record found for MaLo {} in the NB's grid topology. \
                  Import NIS/GIS data or provision the record manually via \
-                 PUT /api/v1/malo/{}/grid.",
+                 PUT /api/v1/malos/{}/grid.",
                 anfrage.malo_id, anfrage.malo_id
             ),
         };
@@ -497,7 +497,7 @@ pub fn evaluate(
             reason: format!(
                 "UTILMD message provides Bilanzierungsgebiet {:?} but grid record \
                  for MaLo {} has no Bilanzierungsgebiet — cannot confirm consistency. \
-                 Update the grid record via PUT /api/v1/malo/{}/grid.",
+                 Update the grid record via PUT /api/v1/malos/{}/grid.",
                 anfrage.bilanzierungsgebiet, anfrage.malo_id, anfrage.malo_id
             ),
         };
@@ -758,7 +758,7 @@ mod tests {
         // Receipt Wed 2026-07-08, requested 2026-09-01 (Monatserster, >1 month
         // ahead) → Accept.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let mut anfrage = make_anfrage(55016, d(2026, Month::September, 1));
+        let mut anfrage = make_anfrage(55077, d(2026, Month::September, 1));
         anfrage.ist_erzeugende_marktlokation = true;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");
@@ -768,7 +768,7 @@ mod tests {
     fn eeg_zuordnung_non_monatserster_rejected() {
         // 2026-09-15 is not a Monatserster → A07.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let mut anfrage = make_anfrage(55016, d(2026, Month::September, 15));
+        let mut anfrage = make_anfrage(55077, d(2026, Month::September, 15));
         anfrage.ist_erzeugende_marktlokation = true;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
@@ -781,7 +781,7 @@ mod tests {
         // first-of-month one month after July is August, so 08-01 is the
         // earliest. 2026-07-01 (same month, past) must be rejected.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let mut anfrage = make_anfrage(55016, d(2026, Month::July, 1));
+        let mut anfrage = make_anfrage(55077, d(2026, Month::July, 1));
         anfrage.ist_erzeugende_marktlokation = true;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
@@ -792,7 +792,7 @@ mod tests {
         // Earliest admissible Monatserster for a July receipt with 1-month lead
         // is 2026-08-01 → Accept.
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
-        let mut anfrage = make_anfrage(55016, d(2026, Month::August, 1));
+        let mut anfrage = make_anfrage(55077, d(2026, Month::August, 1));
         anfrage.ist_erzeugende_marktlokation = true;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
         assert!(result.is_accept(), "expected Accept, got {result:?}");

@@ -4,20 +4,30 @@
 #![allow(clippy::missing_errors_doc)]
 // German regulatory terms (GPKE, GeLi, MaLo, MaStR, BK…) are not Rust items.
 #![allow(clippy::doc_markdown)]
-//! `netz-checker` — pure Anmeldung validation library for German energy market NB role.
+//! `netz-checker` — pure decision library for the Netzbetreiber's GPKE / GeLi
+//! Gas An- and Abmeldung answers.
 //!
-//! # Purpose
+//! Two entry points, one per Entscheidungsbaum. They are separate functions
+//! because the trees have **separate ERC code spaces** — `A02` is „Marktlokation
+//! nimmt nicht an der Marktkommunikation teil" in `E_0622` and „Vorlauffrist
+//! nicht eingehalten" in `E_0607`:
 //!
-//! Implements the **six deterministic NB checks** required by GPKE
-//! (BK6-24-174, EBD E_0622) and GeLi Gas (AWH GeLi Gas 2.0, codeliste
-//! G_0011) for Anmeldung decisions:
+//! | Function | Inbound PIDs | EBD |
+//! |---|---|---|
+//! | [`evaluate`] | 55001, 55077, 44001 | `E_0622` |
+//! | [`evaluate_abmeldung`] | 55004, 44004 | `E_0607` — see [`abmeldung`] |
+//!
+//! # [`evaluate`] — the Anmeldung, six deterministic checks
+//!
+//! Required by GPKE (BK6-24-174, EBD E_0622) and GeLi Gas (AWH GeLi Gas 2.0,
+//! codeliste G_0011):
 //!
 //! | # | Rule | Outcome on failure |
 //! |---|------|-------------------|
 //! | 1 | MaLo exists in NB grid | `Escalate` (data gap) |
 //! | 2 | MaLo participates in MaKo (not Stillgelegt/Ruhend) | `Reject(A02)` |
 //! | 3 | No conflicting Anmeldung in Bearbeitung | `Reject(A06)` |
-//! | 4 | Date plausibility, Transaktionsgrund-aware (Strom: LFW24 future rule; Gas: 6-week retro window for E01/E02 SLP, 10 WT for E03) | `Reject(A07)` Strom / `Reject(E17)` Gas / `Escalate` |
+//! | 4 | Date plausibility, Transaktionsgrund-aware (Strom: LFW24 future rule, §10c EEG Monatserster for an erzeugende MaLo; Gas: 6-week retro window for E01/E02 SLP, 10 WT for E03) | `Reject(A07)` Strom / `Reject(E17)` Gas / `Escalate` |
 //! | 5 | Bilanzierungsgebiet consistent | `Reject(A05)` |
 //! | 6 | LF registered in partner directory | `Reject(A05)` |
 //!
@@ -56,12 +66,16 @@
 //! };
 //! ```
 
+pub mod abmeldung;
 pub mod checks;
 pub mod config;
 pub mod error;
 pub mod types;
 
+pub use abmeldung::evaluate_abmeldung;
 pub use checks::evaluate;
 pub use config::NetzCheckConfig;
 pub use mako_engine::fristen::HolidayCalendar;
-pub use types::{AnmeldungAnfrage, MaloGridRecord, Messtyp, NetzCheckResult, RejectReason};
+pub use types::{
+    AbmeldungAnfrage, AnmeldungAnfrage, MaloGridRecord, Messtyp, NetzCheckResult, RejectReason,
+};

@@ -10,7 +10,6 @@
 //! - [`error`] — shared [`ApiError`] / [`ApiResult`] with `IntoResponse`
 //! - [`cloudevent`] — canonical `CloudEvent` envelope + signed publisher
 //! - [`outbox`] — transactional outbox (persist-before-dispatch) + drain worker
-//! - [`event_bus`] — pluggable event fan-out (`WebhookBus` / `KafkaBus`)
 //! - [`webhook`] — the one HMAC-SHA256 signer/verifier
 //! - [`ServiceBuilder`] — composable Axum router builder (infra routes)
 //! - [`health`] — `/health/live` and `/health/ready` route helpers
@@ -41,7 +40,6 @@ pub mod builder;
 pub mod cloudevent;
 pub mod config;
 pub mod error;
-pub mod event_bus;
 pub mod health;
 pub mod http;
 pub mod outbox;

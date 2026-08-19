@@ -108,9 +108,9 @@ grid-billing     = { path = "crates/grid-billing",     version = "0.16" }
 eeg-billing      = { path = "crates/eeg-billing",      version = "0.16" }
 mako-obs         = { path = "crates/mako-obs",         version = "0.16" }
 mako-wim         = { path = "crates/mako-wim",         version = "0.16" }
-# AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here: mako-as4 and
-# makod both depend on it, and independent declarations previously drifted onto
-# two different versions in the same build.
+# AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
+# mako-as4 and makod both depend on it: independent declarations drift onto two
+# versions in one build.
 asx-rs           = { version = "0.13" }
 mako-service     = { path = "crates/mako-service",     version = "0.16" }
 mako-plugin      = { path = "crates/mako-plugin",      version = "0.16" }
@@ -126,19 +126,18 @@ sepa             = { version = "0.6.0" }
 doubleentry      = { version = "0.6" }
 
 # Kafka client: pure Rust, MSRV 1.88, zero-unsafe, exactly-once semantics.
-# Required by mako-service feature "kafka" (EventBus scale-out backend).
-# Activate at >500 MaLo or >20 webhook subscribers — see event_bus.rs.
-# Default features include: compression (gzip/snappy/lz4), ring (rustls crypto).
+# The one consumer is `edmd` (kafka_ingest), for high-volume metering ingest;
+# marktd's fan-out is the durable event_log/event_delivery worker and needs no
+# broker.
 krafka           = { version = "0.14" }
 
 # ── Arrow (edmd meterstore tier) ────────────────────────────────────────────
 # `edmd` stores metering time series through the `meterstore` crate, which
 # sources Arrow via DataFusion 53 (arrow 58). The workspace `arrow` pin must
 # match that major so edmd's Lastgang Arrow-IPC serialisation stays type-
-# compatible with the `RecordBatch`es meterstore hands back. The Iceberg /
-# DataFusion / Parquet / OpenDAL stack that edmd used to embed directly is gone:
-# meterstore owns the cold tier now, and edmd declares the handful of Iceberg
-# catalog crates it still needs to *construct* a meterstore directly.
+# compatible with the `RecordBatch`es meterstore hands back. meterstore owns the
+# cold tier, so edmd declares only the handful of Iceberg catalog crates it needs
+# to *construct* one.
 arrow                   = { version = "58", default-features = false }
 
 # ── Testing utilities ───────────────────────────────────────────────────────

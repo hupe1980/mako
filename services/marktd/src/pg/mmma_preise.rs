@@ -129,22 +129,20 @@ impl MmmPreisStromRepository for PgMmmPreisStromRepository {
     async fn upsert_strom(
         &self,
         price_month: Date,
-        vnb_mp_id: &str,
         mehr_ct_kwh: Decimal,
         minder_ct_kwh: Decimal,
         source: &str,
     ) -> Result<(), MdmError> {
         sqlx::query(
-            r#"INSERT INTO mmm_preise_strom (price_month, vnb_mp_id, mehr_ct_kwh, minder_ct_kwh, source, updated_at)
-               VALUES ($1, $2, $3, $4, $5, now())
-               ON CONFLICT (price_month, vnb_mp_id) DO UPDATE
+            r#"INSERT INTO mmm_preise_strom (price_month, mehr_ct_kwh, minder_ct_kwh, source, updated_at)
+               VALUES ($1, $2, $3, $4, now())
+               ON CONFLICT (price_month) DO UPDATE
                SET mehr_ct_kwh   = EXCLUDED.mehr_ct_kwh,
                    minder_ct_kwh = EXCLUDED.minder_ct_kwh,
                    source        = EXCLUDED.source,
                    updated_at    = now()"#,
         )
         .bind(price_month)
-        .bind(vnb_mp_id)
         .bind(mehr_ct_kwh)
         .bind(minder_ct_kwh)
         .bind(source)
@@ -154,25 +152,19 @@ impl MmmPreisStromRepository for PgMmmPreisStromRepository {
         Ok(())
     }
 
-    async fn find_strom(
-        &self,
-        price_month: Date,
-        vnb_mp_id: &str,
-    ) -> Result<Option<MmmPreisStromRecord>, MdmError> {
+    async fn find_strom(&self, price_month: Date) -> Result<Option<MmmPreisStromRecord>, MdmError> {
         let row = sqlx::query(
-            r#"SELECT price_month, vnb_mp_id, mehr_ct_kwh, minder_ct_kwh, source, updated_at
+            r#"SELECT price_month, mehr_ct_kwh, minder_ct_kwh, source, updated_at
                FROM mmm_preise_strom
-               WHERE price_month = $1 AND vnb_mp_id = $2"#,
+               WHERE price_month = $1"#,
         )
         .bind(price_month)
-        .bind(vnb_mp_id)
         .fetch_optional(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
         Ok(row.map(|r| MmmPreisStromRecord {
             price_month: r.get("price_month"),
-            vnb_mp_id: r.get("vnb_mp_id"),
             mehr_ct_kwh: r.get("mehr_ct_kwh"),
             minder_ct_kwh: r.get("minder_ct_kwh"),
             source: r.get("source"),

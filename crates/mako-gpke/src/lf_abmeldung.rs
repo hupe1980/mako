@@ -2,7 +2,7 @@
 //!
 //! Covers GPKE Teil 2 §2.5: the Netzbetreiber proactively terminates a supply
 //! relationship (e.g., for non-payment under §41 EnWG or after judicial order).
-//! This is distinct from Lieferende (PID 55002) where the **Lieferant** initiates.
+//! This is distinct from the Abmeldung (PID 55004) where the **Lieferant** initiates.
 //!
 //! This module implements the **receiving-party perspective** (Lieferant / LFN):
 //! the system receives an inbound Ankündigung from the NB and responds with
@@ -27,7 +27,7 @@
 //!
 //! PIDs 55007–55009 are **present in UTILMD AHB Strom 2.1 (FV2025-10-01)** and
 //! in the BDEW Anwendungsübersicht 3.3. They were NOT removed by BK6-22-024
-//! (LFW24); only the LF-initiated Lieferbeginn/Lieferende (55001/55002) was
+//! (LFW24); only the LF-initiated Lieferbeginn/Abmeldung (55001/55004) was
 //! redesigned for 24h processing. The NB-initiated Lieferende (55007–55009) is a
 //! separate process under GPKE Teil 2 §2.5.
 //!

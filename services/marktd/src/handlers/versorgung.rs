@@ -30,7 +30,7 @@ use crate::pg::PgVersorgungsStatusRepository;
 use time::format_description::well_known::Rfc3339;
 use utoipa::{IntoParams, ToSchema};
 
-use super::{Claims, IntoMdmResponse as _, etag, parse_if_match};
+use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, parse_if_match};
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
@@ -343,7 +343,13 @@ where
         }
         .into_response();
     }
-    let if_version = parse_if_match(&headers);
+    let if_version = match parse_if_match(&headers) {
+        IfMatch::Absent | IfMatch::Any => None,
+        IfMatch::Version(v) => Some(v),
+        // Refuse rather than fall back to an unconditional write: the caller
+        // asked for a conditional one and would otherwise be told it succeeded.
+        IfMatch::Malformed => return malformed_if_match(),
+    };
     let malo_id_str = malo_id.clone();
     let malo_id = match malo_id.parse::<MaloId>() {
         Ok(id) => id,
@@ -432,17 +438,32 @@ where
     // Emit de.markt.versorgung.changed so ERP subscribers (vertragd, billingd)
     // are notified of supply-state transitions (Lieferbeginn, Lieferende,
     // Lieferant changes) in near-real-time without polling.
+    // The Sparte a subscriber filters on lives on the MaLo, not on the supply
+    // row. Read it in the same transaction so this event carries the same
+    // `marktsparte` as its EDIFACT-driven twin in `event_ingest`; a path that
+    // omits it bypasses every `sparten` filter.
+    let sparte: Option<String> =
+        sqlx::query_scalar("SELECT sparte FROM malo WHERE malo_id = $1 AND tenant = $2")
+            .bind(&malo_id_str)
+            .bind(&state.tenant_gln)
+            .fetch_optional(&mut *tx)
+            .await
+            .unwrap_or(None);
+
     let evt = MarktEvent::new(
         &state.tenant_gln,
         mako_events::markt::VERSORGUNG_CHANGED,
         malo_id_str.clone(),
         serde_json::json!({
+            "malo_id": malo_id_str,
             "lieferstatus": body.lieferstatus,
+            "sparte": sparte,
             "version": new_version,
         }),
     )
     .with_extensions(EventExtensions {
         marktmaloid: Some(malo_id_str),
+        marktsparte: sparte,
         ..Default::default()
     });
     if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &state.notify).await {

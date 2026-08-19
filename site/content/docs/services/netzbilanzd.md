@@ -595,8 +595,10 @@ charged from the load profile, which lives on the balancing side; `edmd` holds o
 measured half. Supplying the measured total for both halves makes every saldo structurally
 zero.
 
-`sparte` does two jobs here. It selects the price series — Trading Hub Europe for Gas, the
-ÜNB configured as `vnb_mp_id` for Strom — and it is passed through to `edmd` as the
+`sparte` does two jobs here. It selects the price series — Trading Hub Europe per Marktgebiet
+for Gas, the nationwide BDEW series for Strom (§ 13 Abs. 3 StromNZV makes the
+Mehr-/Mindermengenpreise *einheitlich*, so the application month is the whole key and there
+is nothing per-operator to configure) — and it is passed through to `edmd` as the
 aggregation basis. **Gas balances on the 06:00 Gastag**, so a Gas saldo aggregated over
 calendar days misplaces six hours of every day's energy.
 
@@ -911,10 +913,6 @@ makod_url      = "http://makod:8080"
 makod_api_key  = "env:NETZBILANZD_MAKOD_API_KEY"
 edmd_url       = "http://edmd:8380"
 edmd_api_key   = "env:NETZBILANZD_EDMD_API_KEY"
-
-# Your Regelzone's ÜNB — required for the Strom MMM price auto-fetch.
-# Identify it from the BDEW Codenummernbericht or marktd GET /api/v1/partners.
-vnb_mp_id = "9907324000007"
 
 erp_webhook_url    = "http://erp:9000/webhooks/mako"
 erp_webhook_secret = "env:NETZBILANZD_WEBHOOK_SECRET"

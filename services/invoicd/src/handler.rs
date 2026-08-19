@@ -268,10 +268,13 @@ async fn handle_invoic_initiated(state: HandlerState, subject: String, data: ser
                 .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
             let (y, m) = (billing_date.year(), billing_date.month() as u8);
 
-            // Strom MMM prices: sender IS the NB (VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4).
+            // The Strom Mehr-/Mindermengenpreise are einheitlich across the
+            // German market (§ 13 Abs. 3 StromNZV) and published monthly by the
+            // BDEW, so the application month alone identifies them — the sending
+            // NB is not part of the key.
             let mmm_prices = state
                 .preisblatt_client
-                .get_mmm_strom(y, m, &sender_mp_id)
+                .get_mmm_strom(y, m)
                 .await
                 .ok()
                 .flatten()
@@ -1104,9 +1107,8 @@ async fn handle_stornorechnung(state: HandlerState, subject: String, data: serde
         }
     }
 
-    // Sparte-neutral storno command — a Strom storno is no longer forced onto the
-    // Gas `wim.gas.*` namespace. makod settles/disputes the referenced invoice's
-    // process regardless of Sparte.
+    // PID 31004 is Sparte-neutral, so the command name is too: makod settles or
+    // disputes the referenced invoice's process regardless of Sparte.
     let cmd_name = if should_dispute {
         "invoic.stornorechnung.ablehnen"
     } else {

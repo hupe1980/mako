@@ -97,6 +97,7 @@
 #![allow(clippy::map_unwrap_or)]
 #![allow(clippy::items_after_statements)]
 
+pub mod antwortfrist;
 pub mod datenabruf;
 pub mod gas_quality;
 pub mod invoic;
@@ -277,7 +278,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
 
         // GeLi Gas Stammdatenänderung (44109–44182). Change families (G1–G7):
         // both the Änderung PIDs and their shared Antwort PIDs. Anfrage families
-        // (G8–G10) are registered so they no longer dead-letter. Excludes
+        // (G8–G10) are registered too, or they dead-letter. Excludes
         // 44168–44170 (WiM Gas Verpflichtungsanfrage, WimGasModule) and 44183.
         for &(aenderung_pid, antwort_pid, _) in stammdatenaenderung::STAMMDATEN_PAIRS {
             router.register(aenderung_pid, stammdatenaenderung::WORKFLOW_NAME);
@@ -410,10 +411,10 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
             );
         }
         if has_lf_role {
-            // LF (or integrated): 44002/44003 and 44005/44006 are inbound GNB
-            // confirmations/rejections to an outbound 44001/44004 the LF previously
-            // sent. Route to the LFN-side
-            // workflow, overriding the unconditional geli-gas-supplier-change registration.
+            // LF (or integrated): 44002/44003 and 44005/44006 are the GNB's
+            // confirmations/rejections of an outbound 44001/44004 this LF sent.
+            // Route them to the LFN-side workflow, overriding the unconditional
+            // geli-gas-supplier-change registration.
             for &pid in lf_anmeldung::ANTWORT_PIDS_LF {
                 // Use register() (silently replaces) — the GNB-side workflow never
                 // receives these PIDs inbound, so this override is safe.

@@ -1,4 +1,4 @@
-//! `GET|PUT /api/v1/malo/{malo_id}/bilanzierung[/history]` — the first-class,
+//! `GET|PUT /api/v1/malos/{malo_id}/bilanzierung[/history]` — the first-class,
 //! temporal BO4E `Bilanzierung` resource (BO #3).
 //!
 //! The PUT body is a full BO4E `Bilanzierung`; it is **type-validated** by
@@ -55,7 +55,7 @@ fn parse_at(s: &str) -> Result<OffsetDateTime, String> {
         .map_err(|e| format!("invalid `at` {s:?}: expected RFC 3339 or YYYY-MM-DD ({e})"))
 }
 
-/// `PUT /api/v1/malo/{malo_id}/bilanzierung` — upsert a BO4E Bilanzierung.
+/// `PUT /api/v1/malos/{malo_id}/bilanzierung` — upsert a BO4E Bilanzierung.
 pub async fn put_bilanzierung(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -142,7 +142,7 @@ pub async fn put_bilanzierung(
     }
 }
 
-/// `GET /api/v1/malo/{malo_id}/bilanzierung?at=<rfc3339|date>` — point-in-time.
+/// `GET /api/v1/malos/{malo_id}/bilanzierung?at=<rfc3339|date>` — point-in-time.
 pub async fn get_bilanzierung_at(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -186,7 +186,7 @@ pub async fn get_bilanzierung_at(
     }
 }
 
-/// `GET /api/v1/malo/{malo_id}/bilanzierung/history` — full temporal history.
+/// `GET /api/v1/malos/{malo_id}/bilanzierung/history` — full temporal history.
 pub async fn get_bilanzierung_history(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,

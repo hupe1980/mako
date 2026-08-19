@@ -5,8 +5,8 @@
 //! | Method | Path | Returns |
 //! |--------|------|---------|
 //! | `GET` | `/api/v1/versorgung/{malo_id}` | `Option<VersorgungsStatusRecord>` |
-//! | `GET` | `/api/v1/malo/{malo_id}` | `Option<MaloTypedFields>` |
-//! | `GET` | `/api/v1/malo/{malo_id}/grid` | `Option<MaloGridRecord>` |
+//! | `GET` | `/api/v1/malos/{malo_id}` | `Option<MaloTypedFields>` |
+//! | `GET` | `/api/v1/malos/{malo_id}/grid` | `Option<MaloGridRecord>` |
 //! | `GET` | `/api/v1/partners/{mp_id}` | `bool` (partner known) |
 //! | `GET` | `/api/v1/preisblaetter/{nb_mp_id}?date=…` | `Option<PreisblattNetznutzung>` |
 //! | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}?date=…` | `Option<PreisblattMessung>` |
@@ -170,6 +170,38 @@ impl std::fmt::Debug for MarktdClient {
     }
 }
 
+/// One Zähler at a Messlokation, as much of it as a decision needs.
+///
+/// [`MarktdClient::list_zaehler_ids`] returns identifiers only, which is enough
+/// to answer "does this `MeLo` have a meter" but not "is it an iMSys" — and the
+/// § 14a / § 21 `MsbG` eligibility of an MSB-Wechsel turns on exactly that.
+/// Deciding it from an identifier list means never deciding it.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct ZaehlerSummary {
+    /// Zählernummer.
+    pub zaehler_id: String,
+    /// BO4E `Zaehlertyp` wire value, e.g. `INTELLIGENTES_MESSSYSTEM`,
+    /// `MODERNE_MESSEINRICHTUNG`, `DREHSTROMZAEHLER`. `None` when the registry
+    /// holds a meter without a classified type.
+    #[serde(default)]
+    pub zaehler_typ: Option<String>,
+}
+
+impl ZaehlerSummary {
+    /// The BO4E wire spelling of an intelligentes Messsystem in `Zaehlertyp`.
+    ///
+    /// Three `s`. `Geraetetyp` spells the same concept with two
+    /// (`INTELLIGENTES_MESSYSTEM`); the divergence is upstream in BO4E, so a
+    /// comparison written against the wrong BO silently never matches.
+    pub const IMSYS: &'static str = "INTELLIGENTES_MESSSYSTEM";
+
+    /// `true` when this meter is an intelligentes Messsystem.
+    #[must_use]
+    pub fn ist_imsys(&self) -> bool {
+        self.zaehler_typ.as_deref() == Some(Self::IMSYS)
+    }
+}
+
 impl MarktdClient {
     /// Construct a new client.
     ///
@@ -260,7 +292,7 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
-    /// `GET /api/v1/malo/{malo_id}` — typed Marktlokation fields.
+    /// `GET /api/v1/malos/{malo_id}` — typed Marktlokation fields.
     ///
     /// Returns the key typed fields extracted from `Marktlokation` JSONB
     /// (`netzebene`, `bilanzierungsgebiet`, `gasqualitaet`).
@@ -277,7 +309,7 @@ impl MarktdClient {
         &self,
         malo_id: &str,
     ) -> Result<Option<MaloTypedFields>, MarktdClientError> {
-        let url = format!("{}/api/v1/malo/{}", self.base_url, malo_id);
+        let url = format!("{}/api/v1/malos/{}", self.base_url, malo_id);
         let resp = self
             .client
             .get(&url)
@@ -444,7 +476,7 @@ impl MarktdClient {
         Ok(())
     }
 
-    /// `GET /api/v1/malo/{malo_id}/grid` — NB grid topology record.    ///
+    /// `GET /api/v1/malos/{malo_id}/grid` — NB grid topology record.    ///
     /// Returns `None` on 404 (no grid record for this `MaLo`).
     ///
     /// # Errors
@@ -454,7 +486,7 @@ impl MarktdClient {
         &self,
         malo_id: &str,
     ) -> Result<Option<MaloGridRecord>, MarktdClientError> {
-        let url = format!("{}/api/v1/malo/{}/grid", self.base_url, malo_id);
+        let url = format!("{}/api/v1/malos/{}/grid", self.base_url, malo_id);
         let resp = self
             .client
             .get(&url)
@@ -472,7 +504,7 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
-    /// `PUT /api/v1/malo/{malo_id}/grid` — upsert the NB grid topology record for a `MaLo`.
+    /// `PUT /api/v1/malos/{malo_id}/grid` — upsert the NB grid topology record for a `MaLo`.
     ///
     /// NB-role provisioning of NIS/GIS grid data (manual or ERP integration).  Idempotent.
     ///
@@ -488,7 +520,7 @@ impl MarktdClient {
         sparte: &str,
         source: &str,
     ) -> Result<(), MarktdClientError> {
-        let url = format!("{}/api/v1/malo/{}/grid", self.base_url, malo_id);
+        let url = format!("{}/api/v1/malos/{}/grid", self.base_url, malo_id);
         let body = serde_json::json!({
             "nb_mp_id": nb_mp_id,
             "bilanzierungsgebiet": bilanzierungsgebiet,
@@ -861,7 +893,7 @@ impl MarktdClient {
     ) -> Result<Vec<crate::repository::LokationszuordnungEdge>, MarktdClientError> {
         let path = match root_typ {
             "melo" => format!("{}/api/v1/melos/{}/lokationen", self.base_url, root_id),
-            _ => format!("{}/api/v1/malo/{}/lokationen", self.base_url, root_id),
+            _ => format!("{}/api/v1/malos/{}/lokationen", self.base_url, root_id),
         };
         let mut req = self
             .client
@@ -1029,20 +1061,21 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
-    /// Fetch Strom MMM prices for a billing month + VNB.
+    /// Fetch the nationwide Strom Mehr-/Mindermengenpreise for an application
+    /// month.
     ///
-    /// Returns `None` if no prices have been imported for that month/ÜNB.
+    /// § 13 Abs. 3 `StromNZV` makes these *einheitlich* and the BDEW publishes one
+    /// series for the whole market, so the month is the whole key. Returns
+    /// `None` if that month has not been imported.
     pub async fn get_mmm_strom(
         &self,
         year: i32,
         month: u8,
-        vnb_mp_id: &str,
     ) -> Result<Option<crate::repository::MmmPreisStromRecord>, MarktdClientError> {
         let url = format!("{}/api/v1/mmm-preise/strom/{year}/{month}", self.base_url);
         let resp = self
             .client
             .get(&url)
-            .query(&[("vnb_mp_id", vnb_mp_id)])
             .bearer_auth(self.api_key.expose_secret())
             .send()
             .await
@@ -1055,7 +1088,6 @@ impl MarktdClient {
             warn!(
                 year,
                 month,
-                vnb_mp_id,
                 status = s,
                 "MarktdClient: mmm-strom returned non-2xx"
             );
@@ -1217,6 +1249,67 @@ impl MarktdClient {
             .filter_map(|z| z.get("zaehler_id").and_then(|v| v.as_str()))
             .map(str::to_owned)
             .collect())
+    }
+
+    /// `GET /api/v1/melos/{melo_id}/zaehler` — the meters at a Messlokation,
+    /// with their BO4E `Zaehlertyp`.
+    ///
+    /// Returns an empty vector when the `MeLo` has no meters *or* does not exist;
+    /// use [`Self::melo_known`] when the two need to be told apart.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on network/HTTP failure — never conflate one
+    /// with an empty inventory: a transport error is not evidence of absence,
+    /// and treating it as one rejects a valid § 21 `MsbG` registration.
+    pub async fn list_zaehler(
+        &self,
+        melo_id: &str,
+    ) -> Result<Vec<ZaehlerSummary>, MarktdClientError> {
+        let url = format!("{}/api/v1/melos/{}/zaehler", self.base_url, melo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(Vec::new());
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json::<Vec<ZaehlerSummary>>()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
+    /// `GET /api/v1/melos/{melo_id}` — is this Messlokation in the registry?
+    ///
+    /// The `A02` „Messlokation existiert nicht" rejection ground needs the `MeLo`
+    /// itself, not the `MaLo` it hangs off. Deriving it from a `MaLo` lookup puts a
+    /// rejection on the market that names the wrong object.
+    ///
+    /// # Errors
+    ///
+    /// [`MarktdClientError::Http`] on network/HTTP failure. A `404` is
+    /// `Ok(false)`; anything else propagates, because only a genuine absence
+    /// may become an `A02`.
+    pub async fn melo_known(&self, melo_id: &str) -> Result<bool, MarktdClientError> {
+        let url = format!("{}/api/v1/melos/{}", self.base_url, melo_id);
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        Ok(true)
     }
 
     /// `PUT /api/v1/zaehler/{zaehler_id}/register`

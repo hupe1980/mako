@@ -35,7 +35,7 @@ uuid               = { workspace = true }
 tokio              = { version = "1", features = ["full"] }
 tokio-util         = { workspace = true }
 tracing            = "0.1"
-mako-service       = { workspace = true, features = ["otel", "cedar", "oidc"] }
+mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "metrics"] }
 rmcp               = { workspace = true }
 schemars           = { workspace = true }
 secrecy            = "0.10"
@@ -51,11 +51,13 @@ rust_decimal       = { workspace = true }
 utoipa             = { version = "5", features = ["axum_extras", "uuid", "time"] }
 utoipa-axum        = "0.2"
 utoipa-swagger-ui  = { version = "9", features = ["axum"] }
+prometheus         = "0.14"
 sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "time", "json", "rust_decimal"] }
 
 [dev-dependencies]
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
-mako-markt  = { path = "../../crates/mako-markt", features = ["testing"] }
+# (no `testing` feature: every marktd repository is exercised against a real
+# PostgreSQL via testcontainers in tests/*_integration.rs)
 tokio      = { version = "1", features = ["full"] }
 serde_json = { workspace = true }

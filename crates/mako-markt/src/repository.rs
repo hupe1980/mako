@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
 
+use std::future::Future;
+
 use crate::{
     domain::{MaloId, MarktpartnerId, MeloId, ProcessStatus, Sparte},
     error::MdmError,
@@ -181,6 +183,7 @@ pub struct MaloRecord {
     pub data: MaloPayload,
     /// Role assignments valid at the requested reference date.
     pub rollenzuordnung: Vec<Rollenzuordnung>,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
     /// BO4E schema version of the `data` payload (e.g. `"v202607.0.0"`).
     #[serde(default = "default_bo4e_version")]
@@ -215,6 +218,7 @@ pub struct MeloRecord {
     pub lokationsbuendel_objektcode: Option<String>,
     pub version: i64,
     pub data: MeloPayload,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
     /// BO4E schema version of the `data` payload.
     #[serde(default = "default_bo4e_version")]
@@ -316,7 +320,9 @@ pub struct CorrelationEntry {
     pub marktrolle: Option<String>,
     pub format_version: Option<String>,
     pub status: ProcessStatus,
+    #[serde(with = "time::serde::rfc3339")]
     pub initiated_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
     pub completed_at: Option<time::OffsetDateTime>,
 }
 
@@ -336,7 +342,7 @@ pub struct PageResult<T> {
 
 // ── Query filters ─────────────────────────────────────────────────────────────
 
-/// Filters for `GET /api/v1/malo` listing.
+/// Filters for `GET /api/v1/malos` listing.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct MaloFilter {
     pub sparte: Option<Sparte>,
@@ -470,7 +476,7 @@ pub trait MaloRepository: Send + Sync {
     /// `TM+EM` / `TM+Z10` segments by the `makod` adapter (L1/N1).
     ///
     /// No-ops silently when the MaLo row does not yet exist — the values will
-    /// be set on the first `PUT /api/v1/malo` call instead.
+    /// be set on the first `PUT /api/v1/malos` call instead.
     async fn patch_typenmerkmal(
         &self,
         malo_id: &MaloId,
@@ -488,7 +494,7 @@ pub trait MaloRepository: Send + Sync {
     /// touched — a Stammdatenänderung is authoritative master data arriving over
     /// EDIFACT, not an operator edit. Returns `true` when a row was updated and
     /// `false` when the MaLo is not yet known locally (the change is then a
-    /// no-op; the row is created by the next `PUT /api/v1/malo`).
+    /// no-op; the row is created by the next `PUT /api/v1/malos`).
     async fn patch_stammdaten(
         &self,
         malo_id: &MaloId,
@@ -575,30 +581,55 @@ pub trait MeloRepository: Send + Sync {
 }
 
 /// Read/write access to ERP webhook subscriptions.
-#[allow(async_fn_in_trait)]
+///
+/// Unlike the other repositories here, every method returns an explicitly
+/// `Send` future rather than using bare `async fn`. The fan-out worker
+/// (`marktd::fanout`) is generic over this trait, and a bare AFIT future is
+/// not `Send` in a generic context — which forced the worker onto a dedicated
+/// OS thread with its own current-thread runtime and a `LocalSet`, an entire
+/// thread spent on an accidental auto-trait bound. With `+ Send` the worker is
+/// an ordinary `tokio::spawn`.
 pub trait SubscriptionRepository: Send + Sync {
     /// Insert or update a subscription.
     ///
-    /// `webhook_secret` is stored encrypted at rest by the implementation.
+    /// `webhook_secret` is the HMAC signing key and is stored **in plaintext** —
+    /// it is an integrity secret a subscriber uses to verify a delivery came
+    /// from this hub, not a confidentiality key over customer data. Protect it
+    /// with database-level controls (least-privilege grants on `subscriptions`,
+    /// storage encryption); see the marktd README, "Webhook secret at rest".
     ///
     /// Returns the new version number.
-    async fn upsert(&self, sub: Subscription) -> Result<i64, MdmError>;
+    fn upsert(&self, sub: Subscription) -> impl Future<Output = Result<i64, MdmError>> + Send;
 
     /// Return a subscription by subscriber ID.
-    async fn find(&self, subscriber_id: &str) -> Result<Option<Subscription>, MdmError>;
+    fn find(
+        &self,
+        subscriber_id: &str,
+    ) -> impl Future<Output = Result<Option<Subscription>, MdmError>> + Send;
+
+    /// Deactivate a subscription so it stops matching future fan-outs.
+    ///
+    /// A soft delete by design: `event_delivery` rows reference the subscriber
+    /// and are the § 147 AO / GoBD record that a market event was (or was not)
+    /// delivered, so the row itself must survive. Returns `false` when no such
+    /// subscription exists.
+    fn deactivate(
+        &self,
+        subscriber_id: &str,
+    ) -> impl Future<Output = Result<bool, MdmError>> + Send;
 
     /// List all active subscriptions.
-    async fn list_active(&self) -> Result<Vec<Subscription>, MdmError>;
+    fn list_active(&self) -> impl Future<Output = Result<Vec<Subscription>, MdmError>> + Send;
 
     /// Return all active subscriptions that match a given event type and role.
     ///
     /// Used by the fan-out worker to select delivery targets.
-    async fn list_matching(
+    fn list_matching(
         &self,
         event_type: &str,
         role: &str,
         sparte: Option<&str>,
-    ) -> Result<Vec<Subscription>, MdmError>;
+    ) -> impl Future<Output = Result<Vec<Subscription>, MdmError>> + Send;
 }
 
 /// Read/write access to the process correlation index.
@@ -697,7 +728,9 @@ pub struct PreisblattRecord {
     pub bo4e_version: String,
     /// How this record entered the system: `api` (operator upload) or `mako` (engine ingest).
     pub source: PreisblattSource,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -757,7 +790,9 @@ pub struct PreisblattMessungRecord {
     /// whether a discount position in INVOIC 31009 is contractually authorised.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub auf_abschlaege: Vec<serde_json::Value>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -813,7 +848,9 @@ pub struct PreisblattKaRecord {
     pub bo4e_version: String,
     /// How this record entered the system.
     pub source: PreisblattSource,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -858,7 +895,9 @@ pub struct PreisblattDienstleistungRecord {
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     pub source: PreisblattSource,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -893,7 +932,9 @@ pub struct PreisblattHardwareRecord {
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     pub source: PreisblattSource,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -969,7 +1010,9 @@ pub struct PriCatVersion {
     pub dispatch_state: PriCatDispatchState,
     /// Last dispatch error message, if any.
     pub dispatch_error: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
     pub created_at: time::OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -983,6 +1026,7 @@ pub struct PriCatDispatchEntry {
     pub tenant: String,
     /// `makod` process ID returned by `MakodClient`, or `None` if dispatch failed.
     pub process_id: Option<uuid::Uuid>,
+    #[serde(with = "time::serde::rfc3339")]
     pub dispatched_at: time::OffsetDateTime,
     pub outcome: String,
     pub error_detail: Option<String>,
@@ -1182,7 +1226,8 @@ pub trait NbContractRepository: Send + Sync {
 /// `event_ingest` handler and persisted in the `versorgungsstatus` table.
 /// One row per MaLo per tenant — upserted on each relevant process completion.
 ///
-/// Used by `processd` (M17) to drive fully-automated LFA E_0624 responses
+/// Used by `processd` to drive the LF's automated answers to the NB-initiated
+/// GPKE processes (inbound 55007 and 55010)
 /// without ERP involvement (GPKE Teil 1 §5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -1234,7 +1279,7 @@ impl std::str::FromStr for LieferStatus {
 /// One row per `(malo_id, tenant)`. Upserted atomically on each relevant
 /// `de.mako.process.completed` event with optimistic concurrency control
 /// (`WHERE version = $expected`). On conflict: read-retry once (at-least-once
-/// EventBus delivery guarantees convergence).
+/// fan-out delivery guarantees convergence).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VersorgungsStatusRecord {
     /// 11-digit Marktlokations-ID.
@@ -1323,6 +1368,7 @@ pub struct VersorgungsStatusHistoryRecord {
     /// Version of the `versorgungsstatus` row that this snapshot captures.
     pub version: i64,
     /// UTC instant when this state became active (set when the upsert commits).
+    #[serde(with = "time::serde::rfc3339")]
     pub valid_from: time::OffsetDateTime,
 }
 
@@ -1709,6 +1755,7 @@ pub struct NeLoRecord {
     /// Additional Redispatch 2.0 attributes (open-ended JSONB).
     pub data: serde_json::Value,
     pub version: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -1805,6 +1852,7 @@ pub struct TrancheRecord {
     /// Full BO4E `Tranche` payload (open-ended JSONB).
     pub data: serde_json::Value,
     pub version: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -1906,7 +1954,7 @@ where
 /// NB grid topology record for a single Marktlokation.
 ///
 /// Written by the NB's **NIS/GIS adapter** (network information system) or
-/// provisioned manually via `PUT /api/v1/malo/{id}/grid` on `marktd`.
+/// provisioned manually via `PUT /api/v1/malos/{id}/grid` on `marktd`.
 /// Read by `processd` NB module for Anmeldung STP decisions (checks 1, 4).
 ///
 /// NOTE: This is NOT MaStR data. MaStR (BNetzA) covers generation/consumption
@@ -1918,7 +1966,7 @@ where
 /// # STP impact
 ///
 /// STP improves markedly when this record is present — provision it via the
-/// NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint (manual / ERP integration).
+/// NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint (manual / ERP integration).
 /// Without a grid record, ~40 % of Anmeldungen escalate (missing grid records → cold cache).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaloGridRecord {
@@ -2008,6 +2056,7 @@ pub struct SteuerbareRessourceRecord {
     pub bo4e_version: String,
     /// Monotonic version counter (incremented on update).
     pub version: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -2108,6 +2157,7 @@ pub struct TechnischeRessourceRecord {
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     pub version: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -2458,6 +2508,7 @@ pub struct ZaehlerRecord {
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     pub version: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -2562,6 +2613,7 @@ pub struct GeraetRecord {
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
     pub version: i64,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -2632,7 +2684,7 @@ pub trait DeviceRepository: Send + Sync {
     /// The `updated_at` timestamp on each entry is set server-side; callers
     /// should not set it in the request (it is overwritten).
     ///
-    /// Emits `de.markt.geraet.konfiguration.updated` via the EventBus fan-out.
+    /// Emits `de.markt.geraet.konfiguration.updated` via the durable fan-out.
     async fn upsert_geraet_konfigurationen(
         &self,
         geraet_id: &str,
@@ -2676,6 +2728,7 @@ pub struct ZaehlzeitRegisterRecord {
     pub valid_from: time::Date,
     /// End of validity — `None` = currently valid.
     pub valid_to: Option<time::Date>,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -2699,15 +2752,130 @@ pub struct ZaehlzeitSaisonRecord {
     pub register_id: uuid::Uuid,
     /// Season key: `"SOMMER"` | `"WINTER"` | `"GESAMT"` (year-round).
     pub saison: String,
-    /// Days of week this window applies: bitmask or JSON array of ISO weekday
-    /// numbers 1 (Mon) through 7 (Sun).  Stored as a JSON array for clarity.
-    /// Example: `[1,2,3,4,5]` = Monday–Friday.
-    pub wochentage: serde_json::Value,
-    /// Window start time (local German time, HH:MM).  Example: `"07:00"`.
-    pub zeit_von: String,
-    /// Window end time (local German time, HH:MM, exclusive).  Example: `"22:00"`.
-    pub zeit_bis: String,
+    /// ISO weekday numbers this window applies to, 1 (Mon) through 7 (Sun).
+    /// Example: `[1, 2, 3, 4, 5]` = Monday–Friday.
+    ///
+    /// A typed `Vec<i16>` rather than free JSON: the column it maps to is a
+    /// constrained `SMALLINT[]`, so `["monday"]` and `[0]` are rejected at the
+    /// boundary instead of being stored and silently matching nothing.
+    pub wochentage: Vec<i16>,
+    /// Window start in German local time, inclusive. Example: `07:00`.
+    ///
+    /// Serialised as `"HH:MM:SS"`. Without the explicit format `time::Time`
+    /// derives to a component array (`[7,0,0,0]`), which is neither what a
+    /// caller sends nor what any other timestamp in this API looks like.
+    #[serde(with = "wall_clock")]
+    pub zeit_von: time::Time,
+    /// Window end in German local time, exclusive. Example: `22:00`.
+    ///
+    /// Typed `Time` rather than a `"HH:MM"` string: as text, `"7:00"` and
+    /// `"07:00"` were distinct values that ordered differently, and the
+    /// window comparison in `resolve_tariff_zone` was a lexicographic one that
+    /// only worked while every writer happened to zero-pad.
+    #[serde(with = "wall_clock")]
+    pub zeit_bis: time::Time,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
+}
+
+/// `"HH:MM:SS"` on the wire for a [`time::Time`], accepting `"HH:MM"` too.
+///
+/// The default `time` serde impl emits a component array, which has bitten this
+/// workspace before; a tariff-window boundary is a wall-clock time and reads as
+/// one.
+pub mod wall_clock {
+    use serde::{Deserialize as _, Deserializer, Serializer, de::Error as _};
+
+    /// Serialise as `"HH:MM:SS"`.
+    ///
+    /// # Errors
+    /// Propagates the serializer's own error.
+    pub fn serialize<S: Serializer>(t: &time::Time, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&format!(
+            "{:02}:{:02}:{:02}",
+            t.hour(),
+            t.minute(),
+            t.second()
+        ))
+    }
+
+    /// Deserialise `"HH:MM"` or `"HH:MM:SS"`.
+    ///
+    /// # Errors
+    /// Returns a serde error when the value is not a wall-clock time.
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<time::Time, D::Error> {
+        let raw = String::deserialize(d)?;
+        let mut parts = raw.trim().split(':');
+        let mut next = |what: &str| -> Result<u8, D::Error> {
+            parts
+                .next()
+                .ok_or_else(|| D::Error::custom(format!("{raw:?}: missing {what}")))?
+                .parse()
+                .map_err(|e| D::Error::custom(format!("{raw:?}: {what}: {e}")))
+        };
+        let h = next("hour")?;
+        let m = next("minute")?;
+        let sec = match parts.next() {
+            Some(s) => s
+                .parse()
+                .map_err(|e| D::Error::custom(format!("{raw:?}: second: {e}")))?,
+            None => 0,
+        };
+        if parts.next().is_some() {
+            return Err(D::Error::custom(format!(
+                "{raw:?}: too many `:`-separated parts"
+            )));
+        }
+        time::Time::from_hms(h, m, sec).map_err(|e| D::Error::custom(format!("{raw:?}: {e}")))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::super::ZaehlzeitSaisonRecord;
+
+        #[test]
+        fn a_window_round_trips_as_hh_mm_ss_not_a_component_array() {
+            let json = serde_json::json!({
+                "id": "00000000-0000-0000-0000-000000000001",
+                "register_id": "00000000-0000-0000-0000-000000000002",
+                "saison": "WINTER",
+                "wochentage": [1, 2, 3, 4, 5],
+                "zeit_von": "07:00",
+                "zeit_bis": "22:00:00",
+                "updated_at": "2026-01-01T00:00:00Z",
+            });
+            let rec: ZaehlzeitSaisonRecord =
+                serde_json::from_value(json).expect("HH:MM and HH:MM:SS both parse");
+            assert_eq!(rec.zeit_von, time::macros::time!(07:00));
+            assert_eq!(rec.zeit_bis, time::macros::time!(22:00));
+
+            let out = serde_json::to_value(&rec).expect("serialise");
+            assert_eq!(out["zeit_von"], "07:00:00");
+            assert!(
+                out["zeit_bis"].is_string(),
+                "a window boundary must stay a string, not become a component array: {out}"
+            );
+        }
+
+        #[test]
+        fn a_nonsense_time_is_refused_rather_than_defaulted() {
+            for bad in ["25:00", "07", "07:00:00:00", "seven"] {
+                let json = serde_json::json!({
+                    "id": "00000000-0000-0000-0000-000000000001",
+                    "register_id": "00000000-0000-0000-0000-000000000002",
+                    "saison": "WINTER",
+                    "wochentage": [1],
+                    "zeit_von": bad,
+                    "zeit_bis": "22:00",
+                    "updated_at": "2026-01-01T00:00:00Z",
+                });
+                assert!(
+                    serde_json::from_value::<ZaehlzeitSaisonRecord>(json).is_err(),
+                    "{bad:?} must not parse as a window boundary"
+                );
+            }
+        }
+    }
 }
 
 /// Persistence store for iMSys TOU registers.
@@ -2765,6 +2933,7 @@ pub struct MmmaPreisGasRecord {
     pub minder_ct_kwh: rust_decimal::Decimal,
     /// How this record entered the system: `"manual"` | `"the-api"` | `"csv-import"`.
     pub source: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -2795,33 +2964,36 @@ pub trait MmmaPreisGasRepository: Send + Sync {
     async fn list_gas(&self, limit: i64) -> Result<Vec<MmmaPreisGasRecord>, MdmError>;
 }
 
-// ── MMM Strom settlement prices (VNB per GPKE (BK6-24-174) Teil 1 Kap. 8.4) ───────────────────────
+// ── Strom Mehr-/Mindermengenpreise (§ 13 Abs. 3 StromNZV) ────────────────────
 
-/// A stored Strom MMM Ausgleichsenergie price record.
+/// The nationwide Strom Mehr-/Mindermengenpreise for one application month.
 ///
-/// Published monthly by each ÜNB (50Hertz, TenneT, Amprion, TransnetBW).
-/// Used by `netzbilanzd` (INVOIC 31002/31005) and `invoicd` (MMM check 6).
+/// § 13 Abs. 3 StromNZV requires *einheitliche* prices computed from monthly
+/// market prices; the BDEW determines and publishes them centrally as one
+/// series for the whole German market, with a Mehr and a Minder value per
+/// month. There is deliberately no operator dimension here — every
+/// Netzbetreiber settles against the same published values.
+///
+/// Read by `netzbilanzd` (INVOIC 31002/31005) and `invoicd` (MMM check 6).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct MmmPreisStromRecord {
-    /// First day of the billing month.
+    /// First day of the application month.
     pub price_month: time::Date,
-    /// ÜNB MP-ID (BDEW-Codenummer, `99…`).
-    pub vnb_mp_id: String,
-    /// Surplus energy price (Mehrmengen) in ct/kWh.
+    /// Surplus price (Mehrmengen) in ct/kWh.
     pub mehr_ct_kwh: rust_decimal::Decimal,
-    /// Deficit energy price (Mindermengen) in ct/kWh.
+    /// Deficit price (Mindermengen) in ct/kWh.
     pub minder_ct_kwh: rust_decimal::Decimal,
     pub source: String,
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
-/// Read/write access to Strom MMM Ausgleichsenergie prices.
+/// Read/write access to the Strom Mehr-/Mindermengenpreise.
 #[allow(async_fn_in_trait)]
 pub trait MmmPreisStromRepository: Send + Sync {
     async fn upsert_strom(
         &self,
         price_month: time::Date,
-        vnb_mp_id: &str,
         mehr_ct_kwh: rust_decimal::Decimal,
         minder_ct_kwh: rust_decimal::Decimal,
         source: &str,
@@ -2830,7 +3002,6 @@ pub trait MmmPreisStromRepository: Send + Sync {
     async fn find_strom(
         &self,
         price_month: time::Date,
-        vnb_mp_id: &str,
     ) -> Result<Option<MmmPreisStromRecord>, MdmError>;
 }
 
@@ -3354,6 +3525,11 @@ mod partner_record_tests {
 /// lets a territory without an assignment fail loudly at submission time instead
 /// of silently substituting the Bilanzierungsgebiet EIC.
 ///
+/// There is deliberately no `sparte`: MaBiS is the *Marktregeln für die
+/// Durchführung der Bilanzkreisabrechnung **Strom***. Gas balancing runs under
+/// GaBi Gas, which has no MaBiS-Zählpunkt, so a Gas row described a thing that
+/// does not exist and invited an operator to record one.
+///
 /// Regulatory basis: **BNetzA BK6-24-174 Anlage 3 (MaBiS)**; MSCONS AHB 3.2 SG6.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MabisZpRecord {
@@ -3361,14 +3537,12 @@ pub struct MabisZpRecord {
     pub bilanzierungsgebiet: String,
     /// The MaBiS-Zählpunkt filed as `LOC+172` for this territory.
     pub mabis_zp_id: String,
-    /// `STROM` or `GAS` — MaBiS is Strom-only today, but the column keeps the
-    /// door open rather than encoding the assumption in a primary key.
-    pub sparte: Sparte,
     /// Where the assignment came from: `manual`, `erp`, or an import name.
     pub source: String,
     /// Deployment tenant.
     pub tenant: String,
     /// Last write time, set by the repository.
+    #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
 }
 
@@ -3499,5 +3673,60 @@ mod lokationsbuendel_tests {
             b.validate_msb_consistency(&divergent),
             Err(BuendelError::DivergentMsb { .. })
         ));
+    }
+}
+
+#[cfg(test)]
+mod wire_format_guard {
+    //! Timestamps on this API are RFC 3339, and the default is not.
+    //!
+    //! With the workspace's `time` features, a bare `time::OffsetDateTime`
+    //! field serialises as `"2026-01-01 00:00:00.0 +00:00:00"` — a space
+    //! instead of `T`, an explicit `+00:00:00` offset instead of `Z`, and a
+    //! trailing `.0`. It is not RFC 3339 and most clients will not parse it,
+    //! yet it looks close enough in a log to pass review. Every record here
+    //! therefore carries `#[serde(with = "time::serde::rfc3339")]`, and this
+    //! test fails if a new field forgets it.
+
+    #[test]
+    fn the_default_time_format_is_not_rfc_3339() {
+        // Pins the premise: if `time` ever changes its default to RFC 3339,
+        // this test is the place that says the annotations became redundant.
+        let t = time::OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("valid instant");
+        let raw = serde_json::to_string(&t).expect("serialise");
+        assert_eq!(raw, "\"2026-01-01 00:00:00.0 +00:00:00\"");
+    }
+
+    #[test]
+    fn every_offsetdatetime_field_declares_the_rfc_3339_format() {
+        let src = include_str!("repository.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let mut offenders = Vec::new();
+
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if !trimmed.starts_with("pub ") || !trimmed.contains("time::OffsetDateTime") {
+                continue;
+            }
+            // Walk back over doc comments and attributes to find a serde one.
+            let annotated = lines[..i]
+                .iter()
+                .rev()
+                .take_while(|l| {
+                    let t = l.trim();
+                    t.starts_with('#') || t.starts_with("///") || t.starts_with("//")
+                })
+                .any(|l| l.contains("time::serde::rfc3339"));
+            if !annotated {
+                offenders.push(format!("line {}: {trimmed}", i + 1));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "these OffsetDateTime fields would serialise in `time`'s own non-RFC-3339 \
+             format; add #[serde(with = \"time::serde::rfc3339\")] (or `::option`):\n  {}",
+            offenders.join("\n  ")
+        );
     }
 }

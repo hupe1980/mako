@@ -21,9 +21,11 @@ use tokio::sync::Notify;
 /// preceding business write). The whole envelope is stored so a subscriber
 /// receives the exact `MarktEvent` (type, subject, data, extensions).
 ///
-/// `sparte` is derived from the event payload (`data.sparte`) when present, so
-/// the fan-out worker can honour a subscriber's `sparten` filter without
-/// re-parsing the envelope; otherwise it is `NULL` (matches every sparte).
+/// `sparte` comes from the `marktsparte` CloudEvents extension (falling back to
+/// a `data.sparte` payload field) so the fan-out worker can honour a subscriber's
+/// `sparten` filter without re-parsing the envelope. `NULL` means the event is
+/// not Sparte-scoped and matches every filter — so a producer that knows the
+/// Sparte must set it, or the filter silently passes everything.
 ///
 /// `notify` is a low-latency wake-up hint for the fan-out worker — it is **not**
 /// correctness-bearing (the worker also polls on an interval), so a missed
@@ -42,17 +44,27 @@ where
     E: sqlx::PgExecutor<'e>,
 {
     let envelope = serde_json::to_value(ev).map_err(|e| sqlx::Error::Encode(Box::new(e)))?;
-    let sparte = ev.data.get("sparte").and_then(serde_json::Value::as_str);
+    let sparte = ev
+        .marktsparte
+        .as_deref()
+        .or_else(|| ev.data.get("sparte").and_then(serde_json::Value::as_str));
+
+    // Aggregate this event is about. Deliveries to one subscriber are ordered
+    // within an ordering_key and independent across keys, so the key is the thing
+    // whose event *order* carries meaning: the Marktlokation, else the
+    // Messlokation. Events tied to neither are unordered.
+    let ordering_key = ev.marktmaloid.as_deref().or(ev.marktmeloid.as_deref());
 
     sqlx::query(
-        "INSERT INTO event_log (event_id, ce_type, marktrole, sparte, envelope)
-         VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO event_log (event_id, ce_type, marktrole, sparte, ordering_key, envelope)
+         VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (event_id) DO NOTHING",
     )
     .bind(&ev.id)
     .bind(&ev.ce_type)
     .bind(ev.marktrole.as_deref())
     .bind(sparte)
+    .bind(ordering_key)
     .bind(envelope)
     .execute(executor)
     .await?;

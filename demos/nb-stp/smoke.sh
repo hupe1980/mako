@@ -242,12 +242,12 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     # Combined with preisblatt (P1) → auto_accept will dispatch bestaetigen.
     info "[P2] PUT MaLo $SMOKE_MALO_ID (NB=9900357000004, no active LF — fresh MaLo)"
     MALO_JSON=$(jq --arg mid "$SMOKE_MALO_ID" '.data.marktlokationsId = $mid' "$SCRIPT_DIR/fixtures/malo-nb.json")
-    resp=$(marktd_put_json "/api/v1/malo/$SMOKE_MALO_ID" "$MALO_JSON")
+    resp=$(marktd_put_json "/api/v1/malos/$SMOKE_MALO_ID" "$MALO_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" ]] || \
-        fail "PUT /api/v1/malo/$SMOKE_MALO_ID returned $code: $(body "$resp")"
+        fail "PUT /api/v1/malos/$SMOKE_MALO_ID returned $code: $(body "$resp")"
     VERSION=$(body "$resp" | jq -r '.version')
-    pass "PUT /api/v1/malo/$SMOKE_MALO_ID → $code  (version=$VERSION, makod cache push triggered)"
+    pass "PUT /api/v1/malos/$SMOKE_MALO_ID → $code  (version=$VERSION, makod cache push triggered)"
 
     # ── P2b. PUT MaLo grid record (required by netz-checker check 1) ──────────
     #
@@ -261,11 +261,11 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
         --arg mid "$SMOKE_MALO_ID" \
         --arg nb "9900357000004" \
         '{"nb_mp_id": $nb, "bilanzierungsgebiet": "11YN0------0STXG", "netzgebiet": "DEMO-NZ-001", "sparte": "STROM", "source": "manual"}')
-    resp=$(marktd_put_json "/api/v1/malo/$SMOKE_MALO_ID/grid" "$GRID_JSON")
+    resp=$(marktd_put_json "/api/v1/malos/$SMOKE_MALO_ID/grid" "$GRID_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" || "$code" == "204" ]] || \
-        fail "PUT /api/v1/malo/$SMOKE_MALO_ID/grid returned $code: $(body "$resp")"
-    pass "PUT /api/v1/malo/$SMOKE_MALO_ID/grid → $code  (grid record ready for netz-checker)"
+        fail "PUT /api/v1/malos/$SMOKE_MALO_ID/grid returned $code: $(body "$resp")"
+    pass "PUT /api/v1/malos/$SMOKE_MALO_ID/grid → $code  (grid record ready for netz-checker)"
 
     # ── P3. Register ERP subscription for process events → Python webhook ─────
     #
@@ -580,9 +580,9 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
 
     # ── m2. Verify MaLo was stored and makod cache push triggered (P2 above) ──
     info "[m2/m5] GET MaLo $SMOKE_MALO_ID (verify pre-load + rollenzuordnung)"
-    resp=$(marktd_get "/api/v1/malo/$SMOKE_MALO_ID")
+    resp=$(marktd_get "/api/v1/malos/$SMOKE_MALO_ID")
     code=$(status "$resp")
-    [[ "$code" == "200" ]] || fail "GET /api/v1/malo/$SMOKE_MALO_ID returned $code: $(body "$resp")"
+    [[ "$code" == "200" ]] || fail "GET /api/v1/malos/$SMOKE_MALO_ID returned $code: $(body "$resp")"
     NB_GLN=$(body "$resp" | jq -r '.rollenzuordnung[] | select(.zuordnungstyp == "NB") | .rollencodenummer')
     [[ "$NB_GLN" == "9900357000004" ]] || fail "expected NB=9900357000004, got NB=$NB_GLN"
     MALO_SPARTE=$(body "$resp" | jq -r '.sparte')
@@ -595,7 +595,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
 (check fixtures/malo-nb.json field names against rubo4e::current::Marktlokation): $(body "$resp" | jq -c '.data')"
     body "$resp" | jq -e '.netzebene != null' >/dev/null || \
         fail "netzebene is null — Marktlokation.netzebene did not survive ingest"
-    pass "GET /api/v1/malo/$SMOKE_MALO_ID → sparte=$MALO_SPARTE  NB=$NB_GLN  (BO4E payload intact)"
+    pass "GET /api/v1/malos/$SMOKE_MALO_ID → sparte=$MALO_SPARTE  NB=$NB_GLN  (BO4E payload intact)"
 
     # ── m3. GET preisblatt — verify FV2026 coverage ───────────────────────────
     info "[m3/m5] GET preisblatt for NB 9900357000004 at process_date 2026-10-01"

@@ -121,7 +121,12 @@ async fn approval_queue_enqueue_list_approve() {
 
     // Claim: the decision is taken before any market command is dispatched.
     let claimed = queue
-        .claim(id, "9900357000004", QueueStatus::Approved)
+        .claim(
+            id,
+            "9900357000004",
+            QueueStatus::Approved,
+            "operator@example.com",
+        )
         .await
         .expect("claim")
         .expect("a Pending entry is claimable");
@@ -131,7 +136,12 @@ async fn approval_queue_enqueue_list_approve() {
     // A second operator cannot claim the same entry — one decision, one command.
     assert!(
         queue
-            .claim(id, "9900357000004", QueueStatus::Rejected)
+            .claim(
+                id,
+                "9900357000004",
+                QueueStatus::Rejected,
+                "operator@example.com"
+            )
             .await
             .expect("second claim")
             .is_none(),
@@ -149,7 +159,12 @@ async fn approval_queue_enqueue_list_approve() {
     assert!(released.decided_at.is_none());
 
     queue
-        .claim(id, "9900357000004", QueueStatus::Approved)
+        .claim(
+            id,
+            "9900357000004",
+            QueueStatus::Approved,
+            "operator@example.com",
+        )
         .await
         .expect("re-claim")
         .expect("a released entry is claimable again");

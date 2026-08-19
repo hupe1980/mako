@@ -189,7 +189,7 @@
 //! |---------|-----------|---------|------|
 //! | `gpke.lieferbeginn.anmelden` | `LF` | GPKE Lieferbeginn Strom | 55001 |
 //! | `gpke.lieferbeginn.bestaetigen` | `NB` | GPKE NB bestätigt Lieferbeginn | 55002/55003 |
-//! | `gpke.lieferende.anmelden` | `LF` | GPKE Lieferende Strom | 55002 |
+//! | `gpke.lieferende.anmelden` | `LF` | GPKE Lieferende Strom | 55004 |
 //! | `gpke.lieferende.bestaetigen` | `NB` | GPKE NB bestätigt Lieferende | 55005/55006 |
 //! | `gpke.kuendigung.anmelden` | `LF` | GPKE Kündigung Lieferbeginn | 55016 |
 //! | `gpke.sperrung.beauftragen` | `LF` | GPKE Sperrauftrag (LF → NB; ORDERS) | 17115 |

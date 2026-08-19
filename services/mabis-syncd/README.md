@@ -12,7 +12,7 @@ A Summenzeitreihe is **MSCONS Prüfidentifikator 13003** ("Übertragung Summenze
 | Outbound | `makod` command `mabis.summenzeitreihe.uebermitteln` (Marktrolle `NB`/`ÜNB`) → MSCONS 13003 via AS4 |
 | Inbound | `POST /api/v1/datenstatus` (IFTSTA 21003/21004) · `POST /api/v1/pruefmitteilung` (IFTSTA 21000/21001) |
 | Aggregation | `mako-mabis::SummenzeitreiheBuilder` on a **quarter-hourly** grid; rejects any interval that does not match the settlement slot length |
-| Territory resolution | Per-MaLo lookup in `marktd` (`GET /api/v1/malo/{id}` → `bilanzierungsgebiet`) |
+| Territory resolution | Per-MaLo lookup in `marktd` (`GET /api/v1/malos/{id}` → `bilanzierungsgebiet`) |
 | Schedule | 10. Werktag after the Bilanzierungsmonat (last day of the Erstaufschlag window) |
 | Auth | OIDC/JWT + Cedar ABAC — `read-mabis-run`, `trigger-mabis-run` (NB/ÜNB only) |
 | Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
@@ -98,7 +98,7 @@ sequenceDiagram
 
     sched->>syncd: 10. Werktag after the Bilanzierungsmonat
     syncd->>edmd: GET /api/v1/billing-periods (discover MaLos)
-    syncd->>marktd: GET /api/v1/malo/{id} (resolve Bilanzierungsgebiet)
+    syncd->>marktd: GET /api/v1/malos/{id} (resolve Bilanzierungsgebiet)
 
     loop per MaLo
         syncd->>edmd: GET /api/v1/lastgang/{malo_id}
@@ -276,8 +276,8 @@ The assignment is **marktd master data**, not service configuration. Before each
 submission `mabis-syncd` resolves it over HTTP:
 
 ```
-GET /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
-PUT /api/v1/bilanzierungsgebiet/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
+GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
+PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
 GET /api/v1/mabis-zp                             → every assignment for the tenant
 ```
 

@@ -1,8 +1,8 @@
 //! MeLo (Messlokation) REST handlers.
 //!
 //! Routes:
-//!   PUT  /api/v1/melo/:id
-//!   GET  /api/v1/melo/:id
+//!   PUT  /api/v1/melos/:id
+//!   GET  /api/v1/melos/:id
 
 use std::sync::Arc;
 
@@ -25,7 +25,9 @@ use rubo4e::current::{Messlokation, Standorteigenschaften};
 use serde::{Deserialize, Serialize};
 use utoipa::ToSchema;
 
-use super::{Claims, IntoMdmResponse as _, etag, parse_if_match};
+use mako_service::cedar::CedarEnforcer;
+
+use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, parse_if_match};
 
 // ── BO4E validation helpers ──────────────────────────────────────────────────────────
 
@@ -122,7 +124,7 @@ pub struct MeloResponse {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `PUT /api/v1/melo/:id`
+/// `PUT /api/v1/melos/:id`
 ///
 /// # Single-write-path invariant (MaLo ↔ MeLo)
 ///
@@ -134,7 +136,7 @@ pub struct MeloResponse {
 /// `marktd::pg::melo` for the reconciliation rules.
 #[utoipa::path(
     put,
-    path = "/api/v1/melo/{id}",
+    path = "/api/v1/melos/{id}",
     tag = "melo",
     params(("id" = String, Path, description = "MeLo-ID (DE + 31 chars)")),
     request_body = MeloUpsertRequest,
@@ -147,8 +149,9 @@ pub struct MeloResponse {
 pub async fn put_melo<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
     Extension(pool): Extension<sqlx::PgPool>,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     headers: HeaderMap,
-    _claims: Claims,
+    claims: Claims,
     Path(id): Path<String>,
     Json(req): Json<MeloUpsertRequest>,
 ) -> impl IntoResponse
@@ -159,6 +162,16 @@ where
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
+    if enforcer
+        .check(&claims.principal(), "write-melo", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "write-melo denied",
+        }
+        .into_response();
+    }
+
     let melo_id = match id.parse::<MeloId>() {
         Ok(id) => id,
         Err(e) => {
@@ -185,7 +198,13 @@ where
         Err(e) => return e.into_response(),
     };
 
-    let if_match = parse_if_match(&headers);
+    let if_match = match parse_if_match(&headers) {
+        IfMatch::Absent | IfMatch::Any => None,
+        IfMatch::Version(v) => Some(v),
+        // Refuse rather than fall back to an unconditional write: the caller
+        // asked for a conditional one and would otherwise be told it succeeded.
+        IfMatch::Malformed => return malformed_if_match(),
+    };
     let exists = state
         .melo_repo
         .find(&melo_id)
@@ -252,10 +271,10 @@ where
     }
 }
 
-/// `GET /api/v1/melo/:id`
+/// `GET /api/v1/melos/:id`
 #[utoipa::path(
     get,
-    path = "/api/v1/melo/{id}",
+    path = "/api/v1/melos/{id}",
     tag = "melo",
     params(("id" = String, Path, description = "MeLo-ID")),
     responses(
@@ -265,7 +284,8 @@ where
 )]
 pub async fn get_melo<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
-    _claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
     Path(id): Path<String>,
 ) -> impl IntoResponse
 where
@@ -275,6 +295,16 @@ where
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
+    if enforcer
+        .check(&claims.principal(), "read-melo", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "read-melo denied",
+        }
+        .into_response();
+    }
+
     let melo_id = match id.parse::<MeloId>() {
         Ok(id) => id,
         Err(e) => {
@@ -326,7 +356,7 @@ where
 /// `NetworkConstraintDocument` cross-references and Gas billing zone routing.
 ///
 /// Returns 404 when the MeLo has no `standorteigenschaften` column populated yet.
-/// Use `PUT /api/v1/melo/{id}` with a `data.standorteigenschaften` field to populate it,
+/// Use `PUT /api/v1/melos/{id}` with a `data.standorteigenschaften` field to populate it,
 /// or wait for WiM Stammdaten auto-population (Roadmap N3).
 #[utoipa::path(
     get,
@@ -340,7 +370,8 @@ where
 )]
 pub async fn get_melo_standorteigenschaften<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
-    _claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    claims: Claims,
     Path(id): Path<String>,
 ) -> impl IntoResponse
 where
@@ -350,6 +381,16 @@ where
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
+    if enforcer
+        .check(&claims.principal(), "read-melo", &state.tenant_gln)
+        .is_err()
+    {
+        return MdmError::Forbidden {
+            reason: "read-melo denied",
+        }
+        .into_response();
+    }
+
     let melo_id = match id.parse::<MeloId>() {
         Ok(id) => id,
         Err(e) => {

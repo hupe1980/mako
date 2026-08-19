@@ -101,7 +101,7 @@ pub async fn get_pricat_history(
     Path(nb_mp_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-pricat", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -141,7 +141,7 @@ pub async fn get_dispatch_log(
     Path((_nb_gln, version_id)): Path<(String, Uuid)>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-pricat", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -197,7 +197,7 @@ pub async fn post_pricat_dispatch(
     Path(nb_mp_id): Path<String>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "dispatch-pricat", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();

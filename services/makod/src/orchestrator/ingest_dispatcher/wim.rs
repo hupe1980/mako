@@ -408,10 +408,11 @@ impl EdifactIngestDispatcher {
                 if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Preisanfrage deadline: 5 Werktage (BK6-24-174).
+                    // Preisanfrage deadline (BK6-24-174), from the same
+                    // constant processd sizes its operator queue by.
                     let due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
-                        5,
+                        mako_wim::PREISANFRAGE_ANTWORT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
                     self.spawn_or_resume::<WimPreisanfrageWorkflow>(

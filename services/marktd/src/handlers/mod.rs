@@ -3,7 +3,7 @@
 //!
 //! - `Claims` — JWT bearer extraction via `FromRequestParts`
 //! - `IntoResponse for MdmError` — maps domain errors to HTTP status codes
-//! - `parse_if_match` — `If-Match` header → `Option<i64>`
+//! - `parse_if_match` — `If-Match` header → [`IfMatch`]
 //! - `etag` — `i64` version → ETag header value
 
 pub mod bilanzierung;
@@ -14,14 +14,12 @@ pub mod einwilligung;
 pub mod event_ingest;
 pub mod event_log;
 pub mod grundversorger;
-pub mod health;
 pub mod lokationszuordnung;
 pub mod mabis_zp;
 pub mod malo;
 pub mod malo_grid;
 pub mod melo;
 pub mod melo_msb;
-pub mod metrics;
 pub mod mmma_preise;
 pub mod msb_rahmenvertrag_gas;
 pub mod nb_contract;
@@ -90,7 +88,7 @@ impl IntoMdmResponse for MdmError {
 
 /// The instance's primary tenant GLN, injected as an Axum `Extension`.
 ///
-/// Set once at startup from `cfg.makod.tenant`.
+/// Set once at startup from `[markt] tenant`.
 /// Used by handlers that don't have direct access to `AppState` (e.g. `preisblatt`)
 /// as the `resource_tenant` argument to [`mako_service::cedar::CedarEnforcer::check`].
 #[derive(Debug, Clone)]
@@ -98,16 +96,108 @@ pub struct TenantGln(pub String);
 
 // ── If-Match / ETag helpers ───────────────────────────────────────────────────
 
-/// Parse the `If-Match` header value (e.g. `"3"`) into a version number.
+/// The outcome of reading an `If-Match` header.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IfMatch {
+    /// No `If-Match` — an unconditional write.
+    Absent,
+    /// `If-Match: *` — "must already exist", with no version constraint.
+    Any,
+    /// A concrete version the caller expects to still be current.
+    Version(i64),
+    /// Present but unusable.
+    Malformed,
+}
+
+/// Read the `If-Match` header.
+///
+/// Accepts a bare or quoted version (`3`, `"3"`), the weak form (`W/"3"`), and
+/// `*`. Anything else is [`IfMatch::Malformed`] and the caller must answer
+/// `400`, **not** treat it as absent: silently ignoring an unparsable
+/// precondition turns the conditional write the client asked for into an
+/// unconditional one, which is the lost update it was trying to prevent
+/// (RFC 9110 § 13.1.1).
 #[must_use]
-pub fn parse_if_match(headers: &HeaderMap) -> Option<i64> {
-    let raw = headers.get("if-match")?.to_str().ok()?;
-    let stripped = raw.trim_matches('"');
-    stripped.parse::<i64>().ok()
+pub fn parse_if_match(headers: &HeaderMap) -> IfMatch {
+    let Some(raw) = headers.get("if-match") else {
+        return IfMatch::Absent;
+    };
+    let Ok(raw) = raw.to_str() else {
+        return IfMatch::Malformed;
+    };
+    let raw = raw.trim();
+    if raw == "*" {
+        return IfMatch::Any;
+    }
+    // A list of candidate etags is legal but this resource has exactly one
+    // version, so anything beyond a single entry cannot be honoured.
+    if raw.contains(',') {
+        return IfMatch::Malformed;
+    }
+    let value = raw.strip_prefix("W/").unwrap_or(raw).trim_matches('"');
+    value
+        .parse::<i64>()
+        .map_or(IfMatch::Malformed, IfMatch::Version)
+}
+
+/// The `400` for an `If-Match` this resource cannot evaluate.
+#[must_use]
+pub fn malformed_if_match() -> Response {
+    MdmError::Unprocessable {
+        reason: "If-Match must be a version number (`\"3\"`, `W/\"3\"`) or `*`".to_owned(),
+    }
+    .into_response()
 }
 
 /// Build an ETag header value from a version number (`"<version>"`).
 #[must_use]
 pub fn etag(version: i64) -> String {
     format!("\"{version}\"")
+}
+
+#[cfg(test)]
+mod if_match_tests {
+    use super::{IfMatch, parse_if_match};
+    use axum::http::HeaderMap;
+
+    fn headers(value: &str) -> HeaderMap {
+        let mut h = HeaderMap::new();
+        h.insert("if-match", value.parse().expect("header value"));
+        h
+    }
+
+    #[test]
+    fn no_header_is_an_unconditional_write() {
+        assert_eq!(parse_if_match(&HeaderMap::new()), IfMatch::Absent);
+    }
+
+    #[test]
+    fn quoted_bare_and_weak_etags_all_yield_the_version() {
+        for raw in ["\"3\"", "3", "W/\"3\"", "  \"3\"  "] {
+            assert_eq!(
+                parse_if_match(&headers(raw)),
+                IfMatch::Version(3),
+                "{raw:?} must read as version 3"
+            );
+        }
+    }
+
+    #[test]
+    fn a_star_means_must_exist_without_a_version() {
+        assert_eq!(parse_if_match(&headers("*")), IfMatch::Any);
+    }
+
+    #[test]
+    fn an_unusable_precondition_is_malformed_not_absent() {
+        // Treating any of these as "absent" would silently downgrade the
+        // caller's conditional write to an unconditional one — the lost update
+        // the header exists to prevent.
+        for raw in ["\"abc\"", "", "\"3\", \"4\"", "etag-3"] {
+            assert_eq!(
+                parse_if_match(&headers(raw)),
+                IfMatch::Malformed,
+                "{raw:?} must not be silently ignored"
+            );
+        }
+    }
 }

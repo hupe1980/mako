@@ -149,18 +149,18 @@ mod tests {
     #[test]
     fn normalise_keeps_short_paths() {
         assert_eq!(normalise_path("/health/live"), "/health/live");
-        assert_eq!(normalise_path("/api/v1/malo"), "/api/v1/malo");
+        assert_eq!(normalise_path("/api/v1/malos"), "/api/v1/malos");
     }
 
     #[test]
     fn normalise_replaces_uuid() {
-        let path = "/api/v1/malo/550e8400-e29b-41d4-a716-446655440000";
-        assert_eq!(normalise_path(path), "/api/v1/malo/{id}");
+        let path = "/api/v1/malos/550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(normalise_path(path), "/api/v1/malos/{id}");
     }
 
     #[test]
     fn normalise_replaces_digit_ids() {
-        let path = "/api/v1/malo/51238696012";
-        assert_eq!(normalise_path(path), "/api/v1/malo/{id}");
+        let path = "/api/v1/malos/51238696012";
+        assert_eq!(normalise_path(path), "/api/v1/malos/{id}");
     }
 }

@@ -1,4 +1,4 @@
-//! `GET|PUT /api/v1/malo/{malo_id}/grid` — NB grid topology for a MaLo.
+//! `GET|PUT /api/v1/malos/{malo_id}/grid` — NB grid topology for a MaLo.
 //!
 //! Source: the NB's own **NIS/GIS** (Network/Geographic Information System).
 //! Imported via `xtask import-grid` (CSV/API adapter) or provisioned manually.
@@ -76,7 +76,7 @@ impl From<MaloGridRecord> for MaloGridResponse {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `GET /api/v1/malo/{malo_id}/grid` — fetch the grid topology for a MaLo.
+/// `GET /api/v1/malos/{malo_id}/grid` — fetch the grid topology for a MaLo.
 pub async fn get_malo_grid(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -114,7 +114,7 @@ pub async fn get_malo_grid(
     }
 }
 
-/// `PUT /api/v1/malo/{malo_id}/grid` — upsert the grid topology for a MaLo.
+/// `PUT /api/v1/malos/{malo_id}/grid` — upsert the grid topology for a MaLo.
 ///
 /// Requires the `write-malo-grid` action in the Cedar policy.
 /// Idempotent — safe to call repeatedly from `mastr-syncd`.

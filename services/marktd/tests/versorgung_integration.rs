@@ -60,8 +60,8 @@ async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
         "the future supplier is announced"
     );
 
-    // GPKE 55004 (Abmeldung/Ablehnung): the announcement must be reset — this
-    // was the gap, lf_mp_id_next used to stick forever.
+    // Ablehnung Anmeldung: the announcement must be reset, or the next
+    // supplier's Anmeldung is rejected against a stale marker.
     vs.clear_lf_next(&m, TENANT, Some(uuid::Uuid::new_v4()))
         .await
         .expect("clear");
@@ -81,6 +81,175 @@ async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
         again.version, v,
         "no-op cancellation does not bump the version"
     );
+}
+
+/// A second supplier's Anmeldung must **not** displace the pending one.
+///
+/// `marktd` writes `lf_mp_id_next` while ingesting the `process.initiated`,
+/// *before* fanning the event out to `processd` — so by the time `netz-checker`
+/// runs its EBD `E_0622` Prüfschritt 70 check, the Anmeldung under evaluation
+/// has already written its own marker. The check therefore compares MP-IDs
+/// rather than testing for presence, and that is only meaningful if the *first*
+/// announcement survives: an overwriting upsert lets every Anmeldung find its
+/// own MP-ID there, so `A06` „Andere Anmeldung in Bearbeitung" never fires.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_competing_anmeldung_does_not_displace_the_pending_one() {
+    let Some((pool, _pg)) = test_pool("competing_anmeldung").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let m = malo();
+
+    vs.announce_lf_next(
+        &m,
+        TENANT,
+        "9911111111111",
+        Some(time::macros::date!(2026 - 10 - 01)),
+        "9900000000001",
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("first announce");
+    let first = vs.find(&m, TENANT).await.expect("find").expect("row");
+
+    // A different supplier announces while the first is still pending.
+    vs.announce_lf_next(
+        &m,
+        TENANT,
+        "9922222222222",
+        Some(time::macros::date!(2026 - 11 - 01)),
+        "9900000000001",
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("second announce");
+
+    let after = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(
+        after.lf_mp_id_next.as_deref(),
+        Some("9911111111111"),
+        "the first announcement must survive so A06 can be decided against it"
+    );
+    assert_eq!(
+        after.version, first.version,
+        "a losing announcement is a no-op — no version bump, no history row"
+    );
+
+    // The *same* supplier re-sending (corrected date, at-least-once redelivery)
+    // still updates its own announcement.
+    vs.announce_lf_next(
+        &m,
+        TENANT,
+        "9911111111111",
+        Some(time::macros::date!(2026 - 10 - 15)),
+        "9900000000001",
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("re-announce");
+    let corrected = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(
+        corrected.lf_next_lieferbeginn,
+        Some(time::macros::date!(2026 - 10 - 15)),
+        "the holder of the announcement may correct its own date"
+    );
+}
+
+/// The erzeugende-Marktlokation Anmeldung (55077 → 55078 / 55080) drives the
+/// same projection as the verbrauchende one (55001 → 55002 / 55003).
+///
+/// A `derive_supply_state` that matched only 55001 would leave an EEG-/KWKG-MaLo's
+/// supplier change invisible: no announcement for the NB's duplicate check to
+/// see, and nothing for the confirmation to promote.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_erzeugende_malo_anmeldung_drives_the_same_projection() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("erz_malo_anmeldung").await else {
+        return;
+    };
+    let vs = PgVersorgungsStatusRepository::new(pool.clone());
+    let m = malo();
+    let mut tx = pool.begin().await.expect("begin");
+
+    derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_INITIATED,
+        Some(55_077),
+        &serde_json::json!({
+            "malo_id":       m.to_string(),
+            "new_supplier":  "9911111111111",
+            "grid_operator": "9900000000001",
+            "process_date":  "2026-10-01",
+        }),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("55077 announce");
+
+    derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55_078),
+        &serde_json::json!({ "malo_id": m.to_string() }),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("55078 confirm");
+
+    tx.commit().await.expect("commit");
+
+    let after = vs.find(&m, TENANT).await.expect("find").expect("row");
+    assert_eq!(
+        after.lf_mp_id.as_deref(),
+        Some("9911111111111"),
+        "55078 must promote the announcement 55077 made"
+    );
+    assert_eq!(
+        after.lieferstatus,
+        mako_markt::repository::LieferStatus::Beliefert
+    );
+    assert_eq!(
+        after.lieferbeginn,
+        Some(time::macros::date!(2026 - 10 - 01))
+    );
+}
+
+/// `versorgung.changed` announces a transition, so a delivery that changed
+/// nothing must not emit one — a redelivered Ablehnung would otherwise describe
+/// a state that has not moved.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_no_op_derivation_emits_no_versorgung_changed() {
+    use marktd::handlers::event_ingest::derive_supply_state;
+
+    let Some((pool, _pg)) = test_pool("no_op_derivation").await else {
+        return;
+    };
+    let m = malo();
+    let mut tx = pool.begin().await.expect("begin");
+
+    // No announcement pending: the Ablehnung has nothing to clear.
+    let evts = derive_supply_state(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55_003),
+        &serde_json::json!({ "malo_id": m.to_string() }),
+        Some(uuid::Uuid::new_v4()),
+    )
+    .await
+    .expect("55003 on a MaLo with no announcement");
+    assert!(
+        evts.is_empty(),
+        "nothing changed, so nothing may be announced; got {evts:?}"
+    );
+
+    tx.commit().await.expect("commit");
 }
 
 // ── The core supply lifecycle ─────────────────────────────────────────────────
@@ -278,11 +447,24 @@ async fn a_rolled_back_ingest_leaves_neither_marker_nor_projection_nor_outbox() 
             "process_date": "2026-10-01",
             "nb_mp_id":     "9900000000001",
         }),
-        &event_id,
+        Some(uuid::Uuid::new_v4()),
     )
     .await
     .expect("derivation");
-    assert!(evts.is_empty(), "an announce emits no secondary event");
+    // Every transition announces itself. Until this was wired, the whole
+    // EDIFACT-driven lifecycle emitted nothing and only the REST upsert did.
+    assert_eq!(evts.len(), 1, "an announce emits versorgung.changed");
+    assert_eq!(evts[0].ce_type, mako_events::markt::VERSORGUNG_CHANGED);
+    assert_eq!(
+        evts[0].marktsparte.as_deref(),
+        Some("STROM"),
+        "55001 is a Strom PID, so the sparten subscription filter can match it"
+    );
+    assert_eq!(
+        evts[0].data.get("lf_mp_id_next").and_then(|v| v.as_str()),
+        Some("9911111111111"),
+        "the announced future Lieferant is carried on the event"
+    );
     marktd::outbox::enqueue(
         &mut *tx,
         &mako_markt::cloudevents::MarktEvent::new(
@@ -348,17 +530,34 @@ async fn eog_derivation_resolves_the_default_bilanzkreis_and_snapshots_eog_seit(
             "nb_mp_id":     "9900000000001",
             "process_date": "20261115",
         }),
-        &uuid::Uuid::new_v4().to_string(),
+        Some(uuid::Uuid::new_v4()),
     )
     .await
     .expect("derivation");
     tx.commit().await.unwrap();
 
-    assert_eq!(evts.len(), 1, "eog-begonnen is emitted");
+    assert_eq!(evts.len(), 2, "eog-begonnen plus versorgung.changed");
+    let begonnen = &evts[0];
     assert_eq!(
-        evts[0].data.get("bilanzkreis").and_then(|v| v.as_str()),
+        begonnen.ce_type,
+        mako_events::markt::VERSORGUNG_EOG_BEGONNEN
+    );
+    assert_eq!(
+        begonnen.data.get("bilanzkreis").and_then(|v| v.as_str()),
         Some("BK-DEFAULT-1"),
         "the NB's deposited default BK is resolved, not null"
+    );
+    assert_eq!(
+        begonnen.data.get("sparte").and_then(|v| v.as_str()),
+        Some("STROM"),
+        "processd keys its EoG case log on this; without it every Gas case \
+         was recorded as Strom"
+    );
+    assert_eq!(evts[1].ce_type, mako_events::markt::VERSORGUNG_CHANGED);
+    assert_eq!(
+        evts[1].data.get("lieferstatus").and_then(|v| v.as_str()),
+        Some("Ersatzversorgung"),
+        "versorgung.changed reports the state the transition produced"
     );
 
     let vs = PgVersorgungsStatusRepository::new(pool.clone());

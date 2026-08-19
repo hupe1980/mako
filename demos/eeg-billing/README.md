@@ -87,7 +87,7 @@ Expected output:
 ```
 ✓ einsd is ready
 ✓ edmd is ready
-✓ PUT /api/v1/malo/17835382008 → 201
+✓ PUT /api/v1/malos/17835382008 → 201
 ✓ PUT /api/v1/anlagen/TR0000000001 → 201  (plant registered)
 ✓ GET /api/v1/anlagen/TR0000000001 → status=aktiv  verguetungssatz_ct=8.11 ct/kWh
 ✓ POST /api/v1/meter-reads/rlm/17835382008 → 200  stored=96 intervals

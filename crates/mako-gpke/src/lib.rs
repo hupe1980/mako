@@ -190,6 +190,7 @@ pub mod abrechnung;
 pub mod allokationsliste;
 pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
+pub mod antwortfrist;
 pub mod beendigung_zuordnung;
 pub mod comdis;
 pub mod datenabruf;
@@ -232,6 +233,9 @@ pub use ankuendigung_zuordnung_lf::{
     AnkuendigungZuordnungLfCommand, AnkuendigungZuordnungLfData, AnkuendigungZuordnungLfEvent,
     AnkuendigungZuordnungLfState, GpkeAnkuendigungZuordnungLfWorkflow,
     WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW_NAME,
+};
+pub use antwortfrist::{
+    ANTWORT_OBLIGATIONS, AntwortObligation, FristShape, antwort_deadline, antwort_obligation,
 };
 pub use beendigung_zuordnung::{
     BEENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL, BEENDIGUNG_ZUORDNUNG_PIDS,

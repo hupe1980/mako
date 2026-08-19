@@ -286,7 +286,7 @@ slices. What that product **costs** on a given day is a catalogue fact, so
 `tarifbd` owns it.
 
 ```text
-vertragd  GET /api/v1/malo/{malo}/produkte?from=&to=   → the slices, in order
+vertragd  GET /api/v1/malos/{malo}/produkte?from=&to=   → the slices, in order
 tarifbd   POST /api/v1/products/{lf}/resolve            → one version per (code, date)
 ```
 

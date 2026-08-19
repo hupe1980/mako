@@ -1,6 +1,10 @@
 -- processd schema — Process Decision Engine
 --
--- `approval_queue`: LF module — events requiring ERP operator decision (E_0624 etc.).
+-- `approval_queue`: every role's decisions an operator must make — the NB's
+--   escalated and held-back Anmeldungen, the LF's GPKE answers, the MSB's
+--   escalated MSB-Wechsel and § 14a Steuerungsaufträge. `expires_at` carries the
+--   *business* answer Frist of the process (24 h GPKE / 3-5-7-1 WT WiM /
+--   10 WT GeLi Gas), never the 45-minute APERAK clock, which makod owns.
 -- `anmeldung_decisions`: NB module — Anmeldung STP audit log (Accept/Reject/Escalate).
 --
 -- Both tables use (process_id, tenant) as idempotency key;
@@ -8,7 +12,7 @@
 --
 -- Regulatory: §20 Abs. 1 S. 3 EnWG parity (initiator_is_affiliate).
 
--- ── LF approval queue ─────────────────────────────────────────────────────────
+-- ── Operator approval queue (all roles) ───────────────────────────────────────
 
 CREATE TABLE approval_queue (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -17,22 +21,27 @@ CREATE TABLE approval_queue (
     malo_id     TEXT,
     reason      TEXT        NOT NULL,
     status      TEXT        NOT NULL CHECK (status IN ('Pending','Approved','Rejected','Expired')),
-    -- makod command dispatched on operator approve/reject. NULL = legacy
-    -- PID-based mapping in the REST handler (55008 GPKE, 44022/44023 GeLi).
+    -- makod command dispatched on operator approve/reject, resolved from the
+    -- trigger PID at enqueue time. NULL means this decision carries no market
+    -- message.
     approve_command TEXT,
     reject_command  TEXT,
     marktrolle      TEXT,
     expires_at  TIMESTAMPTZ NOT NULL,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     decided_at  TIMESTAMPTZ,
+    -- `sub` of the principal who approved or rejected. § 20 Abs. 1 EnWG parity
+    -- evidence and the GoBD trail both have to say *who* decided.
+    decided_by  TEXT,
     tenant      TEXT        NOT NULL,
     UNIQUE (process_id, tenant)
 );
 
 COMMENT ON TABLE approval_queue IS
-    'LF module: events that could not be auto-decided. '
-    'One row per process awaiting ERP operator decision. '
-    'Background worker expires Pending rows past expires_at.';
+    'Market processes this deployment could not answer automatically, from any '
+    'compiled role. One row per process awaiting an operator decision, carrying '
+    'the makod command to dispatch and the business Frist it must be dispatched '
+    'within. A background worker expires Pending rows past expires_at.';
 
 CREATE INDEX aq_tenant_status ON approval_queue (tenant, status, expires_at);
 CREATE INDEX aq_process_id    ON approval_queue (process_id);

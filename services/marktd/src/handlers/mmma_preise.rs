@@ -103,7 +103,7 @@ pub async fn put_mmma_gas(
     Json(req): Json<MmmaGasUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-mmma-preis", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -136,7 +136,7 @@ pub async fn get_mmma_gas(
     Path(path): Path<YearMonthPath>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-mmma-preis", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -187,7 +187,7 @@ pub async fn list_mmma_gas(
     Query(q): Query<ListQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-mmma-preis", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -217,7 +217,6 @@ pub async fn list_mmma_gas(
 #[derive(Debug, Serialize)]
 pub struct MmmStromResponse {
     pub price_month: String,
-    pub vnb_mp_id: String,
     pub mehr_ct_kwh: Decimal,
     pub minder_ct_kwh: Decimal,
     pub source: String,
@@ -228,9 +227,6 @@ pub struct MmmStromResponse {
 /// Request body for upserting Strom MMM prices.
 #[derive(Debug, Deserialize)]
 pub struct MmmStromUpsertRequest {
-    /// VNB MP-ID (BDEW-Codenummer). The distribution network operator computes and
-    /// publishes the price on its own website.
-    pub vnb_mp_id: String,
     pub mehr_ct_kwh: Decimal,
     pub minder_ct_kwh: Decimal,
     #[serde(default = "default_source_manual")]
@@ -239,7 +235,10 @@ pub struct MmmStromUpsertRequest {
 
 /// `PUT /api/v1/mmm-preise/strom/{year}/{month}`
 ///
-/// Upsert the Strom MMM prices for a billing month + VNB.
+/// Upsert the nationwide Strom Mehr-/Mindermengenpreise for an application
+/// month. § 13 Abs. 3 StromNZV makes them *einheitlich* and the BDEW publishes
+/// one series for the whole market, so the month is the entire key — there is
+/// no per-Netzbetreiber variant to select.
 pub async fn put_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -249,7 +248,7 @@ pub async fn put_mmm_strom(
     Json(req): Json<MmmStromUpsertRequest>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-mmma-preis", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -259,13 +258,7 @@ pub async fn put_mmm_strom(
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
     match repo
-        .upsert_strom(
-            price_month,
-            &req.vnb_mp_id,
-            req.mehr_ct_kwh,
-            req.minder_ct_kwh,
-            &req.source,
-        )
+        .upsert_strom(price_month, req.mehr_ct_kwh, req.minder_ct_kwh, &req.source)
         .await
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
@@ -273,39 +266,27 @@ pub async fn put_mmm_strom(
     }
 }
 
-/// `GET /api/v1/mmm-preise/strom/{year}/{month}?vnb_mp_id=9900...`
+/// `GET /api/v1/mmm-preise/strom/{year}/{month}`
 pub async fn get_mmm_strom(
     Extension(repo): Extension<MmmStromRepoExt>,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     claims: Claims,
     Path(path): Path<YearMonthPath>,
-    Query(q): Query<std::collections::HashMap<String, String>>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "read-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "read-mmma-preis", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
-    let vnb_mp_id = match q.get("vnb_mp_id") {
-        Some(id) => id.clone(),
-        None => {
-            return (
-                StatusCode::BAD_REQUEST,
-                "vnb_mp_id query parameter required",
-            )
-                .into_response();
-        }
-    };
     let price_month = match path.to_date() {
         Ok(d) => d,
         Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
     };
-    match repo.find_strom(price_month, &vnb_mp_id).await {
+    match repo.find_strom(price_month).await {
         Ok(Some(r)) => Json(MmmStromResponse {
             price_month: r.price_month.to_string(),
-            vnb_mp_id: r.vnb_mp_id,
             mehr_ct_kwh: r.mehr_ct_kwh,
             minder_ct_kwh: r.minder_ct_kwh,
             source: r.source,
@@ -315,8 +296,9 @@ pub async fn get_mmm_strom(
         Ok(None) => (
             StatusCode::NOT_FOUND,
             format!(
-                "No MMM Strom prices for {}/{} VNB {vnb_mp_id}",
-                path.year, path.month
+                "No Strom Mehr-/Mindermengenpreise for {}/{} — import them from the \
+                 BDEW publication via PUT /api/v1/mmm-preise/strom/{}/{}",
+                path.year, path.month, path.year, path.month
             ),
         )
             .into_response(),
@@ -365,11 +347,12 @@ pub async fn post_import_trigger(
     Extension(TenantGln(tenant_gln)): Extension<TenantGln>,
     Extension(pool): Extension<sqlx::PgPool>,
     Extension(notify): Extension<Arc<tokio::sync::Notify>>,
+    Extension(http): Extension<reqwest::Client>,
     claims: Claims,
     Query(q): Query<ImportTriggerQuery>,
 ) -> impl IntoResponse {
     if enforcer
-        .check(&claims.principal(), "write-preisblatt", &tenant_gln)
+        .check(&claims.principal(), "write-mmma-preis", &tenant_gln)
         .is_err()
     {
         return (StatusCode::FORBIDDEN, "access denied").into_response();
@@ -382,6 +365,7 @@ pub async fn post_import_trigger(
     let results = crate::mmma_worker::run_import_cycle(
         year,
         month,
+        &http,
         &import_cfg.gas_url,
         &import_cfg.strom_url,
         &gas_repo,

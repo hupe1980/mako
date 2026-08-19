@@ -80,7 +80,28 @@ pub const REQOTE_PIDS: &[u32] = &[35001, 35002, 35004, 35005];
 /// to [`crate::wertebestellung`], not here.
 pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15004, 15005];
 
-/// Deadline label for the 5-Werktage response window (BK6-24-174).
+/// The aMSB's answer window for an inbound REQOTE, in Werktage.
+///
+/// BK6-24-174 (WiM Strom). Single-sourced here because `makod` registers the
+/// process deadline from it and `processd` sizes the operator queue by it — two
+/// literals for one Frist is how the two come to disagree about whether an
+/// obligation was met.
+pub const ANTWORT_FRIST_WT: u32 = 5;
+
+/// The answer window for a REQOTE Preisanfrage PID, in Werktage.
+///
+/// `None` for a PID that is not a Preisanfrage — notably **35003**, the ESA
+/// „Anfrage von Werten", which `crate::wertebestellung` owns and which must
+/// never be answered with a PreisblattMessung quote.
+#[must_use]
+pub const fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
+    match request_pid {
+        35001 | 35002 | 35004 | 35005 => Some(ANTWORT_FRIST_WT),
+        _ => None,
+    }
+}
+
+/// Deadline label for the response window (BK6-24-174).
 pub const PREISANFRAGE_DEADLINE_LABEL: &str = "wim-preisanfrage-antwort";
 
 // ── Response PID derivation ───────────────────────────────────────────────────

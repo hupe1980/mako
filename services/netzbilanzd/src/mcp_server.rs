@@ -472,8 +472,8 @@ impl NetzbilanzMcpHandler {
                 Role::Assistant,
                 "**Prerequisites** — the published prices must be in `marktd`:\n\
                  - Gas: `PUT /api/v1/mmma-preise/gas/{year}/{month}` (Trading Hub Europe)\n\
-                 - Strom: `PUT /api/v1/mmm-preise/strom/{year}/{month}` (your ÜNB; configure \
-                   `vnb_mp_id` in netzbilanzd.toml)\n\n\
+                 - Strom: `PUT /api/v1/mmm-preise/strom/{year}/{month}` (the nationwide \
+                   BDEW series — § 13 Abs. 3 StromNZV, no per-operator variant)\n\n\
                  **Per MaLo** — `POST /api/v1/billing/mmm-run/{malo_id}` with `nb_mp_id`, \
                  `lf_mp_id`, `sparte`, `period_year`, `period_month` and `bilanziert_kwh`.\n\n\
                  `bilanziert_kwh` is **required and cannot be auto-fetched**: it is what the \

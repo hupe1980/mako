@@ -46,8 +46,8 @@ pub struct ApprovalQueueEntry {
     pub malo_id: Option<String>,
     pub reason: String,
     pub status: QueueStatus,
-    /// `makod` command to dispatch when an operator approves. `None` falls back
-    /// to the PID-based mapping in the REST handler.
+    /// `makod` command to dispatch when an operator approves. `None` means the
+    /// approval carries no market message.
     pub approve_command: Option<String>,
     /// `makod` command to dispatch when an operator rejects. `None` means the
     /// rejection is recorded without a market message.
@@ -57,11 +57,15 @@ pub struct ApprovalQueueEntry {
     pub expires_at: OffsetDateTime,
     pub created_at: OffsetDateTime,
     pub decided_at: Option<OffsetDateTime>,
+    /// `sub` of the principal who decided this entry (§ 20 EnWG / GoBD).
+    pub decided_by: Option<String>,
     pub tenant: String,
 }
 
 impl ApprovalQueueEntry {
-    /// A pending entry with no pre-resolved commands (LF E_0624 legacy shape).
+    /// A pending entry. Pair it with [`Self::with_commands`] unless the decision
+    /// genuinely has no market message — the REST handler dispatches what is
+    /// stored here and nothing else.
     pub fn pending(
         process_id: Uuid,
         pid: i32,
@@ -83,6 +87,7 @@ impl ApprovalQueueEntry {
             expires_at,
             created_at: OffsetDateTime::now_utc(),
             decided_at: None,
+            decided_by: None,
             tenant,
         }
     }
@@ -94,11 +99,27 @@ impl ApprovalQueueEntry {
         self.marktrolle = marktrolle.map(ToOwned::to_owned);
         self
     }
+
+    /// A decision where only *approving* sends a market message.
+    ///
+    /// The REQOTE Preisanfrage is the case: the AHB answer to it is a QUOTES,
+    /// and there is no „Preisanfrage ablehnen". Rejecting such an entry records
+    /// the operator's decision not to quote automatically and sends nothing —
+    /// which is why `reject_command` stays `None` rather than repeating the
+    /// approve command.
+    #[must_use]
+    pub fn with_approve_command(mut self, approve: &str, marktrolle: Option<&str>) -> Self {
+        self.approve_command = Some(approve.to_owned());
+        self.reject_command = None;
+        self.marktrolle = marktrolle.map(ToOwned::to_owned);
+        self
+    }
 }
 
 /// Every column `map_entry` reads.
 const ENTRY_COLUMNS: &str = "id, process_id, pid, malo_id, reason, status, approve_command, \
-                             reject_command, marktrolle, expires_at, created_at, decided_at, tenant";
+                             reject_command, marktrolle, expires_at, created_at, decided_at, \
+                             decided_by, tenant";
 
 fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
     let status_str: String = row.try_get("status")?;
@@ -121,6 +142,7 @@ fn map_entry(row: &PgRow) -> Result<ApprovalQueueEntry, sqlx::Error> {
         expires_at: row.try_get("expires_at")?,
         created_at: row.try_get("created_at")?,
         decided_at: row.try_get("decided_at")?,
+        decided_by: row.try_get("decided_by")?,
         tenant: row.try_get("tenant")?,
     })
 }
@@ -159,14 +181,16 @@ impl PgApprovalQueue {
         id: Uuid,
         tenant: &str,
         status: QueueStatus,
+        decided_by: &str,
     ) -> Result<Option<ApprovalQueueEntry>, sqlx::Error> {
         let opt = sqlx::query(&format!(
-            "UPDATE approval_queue SET status = $3, decided_at = now() \
+            "UPDATE approval_queue SET status = $3, decided_at = now(), decided_by = $4 \
              WHERE id = $1 AND tenant = $2 AND status = 'Pending' RETURNING {ENTRY_COLUMNS}"
         ))
         .bind(id)
         .bind(tenant)
         .bind(status.to_string())
+        .bind(decided_by)
         .fetch_optional(&self.pool)
         .await?;
         opt.map(|r| map_entry(&r)).transpose()
@@ -175,9 +199,13 @@ impl PgApprovalQueue {
     /// Release a claim taken by [`Self::claim`] so the operator can retry.
     pub async fn unclaim(&self, id: Uuid, tenant: &str) -> Result<(), sqlx::Error> {
         sqlx::query(
-            "UPDATE approval_queue SET status = 'Pending', decided_at = NULL WHERE id = $1 AND tenant = $2",
+            "UPDATE approval_queue SET status = 'Pending', decided_at = NULL, decided_by = NULL \
+             WHERE id = $1 AND tenant = $2",
         )
-        .bind(id).bind(tenant).execute(&self.pool).await?;
+        .bind(id)
+        .bind(tenant)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 

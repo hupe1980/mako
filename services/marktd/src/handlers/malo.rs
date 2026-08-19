@@ -1,9 +1,9 @@
 //! MaLo (Marktlokation) REST handlers.
 //!
 //! Routes:
-//!   PUT    /api/v1/malo/:id
-//!   GET    /api/v1/malo/:id
-//!   GET    /api/v1/malo           (list / query)
+//!   PUT    /api/v1/malos/:id
+//!   GET    /api/v1/malos/:id
+//!   GET    /api/v1/malos           (list / query)
 
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ use serde::{Deserialize, Serialize};
 use time::Date;
 use utoipa::{IntoParams, ToSchema};
 
-use super::{Claims, IntoMdmResponse as _, etag, parse_if_match};
+use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, parse_if_match};
 
 // ── BO4E validation helpers ──────────────────────────────────────────────────────────
 
@@ -200,10 +200,10 @@ fn default_size() -> u32 {
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `PUT /api/v1/malo/:id`
+/// `PUT /api/v1/malos/:id`
 #[utoipa::path(
     put,
-    path = "/api/v1/malo/{id}",
+    path = "/api/v1/malos/{id}",
     tag = "malo",
     params(("id" = String, Path, description = "11-digit MaLo-ID")),
     request_body = MaloUpsertRequest,
@@ -251,7 +251,13 @@ where
         }
     };
 
-    let if_match = parse_if_match(&headers);
+    let if_match = match parse_if_match(&headers) {
+        IfMatch::Absent | IfMatch::Any => None,
+        IfMatch::Version(v) => Some(v),
+        // Refuse rather than fall back to an unconditional write: the caller
+        // asked for a conditional one and would otherwise be told it succeeded.
+        IfMatch::Malformed => return malformed_if_match(),
+    };
     let exists = state
         .malo_repo
         .find(&malo_id, today_berlin())
@@ -335,6 +341,7 @@ where
     )
     .with_extensions(EventExtensions {
         marktmaloid: Some(malo_id_str.clone()),
+        marktsparte: Some(sparte_str.clone()),
         ..Default::default()
     });
     if let Err(e) = crate::outbox::enqueue(&mut *tx, &evt, &state.notify).await {
@@ -388,10 +395,10 @@ where
         .into_response()
 }
 
-/// `GET /api/v1/malo/:id`
+/// `GET /api/v1/malos/:id`
 #[utoipa::path(
     get,
-    path = "/api/v1/malo/{id}",
+    path = "/api/v1/malos/{id}",
     tag = "malo",
     params(("id" = String, Path, description = "11-digit MaLo-ID")),
     responses(
@@ -470,10 +477,10 @@ where
     }
 }
 
-/// `GET /api/v1/malo`
+/// `GET /api/v1/malos`
 #[utoipa::path(
     get,
-    path = "/api/v1/malo",
+    path = "/api/v1/malos",
     tag = "malo",
     params(ListQuery),
     responses(
@@ -573,7 +580,7 @@ pub(crate) fn today_berlin() -> Date {
 
 // ── Lastprofil derivation ─────────────────────────────────────────────────────
 
-/// `GET /api/v1/malo/{id}/lastprofil`
+/// `GET /api/v1/malos/{id}/lastprofil`
 ///
 /// Returns the SLP `Lastprofil` COM array for a MaLo.
 ///
@@ -602,7 +609,7 @@ pub(crate) fn today_berlin() -> Date {
 /// `Eintarif` assumption for all SLP meters.
 #[utoipa::path(
     get,
-    path = "/api/v1/malo/{id}/lastprofil",
+    path = "/api/v1/malos/{id}/lastprofil",
     params(("id" = String, Path, description = "11-digit MaLo-ID")),
     responses(
         (status = 200, description = "Lastprofil array for this MaLo"),

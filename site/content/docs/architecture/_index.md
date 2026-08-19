@@ -121,8 +121,8 @@ Each is independently testable and suitable for crates.io publication.
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
 | `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
-| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `EventBus`, `ServiceBuilder` |
-| `mako-plugin` | Operator event-bus extension point | `CloudEventPlugin`, `PluginRegistry`; run by `mako-service::event_bus` before delivery |
+| `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `outbox`, `ServiceBuilder` |
+| `mako-plugin` | Operator CloudEvent extension point | `CloudEventPlugin`, `PluginRegistry`, re-exported by `mako-service`. No daemon runs a registry today — it is an integration seam, not an active hook |
 
 ### Billing crate hierarchy
 
@@ -220,8 +220,8 @@ and `agentd`, which is the MCP *host* that calls the others.
 | Daemon | Port | Role | Config file |
 |--------|------|------|-------------|
 | `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 69 workflows, AS4 ingest, deadlines | `makod.toml` |
-| `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, EventBus fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
-| `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`) + LF E_0624 auto-response | `processd.toml` |
+| `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, durable fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
+| `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`), LF answers to the NB-initiated GPKE processes, MSB REQOTE/ORDRSP, EoG gap closure; role-gated binaries (§ 7 EnWG) | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
 | `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31002 (NN-Rechnung) / 31005 (MMM) / 31009 (MSB) / 31011 (AWH), invoice draft lifecycle | `netzbilanzd.toml` |
 | `sperrd` | `:8780` | Sperrung execution tracker (NB role) — `sperr_orders` lifecycle, IFTSTA 21039 auto-dispatch | `sperrd.toml` |
@@ -248,7 +248,7 @@ and **typed `rubo4e::current::Messlokation`** responses,
 contracts, trading partners, network contracts (`NbContractRecord`),
 price sheets (NNE, Messung, KA, Dienstleistung, Hardware),
 **VersorgungsStatus per MaLo** (with full history and `?at=YYYY-MM-DD` point-in-time queries),
-**MaLo grid topology** (`malo_grid`, provisioned via the NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint),
+**MaLo grid topology** (`malo_grid`, provisioned via the NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint),
 **Netz-Element-Lokationen (NeLo)** with typed Redispatch 2.0 columns
 (`steuerkanal`, `eigenschaft_msb_lokation`, `grundzustaendiger_msb_codenr`),
 **TechnischeRessource** (E-mobility, generation, storage for iMS and Redispatch 2.0),
@@ -271,16 +271,16 @@ register data. `marktd`'s `event_ingest` handler upserts `ZaehlzeitRegister` +
 manually for meters where the MSB sends Stammdaten responses.
 **Geraete** returning typed `rubo4e::current::Geraet`,
 and the full **`Lokationszuordnung` location graph** (temporal `valid_from`/`valid_to` edges,
-recursive-CTE BFS traversal via `GET /api/v1/malo/{id}/lokationen`).
+recursive-CTE BFS traversal via `GET /api/v1/malos/{id}/lokationen`).
 
 `makod` pushes `de.mako.process.*` CloudEvents to `marktd`'s ingest endpoint.
 Fan-out is **persist-before-fan-out**: every produced event is written to the
 durable `event_log` outbox (the full envelope) in the same step that accepts it,
 and a two-phase worker drains it — Phase 1 snapshots the matching subscriber set
 into an `event_delivery` ledger, Phase 2 delivers each row (claim-with-lease,
-`FOR UPDATE SKIP LOCKED`). A crash at any point is recoverable from those tables;
-the old in-memory relay channel is gone. `event_log` also backs full replay via
-`GET /admin/events?from=&to=&type=&limit=`.
+`FOR UPDATE SKIP LOCKED`). A crash at any point is recoverable from those tables —
+there is no in-memory relay channel an event could be lost in. `event_log` also
+backs full replay via `GET /admin/events?from=&to=&type=&limit=`.
 W3C Trace Context (`traceparent`, `tracestate`) from the originating `makod` event is
 forwarded unchanged in every outbound webhook, enabling end-to-end distributed traces.
 
@@ -314,10 +314,10 @@ makes automated decisions within regulatory deadlines.
 - Fetches `VersorgungsStatus` + `MaloGridRecord` from `marktd`
 - Evaluates 6 objective checks via the pure `netz-checker` library
 - Dispatches `bestaetigen`/`ablehnen` to `makod` with §20 EnWG parity logging
-- STP improves when the `malo_grid` record is present (provisioned via marktd's NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint — manual/ERP provisioning)
+- STP improves when the `malo_grid` record is present (provisioned via marktd's NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint — manual/ERP provisioning)
 
 **LF module** (`--features lf-only` or `integrated`):
-- Handles LFA E_0624 (PID 55008) within the 45-minute LFW24 window
+- Answers the NB-initiated GPKE processes (inbound 55007 and 55010) within their 24 h business Frist
 - Auto-consents clean Abmeldungen; auto-rejects Einzug (A32) scenarios
 - Queues ambiguous cases in `approval_queue` for ERP operator review
 
@@ -450,7 +450,7 @@ graph TD
         TEL["telemetry<br/>init_tracing_from_env<br/>OtelConfig"]
         WEB["webhook<br/>verify_signature"]
         HTTP["http<br/>default_client()"]
-        EB["event_bus<br/>EventBus<br/>WebhookBus"]
+        OB["outbox<br/>transactional<br/>persist-before-dispatch"]
     end
 
     A & B & C & D & E & F & G & H --> sdk
@@ -468,7 +468,7 @@ graph TD
 | `http` | `default_client()` — `reqwest::Client` with 5 s connect + 30 s request timeout |
 | `webhook` | `verify_signature` — constant-time HMAC-SHA256 |
 | `builder` | `ServiceBuilder` — composable Axum router with health, metrics, trace layer |
-| `event_bus` | `EventBus`, `WebhookBus` — CloudEvent fan-out (webhook or Kafka) |
+| `outbox` | Transactional outbox — persist-before-dispatch + drain worker with retry and dead-lettering |
 
 See the [`mako-service` README](https://github.com/hupe1980/mako/tree/main/crates/mako-service)
 for code examples covering every module.
@@ -534,12 +534,12 @@ sequenceDiagram
     Note over makod: edi-energy: parse + validate<br/>PidRouter → gpke-supplier-change<br/>WorkflowOutput → events + APERAK outbox
     makod-->>LF: APERAK BGM+312 (within 45 min — auto)
     makod->>marktd: POST /api/v1/events  de.mako.process.initiated  (CloudEvents 1.0)
-    marktd->>processd: POST /webhook  de.mako.process.initiated  (EventBus fan-out)
+    marktd->>processd: POST /webhook  de.mako.process.initiated  (durable fan-out)
     marktd->>erp: POST <webhook_url>  de.mako.process.initiated  (ERP subscription)
 
     Note over processd: receive AnmeldungAnfrage from event payload
     processd->>marktd: GET /api/v1/versorgung/{malo_id}  (VersorgungsStatus)
-    processd->>marktd: GET /api/v1/malo/{malo_id}/grid  (MaLo grid record)
+    processd->>marktd: GET /api/v1/malos/{malo_id}/grid  (MaLo grid record)
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}  (partner known?)
     Note over processd: netz_checker::evaluate<br/>check 1: grid record exists (else Escalate)<br/>check 2: MaLo participates in MaKo (A02)<br/>check 3: no Anmeldung in Bearbeitung (A06)<br/>check 4: date plausibility (A07 Strom / E17 Gas)<br/>check 5: Bilanzierungsgebiet match (A05)<br/>check 6: LF in partner directory (A05)<br/>→ Accept (or Reject/Escalate)
     processd->>makod: POST /api/v1/commands  gpke.lieferbeginn.bestaetigen

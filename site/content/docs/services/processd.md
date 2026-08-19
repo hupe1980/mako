@@ -1,6 +1,6 @@
 +++
 title = "processd Operator Guide"
-description = "processd operator guide: Process decision engine for automated NB Anmeldung STP decisions (netz-checker), LF E_0624 auto-response, LFN bootstrap (Strom + Gas), Gas Datenabruf, LFW24 Vorlauffrist validation. Role-gated features for §7 EnWG separation. Cedar ABAC, MCP tools, PostgreSQL audit log."
+description = "processd operator guide: Process decision engine — NB Anmeldung STP (netz-checker), LF answers to the NB-initiated GPKE processes (55007 / 55010), MSB REQOTE and §14a ORDRSP, EoG gap closure. Role-gated binaries for §7 EnWG separation, Cedar ABAC on every route, MCP tools, PostgreSQL audit log."
 weight = 23
 [extra]
 mermaid = true
@@ -12,7 +12,7 @@ regulatory decisions within mandatory deadlines.
 
 ```mermaid
 graph TB
-    marktd["marktd :8180<br/>EventBus"]
+    marktd["marktd :8180<br/>fan-out"]
     processd["processd :8580<br/>(this service)"]
     makod["makod :8080"]
     pg["PostgreSQL<br/>anmeldung_decisions<br/>approval_queue"]
@@ -20,22 +20,22 @@ graph TB
     marktd -->|"de.mako.process.initiated<br/>de.markt.versorgung.gap-detected<br/>HMAC POST /webhook"| processd
 
     subgraph NB ["NB module (--features nb-only)"]
-        NC["netz-checker<br/>6 deterministic checks<br/>STP target ≥ 95%"]
+        NC["netz-checker<br/>Anmeldung E_0622 · Abmeldung E_0607<br/>STP target ≥ 95%"]
         EOG["EoG gap closure<br/>§36/§38 EnWG · §38 timer"]
         NC --> pg
         EOG --> pg
     end
 
     subgraph LF ["LF module (--features lf-only)"]
-        LFA["E_0624 auto-response<br/>45 min window"]
+        LFA["LF answers 55007 / 55010<br/>05:00 / 09:00 Uhr des 1. WT nach dem ÜT"]
         LFA --> pg
     end
 
     processd --> NB
     processd --> LF
-    NB -->|"gpke.lieferbeginn.bestaetigen/ablehnen<br/>gpke.eog.anmelden<br/>POST /api/v1/commands"| makod
+    NB -->|"gpke.lieferbeginn.*<br/>gpke.lieferende.*<br/>gpke.eog.anmelden<br/>POST /api/v1/commands"| makod
     LF -->|"gpke.nb-lieferende.bestaetigen/ablehnen<br/>geli.lieferbeginn.anmelden<br/>POST /api/v1/commands"| makod
-    NB & LF -->|"GET /api/v1/versorgung<br/>GET /api/v1/malo/{id}/grid"| marktd
+    NB & LF -->|"GET /api/v1/versorgung<br/>GET /api/v1/malos/{id}/grid"| marktd
 ```
 
 ---
@@ -48,7 +48,7 @@ graph TB
 │                                                                  │
 │  POST /webhook              ← marktd CloudEvents (HMAC)          │
 │  GET  /api/v1/decisions     ← NB STP audit log (OIDC+Cedar)     │
-│  GET  /api/v1/queue         ← LF approval queue                 │
+│  GET  /api/v1/queue         ← approval queue (every role)       │
 │  POST /api/v1/queue/{id}/approve|reject  ← operator action       │
 │  POST /api/v1/start-supply              ← LFN Strom bootstrap    │
 │  POST /api/v1/start-supply-gas          ← LFN Gas 44001 bootstrap│
@@ -67,15 +67,23 @@ This ensures §7 EnWG separation: an `nb-only` binary provably contains no LF PI
 
 ```toml
 [features]
-role-lf-strom  = []  # LFA E_0624 (PID 55008), LFN Strom bootstrap, INSRPT
+role-lf-strom  = []  # LF answers 55007 + 55010, LFN Strom bootstrap
 role-lf-gas    = []  # LFA GeLi Gas stornierung + LFN Gas bootstrap (PID 44001)
-role-nb-strom  = []  # GPKE Anmeldung STP (PIDs 55001, 55016)
-role-nb-gas    = []  # GeLi Gas Anmeldung STP (PID 44001)
+role-nb-strom  = []  # GPKE An-/Abmeldung STP (55001, 55077, 55004), EoG closure
+role-nb-gas    = []  # GeLi Gas An-/Abmeldung STP (44001, 44004)
+role-msb-strom = []  # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel
 
 lf-only    = ["role-lf-strom", "role-lf-gas"]
 nb-only    = ["role-nb-strom", "role-nb-gas"]
-integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas"]
+msb-only   = ["role-msb-strom"]
+integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb-strom"]
 ```
+
+**PID 55016 „Kündigung" is not an NB process** and is answered by no role here.
+The *Anwendungsübersicht der Prüfidentifikatoren 4.0* (lfd. Nr. 20030) has it
+going LFN → LFA, answered 55017/55018 by the Altlieferant under EBD `E_0614`.
+Routing it into the NB module would make an `nb-only` binary answer a
+supplier-role message — exactly what these feature flags exist to prevent.
 
 For §7 EnWG deployments (≥ 100k Netzkunden): BNetzA inspects the binary SHA to
 confirm no cross-contamination. Use separate container images compiled with
@@ -88,28 +96,55 @@ confirm no cross-contamination. Use separate container images compiled with
 ### Decision pipeline
 
 ```text
-de.mako.process.initiated (PID 55001/55016/44001)
-  → extract AnmeldungAnfrage from event payload
-  → GET marktd /api/v1/versorgung/{malo_id}         → VersorgungsStatus
-  → GET marktd /api/v1/malo/{malo_id}/grid           → MaloGridRecord
-  → GET marktd /api/v1/partners/{lf_mp_id}             → partner_known
-  → netz_checker::evaluate(anfrage, vs, grid, partner_known, now_utc())
-      Accept   → anmeldung_decisions(Accept)
-                 [if NB_AUTO_ACCEPT=true] → makod gpke.lieferbeginn.bestaetigen
-      Reject   → anmeldung_decisions(Reject, erc_code) → makod ablehnen
-      Escalate → anmeldung_decisions(Escalate) → operator alert
+de.mako.process.initiated
+  ├─ Anmeldung (55001 verb. MaLo / 55077 erz. MaLo / 44001 Gas) — EBD E_0622
+  │    → GET marktd /api/v1/versorgung/{malo_id}       → VersorgungsStatus
+  │    → GET marktd /api/v1/malos/{malo_id}/grid       → MaloGridRecord
+  │    → GET marktd /api/v1/partners/{lf_mp_id}        → partner_known
+  │    → netz_checker::evaluate(…)
+  └─ Abmeldung (55004 Strom / 44004 Gas)              — EBD E_0607
+       → GET marktd /api/v1/versorgung/{malo_id}       → VersorgungsStatus
+       → netz_checker::evaluate_abmeldung(…)
+
+  Accept   → anmeldung_decisions(Accept)
+             [if auto_accept] → makod …bestaetigen, else → approval_queue
+  Reject   → anmeldung_decisions(Reject, erc_code) → makod …ablehnen
+  Escalate → anmeldung_decisions(Escalate) → approval_queue
 ```
 
-### netz-checker — 6 checks
+The two trees have **separate ERC code spaces**: `A02` is „Marktlokation nimmt
+nicht an der Marktkommunikation teil" in `E_0622` and „Vorlauffrist nicht
+eingehalten" in `E_0607`, so `netz-checker` exposes two functions rather than one
+with a flag.
+
+### netz-checker `evaluate` — the Anmeldung, 6 checks
 
 | # | Rule | On failure |
 |---|------|------------|
 | 1 | `MaloGridRecord` exists for the MaLo | `Escalate` |
 | 2 | MaLo participates in MaKo (not Stillgelegt/Ruhend) | `Reject A02` |
-| 3 | `lf_mp_id_next` is `None` (no Anmeldung in Bearbeitung) | `Reject A06` |
+| 3 | `lf_mp_id_next` is unset or held by *this* LF (no other Anmeldung in Bearbeitung) | `Reject A06` |
 | 4 | Date plausibility (Transaktionsgrund-aware) — Strom: LFW24 future rule; Gas: E03 ≥ 10 WT, E01/E02 retroactive ≤ 6 weeks (+3 WT) for SLP | `Reject A07` (Strom) / `Reject E17` (Gas); Gas backdated without Transaktionsgrund → `Escalate` |
 | 5 | Bilanzierungsgebiet in UTILMD matches grid record | `Reject A05` |
 | 6 | LF MP-ID in partner directory | `Reject A05` |
+
+### netz-checker `evaluate_abmeldung` — the Abmeldung, EBD `E_0607`
+
+Inbound **55004** (Strom) / **44004** (Gas): the supplier ends the assignment
+and the NB answers 55005/55006 (44005/44006).
+
+| # | Prüfschritt | On failure |
+|---|---|---|
+| 1 | The MaLo is known to this NB | `Escalate` |
+| 2 | The requesting LF is the assigned Lieferant (Prüfschritt 110) | `Escalate` |
+| 3 | Vorlauffrist eingehalten (Prüfschritt 50) — Strom: one full Werktag between receipt and Zuordnungsende, or Monatserster + 1 Monat for an EEG-MaLo; Gas: the GeLi Gas Kap. 3.2.1 retroactivity rules | `Reject A02` |
+| 4 | Kein bereits bestätigtes Lieferende zum selben Datum (Prüfschritte 100–130) | `Reject A09` / `A10` |
+
+Prüfschritte 10–30 (Kundenanlagen-Herauslösung) and 60–90 (ESV-Ende, Aufhebung
+einer zukünftigen Zuordnung) need Transaktionsgründe and prior process history
+the projection does not carry; they escalate rather than guess. Escalation is
+the § 20 EnWG-safe direction — an unfounded Ablehnung keeps a customer bound to
+a supplier they have left.
 
 ### STP rate targets
 
@@ -118,15 +153,16 @@ record is a prerequisite: `netz-checker` check 1 (grid record exists) can only p
 the record is present, so NB Anmeldung STP improves markedly once the record is provisioned.
 
 Grid records are the NB’s own grid topology — **not** from MaStR. Provision them via
-marktd’s NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint (manual / ERP provisioning).
+marktd’s NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint (manual / ERP provisioning).
 
 Monitor via `GET /api/v1/decisions` or the `get_stp_rate` MCP tool.
 
-### `NB_AUTO_ACCEPT`
+### `[nb] auto_accept`
 
-Set `NB_AUTO_ACCEPT=false` (default) until you have verified:
+Set `auto_accept = false` (the default; `PROCESSD_NB__AUTO_ACCEPT` in the
+environment) until you have verified:
 
-1. Grid record coverage for your MaLo portfolio (`GET /api/v1/malo/{id}/grid`)
+1. Grid record coverage for your MaLo portfolio (`GET /api/v1/malos/{id}/grid`)
 2. Partner directory populated for all expected LF MP-IDs
 3. At least one manual review cycle confirmed correct ERC codes
 
@@ -137,21 +173,27 @@ auto-acceptance is **always blocked** for Anmeldungen where the requesting LF
 is an **affiliate** of the NB operator. This implements the §20 EnWG
 Diskriminierungsfreiheitspflicht non-discrimination obligation.
 
+It applies to Abmeldungen as well as Anmeldungen — an affiliate must not get a
+faster automatic path in either direction.
+
 Detection logic:
 
 ```text
-new_supplier_mp_id ∈ obsd.own_mp_ids  →  initiator_is_affiliate = true
-                                           auto_accept overridden to false
-                                           decision: Escalate (operator review)
+initiating LF MP-ID == [identity] own_mp_id  →  initiator_is_affiliate = true
+                                                auto_accept overridden to false
+                                                → approval_queue (operator review)
 ```
 
-Configure the operator's own MP-IDs in `obsd.toml` (they are shared with `processd`
-via the `obsd` CloudEvent payload):
+The operator's own MP-ID comes from `processd.toml`:
 
 ```toml
 [identity]
-own_mp_ids = ["9900357000004", "9800357000004"]
+own_mp_id = "9900357000004"   # BDEW 99… / DVGW 98…; must match makod's primary party
 ```
+
+Startup logs the coding authority derived from it (293 = BDEW, 332 = DVGW) and
+warns on a GS1 GLN, because a mismatched prefix makes every parity comparison
+fail silently.
 
 `obsd` records `initiator_is_affiliate = true` on the resulting `ProcessProjection`
 and the KPI report exposes the parity delta for **BNetzA audit evidence**.
@@ -216,23 +258,59 @@ notify_webhook_url       = "https://erp.example/hooks/eog"
 
 ---
 
-## LF module — E_0624 auto-response
+## LF module — answering the NB-initiated GPKE processes
 
-### Decision rules (PID 55008)
+Two processes, two EBDs: **55007** „Ankündigung der Beendigung der Zuordnung"
+(NB → LF, answered 55008/55009, EBD `E_0609`) and **55010** „Anfrage zur
+Beendigung der Zuordnung" (NB → LFA, answered 55011/55012, EBD `E_0624`). They
+share the evaluation and differ in the command pair and the Frist.
+
+### Decision rules (inbound 55007 / 55010)
+
+"Supplying" means `lieferstatus` is `Beliefert`, `Grundversorgung` or
+`Ersatzversorgung` **and** `lf_mp_id == own_mp_id` — all three are a supply this
+LF may be asked to end.
 
 | VersorgungsStatus | Scenario | Decision |
 |-------------------|----------|----------|
-| `Beliefert` + `lf_mp_id == own_mp_id` | Standard | `einwilligung` |
-| `Beliefert` + `lf_mp_id == own_mp_id` | `Einzug` | `ablehnen A32` |
-| `Beliefert` + `lf_mp_id == own_mp_id` | `Ersatzversorgung` | `einwilligung` |
-| `Grundversorgung` | any | `einwilligung` |
+| supplying | `standard` | `einwilligung` |
+| supplying | `einzug` | `ablehnen A32` |
+| supplying | `vertragsbindung` | `ablehnen A35` |
+| supplying | `ersatzversorgung` | `einwilligung` |
 | MaLo unknown | any | `approval_queue` |
-| `lf_mp_id != own_mp_id` | any | `approval_queue` |
+| not supplying / `lf_mp_id != own_mp_id` | any | `approval_queue` |
+
+The `scenario` marker is matched case-insensitively — the AHB does not fix its
+casing.
 
 ### Approval queue
 
-Entries expire at `deadline_at - 5 min` (where `deadline_at = event_time + 45 min`).
-A background task runs every 60 s and sets `status = Expired` for stale entries.
+The queue is shared by **every** compiled role: the NB queues escalated and held-back
+Anmeldungen, the MSB escalated MSB-Wechsel and § 14a Steuerungsaufträge, the LF its GPKE
+answers. Each entry stores the `makod` command to dispatch on approve and on reject,
+resolved from the trigger PID at enqueue time.
+
+`expires_at` is the **business** answer Frist of that process, less headroom:
+
+| Trigger | Frist | Source |
+|---|---|---|
+| GPKE Anmeldung 55001 / 55077 | 11:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferbeginn 5/6 |
+| GPKE Abmeldung 55004 | 06:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferende von LF an NB 2/3 |
+| GPKE LF answer 55007 | 05:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferende von NB an LF 2 |
+| GPKE LFA answer 55010 | 09:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferbeginn 4 |
+| GeLi Gas Anmeldung 44001 | Ablauf des 4. WT nach Eingang | BK7-24-01-009 Kap. 3.2.3 |
+| GeLi Gas Abmeldung 44004 | Ablauf des 3. WT nach Eingang | BK7-24-01-009 Kap. 3.2.2 |
+| WiM MSB-Wechsel 55039 / 55042 / 55051 / 55168 | 3 / 5 / 7 / 1 WT | WiM Strom Teil 1 |
+| § 14a Steuerungsauftrag | 5 WT | BK6-22-024 |
+
+The 45-minute APERAK window on the same message is a separate clock and is `makod`'s to
+answer.
+
+A background task runs every 60 s and sets `status = Expired` for stale entries. It is
+deliberately **not** role-gated, since every role build can enqueue.
+
+`decided_by` records the `sub` of the principal who approved or rejected (§ 20 EnWG parity
+evidence and the GoBD trail both have to say *who* decided).
 
 **Operator workflow:**
 ```
@@ -241,10 +319,16 @@ POST /api/v1/queue/{id}/approve       → dispatch consent command via makod AND
 POST /api/v1/queue/{id}/reject        → dispatch reject command via makod AND mark Rejected
 ```
 
-> **Regulatory deadline:** `expires_at = event_time + 45 min - 5 min`.
-> The approve/reject handlers dispatch to `makod` **before** updating the DB — if
-> `makod` is unavailable, the entry stays `Pending` so the operator can retry.
-> Expired entries log a `WARN` and must be reconciled manually.
+> **Regulatory deadline:** `expires_at` is the per-PID business Frist less an
+> hour of headroom, read from `processd::fristen` — the table `makod` also
+> registers the process deadline from.
+>
+> The approve/reject handlers **claim** the entry (`status = 'Pending'` guard)
+> before dispatching to `makod`, releasing the claim if the dispatch fails so the
+> operator can retry. Claiming first is what stops a terminal entry re-sending
+> its market message, and two operators deciding at once from sending both an
+> einwilligung and an ablehnen. Expired entries log a `WARN` and must be
+> reconciled manually.
 
 ---
 
@@ -399,8 +483,7 @@ event_types   = "de.mako.process.initiated"     # default
 auto_accept = false   # true → dispatch bestaetigen automatically on Accept
 
 [lf]
-auto_respond   = true   # false → all E_0624 routed to approval_queue
-queue_ttl_secs = 2700   # 45 min — LFW24 deadline
+auto_respond = true   # false → every inbound LF process routed to approval_queue
 
 [eog]                                     # §36/§38 EnWG gap closure (NB role)
 auto_activate             = false         # true → dispatch gpke.eog.anmelden on gap-detected
@@ -472,8 +555,10 @@ the shared runner):
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `processd_decisions_total{decision,pid}` | counter | NB STP decisions by outcome (`Accept`/`Reject`/`Escalate`) and PID (`55001`/`44001`) |
-| `processd_approval_queue_depth` | gauge | Pending LF E_0624 entries in `approval_queue` (unresolved) |
+| `processd_decisions_total{decision,pid}` | counter | NB STP decisions by outcome (`Accept`/`Reject`/`Escalate`) and PID (`55001`/`55077`/`55004`/`44001`/`44004`) |
+| `processd_approval_queue_pending` | gauge | Processes waiting for an operator decision |
+| `processd_approval_queue_overdue` | gauge | Pending entries past `expires_at` — the answer deadline has been missed. **Alert on > 0** |
+| `processd_eog_open` | gauge | Ersatz-/Grundversorgung cases not yet closed (§ 36/§ 38 EnWG) |
 | `processd_db_pool_size` | gauge | PostgreSQL connection pool size |
 | `processd_db_pool_idle` | gauge | Idle PostgreSQL connections |
 
@@ -482,12 +567,12 @@ the shared runner):
 | Metric / Query | Target |
 |----------------|--------|
 | `processd_decisions_total{decision="Accept"} / processd_decisions_total` | ≥ 95 % (STP rate) |
-| `processd_approval_queue_depth` approaching TTL | 0 near-expiry entries |
+| `processd_approval_queue_overdue` | 0 |
 | `processd_decisions_total{decision="Escalate"}` / total | < 5 % (grid coverage indicator) |
 
 Alert when:
-- STP rate drops below 90 % (grid record coverage degraded — provision missing `malo_grid` records via marktd’s NB-role `PUT /api/v1/malo/{malo_id}/grid` endpoint)
-- `processd_approval_queue_depth` > 0 entries near TTL (LF deadline risk)
+- STP rate drops below 90 % (grid record coverage degraded — provision missing `malo_grid` records via marktd’s NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint)
+- `processd_approval_queue_overdue` > 0 (a business answer Frist has been missed)
 - Decision latency > 10 s (marktd connectivity issue)
 
 ---
