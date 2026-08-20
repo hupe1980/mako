@@ -20,8 +20,9 @@
 //! | `de.accounting.erstattung.faellig` | Jahresabschluss refund (pain.001 attached) |
 //!
 //! All outbound CloudEvents are HMAC-signed (`X-Mako-Signature`) when
-//! `erp_hmac_secret` is set. A Mahnstufe-3 case ≥ the Sperrung threshold is
-//! handed to `sperrd` directly (`POST /api/v1/sperr-orders`), not as a CE.
+//! `erp_hmac_secret` is set. The §§41f/41g Sperr- and Entsperrauftrag are
+//! **market messages** — ORDERS 17115/17117 dispatched through `makod` — and the
+//! CloudEvent announces the dispatch rather than carrying it.
 //!
 //! Port: `:9380`
 
@@ -90,6 +91,20 @@ impl Daemon for Accountingd {
             );
         }
 
+        // ── Cedar ABAC ────────────────────────────────────────────────────
+        // Authentication says *who* is calling; this says what they may do.
+        // accountingd enabled the `cedar` feature and enforced nothing, and
+        // twenty-four endpoints named no `Claims` extractor at all — so customer
+        // balances, full Kontokorrent histories, SEPA mandates, IBANs, the aging
+        // list for the whole book and generated pain.001 payout XML were served
+        // to any caller that could open a socket.
+        let cedar = Arc::new(
+            mako_service::cedar::CedarEnforcer::from_policy_str(include_str!(
+                "../policies/accountingd.cedar"
+            ))
+            .context("accountingd.cedar must parse at startup")?,
+        );
+
         // ── doubleentry ledger — accountingd's accounting/storage base ──────────
         // One ledger per deployment, in its own `doubleentry` PG schema sharing
         // this database. Constructing it applies the ledger schema and restores the
@@ -99,6 +114,29 @@ impl Daemon for Accountingd {
                 .await
                 .context("connect doubleentry ledger")?,
         );
+        // ── makod command client — the §§41f/41g market channel ────────────
+        // Phase 3/4 of the disconnection sequence are ORDERS 17115/17117, so they
+        // go out over the market, not as an HTTP call into the NB's own queue.
+        let makod = match (cfg.makod_url.as_deref(), cfg.makod_api_key.as_ref()) {
+            (Some(url), Some(key)) => Some(Arc::new(mako_markt::makod_client::MakodClient::new(
+                url,
+                key.clone(),
+            ))),
+            (Some(_), None) => anyhow::bail!(
+                "makod_url is set but makod_api_key is not. The §§41f/41g sequence \
+                 dispatches ORDERS 17115/17117 through makod's command API, which is \
+                 bearer-authenticated; an unauthenticated dispatch is silently refused \
+                 and the sequence stalls at the Sperrauftrag."
+            ),
+            (None, _) => {
+                tracing::warn!(
+                    "accountingd: no makod_url — the §§41f/41g EnWG disconnection sequence \
+                     is disabled (no Sperr-/Entsperrauftrag can be issued)"
+                );
+                None
+            }
+        };
+
         let iban_hash_key = cfg
             .iban_hash_secret
             .as_ref()
@@ -191,13 +229,39 @@ impl Daemon for Accountingd {
                 "/api/v1/dunning/{id}/resolve",
                 post(handlers::resolve_dunning),
             )
+            // §41g Abs. 1 S. 2 — the offer of an Abwendungsvereinbarung, recorded
+            // separately from its acceptance: a supplier that never offered one
+            // was otherwise indistinguishable from one that offered and was
+            // refused, and only the first breaches the statute.
             .route(
-                "/api/v1/dunning/{id}/abwendung",
-                post(handlers::abwendung_dunning),
+                "/api/v1/dunning/{id}/abwendung/angebot",
+                post(handlers::abwendung_angebot),
+            )
+            // ── Mahnsperren — every §§41f/41g halt, with a reason and an end ──
+            // One endpoint replaces `.../abwendung` and `.../unverhaeltnismaessig`,
+            // which set bare timestamps that nothing could lift.
+            .route(
+                "/api/v1/dunning/{id}/locks",
+                get(handlers::get_locks).post(handlers::place_lock),
             )
             .route(
-                "/api/v1/dunning/{id}/unverhaeltnismaessig",
-                post(handlers::unverhaeltnismaessig_dunning),
+                "/api/v1/dunning/locks/review",
+                get(handlers::get_locks_due_review),
+            )
+            .route(
+                "/api/v1/dunning/locks/{lock_id}",
+                axum::routing::delete(handlers::lift_lock),
+            )
+            // ── Forderungseinwände (§41f Abs. 3 S. 3–5) ──────────────────────
+            // Amounts that stay out of the Verzug calculation. Not halts: they
+            // reduce what the threshold is measured against.
+            .route(
+                "/api/v1/dunning/{id}/einwaende",
+                get(handlers::get_einwaende).post(handlers::place_einwand),
+            )
+            .route(
+                "/api/v1/einwaende/{einwand_id}/erledigen",
+                post(handlers::close_einwand),
             )
             // ── SEPA ───────────────────────────────────────────────────────────────
             .route("/api/v1/sepa/mandates", post(handlers::post_mandate))
@@ -206,6 +270,12 @@ impl Daemon for Accountingd {
                 get(handlers::get_mandate).delete(handlers::delete_mandate),
             )
             .route("/api/v1/sepa/run", post(handlers::run_sepa))
+            // EPC 36-month dormancy — mandates that are, or are about to become,
+            // uncollectable. Tracked here because no bank tracks it for us.
+            .route(
+                "/api/v1/sepa/mandates/dormant",
+                get(handlers::get_dormant_mandates),
+            )
             // What a collection run collected, and where each entry stands —
             // the list a reversal is chosen from.
             .route(
@@ -315,6 +385,7 @@ impl Daemon for Accountingd {
                 get(handlers::get_payment_plan).delete(handlers::delete_payment_plan),
             )
             .layer(Extension(Arc::clone(&cfg)))
+            .layer(Extension(Arc::clone(&cedar)))
             .layer(Extension(pool.clone()))
             .layer(Extension(Arc::clone(&ledger)))
             .layer(Extension(iban_hash_key))
@@ -473,25 +544,32 @@ impl Daemon for Accountingd {
             });
         }
 
-        // ── SEPA N-5 Pre-Notification Scheduler (B7) ────────────────────────────
-        // Runs daily and identifies accounts whose billing_day falls 5 days from now.
-        // For each account with an active SEPA mandate, generates a pain.008 XML
-        // batch and emits a `de.accounting.payment.due` CloudEvent to the ERP webhook.
+        // ── SEPA pre-notification scheduler ─────────────────────────────────────
+        // Runs daily, finds the accounts whose `billing_day` falls
+        // `sepa_pre_notification_days` ahead, builds one pain.008 for that
+        // collection date and announces it as `de.accounting.payment.due` — the
+        // event the ERP turns into the debtor's pre-notification.
         //
-        // ISO 20022 SEPA Pre-Notification rule:
-        //   - RCUR/FRST mandates require ≥ 2 banking days pre-notification to the debtor.
-        //   - Standard practice: send at least 5 calendar days before due date
-        //     (covers weekends + 1 business-day buffer).
+        // **14 calendar days by default.** The EPC SDD Core Rulebook requires the
+        // creditor to notify the debtor at least 14 calendar days before the due
+        // date unless the contract agrees a shorter period. This was hard-coded
+        // to 5 and named "N-5" — which is the *bank submission* lead time, a
+        // different deadline owed to a different party — while the config field
+        // that was supposed to set it was read by nothing.
         {
             let pool_sepa = pool.clone();
             let cfg_sepa = Arc::clone(&cfg);
             tokio::spawn(async move {
                 // Offset start so N-5 and Abschlagslauf do not run simultaneously.
                 tokio::time::sleep(tokio::time::Duration::from_secs(120)).await;
+                let lead_days = cfg_sepa
+                    .sepa_pre_notification_days
+                    .unwrap_or(14)
+                    .clamp(1, 60);
                 loop {
                     let today = time::OffsetDateTime::now_utc().date();
-                    // Target day = today + 5; wraps correctly across month end.
-                    let target_date = today + time::Duration::days(5);
+                    // Wraps correctly across month end.
+                    let target_date = today + time::Duration::days(lead_days);
                     let target_billing_day = target_date.day() as i16;
 
                     match accountingd::pg::find_accounts_due_for_sepa(
@@ -505,7 +583,7 @@ impl Daemon for Accountingd {
                             tracing::info!(
                                 target_billing_day,
                                 count = pairs.len(),
-                                "accountingd: SEPA N-5 — generating pain.008 pre-notifications"
+                                "accountingd: SEPA — generating pain.008 pre-notifications"
                             );
 
                             // Build one pain.008 message — one PmtInf group per
@@ -585,7 +663,7 @@ impl Daemon for Accountingd {
                                 {
                                     Ok(id) => Some(id),
                                     Err(e) => {
-                                        tracing::warn!(error = %e, "accountingd: SEPA N-5 — failed to persist sepa_collection_run");
+                                        tracing::warn!(error = %e, "accountingd: SEPA — failed to persist sepa_collection_run");
                                         None
                                     }
                                 };
@@ -698,6 +776,7 @@ impl Daemon for Accountingd {
             let pool_dun = pool.clone();
             let ledger_dun = Arc::clone(&ledger);
             let cfg_dun = Arc::clone(&cfg);
+            let makod_dun = makod.clone();
             tokio::spawn(async move {
                 // Stagger start relative to other workers.
                 tokio::time::sleep(tokio::time::Duration::from_secs(180)).await;
@@ -751,20 +830,32 @@ impl Daemon for Accountingd {
                     // independently of whether new Mahnungen were created today: a
                     // Stufe-3 case escalated on a previous day still needs its
                     // Androhung → Ankündigung → Sperrauftrag advanced on schedule.
-                    // Idempotent (each phase query excludes already-advanced/halted
-                    // cases); a no-op when `sperrd_url` is unset.
-                    match accountingd::sperr::run_sperr_sequence(&pool_dun, &cfg_dun).await {
-                        Ok(s) if s.androhungen + s.ankuendigungen + s.sperrauftraege > 0 => {
-                            tracing::info!(
-                                androhungen = s.androhungen,
-                                ankuendigungen = s.ankuendigungen,
-                                sperrauftraege = s.sperrauftraege,
-                                "accountingd: §§41f/41g disconnection sequence advanced"
-                            );
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::error!(error = %e, "accountingd: §§41f/41g sequence error");
+                    // Idempotent (each phase query excludes already-advanced,
+                    // halted, or no-longer-in-Verzug cases); skipped entirely when
+                    // no makod endpoint is configured.
+                    if let Some(makod_dun) = makod_dun.as_ref() {
+                        match accountingd::sperr::run_sperr_sequence(&pool_dun, makod_dun, &cfg_dun)
+                            .await
+                        {
+                            Ok(s)
+                                if s.androhungen
+                                    + s.ankuendigungen
+                                    + s.sperrauftraege
+                                    + s.entsperrauftraege
+                                    > 0 =>
+                            {
+                                tracing::info!(
+                                    androhungen = s.androhungen,
+                                    ankuendigungen = s.ankuendigungen,
+                                    sperrauftraege = s.sperrauftraege,
+                                    entsperrauftraege = s.entsperrauftraege,
+                                    "accountingd: §§41f/41g disconnection sequence advanced"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::error!(error = %e, "accountingd: §§41f/41g sequence error");
+                            }
                         }
                     }
 

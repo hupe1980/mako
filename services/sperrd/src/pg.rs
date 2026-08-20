@@ -1,4 +1,15 @@
 //! PostgreSQL persistence for `sperrd`.
+//!
+//! ## The IFTSTA invariant
+//!
+//! A terminal order whose `iftsta_dispatched_at` is NULL is an order whose
+//! Lieferant has not been told the outcome — their `gpke-sperrung-lf` process
+//! cannot close, and GPKE gives them no way to find out but to ask.
+//!
+//! So it is a queue, not a one-shot: [`claim_iftsta_retry`] hands the worker one
+//! such order at a time under `FOR UPDATE SKIP LOCKED`, a successful dispatch
+//! closes it, and orders past [`IFTSTA_MAX_ATTEMPTS`] are announced once as
+//! `de.sperr.iftsta.ausstehend` and left for a human.
 
 use anyhow::Context as _;
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
@@ -8,182 +19,229 @@ use std::sync::Arc;
 use time::{Date, OffsetDateTime};
 use uuid::Uuid;
 
-// ── CreateOrderRequest ────────────────────────────────────────────────────────
+use crate::model::{Arbeitszeit, OrderStatus, OrderType};
 
-/// Request body for `POST /api/v1/sperr-orders`.
+/// How many times the worker re-tries an IFTSTA before escalating to a human.
+///
+/// Bounded because a dispatch that keeps failing is not a transport problem: the
+/// makod process is in the wrong state, or was never spawned. Retrying that
+/// forever hides it behind a growing attempt count.
+pub const IFTSTA_MAX_ATTEMPTS: i32 = 8;
+
+// ── Requests ──────────────────────────────────────────────────────────────────
+
+/// Body of `POST /api/v1/sperr-orders`, and the shape the ORDERS ingest builds.
 #[derive(Debug, Deserialize)]
 pub struct CreateOrderRequest {
-    /// 11-digit MaLo-ID.
+    /// 11-digit MaLo-ID (`SG2 LOC+172`, hint \[521\]).
     pub malo_id: String,
-    /// Initiating counterparty MP-ID (the LF who requested the Sperrung).
+    /// The ordering Lieferant's MP-ID (`SG2 NAD+MS`).
     pub lf_mp_id: String,
-    /// Type: `"sperrung"` (disconnect) or `"entsperrung"` (reconnect).
-    pub order_type: String,
-    /// `makod` process ID — used to track back to the ORDERS workflow.
+    pub order_type: OrderType,
+    /// The `makod` process the IFTSTA 21039 is reported into. Absent for an
+    /// operator-created order, which has no market correspondent.
     pub process_id: Option<String>,
-    /// Planned execution date.
-    pub planned_date: Option<String>,
+    /// `DTM+203` — a fixed execution date the LF requires.
+    pub ausfuehrung_am: Option<Date>,
+    /// `DTM+469` — execute at the next possible date, but not before this one.
+    pub fruehestens_am: Option<Date>,
+    /// `IMD+7081` on an Entsperrauftrag.
+    pub arbeitszeit: Option<Arbeitszeit>,
+    /// `SG2 NAD+Z24` Treffpunkt — where the technician goes.
+    #[serde(default)]
+    pub treffpunkt: Treffpunkt,
+    /// `SG29 FTX+ACB` free text from the LF.
+    pub hinweis: Option<String>,
 }
 
-// ── SperrOrderRow ─────────────────────────────────────────────────────────────
+/// `SG2 NAD+Z24` — the meeting point for the field visit.
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct Treffpunkt {
+    /// `NAD 3124` Zusatzinformation zur Identifizierung ("Keller links",
+    /// "Zählerschrank Hof"). The AHB accepts this *instead of* a street.
+    pub hinweis: Option<String>,
+    /// `NAD 3042` Straße und Hausnummer.
+    pub strasse: Option<String>,
+    /// `NAD 3251` Postleitzahl.
+    pub plz: Option<String>,
+    /// `NAD 3164` Ort.
+    pub ort: Option<String>,
+    /// `NAD 3207` Ländername, Code (ISO 3166 alpha-2).
+    pub land: Option<String>,
+}
+
+impl CreateOrderRequest {
+    /// Reject what the ORDERS AHB does not allow, before it reaches the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns the AHB condition that was violated.
+    pub fn validate(&self) -> Result<(), String> {
+        // Conditions [55]/[56]: DTM+203 and DTM+469 are alternatives, never both.
+        if self.ausfuehrung_am.is_some() && self.fruehestens_am.is_some() {
+            return Err("ausfuehrung_am (DTM+203) and fruehestens_am (DTM+469) are \
+                        alternatives — an ORDERS carries one or the other, not both"
+                .to_owned());
+        }
+        if let Some(land) = self.treffpunkt.land.as_deref()
+            && (land.len() != 2 || !land.bytes().all(|b| b.is_ascii_uppercase()))
+        {
+            return Err(format!(
+                "treffpunkt.land must be an ISO 3166 alpha-2 code, got {land:?}"
+            ));
+        }
+        Ok(())
+    }
+}
+
+// ── Rows ──────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Serialize, sqlx::FromRow)]
 pub struct SperrOrderRow {
     pub id: String,
+    pub tenant: String,
     pub malo_id: String,
     pub lf_mp_id: String,
-    pub order_type: String,
+    pub order_type: OrderType,
+    pub pruefidentifikator: Option<i32>,
     pub process_id: Option<String>,
-    pub planned_date: Option<time::Date>,
-    pub status: String, // pending | executed | failed | cancelled
-    pub executed_at: Option<time::OffsetDateTime>,
+    pub ausfuehrung_am: Option<Date>,
+    pub fruehestens_am: Option<Date>,
+    pub arbeitszeit: Option<Arbeitszeit>,
+    pub treffpunkt_hinweis: Option<String>,
+    pub treffpunkt_strasse: Option<String>,
+    pub treffpunkt_plz: Option<String>,
+    pub treffpunkt_ort: Option<String>,
+    pub treffpunkt_land: Option<String>,
+    pub hinweis: Option<String>,
+    pub status: OrderStatus,
+    pub executed_at: Option<OffsetDateTime>,
     pub execution_note: Option<String>,
     pub fail_reason: Option<String>,
+    pub pruefschritt_code: Option<String>,
     pub iftsta_ref: Option<String>,
-    pub iftsta_dispatched_at: Option<time::OffsetDateTime>,
-    pub tenant: String,
-    pub created_at: time::OffsetDateTime,
-    pub updated_at: time::OffsetDateTime,
+    pub iftsta_dispatched_at: Option<OffsetDateTime>,
+    pub iftsta_attempts: i32,
+    pub iftsta_last_error: Option<String>,
+    pub created_at: OffsetDateTime,
+    pub updated_at: OffsetDateTime,
 }
 
-// ── SperrStats ────────────────────────────────────────────────────────────────
+const ORDER_COLUMNS: &str = "id::TEXT, tenant, malo_id, lf_mp_id, order_type, \
+     pruefidentifikator, process_id, ausfuehrung_am, fruehestens_am, arbeitszeit, \
+     treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz, treffpunkt_ort, \
+     treffpunkt_land, hinweis, status, executed_at, execution_note, fail_reason, \
+     pruefschritt_code, iftsta_ref, iftsta_dispatched_at, iftsta_attempts, \
+     iftsta_last_error, created_at, updated_at";
 
-/// Aggregate statistics for Sperrung orders, used by the sperrd MCP and monitoring.
+/// Aggregate counters for the compliance sweep.
 #[derive(Debug, Serialize)]
 pub struct SperrStats {
-    /// Total orders for this tenant.
     pub total: i64,
-    /// Orders awaiting field execution.
     pub pending: i64,
-    /// Successfully executed orders (IFTSTA 21039 dispatched).
     pub executed: i64,
-    /// Failed field executions (operator escalation required).
     pub failed: i64,
-    /// Cancelled orders.
     pub cancelled: i64,
-    /// Pending orders whose `planned_date` is in the past (overdue).
+    /// Pending orders whose requested execution date has passed.
     ///
-    /// BK6-22-024: Sperrung must be executed within 2 Werktage of Bestelldatum.
-    /// Any entry here is a potential compliance violation.
+    /// The date comes from the Lieferant (`DTM+203` or `DTM+469`), not from a
+    /// regulatory window: GPKE fixes no Werktage deadline for the physical act.
     pub overdue_pending: i64,
-    /// Executed orders where the IFTSTA 21039 was NOT yet dispatched.
-    ///
-    /// A non-zero count means GPKE protocol violations: the LF has not received
-    /// execution confirmation.  These must be resolved immediately.
-    pub executed_missing_iftsta: i64,
+    /// Terminal orders whose IFTSTA 21039 has not been dispatched. The LF has
+    /// not learned the outcome and their process cannot close.
+    pub iftsta_outstanding: i64,
+    /// …of which have exhausted the retry budget and need a human.
+    pub iftsta_stuck: i64,
 }
 
-// ── create_order_pg ───────────────────────────────────────────────────────────
+// ── Create ────────────────────────────────────────────────────────────────────
 
+/// Insert a new order.
+///
+/// Returns `None` when an order for the same `(tenant, process_id)` already
+/// exists — an ORDERS redelivered over AS4 must not put a second disconnection in
+/// front of the field team.
+///
+/// # Errors
+///
+/// Propagates database errors.
 pub async fn create_order_pg(
     pool: &PgPool,
     tenant: &str,
-    req: CreateOrderRequest,
-) -> anyhow::Result<Uuid> {
-    let planned_date = req
-        .planned_date
-        .as_deref()
-        .map(|s| {
-            use time::format_description::well_known::Iso8601;
-            time::Date::parse(s, &Iso8601::DEFAULT)
-        })
-        .transpose()
-        .context("parse planned_date")?;
-
+    req: &CreateOrderRequest,
+) -> anyhow::Result<Option<Uuid>> {
     let row = sqlx::query(
         r"INSERT INTO sperr_orders
-              (malo_id, lf_mp_id, order_type, process_id, planned_date, tenant)
-          VALUES ($1, $2, $3, $4, $5, $6)
+              (tenant, malo_id, lf_mp_id, order_type, pruefidentifikator, process_id,
+               ausfuehrung_am, fruehestens_am, arbeitszeit,
+               treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz,
+               treffpunkt_ort, treffpunkt_land, hinweis)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+          ON CONFLICT (tenant, process_id) DO NOTHING
           RETURNING id::TEXT",
     )
+    .bind(tenant)
     .bind(&req.malo_id)
     .bind(&req.lf_mp_id)
-    .bind(&req.order_type)
+    .bind(req.order_type)
+    .bind(req.process_id.as_ref().map(|_| req.order_type.pid()))
     .bind(&req.process_id)
-    .bind(planned_date)
-    .bind(tenant)
-    .fetch_one(pool)
+    .bind(req.ausfuehrung_am)
+    .bind(req.fruehestens_am)
+    .bind(req.arbeitszeit)
+    .bind(&req.treffpunkt.hinweis)
+    .bind(&req.treffpunkt.strasse)
+    .bind(&req.treffpunkt.plz)
+    .bind(&req.treffpunkt.ort)
+    .bind(&req.treffpunkt.land)
+    .bind(&req.hinweis)
+    .fetch_optional(pool)
     .await
     .context("insert sperr_order")?;
 
-    let id_str: String = row.try_get("id")?;
-    id_str.parse::<Uuid>().context("parse UUID")
+    let Some(row) = row else { return Ok(None) };
+    let id: String = row.try_get("id")?;
+    Ok(Some(id.parse::<Uuid>().context("parse UUID")?))
 }
 
-// ── list_orders_pg ────────────────────────────────────────────────────────────
-
-/// The latest creation date whose `werktage`-Werktage deadline is already over.
-///
-/// BK6-22-024 counts the Sperrung window in Werktagen, not in calendar hours.
-/// A flat 48 h flagged every order placed on a Friday as overdue on Sunday, and
-/// let one placed before a public holiday run past its real deadline unflagged.
-#[must_use]
-pub fn werktage_cutoff(today: Date, werktage: u32) -> Date {
-    use mako_engine::fristen::{HolidayCalendar, add_werktage};
-    let cal = HolidayCalendar::BdewMaKo;
-    let mut day = today;
-    // A deadline of n Werktagen is never more than a few weeks of calendar days.
-    for _ in 0..90 {
-        if add_werktage(day, werktage, cal) < today {
-            return day;
-        }
-        match day.previous_day() {
-            Some(prev) => day = prev,
-            None => return day,
-        }
-    }
-    day
-}
+// ── Read ──────────────────────────────────────────────────────────────────────
 
 pub async fn list_orders_pg(
     pool: &PgPool,
     tenant: &str,
-    status: Option<&str>,
+    status: Option<OrderStatus>,
     malo_id: Option<&str>,
-    older_than_werktage: Option<u32>,
+    only_due: bool,
     limit: i64,
 ) -> anyhow::Result<Vec<SperrOrderRow>> {
-    // The deadline runs on the German civil calendar, so the creation date is
-    // read in Berlin rather than in the session timezone.
-    let cutoff = older_than_werktage.map(|n| werktage_cutoff(OffsetDateTime::now_utc().date(), n));
-    sqlx::query_as::<_, SperrOrderRow>(
-        r"SELECT id::TEXT, malo_id, lf_mp_id, order_type, process_id,
-                 planned_date, status, executed_at, execution_note,
-                 fail_reason, iftsta_ref, iftsta_dispatched_at,
-                 tenant, created_at, updated_at
+    sqlx::query_as::<_, SperrOrderRow>(&format!(
+        r"SELECT {ORDER_COLUMNS}
           FROM sperr_orders
-          WHERE (tenant = $1 OR $1 = '')
+          WHERE tenant = $1
             AND ($2::TEXT IS NULL OR status = $2)
             AND ($3::TEXT IS NULL OR malo_id = $3)
-            AND ($4::DATE IS NULL
-                 OR (created_at AT TIME ZONE 'Europe/Berlin')::DATE <= $4)
-          ORDER BY created_at DESC
-          LIMIT $5",
-    )
+            AND (NOT $4 OR COALESCE(ausfuehrung_am, fruehestens_am) <= CURRENT_DATE)
+          ORDER BY COALESCE(ausfuehrung_am, fruehestens_am) NULLS LAST, created_at DESC
+          LIMIT $5"
+    ))
     .bind(tenant)
-    .bind(status)
+    .bind(status.map(OrderStatus::as_str))
     .bind(malo_id)
-    .bind(cutoff)
+    .bind(only_due)
     .bind(limit)
     .fetch_all(pool)
     .await
     .context("list_orders_pg")
 }
 
-// ── fetch_order_pg ────────────────────────────────────────────────────────────
-
 pub async fn fetch_order_pg(
     pool: &PgPool,
     id: Uuid,
     tenant: &str,
 ) -> anyhow::Result<Option<SperrOrderRow>> {
-    sqlx::query_as::<_, SperrOrderRow>(
-        r"SELECT id::TEXT, malo_id, lf_mp_id, order_type, process_id,
-                 planned_date, status, executed_at, execution_note,
-                 fail_reason, iftsta_ref, iftsta_dispatched_at,
-                 tenant, created_at, updated_at
-          FROM sperr_orders WHERE id = $1 AND tenant = $2",
-    )
+    sqlx::query_as::<_, SperrOrderRow>(&format!(
+        "SELECT {ORDER_COLUMNS} FROM sperr_orders WHERE id = $1 AND tenant = $2"
+    ))
     .bind(id)
     .bind(tenant)
     .fetch_optional(pool)
@@ -191,316 +249,550 @@ pub async fn fetch_order_pg(
     .context("fetch_order_pg")
 }
 
-// ── execute_order_pg ─────────────────────────────────────────────────────────
+// ── Execute / fail ────────────────────────────────────────────────────────────
 
-/// Mark an order as executed and dispatch IFTSTA 21039 (Ausführungsbestätigung)
-/// to `makod` via the `gpke.sperrung.bestaetigen` command.
+/// The outcome the field team reported.
+#[derive(Debug)]
+pub enum Outcome<'a> {
+    /// Carried out. `at` becomes `DTM+293 Fertigstellungsdatum`.
+    Executed {
+        at: OffsetDateTime,
+        note: Option<&'a str>,
+        /// `SG15 STS DE9013` from the EBD "erfolgreich" cluster.
+        pruefschritt_code: Option<&'a str>,
+    },
+    /// Attempted and not carried out.
+    Failed {
+        reason: &'a str,
+        /// `SG15 STS DE9013` from the EBD "gescheitert" cluster.
+        pruefschritt_code: Option<&'a str>,
+    },
+}
+
+impl Outcome<'_> {
+    #[must_use]
+    pub const fn status(&self) -> OrderStatus {
+        match self {
+            Self::Executed { .. } => OrderStatus::Executed,
+            Self::Failed { .. } => OrderStatus::Failed,
+        }
+    }
+}
+
+/// What [`report_outcome`] did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Reported {
+    /// The order moved to its terminal state. The IFTSTA is either dispatched
+    /// (`iftsta_ref` set) or queued for the retry worker.
+    Recorded { iftsta_dispatched: bool },
+    /// No pending order with that id in this tenant.
+    NotFound,
+}
+
+/// Record a field outcome and report it to the Lieferant with IFTSTA 21039.
 ///
-/// This satisfies GPKE BK6-22-024 §5: the NB must send IFTSTA 21039 after
-/// physical Sperrung/Entsperrung execution.
-pub async fn execute_order_pg(
+/// The order is **claimed first** — a single guarded `UPDATE … WHERE status =
+/// 'pending'` — and only then is the IFTSTA dispatched. Reading, dispatching and
+/// guarding the write afterwards let a concurrent execute and fail both pass the
+/// read, so the LF received an Ausführungs- *and* a Fehlmeldung for one order.
+///
+/// If the dispatch then fails, the claim is **kept**, not rolled back: the field
+/// team's report is a fact about the physical world and must not be discarded
+/// because a downstream service was unreachable. The order lands in the retry
+/// queue instead, which is what [`claim_iftsta_retry`] drains.
+///
+/// # Errors
+///
+/// Propagates database errors. A failed dispatch is *not* an error — it is a
+/// queued retry.
+pub async fn report_outcome(
     pool: &PgPool,
     makod: &Arc<MakodClient>,
     id: Uuid,
     tenant: &str,
-    note: Option<&str>,
-    executed_at_str: Option<&str>,
-) -> anyhow::Result<bool> {
-    let executed_at = if let Some(s) = executed_at_str {
-        OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339)
-            .map(Some)
-            .context("parse executed_at")?
-    } else {
-        Some(OffsetDateTime::now_utc())
+    outcome: &Outcome<'_>,
+) -> anyhow::Result<Reported> {
+    let status = outcome.status();
+    let (executed_at, note, reason, code) = match outcome {
+        Outcome::Executed {
+            at,
+            note,
+            pruefschritt_code,
+        } => (Some(*at), *note, None, *pruefschritt_code),
+        Outcome::Failed {
+            reason,
+            pruefschritt_code,
+        } => (None, None, Some(*reason), *pruefschritt_code),
     };
 
-    // Claim the order before dispatching. Reading the row, dispatching, and only
-    // then guarding the UPDATE let a concurrent execute and fail both pass the
-    // read and both put an IFTSTA on the wire — the LF received an
-    // Ausführungs- *and* a Fehlmeldung for the same order.
-    let order_row = sqlx::query(
+    let claimed = sqlx::query(
         r"UPDATE sperr_orders
-          SET status = 'executed', executed_at = $3, execution_note = $4, updated_at = now()
+          SET status = $3, executed_at = $4, execution_note = $5, fail_reason = $6,
+              pruefschritt_code = $7, updated_at = now()
           WHERE id = $1 AND tenant = $2 AND status = 'pending'
-          RETURNING malo_id, lf_mp_id, process_id",
+          RETURNING malo_id, lf_mp_id, order_type, process_id",
     )
     .bind(id)
     .bind(tenant)
+    .bind(status.as_str())
     .bind(executed_at)
     .bind(note)
+    .bind(reason)
+    .bind(code)
     .fetch_optional(pool)
     .await
-    .context("claim order for execute")?;
+    .context("claim order")?;
 
-    let Some(order) = order_row else {
-        return Ok(false);
+    let Some(row) = claimed else {
+        return Ok(Reported::NotFound);
     };
 
-    let malo_id: String = order.try_get("malo_id")?;
-    let lf_mp_id: String = order.try_get("lf_mp_id")?;
-    let process_id: Option<String> = order.try_get("process_id")?;
+    let order = DispatchTarget {
+        id,
+        malo_id: row.try_get("malo_id")?,
+        lf_mp_id: row.try_get("lf_mp_id")?,
+        order_type: row.try_get("order_type")?,
+        process_id: row.try_get("process_id")?,
+        status,
+        executed_at,
+        note: note.map(str::to_owned),
+        reason: reason.map(str::to_owned),
+        pruefschritt_code: code.map(str::to_owned),
+    };
+    let dispatched = dispatch_iftsta(pool, makod, tenant, &order).await;
+    Ok(Reported::Recorded {
+        iftsta_dispatched: dispatched,
+    })
+}
 
-    // Dispatch IFTSTA 21039 via makod — mandatory per GPKE BK6-22-024 §5.
-    // Idempotency key prevents double-dispatch on retry.
-    let idempotency_key = format!("sperrd-iftsta-{id}");
+/// Everything the IFTSTA 21039 dispatch needs about an order.
+#[derive(Debug)]
+pub struct DispatchTarget {
+    pub id: Uuid,
+    pub malo_id: String,
+    pub lf_mp_id: String,
+    pub order_type: OrderType,
+    pub process_id: Option<String>,
+    pub status: OrderStatus,
+    pub executed_at: Option<OffsetDateTime>,
+    pub note: Option<String>,
+    pub reason: Option<String>,
+    pub pruefschritt_code: Option<String>,
+}
+
+/// Hand the IFTSTA 21039 to `makod`, recording success or the reason it failed.
+///
+/// Returns whether the dispatch succeeded. Never returns an error: a failure is
+/// recorded on the row and retried by the worker, because the alternative is
+/// losing the field team's report.
+pub async fn dispatch_iftsta(
+    pool: &PgPool,
+    makod: &Arc<MakodClient>,
+    tenant: &str,
+    order: &DispatchTarget,
+) -> bool {
+    // An operator-created order has no inbound ORDERS behind it, so there is no
+    // Lieferant waiting and no process to report into. Marking it dispatched is
+    // honest: nothing is outstanding.
+    let Some(process_id) = order.process_id.as_deref() else {
+        let _ = record_iftsta(pool, order.id, tenant, "local").await;
+        return true;
+    };
+
+    let command = match order.status {
+        OrderStatus::Executed => "gpke.sperrung.bestaetigen",
+        OrderStatus::Failed => "gpke.sperrung.fehlgeschlagen",
+        // Unreachable: only terminal outcomes are dispatched.
+        OrderStatus::Pending | OrderStatus::Cancelled => return false,
+    };
+
     let cmd = ForwardCommand {
-        command: "gpke.sperrung.bestaetigen".to_owned(),
-        marktrolle: None,
-        malo_id: Some(malo_id.clone()),
+        command: command.to_owned(),
+        marktrolle: Some("NB".to_owned()),
+        malo_id: Some(order.malo_id.clone()),
         melo_id: None,
         payload: serde_json::json!({
-            "lf_mp_id":    lf_mp_id,
-            "process_id":  process_id,
-            "executed_at": executed_at.map(|t| {
-                t.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()
+            "lf_mp_id":   order.lf_mp_id,
+            "process_id": process_id,
+            // SG15 STS DE9015 — Z37 Sperren / Z38 Entsperren. Derived from the
+            // order type so an executed *Entsperrung* is not reported as a
+            // Sperren-Auftragsstatus, which is what a single command name for
+            // both would produce.
+            "auftragsstatus_qualifier": order.order_type.iftsta_qualifier(),
+            // SG15 STS DE4405 — Z14 erfolgreich / Z13 gescheitert.
+            "auftragsstatus_code": order.status.iftsta_code(),
+            // SG15 STS DE9013 — Code des Prüfschritts. Muss in the AHB.
+            "pruefschritt_code": order.pruefschritt_code,
+            // DTM+293 Fertigstellungsdatum — Muss on Z14, and condition [495]
+            // requires it to be ≤ the document date.
+            "fertigstellung": order.executed_at.and_then(|t| {
+                t.format(&time::format_description::well_known::Rfc3339).ok()
             }),
-            "note": note,
+            // SG25 FTX+ACB Freier Text.
+            "note":   order.note,
+            "reason": order.reason,
         }),
     };
 
-    let accepted = match makod.post_command(&idempotency_key, &cmd).await {
-        Ok(accepted) => accepted,
-        Err(e) => {
-            // The claim already moved the order out of 'pending'. Release it, or
-            // the field team's confirmation is recorded with no IFTSTA behind it
-            // and nothing left to retry.
-            release_claim(pool, id, tenant).await;
-            return Err(e).context("dispatch IFTSTA 21039 to makod");
+    // Keyed on the order, not the attempt: makod deduplicates a retry into the
+    // same command rather than putting a second IFTSTA on the wire.
+    let key = format!("sperrd-iftsta-{}", order.id);
+    match makod.post_command(&key, &cmd).await {
+        Ok(accepted) => {
+            let reference = accepted.process_id.to_string();
+            if let Err(e) = record_iftsta(pool, order.id, tenant, &reference).await {
+                tracing::error!(
+                    order_id = %order.id, error = %e,
+                    "sperrd: IFTSTA 21039 accepted by makod but not recorded — the retry \
+                     worker will re-send it under the same idempotency key"
+                );
+                return false;
+            }
+            true
         }
-    };
-
-    record_iftsta(pool, id, tenant, &accepted.process_id.to_string()).await?;
-    Ok(true)
-}
-
-/// Return a claimed order to `pending` after its dispatch failed.
-async fn release_claim(pool: &PgPool, id: Uuid, tenant: &str) {
-    let res = sqlx::query(
-        r"UPDATE sperr_orders
-          SET status = 'pending', executed_at = NULL, execution_note = NULL,
-              fail_reason = NULL, updated_at = now()
-          WHERE id = $1 AND tenant = $2 AND iftsta_ref IS NULL",
-    )
-    .bind(id)
-    .bind(tenant)
-    .execute(pool)
-    .await;
-    if let Err(e) = res {
-        tracing::error!(
-            order_id = %id, error = %e,
-            "sperrd: could not release the claim after a failed IFTSTA dispatch — \
-             the order is stuck out of 'pending'"
-        );
+        Err(e) => {
+            let _ = record_iftsta_failure(pool, order.id, tenant, &e.to_string()).await;
+            tracing::warn!(
+                order_id = %order.id, error = %e,
+                "sperrd: IFTSTA 21039 dispatch failed — queued for retry"
+            );
+            false
+        }
     }
 }
 
-/// Record the dispatched IFTSTA against the claimed order.
+/// Record a successful IFTSTA dispatch.
 async fn record_iftsta(
     pool: &PgPool,
     id: Uuid,
     tenant: &str,
-    iftsta_ref: &str,
+    reference: &str,
 ) -> anyhow::Result<()> {
     sqlx::query(
         r"UPDATE sperr_orders
-          SET iftsta_ref = $3, iftsta_dispatched_at = now(), updated_at = now()
-          WHERE id = $1 AND tenant = $2",
+          SET iftsta_ref = $3, iftsta_dispatched_at = now(),
+              iftsta_last_error = NULL, updated_at = now()
+          WHERE id = $1 AND tenant = $2 AND iftsta_dispatched_at IS NULL",
     )
     .bind(id)
     .bind(tenant)
-    .bind(iftsta_ref)
+    .bind(reference)
     .execute(pool)
     .await
     .context("record IFTSTA dispatch")?;
     Ok(())
 }
 
-// ── fail_order_pg ─────────────────────────────────────────────────────────────
-
-/// Mark an order as failed and dispatch IFTSTA 21039 reporting non-execution.
-///
-/// GPKE BK6-22-024 §5 requires the NB to report the outcome of a Sperrung order
-/// — **including a failed attempt**. Without this dispatch the Lieferant's
-/// `gpke-sperrung-lf` process hangs until its 24-hour deadline expires and the LF
-/// never learns why (meter access denied, safety block, address not found, …).
-pub async fn fail_order_pg(
+/// Record a failed IFTSTA dispatch and count the attempt.
+async fn record_iftsta_failure(
     pool: &PgPool,
-    makod: &Arc<MakodClient>,
     id: Uuid,
     tenant: &str,
-    reason: &str,
-) -> anyhow::Result<bool> {
-    // Claimed before dispatch for the same reason as `execute_order_pg`: the two
-    // routes race, and both IFTSTA messages reaching the LF is worse than
-    // either one not being sent.
-    let order_row = sqlx::query(
+    error: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
         r"UPDATE sperr_orders
-          SET status = 'failed', fail_reason = $3, updated_at = now()
-          WHERE id = $1 AND tenant = $2 AND status = 'pending'
-          RETURNING malo_id, lf_mp_id, process_id",
+          SET iftsta_attempts = iftsta_attempts + 1,
+              iftsta_last_error = $3, updated_at = now()
+          WHERE id = $1 AND tenant = $2",
     )
     .bind(id)
     .bind(tenant)
-    .bind(reason)
-    .fetch_optional(pool)
-    .await
-    .context("claim order for fail")?;
-
-    let Some(order) = order_row else {
-        return Ok(false);
-    };
-
-    let malo_id: String = order.try_get("malo_id")?;
-    let lf_mp_id: String = order.try_get("lf_mp_id")?;
-    let process_id: Option<String> = order.try_get("process_id")?;
-
-    let idempotency_key = format!("sperrd-iftsta-fail-{id}");
-    let cmd = ForwardCommand {
-        command: "gpke.sperrung.fehlgeschlagen".to_owned(),
-        marktrolle: None,
-        malo_id: Some(malo_id.clone()),
-        melo_id: None,
-        payload: serde_json::json!({
-            "lf_mp_id":   lf_mp_id,
-            "process_id": process_id,
-            "reason":     reason,
-        }),
-    };
-
-    let accepted = match makod.post_command(&idempotency_key, &cmd).await {
-        Ok(accepted) => accepted,
-        Err(e) => {
-            release_claim(pool, id, tenant).await;
-            return Err(e).context("dispatch IFTSTA 21039 (non-execution) to makod");
-        }
-    };
-
-    record_iftsta(pool, id, tenant, &accepted.process_id.to_string()).await?;
-    Ok(true)
-}
-
-// ── cancel_order_pg ───────────────────────────────────────────────────────────
-
-/// Cancel a pending Sperrung order (operator-initiated; no IFTSTA dispatched).
-///
-/// Only `pending` orders can be cancelled.  Once `executed` or `failed`,
-/// the order is terminal and cannot be cancelled.
-pub async fn cancel_order_pg(pool: &PgPool, id: Uuid, tenant: &str) -> anyhow::Result<bool> {
-    let rows = sqlx::query(
-        r"UPDATE sperr_orders
-          SET status = 'cancelled', updated_at = now()
-          WHERE id = $1 AND tenant = $2 AND status = 'pending'",
-    )
-    .bind(id)
-    .bind(tenant)
+    // Bounded: a provider error can be arbitrarily long and this column is read
+    // in list responses.
+    .bind(error.chars().take(500).collect::<String>())
     .execute(pool)
     .await
-    .context("cancel_order_pg")?
-    .rows_affected();
-    Ok(rows > 0)
+    .context("record IFTSTA failure")?;
+    Ok(())
 }
 
-// ── stats_pg ──────────────────────────────────────────────────────────────────
-
-/// Aggregate statistics for Sperrung orders for the given tenant.
+/// Take one order off the IFTSTA retry queue, or `None` when it is empty.
 ///
-/// Includes counts of orders by status + overdue pending orders (planned_date < today)
-/// + executed orders missing IFTSTA dispatch.  Used by the sperrd MCP and monitoring.
+/// `FOR UPDATE SKIP LOCKED` so replicas drain it in parallel without one
+/// blocking on another's row. Only orders inside the retry budget are handed
+/// out; the rest are [`list_stuck_iftsta`]'s problem.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn claim_iftsta_retry(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Option<DispatchTarget>> {
+    let row = sqlx::query(
+        r"SELECT id, malo_id, lf_mp_id, order_type, process_id, status,
+                 executed_at, execution_note, fail_reason, pruefschritt_code
+          FROM sperr_orders
+          WHERE tenant = $1
+            AND status IN ('executed', 'failed')
+            AND iftsta_dispatched_at IS NULL
+            AND iftsta_attempts < $2
+          ORDER BY updated_at
+          LIMIT 1
+          FOR UPDATE SKIP LOCKED",
+    )
+    .bind(tenant)
+    .bind(IFTSTA_MAX_ATTEMPTS)
+    .fetch_optional(pool)
+    .await
+    .context("claim_iftsta_retry")?;
+
+    let Some(r) = row else { return Ok(None) };
+    Ok(Some(DispatchTarget {
+        id: r.try_get("id")?,
+        malo_id: r.try_get("malo_id")?,
+        lf_mp_id: r.try_get("lf_mp_id")?,
+        order_type: r.try_get("order_type")?,
+        process_id: r.try_get("process_id")?,
+        status: r.try_get("status")?,
+        executed_at: r.try_get("executed_at")?,
+        note: r.try_get("execution_note")?,
+        reason: r.try_get("fail_reason")?,
+        pruefschritt_code: r.try_get("pruefschritt_code")?,
+    }))
+}
+
+/// Orders that exhausted the retry budget and have not been escalated yet.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_stuck_iftsta(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<(Uuid, String, String, String)>> {
+    let rows = sqlx::query(
+        r"SELECT id, malo_id, lf_mp_id, COALESCE(iftsta_last_error, '') AS err
+          FROM sperr_orders
+          WHERE tenant = $1
+            AND status IN ('executed', 'failed')
+            AND iftsta_dispatched_at IS NULL
+            AND iftsta_attempts >= $2
+            AND iftsta_escalated_at IS NULL",
+    )
+    .bind(tenant)
+    .bind(IFTSTA_MAX_ATTEMPTS)
+    .fetch_all(pool)
+    .await
+    .context("list_stuck_iftsta")?;
+    rows.into_iter()
+        .map(|r| {
+            Ok((
+                r.try_get("id")?,
+                r.try_get("malo_id")?,
+                r.try_get("lf_mp_id")?,
+                r.try_get("err")?,
+            ))
+        })
+        .collect()
+}
+
+/// Mark a stuck order as escalated so it is announced once, not every cycle.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_iftsta_escalated(
+    exec: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE sperr_orders SET iftsta_escalated_at = now() \
+         WHERE id = $1 AND tenant = $2 AND iftsta_escalated_at IS NULL",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(exec)
+    .await
+    .context("mark_iftsta_escalated")?;
+    Ok(())
+}
+
+// ── Cancel ────────────────────────────────────────────────────────────────────
+
+/// Withdraw a pending order. Terminal orders cannot be cancelled.
+///
+/// Returns the `(malo_id, lf_mp_id)` of the cancelled order, or `None`.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn cancel_order_pg(
+    exec: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<(String, String)>> {
+    let row = sqlx::query(
+        r"UPDATE sperr_orders
+          SET status = 'cancelled', updated_at = now()
+          WHERE id = $1 AND tenant = $2 AND status = 'pending'
+          RETURNING malo_id, lf_mp_id",
+    )
+    .bind(id)
+    .bind(tenant)
+    .fetch_optional(exec)
+    .await
+    .context("cancel_order_pg")?;
+    match row {
+        Some(r) => Ok(Some((r.try_get("malo_id")?, r.try_get("lf_mp_id")?))),
+        None => Ok(None),
+    }
+}
+
+// ── Stats ─────────────────────────────────────────────────────────────────────
+
 pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats> {
     let row = sqlx::query(
         r"SELECT
-              COUNT(*)                                                        AS total,
-              COUNT(*) FILTER (WHERE status = 'pending')                     AS pending,
-              COUNT(*) FILTER (WHERE status = 'executed')                    AS executed,
-              COUNT(*) FILTER (WHERE status = 'failed')                      AS failed,
-              COUNT(*) FILTER (WHERE status = 'cancelled')                   AS cancelled,
+              COUNT(*)                                        AS total,
+              COUNT(*) FILTER (WHERE status = 'pending')      AS pending,
+              COUNT(*) FILTER (WHERE status = 'executed')     AS executed,
+              COUNT(*) FILTER (WHERE status = 'failed')       AS failed,
+              COUNT(*) FILTER (WHERE status = 'cancelled')    AS cancelled,
               COUNT(*) FILTER (
                   WHERE status = 'pending'
-                    AND planned_date IS NOT NULL
-                    AND planned_date < CURRENT_DATE
-              )                                                               AS overdue_pending,
+                    AND COALESCE(ausfuehrung_am, fruehestens_am) < CURRENT_DATE
+              )                                                AS overdue_pending,
               COUNT(*) FILTER (
-                  WHERE status = 'executed'
+                  WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
-              )                                                               AS executed_missing_iftsta
+              )                                                AS iftsta_outstanding,
+              COUNT(*) FILTER (
+                  WHERE status IN ('executed', 'failed')
+                    AND iftsta_dispatched_at IS NULL
+                    AND iftsta_attempts >= $2
+              )                                                AS iftsta_stuck
           FROM sperr_orders
-          WHERE (tenant = $1 OR $1 = '')",
+          WHERE tenant = $1",
     )
     .bind(tenant)
+    .bind(IFTSTA_MAX_ATTEMPTS)
     .fetch_one(pool)
     .await
     .context("stats_pg")?;
 
     Ok(SperrStats {
-        total: row.try_get("total").unwrap_or(0),
-        pending: row.try_get("pending").unwrap_or(0),
-        executed: row.try_get("executed").unwrap_or(0),
-        failed: row.try_get("failed").unwrap_or(0),
-        cancelled: row.try_get("cancelled").unwrap_or(0),
-        overdue_pending: row.try_get("overdue_pending").unwrap_or(0),
-        executed_missing_iftsta: row.try_get("executed_missing_iftsta").unwrap_or(0),
+        total: row.try_get("total")?,
+        pending: row.try_get("pending")?,
+        executed: row.try_get("executed")?,
+        failed: row.try_get("failed")?,
+        cancelled: row.try_get("cancelled")?,
+        overdue_pending: row.try_get("overdue_pending")?,
+        iftsta_outstanding: row.try_get("iftsta_outstanding")?,
+        iftsta_stuck: row.try_get("iftsta_stuck")?,
     })
 }
-
-// ── Unit tests ─────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use time::macros::date;
 
-    #[test]
-    fn create_order_request_fields() {
-        let req = CreateOrderRequest {
+    fn req() -> CreateOrderRequest {
+        CreateOrderRequest {
             malo_id: "51238696012".to_owned(),
             lf_mp_id: "9900012345678".to_owned(),
-            order_type: "sperrung".to_owned(),
-            process_id: Some("550e8400-e29b-41d4-a716-446655440000".to_owned()),
-            planned_date: Some("2026-07-20".to_owned()),
-        };
-        assert_eq!(req.malo_id, "51238696012");
-        assert_eq!(req.order_type, "sperrung");
-        assert!(req.process_id.is_some());
-    }
-
-    #[test]
-    fn sperrung_order_types_are_valid() {
-        // Only 'sperrung' and 'entsperrung' are valid per DB CHECK constraint.
-        let valid = ["sperrung", "entsperrung"];
-        for t in valid {
-            assert!(!t.is_empty(), "order_type must not be empty: {t}");
+            order_type: OrderType::Sperrung,
+            process_id: None,
+            ausfuehrung_am: None,
+            fruehestens_am: None,
+            arbeitszeit: None,
+            treffpunkt: Treffpunkt::default(),
+            hinweis: None,
         }
     }
 
     #[test]
-    fn sperr_stats_default_all_zero() {
-        let s = SperrStats {
-            total: 0,
-            pending: 0,
-            executed: 0,
-            failed: 0,
-            cancelled: 0,
-            overdue_pending: 0,
-            executed_missing_iftsta: 0,
-        };
-        assert_eq!(s.total, 0);
-        assert_eq!(s.executed_missing_iftsta, 0);
+    fn a_fixed_and_an_earliest_date_are_alternatives() {
+        // ORDERS AHB conditions [55]/[56]: DTM+203 is Muss when DTM+469 is
+        // absent and vice versa, so a message carrying both is malformed.
+        let mut r = req();
+        r.ausfuehrung_am = Some(date!(2026 - 09 - 01));
+        r.fruehestens_am = Some(date!(2026 - 09 - 03));
+        assert!(r.validate().is_err());
+
+        r.fruehestens_am = None;
+        assert!(r.validate().is_ok());
+
+        r.ausfuehrung_am = None;
+        r.fruehestens_am = Some(date!(2026 - 09 - 03));
+        assert!(r.validate().is_ok());
     }
 
     #[test]
-    fn executed_at_parse_roundtrip() {
-        use time::format_description::well_known::Rfc3339;
-        let ts = "2026-07-14T09:47:00Z";
-        let parsed = time::OffsetDateTime::parse(ts, &Rfc3339).unwrap();
-        let formatted = parsed.format(&Rfc3339).unwrap();
-        // Round-trip should produce the same canonical string (modulo offset).
-        let reparsed = time::OffsetDateTime::parse(&formatted, &Rfc3339).unwrap();
-        assert_eq!(parsed, reparsed);
+    fn an_order_with_neither_date_is_accepted() {
+        // A 17117 Entsperrauftrag carries neither DTM+203 nor DTM+469 — §41f
+        // Abs. 7 makes it unverzüglich rather than scheduled.
+        let mut r = req();
+        r.order_type = OrderType::Entsperrung;
+        assert!(r.validate().is_ok());
     }
 
     #[test]
-    fn idempotency_key_format_is_stable() {
-        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
-        let key = format!("sperrd-iftsta-{id}");
-        assert_eq!(key, "sperrd-iftsta-550e8400-e29b-41d4-a716-446655440000");
+    fn treffpunkt_country_must_be_an_iso_code() {
+        let mut r = req();
+        r.treffpunkt.land = Some("Deutschland".to_owned());
+        assert!(r.validate().is_err());
+        r.treffpunkt.land = Some("de".to_owned());
+        assert!(
+            r.validate().is_err(),
+            "NAD 3207 is the upper-case alpha-2 code"
+        );
+        r.treffpunkt.land = Some("DE".to_owned());
+        assert!(r.validate().is_ok());
+    }
+
+    #[test]
+    fn the_retry_budget_is_bounded() {
+        // A dispatch that keeps failing is a wrong-state problem, not a
+        // transport one; retrying forever hides it behind an attempt counter.
+        const { assert!(IFTSTA_MAX_ATTEMPTS > 0 && IFTSTA_MAX_ATTEMPTS <= 32) }
+    }
+
+    #[test]
+    fn the_column_list_covers_every_row_field() {
+        // `SperrOrderRow` is decoded by name, so a field added to the struct but
+        // not to ORDER_COLUMNS fails at runtime on the first query — in
+        // production, on a route nobody ran in CI.
+        let selected: Vec<&str> = ORDER_COLUMNS
+            .split(',')
+            .map(|c| c.trim().split("::").next().unwrap_or_default().trim())
+            .collect();
+        for field in [
+            "id",
+            "tenant",
+            "malo_id",
+            "lf_mp_id",
+            "order_type",
+            "pruefidentifikator",
+            "process_id",
+            "ausfuehrung_am",
+            "fruehestens_am",
+            "arbeitszeit",
+            "treffpunkt_hinweis",
+            "treffpunkt_strasse",
+            "treffpunkt_plz",
+            "treffpunkt_ort",
+            "treffpunkt_land",
+            "hinweis",
+            "status",
+            "executed_at",
+            "execution_note",
+            "fail_reason",
+            "pruefschritt_code",
+            "iftsta_ref",
+            "iftsta_dispatched_at",
+            "iftsta_attempts",
+            "iftsta_last_error",
+            "created_at",
+            "updated_at",
+        ] {
+            assert!(
+                selected.contains(&field),
+                "ORDER_COLUMNS is missing {field}"
+            );
+        }
     }
 }

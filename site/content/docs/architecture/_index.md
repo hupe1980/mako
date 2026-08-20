@@ -61,7 +61,7 @@ graph LR
         RETAIL["Retail — LF<br/>vertragd · tarifbd · billingd"]
         EDMD["edmd<br/>metering data · hot + cold"]
         OBSD["obsd<br/>KPIs · deadlines · §20 parity"]
-        SPERRD["sperrd<br/>Sperrung execution · IFTSTA"]
+        SPERRD["sperrd<br/>Sperr-/Entsperrauftrag queue · IFTSTA 21039"]
         MABIS["mabis-syncd<br/>Summenzeitreihen → BIKO"]
     end
 
@@ -224,7 +224,7 @@ and `agentd`, which is the MCP *host* that calls the others.
 | `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`), LF answers to the NB-initiated GPKE processes, MSB REQOTE/ORDRSP, EoG gap closure; role-gated binaries (§ 7 EnWG) | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
 | `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31002 (NN-Rechnung) / 31005 (MMM) / 31009 (MSB) / 31011 (AWH), invoice draft lifecycle | `netzbilanzd.toml` |
-| `sperrd` | `:8780` | Sperrung execution tracker (NB role) — `sperr_orders` lifecycle, IFTSTA 21039 auto-dispatch | `sperrd.toml` |
+| `sperrd` | `:8780` | Sperr-/Entsperrauftrag execution queue (NB role) — ORDERS 17115/17117 ingest, field dispatch, IFTSTA 21039 with a retry queue | `sperrd.toml` |
 | `edmd` | `:8380` | Energy data management — MSCONS meter readings, BO4E `Energiemenge` deliveries, `Lastgang` + `Zeitreihe` time-series, `MeterBillingPeriod`; **§14a SMGW compliance** (MsbG §21c): `smgw_sessions` + `cls_compliance_log` tables, daily `check_session_compliance()` sweep, `de.messwert.cls.compliance-issue` CloudEvents | `edmd.toml` |
 | `obsd` | `:8480` | Process observability — KPI reports, deadline-risk alerts, §20 EnWG parity | `obsd.toml` |
 | `einsd` | `:9180` | Einspeiser Registry + EEG/KWKG Settlement (NB/LF role) — **10 settlement schemes** (Vergütung, Mieterstrom §21 Abs. 3 EEG, Direktvermarktung MarketPremium, sonstige Direktvermarktung, Ausschreibung, Post-EEG Spot, Eigenverbrauch, KWKG-Zuschlag §7 KWKG 2023, Flexibilitätsprämie §50 EEG, Flexibilitätszuschlag §50b EEG); Repowering §22 EEG; KWKG Förderdauer; built-in rate table EEG 2000–2023 + KWKG 2023; **§14 UStG Gutschrift** issued per billable settlement (Gutschriftverfahren — NB issues the document; BO4E `Rechnung` in `rechnung_json`, VAT breakdown per plant tax status); CloudEvents `de.eeg.verguetung.berechnet` (net + USt + brutto) + `de.eeg.marktpraemie.berechnet` + `de.eeg.anlage.foerderung-auslaufend` | `einsd.toml` |
@@ -412,22 +412,32 @@ Key facts:
 
 See [`netzbilanzd` Operator Guide](@/docs/services/netzbilanzd.md).
 
-### `sperrd` — Sperrung Execution Tracker (`:8780`)
+### `sperrd` — Sperr-/Entsperrauftrag Execution Queue (`:8780`)
 
-`sperrd` tracks the field execution of Sperrung (power/gas disconnection) and
-Entsperrung (reconnection) orders under GPKE BK6-22-024. Without it, the NB
-risks a permanent protocol violation if a field team executes a disconnection
-but the IFTSTA 21039 confirmation is never sent to `makod`.
+The Netzbetreiber's work queue for the physical acts GPKE orders it to perform.
+An ORDERS **17115 Sperrauftrag** or **17117 Entsperrauftrag** from a Lieferant
+becomes a job for the field team; the outcome goes back as **IFTSTA 21039**
+(Auftragsstatus Sperren `STS+Z37` / Entsperren `STS+Z38`). Without that message
+the LF's `gpke-sperrung-lf` process never terminates.
 
 Key facts:
-- **`sperr_orders` lifecycle**: `pending → executed` (field confirmation received) or
-  `failed` (field team cannot execute) or `cancelled` (order withdrawn before execution).
-- **IFTSTA 21039 auto-dispatch** — when the field team calls `PUT /api/v1/sperr-orders/{id}/execute`,
-  `sperrd` atomically updates the order status and issues the IFTSTA 21039 command to `makod`.
-- **Operator escalation** — `PUT /api/v1/sperr-orders/{id}/fail` records the failure and
-  triggers an operator alert, preventing silent non-execution.
-- No event subscription from `marktd`; order IDs are created by the NB operator or ERP
-  when a Sperrung workflow reaches the execution milestone in `makod`.
+- **Market inbox** — `POST /webhook` consumes `de.mako.process.initiated` for PIDs
+  17115/17117 and creates the work order, keyed on the `makod` process so an AS4
+  redelivery cannot queue a second disconnection. 17116 (Anfrage Sperrung, NB→MSB)
+  is deliberately not queued: it is a question, not an order.
+- **The row is the ORDERS** — `DTM+203` fixed date *or* `DTM+469` earliest start
+  (mutually exclusive), `IMD+7081` Arbeitszeit, and the `SG2 NAD+Z24` Treffpunkt
+  the technician actually travels to.
+- **Lifecycle**: `pending → executed | failed | cancelled`. The transition is a
+  single guarded `UPDATE`, so a concurrent execute and fail cannot both put a
+  message on the wire.
+- **The IFTSTA is a queue, not a one-shot** — a failed dispatch keeps the field
+  report and schedules a retry under the same idempotency key; exhausting the
+  budget announces `de.sperr.iftsta.ausstehend` once. `/stats` separates
+  `iftsta_outstanding` (in flight) from `iftsta_stuck` (needs a human).
+- **No Werktage execution deadline exists.** BK6-22-024 §5's 24 wall-clock hours
+  is the ORDRSP window, which `makod` tracks; the physical date is the
+  Lieferant's own.
 
 See [`sperrd` Operator Guide](@/docs/services/sperrd.md).
 

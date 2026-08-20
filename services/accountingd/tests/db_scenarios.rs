@@ -1003,13 +1003,40 @@ async fn the_journal_proves_it_is_append_only() {
 
 /// Seed an unresolved **Mahnstufe-3** case for a fresh account and return its id.
 ///
-/// Also arms the §41f Abs. 3 S. 1 consumption gate by setting the monthly
-/// Abschlag to ⅓ of the arrears (so `2× Abschlag = ⅔ arrears ≤ arrears` clears
-/// the gate). Tests that exercise the gate itself override `abschlag_ct` /
-/// `jahresabschluss_runs` afterwards via [`set_abschlag`] / [`set_annual_bill`].
-async fn seed_stufe3(pool: &PgPool, malo: &str, amount_ct: i64) -> Uuid {
+/// Books `amount_ct` as a real `RECHNUNG` debit, because the §41f Abs. 3 gates
+/// read the live open receivable — seeding only the case row leaves the account
+/// owing nothing and every phase correctly refuses to advance it.
+///
+/// Also arms the Abs. 3 S. 1 consumption gate by setting the monthly Abschlag to
+/// ⅓ of the arrears (so `2× Abschlag = ⅔ arrears ≤ arrears` clears it). Tests
+/// that exercise the gate itself override `abschlag_ct` / `jahresabschluss_runs`
+/// via [`set_abschlag`] / [`set_annual_bill`].
+async fn seed_stufe3(pool: &PgPool, ledger: &PgLedger, malo: &str, amount_ct: i64) -> Uuid {
     let account_id = pg::upsert_account(pool, malo, "LF1", TENANT).await.unwrap();
+    pg::post_entry(
+        ledger,
+        pool,
+        TENANT,
+        malo,
+        "LF1",
+        "RECHNUNG",
+        amount_ct,
+        &uniq("arrears"),
+        None,
+        None,
+        date!(2026 - 01 - 01),
+        date!(2026 - 01 - 01),
+        Some("Jahresrechnung"),
+        None,
+    )
+    .await
+    .unwrap();
     set_abschlag(pool, malo, amount_ct / 3).await;
+    // The phase queries read `accounts.verzug_ct`. `post_entry` refreshes it,
+    // but `set_abschlag` writes the account afterwards, so prime it explicitly.
+    pg::refresh_verzug(ledger, pool, TENANT, malo, "LF1")
+        .await
+        .unwrap();
     pg::create_dunning_case(
         pool,
         account_id,
@@ -1060,11 +1087,11 @@ fn contains(cands: &[(Uuid, String, String, i64)], case: Uuid) -> bool {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn sperr_sequence_progresses_through_all_phases() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
     let threshold = 10_000;
 
     // ── Phase 1: Sperrandrohung (§41f Abs. 1) ──
@@ -1085,14 +1112,14 @@ async fn sperr_sequence_progresses_through_all_phases() {
     );
 
     // ── Phase 2: Sperrankündigung (§41f Abs. 5), gated by the 4-Wochen Frist ──
-    let not_yet = pg::list_ankuendigung_candidates(&pool, TENANT, 28)
+    let not_yet = pg::list_ankuendigung_candidates(&pool, TENANT, 28, 10_000)
         .await
         .unwrap();
     assert!(
         !contains(&not_yet, case),
         "Ankündigung waits out the 4-Wochen Androhungsfrist"
     );
-    let due = pg::list_ankuendigung_candidates(&pool, TENANT, 0)
+    let due = pg::list_ankuendigung_candidates(&pool, TENANT, 0, 10_000)
         .await
         .unwrap();
     assert!(
@@ -1103,7 +1130,7 @@ async fn sperr_sequence_progresses_through_all_phases() {
     pg::mark_sperrankuendigung(&pool, case, TENANT, date!(2026 - 01 - 08))
         .await
         .unwrap();
-    let after = pg::list_ankuendigung_candidates(&pool, TENANT, 0)
+    let after = pg::list_ankuendigung_candidates(&pool, TENANT, 0, 10_000)
         .await
         .unwrap();
     assert!(
@@ -1112,7 +1139,7 @@ async fn sperr_sequence_progresses_through_all_phases() {
     );
 
     // ── Phase 3: Sperrauftrag (announced date reached) ──
-    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT)
+    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT, 10_000)
         .await
         .unwrap();
     assert!(
@@ -1122,7 +1149,7 @@ async fn sperr_sequence_progresses_through_all_phases() {
     pg::mark_sperrauftrag_dispatched(&pool, case, TENANT, "sperrd:test")
         .await
         .unwrap();
-    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT)
+    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT, 10_000)
         .await
         .unwrap();
     assert!(
@@ -1131,22 +1158,718 @@ async fn sperr_sequence_progresses_through_all_phases() {
     );
 }
 
+/// **A customer who pays must not be dunned further, and must never be
+/// disconnected.**
+///
+/// Without the settlement sweep the escalation chain runs on `due_date` alone,
+/// walking a paid-up customer to Mahnstufe 3 — collecting a Mahngebühr at each
+/// step, which pushes the settled balance back above zero and makes the next
+/// step look justified — and into the disconnection sequence.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn paying_the_bill_stands_the_disconnection_sequence_down() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+
+    // Before payment the case is a candidate for the Androhung.
+    assert!(
+        contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "150 EUR of unpaid supply debt opens the sequence"
+    );
+
+    // The customer pays in full.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "ZAHLUNG",
+        -15_000,
+        &uniq("payment"),
+        None,
+        None,
+        date!(2026 - 02 - 01),
+        date!(2026 - 02 - 01),
+        Some("Überweisung"),
+        None,
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(
+        pg::compute_verzug_ct(&ledger, &pool, TENANT, &malo, "LF1")
+            .await
+            .unwrap(),
+        0,
+        "nothing is owed after the payment is matched"
+    );
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "a settled account is not an Androhung candidate"
+    );
+
+    // The sweep closes the case, so it stops feeding the escalation chain too.
+    let closed = pg::settle_paid_dunning_cases(&pool, TENANT).await.unwrap();
+    assert!(closed >= 1, "the settled case is resolved");
+    let resolved: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("SELECT resolved_at FROM dunning_cases WHERE id = $1")
+            .bind(case)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(resolved.is_some(), "resolved_at is set");
+}
+
+/// Mahngebühren and Verzugszinsen are **Verzugsschaden**, not the supply debt,
+/// so they may not push a customer over the § 41f Abs. 3 threshold — otherwise
+/// the dunning process manufactures its own justification: a customer 5 EUR
+/// short of the floor crosses it on the Stufe-2 fee, charged *because* they were
+/// being dunned.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn dunning_fees_do_not_count_toward_the_disconnection_threshold() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    // 95 EUR of supply debt — below the 100 EUR floor of §41f Abs. 3 S. 2.
+    let case = seed_stufe3(&pool, &ledger, &malo, 9_500).await;
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "95 EUR is below the 100 EUR floor"
+    );
+
+    // Two Mahngebühren of 10 EUR take the *balance* to 115 EUR.
+    for n in 1..=2 {
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            "LF1",
+            "MAHNGEBUEHR",
+            1_000,
+            &format!("fee-{malo}-{n}"),
+            None,
+            None,
+            date!(2026 - 02 - 01),
+            date!(2026 - 02 - 01),
+            Some("Mahngebühr"),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+    let acct = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        acct.balance_ct, 11_500,
+        "the balance cache does include the fees — it is the amount demanded"
+    );
+    assert_eq!(
+        pg::compute_verzug_ct(&ledger, &pool, TENANT, &malo, "LF1")
+            .await
+            .unwrap(),
+        9_500,
+        "…but the §41f Abs. 3 Zahlungsverzug is the supply debt alone"
+    );
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "dunning fees must not carry a customer over the disconnection threshold"
+    );
+}
+
+/// § 41g Abs. 1 S. 11 — a broken Abwendungsvereinbarung lets the sequence resume,
+/// but only after a **fresh** § 41f Abs. 5 announcement.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_broken_abwendungsvereinbarung_reopens_the_sequence() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+    pg::mark_sperrandrohung(&pool, case, TENANT).await.unwrap();
+    pg::mark_sperrankuendigung(&pool, case, TENANT, date!(2026 - 01 - 08))
+        .await
+        .unwrap();
+    let lock = pg::place_dunning_lock(
+        &pool,
+        case,
+        TENANT,
+        pg::LockGrund::Abwendungsvereinbarung,
+        None,
+        None,
+        None,
+        None,
+        Some("op-1"),
+    )
+    .await
+    .unwrap()
+    .expect("lock placed");
+
+    // Halted: the announced date has passed, but the agreement bars disconnection.
+    assert!(
+        !contains(
+            &pg::list_sperrauftrag_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "§41g Abs. 1 S. 10 — an accepted agreement bars the disconnection"
+    );
+
+    // The customer stops keeping it.
+    let account_id = pg::lift_dunning_lock(&pool, lock, TENANT, "vereinbarung_gebrochen")
+        .await
+        .unwrap()
+        .expect("the lock is lifted");
+    pg::clear_ankuendigung(&pool, account_id, TENANT)
+        .await
+        .unwrap();
+
+    // The sequence resumes — but NOT straight to a Sperrauftrag. §41f Abs. 5 has
+    // to be observed again, so the case is back at the Ankündigung.
+    assert!(
+        !contains(
+            &pg::list_sperrauftrag_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "the stale announcement must not be reused — Abs. 5 requires a new one"
+    );
+    assert!(
+        contains(
+            &pg::list_ankuendigung_candidates(&pool, TENANT, 0, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "the case is an Ankündigung candidate again"
+    );
+}
+
+/// A **Mahnsperre expires**, and the sequence resumes on its own.
+///
+/// § 41f Abs. 2 makes the Gefahr *auf Verlangen glaubhaft zu machen*: reviewable,
+/// and capable of lapsing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_lock_with_an_end_date_stops_halting_when_it_lapses() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+
+    // A Schutzbedürftigkeit substantiated by a certificate valid to yesterday.
+    let lock = pg::place_dunning_lock(
+        &pool,
+        case,
+        TENANT,
+        pg::LockGrund::Schutzbeduerftigkeit,
+        None,
+        Some("ärztliches Attest"),
+        // A certificate that covered 2019 and has since lapsed.
+        Some(date!(2019 - 01 - 01)),
+        Some(date!(2020 - 01 - 01)),
+        Some("op-1"),
+    )
+    .await
+    .unwrap()
+    .expect("lock placed");
+    assert!(
+        contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "a lapsed lock no longer halts the sequence"
+    );
+
+    // An open-ended one does, and keeps doing so.
+    pg::place_dunning_lock(
+        &pool,
+        case,
+        TENANT,
+        pg::LockGrund::Schutzbeduerftigkeit,
+        None,
+        Some("Folgeattest, unbefristet"),
+        None,
+        None,
+        Some("op-1"),
+    )
+    .await
+    .unwrap()
+    .expect("second lock placed");
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "an active lock halts the sequence"
+    );
+
+    // …and it is listed for review rather than left to be forgotten.
+    let review = pg::list_locks_due_review(&pool, TENANT, 0).await.unwrap();
+    assert_eq!(review.len(), 1, "only the open-ended lock is up for review");
+    assert_eq!(review[0].valid_to, None);
+    // The lapsed one is not a review item — it ended by itself.
+    assert!(review.iter().all(|l| l.lock_id != lock));
+}
+
+/// A lock records **why**, and lifting it records why it stopped applying.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_lock_carries_its_ground_and_its_lifting_reason() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+    let lock = pg::place_dunning_lock(
+        &pool,
+        case,
+        TENANT,
+        pg::LockGrund::Zahlungsaussicht,
+        None,
+        Some("Kunde hat Ratenzahlung zugesagt"),
+        None,
+        None,
+        Some("clerk-7"),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+
+    let locks = pg::list_dunning_locks(&pool, case, TENANT).await.unwrap();
+    assert_eq!(locks.len(), 1);
+    assert_eq!(locks[0].grund, "zahlungsaussicht");
+    assert_eq!(
+        locks[0].rechtsgrundlage, "§41f Abs. 1 S. 2 EnWG",
+        "the citation defaults from the ground"
+    );
+    assert_eq!(locks[0].created_by.as_deref(), Some("clerk-7"));
+    assert!(locks[0].aufgehoben_at.is_none());
+
+    pg::lift_dunning_lock(&pool, lock, TENANT, "zusage nicht eingehalten")
+        .await
+        .unwrap()
+        .expect("lifted");
+    let locks = pg::list_dunning_locks(&pool, case, TENANT).await.unwrap();
+    assert!(locks[0].aufgehoben_at.is_some());
+    assert_eq!(
+        locks[0].aufhebung_grund.as_deref(),
+        Some("zusage nicht eingehalten"),
+        "the history says why it stopped applying, not just that it did"
+    );
+    // Lifting is once.
+    assert!(
+        pg::lift_dunning_lock(&pool, lock, TENANT, "nochmal")
+            .await
+            .unwrap()
+            .is_none()
+    );
+}
+
+/// § 41f Abs. 3 S. 3–5 — a **disputed claim** leaves the Verzug, and the
+/// sequence stops by itself when what is left falls below the threshold.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_disputed_claim_leaves_the_disconnection_threshold() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+    let account_id = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap()
+        .account_id;
+    assert!(
+        contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "150 EUR of undisputed supply debt opens the sequence"
+    );
+
+    // The customer disputes 100 EUR of it, form- und fristgerecht.
+    let einwand = pg::record_einwand(
+        &pool,
+        TENANT,
+        account_id,
+        pg::EinwandArt::ForderungBestritten,
+        10_000,
+        None,
+        Some("Widerspruch vom 03.03.2026"),
+        Some("clerk-7"),
+    )
+    .await
+    .unwrap();
+    let verzug = pg::refresh_verzug(&ledger, &pool, TENANT, &malo, "LF1")
+        .await
+        .unwrap();
+    assert_eq!(verzug, 5_000, "the disputed amount leaves the Verzug");
+    assert!(
+        !contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "50 EUR undisputed is below the §41f Abs. 3 S. 2 floor — no disconnection"
+    );
+
+    // The objection is rejected. The amount is owed after all.
+    pg::close_einwand(&pool, einwand, TENANT, "zurueckgewiesen")
+        .await
+        .unwrap()
+        .expect("closed");
+    let verzug = pg::refresh_verzug(&ledger, &pool, TENANT, &malo, "LF1")
+        .await
+        .unwrap();
+    assert_eq!(verzug, 15_000);
+    assert!(
+        contains(
+            &pg::list_androhung_candidates(&pool, TENANT, 10_000)
+                .await
+                .unwrap(),
+            case
+        ),
+        "a rejected objection puts the amount back in the Verzug"
+    );
+}
+
+/// An objection larger than the debt leaves nothing owed, not a credit.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_objection_cannot_drive_the_verzug_negative() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+    let account_id = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap()
+        .account_id;
+    pg::record_einwand(
+        &pool,
+        TENANT,
+        account_id,
+        pg::EinwandArt::Schlichtung,
+        99_000,
+        None,
+        None,
+        None,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        pg::refresh_verzug(&ledger, &pool, TENANT, &malo, "LF1")
+            .await
+            .unwrap(),
+        0,
+        "nothing is owed; the customer is not thereby in credit"
+    );
+}
+
+/// Verzugszinsen book to Zinserträge, not to the Mahngebühren account:
+/// § 275 HGB reports *Zinsen und ähnliche Erträge* on their own line.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn verzugszinsen_book_to_their_own_gl_account() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq_malo();
+    let account_id = pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "RECHNUNG",
+        50_000,
+        &uniq("inv"),
+        None,
+        None,
+        date!(2026 - 01 - 01),
+        date!(2026 - 01 - 01),
+        Some("Jahresrechnung"),
+        None,
+    )
+    .await
+    .unwrap();
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "MAHNGEBUEHR",
+        500,
+        &uniq("fee"),
+        None,
+        None,
+        date!(2026 - 02 - 01),
+        date!(2026 - 02 - 01),
+        Some("Mahngebühr"),
+        None,
+    )
+    .await
+    .unwrap();
+    pg::create_interest_charge(
+        &ledger,
+        &pool,
+        account_id,
+        TENANT,
+        &malo,
+        "LF1",
+        None,
+        50_000,
+        false,
+        date!(2026 - 02 - 01),
+        date!(2026 - 05 - 01),
+    )
+    .await
+    .unwrap();
+
+    let tb = ledger.trial_balance().await.unwrap();
+    let zins = tb
+        .iter()
+        .find(|l| l.account.contains("Zinsertraege"))
+        .expect("Zinsertraege is its own trial-balance line");
+    let mahn = tb
+        .iter()
+        .find(|l| l.account.contains("Mahnerloese"))
+        .expect("Mahnerloese line");
+    assert!(zins.credits_ct > 0, "the interest landed in Zinsertraege");
+    assert_eq!(
+        mahn.credits_ct, 500,
+        "…and the Mahngebühr account holds only the fee"
+    );
+}
+
+/// The EPC **36-month dormancy** clock, and that it runs on presentation.
+///
+/// A mandate not presented for 36 consecutive months must be cancelled by the
+/// creditor. The debtor banks do not enforce it, so an untracked creditor learns
+/// of it from a rejected batch.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_mandate_unused_for_36_months_stops_being_collectable() {
+    let Some((pool, _ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq_malo();
+    let mandatsref = uniq("MND");
+    pg::create_mandate(
+        &pool,
+        TENANT,
+        None,
+        pg::CreateMandateRequest {
+            malo_id: malo.clone(),
+            lf_mp_id: "LF1".to_owned(),
+            iban: "DE89370400440532013000".to_owned(),
+            bic: None,
+            kontoinhaber: Some("Muster".to_owned()),
+            mandatsref: mandatsref.clone(),
+            sequence_type: "RCUR".to_owned(),
+            scheme: "CORE".to_owned(),
+            signed_at: "2020-01-01".to_owned(),
+            debtor_address: accountingd::sepa::AddressParts::default(),
+        },
+    )
+    .await
+    .unwrap();
+
+    // Never presented: not dormant — that is a FRST mandate waiting to be used.
+    assert_eq!(
+        pg::list_active_mandates(&pool, TENANT, 100)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        pg::list_dormant_mandates(&pool, TENANT, 0)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a mandate that has never been used is not dormant"
+    );
+
+    // Presented 37 months ago.
+    sqlx::query(
+        "UPDATE sepa_mandates SET last_presented_at = now() - INTERVAL '37 months' \
+         WHERE tenant = $1 AND mandatsref = $2",
+    )
+    .bind(TENANT)
+    .bind(&mandatsref)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    assert!(
+        pg::list_active_mandates(&pool, TENANT, 100)
+            .await
+            .unwrap()
+            .is_empty(),
+        "a dormant mandate must not be collected on"
+    );
+    assert_eq!(
+        pg::list_dormant_mandates(&pool, TENANT, 0)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "…and it is surfaced so it can be cancelled"
+    );
+
+    // A presentation resets the clock — including one that later bounces, which
+    // is why the stamp is on presentation and not on settlement.
+    sqlx::query(
+        "UPDATE sepa_mandates SET last_presented_at = now() \
+         WHERE tenant = $1 AND mandatsref = $2",
+    )
+    .bind(TENANT)
+    .bind(&mandatsref)
+    .execute(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        pg::list_active_mandates(&pool, TENANT, 100)
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+/// § 41f Abs. 7 — a disconnected customer who settles is reconnected
+/// *unverzüglich*, and without having to ask.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn settling_after_disconnection_orders_the_reconnection() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+    pg::mark_sperrauftrag_dispatched(&pool, case, TENANT, "process-1")
+        .await
+        .unwrap();
+
+    // Still in arrears: nothing to reconnect.
+    assert!(
+        !contains(
+            &pg::list_entsperrauftrag_candidates(&pool, TENANT)
+                .await
+                .unwrap(),
+            case
+        ),
+        "a customer still in Verzug is not an Entsperrauftrag candidate"
+    );
+
+    // They pay.
+    pg::post_entry(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        "ZAHLUNG",
+        -15_000,
+        &uniq("payment"),
+        None,
+        None,
+        date!(2026 - 03 - 01),
+        date!(2026 - 03 - 01),
+        Some("Überweisung"),
+        None,
+    )
+    .await
+    .unwrap();
+    pg::settle_paid_dunning_cases(&pool, TENANT).await.unwrap();
+
+    assert!(
+        contains(
+            &pg::list_entsperrauftrag_candidates(&pool, TENANT)
+                .await
+                .unwrap(),
+            case
+        ),
+        "§41f Abs. 7 — the grounds are gone, so the reconnection is owed unverzüglich"
+    );
+    pg::mark_entsperrauftrag_dispatched(&pool, case, TENANT, "process-2")
+        .await
+        .unwrap();
+    assert!(
+        !contains(
+            &pg::list_entsperrauftrag_candidates(&pool, TENANT)
+                .await
+                .unwrap(),
+            case
+        ),
+        "a dispatched Entsperrauftrag is not re-ordered (idempotent)"
+    );
+}
+
 /// The Sperrauftrag must not fire before the announced disconnection date
 /// (§41f Abs. 5 — 8 Werktage im Voraus).
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn sperrauftrag_waits_for_the_announced_date() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
     pg::mark_sperrandrohung(&pool, case, TENANT).await.unwrap();
     // Announce a date far in the future.
     pg::mark_sperrankuendigung(&pool, case, TENANT, date!(2099 - 01 - 01))
         .await
         .unwrap();
-    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT)
+    let sa = pg::list_sperrauftrag_candidates(&pool, TENANT, 10_000)
         .await
         .unwrap();
     assert!(
@@ -1160,11 +1883,11 @@ async fn sperrauftrag_waits_for_the_announced_date() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn abwendungsvereinbarung_halts_the_sequence() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 15_000).await;
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
     // A second open Stufe-3 case on the SAME account (auto-dunning creates a fresh
     // case per Mahnstufe, so this is realistic). The agreement covers the supply
     // point, so accepting it must halt both.
@@ -1178,8 +1901,20 @@ async fn abwendungsvereinbarung_halts_the_sequence() {
             .await
             .unwrap();
 
-    let n = pg::vereinbare_abwendung(&pool, case, TENANT).await.unwrap();
-    assert_eq!(n, 2, "the agreement halts every open case of the account");
+    pg::place_dunning_lock(
+        &pool,
+        case,
+        TENANT,
+        pg::LockGrund::Abwendungsvereinbarung,
+        None,
+        None,
+        None,
+        None,
+        Some("op-1"),
+    )
+    .await
+    .unwrap()
+    .expect("lock placed");
     for c in [case, case2] {
         assert!(
             !contains(
@@ -1193,7 +1928,7 @@ async fn abwendungsvereinbarung_halts_the_sequence() {
     }
     assert!(
         !contains(
-            &pg::list_ankuendigung_candidates(&pool, TENANT, 0)
+            &pg::list_ankuendigung_candidates(&pool, TENANT, 0, 10_000)
                 .await
                 .unwrap(),
             case
@@ -1207,15 +1942,25 @@ async fn abwendungsvereinbarung_halts_the_sequence() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn unverhaeltnismaessigkeit_halts_the_sequence() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 15_000).await;
-    let n = pg::markiere_unverhaeltnismaessig(&pool, case, TENANT)
-        .await
-        .unwrap();
-    assert_eq!(n, 1, "the open case is flagged");
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await;
+    pg::place_dunning_lock(
+        &pool,
+        case,
+        TENANT,
+        pg::LockGrund::Schutzbeduerftigkeit,
+        None,
+        Some("ärztliches Attest vom 12.02.2026"),
+        None,
+        None,
+        Some("op-1"),
+    )
+    .await
+    .unwrap()
+    .expect("lock placed");
     assert!(
         !contains(
             &pg::list_androhung_candidates(&pool, TENANT, 10_000)
@@ -1232,11 +1977,11 @@ async fn unverhaeltnismaessigkeit_halts_the_sequence() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn below_threshold_is_not_a_candidate() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 5_000).await; // 50 € < 100 € threshold
+    let case = seed_stufe3(&pool, &ledger, &malo, 5_000).await; // 50 € < 100 € threshold
     assert!(
         !contains(
             &pg::list_androhung_candidates(&pool, TENANT, 10_000)
@@ -1253,11 +1998,11 @@ async fn below_threshold_is_not_a_candidate() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn below_consumption_gate_is_not_a_candidate() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 15_000).await; // 150 € > 100 € floor
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await; // 150 € > 100 € floor
     // Override the Abschlag to 200 €/month → 2× = 400 € > 150 € arrears.
     set_abschlag(&pool, &malo, 20_000).await;
     assert!(
@@ -1287,11 +2032,11 @@ async fn below_consumption_gate_is_not_a_candidate() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn annual_bill_fallback_when_no_abschlag() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 15_000).await; // 150 € > 100 € floor
+    let case = seed_stufe3(&pool, &ledger, &malo, 15_000).await; // 150 € > 100 € floor
     set_abschlag(&pool, &malo, 0).await; // no Abschlag agreed → fall back to annual bill
     // Annual bill 1200 € → ⅙ = 200 € > 150 € arrears → excluded.
     set_annual_bill(&pool, &malo, 2024, 120_000).await;
@@ -1324,11 +2069,11 @@ async fn annual_bill_fallback_when_no_abschlag() {
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn no_consumption_basis_is_conservatively_excluded() {
-    let Some((pool, _ledger, _pg)) = setup().await else {
+    let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
     let malo = uniq("MALO");
-    let case = seed_stufe3(&pool, &malo, 500_000).await; // 5000 € arrears
+    let case = seed_stufe3(&pool, &ledger, &malo, 500_000).await; // 5000 € arrears
     set_abschlag(&pool, &malo, 0).await; // no Abschlag, no Jahresabschluss
     assert!(
         !contains(
@@ -1623,6 +2368,7 @@ async fn a_mandate_makes_the_account_findable_by_iban() {
             kontoinhaber: Some("Erika Mustermann".to_owned()),
             mandatsref: uniq("MND"),
             sequence_type: "FRST".to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: "2026-01-15".to_owned(),
             debtor_address: accountingd::sepa::AddressParts {
                 town: Some("Berlin".to_owned()),
@@ -1807,7 +2553,6 @@ async fn settlement_counts_direct_payments_and_chargebacks() {
         "the settlement must equal the Kontokorrent balance it settles"
     );
 
-    // The old formula refunded 100.00 EUR here.
     assert_eq!(s.rechnung_sum + s.abschlag_sum, 10_000);
 }
 
@@ -1836,6 +2581,7 @@ async fn seed_collection(
             kontoinhaber: Some("Erika Mustermann".to_owned()),
             mandatsref: mandatsref.clone(),
             sequence_type: "RCUR".to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: "2024-01-15".to_owned(),
             debtor_address: accountingd::sepa::AddressParts {
                 town: Some("Hamburg".to_owned()),
@@ -1903,7 +2649,7 @@ async fn collection_run_persists_its_entries() {
     assert_eq!(entry.sequence_type, "RCUR");
     assert_eq!(entry.collection_date, d);
     assert_eq!(entry.msg_id, "DD-2026-07-25");
-    assert_eq!(entry.payment_info_id, "DD-2026-07-25-RCUR");
+    assert_eq!(entry.payment_info_id, "DD-2026-07-25-CORE-RCUR");
     assert_eq!(entry.malo_id.as_deref(), Some(malo.as_str()));
     // The IBAN is reached through the mandate, not duplicated onto the entry,
     // so GDPR erasure keeps working from one place.
@@ -2018,6 +2764,7 @@ async fn reversal_is_recorded_once_per_collection() {
             mandate_signed_at: entry.mandate_signed_at.unwrap(),
             collection_date: entry.collection_date,
             sequence_type: &entry.sequence_type,
+            scheme: &entry.scheme,
             debtor_name: entry.debtor_name.as_deref().unwrap(),
             debtor_iban: entry.debtor_iban.as_deref().unwrap(),
             debtor_bic: entry.debtor_bic.as_deref(),
@@ -2107,7 +2854,7 @@ async fn bank_import_records_the_batch_attribution() {
         Some("DE89370400440532013000"),
         date!(2026 - 07 - 27),
         None,
-        Some("DD-2026-07-25-RCUR"),
+        Some("DD-2026-07-25-CORE-RCUR"),
         Some("MND-000123"),
     )
     .await
@@ -2122,7 +2869,7 @@ async fn bank_import_records_the_batch_attribution() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(pmt_inf.as_deref(), Some("DD-2026-07-25-RCUR"));
+    assert_eq!(pmt_inf.as_deref(), Some("DD-2026-07-25-CORE-RCUR"));
     assert_eq!(e2e.as_deref(), Some("MND-000123"));
 }
 
@@ -2229,6 +2976,7 @@ async fn payment_resolves_by_counterparty_iban() {
             kontoinhaber: Some("Erika Mustermann".to_owned()),
             mandatsref: uniq("MND"),
             sequence_type: "FRST".to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: "2026-01-15".to_owned(),
             debtor_address: Default::default(),
         },
@@ -2280,6 +3028,7 @@ async fn payment_from_a_stranger_iban_resolves_by_reference() {
             kontoinhaber: Some("Erika Mustermann".to_owned()),
             mandatsref: mandatsref.clone(),
             sequence_type: "RCUR".to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: "2026-01-15".to_owned(),
             debtor_address: Default::default(),
         },
@@ -2344,6 +3093,7 @@ async fn reference_matching_is_exact_token_not_substring() {
             kontoinhaber: None,
             mandatsref: mandatsref.clone(),
             sequence_type: "RCUR".to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: "2026-01-15".to_owned(),
             debtor_address: Default::default(),
         },

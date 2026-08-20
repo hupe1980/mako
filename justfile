@@ -57,6 +57,11 @@ test-einsd-db:
 test-accountingd-db:
     cargo test -p accountingd --test db_scenarios -- --include-ignored --test-threads=1
 
+# Execution-queue integration tests for sperrd (ORDERS 17115/17117 ingest,
+# the claim guard, and the IFTSTA 21039 retry queue) against real PostgreSQL.
+test-sperrd-db:
+    cargo test -p sperrd --test db_scenarios -- --include-ignored --test-threads=1
+
 # Records integration tests for billingd.
 test-billingd-db:
     cargo test -p billingd --test records_integration -- --include-ignored --test-threads=1

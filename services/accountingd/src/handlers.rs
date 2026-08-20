@@ -1,12 +1,18 @@
 //! HTTP handlers for `accountingd`.
 //!
+//! Axum extractors are function parameters, so a handler that needs the pool,
+//! the config, the ledger, the Cedar enforcer, a path, a query and a body is
+//! already at seven before it has a line of body. The lint measures coupling,
+//! which is the framework's here rather than this module's.
+#![allow(clippy::too_many_arguments)]
+//!
 //! ## Security model
 //!
 //! - **Inbound webhook** (`POST /webhook`): HMAC-SHA256 verified when `erp_hmac_secret`
 //!   is set. Uses `mako_service::webhook::hmac_hex` with `sha256=` prefix.
 //!   Dev mode (no secret): accepts all but emits `WARN`.
-//! - **REST write endpoints**: OIDC JWT required via `Claims` extractor when
-//!   `OidcVerifier` is injected via `Extension`. Dev mode: synthetic claims.
+//! - **REST endpoints**: OIDC JWT via the `Claims` extractor, then a Cedar
+//!   check. Dev mode: synthetic claims.
 //! - **MCP tools**: protected by `McpAuth` (API-key bearer or OIDC).
 
 use axum::{
@@ -16,6 +22,7 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
+use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
 use serde::Deserialize;
 use sqlx::{PgPool, Row as _};
@@ -29,9 +36,8 @@ use crate::{
         CreateMandateRequest, UpdateAccountRequest, create_dunning_case_announced, create_mandate,
         fetch_account, fetch_account_by_id, fetch_mandate, fetch_vorauszahlung,
         jahresabschluss_already_settled, list_active_mandates, list_ledger, list_open_dunning,
-        list_overdue_accounts, markiere_unverhaeltnismaessig, record_jahresabschluss,
-        resolve_dunning_case, update_account_tenanted, upsert_account, upsert_vorauszahlung,
-        vereinbare_abwendung,
+        list_overdue_accounts, record_jahresabschluss, resolve_dunning_case,
+        update_account_tenanted, upsert_account, upsert_vorauszahlung,
     },
     sepa::build_pain_008,
 };
@@ -39,6 +45,30 @@ use crate::{
 pub use sepa::validate_iban;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// The 403 body every Cedar denial returns.
+///
+/// A denial names the principal, the action and the tenant it was refused
+/// against — enough for an operator to see whether the caller's `mako_roles` are
+/// wrong or the policy is, without leaking anything about the resource.
+fn forbidden(e: &mako_service::cedar::CedarError) -> axum::response::Response {
+    (
+        StatusCode::FORBIDDEN,
+        Json(serde_json::json!({ "error": e.to_string() })),
+    )
+        .into_response()
+}
+
+/// The 500 body. The detail is returned because every caller of this service is
+/// an operator or an internal system, never an end customer.
+fn internal(e: &anyhow::Error) -> axum::response::Response {
+    tracing::error!(error = %e, "accountingd: request failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": e.to_string() })),
+    )
+        .into_response()
+}
 
 /// Convert an amount in ct (i64, × 10⁻² EUR) to a `"1234.56"` EUR string.
 /// Uses pure integer arithmetic — no f64.
@@ -52,11 +82,16 @@ pub fn format_ct_as_eur(ct: i64) -> String {
 
 /// `GET /api/v1/accounts/{malo_id}`
 pub async fn get_account(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
@@ -70,11 +105,15 @@ pub async fn put_account(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(iban_key): Extension<Option<[u8; 32]>>,
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
     Json(req): Json<crate::pg::UpdateAccountRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
     let _ = upsert_account(&pool, &malo_id, &lf_mp_id, &cfg.tenant).await;
     match update_account_tenanted(
@@ -94,11 +133,16 @@ pub async fn put_account(
 
 /// `GET /api/v1/accounts/{malo_id}/balance`  — current balance in ct (negative = credit)
 pub async fn get_balance(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(serde_json::json!({
@@ -115,12 +159,17 @@ pub async fn get_balance(
 
 /// `GET /api/v1/accounts/{malo_id}/ledger`  — paged ledger entries
 pub async fn get_ledger(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<LedgerQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         return StatusCode::NOT_FOUND.into_response();
@@ -140,12 +189,17 @@ pub async fn get_ledger(
 
 /// `GET /api/v1/accounts/{malo_id}/kontoauszug`  — account statement (portald-consumable)
 pub async fn get_kontoauszug(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
@@ -169,12 +223,16 @@ pub async fn get_kontoauszug(
 
 /// `PUT /api/v1/accounts/{malo_id}/abschlag`  — update monthly advance payment
 pub async fn put_abschlag(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let abschlag_ct = body.get("abschlag_ct").and_then(|v| v.as_i64());
     if let Some(ct) = abschlag_ct {
         match update_account_tenanted(
@@ -515,11 +573,11 @@ pub async fn ingest_webhook(
                 }
 
                 // ── SCT Inst / SCT CORE auto-payout ─────────────────────────────
-                // #10 fix: created INLINE (not a detached task). The old spawn ACKed
-                // the CE 200 and then swallowed any payout failure, so a booked
-                // credit could exist with no payout order and no redelivery. Inline,
-                // the order creation is part of the request; both the credit and the
-                // order are idempotent (by CE id / EndToEndId), so a failure is
+                // Created INLINE, not in a detached task: a spawn would ACK the CE
+                // 200 and swallow any payout failure, leaving a booked credit with
+                // no payout order and no redelivery. Inline, the order creation is
+                // part of the request; both the credit and the order are idempotent
+                // (by CE id / EndToEndId), so a failure is
                 // logged and safely retried on redelivery or via POST /eeg/payouts/run.
                 if cfg.eeg.auto_payout {
                     // Creditor IBAN: CE-supplied bank_iban first, else the account's
@@ -691,13 +749,17 @@ pub async fn ingest_webhook(
 /// When `bank_transaction_id` is absent, a stable hash of (iban+amount+date+reference)
 /// is used as the deduplication key.
 pub async fn import_payments(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(iban_key): Extension<Option<[u8; 32]>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(entries): Json<Vec<serde_json::Value>>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let mut accepted = 0usize;
     let mut deduplicated = 0usize;
     let mut skipped = 0usize;
@@ -779,8 +841,7 @@ pub async fn import_payments(
                     "ZAHLUNG"
                 };
                 // Idempotency keyed on the bank transaction id — a re-import of the
-                // same row replays as a ledger no-op rather than double-booking
-                // (fixes the old non-transactional dedup race).
+                // same row replays as a ledger no-op rather than double-booking.
                 let ledger_result = crate::pg::post_entry(
                     &ledger,
                     &pool,
@@ -1052,9 +1113,8 @@ async fn import_cash_entries(
             };
             // A bank does not always report the counterparty IBAN — a cash
             // deposit, a foreign transfer, a booking whose `RltdPties` block the
-            // bank omits. That used to end the import right here; the resolution
-            // ladder can still identify the payer from the reference, so an
-            // absent IBAN is now just one missing clue rather than a dead end.
+            // bank omits. Not a dead end: the resolution ladder can still
+            // identify the payer from the reference.
             let counterparty_iban = detail
                 .and_then(|d| d.counterparty_iban.as_deref())
                 .unwrap_or("");
@@ -1278,13 +1338,17 @@ async fn import_cash_entries(
 /// keyed on `AcctSvcrRef` (disambiguated per detail by `EndToEndId`) with a
 /// stable hash of the transaction fields as the fallback.
 pub async fn import_payments_camt054(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(iban_key): Extension<Option<[u8; 32]>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     body: String,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let doc = match crate::sepa::parse_camt054(&body) {
         Ok(d) => d,
         Err(e) => {
@@ -1355,13 +1419,17 @@ pub async fn import_payments_camt054(
 /// Interim balances (`ITBD`) are returned rather than posted — a receivables
 /// ledger has no place to put a treasury figure.
 pub async fn import_payments_camt052(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(iban_key): Extension<Option<[u8; 32]>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     body: String,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let doc = match crate::sepa::parse_camt052(&body) {
         Ok(d) => d,
         Err(e) => {
@@ -1430,13 +1498,17 @@ pub async fn import_payments_camt052(
 /// key are keyed on the bank's transaction reference, so a transaction notified
 /// intraday by camt.054 and again in the evening's camt.053 books once.
 pub async fn import_payments_camt053(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(iban_key): Extension<Option<[u8; 32]>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     body: String,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "import-payments", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let doc = match crate::sepa::parse_camt053(&body) {
         Ok(d) => d,
         Err(e) => {
@@ -1595,13 +1667,17 @@ pub async fn metrics(
 /// vertragd `kunden_nr` so its balance/dunning aggregate with the customer's
 /// other market locations (FI-CA contract-account model).
 pub async fn put_account_business_partner(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let Some(kunden_nr) = body.get("kunden_nr").and_then(|v| v.as_str()) else {
         return (
@@ -1620,10 +1696,15 @@ pub async fn put_account_business_partner(
 
 /// `GET /api/v1/business-partners/{kunden_nr}/accounts` — all accounts.
 pub async fn get_bp_accounts(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(kunden_nr): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match crate::pg::list_accounts_by_bp(&pool, &cfg.tenant, &kunden_nr).await {
         Ok(rows) => Json(serde_json::json!({
             "kunden_nr": kunden_nr,
@@ -1637,10 +1718,15 @@ pub async fn get_bp_accounts(
 
 /// `GET /api/v1/business-partners/{kunden_nr}/balance` — consolidated balance.
 pub async fn get_bp_balance(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(kunden_nr): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match crate::pg::bp_consolidated_balance(&pool, &cfg.tenant, &kunden_nr).await {
         Ok(total_ct) => Json(serde_json::json!({
             "kunden_nr": kunden_nr,
@@ -1656,10 +1742,15 @@ pub async fn get_bp_balance(
 
 /// `GET /api/v1/offene-posten`  — overdue accounts
 pub async fn get_offene_posten(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<OffenePostenQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     // parse min_balance_eur as a decimal string to avoid f64 rounding errors.
     // e.g. "1.99" must produce 199 ct, not 198 ct from (1.99 * 100.0) as i64.
     let min_ct: i64 = q
@@ -1696,10 +1787,15 @@ pub struct OffenePostenQuery {
 
 /// `GET /api/v1/dunning`  — open dunning cases
 pub async fn get_dunning(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<DunningQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match list_open_dunning(&pool, &cfg.tenant, q.limit.unwrap_or(200).min(1000)).await {
         Ok(rows) => Json(rows).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -1708,12 +1804,16 @@ pub async fn get_dunning(
 
 /// `POST /api/v1/dunning/{account_id}/escalate`  — manual dunning escalation
 pub async fn escalate_dunning(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(account_id): Path<Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let account = match fetch_account_by_id(&pool, account_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => return StatusCode::NOT_FOUND.into_response(),
@@ -1746,52 +1846,512 @@ pub async fn escalate_dunning(
 
 /// `POST /api/v1/dunning/{id}/resolve`
 pub async fn resolve_dunning(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match resolve_dunning_case(&pool, id, &cfg.tenant).await {
         Ok(0) => StatusCode::NOT_FOUND.into_response(),
         Ok(_) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
     }
 }
-
-/// `POST /api/v1/dunning/{id}/abwendung` — record an accepted
-/// **Abwendungsvereinbarung** (§ 41g Abs. 1 S. 10 EnWG). Once the customer has
-/// accepted a payment agreement in Textform before the disconnection is carried
-/// out, the Grundversorgung **must not** be disconnected — this halts the
-/// §§41f/41g sequence for **every open dunning case of the supply point** (the
-/// account owning `{id}`), not just that one case.
-pub async fn abwendung_dunning(
-    _claims: Claims,
+/// `POST /api/v1/dunning/{id}/abwendung/angebot` — § 41g Abs. 1 S. 2 EnWG.
+///
+/// Records that the Grundversorger's **offer** went out, and emits
+/// `de.accounting.abwendung.angeboten` with the interest-free instalment terms.
+///
+/// Owed within **one week** of the customer demanding it after the Androhung, and
+/// no later than the Ankündigung. Recorded separately from acceptance because it
+/// is the only evidence the obligation was met — a supplier that never offered
+/// and one that offered and was refused are otherwise indistinguishable.
+///
+/// The instalment period follows § 41g Abs. 1 S. 7–9: **6 to 18 months** in
+/// general, and **12 to 24 months** once the arrears exceed 300 EUR.
+pub async fn abwendung_angebot(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match vereinbare_abwendung(&pool, id, &cfg.tenant).await {
-        Ok(0) => StatusCode::NOT_FOUND.into_response(),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    let Ok(Some((_, malo_id, lf_mp_id))) =
+        crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    // Re-derived, not read: the instalment band depends on the arrears, and an
+    // offer quoting the wrong band is a §41g Abs. 1 S. 7-9 defect.
+    let verzug_ct =
+        match crate::pg::refresh_verzug(&ledger, &pool, &cfg.tenant, &malo_id, &lf_mp_id).await {
+            Ok(v) => v,
+            Err(e) => return internal(&e),
+        };
+    // § 41g Abs. 1 S. 7–9: 6–18 Monate in der Regel, 12–24 Monate über 300 EUR.
+    let (min_monate, max_monate) = if verzug_ct > 30_000 {
+        (12, 24)
+    } else {
+        (6, 18)
+    };
+
+    let ce = mako_service::CloudEvent::new(
+        mako_service::source("accountingd", &cfg.tenant),
+        mako_events::accounting::ABWENDUNG_ANGEBOTEN,
+        &malo_id,
+        serde_json::json!({
+            "malo_id":         malo_id,
+            "lf_mp_id":        lf_mp_id,
+            "case_id":         id.to_string(),
+            "amount_due_ct":   verzug_ct,
+            "rechtsgrundlage": "§41g Abs. 1 EnWG",
+            "ratenzahlung": {
+                "zinsfrei":            true,
+                "min_laufzeit_monate": min_monate,
+                "max_laufzeit_monate": max_monate,
+                "weiterversorgung":    true,
+            },
+        }),
+    );
+    let done = async {
+        let mut tx = pool.begin().await?;
+        let marked = crate::pg::mark_abwendung_angeboten(&mut *tx, id, &cfg.tenant).await?;
+        if marked {
+            mako_service::outbox::enqueue(&mut tx, &ce).await?;
+        }
+        tx.commit().await?;
+        anyhow::Ok(marked)
+    }
+    .await;
+    match done {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        // Already offered, or the case is closed — either way there is nothing
+        // to do and nothing went wrong.
+        Ok(false) => StatusCode::CONFLICT.into_response(),
+        Err(e) => internal(&e),
     }
 }
 
-/// `POST /api/v1/dunning/{id}/unverhaeltnismaessig` — flag the supply point as
-/// **unverhältnismäßig / schutzbedürftig** (§ 41f Abs. 1 S. 2 / Abs. 2 EnWG): the
-/// customer showed *hinreichende Aussicht* to pay, or there is a *konkrete Gefahr
-/// für Leib oder Leben* (health/age). Halts the §§41f/41g sequence for every open
-/// dunning case of the account owning `{id}`.
-pub async fn unverhaeltnismaessig_dunning(
-    _claims: Claims,
+/// `GET /api/v1/sepa/mandates/dormant?within_days=30` — the EPC 36-month sweep.
+///
+/// A mandate not presented for **36 consecutive months** must be cancelled by
+/// the creditor. The clock resets on every presentation, *including collections
+/// later rejected or refunded*, so it counts from `last_presented_at` — stamped
+/// when the collection is written into a run, not when the bank confirms it.
+///
+/// The debtor banks do not enforce this, so `within_days` looks ahead: a mandate
+/// going dormant next month is worth knowing about while the customer can still
+/// be asked for a new one.
+pub async fn get_dormant_mandates(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Query(q): Query<ReviewQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    let within = q.older_than_days.unwrap_or(30).clamp(0, 365);
+    match crate::pg::list_dormant_mandates(&pool, &cfg.tenant, within).await {
+        Ok(rows) => Json(serde_json::json!({
+            "dormancy_months": crate::pg::MANDATE_DORMANCY_MONTHS,
+            "within_days": within,
+            "count": rows.len(),
+            "mandates": rows,
+            "note": "a mandate past the 36-month limit is uncollectable and must be \
+                     cancelled; the debtor banks do not enforce this, so the first \
+                     symptom of ignoring it is a rejected batch",
+        }))
+        .into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+// ── Mahnsperren (§§41f/41g halts) ─────────────────────────────────────────────
+
+/// Body of `POST /api/v1/dunning/{id}/locks`.
+#[derive(Debug, Deserialize)]
+pub struct PlaceLockRequest {
+    pub grund: crate::pg::LockGrund,
+    /// The citation this rests on. Defaults to the ground's own.
+    pub rechtsgrundlage: Option<String>,
+    pub note: Option<String>,
+    /// When the lock takes effect. Absent = today. Settable because the evidence
+    /// a lock rests on has its own dates — a certificate covering January to
+    /// March is recorded as it reads, not as of the day it was typed in.
+    pub valid_from: Option<time::Date>,
+    /// When the lock lapses. Absent = open-ended, and open-ended locks are
+    /// listed by `GET /api/v1/dunning/locks/review`.
+    pub valid_to: Option<time::Date>,
+}
+
+/// `POST /api/v1/dunning/{id}/locks` — stop dunning this account, and say why.
+///
+/// One endpoint for every §§41f/41g halt. A lock carries its ground, its
+/// citation, a validity period and the operator who set it, and is lifted by
+/// `DELETE .../locks/{lock_id}` with a reason — because § 41g Abs. 1 S. 11 lets
+/// the supplier resume after a broken agreement, and § 41f Abs. 2 makes the
+/// Gefahr *auf Verlangen glaubhaft zu machen*, hence reviewable.
+pub async fn place_lock(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<PlaceLockRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    if matches!(req.grund, crate::pg::LockGrund::Operator) && req.note.is_none() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "grund = \"operator\" requires a note — a halt with no \
+                          statutory ground and no reason is not auditable",
+            })),
+        )
+            .into_response();
+    }
+    let placed = crate::pg::place_dunning_lock(
+        &pool,
+        id,
+        &cfg.tenant,
+        req.grund,
+        req.rechtsgrundlage.as_deref(),
+        req.note.as_deref(),
+        req.valid_from,
+        req.valid_to,
+        Some(claims.sub()),
+    )
+    .await;
+    match placed {
+        Ok(Some(lock_id)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({ "lock_id": lock_id })),
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+/// `GET /api/v1/dunning/{id}/locks` — every lock this account has carried.
+pub async fn get_locks(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(id): Path<Uuid>,
 ) -> impl IntoResponse {
-    match markiere_unverhaeltnismaessig(&pool, id, &cfg.tenant).await {
-        Ok(0) => StatusCode::NOT_FOUND.into_response(),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    match crate::pg::list_dunning_locks(&pool, id, &cfg.tenant).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+/// `GET /api/v1/dunning/locks/review?older_than_days=90` — open-ended locks.
+///
+/// § 41f Abs. 2 contemplates circumstances with no foreseeable end and equally
+/// makes them reviewable, so an unbounded lock is allowed but surfaced here.
+pub async fn get_locks_due_review(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Query(q): Query<ReviewQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    let days = q.older_than_days.unwrap_or(90).clamp(0, 3650);
+    match crate::pg::list_locks_due_review(&pool, &cfg.tenant, days).await {
+        Ok(rows) => Json(serde_json::json!({
+            "older_than_days": days,
+            "count": rows.len(),
+            "locks": rows,
+        }))
+        .into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReviewQuery {
+    pub older_than_days: Option<i64>,
+}
+
+/// Body of `DELETE /api/v1/dunning/locks/{lock_id}`.
+#[derive(Debug, Deserialize)]
+pub struct LiftLockRequest {
+    /// Why the lock no longer applies. `vereinbarung_gebrochen` carries the
+    /// § 41g Abs. 1 S. 11 side effect described below.
+    pub grund: String,
+}
+
+/// `DELETE /api/v1/dunning/locks/{lock_id}` — lift a lock, with a reason.
+///
+/// Lifting for **`vereinbarung_gebrochen`** is § 41g Abs. 1 S. 11: the supplier
+/// may resume, but must re-observe § 41f Abs. 1 S. 2 **and Abs. 5**, so the
+/// Ankündigung state is cleared and the case returns to a *fresh* 8-Werktage
+/// announcement. Any other reason leaves the announcement standing.
+pub async fn lift_lock(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(lock_id): Path<Uuid>,
+    Json(req): Json<LiftLockRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    if req.grund.trim().is_empty() {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "grund must not be empty" })),
+        )
+            .into_response();
+    }
+    let broken = req.grund.trim() == "vereinbarung_gebrochen";
+    let done = async {
+        let mut tx = pool.begin().await?;
+        let Some(account_id) =
+            crate::pg::lift_dunning_lock(&mut *tx, lock_id, &cfg.tenant, req.grund.trim()).await?
+        else {
+            return anyhow::Ok(None);
+        };
+        if broken {
+            crate::pg::clear_ankuendigung(&mut *tx, account_id, &cfg.tenant).await?;
+            // In the same transaction as the lift: a broken agreement re-opens
+            // the path to a disconnection and § 41f Abs. 5 needs a fresh letter,
+            // so resuming without telling the ERP is the failure mode.
+            let ids: Option<(String, String)> = sqlx::query_as(
+                "SELECT malo_id, lf_mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
+            )
+            .bind(account_id)
+            .bind(&cfg.tenant)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some((malo_id, lf_mp_id)) = ids {
+                let ce = mako_service::CloudEvent::new(
+                    mako_service::source("accountingd", &cfg.tenant),
+                    mako_events::accounting::ABWENDUNG_GEBROCHEN,
+                    &malo_id,
+                    serde_json::json!({
+                        "malo_id":         malo_id,
+                        "lf_mp_id":        lf_mp_id,
+                        "lock_id":         lock_id.to_string(),
+                        "rechtsgrundlage": "\u{a7}41g Abs. 1 S. 11 EnWG",
+                        "folge": "Unterbrechung wieder zul\u{e4}ssig; \u{a7}41f Abs. 1 S. 2 und                                   Abs. 5 sind erneut zu beachten (neue Ank\u{fc}ndigung, 8 Werktage)",
+                    }),
+                );
+                mako_service::outbox::enqueue(&mut tx, &ce).await?;
+            }
+        }
+        tx.commit().await?;
+        anyhow::Ok(Some(account_id))
+    }
+    .await;
+
+    match done {
+        Ok(Some(_)) if broken => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "lifted": true,
+                "rechtsgrundlage": "\u{a7}41g Abs. 1 S. 11 EnWG",
+                "note": "the Ankündigung was cleared — §41f Abs. 5 requires a fresh \
+                         8-Werktage announcement before any Sperrauftrag",
+            })),
+        )
+            .into_response(),
+        Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+// ── Forderungseinwände (§ 41f Abs. 3 S. 3–5) ──────────────────────────────────
+
+/// Body of `POST /api/v1/dunning/{id}/einwaende`.
+#[derive(Debug, Deserialize)]
+pub struct EinwandRequest {
+    pub art: crate::pg::EinwandArt,
+    pub betrag_ct: i64,
+    /// The disputed booking, where one can be pointed at.
+    pub ledger_entry_id: Option<Uuid>,
+    pub note: Option<String>,
+}
+
+/// `POST /api/v1/dunning/{id}/einwaende` — § 41f Abs. 3 S. 3–5 EnWG.
+///
+/// Record an amount that must stay **out of the Verzug calculation**: a claim
+/// disputed form- und fristgerecht and schlüssig, a disputed price increase, a
+/// claim before a § 111b Schlichtungsverfahren, or instalments not yet due.
+///
+/// Not a lock: it does not halt the sequence, it reduces the number the § 41f
+/// Abs. 3 gates are measured against, and the sequence stops by itself when what
+/// remains falls below them.
+pub async fn place_einwand(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<EinwandRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    if req.betrag_ct <= 0 {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({ "error": "betrag_ct must be positive" })),
+        )
+            .into_response();
+    }
+    let Ok(Some((account_id, malo_id, lf_mp_id))) =
+        crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+
+    let done = async {
+        let mut tx = pool.begin().await?;
+        let einwand_id = crate::pg::record_einwand(
+            &mut *tx,
+            &cfg.tenant,
+            account_id,
+            req.art,
+            req.betrag_ct,
+            req.ledger_entry_id,
+            req.note.as_deref(),
+            Some(claims.sub()),
+        )
+        .await?;
+        tx.commit().await?;
+        // The objection changes the Verzug with no posting behind it, so the
+        // cache has to be told; leaving it stale would let the sequence run on
+        // arrears the statute says do not count.
+        let verzug =
+            crate::pg::refresh_verzug(&ledger, &pool, &cfg.tenant, &malo_id, &lf_mp_id).await?;
+        anyhow::Ok((einwand_id, verzug))
+    }
+    .await;
+
+    match done {
+        Ok((einwand_id, verzug)) => (
+            StatusCode::CREATED,
+            Json(serde_json::json!({
+                "einwand_id": einwand_id,
+                "verzug_ct": verzug,
+                "verzug_eur": format_ct_as_eur(verzug),
+                "rechtsgrundlage": "\u{a7}41f Abs. 3 S. 3-5 EnWG",
+            })),
+        )
+            .into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+/// `GET /api/v1/dunning/{id}/einwaende` — every objection on this account.
+pub async fn get_einwaende(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(id): Path<Uuid>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    let Ok(Some((account_id, _, _))) =
+        crate::pg::dunning_case_account(&pool, id, &cfg.tenant).await
+    else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    match crate::pg::list_einwaende(&pool, account_id, &cfg.tenant).await {
+        Ok(rows) => Json(rows).into_response(),
+        Err(e) => internal(&e),
+    }
+}
+
+/// Body of `POST /api/v1/einwaende/{einwand_id}/erledigen`.
+#[derive(Debug, Deserialize)]
+pub struct CloseEinwandRequest {
+    /// `stattgegeben` | `zurueckgenommen` | `zurueckgewiesen`.
+    pub erledigung: String,
+}
+
+/// `POST /api/v1/einwaende/{einwand_id}/erledigen` — close an objection.
+///
+/// The amount re-enters the § 41f Abs. 3 Verzug from this point, whichever way it
+/// was decided: upheld means the claim was reduced or written off (and the
+/// posting that does so is what removes it from the arrears), withdrawn or
+/// rejected means it was owed all along.
+pub async fn close_einwand(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(einwand_id): Path<Uuid>,
+    Json(req): Json<CloseEinwandRequest>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-dunning", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    if !matches!(
+        req.erledigung.as_str(),
+        "stattgegeben" | "zurueckgenommen" | "zurueckgewiesen"
+    ) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "erledigung must be stattgegeben, zurueckgenommen or zurueckgewiesen",
+            })),
+        )
+            .into_response();
+    }
+    let done = async {
+        let mut tx = pool.begin().await?;
+        let account =
+            crate::pg::close_einwand(&mut *tx, einwand_id, &cfg.tenant, &req.erledigung).await?;
+        tx.commit().await?;
+        let Some(account_id) = account else {
+            return anyhow::Ok(None);
+        };
+        let ids: Option<(String, String)> = sqlx::query_as(
+            "SELECT malo_id, lf_mp_id FROM accounts WHERE account_id = $1 AND tenant = $2",
+        )
+        .bind(account_id)
+        .bind(&cfg.tenant)
+        .fetch_optional(&pool)
+        .await?;
+        if let Some((malo_id, lf_mp_id)) = ids {
+            crate::pg::refresh_verzug(&ledger, &pool, &cfg.tenant, &malo_id, &lf_mp_id).await?;
+        }
+        anyhow::Ok(Some(account_id))
+    }
+    .await;
+
+    match done {
+        Ok(Some(_)) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => internal(&e),
     }
 }
 
@@ -1808,9 +2368,13 @@ pub async fn post_mandate(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(iban_key): Extension<Option<[u8; 32]>>,
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Json(req): Json<CreateMandateRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
     // Validate IBAN checksum before writing to DB (B16).
     // Malformed IBANs cause SEPA return charges (€3–15/return) + Mahnstufe escalation.
     if let Err(msg) = validate_iban(&req.iban) {
@@ -1847,10 +2411,15 @@ pub async fn post_mandate(
 
 /// `GET /api/v1/sepa/mandates/{mandate_id}`
 pub async fn get_mandate(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(mandate_id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match fetch_mandate(&pool, mandate_id, &cfg.tenant).await {
         Ok(Some(row)) => Json(row).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
@@ -1867,11 +2436,15 @@ pub async fn get_mandate(
 /// Does NOT affect existing `accounts.iban` or `mandatsref` columns —
 /// update those separately if needed via `PUT /api/v1/accounts/{malo_id}`.
 pub async fn delete_mandate(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(mandate_id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let today = time::OffsetDateTime::now_utc().date();
     let rows = sqlx::query(
         "UPDATE sepa_mandates SET revoked_at = $1, updated_at = now() \
@@ -1892,10 +2465,14 @@ pub async fn delete_mandate(
 
 /// `POST /api/v1/sepa/run`  — generate pain.008 XML for all active mandates with positive balance
 pub async fn run_sepa(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let mandates = match list_active_mandates(&pool, &cfg.tenant, 10_000).await {
         Ok(m) => m,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -2025,13 +2602,17 @@ pub async fn run_sepa(
 /// Typed `Vorauszahlung` enables `portald` Jahresabschluss preview and
 /// auto-adjustment when deviation exceeds 10 %.
 pub async fn put_vorauszahlung(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<VorauszahlungQuery>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use rubo4e::current::Vorauszahlung;
     use rust_decimal::Decimal;
 
@@ -2105,11 +2686,16 @@ pub async fn put_vorauszahlung(
 /// Falls back to synthesising a `Vorauszahlung` from `abschlag_ct` when no
 /// typed record has been stored yet (backward-compatible bootstrapping).
 pub async fn get_vorauszahlung(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<VorauszahlungQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use rust_decimal::Decimal;
 
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
@@ -2191,15 +2777,19 @@ pub struct BuchenRequest {
 /// ## Idempotency
 /// Supply `reference_id` to make the post idempotent — re-posting with the same
 /// `reference_id` replays as a ledger no-op. Omit it and each call books a new
-/// entry (a fresh random key), matching the old unguarded behaviour.
+/// entry under a fresh random key.
 pub async fn post_buchen(
     claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Json(req): Json<BuchenRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use time::format_description::well_known::Iso8601;
 
     // Validate entry_type against the allowed set.
@@ -2371,13 +2961,17 @@ impl JahresabschlussSums {
 }
 
 pub async fn post_jahresabschluss(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<JahresabschlussQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "close-period", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let year = q.year.unwrap_or_else(|| OffsetDateTime::now_utc().year());
     let dry_run = q.dry_run.unwrap_or(false);
@@ -2698,13 +3292,17 @@ pub struct ZahlungsQuery {
 /// - Atomically syncs `accounts.iban` column from `typed.iban` so that
 ///   `import_payments` (CAMT.054) matching continues to work.
 pub async fn put_zahlungsinformation(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<ZahlungsQuery>,
     Json(body): Json<serde_json::Value>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "write-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use rubo4e::current::Zahlungsinformation;
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
 
@@ -2797,11 +3395,16 @@ pub async fn put_zahlungsinformation(
 /// Falls back to a minimal object from `accounts.iban` when no typed payload has
 /// been PUT yet (backward-compatible with legacy IBAN-only mandates).
 pub async fn get_zahlungsinformation(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<ZahlungsQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use rubo4e::current::Zahlungsinformation;
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let row = sqlx::query(
@@ -2898,12 +3501,17 @@ mod iban_tests {
 /// ]
 /// ```
 pub async fn get_open_items(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
@@ -2965,13 +3573,17 @@ pub struct AnonymizeRequest {
 /// - `409` — already anonymized
 /// - `422` — missing `requested_by` or `legal_basis`
 pub async fn post_anonymize(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
     Json(req): Json<AnonymizeRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "erase-pii", &cfg.tenant) {
+        return forbidden(&e);
+    }
     if req.requested_by.is_empty() || req.legal_basis.is_empty() {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3040,13 +3652,17 @@ pub struct ReconcileQuery {
 /// A non-zero `drift_ct` indicates a bug and must be investigated before repair.
 /// This endpoint is idempotent: running it multiple times with `repair=true` is safe.
 pub async fn post_reconcile(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<ReconcileQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         return StatusCode::NOT_FOUND.into_response();
@@ -3102,11 +3718,16 @@ fn seal_json(seal: &doubleentry::Seal) -> serde_json::Value {
 /// chained Merkle roots. After sealing, a backdated booking into the period is
 /// rejected — corrections book into a later open period (§ 146 Abs. 4 AO).
 pub async fn post_seal_period(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Path(period_id): Path<String>,
     Json(req): Json<SealPeriodRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "close-period", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use time::format_description::well_known::Iso8601;
     let (Ok(start), Ok(end)) = (
         time::Date::parse(&req.start, &Iso8601::DEFAULT),
@@ -3126,8 +3747,14 @@ pub async fn post_seal_period(
 
 /// `GET /api/v1/periods/seals` — the Festschreibung history, with chain verification.
 pub async fn get_seals(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let seals = match ledger.seals().await {
         Ok(s) => s,
         Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
@@ -3149,9 +3776,15 @@ pub async fn get_seals(
 /// `GET /api/v1/entries/{entry_id}/proof` — a Merkle inclusion proof that the
 /// entry is committed to by the current head (tamper-evidence for an auditor).
 pub async fn get_entry_proof(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Path(entry_id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let Ok(uuid) = Uuid::parse_str(&entry_id) else {
         return (StatusCode::BAD_REQUEST, "invalid entry_id").into_response();
     };
@@ -3196,10 +3829,16 @@ pub struct BalanceProofQuery {
 /// read out of a table is not evidence for that; this returns the two chained
 /// Merkle proofs that are.
 pub async fn get_period_balance_proof(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Path(period_id): Path<String>,
     Query(q): Query<BalanceProofQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let outcome = match ledger
         .prove_period_balance(&period_id, &q.lf_mp_id, &q.malo_id)
         .await
@@ -3302,9 +3941,15 @@ pub struct ConsistencyQuery {
 /// the log append-only in the eyes of someone who was here before: they check it
 /// against the head they archived and the head returned here.
 pub async fn get_consistency_proof(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Query(q): Query<ConsistencyQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match ledger.prove_append_only(q.since).await {
         Ok((proof, then, now)) => {
             let verified = proof.verify(&then, &now);
@@ -3342,8 +3987,14 @@ pub async fn get_consistency_proof(
 /// `GET /api/v1/trial-balance` — Summen- und Saldenliste (§ 238 HGB): gross debit
 /// and credit turnover and the balance per GL account. Debits must equal credits.
 pub async fn get_trial_balance(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match ledger.trial_balance().await {
         Ok(lines) => {
             let total_debits: i64 = lines.iter().map(|l| l.debits_ct).sum();
@@ -3364,13 +4015,17 @@ pub async fn get_trial_balance(
 /// (open credits matched against the oldest open debits). Idempotent: matches
 /// nothing when everything is already assigned.
 pub async fn post_clear(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         return StatusCode::NOT_FOUND.into_response();
@@ -3394,10 +4049,15 @@ pub async fn post_clear(
 /// `POST /api/v1/clearings/{clearing_id}/reset` — release a Zahlungszuordnung; the
 /// applied amounts return to the postings' residuals (the original record stays).
 pub async fn post_reset_clearing(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Path(clearing_id): Path<String>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let Ok(uuid) = Uuid::parse_str(&clearing_id) else {
         return (StatusCode::BAD_REQUEST, "invalid clearing_id").into_response();
     };
@@ -3443,10 +4103,15 @@ pub struct EegPayoutQuery {
 /// Use `?status=PDNG` to find orders awaiting pain.002 confirmation, or
 /// `?status=RJCT` to audit rejected payments (EPC rejection codes).
 pub async fn get_eeg_payouts(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Query(q): Query<EegPayoutQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+        return forbidden(&e);
+    }
     // Dynamic WHERE clause built from optional filters.
     let mut conditions = vec!["tenant = $1".to_owned()];
     let mut params: Vec<String> = vec![cfg.tenant.clone()];
@@ -3539,10 +4204,15 @@ pub async fn get_eeg_payouts(
 
 /// `GET /api/v1/eeg/payouts/{payout_id}` — get a single payout order with pain.001 XML.
 pub async fn get_eeg_payout(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(payout_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use sqlx::Row;
     let row =
         match sqlx::query("SELECT * FROM eeg_payout_orders WHERE payout_id = $1 AND tenant = $2")
@@ -3606,12 +4276,16 @@ pub struct RunEegPayoutsRequest {
 ///
 /// Returns a summary JSON with `generated`, `skipped_no_iban`, `errors`.
 pub async fn post_run_eeg_payouts(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(req): Json<RunEegPayoutsRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use crate::sepa::build_pain_001;
 
     let debtor_iban = match cfg.eeg.debtor_iban.as_deref() {
@@ -3840,12 +4514,16 @@ pub struct Pain002StatusUpdate {
 /// `RJCT` / `CANC` → sets `pain002_reason` for audit; emits
 /// `de.accounting.eeg.payout.rejected` CloudEvent if ERP webhook is configured.
 pub async fn put_eeg_payout_status(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(payout_id): Path<uuid::Uuid>,
     Json(req): Json<Pain002StatusUpdate>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "run-payout", &cfg.tenant) {
+        return forbidden(&e);
+    }
     if !["ACCP", "RJCT", "CANC"].contains(&req.status.as_str()) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -3958,11 +4636,15 @@ pub async fn put_eeg_payout_status(
 /// `de.accounting.payee.verification-mismatch`, because executing after a
 /// no-match shifts liability to the payer and that is an operator's decision.
 pub async fn import_pain002(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     body: String,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let doc = match crate::sepa::parse_pain002(&body) {
         Ok(d) => d,
         Err(e) => {
@@ -4336,11 +5018,15 @@ pub struct CreateReversalRequest {
 /// owed once more.
 pub async fn post_sepa_reversal(
     claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Json(req): Json<CreateReversalRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "manage-sepa", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let entry = match crate::pg::fetch_collection_entry(&pool, req.collection_entry_id, &cfg.tenant)
         .await
     {
@@ -4453,6 +5139,7 @@ pub async fn post_sepa_reversal(
         mandate_signed_at: signed_at,
         collection_date: entry.collection_date,
         sequence_type: &entry.sequence_type,
+        scheme: &entry.scheme,
         debtor_name: entry.debtor_name.as_deref().unwrap_or("Kunde"),
         debtor_iban,
         debtor_bic: entry.debtor_bic.as_deref(),
@@ -4602,11 +5289,15 @@ pub async fn post_sepa_reversal(
 /// moved (`REJECTED`), returned by the debtor (`RETURNED`) or already given back
 /// (`REVERSED`).
 pub async fn get_collection_entries(
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(run_id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-banking", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let rows = sqlx::query(
         r"SELECT ce.entry_id, ce.mandatsref, ce.end_to_end_id, ce.payment_info_id,
                  ce.sequence_type, ce.amount_ct, ce.status, ce.status_reason, ce.status_at,
@@ -4850,9 +5541,14 @@ pub(crate) async fn create_eeg_payout_order(
 /// Uses the oldest unresolved dunning case issued_at as the "overdue since" date
 /// when present; falls back to `accounts.updated_at` otherwise.
 pub async fn get_aging(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-books", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match crate::pg::list_aging_buckets(&pool, &cfg.tenant).await {
         Ok(buckets) => {
             let total_ct: i64 = buckets.iter().map(|b| b.total_ct).sum();
@@ -4874,11 +5570,16 @@ pub async fn get_aging(
 
 /// `GET /api/v1/accounts/{malo_id}/interest-charges` — list interest charges.
 pub async fn get_interest_charges(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
@@ -4910,10 +5611,14 @@ pub async fn post_interest_charge(
     Extension(pool): Extension<PgPool>,
     Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
     Json(req): Json<CreateInterestChargeRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     use time::format_description::well_known::Iso8601;
 
     let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
@@ -4959,11 +5664,16 @@ pub async fn post_interest_charge(
 
 /// `GET /api/v1/accounts/{malo_id}/payment-plans` — list payment plans for a MaLo.
 pub async fn get_payment_plans(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(malo_id): Path<String>,
     Query(q): Query<AccountQuery>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let account = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
@@ -4983,10 +5693,14 @@ pub async fn get_payment_plans(
 pub async fn post_payment_plan(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
-    _claims: Claims,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Path(malo_id): Path<String>,
     Json(mut req): Json<crate::pg::CreatePaymentPlanRequest>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     req.malo_id = malo_id;
     match crate::pg::create_payment_plan(&pool, &cfg.tenant, req).await {
         Ok(id) => (
@@ -5000,10 +5714,15 @@ pub async fn post_payment_plan(
 
 /// `GET /api/v1/payment-plans/{plan_id}` — get a payment plan with installments.
 pub async fn get_payment_plan(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     Path(plan_id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match crate::pg::get_payment_plan_with_installments(&pool, plan_id, &cfg.tenant).await {
         Ok(Some((plan, installments))) => Json(serde_json::json!({
             "plan": plan,
@@ -5020,8 +5739,12 @@ pub async fn delete_payment_plan(
     Extension(pool): Extension<PgPool>,
     Extension(cfg): Extension<Arc<AccountingdConfig>>,
     claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     Path(plan_id): Path<Uuid>,
 ) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
+        return forbidden(&e);
+    }
     match crate::pg::cancel_payment_plan(&pool, plan_id, &cfg.tenant, Some(claims.sub())).await {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(e) => (StatusCode::UNPROCESSABLE_ENTITY, e.to_string()).into_response(),

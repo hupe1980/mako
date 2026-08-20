@@ -1711,8 +1711,8 @@ sequenceDiagram
 | `ZWISCHENABLESUNG` | LF or ERP | On-demand (tariff change, billing dispute) |
 | `EINZUG` | NB on customer move-in | |
 | `AUSZUG` | NB on customer move-out | |
-| `SPERRUNG` | `sperrd` before disconnection | §19 StromGVV / §33 GasGVV |
-| `ENTSPERRUNG` | `sperrd` after reconnection | |
+| `SPERRUNG` | `sperrd` before disconnection | §41f EnWG (payment default; §19 StromGVV/GasGVV now covers only the illegal-use case) |
+| `ENTSPERRUNG` | `sperrd` after reconnection | §41f Abs. 7 EnWG — Wiederherstellung unverzüglich |
 | `SONDERABLESUNG` | MSB on `INSRPT` fault | Billing restart after meter replacement |
 | `ISMS_AUSLESUNG` | iMSys automatic | Smart meter daily/15-min auto-readout |
 

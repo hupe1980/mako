@@ -255,7 +255,7 @@ fn entry_types_are_complete() {
 
 #[test]
 fn storno_replaces_korrekturrechnung() {
-    // KORREKTURRECHNUNG was the old (buggy) entry type — it was NOT in the DB CHECK.
+    // KORREKTURRECHNUNG is not a valid entry type — the DB CHECK rejects it.
     // STORNO is its replacement for billing reversals from billingd.
     let buggy_old = "KORREKTURRECHNUNG";
     let correct_new = "STORNO";
@@ -806,11 +806,10 @@ fn open_item_fifo_partial_first_debit() {
 
 /// The anonymized-field list must name every PII column the sweep clears.
 ///
-/// The old version of this test restated the list as a literal and compared it
-/// with an identical literal, so it passed for any list at all — including one
-/// that had silently shrunk. It now reads the real one out of `pg.rs` and
-/// checks it against the `UPDATE` statements beside it: a column added to the
-/// sweep without being declared (or declared without being cleared) fails here.
+/// Reads the real list out of `pg.rs` and checks it against the `UPDATE`
+/// statements beside it — restating it as a literal here would pass for any
+/// list at all, including one that had silently shrunk. A column added to the
+/// sweep without being declared, or declared without being cleared, fails here.
 #[test]
 fn gdpr_anonymization_fields_list_is_complete() {
     const PG_SRC: &str = include_str!("../src/pg.rs");

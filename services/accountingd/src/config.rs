@@ -92,11 +92,32 @@ pub struct AccountingdConfig {
     /// hash with a startup warning (dev only). Use `"env:VAR_NAME"` for injection.
     pub iban_hash_secret: Option<SecretString>,
 
-    /// `sperrd` base URL — the endpoint of the §§41f/41g EnWG disconnection
-    /// sequence. A Mahnstufe-3 case ≥ `sperrung_threshold_ct` runs Sperrandrohung
-    /// (4 Wochen) → Sperrankündigung (8 Werktage) → Sperrauftrag; only the final
-    /// step posts to `sperrd` (`POST /api/v1/sperr-orders`).
-    pub sperrd_url: Option<String>,
+    /// `makod` base URL — where the §§41f/41g sequence puts its market messages.
+    ///
+    /// Phase 3 dispatches `gpke.sperrung.beauftragen` (**ORDERS 17115**) and
+    /// Phase 4 `gpke.entsperrung.beauftragen` (**ORDERS 17117**). Both are
+    /// regulated LF→NB messages, so they travel over the market channel — not as
+    /// an HTTP call into the grid operator's own work queue, which produced no
+    /// ORDRSP, no IFTSTA 21039 and no process to correlate them with.
+    ///
+    /// Absent → the §§41f/41g sequence does not run at all.
+    pub makod_url: Option<String>,
+
+    /// Bearer key for the `makod` command API. Use `"env:VAR_NAME"`.
+    pub makod_api_key: Option<SecretString>,
+
+    /// § 41f Abs. 6 EnWG — the **voraussichtlichen Unterbrechungskosten** in ct,
+    /// stated on both the Androhung and the Ankündigung.
+    ///
+    /// § 41f Abs. 7 S. 2 permits a Pauschale, provided it stays nachvollziehbar
+    /// and does not exceed the actual cost. Default `0` — an operator that has
+    /// not configured it sends a notice claiming the disconnection is free.
+    pub sperrkosten_ct: Option<i64>,
+
+    /// § 41f Abs. 6 EnWG — the **voraussichtlichen Wiederherstellungskosten** in
+    /// ct (the Entsperrpauschale), stated on both notices. Same Pauschale rule as
+    /// [`AccountingdConfig::sperrkosten_ct`].
+    pub entsperrkosten_ct: Option<i64>,
 
     /// Minimum undisputed arrears to open the disconnection sequence (§41f Abs. 3
     /// **Satz 2** EnWG: the Zahlungsverzug must be ≥ 100 EUR). Default: 10_000 ct.
@@ -104,9 +125,15 @@ pub struct AccountingdConfig {
     /// This is the absolute floor. The §41f Abs. 3 **Satz 1** consumption-relative
     /// gate (arrears ≥ 2× the agreed monthly Abschlag `accounts.abschlag_ct`; or,
     /// when no Abschlag is agreed, ≥ ⅙ of the most recent expected annual bill
-    /// `jahresabschluss_runs.annual_bill_ct`) is enforced directly in the candidate
-    /// query and is **not** configurable. A case must clear *both* gates; with no
-    /// consumption basis on record it is conservatively excluded.
+    /// `jahresabschluss_runs.annual_bill_ct`) is **not** configurable. A case must
+    /// clear *both* gates; with no consumption basis on record it is
+    /// conservatively excluded.
+    ///
+    /// Both gates are re-evaluated against the live ledger at **every** phase of
+    /// the sequence — not once when the dunning case was opened — and they measure
+    /// only the open *supply* debt: Mahngebühren and Verzugszinsen are
+    /// Verzugsschaden and are excluded, so the dunning process cannot manufacture
+    /// its own justification by fee-ing a customer over the floor.
     pub sperrung_threshold_ct: Option<i64>,
 
     /// Sperrandrohung → Sperrankündigung Frist (§41f Abs. 1 EnWG: **4 Wochen**).
@@ -115,8 +142,7 @@ pub struct AccountingdConfig {
 
     /// Sperrankündigung → Sperrauftrag Frist (§41f Abs. 5 EnWG: **8 Werktage**,
     /// briefliche Mitteilung). Werktage between the Ankündigung and the earliest
-    /// disconnection order. Default: 8. (The repealed §19 Abs. 3 StromGVV value of
-    /// 3 Werktage no longer applies since 23.12.2025.)
+    /// disconnection order. Default: 8.
     pub sperrankuendigung_frist_werktage: Option<i64>,
 
     /// Dunning fee in ct (× 10⁻² EUR) per Mahnstufe level.
@@ -197,11 +223,16 @@ pub struct AccountingdConfig {
     #[serde(default)]
     pub dunning_auto_enabled: bool,
 
-    /// Days between SEPA N-5 pre-notification and collection day (default: 5).
+    /// Calendar days between the debtor's pre-notification and the collection
+    /// date. Default: **14**.
     ///
-    /// SEPA CORE SDD Rulebook: the debtor must be notified at least 5 calendar
-    /// days before the collection date (N-5). Set to 5 unless the mandate uses
-    /// a shorter notice period (requires bilateral agreement with the bank).
+    /// The EPC SDD Core Rulebook requires the creditor to notify the debtor at
+    /// least **14 calendar days** before the due date, unless a shorter period is
+    /// agreed in the contract. Not to be confused with the bank submission lead
+    /// time, which is a separate deadline owed to a different party.
+    ///
+    /// `de.accounting.payment.due` — the event the ERP turns into the debtor's
+    /// pre-notification — is emitted this many days ahead of the collection.
     pub sepa_pre_notification_days: Option<i64>,
 
     /// EEG Einspeisevergütung payout configuration.

@@ -71,6 +71,21 @@ CREATE TABLE accounts (
     -- re-derives it from the ledger.
     balance_ct          BIGINT      NOT NULL DEFAULT 0,
 
+    -- The **§ 41f Abs. 3 Zahlungsverzug**, likewise ledger-derived and set
+    -- absolutely. Deliberately not the same number as `balance_ct`:
+    --
+    --   * it counts only *open* debit residuals after FIFO clearing, so an
+    --     unallocated credit cannot net an unpaid invoice out of sight;
+    --   * it excludes Verzugsschaden (Mahngebühren, Verzugszinsen — see
+    --     `pg::VERZUGSSCHADEN_KINDS`), which arise *because* of the default and
+    --     may not count toward the threshold that authorises a disconnection;
+    --   * it subtracts open `forderungs_einwaende` (§41f Abs. 3 S. 3–5).
+    --
+    -- Cached because deriving it walks the account's whole posting history.
+    -- Refreshed on every posting, clearing and objection — the cadence of the
+    -- facts it depends on, not of the questions asked about it.
+    verzug_ct           BIGINT      NOT NULL DEFAULT 0,
+
     -- BO4E Vorauszahlung COM: typed advance-payment schedule (§40 EnWG)
     vorauszahlung       JSONB,
     -- BO4E Zahlungsinformation COM: IBAN/BIC/Zahlungsart for SEPA batch export
@@ -129,6 +144,8 @@ CREATE INDEX acct_malo_tenant  ON accounts (malo_id, tenant);
 CREATE INDEX acct_bp           ON accounts (tenant, kunden_nr) WHERE kunden_nr IS NOT NULL;
 -- Supports the portfolio open-receivables / dunning-candidate scans.
 CREATE INDEX acct_overdue      ON accounts (tenant) WHERE balance_ct > 0;
+-- The §41f candidate scan: accounts actually in Verzug on the supply debt.
+CREATE INDEX acct_verzug       ON accounts (tenant) WHERE verzug_ct > 0;
 
 -- ── The double-entry ledger lives in the `doubleentry` schema ─────────────────
 --
@@ -172,8 +189,28 @@ CREATE TABLE sepa_mandates (
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     -- track when the first successful collection occurred for FRST→RCUR auto-transition
-    first_collected_at TIMESTAMPTZ
+    first_collected_at TIMESTAMPTZ,
+
+    -- ── EPC dormancy (SDD Core Rulebook) ─────────────────────────────────────
+    -- A mandate unused for **36 consecutive months** must be cancelled by the
+    -- creditor. The clock resets on every *presentation*, including one later
+    -- rejected or refunded, so this is stamped on submission rather than on
+    -- settlement. The debtor banks do not enforce it; the creditor must.
+    last_presented_at  TIMESTAMPTZ,
+
+    -- ── Scheme ───────────────────────────────────────────────────────────────
+    -- `CORE` (consumers; 8-week no-questions-asked refund) or `B2B` (business
+    -- only; no refund right, and the debtor bank must hold the mandate).
+    -- Different rulebooks and different `LclInstrm` codes, so collecting a B2B
+    -- mandate as CORE grants a refund right the mandate does not carry.
+    scheme          TEXT        NOT NULL DEFAULT 'CORE'
+                    CHECK (scheme IN ('CORE', 'B2B'))
 );
+
+COMMENT ON COLUMN sepa_mandates.last_presented_at IS
+    'EPC SDD Core Rulebook: a mandate unused for 36 consecutive months must be '
+    'cancelled by the creditor. Stamped on presentation (not settlement) because '
+    'the rulebook resets the clock on rejected and refunded collections too.';
 
 -- mandatsref unique per tenant, not globally
 CREATE UNIQUE INDEX sm_mandatsref_tenant ON sepa_mandates (tenant, mandatsref);
@@ -195,6 +232,9 @@ CREATE INDEX sm_mandatsref_norm ON sepa_mandates (tenant, mandatsref_norm);
 CREATE INDEX sm_account ON sepa_mandates (account_id);
 CREATE INDEX sm_active  ON sepa_mandates (account_id)
     WHERE revoked_at IS NULL;
+-- The dormancy sweep: mandates approaching or past the 36-month limit.
+CREATE INDEX sm_dormant ON sepa_mandates (tenant, last_presented_at)
+    WHERE revoked_at IS NULL;
 
 -- ── Dunning cases (Mahnwesen) ─────────────────────────────────────────────────
 
@@ -207,36 +247,167 @@ CREATE TABLE dunning_cases (
     issued_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
     due_date        DATE        NOT NULL,
     resolved_at     TIMESTAMPTZ,
-    -- ── §§41f/41g EnWG Versorgungsunterbrechung sequence (Mahnstufe 3 only) ──
-    -- The disconnection sequence is a 3-phase state machine on a Stufe-3 case:
-    --   Sperrandrohung (§41f Abs. 1, 4-Wochen-Frist)
-    --     → Sperrankündigung (§41f Abs. 5, 8-Werktage-Frist)
-    --       → Sperrauftrag to sperrd.
-    -- Any of `abwendung_vereinbart_at` (§41g Abs. 1 S. 10 — acceptance BARS
-    -- disconnection) or `unverhaeltnismaessig_seit` (§41f Abs. 1 S. 2 / Abs. 2 —
-    -- proportionality / Schutzbedürftigkeit) HALTS the sequence.
+    -- ── §§41f/41g EnWG Versorgungsunterbrechung sequence ────────────────────
+    -- Three phase marks and two dispatch references. What **halts** the sequence
+    -- is deliberately not here: a halt is an account-level fact with a reason and
+    -- a review date, so it lives in `dunning_locks`.
     sperrandrohung_at       TIMESTAMPTZ,
     sperrankuendigung_at    TIMESTAMPTZ,
     geplantes_sperrdatum    DATE,
-    abwendung_vereinbart_at TIMESTAMPTZ,
-    unverhaeltnismaessig_seit TIMESTAMPTZ,
-    -- Reference of the Sperrauftrag handed to sperrd (idempotency: won't re-post).
-    sperrauftrag_ce_id TEXT
+    -- makod process id of the dispatched ORDERS 17115 Sperrauftrag.
+    -- Non-NULL is the idempotency guard: the candidate query selects on NULL, so
+    -- a second §41f disconnection order can never be placed for the same case.
+    sperrauftrag_ce_id      TEXT,
+    -- §41f Abs. 7 — makod process id of the ORDERS 17117 Entsperrauftrag issued
+    -- once the grounds fell away. Restoration is *unverzüglich* and owed without
+    -- being asked, so it follows automatically from the grounds ending.
+    entsperrauftrag_ce_id   TEXT,
+    -- §41g Abs. 1 S. 2 — when the Grundversorger's Abwendungsvereinbarung offer
+    -- went out. Due within one week of a demand made after the Androhung, and at
+    -- the latest with the Ankündigung. Recorded separately from acceptance: a
+    -- supplier that never offered and one that offered and was refused are
+    -- otherwise indistinguishable.
+    abwendung_angeboten_at  TIMESTAMPTZ,
+    -- Phase 2 and 3 read this: the disconnection announced on `geplantes_sperrdatum`
+    -- may only proceed if the announcement is still the current one.
+    CHECK (geplantes_sperrdatum IS NULL OR sperrankuendigung_at IS NOT NULL)
 );
 
 COMMENT ON TABLE dunning_cases IS
-    'Mahnwesen escalation (Mahnstufe 1–3). At Mahnstufe 3 a §§41f/41g EnWG '
-    'disconnection sequence runs: Sperrandrohung (4 Wochen) → Sperrankündigung '
-    '(8 Werktage) → Sperrauftrag to sperrd, halted by Abwendungsvereinbarung '
-    '(§41g Abs. 1) or Unverhältnismäßigkeit/Schutzbedürftigkeit (§41f Abs. 1/2).';
+    'Mahnwesen escalation (Mahnstufe 1-3). At Mahnstufe 3 a §§41f/41g EnWG '
+    'disconnection sequence runs: Sperrandrohung (4 Wochen) -> Sperrankuendigung '
+    '(8 Werktage) -> Sperrauftrag (ORDERS 17115) -> Entsperrauftrag (17117). '
+    'What halts it lives in dunning_locks; what reduces the Verzug lives in '
+    'forderungs_einwaende.';
 
 CREATE INDEX dc_account ON dunning_cases (account_id, stufe);
 CREATE INDEX dc_overdue ON dunning_cases (tenant, due_date)
     WHERE resolved_at IS NULL;
+-- §41f Abs. 7 candidate scan: disconnected cases awaiting restoration.
+CREATE INDEX dc_entsperr ON dunning_cases (tenant)
+    WHERE sperrauftrag_ce_id IS NOT NULL AND entsperrauftrag_ce_id IS NULL;
 
 -- CloudEvent idempotency no longer needs a table here: the ledger post is keyed
 -- by the CloudEvent id, so a redelivery replays as a store-level no-op. There is
 -- no separate `processed_events` guard to keep in sync.
+
+-- ── Mahnsperren (dunning locks) ───────────────────────────────────────────────
+--
+-- A reason to stop dunning an account, with a validity period and an audit
+-- trail. The shape is FI-CA's dunning lock: a reason code, a scope, a validity.
+-- § 41f Abs. 2 makes the Schutzbeduerftigkeit 'auf Verlangen glaubhaft zu
+-- machen', i.e. reviewable, so a flag that can only ever be set is the wrong
+-- shape for a halt.
+--
+-- **Account-scoped**: disconnection is per supply point, and auto-dunning opens
+-- a fresh case per Mahnstufe.
+
+CREATE TABLE dunning_locks (
+    lock_id         UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    account_id      UUID        NOT NULL REFERENCES accounts (account_id) ON DELETE CASCADE,
+
+    grund           TEXT        NOT NULL CHECK (grund IN (
+                        -- §41g Abs. 1 S. 10 — accepted in Textform before the
+                        -- disconnection was carried out; bars it outright.
+                        'abwendungsvereinbarung',
+                        -- §41f Abs. 2 — konkrete Gefahr fuer Leib oder Leben by
+                        -- reason of personal or health circumstances.
+                        'schutzbeduerftigkeit',
+                        -- §41f Abs. 1 S. 2 — the customer showed hinreichende
+                        -- Aussicht that they will meet their obligations.
+                        'zahlungsaussicht',
+                        -- Anything else an operator decides, always with a note.
+                        'operator')),
+    -- The citation the lock rests on, e.g. '§41g Abs. 1 S. 10 EnWG'. Free text
+    -- rather than an enum: the same ground can rest on different Saetze.
+    rechtsgrundlage TEXT        NOT NULL,
+    note            TEXT,
+    CHECK (grund <> 'operator' OR note IS NOT NULL),
+
+    valid_from      DATE        NOT NULL DEFAULT CURRENT_DATE,
+    -- NULL = open-ended. Permitted (a Schutzbeduerftigkeit may have no
+    -- foreseeable end) but surfaced for review, so it stays a decision.
+    valid_to        DATE,
+    CHECK (valid_to IS NULL OR valid_to >= valid_from),
+
+    -- Lifting is an act with its own reason, not a column set back to NULL.
+    -- `vereinbarung_gebrochen` is §41g Abs. 1 S. 11: the sequence may resume, but
+    -- §41f Abs. 1 S. 2 and Abs. 5 must be re-observed, so lifting for that reason
+    -- also clears the Ankuendigung state on the account's open cases.
+    aufgehoben_at    TIMESTAMPTZ,
+    aufhebung_grund  TEXT,
+    CHECK ((aufgehoben_at IS NULL) = (aufhebung_grund IS NULL)),
+
+    -- `sub` of the operator who set it (§238 HGB traceability).
+    created_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE dunning_locks IS
+    'Reasons to stop dunning an account (FI-CA Mahnsperre): §41g Abs. 1 S. 10 '
+    'Abwendungsvereinbarung, §41f Abs. 2 Schutzbeduerftigkeit, §41f Abs. 1 S. 2 '
+    'Zahlungsaussicht, or an operator decision. Account-scoped, dated, and lifted '
+    'with a reason.';
+
+-- The hot path: "is this account locked today?".
+CREATE INDEX dl_active ON dunning_locks (account_id, valid_from, valid_to)
+    WHERE aufgehoben_at IS NULL;
+CREATE INDEX dl_tenant ON dunning_locks (tenant, created_at DESC);
+-- Open-ended locks that nobody has revisited.
+CREATE INDEX dl_review ON dunning_locks (tenant, valid_from)
+    WHERE aufgehoben_at IS NULL AND valid_to IS NULL;
+
+-- ── Forderungseinwände (§ 41f Abs. 3 S. 3–5 EnWG) ────────────────────────────
+--
+-- Amounts that must stay **out of the Verzug calculation** when deciding whether
+-- a disconnection is permitted. Not locks: they do not halt the sequence, they
+-- reduce the number it is measured against, and the sequence stops by itself
+-- when what is left falls below the Abs. 3 gates. The list is the statute's.
+
+CREATE TABLE forderungs_einwaende (
+    einwand_id      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT        NOT NULL,
+    account_id      UUID        NOT NULL REFERENCES accounts (account_id) ON DELETE CASCADE,
+    -- The disputed booking, where one can be pointed at. NULL when the objection
+    -- is against a part of the account rather than one document.
+    ledger_entry_id UUID,
+
+    art             TEXT        NOT NULL CHECK (art IN (
+                        -- S. 3 — form- und fristgerecht, schluessig bestritten,
+                        -- and not titled. Whether it qualifies is a human call;
+                        -- recording it is the operator's act.
+                        'forderung_bestritten',
+                        -- S. 4 — a disputed price increase.
+                        'preiserhoehung_bestritten',
+                        -- S. 5 — the claim is before a §111b EnWG Schlichtung.
+                        'schlichtung',
+                        -- S. 3 — instalments under an agreement, not yet due.
+                        'ratenzahlung_nicht_faellig')),
+    betrag_ct       BIGINT      NOT NULL CHECK (betrag_ct > 0),
+    erhoben_am      DATE        NOT NULL DEFAULT CURRENT_DATE,
+    note            TEXT,
+
+    -- Resolved: upheld, withdrawn, or decided against the customer. Either way
+    -- the amount re-enters the Verzug from that point.
+    erledigt_at     TIMESTAMPTZ,
+    erledigung      TEXT        CHECK (erledigung IN
+                        ('stattgegeben', 'zurueckgenommen', 'zurueckgewiesen')),
+    CHECK ((erledigt_at IS NULL) = (erledigung IS NULL)),
+
+    created_by      TEXT,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+COMMENT ON TABLE forderungs_einwaende IS
+    'Amounts excluded from the § 41f Abs. 3 Zahlungsverzug: bestrittene '
+    'Forderungen und Preiserhoehungen, §111b Schlichtungsverfahren, and '
+    'noch nicht faellige Ratenzahlungsrueckstaende. They reduce the arrears the '
+    'disconnection threshold is measured against; they do not halt the sequence.';
+
+CREATE INDEX fe_open   ON forderungs_einwaende (account_id)
+    WHERE erledigt_at IS NULL;
+CREATE INDEX fe_tenant ON forderungs_einwaende (tenant, erhoben_am DESC);
 
 -- ── GDPR Art. 17 anonymization log (INSERT-only) ──────────────────────────────
 
@@ -441,6 +612,11 @@ CREATE TABLE sepa_collection_entries (
     -- PmtInfId of the group this entry sat in (`<MsgId>-<SEQ>`).
     payment_info_id TEXT        NOT NULL,
     sequence_type   TEXT        NOT NULL CHECK (sequence_type IN ('FRST', 'RCUR', 'FNAL', 'OOFF')),
+    -- The scheme this collection went out under. Recorded on the entry rather
+    -- than looked up from the mandate later, because a pain.007 reversal must
+    -- restate the original **as submitted** — and the mandate may have been
+    -- migrated between schemes since.
+    scheme          TEXT        NOT NULL DEFAULT 'CORE' CHECK (scheme IN ('CORE', 'B2B')),
     amount_ct       BIGINT      NOT NULL CHECK (amount_ct > 0),
     -- Lifecycle, driven by the bank's own replies:
     --   SUBMITTED  written when the pain.008 is generated

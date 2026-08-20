@@ -1,292 +1,263 @@
 +++
 title = "sperrd Operator Guide"
-description = "Operator guide for sperrd — the Sperrung execution tracking daemon that auto-dispatches IFTSTA 21039 (field confirmation) when the field-service team reports execution, preventing permanent GPKE protocol violations."
+description = "Operator guide for sperrd — the Netzbetreiber's Sperr-/Entsperrauftrag execution queue: ORDERS 17115/17117 in, field dispatch, IFTSTA 21039 out, with a retry queue for the outcomes that do not reach the Lieferant."
 weight = 26
 [extra]
 mermaid = true
 +++
 # `sperrd` Operator Guide
 
-`sperrd` bridges the gap between the BDEW ORDERS Sperrung process and the
-physical field-service execution. Without `sperrd`, a missed IFTSTA 21039
-leaves the Sperrung permanently unresolved in the LF system — a GPKE protocol
-violation under BK6-22-024.
+`sperrd` is the Netzbetreiber's work queue for the physical acts GPKE orders it
+to perform. An **ORDERS 17115 Sperrauftrag** or **17117 Entsperrauftrag** from a
+Lieferant becomes a job for the field team; the outcome goes back as **IFTSTA
+21039** (Auftragsstatus Sperren/Entsperren).
 
-**Port:** `:8780`  
-**Storage:** PostgreSQL (`sperr_orders` table)  
-**Role:** NB (Netzbetreiber) role only
+Without that outcome message the Lieferant's `gpke-sperrung-lf` process never
+reaches a terminal state, and GPKE gives them no way to find out what happened
+but to ask. Dispatching it is the service's reason to exist, and the one state it
+will not let fall silently on the floor.
 
+**Port:** `:8780`
+**Storage:** PostgreSQL (`sperr_orders`)
+**Role:** NB (Netzbetreiber)
 
 1. TOC
 {:toc}
 
----
-
-## Why `sperrd` exists
+## Where orders come from
 
 ```mermaid
-sequenceDiagram
-    participant LF as LF (Lieferant)
-    participant makod as makod :8080
-    participant sperrd as sperrd :8780
-    participant Field as Field service team
-
-    LF->>makod: ORDERS 17115 (Sperrung request)
-    makod->>sperrd: POST /api/v1/sperr-orders<br/>{malo_id, lf_mp_id, "sperrung"}
-    makod-->>LF: ORDRSP (confirmation)
-
-    Note over Field: Field team executes disconnection
-
-    Field->>sperrd: PUT /api/v1/sperr-orders/{id}/execute<br/>{note, executed_at}
-    sperrd->>makod: dispatch IFTSTA 21039<br/>(field confirmation)
-    makod-->>LF: IFTSTA 21039 (Ausführungsbestätigung)
+flowchart LR
+    LF["Lieferant"] -->|"ORDERS 17115 / 17117"| AS4["AS4"]
+    AS4 --> MAKOD["makod<br/>gpke-sperrung"]
+    MAKOD -->|"de.mako.process.initiated"| WH["sperrd<br/>POST /webhook"]
+    WH --> Q[("sperr_orders<br/>pending")]
+    OP["Operator"] -->|"POST /api/v1/sperr-orders"| Q
+    Q --> FIELD["Field team"]
+    FIELD -->|"PUT /execute or /fail"| Q
+    Q -->|"gpke.sperrung.bestaetigen<br/>/ .fehlgeschlagen"| MAKOD
+    MAKOD -->|"IFTSTA 21039"| LF
 ```
 
-Without `sperrd`, the field team would need to manually trigger IFTSTA 21039
-through another system, creating a compliance risk if that step is missed.
-`sperrd` captures the execution confirmation and automatically ensures the
-IFTSTA reaches `makod` for outbound delivery.
+Two producers, one queue:
 
----
+* **The market inbox.** `POST /webhook` consumes `de.mako.process.initiated` and
+  turns PIDs 17115 and 17117 into work orders, keyed on the `makod` process so a
+  redelivery over AS4 does not queue a second disconnection. This is what makes
+  `sperrd` an NB service — before it existed, a Sperrauftrag arriving from a
+  third-party Lieferant spawned a `makod` process and then reached nobody.
+* **Operators.** `POST /api/v1/sperr-orders` for an order with no market
+  correspondent. It has no `process_id`, so no IFTSTA is owed for it.
 
-## HTTP API
+PID **17116** (Anfrage Sperrung) is deliberately *not* queued: it is the NB asking
+the Messstellenbetreiber whether the meter is reachable, not an order to execute.
 
-### `POST /api/v1/sperr-orders`
+## What the queue carries
 
-Register a new Sperrung or Entsperrung order.
+The row is shaped by what the ORDERS AHB actually sends:
 
-```json
-{
-  "malo_id":      "51238696012",
-  "lf_mp_id":     "9900012345678",
-  "order_type":   "sperrung",
-  "process_id":   "550e8400-e29b-41d4-a716-446655440000",
-  "planned_date": "2025-02-20"
-}
-```
+| Column | EDIFACT | Meaning |
+|---|---|---|
+| `order_type` | `BGM+Z51` / `Z52` | Sperrung / Entsperrung |
+| `ausfuehrung_am` | `DTM+203` | A **fixed** date the LF requires (hint [533]: a Gerichtsvollzieher may have set it) |
+| `fruehestens_am` | `DTM+469` | Execute at the next opportunity, but **not before** this date |
+| `arbeitszeit` | `IMD+7081` `Z53`/`Z54` | Entsperrauftrag: within working hours, or also outside |
+| `treffpunkt_*` | `SG2 NAD+Z24` | Where the technician goes |
+| `hinweis` | `SG29 FTX+ACB` | The LF's free-text hints |
 
-`order_type`: `"sperrung"` (disconnect) or `"entsperrung"` (reconnect).
+`ausfuehrung_am` and `fruehestens_am` are alternatives — AHB conditions [55]/[56]
+— enforced in the API and by a database `CHECK`. The distinction matters
+operationally: a missed fixed date is a broken commitment to the Lieferant, while
+a passed earliest-start only means the job became schedulable.
 
-Response `201 Created`: `{ "id": "<uuid>" }`
+## Timing — read this before building an SLA
 
-### `GET /api/v1/sperr-orders`
+GPKE fixes **no execution deadline in Werktagen** for the physical act. The only
+date is the Lieferant's own, from `DTM+203` or `DTM+469`.
 
-Query parameters:
+What BK6-22-024 §5 *does* fix is **24 wall-clock hours** for the NB's **ORDRSP**
+(Bestätigung 19116 / Ablehnung 19117), which `makod` tracks — not this service.
 
-| Parameter | Description |
-|-----------|-------------|
-| `status` | Filter by status: `pending`, `executed`, `failed`, `cancelled` |
-| `malo_id` | Filter by Marktlokations-ID |
-| `older_than_hours` | Return only orders created more than N hours ago — use `48` in the daily BK6-22-024 compliance sweep to detect stuck orders past the 2-Werktage window |
-| `limit` | Maximum results (default 100, max 1000) |
+A guard test fails the build if a Werktage execution window is asserted
+anywhere in the service.
 
-### `GET /api/v1/sperr-orders/{id}`
+## Reporting the outcome
 
-Returns full order including `status`, `executed_at`, `iftsta_ref`, and `fail_reason`.
+`PUT /api/v1/sperr-orders/{id}/execute` and `.../fail` are the two terminal
+transitions. Both **claim the order first** with a single guarded `UPDATE … WHERE
+status = 'pending'` and only then dispatch, so a concurrent execute and fail
+cannot both put a message on the wire — which would send the Lieferant an
+Ausführungs- *and* a Fehlmeldung for the same order.
 
-### `PUT /api/v1/sperr-orders/{id}/execute`
+What the IFTSTA carries, per AHB 2.1 §7.2:
 
-Reports successful field execution. Triggers IFTSTA 21039 dispatch to `makod`.
-
-```json
-{
-  "note":        "Disconnected at main fuse panel, ref: TW-2025-0220-001",
-  "executed_at": "2025-02-20T09:47:00+01:00"
-}
-```
-
-Response `204 No Content`.
-
-### `PUT /api/v1/sperr-orders/{id}/fail`
-
-Reports a field failure (status → `failed`) and auto-dispatches IFTSTA 21039
-reporting non-execution (`gpke.sperrung.fehlgeschlagen` → `makod`), so the LF
-learns why the Sperrung did not happen instead of waiting out its deadline.
-
-```json
-{
-  "reason": "Meter not accessible — locked gate. Rescheduled for next week."
-}
-```
-
-Response `204 No Content`.
-
----
-
-### `PUT /api/v1/sperr-orders/{id}/cancel`
-
-Operator-initiated cancellation of a `pending` order. Only pending orders can
-be cancelled — `executed` and `failed` orders are terminal.
-
-No IFTSTA 21039 is dispatched for cancelled orders (the Sperrung was never
-physically executed). Inform the LF if the order had already been communicated
-to their system.
-
-Response `204 No Content`.
-
----
-
-### `GET /api/v1/sperr-orders/stats`
-
-Aggregate statistics for the BK6-22-024 compliance sweep.
-
-```json
-{
-  "total": 42,
-  "pending": 3,
-  "executed": 36,
-  "failed": 2,
-  "cancelled": 1,
-  "overdue_pending": 1,
-  "executed_missing_iftsta": 0
-}
-```
-
-| Field | Regulatory meaning |
-|-------|--------------------|
-| `overdue_pending` | Pending orders whose `planned_date` is in the past — **BK6-22-024 violation risk** |
-| `executed_missing_iftsta` | Executed orders where IFTSTA 21039 was NOT dispatched — **GPKE protocol violation** |
-
----
-
-## Order lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> pending : POST /sperr-orders
-    pending --> executed : PUT /execute<br/>→ IFTSTA 21039 dispatched
-    pending --> failed : PUT /fail<br/>→ IFTSTA 21039 (non-execution)
-    pending --> cancelled : operator action
-    executed --> [*]
-    failed --> [*]
-    cancelled --> [*]
-```
-
-### Status meanings
-
-| Status | Description |
+| Field | Source |
 |---|---|
-| `pending` | Order registered, awaiting field execution |
-| `executed` | Field team confirmed execution; IFTSTA 21039 dispatched to `makod` |
-| `failed` | Field team reported failure; IFTSTA 21039 (non-execution) dispatched to the LF; operator must reschedule |
-| `cancelled` | Order cancelled before field execution (e.g. customer paid) |
+| `SG15 STS DE9015` | `Z37` Auftragsstatus Sperren / `Z38` Entsperren — derived from `order_type` |
+| `SG15 STS DE4405` | `Z14 erfolgreich` (execute) / `Z13 gescheitert` (fail) |
+| `SG15 STS DE9013` | The EBD Prüfschritt code — a **Muss**, so `pruefschritt_code` is what makes the message valid |
+| `DTM+293` | Fertigstellungsdatum — **Muss** on `Z14`, and condition [495] requires it ≤ the document date, so a future `executed_at` is refused at the API |
+| `SG25 FTX+ACB` | The `note` or `reason` free text |
 
----
+The response tells you which of two things happened:
+
+* **204** — recorded, and the IFTSTA is with `makod`.
+* **202** — recorded, but the dispatch failed. The order is in the retry queue and
+  the Lieferant has **not** been told. The outcome is kept regardless: a field
+  team's report is a fact about the physical world, and discarding it because a
+  downstream service was unreachable is worse than retrying.
+
+## The IFTSTA retry queue
+
+A terminal order whose `iftsta_dispatched_at` is NULL is an order whose Lieferant
+does not know the outcome.
+
+The previous design created that state on every crash between claiming an order
+and dispatching its IFTSTA, counted it in `/stats`, indexed it — and had **no way
+to clear it**. The documented recovery, "call `PUT .../execute` again, it is
+idempotent", could not work: the claim guards on `status = 'pending'`, so a second
+call returned 404 and dispatched nothing.
+
+It is now a queue. A background worker re-sends under the same idempotency key
+`makod` deduplicates on, so a re-send after a lost response is the same command
+rather than a second IFTSTA. After `IFTSTA_MAX_ATTEMPTS` it announces
+`de.sperr.iftsta.ausstehend` once and stops — a dispatch that has failed eight
+times is not a transport problem but a `makod` process in the wrong state, and
+retrying that forever only hides it behind a rising attempt count.
+
+`/stats` reports the two apart:
+
+| Field | Meaning |
+|---|---|
+| `iftsta_outstanding` | Dispatches in flight. Normal for seconds after an execution. |
+| `iftsta_stuck` | Past the retry budget. **This is the number that needs a human.** |
+
+### Diagnosing a stuck IFTSTA
+
+Read `iftsta_last_error` on the order. The usual cause is that `makod` has no
+`gpke-sperrung` process for that MaLo in `ValidationPassed` — its
+`BestaetigueSperrung` command refuses any other state. Check whether the inbound
+ORDERS spawned a process at all; if it did not, the order reached the queue by
+another route and there is no market correspondent to report to. After fixing the
+cause, reset `iftsta_attempts` and the worker picks the order up again.
+
+## Emitted events
+
+All through the transactional outbox.
+
+| CloudEvent | Emitted when |
+|---|---|
+| `de.sperr.auftrag.eingegangen` | An order entered the queue, from ORDERS or an operator |
+| `de.sperr.ausgefuehrt` | Carried out — IFTSTA `Z14` |
+| `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
+| `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
+| `de.sperr.iftsta.ausstehend` | The retry budget is spent and the LF is still uninformed |
+
+`agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob.
+
+## Authentication and authorization
+
+Every REST route requires an OIDC token **and** passes a Cedar check.
+Authentication alone would let a valid token from any tenant order a
+disconnection in this operator's name.
+
+| Action | Routes |
+|---|---|
+| `read-sperr-order` | `GET` the queue, an order, `/stats` |
+| `create-sperr-order` | `POST /api/v1/sperr-orders` |
+| `execute-sperr-order` | `PUT .../execute`, `.../fail` |
+| `cancel-sperr-order` | `PUT .../cancel` |
+
+All four require the `NB` market role in `mako_roles` and a tenant match. The
+`/webhook` ingest is authenticated by the inbound `X-Mako-Signature` HMAC instead,
+because `makod` holds no bearer token for this service.
+
+`tests/authorization_guard.rs` fails the build if a handler loses its `Claims`
+extractor or its Cedar check, if a checked action appears in no policy (Cedar is
+default-deny, so that is a permanent 403), or if a policy grants an action nothing
+checks.
+
+## Schema
+
+```sql
+CREATE TABLE sperr_orders (
+    id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant               TEXT NOT NULL,
+    malo_id              TEXT NOT NULL,
+    lf_mp_id             TEXT NOT NULL,
+    order_type           TEXT NOT NULL CHECK (order_type IN ('sperrung','entsperrung')),
+    pruefidentifikator   INTEGER CHECK (pruefidentifikator IN (17115, 17117)),
+    process_id           TEXT,
+    ausfuehrung_am       DATE,
+    fruehestens_am       DATE,
+    CHECK (ausfuehrung_am IS NULL OR fruehestens_am IS NULL),
+    arbeitszeit          TEXT CHECK (arbeitszeit IN ('innerhalb','auch_ausserhalb')),
+    treffpunkt_hinweis   TEXT,
+    treffpunkt_strasse   TEXT,
+    treffpunkt_plz       TEXT,
+    treffpunkt_ort       TEXT,
+    treffpunkt_land      TEXT CHECK (treffpunkt_land IS NULL OR treffpunkt_land ~ '^[A-Z]{2}$'),
+    hinweis              TEXT,
+    status               TEXT NOT NULL DEFAULT 'pending'
+                         CHECK (status IN ('pending','executed','failed','cancelled')),
+    executed_at          TIMESTAMPTZ,
+    execution_note       TEXT,
+    fail_reason          TEXT,
+    pruefschritt_code    TEXT,
+    CHECK (status <> 'executed' OR executed_at IS NOT NULL),
+    CHECK (status <> 'failed'   OR fail_reason IS NOT NULL),
+    iftsta_ref           TEXT,
+    iftsta_dispatched_at TIMESTAMPTZ,
+    iftsta_attempts      INTEGER NOT NULL DEFAULT 0,
+    iftsta_last_error    TEXT,
+    iftsta_escalated_at  TIMESTAMPTZ,
+    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (tenant, process_id)
+);
+```
+
+## MCP surface
+
+Read-only by construction. The previous version exposed `cancel_sperr_order` — a
+tool that withdraws a §41f disconnection order — on a surface a language model
+drives; every other MCP server on this platform is read-only and keeps the
+mutating decision with an operator.
+
+| Tool | Description |
+|---|---|
+| `list_sperr_orders(status, malo_id, due, limit)` | The queue |
+| `get_sperr_order(id)` | One order, with ORDERS provenance and IFTSTA state |
+| `get_sperr_stats` | Counters, incl. `iftsta_outstanding` / `iftsta_stuck` |
+| `list_due_orders` | The field-dispatch list, with the Treffpunkt |
+
+Prompts: `execute-sperrung`, `iftsta-sweep`.
 
 ## Configuration
 
 ```toml
-# sperrd.toml
 port           = 8780
-tenant         = "9900357000004"   # data-isolation key (BDEW-/DVGW-Codenummer)
-
-[database]
-url       = "env:DATABASE_URL"
-pool_size = 10                     # optional — the tuned pool is applied by mako-service
+tenant         = "9900357000004"
 
 makod_url      = "http://makod:8080"
-makod_api_key  = "env:MAKOD_API_KEY"
+makod_api_key  = "env:SPERRD_MAKOD_API_KEY"
+inbound_hmac_secret = "env:SPERRD_INBOUND_HMAC_SECRET"
+
+[database]
+url       = "env:SPERRD_DATABASE_URL"
+pool_size = 10
+
+[oidc]
+issuer   = "https://keycloak:8080/realms/mako"
+audience = "sperrd"
 ```
 
----
+Omitting `[oidc]` is a startup failure unless `allow_insecure_no_auth = true` is
+written down explicitly: these routes create and confirm physical disconnections.
 
-## PostgreSQL schema
+## Tests
 
-```sql
--- sperr_orders: tracks Sperrung/Entsperrung execution.
--- status: pending → executed | failed | cancelled
-CREATE TABLE sperr_orders (
-    id                   UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    malo_id              TEXT        NOT NULL,
-    lf_mp_id             TEXT        NOT NULL,
-    order_type           TEXT        NOT NULL CHECK (order_type IN ('sperrung', 'entsperrung')),
-    process_id           TEXT,                    -- makod ORDERS process UUID
-    planned_date         DATE,
-    status               TEXT        NOT NULL DEFAULT 'pending',
-    executed_at          TIMESTAMPTZ,
-    execution_note       TEXT,
-    fail_reason          TEXT,
-    iftsta_ref           TEXT,                    -- dispatched IFTSTA 21039 command ID
-    iftsta_dispatched_at TIMESTAMPTZ,             -- when IFTSTA 21039 was sent (SLA tracking)
-    tenant               TEXT        NOT NULL DEFAULT '', -- data-isolation key
-    created_at           TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX ON sperr_orders (malo_id, status);
-CREATE INDEX ON sperr_orders (tenant, status);
-CREATE INDEX ON sperr_orders (planned_date) WHERE status = 'pending';
-CREATE INDEX ON sperr_orders (id) WHERE status = 'executed' AND iftsta_dispatched_at IS NULL;
-```
-
-`iftsta_dispatched_at` tracks the exact moment IFTSTA 21039 was dispatched.
-Any row with `status = 'executed'` and `iftsta_dispatched_at IS NULL` represents
-a **GPKE protocol violation** — the LF has not yet received execution confirmation.
-
----
-
-## Overdue pending orders
-
-Orders that remain `pending` past their `planned_date` are a compliance risk.
-Query them via the REST API:
-
-```bash
-# Overdue orders past planned_date (BK6-22-024 violation risk)
-curl http://sperrd:8780/api/v1/sperr-orders/stats
-
-# All stuck pending orders older than 48 hours
-curl "http://sperrd:8780/api/v1/sperr-orders?status=pending&older_than_hours=48"
-```
-
-Or the MCP tool `list_overdue_orders` surfaces all orders with `planned_date < CURRENT_DATE`
-including `days_overdue` — the sperrd-agent calls this in its daily compliance sweep.
-
----
-
-## Regulatory basis
-
-| Regulation | Requirement |
-|---|---|
-| GPKE BK6-22-024 | IFTSTA 21039 (Ausführungsbestätigung) must be sent after physical Sperrung/Entsperrung execution |
-| BK6-22-024 §6.2 | Failure to send IFTSTA 21039 leaves the process permanently unresolved in the LF system |
-| BK6-22-024 §9 | Failed Sperrung must be reported to the LF within 3 Werktage |
-| BDEW ORDERS AHB PIDs 17115–17117 | Sperrung/Entsperrung order + confirmation message flow |
-| BDEW GeLi Gas 3.0 (BK7-24-01-009) | Gas Sperrprozesse — ORDERS 17115/17117 + INVOIC 31011 (AWH) |
-
-> **Integration note:** Inbound ORDERS 17115 from the LF triggers the order creation in `sperrd`.
-> Outbound IFTSTA 21039 is dispatched to `makod`, which serializes it as EDIFACT and delivers
-> it to the LF via AS4.
-
----
-
-## MCP server
-
-`sperrd` exposes an MCP server at `/mcp` for LLM-based compliance automation.
-
-### Tools (5)
-
-| Tool | Description |
-|---|---|
-| `list_sperr_orders(status, older_than_hours, limit)` | List orders filtered by status and/or age |
-| `get_sperr_order(id)` | Full order with timestamps, IFTSTA dispatch status, and process reference |
-| `get_sperr_stats` | Aggregate compliance snapshot: pending, executed, overdue, missing IFTSTA |
-| `list_overdue_orders` | All pending orders past `planned_date`, with `days_overdue` computed |
-| `cancel_sperr_order(id)` | Cancel a pending order (operator-only; `destructive_hint = true`) |
-
-### Prompts (2)
-
-| Prompt | Description |
-|---|---|
-| `execute-sperrung` | Confirm field execution → IFTSTA 21039 dispatch workflow |
-| `compliance-sweep` | Daily BK6-22-024 sweep: overdue + missing IFTSTA + AWH billing gaps |
-
-### Daily compliance sweep with `sperrd-agent`
-
-The `sperrd-agent` in `agentd` runs the compliance check automatically. The pattern:
-
-```
-1. get_sperr_stats → check overdue_pending + executed_missing_iftsta
-2. If overdue_pending > 0 → list_overdue_orders → escalate field team + notify LF
-3. If executed_missing_iftsta > 0 → list_sperr_orders(status=executed) → re-trigger dispatch
-4. Cross-reference executed Sperrungen with netzbilanzd INVOIC 31011 drafts (AWH billing)
-```
+`cargo test -p sperrd` runs the unit and guard tests. `just test-sperrd-db` runs
+10 scenarios against real PostgreSQL: the redelivery guard, the claim guard, a
+failed dispatch keeping the report and queueing a retry, budget exhaustion
+escalating once, tenant isolation, and the mutually-exclusive ORDERS dates.

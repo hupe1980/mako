@@ -52,7 +52,7 @@ graph TB
     accountingd -->|"de.accounting.sepa.collection-rejected (pain.002 RJCT)<br/>de.accounting.sepa.reversal-issued (pain.007)<br/>de.accounting.payee.verification-mismatch (VoP)"| erp
     accountingd -->|"de.accounting.interest.charged (§288 BGB)"| erp
     accountingd -->|"de.accounting.sperrandrohung / .sperrankuendigung (§41f)"| erp
-    accountingd -->|"POST /api/v1/sperr-orders (the order itself)<br/>+ de.accounting.sperrauftrag (announcement)"| sperrd
+    accountingd -->|"gpke.sperrung.beauftragen ORDERS 17115<br/>gpke.entsperrung.beauftragen ORDERS 17117"| makod
     accountingd -->|"de.accounting.eeg.payout.rejected (pain.002 RJCT)"| erp
     accountingd -->|"pain.001 XML (SCT Inst <10s / CORE D+1)"| bank
     bank -->|"pain.002 XML → POST /sepa/pain002 (status + VoP)"| accountingd
@@ -153,8 +153,13 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `GET` | `/api/v1/dunning` | Open dunning cases |
 | `POST` | `/api/v1/dunning/{account_id}/escalate` | Manual Mahnstufe escalation |
 | `POST` | `/api/v1/dunning/{id}/resolve` | Mark dunning case resolved |
-| `POST` | `/api/v1/dunning/{id}/abwendung` | Record an accepted **Abwendungsvereinbarung** (§41g Abs. 1 S. 10 EnWG) — bars disconnection of the supply point (halts every open case of the account) |
-| `POST` | `/api/v1/dunning/{id}/unverhaeltnismaessig` | Flag **Unverhältnismäßigkeit/Schutzbedürftigkeit** (§41f Abs. 1 S. 2 / Abs. 2 EnWG) — halts every open case of the account |
+| `POST` | `/api/v1/dunning/{id}/abwendung/angebot` | Record the **Abwendungsvereinbarung offer** (§41g Abs. 1 S. 2 EnWG) |
+| `GET\|POST` | `/api/v1/dunning/{id}/locks` | Mahnsperren on the account — list, or place one with a ground and a validity |
+| `DELETE` | `/api/v1/dunning/locks/{lock_id}` | Lift a Mahnsperre, with a reason |
+| `GET` | `/api/v1/dunning/locks/review` | Open-ended locks awaiting review |
+| `GET\|POST` | `/api/v1/dunning/{id}/einwaende` | Forderungseinwände (§41f Abs. 3 S. 3–5 EnWG) — amounts outside the Verzug |
+| `POST` | `/api/v1/einwaende/{einwand_id}/erledigen` | Close an objection; the amount re-enters the Verzug |
+| `GET` | `/api/v1/sepa/mandates/dormant` | Mandates at or near the EPC 36-month dormancy limit |
 | `GET` | `/api/v1/payment-plans/{id}` | Get payment plan with full installment schedule |
 | `DELETE` | `/api/v1/payment-plans/{id}` | Cancel payment plan (CANCELLED status) |
 | `POST` | `/api/v1/sepa/mandates` | Register SEPA mandate (IBAN validated via mod-97) — OIDC required |
@@ -284,41 +289,120 @@ Mahnungen were created), advancing each qualifying Mahnstufe-3 case one phase:
 |---|---|---|---|---|
 | **1. Sperrandrohung** | Mahnstufe 3, both §41f Abs. 3 thresholds cleared (see below), not halted | ≥ 4 Wochen nach Mahnung | `de.accounting.sperrandrohung` via outbox; sets `sperrandrohung_at` | §41f Abs. 1 |
 | **2. Sperrankündigung** | Androhung + `sperrandrohung_frist_days` (default 28) elapsed | announces disconnection **8 Werktage im Voraus** | `de.accounting.sperrankuendigung` via outbox; sets `sperrankuendigung_at` + `geplantes_sperrdatum = heute + 8 Werktage` (BDEW-Kalender) | §41f Abs. 5 |
-| **3. Sperrauftrag** | `geplantes_sperrdatum` reached | `de.accounting.sperrauftrag` | `POST sperrd /api/v1/sperr-orders` (`order_type: "sperrung"`) — the order is an HTTP call, the CloudEvent announces it for obsd/agentd. The mark commits **before** the enqueue, because `sperrd` does not deduplicate orders and the candidate query selects on `sperrauftrag_ce_id IS NULL`: a lost announcement is replayable, a second disconnection order is not | §41f |
+| **3. Sperrauftrag** | `geplantes_sperrdatum` reached | `de.accounting.sperrauftrag` | `gpke.sperrung.beauftragen` → **ORDERS 17115** via `makod`. The CloudEvent announces the dispatch for obsd/agentd; the mark commits **before** the enqueue, because the candidate query selects on `sperrauftrag_ce_id IS NULL` — a lost announcement is replayable, a second disconnection order is not | §41f |
+| **4. Entsperrauftrag** | the grounds fell away — the arrears were settled, an Abwendungsvereinbarung was accepted, or Schutzbedürftigkeit was found | `de.accounting.entsperrauftrag` | `gpke.entsperrung.beauftragen` → **ORDERS 17117**. Restoration is *unverzüglich* and is owed without the customer asking, which is why this is a sweep and not an endpoint | §41f Abs. 7 |
+
+### Why the Sperrauftrag is a market message
+
+Phases 3 and 4 dispatch GPKE commands through `makod` rather than calling the
+grid operator's internal queue over HTTP. The Sperrauftrag is a regulated LF→NB
+message: the NB answers it with ORDRSP 19116/19117 and reports execution with
+IFTSTA 21039, and the LF's own `gpke-sperrung-lf` process tracks that exchange.
+A direct HTTP call into the grid operator's queue would produce none of it.
 
 Each phase is **idempotent** (its candidate query excludes already-advanced
 cases); the first two commit the state flag and the outbound CloudEvent in **one
 transaction** (persist-before-dispatch), because the Androhung and Ankündigung
 are legal acts (letters the ERP must send). The sequence **halts** on:
 
-- an accepted **Abwendungsvereinbarung** (§41g Abs. 1 S. 10 — acceptance in
-  Textform *bars* disconnection): `POST /api/v1/dunning/{id}/abwendung` →
-  `abwendung_vereinbart_at`;
-- an **Unverhältnismäßigkeit / Schutzbedürftigkeit** (§41f Abs. 1 S. 2 / Abs. 2
-  — payment prospect, or konkrete Gefahr für Leib oder Leben):
-  `POST /api/v1/dunning/{id}/unverhaeltnismaessig` → `unverhaeltnismaessig_seit`.
+### Mahnsperren — one mechanism for every halt
 
-Both halts are **account-scoped**: disconnection is per supply point and
-auto-dunning creates a fresh case per Mahnstufe, so each flag is set on *every*
-open dunning case of the account owning `{id}`. Both are filtered out by every
-phase query, so a halted account never progresses. Fristen are configurable (`sperrandrohung_frist_days`,
-`sperrankuendigung_frist_werktage`). The governing text is §§ 41f–41g EnWG in the
-consolidated version of 23.12.2025 (BGBl. 2025 I Nr. 347).
+Everything that stops the sequence is a row in `dunning_locks`, with a **ground,
+a citation, a validity period and the operator who set it**:
 
-### Threshold — both §41f Abs. 3 gates
+| `grund` | Norm | Meaning |
+|---|---|---|
+| `abwendungsvereinbarung` | §41g Abs. 1 S. 10 | Accepted in Textform before the disconnection was carried out; bars it outright |
+| `schutzbeduerftigkeit` | §41f Abs. 2 | Konkrete Gefahr für Leib oder Leben |
+| `zahlungsaussicht` | §41f Abs. 1 S. 2 | The customer showed *hinreichende Aussicht* to pay |
+| `operator` | — | An operator decision; requires a note |
 
-A Mahnstufe-3 case enters Phase 1 only when it clears **both** gates:
+`POST /api/v1/dunning/{id}/locks` places one, `DELETE /api/v1/dunning/locks/{lock_id}`
+lifts it **with a reason**, and `GET /api/v1/dunning/{id}/locks` is the history.
 
-- **Satz 2 (absolute floor):** arrears ≥ `sperrung_threshold_ct` (default 100 EUR).
-- **Satz 1 (consumption-relative):** arrears ≥ **2×** the agreed monthly Abschlag
-  (`accounts.abschlag_ct`); *wenn keine Abschläge vereinbart sind* (`abschlag_ct = 0`),
-  arrears ≥ **⅙** of the most recent expected annual bill
+Lifting a lock for **`vereinbarung_gebrochen`** applies §41g Abs. 1 S. 11: the
+Ankündigung state is cleared, so the sequence resumes at a *fresh* 8-Werktage
+announcement rather than at a Sperrauftrag. An announcement made before the
+agreement was accepted has been overtaken by events; disconnecting on it would
+use a date the customer was told about under different circumstances, possibly
+months earlier. `de.accounting.abwendung.gebrochen` is emitted in the same
+transaction.
+
+Open-ended locks are permitted — a Schutzbedürftigkeit may have no foreseeable
+end — but they are listed by `GET /api/v1/dunning/locks/review?older_than_days=90`,
+so an unbounded lock is a decision under review rather than one forgotten.
+
+### Forderungseinwände — §41f Abs. 3 S. 3–5
+
+Not halts. These are amounts that must stay **out of the Verzug calculation**, so
+the sequence stops by itself once what remains falls below the Abs. 3 gates:
+
+| `art` | Norm |
+|---|---|
+| `forderung_bestritten` | S. 3 — form- und fristgerecht, schlüssig bestritten, not titled |
+| `preiserhoehung_bestritten` | S. 4 |
+| `schlichtung` | S. 5 — before a §111b EnWG Schlichtungsverfahren |
+| `ratenzahlung_nicht_faellig` | S. 3 — instalments not yet due |
+
+`POST /api/v1/dunning/{id}/einwaende` records one and
+`POST /api/v1/einwaende/{einwand_id}/erledigen` closes it, either way putting the
+amount back. Both refresh `verzug_ct` immediately, because an objection changes
+the arrears with no posting behind it — the one case a posting-driven cache would
+otherwise miss.
+
+Locks are **account-scoped**: disconnection is per supply point, and
+auto-dunning opens a fresh case per Mahnstufe, so a per-case flag had to be
+fanned across every open case to mean anything. Fristen are configurable
+(`sperrandrohung_frist_days`, `sperrankuendigung_frist_werktage`). The governing
+text is §§41f–41g EnWG in the consolidated version of 23.12.2025 (BGBl. 2025 I
+Nr. 347).
+
+### Threshold — both §41f Abs. 3 gates, re-checked at every phase
+
+A case enters Phase 1, and stays eligible at Phases 2 and 3, only while it clears
+**both** gates:
+
+- **Satz 2 (absolute floor):** Zahlungsverzug ≥ `sperrung_threshold_ct` (default 100 EUR).
+- **Satz 1 (consumption-relative):** Zahlungsverzug ≥ **2×** the agreed monthly
+  Abschlag (`accounts.abschlag_ct`); *wenn keine Abschläge vereinbart sind*
+  (`abschlag_ct = 0`), ≥ **⅙** of the most recent expected annual bill
   (`jahresabschluss_runs.annual_bill_ct`).
 
-When **neither** an Abschlag nor a prior Jahresrechnung is on record the Satz-1
-gate cannot be established and the case is **conservatively excluded** — mako
-never disconnects without a provable consumption basis. Populate `abschlag_ct`
-(set at contract start / recalibrated by the Jahresabschluss) to arm the sequence.
+With **neither** an Abschlag nor a prior Jahresrechnung on record the Satz-1 gate
+cannot be established and the case is **conservatively excluded** — mako never
+disconnects without a provable consumption basis.
+
+Two things about *what* is measured, both of which were wrong before:
+
+**The Zahlungsverzug is `accounts.verzug_ct`** — a second ledger-derived cache
+beside `balance_ct`, and deliberately a different number: the sum of open debit
+*residuals* after FIFO clearing (so an unallocated credit cannot net an unpaid
+invoice out of sight), less Verzugsschaden, less open Forderungseinwände. It is
+not the dunning case's `amount_due_ct`, which is frozen when the case opens and
+survives every payment made afterwards. Four weeks pass between the Androhung and
+the Ankündigung and eight Werktage between the Ankündigung and the order; those
+are exactly the windows the notices give the customer to pay, so a gate evaluated
+once at the start measures the wrong thing by the time it matters.
+
+The cache is set absolutely, never incremented — the same discipline
+`balance_ct` follows, for the same reason: a cache that is added to can drift,
+and this one decides whether a household is disconnected. It is refreshed on
+every posting (after the clearing, because it reads residuals), on every
+objection, and once per open case at the start of each dunning run.
+
+**Mahngebühren and Verzugszinsen are excluded.** They are Verzugsschaden, not the
+supply debt § 41f Abs. 3 measures. Counting them would let the dunning process
+manufacture its own justification: a customer five euro short of the 100-euro
+floor crosses it on the Stufe-2 fee, charged *because* they are being dunned.
+
+### A settled receivable stands the sequence down
+
+The dunning worker's first step closes every open case whose account no longer
+owes anything, clearing its §§41f/41g state so a later default starts again at
+the Androhung with its own Frist. Without it the escalation chain runs on
+`due_date` alone and walks a paid-up customer into the disconnection sequence;
+`paying_the_bill_stands_the_disconnection_sequence_down` and
+`dunning_fees_do_not_count_toward_the_disconnection_threshold` pin it.
 
 ### No ERP webhook → notice phases paused
 
@@ -329,9 +413,23 @@ progress to a Sperrauftrag without its notices having been sent. (Phase 3 needs
 no ERP, but has no candidates until Phase 2 has run, so the sequence stays inert
 until a webhook is set.)
 
+### §41f Abs. 6 — what the notices must say
+
+Both the Androhung and the Ankündigung must state, klar und deutlich, the
+**Grund** of the interruption and the **voraussichtlichen Unterbrechungs- und
+Wiederherstellungskosten**. Both travel in the CloudEvent payload the ERP renders
+into the letter, from `sperrkosten_ct` / `entsperrkosten_ct`; §41f Abs. 7 S. 2
+permits a Pauschale provided it stays nachvollziehbar and does not exceed the
+actual cost. Leaving them unset sends a notice claiming the disconnection is
+free. The Androhung additionally carries the §41f Abs. 4 list of no-extra-cost
+avoidance options.
+
 > **Follow-up (documented):** the §41g Sozialhilfeträger consent flow (Abs. 3–6)
-> and the Abwendungsvereinbarung Ratenzahlung content (6–18 / 12–24 months) are
-> ERP concerns triggered off the emitted CloudEvents.
+> is an ERP concern triggered off the emitted CloudEvents — including the rule
+> that disconnection may then happen no earlier than 8 Werktage after the
+> authority was notified (Abs. 4). The Abwendungsvereinbarung's instalment terms
+> (zinsfrei, 6–18 months, 12–24 above 300 EUR) ride on
+> `de.accounting.abwendung.angeboten`.
 
 ## Metrics
 
@@ -853,7 +951,7 @@ Each Buchungsart maps to **one balanced entry** with two legs: the per-Marktloka
 **Kontokorrent** (`Kontokorrent:<lf_mp>:<malo>`, an Asset leaf — the SKR 1400
 Debitoren subledger, whose signed net *is* the customer balance) against a GL contra
 leaf. The customer leg's direction follows the sign of the amount, so the Kontokorrent
-net reproduces the old `balance_ct` exactly, and the GL leaves roll up to the SKR trial
+net reproduces `balance_ct` exactly, and the GL leaves roll up to the SKR trial
 balance ([`ledger::Chart`](https://github.com/hupe1980/mako/blob/main/services/accountingd/src/ledger.rs)):
 
 | `entry_type` | Customer leg (Kontokorrent) | GL contra |
@@ -1455,7 +1553,10 @@ dunning_grace_days    = 30
 dunning_auto_enabled  = true
 
 # §§41f/41g EnWG disconnection sequence (runs after escalation to Mahnstufe 3)
-sperrd_url                        = "http://sperrd:8780"
+makod_url                         = "http://makod:8080"
+makod_api_key                     = "env:ACCOUNTINGD_MAKOD_API_KEY"
+sperrkosten_ct                    = 4500   # §41f Abs. 6 — voraussichtliche Kosten
+entsperrkosten_ct                 = 4500
 sperrung_threshold_ct             = 10000  # §41f Abs. 3 S. 2: arrears ≥ 100 EUR
 sperrandrohung_frist_days         = 28     # §41f Abs. 1: Androhung → Ankündigung, 4 Wochen
 sperrankuendigung_frist_werktage  = 8      # §41f Abs. 5: Ankündigung → Sperrung, 8 Werktage im Voraus

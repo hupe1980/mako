@@ -423,7 +423,7 @@ const PROCESSD_AGENT: Specialist = Specialist {
 ))]
 const SPERRD_AGENT: Specialist = Specialist {
     name: "sperrd-agent",
-    specialty: "Sperrung execution SLA monitor. Tracks sperr_orders lifecycle (pending→executed/failed/cancelled), flags overdue orders that risk BK6-22-024 compliance, and diagnoses IFTSTA 21039 dispatch failures.",
+    specialty: "Sperr-/Entsperrauftrag execution monitor (NB role). Tracks the queue (pending→executed/failed/cancelled), flags orders past the date the Lieferant asked for, and diagnoses IFTSTA 21039 dispatches that never reached the LF.",
     trigger_patterns: &[
         mako_events::accounting::SPERRAUFTRAG,
         "de.sperr.*",
@@ -704,18 +704,11 @@ mod trigger_contract_tests {
     /// Each entry is a subscription placed ahead of the emitter, so the glob is
     /// live but nothing fires it. Removing an entry here is the last step of
     /// wiring the emitter, not a chore.
-    const UNEMITTED_PATTERNS: &[(&str, &str)] = &[
-        (
-            "de.sperr.*",
-            "sperrd does not emit a concrete de.sperr.* type yet; \
-             mako-events documents the gap and the ROADMAP tracks it",
-        ),
-        (
-            "de.eeg.compliance.*",
-            "einsd does not emit a concrete de.eeg.compliance.* type yet; \
+    const UNEMITTED_PATTERNS: &[(&str, &str)] = &[(
+        "de.eeg.compliance.*",
+        "einsd does not emit a concrete de.eeg.compliance.* type yet; \
              mako-events documents the gap on the `eeg` module",
-        ),
-    ];
+    )];
 
     /// The concrete event types named under `## TRIGGERED BY` in the
     /// specialist's **manifest** prompt.

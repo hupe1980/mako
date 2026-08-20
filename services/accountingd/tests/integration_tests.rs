@@ -134,8 +134,10 @@ fn test_pain008_frst_rcur_separation() {
             kontoinhaber: Some("Test Kunde".into()),
             mandatsref: format!("REF-{seq}-{}", &Uuid::new_v4().simple().to_string()[..8]),
             sequence_type: seq.to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
             revoked_at: None,
+            last_presented_at: None,
             sparte: Some("STROM".into()),
             debtor_town: Some("Berlin".into()),
             debtor_country: Some("DE".into()),
@@ -308,8 +310,10 @@ fn test_pain008_emits_configured_namespace() {
         kontoinhaber: Some("Test Kunde".into()),
         mandatsref: "REF-SCHEMA-01".into(),
         sequence_type: "RCUR".into(),
+        scheme: "CORE".to_owned(),
         signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
         revoked_at: None,
+        last_presented_at: None,
         sparte: None,
         debtor_town: None,
         debtor_country: None,
@@ -443,8 +447,10 @@ fn pain008_emits_structured_addresses_on_both_sides() {
         kontoinhaber: Some("Erika Mustermann".into()),
         mandatsref: "REF-ADDR-01".into(),
         sequence_type: "RCUR".into(),
+        scheme: "CORE".to_owned(),
         signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
         revoked_at: None,
+        last_presented_at: None,
         sparte: Some("GAS".into()),
         debtor_town: Some("Hamburg".into()),
         debtor_country: Some("DE".into()),
@@ -513,8 +519,10 @@ fn pain008_legacy_dk_schema_omits_the_address_rather_than_failing() {
         kontoinhaber: Some("Erika Mustermann".into()),
         mandatsref: "REF-ADDR-02".into(),
         sequence_type: "RCUR".into(),
+        scheme: "CORE".to_owned(),
         signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
         revoked_at: None,
+        last_presented_at: None,
         sparte: Some("GAS".into()),
         debtor_town: Some("Hamburg".into()),
         debtor_country: Some("DE".into()),
@@ -570,8 +578,10 @@ fn pain008_groups_carry_distinct_payment_info_ids() {
             kontoinhaber: Some("Test Kunde".into()),
             mandatsref: refn.to_owned(),
             sequence_type: seq.to_owned(),
+            scheme: "CORE".to_owned(),
             signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
             revoked_at: None,
+            last_presented_at: None,
             sparte: None,
             debtor_town: None,
             debtor_country: None,
@@ -594,14 +604,18 @@ fn pain008_groups_carry_distinct_payment_info_ids() {
     )
     .expect("build_pain_008 should succeed");
 
+    // One `PmtInf` per (scheme, SequenceType) — the DK subset makes
+    // `SvcLvl`/`LclInstrm`/`SeqTp` an all-or-nothing block, and CORE and B2B are
+    // different rulebooks with different debtor refund rights.
     assert_eq!(
         run.groups[0].payment_info_id,
-        format!("{}-FRST", run.msg_id)
+        format!("{}-CORE-FRST", run.msg_id)
     );
     assert_eq!(
         run.groups[1].payment_info_id,
-        format!("{}-RCUR", run.msg_id)
+        format!("{}-CORE-RCUR", run.msg_id)
     );
+    assert!(run.groups.iter().all(|g| g.scheme == "CORE"));
     assert_ne!(run.groups[0].payment_info_id, run.groups[1].payment_info_id);
 
     // The per-entry breakdown is what `sepa_collection_entries` persists, and
@@ -668,6 +682,7 @@ fn sample_reversal<'a>(reversed_amount_ct: Option<i64>) -> accountingd::sepa::Re
         mandate_signed_at: time::Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
         collection_date: time::Date::from_calendar_date(2026, time::Month::July, 25).unwrap(),
         sequence_type: "RCUR",
+        scheme: "CORE",
         debtor_name: "Erika Mustermann",
         debtor_iban: "DE89370400440532013000",
         debtor_bic: None,
@@ -960,8 +975,10 @@ fn pain008_emits_the_purpose_code_for_the_sparte() {
             kontoinhaber: Some("Test Kunde".into()),
             mandatsref: refn.to_owned(),
             sequence_type: "RCUR".into(),
+            scheme: "CORE".to_owned(),
             signed_at: Date::from_calendar_date(2024, time::Month::January, 1).unwrap(),
             revoked_at: None,
+            last_presented_at: None,
             sparte: sparte.map(ToOwned::to_owned),
             debtor_town: None,
             debtor_country: None,

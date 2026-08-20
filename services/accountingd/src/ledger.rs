@@ -4,7 +4,7 @@
 //! Massenkontokorrent, SKR 03/04, EEG payouts, dunning) and the domain-neutral
 //! [`doubleentry`] kernel. accountingd owns the **chart of accounts** and the
 //! **`entry_type` → postings** mapping; `doubleentry` owns everything a ledger
-//! must guarantee and accountingd used to hand-roll: balances, immutability, an
+//! must guarantee: balances, immutability, an
 //! append-only Merkle log with inclusion/consistency proofs, period seals
 //! (GoBD Unveränderbarkeit / § 146 AO), open-item clearing, and store-level
 //! idempotency.
@@ -15,7 +15,7 @@
 //!
 //! - the customer/counterparty **Kontokorrent** — one leaf account per
 //!   Marktlokation (`Kontokorrent:<lf_mp>:<malo>`, [`AccountKind::Asset`]). Its
-//!   signed net *is* the old `accounts.balance_ct`: a debit balance means the
+//!   signed net *is* `accounts.balance_ct`: a debit balance means the
 //!   customer owes, a credit balance means they are owed (EEG operators, refunds).
 //! - a **general-ledger** contra account, one per `entry_type`
 //!   ([`Chart`]) — Erlöse, Bank, Mahnerlöse, EEG-Aufwand.
@@ -117,8 +117,13 @@ pub struct Chart {
     pub bank: AccountId,
     /// SKR 4000 — Energieerlöse. The revenue contra for invoices and settlements.
     pub erloese: AccountId,
-    /// SKR 4003 — Mahngebühren / Verzugszinsen.
+    /// SKR 4003 — Mahngebühren. Fees charged for the dunning process itself.
     pub mahnerloese: AccountId,
+    /// SKR 2650 — Zinserträge. **Not** the same account as Mahngebühren:
+    /// § 275 HGB puts *Zinsen und ähnliche Erträge* in their own P&L line,
+    /// separate from sonstige betriebliche Erträge. Verzugszinsen are interest;
+    /// a Mahngebühr is a fee for an administrative act.
+    pub zinsertrag: AccountId,
     /// EEG feed-in expense (Aufwand) — the contra for EEG Gutschrift / Marktprämie.
     pub eeg_aufwand: AccountId,
     /// Refund payable — the contra when a Jahresabschluss books a customer refund
@@ -132,7 +137,7 @@ impl Chart {
     ///
     /// The customer Kontokorrent is always the other leg; its direction follows
     /// the sign of `amount_ct` (positive → debit customer, negative → credit),
-    /// which is what makes the Kontokorrent net equal the old `balance_ct`.
+    /// which is what makes the Kontokorrent net equal `balance_ct`.
     #[must_use]
     fn contra(&self, entry_type: &str) -> AccountId {
         match entry_type {
@@ -142,6 +147,7 @@ impl Chart {
             // it undoes, in the opposite direction.
             "ZAHLUNG" | "ABSCHLAG" | "BANKRUECKLAST" | "SEPA_STORNO" => self.bank,
             "MAHNGEBUEHR" => self.mahnerloese,
+            "VERZUGSZINSEN" => self.zinsertrag,
             "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => self.eeg_aufwand,
             // Erstattung: zero the customer credit against a refund payable.
             "JAHRESABSCHLUSS" => self.erstattung,
@@ -367,6 +373,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
             bank: ensure(&mut registry, "Aktiva:Bank", AccountKind::Asset)?,
             erloese: ensure(&mut registry, "Ertrag:Energieerloese", AccountKind::Income)?,
             mahnerloese: ensure(&mut registry, "Ertrag:Mahnerloese", AccountKind::Income)?,
+            zinsertrag: ensure(&mut registry, "Ertrag:Zinsertraege", AccountKind::Income)?,
             eeg_aufwand: ensure(
                 &mut registry,
                 "Aufwand:EEG-Einspeiseverguetung",
@@ -929,7 +936,7 @@ impl<S: LedgerStore<P>> Ledger<S> {
     ///
     /// The value is the signed net on the Kontokorrent (debit positive, credit
     /// negative), so `RECHNUNG` sums positive and `ABSCHLAG` negative — matching
-    /// the old `SUM(amount_ct)` semantics. Bounded: one customer's yearly entries.
+    /// `SUM(amount_ct)` semantics. Bounded: one customer's yearly entries.
     ///
     /// # Errors
     ///

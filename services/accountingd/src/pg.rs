@@ -11,8 +11,7 @@ use crate::ledger::{PgLedger, PostEntry};
 /// Post a money movement through the doubleentry ledger, then refresh the
 /// `accounts.balance_ct` read cache to the authoritative ledger net.
 ///
-/// This is the single money choke point (replacing the old `write_entry` +
-/// `journal_lines` machinery). doubleentry is the authoritative, tamper-evident
+/// The single money choke point. doubleentry is the authoritative, tamper-evident
 /// system of record; `balance_ct` is a cache set **absolutely** from the ledger
 /// net (never incremented, so it cannot drift by arithmetic).
 ///
@@ -89,6 +88,13 @@ pub async fn post_entry(
         .await
     {
         tracing::warn!(malo = %malo_id, error = %e, "post_entry: FIFO clearing skipped");
+    }
+
+    // …and only then the Verzug cache, which reads *residuals* and so must run
+    // after the clearing. (Ordering does not matter for `balance_ct`: clearing
+    // never changes the net.)
+    if let Err(e) = refresh_verzug(ledger, pool, tenant, malo_id, lf_mp_id).await {
+        tracing::warn!(malo = %malo_id, error = %e, "post_entry: Verzug cache refresh failed");
     }
 
     Ok(*posted.id.as_uuid())
@@ -305,7 +311,6 @@ pub async fn update_account(
 ) -> anyhow::Result<()> {
     let iban_hash = account_iban_hash(req.iban.as_deref(), iban_key);
     sqlx::query(
-        // add tenant parameter — previously missing, allowing cross-tenant modification.
         r"UPDATE accounts SET
               iban        = COALESCE($3, iban),
               iban_hash   = COALESCE($7, iban_hash),
@@ -497,8 +502,9 @@ pub async fn persist_sepa_collection(
         let inserted = sqlx::query(
             r"INSERT INTO sepa_collection_entries
                   (run_id, tenant, mandate_id, account_id, mandatsref, end_to_end_id,
-                   payment_info_id, sequence_type, amount_ct)
-              SELECT $1, $2, sm.mandate_id, sm.account_id, $4, $5, $6, $7, $8
+                   payment_info_id, sequence_type, scheme, amount_ct)
+              SELECT $1, $2, sm.mandate_id, sm.account_id, $4, $5, $6, $7,
+                     sm.scheme, $8
               FROM sepa_mandates sm
               WHERE sm.mandate_id = $3",
         )
@@ -527,6 +533,13 @@ pub async fn persist_sepa_collection(
         }
     }
 
+    // EPC dormancy: the 36-month clock resets on **presentation**, so it is
+    // stamped here — when the collection is written into the run — and not when
+    // the bank confirms settlement. A mandate whose only recent collection was
+    // rejected is still live, and stamping on settlement would retire it early.
+    let presented: Vec<Uuid> = run.entries.iter().map(|e| e.mandate_id).collect();
+    mark_mandates_presented(&mut *tx, tenant, &presented).await?;
+
     tx.commit()
         .await
         .context("persist_sepa_collection: commit")?;
@@ -550,6 +563,9 @@ pub struct CollectionEntryRow {
     pub end_to_end_id: String,
     pub payment_info_id: String,
     pub sequence_type: String,
+    /// `CORE` or `B2B`, as submitted. A pain.007 restates the original exactly,
+    /// so it reads this rather than the mandate's current scheme.
+    pub scheme: String,
     pub amount_ct: i64,
     pub status: String,
     pub status_reason: Option<String>,
@@ -568,7 +584,7 @@ pub struct CollectionEntryRow {
 const COLLECTION_ENTRY_SELECT: &str = r"
     SELECT ce.entry_id, ce.run_id, ce.tenant, ce.mandate_id, ce.account_id,
            ce.mandatsref, ce.end_to_end_id, ce.payment_info_id, ce.sequence_type,
-           ce.amount_ct, ce.status, ce.status_reason,
+           ce.scheme, ce.amount_ct, ce.status, ce.status_reason,
            r.msg_id, r.collection_date,
            sm.iban          AS debtor_iban,
            sm.bic           AS debtor_bic,
@@ -826,6 +842,9 @@ pub struct CollectionEntrySummary {
     pub end_to_end_id: String,
     pub payment_info_id: String,
     pub sequence_type: String,
+    /// `CORE` or `B2B`, as submitted. A pain.007 restates the original exactly,
+    /// so it reads this rather than the mandate's current scheme.
+    pub scheme: String,
     pub amount_ct: i64,
     pub status: String,
     pub status_reason: Option<String>,
@@ -842,7 +861,7 @@ pub async fn list_collection_entries(
 ) -> anyhow::Result<Vec<CollectionEntrySummary>> {
     sqlx::query_as::<_, CollectionEntrySummary>(
         r"SELECT ce.entry_id, a.malo_id, ce.mandatsref, ce.end_to_end_id,
-                 ce.payment_info_id, ce.sequence_type, ce.amount_ct,
+                 ce.payment_info_id, ce.sequence_type, ce.scheme, ce.amount_ct,
                  ce.status, ce.status_reason, r.collection_date
           FROM sepa_collection_entries ce
           JOIN sepa_collection_runs r ON r.run_id = ce.run_id
@@ -1131,11 +1150,9 @@ pub struct LedgerEntryRow {
     pub created_at: OffsetDateTime,
 }
 
-// The old `write_entry` / `write_entry_with_value_date` (which INSERTed into
-// `ledger_entries`, incremented the `balance_ct` cache, and posted the
-// `journal_lines` SKR shadow) are gone. Every money movement now flows through
-// `post_entry` above → the doubleentry ledger, which is balanced, immutable,
-// provable, and idempotent, with the balance cache set absolutely from the ledger.
+// Every money movement flows through `post_entry` above → the doubleentry
+// ledger: balanced, immutable, provable and idempotent, with the balance cache
+// set absolutely from the ledger.
 
 /// One movement on a customer's Kontokorrent, for display — derived from the
 /// doubleentry statement (the authoritative log), newest first.
@@ -1210,8 +1227,16 @@ pub struct SepaMandateRow {
     pub kontoinhaber: Option<String>,
     pub mandatsref: String,
     pub sequence_type: String,
+    /// `CORE` or `B2B`. Two different schemes, two different rulebooks: a CORE
+    /// debtor has an unconditional 8-week refund right, a B2B debtor has none
+    /// and their bank must hold the mandate. Collecting a B2B mandate as CORE
+    /// hands the debtor a right their mandate does not carry.
+    pub scheme: String,
     pub signed_at: Date,
     pub revoked_at: Option<Date>,
+    /// EPC dormancy clock — see [`MANDATE_DORMANCY_MONTHS`].
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub last_presented_at: Option<OffsetDateTime>,
     /// The account's BO4E Sparte, joined in — drives the ISO 20022 `Purp/Cd`
     /// on the collection. `None` for an account that has never been billed.
     pub sparte: Option<String>,
@@ -1253,11 +1278,24 @@ pub struct CreateMandateRequest {
     pub kontoinhaber: Option<String>,
     pub mandatsref: String,
     pub sequence_type: String,
+    /// `CORE` (default) or `B2B`.
+    ///
+    /// Not a formatting detail. A CORE debtor has an unconditional 8-week refund
+    /// right; a B2B debtor has none, and their bank must hold the mandate before
+    /// a collection will clear. Collecting a B2B mandate under CORE — which is
+    /// what happened while this was unmodelled and every group was hard-coded to
+    /// CORE — grants the debtor a right their mandate does not carry.
+    #[serde(default = "default_scheme")]
+    pub scheme: String,
     pub signed_at: String,
     /// Debtor postal address (`Dbtr/PstlAdr`). Optional until 15 November 2026,
     /// after which the EPC schemes require `town` + `country`.
     #[serde(default)]
     pub debtor_address: crate::sepa::AddressParts,
+}
+
+fn default_scheme() -> String {
+    "CORE".to_owned()
 }
 
 pub async fn create_mandate(
@@ -1273,17 +1311,18 @@ pub async fn create_mandate(
     let account_id = upsert_account(pool, &req.malo_id, &req.lf_mp_id, tenant).await?;
 
     let row = sqlx::query(
-        // ON CONFLICT uses (tenant, mandatsref) per the schema unique index,
-        // not the old global UNIQUE (mandatsref). This prevents cross-tenant collisions.
+        // ON CONFLICT on (tenant, mandatsref): unique per tenant, so two tenants
+        // may use the same Mandatsreferenz without colliding.
         r"INSERT INTO sepa_mandates
-              (account_id, tenant, iban, bic, kontoinhaber, mandatsref, sequence_type, signed_at,
+              (account_id, tenant, iban, bic, kontoinhaber, mandatsref, sequence_type, scheme, signed_at,
                debtor_town, debtor_country, debtor_street, debtor_building_number,
                debtor_post_code, debtor_country_subdivision)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
           ON CONFLICT (tenant, mandatsref) DO UPDATE
           SET iban = EXCLUDED.iban, bic = EXCLUDED.bic,
               kontoinhaber = EXCLUDED.kontoinhaber,
               sequence_type = EXCLUDED.sequence_type,
+              scheme = EXCLUDED.scheme,
               signed_at = EXCLUDED.signed_at,
               debtor_town = EXCLUDED.debtor_town,
               debtor_country = EXCLUDED.debtor_country,
@@ -1301,6 +1340,7 @@ pub async fn create_mandate(
     .bind(&req.kontoinhaber)
     .bind(&req.mandatsref)
     .bind(&req.sequence_type)
+    .bind(req.scheme.to_uppercase())
     .bind(signed_at)
     .bind(&req.debtor_address.town)
     .bind(&req.debtor_address.country)
@@ -1382,6 +1422,11 @@ pub async fn list_active_mandates(
         r"SELECT sm.*, a.sparte FROM sepa_mandates sm
           JOIN accounts a ON a.account_id = sm.account_id
           WHERE sm.revoked_at IS NULL AND a.tenant = $1
+            -- EPC SDD Core Rulebook: a mandate unused for 36 consecutive months
+            -- is dormant and may not be collected on. `last_presented_at IS NULL`
+            -- is a mandate never yet used, which is not dormant — it is FRST.
+            AND (sm.last_presented_at IS NULL
+                 OR sm.last_presented_at > now() - INTERVAL '36 months')
           ORDER BY sm.updated_at DESC
           LIMIT $2",
     )
@@ -1390,6 +1435,70 @@ pub async fn list_active_mandates(
     .fetch_all(pool)
     .await
     .context("list_active_mandates")
+}
+
+/// How long an unused SEPA mandate stays collectable (EPC SDD Core Rulebook).
+pub const MANDATE_DORMANCY_MONTHS: i64 = 36;
+
+/// Stamp the mandates a collection run just presented.
+///
+/// **Presentation, not settlement.** The rulebook resets the 36-month dormancy
+/// clock on every presentation, including collections that are later rejected or
+/// refunded — so a mandate whose only recent collection bounced is still live,
+/// and stamping on settlement would retire it early.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_mandates_presented(
+    exec: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    mandate_ids: &[Uuid],
+) -> anyhow::Result<u64> {
+    if mandate_ids.is_empty() {
+        return Ok(0);
+    }
+    Ok(sqlx::query(
+        "UPDATE sepa_mandates SET last_presented_at = now(), updated_at = now() \
+         WHERE tenant = $1 AND mandate_id = ANY($2)",
+    )
+    .bind(tenant)
+    .bind(mandate_ids)
+    .execute(exec)
+    .await
+    .context("mark_mandates_presented")?
+    .rows_affected())
+}
+
+/// Mandates at or approaching the 36-month dormancy limit.
+///
+/// `within_days` looks ahead: a mandate that will go dormant next month is worth
+/// knowing about while the customer can still be asked for a new one. A mandate
+/// past the limit is already uncollectable and must be cancelled — the banks do
+/// not enforce this, so the first symptom of ignoring it is a rejected batch.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_dormant_mandates(
+    pool: &PgPool,
+    tenant: &str,
+    within_days: i64,
+) -> anyhow::Result<Vec<SepaMandateRow>> {
+    sqlx::query_as::<_, SepaMandateRow>(
+        r"SELECT sm.*, a.sparte FROM sepa_mandates sm
+          JOIN accounts a ON a.account_id = sm.account_id
+          WHERE sm.revoked_at IS NULL AND a.tenant = $1
+            AND sm.last_presented_at IS NOT NULL
+            AND sm.last_presented_at
+                <= now() - make_interval(months => 36) + make_interval(days => $2::int)
+          ORDER BY sm.last_presented_at",
+    )
+    .bind(tenant)
+    .bind(within_days)
+    .fetch_all(pool)
+    .await
+    .context("list_dormant_mandates")
 }
 
 // ── Dunning cases ─────────────────────────────────────────────────────────────
@@ -1514,8 +1623,10 @@ pub async fn list_accounts_with_mandates(
             kontoinhaber: r.try_get("kontoinhaber")?,
             mandatsref: r.try_get("mandatsref")?,
             sequence_type: r.try_get("sequence_type")?,
+            scheme: r.try_get("scheme")?,
             signed_at: r.try_get("signed_at")?,
             revoked_at: r.try_get("revoked_at")?,
+            last_presented_at: r.try_get("last_presented_at")?,
             sparte: r.try_get("sparte")?,
             debtor_town: r.try_get("debtor_town")?,
             debtor_country: r.try_get("debtor_country")?,
@@ -1627,8 +1738,10 @@ pub async fn find_accounts_due_for_sepa(
             kontoinhaber: r.try_get("kontoinhaber")?,
             mandatsref: r.try_get("mandatsref")?,
             sequence_type: r.try_get("sequence_type")?,
+            scheme: r.try_get("scheme")?,
             signed_at: r.try_get("signed_at")?,
             revoked_at: r.try_get("revoked_at")?,
+            last_presented_at: r.try_get("last_presented_at")?,
             sparte: r.try_get("sparte")?,
             debtor_town: r.try_get("debtor_town")?,
             debtor_country: r.try_get("debtor_country")?,
@@ -2003,28 +2116,33 @@ pub struct AutoDunningResult {
 
 /// Run the automatic Mahnwesen escalation engine for one tenant.
 ///
-/// This is the **dunning rule engine**. It evaluates every active account
-/// and creates / escalates dunning cases according to the following rules:
+/// ## Rules, in order
 ///
-/// ## Rules
+/// | Step | Condition | Action |
+/// |---|---|---|
+/// | 0a | every account with an open case | re-derive `verzug_ct` from the ledger |
+/// | 0b | `verzug_ct <= 0` | close the case and clear its §§41f/41g phase marks |
+/// | 1 | `balance_ct > 0`, oldest RECHNUNG older than `grace_days`, no open case | open Mahnstufe 1 |
+/// | 2 | open Mahnstufe 1, `due_date < today`, `balance_ct > 0` | escalate to Mahnstufe 2 |
+/// | 3 | open Mahnstufe 2, `due_date < today`, `balance_ct > 0` | escalate to Mahnstufe 3 |
 ///
-/// | Condition | Action |
-/// |---|---|
-/// | `balance_ct > 0` AND oldest RECHNUNG > `grace_days` old AND no open Mahnstufe 1 | Create Mahnstufe 1 |
-/// | Open Mahnstufe 1 AND `due_date < today` | Escalate to Mahnstufe 2 |
-/// | Open Mahnstufe 2 AND `due_date < today` | Escalate to Mahnstufe 3 + Sperrauftrag |
+/// Reaching Mahnstufe 3 does **not** order a disconnection. The §§41f/41g
+/// sequence runs separately ([`crate::sperr::run_sperr_sequence`]) and applies
+/// its own Abs. 3 gates to `verzug_ct` at every phase.
+///
+/// Each escalation demands what is open *now* (`balance_ct`), not the previous
+/// case's frozen `amount_due_ct`.
 ///
 /// ## Idempotency
 ///
-/// Inserts a record into `auto_dunning_runs (tenant, run_date)` with a UNIQUE
-/// constraint. If the worker crashes and restarts the same day, the second run is
-/// a no-op.
+/// `auto_dunning_runs (tenant, run_date)` is UNIQUE, so a crash and restart on
+/// the same day makes the second run a no-op.
 ///
-/// ## Fee creation
+/// ## Fees
 ///
-/// When a new Mahnstufe 1/2/3 is created, the corresponding Mahngebühr (from
-/// `dunning_fee_stufe{1,2,3}_ct`) is posted as a `MAHNGEBUEHR` ledger entry if > 0.
-/// This updates `balance_ct` atomically (via `write_entry`).
+/// A new Mahnstufe posts its `dunning_fee_stufe{1,2,3}_ct` as a `MAHNGEBUEHR`
+/// entry when > 0, keyed per (malo, Stufe, run-date) so a same-day re-run does
+/// not double-charge. Fees are Verzugsschaden and stay out of `verzug_ct`.
 /// Try to acquire a session-level PostgreSQL advisory lock for a worker.
 ///
 /// Returns the held connection when the lock is won (a second replica gets
@@ -2159,32 +2277,90 @@ pub async fn list_androhung_candidates(
     tenant: &str,
     threshold_ct: i64,
 ) -> anyhow::Result<Vec<SperrCandidate>> {
-    let rows = sqlx::query(
-        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+    phase_candidates(pool, tenant, threshold_ct, PHASE_1_ANDROHUNG, &[]).await
+}
+
+/// The § 41f Abs. 3 gates and the § 41g halt, as one SQL fragment shared by every
+/// phase.
+///
+/// Every phase applies the *same* test: the gates are preconditions for the
+/// interruption, not for opening the sequence, so a case that stops qualifying
+/// stops advancing. The four weeks and eight Werktage between the phases are
+/// exactly the windows the notices give the customer to pay.
+///
+/// * `a.verzug_ct >= $2` — **Abs. 3 S. 2**, the 100 EUR floor.
+/// * `a.verzug_ct >= (2 × Abschlag | ⅙ Jahresrechnung)` — **Abs. 3 S. 1**, the
+///   consumption relation. `NULL` when neither is on record, and `>= NULL` is
+///   `NULL`, so the case drops out: the statute makes the relation a
+///   precondition, not a default.
+/// * `NOT EXISTS (an active dunning lock)` — **§ 41g Abs. 1 S. 10**,
+///   **§ 41f Abs. 1 S. 2** and **Abs. 2**, whichever applies.
+///
+/// `verzug_ct` is the ledger-derived cache: open debit residuals, less
+/// Verzugsschaden, less the Abs. 3 S. 3–5 objections. See [`refresh_verzug`].
+const ABS3_GATES: &str = r"
+            AND a.verzug_ct >= $2
+            AND a.verzug_ct >= (
+                  CASE
+                    WHEN a.abschlag_ct > 0 THEN 2 * a.abschlag_ct
+                    ELSE (SELECT jr.annual_bill_ct / 6
+                          FROM jahresabschluss_runs jr
+                          WHERE jr.tenant = a.tenant AND jr.malo_id = a.malo_id
+                          ORDER BY jr.billing_year DESC
+                          LIMIT 1)
+                  END)
+            AND NOT EXISTS (
+                  SELECT 1 FROM dunning_locks dl
+                  WHERE dl.account_id = a.account_id
+                    AND dl.aufgehoben_at IS NULL
+                    AND dl.valid_from <= CURRENT_DATE
+                    AND (dl.valid_to IS NULL OR dl.valid_to >= CURRENT_DATE))";
+
+/// Phase 1 — no Androhung has gone out yet.
+const PHASE_1_ANDROHUNG: &str = "AND dc.sperrandrohung_at IS NULL";
+
+/// Phase 2 — the Androhung's 4-Wochen-Frist has elapsed and no Ankündigung has
+/// gone out. `$3` is the Frist in calendar days.
+const PHASE_2_ANKUENDIGUNG: &str = "AND dc.sperrandrohung_at IS NOT NULL \
+     AND dc.sperrankuendigung_at IS NULL \
+     AND dc.sperrandrohung_at + make_interval(days => $3::int) <= now()";
+
+/// Phase 3 — the announced date has arrived and no order has been placed.
+const PHASE_3_SPERRAUFTRAG: &str = "AND dc.sperrankuendigung_at IS NOT NULL \
+     AND dc.sperrauftrag_ce_id IS NULL \
+     AND dc.geplantes_sperrdatum IS NOT NULL \
+     AND dc.geplantes_sperrdatum <= CURRENT_DATE";
+
+/// Run one phase's candidate query.
+///
+/// `extra_binds` are appended after `$1` (tenant) and `$2` (floor), so a phase
+/// that needs a Frist binds it as `$3`.
+async fn phase_candidates(
+    pool: &PgPool,
+    tenant: &str,
+    threshold_ct: i64,
+    phase: &str,
+    extra_binds: &[i64],
+) -> anyhow::Result<Vec<SperrCandidate>> {
+    let sql = format!(
+        r"SELECT dc.id, a.malo_id, a.lf_mp_id, a.verzug_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
             AND dc.stufe = 3
             AND dc.resolved_at IS NULL
-            AND dc.sperrandrohung_at IS NULL
-            AND dc.abwendung_vereinbart_at IS NULL
-            AND dc.unverhaeltnismaessig_seit IS NULL
-            AND dc.amount_due_ct >= $2                       -- §41f Abs. 3 S. 2: ≥ 100 EUR floor
-            AND dc.amount_due_ct >= (                        -- §41f Abs. 3 S. 1: consumption gate
-                  CASE
-                    WHEN a.abschlag_ct > 0 THEN 2 * a.abschlag_ct
-                    ELSE (SELECT jr.annual_bill_ct / 6
-                          FROM jahresabschluss_runs jr
-                          WHERE jr.tenant = dc.tenant AND jr.malo_id = a.malo_id
-                          ORDER BY jr.billing_year DESC
-                          LIMIT 1)
-                  END)",
-    )
-    .bind(tenant)
-    .bind(threshold_ct)
-    .fetch_all(pool)
-    .await
-    .context("list_androhung_candidates")?;
+            {phase}
+            {ABS3_GATES}
+          ORDER BY dc.issued_at"
+    );
+    let mut q = sqlx::query(&sql).bind(tenant).bind(threshold_ct);
+    for b in extra_binds {
+        q = q.bind(*b);
+    }
+    let rows = q
+        .fetch_all(pool)
+        .await
+        .with_context(|| format!("phase_candidates: {phase}"))?;
     Ok(to_sperr_candidates(rows))
 }
 
@@ -2218,26 +2394,16 @@ pub async fn list_ankuendigung_candidates(
     pool: &PgPool,
     tenant: &str,
     androhung_frist_days: i64,
+    threshold_ct: i64,
 ) -> anyhow::Result<Vec<SperrCandidate>> {
-    let rows = sqlx::query(
-        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
-          FROM dunning_cases dc
-          JOIN accounts a ON a.account_id = dc.account_id
-          WHERE dc.tenant = $1
-            AND dc.stufe = 3
-            AND dc.resolved_at IS NULL
-            AND dc.abwendung_vereinbart_at IS NULL
-            AND dc.unverhaeltnismaessig_seit IS NULL
-            AND dc.sperrandrohung_at IS NOT NULL
-            AND dc.sperrankuendigung_at IS NULL
-            AND dc.sperrandrohung_at + make_interval(days => $2::int) <= now()",
+    phase_candidates(
+        pool,
+        tenant,
+        threshold_ct,
+        PHASE_2_ANKUENDIGUNG,
+        &[androhung_frist_days],
     )
-    .bind(tenant)
-    .bind(androhung_frist_days)
-    .fetch_all(pool)
     .await
-    .context("list_ankuendigung_candidates")?;
-    Ok(to_sperr_candidates(rows))
 }
 
 /// Record the Sperrankündigung and the concrete planned disconnection date
@@ -2272,80 +2438,530 @@ pub async fn mark_sperrankuendigung(
 pub async fn list_sperrauftrag_candidates(
     pool: &PgPool,
     tenant: &str,
+    threshold_ct: i64,
+) -> anyhow::Result<Vec<SperrCandidate>> {
+    // The last gate before a physical disconnection, and the one that matters
+    // most: eight Werktage stand between the Ankündigung and this step, which is
+    // exactly the window the announcement gives the customer to pay.
+    phase_candidates(pool, tenant, threshold_ct, PHASE_3_SPERRAUFTRAG, &[]).await
+}
+
+/// **Phase 4 (§ 41f Abs. 7 EnWG) — Entsperrauftrag candidates.**
+///
+/// A disconnection was ordered and the grounds for it are gone: the case is
+/// resolved (its receivable was settled — see [`settle_paid_dunning_cases`]), or
+/// it was halted by an Abwendungsvereinbarung or a Schutzbedürftigkeit finding,
+/// and no Entsperrauftrag has been issued yet.
+///
+/// § 41f Abs. 7 makes the restoration *unverzüglich* and does not condition it on
+/// the customer asking, which is why this is a sweep and not an endpoint. The
+/// statute also conditions it on the reconnection costs having been reimbursed;
+/// that Nebenforderung is tracked as an ordinary receivable and deliberately does
+/// **not** hold the reconnection back here — leaving a household disconnected over
+/// an unpaid Entsperrpauschale is the disproportionality § 41f Abs. 1 S. 2 bars.
+///
+/// The fourth tuple element is always `0`: there is no arrears amount to report
+/// for a case that is being reconnected.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_entsperrauftrag_candidates(
+    pool: &PgPool,
+    tenant: &str,
 ) -> anyhow::Result<Vec<SperrCandidate>> {
     let rows = sqlx::query(
-        r"SELECT dc.id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+        r"SELECT dc.id, a.malo_id, a.lf_mp_id, 0::BIGINT AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
-            AND dc.stufe = 3
-            AND dc.resolved_at IS NULL
-            AND dc.abwendung_vereinbart_at IS NULL
-            AND dc.unverhaeltnismaessig_seit IS NULL
-            AND dc.sperrankuendigung_at IS NOT NULL
-            AND dc.sperrauftrag_ce_id IS NULL
-            AND dc.geplantes_sperrdatum IS NOT NULL
-            AND dc.geplantes_sperrdatum <= CURRENT_DATE",
+            AND dc.sperrauftrag_ce_id IS NOT NULL
+            AND dc.entsperrauftrag_ce_id IS NULL
+            -- The grounds are gone when the supply debt is settled *or* an
+            -- active lock now bars the interruption — an Abwendungsvereinbarung
+            -- accepted after the order went out, or a Schutzbedürftigkeit found
+            -- since. Either way § 41f Abs. 7 owes the reconnection.
+            AND (dc.resolved_at IS NOT NULL
+                 OR EXISTS (
+                      SELECT 1 FROM dunning_locks dl
+                      WHERE dl.account_id = a.account_id
+                        AND dl.aufgehoben_at IS NULL
+                        AND dl.valid_from <= CURRENT_DATE
+                        AND (dl.valid_to IS NULL OR dl.valid_to >= CURRENT_DATE)))",
     )
     .bind(tenant)
     .fetch_all(pool)
     .await
-    .context("list_sperrauftrag_candidates")?;
+    .context("list_entsperrauftrag_candidates")?;
     Ok(to_sperr_candidates(rows))
 }
 
-/// §41g Abs. 1 Satz 10 EnWG — the customer accepted an Abwendungsvereinbarung
-/// (payment agreement) in Textform: disconnection **must not** proceed.
+/// Record the dispatched ORDERS 17117 Entsperrauftrag against the case.
 ///
-/// The agreement covers the arrears of the **supply point**, and disconnection is
-/// per supply point, so this halts **every** open dunning case of the account that
-/// owns `case_id` — not just that one case (auto-dunning creates a fresh case per
-/// Mahnstufe, so an account can carry more than one open case). Returns the number
-/// of cases halted (0 → the case id was not found). See [`markiere_unverhaeltnismaessig`].
-pub async fn vereinbare_abwendung(
-    pool: &PgPool,
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_entsperrauftrag_dispatched(
+    exec: impl sqlx::PgExecutor<'_>,
     case_id: Uuid,
     tenant: &str,
-) -> anyhow::Result<u64> {
+    reference: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE dunning_cases SET entsperrauftrag_ce_id = $1 \
+         WHERE id = $2 AND tenant = $3 AND entsperrauftrag_ce_id IS NULL",
+    )
+    .bind(reference)
+    .bind(case_id)
+    .bind(tenant)
+    .execute(exec)
+    .await
+    .context("mark_entsperrauftrag_dispatched")?;
+    Ok(())
+}
+
+/// § 41g Abs. 1 S. 2 EnWG — record that the Abwendungsvereinbarung offer went out.
+///
+/// The Grundversorger owes the offer within one week of a demand made after the
+/// Androhung, and in any case no later than the Ankündigung. Recording it is what
+/// makes the obligation auditable; the offer itself travels on
+/// `de.accounting.abwendung.angeboten`.
+///
+/// Returns `false` when the case does not exist or an offer was already recorded.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_abwendung_angeboten(
+    exec: impl sqlx::PgExecutor<'_>,
+    case_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<bool> {
     let r = sqlx::query(
-        "UPDATE dunning_cases SET abwendung_vereinbart_at = now() \
-         WHERE tenant = $2 AND resolved_at IS NULL \
-           AND account_id = (SELECT account_id FROM dunning_cases WHERE id = $1 AND tenant = $2)",
+        "UPDATE dunning_cases SET abwendung_angeboten_at = now() \
+         WHERE id = $1 AND tenant = $2 AND resolved_at IS NULL \
+           AND abwendung_angeboten_at IS NULL",
     )
     .bind(case_id)
     .bind(tenant)
-    .execute(pool)
+    .execute(exec)
     .await
-    .context("vereinbare_abwendung")?;
-    Ok(r.rows_affected())
+    .context("mark_abwendung_angeboten")?;
+    Ok(r.rows_affected() > 0)
 }
 
-/// §41f Abs. 1 Satz 2 / Abs. 2 EnWG — the disconnection is disproportionate
-/// (the customer showed a payment prospect, or besondere Schutzbedürftigkeit /
-/// konkrete Gefahr für Leib oder Leben).
+// ── Mahnsperren (dunning locks) ───────────────────────────────────────────────
+
+/// A reason to stop dunning an account.
 ///
-/// Like [`vereinbare_abwendung`], the Schutzbedürftigkeit attaches to the supply
-/// point, so this halts **every** open dunning case of the account owning
-/// `case_id`. Returns the number of cases halted (0 → the case id was not found).
-pub async fn markiere_unverhaeltnismaessig(
+/// Every halt carries a ground, a citation, a validity period and a lifting
+/// reason — none of them optional. A halt that cannot be lifted makes an account
+/// permanently undunnable, and § 41f Abs. 2 in particular describes a
+/// circumstance that is *auf Verlangen glaubhaft zu machen*, so reviewable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LockGrund {
+    /// § 41g Abs. 1 S. 10 — an Abwendungsvereinbarung accepted in Textform
+    /// before the disconnection was carried out. Bars it outright.
+    Abwendungsvereinbarung,
+    /// § 41f Abs. 2 — konkrete Gefahr für Leib oder Leben.
+    Schutzbeduerftigkeit,
+    /// § 41f Abs. 1 S. 2 — the customer showed *hinreichende Aussicht* to pay.
+    Zahlungsaussicht,
+    /// An operator decision. Requires a note.
+    Operator,
+}
+
+impl LockGrund {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Abwendungsvereinbarung => "abwendungsvereinbarung",
+            Self::Schutzbeduerftigkeit => "schutzbeduerftigkeit",
+            Self::Zahlungsaussicht => "zahlungsaussicht",
+            Self::Operator => "operator",
+        }
+    }
+
+    /// The citation the lock rests on, when the caller states none.
+    #[must_use]
+    pub const fn default_rechtsgrundlage(self) -> &'static str {
+        match self {
+            Self::Abwendungsvereinbarung => "\u{a7}41g Abs. 1 S. 10 EnWG",
+            Self::Schutzbeduerftigkeit => "\u{a7}41f Abs. 2 EnWG",
+            Self::Zahlungsaussicht => "\u{a7}41f Abs. 1 S. 2 EnWG",
+            Self::Operator => "Ermessensentscheidung des Betreibers",
+        }
+    }
+}
+
+/// A dunning lock as stored.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct DunningLockRow {
+    pub lock_id: Uuid,
+    pub account_id: Uuid,
+    pub grund: String,
+    pub rechtsgrundlage: String,
+    pub note: Option<String>,
+    pub valid_from: Date,
+    pub valid_to: Option<Date>,
+    pub aufgehoben_at: Option<OffsetDateTime>,
+    pub aufhebung_grund: Option<String>,
+    pub created_by: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+/// Place a dunning lock on the account owning `case_id`.
+///
+/// Account-scoped: disconnection is per supply point, and auto-dunning opens a
+/// fresh case per Mahnstufe.
+///
+/// `valid_to = None` is an open-ended lock. Permitted (a Schutzbedürftigkeit may
+/// have no foreseeable end) but surfaced by [`list_locks_due_review`], so it is a
+/// decision under review rather than one forgotten.
+///
+/// `valid_from = None` means today. Both ends are settable because the evidence a
+/// lock rests on has its own dates: a medical certificate covering January to
+/// March is recorded as it reads, not as of the day someone typed it in.
+///
+/// Returns the new lock id, or `None` when the case does not exist.
+///
+/// # Errors
+///
+/// Propagates database errors.
+#[allow(clippy::too_many_arguments)]
+pub async fn place_dunning_lock(
+    exec: impl sqlx::PgExecutor<'_>,
+    case_id: Uuid,
+    tenant: &str,
+    grund: LockGrund,
+    rechtsgrundlage: Option<&str>,
+    note: Option<&str>,
+    valid_from: Option<Date>,
+    valid_to: Option<Date>,
+    created_by: Option<&str>,
+) -> anyhow::Result<Option<Uuid>> {
+    let row = sqlx::query(
+        r"INSERT INTO dunning_locks
+              (tenant, account_id, grund, rechtsgrundlage, note,
+               valid_from, valid_to, created_by)
+          SELECT $1, dc.account_id, $3, $4, $5,
+                 COALESCE($6, CURRENT_DATE), $7, $8
+          FROM dunning_cases dc
+          WHERE dc.id = $2 AND dc.tenant = $1
+          RETURNING lock_id",
+    )
+    .bind(tenant)
+    .bind(case_id)
+    .bind(grund.as_str())
+    .bind(rechtsgrundlage.unwrap_or_else(|| grund.default_rechtsgrundlage()))
+    .bind(note)
+    .bind(valid_from)
+    .bind(valid_to)
+    .bind(created_by)
+    .fetch_optional(exec)
+    .await
+    .context("place_dunning_lock")?;
+    match row {
+        Some(r) => Ok(Some(r.try_get("lock_id")?)),
+        None => Ok(None),
+    }
+}
+
+/// Lift a lock, recording why.
+///
+/// Lifting for `vereinbarung_gebrochen` is **§ 41g Abs. 1 S. 11**: the supplier
+/// may resume, but must re-observe § 41f Abs. 1 S. 2 and Abs. 5, so the caller
+/// also clears the Ankündigung state — see [`clear_ankuendigung`]. Lifting for
+/// any other reason leaves the announcement standing, because nothing about it
+/// became untrue.
+///
+/// Returns the `account_id` the lock sat on, or `None` when it was already
+/// lifted or does not exist.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn lift_dunning_lock(
+    exec: impl sqlx::PgExecutor<'_>,
+    lock_id: Uuid,
+    tenant: &str,
+    aufhebung_grund: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    let row = sqlx::query(
+        "UPDATE dunning_locks \
+         SET aufgehoben_at = now(), aufhebung_grund = $3 \
+         WHERE lock_id = $1 AND tenant = $2 AND aufgehoben_at IS NULL \
+         RETURNING account_id",
+    )
+    .bind(lock_id)
+    .bind(tenant)
+    .bind(aufhebung_grund)
+    .fetch_optional(exec)
+    .await
+    .context("lift_dunning_lock")?;
+    match row {
+        Some(r) => Ok(Some(r.try_get("account_id")?)),
+        None => Ok(None),
+    }
+}
+
+/// Clear the Ankündigung state on every open case of an account.
+///
+/// § 41f Abs. 5 requires the announcement to be **8 Werktage im Voraus**. One
+/// made before an Abwendungsvereinbarung was accepted has been overtaken by
+/// events, so resuming needs a fresh one.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn clear_ankuendigung(
+    exec: impl sqlx::PgExecutor<'_>,
+    account_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<u64> {
+    Ok(sqlx::query(
+        "UPDATE dunning_cases \
+         SET sperrankuendigung_at = NULL, geplantes_sperrdatum = NULL \
+         WHERE account_id = $1 AND tenant = $2 AND resolved_at IS NULL",
+    )
+    .bind(account_id)
+    .bind(tenant)
+    .execute(exec)
+    .await
+    .context("clear_ankuendigung")?
+    .rows_affected())
+}
+
+/// Every lock on the account owning `case_id`, newest first.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_dunning_locks(
     pool: &PgPool,
     case_id: Uuid,
     tenant: &str,
-) -> anyhow::Result<u64> {
-    let r = sqlx::query(
-        "UPDATE dunning_cases SET unverhaeltnismaessig_seit = now() \
-         WHERE tenant = $2 AND resolved_at IS NULL \
-           AND account_id = (SELECT account_id FROM dunning_cases WHERE id = $1 AND tenant = $2)",
+) -> anyhow::Result<Vec<DunningLockRow>> {
+    sqlx::query_as::<_, DunningLockRow>(
+        r"SELECT lock_id, account_id, grund, rechtsgrundlage, note, valid_from,
+                 valid_to, aufgehoben_at, aufhebung_grund, created_by, created_at
+          FROM dunning_locks
+          WHERE tenant = $1
+            AND account_id = (SELECT account_id FROM dunning_cases
+                              WHERE id = $2 AND tenant = $1)
+          ORDER BY created_at DESC",
+    )
+    .bind(tenant)
+    .bind(case_id)
+    .fetch_all(pool)
+    .await
+    .context("list_dunning_locks")
+}
+
+/// Open-ended locks older than `older_than_days` that nobody has revisited.
+///
+/// § 41f Abs. 2 contemplates circumstances with no foreseeable end and equally
+/// makes them reviewable, so an open-ended lock is allowed but listed.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_locks_due_review(
+    pool: &PgPool,
+    tenant: &str,
+    older_than_days: i64,
+) -> anyhow::Result<Vec<DunningLockRow>> {
+    sqlx::query_as::<_, DunningLockRow>(
+        r"SELECT lock_id, account_id, grund, rechtsgrundlage, note, valid_from,
+                 valid_to, aufgehoben_at, aufhebung_grund, created_by, created_at
+          FROM dunning_locks
+          WHERE tenant = $1
+            AND aufgehoben_at IS NULL
+            AND valid_to IS NULL
+            AND valid_from <= CURRENT_DATE - make_interval(days => $2::int)
+          ORDER BY valid_from",
+    )
+    .bind(tenant)
+    .bind(older_than_days)
+    .fetch_all(pool)
+    .await
+    .context("list_locks_due_review")
+}
+
+// ── Forderungseinwände (§ 41f Abs. 3 S. 3–5) ──────────────────────────────────
+
+/// An amount that must stay out of the § 41f Abs. 3 Verzug calculation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EinwandArt {
+    /// S. 3 — form- und fristgerecht, schlüssig bestritten, and not titled.
+    ForderungBestritten,
+    /// S. 4 — a disputed price increase.
+    PreiserhoehungBestritten,
+    /// S. 5 — the claim is before a § 111b EnWG Schlichtungsverfahren.
+    Schlichtung,
+    /// S. 3 — instalments under an agreement that are not yet due.
+    RatenzahlungNichtFaellig,
+}
+
+impl EinwandArt {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ForderungBestritten => "forderung_bestritten",
+            Self::PreiserhoehungBestritten => "preiserhoehung_bestritten",
+            Self::Schlichtung => "schlichtung",
+            Self::RatenzahlungNichtFaellig => "ratenzahlung_nicht_faellig",
+        }
+    }
+}
+
+/// A recorded objection.
+#[derive(Debug, serde::Serialize, sqlx::FromRow)]
+pub struct EinwandRow {
+    pub einwand_id: Uuid,
+    pub account_id: Uuid,
+    pub ledger_entry_id: Option<Uuid>,
+    pub art: String,
+    pub betrag_ct: i64,
+    pub erhoben_am: Date,
+    pub note: Option<String>,
+    pub erledigt_at: Option<OffsetDateTime>,
+    pub erledigung: Option<String>,
+    pub created_at: OffsetDateTime,
+}
+
+/// Record an objection against part of an account's receivable.
+///
+/// The amount leaves the § 41f Abs. 3 Verzug from now on. Whether the objection
+/// *qualifies* — form- und fristgerecht, schlüssig, not titled — is a judgement
+/// the statute leaves to the supplier; recording it is the act.
+///
+/// # Errors
+///
+/// Propagates database errors.
+#[allow(clippy::too_many_arguments)]
+pub async fn record_einwand(
+    exec: impl sqlx::PgExecutor<'_>,
+    tenant: &str,
+    account_id: Uuid,
+    art: EinwandArt,
+    betrag_ct: i64,
+    ledger_entry_id: Option<Uuid>,
+    note: Option<&str>,
+    created_by: Option<&str>,
+) -> anyhow::Result<Uuid> {
+    let row = sqlx::query(
+        r"INSERT INTO forderungs_einwaende
+              (tenant, account_id, art, betrag_ct, ledger_entry_id, note, created_by)
+          VALUES ($1, $2, $3, $4, $5, $6, $7)
+          RETURNING einwand_id",
+    )
+    .bind(tenant)
+    .bind(account_id)
+    .bind(art.as_str())
+    .bind(betrag_ct)
+    .bind(ledger_entry_id)
+    .bind(note)
+    .bind(created_by)
+    .fetch_one(exec)
+    .await
+    .context("record_einwand")?;
+    Ok(row.try_get("einwand_id")?)
+}
+
+/// Close an objection. The amount re-enters the Verzug from this point.
+///
+/// Returns the `account_id`, so the caller can refresh its Verzug cache: an
+/// objection lapsing changes the arrears with no posting behind it.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn close_einwand(
+    exec: impl sqlx::PgExecutor<'_>,
+    einwand_id: Uuid,
+    tenant: &str,
+    erledigung: &str,
+) -> anyhow::Result<Option<Uuid>> {
+    let row = sqlx::query(
+        "UPDATE forderungs_einwaende \
+         SET erledigt_at = now(), erledigung = $3 \
+         WHERE einwand_id = $1 AND tenant = $2 AND erledigt_at IS NULL \
+         RETURNING account_id",
+    )
+    .bind(einwand_id)
+    .bind(tenant)
+    .bind(erledigung)
+    .fetch_optional(exec)
+    .await
+    .context("close_einwand")?;
+    match row {
+        Some(r) => Ok(Some(r.try_get("account_id")?)),
+        None => Ok(None),
+    }
+}
+
+/// Every objection on an account, newest first.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_einwaende(
+    pool: &PgPool,
+    account_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Vec<EinwandRow>> {
+    sqlx::query_as::<_, EinwandRow>(
+        r"SELECT einwand_id, account_id, ledger_entry_id, art, betrag_ct, erhoben_am,
+                 note, erledigt_at, erledigung, created_at
+          FROM forderungs_einwaende
+          WHERE tenant = $1 AND account_id = $2
+          ORDER BY created_at DESC",
+    )
+    .bind(tenant)
+    .bind(account_id)
+    .fetch_all(pool)
+    .await
+    .context("list_einwaende")
+}
+
+/// The `(account_id, malo_id, lf_mp_id)` of the account a dunning case belongs to.
+///
+/// The §§41f/41g endpoints act on a case id but announce on the supply point and
+/// refresh its Verzug cache, so they need all three.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn dunning_case_account(
+    pool: &PgPool,
+    case_id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<Option<(Uuid, String, String)>> {
+    let row = sqlx::query(
+        r"SELECT a.account_id, a.malo_id, a.lf_mp_id
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.id = $1 AND dc.tenant = $2",
     )
     .bind(case_id)
     .bind(tenant)
-    .execute(pool)
+    .fetch_optional(pool)
     .await
-    .context("markiere_unverhaeltnismaessig")?;
-    Ok(r.rows_affected())
+    .context("dunning_case_account")?;
+    match row {
+        Some(r) => Ok(Some((
+            r.try_get("account_id")?,
+            r.try_get("malo_id")?,
+            r.try_get("lf_mp_id")?,
+        ))),
+        None => Ok(None),
+    }
 }
 
-/// Record that a Sperrauftrag was handed to sperrd (idempotency: won't re-post).
+/// Record the dispatched ORDERS 17115 Sperrauftrag (idempotency: won't re-order).
 pub async fn mark_sperrauftrag_dispatched(
     exec: impl sqlx::PgExecutor<'_>,
     case_id: Uuid,
@@ -2409,6 +3025,189 @@ pub async fn create_dunning_case_announced(
     Ok(case_id)
 }
 
+/// Buchungsarten that are **Verzugsschaden**, not the supply debt itself.
+///
+/// § 41f Abs. 3 EnWG measures the Zahlungsverzug against the *payment obligation
+/// from the supply contract*. Mahngebühren and Verzugszinsen arise **because** of
+/// the default; counting them toward the threshold that authorises a
+/// disconnection lets the dunning process manufacture its own justification — a
+/// customer 8 EUR short of the 100 EUR floor crosses it on the third Mahngebühr.
+/// Both are listed. They book to different GL accounts (§ 275 HGB separates
+/// Zinserträge from sonstige betriebliche Erträge) but share this character.
+pub const VERZUGSSCHADEN_KINDS: &[&str] = &["MAHNGEBUEHR", "VERZUGSZINSEN"];
+
+/// The **§ 41f Abs. 3 Zahlungsverzug** for one account, read from the ledger.
+///
+/// Open *supply* debt: the debit residuals left after FIFO clearing, less the
+/// Verzugsschaden kinds, less any open `forderungs_einwaende`. Three
+/// deliberate departures from `accounts.balance_ct`:
+///
+/// * **residuals, not the net** — an unallocated credit must not net an unpaid
+///   invoice out of sight;
+/// * **no Verzugsschaden** — see [`VERZUGSSCHADEN_KINDS`];
+/// * **less the § 41f Abs. 3 S. 3–5 objections** — a formally disputed claim,
+///   a disputed price increase, a claim before a § 111b Schlichtung, and
+///   instalments not yet due all stay out of the calculation.
+///
+/// Deriving this walks the account's whole posting history, so callers read
+/// `accounts.verzug_ct` instead; this is what refreshes it. Never negative: an
+/// objection larger than the open debt means nothing is owed, not that the
+/// customer is in credit.
+///
+/// # Errors
+///
+/// Propagates database and ledger errors.
+pub async fn compute_verzug_ct(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+) -> anyhow::Result<i64> {
+    let offen: i64 = ledger
+        .open_receivables(lf_mp_id, malo_id)
+        .await?
+        .iter()
+        .filter(|r| {
+            r.entry_type
+                .as_deref()
+                .is_none_or(|k| !VERZUGSSCHADEN_KINDS.contains(&k))
+        })
+        .map(|r| r.outstanding_ct)
+        .sum();
+
+    let einwaende: i64 = sqlx::query_scalar(
+        r"SELECT COALESCE(SUM(e.betrag_ct), 0)::BIGINT
+          FROM forderungs_einwaende e
+          JOIN accounts a ON a.account_id = e.account_id
+          WHERE e.tenant = $1 AND a.malo_id = $2 AND a.lf_mp_id = $3
+            AND e.erledigt_at IS NULL",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .fetch_one(pool)
+    .await
+    .context("compute_verzug_ct: open objections")?;
+
+    Ok((offen - einwaende).max(0))
+}
+
+/// Recompute `accounts.verzug_ct` from the ledger and store it.
+///
+/// Set absolutely, never incremented — like `balance_ct`, and for the same
+/// reason: a cache that is added to can drift, and this one decides whether a
+/// household is disconnected.
+///
+/// Call after anything that changes what is open: a posting, a manual clearing,
+/// a clearing reset, or an objection being raised or resolved.
+///
+/// # Errors
+///
+/// Propagates database and ledger errors.
+pub async fn refresh_verzug(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+) -> anyhow::Result<i64> {
+    let verzug = compute_verzug_ct(ledger, pool, tenant, malo_id, lf_mp_id).await?;
+    sqlx::query(
+        "UPDATE accounts SET verzug_ct = $1, updated_at = now() \
+         WHERE malo_id = $2 AND lf_mp_id = $3 AND tenant = $4",
+    )
+    .bind(verzug)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("refresh_verzug")?;
+    Ok(verzug)
+}
+
+/// Recompute the Verzug for every account carrying an open dunning case.
+///
+/// The daily worker's safety net. Most refreshes ride the posting that caused
+/// them, but an objection lapsing and an instalment falling due both move the
+/// Verzug with no posting behind them.
+///
+/// # Errors
+///
+/// Propagates database and ledger errors.
+pub async fn refresh_verzug_for_open_cases(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<u64> {
+    let rows = sqlx::query(
+        r"SELECT DISTINCT a.malo_id, a.lf_mp_id
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.tenant = $1 AND dc.resolved_at IS NULL",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("refresh_verzug_for_open_cases")?;
+
+    let mut n = 0u64;
+    for r in rows {
+        let malo_id: String = r.try_get("malo_id")?;
+        let lf_mp_id: String = r.try_get("lf_mp_id")?;
+        if let Err(e) = refresh_verzug(ledger, pool, tenant, &malo_id, &lf_mp_id).await {
+            tracing::warn!(malo = %malo_id, error = %e, "Verzug refresh failed");
+        } else {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
+/// Close every open dunning case whose account no longer owes anything.
+///
+/// Runs before every escalation step, so a settled case cannot be escalated,
+/// collect another Mahngebühr, or feed the §§ 41f/41g sequence.
+///
+/// Settled means `verzug_ct <= 0`: the supply debt is gone. An unpaid Mahngebühr
+/// keeps the receivable open but is not a ground to disconnect anyone, so it must
+/// not keep the § 41f sequence alive either.
+///
+/// Closing a case clears its phase marks: a later default is a *new* default and
+/// must start again at the Androhung with its own 4-Wochen-Frist.
+///
+/// Returns the number of cases closed.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn settle_paid_dunning_cases(pool: &PgPool, tenant: &str) -> anyhow::Result<u64> {
+    let n = sqlx::query(
+        r"UPDATE dunning_cases dc
+          SET resolved_at = now(),
+              sperrandrohung_at = NULL, sperrankuendigung_at = NULL,
+              geplantes_sperrdatum = NULL
+          FROM accounts a
+          WHERE a.account_id = dc.account_id
+            AND dc.tenant = $1
+            AND dc.resolved_at IS NULL
+            AND a.verzug_ct <= 0",
+    )
+    .bind(tenant)
+    .execute(pool)
+    .await
+    .context("settle_paid_dunning_cases")?
+    .rows_affected();
+    if n > 0 {
+        tracing::info!(
+            closed = n,
+            "accountingd: dunning cases settled — receivable paid"
+        );
+    }
+    Ok(n)
+}
+
 pub async fn run_auto_dunning(
     ledger: &PgLedger,
     pool: &PgPool,
@@ -2437,6 +3236,25 @@ pub async fn run_auto_dunning(
             escalated: 0,
             sperrauftrag_triggered: 0,
         });
+    }
+
+    // ── Step 0a: re-derive the Verzug ────────────────────────────────────────
+    // An objection lapsing and an instalment falling due both move the arrears
+    // with no posting behind them.
+    let refreshed = refresh_verzug_for_open_cases(ledger, pool, tenant)
+        .await
+        .context("auto_dunning: refresh Verzug")?;
+    tracing::debug!(refreshed, "accountingd: Verzug caches re-derived");
+
+    // ── Step 0b: close what has been paid ────────────────────────────────────
+    // Runs *before* every escalation step. A case whose receivable is settled
+    // must not be escalated, must not collect another Mahngebühr, and must not
+    // feed the §§41f/41g disconnection sequence.
+    let settled = settle_paid_dunning_cases(pool, tenant)
+        .await
+        .context("auto_dunning: settle paid cases")?;
+    if settled > 0 {
+        tracing::info!(settled, "accountingd: auto-dunning closed settled cases");
     }
 
     let mut mahnstufe1_created: u32 = 0;
@@ -2510,7 +3328,7 @@ pub async fn run_auto_dunning(
 
         // Post Mahngebühr if configured > 0. Deterministic idempotency key per
         // (malo, Mahnstufe, run-date) — a same-day re-run replays as a no-op
-        // instead of double-charging the fee (fixes the old un-idempotent write).
+        // instead of double-charging the fee.
         if fee_stufe1_ct > 0 {
             let _ = post_entry(
                 ledger,
@@ -2541,13 +3359,19 @@ pub async fn run_auto_dunning(
 
     // ── Step 2: Escalate Mahnstufe 1 → 2 ─────────────────────────────────────
     let overdue_stufe1: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
-        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+        // `a.balance_ct`, not `dc.amount_due_ct`: the next Mahnstufe demands what
+        // is open **now**. Carrying the frozen amount forward dunned a customer
+        // who had paid most of the invoice for the whole of it.
+        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
             AND dc.stufe = 1
             AND dc.resolved_at IS NULL
-            AND dc.due_date < $2",
+            AND dc.due_date < $2
+            -- Escalate only accounts that still owe. Without this the chain ran
+            -- on `due_date` alone and walked a paid-up customer to Mahnstufe 3.
+            AND a.balance_ct > 0",
     )
     .bind(tenant)
     .bind(today)
@@ -2613,13 +3437,19 @@ pub async fn run_auto_dunning(
 
     // ── Step 3: Escalate Mahnstufe 2 → 3 + Sperrauftrag ─────────────────────
     let overdue_stufe2: Vec<(Uuid, Uuid, String, String, i64)> = sqlx::query(
-        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, dc.amount_due_ct
+        // `a.balance_ct`, not `dc.amount_due_ct`: the next Mahnstufe demands what
+        // is open **now**. Carrying the frozen amount forward dunned a customer
+        // who had paid most of the invoice for the whole of it.
+        r"SELECT dc.id, dc.account_id, a.malo_id, a.lf_mp_id, a.balance_ct AS amount_due_ct
           FROM dunning_cases dc
           JOIN accounts a ON a.account_id = dc.account_id
           WHERE dc.tenant = $1
             AND dc.stufe = 2
             AND dc.resolved_at IS NULL
-            AND dc.due_date < $2",
+            AND dc.due_date < $2
+            -- Escalate only accounts that still owe. Without this the chain ran
+            -- on `due_date` alone and walked a paid-up customer to Mahnstufe 3.
+            AND a.balance_ct > 0",
     )
     .bind(tenant)
     .bind(today)
@@ -2842,7 +3672,7 @@ pub async fn fetch_ecb_base_rate(
     }
 }
 
-/// Create a Verzugszinsen (default interest) charge and the linked MAHNGEBUEHR ledger entry.
+/// Create a Verzugszinsen (§ 288 BGB) charge and its linked ledger entry.
 #[allow(clippy::too_many_arguments)]
 pub async fn create_interest_charge(
     ledger: &PgLedger,
@@ -2875,15 +3705,17 @@ pub async fn create_interest_charge(
     };
     let customer_type = if is_b2b { "B2B" } else { "B2C" };
 
-    // Create linked MAHNGEBUEHR ledger entry (deterministic idempotency key per
-    // malo + interest period — a re-post is a no-op, not a double charge).
+    // `VERZUGSZINSEN`, not `MAHNGEBUEHR`: both are Verzugsschaden and stay out of
+    // the § 41f Abs. 3 arrears, but § 275 HGB reports Zinsen und ähnliche Erträge
+    // separately from sonstige betriebliche Erträge, so they book to different GL
+    // accounts. Deterministic idempotency key per malo + period.
     let ledger_id = post_entry(
         ledger,
         pool,
         tenant,
         malo_id,
         lf_mp_id,
-        "MAHNGEBUEHR",
+        "VERZUGSZINSEN",
         interest_ct,
         &format!("interest:{malo_id}:{period_from}:{period_to}"),
         None,
@@ -2897,10 +3729,9 @@ pub async fn create_interest_charge(
     .context("create_interest_charge: ledger entry")?;
 
     // The satellite row, the outbox announcement and the idempotency guard all
-    // commit together. Previously the insert had no unique key and the enqueue
-    // ran in its own transaction *after* it: an enqueue failure returned `Err`,
-    // the caller retried, and the ledger (idempotent on its own key) stayed
-    // right while this table grew a second charge for the same period.
+    // commit together. Enqueueing afterwards in its own transaction would let a
+    // retry after a failed enqueue grow a second charge for the same period,
+    // while the ledger — idempotent on its own key — stayed right.
     let mut tx = pool.begin().await?;
     let row = sqlx::query_as::<_, InterestChargeRow>(
         r"INSERT INTO interest_charges

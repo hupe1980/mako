@@ -8,15 +8,17 @@ no SEPA collection.
 |---|---|
 | **HTTP port** | `:9380` |
 | **Database** | PostgreSQL (sqlx 0.8) — customer/SEPA satellites in `public`, the ledger in the `doubleentry` schema of the same database |
-| **Auth** | OIDC/JWT on write endpoints + inbound webhook HMAC-SHA256 |
+| **Auth** | OIDC/JWT **+ Cedar ABAC** on every endpoint, read and write, plus inbound webhook HMAC-SHA256. Reads split three ways — `read-account` (one customer), `read-banking` (IBANs, mandates, pain.001), `read-books` (trial balance, aging, seals). `tests/authorization_guard.rs` fails the build if a handler loses its `Claims` extractor or its Cedar check |
 | **Ledger** | The [`doubleentry`](https://github.com/hupe1980/doubleentry) crate: an **immutable, tamper-evident double-entry engine** — balanced by construction, an append-only Merkle log with inclusion/consistency proofs, period seals (GoBD/§ 146 AO), open-item clearing, and store-level idempotency. accountingd owns the chart of accounts (`ledger::Chart`) and the `entry_type → postings` mapping; every money movement flows through `pg::post_entry` → `ledger.post`. |
 | **Double-entry** | Each Buchungsart is one balanced entry: the per-MaLo **Kontokorrent** (SKR 1400 subledger, an Asset leaf whose signed net *is* the balance) against a GL contra leaf (Bank 1200 / Erlöse 4000 / Mahnerlöse 4003 / EEG-Aufwand / Erstattungen). Soll = Haben is enforced in-engine **and** by a deferred DB trigger; §238 HGB. `accounts.balance_ct` is a ledger-derived read cache (set absolutely from the ledger net — never incremented, so it cannot drift) backing the portfolio SUM queries. |
 | **Vorauszahlung** | `PUT/GET /api/v1/accounts/{malo_id}/vorauszahlung` — typed `rubo4e::current::Vorauszahlung` (§40 Abs. 1 EnWG) |
 | **Aging analysis** | `GET /api/v1/aging` — receivables by 0–30d / 31–60d / 61–90d / >90d |
-| **Verzugszinsen** | `GET/POST /api/v1/accounts/{malo_id}/interest-charges` — §288 BGB B2C/B2B |
+| **Verzugszinsen** | `GET/POST /api/v1/accounts/{malo_id}/interest-charges` — §288 BGB, Basiszinssatz + 5 pp (B2C) / + 9 pp (B2B). Own `VERZUGSZINSEN` Buchungsart booking to a **Zinsertrag** GL account, because §275 HGB reports *Zinsen und ähnliche Erträge* on their own line |
 | **Payment plans** | `GET/POST /api/v1/accounts/{malo_id}/payment-plans` — Zahlungsvereinbarung |
 | **SEPA mandates** | IBAN validated via **ISO 13616 mod-97 + the SWIFT registry's per-country BBAN structure** on PUT (mod-97 alone misses an `O` typed for a `0` about 99 % of the time it is the only error); `sepa_mandates` table (UNIQUE per tenant) |
-| **SEPA scheduler** | N-5 background worker generates **one pain.008 message per collection date** (one `PmtInf` group per SequenceType, mandatory Gläubiger-ID); persisted in `sepa_collection_runs` **with one `sepa_collection_entries` row per collected mandate** |
+| **CORE vs B2B** | The scheme lives on the mandate **and** on every collection entry (a pain.007 restates the original as submitted), and one `PmtInf` group carries exactly one scheme. Different rulebooks: a CORE debtor has an unconditional 8-week refund right, a B2B debtor has none and their bank must hold the mandate |
+| **36-month dormancy** | EPC SDD Core Rulebook: a mandate not presented for 36 consecutive months must be cancelled by the creditor, and the clock resets on every **presentation** — including collections later rejected or refunded — so `last_presented_at` is stamped when the collection is written into a run, not when it settles. Dormant mandates drop out of collection runs and surface at `GET /api/v1/sepa/mandates/dormant`. The debtor banks do not enforce this; the creditor must |
+| **SEPA scheduler** | Background worker generates **one pain.008 message per collection date** (one `PmtInf` group per scheme × SequenceType, mandatory Gläubiger-ID); persisted in `sepa_collection_runs` **with one `sepa_collection_entries` row per collected mandate**. Pre-notification runs **14 calendar days** ahead per the EPC rulebook (`sepa_pre_notification_days`) |
 | **SEPA Gläubiger-ID** | `creditor_id` config field (EPC AT-02); validated via `sepa::validate_creditor_id`; included as `<CdtrSchmeId>` |
 | **Structured `PstlAdr`** | ISO 20022 postal addresses on creditor **and** debtor, ahead of the EPC cut-over on **15 Nov 2026**; half-filled addresses are refused, `Ctry` is checked against ISO 3166, legacy DK schemas drop it rather than emit an XSD violation |
 | **FRST→RCUR transition** | Auto-transitions FRST mandate to RCUR after first successful collection |
@@ -28,8 +30,11 @@ no SEPA collection.
 | **pain.007 reversal** | `POST /api/v1/sepa/reversals` — the creditor gives a settled collection back; `OrgnlTxRef` is restated from stored data (the DK subset makes it mandatory), one reversal per collection, `SEPA_STORNO` re-opens the receivable |
 | **IBAN encryption ready** | `iban_hash` is an app-computed **keyed BLAKE3** lookup key (no pgcrypto); `iban_encrypted` flag; CAMT.054 matching uses the hash even when the IBAN is ciphertext |
 | **Abschlag model** | ABSCHLAG booked as advance-payment **credit** (negative); full-cost Jahresrechnung as debit — the balance nets to the Nachzahlung/Erstattung |
-| **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in) |
-| **Sperr-Sequenz (§§41f/41g EnWG)** | Mahnstufe-3 arrears ≥ `sperrung_threshold_ct` (default 100 EUR) run the three-step disconnection sequence: **Sperrandrohung** (4 Wochen) → **Sperrankündigung** (8 Werktage im Voraus) → **Sperrauftrag** → `POST sperrd /api/v1/sperr-orders`. Each step is idempotent; the first two emit signed CloudEvents via the outbox (persist-before-dispatch). Halted by an accepted **Abwendungsvereinbarung** (§41g) or an **Unverhältnismäßigkeit/Schutzbedürftigkeit** flag (§41f Abs. 1/2). |
+| **Mahnwesen** | Mahnstufe 1→2→3; auto-dunning worker (advisory-locked, opt-in). Every step re-checks the **live** receivable, and a case whose arrears are settled is closed rather than escalated |
+| **Sperr-Sequenz (§§41f/41g EnWG)** | Four phases, every one applying the same § 41f Abs. 3 gates: **Sperrandrohung** (Abs. 1, 4 Wochen) → **Sperrankündigung** (Abs. 5, 8 Werktage brieflich) → **Sperrauftrag** (ORDERS **17115** via `makod`) → **Entsperrauftrag** (Abs. 7, ORDERS **17117**, once the grounds are gone). Both notices carry the Grund, the voraussichtlichen Unterbrechungs-/Wiederherstellungskosten (Abs. 6) and the avoidance options (Abs. 4) |
+| **Mahnsperren** | Every §§41f/41g halt is a row in `dunning_locks` with a **ground, a citation, a validity period and the operator who set it** — Abwendungsvereinbarung (§41g Abs. 1 S. 10), Schutzbedürftigkeit (§41f Abs. 2), Zahlungsaussicht (§41f Abs. 1 S. 2), or an operator decision. Lifting is an act with its own reason; lifting for `vereinbarung_gebrochen` applies §41g Abs. 1 S. 11 by clearing the Ankündigung, so the sequence resumes at a *fresh* 8-Werktage announcement. Open-ended locks are listed by `GET /api/v1/dunning/locks/review` |
+| **§41f Abs. 3 arrears** | `accounts.verzug_ct` — a second ledger-derived cache beside `balance_ct`, deliberately a different number: **open debit residuals** after FIFO clearing (so an unallocated credit cannot net an unpaid invoice out of sight), **less Verzugsschaden** (Mahngebühren and Verzugszinsen arise *because* of the default and must not fee a customer over the 100 EUR floor), **less open Forderungseinwände** |
+| **Forderungseinwände (§41f Abs. 3 S. 3–5)** | Amounts that stay out of the Verzug: a claim disputed form- und fristgerecht, a disputed price increase, a claim before a §111b Schlichtung, instalments not yet due. Not halts — they reduce what the threshold is measured against, and the sequence stops by itself when what remains falls below it |
 | **Business partner** | `kunden_nr` links accounts to `vertragd.kunden`; `GET /api/v1/business-partners/{kunden_nr}/{accounts,balance}` aggregate cross-MaLo |
 | **Refund payout** | Jahresabschluss Erstattung → **pain.001** to the customer IBAN (credit balance carried forward when no IBAN) |
 | **Metrics** | `GET /metrics` — Prometheus gauges (open receivables, credit balances, dunning by Mahnstufe, pending SEPA runs) |
@@ -109,7 +114,10 @@ retry and dead-letter.
 | `de.accounting.mahnung.issued` | a Mahnstufe case is opened (auto-dunning **and** manual escalation) |
 | `de.accounting.sperrandrohung` | §41f Abs. 1 notice |
 | `de.accounting.sperrankuendigung` | §41f Abs. 5 notice |
-| `de.accounting.sperrauftrag` | Sperrauftrag handed to `sperrd` |
+| `de.accounting.sperrauftrag` | ORDERS 17115 dispatched to the Netzbetreiber |
+| `de.accounting.entsperrauftrag` | §41f Abs. 7 — ORDERS 17117, the arrears were settled |
+| `de.accounting.abwendung.angeboten` | §41g Abs. 1 S. 2 — an Abwendungsvereinbarung was offered |
+| `de.accounting.abwendung.gebrochen` | §41g Abs. 1 S. 11 — an accepted agreement was broken |
 | `de.accounting.payment.imported` | a bank credit booked (camt.053, camt.054 or the flat import) |
 | `de.accounting.bankruecklast` | a SEPA return booked — a collection that **settled** and was then given back |
 | `de.accounting.sepa.collection-rejected` | pain.002 `RJCT` on a collection — the money never moved, so the receivable stays open and the mandate needs attention |
@@ -126,12 +134,11 @@ retry and dead-letter.
 Most events commit in the same transaction as the state change they announce.
 Two are deliberately different:
 
-**Sperrauftrag** — the order is a `POST sperrd /api/v1/sperr-orders`; the
-CloudEvent only announces it. `sperrd` does not deduplicate orders and the
-candidate query selects on `sperrauftrag_ce_id IS NULL`, so the mark commits
-**before** the announcement. The asymmetry is deliberate: a lost announcement
-logs at `ERROR` with the case id and can be replayed, while a second §41f
-disconnection order cannot be withdrawn.
+**Sperrauftrag / Entsperrauftrag** — the order is an ORDERS 17115/17117
+dispatched through `makod`; the CloudEvent only announces it. The candidate query
+selects on `sperrauftrag_ce_id IS NULL`, so the mark commits **before** the
+announcement: a lost announcement logs at `ERROR` and can be replayed, while a
+second §41f disconnection order cannot be withdrawn.
 
 **Abschlag** — the CloudEvent id *is* the ledger idempotency key
 (`ABSCHLAG-{malo}-{YYYY}-{MM}`), so `outbox::enqueue`'s
@@ -155,6 +162,15 @@ creditor_name         = "Muster Energie GmbH"
 # (persist-before-dispatch) and drained by a background worker with retry +
 # dead-letter — a crash never drops an event.
 erp_webhook_url       = "http://erp:8000/events"
+# The §§41f/41g market channel: Phase 3 and 4 are ORDERS 17115/17117.
+# Absent → the disconnection sequence does not run.
+makod_url             = "http://makod:8080"
+makod_api_key         = "env:ACCOUNTINGD_MAKOD_API_KEY"
+# §41f Abs. 6 — the voraussichtliche Kosten both notices must state. A Pauschale
+# is permitted (Abs. 7 S. 2) provided it stays nachvollziehbar. Default 0, which
+# sends a notice claiming the disconnection is free.
+sperrkosten_ct        = 4500
+entsperrkosten_ct     = 4500
 erp_hmac_secret       = "env:ACCOUNTINGD_INBOUND_HMAC_SECRET"
 dunning_auto_enabled  = true
 dunning_grace_days    = 30

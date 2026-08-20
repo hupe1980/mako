@@ -27,7 +27,7 @@
 //! Everything read off a bank file uses the camt convention: **positive = credit
 //! to our account**. [`bank_to_ledger_ct`] is the single place that flips it into
 //! accountingd's open-items convention (positive = Forderung). The flat-JSON
-//! import used to carry its own opposite convention; it no longer does.
+//! import follows it too — one sign convention across the service.
 
 // ── Re-exports from the sepa crate ────────────────────────────────────────────
 
@@ -313,6 +313,9 @@ pub struct Pain008Run {
 /// Summary of one `PmtInf` block inside a [`Pain008Run`].
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Pain008GroupInfo {
+    /// Scheme of the block: `"CORE"` or `"B2B"`. One `PmtInf` carries exactly
+    /// one, because the two are different rulebooks with different refund rights.
+    pub scheme: String,
     /// SEPA SequenceType of the block (`"FRST"`, `"RCUR"`, `"FNAL"`, `"OOFF"`).
     pub sequence_type: String,
     /// `PmtInfId` of the block — the key the bank echoes in `NtryDtls/Btch`.
@@ -427,121 +430,138 @@ pub fn build_pain_008(
     let mut total_ct = 0i64;
     let mut entry_count = 0usize;
 
-    for (seq_key, seq_type) in SEQ_ORDER {
-        let group_entries: Vec<&(&SepaMandateRow, i64)> = entries
-            .iter()
-            .filter(|(m, _)| normalise_sequence_type(&m.sequence_type) == seq_key)
-            .collect();
-        if group_entries.is_empty() {
-            continue;
-        }
-
-        let payment_info_id = format!("{msg_id}-{seq_key}");
-        // The group borrows the Creditor Identifier (`&CreditorId`), so the same
-        // creditor identity is not cloned once per sequence-type group.
-        let mut group = DirectDebitGroup::new(creditor.name, &creditor_iban, &creditor_id)
-            .sequence_type(seq_type)
-            .collection_date(collection_iso)
-            .payment_info_id(payment_info_id.clone());
-        if let Some(address) = creditor_address.clone() {
-            group = group.creditor_address(address);
-        }
-
-        let mut group_ct = 0i64;
-        let mut group_n = 0usize;
-        for (mandate, amount_ct) in group_entries {
-            let debtor_iban = match validate_iban(&mandate.iban) {
-                Ok(iban) => iban,
-                Err(e) => {
-                    tracing::warn!(
-                        mandate_id = %mandate.mandate_id,
-                        error = %e,
-                        "accountingd: skipping mandate with invalid debtor IBAN in pain.008"
-                    );
-                    continue;
-                }
-            };
-
-            let signed_iso = match IsoDate::try_from(mandate.signed_at) {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!(
-                        mandate_id = %mandate.mandate_id,
-                        error = %e,
-                        "accountingd: skipping mandate with invalid signature date in pain.008"
-                    );
-                    continue;
-                }
-            };
-            let description = format!("Abschlag {}-{:02}", today.year(), today.month() as u8);
-            let mut entry = DirectDebitEntry::new(
-                mandate.mandatsref.clone(),
-                signed_iso,
-                mandate
-                    .kontoinhaber
-                    .clone()
-                    .unwrap_or_else(|| "Kunde".to_owned()),
-                debtor_iban,
-                *amount_ct,
-                mandate.mandatsref.clone(),
-            )
-            .with_description(description);
-
-            if let Some(bic_str) = &mandate.bic
-                && let Ok(bic) = validate_bic(bic_str)
-            {
-                entry = entry.with_bic(bic);
+    // One `PmtInf` per (scheme, SequenceType). Both axes are needed, and for the
+    // same reason: the DK subset makes `SvcLvl`/`LclInstrm`/`SeqTp` an
+    // all-or-nothing block, so a group carries exactly one scheme and one
+    // sequence type. CORE and B2B are also different rulebooks — a CORE debtor
+    // has an unconditional 8-week refund right and a B2B debtor has none — so
+    // mixing them in one group would not just be schema-invalid, it would
+    // misstate what the debtor agreed to.
+    for (scheme_key, scheme) in [
+        ("CORE", DirectDebitScheme::Core),
+        ("B2B", DirectDebitScheme::B2b),
+    ] {
+        for (seq_key, seq_type) in SEQ_ORDER {
+            let group_entries: Vec<&(&SepaMandateRow, i64)> = entries
+                .iter()
+                .filter(|(m, _)| {
+                    normalise_sequence_type(&m.sequence_type) == seq_key
+                        && m.scheme.eq_ignore_ascii_case(scheme_key)
+                })
+                .collect();
+            if group_entries.is_empty() {
+                continue;
             }
 
-            // `Purp/Cd` — what the collection is for, as the debtor's statement
-            // and their accounting software read it. Transaction level only;
-            // informational, instructing no bank.
-            if let Some(purpose) = mandate.sparte.as_deref().and_then(purpose_for_sparte) {
-                entry = entry.with_purpose(purpose);
+            let payment_info_id = format!("{msg_id}-{scheme_key}-{seq_key}");
+            // The group borrows the Creditor Identifier (`&CreditorId`), so the same
+            // creditor identity is not cloned once per group.
+            let mut group = DirectDebitGroup::new(creditor.name, &creditor_iban, &creditor_id)
+                .scheme(scheme)
+                .sequence_type(seq_type)
+                .collection_date(collection_iso)
+                .payment_info_id(payment_info_id.clone());
+            if let Some(address) = creditor_address.clone() {
+                group = group.creditor_address(address);
             }
 
-            // `Dbtr/PstlAdr` — the debtor's own address, stored per mandate.
-            match address_for_schema(
-                Some(&mandate.debtor_address()),
-                schema.supports_postal_address(),
-                "debtor",
-            ) {
-                Ok(Some(address)) => entry = entry.with_debtor_address(address),
-                Ok(None) => {}
-                Err(e) => {
-                    tracing::warn!(
-                        mandate_id = %mandate.mandate_id,
-                        error = %e,
-                        "accountingd: skipping mandate with an unusable debtor address in pain.008"
-                    );
-                    continue;
+            let mut group_ct = 0i64;
+            let mut group_n = 0usize;
+            for (mandate, amount_ct) in group_entries {
+                let debtor_iban = match validate_iban(&mandate.iban) {
+                    Ok(iban) => iban,
+                    Err(e) => {
+                        tracing::warn!(
+                            mandate_id = %mandate.mandate_id,
+                            error = %e,
+                            "accountingd: skipping mandate with invalid debtor IBAN in pain.008"
+                        );
+                        continue;
+                    }
+                };
+
+                let signed_iso = match IsoDate::try_from(mandate.signed_at) {
+                    Ok(d) => d,
+                    Err(e) => {
+                        tracing::warn!(
+                            mandate_id = %mandate.mandate_id,
+                            error = %e,
+                            "accountingd: skipping mandate with invalid signature date in pain.008"
+                        );
+                        continue;
+                    }
+                };
+                let description = format!("Abschlag {}-{:02}", today.year(), today.month() as u8);
+                let mut entry = DirectDebitEntry::new(
+                    mandate.mandatsref.clone(),
+                    signed_iso,
+                    mandate
+                        .kontoinhaber
+                        .clone()
+                        .unwrap_or_else(|| "Kunde".to_owned()),
+                    debtor_iban,
+                    *amount_ct,
+                    mandate.mandatsref.clone(),
+                )
+                .with_description(description);
+
+                if let Some(bic_str) = &mandate.bic
+                    && let Ok(bic) = validate_bic(bic_str)
+                {
+                    entry = entry.with_bic(bic);
                 }
+
+                // `Purp/Cd` — what the collection is for, as the debtor's statement
+                // and their accounting software read it. Transaction level only;
+                // informational, instructing no bank.
+                if let Some(purpose) = mandate.sparte.as_deref().and_then(purpose_for_sparte) {
+                    entry = entry.with_purpose(purpose);
+                }
+
+                // `Dbtr/PstlAdr` — the debtor's own address, stored per mandate.
+                match address_for_schema(
+                    Some(&mandate.debtor_address()),
+                    schema.supports_postal_address(),
+                    "debtor",
+                ) {
+                    Ok(Some(address)) => entry = entry.with_debtor_address(address),
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!(
+                            mandate_id = %mandate.mandate_id,
+                            error = %e,
+                            "accountingd: skipping mandate with an unusable debtor address in pain.008"
+                        );
+                        continue;
+                    }
+                }
+
+                group_ct += *amount_ct;
+                group_n += 1;
+                entries_info.push(Pain008EntryInfo {
+                    mandate_id: mandate.mandate_id,
+                    mandatsref: mandate.mandatsref.clone(),
+                    payment_info_id: payment_info_id.clone(),
+                    sequence_type: seq_key.to_owned(),
+                    amount_ct: *amount_ct,
+                });
+                group = group.add_entry(entry);
             }
 
-            group_ct += *amount_ct;
-            group_n += 1;
-            entries_info.push(Pain008EntryInfo {
-                mandate_id: mandate.mandate_id,
-                mandatsref: mandate.mandatsref.clone(),
-                payment_info_id: payment_info_id.clone(),
+            if group_n == 0 {
+                continue; // every mandate in this sequence had an invalid IBAN
+            }
+            total_ct += group_ct;
+            entry_count += group_n;
+            groups_info.push(Pain008GroupInfo {
+                scheme: scheme_key.to_owned(),
                 sequence_type: seq_key.to_owned(),
-                amount_ct: *amount_ct,
+                payment_info_id,
+                entry_count: group_n,
+                total_ct: group_ct,
             });
-            group = group.add_entry(entry);
+            builder = builder.add_group(group);
         }
-
-        if group_n == 0 {
-            continue; // every mandate in this sequence had an invalid IBAN
-        }
-        total_ct += group_ct;
-        entry_count += group_n;
-        groups_info.push(Pain008GroupInfo {
-            sequence_type: seq_key.to_owned(),
-            payment_info_id,
-            entry_count: group_n,
-            total_ct: group_ct,
-        });
-        builder = builder.add_group(group);
     }
 
     if entry_count == 0 {
@@ -600,6 +620,20 @@ pub fn normalise_sequence_type(stored: &str) -> &'static str {
         "FNAL" => "FNAL",
         "OOFF" => "OOFF",
         _ => "RCUR",
+    }
+}
+
+/// The typed [`DirectDebitScheme`] for a stored `scheme` string.
+///
+/// Unknown values fall back to `CORE`, the consumer scheme: it is the one with
+/// the *stronger* debtor protection, so mis-reading a scheme errs toward giving
+/// the debtor a refund right rather than removing one.
+#[must_use]
+pub fn scheme_of(stored: &str) -> DirectDebitScheme {
+    if stored.eq_ignore_ascii_case("B2B") {
+        DirectDebitScheme::B2b
+    } else {
+        DirectDebitScheme::Core
     }
 }
 
@@ -725,6 +759,14 @@ pub struct ReversalRequest<'a> {
     pub collection_date: time::Date,
     /// SEPA sequence type the original collection carried.
     pub sequence_type: &'a str,
+    /// The scheme the **original** collection went out under, `CORE` or `B2B`.
+    ///
+    /// A reversal restates the original mandate exactly as submitted (the DK
+    /// subset makes `OrgnlTxRef` mandatory), so it must repeat the original's
+    /// scheme — not a default. Hard-coding CORE here restated a B2B collection
+    /// as a CORE one, which is a different agreement with a different refund
+    /// right.
+    pub scheme: &'a str,
     /// Debtor name as it was sent.
     pub debtor_name: &'a str,
     /// Debtor IBAN as it was sent.
@@ -821,12 +863,11 @@ pub fn build_pain_007(
         let mut original = OriginalCollection::new(r.mandate_ref, signed_iso)
             .collection_date(collection_iso)
             .creditor_id(creditor_id.clone())
-            // `CORE`, because that is what [`build_pain_008`] collected with —
-            // it never calls `.scheme()`, so the group takes the crate default.
-            // The DK subset makes `SvcLvl`/`LclInstrm`/`SeqTp` all-or-nothing,
-            // so a half-filled block is unconstructible rather than
-            // schema-invalid; the pair must therefore agree with the original.
-            .payment_type(DirectDebitScheme::Core, sequence_type_of(r.sequence_type))
+            // The DK subset makes `SvcLvl`/`LclInstrm`/`SeqTp` an all-or-nothing
+            // block, so a half-filled one is unconstructible rather than
+            // schema-invalid — and the pair must agree with the original
+            // collection, scheme included.
+            .payment_type(scheme_of(r.scheme), sequence_type_of(r.sequence_type))
             .debtor(r.debtor_name, debtor_iban)
             .creditor(creditor.name, creditor_iban.clone());
         if let Some(bic_str) = r.debtor_bic

@@ -39,7 +39,7 @@ graph TB
     subgraph nb_billing ["Invoice & Grid Billing (NB)"]
         invoicd[":8280 invoicd<br/>INVOIC 6-check plausibility<br/>auto-settle/dispute"]
         netzbilanzd[":8680 netzbilanzd<br/>NNE/KA/MMM/MSB billing<br/>GridSettlement · CalculationTrace"]
-        sperrd[":8780 sperrd<br/>Sperrung execution<br/>IFTSTA 21039 auto-dispatch"]
+        sperrd[":8780 sperrd<br/>Sperr-/Entsperrauftrag queue<br/>ORDERS 17115/17117 · IFTSTA 21039"]
     end
 
     subgraph data ["Energy Data & Observability"]

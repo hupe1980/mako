@@ -18,8 +18,8 @@ name = "sperrd"
 path = "src/main.rs"
 
 [dependencies]
-mako-engine  = { workspace = true }
 mako-markt   = { workspace = true, features = ["makod-client"] }
+mako-events  = { workspace = true }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 rmcp         = { workspace = true }
 schemars     = { workspace = true }
@@ -34,4 +34,10 @@ tracing      = "0.1"
 tower-http   = { version = "0.6" }
 tokio-util   = { workspace = true }
 anyhow       = "1"
-secrecy      = { version = "0.10" }
+secrecy      = { version = "0.10", features = ["serde"] }
+
+[dev-dependencies]
+testcontainers = { workspace = true }
+testcontainers-modules = { workspace = true }
+sqlx = { version = "0.8", features = ["postgres", "runtime-tokio-rustls", "time", "uuid", "json", "migrate", "macros"] }
+tokio = { version = "1", features = ["full", "test-util"] }

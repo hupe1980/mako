@@ -210,10 +210,26 @@ pub mod accounting {
     /// §41f Abs. 5 EnWG — Sperrankündigung: the concrete disconnection date is
     /// announced 8 Werktage in advance (after the 4-Wochen Androhung Frist).
     pub const SPERRANKUENDIGUNG: &str = "de.accounting.sperrankuendigung";
-    /// §41f Abs. 1 / §41g EnWG — Sperrauftrag handed to `sperrd` once the
-    /// Androhung (4 Wochen) and Ankündigung (8 Werktage) Fristen have elapsed and
-    /// no Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence.
+    /// §41f Abs. 1 EnWG — Sperrauftrag: **ORDERS 17115** dispatched to the
+    /// Netzbetreiber once the Androhung (4 Wochen) and Ankündigung (8 Werktage)
+    /// Fristen have elapsed, the Abs. 3 arrears gates still hold, and no
+    /// Abwendungsvereinbarung / Unverhältnismäßigkeit halted the sequence. The
+    /// event announces the market message; it does not carry it.
     pub const SPERRAUFTRAG: &str = "de.accounting.sperrauftrag";
+    /// §41f Abs. 7 EnWG — Entsperrauftrag: **ORDERS 17117** dispatched once the
+    /// grounds for the interruption are gone (the arrears were settled). The
+    /// statute makes the restoration *unverzüglich* and unconditional on being
+    /// asked, so this follows automatically from the case settling.
+    pub const ENTSPERRAUFTRAG: &str = "de.accounting.entsperrauftrag";
+    /// §41g Abs. 1 S. 2 EnWG — the Grundversorger's offer of an
+    /// Abwendungsvereinbarung: due within one week of the customer demanding it
+    /// after the Androhung, and at the latest together with the Ankündigung.
+    /// Carries the interest-free instalment terms (§41g Abs. 1 S. 7–9).
+    pub const ABWENDUNG_ANGEBOTEN: &str = "de.accounting.abwendung.angeboten";
+    /// §41g Abs. 1 S. 11 EnWG — an accepted Abwendungsvereinbarung was broken.
+    /// The supplier may resume the interruption, but must re-observe §41f
+    /// Abs. 1 S. 2 and issue a **fresh** Ankündigung (§41f Abs. 5).
+    pub const ABWENDUNG_GEBROCHEN: &str = "de.accounting.abwendung.gebrochen";
     /// SEPA direct-debit return (Bankrücklastschrift) — emitted by
     /// `accountingd` when a camt.053/054 booking carries a return reason code
     /// or debits the account, and subscribed by agentd's `payment-agent`.
@@ -438,12 +454,34 @@ pub mod obs {
     pub const DEADLINE_APPROACHING: &str = "de.obs.deadline.approaching";
 }
 
-/// Sperr/Entsperr (disconnection) events (`de.sperr.*`).
+/// Sperr/Entsperr execution events (`de.sperr.*`), emitted by `sperrd`.
 ///
-/// ⚠ phantom: agentd's `sperr-agent` subscribes to the glob `de.sperr.*`,
-/// but no concrete `de.sperr.*` type is defined or emitted anywhere yet
-/// (tracked in ROADMAP). Add constants here when `sperrd` starts emitting.
-pub mod sperr {}
+/// These are the **NB side**: the grid operator's record of a Sperr- or
+/// Entsperrauftrag it received (ORDERS 17115/17117) and physically carried out.
+/// They are not the LF's §41f notices — those are `de.accounting.sperr*`.
+///
+/// Consumed by agentd's `sperrd-agent`, which watches the execution SLA and the
+/// IFTSTA 21039 dispatch.
+pub mod sperr {
+    /// A Sperr-/Entsperrauftrag entered the field-service queue — either from an
+    /// inbound ORDERS 17115/17117 or from an operator creating one directly.
+    pub const AUFTRAG_EINGEGANGEN: &str = "de.sperr.auftrag.eingegangen";
+    /// The field team carried the order out. The IFTSTA 21039 reporting
+    /// `STS+Z37/Z38 → Z14 erfolgreich` has been handed to `makod`.
+    pub const AUSGEFUEHRT: &str = "de.sperr.ausgefuehrt";
+    /// The order could not be carried out (`Z13 gescheitert`) — meter access
+    /// denied, safety block, address not found. Carries the EBD Prüfschritt code
+    /// so the LF learns *why* instead of waiting out its ORDRSP deadline.
+    pub const FEHLGESCHLAGEN: &str = "de.sperr.fehlgeschlagen";
+    /// A pending order was withdrawn before execution (operator action, or an
+    /// inbound ORDCHG 39000 Stornierung). No IFTSTA is dispatched.
+    pub const STORNIERT: &str = "de.sperr.storniert";
+    /// An order is terminal in `sperrd` but its IFTSTA 21039 has still not
+    /// reached `makod` after the retry budget. Until it does, the LF's
+    /// `gpke-sperrung-lf` process cannot close — this is the one state in the
+    /// service that needs a human.
+    pub const IFTSTA_AUSSTEHEND: &str = "de.sperr.iftsta.ausstehend";
+}
 
 /// MaBiS Summenzeitreihe submission events (`de.mabis.*`), emitted by
 /// `mabis-syncd`.
@@ -527,6 +565,9 @@ pub fn all() -> &'static [&'static str] {
         accounting::SPERRANDROHUNG,
         accounting::SPERRANKUENDIGUNG,
         accounting::SPERRAUFTRAG,
+        accounting::ENTSPERRAUFTRAG,
+        accounting::ABWENDUNG_ANGEBOTEN,
+        accounting::ABWENDUNG_GEBROCHEN,
         accounting::BANKRUECKLAST,
         // de.netzbilanz.*
         netzbilanz::INVOIC_DRAFTED,
@@ -583,6 +624,12 @@ pub fn all() -> &'static [&'static str] {
         // de.obs.*
         obs::STP_PARITY_ALERT,
         obs::DEADLINE_APPROACHING,
+        // de.sperr.*
+        sperr::AUFTRAG_EINGEGANGEN,
+        sperr::AUSGEFUEHRT,
+        sperr::FEHLGESCHLAGEN,
+        sperr::STORNIERT,
+        sperr::IFTSTA_AUSSTEHEND,
         // de.mabis.*
         mabis::SUBMISSION_FAILED,
         mabis::KORREKTURBEDARF_OPENED,
