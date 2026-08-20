@@ -68,7 +68,7 @@ pub struct NetzzugangSender {
     /// ERP webhook for the operator-submits-manually fallback.
     webhook_url: Option<Arc<str>>,
     /// Shared secret for the ERP webhook — when set, the fallback CloudEvent
-    /// body is signed with HMAC-SHA256 (`X-Mako-Signature`), matching
+    /// body is signed with Standard Webhooks, matching
     /// [`crate::erp_adapter::WebhookErpAdapter`].
     webhook_secret: Option<Arc<SecretString>>,
     /// marktd projection (best-effort; delivery does not depend on it).
@@ -191,20 +191,31 @@ impl NetzzugangSender {
                 "datacontenttype": "application/json",
                 "data": antrag,
             });
-            // Serialize once so the (optional) HMAC signature covers the raw
-            // bytes actually sent — same construction and header as
-            // `WebhookErpAdapter` (`X-Mako-Signature: HMAC-SHA256 hex`).
+            // Serialize once so the (optional) signature covers the raw bytes
+            // actually sent — same construction and headers as
+            // `WebhookErpAdapter` (Standard Webhooks).
             let body_bytes = serde_json::to_vec(&body).map_err(|e| {
                 EngineError::Deserialization(format!("netzzugang CloudEvent serialize: {e}"))
             })?;
+            let webhook_id = body
+                .get("id")
+                .and_then(|v| v.as_str())
+                .unwrap_or_default()
+                .to_owned();
             let mut builder = self
                 .http
                 .post(webhook.as_ref())
-                .header("Content-Type", "application/json");
+                .header("Content-Type", "application/json")
+                .header(mako_service::webhook::ID_HEADER, &webhook_id);
             if let Some(secret) = &self.webhook_secret {
-                let sig =
-                    mako_service::webhook::sign(secret.expose_secret().as_bytes(), &body_bytes);
-                builder = builder.header("X-Mako-Signature", sig);
+                for (name, value) in mako_service::webhook::headers(
+                    secret.expose_secret().as_bytes(),
+                    &webhook_id,
+                    time::OffsetDateTime::now_utc().unix_timestamp(),
+                    &body_bytes,
+                ) {
+                    builder = builder.header(name, value);
+                }
             }
             let resp = builder
                 .body(body_bytes)
@@ -294,11 +305,11 @@ mod tests {
     /// header + raw body) from the Path-2 webhook delivery.
     async fn capture_one_webhook_request() -> (
         std::net::SocketAddr,
-        Arc<std::sync::Mutex<Option<(Option<String>, Vec<u8>)>>>,
+        Arc<std::sync::Mutex<Option<(axum::http::HeaderMap, Vec<u8>)>>>,
     ) {
         use axum::routing::post;
 
-        type Captured = Arc<std::sync::Mutex<Option<(Option<String>, Vec<u8>)>>>;
+        type Captured = Arc<std::sync::Mutex<Option<(axum::http::HeaderMap, Vec<u8>)>>>;
         let captured: Captured = Arc::new(std::sync::Mutex::new(None));
         let state = Arc::clone(&captured);
         let app = axum::Router::new().route(
@@ -307,11 +318,7 @@ mod tests {
                 move |headers: axum::http::HeaderMap, body: axum::body::Bytes| {
                     let state = Arc::clone(&state);
                     async move {
-                        let sig = headers
-                            .get("X-Mako-Signature")
-                            .and_then(|v| v.to_str().ok())
-                            .map(String::from);
-                        *state.lock().expect("lock") = Some((sig, body.to_vec()));
+                        *state.lock().expect("lock") = Some((headers, body.to_vec()));
                         "ok"
                     }
                 },
@@ -327,11 +334,12 @@ mod tests {
         (addr, captured)
     }
 
-    /// The Path-2 CloudEvent POST carries `X-Mako-Signature` — HMAC-SHA256 of
-    /// the raw body with the configured secret, exactly like the general ERP
-    /// webhook adapter.
+    /// The Path-2 CloudEvent POST carries Standard Webhooks headers, exactly
+    /// like the general ERP webhook adapter — and is asserted through the shared
+    /// **verifier**, not by rebuilding the signature here. Comparing an emitter
+    /// against its own signer proves only that it is self-consistent.
     #[tokio::test]
-    async fn webhook_cloudevent_is_hmac_signed_when_secret_configured() {
+    async fn webhook_cloudevent_is_signed_when_secret_configured() {
         let (addr, captured) = capture_one_webhook_request().await;
 
         let sender = NetzzugangSender::new(
@@ -344,16 +352,19 @@ mod tests {
         let msg = outbox_msg(serde_json::to_value(antrag()).expect("serialize"));
         sender.send(&msg).await.expect("delivered");
 
-        let (sig, body) = captured
+        let (headers, body) = captured
             .lock()
             .expect("lock")
             .take()
             .expect("request captured");
-        let sig = sig.expect("X-Mako-Signature header present");
-        assert_eq!(
-            sig,
-            mako_service::webhook::sign(b"test-secret", &body),
-            "signature must be the canonical sha256=<hex> of the raw body",
+        let verified = mako_service::webhook::verify_request(Some(b"test-secret"), &headers, &body)
+            .expect("the receiver's own verifier accepts what was sent");
+        // The id is the message id, so an ERP deduplicating on `webhook-id`
+        // deduplicates on the thing makod already calls the message.
+        assert!(verified.is_some(), "webhook-id must be present");
+        assert!(
+            mako_service::webhook::verify_request(Some(b"other-secret"), &headers, &body).is_err(),
+            "a different secret must not verify"
         );
         // Sanity: the signed body is the expected CloudEvent.
         let ce: serde_json::Value = serde_json::from_slice(&body).expect("CloudEvent JSON");
@@ -376,11 +387,17 @@ mod tests {
         let msg = outbox_msg(serde_json::to_value(antrag()).expect("serialize"));
         sender.send(&msg).await.expect("delivered");
 
-        let (sig, _body) = captured
+        let (headers, _body) = captured
             .lock()
             .expect("lock")
             .take()
             .expect("request captured");
-        assert!(sig.is_none(), "no secret configured — no signature header");
+        assert!(
+            !headers.contains_key(mako_service::webhook::SIGNATURE_HEADER),
+            "no secret configured — no signature header"
+        );
+        // …but the id still travels, so a receiver deduplicates the same way
+        // whether or not a secret happens to be configured.
+        assert!(headers.contains_key(mako_service::webhook::ID_HEADER));
     }
 }

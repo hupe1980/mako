@@ -75,7 +75,7 @@ pub mod types;
 pub use abmeldung::evaluate_abmeldung;
 pub use checks::evaluate;
 pub use config::NetzCheckConfig;
-pub use mako_engine::fristen::HolidayCalendar;
+pub use mako_fristen::HolidayCalendar;
 pub use types::{
     AbmeldungAnfrage, AnmeldungAnfrage, MaloGridRecord, Messtyp, NetzCheckResult, RejectReason,
 };

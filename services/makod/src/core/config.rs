@@ -462,7 +462,7 @@ pub struct ErpConfig {
     /// only logged.
     pub webhook_url: Option<String>,
 
-    /// Shared secret for `X-Mako-Signature` HMAC-SHA256 request signing.
+    /// Shared secret for Standard Webhooks request signing.
     pub webhook_secret: Option<String>,
 
     /// Path to a file holding the webhook signing secret. Preferred over

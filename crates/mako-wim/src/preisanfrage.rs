@@ -86,17 +86,23 @@ pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15004, 15005];
 /// process deadline from it and `processd` sizes the operator queue by it — two
 /// literals for one Frist is how the two come to disagree about whether an
 /// obligation was met.
-pub const ANTWORT_FRIST_WT: u32 = 5;
+pub use mako_fristen::antwort::PREISANFRAGE_WERKTAGE as ANTWORT_FRIST_WT;
 
 /// The answer window for a REQOTE Preisanfrage PID, in Werktage.
+///
+/// A view on [`mako_fristen::antwort::WIM`].
 ///
 /// `None` for a PID that is not a Preisanfrage — notably **35003**, the ESA
 /// „Anfrage von Werten", which `crate::wertebestellung` owns and which must
 /// never be answered with a PreisblattMessung quote.
 #[must_use]
-pub const fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
-    match request_pid {
-        35001 | 35002 | 35004 | 35005 => Some(ANTWORT_FRIST_WT),
+pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
+    use mako_fristen::antwort::FristShape;
+    if !matches!(request_pid, 35001 | 35002 | 35004 | 35005) {
+        return None;
+    }
+    match mako_fristen::antwort::antwort_obligation(request_pid)?.frist {
+        FristShape::WerktageAtCutoff(n) => Some(n),
         _ => None,
     }
 }

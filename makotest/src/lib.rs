@@ -19,7 +19,7 @@ use edi_energy::registry::ReleaseRegistry;
 use edi_energy::{
     EdiEnergyMessage, MessageType, ObjectType, Platform, Pruefidentifikator, Release,
 };
-use mako_engine::fristen::{self, HolidayCalendar};
+use mako_fristen::{self as fristen, HolidayCalendar};
 use rubo4e::identifiers::{MaloId, MeloId};
 
 // ── Identifiers ───────────────────────────────────────────────────────────────

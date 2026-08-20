@@ -69,9 +69,9 @@ name = "processd"
 path = "src/lib.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"] }
-mako-engine   = { workspace = true }
 # The GPKE / GeLi Gas answer-Frist tables. The operator queue must expire on the
 # same instant makod registers on the process, so both read one table.
 mako-gpke     = { path = "../../crates/mako-gpke" }

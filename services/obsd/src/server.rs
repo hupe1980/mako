@@ -35,7 +35,10 @@ pub fn router(state: HandlerState) -> Router {
         .route("/obs/processes/{process_id}", get(get_process))
         .route("/obs/kpis", get(get_kpis))
         .route("/obs/overdue", get(get_overdue))
-        .route("/api/v1/audit/bnetza-report", get(get_bnetza_report))
+        .route(
+            "/api/v1/audit/gleichbehandlung",
+            get(get_gleichbehandlung_report),
+        )
         .route("/obs/metrics", get(metrics))
         .with_state(state)
 }
@@ -107,6 +110,7 @@ async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
 struct ProcessQueryParams {
     state: Option<String>,
     pid: Option<u32>,
+    family: Option<String>,
     partner_mp_id: Option<String>,
     mdm_role: Option<String>,
     since: Option<String>,
@@ -131,15 +135,25 @@ async fn get_processes(
             .into_response();
     }
 
-    let obs_state = params.state.as_deref().and_then(|s| match s {
-        "initiated" => Some(ProcessState::Initiated),
-        "running" => Some(ProcessState::Running),
-        "aperak_timeout" => Some(ProcessState::AperakTimeout),
-        "completed" => Some(ProcessState::Completed),
-        "rejected" => Some(ProcessState::Rejected),
-        "cancelled" => Some(ProcessState::Cancelled),
-        _ => ProcessState::from_ce_type(&format!("de.mako.process.{s}")),
-    });
+    // An unparseable `state` is a client error, not "no filter": silently
+    // dropping it returns every row and reads as a much larger result set than
+    // the caller asked for.
+    let obs_state = match params.state.as_deref() {
+        None => None,
+        Some(s) => match ProcessState::from_str_exact(s) {
+            Some(st) => Some(st),
+            None => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("unknown state `{s}`"),
+                        "known": ProcessState::ALL.map(ProcessState::as_str),
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
 
     let since = params
         .since
@@ -149,6 +163,7 @@ async fn get_processes(
     let q = ObsQuery {
         state: obs_state,
         pid: params.pid,
+        family: params.family,
         partner_mp_id: params.partner_mp_id,
         mdm_role: params.mdm_role,
         since,
@@ -258,16 +273,10 @@ async fn get_kpis(
         .kpi_report(params.pid, from, to, &state.tenant)
         .await
     {
-        Ok(report) => {
-            let mut body = serde_json::to_value(&report).unwrap_or_default();
-            // The cycle-time aggregates are NULL until something in the bucket
-            // reaches a terminal state; report that as null, not as 0.0 hours.
-            if report.total_completed + report.total_rejected + report.total_cancelled == 0 {
-                body["avg_cycle_time_hours"] = serde_json::Value::Null;
-                body["p95_cycle_time_hours"] = serde_json::Value::Null;
-            }
-            Json(body).into_response()
-        }
+        // The report's rates are `Option`, so an unclosed or unmeasurable
+        // bucket serialises as `null` without this layer patching anything —
+        // which is what stops the MCP surface answering 0.0 to the same query.
+        Ok(report) => Json(report).into_response(),
         Err(mako_obs::error::ObsError::NoKpiData { .. }) => {
             (StatusCode::NOT_FOUND, "no data for this PID / period").into_response()
         }
@@ -364,7 +373,7 @@ pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Resu
     let worker_pool = pool.clone();
     let repo = PgProcessProjectionRepository::new(pool);
 
-    // §20 EnWG: build the affiliate-detection set from configured own_mp_ids.
+    // § 7a Abs. 5 EnWG: build the affiliate-detection set from own_mp_ids.
     // Fall back to tenant alone for single-MP-ID deployments.
     let own_mp_ids: std::collections::HashSet<String> = if cfg.identity.own_mp_ids.is_empty() {
         std::iter::once(tenant.clone()).collect()
@@ -438,69 +447,79 @@ pub async fn build_router(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Resu
         .merge(crate::mcp_server::router(mcp_state, ctx.shutdown.clone())))
 }
 
-// ── BNetzA §20 Diskriminierungsbericht ───────────────────────────────────────
+// ── § 7a Abs. 5 EnWG Gleichbehandlungsbericht evidence ───────────────────────
 
-/// §20 parity counts per PID.
+/// Per-PID parity counts for one **calendar year**, bucketed by `started_at`.
 ///
-/// The `state` literals are the ones `state_to_str` writes — lowercase. They
-/// were `'Completed'` / `'Rejected'` here, which matches nothing, so every PID
-/// reported perfect parity and discrimination was invisible in the artifact
-/// the BNetzA audit relies on. `bnetza_report_state_literals_match_projection`
-/// pins them.
-const BNETZA_REPORT_SQL: &str = r"SELECT
+/// **The bucket is `started_at`, not `updated_at`.** Grouping by `updated_at`
+/// moved rows between report years as later events touched them, so re-running
+/// last year's filing produced different numbers — the one property an annual
+/// regulatory filing must not have. A process that started on 30 December and
+/// completed in January belongs to the year it started, in every re-run.
+///
+/// The `state` literals are the ones `ProcessState::as_str` writes — lowercase.
+/// They were `'Completed'` / `'Rejected'` here, which matches nothing, so every
+/// PID reported perfect parity and unequal treatment was invisible in the
+/// artefact the filing rests on. `report_state_literals_match_projection` pins
+/// them.
+const GLEICHBEHANDLUNG_SQL: &str = r"SELECT
       pid::int,
       initiator_is_affiliate,
       COUNT(*)                                      AS total,
       COUNT(*) FILTER (WHERE state = 'completed')   AS completed,
-      COUNT(*) FILTER (WHERE state = 'rejected')    AS rejected
+      COUNT(*) FILTER (WHERE state = 'rejected')    AS rejected,
+      COUNT(*) FILTER (
+          WHERE deadline_at IS NOT NULL
+            AND deadline_at < COALESCE(completed_at, now())
+      )                                             AS frist_breached
   FROM process_projections
-  WHERE EXTRACT(YEAR FROM updated_at)::int = $1
+  WHERE EXTRACT(YEAR FROM started_at)::int = $1
     AND tenant = $2
   GROUP BY pid, initiator_is_affiliate
   ORDER BY pid, initiator_is_affiliate";
 
-/// Query parameters for `GET /api/v1/audit/bnetza-report`.
+/// Query parameters for `GET /api/v1/audit/gleichbehandlung`.
 #[derive(Debug, Deserialize)]
-struct BnetzaReportQuery {
+struct GleichbehandlungQuery {
     /// Calendar year to report (default: current year).
     year: Option<i32>,
     /// Output format: `json` (default) or `csv`.
     format: Option<String>,
 }
 
-/// `GET /api/v1/audit/bnetza-report?year=YYYY[&format=csv|json]`
+/// `GET /api/v1/audit/gleichbehandlung?year=YYYY[&format=csv|json]`
 ///
-/// Generate a BNetzA §20 Abs. 1 EnWG Diskriminierungsbericht for the given
-/// calendar year.  The report shows affiliate vs. non-affiliate process
-/// statistics per PID, enabling the NB to demonstrate non-discriminatory
-/// treatment at BNetzA audits.
+/// Per-PID evidence for the **Gleichbehandlungsbericht** a vertically
+/// integrated undertaking's Gleichbehandlungsbeauftragte files with the
+/// Bundesnetzagentur by **31 March** for the preceding calendar year
+/// (§ 7a Abs. 5 EnWG), and publishes in non-personalised form.
+/// Lieferantenwechsel is one of the areas those reports examine.
 ///
-/// Response shape (JSON):
-/// ```json
-/// {
-///   "year": 2026,
-///   "tenant": "9903000...",
-///   "generated_at": "2026-07-12T...",
-///   "by_pid": [
-///     {
-///       "pid": 55001,
-///       "affiliate":     { "total": 10, "completed": 9, "rejected": 1, "completion_rate": 0.9  },
-///       "non_affiliate": { "total": 50, "completed": 48, "rejected": 2, "completion_rate": 0.96 },
-///       "parity_gap_pct": -6.0
-///     }
-///   ]
-/// }
-/// ```
+/// It compares how the operator's network arm treated Lieferanten inside its
+/// own undertaking against third-party Lieferanten, over the processes the
+/// network arm actually answers (`handler::is_nb_answered_lieferanten_process`).
+/// The underlying duties are § 6a EnWG (informatorische Entflechtung) and
+/// § 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang).
 ///
-/// `parity_gap_pct` = (affiliate completion_rate − non_affiliate completion_rate) × 100.
-/// Negative values indicate the NB resolves affiliate processes FASTER (potential bias).
-/// BNetzA threshold: |parity_gap_pct| > 5 triggers scrutiny.
-async fn get_bnetza_report(
+/// **`gap_pp` is `affiliate − third_party`, in percentage points.** A positive
+/// gap means the affiliate fared better, which is the concern. This convention
+/// is `ParityComparison`'s and is shared with the `de.obs.stp.parity.alert`
+/// CloudEvent and the MCP tool — three surfaces previously computed it, two one
+/// way and one the other.
+///
+/// **No threshold is asserted.** The Bundesnetzagentur publishes no numeric
+/// parity limit for this figure; what counts as a gap worth explaining is the
+/// operator's judgement, and the escalation threshold lives in
+/// `[worker] parity_threshold_pp`. A gap over a group smaller than
+/// `PARITY_MIN_SAMPLE` is reported as `null`, not as a large number.
+async fn get_gleichbehandlung_report(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
-    Query(params): Query<BnetzaReportQuery>,
+    Query(params): Query<GleichbehandlungQuery>,
 ) -> impl IntoResponse {
+    use mako_obs::domain::{ParityComparison, ParityGroup};
+
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-kpi", resource_tenant) {
         return (
@@ -515,9 +534,8 @@ async fn get_bnetza_report(
         .unwrap_or_else(|| OffsetDateTime::now_utc().year());
     let format = params.format.as_deref().unwrap_or("json");
 
-    // Query parity stats: affiliate vs. non-affiliate per PID for the year.
-    let rows: Vec<(i32, bool, i64, i64, i64)> =
-        match sqlx::query_as::<_, (i32, bool, i64, i64, i64)>(BNETZA_REPORT_SQL)
+    let rows: Vec<(i32, bool, i64, i64, i64, i64)> =
+        match sqlx::query_as::<_, (i32, bool, i64, i64, i64, i64)>(GLEICHBEHANDLUNG_SQL)
             .bind(year)
             .bind(&state.tenant)
             .fetch_all(state.repo.pool())
@@ -525,70 +543,58 @@ async fn get_bnetza_report(
         {
             Ok(r) => r,
             Err(e) => {
-                return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                tracing::warn!(%e, year, "obsd: Gleichbehandlung report query failed");
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
 
-    // Collate into per-PID affiliate / non-affiliate pairs.
-    use std::collections::HashMap;
-    #[derive(Default)]
-    struct PidStats {
-        affiliate_total: i64,
-        affiliate_completed: i64,
-        affiliate_rejected: i64,
-        non_affiliate_total: i64,
-        non_affiliate_completed: i64,
-        non_affiliate_rejected: i64,
-    }
-    let mut by_pid: HashMap<i32, PidStats> = HashMap::new();
-    for (pid, is_affiliate, total, completed, rejected) in rows {
+    // Collate into per-PID affiliate / third-party pairs.
+    use std::collections::BTreeMap;
+    let mut by_pid: BTreeMap<i32, (ParityGroup, ParityGroup)> = BTreeMap::new();
+    for (pid, is_affiliate, total, completed, rejected, frist_breached) in rows {
         let entry = by_pid.entry(pid).or_default();
-        if is_affiliate {
-            entry.affiliate_total += total;
-            entry.affiliate_completed += completed;
-            entry.affiliate_rejected += rejected;
+        let group = if is_affiliate {
+            &mut entry.0
         } else {
-            entry.non_affiliate_total += total;
-            entry.non_affiliate_completed += completed;
-            entry.non_affiliate_rejected += rejected;
-        }
+            &mut entry.1
+        };
+        group.total += total;
+        group.completed += completed;
+        group.rejected += rejected;
+        group.frist_breached += frist_breached;
     }
 
-    fn completion_rate(completed: i64, total: i64) -> f64 {
-        if total == 0 {
-            0.0
-        } else {
-            completed as f64 / total as f64
-        }
-    }
-
-    let mut pid_list: Vec<i32> = by_pid.keys().copied().collect();
-    pid_list.sort_unstable();
+    let comparisons: Vec<(i32, ParityComparison)> = by_pid
+        .into_iter()
+        .map(|(pid, (affiliate, third_party))| (pid, ParityComparison::new(affiliate, third_party)))
+        .collect();
 
     if format == "csv" {
-        // CSV output for BNetzA tabular reporting.
         let mut csv = String::from(
-            "pid,affiliate_total,affiliate_completed,affiliate_rejected,affiliate_completion_rate,\
-             non_affiliate_total,non_affiliate_completed,non_affiliate_rejected,non_affiliate_completion_rate,\
-             parity_gap_pct\n",
+            "pid,affiliate_total,affiliate_completed,affiliate_rejected,affiliate_frist_breached,             affiliate_completion_rate,third_party_total,third_party_completed,             third_party_rejected,third_party_frist_breached,third_party_completion_rate,gap_pp
+",
         );
-        for pid in &pid_list {
-            let s = &by_pid[pid];
-            let aff_rate = completion_rate(s.affiliate_completed, s.affiliate_total);
-            let non_rate = completion_rate(s.non_affiliate_completed, s.non_affiliate_total);
-            let gap = (aff_rate - non_rate) * 100.0;
+        for (pid, c) in &comparisons {
+            // An unstatable rate is an empty CSV cell, never a 0 that reads as a
+            // measured "completed none of them".
+            let rate = |g: &ParityGroup| {
+                g.completion_rate()
+                    .map_or_else(String::new, |r| format!("{r:.4}"))
+            };
+            let gap = c.gap_pp.map_or_else(String::new, |g| format!("{g:.1}"));
             csv.push_str(&format!(
-                "{},{},{},{},{:.4},{},{},{},{:.4},{:.2}\n",
-                pid,
-                s.affiliate_total,
-                s.affiliate_completed,
-                s.affiliate_rejected,
-                aff_rate,
-                s.non_affiliate_total,
-                s.non_affiliate_completed,
-                s.non_affiliate_rejected,
-                non_rate,
-                gap,
+                "{pid},{},{},{},{},{},{},{},{},{},{},{gap}
+",
+                c.affiliate.total,
+                c.affiliate.completed,
+                c.affiliate.rejected,
+                c.affiliate.frist_breached,
+                rate(&c.affiliate),
+                c.third_party.total,
+                c.third_party.completed,
+                c.third_party.rejected,
+                c.third_party.frist_breached,
+                rate(&c.third_party),
             ));
         }
         return (
@@ -599,29 +605,17 @@ async fn get_bnetza_report(
             .into_response();
     }
 
-    // JSON output.
-    let by_pid_json: Vec<serde_json::Value> = pid_list
+    let by_pid_json: Vec<serde_json::Value> = comparisons
         .iter()
-        .map(|pid| {
-            let s = &by_pid[pid];
-            let aff_rate = completion_rate(s.affiliate_completed, s.affiliate_total);
-            let non_rate = completion_rate(s.non_affiliate_completed, s.non_affiliate_total);
-            let gap = (aff_rate - non_rate) * 100.0;
+        .map(|(pid, c)| {
             serde_json::json!({
                 "pid": pid,
-                "affiliate": {
-                    "total": s.affiliate_total,
-                    "completed": s.affiliate_completed,
-                    "rejected": s.affiliate_rejected,
-                    "completion_rate": (aff_rate * 1000.0).round() / 1000.0,
-                },
-                "non_affiliate": {
-                    "total": s.non_affiliate_total,
-                    "completed": s.non_affiliate_completed,
-                    "rejected": s.non_affiliate_rejected,
-                    "completion_rate": (non_rate * 1000.0).round() / 1000.0,
-                },
-                "parity_gap_pct": (gap * 100.0).round() / 100.0,
+                "process": mako_fristen::antwort::antwort_obligation(pid.unsigned_abs())
+                    .map(|o| o.name),
+                "affiliate": c.affiliate,
+                "third_party": c.third_party,
+                "gap_pp": c.gap_pp,
+                "favours": c.favours(),
             })
         })
         .collect();
@@ -632,7 +626,17 @@ async fn get_bnetza_report(
         "generated_at": OffsetDateTime::now_utc()
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_default(),
-        "note": "parity_gap_pct = (affiliate_completion_rate - non_affiliate_completion_rate) * 100. BNetzA §20 scrutiny threshold: |gap| > 5.0.",
+        "basis": "§ 7a Abs. 5 EnWG — Gleichbehandlungsbericht, filed by 31 March for the \
+                  preceding calendar year; duties under § 6a EnWG (informatorische \
+                  Entflechtung) and § 20 Abs. 1 Satz 1 EnWG (diskriminierungsfreier Netzzugang)",
+        "gap_convention": "gap_pp = (affiliate completion rate − third-party completion rate) \
+                           × 100. Positive means the affiliate fared better. `null` when either \
+                           group is below the minimum sample size — an unstatable gap, not a \
+                           zero one.",
+        "min_sample": mako_obs::domain::PARITY_MIN_SAMPLE,
+        "threshold": "none published. The Bundesnetzagentur sets no numeric parity limit for \
+                      this figure; the operator's escalation threshold is [worker] \
+                      parity_threshold_pp and is an internal policy, not a regulatory one.",
         "by_pid": by_pid_json,
     }))
     .into_response()
@@ -640,24 +644,42 @@ async fn get_bnetza_report(
 
 #[cfg(test)]
 mod tests {
-    use super::{BNETZA_REPORT_SQL, TERMINAL_STATE_SQL};
-    use crate::pg::projection::state_to_str;
+    use super::{GLEICHBEHANDLUNG_SQL, TERMINAL_STATE_SQL};
     use mako_obs::domain::ProcessState;
 
-    /// The §20 Diskriminierungsbericht must count the states the projection
+    /// The Gleichbehandlungsbericht must count the states the projection
     /// actually writes. Casing drift here is silent: every PID reports
-    /// completed=0/rejected=0 and therefore perfect parity.
+    /// completed=0/rejected=0 and therefore perfect parity — in the artefact
+    /// the § 7a Abs. 5 filing rests on.
     #[test]
-    fn bnetza_report_state_literals_match_projection() {
+    fn report_state_literals_match_projection() {
         for s in [ProcessState::Completed, ProcessState::Rejected] {
             assert!(
-                BNETZA_REPORT_SQL.contains(&format!("state = '{}'", state_to_str(s))),
-                "BNetzA report does not filter on the stored literal for {s:?}"
+                GLEICHBEHANDLUNG_SQL.contains(&format!("state = '{}'", s.as_str())),
+                "the report does not filter on the stored literal for {s:?}"
             );
         }
         assert!(
-            !BNETZA_REPORT_SQL.contains("'Completed'") && !BNETZA_REPORT_SQL.contains("'Rejected'"),
-            "BNetzA report still carries the PascalCase literals"
+            !GLEICHBEHANDLUNG_SQL.contains("'Completed'")
+                && !GLEICHBEHANDLUNG_SQL.contains("'Rejected'"),
+            "the report still carries the PascalCase literals"
+        );
+    }
+
+    /// An annual filing must reproduce when re-run.
+    ///
+    /// Bucketing by `updated_at` migrated rows between report years every time a
+    /// later event touched them, so last year's numbers changed after it was
+    /// filed. `started_at` is fixed once the process begins.
+    #[test]
+    fn the_report_year_is_the_year_the_process_started() {
+        assert!(
+            GLEICHBEHANDLUNG_SQL.contains("EXTRACT(YEAR FROM started_at)"),
+            "the report year must be the process's own, not the row's last touch"
+        );
+        assert!(
+            !GLEICHBEHANDLUNG_SQL.contains("updated_at"),
+            "a filing bucketed on updated_at does not reproduce"
         );
     }
 
@@ -665,16 +687,9 @@ mod tests {
     /// exclude is the projection's terminal set.
     #[test]
     fn open_process_gauge_excludes_exactly_the_terminal_states() {
-        for s in [
-            ProcessState::Initiated,
-            ProcessState::Running,
-            ProcessState::AperakTimeout,
-            ProcessState::Completed,
-            ProcessState::Rejected,
-            ProcessState::Cancelled,
-        ] {
+        for s in ProcessState::ALL {
             assert_eq!(
-                TERMINAL_STATE_SQL.contains(&format!("'{}'", state_to_str(s))),
+                TERMINAL_STATE_SQL.contains(&format!("'{}'", s.as_str())),
                 s.is_terminal(),
                 "{s:?} is on the wrong side of the open-process gauge filter"
             );

@@ -57,7 +57,7 @@ use crate::{
 /// register a regulatory deadline alongside its events and outbox messages:
 ///
 /// ```rust,ignore
-/// use mako_engine::fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
+/// use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 /// use mako_engine::workflow::PendingDeadline;
 ///
 /// let due = aperak_strom_due_at(received_at);

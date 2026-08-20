@@ -595,10 +595,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                 let outbox = esa_send("REQOTE", ANFRAGE_PID, &data, &message_ref, None);
                 // The MSB owes an Angebot within 5 WT; arm the window from now
                 // (the AS4 Receipt for our REQOTE is issued in the same request).
-                let due = mako_engine::fristen::deadline_at_werktage(
+                let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
                     super::wertebestellung::ANGEBOT_FRIST_WT,
-                    mako_engine::fristen::HolidayCalendar::BdewMaKo,
+                    mako_fristen::HolidayCalendar::BdewMaKo,
                 );
                 Ok(WorkflowOutput {
                     events: vec![E::AnfrageGesendet {
@@ -663,10 +663,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                     )));
                 }
                 let outbox = esa_send("ORDERS", BESTELLUNG_PID, data, &message_ref, None);
-                let due = mako_engine::fristen::deadline_at_werktage(
+                let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
                     ANTWORT_FRIST_WT,
-                    mako_engine::fristen::HolidayCalendar::BdewMaKo,
+                    mako_fristen::HolidayCalendar::BdewMaKo,
                 );
                 Ok(WorkflowOutput {
                     events: vec![E::BestellungGesendet { message_ref }],
@@ -737,10 +737,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                     &message_ref,
                     data.bestellung_ref.as_deref(),
                 );
-                let due = mako_engine::fristen::deadline_at_werktage(
+                let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
                     ANTWORT_FRIST_WT,
-                    mako_engine::fristen::HolidayCalendar::BdewMaKo,
+                    mako_fristen::HolidayCalendar::BdewMaKo,
                 );
                 Ok(WorkflowOutput {
                     events: vec![E::StornierungGesendet { message_ref }],
@@ -786,10 +786,10 @@ impl Workflow for EsaWertebestellungWorkflow {
                 };
                 // UC 4.3 Nr. 1: the Abbestellung (17008) ends a running delivery.
                 let outbox = esa_send("ORDERS", ABBESTELLUNG_PID, data, &message_ref, None);
-                let due = mako_engine::fristen::deadline_at_werktage(
+                let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
                     ANTWORT_FRIST_WT,
-                    mako_engine::fristen::HolidayCalendar::BdewMaKo,
+                    mako_fristen::HolidayCalendar::BdewMaKo,
                 );
                 Ok(WorkflowOutput {
                     events: vec![E::AbbestellungGesendet {

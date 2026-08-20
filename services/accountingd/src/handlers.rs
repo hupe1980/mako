@@ -276,7 +276,7 @@ pub struct LedgerQuery {
 ///
 /// ## Security
 ///
-/// When `erp_hmac_secret` is configured, the `X-Mako-Signature: sha256=...` header
+/// When `erp_hmac_secret` is configured, the Standard Webhooks headers
 /// is verified before any processing. Requests without a valid signature are rejected
 /// with HTTP 403 to prevent fake invoice injection.
 ///
@@ -292,18 +292,19 @@ pub async fn ingest_webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // ── Inbound HMAC verification ─────────────────────────────────────
-    if let Some(ref secret) = cfg.erp_hmac_secret {
-        use secrecy::ExposeSecret;
-        let provided = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        // Canonical verify — constant-time, and tolerant of the `sha256=` prefix
-        // (so a bare-hex or prefixed sender both authenticate identically).
-        if !mako_service::webhook::verify_hmac(secret.expose_secret().as_bytes(), &body, provided) {
-            tracing::warn!("accountingd: inbound webhook HMAC mismatch — rejected");
-            return StatusCode::UNAUTHORIZED.into_response();
+    // ── Inbound Standard Webhooks verification ────────────────────────
+    use secrecy::ExposeSecret;
+    let secret = cfg
+        .erp_hmac_secret
+        .as_ref()
+        .map(|s| s.expose_secret().as_bytes().to_vec());
+    if secret.is_some() {
+        // The shared verifier: constant-time signature compare *and* the
+        // timestamp check, so a captured ERP POST cannot be replayed.
+        if let Err(err) = mako_service::webhook::verify_request(secret.as_deref(), &headers, &body)
+        {
+            tracing::warn!(%err, "accountingd: inbound webhook refused");
+            return StatusCode::from(err).into_response();
         }
     } else {
         tracing::warn!(

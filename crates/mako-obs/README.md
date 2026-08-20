@@ -72,8 +72,13 @@ pub enum DeadlineRisk {
 
 ## `KpiReport`
 
-Regulatory KPI report for **one PID** over one calendar period, suitable for
-BNetzA voluntary reporting and §4a MsbG monitoring:
+Process KPIs for **one PID** over one calendar period, bucketed by `started_at`.
+
+**The two deadline clocks are two fields.** `total_aperak_timeout` is the
+*technical acknowledgement* (45 min Strom weekday; Gas next Werktag 12:00 or
+3 Werktage); `total_frist_breached` is the *business Antwortfrist*. They differ
+by orders of magnitude and fail for different reasons, so reporting one under the
+other's name points an operator at the wrong problem.
 
 ```rust
 pub struct KpiReport {
@@ -83,13 +88,25 @@ pub struct KpiReport {
     pub total_initiated: u64,
     pub total_completed: u64,
     pub total_rejected: u64,
+    pub total_failed: u64,
+    /// The technical acknowledgement clock.
     pub total_aperak_timeout: u64,
-    pub total_cancelled: u64,
-    pub aperak_compliance_rate: f64, // (total_initiated - total_aperak_timeout) / total_initiated
-    pub avg_cycle_time_hours: f64,   // mean initiated → completed/rejected
-    pub p95_cycle_time_hours: f64,   // 95th percentile cycle time
+    /// The business Antwortfrist.
+    pub total_frist_breached: u64,
+    /// Denominator of the rate below. Reported because a small one means the
+    /// bucket is mostly *unmeasured*, which a rate near 1.0 would hide.
+    pub total_with_frist: u64,
+    /// `None` when nothing in the bucket carries a published Frist.
+    pub frist_compliance_rate: Option<f64>,
+    /// `None` until something in the bucket closes — never a measured 0 hours.
+    pub avg_cycle_time_hours: Option<f64>,
+    pub p95_cycle_time_hours: Option<f64>,
 }
 ```
+
+Every rate is `Option`, in the type rather than patched at the edge: a `null`
+means nothing measurable in the bucket, and a `0.0` placeholder reads as
+"we completed none of them".
 
 ---
 
@@ -131,20 +148,26 @@ Errors are reported through `ObsError` (`Database`, `NotFound`, `NoKpiData`,
 
 ---
 
-## §20 EnWG parity monitoring
+## § 7a Abs. 5 EnWG Gleichbehandlung parity
 
-`ProcessProjection::initiator_is_affiliate` flags whether the initiating LF
-MP-ID equals the operator's own MP-ID (vertically integrated utility
-deployment). `obsd` sets it on `de.mako.process.initiated` for Lieferbeginn PIDs
-by comparing the event's new-supplier MP-ID to the configured `own_mp_id`.
+`ProcessProjection::initiator_is_affiliate` flags whether the Lieferant on a
+process belongs to the operator's own vertically integrated undertaking. `obsd`
+sets it over the processes the **network arm answers for a Lieferant** — the set
+derived from the Antwortfrist table, not a literal PID list.
 
-On its parity sweep, `obsd` compares the completion-rate of affiliate-initiated
-Anmeldungen against non-affiliate-initiated ones. When the **gap** exceeds the
-configured `parity_threshold_pp` (default `5.0` percentage points; see
-`services/obsd/src/config.rs`), it emits a `de.obs.stp.parity.alert` CloudEvent
-(`mako_events::obs::STP_PARITY_ALERT`) for the BNetzA §20 EnWG
-Diskriminierungsfreiheitspflicht audit trail. This is a gap-based comparison, not
-an absolute rate threshold.
+`ParityComparison` owns the comparison and its sign convention:
+**`gap_pp = affiliate − third_party`, in percentage points; positive means the
+affiliate fared better**, which is the concern. It is `None` when either group is
+below `PARITY_MIN_SAMPLE` — an *unstatable* gap, not a zero one and not a
+hundred-point one off a single process.
+
+On its parity sweep `obsd` emits `de.obs.stp.parity.alert`
+(`mako_events::obs::STP_PARITY_ALERT`) when the gap passes the configured
+`parity_threshold_pp`. **That threshold is the operator's own escalation
+policy.** The Bundesnetzagentur publishes no numeric parity limit for this
+figure; § 7a Abs. 5 asks the Gleichbehandlungsbeauftragte to describe the
+measures taken, and the report is filed by 31 March for the preceding calendar
+year.
 
 The deadline sweep emits `de.obs.deadline.approaching`
 (`mako_events::obs::DEADLINE_APPROACHING`) per process inside the warn window.
@@ -170,6 +193,12 @@ Never enable `testing` in production builds.
 
 ## Regulatory basis
 
-- **§20 EnWG** — Nichtdiskriminierungsgebot (non-discrimination mandate)
-- **BK6-24-174** — GPKE / WiM Strom process framework and deadlines
-- **BK7-24-01-009** — GeLi Gas / WiM Gas process framework and deadlines
+- **§ 20 Abs. 1 Satz 1 EnWG** — diskriminierungsfreier Netzzugang
+- **§ 6a EnWG** — informatorische Entflechtung
+- **§ 7a Abs. 5 EnWG** — Gleichbehandlungsprogramm and the Gleichbehandlungs­bericht
+  the Gleichbehandlungsbeauftragte files by 31 March for the preceding calendar year
+- **BK6-24-174** — GPKE / WiM Strom process framework and Fristen
+- **BK7-24-01-009** — GeLi Gas / WiM Gas process framework and Fristen
+
+Deadlines themselves live in `mako-fristen`, not here: this crate holds the
+read-model and the report shapes.

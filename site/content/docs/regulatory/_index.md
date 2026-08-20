@@ -94,7 +94,7 @@ graph LR
 | **§19 Abs. 2/3 StromNEV + BK8-25-003-A / GBK-25-01 (AgNeS, draft)** | Strom | `grid-billing::regulatory` (regime turnovers as dates; **AgNeS-era Entgelt settlements are refused** until the Rahmenfestlegung supplies parameters) |
 | **§20b EnWG** (Netzzugangsplattform, G. v. 18.12.2025 — no Festlegung/API yet) | Both | `makod` (`netzzugang.*` commands, outbox-reliable sender + signed ERP-webhook fallback), `marktd` (`netzzugang_antraege` registry) |
 | **BDEW AS4-Profil v1.2** (BrainpoolP256r1, sign+encrypt, ECDH-ES AES128-GCM) | — | `mako-as4` |
-| **§20 EnWG** (Diskriminierungsfreiheit, §20 Abs. 1 S. 3) | Both | `obsd` (`bnetza-report`), Cedar ABAC |
+| **§ 20 Abs. 1 S. 1 EnWG** (diskriminierungsfreier Netzzugang) + **§ 6a / § 7a Abs. 5 EnWG** (informatorische Entflechtung, Gleichbehandlungsbericht by 31 March) | Both | `obsd` (`GET /api/v1/audit/gleichbehandlung`), Cedar ABAC |
 | **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` daily cert-expiry worker — tiered 90/30/7-day `de.messwert.smgw.cert.expiry-warning` (dedup per tier); `agentd` `smgw-diagnostics-agent` escalates renewal |
 
 > **Format version coexistence.** Format releases ship on a semi-annual cadence

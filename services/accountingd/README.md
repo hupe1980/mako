@@ -52,7 +52,7 @@ no SEPA collection.
 ## Security
 
 - **OIDC/JWT**: all financial write endpoints require a valid Bearer token; dev mode emits `[WARN]`
-- **Inbound HMAC**: `POST /webhook` verifies `X-Mako-Signature: sha256=...`; constant-time comparison
+- **Inbound HMAC**: `POST /webhook` verifies Standard Webhooks (`webhook-signature`); constant-time comparison
 - **SecretString**: `erp_hmac_secret` never appears in logs or debug output
 
 ## IBAN validation

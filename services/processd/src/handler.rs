@@ -89,11 +89,13 @@ pub async fn handle_webhook(
     let inbound_secret = (*state.inbound_secret)
         .as_ref()
         .map(|s| s.expose_secret().as_bytes().to_vec());
-    if let Err(code) =
+    // The shared verifier also refuses a stale `webhook-timestamp`, so a
+    // captured POST cannot be replayed into the projection.
+    if let Err(err) =
         mako_service::webhook::verify_request(inbound_secret.as_deref(), &headers, &body)
     {
-        warn!("processd: webhook HMAC signature mismatch");
-        return code.into_response();
+        warn!(%err, "processd: inbound webhook refused");
+        return StatusCode::from(err).into_response();
     }
 
     // ── 2. Parse JSON body ────────────────────────────────────────────────
@@ -339,7 +341,7 @@ pub async fn handle_webhook(
         // `mako_wim::STEUERUNGSAUFTRAG_DEADLINE_LABEL`) — less an hour of
         // headroom. An escalation must not expire before its own process.
         let sa_expires_at = {
-            use mako_engine::fristen::{HolidayCalendar, deadline_at_werktage};
+            use mako_fristen::{HolidayCalendar, deadline_at_werktage};
             let received_at = event["time"]
                 .as_str()
                 .and_then(|s| {

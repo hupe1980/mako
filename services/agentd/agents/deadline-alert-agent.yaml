@@ -39,7 +39,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: deadline-alert-agent
-  version: "2.2.0"
+  version: "3.0.0"
 spec:
   # No `execution`: the behaviour is `agentd::skills::DeadlineTriage`.
   # No `oversight`: this specialist reads and reports, and oversight without
@@ -47,10 +47,10 @@ spec:
 
   identity:
     role: >-
-      APERAK deadline triage. Classifies processes past or approaching their
-      BDEW MaKo response window (45 min Strom UTILMD, 3 WT Gas APERAK) by how
-      much time remains, and attributes each to the market participant that owes
-      the response.
+      MaKo deadline triage. Classifies processes past or approaching a BDEW
+      response window — the business Antwortfrist and the APERAK acknowledgement
+      clock, kept apart — by how much time remains, and attributes each to the
+      market participant that owes the response.
     constraints: |
       The procedure is code, not prose: agentd::skills::deadline.
 
@@ -60,12 +60,29 @@ spec:
         WARNING   under 2 hours remain
         COMPLIANT more than 2 hours remain
 
-      The BDEW windows those deadlines come from (APERAK AHB 1.0 §2.3/§2.4.1 —
-      45 min Strom weekday, Sonntag 12:00 for Saturday, next Werktag 12:00
-      otherwise, 3 Werktage for Gas Initialprozesse) are obsd's to compute, via
-      the same mako-engine Werktage calendar this plane resolves approval
-      windows with. This specialist does not re-derive them; it reads
-      `deadline_at` and subtracts.
+      The set classified is the union of the **triggering event** and obsd's
+      overdue list, deduplicated by process_id. The trigger matters: a
+      `de.obs.deadline.approaching` alert carries a deadline that is usually
+      still in the future, and a run that ignored it answered only about
+      processes that had already breached — saying nothing about the one it was
+      woken for.
+
+      Two different clocks produce these deadlines, and this specialist never
+      conflates them:
+
+        APERAK Frist   the technical acknowledgement — 45 min Strom weekday,
+                       next Werktag 12:00 for a Gas Folgeprozess, 3 Werktage for
+                       a Gas Initialprozess. A lapse arrives as
+                       `de.mako.aperak.timeout`.
+        Antwortfrist   the business answer — 11:00 of the 1. Werktag for a GPKE
+                       Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for
+                       WiM Strom. This is what `deadline_at` holds.
+
+      Both are obsd's to compute, from `mako_fristen` — the same Werktage
+      calendar this plane resolves approval windows with. This specialist does
+      not re-derive them: it reads `deadline_at`, subtracts, and quotes
+      `deadline_source` so the answer cites the Festlegung rather than asserting
+      a number.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -109,22 +126,32 @@ spec:
     schema:
       type: object
       additionalProperties: false
-      required: [deadline_status, overdue_count, processes]
+      required: [deadline_status, at_risk_count, processes]
       properties:
         deadline_status:
           type: string
           enum: [COMPLIANT, WARNING, CRITICAL, BREACH]
           description: The worst severity in the set.
-        overdue_count:
+        at_risk_count:
           type: integer
           minimum: 0
+          description: >-
+            Processes classified in this run: the triggering alert plus obsd's
+            overdue list, deduplicated by process_id. Was `overdue_count`, which
+            was wrong twice over — the set includes the not-yet-overdue process
+            the run was woken for.
         unclassifiable:
           type: integer
           minimum: 0
           description: >-
-            Rows whose `deadline_at` could not be read. Counted rather than
-            treated as compliant, so an obsd projection fault cannot hide behind
-            a green alert.
+            Rows whose deadline could not be read. Counted rather than treated as
+            compliant, so an obsd projection fault cannot hide behind a green
+            alert.
+        truncated:
+          type: boolean
+          description: >-
+            obsd returned a full batch. At least the cap was waiting — never that
+            the cap was all there was.
         by_partner_mp_id:
           type: object
           description: Count of at-risk processes per responsible market partner.
@@ -141,6 +168,12 @@ spec:
               state:         { type: string }
               partner_mp_id: { type: string }
               deadline_at:   { type: string }
+              deadline_source:
+                type: string
+                description: >-
+                  The Festlegung the deadline came from, as obsd stored it. A
+                  recommendation that cites the rule beats one that asserts a
+                  number.
               remaining_secs:
                 type: integer
                 description: Negative once the Frist has passed.

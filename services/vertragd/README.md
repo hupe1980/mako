@@ -109,7 +109,7 @@ The check sits in extraction, not in the handlers, so a route added later cannot
 skip it without also dropping authentication.
 
 The two webhook routes carry no operator token and are authenticated by the
-shared `X-Mako-Signature` HMAC over the raw body. `main` refuses to start
+shared Standard Webhooks signature over the raw body. `main` refuses to start
 without **both** `[oidc]` and `inbound_secret` unless
 `allow_insecure_no_auth = true`: a forged event on those routes confirms supply
 or creates a contract.

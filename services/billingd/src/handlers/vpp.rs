@@ -342,7 +342,8 @@ pub async fn post_vpp_billing(
 /// ## HMAC verification
 ///
 /// When `[inbound_webhook_secret]` is configured in `billingd.toml`, the
-/// `X-Mako-Signature: sha256=<hex>` header is verified.  Requests with
+/// `webhook-signature` header is verified, together with the `webhook-timestamp`
+/// freshness that stops a captured request replaying.  Requests with
 /// invalid or missing signatures are rejected with `401 Unauthorized`.
 ///
 /// ## Auto-billing disabled
@@ -374,23 +375,24 @@ pub async fn post_vpp_webhook(
     body: axum::body::Bytes,
 ) -> impl IntoResponse {
     let (cfg, vertragd) = (&deps.cfg, &deps.vertragd);
-    // ── 1. HMAC signature verification ────────────────────────────────────────
-    if let Some(ref secret) = cfg.inbound_webhook_secret {
-        let sig = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.strip_prefix("sha256=").unwrap_or(v));
-        match sig {
-            Some(hex) if mako_service::webhook::verify_hmac(secret.as_bytes(), &body, hex) => {}
-            Some(_) => {
-                tracing::warn!("billingd: vpp-dispatch webhook — invalid HMAC signature");
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
-            None => {
-                tracing::warn!("billingd: vpp-dispatch webhook — missing X-Mako-Signature");
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
-        }
+    // ── 1. Standard Webhooks verification ─────────────────────────────────────
+    //
+    // A dispatch settles money, so a replay is a second Gutschrift. The shared
+    // verifier refuses a stale `webhook-timestamp`; the local signature compare
+    // this replaces could not.
+    if let Err(err) = mako_service::webhook::verify_request(
+        cfg.inbound_webhook_secret.as_deref().map(str::as_bytes),
+        &headers,
+        &body,
+    ) {
+        tracing::warn!(%err, "billingd: vpp-dispatch webhook refused");
+        return StatusCode::from(err).into_response();
+    }
+    if cfg.inbound_webhook_secret.is_none() {
+        tracing::warn!(
+            "billingd: inbound_webhook_secret not set — accepting vpp-dispatch webhooks \
+             unverified (dev mode)"
+        );
     }
 
     // ── 2. Parse CloudEvent ───────────────────────────────────────────────────

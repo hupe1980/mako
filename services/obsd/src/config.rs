@@ -11,7 +11,7 @@
 //!
 //! [identity]
 //! tenant     = "9900357000004"
-//! # All operator MP-IDs for §20 EnWG affiliate detection.
+//! # All operator MP-IDs for § 7a Abs. 5 EnWG affiliate detection.
 //! # Include both Strom (BDEW 99…) and Gas (DVGW 98…) codes
 //! # when running an integrated NB+GNB deployment.
 //! own_mp_ids = ["9900357000004", "9800357000004"]
@@ -37,12 +37,15 @@
 use serde::Deserialize;
 use std::path::Path;
 
-// NOTE: no `deny_unknown_fields` on the top-level struct — `mako_service::run`
-// loads config via `load_config`, whose env layer (`OBSD_*`) also surfaces the
-// `OBSD_CONFIG` path variable as a stray `config` key. Rejecting unknown fields
-// here would make every deployment that points at its config via that variable
-// fail to start. Nested blocks keep `deny_unknown_fields`.
+// `deny_unknown_fields` like every nested block: a typo in a top-level key is a
+// refusal to start, not a setting that silently does nothing.
+//
+// The waiver this replaces said `load_config`'s env layer surfaces `OBSD_CONFIG`
+// as a stray `config` key. It does not: `load_config` ignores `CONFIG`,
+// `LOG_FORMAT` and `LOG_LEVEL` precisely so a `deny_unknown_fields` struct can
+// start. The waiver outlived its reason and left every top-level typo silent.
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     pub http: HttpConfig,
     pub database: DatabaseConfig,
@@ -107,9 +110,10 @@ pub struct IdentityConfig {
     /// - GNB Gas  DVGW-Codenummer (`98…`)
     /// - MSB / nMSB codes if applicable
     ///
-    /// Used to compute `initiator_is_affiliate` for §20 EnWG parity reporting:
-    /// when `data.new_supplier` matches **any** of these MP-IDs, the initiating
-    /// LF is a subsidiary of the operator (vertically integrated utility).
+    /// Used to compute `initiator_is_affiliate` for the § 7a Abs. 5 EnWG
+    /// Gleichbehandlungsbericht evidence: when the Lieferant on an NB-answered
+    /// process matches **any** of these MP-IDs, it belongs to the operator's own
+    /// vertically integrated undertaking.
     ///
     /// Defaults to `[tenant]` when absent (single-MP-ID deployments).
     #[serde(default)]
@@ -138,7 +142,7 @@ pub struct WebhookConfig {
     /// not run. Use `"env:OBSD_OUTBOUND_URL"`.
     pub outbound_url: Option<String>,
     /// HMAC-SHA256 secret for signing outbound `de.obs.*` CloudEvents
-    /// (`X-Mako-Signature: sha256=…`). Must match the target's inbound secret.
+    /// (Standard Webhooks). Must match the target's inbound secret.
     /// Use `"env:OBSD_OUTBOUND_SECRET"`.
     pub outbound_secret: Option<String>,
 }
@@ -154,11 +158,19 @@ pub struct WorkerConfig {
     /// many hours of now. Default 24 (the Amber window).
     #[serde(default = "default_deadline_warn_hours")]
     pub deadline_warn_hours: i64,
-    /// Interval between §20 EnWG parity sweeps, seconds. Default 86400 (daily).
+    /// Interval between § 7a Abs. 5 EnWG parity sweeps, seconds. Default 86400 (daily).
     #[serde(default = "default_parity_sweep_secs")]
     pub parity_sweep_secs: u64,
-    /// Parity-gap threshold in percentage points above which
-    /// `de.obs.stp.parity.alert` fires. Default 5.0 (BNetzA scrutiny threshold).
+    /// Completion-rate gap, in percentage points, at which
+    /// `de.obs.stp.parity.alert` fires. Default 5.0.
+    ///
+    /// **This is the operator's own escalation policy, not a regulatory limit.**
+    /// The Bundesnetzagentur publishes no numeric parity threshold for this
+    /// figure; the § 7a Abs. 5 EnWG Gleichbehandlungsbericht asks the
+    /// Gleichbehandlungsbeauftragte to describe the measures taken, not to meet
+    ///
+    /// A gap over a group smaller than `mako_obs::domain::PARITY_MIN_SAMPLE` is
+    /// never alerted on, whatever this is set to.
     #[serde(default = "default_parity_threshold_pp")]
     pub parity_threshold_pp: f64,
     /// Look-back window for the parity computation, days. Default 90.

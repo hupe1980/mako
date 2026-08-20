@@ -11,6 +11,7 @@ keywords     = ["gpke", "edifact", "energy", "mako", "bdew"]
 categories   = ["data-structures"]
 
 [dependencies]
+mako-fristen = { workspace = true }
 rubo4e      = { workspace = true }
 mako-engine = { workspace = true }
 serde       = { workspace = true }

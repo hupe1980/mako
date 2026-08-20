@@ -5,7 +5,7 @@
 //! value. Defaults reproduce the exact behaviour the crate shipped with before
 //! the config seam existed, so `NetzCheckConfig::default()` is always safe.
 
-use mako_engine::fristen::HolidayCalendar;
+use mako_fristen::HolidayCalendar;
 
 /// Tunable parameters for [`crate::evaluate`].
 ///

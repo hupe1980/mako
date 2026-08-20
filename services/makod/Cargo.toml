@@ -18,6 +18,7 @@ name = "makod"
 path = "src/lib.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-engine      = { path = "../../crates/mako-engine", features = ["slatedb"] }
 mako-gpke        = { path = "../../crates/mako-gpke" }

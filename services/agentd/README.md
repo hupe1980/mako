@@ -163,7 +163,7 @@ a GDPR decision. Seven specialists form memories: **five bind
 `$correlation/malo`**, so the subject resolves per run to the Marktlokation the
 run was correlated on and an Art. 17 erasure destroys exactly one person's pile;
 **two carry a literal** because their subject genuinely is the operator itself
-(§20 parity posture, BNetzA KPI history).
+(§ 7a Abs. 5 EnWG parity posture, per-PID KPI history).
 
 A lint holds the line — a literal subject is refused unless it is one of those
 two operator-wide scopes, and a binding to a correlation namespace the labeller

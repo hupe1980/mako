@@ -71,6 +71,7 @@ pub fn servers_named_in_grants() -> BTreeSet<String> {
 pub async fn connect(
     endpoints: &HashMap<String, String>,
     api_key: &secrecy::SecretString,
+    http: &reqwest::Client,
 ) -> Result<Vec<(String, Arc<dyn ToolClient>)>> {
     let granted = servers_named_in_grants();
 
@@ -102,7 +103,7 @@ pub async fn connect(
 
     for name in &granted {
         let uri = &endpoints[name];
-        let client = connect_one(name, uri, &token)
+        let client = connect_one(name, uri, &token, http)
             .await
             .with_context(|| format!("connect to MCP server '{name}' at {uri}"))?;
         clients.push((name.clone(), client));
@@ -113,12 +114,23 @@ pub async fn connect(
 }
 
 /// One streamable-HTTP MCP connection, authenticated with the shared bearer.
-async fn connect_one(name: &str, uri: &str, token: &str) -> Result<Arc<dyn ToolClient>> {
+///
+/// `http` is the runner's client, not a fresh one per server. Building one per
+/// MCP endpoint gave each its own connection pool, its own DNS cache and — the
+/// part that matters — none of the timeouts and TLS settings `mako_service`
+/// configures centrally, so a hung tool server had no client-side deadline at
+/// all. `reqwest::Client` is an `Arc` internally; cloning it shares the pool.
+async fn connect_one(
+    name: &str,
+    uri: &str,
+    token: &str,
+    http: &reqwest::Client,
+) -> Result<Arc<dyn ToolClient>> {
     let mut config = StreamableHttpClientTransportConfig::with_uri(uri);
     if !token.is_empty() {
         config = config.auth_header(token);
     }
-    let transport = StreamableHttpClientTransport::with_client(reqwest::Client::new(), config);
+    let transport = StreamableHttpClientTransport::with_client(http.clone(), config);
 
     // `host_info` advertises exactly what agentplane implements. Elicitation,
     // sampling and roots are deliberately not advertised: a server offered one
@@ -163,9 +175,13 @@ mod tests {
     #[tokio::test]
     async fn a_granted_server_missing_from_the_config_is_a_startup_failure() {
         let endpoints = HashMap::from([("marktd".to_owned(), "http://127.0.0.1:1/mcp".to_owned())]);
-        let err = connect(&endpoints, &secrecy::SecretString::from(String::new()))
-            .await
-            .expect_err("makod is granted but unconfigured");
+        let err = connect(
+            &endpoints,
+            &secrecy::SecretString::from(String::new()),
+            &reqwest::Client::new(),
+        )
+        .await
+        .expect_err("makod is granted but unconfigured");
         let msg = err.to_string();
         assert!(
             msg.contains("makod"),

@@ -99,7 +99,7 @@ graph TB
 | [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b EnWG GGV), § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), meterstore hot/cold tiering (PostgreSQL + Apache Iceberg) with cross-tier OLAP + a read-only Iceberg REST catalog; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
 | [mabis-syncd](@/docs/services/mabis-syncd.md) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf; emits `de.mabis.*` failure events; 4-tool read-only MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 18-tool MCP server |
-| [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation (GPKE 24h/WiM 5WT/GeLi Gas 10WT), `completed_at` cycle-time tracking, `GET /api/v1/audit/bnetza-report`, 6-tool MCP server |
+| [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen` (never computed here), `completed_at` cycle-time tracking, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, 6-tool MCP server |
 
 ## Retail Billing (LF)
 
@@ -169,7 +169,7 @@ transaction* as the business change and drained by a background `OutboxWorker` w
 status-column dead-letter queue. Because the event is committed atomically with the data that
 justifies it, a crash between "commit" and "deliver" can never drop or duplicate it —
 persist-before-dispatch. Emission always goes through one builder and one signer
-(`CloudEvent::new` + `post_ce_with_retry`; `X-Mako-Signature: sha256=<hex>`).
+(`CloudEvent::new` + `post_ce_with_retry`; Standard Webhooks (`webhook-signature`)).
 
 > `makod`, `marktd`, `agentd`, and `portald` keep bespoke `main`s — `makod`/`marktd` for their
 > non-standard runtimes (SlateDB event store, `marktd`'s durable fan-out worker), `agentd`/`portald`

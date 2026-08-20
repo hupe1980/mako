@@ -51,7 +51,7 @@
 
 use std::sync::Arc;
 
-use mako_engine::fristen::{self, HolidayCalendar};
+use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use sqlx::PgPool;
 use time::OffsetDateTime;

@@ -246,13 +246,13 @@ impl ContrlAckService {
                 mako_engine::version::FormatVersion::parse("FV2025-10-01")
                     .expect("FV2025-10-01 is a valid fallback format version")
             });
-        let due_at = mako_engine::fristen::contrl_due_at(time::OffsetDateTime::now_utc());
+        let due_at = mako_fristen::contrl_due_at(time::OffsetDateTime::now_utc());
         let deadline = Deadline::new(
             StreamId::for_process(self.tenant_id, &process_id),
             process_id,
             self.tenant_id,
             WorkflowId::new("contrl-ack-obligation", fv.as_str()),
-            mako_engine::fristen::CONTRL_FRIST_LABEL,
+            mako_fristen::CONTRL_FRIST_LABEL,
             due_at,
         );
 

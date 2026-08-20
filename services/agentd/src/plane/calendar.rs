@@ -8,7 +8,7 @@
 //! stated in *Werktage*.
 //!
 //! This adapter supplies the missing kind. `working-days` resolves through
-//! [`mako_engine::fristen`] — the same BDEW MaKo holiday table that computes an
+//! [`mako_fristen`] — the same BDEW MaKo holiday table that computes an
 //! APERAK Frist, so an agent's approval window and the regulatory window it
 //! guards cannot disagree about when Karfreitag is.
 //!
@@ -26,7 +26,7 @@
 //!   than as a silent re-interpretation.
 
 use agentplane::core::{Calendar, CalendarError, DeadlineSpec, Digest, Timestamp, WallClock};
-use mako_engine::fristen::{self, HolidayCalendar};
+use mako_fristen::{self as fristen, HolidayCalendar};
 
 /// Names the rules this calendar applies. Bump the version on any change to
 /// the holiday table, the cut-off hour or the timezone.

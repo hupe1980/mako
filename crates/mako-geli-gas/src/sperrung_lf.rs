@@ -80,7 +80,7 @@ pub const ORDRSP_STORNO_PIDS: &[u32] = &[19128, 19129];
 /// Deadline label for the 10-Werktage GNB response window.
 ///
 /// BK7-24-01-009: the GNB must send ORDRSP within **10 Werktage** of receipt.
-/// Use `mako_engine::fristen::add_werktage(date, 10, BdewMaKo)` to compute the
+/// Use `mako_fristen::add_werktage(date, 10, BdewMaKo)` to compute the
 /// deadline. Saturdays, Sundays and public holidays are not Werktage.
 pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-lf-antwort-10wt";
 
@@ -321,7 +321,7 @@ impl CommandPayload for GasSperrungLfCommand {}
 /// responses (ORDRSP 19128/19129).
 ///
 /// Deadline: **10 Werktage** per BK7-24-01-009. Compute with
-/// `mako_engine::fristen::add_werktage(date, 10, BdewMaKo)`.
+/// `mako_fristen::add_werktage(date, 10, BdewMaKo)`.
 pub struct GeliGasSperrungLfWorkflow;
 
 impl Workflow for GeliGasSperrungLfWorkflow {

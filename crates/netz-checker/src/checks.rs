@@ -69,7 +69,7 @@
 use time::{Date, Duration, OffsetDateTime};
 use time_tz::{OffsetDateTimeExt, timezones};
 
-use mako_engine::fristen::{self, HolidayCalendar};
+use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_markt::domain::Sparte;
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 

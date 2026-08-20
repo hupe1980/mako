@@ -5,7 +5,11 @@
 //!
 //! `obsd` is an L3 application service that subscribes to **all** `de.mako.*`
 //! events from `marktd` and projects them into a `ProcessProjection` read-model
-//! stored in PostgreSQL.  It **never** connects to `makod` directly.
+//! stored in PostgreSQL. It **never** connects to `makod` directly.
+//!
+//! It is also a producer of two `de.obs.*` events — the Antwortfrist warning and
+//! the § 7a Abs. 5 EnWG parity alert — emitted by [`worker`] to `marktd`'s
+//! ingest, whose fan-out delivers them to `agentd`.
 //!
 //! ```text
 //! makod ──(CloudEvents)──► marktd ──(webhook fan-out, all events)──► obsd POST /webhook
@@ -19,27 +23,32 @@
 //!
 //! ## Routes
 //!
-//! | Method | Path | Description |
-//! |--------|------|-------------|
-//! | POST   | `/webhook` | Inbound `MarktEvent` from `marktd` (all event types) |
-//! | GET    | `/obs/processes` | Query process projections |
-//! | GET    | `/obs/processes/{process_id}` | Get single process projection |
-//! | GET    | `/obs/kpis` | KPI report for a PID and period |
-//! | GET    | `/obs/overdue` | Processes past their regulatory deadline |
-//! | GET    | `/health/live` | Liveness probe |
-//! | GET    | `/health/ready` | Readiness probe |
+//! | Method | Path | Auth | Description |
+//! |--------|------|------|-------------|
+//! | POST   | `/webhook` | inbound HMAC | `de.mako.*` CloudEvents from `marktd` |
+//! | GET    | `/obs/processes` | OIDC + Cedar `read-process` | Query projections |
+//! | GET    | `/obs/processes/{process_id}` | OIDC + Cedar `read-process` | One projection |
+//! | GET    | `/obs/kpis` | OIDC + Cedar `read-kpi` | Per-PID KPIs for a month |
+//! | GET    | `/obs/overdue` | OIDC + Cedar `read-overdue` | Past their Antwortfrist |
+//! | GET    | `/api/v1/audit/gleichbehandlung` | OIDC + Cedar `read-kpi` | § 7a Abs. 5 EnWG parity evidence |
+//! | GET    | `/obs/metrics` | none — restrict at the ingress | Business gauges, Prometheus text |
+//! | POST/GET | `/mcp` | OIDC or API key + Cedar `use-mcp` | MCP Streamable HTTP |
+//!
+//! `/health/live`, `/health/ready` and the generic `/metrics` are mounted by
+//! [`mako_service::run`], not here.
 //!
 //! ## Configuration
 //!
-//! | Flag | Env | Default |
-//! |---|---|---|
-//! | `--listen` | `OBSD_LISTEN` | `0.0.0.0:8480` |
-//! | `--database-url` | `OBSD_DATABASE_URL` | *(required)* |
-//! | `--marktd-url` | `OBSD_MARKTD_URL` | `http://localhost:8180` | URL of `marktd` for subscription registration |
-//! | `--subscriber-id` | `OBSD_SUBSCRIBER_ID` | `obsd` |
-//! | `--webhook-url` | `OBSD_WEBHOOK_URL` | *(required)* |
-//! | `--webhook-secret` | `OBSD_WEBHOOK_SECRET` | *(optional)* |
-//! | `--inbound-secret` | `OBSD_INBOUND_SECRET` | *(optional)* |
+//! `obsd.toml`, resolved by `mako_service::load_config` with an `OBSD_*` env
+//! overlay and `env:VAR` indirection for secrets. There are **no command-line
+//! flags**: the runner owns the lifecycle and the config file owns the settings.
+//! See [`config`] for the annotated minimal file.
+//!
+//! ## Two deadline clocks
+//!
+//! Every process carries two, and `obsd` reports them as two numbers. See
+//! [`mako_obs::domain`] for why conflating them is the defect this service is
+//! shaped to prevent.
 
 pub mod config;
 pub mod handler;

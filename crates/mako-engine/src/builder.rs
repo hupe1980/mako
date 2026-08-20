@@ -846,11 +846,11 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                         // for transport-layer CONTRL obligations).
                         if msg.message_type.as_ref() == "CONTRL" {
                             let elapsed = time::OffsetDateTime::now_utc() - msg.created_at;
-                            if elapsed > time::Duration::hours(crate::fristen::CONTRL_FRIST_HOURS) {
+                            if elapsed > time::Duration::hours(mako_fristen::CONTRL_FRIST_HOURS) {
                                 tracing::warn!(
                                     message_id   = %msg.message_id,
                                     elapsed_secs = elapsed.whole_seconds(),
-                                    max_secs     = crate::fristen::CONTRL_FRIST_HOURS * 3600,
+                                    max_secs     = mako_fristen::CONTRL_FRIST_HOURS * 3600,
                                     "outbox worker: CONTRL delivered OUTSIDE the 6h Übertragungsfrist \
                                      (CONTRL AHB 1.0 §1.2) — this is a BNetzA compliance violation"
                                 );
@@ -864,7 +864,7 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
                             let elapsed = time::OffsetDateTime::now_utc() - msg.created_at;
                             if elapsed
                                 > time::Duration::minutes(
-                                    crate::fristen::APERAK_STROM_WEEKDAY_MINUTES,
+                                    mako_fristen::APERAK_STROM_WEEKDAY_MINUTES,
                                 )
                             {
                                 tracing::warn!(
@@ -1054,7 +1054,7 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
     /// never a lost or duplicated message, so it is logged rather than
     /// propagated — the delivery itself has already been acknowledged.
     ///
-    /// [`fristen::discharges_delivery_window`]: crate::fristen::discharges_delivery_window
+    /// [`fristen::discharges_delivery_window`]: mako_fristen::discharges_delivery_window
     async fn discharge_delivery_window(&self, msg: &crate::outbox::OutboxMessage) {
         let open = match self.deadline_store.for_stream(&msg.stream_id).await {
             Ok(deadlines) => deadlines,
@@ -1072,7 +1072,7 @@ impl<OS: OutboxStore, S: As4Sender, DS: DeadlineStore> OutboxWorker<OS, S, DS> {
 
         for deadline in open
             .iter()
-            .filter(|d| crate::fristen::discharges_delivery_window(&msg.message_type, d.label()))
+            .filter(|d| mako_fristen::discharges_delivery_window(&msg.message_type, d.label()))
         {
             if let Err(e) = self.deadline_store.cancel(deadline.deadline_id()).await {
                 tracing::warn!(
@@ -1299,7 +1299,7 @@ impl<DS: DeadlineStore> DeadlineScheduler<DS> {
                 // says nothing about compliance — it was the reason this counter
                 // once tracked "Strom processes started" rather than "APERAKs
                 // missed". The discharge is what carries the meaning.
-                if label.starts_with(crate::fristen::APERAK_WINDOW_LABEL_PREFIX) {
+                if label.starts_with(mako_fristen::APERAK_WINDOW_LABEL_PREFIX) {
                     let now = time::OffsetDateTime::now_utc();
                     crate::metrics::EngineMetrics::global().aperak_missed(&label);
                     tracing::error!(
@@ -2573,10 +2573,10 @@ mod tests {
     async fn delivering_a_message_discharges_its_delivery_window() {
         // (message type, the window it answers for)
         for (message_type, window) in [
-            ("APERAK", crate::fristen::APERAK_STROM_WINDOW_LABEL),
-            ("APERAK", crate::fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
-            ("APERAK", crate::fristen::APERAK_GAS_INITIALPROZESS_LABEL),
-            ("CONTRL", crate::fristen::CONTRL_FRIST_LABEL),
+            ("APERAK", mako_fristen::APERAK_STROM_WINDOW_LABEL),
+            ("APERAK", mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
+            ("APERAK", mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL),
+            ("CONTRL", mako_fristen::CONTRL_FRIST_LABEL),
         ] {
             let stream_id = crate::ids::StreamId::new("gpke-supplier-change-1");
             let msg = outbox_message(&stream_id, message_type);
@@ -2609,15 +2609,15 @@ mod tests {
             &contrl,
             &stream_id,
             &[
-                crate::fristen::CONTRL_FRIST_LABEL,
-                crate::fristen::APERAK_STROM_WINDOW_LABEL,
+                mako_fristen::CONTRL_FRIST_LABEL,
+                mako_fristen::APERAK_STROM_WINDOW_LABEL,
             ],
         )
         .await;
 
         assert_eq!(
             left,
-            vec![crate::fristen::APERAK_STROM_WINDOW_LABEL.to_owned()],
+            vec![mako_fristen::APERAK_STROM_WINDOW_LABEL.to_owned()],
             "a delivered CONTRL discharges only the CONTRL window; the APERAK \
              obligation is still outstanding",
         );
@@ -2635,13 +2635,13 @@ mod tests {
     #[test]
     fn every_delivery_window_label_is_discharged_by_its_message() {
         for (message_type, label) in [
-            ("APERAK", crate::fristen::APERAK_STROM_WINDOW_LABEL),
-            ("APERAK", crate::fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
-            ("APERAK", crate::fristen::APERAK_GAS_INITIALPROZESS_LABEL),
-            ("CONTRL", crate::fristen::CONTRL_FRIST_LABEL),
+            ("APERAK", mako_fristen::APERAK_STROM_WINDOW_LABEL),
+            ("APERAK", mako_fristen::APERAK_GAS_FOLGEPROZESS_LABEL),
+            ("APERAK", mako_fristen::APERAK_GAS_INITIALPROZESS_LABEL),
+            ("CONTRL", mako_fristen::CONTRL_FRIST_LABEL),
         ] {
             assert!(
-                crate::fristen::discharges_delivery_window(message_type, label),
+                mako_fristen::discharges_delivery_window(message_type, label),
                 "delivering {message_type} must discharge `{label}`, or the window \
                  outlives its obligation and alerts on every process",
             );

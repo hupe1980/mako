@@ -165,10 +165,10 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
     // (BK6-24-174 §13.8).  The deadline is passed to
     // `execute_and_enqueue_with_deadlines` so that the event, outbox entry,
     // and the deadline all land in a single SSI transaction (F-009).
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         1,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),

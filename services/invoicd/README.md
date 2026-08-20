@@ -124,7 +124,7 @@ CloudEvent to the configured ERP webhook.  Delivery is **durable at-least-once**
 the initial attempt runs inline; failures are retried by the background outbox worker
 with exponential backoff (30 s → 5 min → 30 min → 2 h → dead-letter at attempt 5).
 HTTP 4xx = permanent failure (dead-lettered immediately); 5xx/transport = retried.
-Signed with `X-Mako-Signature: sha256=<hex>` when `[erp] hmac_secret` is configured.
+Signed with Standard Webhooks (`webhook-signature`) when `[erp] hmac_secret` is configured.
 Dead-lettered receipts: `SELECT * FROM invoic_receipts WHERE erp_notified_at IS NULL AND erp_attempts >= 5`.
 
 **REMADV deadline tracking.** Alert query (run every 6 h):
@@ -148,7 +148,7 @@ than 1 hour. Events are never silently dropped.
 ### `POST /webhook` — inbound from marktd
 
 Receives CloudEvents 1.0 JSON from `marktd`. Signature verified via
-`X-Mako-Signature: sha256=<hex>` (HMAC-SHA256 over the raw body) when
+Standard Webhooks (`webhook-signature`) (HMAC-SHA256 over the raw body) when
 `[webhook].inbound_secret` is set in the TOML config. Rejected signatures return `401 Unauthorized`
 before the event body is deserialized.
 

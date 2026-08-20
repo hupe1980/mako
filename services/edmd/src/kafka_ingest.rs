@@ -205,16 +205,37 @@ async fn run_consumer(
             // Per-message authentication when configured: unauthenticated
             // records are skipped like poison pills — one forged producer
             // must not wedge the partition, and must not store data either.
+            //
+            // Standard Webhooks headers, on a Kafka record rather than an HTTP
+            // request: `webhook-id` is the producer's message id and is what
+            // binds the signature to *this* record, so a value replayed onto
+            // another offset does not verify. The broker gives ordering and
+            // retention that HTTP does not, so there is no timestamp-freshness
+            // check here — the offset is the replay boundary.
             if let Some(ref secret) = message_secret {
-                let provided = record
-                    .headers
-                    .iter()
-                    .find(|(k, _)| k.as_ref() == b"x-mako-signature")
-                    .and_then(|(_, v)| v.as_ref())
-                    .and_then(|v| std::str::from_utf8(v).ok());
-                let ok = provided.is_some_and(|sig| {
-                    mako_service::webhook::verify_hmac(secret.as_bytes(), value, sig)
-                });
+                let header = |name: &[u8]| {
+                    record
+                        .headers
+                        .iter()
+                        .find(|(k, _)| k.as_ref() == name)
+                        .and_then(|(_, v)| v.as_ref())
+                        .and_then(|v| std::str::from_utf8(v).ok())
+                };
+                let ok = match (
+                    header(mako_service::webhook::ID_HEADER.as_bytes()),
+                    header(mako_service::webhook::TIMESTAMP_HEADER.as_bytes())
+                        .and_then(|t| t.trim().parse::<i64>().ok()),
+                    header(mako_service::webhook::SIGNATURE_HEADER.as_bytes()),
+                ) {
+                    (Some(id), Some(ts), Some(sig)) => mako_service::webhook::verify_signature(
+                        secret.as_bytes(),
+                        id,
+                        ts,
+                        value,
+                        sig,
+                    ),
+                    _ => false,
+                };
                 if !ok {
                     warn!(
                         topic = %record.topic, partition = record.partition,

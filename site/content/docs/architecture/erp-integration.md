@@ -75,8 +75,9 @@ Your ERP must accept `POST` requests at the configured URL:
 ```
 POST /mako/events
 Content-Type: application/cloudevents+json
-X-Idempotency-Key: 01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f
-X-Mako-Signature: sha256=<hmac-sha256-hex>
+webhook-id:        01932a4f-7b3e-4c5d-8f6a-9e0b1c2d3e4f
+webhook-timestamp: 1786012800
+webhook-signature: v1,K5oT9r8GKYqrTwjUPD8ILPZIo2LaLaSw…
 ```
 
 Body (CloudEvents 1.0 structured-mode JSON):
@@ -106,34 +107,80 @@ Body (CloudEvents 1.0 structured-mode JSON):
 }
 ```
 
+`webhook-id` is the CloudEvent's own `id`. It is the signature's message
+identity **and** your idempotency key — one value, not two headers that can
+disagree.
+
 **Step 4 — Verify the signature**
 
-Compute HMAC-SHA256 over the raw request body using your shared secret and
-compare with the `X-Mako-Signature` header. The header is `sha256=<hex>`; strip
-the `sha256=` prefix before comparing (the digest is 64-char lowercase hex):
+mako signs with [Standard Webhooks]. **Use a library** — there is one for every
+language an ERP is written in, and it will get the parts below right. The manual
+implementation is here so you can see what it does, not as a recommendation.
+
+Three things must all hold:
+
+1. The signature matches `base64(HMAC-SHA256(secret, "{id}.{timestamp}.{body}"))`.
+   Note it covers the id and the timestamp, **not the body alone**.
+2. `webhook-timestamp` is within **5 minutes** of now, in either direction.
+   Without this a captured request replays forever.
+3. `webhook-id` has not been seen before. Reject or ignore the duplicate.
 
 ```python
-import hmac, hashlib
+import base64, hmac, hashlib, time
 
-def verify_mako_signature(body: bytes, secret: str, header: str) -> bool:
-    provided = header.removeprefix("sha256=")
-    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, provided)
+TOLERANCE = 300  # seconds, each way
+
+def verify_mako_webhook(body: bytes, secret: str, headers) -> str:
+    """Returns the webhook id to deduplicate on; raises on refusal."""
+    msg_id = headers["webhook-id"]
+    ts     = int(headers["webhook-timestamp"])
+    if abs(time.time() - ts) > TOLERANCE:
+        raise ValueError("stale or future timestamp — possible replay")
+
+    signed  = f"{msg_id}.{ts}.".encode() + body
+    digest  = hmac.new(secret.encode(), signed, hashlib.sha256).digest()
+    expected = "v1," + base64.b64encode(digest).decode()
+
+    # The header is a space-separated list, so a key rotation presents both.
+    if not any(hmac.compare_digest(expected, part)
+               for part in headers["webhook-signature"].split()):
+        raise ValueError("no signature matched")
+    return msg_id   # ← persist this; reject a repeat
 ```
 
 ```typescript
 import { createHmac, timingSafeEqual } from "crypto";
 
-function verifyMakoSignature(body: Buffer, secret: string, header: string): boolean {
-  const provided = header.replace(/^sha256=/, "");
-  const expected = createHmac("sha256", secret).update(body).digest("hex");
-  return timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
+const TOLERANCE = 300; // seconds, each way
+
+function verifyMakoWebhook(body: Buffer, secret: string, headers: Record<string, string>): string {
+  const id = headers["webhook-id"];
+  const ts = Number(headers["webhook-timestamp"]);
+  if (Math.abs(Date.now() / 1000 - ts) > TOLERANCE) {
+    throw new Error("stale or future timestamp — possible replay");
+  }
+
+  const signed = Buffer.concat([Buffer.from(`${id}.${ts}.`), body]);
+  const expected = "v1," + createHmac("sha256", secret).update(signed).digest("base64");
+
+  const ok = headers["webhook-signature"].split(" ").some((part) =>
+    part.length === expected.length &&
+    timingSafeEqual(Buffer.from(part), Buffer.from(expected)));
+  if (!ok) throw new Error("no signature matched");
+  return id; // ← persist this; reject a repeat
 }
 ```
 
 > CloudEvents deliberately excludes signing from its specification — signing
-> semantics vary by use case. `X-Mako-Signature` (HMAC-SHA256) is the mako
-> security layer that sits on top of CloudEvents.
+> semantics vary by use case. [Standard Webhooks] is the security layer mako
+> puts on top of it.
+
+> **Key rotation.** `webhook-signature` is a space-separated list, so during a
+> rollover mako can present the old and the new signature at once. Accept the
+> request if **any** entry matches, and a secret can be changed without a
+> flag-day across every integration.
+
+[Standard Webhooks]: https://www.standardwebhooks.com/
 
 **Step 5 — Return `HTTP 200` for duplicates**
 
@@ -279,15 +326,16 @@ Track delivery via `invoic_receipts.erp_notified_at`; dead-lettered rows have
 `erp_attempts >= 5 AND erp_notified_at IS NULL`.
 
 **Request signing:** when `[erp] hmac_secret` is configured, every POST includes
-`X-Mako-Signature: sha256=<hex>` computed over the exact request body bytes.
+[Standard Webhooks] headers computed over `{webhook-id}.{webhook-timestamp}.{body}`.
 
 ### Request format
 
 ```
 POST <erp_webhook_url>
 Content-Type: application/cloudevents+json
-X-Idempotency-Key: <event.id>
-X-Mako-Signature: sha256=<hmac-sha256-hex>   ← only when --erp-webhook-secret is set
+webhook-id:        <event.id>                     ← dedup key; always sent
+webhook-timestamp: <unix seconds>                 ← only when a secret is set
+webhook-signature: v1,<base64>                    ← only when a secret is set
 ```
 
 Body is a **CloudEvents 1.0 structured-mode JSON** object (see below).
@@ -399,16 +447,18 @@ HTTP response codes:
 When `--erp-webhook-secret` is set, every POST includes:
 
 ```
-X-Mako-Signature: sha256=<lowercase-hex HMAC-SHA256 of raw request body>
+webhook-signature: v1,<base64 HMAC-SHA256 of {id}.{timestamp}.{raw body}>
 ```
 
-Strip the `sha256=` prefix before comparing. The key is the UTF-8 encoding of the
+The header is a space-separated list — accept if any entry matches, which is what
+makes key rotation possible. The key is the UTF-8 encoding of the
 shared secret. **Always use a constant-time comparison** (e.g. `hmac.compare_digest`
 in Python, `crypto.timingSafeEqual` in Node.js) to prevent timing attacks.
 
 ### No-secret mode
 
-If `--erp-webhook-secret` is omitted, no `X-Mako-Signature` header is sent.
+If `--erp-webhook-secret` is omitted, the signature and timestamp headers are
+not sent. `webhook-id` still is, so your deduplication works either way.
 **Do not use no-secret mode in production.** Use it only in local development
 with loopback-only ERP endpoints.
 
@@ -636,39 +686,42 @@ languages. The same pattern works regardless of your ERP stack.
 ### Checklist
 
 1. Accept `POST` from `makod`'s IP or via your load balancer.
-2. **Verify the HMAC-SHA256 signature** before touching the body.
+2. **Verify the [Standard Webhooks] signature** before touching the body — and
+   with it the `webhook-timestamp`, or a captured request replays forever.
 3. Deserialise the CloudEvents envelope.
-4. **Persist the `id` field** (idempotency key) before acting on the event.
-5. Check the `id` against your dedup log — discard duplicates without error.
+4. **Persist `webhook-id`** (identical to the envelope's `id`) before acting.
+5. Check it against your dedup log — discard duplicates without error.
 6. Dispatch on `type` to your business logic.
 7. Return `200 OK` (or any `2xx`) — `makod` retries on `429`/`5xx`.
 
 ### Python (FastAPI)
 
 ```python
-import hashlib, hmac, json
+import json
 from fastapi import FastAPI, Request, HTTPException, status
+# In production use a Standard Webhooks library; `verify_mako_webhook` from
+# Step 4 is shown so you can see what it checks.
 
 app     = FastAPI()
-SECRET  = b"your-shared-secret"          # same as --erp-webhook-secret
+SECRET  = "your-shared-secret"           # same as --erp-webhook-secret
 
 @app.post("/mako/events")
 async def receive(request: Request):
     body = await request.body()
 
-    # 1. Verify signature (constant-time compare)
-    sig = request.headers.get("X-Mako-Signature", "").removeprefix("sha256=")
-    expected = hmac.new(SECRET, body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(sig, expected):
+    # 1. Signature + timestamp freshness, in one call. Returns the id.
+    try:
+        msg_id = verify_mako_webhook(body, SECRET, request.headers)
+    except ValueError:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
 
     event = json.loads(body)
 
-    # 2. Idempotency — skip already-processed events
-    if already_processed(event["id"]):
+    # 2. Idempotency — `webhook-id` is the envelope's `id`, so either works.
+    if already_processed(msg_id):
         return {"ok": True}          # return 2xx; makod won't retry
 
-    mark_as_processed(event["id"])
+    mark_as_processed(msg_id)
 
     # 3. Dispatch on CloudEvents type
     match event["type"]:
@@ -694,27 +747,29 @@ async def receive(request: Request):
 
 ```typescript
 import express, { Request, Response } from "express";
-import { createHmac, timingSafeEqual } from "crypto";
+// In production use a Standard Webhooks library; `verifyMakoWebhook` from
+// Step 4 is shown so you can see what it checks.
 
 const app    = express();
-const SECRET = Buffer.from(process.env.MAKO_WEBHOOK_SECRET!);
+const SECRET = process.env.MAKO_WEBHOOK_SECRET!;
 
 app.post(
   "/mako/events",
   express.raw({ type: "application/cloudevents+json" }),
   async (req: Request, res: Response) => {
-    // 1. Verify signature
-    const sig      = ((req.headers["x-mako-signature"] as string) ?? "").replace(/^sha256=/, "");
-    const expected = createHmac("sha256", SECRET).update(req.body).digest("hex");
-    if (!timingSafeEqual(Buffer.from(sig), Buffer.from(expected))) {
+    // 1. Signature + timestamp freshness, in one call. Returns the id.
+    let msgId: string;
+    try {
+      msgId = verifyMakoWebhook(req.body, SECRET, req.headers as Record<string, string>);
+    } catch {
       return res.status(401).end();
     }
 
     const event = JSON.parse(req.body.toString());
 
-    // 2. Idempotency
-    if (await alreadyProcessed(event.id)) return res.json({ ok: true });
-    await markAsProcessed(event.id);
+    // 2. Idempotency — `webhook-id` is the envelope's `id`, so either works.
+    if (await alreadyProcessed(msgId)) return res.json({ ok: true });
+    await markAsProcessed(msgId);
 
     // 3. Dispatch
     switch (event.type) {
@@ -738,7 +793,7 @@ SAP Business Technology Platform can consume CloudEvents 1.0 natively via
 a webhook receiver channel with:
 
 - **Channel type**: HTTP-based receiver
-- **Authentication**: Custom header (`X-Mako-Signature`)
+- **Authentication**: [Standard Webhooks] (`webhook-signature`)
 - **Content type**: `application/cloudevents+json`
 - **Format**: JSON
 

@@ -20,6 +20,7 @@ name = "mabis-syncd"
 path = "src/main.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 anyhow           = { workspace = true }
 axum             = { version = "0.8" }
 mako-engine      = { workspace = true }

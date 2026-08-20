@@ -141,6 +141,49 @@ mod tests {
         );
     }
 
+    /// **Every server a manifest grants must be reachable through the policy.**
+    ///
+    /// A granted server missing from the allowlist is the quietest failure
+    /// there is: startup succeeds — the wiring check compares grants against
+    /// `[mcp_servers]`, not against the policy — the agent registers, routes and
+    /// runs, and every one of its tool calls is denied. A specialist answering
+    /// from the model alone, with no evidence behind it, is worse than one that
+    /// does not run.
+    ///
+    /// The server list is read from the manifests rather than restated here, so
+    /// a new grant fails this test until the policy set admits it.
+    #[test]
+    fn every_granted_server_is_reachable() {
+        let engine = engine();
+        let denied: Vec<String> = crate::plane::tools::servers_named_in_grants()
+            .into_iter()
+            .filter(|server| {
+                let context = json!({
+                    "run": "r1", "step": 0, "tenant": "9900357000004",
+                    "mutates": false,
+                    "args": { "server": server, "tool": "any_read", "arguments": {} },
+                    "label": { "provenance": [], "trust": "trusted", "sensitivity": "internal" },
+                });
+                !permitted(&engine.authorize(&PolicyRequest {
+                    principal: "mako-agent",
+                    action: "effect:perform",
+                    resource: "tool.call",
+                    context: &context,
+                }))
+            })
+            .collect();
+
+        assert!(
+            denied.is_empty(),
+            "these MCP servers are granted by a specialist manifest but the Cedar set \
+             refuses every call to them — the specialists boot, run, and can reach none of \
+             their tools: {denied:?}\n\n\
+             Add them to the `unless` list in policy/agentd.cedar. Remember agentplane \
+             reserves `-` in a tool:// server component, so a hyphenated service is spelled \
+             with an underscore."
+        );
+    }
+
     /// A tool call to a server outside mako is refused even when trusted.
     ///
     /// The failure this prevents is a mistyped `[mcp_servers]` entry: the
@@ -197,12 +240,10 @@ mod tests {
 
     /// Every role a manifest names can actually reach the worklist.
     ///
-    /// The failure this exists to prevent shipped: 14 triage rules named nine
-    /// audiences (`netzbilanz`, `metering`, `credit-control`, …) while this
-    /// policy set admitted two roles — so twelve of the fourteen rules opened
-    /// rows into a worklist their own audience was refused at the door. An
-    /// oversight control that reads as configured and cannot be exercised is
-    /// worse than none, because review sees it and stops asking.
+    /// A triage rule whose audience this set does not admit opens worklist rows
+    /// nobody can see or decide. An oversight control that reads as configured
+    /// and cannot be exercised is worse than none, because review sees it and
+    /// stops asking.
     ///
     /// The roles are read from the embedded manifests, not restated here: a new
     /// audience in a manifest fails this test until the Cedar set admits it.

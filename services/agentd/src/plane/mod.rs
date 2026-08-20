@@ -161,7 +161,12 @@ mod tests {
                         Some(agentplane::manifest::ExecutionKind::Planned)
                     );
                     assert!(
-                        !quarantined || plans || m.spec.memory_formation.is_some(),
+                        !quarantined
+                            || plans
+                            || m.spec
+                                .memory
+                                .as_ref()
+                                .is_some_and(|mem| mem.formation.is_some()),
                         "{name}: declares a quarantined model that nothing would select"
                     );
                 }
@@ -400,7 +405,12 @@ mod tests {
         const OPERATOR_WIDE: &[&str] = &["operator-parity-posture", "bnetza-reporting-posture"];
 
         for (name, m) in manifests() {
-            let Some(formation) = m.spec.memory_formation.as_ref() else {
+            let Some(formation) = m
+                .spec
+                .memory
+                .as_ref()
+                .and_then(|mem| mem.formation.as_ref())
+            else {
                 continue;
             };
             match &formation.subject {

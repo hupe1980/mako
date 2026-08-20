@@ -16,6 +16,7 @@ name       = "makotest_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+mako-fristen = { workspace = true }
 edi-energy   = { path = "../crates/edi-energy", features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders",
     "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes",

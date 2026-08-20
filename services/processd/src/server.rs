@@ -762,7 +762,7 @@ mod rest {
         if let Err(deny) = authorize(&enforcer, &claims, "initiate-supply", &state.tenant) {
             return deny;
         }
-        use mako_engine::fristen::{self, HolidayCalendar};
+        use mako_fristen::{self as fristen, HolidayCalendar};
         use time_tz::{OffsetDateTimeExt as _, timezones};
 
         let malo_id = match body

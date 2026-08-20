@@ -1634,16 +1634,22 @@ pub async fn post_angebot_annehmen(
         // This emit consumes the webhook response to link the created
         // Rahmenvertrag back to the Angebot, so it POSTs directly rather than
         // via the fire-and-forget `post_ce_with_retry`. Envelope construction
-        // and the `sha256=<hex>` signature still come from `mako_service`.
+        // and the Standard Webhooks headers still come from `mako_service`, so
+        // this path signs exactly like every other outbound.
         let body_bytes = ce.to_bytes().unwrap_or_default();
         let mut builder = client
             .post(webhook_url)
-            .header("Content-Type", "application/cloudevents+json");
+            .header("Content-Type", "application/cloudevents+json")
+            .header(mako_service::webhook::ID_HEADER, ce.id.clone());
         if let Some(ref secret) = cfg.erp_hmac_secret {
-            builder = builder.header(
-                "x-mako-signature",
-                mako_service::webhook::sign(secret.as_bytes(), &body_bytes),
-            );
+            for (name, value) in mako_service::webhook::headers(
+                secret.as_bytes(),
+                &ce.id,
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+                &body_bytes,
+            ) {
+                builder = builder.header(name, value);
+            }
         }
         if let Ok(resp) = builder.body(body_bytes).send().await
             && resp.status().is_success()

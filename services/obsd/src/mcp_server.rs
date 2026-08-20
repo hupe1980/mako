@@ -8,11 +8,14 @@
 //! | Tool | Description |
 //! |---|---|
 //! | `get_process`             | Read a process projection by UUID |
-//! | `list_overdue_processes`  | List MaKo processes past their regulatory deadline |
-//! | `get_kpi_report`          | BNetzA KPI report for a PID and billing month |
-//! | `get_parity_report`       | §20 EnWG affiliate vs. non-affiliate completion rates |
-//! | `get_stp_rate`            | Rolling STP rate across all process families |
-//! | `list_processes_by_family`| List processes by workflow family (gpke/wim/geli-gas/…) |
+//! | `list_overdue_processes`  | Processes past their business Antwortfrist |
+//! | `get_kpi_report`          | Per-PID KPIs for a calendar month |
+//! | `get_parity_report`       | § 7a Abs. 5 EnWG affiliate vs third-party parity |
+//! | `get_stp_rate`            | Completions over processes that ended |
+//! | `list_processes_by_family`| Drill into one family (gpke/wim/geli-gas/…) |
+//!
+//! Every tool goes through [`crate::pg::PgProcessProjectionRepository`] where one
+//! exists, so this surface and the REST one cannot answer differently.
 
 use std::sync::Arc;
 
@@ -133,9 +136,8 @@ impl ObsdMcpHandler {
 
     /// Read a process projection by UUID.
     ///
-    /// Returns the full CQRS read-model entry: PID, state, partner GLNs,
-    /// timestamps, and deadline risk score.  The data is a projection of
-    /// all `de.mako.*` events received so far for this process.
+    /// The full read-model entry: PID, family, state, counterparty, timestamps,
+    /// the business Antwortfrist and the Festlegung it came from.
     #[tool(
         description = "Read a process projection by UUID",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -144,46 +146,25 @@ impl ObsdMcpHandler {
         &self,
         Parameters(p): Parameters<GetProcessParams>,
     ) -> Result<CallToolResult, McpError> {
+        use mako_obs::repository::ProcessProjectionRepository as _;
+
         let process_id: uuid::Uuid = p
             .process_id
             .parse()
             .map_err(|_| McpError::invalid_params("process_id is not a valid UUID", None))?;
 
-        let row = sqlx::query(
-            r#"
-            SELECT process_id, pid, family, workflow_name, state, malo_id, partner_mp_id,
-                   mdm_role, deadline_at, deadline_risk, started_at, last_event_at,
-                   erc_code, initiator_is_affiliate
-            FROM process_projections
-            WHERE process_id = $1 AND tenant = $2
-            "#,
-        )
-        .bind(process_id)
-        .bind(&self.state.tenant)
-        .fetch_optional(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
+        let found = repo
+            .get(process_id)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?
+            // The repository is not tenant-scoped on `get`; this surface is.
+            .filter(|row| row.tenant == self.state.tenant);
 
-        use sqlx::Row;
-        match row {
-            Some(r) => ContentBlock::json(serde_json::json!({
-                "process_id": r.try_get::<uuid::Uuid, _>("process_id").map(|v| v.to_string()).unwrap_or_default(),
-                "pid": r.try_get::<i32, _>("pid").unwrap_or(0),
-                "family": r.try_get::<String, _>("family").unwrap_or_default(),
-                "workflow_name": r.try_get::<String, _>("workflow_name").unwrap_or_default(),
-                "state": r.try_get::<String, _>("state").unwrap_or_default(),
-                "malo_id": r.try_get::<Option<String>, _>("malo_id").unwrap_or(None),
-                "partner_mp_id": r.try_get::<Option<String>, _>("partner_mp_id").unwrap_or(None),
-                "mdm_role": r.try_get::<Option<String>, _>("mdm_role").unwrap_or(None),
-                "deadline_at": rfc3339_opt(r.try_get::<Option<time::OffsetDateTime>, _>("deadline_at").unwrap_or(None)),
-                "deadline_risk": r.try_get::<String, _>("deadline_risk").unwrap_or_default(),
-                "started_at": rfc3339_opt(r.try_get::<time::OffsetDateTime, _>("started_at").ok()),
-                "last_event_at": rfc3339_opt(r.try_get::<time::OffsetDateTime, _>("last_event_at").ok()),
-                "erc_code": r.try_get::<Option<String>, _>("erc_code").unwrap_or(None),
-                "initiator_is_affiliate": r.try_get::<bool, _>("initiator_is_affiliate").unwrap_or(false),
-            }))
-            .map(|b| CallToolResult::success(vec![b]))
-            .map_err(|e| McpError::internal_error(e.message, None)),
+        match found {
+            Some(r) => ContentBlock::json(projection_json(&r))
+                .map(|b| CallToolResult::success(vec![b]))
+                .map_err(|e| McpError::internal_error(e.message, None)),
             None => Ok(CallToolResult::error(vec![ContentBlock::text(format!(
                 "process_not_found: No process projection for id '{}'.",
                 p.process_id
@@ -191,253 +172,226 @@ impl ObsdMcpHandler {
         }
     }
 
-    /// List processes that have exceeded their regulatory deadline.
+    /// Processes past their **business Antwortfrist**.
     ///
-    /// Returns processes with `deadline_at < now()` and `state NOT IN
-    /// ('completed', 'rejected', 'cancelled')`.  These are processes that
-    /// must be escalated — missing the APERAK or response deadline is a
-    /// regulatory violation under BNetzA monitoring.
+    /// Not the APERAK clock: that is minutes, arrives as its own event and lands
+    /// in `state = aperak_timeout`, which this list deliberately still includes
+    /// — a counterparty that missed the acknowledgement still owes the answer.
     ///
-    /// Returns up to 200 results ordered by deadline ascending (most urgent first).
+    /// Processes with **no published Frist carry no deadline** and are therefore
+    /// absent: unknown, never measured against an instant nobody can cite.
+    ///
+    /// Every row carries `deadline_source`, the Fundstelle the instant came
+    /// from, so a caller can name the Festlegung rather than assert a number.
     #[tool(
-        description = "List processes past their regulatory deadline (most urgent first)",
+        description = "Processes past their business Antwortfrist, most urgent first. Each row \
+                       carries deadline_source, the Festlegung the deadline came from. \
+                       `saturated` means at least the cap was waiting, never that the cap was \
+                       all there was.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_overdue_processes(&self) -> Result<CallToolResult, McpError> {
-        let rows = sqlx::query_as::<
-            _,
-            (
-                uuid::Uuid,
-                i32,
-                String,
-                Option<String>,
-                time::OffsetDateTime,
-                Option<time::OffsetDateTime>,
-            ),
-        >(
-            r#"
-            SELECT process_id, pid, state, partner_mp_id, started_at, deadline_at
-            FROM process_projections
-            WHERE tenant = $1
-              AND deadline_at IS NOT NULL
-              AND deadline_at < NOW()
-              AND state NOT IN ('completed', 'rejected', 'cancelled')
-            ORDER BY deadline_at ASC
-            LIMIT 200
-            "#,
-        )
-        .bind(&self.state.tenant)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        use mako_obs::repository::ProcessProjectionRepository as _;
 
+        let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
+        let rows = repo
+            .overdue_processes(time::OffsetDateTime::now_utc(), &self.state.tenant)
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let saturated =
+            i64::try_from(rows.len()).unwrap_or(i64::MAX) >= crate::pg::projection::OVERDUE_LIMIT;
         let overdue: Vec<serde_json::Value> = rows
-            .into_iter()
-            .map(
-                |(process_id, pid, state, partner_mp_id, started_at, deadline_at)| {
-                    serde_json::json!({
-                        "process_id": process_id,
-                        "pid": pid,
-                        "state": state,
-                        "partner_mp_id": partner_mp_id,
-                        "started_at": rfc3339(started_at),
-                        "deadline_at": rfc3339_opt(deadline_at),
-                    })
-                },
-            )
+            .iter()
+            .map(|p| {
+                serde_json::json!({
+                    "process_id": p.process_id.to_string(),
+                    "pid": p.pid,
+                    "family": p.family,
+                    "state": p.state.as_str(),
+                    "malo_id": p.malo_id,
+                    "partner_mp_id": p.partner_mp_id,
+                    "started_at": rfc3339(p.started_at),
+                    "deadline_at": rfc3339_opt(p.deadline_at),
+                    "deadline_source": p.deadline_source,
+                })
+            })
             .collect();
 
         ContentBlock::json(serde_json::json!({
             "overdue": overdue,
             "count": overdue.len(),
+            "saturated": saturated,
+            "limit": crate::pg::projection::OVERDUE_LIMIT,
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Get the BNetzA KPI report for a Prüfidentifikator and billing month.
+    /// Process KPIs for a Prüfidentifikator and calendar month.
     ///
-    /// Returns regulatory KPIs required by BNetzA monitoring: total processes,
-    /// completion rate, median lead time, and APERAK violation count.
-    /// Use for preparing the annual BNetzA Marktkommunikationsbericht.
+    /// **Two clocks, two numbers.** `aperak_timeout` counts processes whose
+    /// *technical acknowledgement* window lapsed (45 min Strom, next Werktag
+    /// 12:00 / 3 Werktage Gas); `frist_breached` counts processes that passed
+    /// their *business* Antwortfrist. Reporting the second under the first's
+    /// name points an operator at the wrong clock by three orders of magnitude.
     ///
-    /// `pid` — BDEW Prüfidentifikator (e.g. 55001 for GPKE Lieferbeginn).
+    /// `pid` — BDEW Prüfidentifikator (e.g. 55001 for the GPKE Lieferbeginn).
     /// `period` — `YYYY-MM` (default: current month).
     #[tool(
-        description = "Get BNetzA KPI report for a PID and billing month (YYYY-MM)",
+        description = "Process KPIs for a PID and calendar month (YYYY-MM). Reports the APERAK \
+                       acknowledgement clock and the business Antwortfrist as separate numbers. \
+                       Rates are null when the bucket contains nothing measurable — never 0.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_kpi_report(
         &self,
         Parameters(p): Parameters<GetKpiReportParams>,
     ) -> Result<CallToolResult, McpError> {
-        use time::{Date, Month, OffsetDateTime};
+        use mako_obs::repository::ProcessProjectionRepository as _;
 
-        let today = OffsetDateTime::now_utc().date();
-        let (year, month_u8) = if let Some(period) = p.period.as_deref() {
-            let parts: Vec<&str> = period.splitn(2, '-').collect();
-            if parts.len() != 2 {
-                return Err(McpError::invalid_params("period must be YYYY-MM", None));
+        let (from, to) = month_bounds(p.period.as_deref())?;
+        let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
+        // The repository owns the query, so this tool and `GET /obs/kpis`
+        // cannot drift. The inline copy this replaces bounded the period with
+        // `started_at <= <last day at 00:00>`, silently dropping every process
+        // started on the last day of the month.
+        match repo.kpi_report(p.pid, from, to, &self.state.tenant).await {
+            Ok(report) => ContentBlock::json(serde_json::json!({
+                "pid": report.pid,
+                "period_from": report.period_from.to_string(),
+                "period_to": report.period_to.to_string(),
+                "total_initiated": report.total_initiated,
+                "total_completed": report.total_completed,
+                "total_rejected": report.total_rejected,
+                "total_failed": report.total_failed,
+                // The technical acknowledgement clock.
+                "aperak_timeout": report.total_aperak_timeout,
+                // The business Antwortfrist. `total_with_frist` is the
+                // denominator and is reported because a small one means the
+                // bucket is mostly *unmeasured*, which a rate near 1.0 hides.
+                "frist_breached": report.total_frist_breached,
+                "with_published_frist": report.total_with_frist,
+                "frist_compliance_rate": report.frist_compliance_rate,
+                "avg_cycle_time_hours": report.avg_cycle_time_hours,
+                "p95_cycle_time_hours": report.p95_cycle_time_hours,
+                "note": "aperak_timeout is the technical acknowledgement clock; frist_breached \
+                         is the business Antwortfrist. They are different obligations. Null \
+                         rates mean nothing measurable in the bucket, not perfect performance.",
+            }))
+            .map(|b| CallToolResult::success(vec![b]))
+            .map_err(|e| McpError::internal_error(e.message, None)),
+            Err(mako_obs::error::ObsError::NoKpiData { .. }) => {
+                Ok(CallToolResult::error(vec![ContentBlock::text(format!(
+                    "no_data: no process with PID {} started between {from} and {to}.",
+                    p.pid
+                ))]))
             }
-            let y: i32 = parts[0]
-                .parse()
-                .map_err(|_| McpError::invalid_params("invalid year in period", None))?;
-            let m: u8 = parts[1]
-                .parse()
-                .map_err(|_| McpError::invalid_params("invalid month in period", None))?;
-            (y, m)
-        } else {
-            (today.year(), today.month() as u8)
-        };
-
-        let month = Month::try_from(month_u8)
-            .map_err(|_| McpError::invalid_params("month out of range 1–12", None))?;
-        let from = Date::from_calendar_date(year, month, 1)
-            .map_err(|_| McpError::invalid_params("invalid date", None))?;
-        let (ny, nm) = if month_u8 == 12 {
-            (year + 1, Month::January)
-        } else {
-            (year, Month::try_from(month_u8 + 1).unwrap())
-        };
-        let to = Date::from_calendar_date(ny, nm, 1)
-            .unwrap()
-            .previous_day()
-            .unwrap_or(from);
-
-        let from_ts = OffsetDateTime::new_utc(from, time::Time::MIDNIGHT);
-        let to_ts = OffsetDateTime::new_utc(to, time::Time::MIDNIGHT);
-
-        let row = sqlx::query_as::<_, (i64, i64, i64, i64, Option<f64>)>(
-            r#"
-            SELECT
-                COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE state = 'completed') AS completed,
-                COUNT(*) FILTER (WHERE state IN ('rejected', 'cancelled')) AS rejected,
-                COUNT(*) FILTER (
-                    WHERE deadline_at IS NOT NULL
-                      AND deadline_at < COALESCE(completed_at, NOW())
-                ) AS aperak_violations,
-                AVG(EXTRACT(EPOCH FROM (completed_at - started_at)) / 3600.0)
-                    FILTER (WHERE completed_at IS NOT NULL) AS avg_lead_time_hours
-            FROM process_projections
-            WHERE tenant = $1
-              AND pid = $2
-              AND started_at >= $3
-              AND started_at <= $4
-            "#,
-        )
-        .bind(&self.state.tenant)
-        .bind(p.pid as i32)
-        .bind(from_ts)
-        .bind(to_ts)
-        .fetch_one(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let (total, completed, rejected, aperak_violations, avg_lead_time_hours) = row;
-        let completion_rate = if total > 0 {
-            completed as f64 / total as f64
-        } else {
-            0.0
-        };
-
-        ContentBlock::json(serde_json::json!({
-            "pid": p.pid,
-            "period": format!("{year}-{month_u8:02}"),
-            "total": total,
-            "completed": completed,
-            "rejected_or_cancelled": rejected,
-            "aperak_violations": aperak_violations,
-            "completion_rate": (completion_rate * 100.0).round() / 100.0,
-            "avg_lead_time_hours": avg_lead_time_hours,
-        }))
-        .map(|b| CallToolResult::success(vec![b]))
-        .map_err(|e| McpError::internal_error(e.message, None))
+            Err(e) => Err(McpError::internal_error(e.to_string(), None)),
+        }
     }
 
-    /// §20 EnWG Diskriminierungsfreiheitspflicht parity report.
+    /// § 7a Abs. 5 EnWG Gleichbehandlung parity report.
     ///
-    /// Compares affiliate (initiator_is_affiliate=true) vs. non-affiliate
-    /// completion rates for Lieferbeginn PIDs (55001, 55016, 44001) over the
-    /// last `days` days.  BNetzA expects the completion rate gap to be < 2 pp.
+    /// Compares how the operator's network arm treated Lieferanten inside its
+    /// own vertically integrated undertaking against third-party Lieferanten,
+    /// over the processes the network arm actually answers.
+    ///
+    /// **`gap_pp` is `affiliate − third_party`.** Positive means the affiliate
+    /// fared better, which is the concern. The convention is
+    /// `ParityComparison`'s, shared with the REST report and the CloudEvent.
+    ///
+    /// **No BNetzA threshold exists** for this figure — what counts as a gap
+    /// worth explaining is the operator's judgement, configured in
+    /// `[worker] parity_threshold_pp`.
     #[tool(
-        description = "§20 EnWG parity report: compare affiliate vs. non-affiliate completion rates for Lieferbeginn processes (PIDs 55001, 55016, 44001). Returns stp_rate, completion_rate, and parity_gap_pp. BNetzA target: parity_gap_pp < 2.",
+        description = "§ 7a Abs. 5 EnWG parity: affiliate vs third-party Lieferanten completion \
+                       rates over the processes the network arm answers. gap_pp = affiliate − \
+                       third_party in percentage points; positive means the affiliate fared \
+                       better. Null when either group is below the minimum sample — an \
+                       unstatable gap, not a zero one. No regulatory threshold exists.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_parity_report(
         &self,
         Parameters(p): Parameters<GetParityReportParams>,
     ) -> Result<CallToolResult, McpError> {
+        use mako_obs::domain::{PARITY_MIN_SAMPLE, ParityComparison, ParityGroup};
         use sqlx::Row;
-        let days = p.days.unwrap_or(90) as i32;
-        let rows = sqlx::query(
-            r#"
-            SELECT
-                initiator_is_affiliate,
-                COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE state = 'completed') AS completed,
-                COUNT(*) FILTER (WHERE state IN ('rejected','cancelled','aperak_timeout')) AS not_completed
-            FROM process_projections
-            WHERE tenant = $1
-              AND pid IN (55001, 55016, 44001)
-              AND started_at >= NOW() - ($2 || ' days')::INTERVAL
-            GROUP BY initiator_is_affiliate
-            "#,
-        )
+
+        let days = i32::try_from(p.days.unwrap_or(90)).unwrap_or(90);
+        let rows = sqlx::query(&format!(
+            r"SELECT initiator_is_affiliate,
+                     COUNT(*) AS total,
+                     COUNT(*) FILTER (WHERE state = 'completed') AS completed,
+                     COUNT(*) FILTER (WHERE state = 'rejected')  AS rejected,
+                     COUNT(*) FILTER (
+                         WHERE deadline_at IS NOT NULL
+                           AND deadline_at < COALESCE(completed_at, now())
+                     ) AS frist_breached
+              FROM process_projections
+              WHERE tenant = $1
+                AND pid IN ({pids})
+                AND started_at >= now() - make_interval(days => $2::int)
+              GROUP BY initiator_is_affiliate",
+            pids = crate::worker::parity_pids_sql(),
+        ))
         .bind(&self.state.tenant)
         .bind(days)
         .fetch_all(&self.state.pool)
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let mut affiliate =
-            serde_json::json!({ "total": 0, "completed": 0, "completion_rate": 0.0 });
-        let mut non_affiliate =
-            serde_json::json!({ "total": 0, "completed": 0, "completion_rate": 0.0 });
-
+        let (mut affiliate, mut third_party) = (ParityGroup::default(), ParityGroup::default());
         for row in &rows {
-            let is_aff: bool = row.try_get("initiator_is_affiliate").unwrap_or(false);
-            let total: i64 = row.try_get("total").unwrap_or(0);
-            let completed: i64 = row.try_get("completed").unwrap_or(0);
-            let rate = if total > 0 {
-                completed as f64 / total as f64
-            } else {
-                0.0
+            let g = ParityGroup {
+                total: row.try_get("total").unwrap_or(0),
+                completed: row.try_get("completed").unwrap_or(0),
+                rejected: row.try_get("rejected").unwrap_or(0),
+                frist_breached: row.try_get("frist_breached").unwrap_or(0),
             };
-            let entry = serde_json::json!({
-                "total": total, "completed": completed,
-                "completion_rate": (rate * 1000.0).round() / 1000.0,
-            });
-            if is_aff {
-                affiliate = entry;
+            if row
+                .try_get::<bool, _>("initiator_is_affiliate")
+                .unwrap_or(false)
+            {
+                affiliate = g;
             } else {
-                non_affiliate = entry;
+                third_party = g;
             }
         }
-
-        let aff_rate = affiliate["completion_rate"].as_f64().unwrap_or(0.0);
-        let non_aff_rate = non_affiliate["completion_rate"].as_f64().unwrap_or(0.0);
-        let parity_gap_pp = ((non_aff_rate - aff_rate) * 100.0 * 10.0).round() / 10.0;
+        let c = ParityComparison::new(affiliate, third_party);
 
         ContentBlock::json(serde_json::json!({
-            "days": p.days.unwrap_or(90),
-            "affiliate": affiliate,
-            "non_affiliate": non_affiliate,
-            "parity_gap_pp": parity_gap_pp,
-            "bnetza_target_pp": 2.0,
-            "compliant": parity_gap_pp.abs() < 2.0,
-            "note": "affiliate = initiating LF is operator's own subsidiary (§20 EnWG §6b EnWG deployment). Gap > 2 pp requires BNetzA escalation.",
+            "days": days,
+            "affiliate": c.affiliate,
+            "third_party": c.third_party,
+            "gap_pp": c.gap_pp,
+            "favours": c.favours(),
+            "min_sample": PARITY_MIN_SAMPLE,
+            "gap_convention": "affiliate − third_party, percentage points. Positive means the \
+                               affiliate fared better.",
+            "note": "gap_pp is null when either group has fewer than min_sample processes — the \
+                     gap is unstatable, not zero. No BNetzA publication sets a numeric parity \
+                     limit; the operator's escalation threshold is [worker] parity_threshold_pp. \
+                     Basis: § 7a Abs. 5 EnWG Gleichbehandlungsbericht, filed by 31 March for the \
+                     preceding calendar year.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Rolling STP (Straight-Through Processing) rate across all process families.
+    /// Rolling STP (Straight-Through Processing) rate across all families.
     ///
-    /// Returns the fraction of terminal processes that completed without an
-    /// APERAK timeout or unrecoverable failure in the last `days` days.
+    /// The denominator is processes that **ended** — completed, rejected or
+    /// failed. An `aperak_timeout` is not an ending: the counterparty missed the
+    /// acknowledgement window and can still answer, so counting it as a terminal
+    /// failure understates the rate for as long as the process stays open.
     #[tool(
-        description = "Rolling STP (Straight-Through Processing) rate across all MaKo processes for the last N days. Returns stp_rate (0–1), total, completed, rejected, timeout counts. Used by compliance-agent and processd-agent for health monitoring. Target STP >= 0.95.",
+        description = "Rolling STP rate over processes that ended in the last N days. \
+                       Denominator is completed + rejected + failed; in-flight and \
+                       aperak_timeout processes are reported separately because neither has \
+                       ended. Null when nothing ended in the window. No regulatory target \
+                       exists — compare against your own operating goal.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_stp_rate(
@@ -445,19 +399,22 @@ impl ObsdMcpHandler {
         Parameters(p): Parameters<GetStpRateParams>,
     ) -> Result<CallToolResult, McpError> {
         use sqlx::Row;
-        let days = p.days.unwrap_or(30) as i32;
+        let days = i32::try_from(p.days.unwrap_or(30)).unwrap_or(30);
         let row = sqlx::query(
-            r#"
-            SELECT
+            r"SELECT
                 COUNT(*) AS total,
-                COUNT(*) FILTER (WHERE state = 'completed') AS completed,
-                COUNT(*) FILTER (WHERE state IN ('rejected','cancelled')) AS rejected,
-                COUNT(*) FILTER (WHERE state = 'aperak_timeout') AS timeout,
-                COUNT(*) FILTER (WHERE state IN ('initiated','running')) AS in_flight
-            FROM process_projections
-            WHERE tenant = $1
-              AND started_at >= NOW() - ($2 || ' days')::INTERVAL
-            "#,
+                COUNT(*) FILTER (WHERE state = 'completed')      AS completed,
+                COUNT(*) FILTER (WHERE state = 'rejected')       AS rejected,
+                COUNT(*) FILTER (WHERE state = 'failed')         AS failed,
+                COUNT(*) FILTER (WHERE state = 'aperak_timeout') AS aperak_timeout,
+                COUNT(*) FILTER (WHERE state IN ('initiated','running')) AS in_flight,
+                COUNT(*) FILTER (
+                    WHERE deadline_at IS NOT NULL
+                      AND deadline_at < COALESCE(completed_at, now())
+                ) AS frist_breached
+              FROM process_projections
+              WHERE tenant = $1
+                AND started_at >= now() - make_interval(days => $2::int)",
         )
         .bind(&self.state.tenant)
         .bind(days)
@@ -465,30 +422,29 @@ impl ObsdMcpHandler {
         .await
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let total: i64 = row.try_get("total").unwrap_or(0);
-        let completed: i64 = row.try_get("completed").unwrap_or(0);
-        let rejected: i64 = row.try_get("rejected").unwrap_or(0);
-        let timeout: i64 = row.try_get("timeout").unwrap_or(0);
-        let in_flight: i64 = row.try_get("in_flight").unwrap_or(0);
-        let terminal = completed + rejected + timeout;
-        let stp_rate = if terminal > 0 {
-            completed as f64 / terminal as f64
-        } else {
-            0.0
-        };
+        let n = |name: &str| -> i64 { row.try_get(name).unwrap_or(0) };
+        let (completed, rejected, failed) = (n("completed"), n("rejected"), n("failed"));
+        let ended = completed + rejected + failed;
+        #[allow(clippy::cast_precision_loss)]
+        // Null, not 0.0: a window in which nothing ended has no rate, and a zero
+        // reads as "everything failed".
+        let stp_rate =
+            (ended > 0).then(|| ((completed as f64 / ended as f64) * 10_000.0).round() / 10_000.0);
 
         ContentBlock::json(serde_json::json!({
             "days": days,
-            "total": total,
-            "terminal": terminal,
-            "in_flight": in_flight,
+            "total_started": n("total"),
+            "ended": ended,
             "completed": completed,
             "rejected": rejected,
-            "aperak_timeout": timeout,
-            "stp_rate": (stp_rate * 10000.0).round() / 10000.0,
-            "stp_pct": (stp_rate * 100.0 * 10.0).round() / 10.0,
-            "target_stp": 0.95,
-            "compliant": stp_rate >= 0.95,
+            "failed": failed,
+            "in_flight": n("in_flight"),
+            "aperak_timeout": n("aperak_timeout"),
+            "frist_breached": n("frist_breached"),
+            "stp_rate": stp_rate,
+            "note": "stp_rate = completed / (completed + rejected + failed). aperak_timeout is \
+                     the technical acknowledgement clock and is not an ending — a counterparty \
+                     that missed it can still answer. No regulatory STP target exists.",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -496,63 +452,127 @@ impl ObsdMcpHandler {
 
     /// List processes by workflow family.
     ///
-    /// Useful for investigating STP drops within a specific process family
-    /// (e.g. "all rejected GPKE processes this week").
+    /// Useful for investigating a drop inside one family (e.g. "all rejected
+    /// GPKE processes this week").
     #[tool(
-        description = "List processes by workflow family (gpke, wim, geli-gas, wim-gas, gabi-gas, mabis). Optional state filter. Returns process_id, pid, state, malo_id, partner_mp_id, started_at, deadline_at, erc_code ordered by started_at DESC.",
+        description = "List processes by family (gpke, wim, geli-gas, wim-gas, gabi-gas, mabis, \
+                       invoic-storno, unknown), newest first. Optional state filter: initiated, \
+                       running, aperak_timeout, completed, rejected, failed.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn list_processes_by_family(
         &self,
         Parameters(p): Parameters<ListByFamilyParams>,
     ) -> Result<CallToolResult, McpError> {
-        use sqlx::Row;
-        let limit = p.limit.unwrap_or(50).min(500) as i64;
-        let rows = sqlx::query(
-            r#"
-            SELECT process_id, pid, state, malo_id, partner_mp_id,
-                   started_at, deadline_at, erc_code, deadline_risk, initiator_is_affiliate
-            FROM process_projections
-            WHERE tenant = $1
-              AND family = $2
-              AND ($3::text IS NULL OR state = $3)
-            ORDER BY started_at DESC
-            LIMIT $4
-            "#,
-        )
-        .bind(&self.state.tenant)
-        .bind(&p.family)
-        .bind(p.state.as_deref())
-        .bind(limit)
-        .fetch_all(&self.state.pool)
-        .await
-        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+        use mako_obs::domain::{ObsQuery, ProcessState};
+        use mako_obs::repository::ProcessProjectionRepository as _;
 
-        let processes: Vec<serde_json::Value> = rows
-            .iter()
-            .map(|r| serde_json::json!({
-                "process_id": r.try_get::<uuid::Uuid, _>("process_id").map(|v| v.to_string()).unwrap_or_default(),
-                "pid": r.try_get::<i32, _>("pid").unwrap_or(0),
-                "state": r.try_get::<String, _>("state").unwrap_or_default(),
-                "malo_id": r.try_get::<Option<String>, _>("malo_id").unwrap_or(None),
-                "partner_mp_id": r.try_get::<Option<String>, _>("partner_mp_id").unwrap_or(None),
-                "started_at": rfc3339_opt(r.try_get::<time::OffsetDateTime, _>("started_at").ok()),
-                "deadline_at": rfc3339_opt(r.try_get::<Option<time::OffsetDateTime>, _>("deadline_at").unwrap_or(None)),
-                "erc_code": r.try_get::<Option<String>, _>("erc_code").unwrap_or(None),
-                "deadline_risk": r.try_get::<String, _>("deadline_risk").unwrap_or_default(),
-                "initiator_is_affiliate": r.try_get::<bool, _>("initiator_is_affiliate").unwrap_or(false),
-            }))
-            .collect();
+        // An unknown state is refused rather than ignored: dropping the filter
+        // returns every row, which reads as "the filter matched everything".
+        let state = match p.state.as_deref() {
+            None => None,
+            Some(s) => Some(ProcessState::from_str_exact(s).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!(
+                        "unknown state `{s}` — one of {:?}",
+                        ProcessState::ALL.map(ProcessState::as_str)
+                    ),
+                    None,
+                )
+            })?),
+        };
+
+        let limit = p.limit.unwrap_or(50).min(500);
+        let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
+        let rows = repo
+            .query(&ObsQuery {
+                state,
+                family: Some(p.family.clone()),
+                tenant: Some(self.state.tenant.clone()),
+                limit,
+                ..ObsQuery::default()
+            })
+            .await
+            .map_err(|e| McpError::internal_error(e.to_string(), None))?;
+
+        let saturated = u32::try_from(rows.len()).unwrap_or(u32::MAX) >= limit;
+        let processes: Vec<serde_json::Value> = rows.iter().map(projection_json).collect();
 
         ContentBlock::json(serde_json::json!({
             "family": p.family,
             "state_filter": p.state,
             "count": processes.len(),
+            "saturated": saturated,
+            "limit": limit,
             "processes": processes,
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
     }
+}
+
+/// One projection, as every tool on this surface renders it.
+///
+/// One function so a field added to the read-model reaches all of them, and so
+/// two tools cannot disagree about what `state` is called.
+fn projection_json(p: &mako_obs::domain::ProcessProjection) -> serde_json::Value {
+    serde_json::json!({
+        "process_id": p.process_id.to_string(),
+        "pid": p.pid,
+        "family": p.family,
+        "workflow_name": p.workflow_name,
+        "state": p.state.as_str(),
+        "malo_id": p.malo_id,
+        "partner_mp_id": p.partner_mp_id,
+        "mdm_role": p.mdm_role,
+        "deadline_at": rfc3339_opt(p.deadline_at),
+        "deadline_source": p.deadline_source,
+        "deadline_risk": p.deadline_risk.as_str(),
+        "started_at": rfc3339(p.started_at),
+        "last_event_at": rfc3339(p.last_event_at),
+        "erc_code": p.erc_code,
+        "initiator_is_affiliate": p.initiator_is_affiliate,
+    })
+}
+
+/// First and last day of a `YYYY-MM` period, or of the current month.
+fn month_bounds(period: Option<&str>) -> Result<(time::Date, time::Date), McpError> {
+    use time::{Date, Month, OffsetDateTime};
+
+    let today = OffsetDateTime::now_utc().date();
+    let (year, month_u8) = match period {
+        Some(p) => {
+            let (y, m) = p
+                .split_once('-')
+                .ok_or_else(|| McpError::invalid_params("period must be YYYY-MM", None))?;
+            (
+                y.parse::<i32>()
+                    .map_err(|_| McpError::invalid_params("invalid year in period", None))?,
+                m.parse::<u8>()
+                    .map_err(|_| McpError::invalid_params("invalid month in period", None))?,
+            )
+        }
+        None => (today.year(), today.month() as u8),
+    };
+
+    let month = Month::try_from(month_u8)
+        .map_err(|_| McpError::invalid_params("month out of range 1–12", None))?;
+    let from = Date::from_calendar_date(year, month, 1)
+        .map_err(|_| McpError::invalid_params("invalid date", None))?;
+    // The last day of the month, as a *date*: bounding by a timestamp at
+    // midnight would drop every process started on it.
+    let next_month = if month_u8 == 12 {
+        Date::from_calendar_date(year + 1, Month::January, 1)
+    } else {
+        Date::from_calendar_date(
+            year,
+            Month::try_from(month_u8 + 1).unwrap_or(Month::December),
+            1,
+        )
+    }
+    .map_err(|_| McpError::invalid_params("invalid date", None))?;
+    let to = next_month.previous_day().unwrap_or(from);
+    Ok((from, to))
 }
 
 #[prompt_router]
@@ -605,33 +625,57 @@ impl ObsdMcpHandler {
 #[prompt_handler]
 impl ServerHandler for ObsdMcpHandler {
     fn get_info(&self) -> ServerInfo {
-        InitializeResult::new(ServerCapabilities::builder().enable_tools().enable_prompts().build())
-            .with_server_info(Implementation::new("obsd", env!("CARGO_PKG_VERSION")))
-            .with_instructions(
-                "# obsd — Process Observability\n\
+        InitializeResult::new(
+            ServerCapabilities::builder()
+                .enable_tools()
+                .enable_prompts()
+                .build(),
+        )
+        .with_server_info(Implementation::new("obsd", env!("CARGO_PKG_VERSION")))
+        .with_instructions(
+            "# obsd — Process Observability\n\
              \n\
-             CQRS read model of all `de.mako.*` events. Deadline risk monitoring \
-             and BNetzA KPI reports.\n\
+             CQRS read model over every `de.mako.*` event. Antwortfrist monitoring and \
+             process KPIs.\n\
+             \n\
+             ## Two deadline clocks, never one number\n\
+             - **APERAK Frist** — the technical acknowledgement: 45 min Strom weekday; Gas \
+             next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess). A lapse \
+             arrives as its own event and shows as `state = aperak_timeout`.\n\
+             - **Antwortfrist** — the business answer: 11:00 of the 1. Werktag for a GPKE \
+             Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom. Stored as \
+             `deadline_at`, with `deadline_source` naming the Festlegung.\n\
+             \n\
+             They differ by orders of magnitude and fail for different reasons. Never report \
+             one under the other's name.\n\
              \n\
              ## Tools (6)\n\
-             - `get_process` — full process projection by UUID (state, PIDs, deadlines, ERC)\n\
-             - `list_overdue_processes` — MaKo processes past their regulatory deadline (most urgent first)\n\
-             - `get_kpi_report(pid, period)` — BNetzA KPI for a PID + billing month\n\
-             - `get_parity_report(days)` — §20 EnWG affiliate vs. non-affiliate completion rates; BNetzA target < 2 pp gap\n\
-             - `get_stp_rate(days)` — rolling STP rate across all process families; target >= 95%\n\
-             - `list_processes_by_family(family, state, limit)` — drill into gpke/wim/geli-gas/wim-gas/gabi-gas/mabis\n\
+             - `get_process` — full projection by UUID\n\
+             - `list_overdue_processes` — past their Antwortfrist, most urgent first\n\
+             - `get_kpi_report(pid, period)` — per-PID KPIs for a `YYYY-MM` month\n\
+             - `get_parity_report(days)` — § 7a Abs. 5 EnWG affiliate vs third-party; \
+             `gap_pp` is affiliate − third_party, positive means the affiliate fared better\n\
+             - `get_stp_rate(days)` — completions over processes that ended\n\
+             - `list_processes_by_family(family, state, limit)`\n\
              \n\
              ## Prompts (2)\n\
-             - `audit-kpi` — generate BNetzA KPI report step-by-step\n\
-             - `investigate-aperak-violation` — root-cause an APERAK deadline violation\n\
+             - `process-kpis` — read a period's KPIs without confusing the two clocks\n\
+             - `investigate-overdue-process` — root-cause a missed Antwortfrist\n\
+             \n\
+             ## Reading the answers honestly\n\
+             - A **null** rate means nothing measurable in the bucket. It is not 0 and not \
+             perfect performance.\n\
+             - A missing `deadline_at` means no Festlegung publishes a window for that PID: \
+             unknown, not compliant.\n\
+             - `saturated: true` means at least the cap was waiting — never that the cap was \
+             all there was.\n\
+             - **No BNetzA threshold exists** for STP rate, parity gap or compliance rate. \
+             Any target is the operator's own; say whose it is.\n\
              \n\
              ## Process states\n\
-             `initiated` → `running` → `completed` | `rejected` | `cancelled` | `aperak_timeout`\n\
-             \n\
-             ## Regulatory reference\n\
-             Overdue processes and parity gaps are BNetzA compliance risks. \
-             Report them in the annual Marktkommunikationsbericht (§12 EnWG)."
-            )
+             `initiated` → `running` → `completed` | `rejected` | `failed`; `aperak_timeout` \
+             is not terminal — a counterparty that missed the acknowledgement can still answer.",
+        )
     }
 }
 

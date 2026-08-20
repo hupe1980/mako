@@ -59,7 +59,7 @@ async fn spawn_mock_webhook(state: Arc<Captured>) -> String {
         _body: axum::body::Bytes,
     ) -> axum::http::StatusCode {
         state.hits.fetch_add(1, Ordering::SeqCst);
-        if headers.contains_key("x-mako-signature") {
+        if headers.contains_key(mako_service::webhook::SIGNATURE_HEADER) {
             state.signed.fetch_add(1, Ordering::SeqCst);
         }
         axum::http::StatusCode::OK

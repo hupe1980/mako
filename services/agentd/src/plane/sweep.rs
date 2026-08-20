@@ -115,8 +115,10 @@ pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken
 /// persist-before-dispatch.
 ///
 /// A receiver that is down for a deploy is caught up afterwards. One that has
-/// gone away is abandoned after the retry ceiling and **reported**, because a
-/// registration nobody removes is a queue that only grows.
+/// gone away, or that refuses permanently, is **parked** past the retry ceiling
+/// and reported — its rows and cursor survive, listed by `PushStore::parked`, so
+/// a registration nobody removes is a queue an operator can see rather than one
+/// that only grows.
 pub fn spawn_delivery(
     worker: Arc<agentplane::push::DeliveryWorker>,
     every: Duration,
@@ -142,26 +144,35 @@ pub fn spawn_delivery(
             #[allow(clippy::cast_sign_loss)]
             let now = time::OffsetDateTime::now_utc().unix_timestamp().max(0) as u64;
             match worker.run_once(now, BATCH).await {
-                Ok(report) if report.deliveries == 0 && report.abandoned == 0 => {}
+                // A quiet outbox says nothing, like every other sweep here.
+                Ok(report) if report.deliveries == 0 && !report.needs_attention() => {}
+                Ok(report) if report.needs_attention() => {
+                    // `parked` and `completed` are opposite outcomes wearing one
+                    // shape: both take a registration out of the due order, and
+                    // only one of them delivered anything. The rows survive with
+                    // their cursors — `PushStore::parked` is the list — so this
+                    // number is how an operator learns there is one to read.
+                    warn!(
+                        deliveries = report.deliveries,
+                        parked = report.parked,
+                        retries = report.retries,
+                        saturated = report.saturated,
+                        unserved = report.unserved,
+                        "agent outbox needs attention — parked registrations are listed by \
+                         PushStore::parked; a saturated tick means at least the cap was waiting"
+                    );
+                }
                 Ok(report) => {
-                    if report.abandoned > 0 {
-                        // A receiver past its retry ceiling. The decisions it
-                        // was owed are still in the journal; nothing will carry
-                        // them there again.
-                        warn!(
-                            deliveries = report.deliveries,
-                            abandoned = report.abandoned,
-                            retries = report.retries,
-                            "agent outbox abandoned a receiver that stayed unreachable"
-                        );
-                    } else {
-                        info!(
-                            deliveries = report.deliveries,
-                            completed = report.completed,
-                            saturated = report.saturated,
-                            "agent outbox delivered"
-                        );
-                    }
+                    info!(
+                        deliveries = report.deliveries,
+                        completed = report.completed,
+                        // Due rows in the other id namespace. Not part of
+                        // `needs_attention` — with both workers running the
+                        // other's rows are legitimately due between its sweeps
+                        // — but invisible without saying it.
+                        unserved = report.unserved,
+                        "agent outbox delivered"
+                    );
                 }
                 Err(e) => error!(error = %e, "agent outbox sweep failed"),
             }

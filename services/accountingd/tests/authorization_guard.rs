@@ -83,7 +83,7 @@ fn the_policy_grants_no_action_the_code_never_checks() {
 fn unauthenticated_by_design(handler: &str) -> Option<&'static str> {
     match handler {
         "ingest_webhook" => {
-            Some("authenticated by the inbound X-Mako-Signature HMAC, not by a bearer token")
+            Some("authenticated by the inbound Standard Webhooks signature, not by a bearer token")
         }
         "metrics" => Some("Prometheus scrape target; aggregates only, no per-customer data"),
         _ => None,

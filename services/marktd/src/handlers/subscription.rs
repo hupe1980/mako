@@ -393,14 +393,25 @@ where
         }
     };
 
+    // A test delivery is signed exactly like a real one, so a subscriber that
+    // verifies this one verifies the fan-out too — which is the only thing a
+    // test delivery is for.
+    let webhook_id = format!("test-delivery/{}", uuid::Uuid::new_v4());
     let mut req = http
         .post(&sub.webhook_url)
         .header("Content-Type", "application/cloudevents+json")
+        .header(mako_service::webhook::ID_HEADER, &webhook_id)
         .body(body.clone());
 
     if let Some(secret) = sub.webhook_secret.as_deref() {
-        let sig = mako_service::webhook::sign(secret.as_bytes(), &body);
-        req = req.header("X-Mako-Signature", sig);
+        for (name, value) in mako_service::webhook::headers(
+            secret.as_bytes(),
+            &webhook_id,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+            &body,
+        ) {
+            req = req.header(name, value);
+        }
     }
 
     match req.send().await {

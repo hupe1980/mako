@@ -10,7 +10,7 @@
 //!
 //! ```text
 //! LFN ──── UTILMD 55555 Anfrage Daten ────► NB
-//!                                            ↓ (within 24 h per BK6-22-024)
+//!                                            ↓ (per-PID Antwortfrist, BK6-24-174 Teil 2)
 //!                    ◄──── data response / rejection ────
 //! ```
 //!
@@ -57,7 +57,8 @@ pub const WORKFLOW_NAME: &str = "gpke-anfrage-bestellung";
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
 /// ```text
-/// let due = mako_engine::fristen::add_hours(received_at, 24);
+/// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
+///     .expect("a PID with a published Antwortfrist");
 /// let dl = Deadline::new(stream_id, …, ANFRAGE_WINDOW_LABEL, due);
 /// deadline_store.register(&dl).await?;
 /// ```

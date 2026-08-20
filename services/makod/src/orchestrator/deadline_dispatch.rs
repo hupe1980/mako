@@ -313,7 +313,7 @@ pub async fn dispatch_deadline(
     // This label is purely a monitoring marker: it does NOT carry a workflow
     // command.  Log the alert and return early — do NOT dispatch TimeoutExpired
     // to the process (the process is waiting for an AS4 delivery, not a timer).
-    if label.as_ref() == mako_engine::fristen::APERAK_STROM_WINDOW_LABEL {
+    if label.as_ref() == mako_fristen::APERAK_STROM_WINDOW_LABEL {
         tracing::error!(
             deadline_id = %deadline_id,
             workflow    = %wf_name,

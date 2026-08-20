@@ -97,6 +97,17 @@ impl Daemon for Agentd {
             // resolved: connecting with the literal placeholder would fail as a
             // hostname nobody can find.
             JournalConfig::Postgres { .. } => {
+                // The multi-instance topology. Say the one thing about it that
+                // is not true of the embedded backend, at the moment an operator
+                // is choosing it.
+                warn!(
+                    "agentd: the Postgres journal is the multi-instance backend. Inbound \
+                     CloudEvent deduplication is per-process, so a redelivery that lands on \
+                     another instance starts a second fan-out: extra model spend and a second \
+                     approval task on the same case. No effect is duplicated inside a run and \
+                     no market message is dispatched twice — the one dispatching grant needs a \
+                     human, and the engine sends the message."
+                );
                 let url = secrets
                     .journal_url
                     .as_deref()
@@ -137,9 +148,10 @@ impl Daemon for Agentd {
         // startup rather than lazily is deliberate: an agent whose tools are
         // unreachable still answers, from the model alone and with no evidence
         // behind it, which is worse than a daemon that declines to start.
-        let tool_servers = agentd::plane::tools::connect(&cfg.mcp_servers, &secrets.mcp_api_key)
-            .await
-            .context("connect MCP tool transports")?;
+        let tool_servers =
+            agentd::plane::tools::connect(&cfg.mcp_servers, &secrets.mcp_api_key, &ctx.http)
+                .await
+                .context("connect MCP tool transports")?;
 
         // Only specialists the operator activated are registered and routed. An
         // `enable` name that matches nothing compiled in refuses to boot rather
@@ -162,14 +174,14 @@ impl Daemon for Agentd {
             .as_ref()
             .map(|url| {
                 let destination = agentplane::push::Destination::new("erp-audit", url);
-                // HMAC-SHA256 over the exact bytes posted, `sha256=<hex>` in
-                // X-Mako-Signature — the convention every mako receiver
-                // already verifies.
+                // Standard Webhooks, the same scheme `mako_service::webhook`
+                // signs every other mako outbound with — so `de.agent.decision.made`
+                // verifies through the shared verifier like everything else, and
+                // gains the replay protection a body-only HMAC could not give it.
                 let destination = match secrets.audit_hmac_secret.as_ref() {
-                    Some(secret) => destination.signed_with(
-                        "X-Mako-Signature",
-                        agentplane::core::Secret::new(secrecy::ExposeSecret::expose_secret(secret)),
-                    ),
+                    Some(secret) => destination.signed_with(&agentplane::core::Secret::new(
+                        secrecy::ExposeSecret::expose_secret(secret),
+                    )),
                     None => destination,
                 };
                 vec![destination]
@@ -318,10 +330,28 @@ impl Daemon for Agentd {
 ///
 /// Not the agent and not the service: two agentd instances sharing a Postgres
 /// journal must not believe they are the same writer, or a resumed run could be
-/// executed twice. The hostname is what distinguishes them in every deployment
-/// mako runs.
+/// executed twice. `HOSTNAME` is what distinguishes them in every container
+/// runtime mako deploys on.
+///
+/// **The fallback is per-process, not a constant.** A shared owner string
+/// defeats fencing entirely — every instance would consider every other
+/// instance's lease its own and resume a run another was executing. A random
+/// suffix cannot collide, and losing a lease across a restart is the safe
+/// direction: it lapses and another owner takes over, which is the designed
+/// path.
 fn owner_id() -> String {
-    std::env::var("HOSTNAME").map_or_else(|_| "agentd".to_owned(), |h| format!("agentd@{h}"))
+    std::env::var("HOSTNAME").map_or_else(
+        |_| {
+            let unique = uuid::Uuid::new_v4();
+            warn!(
+                owner = %unique,
+                "agentd: HOSTNAME is unset — using a random per-process owner id for lease \
+                 fencing. Set HOSTNAME to the pod name so an owner survives a reconnect."
+            );
+            format!("agentd@{unique}")
+        },
+        |h| format!("agentd@{h}"),
+    )
 }
 
 #[tokio::main]

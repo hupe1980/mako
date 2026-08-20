@@ -38,12 +38,12 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
     error::WorkflowError,
-    fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at},
     ids::DeadlineId,
     outbox::PendingOutbox,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
+use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -64,7 +64,8 @@ pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];
 ///
 /// Register immediately after `ValidationPassed`:
 /// ```rust,ignore
-/// let due = mako_engine::fristen::add_hours(received_at, 24);
+/// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
+///     .expect("a PID with a published Antwortfrist");
 /// let dl = Deadline::new(stream_id, ..., NEUANLAGE_APERAK_WINDOW_LABEL, due);
 /// deadline_store.register(&dl).await?;
 /// ```

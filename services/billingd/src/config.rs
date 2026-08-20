@@ -177,7 +177,7 @@ pub struct BillingdConfig {
     /// Shared secret for verifying inbound webhook HMAC-SHA256 signatures.
     ///
     /// When set, `POST /api/v1/webhooks/vpp-dispatch` (and future inbound webhook
-    /// endpoints) validate the `X-Mako-Signature: sha256=<hex>` header.
+    /// endpoints) validate the Standard Webhooks headers.
     /// When absent, signature verification is disabled (dev mode).
     pub inbound_webhook_secret: Option<String>,
 

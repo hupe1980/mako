@@ -201,10 +201,10 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
     let frist_wt = mako_wim::antwort_frist_werktage(pid_code).ok_or_else(|| {
         DispatchError::InvalidPayload(format!("no Antwortfrist defined for PID {pid_code}"))
     })?;
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         frist_wt,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),
@@ -521,10 +521,10 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
 
     // The counterparty's answer window: the WiM Teil 1 process window the
     // sibling workflows use (5 Werktage, BK6-24-174).
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         5,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),

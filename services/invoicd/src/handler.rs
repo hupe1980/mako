@@ -95,7 +95,7 @@ pub struct HandlerState {
     pub edmd_api_key: Option<secrecy::SecretString>,
     /// Optional HMAC-SHA256 secret for signing outbound ERP webhook requests.
     ///
-    /// When set, every outbound ERP POST includes an `X-Mako-Signature: sha256=<hex>`
+    /// When set, every outbound ERP POST carries the Standard Webhooks headers
     /// header so the ERP can verify authenticity.
     pub erp_hmac_secret: Option<SecretString>,
     /// HTTP client for ERP payment event delivery.
@@ -112,11 +112,13 @@ pub async fn handle_webhook(
     let inbound_secret = (*state.inbound_secret)
         .as_ref()
         .map(|s| s.expose_secret().as_bytes().to_vec());
-    if let Err(code) =
+    // The shared verifier also refuses a stale `webhook-timestamp`, so a
+    // captured POST cannot be replayed into the projection.
+    if let Err(err) =
         mako_service::webhook::verify_request(inbound_secret.as_deref(), &headers, &body)
     {
-        warn!("invoicd: webhook signature mismatch");
-        return code.into_response();
+        warn!(%err, "invoicd: inbound webhook refused");
+        return StatusCode::from(err).into_response();
     }
 
     // ── 2. Parse JSON body ────────────────────────────────────────────────────
@@ -1218,7 +1220,7 @@ pub struct PaymentEventCtx<'a> {
 /// ## Request signing
 ///
 /// When `state.erp_hmac_secret` is configured, the POST body is signed with
-/// HMAC-SHA256 and the signature is sent as `X-Mako-Signature: sha256=<hex>`.
+/// Standard Webhooks and the signature is sent as `webhook-signature: v1,<base64>`.
 pub async fn emit_payment_event(state: &HandlerState, ctx: PaymentEventCtx<'_>) {
     let Some(url) = &state.erp_webhook_url else {
         return;

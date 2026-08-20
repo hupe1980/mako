@@ -719,10 +719,10 @@ fn the_inbound_antwort_deadline_is_sized_per_pid() {
             })
             .unwrap_or_else(|| panic!("PID {pid}: no business-answer deadline registered"));
 
-        let expected = mako_engine::fristen::deadline_at_werktage(
+        let expected = mako_fristen::deadline_at_werktage(
             received_at,
             expected_wt,
-            mako_engine::fristen::HolidayCalendar::BdewMaKo,
+            mako_fristen::HolidayCalendar::BdewMaKo,
         );
         assert_eq!(
             answer_dl.due_at, expected,
@@ -735,7 +735,7 @@ fn the_inbound_antwort_deadline_is_sized_per_pid() {
             .deadlines
             .iter()
             .find(|d: &&mako_engine::workflow::PendingDeadline| {
-                d.label == mako_engine::fristen::APERAK_STROM_WINDOW_LABEL
+                d.label == mako_fristen::APERAK_STROM_WINDOW_LABEL
             })
             .unwrap_or_else(|| panic!("PID {pid}: no APERAK deadline registered"));
         assert!(

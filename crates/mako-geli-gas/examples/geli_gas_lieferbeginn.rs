@@ -29,7 +29,6 @@ use mako_engine::{
     builder::EngineBuilder,
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
     event_store::{EventStore, InMemoryEventStore},
-    fristen::{self, HolidayCalendar},
     ids::TenantId,
     inbox::{InMemoryInboxStore, InboxStore, inbox_key},
     outbox::{InMemoryOutboxStore, OutboxMessage, OutboxStore},
@@ -40,6 +39,7 @@ use mako_engine::{
     version::WorkflowId,
     workflow::CommandContext,
 };
+use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_geli_gas::{
     GasSupplierChangeCommand, GasSupplierChangeProjection, GeliGasSupplierChangeWorkflow,
 };

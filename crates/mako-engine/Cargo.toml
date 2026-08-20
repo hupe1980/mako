@@ -30,6 +30,7 @@ slatedb = ["dep:slatedb"]
 
 [dependencies]
 mako-events  = { workspace = true }
+mako-fristen = { workspace = true }
 serde      = { workspace = true }
 serde_json = { workspace = true }
 thiserror  = { workspace = true }

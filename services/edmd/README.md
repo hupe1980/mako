@@ -32,7 +32,7 @@
 | Units | A reading is stored **and labelled** in its Sparte's *billing* unit. Gas is converted to kWh_Hs at ingest (§25 Nr. 4 MessEV / DVGW G 685), so it is kWh everywhere downstream — the BO4E `Mengeneinheit`, the cold tier, the Iceberg facade. Only water, measured and billed in m³, is a volume |
 | Storno | MSCONS **13006** is *Messwert Storno* — it withdraws values delivered earlier. The receipt is recorded and the payload is **not** stored; booking withdrawn quantities as freshly measured ones is the opposite of what the message says |
 | GDPR | `DELETE /api/v1/gdpr/erasure/{malo_id}` — Art. 17 pseudonymisation in one transaction: destroys the MaLo's subject mapping in meterstore's registry (readings in both tiers become unattributable), **rewrites `malo_id` to that subject reference** in the Buchungsbeleg tables it may not delete (`meter_read_corrections`, `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`, `gas_quality_data` — § 147 Abs. 1 AO, Art. 17 Abs. 3 lit. b DSGVO), and deletes the derived, operational and device tables outright |
-| Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, **writes role-gated** (`write-meter-reads` → MSB/admin; series mutation, reading orders, GDPR erasure → MSB/NB/admin; LF-role tokens are read-only; gates pinned by the `cedar_policy` test suite); **service-to-service keys** via `[[oidc.service_keys]]` for internal callers (einsd/billingd/vertragd/portald send an opaque Bearer key, not a JWT); webhook HMAC-SHA256 (`X-Mako-Signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
+| Auth | OIDC/JWT + Cedar ABAC — reads tenant-scoped, **writes role-gated** (`write-meter-reads` → MSB/admin; series mutation, reading orders, GDPR erasure → MSB/NB/admin; LF-role tokens are read-only; gates pinned by the `cedar_policy` test suite); **service-to-service keys** via `[[oidc.service_keys]]` for internal callers (einsd/billingd/vertragd/portald send an opaque Bearer key, not a JWT); webhook Standard Webhooks (`webhook-signature`). Refuses to start without `[oidc]` unless `allow_insecure_no_auth = true` |
 | Rate limiting | Per-tenant and global GCRA buckets; `429` carries `Retry-After` |
 | Lifecycle | `mako_service::run` owns it — tracing, the tuned pool (`application_name = edmd`), migrations, real DB-ping readiness, `/metrics`, and graceful shutdown on **SIGINT and SIGTERM** |
 | Health | `GET /health/live`, `GET /health/ready` (real DB ping) — the runner's; `GET /edmd/metrics` carries edmd's own gauges |
@@ -99,7 +99,7 @@ subscriber_id = "edmd"
 webhook_url   = "http://edmd:8380/webhook"
 
 [webhook]
-inbound_secret   = "env:EDMD_INBOUND_SECRET"   # verifies X-Mako-Signature
+inbound_secret   = "env:EDMD_INBOUND_SECRET"   # verifies webhook-signature
 erp_webhook_url  = "http://erp:9000/events"    # outbound CloudEvents
 
 [oidc]
@@ -324,7 +324,7 @@ so two tenants' readings for one measuring point never merge.
 `edmd` subscribes to `de.mako.process.completed` events from `marktd` where `makopid`
 is in the MSCONS PID set (`edmd::domain::MSCONS_PIDS`). On receipt:
 
-1. Verifies the `X-Mako-Signature` HMAC (if configured)
+1. Verifies the Standard Webhooks signature (if configured)
 2. Parses `data` into a `MeterDataReceipt`
 3. Upserts the receipt row (idempotent on `process_id`)
 4. Stores typed interval reads

@@ -14,6 +14,7 @@ default = []
 testing = []
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events  = { workspace = true }
 thiserror    = { workspace = true }
 serde        = { workspace = true }

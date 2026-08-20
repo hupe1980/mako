@@ -476,10 +476,10 @@ async fn spawn_device_change(
     // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
     // correctly handling CET/CEST transitions.
     let frist_wt = device_change_frist_wt(&command);
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         frist_wt,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         stream_id,
@@ -548,10 +548,10 @@ async fn spawn_steuerungsauftrag(
     // unrelated to the per-PID MSB-Wechsel Fristen above.
     // deadline_at_werktage computes 17:00 Europe/Berlin on the due Werktag,
     // correctly handling CET/CEST transitions.
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         5,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         stream_id,

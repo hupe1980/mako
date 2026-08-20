@@ -87,7 +87,7 @@ pub const ANTWORT_PIDS_LF: &[u32] = &[
 /// `on_deadline` → `TimeoutExpired` to transition the process to `Rejected`.
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     sent_at, 10, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(

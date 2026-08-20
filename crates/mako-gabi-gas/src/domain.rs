@@ -317,7 +317,8 @@ impl GasQualityFlag {
 ///
 /// Re-exported from the workspace-wide [`mako_events`] catalog (single
 /// source of truth). Use `de.gabi.*` as a single glob in `agentd.toml`
-/// `trigger_event_types` to activate the `gabi-gas-agent` on all GaBi Gas
+/// the `gabi-gas-agent` manifest's `## TRIGGERED BY` block and the `builtin`
+/// subscription table, which together decide what wakes it on GaBi Gas
 /// events.
 pub use mako_events::gabi as cloud_events;
 

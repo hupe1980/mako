@@ -34,14 +34,14 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
-    fristen::{
-        APERAK_STROM_WINDOW_LABEL, HolidayCalendar, aperak_strom_due_at, deadline_at_werktage,
-    },
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{DeviceId, MarktpartnerCode, MeLo, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
+};
+use mako_fristen::{
+    APERAK_STROM_WINDOW_LABEL, HolidayCalendar, aperak_strom_due_at, deadline_at_werktage,
 };
 use time::OffsetDateTime;
 
@@ -56,14 +56,14 @@ pub const WORKFLOW_NAME: &str = "wim-device-change";
 ///
 /// | Clock | Window | Label |
 /// |---|---|---|
-/// | Technical acknowledgement (APERAK) | **45 minutes**, Strom UTILMD (APERAK AHB §2.4.1) | `mako_engine::fristen::APERAK_STROM_WINDOW_LABEL` |
+/// | Technical acknowledgement (APERAK) | **45 minutes**, Strom UTILMD (APERAK AHB §2.4.1) | `mako_fristen::APERAK_STROM_WINDOW_LABEL` |
 /// | Business answer (Bestätigung/Ablehnung) | **1 / 3 / 5 / 7 WT**, per PID | this label |
 ///
 /// Size it with [`antwort_frist_werktage`] — never a flat window:
 ///
 /// ```rust,ignore
 /// let wt = antwort_frist_werktage(pid).expect("a WiM MSB-Wechsel request PID");
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at, wt, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., ANTWORT_FRIST_WINDOW_LABEL, due);
@@ -95,7 +95,7 @@ pub const DEVICE_CHANGE_PIDS: &[u32] = &[55_039, 55_042, 55_051, 55_168];
 /// Antwortfrist in Werktagen for the counterparty's business response.
 ///
 /// **These differ per process** — a single flat window would fire early for the
-/// Kündigung and late for the Abmeldung. From BK6-22-024 WiM Teil 1
+/// Kündigung and late for the Abmeldung. From BK6-24-174 WiM Teil 1
 /// ("Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von Nr. 1"):
 ///
 /// | Request | Antwort | Frist | Fundstelle |
@@ -105,17 +105,22 @@ pub const DEVICE_CHANGE_PIDS: &[u32] = &[55_039, 55_042, 55_051, 55_168];
 /// | 55051   | 55052/55053 | **7 WT** | Kap. 2.4.2 Nr. 2 |
 /// | 55168   | 55169/55170 | **1 WT** | Kap. 2.5.2 Nr. 4 |
 ///
+/// A view on [`mako_fristen::antwort::WIM`], which is the same table
+/// `makod` registers the deadline from, `processd` sizes its operator queue by
+/// and `obsd` raises the breach alert against.
+///
 /// Distinct from the APERAK window, which is **45 minutes** for UTILMD in Strom
 /// (APERAK AHB §2.4.1) — see [`ANTWORT_FRIST_WINDOW_LABEL`].
 ///
 /// Returns `None` when `request_pid` is not a WiM MSB-Wechsel request.
 #[must_use]
-pub const fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
-    match request_pid {
-        55_039 => Some(3),
-        55_042 => Some(5),
-        55_051 => Some(7),
-        55_168 => Some(1),
+pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
+    use mako_fristen::antwort::FristShape;
+    if !DEVICE_CHANGE_PIDS.contains(&request_pid) {
+        return None;
+    }
+    match mako_fristen::antwort::antwort_obligation(request_pid)?.frist {
+        FristShape::WerktageAtCutoff(n) => Some(n),
         _ => None,
     }
 }

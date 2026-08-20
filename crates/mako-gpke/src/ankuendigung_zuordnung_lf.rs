@@ -65,7 +65,8 @@ pub const WORKFLOW_NAME: &str = "gpke-ankuendigung-zuordnung-lf";
 ///
 /// Register immediately after `ValidationPassed`:
 /// ```rust,ignore
-/// let due = mako_engine::fristen::add_hours(received_at, 24);
+/// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
+///     .expect("a PID with a published Antwortfrist");
 /// let dl = Deadline::new(stream_id, ..., ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL, due);
 /// deadline_store.register(&dl).await?;
 /// ```

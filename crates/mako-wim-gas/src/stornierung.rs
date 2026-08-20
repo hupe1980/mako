@@ -52,7 +52,7 @@ pub const WORKFLOW_NAME: &str = "wim-gas-stornierung";
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
 /// ```text
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at, 10, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_RESPONSE_WINDOW_LABEL, due);

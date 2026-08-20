@@ -1364,16 +1364,16 @@ pub async fn post_remadv_webhook(
     headers: axum::http::HeaderMap,
     raw: axum::body::Bytes,
 ) -> ApiResult<StatusCode> {
-    // A forged REMADV would mark an invoice paid, or contest one that was not.
-    if let Some(secret) = &cfg.inbound_secret {
-        let provided = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or_default();
-        if !mako_service::webhook::verify_hmac(secret.as_bytes(), &raw, provided) {
-            tracing::warn!("netzbilanzd: inbound REMADV signature mismatch — rejected");
-            return Err(ApiError::Unauthorized);
-        }
+    // A forged REMADV would mark an invoice paid, or contest one that was not —
+    // and a *replayed* one would do it twice, which is why this goes through the
+    // shared verifier's timestamp check rather than a local signature compare.
+    if let Err(err) = mako_service::webhook::verify_request(
+        cfg.inbound_secret.as_deref().map(str::as_bytes),
+        &headers,
+        &raw,
+    ) {
+        tracing::warn!(%err, "netzbilanzd: inbound REMADV refused");
+        return Err(ApiError::Unauthorized);
     }
 
     let body: RemadvWebhookBody = serde_json::from_slice(&raw)

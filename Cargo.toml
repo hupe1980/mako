@@ -8,6 +8,7 @@ members = [
     "crates/mako-gpke",
     "crates/mako-wim",
     "crates/mako-geli-gas",
+    "crates/mako-fristen",
     "crates/mako-mabis",
     "crates/mako-as4",
     "crates/mako-redispatch",
@@ -108,6 +109,13 @@ grid-billing     = { path = "crates/grid-billing",     version = "0.16" }
 eeg-billing      = { path = "crates/eeg-billing",      version = "0.16" }
 mako-obs         = { path = "crates/mako-obs",         version = "0.16" }
 mako-wim         = { path = "crates/mako-wim",         version = "0.16" }
+mako-gpke        = { path = "crates/mako-gpke",        version = "0.16" }
+mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.16" }
+mako-wim-gas     = { path = "crates/mako-wim-gas",     version = "0.16" }
+# Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
+# the per-Prüfidentifikator Antwortfrist tables. `mako-engine` re-exports it as
+# `mako_engine::fristen`, so existing call sites are unchanged.
+mako-fristen     = { path = "crates/mako-fristen",     version = "0.16" }
 # AS4/ebMS3 stack behind the BDEW MaKo profile. Declared once here because
 # mako-as4 and makod both depend on it: independent declarations drift onto two
 # versions in one build.

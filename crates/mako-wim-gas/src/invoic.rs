@@ -391,7 +391,7 @@ impl CommandPayload for WimGasInvoicCommand {}
 /// `ValidationPassed` event fires. Compute the due date with:
 ///
 /// ```rust,ignore
-/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use mako_fristen::{self as fristen, HolidayCalendar};
 /// let due = fristen::add_werktage(received_date, 10, HolidayCalendar::BdewMaKo);
 /// ```
 pub struct WimGasInvoicWorkflow;

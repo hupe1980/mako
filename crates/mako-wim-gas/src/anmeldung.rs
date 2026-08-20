@@ -25,7 +25,7 @@
 //! Sunday and federal public holidays do not.
 //!
 //! ```rust,ignore
-//! use mako_engine::fristen::{self, HolidayCalendar};
+//! use mako_fristen::{self as fristen, HolidayCalendar};
 //! let due = fristen::add_werktage(received_date, 10, HolidayCalendar::BdewMaKo);
 //! ```
 //!
@@ -53,15 +53,15 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     envelope::EventEnvelope,
     error::WorkflowError,
-    fristen::{
-        APERAK_GAS_FOLGEPROZESS_LABEL, HolidayCalendar, aperak_gas_folgeprozess_due_at,
-        deadline_at_werktage,
-    },
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
+};
+use mako_fristen::{
+    APERAK_GAS_FOLGEPROZESS_LABEL, HolidayCalendar, aperak_gas_folgeprozess_due_at,
+    deadline_at_werktage,
 };
 use std::collections::HashMap;
 use time::OffsetDateTime;
@@ -74,7 +74,7 @@ pub const WORKFLOW_NAME: &str = "wim-gas-anmeldung";
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at, 10, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., RESPONSE_WINDOW_LABEL, due);

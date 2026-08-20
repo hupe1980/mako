@@ -286,7 +286,7 @@ pub struct EogConfig {
     #[serde(default)]
     pub notify_webhook_url: Option<String>,
     /// HMAC-SHA256 secret for signing the outbound `notify_webhook_url`
-    /// CloudEvents (`X-Mako-Signature: sha256=<hex>`). Supports `"env:VAR_NAME"`,
+    /// CloudEvents (Standard Webhooks). Supports `"env:VAR_NAME"`,
     /// which `main` resolves before use — an unresolved reference would sign
     /// with the ASCII bytes of the literal `env:VAR_NAME` and every receiver
     /// verifying the signature would reject the event.

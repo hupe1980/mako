@@ -103,7 +103,7 @@ tenant         = "9900357000004"
 makod_url      = "http://makod:8080"
 makod_api_key  = "env:SPERRD_MAKOD_API_KEY"
 
-# Verifies X-Mako-Signature on the market ingest. Absent → unsigned events are
+# Verifies webhook-signature on the market ingest. Absent → unsigned events are
 # accepted with a startup warning; the webhook queues physical disconnections,
 # so that is a development setting.
 inbound_hmac_secret = "env:SPERRD_INBOUND_HMAC_SECRET"

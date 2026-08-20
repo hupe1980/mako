@@ -148,7 +148,7 @@ mod fristen {
 /// derived from the calendar rather than passed in by the caller.
 #[must_use]
 pub fn phase_for(period_to: Date, today: Date) -> (Abrechnungslauf, SubmissionPhase) {
-    use mako_engine::fristen::{HolidayCalendar, add_werktage};
+    use mako_fristen::{HolidayCalendar, add_werktage};
 
     let cal = HolidayCalendar::BdewMaKo;
     let erstaufschlag_ends = add_werktage(period_to, fristen::ERSTAUFSCHLAG_LAST_WT, cal);

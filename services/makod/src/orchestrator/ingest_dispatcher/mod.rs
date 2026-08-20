@@ -44,7 +44,6 @@ use mako_engine::{
     deadline::Deadline,
     error::EngineError,
     event_store::CorrelationEntry,
-    fristen::{self, HolidayCalendar},
     ids::{ProcessId, ProcessIdentity, TenantId},
     process::Process,
     registry::ProcessRegistry as _,
@@ -53,6 +52,7 @@ use mako_engine::{
     version::{FormatVersion, WorkflowId},
     workflow::{CommandPayload, Workflow},
 };
+use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_gabi_gas::{
     AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow,
     NominationCommand,
@@ -925,14 +925,14 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
     }
 }
 
-/// The business answer Frist for an inbound GPKE Strom / GeLi Gas PID.
+/// The business answer Frist for an inbound PID.
 ///
-/// Single-sourced from the Festlegungen via
-/// [`mako_gpke::antwort_deadline`] and [`mako_geli_gas::antwortfrist::antwort_deadline`],
-/// so the deadline makod registers on the process and the one `processd` sizes
-/// its operator queue by are the same number read from the same table.
+/// Single-sourced from [`mako_fristen::antwort`], the one table `processd` sizes
+/// its operator queue by and `obsd` raises breach alerts against — so the
+/// deadline makod registers on the process, the queue entry that expires
+/// against it and the alert that fires are three readings of one number.
 ///
-/// The windows are **not** a flat 24 hours: GPKE Teil 2 states each one as a
+/// The windows are **not** flat durations: GPKE Teil 2 states each one as a
 /// wall-clock instant on the first Werktag after the ÜT (11:00 Anmeldung, 06:00
 /// Abmeldung, 05:00 NB-seitiges Lieferende, 09:00 Anfrage zur Beendigung), and
 /// GeLi Gas as „Ablauf des n. Werktags nach Eingang" (4 WT Anmeldung, 3 WT
@@ -940,17 +940,15 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
 /// — the quiet failure — still calls a Tuesday-evening arrival healthy nine
 /// hours after its Frist has lapsed.
 ///
-/// `fallback` is used for a PID neither table quantifies. It must stay a real
-/// value: a process with no registered deadline never transitions out of
-/// `Initiated` and is invisible to the deadline scheduler.
+/// `fallback` is used for a PID no table quantifies. It must stay a real value:
+/// a process with no registered deadline never transitions out of `Initiated`
+/// and is invisible to the deadline scheduler.
 pub(crate) fn antwort_due_at(
     pid: u32,
     received: OffsetDateTime,
     fallback: OffsetDateTime,
 ) -> OffsetDateTime {
-    mako_gpke::antwort_deadline(pid, received)
-        .or_else(|| mako_geli_gas::antwortfrist::antwort_deadline(pid, received))
-        .unwrap_or(fallback)
+    mako_fristen::antwort::antwort_deadline(pid, received).unwrap_or(fallback)
 }
 
 /// Extract the **Fälligkeitsdatum** (Zahlungsziel) from an INVOIC — `SG8 DTM+265`

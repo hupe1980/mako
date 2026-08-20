@@ -32,7 +32,7 @@ pub struct NetzbilanzConfig {
     /// `de.netzbilanz.invoic.drafted` and `de.netzbilanz.invoic.dispatched`.
     pub erp_webhook_url: Option<String>,
     /// HMAC-SHA256 secret for signing the outbound ERP webhook CloudEvents
-    /// (`X-Mako-Signature: sha256=<hex>`). Use `env:VAR_NAME`. Leave unset only
+    /// (Standard Webhooks). Use `env:VAR_NAME`. Leave unset only
     /// in dev — a receiver verifying the signature rejects unsigned events.
     pub erp_webhook_secret: Option<String>,
     /// HMAC-SHA256 secret for verifying INBOUND REMADV CloudEvents on

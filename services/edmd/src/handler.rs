@@ -39,7 +39,6 @@ use axum::{
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
 };
-use mako_service::webhook::verify_hmac;
 use secrecy::{ExposeSecret, SecretString};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -95,7 +94,7 @@ pub struct HandlerState {
     pub marktd_api_key: secrecy::SecretString,
     /// ERP webhook URL for outbound CloudEvents from direct push and quality warnings.
     pub erp_webhook_url: Option<String>,
-    /// Optional HMAC secret signing outbound CloudEvents (`x-mako-signature`).
+    /// Optional secret signing outbound CloudEvents (Standard Webhooks).
     pub erp_webhook_secret: Option<secrecy::SecretString>,
     /// §14a SMGW/CLS compliance thresholds, so the synchronous checks on the
     /// upsert and audit endpoints use the same numbers as the daily sweep. They
@@ -139,13 +138,15 @@ pub async fn handle_webhook(
     //    posture, rather than waved through.
     match (*state.inbound_secret).as_ref() {
         Some(secret) => {
-            let provided = headers
-                .get("x-mako-signature")
-                .and_then(|v| v.to_str().ok())
-                .unwrap_or("");
-            if !verify_hmac(secret.expose_secret().as_bytes(), &body, provided) {
-                warn!("edmd: webhook signature mismatch");
-                return (StatusCode::UNAUTHORIZED, "signature mismatch").into_response();
+            // The shared verifier, which also refuses a stale
+            // `webhook-timestamp`: a replayed reading would be stored twice.
+            if let Err(err) = mako_service::webhook::verify_request(
+                Some(secret.expose_secret().as_bytes()),
+                &headers,
+                &body,
+            ) {
+                warn!(%err, "edmd: inbound webhook refused");
+                return (StatusCode::from(err), err.to_string()).into_response();
             }
         }
         None => {

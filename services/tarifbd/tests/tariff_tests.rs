@@ -1234,34 +1234,61 @@ mod sharing_category_tests {
     }
 }
 
-// ── HMAC signing on CloudEvent tests ──────────────────────────────────────────
+// ── Outbound signing on the Angebot CloudEvent ────────────────────────────────
 
 #[cfg(test)]
-mod hmac_signing_tests {
-    use mako_service::webhook::hmac_hex;
+mod webhook_signing_tests {
+    use mako_service::webhook::{self, ID_HEADER, SIGNATURE_HEADER, TIMESTAMP_HEADER};
 
-    /// Verify that de.tarif.angebot.angenommen CloudEvent payloads are HMAC-signed.
-    /// The X-Mako-Signature header must be present when erp_hmac_secret is configured.
+    fn now() -> i64 {
+        time::OffsetDateTime::now_utc().unix_timestamp()
+    }
+
+    /// The `de.tarif.angebot.angenommen` emit signs with the shared signer, so
+    /// what an ERP receives here verifies the same way as every other mako
+    /// outbound. This path POSTs directly (it reads the response back to link
+    /// the Rahmenvertrag), which is exactly the kind of call site that used to
+    /// grow its own signing.
     #[test]
-    fn hmac_sha256_of_ce_body_is_deterministic() {
+    fn the_three_headers_verify_against_the_shared_verifier() {
         let secret = b"test-secret";
-        let body = r#"{"specversion":"1.0","type":"de.tarif.angebot.angenommen"}"#;
-        let sig1 = hmac_hex(secret, body.as_bytes());
-        let sig2 = hmac_hex(secret, body.as_bytes());
-        assert_eq!(sig1, sig2, "HMAC must be deterministic");
-        assert!(!sig1.is_empty(), "HMAC must not be empty");
-        assert_eq!(sig1.len(), 64, "HMAC-SHA256 hex must be 64 chars");
+        let body = br#"{"specversion":"1.0","type":"de.tarif.angebot.angenommen"}"#;
+        let id = "de.tarif.angebot.angenommen/a1b2c3d4";
+        let ts = now();
+
+        let mut headers = axum::http::HeaderMap::new();
+        for (name, value) in webhook::headers(secret, id, ts, body) {
+            headers.insert(
+                axum::http::HeaderName::from_static(name),
+                value.parse().expect("ascii"),
+            );
+        }
+        for required in [ID_HEADER, TIMESTAMP_HEADER, SIGNATURE_HEADER] {
+            assert!(headers.contains_key(required), "{required} must be sent");
+        }
+        assert_eq!(
+            webhook::verify_request(Some(secret), &headers, body),
+            Ok(Some(webhook::WebhookId(id.to_owned())))
+        );
+    }
+
+    /// The signature covers the id, so two Angebote cannot share one.
+    #[test]
+    fn different_angebote_produce_different_signatures() {
+        let (secret, ts) = (b"test-secret".as_slice(), now());
+        let body = br#"{"specversion":"1.0"}"#;
+        assert_ne!(
+            webhook::sign(secret, "angebot/a1b2c3d4", ts, body),
+            webhook::sign(secret, "angebot/different-id", ts, body),
+        );
     }
 
     #[test]
-    fn different_payloads_produce_different_hmac() {
-        let secret = b"test-secret";
-        let body1 = r#"{"angebot_id":"a1b2c3d4"}"#;
-        let body2 = r#"{"angebot_id":"different-id"}"#;
+    fn different_payloads_produce_different_signatures() {
+        let (secret, ts) = (b"test-secret".as_slice(), now());
         assert_ne!(
-            hmac_hex(secret, body1.as_bytes()),
-            hmac_hex(secret, body2.as_bytes()),
-            "different payloads must produce different HMAC"
+            webhook::sign(secret, "angebot/a", ts, br#"{"angebot_id":"a1b2c3d4"}"#),
+            webhook::sign(secret, "angebot/a", ts, br#"{"angebot_id":"different"}"#),
         );
     }
 }

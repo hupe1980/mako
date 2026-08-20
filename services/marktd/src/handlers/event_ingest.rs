@@ -3,7 +3,7 @@
 //! Route: `POST /api/v1/mako/events`
 //!
 //! Receives CloudEvents 1.0 payloads from `makod`'s outbound webhook channel,
-//! verifies the `X-Mako-Signature` HMAC-SHA256 header, deduplicates via the
+//! verifies the Standard Webhooks signature and timestamp, deduplicates via the
 //! `processed_events` table, and emits the event onto the internal MPSC channel
 //! for the fan-out worker.
 //!
@@ -55,7 +55,7 @@ pub struct InboundWebhookSecret(pub Option<String>);
 /// `POST /api/v1/mako/events`
 ///
 /// Request body: CloudEvents 1.0 JSON (`application/cloudevents+json`).
-/// Signature header: `X-Mako-Signature: sha256=<hex>`.
+/// Signature headers: `webhook-id`, `webhook-timestamp`, `webhook-signature`.
 #[allow(clippy::too_many_arguments)]
 pub async fn ingest_event<Ma, Me, Su, Ci, Pa>(
     State(state): State<Arc<AppState<Ma, Me, Su, Ci, Pa>>>,
@@ -78,24 +78,19 @@ where
     Ci: CorrelationIndex + Clone,
     Pa: PartnerRepository + Clone,
 {
-    // 1. Verify HMAC signature if a shared secret is configured.
-    if let Some(secret_str) = secret.0.as_deref() {
-        let sig = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .map(|v| v.strip_prefix("sha256=").unwrap_or(v));
-
-        match sig {
-            Some(hex) if mako_service::webhook::verify_hmac(secret_str.as_bytes(), &body, hex) => {}
-            Some(_) => {
-                warn!("event_ingest: invalid HMAC signature");
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
-            None => {
-                warn!("event_ingest: missing or malformed X-Mako-Signature header");
-                return StatusCode::UNAUTHORIZED.into_response();
-            }
-        }
+    // 1. Verify the inbound signature through the shared verifier, which also
+    //    refuses a stale `webhook-timestamp` — this is the ingest every other
+    //    service's events arrive on, so a replay here re-enters the fan-out.
+    if let Err(err) = mako_service::webhook::verify_request(
+        secret.0.as_deref().map(str::as_bytes),
+        &headers,
+        &body,
+    ) {
+        warn!(%err, "event_ingest: refused");
+        return StatusCode::from(err).into_response();
+    }
+    if secret.0.is_none() {
+        warn!("event_ingest: no inbound secret configured — accepting unverified (dev mode)");
     }
 
     // 2. Deserialize.

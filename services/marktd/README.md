@@ -339,7 +339,7 @@ not Sparte-scoped (a Marktpartner, a subscription test) and matches every `spart
 address — the worker POSTs from inside the deployment's network, and the shared HTTP client
 refuses redirects so the check cannot be bypassed with a `302`.
 
-Deliveries carry `X-Mako-Signature: sha256=<hmac-sha256-hex>` when a secret is set:
+Deliveries carry `webhook-signature: v1,<base64>` when a secret is set:
 
 ```python
 import hmac, hashlib

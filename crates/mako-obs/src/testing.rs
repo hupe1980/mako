@@ -46,6 +46,7 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
                         .is_none_or(|r| p.mdm_role.as_deref() == Some(r))
                     && q.since.is_none_or(|s| p.started_at >= s)
                     && q.tenant.as_deref().is_none_or(|t| p.tenant == t)
+                    && q.family.as_deref().is_none_or(|f| p.family == f)
             })
             .cloned()
             .collect();
@@ -81,42 +82,41 @@ impl ProcessProjectionRepository for InMemoryProcessProjectionRepository {
             });
         }
 
-        let total = relevant.len() as u64;
-        let completed = relevant
-            .iter()
-            .filter(|p| p.state == ProcessState::Completed)
-            .count() as u64;
-        let rejected = relevant
-            .iter()
-            .filter(|p| p.state == ProcessState::Rejected)
-            .count() as u64;
-        let timeout = relevant
-            .iter()
-            .filter(|p| p.state == ProcessState::AperakTimeout)
-            .count() as u64;
-        let cancelled = relevant
-            .iter()
-            .filter(|p| p.state == ProcessState::Cancelled)
-            .count() as u64;
-
-        let compliance = if total > 0 {
-            (total - timeout) as f64 / total as f64
-        } else {
-            1.0
+        let count = |state: ProcessState| -> u64 {
+            relevant.iter().filter(|p| p.state == state).count() as u64
         };
+        let total = relevant.len() as u64;
+        let with_frist = relevant.iter().filter(|p| p.deadline_at.is_some()).count() as u64;
+        let now = time::OffsetDateTime::now_utc();
+        let breached = relevant
+            .iter()
+            .filter(|p| {
+                // The business window, never the APERAK clock: measured against
+                // when the process closed, or against now while it is open.
+                let measured_at = if p.state.is_terminal() {
+                    p.last_event_at
+                } else {
+                    now
+                };
+                p.deadline_at.is_some_and(|d| d < measured_at)
+            })
+            .count() as u64;
 
         Ok(KpiReport {
             pid,
             period_from: from,
             period_to: to,
             total_initiated: total,
-            total_completed: completed,
-            total_rejected: rejected,
-            total_aperak_timeout: timeout,
-            total_cancelled: cancelled,
-            aperak_compliance_rate: compliance,
-            avg_cycle_time_hours: 0.0,
-            p95_cycle_time_hours: 0.0,
+            total_completed: count(ProcessState::Completed),
+            total_rejected: count(ProcessState::Rejected),
+            total_failed: count(ProcessState::Failed),
+            total_aperak_timeout: count(ProcessState::AperakTimeout),
+            total_frist_breached: breached,
+            total_with_frist: with_frist,
+            frist_compliance_rate: (with_frist > 0)
+                .then(|| 1.0 - (breached as f64 / with_frist as f64)),
+            avg_cycle_time_hours: None,
+            p95_cycle_time_hours: None,
         })
     }
 
@@ -158,7 +158,8 @@ mod tests {
             partner_mp_id: Some("9900000000001".into()),
             mdm_role: Some("LF".into()),
             deadline_at: None,
-            deadline_risk: DeadlineRisk::Green,
+            deadline_source: None,
+            deadline_risk: DeadlineRisk::Unknown,
             started_at: OffsetDateTime::now_utc(),
             last_event_at: OffsetDateTime::now_utc(),
             erc_code: None,
@@ -185,7 +186,8 @@ mod tests {
                 partner_mp_id: None,
                 mdm_role: None,
                 deadline_at: None,
-                deadline_risk: DeadlineRisk::Green,
+                deadline_source: None,
+                deadline_risk: DeadlineRisk::Unknown,
                 started_at: OffsetDateTime::now_utc(),
                 last_event_at: OffsetDateTime::now_utc(),
                 erc_code: None,

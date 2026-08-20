@@ -1482,7 +1482,7 @@ the credit against an actual document, not just an amount. Non-billable statuses
 }
 ```
 
-All events: `application/cloudevents+json` + `X-Mako-Signature` HMAC.
+All events: `application/cloudevents+json` + Standard Webhooks signature.
 
 ---
 

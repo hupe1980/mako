@@ -24,7 +24,7 @@
 //! - **AWH Sperrprozesse Gas** — published under BK7-24-01-009
 //! - **APERAK Frist**: **10 Werktage** (Saturday counts, Sunday and public
 //!   holidays do not; German local time CET/CEST)
-//! - Use `mako_engine::fristen::add_werktage(date, 10, BdewMaKo)` for the
+//! - Use `mako_fristen::add_werktage(date, 10, BdewMaKo)` for the
 //!   deadline computation
 
 use mako_engine::types::Pruefidentifikator;
@@ -71,10 +71,10 @@ pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 /// **10 Werktage** of receiving the Sperrauftrag.
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at,
 ///     10,
-///     mako_engine::fristen::HolidayCalendar::BdewMaKo,
+///     mako_fristen::HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., ANTWORT_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;

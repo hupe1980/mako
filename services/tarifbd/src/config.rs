@@ -37,7 +37,7 @@ pub struct TarifbdConfig {
     pub erp_webhook_url: Option<String>,
 
     /// HMAC-SHA256 secret for outbound webhook signing.
-    /// When absent, the `X-Mako-Signature` header is omitted from outbound
+    /// When absent, the signature headers are omitted from outbound
     /// CloudEvent webhooks.  Required in production.
     pub erp_hmac_secret: Option<String>,
 

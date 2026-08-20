@@ -1,15 +1,21 @@
 //! Deadline tracking for regulatory process timers.
 //!
 //! Every MaKo process is subject to hard regulatory deadlines defined in the
-//! BDEW Application Handbooks. Deadline semantics vary by process family:
+//! BDEW Application Handbooks, and this module stores them. It does not compute
+//! them: [`mako_fristen`] does, and is the only place that should.
 //!
-//! | Process family | Deadline unit | Helper |
+//! Three different clocks produce a `due_at`, and they are not interchangeable:
+//!
+//! | Clock | Window | Helper |
 //! |---|---|---|
-//! | GPKE Lieferantenwechsel (BK6-22-024) | 24 wall-clock hours | [`fristen::add_hours`] |
-//! | WiM / GeLi Gas / MABIS | Werktage | [`fristen::add_werktage`] |
+//! | CONTRL | 6 wall-clock hours | [`mako_fristen::contrl_due_at`] |
+//! | APERAK | 45 min Strom weekday; Gas next Werktag 12:00 or 3 Werktage | [`mako_fristen::aperak_strom_due_at`] and the Gas pair |
+//! | Antwortfrist | per Prüfidentifikator | [`mako_fristen::antwort::antwort_deadline`] |
 //!
-//! Use the helpers in [`crate::fristen`] to compute the correct `due_at`
-//! timestamp before constructing a [`Deadline`].
+//! **There is no flat GPKE window.** GPKE Teil 2 states each answer Frist as a
+//! clock time on the first Werktag after the Übertragungstag, so a duration is
+//! wrong in both directions — and wrong silently in the loose one, where it
+//! reports a lapsed Frist as still running.
 //!
 //! The `DeadlineStore` persists these timers per process stream. A background
 //! scheduler polls [`DeadlineStore::due_now`] and dispatches a
@@ -20,13 +26,9 @@
 //! # Usage
 //!
 //! ```rust,ignore
-//! use mako_engine::fristen;
-//!
-//! // GPKE 24h Lieferantenwechsel (BK6-22-024):
-//! let due = fristen::add_hours(OffsetDateTime::now_utc(), 24);
-//! // WiM 5-Werktage confirmation window:
-//! let due = fristen::add_werktage(OffsetDateTime::now_utc().date(), 5,
-//!     fristen::HolidayCalendar::BdewMaKo).midnight().assume_utc();
+//! // The window comes from the table, never from a literal:
+//! let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
+//!     .expect("a PID with a published Antwortfrist");
 //!
 //! let deadline = Deadline::new(
 //!     process.stream_id().clone(),
@@ -49,8 +51,6 @@
 //! }
 //! ```
 //!
-//! [`fristen::add_hours`]: crate::fristen::add_hours
-//! [`fristen::add_werktage`]: crate::fristen::add_werktage
 
 use std::sync::Arc;
 

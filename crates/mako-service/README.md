@@ -297,7 +297,7 @@ let ce = CloudEvent::new(
     &malo_id,                                     // subject
     serde_json::json!({ "betrag": "42.00" }),     // data
 );
-// Signs (X-Mako-Signature: sha256=<hex>) when the secret is Some, sends
+// Signs (webhook-signature: v1,<base64>) when the secret is Some, sends
 // Content-Type: application/cloudevents+json, retries transient failures 3×,
 // and returns immediately on a permanent 4xx.
 post_ce_with_retry(&default_client(), &webhook_url, &ce, secret.map(str::as_bytes)).await?;

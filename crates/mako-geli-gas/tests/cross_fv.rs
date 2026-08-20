@@ -33,12 +33,12 @@
 use mako_engine::{
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
     event_store::InMemoryEventStore,
-    fristen::{self, HolidayCalendar},
     ids::{DeadlineId, TenantId},
     process::Process,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
+use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_geli_gas::{
     GasSupplierChangeCommand, GasSupplierChangeState, GeliGasSupplierChangeWorkflow,
     LIEFERBEGINN_RESPONSE_WINDOW_LABEL,

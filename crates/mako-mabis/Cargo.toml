@@ -11,6 +11,7 @@ keywords     = ["mabis", "bilanzkreis", "edifact", "energy", "mako"]
 categories   = ["data-structures"]
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-engine  = { workspace = true }
 metering     = { workspace = true, features = ["serde"] }
 # The validated BDEW/ENTSO-E identifier types. A Bilanzkreis (EIC type `X`)

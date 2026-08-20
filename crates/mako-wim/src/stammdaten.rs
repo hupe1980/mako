@@ -93,7 +93,7 @@ pub const UEBERMITTLUNG_PIDS: std::ops::RangeInclusive<u32> = 17102..=17133;
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at, 5, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., STAMMDATEN_DEADLINE_LABEL, due);

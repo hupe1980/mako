@@ -18,8 +18,8 @@ name = "accountingd"
 path = "src/main.rs"
 
 [dependencies]
+mako-fristen = { workspace = true }
 mako-events = { workspace = true }
-mako-engine = { workspace = true }
 mako-markt  = { workspace = true, features = ["makod-client"] }
 mako-service = { workspace = true, features = ["oidc", "cedar", "otel"] }
 rmcp         = { workspace = true }

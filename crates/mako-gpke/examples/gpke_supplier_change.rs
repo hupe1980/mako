@@ -25,7 +25,6 @@ use mako_engine::{
     builder::EngineBuilder,
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
     event_store::{EventStore, InMemoryEventStore},
-    fristen,
     ids::TenantId,
     inbox::{InMemoryInboxStore, InboxStore, inbox_key},
     outbox::{InMemoryOutboxStore, OutboxMessage, OutboxStore},
@@ -36,6 +35,7 @@ use mako_engine::{
     version::WorkflowId,
     workflow::CommandContext,
 };
+use mako_fristen as fristen;
 use mako_gpke::{
     GpkeSupplierChangeWorkflow, SupplierChangeCommand, SupplierChangeProjection, post_acceptance,
 };

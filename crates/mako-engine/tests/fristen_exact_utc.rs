@@ -17,7 +17,7 @@
 //! - 2026-03-29 02:00 CET → 03:00 CEST (spring forward)
 //! - 2026-10-25 03:00 CEST → 02:00 CET (fall back)
 
-use mako_engine::fristen::{
+use mako_fristen::{
     HolidayCalendar, add_hours, add_werktage, aperak_strom_due_at, deadline_at_werktage,
 };
 use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};

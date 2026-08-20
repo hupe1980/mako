@@ -1,33 +1,45 @@
-//! Regulatory deadline calculation helpers.
+//! **Every Frist in German market communication, in one leaf crate.**
 //!
-//! Two fundamentally different deadline semantics apply in BNetzA MaKo
-//! processes, and they **must not be mixed up**:
+//! Deadlines are the regulatory asset this platform is built around, and they
+//! used to live in three places: the calendar in `mako-engine`, the
+//! per-Prüfidentifikator answer tables in `mako-gpke` and `mako-geli-gas`, and a
+//! hand-rolled copy in `obsd`. The copies disagreed. This crate is the one
+//! answer to "when is this due", and it depends on nothing but `time` — so
+//! every service can read it without pulling in a workflow engine.
 //!
-//! | Process family | Deadline unit | Reason |
+//! | Question | Answer |
+//! |---|---|
+//! | *When is the 4th Werktag after this instant?* | [`add_werktage`], [`deadline_at_werktage`], [`end_of_werktag_after`], [`next_werktag_at`] |
+//! | *Which window does PID 55001 carry?* | [`antwort`] |
+//! | *When must the CONTRL / APERAK go out?* | [`contrl_due_at`], [`aperak_strom_due_at`], [`aperak_gas_folgeprozess_due_at`], [`aperak_gas_initialprozess_due_at`] |
+//!
+//! `mako-engine` re-exports this crate as `mako_fristen`, so existing
+//! call sites are unchanged.
+//!
+//! # Three clocks, never one number
+//!
+//! The mistake this crate is shaped to prevent is treating any of these as the
+//! others. They differ by orders of magnitude and they fail for different
+//! reasons.
+//!
+//! | Clock | Window | Meaning |
 //! |---|---|---|
-//! | **GPKE Lieferantenwechsel** (BK6-22-024) | 24 wall-clock hours | BNetzA decision; no Werktag exemption |
-//! | **WiM / GeLi Gas / MABIS** | Werktage (working days) | BDEW AHB Fristenregeln |
+//! | **CONTRL** | 6 wall-clock hours (CONTRL AHB 1.0 §1.2) | the interchange was syntactically readable |
+//! | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
+//! | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 //!
-//! ## GPKE 24h Lieferantenwechsel
+//! **There is no 24-hour GPKE window.** This module's own header used to open
+//! with one, attributed to BK6-22-024, and `obsd` computed every GPKE breach
+//! alert from it. The technical acknowledgement is 45 minutes
+//! ([`aperak_strom_due_at`]) and the business answer is a wall-clock instant on
+//! the first Werktag after the Übertragungstag ([`antwort`]). A flat 24 h is
+//! neither, and it is wrong in the direction that does not announce itself: it
+//! reports a lapsed Frist as still running.
 //!
-//! After receiving a UTILMD Lieferbeginn request, the network operator **must**
-//! dispatch the APERAK acknowledgement within **24 consecutive wall-clock
-//! hours** (BNetzA decision BK6-22-024). Weekends and public holidays do
-//! **not** extend this window.
-//!
-//! ```rust
-//! use mako_engine::fristen;
-//! use time::OffsetDateTime;
-//!
-//! let received = OffsetDateTime::now_utc();
-//! let due = fristen::add_hours(received, 24);
-//! assert!(due > received);
-//! ```
-//!
-//! ## WiM / GeLi Gas / MABIS Werktage
+//! ## Werktage
 //!
 //! ```rust
-//! use mako_engine::fristen::{self, HolidayCalendar};
+//! use mako_fristen::{self as fristen, HolidayCalendar};
 //! use time::{Date, Month};
 //!
 //! // 5 Werktage after Monday 2025-01-06:
@@ -38,30 +50,31 @@
 //! assert_eq!(due, Date::from_calendar_date(2025, Month::January, 13).unwrap());
 //! ```
 //!
-//! ## Holiday calendar: BDEW-defined Germany-wide calendar
+//! ## Holiday calendar: BDEW-defined, Germany-wide
 //!
 //! [`HolidayCalendar::BdewMaKo`] is the single holiday calendar used in all
 //! BNetzA MaKo processes. BDEW EDI@Energy specifies a conservative-inclusive
 //! approach: every public holiday observed in *any* German state is treated as
-//! a non-Werktag. This guarantees no APERAK Frist is ever shorter than the AHB
-//! requires. Per-state calendars are **not** used in BDEW MaKo — there is one
-//! Germany-wide calendar that all market participants use.
+//! a non-Werktag. This guarantees no Frist is ever shorter than the AHB
+//! requires. Per-state calendars are **not** used in BDEW MaKo.
 //!
 //! ## CONTRL 6h Übertragungsquittung
 //!
-//! CONTRL AHB 1.0 §1.2 mandates that the recipient confirms syntactic validity
-//! of a received EDIFACT interchange **within 6 wall-clock hours** of receipt.
-//! This obligation applies at the transport layer (before any workflow
-//! processing) and is independent of the process-level APERAK fristen.
-//!
 //! ```rust
-//! use mako_engine::fristen;
+//! use mako_fristen as fristen;
 //! use time::OffsetDateTime;
 //!
 //! let received = OffsetDateTime::now_utc();
 //! let due = fristen::contrl_due_at(received);
 //! assert_eq!(due - received, time::Duration::hours(6));
 //! ```
+
+#![deny(unsafe_code)]
+#![deny(missing_docs)]
+#![warn(clippy::pedantic, clippy::must_use_candidate)]
+#![allow(clippy::doc_markdown)] // German MaKo terms produce many false positives
+
+pub mod antwort;
 
 use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
 use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
@@ -89,7 +102,7 @@ pub const CONTRL_FRIST_LABEL: &str = "contrl-6h-delivery-window";
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen;
+/// use mako_fristen as fristen;
 /// use time::OffsetDateTime;
 ///
 /// let received = OffsetDateTime::now_utc();
@@ -127,14 +140,14 @@ pub const APERAK_WINDOW_LABEL_PREFIX: &str = "aperak-";
 /// scheduler cannot tell those apart, because a deadline it hands out is late
 /// by construction (`due_now` selects on `due_at <= now`).
 ///
-/// Used by [`OutboxWorker::run`](crate::builder::OutboxWorker::run) on
+/// Used by `mako_engine::builder::OutboxWorker::run` on
 /// successful delivery. Adding a delivery window means adding it here too;
 /// forgetting turns its miss counter into a count of *processes started*.
 ///
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen::{
+/// use mako_fristen::{
 ///     discharges_delivery_window, APERAK_STROM_WINDOW_LABEL, CONTRL_FRIST_LABEL,
 /// };
 ///
@@ -158,7 +171,7 @@ pub fn discharges_delivery_window(message_type: &str, label: &str) -> bool {
 
 /// Deadline label for Strom APERAK 45-minute sending obligations.
 ///
-/// Register a [`Deadline`](crate::deadline::Deadline) with this label after
+/// Register a `mako_engine::deadline::Deadline` with this label after
 /// enqueuing an outbound Strom APERAK.  If this deadline fires before the APERAK
 /// is delivered, the OutboxWorker has not completed delivery within the 45-minute
 /// window required by APERAK AHB 1.0 §2.4.1.
@@ -189,7 +202,7 @@ pub const APERAK_STROM_WINDOW_LABEL: &str = "aperak-strom-45min-window";
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen;
+/// use mako_fristen as fristen;
 /// use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
 ///
 /// // Monday 2025-01-06 10:00 UTC (= 11:00 CET): deadline = 10:45 UTC
@@ -273,7 +286,7 @@ pub const APERAK_GAS_INITIALPROZESS_LABEL: &str = "aperak-gas-initialprozess-3-w
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen;
+/// use mako_fristen as fristen;
 /// use time::{Date, Month, OffsetDateTime, Time};
 ///
 /// // Monday 2025-01-06 10:00 UTC (= 11:00 CET): next Werktag is Tuesday.
@@ -313,7 +326,7 @@ pub fn aperak_gas_folgeprozess_due_at(received: OffsetDateTime) -> OffsetDateTim
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use mako_fristen::{self as fristen, HolidayCalendar};
 /// use time::{Date, Month, OffsetDateTime, Time};
 ///
 /// // Monday 2025-01-06 10:00 UTC (= 11:00 CET):
@@ -423,7 +436,7 @@ pub fn end_of_day_berlin(date: Date) -> OffsetDateTime {
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use mako_fristen::{self as fristen, HolidayCalendar};
 /// use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
 ///
 /// // Friday 2025-01-10 14:00 CET: the next Werktag is Monday the 13th.
@@ -547,7 +560,7 @@ pub enum HolidayCalendar {
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen;
+/// use mako_fristen as fristen;
 /// use time::OffsetDateTime;
 ///
 /// let received = OffsetDateTime::now_utc();
@@ -578,7 +591,7 @@ pub fn add_hours(from: OffsetDateTime, hours: u32) -> OffsetDateTime {
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use mako_fristen::{self as fristen, HolidayCalendar};
 /// use time::{Date, Month};
 ///
 /// // Monday + 5 Werktage. Saturday and Sunday are not Werktage:
@@ -613,7 +626,7 @@ pub fn add_werktage(from: Date, n: u32, cal: HolidayCalendar) -> Date {
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use mako_fristen::{self as fristen, HolidayCalendar};
 /// use time::{Date, Month};
 ///
 /// // Sunday 2025-01-12 → next Werktag is Monday 2025-01-13 (no holiday).
@@ -657,7 +670,7 @@ pub fn next_werktag(from: Date, cal: HolidayCalendar) -> Date {
 /// # Example
 ///
 /// ```rust
-/// use mako_engine::fristen::{self, HolidayCalendar};
+/// use mako_fristen::{self as fristen, HolidayCalendar};
 /// use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
 ///
 /// let received = OffsetDateTime::new_utc(

@@ -19,7 +19,7 @@
 //! | `de.accounting.payment.due` | SEPA collection run dispatched (once per run) |
 //! | `de.accounting.erstattung.faellig` | Jahresabschluss refund (pain.001 attached) |
 //!
-//! All outbound CloudEvents are HMAC-signed (`X-Mako-Signature`) when
+//! All outbound CloudEvents are signed with Standard Webhooks when
 //! `erp_hmac_secret` is set. The §§41f/41g Sperr- and Entsperrauftrag are
 //! **market messages** — ORDERS 17115/17117 dispatched through `makod` — and the
 //! CloudEvent announces the dispatch rather than carrying it.

@@ -16,7 +16,8 @@
 //! POST <erp_url>
 //! Content-Type: application/cloudevents+json
 //! X-Idempotency-Key: <event.idempotency_key>
-//! X-Mako-Signature: <hmac-sha256-hex>   ← only when secret is configured
+//! webhook-id / webhook-timestamp / webhook-signature   ← Standard Webhooks,
+//!                                                       only when a secret is set
 //!
 //! {
 //!   "specversion": "1.0",
@@ -140,7 +141,7 @@ impl<'a> CloudEventEnvelope<'a> {
 /// POST <erp_url>
 /// Content-Type: application/cloudevents+json
 /// X-Idempotency-Key: <event.idempotency_key>
-/// X-Mako-Signature: HMAC-SHA256(<secret>, <body>)   ← only if secret is set
+/// webhook-signature: v1,<base64 over {id}.{timestamp}.{body}>   ← if a secret is set
 ///
 /// {
 ///   "specversion": "1.0",
@@ -167,7 +168,8 @@ impl<'a> CloudEventEnvelope<'a> {
 /// ## Authentication
 ///
 /// If `shared_secret` is set, the adapter signs the raw request body with
-/// HMAC-SHA256 and includes the hex digest in `X-Mako-Signature`.  The ERP
+/// Standard Webhooks and sends `webhook-id`, `webhook-timestamp` and
+/// `webhook-signature`.  The ERP
 /// verifies the signature before processing.
 ///
 /// ## Error handling
@@ -187,7 +189,7 @@ impl WebhookErpAdapter {
     /// Create a new adapter that POSTs to `erp_url`.
     ///
     /// `shared_secret` — when `Some`, the body is signed with HMAC-SHA256 and
-    /// the hex digest is sent as `X-Mako-Signature`.
+    /// the signature is sent as `webhook-signature: v1,<base64>`.
     ///
     /// The default HTTP timeout is 30 seconds.  Use [`WebhookErpAdapter::with_timeout`]
     /// to override.
@@ -246,11 +248,18 @@ impl ErpAdapter for WebhookErpAdapter {
         }
 
         if let Some(secret) = &self.shared_secret {
-            // The one canonical signer — `sha256=<hex>`. The ERP (and marktd's
-            // ingest, which tolerantly strips the prefix) authenticate every mako
-            // CloudEvent the same way, regardless of emitter.
-            let sig = mako_service::webhook::sign(secret.expose_secret().as_bytes(), &body);
-            builder = builder.header("X-Mako-Signature", sig);
+            // The one canonical signer — Standard Webhooks. The ERP and marktd's
+            // ingest authenticate every mako CloudEvent the same way, regardless
+            // of emitter, and `webhook-id` is the idempotency key they were
+            // already deduplicating on.
+            for (name, value) in mako_service::webhook::headers(
+                secret.expose_secret().as_bytes(),
+                &event.idempotency_key,
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+                &body,
+            ) {
+                builder = builder.header(name, value);
+            }
         }
 
         let resp = builder

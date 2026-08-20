@@ -1127,7 +1127,7 @@ uses. The sender then:
    it via the Netzbetreiber's **Webportal**, which is the statutory minimum
    interface (an API only "soll Berücksichtigung finden"). When
    `--erp-webhook-secret` is configured, the POST is HMAC-SHA256-signed with
-   the same `X-Mako-Signature` header the general ERP adapter uses.
+   the same `webhook-signature` header the general ERP adapter uses.
 3. **Neither configured** — the request is marked `fehlgeschlagen` in the
    registry instead of poison-looping the outbox. A stored payload that fails
    to deserialize is treated the same way (permanent failure — logged,

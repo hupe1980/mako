@@ -5,6 +5,11 @@
 //! the digest a reviewer approves. This file is deployment wiring — where the
 //! journal lives, which providers exist, which MCP servers to reach, who may
 //! approve, and what the plane is allowed to do.
+//!
+//! **Which events wake an agent is not here either.** That is the manifests'
+//! subscription table, and `plane::Router::accepts` is the only admission
+//! filter: a second event-type list in config that nothing reconciles with the
+//! manifests is a mute switch.
 
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -58,25 +63,28 @@ pub struct AgentdConfig {
     /// Use `"env:AGENTD_MCP_API_KEY"` to defer to environment; never log this value.
     pub mcp_api_key: SecretString,
 
-    /// CloudEvent types that trigger agent runs.
-    #[serde(default = "default_triggers")]
-    pub trigger_event_types: Vec<String>,
-
     /// Audit CloudEvent webhook (marktd event_log).
     pub audit_webhook_url: Option<String>,
-    /// HMAC-SHA256 secret signing every `de.agent.decision.made` delivery.
+    /// Secret signing every `de.agent.decision.made` delivery.
     ///
-    /// `X-Mako-Signature: sha256=HMAC(secret, body)` over the exact bytes
-    /// posted — the same convention every other mako outbound carries and every
-    /// mako receiver verifies. A signature authenticates the bytes, not their
-    /// freshness: the receiver deduplicates on the CloudEvent id, which mako
-    /// receivers already do.
+    /// [Standard Webhooks](https://www.standardwebhooks.com/), signed by
+    /// agentplane's `push::Destination` — the same scheme
+    /// `mako_service::webhook` signs every other mako outbound with, so
+    /// `mako_service::webhook::verify_request` accepts an agentd delivery like
+    /// any other. `mako-service`'s own test pins the header names and the
+    /// signed-payload shape against agentplane's, because two implementations
+    /// of one spec is where a wire contract drifts.
+    ///
+    /// Unlike the body-only HMAC this replaces, the signature covers the
+    /// message id and the timestamp, so a captured delivery cannot be replayed
+    /// once the tolerance window has passed.
     pub audit_hmac_secret: Option<SecretString>,
 
     /// HMAC-SHA256 secret for verifying **inbound** CloudEvent webhook signatures.
-    /// When set, `POST /webhook` rejects requests where the `X-Mako-Signature` header
-    /// does not match `sha256=HMAC(secret, body)`.
-    /// When absent, all inbound webhooks are accepted (dev mode only — log a WARNING).
+    /// When set, `POST /webhook` verifies the Standard Webhooks headers through
+    /// `mako_service::webhook::verify_request`, which also refuses a stale
+    /// `webhook-timestamp`.
+    /// When absent, all inbound webhooks are accepted (dev mode only — logs a WARNING).
     pub inbound_hmac_secret: Option<SecretString>,
 
     /// Wall-clock ceiling in seconds for one event's whole fan-out (default: 300).
@@ -298,15 +306,6 @@ fn default_sweep_interval_secs() -> u64 {
 fn default_vault_mount() -> String {
     "transit".to_owned()
 }
-fn default_triggers() -> Vec<String> {
-    vec![
-        mako_events::mako::PROCESS_FAILED.into(),
-        mako_events::invoic::RECEIPT_DISPUTED.into(),
-        mako_events::accounting::MAHNUNG_ISSUED.into(),
-        mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND.into(),
-    ]
-}
-
 /// Every credential the config points at, with its `env:VAR` indirection
 /// resolved.
 ///
@@ -321,7 +320,7 @@ pub struct Secrets {
     /// Providers with `api_key` resolved, keyed as in `[providers.*]`.
     pub providers: HashMap<String, ProviderConfig>,
     pub mcp_api_key: SecretString,
-    /// HMAC secret signing outbound audit deliveries (`X-Mako-Signature`).
+    /// Secret signing outbound audit deliveries (Standard Webhooks).
     pub audit_hmac_secret: Option<SecretString>,
     pub inbound_hmac_secret: Option<SecretString>,
     /// The Vault token, when a key ring is configured.

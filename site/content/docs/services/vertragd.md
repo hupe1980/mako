@@ -101,7 +101,7 @@ the handlers, so a route added later cannot skip it without also dropping
 authentication; the `401` detail is generic and the mismatch is logged at `WARN`.
 
 The two webhook routes carry no operator token and are authenticated by the
-shared `X-Mako-Signature` HMAC over the raw body. `vertragd` refuses to start
+shared Standard Webhooks signature over the raw body. `vertragd` refuses to start
 without **both** `[oidc]` and `inbound_secret` unless the deployment sets
 `allow_insecure_no_auth = true`: a forged event on `POST /api/v1/events`
 confirms supply, and one on `POST /api/v1/webhooks/angebot` creates a contract.

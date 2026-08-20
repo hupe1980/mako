@@ -44,13 +44,13 @@ use edi_energy::{AnyMessage, EdiEnergyMessage, ObjectType, Platform, Pruefidenti
 use mako_engine::{
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
     event_store::InMemoryEventStore,
-    fristen,
     ids::TenantId,
     process::Process,
     types::{MaLo, MarktpartnerCode, MessageRef},
     version::WorkflowId,
     workflow::Workflow,
 };
+use mako_fristen as fristen;
 use mako_gpke::{
     GPKE_PROCESS_RESPONSE_LABEL, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow,
     LfAnmeldungCommand, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL, SupplierChangeCommand,

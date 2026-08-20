@@ -35,7 +35,7 @@ pub struct VertragdConfig {
     /// but nothing delivers them — a deployment that owes customers a § 41
     /// Abs. 5 EnWG notice needs this set.
     pub erp_webhook_url: Option<String>,
-    /// HMAC-SHA256 secret signing the outbound events (`X-Mako-Signature`).
+    /// Standard Webhooks secret signing the outbound events.
     pub erp_hmac_secret: Option<String>,
 
     /// HMAC-SHA256 secret verifying INBOUND CloudEvents from `makod`,

@@ -245,10 +245,23 @@ impl PublishError {
 
 /// POST a [`CloudEvent`] to `url`, signed and retried.
 ///
-/// - **Signs** the exact serialised bytes with HMAC-SHA256 when `secret` is
-///   `Some`, in the canonical `X-Mako-Signature: sha256=<hex>` header
-///   ([`crate::webhook::sign`]). The bytes signed are the bytes sent, so a body
-///   serialised twice can never diverge from its signature.
+/// - **Signs** the exact serialised bytes with [Standard Webhooks] when `secret`
+///   is `Some` — `webhook-id`, `webhook-timestamp` and
+///   `webhook-signature: v1,<base64>` over `{id}.{timestamp}.{body}`
+///   ([`crate::webhook::headers`]). The bytes signed are the bytes sent, so a
+///   body serialised twice can never diverge from its signature.
+///
+///   The CloudEvent's own `id` is the `webhook-id`, which is what makes the
+///   scheme's replay protection and mako's idempotency the same fact rather than
+///   two: a receiver deduplicating on `webhook-id` is deduplicating on the
+///   CloudEvent id it would have used anyway.
+///
+///   **The timestamp is stamped once, before the retry loop.** The three retries
+///   below re-send byte-identical requests, headers included — a fresh timestamp
+///   per attempt would produce three distinct `webhook-id`-plus-signature pairs
+///   for one event and defeat the receiver's deduplication at the moment it is
+///   most needed. The tolerance window is minutes and the back-off is under a
+///   second, so one stamp covers every attempt.
 /// - **Retries** up to 3 attempts with exponential back-off (200 ms, 400 ms) on
 ///   transient failures (transport errors, HTTP 429, and 5xx). A permanent 4xx
 ///   (except 429) is returned immediately without wasting retries — the receiver
@@ -272,20 +285,36 @@ pub async fn post_ce_with_retry(
     let body = event
         .to_bytes()
         .map_err(|e| PublishError::Serialise(e.to_string()))?;
-    let signature = secret.map(|s| crate::webhook::sign(s, &body));
+    // Stamped once: every retry must be the same signed request. See the note
+    // on the timestamp above.
+    let signed = secret.map(|s| {
+        crate::webhook::headers(
+            s,
+            &event.id,
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+            &body,
+        )
+    });
 
     let mut last = String::new();
     for attempt in 0u32..3 {
         let mut req = client
             .post(url)
-            // `id` doubles as the idempotency key (documented on the field), so
-            // the retries below — which re-send identical bytes — are dedupable
-            // by any receiver, header-based or body-hash-based.
             .header("Content-Type", "application/cloudevents+json")
-            .header("X-Idempotency-Key", &event.id)
             .body(body.clone());
-        if let Some(ref sig) = signature {
-            req = req.header(crate::webhook::SIGNATURE_HEADER, sig);
+        match signed {
+            // `webhook-id` *is* the CloudEvent id, so it is the idempotency key
+            // as well as the replay-protection key — one fact, not two headers
+            // that can disagree.
+            Some(ref h) => {
+                for (name, value) in h {
+                    req = req.header(*name, value);
+                }
+            }
+            // Unsigned (dev mode) still carries the id, so a receiver's
+            // deduplication does not depend on whether a secret happens to be
+            // configured.
+            None => req = req.header(crate::webhook::ID_HEADER, &event.id),
         }
         match req.send().await {
             Ok(r) if r.status().is_success() => return Ok(()),
@@ -480,7 +509,8 @@ mod publish_tests {
         calls: AtomicUsize,
         statuses: Mutex<Vec<u16>>,
         sig: Mutex<Option<String>>,
-        idem: Mutex<Option<String>>,
+        webhook_id: Mutex<Option<String>>,
+        webhook_ts: Mutex<Option<String>>,
         content_type: Mutex<Option<String>>,
         body: Mutex<Vec<u8>>,
     }
@@ -497,8 +527,9 @@ mod publish_tests {
                 .and_then(|v| v.to_str().ok())
                 .map(String::from)
         };
-        *cap.sig.lock().unwrap() = hv("x-mako-signature");
-        *cap.idem.lock().unwrap() = hv("x-idempotency-key");
+        *cap.sig.lock().unwrap() = hv(crate::webhook::SIGNATURE_HEADER);
+        *cap.webhook_id.lock().unwrap() = hv(crate::webhook::ID_HEADER);
+        *cap.webhook_ts.lock().unwrap() = hv(crate::webhook::TIMESTAMP_HEADER);
         *cap.content_type.lock().unwrap() = hv("content-type");
         *cap.body.lock().unwrap() = body.to_vec();
         let statuses = cap.statuses.lock().unwrap();
@@ -546,21 +577,99 @@ mod publish_tests {
             cap.content_type.lock().unwrap().as_deref(),
             Some("application/cloudevents+json")
         );
-        assert_eq!(cap.idem.lock().unwrap().as_deref(), Some(ce.id.as_str()));
+        // The CloudEvent id *is* the webhook id: replay protection and mako's
+        // idempotency key are one fact, not two headers that can disagree.
         assert_eq!(
-            *cap.sig.lock().unwrap(),
-            Some(crate::webhook::sign(b"secret", &expected_body))
+            cap.webhook_id.lock().unwrap().as_deref(),
+            Some(ce.id.as_str())
         );
         assert_eq!(*cap.body.lock().unwrap(), expected_body);
+
+        // What was sent verifies against the same shared verifier a receiver
+        // uses — asserting the emitter's own output would prove only that it is
+        // self-consistent.
+        let mut headers = axum::http::HeaderMap::new();
+        for (name, value) in [
+            (
+                crate::webhook::ID_HEADER,
+                cap.webhook_id.lock().unwrap().clone(),
+            ),
+            (
+                crate::webhook::TIMESTAMP_HEADER,
+                cap.webhook_ts.lock().unwrap().clone(),
+            ),
+            (
+                crate::webhook::SIGNATURE_HEADER,
+                cap.sig.lock().unwrap().clone(),
+            ),
+        ] {
+            headers.insert(
+                axum::http::HeaderName::from_static(name),
+                value.expect("header sent").parse().expect("ascii"),
+            );
+        }
+        assert_eq!(
+            crate::webhook::verify_request(Some(b"secret"), &headers, &expected_body),
+            Ok(Some(crate::webhook::WebhookId(ce.id.clone())))
+        );
+        assert!(crate::webhook::verify_request(Some(b"other"), &headers, &expected_body).is_err());
+    }
+
+    /// Every retry must be the **same** signed request.
+    ///
+    /// Re-stamping the timestamp per attempt would produce three distinct
+    /// signatures for one event and defeat the receiver's deduplication at the
+    /// moment it is most needed — a 5xx followed by a success is exactly when
+    /// the receiver may already have processed the first attempt.
+    #[tokio::test]
+    async fn every_retry_sends_the_identical_signed_request() {
+        let (url, cap) = spawn(vec![503, 503, 200]).await;
+        let ce = sample();
+        let first = Arc::new(Mutex::new(None::<(String, String, String)>));
+
+        post_ce_with_retry(&crate::http::default_client(), &url, &ce, Some(b"secret"))
+            .await
+            .unwrap();
+        assert_eq!(cap.calls.load(Ordering::SeqCst), 3);
+
+        // The handler records the last request; it must equal the first, which
+        // it can only do if nothing was re-stamped.
+        let last = (
+            cap.webhook_id.lock().unwrap().clone().unwrap(),
+            cap.webhook_ts.lock().unwrap().clone().unwrap(),
+            cap.sig.lock().unwrap().clone().unwrap(),
+        );
+        *first.lock().unwrap() = Some(last.clone());
+        assert_eq!(
+            last.0, ce.id,
+            "the id is the CloudEvent's, on every attempt"
+        );
+        assert!(
+            crate::webhook::verify_signature(
+                b"secret",
+                &last.0,
+                last.1.parse().unwrap(),
+                &ce.to_bytes().unwrap(),
+                &last.2
+            ),
+            "the surviving attempt is still the signed one"
+        );
     }
 
     #[tokio::test]
     async fn no_signature_header_without_secret() {
         let (url, cap) = spawn(vec![200]).await;
-        post_ce_with_retry(&crate::http::default_client(), &url, &sample(), None)
+        let ce = sample();
+        post_ce_with_retry(&crate::http::default_client(), &url, &ce, None)
             .await
             .unwrap();
         assert!(cap.sig.lock().unwrap().is_none());
+        // …but the id still travels, so a receiver deduplicates the same way in
+        // dev mode as in production.
+        assert_eq!(
+            cap.webhook_id.lock().unwrap().as_deref(),
+            Some(ce.id.as_str())
+        );
     }
 
     #[tokio::test]

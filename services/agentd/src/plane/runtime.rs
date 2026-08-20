@@ -189,6 +189,22 @@ impl Router {
     pub fn routes(&self) -> &[Route] {
         &self.routes
     }
+
+    /// Whether any activated specialist subscribes to this event type.
+    ///
+    /// This is the **only** admission filter on `POST /webhook`. A second
+    /// event-type list — one that must agree with the manifests and that nothing
+    /// checks — is a subscription table with a second opinion, and an event it
+    /// omits is answered `204 No Content` with nothing in any log distinguishing
+    /// that from "no specialist subscribes".
+    #[must_use]
+    pub fn accepts(&self, event_type: &str) -> bool {
+        self.routes.iter().any(|r| {
+            r.triggers
+                .iter()
+                .any(|p| mako_events::matches(p, event_type))
+        })
+    }
 }
 
 /// What one specialist concluded, in the shape the CloudEvent carries.
@@ -594,8 +610,9 @@ impl Plane {
         };
 
         // Correlated, not bare. A run outside a case cannot register an
-        // obligation or open a task, so `requires_approval` — declared on 200
-        // grants across the 28 manifests — would fail at dispatch. The keys are
+        // obligation or open a task, so `requires_approval` — declared on the
+        // one grant across the 28 manifests that can dispatch — would fail at
+        // dispatch instead of asking a human. The keys are
         // the re-validated identifiers, which makes the case the erasure unit
         // for one Marktlokation: destroying its wrapping key destroys every
         // sealed payload of every run about that customer.
@@ -715,6 +732,52 @@ mod tests {
         assert!(
             !matched.is_empty(),
             "a process failure must reach at least one specialist"
+        );
+    }
+
+    /// The webhook's admission filter is the routing table itself.
+    ///
+    /// Without this, an event a specialist subscribes to can be dropped at the
+    /// door by a filter nobody reconciled with the manifests.
+    #[test]
+    fn the_admission_filter_accepts_exactly_what_a_specialist_subscribes_to() {
+        let router = Router::build(&Activation::all()).expect("routes");
+
+        // Every pattern any specialist declared is admitted. Concrete types are
+        // used where the pattern is one; a glob is exercised through a member.
+        for def in crate::builtin::all() {
+            for pattern in def.trigger_patterns {
+                let sample = mako_events::all()
+                    .iter()
+                    .find(|ev| mako_events::matches(pattern, ev))
+                    .copied()
+                    // A pattern with no emitter yet (UNEMITTED_PATTERNS) still
+                    // has to be admitted, or wiring the emitter would not be
+                    // enough to wake the specialist.
+                    .unwrap_or(pattern);
+                assert!(
+                    router.accepts(sample),
+                    "{}: subscribes to `{pattern}` but the webhook would drop `{sample}`",
+                    def.name
+                );
+            }
+        }
+
+        assert!(
+            !router.accepts("de.nobody.listens.here"),
+            "an event nothing subscribes to is not admitted"
+        );
+    }
+
+    /// Deactivating a specialist closes the door its subscriptions opened.
+    #[test]
+    fn an_unactivated_specialists_events_are_not_admitted() {
+        let only = Activation::named(vec!["mako-agent".to_owned()]);
+        let router = Router::build(&only).expect("routes");
+        assert!(router.accepts(mako_events::mako::PROCESS_FAILED));
+        assert!(
+            !router.accepts(mako_events::obs::DEADLINE_APPROACHING),
+            "deadline-alert-agent is not activated, so its events are not admitted"
         );
     }
 

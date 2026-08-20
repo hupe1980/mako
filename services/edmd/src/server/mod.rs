@@ -405,7 +405,7 @@ pub struct RunConfig {
     pub archive: Option<crate::config::ArchiveConfig>,
     /// ERP webhook URL for outbound CloudEvents (direct push + quality warnings).
     pub erp_webhook_url: Option<String>,
-    /// Optional HMAC secret signing every outbound CloudEvent (`x-mako-signature`).
+    /// Optional secret signing every outbound CloudEvent (Standard Webhooks).
     pub erp_webhook_secret: Option<String>,
     /// Request rate limits. Ingest endpoints accept unbounded batches, so an
     /// unthrottled client can saturate the write path for every other tenant.

@@ -114,10 +114,10 @@ impl Daemon for MabisSyncd {
                     // date is a day behind for the first hour of every local day.
                     let today = mabis_syncd::sync_engine::berlin_date(now);
                     let (from, to) = mabis_syncd::sync_engine::previous_month_period(today);
-                    let due = mako_engine::fristen::add_werktage(
+                    let due = mako_fristen::add_werktage(
                         to,
                         submit_wt,
-                        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+                        mako_fristen::HolidayCalendar::BdewMaKo,
                     );
                     if today != due {
                         continue;

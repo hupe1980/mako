@@ -426,7 +426,7 @@ email        = "service@stadtwerke-musterstadt.de"  # BT-43
 issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 audience = "api://mako-billingd"
 
-# Outbound ERP CloudEvents. `erp_hmac_secret` signs them (X-Mako-Signature,
+# Outbound ERP CloudEvents. `erp_hmac_secret` signs them (webhook-signature,
 # HMAC-SHA256) so the receiver can verify the origin. Delivery is durable:
 # each event is written to the `event_outbox` table in the same transaction as
 # the business change (persist-before-dispatch) and drained by a background
@@ -548,7 +548,7 @@ abrechnungsinformation = true
 
 All outbound CloudEvents (invoices, settlements and monthly infos) go through
 the transactional outbox and are HMAC-signed with `erp_hmac_secret`
-(`X-Mako-Signature`).
+(`webhook-signature`).
 
 ## Rounding
 

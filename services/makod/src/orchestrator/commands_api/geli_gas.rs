@@ -170,10 +170,10 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
     );
     let process_id = process.process_id();
 
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         10,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),
@@ -291,10 +291,10 @@ pub(super) async fn dispatch_geli_eog_anmelden(
     );
     let process_id = process.process_id();
 
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         10,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),
@@ -412,10 +412,10 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
     );
     let process_id = process.process_id();
 
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         10,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),
@@ -556,10 +556,10 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
     let process_id = process.process_id();
 
     // 10-Werktage GNB response deadline (BK7-24-01-009).
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         10,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),

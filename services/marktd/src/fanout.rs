@@ -37,7 +37,6 @@
 use std::{sync::Arc, time::Duration};
 
 use mako_markt::repository::SubscriptionRepository;
-use mako_service::webhook::sign;
 use serde_json::Value;
 use sqlx::PgPool;
 use tokio::sync::Notify;
@@ -315,10 +314,24 @@ where
             }
         };
 
-        let sig = d
-            .webhook_secret
-            .as_deref()
-            .map(|s| sign(s.as_bytes(), &body));
+        // Standard Webhooks: the **event id is stable across retries** and the
+        // **timestamp is per attempt**. Both halves matter here and they pull in
+        // opposite directions — a subscriber deduplicates on `webhook-id`, so a
+        // redelivery must reuse it; but a retry can land hours after the first
+        // attempt, so re-using its timestamp would be refused as stale by the
+        // receiver's own freshness check.
+        //
+        // (`post_ce_with_retry` stamps once instead, because its three attempts
+        // are sub-second and identical bytes are the simpler guarantee there.)
+        let webhook_id = d.event_id.to_string();
+        let signed = d.webhook_secret.as_deref().map(|s| {
+            mako_service::webhook::headers(
+                s.as_bytes(),
+                &webhook_id,
+                time::OffsetDateTime::now_utc().unix_timestamp(),
+                &body,
+            )
+        });
 
         let mut req = self
             .http
@@ -326,8 +339,15 @@ where
             .header("Content-Type", "application/cloudevents+json")
             .timeout(self.config.delivery_timeout)
             .body(body);
-        if let Some(sig) = &sig {
-            req = req.header("X-Mako-Signature", sig);
+        match signed {
+            Some(ref h) => {
+                for (name, value) in h {
+                    req = req.header(*name, value);
+                }
+            }
+            // Unsigned subscribers still receive the id, so their deduplication
+            // does not depend on whether they configured a secret.
+            None => req = req.header(mako_service::webhook::ID_HEADER, &webhook_id),
         }
 
         match req.send().await {

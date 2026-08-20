@@ -169,7 +169,7 @@ disconnection in this operator's name.
 | `cancel-sperr-order` | `PUT .../cancel` |
 
 All four require the `NB` market role in `mako_roles` and a tenant match. The
-`/webhook` ingest is authenticated by the inbound `X-Mako-Signature` HMAC instead,
+`/webhook` ingest is authenticated by the inbound Standard Webhooks signature instead,
 because `makod` holds no bearer token for this service.
 
 `tests/authorization_guard.rs` fails the build if a handler loses its `Claims`

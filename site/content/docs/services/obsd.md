@@ -1,274 +1,312 @@
 +++
 title = "obsd Operator Guide"
-description = "obsd operator guide: Business-process observability daemon. Process projections, BNetzA KPI reports (§20 EnWG parity, deadline monitoring), Alertmanager bridge, overdue-process detection. PostgreSQL-backed, OIDC-secured."
+description = "obsd operator guide: business-process observability. Process projections, the two deadline clocks, per-PID KPIs, § 7a Abs. 5 EnWG Gleichbehandlung parity evidence, and the de.obs.* producers. PostgreSQL-backed, OIDC-secured."
 weight = 29
 [extra]
 mermaid = true
 +++
 # `obsd` Operator Guide
 
-`obsd` is the **business-process observability daemon** — the service that tracks
-every active MaKo process, monitors regulatory deadlines, and produces the
-BNetzA-mandated §20 EnWG parity reports.
+`obsd` subscribes to every `de.mako.*` CloudEvent from `marktd` and projects it
+into one row per business process. From that row it answers three questions the
+engine's own metrics cannot:
 
-Key responsibilities:
-- Build and maintain **`ProcessProjection`** records from `de.mako.process.*` events.
-- Detect and report **overdue processes** (approaching or past regulatory deadline).
-- Produce **KPI reports** for BNetzA audit — decision times, affiliate/non-affiliate
-  parity (`initiator_is_affiliate`), STP rates.
-- Bridge to **Alertmanager** for operational alerting on deadline violations.
+- **Which processes are at risk** of missing their business answer window?
+- **How did this Prüfidentifikator perform** last month?
+- **Did we treat our own Lieferant better** than a third party's?
+
+It never connects to `makod`. It is a read-model with two producers of its own,
+and an MCP surface `agentd`'s specialists read.
 
 ```mermaid
 graph TB
     marktd["marktd :8180<br/>fan-out"]
     obsd["obsd :8480<br/>(this service)"]
     pg["PostgreSQL<br/>process_projections"]
-    alert["Alertmanager /<br/>Grafana"]
-    erp["ERP / BNetzA report"]
+    fristen["mako-fristen<br/>Werktage + Antwortfrist tables"]
+    erp["ERP / Gleichbehandlungsbericht"]
 
-    marktd -->|"de.mako.process.*<br/>de.mako.aperak.*<br/>HMAC POST /webhook"| obsd
+    marktd -->|"de.mako.*<br/>signed POST /webhook"| obsd
+    fristen -.->|"deadline_at + deadline_source"| obsd
     obsd --> pg
-    obsd -->|"de.obs.deadline.approaching<br/>de.obs.stp.parity.alert<br/>(HMAC POST → marktd fan-out → agentd)"| marktd
-    obsd -->|"deadline_risk<br/>alerts"| alert
-    erp -->|"GET /obs/processes<br/>GET /obs/kpis<br/>GET /obs/overdue"| obsd
+    obsd -->|"de.obs.deadline.approaching<br/>de.obs.stp.parity.alert<br/>(signed POST → marktd fan-out → agentd)"| marktd
+    erp -->|"GET /obs/*<br/>GET /api/v1/audit/gleichbehandlung"| obsd
 ```
+
+---
+
+## Two deadline clocks
+
+Every MaKo process carries **two independent deadlines**, and `obsd` reports them
+as two numbers. Conflating them is the defect this service is shaped to prevent.
+
+| Clock | Window | A breach means | Where it shows |
+|---|---|---|---|
+| **APERAK Frist** | 45 min Strom weekday; Gas next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was not *acknowledged* — a transport or validation fault | `state = aperak_timeout`, from `de.mako.aperak.timeout` |
+| **Antwortfrist** | per PID — see below | the *business answer* is owed and has not been sent | `deadline_at`, computed on `process.initiated` |
+
+They differ by orders of magnitude and fail for different reasons. Never report
+one under the other's name: `total_aperak_timeout` and `total_frist_breached` are
+separate fields on every report for exactly this reason.
+
+`state = aperak_timeout` is **not terminal**. A counterparty that missed the
+acknowledgement window can still answer the business message, so those processes
+stay in the Antwortfrist sweep — they are the ones most likely to breach it too.
 
 ---
 
 ## Port layout
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│  obsd  :8480                                                     │
-│                                                                 │
-│  POST /webhook                  ← marktd CloudEvents (HMAC)    │
-│  GET  /obs/processes            ← list / filter projections     │
-│  GET  /obs/processes/{id}       ← single process by UUID        │
-│  GET  /obs/kpis                 ← BNetzA KPI report (per PID)   │
-│  GET  /obs/overdue              ← processes past deadline        │
-│  GET  /api/v1/audit/bnetza-report ← §20 Abs.1 EnWG annual audit │
-│  GET  /obs/metrics              ← obsd business gauges (Prom)   │
-│  GET  /metrics                  ← request metrics (SDK)         │
-│  GET  /health/live  /health/ready ← liveness + real DB-ping    │
-│  POST|GET /mcp                  ← MCP Streamable HTTP           │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────────┐
+│  obsd  :8480                                                          │
+│                                                                       │
+│  POST /webhook                       ← marktd CloudEvents (signed)    │
+│  GET  /obs/processes                 ← list / filter projections      │
+│  GET  /obs/processes/{id}            ← single process by UUID         │
+│  GET  /obs/kpis                      ← per-PID KPIs for a month       │
+│  GET  /obs/overdue                   ← past the business Antwortfrist │
+│  GET  /api/v1/audit/gleichbehandlung ← § 7a Abs. 5 EnWG evidence      │
+│  GET  /obs/metrics                   ← obsd business gauges (Prom)    │
+│  GET  /metrics                       ← request metrics (runner)       │
+│  GET  /health/live  /health/ready    ← liveness + real DB ping        │
+│  POST|GET /mcp                       ← MCP Streamable HTTP            │
+└───────────────────────────────────────────────────────────────────────┘
 ```
+
+There are **no command-line flags**: `mako_service::run` owns the lifecycle and
+`obsd.toml` owns the settings.
 
 ---
 
 ## ProcessProjection
 
-Each `ProcessProjection` record is a read-model built from the event stream:
-
 | Field | Description |
 |-------|-------------|
-| `process_id` | UUID from `de.mako.process.initiated` |
+| `process_id` | UUID — the CloudEvent `subject` |
 | `pid` | BDEW Prüfidentifikator (e.g. 55001) |
-| `family` | Process family: `gpke`, `geli-gas`, `wim`, `wim-gas`, `gabi-gas`, `mabis`, `unknown` |
-| `workflow_name` | Workflow name from `makoworkflow` CE extension |
-| `state` | `initiated` \| `running` \| `completed` \| `rejected` \| `cancelled` \| `aperak_timeout` |
+| `family` | `gpke`, `geli-gas`, `wim`, `wim-gas`, `gabi-gas`, `mabis`, `invoic-storno`, `unknown` |
+| `workflow_name` | From the `makoworkflow` CE extension |
+| `state` | `initiated` \| `running` \| `aperak_timeout` \| `completed` \| `rejected` \| `failed` |
 | `malo_id` | 11-digit Marktlokations-ID |
-| `partner_mp_id` | GLN of the counterparty (NB/GNB/MSB) |
+| `partner_mp_id` | MP-ID of the counterparty (NB/GNB/MSB) |
 | `mdm_role` | Canonical Marktrolle (`LF`, `NB`, …) |
-| `started_at` | UTC timestamp of the first `process.initiated` event |
-| `last_event_at` | UTC timestamp of the most recently received event |
-| `completed_at` | Set when state transitions to `completed`, `rejected`, or `cancelled`; used for cycle-time KPIs |
-| `deadline_at` | Regulatory deadline, computed from PID on `Initiated` event (see below) |
-| `deadline_risk` | `green` \| `amber` (< 24 h) \| `red` (past deadline) |
-| `erc_code` | BDEW ERC error code when `state == rejected` |
-| `initiator_is_affiliate` | `true` if initiating LF MP-ID ∈ operator's `own_mp_ids` (§20 parity flag) |
+| `started_at` | First event seen for this process |
+| `last_event_at` | Most recent event |
+| `completed_at` | Set once when the state first becomes terminal; cycle-time input |
+| `deadline_at` | The **business Antwortfrist**. `null` = no published window for this PID |
+| `deadline_source` | The Festlegung `deadline_at` came from |
+| `deadline_risk` | `unknown` \| `green` \| `amber` (< 24 h) \| `red` (past) |
+| `erc_code` | BDEW ERC code when `state = rejected` |
+| `initiator_is_affiliate` | The Lieferant belongs to this operator's own undertaking |
+
+`failed` is the projection of `de.mako.process.failed`. Not `cancelled`: nothing
+in mako emits a cancellation, and that name puts unrecoverable failures in a
+bucket the STP rate reads as a normal ending.
 
 ---
 
-## Deadline computation
+## The Antwortfrist
 
-`obsd` computes `deadline_at` **automatically** when processing `de.mako.process.initiated` events.
-Deadlines are derived from the PID using conservative calendar-day approximations:
+`obsd` does **not** compute deadlines. `mako-fristen` does — a leaf crate holding
+the BDEW Werktage arithmetic, the MaKo holiday calendar and the
+per-Prüfidentifikator Antwortfrist tables. `makod` registers the deadline on the
+process from the same table and `processd` sizes its operator queue by it, so all
+three name one instant.
 
-| Process family | Deadline | Regulatory source |
+| Family | Window | Source |
 |---|---|---|
-| GPKE (PIDs 55001–55609) | **24 wall-clock hours** | BK6-22-024 §5 |
-| WiM Strom | **per PID** — Kündigung 55039 **3 WT**, Anmeldung 55042 **5 WT**, Abmeldung 55051 **7 WT**, Verpflichtungsanfrage 55168 **1 WT** | BK6-24-174 Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
-| GeLi Gas (PIDs 44001–44024) | **10 Werktage** | BK7-24-01-009 §5 |
-| WiM Gas (PIDs 44039–44053, 44168–44170) | **10 Werktage** | BK7-24-01-009 §5 |
-| MABIS (PID 13003) | **1 Werktag** | BK6-24-174 §13.8 |
-| Billing / PARTIN / INSRPT PIDs | `null` (no per-process deadline) | — |
+| GPKE Strom | **a clock time on the 1. Werktag after the ÜT**: 11:00 Anmeldung (55001/55077), 06:00 Abmeldung (55004), 05:00 Lieferende NB→LF (55007), 09:00 Beendigung der Zuordnung (55010); Kündigung 55016 to the end of the 1. WT | BK6-24-174 GPKE Teil 2 |
+| GeLi Gas | Ablauf des **4. WT** Anmeldung (44001), **3. WT** Abmeldung (44004), **2. WT** Ersatz-/Grundversorgung (44013), **3. WT** Kündigung (44016) | BK7-24-01-009 Kap. 3.1–3.3 |
+| WiM Strom | **3 / 5 / 7 / 1 Werktage** (55039 / 55042 / 55051 / 55168), 17:00 Berlin; REQOTE Preisanfrage 5 WT | BK6-24-174 Teil 1 Kap. 2.2.2–2.5.2 |
+| WiM Gas | **10 Werktage** (44039, 44042, 44051, 44168) | BK7-24-01-009 / AWH WiM Gas V2.0 |
+| Everything else | `null` — **unknown, never unbounded** | — |
 
-> Werktage are resolved **exactly**, on the same BdewMaKo calendar
-> `processd`/`mako-engine` use — including the 17:00 local cutoff and public
-> holidays — so an obsd alert and the deadline the process actually carries name
-> the same instant. The WiM Strom windows come from
-> `mako-wim::antwort_frist_werktage`, the same table both makod dispatch paths
-> use, so the monitor cannot drift from the engine it monitors.
+> **There is no 24-hour GPKE window and no 10-Werktage GeLi Gas answer window.**
+> Both approximations fail in the direction that does not announce itself: a GPKE
+> Anmeldung arriving Friday afternoon is answerable until Monday, and one
+> arriving Tuesday evening has under sixteen hours — so a flat window breaches
+> the first early and reports the second healthy after its Frist has lapsed. The
+> GeLi Gas „10 Werktage" is the *supplier's* Vorlauffrist, how far ahead the LF
+> must send; the Netzbetreiber's answer window is 4 Werktage.
 
-`deadline_risk` is re-classified on every event:
-- `green` — more than 24 h before deadline
-- `amber` — less than 24 h before deadline
-- `red` — deadline has passed and process is still open
+### `null` is unknown, not compliant
+
+A PID with no published window carries **no deadline** and is absent from every
+breach sweep, rather than being measured against an instant nobody can cite. Its
+`deadline_risk` is `unknown` — never `green`, because "we have not read that
+Festlegung" and "there is time" are different statements.
+
+Every stored deadline carries `deadline_source`, and it travels into the
+CloudEvent and out through the MCP tools. Quote it: a recommendation that cites
+the rule beats one that asserts a number.
 
 ---
 
-## §20 EnWG parity
+## § 7a Abs. 5 EnWG Gleichbehandlung parity
 
-`processd` and `obsd` together implement the **§20 EnWG Diskriminierungsfreiheitspflicht**
-(non-discrimination obligation) for vertically integrated utilities operating both NB
-and LF roles (§6b EnWG deployment).
+A vertically integrated undertaking's Gleichbehandlungsbeauftragte files a report
+with the Bundesnetzagentur **by 31 March** each year, covering the preceding
+calendar year, and publishes it in non-personalised form (§ 7a Abs. 5 EnWG).
+Lieferantenwechsel is among the areas those reports examine. `obsd` produces the
+Lieferantenwechsel evidence for it.
 
-### How it works
+The underlying duties are **§ 6a EnWG** (informatorische Entflechtung) and
+**§ 20 Abs. 1 Satz 1 EnWG** (diskriminierungsfreier Netzzugang).
 
-When a Lieferbeginn Anmeldung (PID 55001, 55016, or 44001) arrives, `processd` computes:
+### What is compared
 
-```rust
-initiator_is_affiliate = new_supplier_mp_id ∈ own_mp_ids
-```
+The processes the operator's **network arm answers for a Lieferant** — the ones
+where the network operator is the party doing the treating. The set is derived
+from the Antwortfrist table (`answered_by == "NB"` in the GPKE and GeLi Gas
+families), so it cannot drift from the Festlegung: currently 55001, 55077, 55004,
+44001 and 44004.
 
-- `own_mp_ids` is a `Vec<String>` configured per service instance — covering
-  **all** operator MP-IDs (Strom NB `99…` and Gas GNB `98…` for integrated Stadtwerk deployments).
-- Falls back to `[tenant]` when `own_mp_ids` is not explicitly configured.
+> The Kündigung (55016, 44016) is deliberately **not** in the set: it is answered
+> by the *old supplier*, never by the Netzbetreiber.
 
-`processd` **blocks automatic acceptance** (`auto_accept = false` is enforced) when
-`initiator_is_affiliate = true`, forcing operator review for all affiliate Anmeldungen.
-This ensures the NB cannot give its subsidiary LF an automatic processing advantage.
+`initiator_is_affiliate` is set when the Lieferant's MP-ID — `new_supplier` where
+the message names one, the counterparty otherwise — matches any entry in
+`[identity] own_mp_ids`.
 
-`obsd` records `initiator_is_affiliate` on every `ProcessProjection`, enabling
-BNetzA audit evidence as a structured query:
+### The sign convention
 
-```bash
-# §20 EnWG parity audit: affiliate vs. non-affiliate STP rates
-curl -s "http://obsd:8480/obs/kpis?days=90" \
-  -H "Authorization: Bearer <token>" | jq '{
-    affiliate_stp_rate:     .affiliate.stp_rate,
-    non_affiliate_stp_rate: .non_affiliate.stp_rate,
-    parity_delta:           (.affiliate.stp_rate - .non_affiliate.stp_rate | fabs),
-    bnetza_limit_pp:        2.0
-  }'
-```
+**`gap_pp = affiliate − third_party`, in percentage points. Positive means the
+affiliate fared better**, which is the concern. The same convention is used by the
+REST report, the `de.obs.stp.parity.alert` CloudEvent and the MCP tool.
 
-BNetzA expects the parity delta to be **< 2 percentage points**.
+`gap_pp` is `null` when either group has fewer than 10 processes: the gap is
+**unstatable**, not zero — and not a hundred points off a single process.
+
+### There is no regulatory threshold
+
+The Bundesnetzagentur publishes no numeric parity limit for this figure. § 7a
+Abs. 5 asks the Gleichbehandlungsbeauftragte to describe the measures taken, not
+to meet a number. `[worker] parity_threshold_pp` is the **operator's own**
+escalation policy and is labelled as such everywhere it appears. The same applies
+to any STP-rate target.
 
 ### Multi-MP-ID configuration
 
-An integrated NB+GNB instance operates under multiple MP-IDs. Configure all of them:
+An integrated NB+GNB instance operates under several MP-IDs. Configure all of
+them, or affiliate processes under the unlisted ones count as third-party:
 
 ```toml
 [identity]
-tenant     = "9900357000004"   # primary (for Cedar resource checks)
-# §20 EnWG: list all operator MP-IDs — Strom NB (BDEW 99…) + Gas GNB (DVGW 98…)
+tenant     = "9900357000004"   # primary — Cedar resource checks
+# Strom NB (BDEW 99…) + Gas GNB (DVGW 98…)
 own_mp_ids = ["9900357000004", "9800357000004"]
 ```
 
-When `own_mp_ids` is omitted, it defaults to `[tenant]` (pure single-role deployments).
+Omitting `own_mp_ids` defaults it to `[tenant]`.
 
----
-
-## Deadline monitoring
-
-`obsd` monitors regulatory deadlines:
-
-| PID family | Deadline |
-|------------|---------|
-| GPKE (55001–55018) | 24 wall-clock hours |
-| WiM Strom (55039 / 55042 / 55051 / 55168) | 3 / 5 / 7 / 1 Werktage |
-| GeLi Gas (44001…) | 10 Werktage |
-| MABIS (13003) | 1 Werktag |
-
-Processes approaching the deadline within a configurable window (`WARNING`) or
-past it (`BREACH`) appear in `GET /obs/overdue`:
+### Export
 
 ```bash
-curl -s "http://obsd:8480/obs/overdue" \
-  -H "Authorization: Bearer <token>" | jq '.[] | {
-    process_id, pid, malo_id, deadline_at, deadline_risk
-  }'
+# JSON, for the current year
+curl -s "http://obsd:8480/api/v1/audit/gleichbehandlung?year=2026" \
+  -H "Authorization: Bearer $TOKEN" | jq '.by_pid[] | {pid, process, gap_pp, favours}'
+
+# CSV, for the filing
+curl -s "http://obsd:8480/api/v1/audit/gleichbehandlung?year=2025&format=csv" \
+  -H "Authorization: Bearer $TOKEN" > gleichbehandlung-2025.csv
 ```
+
+The report year is the year each process **started**, not the year its row was
+last touched — so re-running a closed year reproduces it. An annual filing that
+changes when you re-run it is not evidence.
 
 ---
 
 ## Events produced
 
-`obsd` is a read-model, but two background **sweep workers** produce `de.obs.*`
-CloudEvents. They run only when `webhook.outbound_url` is configured (in
-production, the `marktd` event-ingest endpoint, whose fan-out delivers to the
-`agentd` subscribers). Events are HMAC-signed when `webhook.outbound_secret` is
-set.
+Two background sweeps produce `de.obs.*` CloudEvents. They run only when
+`webhook.outbound_url` is configured (in production, `marktd`'s event-ingest
+endpoint, whose fan-out delivers to `agentd`), and are HMAC-signed when
+`webhook.outbound_secret` is set.
 
 | Event | Producer | When | Consumed by |
 |-------|----------|------|-------------|
-| `de.obs.deadline.approaching` | deadline sweep (`deadline_sweep_secs`) | a tracked, still-open process has `deadline_at` within `deadline_warn_hours` and has not been alerted yet (idempotent per process via `deadline_alerted_at`) | agentd `deadline-alert-agent` |
-| `de.obs.stp.parity.alert` | parity sweep (`parity_sweep_secs`) | the §20 EnWG completion-rate gap between affiliate- and non-affiliate-initiated Anmeldungen (55001/55016/44001) exceeds `parity_threshold_pp` (both groups ≥ 10 samples) | agentd `compliance-agent` |
+| `de.obs.deadline.approaching` | deadline sweep (`deadline_sweep_secs`) | an open process has `deadline_at` within `deadline_warn_hours`, or already past it, and has not been alerted (idempotent per process via `deadline_alerted_at`) | agentd `deadline-alert-agent` |
+| `de.obs.stp.parity.alert` | parity sweep (`parity_sweep_secs`) | the completion-rate gap passes `parity_threshold_pp`, with both groups ≥ 10 processes | agentd `compliance-agent` |
 
-**`de.obs.deadline.approaching` payload:** `process_id`, `pid`, `family`,
+**`de.obs.deadline.approaching`:** `process_id`, `pid`, `family`,
 `workflow_name`, `malo_id`, `partner_mp_id`, `due_at` (RFC 3339),
-`hours_remaining`, `deadline_risk`, `tenant`.
+`hours_remaining`, `breached`, `deadline_risk`, **`deadline_source`**, `tenant`.
 
-**`de.obs.stp.parity.alert` payload:** `tenant`, `window_days`, `threshold_pp`,
-`affiliate` + `non_affiliate` `{total, completed, completion_rate}`,
-`parity_gap_pp` (signed — positive = affiliate favoured), `favored`, `note`.
+**`de.obs.stp.parity.alert`:** `tenant`, `window_days`, `threshold_pp`,
+`affiliate` + `third_party` `{total, completed, rejected, frist_breached}`,
+`gap_pp` (signed), `favours`, `min_sample`, `gap_convention`, `basis`.
+
+Only a **delivered** alert is stamped, so a downed webhook target cannot silently
+consume a warning. A sweep that returns a full batch reports `saturated`: at least
+the cap was waiting — never that the cap was all there was. A quiet sweep logs
+nothing, so a line in the log is worth reading.
 
 ---
 
 ## Configuration reference
 
-`obsd` reads its configuration from a **TOML file** (default: `obsd.toml`),
-with secrets deferred to environment variables via `"env:VAR_NAME"` values.
+`obsd` reads a **TOML file** (default `obsd.toml`, or the path in `OBSD_CONFIG`),
+with secrets deferred to environment variables via `"env:VAR_NAME"`. Individual
+keys may be overridden by `OBSD_`-prefixed variables (`__` separates nested
+sections, e.g. `OBSD_DATABASE__URL`); `RUST_LOG` sets the log level.
 
-The config file is located via `OBSD_CONFIG` (an absolute or relative path), or
-`./obsd.toml` in the working directory when that variable is unset. Individual
-keys may be overridden by `OBSD_`-prefixed environment variables (`__` separates
-nested sections, e.g. `OBSD_DATABASE__URL`); `RUST_LOG` sets the log level.
-
-```bash
-OBSD_CONFIG=/etc/obsd/obsd.toml obsd
-```
-
-### Full `obsd.toml` reference
+Unknown keys are **refused at startup**, at every level — a typo is a refusal to
+boot rather than a setting that silently does nothing.
 
 ```toml
 [http]
 addr = "0.0.0.0:8480"          # default
 
 [database]
-url       = "env:DATABASE_URL"  # required; use env: for secrets
+url       = "env:DATABASE_URL"  # required
 pool_size = 10                  # default
 
 [identity]
-tenant = "9900357000004"        # required — MP-ID of the operator
+tenant     = "9900357000004"    # required — MP-ID of the operator
+own_mp_ids = ["9900357000004", "9800357000004"]   # § 7a Abs. 5 affiliate detection
 
 [marktd]
 url     = "http://marktd:8180"      # required
 api_key = "env:OBSD_MARKTD_API_KEY" # required
 
 [webhook]
-inbound_secret  = "env:OBSD_INBOUND_SECRET"   # optional; verifies inbound POST /webhook
-# Outbound target for the de.obs.* events obsd produces. In production this is
-# the marktd event-ingest endpoint, whose fan-out delivers to agentd. Omit to
-# disable the sweep producers.
-outbound_url    = "env:OBSD_OUTBOUND_URL"      # e.g. http://marktd:8180/api/v1/mako/events
-outbound_secret = "env:OBSD_OUTBOUND_SECRET"   # HMAC; must match the target's inbound secret
+inbound_secret  = "env:OBSD_INBOUND_SECRET"   # verifies inbound POST /webhook
+# Outbound target for the de.obs.* events. In production the marktd
+# event-ingest endpoint, whose fan-out delivers to agentd. Omit to disable
+# the sweep producers entirely.
+outbound_url    = "env:OBSD_OUTBOUND_URL"     # e.g. http://marktd:8180/api/v1/mako/events
+outbound_secret = "env:OBSD_OUTBOUND_SECRET"  # HMAC; must match the target's inbound secret
 
 [worker]
 deadline_sweep_secs = 900     # deadline sweep interval (default 15 min)
-deadline_warn_hours = 24      # alert when a deadline is within this many hours
-parity_sweep_secs   = 86400   # §20 parity sweep interval (default daily)
-parity_threshold_pp = 5.0     # parity-gap threshold in pp (BNetzA scrutiny)
+deadline_warn_hours = 24      # alert when an Antwortfrist is within this many hours
+parity_sweep_secs   = 86400   # parity sweep interval (default daily)
+# The OPERATOR'S escalation threshold, in percentage points. Not a regulatory
+# limit — the BNetzA publishes none for this figure.
+parity_threshold_pp = 5.0
 parity_window_days  = 90      # parity look-back window
 
 [subscription]
 # Self-registers with marktd on startup — no manual curl required.
-webhook_url   = "http://obsd:8480/webhook"  # public URL marktd POSTs to
-subscriber_id = "obsd"                       # default
+webhook_url   = "http://obsd:8480/webhook"
+subscriber_id = "obsd"
 event_types   = [
   "de.mako.process.initiated",
   "de.mako.process.completed",
+  "de.mako.aperak.accepted",
   "de.mako.aperak.timeout",
-  "de.mako.process.failed",
   "de.mako.aperak.rejected",
+  "de.mako.process.failed",
 ]
 
 # [oidc]          # omit to disable auth (dev only — never omit in production)
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
 # audience = "api://mako-obsd"
-# jwks_refresh_secs = 300
+
+# [mcp]           # MCP server auth: OIDC + optional API-key fallback
+# api_key = "env:OBSD_MCP_API_KEY"
 
 # [otel]          # omit to disable tracing
 # endpoint = "http://otel-collector:4317"
@@ -276,93 +314,113 @@ event_types   = [
 
 ---
 
-## marktd subscription
-
-`obsd` **auto-registers** its fan-out subscription with `marktd` on startup
-when `subscription.webhook_url` is set in the config — no manual `curl` required.
-
-To force re-registration or verify the subscription:
-
-```bash
-curl -s http://marktd:8180/api/v1/subscriptions/obsd \
-  -H "Authorization: Bearer <token>" | jq .
-```
-
----
-
 ## Query examples
 
 ```bash
-# Open processes for a MaLo
-curl -s "http://obsd:8480/obs/processes?state=Open&pid=55001" \
-  -H "Authorization: Bearer <token>" | jq '.[] | {process_id, initiated_at, deadline_at}'
+# Open GPKE Anmeldungen, newest first
+curl -s "http://obsd:8480/obs/processes?family=gpke&state=initiated&pid=55001" \
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.[] | {process_id, started_at, deadline_at, deadline_source}'
 
-# 90-day KPI report
-curl -s "http://obsd:8480/obs/kpis?days=90" \
-  -H "Authorization: Bearer <token>" | jq .
+# Per-PID KPIs for one calendar month
+curl -s "http://obsd:8480/obs/kpis?pid=55001&period=2026-07" \
+  -H "Authorization: Bearer $TOKEN" | jq .
 
-# Overdue processes (deadline breached or within 2 hours)
+# Past the business Antwortfrist
 curl -s "http://obsd:8480/obs/overdue" \
-  -H "Authorization: Bearer <token>" | jq '.[] | select(.deadline_risk == "Breach")'
+  -H "Authorization: Bearer $TOKEN" \
+  | jq '.[] | {pid, malo_id, deadline_at, deadline_source, deadline_risk}'
 ```
+
+`state` accepts exactly the six stored spellings; anything else is a `400` naming
+them, not a silently dropped filter.
+
+### Reading a KPI report honestly
+
+```json
+{
+  "pid": 55001,
+  "total_initiated": 412,
+  "total_aperak_timeout": 3,
+  "total_frist_breached": 11,
+  "total_with_frist": 412,
+  "frist_compliance_rate": 0.9733,
+  "avg_cycle_time_hours": 9.4,
+  "p95_cycle_time_hours": 21.8
+}
+```
+
+- `total_aperak_timeout` and `total_frist_breached` are **different clocks**.
+- Check `total_with_frist` before quoting `frist_compliance_rate`: a small
+  denominator means the bucket is mostly *unmeasured*, not compliant.
+- A `null` rate means nothing measurable in the bucket. It is not `0`, and it is
+  not perfect performance.
 
 ---
 
-## Alertmanager integration
+## Monitoring
 
-`obsd` can fire Alertmanager webhook alerts when processes breach their deadline.
-Configure the Alertmanager webhook receiver URL via environment:
+`GET /obs/metrics` serves business gauges, computed by querying the store on each
+scrape (a counter loses its decrement when a process crashes; a census does not):
 
-```bash
-OBSD_ALERTMANAGER_URL=http://alertmanager:9093/api/v2/alerts
-```
+| Gauge | Meaning |
+|---|---|
+| `obsd_process_projections_total` | rows in the read-model |
+| `obsd_open_processes_total` | non-terminal processes |
+| `obsd_overdue_processes_total` | open and past their Antwortfrist |
+| `obsd_db_pool_size` / `obsd_db_pool_idle` | connection pool |
 
-Alert labels include `pid`, `workflow`, `malo_id`, and `deadline_risk`.
+It is unauthenticated by design — restrict it at the ingress. Every other route
+that returns business data requires OIDC and passes Cedar.
 
----
-
-## Monitoring (self-monitoring)
-
-| Metric | Target |
-|--------|--------|
-| Projection build lag | < 5 s from `ProcessInitiated` |
-| `deadline_risk = 'Breach'` count | 0 |
-| `initiator_is_affiliate` parity delta | < 2 pp |
-| DB pool utilisation | < 80 % |
-
-The `obsd` `GET /obs/kpis` endpoint is also the input for BNetzA audit submissions
-under §20 EnWG — export as JSON or CSV before each annual report.
+There is **no Alertmanager bridge**. Alerting is Prometheus's job over these
+gauges, or `agentd`'s over `de.obs.deadline.approaching`.
 
 ---
 
 ## MCP server
 
-`obsd` exposes an MCP server at `/mcp` for LLM-based compliance automation.
+`obsd` exposes a read-only MCP server at `/mcp`. Every tool goes through the same
+repository the REST surface uses, so the two cannot answer differently.
 
 ### Tools (6)
 
 | Tool | Description |
 |---|---|
-| `get_process(process_id)` | Full process projection by UUID — state, PIDs, deadlines, ERC code |
-| `list_overdue_processes` | All MaKo processes past their regulatory deadline, ordered by urgency |
-| `get_kpi_report(pid, period)` | BNetzA KPI for a single PID and billing month (`YYYY-MM`) |
-| `get_parity_report(days)` | §20 EnWG compliance: affiliate vs. non-affiliate completion rates; target gap < 2 pp |
-| `get_stp_rate(days)` | Rolling STP rate across all process families; target ≥ 95% |
-| `list_processes_by_family(family, state, limit)` | Drill into a process family (`gpke`, `wim`, `geli-gas`, …) |
+| `get_process(process_id)` | Full projection — state, deadline, `deadline_source`, ERC code |
+| `list_overdue_processes` | Past the business Antwortfrist, most urgent first; reports `saturated` |
+| `get_kpi_report(pid, period)` | Per-PID KPIs for a `YYYY-MM` month, both clocks separately |
+| `get_parity_report(days)` | § 7a Abs. 5 parity; `gap_pp` = affiliate − third_party |
+| `get_stp_rate(days)` | Completions over processes that **ended** |
+| `list_processes_by_family(family, state, limit)` | Drill into one family |
 
 ### Prompts (2)
 
 | Prompt | Description |
 |---|---|
-| `audit-kpi` | Generate a BNetzA KPI report for a reporting period |
-| `investigate-aperak-violation` | Root-cause an APERAK deadline violation |
+| `process-kpis` | Read a period's KPIs without confusing the two clocks |
+| `investigate-overdue-process` | Root-cause a missed Antwortfrist |
 
-### Example: rolling STP rate check
+### Example
 
 ```bash
 curl -X POST http://obsd:8480/mcp \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_stp_rate","arguments":{"days":30}}}'
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/call",
+       "params":{"name":"get_stp_rate","arguments":{"days":30}}}'
 ```
 
-Returns `{ "stp_rate": 0.9720, "stp_pct": 97.2, "target_stp": 0.95, "compliant": true, ... }`.
+Returns `ended`, `completed`, `rejected`, `failed`, `in_flight`,
+`aperak_timeout`, `frist_breached` and `stp_rate` — `null` when nothing ended in
+the window, because a window with no endings has no rate.
+
+---
+
+## See also
+
+- [`concepts/OBSD.md`](https://github.com/hupe1980/mako/blob/main/concepts/OBSD.md)
+  — the two clocks, the § 7a argument, and what obsd deliberately does not do.
+- [agentd Operator Guide](@/docs/services/agentd.md) — the specialists that
+  consume `de.obs.*`.
+- [processd Operator Guide](@/docs/services/processd.md) — the operator queue
+  sized by the same Antwortfrist table.

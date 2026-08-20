@@ -2,7 +2,7 @@
 //!
 //! Neither route carries an operator token — they are called by `makod`,
 //! `processd` and `tarifbd`, which authenticate with the shared
-//! `X-Mako-Signature` HMAC over the raw body. `main` refuses to start without
+//! Standard Webhooks signature over the raw body. `main` refuses to start without
 //! `inbound_secret` unless the deployment asked for an unauthenticated posture
 //! by name: a forged CloudEvent here creates contracts and moves supply.
 
@@ -23,19 +23,16 @@ use crate::{
 
 /// Reject a body whose signature does not match before it can mutate anything.
 fn verify_signature(ctx: &Ctx, headers: &HeaderMap, body: &Bytes) -> ApiResult<()> {
-    let Some(secret) = &ctx.cfg.inbound_secret else {
-        return Ok(());
-    };
-    let provided = headers
-        .get("x-mako-signature")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default();
-    if mako_service::webhook::verify_hmac(secret.as_bytes(), body, provided) {
-        Ok(())
-    } else {
-        tracing::warn!("vertragd: inbound webhook signature mismatch — rejected");
-        Err(ApiError::Unauthorized)
-    }
+    mako_service::webhook::verify_request(
+        ctx.cfg.inbound_secret.as_deref().map(str::as_bytes),
+        headers,
+        body,
+    )
+    .map(|_| ())
+    .map_err(|err| {
+        tracing::warn!(%err, "vertragd: inbound webhook refused");
+        ApiError::Unauthorized
+    })
 }
 
 // ── MaKo process outcomes ─────────────────────────────────────────────────────

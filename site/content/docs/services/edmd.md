@@ -196,7 +196,7 @@ so an LF-role token cannot escalate through MCP to a write it is refused on REST
 Every edmd-originated CloudEvent — direct-push `stored`/`quality.warning`,
 reading-order `failed`, confirmation-overdue, SMGW compliance and cert-expiry
 alerts, from both the request path and the background workers — is delivered
-through one emitter that adds an `x-mako-signature: sha256=<hex>` HMAC over the
+through one emitter that adds an `webhook-signature: sha256=<hex>` HMAC over the
 body when `erp_webhook_secret` is set. This is the counterpart to `inbound_secret`:
 the ERP receiver authenticates edmd's events exactly as edmd authenticates its
 inbound webhook. Without the secret the body is unsigned and the transport is the
@@ -1296,7 +1296,7 @@ endpoint accepts:
 
 Optional per-message authentication: set `message_hmac_secret` (supports
 `"env:VAR"`) in `[kafka_ingest]` and every record must carry an
-`x-mako-signature` header (`sha256=<hex>` over the record value, the
+`webhook-signature` header (`sha256=<hex>` over the record value, the
 platform's webhook signing scheme); forged or unsigned records are skipped
 like poison pills — never stored. Without the secret, the **topic ACL is the
 trust boundary**: restrict produce rights to the head-end system.

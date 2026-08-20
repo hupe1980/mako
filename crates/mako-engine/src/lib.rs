@@ -70,7 +70,6 @@
 //! | [`deadline`] | `Deadline`, `DeadlineStore` + `InMemoryDeadlineStore` / `NoopDeadlineStore` |
 //! | [`registry`] | `ProcessRegistry` + `InMemoryProcessRegistry` / `NoopProcessRegistry` |
 //! | [`pid_router`] | `PidRouter` — maps `Prüfidentifikator` values to workflow names |
-//! | [`fristen`] | Regulatory deadline helpers: `add_hours` (GPKE 24h), `add_werktage` (WiM/GeLi/MABIS) |
 //! | [`dead_letter`] | `DeadLetterSink` trait + `LogDeadLetterSink` / `NoopDeadLetterSink` |
 //! | [`erp`] | `ErpAdapter`, `ErpCommandSource`, `ErpEvent` — ERP/backend integration contract (BO4E) |
 //! | [`builder`] | `EngineModule` trait, `EngineBuilder`, `EngineContext` |
@@ -91,7 +90,6 @@ pub mod erc;
 pub mod erp;
 pub mod error;
 pub mod event_store;
-pub mod fristen;
 pub mod ids;
 pub mod inbox;
 pub mod marktrolle;

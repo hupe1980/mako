@@ -69,7 +69,8 @@ pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::add_hours(received_at, 24);
+/// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
+///     .expect("a PID with a published Antwortfrist");
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., SPERRUNG_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```

@@ -783,10 +783,10 @@ struct Cli {
     #[arg(long, value_name = "TOKEN", env = "MAKOD_MARKTD_API_KEY")]
     marktd_api_key: Option<String>,
 
-    /// Shared secret for `X-Mako-Signature` HMAC-SHA256 on ERP webhook POSTs.
+    /// Shared secret for Standard Webhooks signing on ERP webhook POSTs.
     ///
     /// When set alongside `--erp-webhook-url`, every webhook POST includes an
-    /// `X-Mako-Signature: <hex>` header so the ERP can verify authenticity.
+    /// `webhook-signature` header so the ERP can verify authenticity and refuse a replay.
     /// The ERP endpoint must verify the signature before processing.
     ///
     /// When omitted, the webhook is sent without a signature header.

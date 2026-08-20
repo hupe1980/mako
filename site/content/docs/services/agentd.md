@@ -22,9 +22,9 @@ Port: **`:9580`**
 |---|---|
 | `POST /webhook` | Inbound CloudEvent trigger (HMAC-verified) |
 | `POST /api/v1/run` | Manual agent invocation (OIDC JWT required) |
-| `GET /api/v1/decisions` | Last 100 agent decisions (in-memory ring buffer) |
-| `GET /api/v1/agents` | Activated specialists and their subscriptions |
-| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary |
+| `GET /api/v1/decisions` | Last 100 agent decisions (in-memory ring buffer). **OIDC** — a decision summary names a real Marktlokation |
+| `GET /api/v1/agents` | Activated specialists and their subscriptions. **OIDC** — in a combined-role deployment the activated set is § 9 EnWG-relevant |
+| `GET /api/v1/agents/catalog` | Every specialist compiled into this binary. **OIDC** |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
 | `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, event delivery (OIDC required) |
 | `GET /health` · `GET /health/ready` | Liveness / readiness |
@@ -175,7 +175,7 @@ arguments come out of a model completion, which the taint gate refuses at a
 mutating sink, so gating its answer would gate nothing while suspending a run
 per finding. A triage rule changes nothing about the run — same answer, same
 validation, same memories — and its only effect is a worklist row: a §40a EnWG
-billing violation, an EEG breach accruing penalty per month, a §20 parity
+billing violation, an EEG breach accruing penalty per month, a § 7a parity
 deviation, a MaLo with no grid assignment, arrears at the §41f threshold.
 
 That asymmetry is deliberate: a triage rule may carry a predicate, `approval`
@@ -620,7 +620,7 @@ its first model call.
 | **Oversight surface auth** | OIDC only — no dev mode. Not mounted when OIDC is disabled |
 | **Oversight authorization** | Cedar `api:*` verbs; reading, claiming and deciding are separate, and `POST /events` is the machine door |
 | **Effect authorization** | Cedar on every effect: server allowlist, secret-to-model refusal, delegation depth, no declassification. `DenyAll` baseline — there is no `AllowAll` |
-| **Inbound webhook HMAC** | `X-Mako-Signature: sha256=...` verified when `inbound_hmac_secret` is set; constant-time compare; 403 on mismatch |
+| **Inbound webhook HMAC** | Standard Webhooks (`webhook-signature`) verified when `inbound_hmac_secret` is set; constant-time compare; 403 on mismatch |
 | **Mutating tools** | `requires_approval` + `spec.oversight` obligation, `on_expiry: deny`, four-eyes in the task store |
 | **Admission** | payload fields are re-validated at the boundary; only identifiers that pass are trusted |
 | **Authority-bearing arguments** | `protected_fields` with `require_trusted` — counterparty-derived values are refused |
@@ -686,12 +686,11 @@ mabis_syncd = "http://mabis-syncd:8880/mcp"
 # ... every MCP-exposing service
 mcp_api_key = "env:AGENTD_MCP_API_KEY"
 
-trigger_event_types = [
-  "de.mako.process.failed",
-  "de.billing.rechnung.erstellt",
-  "de.eeg.*",
-  "de.invoic.receipt.disputed",
-]
+# There is no `trigger_event_types` here, deliberately. Which events wake an
+# agent is the manifests' subscription table, and a second list in config that
+# nothing checks against it is a mute switch: the key's own default named four
+# event types while the specialists subscribe to dozens, so most of them were
+# answered 204 at the door. `plane::Router::accepts` is the only filter now.
 
 # ── Security ──────────────────────────────────────────────────────────────────
 inbound_hmac_secret  = "env:AGENTD_INBOUND_HMAC_SECRET"
@@ -802,7 +801,7 @@ graph LR
     RUN["Run reaches a<br/>terminal state"] --> JRN[("journal record")]
     JRN --> W["Delivery worker"]
     REG --> W
-    W -->|"POST + X-Mako-Signature"| RX["ERP / receiver"]
+    W -->|"POST + webhook-signature"| RX["ERP / receiver"]
     RX -->|"2xx"| CUR["cursor advances"]
     RX -.->|"non-2xx"| W
 ```
@@ -817,7 +816,7 @@ discipline every other mako service applies to its transactional outbox.
 
 ```toml
 audit_webhook_url = "https://erp.example/hooks/agent-decisions"
-# X-Mako-Signature: sha256=HMAC(secret, body) over the exact bytes posted, the
+# webhook-signature: sha256=HMAC(secret, body) over the exact bytes posted, the
 # convention every mako receiver already verifies. A signature authenticates the
 # bytes, not their freshness — the receiver deduplicates on the CloudEvent id.
 audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"

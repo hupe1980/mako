@@ -174,7 +174,7 @@ retries with exponential backoff:
 - **5xx / transport error** — transient; retried per schedule above
 
 **Request signing** (`[erp] hmac_secret`): when configured, every POST includes
-`X-Mako-Signature: sha256=<hex>` so the ERP can verify authenticity.
+Standard Webhooks (`webhook-signature`) so the ERP can verify authenticity.
 
 **REMADV is dispatched before ERP notification** — a failed ERP webhook never
 blocks the regulatory obligation.  Reconcile dead-lettered events by querying
@@ -357,7 +357,7 @@ max_zahlungsziel_days      = 30     # 0 = disable; default 30 (§7 Allg. Festleg
 # Required for ERP accounts-payable automation.
 webhook_url = "https://erp.example.com/webhooks/invoicd"
 # Optional: sign outbound requests with HMAC-SHA256.
-# The ERP verifies via X-Mako-Signature: sha256=<hex>.
+# The ERP verifies via webhook-signature: v1,<base64>.
 hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
 
 [edmd]

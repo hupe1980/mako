@@ -345,10 +345,10 @@ pub struct MabisBillingWorkflow;
 /// `PruefmitteilungDeadlineExpired` if the BKV does not respond in time:
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at,
 ///     1,
-///     mako_engine::fristen::HolidayCalendar::BdewMaKo,
+///     mako_fristen::HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(
 ///     process.stream_id().clone(), ..., PRUEFMITTEILUNG_DEADLINE_LABEL, due,

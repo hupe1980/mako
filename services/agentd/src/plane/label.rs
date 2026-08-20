@@ -33,13 +33,29 @@
 use agentplane::core::{CorrelationKey, SourceId, Tainted};
 use serde_json::Value;
 
+/// An ENTSO-E EIC is 16 characters.
+const EIC_LEN: usize = 16;
+
 /// The shape an identifier must have to be promoted.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Shape {
     /// Exactly `n` ASCII digits — MaLo (11), BDEW MP-ID (13), PID (5).
     Digits(usize),
-    /// Exactly `n` ASCII alphanumerics — MeLo (33), Bilanzkreis EIC (16).
+    /// Exactly `n` ASCII alphanumerics — MeLo (33).
     AlphaNum(usize),
+    /// A 16-character ENTSO-E Energy Identification Code.
+    ///
+    /// Its own shape rather than [`Self::AlphaNum`], because **an EIC may
+    /// contain `-`**: positions 4–15 are alphanumeric *or* the filler `-`, so a
+    /// real Bilanzkreis like `11XRWENET----1X` is 16 characters of which four
+    /// are hyphens. Treating it as alphanumeric refused every padded code, and
+    /// the refusal is silent — the value simply stayed untrusted, so a `planned`
+    /// specialist reading a Bilanzkreis found nothing to plan from.
+    ///
+    /// The promotion is still honest: 16 characters drawn from
+    /// `[A-Za-z0-9-]` has no room for an instruction, which is the whole basis
+    /// for trusting an identifier at all.
+    Eic,
     /// An RFC 4122 UUID, which mako generates itself.
     Uuid,
     /// `YYYY-MM-DD`, the form every MaKo date takes on the wire.
@@ -51,6 +67,9 @@ impl Shape {
         match self {
             Self::Digits(n) => s.len() == n && s.bytes().all(|b| b.is_ascii_digit()),
             Self::AlphaNum(n) => s.len() == n && s.bytes().all(|b| b.is_ascii_alphanumeric()),
+            Self::Eic => {
+                s.len() == EIC_LEN && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
+            }
             Self::Uuid => uuid::Uuid::parse_str(s).is_ok(),
             Self::IsoDate => {
                 let b = s.as_bytes();
@@ -85,10 +104,10 @@ const PROMOTABLE: &[(&str, Shape)] = &[
     // ── Protocol ──
     ("pid", Shape::Digits(5)),
     // ── Bilanzkreis EIC (LOC+237) ──
-    ("bilanzkreis", Shape::AlphaNum(16)),
-    ("bilanzkreis_id", Shape::AlphaNum(16)),
+    ("bilanzkreis", Shape::Eic),
+    ("bilanzkreis_id", Shape::Eic),
     // ── Bilanzierungsgebiet EIC (LOC+107), carried by de.mabis.* events ──
-    ("bilanzierungsgebiet_id", Shape::AlphaNum(16)),
+    ("bilanzierungsgebiet_id", Shape::Eic),
     // ── mako-generated keys ──
     ("record_id", Shape::Uuid),
     ("process_id", Shape::Uuid),
@@ -320,6 +339,55 @@ mod tests {
             Trust::Trusted,
             "an envelope of re-validated identifiers is what `planned` requires"
         );
+    }
+
+    /// **An EIC may contain `-`.**
+    ///
+    /// Positions 4–15 are alphanumeric or the filler `-`, so a real Bilanzkreis
+    /// is often padded. Requiring 16 alphanumerics refuses every padded code,
+    /// silently: the field stays untrusted, and a `planned` specialist reading a
+    /// Bilanzkreis has nothing to plan from.
+    #[test]
+    fn a_padded_eic_is_promoted_and_a_wrong_length_one_is_not() {
+        // A real ENTSO-E party code: 2 digits + `X` + 12 alphanumeric-or-filler
+        // + 1 check character. The filler is `-`, and the check character is
+        // computed — `cargo xtask check-malo-ids` refuses an invented one.
+        let padded = "11XRWENET-----1E";
+        assert_eq!(
+            padded.len(),
+            EIC_LEN,
+            "the fixture must be a real EIC length"
+        );
+
+        let env = routing_envelope(&json!({ "bilanzkreis": padded })).expect(
+            "a hyphen-padded EIC must be promotable — requiring 16 alphanumerics refused \
+             every padded Bilanzkreis, silently",
+        );
+        assert!(
+            env.peek()
+                .as_object()
+                .expect("object")
+                .contains_key("bilanzkreis")
+        );
+
+        // The Bilanzierungsgebiet EIC on `de.mabis.*` events takes the same shape.
+        let gebiet = "11YN00000000TH2M";
+        assert_eq!(gebiet.len(), EIC_LEN);
+        assert!(routing_envelope(&json!({ "bilanzierungsgebiet_id": gebiet })).is_some());
+
+        for bad in [
+            "11XRWENET----1E",   // 15 — too short
+            "11XRWENET-----1EX", // 17 — too long
+            "11XRWENET ----1E",  // a space is not filler
+            "11XRWENET;DROP-1",  // punctuation is not filler
+            "",
+        ] {
+            assert!(
+                routing_envelope(&json!({ "bilanzkreis": bad })).is_none(),
+                "`{bad}` ({} chars) is not an EIC",
+                bad.len()
+            );
+        }
     }
 
     /// The envelope drops everything it did not re-validate.

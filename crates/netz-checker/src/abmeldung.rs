@@ -286,7 +286,7 @@ fn check_vorlauffrist_gas(
 
     match anfrage.messtyp {
         Messtyp::Slp => {
-            let window_end = mako_engine::fristen::add_werktage(
+            let window_end = mako_fristen::add_werktage(
                 d.saturating_add(Duration::weeks(GAS_RUECKWIRKUNG_WOCHEN)),
                 config.gas_bearbeitungsfrist_wt,
                 config.holiday_calendar,

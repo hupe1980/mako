@@ -89,12 +89,24 @@ permit(principal, action == Action::"effect:perform", resource);
 // mako's own services, and nothing else. The plane reaches MCP servers over a
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
-// calls. `context.args.server` is what makes this expressible without naming
-// all 166 granted tools.
+// calls. `context.args.server` is what makes this expressible without naming the
+// 904 granted tools one by one.
+//
+// **This list must cover every server the manifests grant.** A granted server
+// missing from it is not a narrower policy — it is a specialist that boots, runs
+// and has every tool call denied, for the lifetime of the deployment. That
+// shipped: `mabis_syncd` was absent while `mabis-syncd-agent` granted four tools
+// on it, so the one specialist the mabis-syncd MCP surface was built for could
+// not call any of it. `every_granted_server_is_reachable` in `plane::policy`
+// reads the manifests and fails when this list falls behind them.
+//
+// Note the spelling: agentplane reserves `-` in a `tool://` server component, so
+// a hyphenated service is granted — and named here — with an underscore.
 forbid(principal, action == Action::"effect:perform", resource == Resource::"tool.call")
 unless {
   ["makod", "marktd", "processd", "obsd", "billingd", "invoicd", "accountingd",
-   "edmd", "einsd", "netzbilanzd", "portald", "sperrd", "tarifbd", "vertragd"]
+   "edmd", "einsd", "netzbilanzd", "portald", "sperrd", "tarifbd", "vertragd",
+   "mabis_syncd"]
   .contains(context.args.server)
 };
 

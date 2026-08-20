@@ -1,158 +1,25 @@
-//! GPKE Strom **business answer Fristen**, per inbound Prüfidentifikator.
+//! GPKE Strom answer Fristen — the table itself now lives in
+//! [`mako_fristen::antwort`], and what stays here is the check that it
+//! agrees with these workflows.
 //!
-//! BK6-24-174 GPKE Teil 2 states every window as a wall-clock instant in German
-//! local time on the first Werktag *after* the Übertragungstag: 11:00 Uhr for a
-//! Lieferbeginn, 06:00 for an Abmeldung, 05:00 for the NB-seitiges Lieferende,
-//! 09:00 for the Anfrage zur Beendigung der Zuordnung.
+//! The table is data: a PID, a window shape and a Fundstelle. Beside the
+//! workflows it would sit above `mako-engine`, so no crate could hold all four
+//! families and each service would aggregate them itself.
 //!
-//! It is not a duration. A message arriving Friday afternoon is answerable until
-//! Monday; one arriving Tuesday evening has under sixteen hours. Any flat-window
-//! approximation is therefore both too tight and too loose, and the loose
-//! direction is silent — it reports a lapsed Frist as still running.
-//!
-//! A **separate** 45-minute clock runs on the same message for the technical
-//! acknowledgement ([`mako_engine::fristen::aperak_strom_due_at`]).
-//!
-//! A PID absent from [`ANTWORT_OBLIGATIONS`] is one whose Frist this codebase
-//! has not read out of the Festlegung. Treat [`antwort_deadline`] returning
-//! `None` as *unknown*, never as *no deadline*.
-//!
-//! # Sources
-//!
-//! - BK6-24-174 GPKE Teil 2 (Lesefassung) — the SD Fristen per Prozessschritt
-//! - EDI@Energy Anwendungsübersicht der Prüfidentifikatoren 4.0 — roles, EBDs
-//! - Entscheidungsbaum-Diagramme und Codelisten 4.3
+//! What belongs beside a workflow is the cross-check: every trigger is a PID
+//! this crate spawns from, and the answer PIDs match `response_pid_for`'s own
+//! derivation. Those tests are below.
 
-use mako_engine::fristen::{self, HolidayCalendar};
-use time::{OffsetDateTime, Time};
+pub use mako_fristen::antwort::{AntwortObligation, FristShape, GPKE as ANTWORT_OBLIGATIONS};
 
-/// The shape of a GPKE answer Frist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FristShape {
-    /// „Unverzüglich, jedoch spätester ÜZ ist `HH:MM` Uhr des 1. WT nach dem ÜT."
-    ///
-    /// A wall-clock instant in German local time on the first Werktag strictly
-    /// after the arrival day.
-    NextWerktagAt(Time),
-    /// „Unverzüglich, jedoch spätester ÜT ist der `n`. WT nach dem ÜT."
-    ///
-    /// Day-granular: the Frist runs to the end of that Werktag.
-    EndOfWerktag(u32),
-}
+use mako_fristen::antwort;
+use time::OffsetDateTime;
 
-impl FristShape {
-    /// Resolve this Frist against the instant the message arrived.
-    #[must_use]
-    pub fn due_at(self, received: OffsetDateTime, cal: HolidayCalendar) -> OffsetDateTime {
-        match self {
-            Self::NextWerktagAt(at) => fristen::next_werktag_at(received, at, cal),
-            Self::EndOfWerktag(n) => fristen::end_of_werktag_after(received, n, cal),
-        }
-    }
-}
-
-/// One inbound PID's answer obligation.
-#[derive(Debug, Clone, Copy)]
-pub struct AntwortObligation {
-    /// The **inbound** Prüfidentifikator that starts the clock. Never an answer
-    /// PID — `makod` only spawns a process from an inbound message.
-    pub trigger_pid: u32,
-    /// Human-readable process name, for operator-facing queue reasons and logs.
-    pub name: &'static str,
-    /// The Marktrolle that owes the answer, as the Anwendungsübersicht names it
-    /// (`"NB"`, `"LF"`, `"LFA"`).
-    pub answered_by: &'static str,
-    /// Outbound PIDs carrying the positive and negative answer.
-    pub antwort_pids: (u32, u32),
-    /// The Entscheidungsbaum that decides the answer, where one is published.
-    pub ebd: Option<&'static str>,
-    /// The window shape.
-    pub frist: FristShape,
-    /// Citation for the Frist, for the audit trail.
-    pub source: &'static str,
-}
-
-const fn at(hour: u8) -> Time {
-    match Time::from_hms(hour, 0, 0) {
-        Ok(t) => t,
-        Err(_) => panic!("whole hour is a valid Time"),
-    }
-}
-
-/// Every GPKE Strom inbound PID whose answer Frist is stated in Teil 2.
-///
-/// | PID | Process | Answerer | Frist |
-/// |---|---|---|---|
-/// | 55001 | Anmeldung verb. MaLo | NB | 11:00 des 1. WT nach dem ÜT |
-/// | 55077 | Anmeldung erz. MaLo | NB | 11:00 des 1. WT nach dem ÜT |
-/// | 55004 | Abmeldung (Lieferende von LF an NB) | NB | 06:00 des 1. WT nach dem ÜT |
-/// | 55007 | Ankündigung der Beendigung der Zuordnung | LF | 05:00 des 1. WT nach dem ÜT |
-/// | 55010 | Anfrage zur Beendigung der Zuordnung | LFA | 09:00 des 1. WT nach dem ÜT |
-/// | 55016 | Kündigung | LFA | Ablauf des 1. WT nach dem ÜT |
-pub const ANTWORT_OBLIGATIONS: &[AntwortObligation] = &[
-    AntwortObligation {
-        trigger_pid: 55_001,
-        name: "Anmeldung verb. Marktlokation (Lieferbeginn)",
-        answered_by: "NB",
-        antwort_pids: (55_002, 55_003),
-        ebd: Some("E_0622"),
-        frist: FristShape::NextWerktagAt(at(11)),
-        source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6",
-    },
-    AntwortObligation {
-        trigger_pid: 55_077,
-        name: "Anmeldung erz. Marktlokation (Lieferbeginn)",
-        answered_by: "NB",
-        antwort_pids: (55_078, 55_080),
-        ebd: Some("E_0622"),
-        frist: FristShape::NextWerktagAt(at(11)),
-        source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6",
-    },
-    AntwortObligation {
-        trigger_pid: 55_004,
-        name: "Abmeldung (Lieferende von LF an NB)",
-        answered_by: "NB",
-        antwort_pids: (55_005, 55_006),
-        ebd: Some("E_0607"),
-        frist: FristShape::NextWerktagAt(at(6)),
-        source: "BK6-24-174 GPKE Teil 2, SD Lieferende von LF an NB Prozessschritte 2/3",
-    },
-    AntwortObligation {
-        trigger_pid: 55_007,
-        name: "Ankündigung der Beendigung der Zuordnung (Lieferende von NB an LF)",
-        answered_by: "LF",
-        antwort_pids: (55_008, 55_009),
-        ebd: Some("E_0609"),
-        frist: FristShape::NextWerktagAt(at(5)),
-        source: "BK6-24-174 GPKE Teil 2, SD Lieferende von NB an LF Prozessschritt 2",
-    },
-    AntwortObligation {
-        trigger_pid: 55_010,
-        name: "Anfrage zur Beendigung der Zuordnung",
-        answered_by: "LFA",
-        antwort_pids: (55_011, 55_012),
-        ebd: Some("E_0624"),
-        frist: FristShape::NextWerktagAt(at(9)),
-        source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritt 4",
-    },
-    AntwortObligation {
-        trigger_pid: 55_016,
-        name: "Kündigung",
-        answered_by: "LFA",
-        antwort_pids: (55_017, 55_018),
-        ebd: Some("E_0614"),
-        frist: FristShape::EndOfWerktag(1),
-        source: "BK6-24-174 GPKE Teil 2, SD Kündigung Prozessschritt 2",
-    },
-];
-
-/// The answer obligation for an inbound GPKE Strom PID, if this codebase has
-/// read one out of the Festlegung.
+/// The answer obligation for an inbound GPKE Strom PID, if the Festlegung
+/// states one.
 #[must_use]
 pub fn antwort_obligation(trigger_pid: u32) -> Option<&'static AntwortObligation> {
-    ANTWORT_OBLIGATIONS
-        .iter()
-        .find(|o| o.trigger_pid == trigger_pid)
+    antwort::antwort_obligation(trigger_pid).filter(|o| o.family == antwort::Family::Gpke)
 }
 
 /// The instant by which the answer to `trigger_pid` must have been sent.
@@ -162,13 +29,16 @@ pub fn antwort_obligation(trigger_pid: u32) -> Option<&'static AntwortObligation
 /// never as *unbounded*.
 #[must_use]
 pub fn antwort_deadline(trigger_pid: u32, received: OffsetDateTime) -> Option<OffsetDateTime> {
-    antwort_obligation(trigger_pid).map(|o| o.frist.due_at(received, HolidayCalendar::BdewMaKo))
+    antwort_obligation(trigger_pid).map(|o| {
+        o.frist
+            .due_at(received, mako_fristen::HolidayCalendar::BdewMaKo)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use time::{Date, Month};
+    use time::{Date, Month, Time};
 
     fn utc(y: i32, m: Month, d: u8, h: u8) -> OffsetDateTime {
         OffsetDateTime::new_utc(
@@ -181,6 +51,9 @@ mod tests {
     /// `makod` only emits `process.initiated` for messages it spawns from, so a
     /// table entry keyed on an answer PID would describe a clock that never
     /// starts.
+    ///
+    /// This is the check the table cannot make about itself, which is why it
+    /// stayed here when the data moved to `mako-fristen`.
     #[test]
     fn every_trigger_is_an_inbound_pid() {
         let inbound: std::collections::BTreeSet<u32> = crate::UTILMD_ANFRAGE_PIDS
@@ -195,35 +68,6 @@ mod tests {
                 "{} ({}) is not an inbound PID of any registered workflow",
                 o.trigger_pid,
                 o.name
-            );
-        }
-    }
-
-    /// No trigger may also appear as one of the answers — that inversion is the
-    /// recurring failure mode these tables exist to prevent.
-    #[test]
-    fn no_trigger_is_also_an_answer() {
-        let answers: std::collections::BTreeSet<u32> = ANTWORT_OBLIGATIONS
-            .iter()
-            .flat_map(|o| [o.antwort_pids.0, o.antwort_pids.1])
-            .collect();
-        for o in ANTWORT_OBLIGATIONS {
-            assert!(
-                !answers.contains(&o.trigger_pid),
-                "{} is listed both as a trigger and as an answer",
-                o.trigger_pid
-            );
-        }
-    }
-
-    #[test]
-    fn triggers_are_unique() {
-        let mut seen = std::collections::BTreeSet::new();
-        for o in ANTWORT_OBLIGATIONS {
-            assert!(
-                seen.insert(o.trigger_pid),
-                "duplicate trigger {}",
-                o.trigger_pid
             );
         }
     }
@@ -243,6 +87,18 @@ mod tests {
                 o.antwort_pids,
                 "answer PIDs for {} disagree with response_pid_for",
                 o.trigger_pid
+            );
+        }
+    }
+
+    /// The GPKE view is the GPKE table and nothing else: a Gas or WiM PID must
+    /// not resolve through this module.
+    #[test]
+    fn the_gpke_view_excludes_the_other_families() {
+        for foreign in [44_001_u32, 55_039, 44_042, 35_001] {
+            assert!(
+                antwort_obligation(foreign).is_none(),
+                "PID {foreign} is not GPKE"
             );
         }
     }

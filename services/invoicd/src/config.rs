@@ -284,7 +284,7 @@ pub use mako_service::telemetry::OtelConfig;
 pub struct ErpConfig {
     /// ERP webhook URL for `de.invoic.receipt.*` CloudEvents.
     pub webhook_url: Option<String>,
-    /// Optional HMAC-SHA256 secret for `X-Mako-Signature` on outbound requests.
+    /// Optional secret for Standard Webhooks signing on outbound requests.
     /// Use `"env:INVOICD_ERP_HMAC_SECRET"` to load from environment.
     pub hmac_secret: Option<String>,
 }

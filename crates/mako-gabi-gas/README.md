@@ -221,7 +221,7 @@ All GaBi Gas domain events use typed constants from the `cloud_events` module:
 ```rust
 use mako_gabi_gas::gabi_cloud_events;
 
-// Use in agentd.toml trigger_event_types or makod CloudEvent dispatch
+// Use in agentd's builtin subscription table or makod CloudEvent dispatch
 assert_eq!(gabi_cloud_events::NOMINATION_CREATED, "de.gabi.nomination.created");
 assert_eq!(gabi_cloud_events::ALLOCATION_COMPLETED, "de.gabi.allocation.completed");
 assert_eq!(gabi_cloud_events::IMBALANCE_CALCULATED, "de.gabi.imbalance.calculated");

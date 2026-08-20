@@ -125,7 +125,9 @@ fn unauthenticated_by_design(module: &str) -> Option<&'static str> {
     match module {
         "health" => Some("liveness/readiness probes must answer before auth is usable"),
         "metrics" => Some("Prometheus scrape target; no personal or tenant data"),
-        "event_ingest" => Some("authenticated by the makod X-Mako-Signature HMAC, not by a bearer"),
+        "event_ingest" => {
+            Some("authenticated by the makod Standard Webhooks signature, not by a bearer")
+        }
         "mod" => Some("shared helpers, no handlers"),
         _ => None,
     }

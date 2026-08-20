@@ -23,7 +23,8 @@
 //! POST <erp_webhook_url>
 //! Content-Type: application/cloudevents+json
 //! X-Idempotency-Key: <event.idempotency_key>
-//! X-Mako-Signature: <hmac-sha256-hex>   ← only when secret is configured
+//! webhook-id / webhook-timestamp / webhook-signature   ← Standard Webhooks,
+//!                                                       only when a secret is set
 //!
 //! {
 //!   "specversion": "1.0",

@@ -937,7 +937,7 @@ empty list subscribes to everything.
 ```
 POST https://erp.example.com/mdm/events
 Content-Type: application/cloudevents+json
-X-Mako-Signature: sha256=<hmac-sha256-hex>
+webhook-signature: v1,<base64>
 ```
 
 ```json
@@ -959,7 +959,7 @@ X-Mako-Signature: sha256=<hmac-sha256-hex>
 
 ### Signature verification
 
-`X-Mako-Signature` carries an HMAC-SHA256 hex digest over the raw request body,
+`webhook-signature` carries an HMAC-SHA256 hex digest over the raw request body,
 prefixed with `sha256=`, computed with the `secret` registered in the subscription
 (the workspace-wide format emitted by `mako_service::webhook::sign`).
 

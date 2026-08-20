@@ -62,13 +62,13 @@ use mako_engine::{
     deadline::Deadline,
     envelope::EventEnvelope,
     error::WorkflowError,
-    fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at},
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
+use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -578,11 +578,11 @@ pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruef
 /// This is the maximum time within which the NB must send a UTILMD
 /// Bestätigung or Ablehnung after receiving the LF's Lieferbeginn UTILMD.
 /// It is **not** the APERAK *sending* deadline (45 min weekday per
-/// APERAK AHB 1.0 §2.4.1 — see `mako_engine::fristen::APERAK_STROM_WINDOW_LABEL`).
+/// APERAK AHB 1.0 §2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`).
 ///
 /// Register the deadline immediately after `ReceiveUtilmd` is processed:
 /// ```rust,ignore
-/// let due = mako_engine::fristen::add_hours(OffsetDateTime::now_utc(), 24);
+/// let due = mako_fristen::add_hours(OffsetDateTime::now_utc(), 24);
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., GPKE_PROCESS_RESPONSE_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```

@@ -10,8 +10,8 @@ dependencies = [
  "axum",
  "blake3",
  "doubleentry",
- "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-service",
  "reqwest 0.13.4",
@@ -129,8 +129,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
- "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-service",
  "reqwest 0.13.4",
  "rmcp",
@@ -147,9 +147,9 @@ dependencies = [
 
 [[package]]
 name = "agentplane"
-version = "0.18.0"
+version = "0.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ec308279f62b36a37d8c4b77c84d5e1e014e41b81a51e56e5e23fa9bbe584e4"
+checksum = "11151e3208e889a9faee035c82ccddf27db62f05bfdf50efca9447858086cbfc"
 dependencies = [
  "async-trait",
  "aws-config",
@@ -6643,6 +6643,7 @@ dependencies = [
  "axum",
  "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-mabis",
  "mako-service",
  "metering",
@@ -6690,6 +6691,7 @@ version = "0.16.0"
 dependencies = [
  "criterion",
  "mako-events",
+ "mako-fristen",
  "rand 0.10.2",
  "serde",
  "serde_json",
@@ -6707,6 +6709,14 @@ dependencies = [
 [[package]]
 name = "mako-events"
 version = "0.16.0"
+
+[[package]]
+name = "mako-fristen"
+version = "0.16.0"
+dependencies = [
+ "time",
+ "time-tz",
+]
 
 [[package]]
 name = "mako-gabi-gas"
@@ -6731,6 +6741,7 @@ dependencies = [
  "anyhow",
  "edi-energy",
  "mako-engine",
+ "mako-fristen",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -6745,6 +6756,7 @@ dependencies = [
  "anyhow",
  "edi-energy",
  "mako-engine",
+ "mako-fristen",
  "rubo4e",
  "serde",
  "serde_json",
@@ -6759,6 +6771,7 @@ version = "0.16.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
+ "mako-fristen",
  "metering",
  "rubo4e",
  "rust_decimal",
@@ -6797,6 +6810,7 @@ name = "mako-obs"
 version = "0.16.0"
 dependencies = [
  "mako-events",
+ "mako-fristen",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -6834,6 +6848,7 @@ version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64 0.22.1",
  "cedar-policy",
  "figment",
  "figment_file_provider_adapter",
@@ -6877,6 +6892,7 @@ dependencies = [
  "anyhow",
  "edi-energy",
  "mako-engine",
+ "mako-fristen",
  "rubo4e",
  "serde",
  "serde_json",
@@ -6892,6 +6908,7 @@ dependencies = [
  "anyhow",
  "edi-energy",
  "mako-engine",
+ "mako-fristen",
  "mako-wim",
  "serde",
  "serde_json",
@@ -6920,6 +6937,7 @@ dependencies = [
  "mako-as4",
  "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-gabi-gas",
  "mako-geli-gas",
  "mako-gpke",
@@ -6961,6 +6979,7 @@ version = "0.16.0"
 dependencies = [
  "edi-energy",
  "mako-engine",
+ "mako-fristen",
  "mako-wim",
  "pyo3",
  "rubo4e",
@@ -7261,7 +7280,7 @@ checksum = "13d2233c9842d08cfe13f9eac96e207ca6a2ea10b80259ebe8ad0268be27d2af"
 name = "netz-checker"
 version = "0.16.0"
 dependencies = [
- "mako-engine",
+ "mako-fristen",
  "mako-markt",
  "serde",
  "serde_json",
@@ -7612,13 +7631,11 @@ version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
- "clap",
- "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-markt",
  "mako-obs",
  "mako-service",
- "mako-wim",
  "reqwest 0.13.4",
  "rmcp",
  "schemars 1.2.2",
@@ -7626,7 +7643,6 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "subtle",
  "testcontainers",
  "testcontainers-modules",
  "thiserror 2.0.20",
@@ -8833,8 +8849,8 @@ version = "0.16.0"
 dependencies = [
  "anyhow",
  "axum",
- "mako-engine",
  "mako-events",
+ "mako-fristen",
  "mako-geli-gas",
  "mako-gpke",
  "mako-markt",

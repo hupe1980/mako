@@ -1514,7 +1514,7 @@ When `[oidc]` is not configured, the service accepts all requests but emits a st
 
 ### Inbound webhook HMAC verification
 
-`POST /webhook` verifies the `X-Mako-Signature: sha256=<hex>` header when `erp_hmac_secret`
+`POST /webhook` verifies the Standard Webhooks (`webhook-signature`) header when `erp_hmac_secret`
 is configured. Requests with a missing or invalid signature are rejected with HTTP 403.
 
 Dev mode (no `erp_hmac_secret`): all webhooks accepted, WARN emitted on each request.

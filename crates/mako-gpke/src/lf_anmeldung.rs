@@ -89,7 +89,12 @@ pub const ANTWORT_PIDS_LF: &[u32] = &[
     55080, // Ablehnung Anmeldung erz. MaLo         (NB → LFN); 55079 unassigned
 ];
 
-/// Deadline label for the NB/LFA response window (24h, GPKE BK6-22-024).
+/// Deadline label for the NB/LFA response window.
+///
+/// Sized by `mako_fristen::antwort` — a clock time on the 1. Werktag
+/// after the ÜT, per PID. Never a flat 24 hours: that approximation expires a
+/// Friday arrival on Saturday and calls a Tuesday-evening one healthy nine
+/// hours after its Frist lapsed.
 ///
 /// After sending the outbound ANFRAGE, the LF registers a deadline with this
 /// label. If no ANTWORT arrives within 24 wall-clock hours, the scheduler
@@ -97,7 +102,8 @@ pub const ANTWORT_PIDS_LF: &[u32] = &[
 /// `Rejected`.
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::add_hours(sent_at, 24);
+/// let due = mako_fristen::antwort::antwort_deadline(pid, sent_at)
+///     .expect("a PID with a published Antwortfrist");
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., NB_RESPONSE_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```

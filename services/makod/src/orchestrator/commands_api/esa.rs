@@ -305,10 +305,10 @@ pub(super) async fn dispatch_esa_werteanfrage(
     );
     let process_id = process.process_id();
 
-    let due_at = mako_engine::fristen::deadline_at_werktage(
+    let due_at = mako_fristen::deadline_at_werktage(
         time::OffsetDateTime::now_utc(),
         mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
-        mako_engine::fristen::HolidayCalendar::BdewMaKo,
+        mako_fristen::HolidayCalendar::BdewMaKo,
     );
     let deadline = Deadline::new(
         process.stream_id().clone(),

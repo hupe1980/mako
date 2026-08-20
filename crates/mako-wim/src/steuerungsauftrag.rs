@@ -62,7 +62,7 @@ pub const WORKFLOW_NAME: &str = "wim-steuerungsauftrag";
 /// or `InitialZustandReceived`:
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     received_at, 5, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., STEUERUNGSAUFTRAG_DEADLINE_LABEL, due);

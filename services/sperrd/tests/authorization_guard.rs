@@ -88,7 +88,7 @@ fn handler_signatures() -> Vec<(String, String)> {
 fn unauthenticated_by_design(handler: &str) -> Option<&'static str> {
     match handler {
         "ingest_webhook" => Some(
-            "the market inbox is authenticated by the inbound X-Mako-Signature HMAC; \
+            "the market inbox is authenticated by the inbound Standard Webhooks signature; \
              makod holds no bearer token for this service",
         ),
         _ => None,

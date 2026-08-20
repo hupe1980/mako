@@ -10,12 +10,12 @@
 
 use mako_engine::event_store::InMemoryEventStore;
 use mako_engine::{
-    fristen::{self, HolidayCalendar},
     ids::{DeadlineId, TenantId},
     process::Process,
     types::{MaLo, MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
+use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_wim_gas::{
     ANMELDUNG_PIDS, ANMELDUNG_RESPONSE_WINDOW_LABEL, WimGasAnmeldungCommand, WimGasAnmeldungState,
     WimGasAnmeldungWorkflow,

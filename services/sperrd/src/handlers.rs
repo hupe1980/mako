@@ -318,7 +318,7 @@ pub async fn get_stats(
 /// dispatch, no execution, and no IFTSTA 21039 — while the LF's own process
 /// waited for one.
 ///
-/// Authenticated by the inbound `X-Mako-Signature` HMAC, not by a bearer token,
+/// Authenticated by the inbound Standard Webhooks signature, not by a bearer token,
 /// which is why it carries no `Claims` extractor (see the guard test).
 pub async fn ingest_webhook(
     Extension(pool): Extension<PgPool>,

@@ -179,7 +179,7 @@ edmd_api_key   = "env:EINSD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd
 auto_settle_catchup_months = 3
 auto_settle_from_day       = 7   # wait for the ÜNB Marktwert window
 
-# Outbound ERP CloudEvents, signed with HMAC-SHA256 (X-Mako-Signature).
+# Outbound ERP CloudEvents, signed with HMAC-SHA256 (webhook-signature).
 # Delivery is durable: each event is written to `event_outbox` in the same
 # transaction as the settlement (persist-before-dispatch) and drained by a
 # background worker with retry + dead-letter — a crash never drops an event.

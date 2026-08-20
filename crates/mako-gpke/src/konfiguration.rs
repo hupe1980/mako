@@ -82,7 +82,7 @@ pub const ORDRSP_PIDS: &[u32] = &[19001, 19002];
 /// Register a `Deadline` with this label immediately after `BeauftragungGesendet`:
 ///
 /// ```rust,ignore
-/// let due = mako_engine::fristen::deadline_at_werktage(
+/// let due = mako_fristen::deadline_at_werktage(
 ///     sent_at, 5, HolidayCalendar::BdewMaKo,
 /// );
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., KONFIGURATION_WINDOW_LABEL, due);

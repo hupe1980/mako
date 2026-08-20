@@ -18,13 +18,17 @@
 //! | `WARNING` | under 2 hours remain |
 //! | `COMPLIANT` | more than 2 hours remain |
 //!
-//! `obsd`'s query returns only rows whose `deadline_at < NOW()`, so in practice
-//! everything it hands back is a `BREACH`. The other bands are not dead code:
-//! the same triage runs against `de.obs.deadline.approaching`, which carries a
-//! *future* deadline in its payload, and against any row a future obsd query
-//! returns before expiry. Classifying a not-yet-overdue row as a breach because
-//! the only observed input was overdue is exactly the bug a threshold in a
-//! prompt would produce.
+//! ## What the skill classifies
+//!
+//! The union of the **triggering event** and `obsd`'s overdue list, deduplicated
+//! by `process_id`; the alert's own row wins, because its `due_at` came from the
+//! event that caused this run.
+//!
+//! Both halves are needed. `list_overdue_processes` returns only rows already
+//! past their Frist, so classifying it alone answers `BREACH` every time and
+//! leaves the other three bands unreachable — while saying nothing about the
+//! process the run was woken for, whose `de.obs.deadline.approaching` carries a
+//! deadline still in the future.
 
 use std::collections::BTreeMap;
 
@@ -76,6 +80,10 @@ pub enum Severity {
 }
 
 impl Severity {
+    /// How many bands there are. Named so the run's own note cannot claim a
+    /// different number from the enum — it said "3" while there were four.
+    pub const COUNT: usize = 4;
+
     /// The wire spelling, as the alert carries it.
     #[must_use]
     pub const fn as_str(self) -> &'static str {
@@ -104,6 +112,24 @@ pub fn classify(remaining_secs: i64) -> Severity {
     } else {
         Severity::Compliant
     }
+}
+
+/// The triggering event as a classifiable row, when it names a deadline.
+///
+/// `de.obs.deadline.approaching` carries `due_at`, not `deadline_at` — the
+/// field this skill classifies on — so the shapes are reconciled here rather
+/// than by hoping two services agree on a key. Anything without a readable
+/// deadline yields `None` and the event is simply reported back as the trigger.
+fn trigger_as_row(payload: &Value) -> Option<Value> {
+    let due_at = payload.get("due_at").and_then(Value::as_str)?;
+    Some(json!({
+        "process_id":      payload.get("process_id"),
+        "pid":             payload.get("pid"),
+        "state":           payload.get("state"),
+        "partner_mp_id":   payload.get("partner_mp_id"),
+        "deadline_at":     due_at,
+        "deadline_source": payload.get("deadline_source"),
+    }))
 }
 
 /// Seconds from `now` until `deadline`, or `None` when the timestamp is
@@ -152,19 +178,40 @@ impl Skill for DeadlineTriage {
             .await
             .map_err(|e| SkillError::Other(format!("clock: {e}")))?;
 
-        let rows = overdue
+        let mut rows = overdue
             .peek()
             .get("overdue")
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
 
+        // The triggering event is a row too. `de.obs.deadline.approaching`
+        // carries the deadline it is warning about, and it is the reason this
+        // run exists — answering only about *other* processes leaves the alert
+        // unanswered.
+        //
+        // It goes first so the dedup below keeps its `due_at`: the event's
+        // instant came from the projection at alert time and the tool's from
+        // whenever it ran.
+        if let Some(trigger_row) = trigger_as_row(input.peek()) {
+            rows.insert(0, trigger_row);
+        }
+
         let mut worst = Severity::Compliant;
         let mut by_partner: BTreeMap<String, usize> = BTreeMap::new();
         let mut classified: Vec<Value> = Vec::with_capacity(rows.len());
+        let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
         let mut unclassifiable = 0usize;
 
         for row in &rows {
+            // One verdict per process. The alert and the overdue list overlap
+            // whenever the warned process has since breached, and counting it
+            // twice would double it in `by_partner_mp_id`.
+            if let Some(id) = row.get("process_id").and_then(Value::as_str)
+                && !seen.insert(id.to_owned())
+            {
+                continue;
+            }
             let deadline_at = row.get("deadline_at").and_then(Value::as_str);
             let Some(secs) = deadline_at.and_then(|d| remaining_secs(now, d)) else {
                 unclassifiable += 1;
@@ -182,27 +229,45 @@ impl Skill for DeadlineTriage {
             *by_partner.entry(partner.to_owned()).or_default() += 1;
 
             classified.push(json!({
-                "process_id":     row.get("process_id"),
-                "pid":            row.get("pid"),
-                "state":          row.get("state"),
-                "partner_mp_id":  partner,
-                "deadline_at":    deadline_at,
-                "remaining_secs": secs,
-                "severity":       severity.as_str(),
+                "process_id":      row.get("process_id"),
+                "pid":             row.get("pid"),
+                "state":           row.get("state"),
+                "partner_mp_id":   partner,
+                "deadline_at":     deadline_at,
+                // The Festlegung the instant came from, where obsd supplied one.
+                // A recommendation that cites the rule beats one that asserts a
+                // number.
+                "deadline_source": row.get("deadline_source"),
+                "remaining_secs":  secs,
+                "severity":        severity.as_str(),
             }));
         }
 
         // Adjacent to the effects it explains, so reasoning-versus-action
         // mismatch stays detectable after the fact.
+        // `obsd` caps its overdue list and says when the cap bit. A run that
+        // reported 500 of ten thousand as though it were the whole picture would
+        // be wrong in the calmest possible way.
+        let saturated = overdue
+            .peek()
+            .get("saturated")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+
         cx.note(format!(
-            "classified {} overdue process(es) against {} band(s); worst = {}{}",
+            "classified {} process(es) against {} severity band(s); worst = {}{}{}",
             classified.len(),
-            3,
+            Severity::COUNT,
             worst.as_str(),
             if unclassifiable > 0 {
                 format!("; {unclassifiable} row(s) had an unreadable deadline_at")
             } else {
                 String::new()
+            },
+            if saturated {
+                "; obsd's overdue list was saturated — at least the cap was waiting"
+            } else {
+                ""
             }
         ))
         .await
@@ -215,12 +280,15 @@ impl Skill for DeadlineTriage {
 
         Ok(Outcome::done(overdue.map(|_| {
             json!({
-                "deadline_status":   worst.as_str(),
-                "overdue_count":     classified.len(),
-                "unclassifiable":    unclassifiable,
-                "by_partner_mp_id":  by_partner,
-                "processes":         classified,
-                "trigger":           trigger,
+                "deadline_status":  worst.as_str(),
+                "at_risk_count":    classified.len(),
+                "unclassifiable":   unclassifiable,
+                // `true` means obsd returned a full batch: at least the cap was
+                // waiting, never that the cap was all there was.
+                "truncated":        saturated,
+                "by_partner_mp_id": by_partner,
+                "processes":        classified,
+                "trigger":          trigger,
             })
         })))
     }
@@ -229,6 +297,7 @@ impl Skill for DeadlineTriage {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     /// The bands, at and around every boundary.
     ///
@@ -272,6 +341,61 @@ mod tests {
         // A `time` component array is not a timestamp either — the guard that
         // keeps one off a wire is `xtask check-wire-timestamps`.
         assert_eq!(remaining_secs(now, "[2027,15,8,0,0,0,0,0,0]"), None);
+    }
+
+    /// The triggering alert is classified, not just echoed back.
+    ///
+    /// `obsd`'s overdue list is past its Frist by construction, so classifying
+    /// it alone answers `BREACH` every time and makes the other three bands
+    /// unreachable — while saying nothing about the process the run was woken
+    /// for.
+    #[test]
+    fn the_triggering_alert_becomes_a_classifiable_row() {
+        let row = trigger_as_row(&json!({
+            "process_id":      "6f1c2a3e-0000-4000-8000-000000000001",
+            "pid":             55001,
+            "partner_mp_id":   "9900357000004",
+            "due_at":          "2027-01-15T08:00:00Z",
+            "deadline_source": "BK6-24-174 GPKE Teil 2, SD Lieferbeginn",
+        }))
+        .expect("an alert carrying due_at is a row");
+
+        assert_eq!(
+            row.get("deadline_at").and_then(Value::as_str),
+            Some("2027-01-15T08:00:00Z"),
+            "`due_at` on the event is `deadline_at` to the classifier"
+        );
+        assert_eq!(
+            row.get("deadline_source").and_then(Value::as_str),
+            Some("BK6-24-174 GPKE Teil 2, SD Lieferbeginn"),
+            "the Festlegung travels into the recommendation"
+        );
+    }
+
+    /// An event that names no deadline is not invented into one.
+    #[test]
+    fn an_event_without_a_deadline_is_not_a_row() {
+        assert!(trigger_as_row(&json!({ "process_id": "x" })).is_none());
+        assert!(trigger_as_row(&json!("a string")).is_none());
+        assert!(trigger_as_row(&json!({ "due_at": 1_700_000_000 })).is_none());
+    }
+
+    /// The band count in the run's note is the enum's, not a literal.
+    ///
+    /// It said "3" while there were four, which is the smallest possible version
+    /// of the failure this whole module exists to prevent: a threshold stated in
+    /// prose disagreeing with the code that applies it.
+    #[test]
+    fn the_band_count_matches_the_enum() {
+        let bands = [
+            Severity::Compliant,
+            Severity::Warning,
+            Severity::Critical,
+            Severity::Breach,
+        ];
+        assert_eq!(Severity::COUNT, bands.len());
+        let spellings: std::collections::BTreeSet<_> = bands.iter().map(|b| b.as_str()).collect();
+        assert_eq!(spellings.len(), Severity::COUNT, "each band is distinct");
     }
 
     /// The arithmetic, in both directions.

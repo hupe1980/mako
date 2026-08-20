@@ -1,0 +1,15 @@
+[package]
+name         = "mako-fristen"
+version.workspace      = true
+description  = "Every Frist in German market communication: BDEW Werktage, the MaKo holiday calendar, and the per-Prüfidentifikator Antwortfrist tables"
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+keywords     = ["mako", "bdew", "bnetza", "frist", "werktage"]
+categories   = ["date-and-time"]
+
+[dependencies]
+time    = { workspace = true }
+time-tz = { workspace = true }

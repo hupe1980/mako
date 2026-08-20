@@ -399,7 +399,7 @@ pub(super) async fn dispatch_lf_anmeldung(
     // write completes.  It is passed to `execute_and_enqueue_with_deadlines`
     // so that events, outbox entries, and the deadline land in a single SSI
     // transaction (F-009).
-    let due_at = mako_engine::fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
+    let due_at = mako_fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
     let deadline = Deadline::new(
         process.stream_id().clone(),
         process_id,
@@ -828,7 +828,7 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
     let process_id = process.process_id();
 
     // 24 wall-clock hours for the NB's ORDRSP (BK6-22-024) — not Werktage.
-    let due_at = mako_engine::fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
+    let due_at = mako_fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
     let deadline = Deadline::new(
         process.stream_id().clone(),
         process_id,

@@ -395,7 +395,7 @@ async fn projection_tracks_disputed_process() {
 /// (would be 2 Werktage).
 #[test]
 fn pruefmitteilung_deadline_1_werktag_after_heilige_drei_koenige() {
-    use mako_engine::fristen::{self, HolidayCalendar};
+    use mako_fristen::{self as fristen, HolidayCalendar};
     use time::{Date, Month};
 
     // Received on Mon 2025-01-06 — Heilige Drei Könige (public holiday).

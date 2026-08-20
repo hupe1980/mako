@@ -226,7 +226,7 @@ pub struct KafkaIngestConfig {
     /// Optional per-message HMAC-SHA256 authentication.
     ///
     /// When set (supports `"env:VAR"`), every record must carry an
-    /// `x-mako-signature` header (`sha256=<hex>` over the record value,
+    /// Standard Webhooks record headers (`v1,<base64>` over `{id}.{ts}.{value}`,
     /// same scheme as the platform's webhook signing); records with a
     /// missing or wrong signature are skipped and counted. When unset, the
     /// topic itself is the trust boundary — restrict topic ACLs to the
@@ -309,7 +309,7 @@ pub struct WebhookConfig {
     /// `de.messwert.reading.quality.warning`). Omit to disable outbound notifications.
     pub erp_webhook_url: Option<String>,
     /// Shared secret for signing **outbound** CloudEvents with an
-    /// `x-mako-signature: sha256=<hex>` HMAC over the body, so the ERP receiver
+    /// Standard Webhooks headers over the body, so the ERP receiver
     /// can authenticate every edmd-originated event (the counterpart to
     /// `inbound_secret`). Omit to send unsigned, trusting the transport.
     pub erp_webhook_secret: Option<String>,

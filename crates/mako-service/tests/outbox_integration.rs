@@ -58,7 +58,7 @@ struct Received {
     calls: AtomicUsize,
     statuses: Mutex<Vec<u16>>,
     last_body: Mutex<Vec<u8>>,
-    last_sig: Mutex<Option<String>>,
+    last_headers: Mutex<axum::http::HeaderMap>,
 }
 
 async fn receiver(
@@ -68,10 +68,7 @@ async fn receiver(
 ) -> axum::http::StatusCode {
     let n = rx.calls.fetch_add(1, Ordering::SeqCst);
     *rx.last_body.lock().unwrap() = body.to_vec();
-    *rx.last_sig.lock().unwrap() = headers
-        .get("x-mako-signature")
-        .and_then(|v| v.to_str().ok())
-        .map(String::from);
+    *rx.last_headers.lock().unwrap() = headers;
     let statuses = rx.statuses.lock().unwrap();
     let code = *statuses.get(n).unwrap_or_else(|| statuses.last().unwrap());
     axum::http::StatusCode::from_u16(code).unwrap()
@@ -164,9 +161,17 @@ async fn committed_event_is_delivered_and_signed() {
         expected_body,
         "exact CE bytes delivered"
     );
+    // Asserted through the shared **verifier** a real receiver would use — and
+    // it checks the timestamp too, so this also pins that the outbox stamps a
+    // fresh one rather than replaying an old row's.
     assert_eq!(
-        *rx.last_sig.lock().unwrap(),
-        Some(mako_service::webhook::sign(b"s3cr3t", &expected_body))
+        mako_service::webhook::verify_request(
+            Some(b"s3cr3t"),
+            &rx.last_headers.lock().unwrap(),
+            &expected_body
+        ),
+        Ok(Some(mako_service::webhook::WebhookId(ce.id.clone()))),
+        "the delivered request verifies, and its webhook-id is the CloudEvent id"
     );
     assert_eq!(
         pending_count(&pool).await,

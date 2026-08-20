@@ -95,12 +95,37 @@ pub struct AppState {
     pub seen_events: SeenEvents,
 }
 
-/// Bounded, TTL-windowed CloudEvent-id dedup set.
+/// Bounded, TTL-windowed CloudEvent-id dedup set — **per process**.
 ///
-/// Inbound webhooks are at-least-once: the emitter retries until it sees a
-/// 2xx, so the same `ce_id` can arrive more than once. One fan-out per event id
+/// Inbound webhooks are at-least-once: the emitter retries until it sees a 2xx,
+/// so the same `ce_id` can arrive more than once. One fan-out per event id
 /// within the window; entries expire after `ttl` and the set is capped so a
 /// flood of unique ids cannot grow memory unboundedly.
+///
+/// ## What it does not cover, stated rather than assumed
+///
+/// This set lives in memory, so it does **not** deduplicate across instances or
+/// across a restart. With the Postgres journal — the multi-instance topology —
+/// a redelivery that lands on a different pod starts a second fan-out.
+/// [`crate::config::JournalConfig::Postgres`] therefore warns at startup.
+///
+/// The consequence is bounded and worth naming, because "at-least-once
+/// delivery, at-most-once execution" is a claim this plane must not make
+/// loosely:
+///
+/// * **No effect is duplicated inside a run.** Each fan-out is its own run on
+///   its own journal, and the effect protocol is what makes a single run's tool
+///   calls at-most-once. Two runs are two records, not one record executed
+///   twice.
+/// * **No market message is dispatched twice.** The only grant that can
+///   dispatch requires a human decision, and the deterministic engine — not the
+///   agent — puts the message on the wire.
+/// * **What is duplicated is cost and worklist noise**: a second set of model
+///   calls, and a second approval task on the same case.
+///
+/// Closing it properly means a dedup key in the shared store rather than in this
+/// map; it is on the roadmap because the primitive belongs in agentplane, beside
+/// the journal that already arbitrates fencing.
 #[derive(Clone)]
 pub struct SeenEvents {
     inner: Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
@@ -164,18 +189,22 @@ pub async fn webhook(
     headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
-    // ── Inbound HMAC verification ────────────────────────────────────────
-    if let Some(ref secret) = state.secrets.inbound_hmac_secret {
-        let provided = headers
-            .get("x-mako-signature")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("");
-        if !mako_service::webhook::verify_hmac(secret.expose_secret().as_bytes(), &body, provided) {
-            tracing::warn!("agentd: inbound webhook HMAC mismatch — rejected");
-            return StatusCode::UNAUTHORIZED.into_response();
-        }
-    } else {
+    // ── Inbound Standard Webhooks verification ───────────────────────────
+    //
+    // The shared verifier, not a hand-rolled header read: it also refuses a
+    // stale `webhook-timestamp`, which is the half of the check a local copy
+    // omits.
+    let secret = state
+        .secrets
+        .inbound_hmac_secret
+        .as_ref()
+        .map(|s| s.expose_secret().as_bytes().to_vec());
+    if secret.is_none() {
         tracing::warn!("agentd: inbound_hmac_secret not set — accepting all webhooks (dev mode)");
+    }
+    if let Err(err) = mako_service::webhook::verify_request(secret.as_deref(), &headers, &body) {
+        tracing::warn!(%err, "agentd: inbound webhook refused");
+        return StatusCode::from(err).into_response();
     }
 
     // ── Parse CloudEvent ─────────────────────────────────────────────────
@@ -207,13 +236,11 @@ pub async fn webhook(
         return StatusCode::ACCEPTED.into_response();
     }
 
-    if !state
-        .cfg
-        .trigger_event_types
-        .iter()
-        .any(|t| mako_events::matches(t, &event_type))
-    {
-        tracing::debug!(event_type, "agentd: ignoring non-trigger event");
+    // The routing table is the admission filter, and the only one. A second
+    // event-type list in config that nothing reconciles with the manifests mutes
+    // a specialist behind a 204 that reads exactly like "nobody subscribes".
+    if !state.plane.router().accepts(&event_type) {
+        tracing::debug!(event_type, "agentd: no specialist subscribes to this event");
         return StatusCode::NO_CONTENT.into_response();
     }
 
@@ -329,7 +356,19 @@ fn record_decision(state: &AppState, decision: &AgentDecision) {
 /// A convenience view over what just happened. The record is the journal:
 /// `GET /api/v1/oversight/runs/{run_id}` answers *why* a run ended that way,
 /// and `GET /api/v1/oversight/tasks` answers what is waiting for a human.
-pub async fn get_decisions(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+///
+/// **Authenticated**, and it was not. A decision's `summary` is the specialist's
+/// answer about a real Marktlokation — MaLo-IDs, counterparty MP-IDs, the
+/// reasoning behind a Sperrung recommendation — and this route served the last
+/// hundred of them to anyone who could reach the port. Every other route that
+/// returns business data on this plane takes a `Claims`; a handler that does not
+/// is not a laxer policy, it is no policy, and nothing in the type system says
+/// so. (This is `marktd`'s pinned failure class: *a handler without `Claims` is
+/// unauthenticated.*)
+pub async fn get_decisions(
+    _claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
     Json(state.decisions.list()).into_response()
 }
 
@@ -339,7 +378,13 @@ pub async fn get_decisions(State(state): State<Arc<AppState>>) -> impl IntoRespo
 ///
 /// What is *running here*, as opposed to `/api/v1/agents/catalog`, which lists
 /// everything compiled in whether activated or not.
-pub async fn list_agents(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+///
+/// Authenticated: in a combined-role deployment the activated set names which
+/// arm's specialists this process runs, which is § 9 EnWG-relevant deployment
+/// detail rather than public capability advertising. The Agent Cards under
+/// `/.well-known/agents/{name}` stay open — a card is what an agent *is*, and
+/// carries no endpoint credential.
+pub async fn list_agents(_claims: Claims, State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let routes = state.plane.router().routes();
     Json(serde_json::json!({
         "total": routes.len(),
@@ -415,7 +460,10 @@ pub async fn agent_card(
 /// Lists what is *available*, whether or not it is activated, so an operator can
 /// see what `[bundled_agents] enable` accepts. The declared ceilings come from
 /// each specialist's manifest, which is the authority on them.
-pub async fn agents_catalog() -> impl IntoResponse {
+///
+/// Authenticated for the same reason as `/api/v1/agents`: the catalogue is the
+/// compiled set, which in a role-scoped build is the deployment's Marktrolle.
+pub async fn agents_catalog(_claims: Claims) -> impl IntoResponse {
     let catalog: Vec<serde_json::Value> = crate::builtin::all()
         .map(|def| {
             let manifest = crate::plane::find_manifest(def.name);

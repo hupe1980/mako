@@ -82,18 +82,22 @@ spec:
   #
   # Formation reads the agent's own answer, which is model output and therefore
   # untrusted, so it runs on the **quarantined** model.
-  memory_formation:
-    subject: "$correlation/malo"
-    purpose: >-
-      the data-quality history for this Marktlokation, so a meter that gaps every month is recognised as chronic rather than reported as new
-    instruction: >-
-      Record at most three durable facts about THIS Marktlokation's meter-data quality: the gap hours seen, the quality grade, and the substitution method applied. Record nothing about any other party.
-    max_items: 3
-    # Two years: long enough for a year-on-year pattern, short enough that a
-    # fact nobody has revisited expires instead of hardening into a standing
-    # instruction about a customer.
-    retention_seconds: 63113904
-    max_sensitivity: internal
+  # 0.19 moved formation under `memory`, beside a `recall` channel this
+  # plane does not use: recall order is a ranking signal any writer can
+  # influence, and adopting it is a decision somebody makes deliberately.
+  memory:
+    formation:
+      subject: "$correlation/malo"
+      purpose: >-
+        the data-quality history for this Marktlokation, so a meter that gaps every month is recognised as chronic rather than reported as new
+      instruction: >-
+        Record at most three durable facts about THIS Marktlokation's meter-data quality: the gap hours seen, the quality grade, and the substitution method applied. Record nothing about any other party.
+      max_items: 3
+      # Two years: long enough for a year-on-year pattern, short enough that a
+      # fact nobody has revisited expires instead of hardening into a standing
+      # instruction about a customer.
+      retention_seconds: 63113904
+      max_sensitivity: internal
 
   security:
     max_sensitivity_egress: internal
