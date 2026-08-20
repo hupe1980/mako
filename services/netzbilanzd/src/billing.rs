@@ -248,6 +248,10 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
                 mehr_preis_ct_per_kwh: mehr,
                 minder_preis_ct_per_kwh: minder,
                 wiederverkaeufer: mmm.wiederverkaeufer,
+                // netzbilanzd bills as the Netzbetreiber, so the invoice is a
+                // Handelsrechnung. The self-issued Mehrmenge leg (PID 31006) is
+                // written by the receiving party — `invoicd`, in the LF role.
+                selbstausgestellt: false,
             })
         }
         SettlementRequest::Msb(msb) => settle_msb(&MsbInput {

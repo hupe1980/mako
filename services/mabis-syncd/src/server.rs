@@ -2,15 +2,17 @@
 //!
 //! ## Routes
 //!
-//! | Method | Path | Description |
-//! |--------|------|-------------|
-//! | POST | `/api/v1/sync` | Trigger aggregation run manually |
-//! | GET  | `/api/v1/runs` | List recent submission runs |
-//! | GET  | `/api/v1/runs/{id}` | Get single run details |
-//! | PUT  | `/api/v1/runs/{id}/retry` | Retry a failed run |
-//! | GET  | `/health/live` | Liveness probe |
-//! | GET  | `/health/ready` | Readiness probe |
-//! | GET  | `/metrics` | Prometheus metrics |
+//! | Method | Path | Cedar action |
+//! |--------|------|--------------|
+//! | POST | `/api/v1/sync` | `trigger-mabis-run` |
+//! | GET  | `/api/v1/runs` | `read-mabis-run` |
+//! | GET  | `/api/v1/runs/{id}` | `read-mabis-run` |
+//! | PUT  | `/api/v1/runs/{id}/retry` | `trigger-mabis-run` |
+//! | POST | `/api/v1/datenstatus` | `record-biko-response` |
+//! | POST | `/api/v1/pruefmitteilung` | `record-biko-response` |
+//! | GET  | `/api/v1/korrekturbedarf` | `read-mabis-run` |
+//!
+//! `/health/*` and `/metrics` are the runner's and are not mounted here.
 
 use axum::{
     Extension, Json, Router,
@@ -174,6 +176,54 @@ async fn trigger_sync(
         return bad_request("period_to precedes period_from");
     }
 
+    // A Summenzeitreihe the BIKO has acked cannot be withdrawn, and a second
+    // one for the same month is a *correction* under a higher version, not a
+    // repeat — so two clicks, or a client retrying a request whose response was
+    // lost, must not file the month twice. A correction is the one case meant
+    // to file the period again, so `corrects_run_id` passes through.
+    if corrects_run_id.is_none() {
+        match pg::has_live_run_for_period(
+            &state.pool,
+            &state.cfg.identity.tenant,
+            &state.cfg.identity.bilanzierungsgebiet_id,
+            period_from,
+            period_to,
+        )
+        .await
+        {
+            Ok(true) => {
+                return (
+                    StatusCode::CONFLICT,
+                    Json(serde_json::json!({
+                        "error": format!(
+                            "a run for {period_from}-{period_to} already exists and has not \
+                             failed. Filing the period again is a correction, not a retry: send \
+                             `corrects_run_id` to answer a negative Pruefmitteilung under a \
+                             higher version (BK6-24-174 Anlage 3 3.8.2, 9.8.1), or retry a \
+                             failed run via PUT /api/v1/runs/{{id}}/retry."
+                        ),
+                        "period_from": period_from.to_string(),
+                        "period_to": period_to.to_string(),
+                    })),
+                )
+                    .into_response();
+            }
+            Ok(false) => {}
+            Err(e) => {
+                // Refuse rather than risk a duplicate binding filing.
+                warn!(error = %e, "mabis-syncd: cannot check for an existing run");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": "cannot check whether this period has already been filed - \
+                                  refusing rather than risking a duplicate submission",
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    }
+
     let engine = state.engine.clone();
 
     tokio::spawn(async move {
@@ -260,26 +310,51 @@ async fn get_run(
         return resp;
     }
     match pg::get_run(&state.pool, id, &state.cfg.identity.tenant).await {
-        Ok(Some(r)) => Json(serde_json::json!({
-            "id": r.id,
-            "bilanzierungsgebiet_id": r.bilanzierungsgebiet_id,
-            "period_from": r.period_from.to_string(),
-            "period_to": r.period_to.to_string(),
-            "version": rfc3339(r.version),
-            "status": r.status,
-            "malo_count": r.malo_count,
-            "interval_count": r.interval_count,
-            "total_kwh": r.total_kwh,
-            "has_substituted": r.has_substituted,
-            "triggered_at": rfc3339(r.triggered_at),
-            "submitted_at": rfc3339_opt(r.submitted_at),
-            "acked_at": rfc3339_opt(r.acked_at),
-            "message_ref": r.message_ref,
-            "process_id": r.process_id,
-            "error_msg": r.error_msg,
-            "attempt_count": r.attempt_count,
-        }))
-        .into_response(),
+        Ok(Some(r)) => {
+            // What actually went out, per Bilanzierungsgebiet. The run row's
+            // single `message_ref` is the first territory's; a run spanning
+            // several is only legible here.
+            let series: Vec<serde_json::Value> = pg::list_series(&state.pool, r.id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|s| {
+                    serde_json::json!({
+                        "bilanzierungsgebiet_id": s.bilanzierungsgebiet_id,
+                        "mabis_zp_id":            s.mabis_zp_id,
+                        "malo_count":             s.malo_count,
+                        "interval_count":         s.interval_count,
+                        "total_kwh":              s.total_kwh,
+                        "status":                 s.status,
+                        "message_ref":            s.message_ref,
+                        "process_id":             s.process_id,
+                        "error_msg":              s.error_msg,
+                        "submitted_at":           rfc3339_opt(s.submitted_at),
+                    })
+                })
+                .collect();
+            Json(serde_json::json!({
+                "id": r.id,
+                "bilanzierungsgebiet_id": r.bilanzierungsgebiet_id,
+                "period_from": r.period_from.to_string(),
+                "period_to": r.period_to.to_string(),
+                "version": rfc3339(r.version),
+                "status": r.status,
+                "malo_count": r.malo_count,
+                "interval_count": r.interval_count,
+                "total_kwh": r.total_kwh,
+                "has_substituted": r.has_substituted,
+                "triggered_at": rfc3339(r.triggered_at),
+                "submitted_at": rfc3339_opt(r.submitted_at),
+                "acked_at": rfc3339_opt(r.acked_at),
+                "message_ref": r.message_ref,
+                "process_id": r.process_id,
+                "error_msg": r.error_msg,
+                "attempt_count": r.attempt_count,
+                "series": series,
+            }))
+            .into_response()
+        }
         Ok(None) => (
             StatusCode::NOT_FOUND,
             Json(serde_json::json!({ "error": "not found" })),
@@ -340,13 +415,19 @@ async fn retry_run(
 
     let period_from = run.period_from;
     let period_to = run.period_to;
+    // A retry of a correction is still a correction (§9.8.1): dropping
+    // `corrects_run_id` leaves the negative Prüfmitteilung open on
+    // /korrekturbedarf after the corrected BG-SZR has gone out.
+    let corrects_run_id = run.corrects_run_id;
     let engine = state.engine.clone();
 
     tokio::spawn(async move {
         // A retry of a failed run is a fresh submission attempt, so it takes a
-        // new version rather than reusing the one that failed.
+        // new version rather than reusing the one that failed. Territories the
+        // BIKO already acked are not re-filed - `submit_all_to_makod` reads
+        // them from `submission_series`.
         match engine
-            .run_aggregation(period_from, period_to, None, None)
+            .run_aggregation(period_from, period_to, corrects_run_id, None)
             .await
         {
             Ok(new_id) => {
@@ -394,7 +475,7 @@ async fn post_datenstatus(
     if let Some(resp) = deny(
         &enforcer,
         &claims,
-        "trigger-mabis-run",
+        "record-biko-response",
         &state.cfg.identity.tenant,
     ) {
         return resp;
@@ -480,7 +561,7 @@ async fn post_pruefmitteilung(
     if let Some(resp) = deny(
         &enforcer,
         &claims,
-        "trigger-mabis-run",
+        "record-biko-response",
         &state.cfg.identity.tenant,
     ) {
         return resp;

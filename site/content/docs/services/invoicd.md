@@ -1,6 +1,6 @@
 +++
 title = "invoicd Operator Guide"
-description = "invoicd operator guide: INVOIC plausibility-check daemon (LF role). Handles all inbound billing PIDs (31001/31002/31005/31006/31009), runs invoic-checker, dispatches REMADV, persists receipts for § 147 AO / GoBD, emits payment CloudEvents to ERP."
+description = "invoicd operator guide: INVOIC plausibility-check daemon (LF role). Checks the ten inbound billing PIDs against marktd price sheets, persists every receipt for § 147 AO / GoBD, answers the counterparty through makod, and notifies the ERP."
 weight = 24
 [extra]
 mermaid = true
@@ -10,23 +10,32 @@ mermaid = true
 `invoicd` is the **INVOIC plausibility-check daemon** for the LF (Lieferant) role.
 It subscribes to `marktd`'s fan-out, receives inbound INVOIC events, and:
 
-1. Fetches the `PreisblattNetznutzung` and `NbContractRecord` from `marktd`.
-2. Runs **5+1 deterministic checks** via `invoic-checker` (check 6 applies to MMM PIDs only).
-3. Auto-settles (REMADV 33001) or disputes (REMADV 33002).
-4. Persists every receipt to PostgreSQL for the **§ 147 AO / § 14b UStG** audit trail (a received INVOIC is a Buchungsbeleg: 8-year retention).
-5. Emits `de.invoic.receipt.*` CloudEvents to your ERP — **durable at-least-once delivery** with exponential-backoff retry.
+1. Routes the PID through `src/routing.rs`, which decides the check, the price
+   sheet and the answer commands.
+2. Fetches the reference data that PID calls for from `marktd`, and runs the
+   deterministic `invoic-checker` pipeline.
+3. **Persists the receipt** for the § 147 AO / § 14b UStG audit trail (a
+   received INVOIC is a Buchungsbeleg: 8-year retention). A failed write aborts
+   the dispatch.
+4. Answers the counterparty through `makod` — accept or dispute.
+5. Notifies the ERP with `de.invoic.receipt.*`, durable at-least-once.
+
+Every PID takes this path; what varies is data in the routing table, not a copy
+of the pipeline. A PID with no route is ignored rather than answered with a
+default command, and an event that cannot become a receipt goes to `invoic_dlq`
+with the reason instead of vanishing.
 
 ```mermaid
 graph TB
     marktd["marktd :8180<br/>fan-out"]
     invoicd["invoicd :8280<br/>(this service)"]
     makod["makod :8080"]
-    pg["PostgreSQL<br/>invoic_receipts<br/>(§ 147 AO / GoBD, 3y)"]
+    pg["PostgreSQL<br/>invoic_receipts<br/>(§ 147 AO / GoBD, 8y)"]
 
-    marktd -->|"de.mako.process.initiated<br/>(PID 31001/02/05/06/09)<br/>HMAC POST /webhook"| invoicd
-    invoicd -->|"GET /api/v1/preisblaetter/{nb_mp_id}"| marktd
-    invoicd -->|"Persist receipt BEFORE dispatch<br/>(§ 147 AO / GoBD atomic)"| pg
-    invoicd -->|"REMADV 33001/33002<br/>wim.rechnung.annehmen/.ablehnen"| makod
+    marktd -->|"de.mako.process.initiated<br/>(10 INVOIC PIDs)<br/>HMAC POST /webhook"| invoicd
+    invoicd -->|"price sheets + MMM reference prices"| marktd
+    invoicd -->|"persist receipt BEFORE dispatch<br/>(§ 147 AO / GoBD)"| pg
+    invoicd -->|"accept / reject, per the answering PID"| makod
     invoicd -->|"de.invoic.receipt.settled/disputed<br/>durable at-least-once<br/>(inline + outbox worker retry)"| erp["ERP webhook"]
 ```
 
@@ -43,17 +52,44 @@ graph TB
 │  GET  /api/v1/receipts/{id}         ← single receipt by UUID    │
 │  GET  /api/v1/receipts/{id}/rechnung← full BO4E Rechnung JSON   │
 │  POST /api/v1/receipts/{id}/confirm-payment  ← ERP payment ack  │
-│  POST /api/v1/receipts/{id}/dispatch-remadv  ← manual REMADV    │
+│  POST /api/v1/receipts/{id}/dispatch-answer  ← re-send answer   │
 │  POST /api/v1/receipts/{id}/resolve-dispute  ← close dispute    │
 │  GET  /api/v1/disputes              ← open disputes             │
 │  GET  /api/v1/overdue-remadv        ← receipts near pay_by      │
 │  GET  /api/v1/zahlungsstatus/{malo_id}  ← payment status per MaLo│
-│  POST /api/v1/selbstausstellen/{malo_id} ← LF selbstausgestellt │
+│  POST /api/v1/selbstausstellen      ← self-issued MMM (31006)   │
 │  GET  /invoicd/metrics              ← invoicd Prometheus gauges │
 │  GET  /metrics  /health/live  /health/ready  ← runner infra     │
 │  POST|GET /mcp      ← MCP Streamable HTTP (LLM tooling)         │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+---
+
+## Authorization
+
+`/webhook` is HMAC-authenticated (`marktd` is the caller, with replay protection
+on the timestamp). Every `/api/v1/*` route requires a JWT and a Cedar action:
+
+| Routes | Action | Granted to |
+|---|---|---|
+| `/receipts`, `/receipts/{id}`, `/receipts/{id}/rechnung`, `/zahlungsstatus/{malo_id}` | `read-receipt` | any caller in the tenant |
+| `/disputes` | `read-disputes` | any caller in the tenant |
+| `/overdue-remadv` | `read-overdue-remadv` | any caller in the tenant |
+| `/receipts/{id}/confirm-payment`, `/dispatch-answer`, `/resolve-dispute` | `write-receipt` | **LF role** |
+| `/selbstausstellen` | `dispatch-selbstausstellen` | **LF role** |
+
+Cedar is deny-by-default, so an action the code checks and the policy does not
+permit is a permanent 403 no configuration can lift. `tests/cedar_actions.rs`
+pins the two lists together in both directions.
+
+### `POST /api/v1/receipts/{id}/dispatch-answer`
+
+Re-sends the market answer for a receipt whose automatic dispatch failed
+(`dispatched_at IS NULL`). Both the routing key and the command come from the
+receipt: the stored INVOIC message reference, and the answering PID's own
+command from the routing table. Answers `409` when the receipt was already
+dispatched and `422` when it carries no message reference.
 
 ---
 
@@ -66,19 +102,31 @@ graph TB
 | 31003 | WiM Gas Rechnung (NB → LF) | Inbound | Gas | ✅ |
 | 31004 | Stornorechnung — universal Storno (GPKE/MMM/WiM/Kapazität/AWH/GeLi) | Inbound | **Strom + Gas** | ✅ arithmetic-only (`check_storno`) |
 | 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | Strom | ✅ |
-| 31006 | MMM-Rechnung selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
+| 31006 | MMM Mehrmenge, selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |
 | 31007 | GaBi Gas Aggreg. MMM-Rechnung (NB → MGV) | Inbound | Gas | ✅ + MMM check 6 |
 | 31008 | GaBi Gas selbst ausgest. Aggreg. MMM-Rechnung | Inbound | Gas | ✅ + MMM check 6 |
 | 31009 | MSB-Rechnung (MSB → LF, WiM) | Inbound | Strom | ✅ PreisblattMessung |
 | 31011 | GeLi Gas Rechnung sonstige Leistung (AWH) | Inbound | Gas | ✅ |
 
-**PID 31009 (WiM MSB-Rechnung):** Handled by `Wim31009Ingestor`. Uses `PreisblattMessung` (MSB metering service tariff) for checks 4/5. Fallback to `GET /api/v1/invoic/{process_id}/rechnung` on `makod` when Rechnung is not embedded in `ProcessInitiated`.
+**PID 31009 (WiM MSB-Rechnung)** prices metering service, so it is checked
+against `PreisblattMessung`, not the NNE tariff. When the Rechnung is not
+embedded in the process payload, `invoicd` asks `makod` for it.
 
-**Gas PIDs 31003/31011:** Use the standard 5-check pipeline with `PreisblattNetznutzung` Gas tariff.
+**PID 31004 (Stornorechnung)** is a single universal, **Sparte-neutral** Storno
+(INVOIC AHB §3.1.2) cancelling an original invoice from any process — GPKE, MMM
+Strom+Gas, WiM Strom+Gas, Kapazitätsabrechnung, AWH, GeLi Gas. The Sparte is
+read from `Rechnung.sparte`, never assumed. It runs the arithmetic-only check
+and answers with the Sparte-neutral `invoic.stornorechnung.{annehmen,ablehnen}`.
 
-**PID 31004 (Stornorechnung), any Sparte:** A single universal, **Sparte-neutral** Storno (INVOIC AHB §3.1.2) that cancels an original invoice from any process — GPKE, MMM Strom+Gas, WiM Strom+Gas, Kapazitätsabrechnung, AWH, GeLi Gas. The Sparte is read from `Rechnung.sparte` (resolved from the market-partner IDs), not assumed. `handle_stornorechnung` runs the arithmetic-only `InvoicCheckEngine::check_storno` (Storno reference + period + totals; tariff checks skipped), resolves `AcceptedPartial` unless a check fails, and dispatches the Sparte-neutral `invoic.stornorechnung.{annehmen,ablehnen}` command.
+A Rechnung flagged `ist_storno` takes that same arithmetic-only check whatever
+its PID: it carries the original's amounts negated, so a tariff comparison would
+dispute every line.
 
-**GaBi Gas PIDs 31007/31008:** Standard 5 checks + MMM Gas check 6 against Trading Hub Europe (THE) MMMA prices from `marktd`. These are Gas MGV billing PIDs (`mako-gabi-gas`).
+**MMM reference prices.** The Strom Mehr-/Mindermengenpreise are one nationwide
+monthly BDEW series (§ 13 Abs. 3 StromNZV; GPKE Teil 1 Kap. 8.4 from
+01.01.2026), so the application month is the whole key — the sending NB is not
+part of it. Gas prices are per Marktgebiet, and Trading Hub Europe is the single
+German MGV.
 
 ---
 
@@ -114,8 +162,12 @@ INVOIC when `[erp] webhook_url` is configured.
 |---|---|
 | `de.invoic.receipt.settled` | Outcome `Ok`, `AcceptedPartial`, or `Warn` |
 | `de.invoic.receipt.disputed` | Outcome `Dispute` |
-| `de.invoic.receipt.dispatched` | Outbound 31006 selbstausgestellt sent |
-| `de.invoic.payment.overdue` | Background worker (every 6 h) — receipt with `pay_by < now()` and `payment_confirmed_at IS NULL` |
+| `de.invoic.receipt.dispatched` | Self-issued 31006 sent |
+| `de.invoic.payment.overdue` | Zahlungsziel passed without `confirm-payment` |
+
+Accepted or disputed, the ERP hears about every checked invoice. `dispatched` in
+the payload says whether the market answer actually went out — a settled invoice
+whose REMADV never left is not one the ERP may pay against.
 
 ```json
 {
@@ -126,16 +178,21 @@ INVOIC when `[erp] webhook_url` is configured.
   "data": {
     "process_id": "...",
     "pid": 31001,
-    "direction": "Inbound",
+    "direction": "inbound",
     "sender_mp_id": "9904234560001",
     "outcome": "Ok",
     "pay_by": "2026-10-15",
-    "findings_count": 0
+    "findings_count": 0,
+    "dispatched": true
   }
 }
 ```
 
-`de.invoic.payment.overdue` — emitted by the `payment_overdue` background worker (every 6 h) for each receipt where `pay_by < now()` and `payment_confirmed_at IS NULL`:
+`de.invoic.payment.overdue` — emitted by the `payment_overdue` worker (every
+6 h) for each accepted, dispatched receipt whose `pay_by` has passed without
+`payment_confirmed_at`. A disputed invoice is not overdue. Each receipt is
+announced **once**: `overdue_notified_at` is stamped after delivery, so the
+notice does not repeat every six hours until someone acts on it.
 
 ```json
 {
@@ -145,20 +202,22 @@ INVOIC when `[erp] webhook_url` is configured.
   "subject": "<receipt_id>",
   "data": {
     "receipt_id": "550e8400-...",
-    "malo_id": "10001234558",
+    "process_id": "...",
     "pid": 31001,
     "sender_mp_id": "9904234560001",
-    "pay_by": "2026-10-15",
-    "dispatched_at": "2026-10-01T09:12:00Z"
+    "pay_by": "2026-10-15T00:00:00Z",
+    "tenant": "9900357000004"
   }
 }
 ```
 
 ### Delivery guarantee — durable at-least-once
 
-The initial delivery attempt runs inline in the handler task immediately after
-the REMADV is dispatched.  On any failure the `erp_outbox` background worker
-retries with exponential backoff:
+The first attempt runs inline, immediately after the market answer is
+dispatched. On any failure the `erp_outbox` worker retries with backoff. It
+claims each batch with a lease (`UPDATE … RETURNING`, not a pooled
+`SELECT … FOR UPDATE`, whose locks do not survive the pooled statement), so
+replicas do not double-deliver:
 
 | Attempt | Delay before retry |
 |---------|--------------------|
@@ -176,9 +235,12 @@ retries with exponential backoff:
 **Request signing** (`[erp] hmac_secret`): when configured, every POST includes
 Standard Webhooks (`webhook-signature`) so the ERP can verify authenticity.
 
-**REMADV is dispatched before ERP notification** — a failed ERP webhook never
-blocks the regulatory obligation.  Reconcile dead-lettered events by querying
-`invoic_receipts WHERE erp_notified_at IS NULL AND erp_attempts >= 5`.
+**The market answer is dispatched before ERP notification** — a failed ERP
+webhook never blocks the regulatory obligation. Dead-lettered events are counted
+by `invoicd_erp_dead_lettered_total`.
+
+Without `[erp] webhook_url` the events are recorded and nothing delivers them;
+the service warns at startup.
 
 ---
 
@@ -192,9 +254,9 @@ Receipts must be retained for **8 years** — a received INVOIC is a Buchungsbel
 The `received_at` column drives the retention query:
 
 ```sql
--- Receipts eligible for deletion (> 3 years old):
+-- Receipts past the § 147 Abs. 3 AO retention period:
 SELECT * FROM invoic_receipts
-WHERE received_at < now() - INTERVAL '3 years';
+WHERE received_at < now() - INTERVAL '8 years';
 ```
 
 ---
@@ -223,7 +285,7 @@ curl -X POST http://invoicd:8280/api/v1/receipts/550e8400-e29b-41d4-a716-4466554
 |---|---|
 | `204 No Content` | Payment confirmed; `payment_confirmed_at` set |
 | `404 Not Found` | Receipt not found or already confirmed |
-| `403 Forbidden` | Caller lacks `write-receipt` Cedar action |
+| `403 Forbidden` | Caller lacks the `write-receipt` Cedar action (LF role) |
 
 ### `GET /api/v1/zahlungsstatus/{malo_id}`
 
@@ -337,12 +399,10 @@ inbound_secret = "env:INVOICD_INBOUND_SECRET"  # optional; omit for dev
 
 [subscription]
 # Self-registers with marktd on startup — no manual curl required.
+# The event type and PID filter are not configurable: invoicd acts on
+# de.mako.process.initiated for the PIDs in its routing table and nothing else.
 webhook_url   = "http://invoicd:8280/webhook"  # public URL marktd POSTs to
 subscriber_id = "invoicd"                        # default
-event_types   = [
-  "de.mako.process.initiated",
-  "de.mako.process.completed",
-]
 
 [check]
 # Relative tolerances for invoic-checker plausibility pipeline.
@@ -361,10 +421,11 @@ webhook_url = "https://erp.example.com/webhooks/invoicd"
 hmac_secret = "env:INVOICD_ERP_HMAC_SECRET"
 
 [edmd]
-# Required for POST /api/v1/selbstausstellen (PID 31006 self-issue).
-# Without this section the endpoint returns 503.
+# Required only for POST /api/v1/selbstausstellen (PID 31006), which reads the
+# measured quantity for the Bilanzierungsmonat. Omitted, that endpoint answers
+# 503; nothing else in the service needs it.
 url = "http://edmd:8380"
-# api_key = "env:EDMD_API_KEY"  # optional bearer token
+# api_key = "env:INVOICD_EDMD_API_KEY"
 
 # [oidc]          # omit to disable auth (dev only — never omit in production)
 # issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
@@ -391,42 +452,51 @@ curl -s http://marktd:8180/api/v1/subscriptions/invoicd \
 
 ---
 
-## LF selbstausgestellt INVOIC (PID 31006)
+## Self-issued Mehrmengen-Rechnung (PID 31006)
 
-When the LF issues the invoice itself (INVOIC AHB Selbstausstellung selbstausgestellt), trigger via:
+PID 31006 is the **Mehrmenge leg of a Mehr-/Mindermengen settlement, written by
+the receiving party itself** — the Gutschriftverfahren of § 14 Abs. 2 Satz 2
+UStG. It is not a Netznutzungsrechnung; that is PID 31002.
+
+The endpoint settles one Bilanzierungsmonat. Mehr-/Mindermengen settle per
+month, and the price series is published per application month, so a period
+straddling two months has no single price to settle against.
 
 ```bash
-curl -X POST http://invoicd:8280/api/v1/selbstausstellen/10001234558 \
+curl -X POST http://invoicd:8280/api/v1/selbstausstellen \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{
-    "nb_mp_id": "9900000000002",
-    "period_from": "2026-01-01",
-    "period_to":   "2026-03-31"
+    "malo_id":        "51238696012",
+    "nb_mp_id":       "9900000000002",
+    "year":           2026,
+    "month":          6,
+    "bilanziert_kwh": "12500.000"
   }'
 ```
 
-The endpoint performs the following pipeline:
+| Input | Source |
+|---|---|
+| `gemessen_kwh` | `edmd GET /api/v1/imbalance/{malo}/{y}/{m}` — edmd measures |
+| `bilanziert_kwh` | the caller — edmd does not balance; the allocated quantity is a commercial figure from the LF's own Bilanzkreis |
+| Mehr-/Mindermengenpreise | `marktd GET /api/v1/mmm-preise/strom/{y}/{m}` |
 
-1. Fetches `MeterBillingPeriod` from `edmd GET /api/v1/billing-period/{malo_id}` — returns **503** if `[edmd]` is not configured.
-2. Fetches `PreisblattNetznutzung` for the MaLo from `marktd` — returns **422** if no active price sheet exists.
-3. Extracts `ArbeitspreisWirkarbeit` and `LeistungspreisWirkleistung` from typed `Preisposition.preisstaffeln`.
-4. Calls `grid_billing::calculate_nne_invoice(NneInput)` to produce a `GridSettlement`
-   (`GridInvoice` is a backward-compatible alias).
-   `invoicd` calls `into_rechnung()` locally to build the GoBD-compliant `Rechnung`
-   — `grid-billing` has no `rubo4e` dependency.
-5. Persists the real `Rechnung` JSON to `invoic_receipts` (audit trail).
-6. Dispatches `gpke.abrechnung.selbstausstellen` to `makod` with the full `rechnung` payload, which enqueues the outbound INVOIC 31006 for AS4 delivery to the NB.
+A month with no imported prices is **refused** (422) rather than settled against
+a neighbouring month's: an invoice wrong by that margin is one nobody notices.
 
-### Required configuration
+The document is built by `grid_billing::settle_mmm` with `selbstausgestellt`,
+so the rendered BO4E states `netznutzungrechnungsart = Selbstausgestellt` and
+`netznutzungrechnungstyp = Mehrmindermengenrechnung`. An NNE settlement stamped
+with PID 31006 renders as a Handelsrechnung instead — individually well-formed
+fields, and a document the AHB rejects.
 
-```toml
-[edmd]
-url = "http://edmd:8380"
-# api_key = "${EDMD_API_KEY}"  # optional bearer token
-```
+The receipt carries **`makod`'s** process id, so the answering REMADV, a later
+Storno and the payment confirmation all find the same row.
 
-The `[edmd]` section is required. Without it, `POST /api/v1/selbstausstellen` returns **503 Service Unavailable**.
+Electricity needs *both* parties to hold §3g Wiederverkäufer status for § 13b
+Abs. 2 Nr. 5 Buchst. b UStG to shift the tax, which a self-issued invoice cannot
+assert from the issuer's side alone — so the endpoint settles at the ordinary
+rate.
 
 ---
 
@@ -440,7 +510,7 @@ The `[edmd]` section is required. Without it, `POST /api/v1/selbstausstellen` re
 | `list_overdue_remadv` | Receipts approaching Zahlungsziel without dispatched REMADV |
 | `get_zahlungsstatus` | Payment status per MaLo-ID (settled / pending / overdue counts) |
 | `summarize_billing_month` | Monthly billing volume + dispute rate per NB counterparty |
-| `dispatch_remadv` | Check dispatch status for a stuck receipt (see REST API for action) |
+| `list_exceptions` | The two operator queues: undispatched answers, and INVOICs that could not be processed at all |
 
 ## MCP prompts
 
@@ -463,34 +533,46 @@ The `invoice-reconciliation-agent` in `agentd` subscribes to `de.invoic.payment.
 | `outcome = 'Dispute'` count | < 1 % of volume |
 | `pay_by < now() + INTERVAL '3 days' AND dispatched_at IS NULL` | 0 |
 | `pay_by < now() AND payment_confirmed_at IS NULL AND dispatched_at IS NOT NULL` | 0 (trigger dunning) |
+| `invoic_dlq WHERE resolved_at IS NULL` | 0 — an unprocessed Buchungsbeleg |
 
-Alert when receipts approach `pay_by` without a `dispatched_at` — the NB may
-not have received the REMADV and will begin a dispute window.
+Alert when receipts approach `pay_by` without a `dispatched_at` — the
+counterparty may not have received the answer and will begin a dispute window.
+`POST /api/v1/receipts/{id}/dispatch-answer` re-sends it.
 
 ### Prometheus metrics (`/invoicd/metrics`)
 
 These invoicd-specific gauges live at `/invoicd/metrics`; the runner mounts the
 generic request-counter `/metrics` separately.
 
-| Metric | Description |
-|--------|-------------|
-| `invoicd_receipts_total` | Total INVOIC receipts persisted (§ 147 AO / GoBD) |
-| `invoicd_disputes_total` | Receipts with `Dispute` outcome |
-| `invoicd_overdue_remadv_total` | Receipts with `pay_by < now() + 3 days` and no `dispatched_at` |
-| `invoicd_receipts_by_pid_outcome{pid, outcome}` | Receipt count broken down by PID and outcome |
+All gauges are tenant-scoped.
+
+| Metric | Alert when |
+|--------|------------|
+| `invoicd_receipts_total` | — |
+| `invoicd_disputes_total` | rising against a single counterparty |
+| `invoicd_overdue_remadv_total` | `> 0` — an unanswered invoice past its Zahlungsziel |
+| `invoicd_erp_dead_lettered_total` | `> 0` — the ERP is not hearing about settled invoices |
+| `invoicd_dlq_open_total` | `> 0` — an unprocessed Buchungsbeleg |
+| `invoicd_receipts_by_pid_outcome{pid, outcome}` | — |
 
 ```sql
 -- invoic_receipts (§ 147 AO / § 14b UStG, 8-year retention)
 SELECT
   process_id,    -- UUID, unique business key
-  pid,           -- 31001 | 31002 | 31005 | 31006 | 31009
-  direction,     -- 'Inbound' | 'Outbound'
+  invoice_ref,   -- EDIFACT BGM 1004 — what makod routes the answer by
+  pid,           -- 31001..31009, 31011
+  direction,     -- 'inbound' | 'outbound'
   sender_mp_id,  -- NB/MSB MP-ID
-  outcome,       -- 'Ok' | 'AcceptedPartial' | 'Warn' | 'Dispute' | 'Dispatched' | 'Paid'
+  outcome,       -- 'Ok' | 'AcceptedPartial' | 'Warn' | 'Dispute'
+                 -- | 'Resolved' | 'Dispatched' | 'Paid'
   pay_by,        -- Zahlungsziel from INVOIC DTM+92
   received_at,   -- first ingest timestamp
-  dispatched_at, -- when REMADV/COMDIS was sent
-  payment_confirmed_at  -- set by POST /confirm-payment (ERP bank transfer ack)
+  dispatched_at, -- when the answer went out
+  payment_confirmed_at  -- set by POST /confirm-payment
 FROM invoic_receipts
 WHERE tenant = 'your-tenant-gln';
 ```
+
+An inbound receipt without `invoice_ref` is refused by the schema: it could be
+checked but never answered, and discovering that at the Zahlungsziel is a day
+too late.

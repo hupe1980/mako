@@ -1729,6 +1729,17 @@ pub struct MmmInput {
     /// parties, gas needs the recipient — which is why this is a status rather
     /// than a `reverse_charge: bool` the caller has to reason out.
     pub wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus,
+    /// The receiving party issues this invoice itself (Gutschriftverfahren).
+    ///
+    /// PID 31006 (Strom) / 31008 (Gas) is the Mehrmenge leg written by the
+    /// party that would otherwise receive it, which the AHB marks as
+    /// *Selbstausgestellt* rather than *Handelsrechnung*. That distinction is
+    /// on the wire (`IMD+7081` and the Rechnungsart), so it has to come from
+    /// the settlement rather than be stamped on the document afterwards:
+    /// labelling an ordinary [`SettlementType::MmmStrom`] with PID 31006
+    /// produces a message that states Handelsrechnung under a
+    /// Selbstausstellung Prüfidentifikator.
+    pub selbstausgestellt: bool,
 }
 
 // ── AbschlagInput ─────────────────────────────────────────────────────────────

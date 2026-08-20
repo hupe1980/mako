@@ -19,6 +19,14 @@ use uuid::Uuid;
 use crate::config::Config;
 use crate::pg;
 use crate::pg::{Abrechnungslauf, SubmissionPhase};
+use mako_service::http::Upstream;
+
+/// How many `marktd` master-data lookups run at once.
+///
+/// High enough that a tenant with thousands of MaLos resolves inside the
+/// submission window; low enough that the aggregation does not become the load
+/// that takes `marktd` down.
+const MARKTD_CONCURRENCY: usize = 16;
 
 /// Prüfidentifikator for "Übertragung Summenzeitreihe" (MSCONS AHB 3.2 §8.3.1).
 pub const MSCONS_SUMMENZEITREIHE_PID: Pruefidentifikator = Pruefidentifikator::const_new(13003);
@@ -165,38 +173,51 @@ pub fn phase_for(period_to: Date, today: Date) -> (Abrechnungslauf, SubmissionPh
     }
 }
 
+/// One Bilanzierungsgebiet's aggregate, plus how many MaLos went into it.
+///
+/// `Summenzeitreihe` is a sum over slots; it cannot say how many MaLos it came
+/// from, and that count is what an operator reads to see whether a territory
+/// was fully covered.
+pub struct TerritorySeries {
+    /// The aggregate filed for this territory.
+    pub series: Summenzeitreihe,
+    /// MaLos folded into it.
+    pub malo_count: usize,
+}
+
 // ── SyncEngine ────────────────────────────────────────────────────────────────
 
 /// Core aggregation and submission engine.
 pub struct SyncEngine {
     pool: sqlx::PgPool,
-    edmd_client: reqwest::Client,
-    marktd_client: reqwest::Client,
-    makod_client: reqwest::Client,
+    edmd: Upstream,
+    marktd: Upstream,
+    makod: Upstream,
     cfg: std::sync::Arc<Config>,
 }
 
 impl SyncEngine {
     /// Create a new engine from configuration.
+    ///
+    /// A Lastgang fetch reads a month of quarter-hourly values, so `edmd` gets a
+    /// longer request timeout than the shared default; the master-data and
+    /// command calls keep it. All three share one connection pool and the
+    /// no-redirect SSRF guard from `mako_service::http`.
     #[must_use]
     pub fn new(pool: sqlx::PgPool, cfg: std::sync::Arc<Config>) -> Self {
-        let edmd_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(120))
-            .build()
-            .expect("failed to build edmd HTTP client");
-        let marktd_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .expect("failed to build marktd HTTP client");
-        let makod_client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(60))
-            .build()
-            .expect("failed to build makod HTTP client");
+        let key = |k: &str| Some(secrecy::SecretString::from(k.to_owned()));
+        let default = mako_service::http::default_client();
+        let slow = mako_service::http::default_client_with(std::time::Duration::from_secs(120));
         Self {
+            edmd: Upstream::new("edmd", &cfg.edmd.url, key(&cfg.edmd.api_key), slow),
+            marktd: Upstream::new(
+                "marktd",
+                &cfg.marktd.url,
+                key(&cfg.marktd.api_key),
+                default.clone(),
+            ),
+            makod: Upstream::new("makod", &cfg.makod.url, key(&cfg.makod.api_key), default),
             pool,
-            edmd_client,
-            marktd_client,
-            makod_client,
             cfg,
         }
     }
@@ -275,10 +296,13 @@ impl SyncEngine {
             }
             Ok(series) => {
                 // One submission per Bilanzierungsgebiet.
-                let total_kwh: Decimal = series.iter().map(Summenzeitreihe::total_kwh).sum();
+                let total_kwh: Decimal = series.iter().map(|t| t.series.total_kwh()).sum();
                 let malo_count = self.malo_count_for_run(run_id).await;
-                let interval_count: i32 = series.iter().map(|s| s.interval_count() as i32).sum();
-                let has_substituted = series.iter().any(Summenzeitreihe::has_substituted_values);
+                let interval_count: i32 = series
+                    .iter()
+                    .map(|t| t.series.interval_count() as i32)
+                    .sum();
+                let has_substituted = series.iter().any(|t| t.series.has_substituted_values());
 
                 // Update run with aggregation result
                 pg::update_run_aggregated(
@@ -292,8 +316,19 @@ impl SyncEngine {
                 .await
                 .context("failed to update submission_run")?;
 
+                // A retry of a partly-filed run must not re-file the
+                // territories the BIKO already acked: an acked Summenzeitreihe
+                // cannot be withdrawn, and resending one under a new version is
+                // a correction, not a retry.
+                let already_acked = pg::acked_territories(&self.pool, run_id)
+                    .await
+                    .unwrap_or_default();
+
                 // Submit to BIKO via makod — one MSCONS 13003 per Bilanzierungsgebiet.
-                match self.submit_all_to_makod(&series, run_id).await {
+                match self
+                    .submit_all_to_makod(&series, run_id, &already_acked)
+                    .await
+                {
                     Ok((message_ref, process_id)) => {
                         pg::mark_acked(&self.pool, run_id, &message_ref, process_id)
                             .await
@@ -367,7 +402,7 @@ impl SyncEngine {
         period_to: Date,
         version: OffsetDateTime,
         as_of: Option<OffsetDateTime>,
-    ) -> Result<Vec<Summenzeitreihe>> {
+    ) -> Result<Vec<TerritorySeries>> {
         let cfg = &self.cfg;
         let (from_ts, to_ts) = aggregation_window(period_from, period_to);
 
@@ -394,7 +429,7 @@ impl SyncEngine {
 
         // Territories whose grid still has holes after every MaLo aggregated.
         let mut incomplete: Vec<String> = Vec::new();
-        let mut series: Vec<Summenzeitreihe> = Vec::with_capacity(by_gebiet.len());
+        let mut series: Vec<TerritorySeries> = Vec::with_capacity(by_gebiet.len());
         for (gebiet, gebiet_malos) in &by_gebiet {
             // A Summenzeitreihe is submitted under its MaBiS-Zählpunkt
             // (SG6 LOC+172); the Bilanzierungsgebiet EIC is a separate
@@ -492,7 +527,10 @@ impl SyncEngine {
                     szr.expected_slot_count()
                 ));
             }
-            series.push(szr);
+            series.push(TerritorySeries {
+                series: szr,
+                malo_count: gebiet_malos.len(),
+            });
         }
 
         // A MaBiS filing cannot be withdrawn once acked, and the BIKO cannot
@@ -550,41 +588,23 @@ impl SyncEngine {
         &self,
         gebiet: &str,
     ) -> anyhow::Result<mako_mabis::MabisZaehlpunktId> {
-        let cfg = &self.cfg;
-        let url = format!(
-            "{}/api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp",
-            cfg.marktd.url
-        );
-        let resp = self
-            .marktd_client
-            .get(&url)
-            .bearer_auth(&cfg.marktd.api_key)
-            .send()
+        let path = format!("/api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp");
+        let body: serde_json::Value = self
+            .marktd
+            .json(self.marktd.get(&path))
             .await
             .map_err(|e| {
                 anyhow::anyhow!(
-                    "marktd unreachable while resolving the MaBiS-Zählpunkt for \
-                     Bilanzierungsgebiet {gebiet}: {e}"
+                    "resolving the MaBiS-Zählpunkt for Bilanzierungsgebiet {gebiet}: {e}"
+                )
+            })?
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "no MaBiS-Zählpunkt assigned to Bilanzierungsgebiet {gebiet} — assign one via \
+                     PUT /api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp on marktd; the \
+                     Summenzeitreihe cannot be submitted without the SG6 LOC+172 Meldepunkt"
                 )
             })?;
-
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!(
-                "no MaBiS-Zählpunkt assigned to Bilanzierungsgebiet {gebiet} — assign one via \
-                 PUT /api/v1/bilanzierungsgebiete/{gebiet}/mabis-zp on marktd; the \
-                 Summenzeitreihe cannot be submitted without the SG6 LOC+172 Meldepunkt"
-            );
-        }
-        if !resp.status().is_success() {
-            anyhow::bail!(
-                "marktd returned {} resolving the MaBiS-Zählpunkt for Bilanzierungsgebiet {gebiet}",
-                resp.status()
-            );
-        }
-
-        let body: serde_json::Value = resp.json().await.map_err(|e| {
-            anyhow::anyhow!("malformed marktd response for Bilanzierungsgebiet {gebiet}: {e}")
-        })?;
         let zp = body["mabis_zp_id"]
             .as_str()
             .map(str::trim)
@@ -615,46 +635,47 @@ impl SyncEngine {
         malo_ids: &[String],
     ) -> (std::collections::BTreeMap<String, Vec<String>>, Vec<String>) {
         use std::collections::BTreeMap;
-        let cfg = &self.cfg;
         let mut by_gebiet: BTreeMap<String, Vec<String>> = BTreeMap::new();
         let mut missing_gebiet: Vec<String> = Vec::new();
 
-        for malo_id in malo_ids {
-            let url = format!("{}/api/v1/malos/{malo_id}", cfg.marktd.url);
-            let gebiet = match self
-                .marktd_client
-                .get(&url)
-                .bearer_auth(&cfg.marktd.api_key)
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    resp.json::<serde_json::Value>().await.ok().and_then(|v| {
-                        v["bilanzierungsgebiet"]
-                            .as_str()
-                            .filter(|s| !s.is_empty())
-                            .map(str::to_owned)
-                    })
-                }
-                Ok(resp) => {
-                    warn!(malo_id, status = %resp.status(), "mabis-syncd: marktd MaLo lookup failed");
-                    None
-                }
-                Err(e) => {
-                    warn!(malo_id, error = %e, "mabis-syncd: marktd unreachable for MaLo");
-                    None
-                }
-            };
+        // Resolved in bounded-concurrency batches. A territory lookup is one
+        // round-trip per MaLo, and a tenant of any size has thousands: run
+        // sequentially, that alone outlasts the submission window it is
+        // supposed to fit inside. The cap keeps `marktd` from being the thing
+        // that fails instead.
+        for chunk in malo_ids.chunks(MARKTD_CONCURRENCY) {
+            let looked_up = futures::future::join_all(chunk.iter().map(|malo_id| async move {
+                let path = format!("/api/v1/malos/{malo_id}");
+                let gebiet = match self
+                    .marktd
+                    .json::<serde_json::Value>(self.marktd.get(&path))
+                    .await
+                {
+                    Ok(Some(v)) => v["bilanzierungsgebiet"]
+                        .as_str()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_owned),
+                    Ok(None) => None,
+                    Err(e) => {
+                        warn!(malo_id, error = %e, "mabis-syncd: marktd MaLo lookup failed");
+                        None
+                    }
+                };
+                (malo_id.clone(), gebiet)
+            }))
+            .await;
 
-            match gebiet {
-                Some(key) => by_gebiet.entry(key).or_default().push(malo_id.clone()),
-                None => {
-                    warn!(
-                        malo_id,
-                        "mabis-syncd: MaLo has no Bilanzierungsgebiet in marktd — excluded from \
-                         the run rather than misfiled into a fallback zone"
-                    );
-                    missing_gebiet.push(malo_id.clone());
+            for (malo_id, gebiet) in looked_up {
+                match gebiet {
+                    Some(key) => by_gebiet.entry(key).or_default().push(malo_id),
+                    None => {
+                        warn!(
+                            malo_id,
+                            "mabis-syncd: MaLo has no Bilanzierungsgebiet in marktd — excluded \
+                             from the run rather than misfiled into a fallback zone"
+                        );
+                        missing_gebiet.push(malo_id);
+                    }
                 }
             }
         }
@@ -664,29 +685,17 @@ impl SyncEngine {
     /// Discover MaLo IDs from edmd billing periods for the given time window.
     async fn discover_malos(&self, from: Date, to: Date) -> Result<Vec<String>> {
         let cfg = &self.cfg;
-        let url = format!(
-            "{}/api/v1/billing-periods?from={from}&to={to}&tenant={}",
-            cfg.edmd.url, cfg.identity.tenant,
-        );
-
-        let resp = self
-            .edmd_client
-            .get(&url)
-            .bearer_auth(&cfg.edmd.api_key)
-            .send()
+        let request = self.edmd.get("/api/v1/billing-periods").query(&[
+            ("from", from.to_string()),
+            ("to", to.to_string()),
+            ("tenant", cfg.identity.tenant.clone()),
+        ]);
+        let data: serde_json::Value = self
+            .edmd
+            .json(request)
             .await
-            .context("edmd MaLo discovery request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("edmd /api/v1/billing-periods returned {status}: {body}");
-        }
-
-        let data: serde_json::Value = resp
-            .json()
-            .await
-            .context("failed to parse edmd billing-periods response")?;
+            .context("edmd MaLo discovery")?
+            .context("edmd has no billing periods for the tenant in this period")?;
         // edmd returns `{"billing_periods": [{malo_id, messtyp, sparte, ...}], "count": n}`.
         // Reading a `malo_ids` array that the response never contained yielded an
         // empty set on every run — and an empty Summenzeitreihe still submits and
@@ -697,10 +706,34 @@ impl SyncEngine {
                 data.as_object().map(|o| o.keys().collect::<Vec<_>>())
             );
         };
-        let mut malo_ids: Vec<String> = periods
-            .iter()
-            .filter_map(|p| p["malo_id"].as_str().map(str::to_owned))
-            .collect();
+
+        // MaBiS is a **Strom** process. The Bilanzkreisabrechnung it feeds
+        // exists only for electricity — gas balances through GaBi Gas, on the
+        // 06:00 Gastag and against a Marktgebiet, not a Bilanzierungsgebiet.
+        // `edmd` serves both commodities from one endpoint, so an unfiltered
+        // discovery folded every gas MaLo of the tenant into the electricity
+        // Summenzeitreihe: energy that is not the BIKO's to settle, on a grid
+        // it does not use, and the BIKO cannot tell an over-reported territory
+        // from a correct one.
+        let mut skipped_sparten: std::collections::BTreeSet<String> =
+            std::collections::BTreeSet::new();
+        let mut malo_ids: Vec<String> = Vec::new();
+        for p in periods {
+            let sparte = p["sparte"].as_str().unwrap_or_default();
+            if !sparte.eq_ignore_ascii_case("STROM") {
+                skipped_sparten.insert(sparte.to_owned());
+                continue;
+            }
+            if let Some(id) = p["malo_id"].as_str() {
+                malo_ids.push(id.to_owned());
+            }
+        }
+        if !skipped_sparten.is_empty() {
+            info!(
+                sparten = ?skipped_sparten,
+                "mabis-syncd: non-Strom MaLos excluded — MaBiS settles electricity only"
+            );
+        }
         malo_ids.sort_unstable();
         malo_ids.dedup();
 
@@ -764,46 +797,26 @@ impl SyncEngine {
         to: OffsetDateTime,
         as_of: Option<OffsetDateTime>,
     ) -> Result<Vec<metering::MeterInterval>> {
-        let cfg = &self.cfg;
         use time::format_description::well_known::Rfc3339;
-        let from_str = from.format(&Rfc3339).unwrap_or_default();
-        let to_str = to.format(&Rfc3339).unwrap_or_default();
-
+        let mut query = vec![
+            ("from", from.format(&Rfc3339).unwrap_or_default()),
+            ("to", to.format(&Rfc3339).unwrap_or_default()),
+        ];
         // `as_of` reconstructs the data as it stood when an earlier version was
-        // filed (§ 60 Abs. 6 MsbG). A correction under the KBKA has to be able to say
-        // what changed since the version the BIKO settled, which requires the
-        // earlier state, not just the current one.
-        let url = match as_of {
-            Some(ts) => {
-                let ts = ts.format(&Rfc3339).unwrap_or_default();
-                format!(
-                    "{}/api/v1/lastgang/{malo_id}?from={from_str}&to={to_str}&as_of={ts}",
-                    cfg.edmd.url
-                )
-            }
-            None => format!(
-                "{}/api/v1/lastgang/{malo_id}?from={from_str}&to={to_str}",
-                cfg.edmd.url
-            ),
-        };
-
-        let resp = self
-            .edmd_client
-            .get(&url)
-            .bearer_auth(&cfg.edmd.api_key)
-            .send()
-            .await
-            .with_context(|| format!("edmd lastgang request failed for {malo_id}"))?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            anyhow::bail!("edmd /lastgang/{malo_id} returned {status}");
+        // filed (§ 60 Abs. 6 MsbG). A correction under the KBKA has to be able
+        // to say what changed since the version the BIKO settled, which requires
+        // the earlier state and not just the current one.
+        if let Some(ts) = as_of {
+            query.push(("as_of", ts.format(&Rfc3339).unwrap_or_default()));
         }
 
-        let data: serde_json::Value = resp
-            .json()
+        let path = format!("/api/v1/lastgang/{malo_id}");
+        let data: serde_json::Value = self
+            .edmd
+            .json(self.edmd.get(&path).query(&query))
             .await
-            .with_context(|| format!("failed to parse lastgang response for {malo_id}"))?;
+            .with_context(|| format!("edmd lastgang for {malo_id}"))?
+            .with_context(|| format!("edmd has no Lastgang for {malo_id} in this period"))?;
 
         Self::parse_lastgaenge(malo_id, &data)
     }
@@ -875,25 +888,88 @@ impl SyncEngine {
         Ok(intervals)
     }
 
-    /// Submit the aggregated Summenzeitreihe to BIKO via makod.
+    /// File one MSCONS 13003 per Bilanzierungsgebiet, recording each.
     ///
-    /// Returns `(message_ref, process_id)` on success.
-    /// Submit every Bilanzierungsgebiet's Summenzeitreihe, one MSCONS 13003 each.
+    /// # Why every territory is recorded
     ///
-    /// Returns the first submission's reference for the run record. A failure on
-    /// any territory fails the whole run: a partially-submitted MaBiS period is
-    /// harder to reconcile than one that plainly did not go out.
+    /// A Summenzeitreihe the BIKO has acked **cannot be withdrawn**. When
+    /// territory 4 of 4 fails, the first three are already filed, so "the run
+    /// failed" is only half true and acting on it as though nothing went out
+    /// re-files three binding submissions.
+    ///
+    /// Each territory therefore gets a `submission_series` row saying `acked`
+    /// or `failed` with its reference or its reason; `skip` carries the ones a
+    /// retry must not re-file. The run still fails as a whole, because a month
+    /// settled short is not a success.
+    ///
+    /// Returns the first territory's `(message_ref, process_id)` for the run
+    /// row — the whole story in a single-territory deployment.
     async fn submit_all_to_makod(
         &self,
-        series: &[Summenzeitreihe],
+        series: &[TerritorySeries],
         run_id: Uuid,
+        skip: &[String],
     ) -> Result<(String, Option<Uuid>)> {
         let mut first: Option<(String, Option<Uuid>)> = None;
-        for s in series {
-            let res = self.submit_to_makod(s, run_id).await?;
-            if first.is_none() {
-                first = Some(res);
+        let mut failures: Vec<String> = Vec::new();
+
+        for territory in series {
+            let szr = &territory.series;
+            let gebiet = szr.bilanzierungsgebiet_id.as_ref().to_owned();
+            if skip.contains(&gebiet) {
+                info!(
+                    run_id = %run_id, gebiet,
+                    "mabis-syncd: territory already acked by the BIKO — not re-filed"
+                );
+                continue;
             }
+
+            let series_id = pg::insert_series(
+                &self.pool,
+                run_id,
+                &gebiet,
+                szr.mabis_zp_id.as_str(),
+                territory.malo_count as i32,
+                szr.interval_count() as i32,
+                &szr.total_kwh(),
+            )
+            .await
+            .with_context(|| format!("record the series for {gebiet}"))?;
+
+            match self.submit_to_makod(szr, run_id).await {
+                Ok((message_ref, process_id)) => {
+                    pg::mark_series_acked(&self.pool, series_id, &message_ref, process_id)
+                        .await
+                        .with_context(|| format!("record the ack for {gebiet}"))?;
+                    info!(
+                        run_id = %run_id, gebiet, message_ref,
+                        "mabis-syncd: Summenzeitreihe filed"
+                    );
+                    if first.is_none() {
+                        first = Some((message_ref, process_id));
+                    }
+                }
+                Err(e) => {
+                    // Recorded, then the loop continues: the remaining
+                    // territories are independent filings, and stopping here
+                    // would leave them unfiled *and* unexplained.
+                    let msg = e.to_string();
+                    warn!(run_id = %run_id, gebiet, error = %msg, "mabis-syncd: territory not filed");
+                    let _ = pg::mark_series_failed(&self.pool, series_id, &msg).await;
+                    failures.push(format!("{gebiet}: {msg}"));
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            anyhow::bail!(
+                "{} of {} Bilanzierungsgebiete were not filed — the month is settled short. \
+                 Territories already acked are recorded in submission_series and are NOT \
+                 re-filed by a retry: {}",
+                failures.len(),
+                series.len(),
+                failures.join("; ")
+            );
         }
         first.ok_or_else(|| anyhow::anyhow!("no Summenzeitreihe to submit"))
     }
@@ -948,27 +1024,17 @@ impl SyncEngine {
             summenzeitreihe.version,
         );
 
-        let url = format!("{}/api/v1/commands", cfg.makod.url);
-        let resp = self
-            .makod_client
-            .post(&url)
-            .bearer_auth(&cfg.makod.api_key)
+        let request = self
+            .makod
+            .post("/api/v1/commands")
             .header("Idempotency-Key", &idempotency_key)
-            .json(&command)
-            .send()
+            .json(&command);
+        let result: serde_json::Value = self
+            .makod
+            .json(request)
             .await
-            .context("makod command submission request failed")?;
-
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("makod /api/v1/commands returned {status}: {body}");
-        }
-
-        let result: serde_json::Value = resp
-            .json()
-            .await
-            .context("failed to parse makod response")?;
+            .context("makod command submission")?
+            .context("makod accepted the command without a response body")?;
         let message_ref = result["message_ref"]
             .as_str()
             .unwrap_or("unknown")

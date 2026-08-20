@@ -38,21 +38,14 @@ pub async fn fetch_einspeisemenge_from_edmd(
     year: i16,
     month: i16,
 ) -> Option<Decimal> {
-    let edmd_url = cfg.edmd_url.as_deref()?;
+    let edmd = cfg.edmd(client.clone())?;
     let last_day = days_in_month(year, month);
-    let from = format!("{year:04}-{month:02}-01");
-    let to = format!("{year:04}-{month:02}-{last_day:02}");
-    let url = format!("{edmd_url}/api/v1/billing-period/{malo_id}?from={from}&to={to}");
-
-    let mut req = client.get(&url);
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        req = req.bearer_auth(key);
-    }
-    let resp = req.send().await.ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let body: serde_json::Value = resp.json().await.ok()?;
+    let path = format!("/api/v1/billing-period/{malo_id}");
+    let request = edmd.get(&path).query(&[
+        ("from", format!("{year:04}-{month:02}-01")),
+        ("to", format!("{year:04}-{month:02}-{last_day:02}")),
+    ]);
+    let body: serde_json::Value = edmd.json(request).await.ok().flatten()?;
     body.get("arbeitsmenge_kwh")
         .and_then(|v| v.as_str())
         .and_then(|s| s.parse::<Decimal>().ok())
@@ -144,7 +137,7 @@ pub async fn derive_negativpreis_from_edmd(
 ) -> Negativpreis {
     use time::format_description::well_known::Rfc3339;
 
-    let Some(edmd_url) = cfg.edmd_url.as_deref() else {
+    let Some(edmd) = cfg.edmd(client.clone()) else {
         return Negativpreis::Unbekannt;
     };
     let regime = eeg_billing::NegativpreisRegime::fuer_inbetriebnahme(inbetriebnahme);
@@ -155,15 +148,9 @@ pub async fn derive_negativpreis_from_edmd(
     let (Ok(from_s), Ok(to_s)) = (range_from.format(&Rfc3339), range_to.format(&Rfc3339)) else {
         return Negativpreis::Unbekannt;
     };
-    let url = format!("{edmd_url}/api/v1/feed-in/{malo_id}?from={from_s}&to={to_s}");
-    let mut req = client.get(&url);
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        req = req.bearer_auth(key);
-    }
-    let Some(resp) = req.send().await.ok().filter(|r| r.status().is_success()) else {
-        return Negativpreis::Unbekannt;
-    };
-    let Ok(feed) = resp.json::<FeedInResponse>().await else {
+    let path = format!("/api/v1/feed-in/{malo_id}");
+    let request = edmd.get(&path).query(&[("from", from_s), ("to", to_s)]);
+    let Ok(Some(feed)) = edmd.json::<FeedInResponse>(request).await else {
         return Negativpreis::Unbekannt;
     };
 

@@ -160,11 +160,15 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
     // Retries for up to 30 s to tolerate marktd startup ordering in compose/K8s.
     if let Some(ref self_webhook_url) = cfg.self_register_webhook_url {
         use secrecy::ExposeSecret;
-        let sub_url = format!(
-            "{}/api/v1/subscriptions/{}",
-            cfg.marktd_url.trim_end_matches('/'),
-            cfg.subscriber_id
+        // Authenticated: `marktd` requires a bearer on every write, and
+        // subscription management is an operator-level capability there.
+        let marktd = mako_service::http::Upstream::new(
+            "marktd",
+            &cfg.marktd_url,
+            Some(cfg.marktd_api_key.clone()),
+            http.clone(),
         );
+        let sub_path = format!("/api/v1/subscriptions/{}", cfg.subscriber_id);
         let event_types: Vec<&str> = cfg
             .subscriber_event_types
             .split(',')
@@ -184,19 +188,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         );
         let mut remaining = 15u32;
         loop {
-            // Authenticated: `marktd` requires a bearer on every write, and
-            // subscription management is an operator-level capability there.
-            // Without this the PUT is a 401 against any marktd that has OIDC
-            // configured, the retry loop exhausts, and `build_router` returns
-            // an error — processd refuses to start. It only ever worked because
-            // the demo runs marktd with `allow_insecure_no_auth`.
-            match http
-                .put(&sub_url)
-                .bearer_auth(cfg.marktd_api_key.expose_secret())
-                .json(&body)
-                .send()
-                .await
-            {
+            match marktd.put(&sub_path).json(&body).send().await {
                 Ok(resp) if resp.status().is_success() => {
                     info!(
                         subscriber_id = %cfg.subscriber_id,

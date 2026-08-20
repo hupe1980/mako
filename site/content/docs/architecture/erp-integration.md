@@ -201,9 +201,9 @@ message is dead-lettered.
 | ERP → makod | `PUT /admin/partners/{mp_id}` | Register or update a trading-partner endpoint |
 | ERP → makod | `ErpCommandSource` trait | Fully event-driven inbound (Kafka, SFTP, CDC, …) |
 | marktd → invoicd | `POST /webhook` CloudEvents | GPKE/WiM billing notifications for automatic plausibility check |
-| invoicd → makod | `POST /api/v1/commands` | `gpke.abrechnung.annehmen` or `gpke.abrechnung.ablehnen` |
+| invoicd → makod | `POST /api/v1/commands` | the answering PID's accept/reject command (`gpke.abrechnung.*`, `wim.*`, `gabi.gas.*`, `geli.gas.*`, `invoic.stornorechnung.*`) |
 | invoicd → ERP | `de.invoic.receipt.settled/disputed` CloudEvents | Durable at-least-once payment notifications |
-| invoicd → ERP | `de.invoic.payment.overdue` CloudEvents | Background worker every 6 h — unpaid invoices past `pay_by` |
+| invoicd → ERP | `de.invoic.payment.overdue` CloudEvents | Announced once per receipt when `pay_by` passes without `confirm-payment` |
 | ERP → invoicd | `POST /api/v1/receipts/{id}/confirm-payment` | Close § 147 AO / GoBD payment audit trail when bank transfer confirmed |
 | ERP → invoicd | `GET /api/v1/zahlungsstatus/{malo_id}` | AR reconciliation — settled / pending / overdue counts |
 | edmd API → ERP | `GET /api/v1/deliveries/{malo_id}` | BO4E `Vec<Energiemenge>` — typed meter readings for billing import |
@@ -311,19 +311,24 @@ These events enable **accounts-payable automation** without polling the REST API
 
 | Type | Trigger | Use case |
 |---|---|---|
-| `de.invoic.receipt.settled` | REMADV 33001 dispatched | Book received invoice |
-| `de.invoic.receipt.disputed` | REMADV 33002 dispatched | Flag for manual review |
-| `de.invoic.receipt.dispatched` | Outbound 31006 sent | Track self-issued invoice |
+| `de.invoic.receipt.settled` | Invoice accepted | Book received invoice |
+| `de.invoic.receipt.disputed` | Invoice rejected | Flag for manual review |
+| `de.invoic.receipt.dispatched` | Self-issued 31006 sent | Track self-issued invoice |
+
+Every checked invoice is announced, accepted or disputed. The `dispatched` field
+says whether the market answer actually went out — a settled invoice whose
+REMADV never left is not one to pay against.
 
 Payment events use `source: "urn:mako:invoicd:tenant:{tenant}"` and `subject: "{process_id}"`.
 
 **Delivery guarantee — durable at-least-once:**
-The initial attempt runs inline after REMADV dispatch.  On any failure (transport
-error, HTTP 5xx), the background outbox worker retries with exponential backoff
-(30 s → 5 min → 30 min → 2 h → dead-letter after 5 attempts / ~11 h window).
-HTTP 4xx responses are dead-lettered immediately (permanent misconfiguration).
-Track delivery via `invoic_receipts.erp_notified_at`; dead-lettered rows have
-`erp_attempts >= 5 AND erp_notified_at IS NULL`.
+The first attempt runs inline after the market answer is dispatched. On any
+failure (transport error, HTTP 5xx), the outbox worker retries with backoff
+(30 s → 5 min → 30 min → 2 h → dead-letter after 5 attempts). HTTP 4xx is
+dead-lettered immediately — the ERP rejected these exact bytes. Batches are
+claimed with a lease, so replicas do not double-deliver. Track delivery via
+`invoic_receipts.erp_notified_at` and the `invoicd_erp_dead_lettered_total`
+gauge.
 
 **Request signing:** when `[erp] hmac_secret` is configured, every POST includes
 [Standard Webhooks] headers computed over `{webhook-id}.{webhook-timestamp}.{body}`.

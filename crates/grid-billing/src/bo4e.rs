@@ -434,6 +434,54 @@ mod tests {
         assert_eq!(entry.steuerwert, Some(steuer));
     }
 
+    /// A self-issued Mehrmenge leg renders as *Selbstausgestellt* under PID
+    /// 31006.
+    ///
+    /// The Prüfidentifikator and the Rechnungsart are separate fields on the
+    /// wire, and nothing downstream cross-checks them: an invoice stamped with
+    /// PID 31006 while stating `Handelsrechnung` is a contradiction the AHB
+    /// rejects and no local test caught, because the self-issued arm had no
+    /// producer at all — the one caller reached for `settle_nne` and relabelled
+    /// the document, which also made it a Netznutzungs- rather than a
+    /// Mehrmindermengenrechnung.
+    #[test]
+    fn a_self_issued_mehrmenge_renders_as_selbstausgestellt_under_31006() {
+        let settlement = crate::settle_mmm(&crate::MmmInput {
+            malo_id: "51238696012".to_owned(),
+            nb_mp_id: "9900357000004".to_owned(),
+            lf_mp_id: "9900012345678".to_owned(),
+            period: crate::SettlementPeriod::new(
+                time::macros::date!(2026 - 01 - 01),
+                time::macros::date!(2026 - 01 - 31),
+            )
+            .expect("valid period"),
+            sparte: crate::Sparte::Strom,
+            actual_kwh: rust_decimal::Decimal::from(1000),
+            profil_kwh: rust_decimal::Decimal::from(1200),
+            mehr_preis_ct_per_kwh: rust_decimal::Decimal::from(5),
+            minder_preis_ct_per_kwh: rust_decimal::Decimal::from(4),
+            wiederverkaeufer: crate::Wiederverkaeuferstatus::KEINER,
+            selbstausgestellt: true,
+        })
+        .expect("settle");
+
+        assert_eq!(
+            settlement.settlement_type,
+            crate::SettlementType::MmmSelbstausstellt
+        );
+        assert_eq!(settlement.settlement_type.default_pid(), 31006);
+        assert_eq!(
+            netznutzungrechnungsart_for(settlement.settlement_type),
+            Some(NetznutzungRechnungsart::Selbstausgestellt),
+            "PID 31006 is the invoice the receiving party writes"
+        );
+        assert_eq!(
+            netznutzungrechnungstyp_for(settlement.settlement_type, None),
+            Some(NetznutzungRechnungstyp::Mehrmindermengenrechnung),
+            "the type follows from the settlement, not from a billing cadence"
+        );
+    }
+
     /// A reverse-charged MMM states no tax and carries the §14a Abs. 5 wording.
     #[test]
     fn a_reverse_charged_supply_states_no_tax_and_says_why() {
@@ -453,6 +501,7 @@ mod tests {
             minder_preis_ct_per_kwh: rust_decimal::Decimal::from(4),
             // Both parties hold §3g status — what electricity requires.
             wiederverkaeufer: crate::Wiederverkaeuferstatus::BEIDE,
+            selbstausgestellt: false,
         })
         .expect("settle");
         let netto = settlement.total_eur;

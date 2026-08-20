@@ -41,6 +41,15 @@ use serde::Deserialize;
 use sqlx::PgPool;
 use tokio_util::sync::CancellationToken;
 
+/// processd's own base URL, derived from the configured `makod` URL.
+///
+/// The two run side by side in every deployment this ships with, so the host is
+/// shared and only the port differs. A deployment that separates them needs its
+/// own `self_url` config key.
+fn self_base_url(makod_url: &str) -> String {
+    makod_url.trim_end_matches('/').replace(":8080", ":8580")
+}
+
 #[derive(Clone)]
 pub struct ProcessdMcpState {
     pub pool: PgPool,
@@ -340,23 +349,16 @@ Use `list_pending_approvals` first to check `expires_at` before approving.",
         let Ok(id) = p.id.parse::<uuid::Uuid>() else {
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
-        // Call processd's own approval REST endpoint via HTTP self-call.
-        let client = mako_service::http::default_client();
-        let url = format!(
-            "{}/api/v1/approval-queue/{id}/approve",
-            self.state
-                .makod_url
-                .trim_end_matches('/')
-                .replace(":8080", ":8580")
+        // processd's own approval endpoint, reached over the loopback so the
+        // REST handler's Cedar check runs rather than being bypassed.
+        let up = mako_service::http::Upstream::new(
+            "processd",
+            &self_base_url(&self.state.makod_url),
+            Some(self.state.makod_api_key.clone()),
+            mako_service::http::default_client(),
         );
-        match client
-            .put(&url)
-            .bearer_auth(secrecy::ExposeSecret::expose_secret(
-                &self.state.makod_api_key,
-            ))
-            .send()
-            .await
-        {
+        let path = format!("/api/v1/approval-queue/{id}/approve");
+        match up.put(&path).send().await {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,
@@ -392,22 +394,16 @@ For §20 parity data: use `obsd` `get_kpi_report`.",
         let Ok(id) = p.id.parse::<uuid::Uuid>() else {
             return Err(McpError::invalid_params("id must be a valid UUID", None));
         };
-        let client = mako_service::http::default_client();
-        let url = format!(
-            "{}/api/v1/approval-queue/{id}/reject",
-            self.state
-                .makod_url
-                .trim_end_matches('/')
-                .replace(":8080", ":8580")
+        // processd's own approval endpoint, reached over the loopback so the
+        // REST handler's Cedar check runs rather than being bypassed.
+        let up = mako_service::http::Upstream::new(
+            "processd",
+            &self_base_url(&self.state.makod_url),
+            Some(self.state.makod_api_key.clone()),
+            mako_service::http::default_client(),
         );
-        match client
-            .put(&url)
-            .bearer_auth(secrecy::ExposeSecret::expose_secret(
-                &self.state.makod_api_key,
-            ))
-            .send()
-            .await
-        {
+        let path = format!("/api/v1/approval-queue/{id}/reject");
+        match up.put(&path).send().await {
             Ok(resp) if resp.status().is_success() || resp.status() == 204 => {
                 ContentBlock::json(serde_json::json!({
                     "id": p.id,

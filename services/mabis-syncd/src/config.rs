@@ -1,7 +1,6 @@
 //! `mabis-syncd` configuration.
 
 use serde::Deserialize;
-use std::path::Path;
 
 // NOTE: no `deny_unknown_fields` on the top-level struct — `mako_service::run`
 // loads config via `load_config`, whose env layer (`MABIS_SYNCD_*`) also surfaces
@@ -166,35 +165,36 @@ impl Default for ScheduleConfig {
 
 pub use mako_service::telemetry::OtelConfig;
 
-pub fn load_from_file(path: &Path) -> anyhow::Result<Config> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| anyhow::anyhow!("cannot read {}: {e}", path.display()))?;
-    let mut cfg: Config =
-        toml::from_str(&text).map_err(|e| anyhow::anyhow!("config parse error: {e}"))?;
-    cfg.resolve_env_refs()?;
-    // Reject an unimplemented submission target here rather than at the first
-    // submission: by then a run has aggregated a month of metering data and
-    // consumed its version number.
-    cfg.submission_target.ensure_supported()?;
-    // Same argument, one identifier along: the fallback Bilanzierungsgebiet is
-    // operator configuration, so a value that is not a Y-type EIC is a
-    // deployment error. Catching it here means it surfaces at start-up rather
-    // than at 05:00 on the Erstaufschlag-Werktag, when the submission window is
-    // the thing at stake.
-    rubo4e::identifiers::BilanzierungsgebietId::new(&cfg.identity.bilanzierungsgebiet_id).map_err(
-        |e| {
-            anyhow::anyhow!(
-                "identity.bilanzierungsgebiet_id `{}` is not a Bilanzierungsgebiet-EIC: {e}. \
-                 A Bilanzierungsgebiet is a 16-character EIC of ENTSO-E object type `Y` \
-                 (Area); a Bilanzkreis is type `X` (Party) and belongs in a different field.",
-                cfg.identity.bilanzierungsgebiet_id
-            )
-        },
-    )?;
-    Ok(cfg)
-}
-
 impl Config {
+    /// Refuse a configuration that cannot produce a valid submission.
+    ///
+    /// Called from the daemon's `build`, which is the only start-up path there
+    /// is. Both checks exist to fail here rather than at 05:00 on the
+    /// Erstaufschlag-Werktag, by which point a run has aggregated a month of
+    /// metering data and consumed its version number.
+    ///
+    /// # Errors
+    ///
+    /// - The configured [`crate::submission::SubmissionTarget`] has no
+    ///   implementation.
+    /// - `identity.bilanzierungsgebiet_id` is not a Y-type (Area) EIC. A
+    ///   Bilanzkreis is type `X` (Party) and the same length, so only the
+    ///   object type separates them — and `LOC+107` carries the value as free
+    ///   text, which means the BIKO would accept either.
+    pub fn validate(&self) -> anyhow::Result<()> {
+        self.submission_target.ensure_supported()?;
+        rubo4e::identifiers::BilanzierungsgebietId::new(&self.identity.bilanzierungsgebiet_id)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "identity.bilanzierungsgebiet_id `{}` is not a Bilanzierungsgebiet-EIC: {e}. \
+                     A Bilanzierungsgebiet is a 16-character EIC of ENTSO-E object type `Y` \
+                     (Area); a Bilanzkreis is type `X` (Party) and belongs in a different field.",
+                    self.identity.bilanzierungsgebiet_id
+                )
+            })?;
+        Ok(())
+    }
+
     /// Resolve every `env:VARNAME` indirection in the loaded config.
     ///
     /// Without this the placeholder is used verbatim: a documented

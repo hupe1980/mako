@@ -161,7 +161,16 @@ pub async fn update_run_aggregated(
     Ok(())
 }
 
-/// Mark a run as acknowledged by BIKO.
+/// Mark a run acknowledged once every territory's MSCONS has reached the BIKO.
+///
+/// `message_ref` and `process_id` are the **first** territory's, kept on the run
+/// so the common single-territory deployment reads naturally; the full picture
+/// is [`list_series`]. Before that table existed these were the only record of a
+/// submission, so a run spanning four territories reported one and lost three.
+///
+/// # Errors
+///
+/// Propagates database errors.
 pub async fn mark_acked(
     pool: &PgPool,
     id: Uuid,
@@ -513,9 +522,12 @@ pub async fn close_korrekturbedarf(
 
 /// `true` when a run for this period already exists that has not failed.
 ///
-/// The scheduler wakes every 5 minutes and its due-date test is true for the
-/// whole `run_hour`, so without this it filed the same binding Summenzeitreihe
-/// a dozen times over.
+/// Both entry points need it. The scheduler wakes every 5 minutes and its
+/// due-date test is true for the whole `run_hour`, so without this it filed the
+/// same binding Summenzeitreihe a dozen times over. `POST /api/v1/sync` had no
+/// guard at all: two clicks, or a client retrying a request whose response was
+/// lost, filed the month twice — and a Summenzeitreihe the BIKO has acked
+/// cannot be withdrawn.
 ///
 /// # Errors
 ///
@@ -540,5 +552,131 @@ pub async fn has_live_run_for_period(
     .bind(period_from)
     .bind(period_to)
     .fetch_one(pool)
+    .await
+}
+
+// ── Per-territory submission records ──────────────────────────────────────────
+
+/// One territory's MSCONS 13003 within a run.
+#[derive(Debug, sqlx::FromRow)]
+pub struct SeriesRow {
+    pub id: Uuid,
+    pub bilanzierungsgebiet_id: String,
+    pub mabis_zp_id: String,
+    pub malo_count: i32,
+    pub interval_count: i32,
+    pub total_kwh: Option<String>,
+    /// `pending` · `acked` · `failed`.
+    pub status: String,
+    pub message_ref: Option<String>,
+    pub process_id: Option<Uuid>,
+    pub error_msg: Option<String>,
+    pub submitted_at: Option<OffsetDateTime>,
+}
+
+/// Record a territory's series before it is submitted.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn insert_series(
+    pool: &PgPool,
+    run_id: Uuid,
+    bilanzierungsgebiet_id: &str,
+    mabis_zp_id: &str,
+    malo_count: i32,
+    interval_count: i32,
+    total_kwh: &Decimal,
+) -> Result<Uuid, sqlx::Error> {
+    sqlx::query_scalar(
+        "INSERT INTO submission_series
+         (run_id, bilanzierungsgebiet_id, mabis_zp_id, malo_count, interval_count, total_kwh)
+         VALUES ($1,$2,$3,$4,$5,$6)
+         RETURNING id",
+    )
+    .bind(run_id)
+    .bind(bilanzierungsgebiet_id)
+    .bind(mabis_zp_id)
+    .bind(malo_count)
+    .bind(interval_count)
+    .bind(total_kwh.to_string())
+    .fetch_one(pool)
+    .await
+}
+
+/// Record that a territory's MSCONS reached the BIKO.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_series_acked(
+    pool: &PgPool,
+    series_id: Uuid,
+    message_ref: &str,
+    process_id: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "UPDATE submission_series
+            SET status = 'acked', message_ref = $2, process_id = $3, submitted_at = now()
+          WHERE id = $1",
+    )
+    .bind(series_id)
+    .bind(message_ref)
+    .bind(process_id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Record that a territory's MSCONS did not go out.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_series_failed(
+    pool: &PgPool,
+    series_id: Uuid,
+    error_msg: &str,
+) -> Result<(), sqlx::Error> {
+    sqlx::query("UPDATE submission_series SET status = 'failed', error_msg = $2 WHERE id = $1")
+        .bind(series_id)
+        .bind(error_msg)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Every territory's series for a run, in territory order.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_series(pool: &PgPool, run_id: Uuid) -> Result<Vec<SeriesRow>, sqlx::Error> {
+    sqlx::query_as::<_, SeriesRow>(
+        "SELECT id, bilanzierungsgebiet_id, mabis_zp_id, malo_count, interval_count,
+                total_kwh, status, message_ref, process_id, error_msg, submitted_at
+           FROM submission_series WHERE run_id = $1 ORDER BY bilanzierungsgebiet_id",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
+    .await
+}
+
+/// The territories of a run that reached the BIKO.
+///
+/// A retry must not re-file them: an acked Summenzeitreihe cannot be withdrawn,
+/// and sending the same territory again under a new version is a correction,
+/// not a retry.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn acked_territories(pool: &PgPool, run_id: Uuid) -> Result<Vec<String>, sqlx::Error> {
+    sqlx::query_scalar(
+        "SELECT bilanzierungsgebiet_id FROM submission_series
+          WHERE run_id = $1 AND status = 'acked'",
+    )
+    .bind(run_id)
+    .fetch_all(pool)
     .await
 }

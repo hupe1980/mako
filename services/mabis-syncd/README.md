@@ -1,301 +1,171 @@
-# mabis-syncd — MaBiS Summenzeitreihe synchronisation daemon
+# mabis-syncd — MaBiS Summenzeitreihen (ÜNB / NB role)
 
-`mabis-syncd` is the **ÜNB/NB side of MaBiS**: it aggregates per-MaLo quarter-hourly Lastgang data from `edmd` into one **Summenzeitreihe per Bilanzierungsgebiet**, files it with the **BIKO** (Bilanzkoordinator) as an MSCONS message through `makod`, and tracks what the BIKO does with it.
+Aggregates per-MaLo Lastgang from `edmd` into Bilanzierungsgebiets-Summenzeitreihen
+and files them with the BIKO as MSCONS PID 13003, through `makod`.
 
-A Summenzeitreihe is **MSCONS Prüfidentifikator 13003** ("Übertragung Summenzeitreihe"). UTILTS carries Berechnungsformel and Zählzeit-/Schaltzeitdefinitionen and has no Summenzeitreihe use case.
-
-| Feature | Detail |
+| | |
 |---|---|
-| HTTP port | `:8880` |
-| Database | PostgreSQL 15+ (sqlx 0.8, schema from `src/migrations/0001_initial.sql`) |
-| Schema | `submission_runs` — one row per submission attempt, keyed `(tenant, Bilanzierungsgebiet, period, version)`; `submission_malo_log` — per-MaLo contribution; `pruefmitteilung` — inbound BIKO objections |
-| Outbound | `makod` command `mabis.summenzeitreihe.uebermitteln` (Marktrolle `NB`/`ÜNB`) → MSCONS 13003 via AS4 |
-| Inbound | `POST /api/v1/datenstatus` (IFTSTA 21003/21004) · `POST /api/v1/pruefmitteilung` (IFTSTA 21000/21001) |
-| Aggregation | `mako-mabis::SummenzeitreiheBuilder` on a **quarter-hourly** grid; rejects any interval that does not match the settlement slot length |
-| Territory resolution | Per-MaLo lookup in `marktd` (`GET /api/v1/malos/{id}` → `bilanzierungsgebiet`) |
-| Schedule | 10. Werktag after the Bilanzierungsmonat (last day of the Erstaufschlag window) |
-| Auth | OIDC/JWT + Cedar ABAC — `read-mabis-run`, `trigger-mabis-run` (NB/ÜNB only) |
-| Health | `GET /health/live`, `GET /health/ready` (PostgreSQL ping) |
-| Regulatory | BK6-24-174 Anlage 3 (MaBiS); MSCONS AHB 3.2 §8.3.1; IFTSTA AHB 2.1 |
+| **Port** | `:8880` |
+| **Regulatory basis** | BK6-24-174 Anlage 3 (MaBiS); MSCONS AHB 3.2 § 8.3.1 |
+| **Commodity** | Strom only — gas balances through GaBi Gas, on the Gastag and against a Marktgebiet |
 
----
-
-## Quick Start
-
-```bash
-mabis-syncd mabis-syncd.toml
+```text
+edmd /billing-periods ──► discover MaLos (Sparte = STROM)
+marktd /malos/{id}    ──► group by Bilanzierungsgebiet
+marktd /…/mabis-zp    ──► the LOC+172 Meldepunkt per territory
+edmd /lastgang/{id}   ──► Bezugs-register only (OBIS 1.x.y)
+                          │
+              SummenzeitreiheBuilder (15-min grid, Berlin-local)
+                          │
+              makod ──► one MSCONS 13003 per Bilanzierungsgebiet
 ```
 
-Migrations run automatically at startup. The service **refuses to start without an `[oidc]` section** unless `allow_insecure_no_auth = true` is set explicitly — `POST /api/v1/sync` files a binding Summenzeitreihe with the BIKO, so running it unauthenticated must be a decision someone wrote down.
+## One filing per territory
 
----
+MaBiS settles per Bilanzierungsgebiet, so a run files one MSCONS per territory
+and records each in `submission_series` with its own `message_ref` or its reason
+for failing. `submission_runs` keeps the aggregate.
 
-## The two axes: Version and Datenstatus
+An acked Summenzeitreihe **cannot be withdrawn**, so a retry of a partly-filed
+run skips the territories the BIKO already accepted; re-sending one is a
+correction under a higher version, not a retry. The run still fails as a whole
+when any territory did not go out — a month settled short is not a success.
 
-MaBiS identifies a Summenzeitreihe by the 3-tuple **(MaBiS-Zählpunkt, Bilanzierungsmonat, Version)**. These are two independent axes, and conflating them is the most common modelling error.
+## The run refuses rather than under-reporting
 
-```mermaid
-flowchart LR
-    subgraph outbound["Outbound — this service assigns"]
-        V1["Version 1<br/>2026-07-14T05:00Z"]
-        V2["Version 2<br/>2026-08-03T05:00Z"]
-        V1 -->|"correction under a<br/>higher version"| V2
-    end
+The BIKO cannot tell a short Summenzeitreihe from a complete one, and a filing
+is irreversible once acked. A run therefore fails when:
 
-    subgraph inbound["Inbound — the BIKO assigns"]
-        PD["Prüfdaten"]
-        AD["Abrechnungsdaten"]
-        AG["abgerechnete Daten"]
-        PD -->|"positive<br/>Prüfmitteilung"| AD
-        AD -->|"settled"| AG
-    end
+- a discovered MaLo could not be aggregated (no Bilanzierungsgebiet in `marktd`,
+  a fetch failure, a Lastgang that does not match the settlement grid);
+- a territory's grid still has empty slots after every MaLo is folded in;
+- a territory has no MaBiS-Zählpunkt assigned, or `marktd` returns the
+  Bilanzierungsgebiet EIC in its place.
 
-    V1 -.->|"IFTSTA 21003/21004"| PD
-    V2 -.-> PD
-```
+Nothing falls back to the configured territory: misfiling energy into the wrong
+zone is a settlement error the BIKO cannot detect.
 
-**Version** is not a lifecycle state. §3.8.2: *"Die Version einer Summenzeitreihe ist jeweils aufsteigend zu vergeben und ist über die gesamte BKA beizubehalten."* It is a timestamp — MSCONS carries it as `SG6 DTM+293` (Fertigstellungsdatum/-zeit, `CCYYMMDDHHMMSSZZZ`) — which is what makes "ascending" well defined. A correction is the same series resent under a higher version, so a period may hold arbitrarily many. `BGM` DE 1225 is always `9` (Original); there is no replace qualifier, so the version is the only thing distinguishing a correction from the first filing.
+## Windows and Datenstatus
 
-**Datenstatus** is assigned exclusively by the BIKO (§3.8.3: *"Der Datenstatus wird ausschließlich vom BIKO vergeben"*) and arrives inbound via IFTSTA `SG7 STS+Z04`. This service records it and never derives one.
+The phase follows from the Werktag calendar (§ 3.10, Tabelle 2), not from the
+caller:
 
-| Datenstatus | Meaning |
-|---|---|
-| `Prüfdaten` | received, not yet accepted for settlement |
-| `Abrechnungsdaten` | accepted for the ordinary BKA |
-| `Abrechnungsdaten KBKA` | accepted for the Korrekturbilanzkreisabrechnung |
-| `abgerechnete Daten` | settled in the BKA |
-| `abgerechnete Daten KBKA` | settled in the KBKA |
-
-Settlement uses the **highest version carrying `Abrechnungsdaten`** — not simply the newest version.
-
----
-
-## Fristen (§3.10, Tabelle 2)
-
-Werktage after the end of the Bilanzierungsmonat, for a BG-SZR (Kategorie B):
-
-| Phase | BKA | KBKA |
+| Window | Werktage after period end | Datenstatus of a new version |
 |---|---|---|
-| Erstaufschlag | 1.–10. WT | — |
-| Clearingphase | 11.–30. WT | 31. WT – end of month 7 |
-| Abrechnungsstichtag | 42. WT | end of month 8 |
+| Erstaufschlag (BKA) | ≤ 10 WT | Abrechnungsdaten directly |
+| Clearing (BKA) | ≤ 30 WT | Prüfdaten, promoted by a positive Prüfmitteilung |
+| KBKA | after 30 WT | Prüfdaten |
 
-Within the Erstaufschlag a new version is assigned `Abrechnungsdaten` automatically; afterwards it starts as `Prüfdaten` and needs a positive Prüfmitteilung to be promoted. The scheduler therefore submits on the **10. Werktag** by default, which maximises the input data while the automatic assignment still applies.
+The scheduler fires at `run_hour_utc` on `erstaufschlag_werktag` — the last
+Werktag of the Erstaufschlag window, which gives the aggregate the most complete
+input while the BIKO still assigns Abrechnungsdaten automatically.
 
----
+A Summenzeitreihe is identified by (MaBiS-Zählpunkt, Bilanzierungsmonat,
+Version), and the version ascends across the whole BKA (§ 3.8.2). It is stored
+truncated to whole seconds, because MSCONS SG6 `DTM+293` carries no more and the
+BIKO echoes it back for matching.
 
-## Pipeline
+The Datenstatus is assigned **exclusively by the BIKO** (§ 3.8.3) and arrives
+inbound via IFTSTA; this service records it and never derives one.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant sched as Scheduler
-    participant syncd as mabis-syncd
-    participant edmd
-    participant marktd
-    participant makod
-    participant biko as BIKO
+## Timekeeping
 
-    sched->>syncd: 10. Werktag after the Bilanzierungsmonat
-    syncd->>edmd: GET /api/v1/billing-periods (discover MaLos)
-    syncd->>marktd: GET /api/v1/malos/{id} (resolve Bilanzierungsgebiet)
+The MaBiS grid is Berlin-local. `period_to` is the inclusive last day, so the
+window runs to the *following* Berlin midnight — March holds `31 × 96 − 4` slots
+and October `31 × 96 + 4`. A UTC window keeps every month at 24 h a day, which
+is wrong for exactly the two DST months.
 
-    loop per MaLo
-        syncd->>edmd: GET /api/v1/lastgang/{malo_id}
-        edmd-->>syncd: BO4E Lastgang — one value per ¼-h slot
-    end
+## API
 
-    syncd->>syncd: SummenzeitreiheBuilder — one series per Bilanzierungsgebiet
-    syncd->>makod: mabis.summenzeitreihe.uebermitteln
-    makod->>biko: MSCONS 13003 via AS4
-
-    biko-->>syncd: IFTSTA 21003/21004 → POST /api/v1/datenstatus
-    biko-->>syncd: IFTSTA 21000/21001 → POST /api/v1/pruefmitteilung
-    Note over syncd: a negative Prüfmitteilung opens Korrekturbedarf
-```
-
-### What fails a run
-
-A Summenzeitreihe that is short is indistinguishable from a correct one once the BIKO has acked it, so the run fails rather than filing silently:
-
-- **No MaLos discovered** — an empty series would settle a Bilanzierungsgebiet at zero.
-- **A MaLo could not be fetched** — its energy would simply be absent.
-- **An interval does not match the ¼-h grid** — the total would be right and the shape wrong, which the BIKO cannot detect from the message.
-
-Incomplete coverage (slots no MaLo reported) is logged at `WARN` with the missing-slot count.
-
----
-
-## Endpoints
-
-| Method | Path | Cedar action | Description |
-|---|---|---|---|
-| `POST` | `/api/v1/sync` | `trigger-mabis-run` | Trigger an aggregation and submission |
-| `GET` | `/api/v1/runs` | `read-mabis-run` | Recent submission runs |
-| `GET` | `/api/v1/runs/{id}` | `read-mabis-run` | One run with status and Datenstatus |
-| `PUT` | `/api/v1/runs/{id}/retry` | `trigger-mabis-run` | Retry a failed run (new version) |
-| `POST` | `/api/v1/datenstatus` | `trigger-mabis-run` | Record the BIKO-assigned Datenstatus |
-| `POST` | `/api/v1/pruefmitteilung` | `trigger-mabis-run` | Record an inbound Prüfmitteilung |
-| `GET` | `/api/v1/korrekturbedarf` | `read-mabis-run` | Negative Prüfmitteilungen with no correction yet |
-
-Triggering is separated from reading and restricted to the **NB** and **ÜNB** roles — the roles that aggregate a Bilanzierungsgebiet and have standing to file in the tenant's name. Read access is tenant-scoped because run history discloses which territories a tenant settles.
-
-## MCP server (read-only)
-
-`/mcp` on the same port — the agent plane's window into submission state.
-`agentd`'s `mabis-syncd-agent` was a submission monitor reading obsd's KPI
-report as a proxy for the table this server exposes. Filing a submission is
-**not** on MCP: it is a binding filing with the BIKO and stays behind the
-authenticated REST surface, where Cedar authorises a person.
-
-| Tool | Description |
-|---|---|
-| `get_submission_status` | Recent runs + failed / retry-exhausted / open-Korrekturbedarf counts |
-| `list_failed_submissions` | Failed runs, newest first, with `attempt_count` and `error_msg` |
-| `get_submission_run` | One run by UUID (version as RFC 3339) |
-| `list_korrekturbedarf` | Open negative Prüfmitteilungen (§9.8.1 obligations) |
-
-One prompt, `submission-triage`, carries the triage workflow — granted to the
-specialist as `context.prompts` rather than paraphrased into its manifest.
-
-Note for `agentd` deployments: agentplane refuses `-` in a `tool://` server
-component, so the grants and the `[mcp_servers]` key spell it `mabis_syncd`.
-
-## CloudEvents
-
-Emitted through the transactional outbox (persist-before-dispatch), drained to
-`erp_webhook_url` when configured. Both are failure signals — a healthy
-submission cycle is silent:
-
-| Type | When |
-|---|---|
-| `de.mabis.submission.failed` | An aggregation or BIKO submission failed; the row and the event commit in one transaction. Carries `run_id`, `bilanzierungsgebiet_id`, period, phase and `attempt_count` — at 3 the scheduler stops retrying. |
-| `de.mabis.korrekturbedarf.opened` | A negative Prüfmitteilung was recorded (§9.8.1): a corrected Summenzeitreihe is owed within the Clearing window. |
-
----
-
-## Submission target — BIKO today, MaBiS-Hub later
-
-`submission_target` selects where Summenzeitreihen are filed:
-
-```toml
-submission_target = "biko-bilateral"   # default; "mabis-hub" is not yet implemented
-```
-
-BK6-24-210 will replace bilateral BIKO submission with a central **MaBiS-Hub**
-that routes **exclusively by MaLo-ID**. Today a series is filed under its
-MaBiS-Zählpunkt (`LOC+172`) for a Bilanzierungsgebiet (`LOC+107`), and the
-aggregation step groups MaLos *by Bilanzierungsgebiet* — that grouping is what
-the cutover invalidates, not just the endpoint.
-
-The `mabis-hub` target **refuses at startup** rather than guessing a format.
-There is no Beschluss (the H1-2026 target slipped, the -1 consultation closed
-17.11.2025, go-live is planned for H2 2028), so no wire format, endpoint or
-payload shape is published. An invented format that reaches a real Hub is
-indistinguishable, at the point of failure, from a correct submission that was
-rejected.
-
-Three things the cutover will touch, recorded so the audit is not repeated:
-
-| What | Today | Under the Hub |
+| Method | Path | Cedar action |
 |---|---|---|
-| Aggregation key | one series per Bilanzierungsgebiet | routed per MaLo-ID |
-| `mabis_zp_id` | `LOC+172` Meldepunkt, from marktd master data | not a routing key; payload content is a format question |
-| Tranchen | `marktd.tranche` keyed on `tranche_id`, parent `malo_id` | a Tranche is not a MaLo — needs a resolution rule |
+| `POST` | `/api/v1/sync` | `trigger-mabis-run` |
+| `GET` | `/api/v1/runs` · `/runs/{id}` | `read-mabis-run` |
+| `PUT` | `/api/v1/runs/{id}/retry` | `trigger-mabis-run` |
+| `POST` | `/api/v1/datenstatus` | `record-biko-response` |
+| `POST` | `/api/v1/pruefmitteilung` | `record-biko-response` |
+| `GET` | `/api/v1/korrekturbedarf` | `read-mabis-run` |
 
----
+Filing is restricted to the `NB` and `UENB` roles. Recording an inbound BIKO
+response is a separate, unrestricted-by-role action: relaying an IFTSTA needs
+none of the power to file. `tests/authorization_guard.rs` pins both directions.
+
+`POST /api/v1/sync` refuses a period that already has a live run — filing it
+again is a correction, which is what `corrects_run_id` is for.
+`GET /api/v1/runs/{id}` returns the per-territory `series`.
+
+## Korrekturbedarf (§ 9.8.1)
+
+A negative Prüfmitteilung opens an obligation: the ÜNB answers with a corrected
+BG-SZR under a higher version. `GET /api/v1/korrekturbedarf` lists the open
+ones; filing the correction with `corrects_run_id` closes them.
 
 ## Configuration
 
 ```toml
+# mabis-syncd.toml
 [http]
 addr = "0.0.0.0:8880"
 
 [database]
-url = "env:MABIS_SYNCD_DATABASE_URL"
+url = "env:DATABASE_URL"
 
 [identity]
-tenant                  = "env:MABIS_SYNCD_TENANT"                  # BDEW Codenummer of the ÜNB/NB
-sender_mp_id            = "env:MABIS_SYNCD_SENDER_MP_ID"            # NAD+MS in MSCONS
-receiver_mp_id          = "env:MABIS_SYNCD_RECEIVER_MP_ID"          # NAD+MR (BIKO)
-bilanzierungsgebiet_id  = "env:MABIS_SYNCD_BILANZIERUNGSGEBIET_ID"  # fallback only
+tenant                 = "9900357000004"
+sender_mp_id           = "9900357000004"   # MSCONS NAD+MS
+receiver_mp_id         = "9900077000006"   # BIKO, MSCONS NAD+MR
+bilanzierungsgebiet_id = "11YMAKO-TEST-01U"  # Y-type (Area) EIC
 
 [edmd]
 url     = "http://edmd:8380"
-api_key = "env:MABIS_SYNCD_EDMD_API_KEY"
+api_key = "env:MABIS_EDMD_API_KEY"
 
-[marktd]                    # required — per-MaLo Bilanzierungsgebiet lookup
+[marktd]
 url     = "http://marktd:8180"
-api_key = "env:MABIS_SYNCD_MARKTD_API_KEY"
+api_key = "env:MABIS_MARKTD_API_KEY"
 
 [makod]
 url     = "http://makod:8080"
-api_key = "env:MABIS_SYNCD_MAKOD_API_KEY"
-
-[oidc]                      # required unless allow_insecure_no_auth = true
-issuer   = "https://login.microsoftonline.com/{tenant-id}/v2.0"
-audience = "api://mako-mabis-syncd"
+api_key = "env:MABIS_MAKOD_API_KEY"
 
 [schedule]
-erstaufschlag_werktag = 10   # Werktag after the Bilanzierungsmonat to submit on
-run_hour_utc          = 5    # 05:00 UTC = 06:00 CET / 07:00 CEST
+erstaufschlag_werktag = 10
+run_hour_utc          = 5    # 06:00 CET / 07:00 CEST
 
-[mcp]                        # read-only MCP server at /mcp
-api_key = "env:MABIS_SYNCD_MCP_API_KEY"
+# de.mabis.* CloudEvents, drained from the transactional outbox.
+erp_webhook_url = "https://erp.example.com/webhooks/mabis"
+erp_hmac_secret = "env:MABIS_ERP_HMAC_SECRET"
 
-# Drains the de.mabis.* outbox (submission failures, Korrekturbedarf) —
-# persist-before-dispatch, retry + dead-letter, like every other service.
-# Point it at whatever should hear about a failed filing: the ERP, or
-# agentd's /webhook. Unset, the events are still enqueued but nothing
-# delivers them — and the startup log says so.
-erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
+[oidc]
+issuer   = "https://auth.example.com/realms/mako"
+audience = "api://mako-mabis-syncd"
 ```
 
-Every value may be written as `env:VARNAME` and is resolved at startup. A referenced variable that is not set fails the process with the variable named — unresolved, the placeholder would be sent as the literal bearer token and every upstream call would 401.
+Startup refuses a `bilanzierungsgebiet_id` that is not a Y-type EIC — a
+Bilanzkreis is type `X` and the same length, and `LOC+107` carries the value as
+free text, so the BIKO would accept either. It also refuses
+`submission_target = "mabis-hub"`: BK6-24-210 has no Beschluss, so no wire
+format is published, and an invented one that reaches a real Hub is
+indistinguishable at the point of failure from a correct one that was rejected.
 
-`identity.bilanzierungsgebiet_id` is only a **fallback** for MaLos whose master data names no territory, and those MaLos are logged rather than folded in silently: energy filed against the wrong territory is a settlement error the BIKO cannot detect.
+Without `[oidc]`, startup refuses unless `allow_insecure_no_auth = true` — a
+MaBiS submission is a binding filing that cannot be withdrawn.
 
-### MaBiS-Zählpunkt vs Bilanzierungsgebiet
+## Events
 
-The Summenzeitreihe carries **two different SG6 `LOC` identifiers**, and MSCONS
-AHB 3.2 gives each its own qualifier:
+`de.mabis.submission.failed` and `de.mabis.korrekturbedarf.opened`, written to
+the transactional outbox in the same transaction as the row they describe. Set
+`erp_webhook_url` or nothing delivers them.
 
-| Qualifier | Carries |
-|---|---|
-| `LOC+172` | **Meldepunkt** — the MaBiS-Zählpunkt (33-char Zählpunktbezeichnung) |
-| `LOC+107` | **Bilanzierungsgebiet** (16-char EIC) |
-| `LOC+237` | Bilanzkreis |
+## MCP server
 
-Both are free text at the MIG level, so a message that swaps them still parses
-and still validates — the BIKO simply files the Summenzeitreihe against the
-wrong Meldepunkt. Nothing downstream can detect it, which is why the two are
-kept as separate inputs all the way from master data to the wire.
+`/mcp` (Streamable HTTP), read-only over submission state.
 
-The assignment is **marktd master data**, not service configuration. Before each
-submission `mabis-syncd` resolves it over HTTP:
+## Tests
 
+`cargo test -p mabis-syncd` runs the unit and policy tests. The real-PostgreSQL
+suite (`tests/schema_pg.rs`) needs a Docker daemon and skips without one:
+
+```sh
+DOCKER_HOST=unix://$HOME/.docker/run/docker.sock cargo test -p mabis-syncd
 ```
-GET /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   → { "mabis_zp_id": "DE0004030099000000000000000012345", ... }
-PUT /api/v1/bilanzierungsgebiete/{eic}/mabis-zp   (NB role, Cedar `write-mabis-zp`)
-GET /api/v1/mabis-zp                             → every assignment for the tenant
-```
-
-Every failure path **refuses** rather than substituting — an unassigned
-territory (`404`), an unreachable marktd, a malformed response, or a response
-echoing the EIC back as the Meldepunkt all abort the submission. A Summenzeitreihe
-filed against the wrong Meldepunkt is indistinguishable, to the BIKO, from a
-correct one, so not sending is the safe failure.
-
-Both ends refuse the EIC-as-Meldepunkt substitution: marktd rejects it on write
-(a `400`, and a table `CHECK`), and the submission path re-checks it rather than
-taking master data on trust.
-
----
-
-## Related
-
-- [`mako-mabis`](../../crates/mako-mabis) — aggregation domain and the BKV-side Bilanzkreisabrechnung workflow
-- [`edmd`](../edmd) — source of the quarter-hourly Lastgang
-- [`makod`](../makod) — MSCONS rendering and AS4 transport
-- [Operator guide](https://hupe1980.github.io/mako/mabis-syncd) — full documentation

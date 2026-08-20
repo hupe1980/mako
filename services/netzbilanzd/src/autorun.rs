@@ -169,10 +169,8 @@ async fn fetch_gemessen(
     req: &MmmAutoRunRequest,
 ) -> ApiResult<Decimal> {
     let edmd = cfg
-        .edmd_url
-        .as_deref()
-        .ok_or_else(|| ApiError::Unprocessable("edmd_url is not configured".to_owned()))?
-        .trim_end_matches('/');
+        .edmd(http.clone())
+        .ok_or_else(|| ApiError::Unprocessable("edmd_url is not configured".to_owned()))?;
 
     // `sparte` is passed through: edmd aggregates a Gas saldo over the 06:00
     // Gastag and a Strom saldo over the calendar day, so omitting it settles gas
@@ -181,32 +179,19 @@ async fn fetch_gemessen(
         grid_billing::Sparte::Strom => "strom",
         grid_billing::Sparte::Gas => "gas",
     };
-    let url = format!(
-        "{edmd}/api/v1/imbalance/{malo_id}/{}/{}?sparte={sparte}&bilanziert_kwh={}",
-        req.period_year, req.period_month, req.bilanziert_kwh
+    let path = format!(
+        "/api/v1/imbalance/{malo_id}/{}/{}",
+        req.period_year, req.period_month
     );
-    let mut request = http.get(&url);
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        request = request.bearer_auth(key);
-    }
-
-    let response = request
-        .send()
+    let request = edmd.get(&path).query(&[
+        ("sparte", sparte.to_owned()),
+        ("bilanziert_kwh", req.bilanziert_kwh.to_string()),
+    ]);
+    let body: serde_json::Value = edmd
+        .json(request)
         .await
-        .map_err(|e| ApiError::Unprocessable(format!("edmd unreachable: {e}")))?;
-    if response.status() == reqwest::StatusCode::NOT_FOUND {
-        return Err(ApiError::NotFound);
-    }
-    if !response.status().is_success() {
-        return Err(ApiError::Unprocessable(format!(
-            "edmd returned HTTP {}",
-            response.status()
-        )));
-    }
-    let body: serde_json::Value = response
-        .json()
-        .await
-        .map_err(|e| ApiError::Unprocessable(format!("edmd response is not JSON: {e}")))?;
+        .map_err(|e| ApiError::Unprocessable(e.to_string()))?
+        .ok_or(ApiError::NotFound)?;
 
     body.get("gemessen_kwh")
         .and_then(|v| match v {

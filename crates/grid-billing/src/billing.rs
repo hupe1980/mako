@@ -1163,10 +1163,17 @@ pub fn settle_mmm(input: &MmmInput) -> Result<SettlementResult, BillingError> {
             },
         ],
     };
-    // Gas and Strom MMM use separate settlement types for correct audit references.
-    let mmm_settlement_type = match input.sparte {
-        Sparte::Gas => SettlementType::MmmGas,
-        Sparte::Strom => SettlementType::MmmStrom,
+    // Gas and Strom MMM use separate settlement types for correct audit
+    // references. A self-issued Mehrmenge leg is a third: the AHB marks it
+    // *Selbstausgestellt*, and that is carried by the settlement type because
+    // the BO4E rendering reads `netznutzungrechnungsart` from it.
+    let mmm_settlement_type = if input.selbstausgestellt {
+        SettlementType::MmmSelbstausstellt
+    } else {
+        match input.sparte {
+            Sparte::Gas => SettlementType::MmmGas,
+            Sparte::Strom => SettlementType::MmmStrom,
+        }
     };
 
     // Sign convention per GPKE (BK6-24-174) Teil 1 Kap. 8.4 Nr. 3 and, for gas,
@@ -1989,6 +1996,7 @@ mod tests {
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
             wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            selbstausgestellt: false,
         }
     }
 
@@ -2308,6 +2316,7 @@ mod tests {
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
             wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            selbstausgestellt: false,
         };
         let r = settle_mmm(&input).unwrap();
         // 100 kWh over profile × 2.0 ct = 2.00 EUR charged at the Mindermengen price.
@@ -2336,6 +2345,7 @@ mod tests {
             mehr_preis_ct_per_kwh: d("4.0"),
             minder_preis_ct_per_kwh: d("2.0"),
             wiederverkaeufer: crate::umsatzsteuer::Wiederverkaeuferstatus::KEINER,
+            selbstausgestellt: false,
         };
         let r = settle_mmm(&input).unwrap();
         // 100 kWh under profile × 4.0 ct = 4.00 EUR credited at the Mehrmengen price.

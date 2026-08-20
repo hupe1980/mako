@@ -1,144 +1,170 @@
 +++
 title = "portald Operator Guide"
-description = "portald operator guide: Customer Portal read-model gateway. Aggregates Lastgang (edmd), invoices (billingd), account balance (accountingd), VersorgungsStatus (marktd), and EEG settlement (einsd) into a single REST + SSE API. OIDC bearer-token authentication. Port :9480."
+description = "portald operator guide: customer portal read-model gateway (LF role). Aggregates Lastgang, invoices, account ledger, supply status and EEG settlement into one customer-facing REST API, and proxies the §41 EnWG self-service writes. Every route resolves customer ownership through vertragd. Port :9480."
 weight = 36
 [extra]
 mermaid = true
 +++
 # `portald` — Customer Portal Gateway
 
-`portald` is a **stateless read-model gateway** that aggregates data from all LF backend
-services into a single customer-facing REST + Server-Sent Events API.
+`portald` is a **stateless read-model gateway** that aggregates the LF back-end
+services into one customer-facing REST API, and proxies the § 41 EnWG
+self-service writes to the services that own them.
 
 ```mermaid
 graph LR
-    customer["Customer App<br/>(mobile / web)"]
+    customer["Customer app<br/>(mobile / web)"]
     portald["portald :9480<br/>(this service)"]
+    vertragd["vertragd :9780<br/>customer ↔ MaLo · contracts"]
 
-    edmd["edmd :8380<br/>Lastgang · MeterBillingPeriod"]
-    billingd["billingd :9280<br/>billing_records"]
-    accountingd["accountingd :9380<br/>ledger · balance"]
+    edmd["edmd :8380<br/>Lastgang"]
+    billingd["billingd :9280<br/>invoices · XRechnung"]
+    accountingd["accountingd :9380<br/>ledger · SEPA"]
     marktd["marktd :8180<br/>VersorgungsStatus"]
-    einsd["einsd :9180<br/>eeg_anlagen · settlements"]
+    einsd["einsd :9180<br/>EEG settlement"]
 
     customer -->|"GET /portal/{malo_id}/…<br/>Bearer JWT"| portald
-    portald -->|"GET /api/v1/lastgang/{malo_id}"| edmd
-    portald -->|"GET /api/v1/billing?malo_id=…"| billingd
-    portald -->|"GET /api/v1/accounts/{malo_id}/…"| accountingd
-    portald -->|"GET /api/v1/versorgung/{malo_id}"| marktd
-    portald -->|"GET /api/v1/anlagen?malo_id=…"| einsd
+    portald -->|"1. authenticate?malo_id=…<br/>(customer token forwarded)"| vertragd
+    portald -->|"2. read"| edmd
+    portald --> billingd
+    portald --> accountingd
+    portald --> marktd
+    portald --> einsd
 ```
 
 Port: **`:9480`**
 
 ---
 
-## Design Principles
+## Design principles
 
-- **No domain policy.** `portald` never modifies data. All writes go directly to the
-  authoritative service via the ERP Command API.
-- **Stateless.** No database. Can be scaled horizontally without coordination.
-- **Service-unavailable isolation.** When an upstream is unreachable, that field returns
-  `null` rather than failing the entire request.
-- **OIDC-gated.** All endpoints require a valid JWT bearer token. When `oidc_issuer` is
-  absent from config, authentication is skipped (dev/test mode only).
+- **Stateless.** No database, no cache, no session store. Every response is
+  assembled from the authoritative services on the request path, so a portal
+  reply can never be staler than they are and replicas need no coordination.
+- **No domain policy.** Notice periods, tariff rules, IBAN validation and
+  invoice rendering belong to the services that own them. `portald` validates
+  request *shape* and relays their verdicts unchanged.
+- **Degrade a tile, not the screen.** On the dashboard, a field is `null` when
+  its upstream is unconfigured or has no data.
+
+---
+
+## Authorization
+
+`portald` verifies no tokens and holds no customer↔MaLo map. It forwards the
+customer's `Authorization: Bearer` header to
+`vertragd GET /api/v1/kunden/authenticate?malo_id=…` and relays the verdict.
+`vertragd` owns the OIDC verifier, the customer record and the mapping, so it is
+the only place that can answer "may this identity read this delivery point" —
+and a second verifier here could only ever disagree with it.
+
+The service credential rides as `X-Api-Key`, never as a second `Authorization`
+header: which identity `vertragd` sees must not depend on header ordering.
+
+| `vertragd` answers | `portald` answers |
+|---|---|
+| `2xx` with a `kunden_id` | the request proceeds |
+| `401` / no bearer / no customer profile | `401` |
+| `403` | `403` |
+| unreachable, `5xx`, or `2xx` without a `kunden_id` | `503` |
+
+An authorization service that cannot answer is not an answer of yes.
+
+**One gate, applied everywhere.** `auth::authorize` is the only way to obtain a
+`PortalAuthCtx`, and every customer-scoped handler takes one by value — a route
+that skips the check has no context to work with.
+`tests/authorization_guard.rs` drives all 15 routes against a refusing
+`vertragd` and fails if any of them answers with upstream data.
+
+**Object ownership is checked too.** `GET …/invoices/{record_id}/download`
+re-reads the billing record and compares its `malo_id` to the authorised one
+before rendering. Authorising the path parameter alone would let any customer
+stream any invoice in the tenant by id.
+
+Starting without `vertragd_url` is refused unless `allow_insecure_no_auth = true`
+is set explicitly — an omitted URL is a mistake, not a request to serve every
+customer's data to every caller.
 
 ---
 
 ## Endpoints
 
-### Read-only endpoints
+All paths are prefixed `/api/v1/portal/{malo_id}`.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/v1/portal/{malo_id}/dashboard` | Parallel aggregation — all fields in one call |
-| `GET` | `/api/v1/portal/{malo_id}/lastgang` | Interval meter reads (proxied from `edmd`) |
-| `GET` | `/api/v1/portal/{malo_id}/invoices` | Invoice list (proxied from `billingd`) |
-| `GET` | `/api/v1/portal/{malo_id}/balance` | Current open-items balance (from `accountingd`) |
-| `GET` | `/api/v1/portal/{malo_id}/kontoauszug` | Full account statement / ledger (from `accountingd`) |
-| `GET` | `/api/v1/portal/{malo_id}/vorauszahlung` | Advance payment schedule / Abschlag (from `accountingd`) |
-| `GET` | `/api/v1/portal/{malo_id}/eeg` | EEG/KWKG plant list + latest settlements (from `einsd`) |
-| `GET` | `/api/v1/portal/{malo_id}/versorgung` | Supply state (from `marktd`) |
-| `GET` | `/api/v1/portal/{malo_id}/events` | Server-Sent Events stream (30 s heartbeat) |
+| Method | Path | Upstream |
+|--------|------|----------|
+| `GET` | `/dashboard` | all five, concurrently |
+| `GET` | `/lastgang?from=&to=` | `edmd` — BO4E `Lastgang` array |
+| `GET` | `/invoices?limit=&outcome=` | `billingd` — page size clamped to 100 |
+| `GET` | `/invoices/{record_id}/download` | `billingd` — XRechnung 3.0 CII XML (EN 16931) |
+| `GET` | `/balance` | `accountingd` — open-items balance |
+| `GET` | `/kontoauszug` | `accountingd` — full statement (§ 666 BGB) |
+| `GET` | `/vorauszahlung` | `accountingd` — Abschlag schedule (§ 40 Abs. 1 EnWG) |
+| `GET` | `/eeg` | `einsd` — plants + settlements |
+| `GET` | `/versorgung` | `marktd` — supply state |
+| `GET` | `/vertrag` | `vertragd` — active supply contract |
+| `GET` | `/kuendigungsfrist` | `vertragd` — reachable end dates per reason |
+| `POST` | `/tarifwechsel` | `vertragd` |
+| `POST` | `/kuendigen` | `vertragd` |
+| `PUT` | `/kontakt` | `vertragd` — GDPR Art. 16 |
+| `PUT` | `/sepa` | `accountingd` |
 
-### Self-service write endpoints (§41 EnWG customer rights)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET`  | `/api/v1/portal/{malo_id}/vertrag` | Current supply contract (resolved via `vertragd`) |
-| `POST` | `/api/v1/portal/{malo_id}/tarifwechsel` | Tariff switch (§41 Abs. 1 EnWG; min. 14 days notice) |
-| `POST` | `/api/v1/portal/{malo_id}/kuendigen` | Contract termination (notice period per contract; §20 StromGVV/GasGVV two weeks in Grundversorgung) |
-| `PUT`  | `/api/v1/portal/{malo_id}/kontakt` | Update contact data (GDPR Art. 16) |
-| `PUT`  | `/api/v1/portal/{malo_id}/sepa` | Update SEPA direct-debit mandate |
-| `GET`  | `/api/v1/portal/{malo_id}/invoices/{id}/download` | XRechnung 3.0 CII XML (EN 16931) |
-| `GET`  | `/health/live` | Liveness |
-| `GET`  | `/health/ready` | Readiness |
+`/health/live`, `/health/ready` and `/metrics` come from the service runner.
 
 ---
 
 ## Dashboard
 
-`GET /api/v1/portal/{malo_id}/dashboard` fetches from all configured upstream services **in parallel** (`tokio::join!`) and returns a single JSON object:
+`GET /api/v1/portal/{malo_id}/dashboard` fetches from every configured upstream
+concurrently and returns one object:
 
 ```json
 {
   "malo_id": "51238696012",
-  "tenant": "9910000000002",
-  "versorgung": {
-    "lieferstatus": "Beliefert",
-    "lf_mp_id": "9910000000002",
-    "lf_next_lieferbeginn": null
-  },
-  "balance": {
-    "balance_ct": -4500,
-    "currency": "EUR"
-  },
-  "last_invoice": [
-    {
-      "id": "…",
-      "period_from": "2026-06-01",
-      "period_to": "2026-06-30",
-      "total_brutto_eur": "126.14",
-      "outcome": "generated"
-    }
-  ],
-  "meter_summary": {
-    "arbeitsmenge_kwh": "312.5",
-    "sparte": "STROM"
-  }
+  "tenant": "9900357000004",
+  "kundentyp": "B2C",
+  "versorgung":    { "lieferstatus": "Beliefert", "lf_mp_id": "9900357000004" },
+  "balance":       { "balance_ct": -4500, "currency": "EUR" },
+  "last_invoice":  [ { "id": "…", "total_brutto_eur": "126.14" } ],
+  "meter_summary": { "arbeitsmenge_kwh": "312.5", "sparte": "STROM" },
+  "vorauszahlung": { "betrag_ct": 8900, "naechste_faelligkeit": "2026-07-01" }
 }
 ```
 
-Fields are `null` when the upstream service is not configured or returned 404.
-
 ---
 
-## Lastgang
+## Self-service writes (§ 41 EnWG)
 
-`GET /api/v1/portal/{malo_id}/lastgang?from=2026-06-01&to=2026-06-30`
+### Notice periods live in `vertragd`
 
-Proxies `edmd GET /api/v1/lastgang/{malo_id}?from=…&to=…`. Returns BO4E `Lastgang` array.
+`portald` validates the date *format* and nothing else. Whether a `lieferende`
+or `wirksamkeit` is reachable depends on the Vertragsart, on whether the
+customer is a Haushaltskunde (§ 3 Nr. 57 EnWG) and on the reason —
+§ 20 Abs. 1 StromGVV/GasGVV in the Grundversorgung, § 41b Abs. 5 EnWG on a move,
+§ 41 Abs. 5 Satz 4 EnWG after a price change, § 309 Nr. 9 lit. c BGB on term
+length. `vertragd` holds all of them.
 
----
+A second, simpler rule here could only disagree with the one that decides, and
+would reject terminations the contract allows. `vertragd` answers `422` with the
+rule it applied, and that answer is relayed unchanged.
 
-## Server-Sent Events
+Call `GET /kuendigungsfrist` first to show the customer the reachable dates.
 
-`GET /api/v1/portal/{malo_id}/events`
+### SEPA mandates
 
-Returns an SSE stream. The current implementation emits a 30-second heartbeat:
+`PUT /sepa` registers a mandate with `accountingd`, which validates the IBAN
+(ISO 13616 mod-97) and the debtor address.
 
-```
-event: heartbeat
-data: {"malo_id": "51238696012"}
+Two fields the caller does not supply. **`sequence_type`** — the scheme requires
+a `FRST` collection before any `RCUR`, and the sequence is `accountingd`'s to
+track across the mandate's life. **`mandatsref`** — derived here with a random
+suffix (35 characters, the SEPA `MndtId` limit), so a customer correcting a
+mistyped IBAN the same day gets a new mandate rather than reusing the reference
+of the one being replaced.
 
-event: heartbeat
-data: {"malo_id": "51238696012"}
-```
-
-**Production wiring.** In production, wire the SSE stream to an internal notification channel
-populated by CloudEvents from `accountingd` (`de.accounting.mahnung.issued`),
-`billingd` (`de.billing.rechnung.erstellt`), and `einsd` (`de.eeg.verguetung.berechnet`).
-This enables real-time portal updates without polling.
+`debtor_address` is optional until **15 November 2026**, when version 1.1 of the
+2025 SEPA rulebooks ends the unstructured address and the schemes begin
+requiring `town` + `country` on every collection.
 
 ---
 
@@ -147,108 +173,101 @@ This enables real-time portal updates without polling.
 ```toml
 # portald.toml
 port   = 9480
-tenant = "9910000000002"   # data-isolation key (operator tenant; value = BDEW-Codenummer in this example)
+tenant = "9900357000004"
 
-# Upstream service URLs
+# Required — the authorization authority for every route.
+vertragd_url     = "http://vertragd:9780"
+vertragd_api_key = "env:PORTALD_VERTRAGD_SERVICE_KEY"   # sent as X-Api-Key
+
 edmd_url        = "http://edmd:8380"
 billingd_url    = "http://billingd:9280"
 accountingd_url = "http://accountingd:9380"
 einsd_url       = "http://einsd:9180"
 marktd_url      = "http://marktd:8180"
 
-# OIDC authentication
-# When oidc_issuer is absent, authentication is SKIPPED (dev only).
-# In production: configure your OIDC issuer.
-oidc_issuer   = "https://auth.example.com/realms/mako"
-oidc_audience = "portald"
+# Opaque service Bearer tokens; register each in the upstream's service keys.
+# edmd_api_key        = "env:PORTALD_EDMD_SERVICE_KEY"
+# billingd_api_key    = "env:PORTALD_BILLINGD_SERVICE_KEY"
+# accountingd_api_key = "env:PORTALD_ACCOUNTINGD_SERVICE_KEY"
+# einsd_api_key       = "env:PORTALD_EINSD_SERVICE_KEY"
+# marktd_api_key      = "env:PORTALD_MARKTD_SERVICE_KEY"
 
-# API keys for upstream service auth
-# edmd_api_key        = "env:EDMD_API_KEY"
-# billingd_api_key    = "env:BILLINGD_API_KEY"
-# accountingd_api_key = "env:ACCOUNTINGD_API_KEY"
-# einsd_api_key       = "env:EINSD_API_KEY"
-# marktd_api_key      = "env:MARKTD_API_KEY"
+# MP-ID a self-service SEPA mandate is registered under. Defaults to `tenant`;
+# must match accountingd's `lf_mp_id`.
+# lf_mp_id = "9900357000004"
+
+# Local development only: serve portal routes without resolving ownership.
+# allow_insecure_no_auth = true
+
+[mcp]
+api_key = "env:PORTALD_MCP_API_KEY"
 ```
 
----
-
-## Authentication
-
-`portald` validates OIDC JWT bearer tokens. The `sub` claim should match the customer
-identity. The exact claim-to-MaLo mapping is operator-configurable:
-
-- **Simple deployments**: `sub == malo_id` (each customer token scoped to one MaLo)
-- **Multi-MaLo customers**: the ERP injects a `malo_ids` claim listing all accessible MaLos
-
-When `oidc_issuer` is not configured, **authentication is disabled** — suitable for
-internal tooling and development, but never for production customer-facing deployments.
+There is deliberately no `oidc_issuer` / `oidc_audience`: `portald` verifies no
+tokens, and a key suggesting otherwise would misstate where the trust boundary
+is.
 
 ---
 
 ## Deployment
 
-`portald` is stateless — no database schema, no migrations. Deploy as many replicas
-as needed behind a load balancer:
+Stateless — no schema, no migrations. Deploy as many replicas as needed behind a
+load balancer.
 
 ```yaml
 # docker-compose.yml (excerpt)
 portald:
   image: ghcr.io/hupe1980/portald:latest
-  ports:
-    - "9480:9480"
+  ports: ["9480:9480"]
   volumes:
     - ./portald.toml:/etc/mako/portald.toml:ro
   environment:
-    EDMD_API_KEY: "${EDMD_API_KEY}"
-    BILLINGD_API_KEY: "${BILLINGD_API_KEY}"
-    ACCOUNTINGD_API_KEY: "${ACCOUNTINGD_API_KEY}"
-    MARKTD_API_KEY: "${MARKTD_API_KEY}"
-    EINSD_API_KEY: "${EINSD_API_KEY}"
+    PORTALD_VERTRAGD_SERVICE_KEY: "${PORTALD_VERTRAGD_SERVICE_KEY}"
 ```
-
----
-
-## Related Services
-
-| Service | Role |
-|---------|------|
-| [`edmd`](@/docs/services/edmd.md) | Authoritative meter data source |
-| [`billingd`](@/docs/services/billingd.md) | Authoritative invoice calculation + XRechnung |
-| [`accountingd`](@/docs/services/accountingd.md) | Authoritative account ledger + SEPA |
-| [`einsd`](@/docs/services/einsd.md) | Authoritative EEG/KWKG settlement |
-| [`marktd`](@/docs/services/marktd.md) | Authoritative supply status + MaLo data |
-| [`vertragd`](@/docs/services/vertragd.md) | Contract management + OIDC→MaLo auth gateway |
 
 ---
 
 ## MCP server
 
-`portald` exposes an MCP server at `/mcp` for LLM-based customer service automation.
-All tools are **read-only** (`readOnlyHint = true`) — write operations go through the REST API.
-
-### Tools (8)
+`/mcp` (Streamable HTTP), 8 read-only tools:
 
 | Tool | Description |
 |---|---|
-| `get_dashboard(malo_id)` | Instant aggregated snapshot: supply status, latest invoice, account balance |
-| `get_lastgang(malo_id, from, to)` | Energy consumption time-series (MSCONS 15-min or hourly) |
-| `get_invoices(malo_id, limit)` | Billing history, newest first |
-| `get_balance(malo_id)` | Open-items net balance (positive = owed, negative = credit) |
-| `get_kontoauszug(malo_id)` | Full account statement — all ledger entries for dispute investigation |
-| `get_vorauszahlung(malo_id)` | Advance payment schedule (Abschlag amount, cycle, next due date) |
-| `get_eeg_status(malo_id)` | EEG/KWKG plant list + settlements for a MaLo |
-| `get_versorgung(malo_id)` | Supply status (Beliefert / Unbeliefert / Gesperrt) |
+| `get_dashboard` | Aggregated snapshot: supply status, latest invoice, balance |
+| `get_lastgang` | Consumption time-series, optional ISO-8601 range |
+| `get_invoices` | Billing history, newest first |
+| `get_balance` | Open-items net balance (positive = owed) |
+| `get_kontoauszug` | Full account statement, for dispute investigation |
+| `get_vorauszahlung` | Abschlag amount, cycle, next due date |
+| `get_eeg_status` | EEG/KWKG plants + settlements |
+| `get_versorgung` | Supply status and effective date |
 
-### Prompts (3)
+Prompts: `customer-overview`, `billing-dispute`, `eeg-foerderung-check`.
 
-| Prompt | Description |
-|---|---|
-| `customer-overview` | Complete account overview workflow |
-| `billing-dispute` | Investigate a disputed invoice (Lastgang ↔ invoice comparison) |
-| `eeg-foerderung-check` | EEG Förderungsende options (POST_EEG_SPOT, Direktvermarktung, Repowering §22 EEG) |
+**This surface is operator-facing, not customer-facing.** Its tools take a
+`malo_id` and carry no customer token, so they do not run through the
+authorization gate the REST routes do — whoever can call `/mcp` can read every
+customer in the tenant. That is the right shape for a customer-service agent and
+the wrong one for a portal: gate it with `[mcp]`, keep it off the public
+ingress, and never hand its credential to an end user.
 
-### Informatorisches Unbundling (§9 EnWG)
+---
 
-`portald` is an **LF-role service**. It accesses `marktd` only for VersorgungsStatus
-(the LF's own supply records) — not for NB grid topology or NB billing data.
-Unbundled NB services (`netzbilanzd`, `sperrd`) are never accessible via `portald`.
+## Informatorisches Unbundling (§9 EnWG)
+
+An **LF-role** service. It reads `marktd` only for VersorgungsStatus — the LF's
+own supply records — never NB grid topology or NB billing data. The unbundled NB
+services (`netzbilanzd`, `sperrd`) are not reachable through it.
+
+---
+
+## Related services
+
+| Service | Role |
+|---------|------|
+| [`vertragd`](@/docs/services/vertragd.md) | Authorization authority; contracts, Tarifwechsel, Kündigung |
+| [`edmd`](@/docs/services/edmd.md) | Meter data |
+| [`billingd`](@/docs/services/billingd.md) | Invoices + XRechnung rendering |
+| [`accountingd`](@/docs/services/accountingd.md) | Account ledger + SEPA |
+| [`einsd`](@/docs/services/einsd.md) | EEG/KWKG settlement |
+| [`marktd`](@/docs/services/marktd.md) | Supply status + MaLo master data |

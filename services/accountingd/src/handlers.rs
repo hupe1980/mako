@@ -5346,14 +5346,19 @@ pub(crate) async fn submit_pain001_to_bank(
     pool: &PgPool,
     tenant: &str,
 ) {
-    let client = mako_service::http::default_client();
-    let mut req = client
-        .post(bank_url)
+    // `bank_url` is the full submission endpoint, so the upstream is addressed
+    // at it with an empty path — the point here is uniform credential handling,
+    // not path composition.
+    let bank = mako_service::http::Upstream::new(
+        "bank adapter",
+        bank_url,
+        api_key.map(|k| secrecy::SecretString::from(k.to_owned())),
+        mako_service::http::default_client(),
+    );
+    let req = bank
+        .post("")
         .header("Content-Type", "application/xml")
         .body(pain_xml.to_owned());
-    if let Some(key) = api_key {
-        req = req.bearer_auth(key);
-    }
 
     match req.send().await {
         Ok(resp) if resp.status().is_success() => {

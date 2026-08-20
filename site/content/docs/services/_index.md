@@ -58,7 +58,7 @@ graph TB
 
     subgraph b2c ["Contract & Customer (LF)"]
         vertragd[":9780 vertragd<br/>Kunden B2C+B2B · Rahmenverträge<br/>OIDC→MaLo · 16 MCP tools"]
-        portald[":9480 portald<br/>customer portal read-model<br/>SSE · §41 self-service"]
+        portald[":9480 portald<br/>customer portal read-model<br/>§41 self-service"]
     end
 
     agentd[":9580 agentd<br/>28 declarative manifests on agentplane<br/>journaled effects · strict replay<br/>approval on mutating tools · A2A cards<br/>OIDC · HMAC · Anthropic/OpenAI/Bedrock"]
@@ -115,7 +115,7 @@ graph TB
 | Service | Port | Role | Purpose |
 |---|---|---|---|
 | [vertragd](@/docs/services/vertragd.md) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
-| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — aggregates all LF services, REST + SSE, §41 EnWG self-service write API (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16), 8-tool MCP server |
+| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16); every route resolves customer ownership through `vertragd`; 8-tool operator MCP server |
 | [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** run on the agentplane durable runtime, activated via `[bundled_agents]`; one journaled run per subscribing specialist (no first-wins); human approval on mutating tools; OIDC auth on `/api/v1/run`; inbound HMAC; A2A agent cards; MCP tools across the production services |
 
 ---
@@ -171,10 +171,11 @@ justifies it, a crash between "commit" and "deliver" can never drop or duplicate
 persist-before-dispatch. Emission always goes through one builder and one signer
 (`CloudEvent::new` + `post_ce_with_retry`; Standard Webhooks (`webhook-signature`)).
 
-> `makod`, `marktd`, `agentd`, and `portald` keep bespoke `main`s — `makod`/`marktd` for their
-> non-standard runtimes (SlateDB event store, `marktd`'s durable fan-out worker), `agentd`/`portald`
-> because they hold no database. All four still use the same SDK building blocks (config, auth,
-> tracing, shutdown, HMAC).
+> `makod`, `marktd` and `agentd` keep bespoke `main`s — `makod`/`marktd` for their non-standard
+> runtimes (SlateDB event store, `marktd`'s durable fan-out worker), `agentd` because it holds no
+> database. All three still use the same SDK building blocks (config, auth, tracing, shutdown,
+> HMAC). `portald` is stateless too and runs on `mako_service::run` — the runner supports a daemon
+> with no `[database]`.
 
 ---
 

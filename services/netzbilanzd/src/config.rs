@@ -24,6 +24,7 @@ pub struct NetzbilanzConfig {
     pub edmd_url: Option<String>,
     /// `edmd` bearer token.
     pub edmd_api_key: Option<String>,
+
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:NETZBILANZD_MCP_API_KEY"`.
     #[serde(default)]
@@ -54,6 +55,25 @@ pub struct NetzbilanzConfig {
 
 fn default_tenant() -> String {
     "default".to_owned()
+}
+
+impl NetzbilanzConfig {
+    /// `edmd`, addressed and credentialed, or `None` when it is not configured.
+    ///
+    /// The single place `edmd_url` and `edmd_api_key` are read: every caller
+    /// takes the result rather than the two fields, so where the credential
+    /// goes is decided once.
+    #[must_use]
+    pub fn edmd(&self, client: reqwest::Client) -> Option<mako_service::http::Upstream> {
+        self.edmd_url.as_deref().map(|url| {
+            mako_service::http::Upstream::new(
+                "edmd",
+                url,
+                self.edmd_api_key.clone().map(secrecy::SecretString::from),
+                client,
+            )
+        })
+    }
 }
 
 impl mako_service::ServiceConfig for NetzbilanzConfig {

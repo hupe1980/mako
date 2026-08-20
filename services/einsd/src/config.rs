@@ -93,6 +93,24 @@ pub struct EinsdConfig {
     pub allow_insecure_no_auth: bool,
 }
 
+impl EinsdConfig {
+    /// `edmd`, addressed and credentialed, or `None` when it is not configured.
+    ///
+    /// The single place `edmd_url` and `edmd_api_key` are read, so where the
+    /// credential goes is decided once.
+    #[must_use]
+    pub fn edmd(&self, client: reqwest::Client) -> Option<mako_service::http::Upstream> {
+        self.edmd_url.as_deref().map(|url| {
+            mako_service::http::Upstream::new(
+                "edmd",
+                url,
+                self.edmd_api_key.clone().map(secrecy::SecretString::from),
+                client,
+            )
+        })
+    }
+}
+
 impl mako_service::ServiceConfig for EinsdConfig {
     fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
         Some(&self.database)

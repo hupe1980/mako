@@ -28,7 +28,12 @@ uuid         = { workspace = true, features = ["v4", "serde"] }
 tracing      = "0.1"
 reqwest      = { workspace = true }
 anyhow       = "1"
+secrecy      = "0.10"
 rmcp         = { workspace = true }
 tokio-util   = { workspace = true }
 futures      = "0.3"
-tokio-stream = { version = "0.1", features = ["sync", "time"] }
+
+[dev-dependencies]
+tower          = "0.5"
+http-body-util = "0.1"
+toml           = { version = "0.8", default-features = false, features = ["parse"] }

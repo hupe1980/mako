@@ -79,37 +79,17 @@ pub async fn lastgang_sum(
     malo_id: &str,
     window: Window,
 ) -> Option<Decimal> {
-    let edmd = cfg.edmd_url.as_deref()?.trim_end_matches('/');
-    let (from, to) = (
-        window.start.format(&Rfc3339).ok()?,
-        window.end.format(&Rfc3339).ok()?,
-    );
-    let mut req = client.get(format!(
-        "{edmd}/api/v1/lastgang/{malo_id}?from={from}&to={to}"
-    ));
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        req = req.bearer_auth(key);
-    }
-
-    let lastgaenge: Vec<rubo4e::current::Lastgang> = match req.send().await {
-        Ok(r) if r.status() == reqwest::StatusCode::NOT_FOUND => return None,
-        Ok(r) if !r.status().is_success() => {
-            tracing::debug!(
-                malo_id,
-                status = r.status().as_u16(),
-                "netzbilanzd: edmd Lastgang non-2xx"
-            );
-            return None;
-        }
-        Ok(r) => match r.json().await {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(%e, malo_id, "netzbilanzd: edmd Lastgang body is not a BO4E Lastgang list");
-                return None;
-            }
-        },
+    let edmd = cfg.edmd(client.clone())?;
+    let path = format!("/api/v1/lastgang/{malo_id}");
+    let request = edmd.get(&path).query(&[
+        ("from", window.start.format(&Rfc3339).ok()?),
+        ("to", window.end.format(&Rfc3339).ok()?),
+    ]);
+    let lastgaenge: Vec<rubo4e::current::Lastgang> = match edmd.json(request).await {
+        Ok(Some(v)) => v,
+        Ok(None) => return None,
         Err(e) => {
-            tracing::warn!(%e, malo_id, "netzbilanzd: edmd Lastgang fetch failed");
+            tracing::warn!(%e, malo_id, "netzbilanzd: edmd Lastgang unavailable");
             return None;
         }
     };
@@ -542,15 +522,13 @@ async fn billing_period_fallback(
     malo_id: &str,
     window: Window,
 ) -> Option<Decimal> {
-    let edmd = cfg.edmd_url.as_deref()?.trim_end_matches('/');
+    let edmd = cfg.edmd(client.clone())?;
     let day = window.start.date();
-    let mut req = client.get(format!(
-        "{edmd}/api/v1/billing-period/{malo_id}?from={day}&to={day}"
-    ));
-    if let Some(key) = cfg.edmd_api_key.as_deref() {
-        req = req.bearer_auth(key);
-    }
-    let body: serde_json::Value = req.send().await.ok()?.json().await.ok()?;
+    let path = format!("/api/v1/billing-period/{malo_id}");
+    let request = edmd
+        .get(&path)
+        .query(&[("from", day.to_string()), ("to", day.to_string())]);
+    let body: serde_json::Value = edmd.json(request).await.ok().flatten()?;
     body.get("arbeitsmenge_kwh")
         .and_then(decimal_from_json)
         .filter(|&v| v > Decimal::ZERO)

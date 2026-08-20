@@ -276,21 +276,28 @@ sequenceDiagram
     sched->>syncd: trigger (10. Werktag after the Bilanzierungsmonat)
     syncd->>syncd: INSERT submission_runs (status=pending)
 
-    syncd->>edmd: GET /api/v1/billing-periods?from=&to= (discover MaLos)
-    edmd-->>syncd: [malo_id, ...]
+    syncd->>edmd: GET /api/v1/billing-periods?from=&to=
+    edmd-->>syncd: billing periods — Sparte STROM only is kept
 
-    loop for each MaLo
-        syncd->>edmd: GET /api/v1/lastgang/{malo_id}
-        edmd-->>syncd: BO4E Lastgang — one Zeitreihenwert per ¼-h slot
-        syncd->>mabis: SummenzeitreiheBuilder.add_malo(intervals)?
-        syncd->>syncd: INSERT submission_malo_log
+    syncd->>syncd: group MaLos by Bilanzierungsgebiet (marktd)
+
+    loop for each Bilanzierungsgebiet
+        syncd->>syncd: resolve the MaBiS-Zählpunkt (marktd)
+        loop for each MaLo in the territory
+            syncd->>edmd: GET /api/v1/lastgang/{malo_id}
+            edmd-->>syncd: BO4E Lastgang — Bezugsregister, one value per ¼-h slot
+            syncd->>mabis: SummenzeitreiheBuilder.add_malo(intervals)?
+            syncd->>syncd: INSERT submission_malo_log
+        end
+        syncd->>mabis: builder.build() → Summenzeitreihe
+        syncd->>syncd: INSERT submission_series (status=pending)
+        syncd->>makod: POST /api/v1/commands<br/>{ mabis.summenzeitreihe.uebermitteln }
+        makod->>biko: MSCONS 13003 via AS4
+        biko-->>makod: CONTRL / APERAK
+        makod-->>syncd: { message_ref, process_id }
+        syncd->>syncd: UPDATE submission_series (status=acked)
     end
 
-    syncd->>mabis: builder.build() → Summenzeitreihe
-    syncd->>makod: POST /api/v1/commands<br/>{ mabis.summenzeitreihe.uebermitteln }
-    makod->>biko: MSCONS 13003 via AS4
-    biko-->>makod: CONTRL / APERAK
-    makod-->>syncd: { message_ref, process_id }
     syncd->>syncd: UPDATE submission_runs (status=acked)
 ```
 
@@ -345,43 +352,40 @@ assignment still applies.
 
 ## MaLo discovery
 
-`mabis-syncd` discovers which MaLos to include via `edmd`'s billing-periods API.
-All MaLos that have `meter_billing_periods` rows within the submission period
-are automatically included. There is no static MaLo configuration file.
+`mabis-syncd` discovers which MaLos to include from `edmd`'s billing-periods
+API: every MaLo with `meter_billing_periods` rows in the submission period, with
+no static configuration file.
 
-To **exclude** a MaLo from MABIS aggregation, remove its billing period records
-from `edmd` or set a negative tenant override (advanced use case).
+**Strom only.** MaBiS is an electricity process — gas balances through GaBi Gas,
+on the 06:00 Gastag and against a Marktgebiet rather than a Bilanzierungsgebiet.
+`edmd` serves both commodities from one endpoint, so discovery filters on
+`sparte`; the excluded Sparten are logged per run.
+
+**A discovered MaLo that cannot be aggregated fails the run.** The BIKO cannot
+tell a short Summenzeitreihe from a complete one, and a filing is irreversible
+once acked, so omitting a MaLo silently would settle the territory low. The
+same applies to a territory whose grid still has empty slots after every MaLo is
+folded in. To exclude a MaLo deliberately, remove its billing-period records
+from `edmd`.
+
+Only the **Bezugsregister** (OBIS `1.x.y`) contributes. Reading every register
+would fold a MaLo's Einspeisung into the same settlement slot as its draw.
 
 ---
 
-## Submission target — BIKO today, MaBiS-Hub later
+## Submission target
 
-`submission_target` selects where Summenzeitreihen are filed:
+`submission_target` selects where Summenzeitreihen are filed. One value is
+accepted:
 
 ```toml
-submission_target = "biko-bilateral"   # default; the only accepted value — "mabis-hub" refuses at startup
+submission_target = "biko-bilateral"   # default
 ```
 
-BK6-24-210 will replace bilateral BIKO submission with a central **MaBiS-Hub**
-that routes **exclusively by MaLo-ID**. Today a series is filed under its
-MaBiS-Zählpunkt (`LOC+172`) for a Bilanzierungsgebiet (`LOC+107`), and the
-aggregation step groups MaLos *by Bilanzierungsgebiet* — that grouping is what
-the cutover invalidates, not just the endpoint.
-
-The `mabis-hub` target **refuses at startup** rather than guessing a format.
-There is no Beschluss (the H1-2026 target slipped, the -1 consultation closed
-17.11.2025, go-live is planned for H2 2028), so no wire format, endpoint or
-payload shape is published. An invented format that reaches a real Hub is
-indistinguishable, at the point of failure, from a correct submission that was
-rejected.
-
-Three things the cutover will touch, recorded so the audit is not repeated:
-
-| What | Today | Under the Hub |
-|---|---|---|
-| Aggregation key | one series per Bilanzierungsgebiet | routed per MaLo-ID |
-| `mabis_zp_id` | `LOC+172` Meldepunkt, from marktd master data | not a routing key; payload content is a format question |
-| Tranchen | `marktd.tranche` keyed on `tranche_id`, parent `malo_id` | a Tranche is not a MaLo — needs a resolution rule |
+`"mabis-hub"` (BK6-24-210) parses and then **refuses at startup**: there is no
+Beschluss, so no wire format, endpoint or payload shape is published. An
+invented format that reaches a real Hub is indistinguishable, at the point of
+failure, from a correct submission that was rejected.
 
 ---
 
@@ -398,7 +402,7 @@ url = "env:MABIS_SYNCD_DATABASE_URL"   # required
 tenant                  = "env:MABIS_SYNCD_TENANT"             # BDEW Codenummer of ÜNB / NB
 sender_mp_id            = "env:MABIS_SYNCD_SENDER_MP_ID"       # NAD+MS in MSCONS
 receiver_mp_id          = "env:MABIS_SYNCD_RECEIVER_MP_ID"     # NAD+MR in MSCONS (BIKO)
-bilanzierungsgebiet_id  = "env:MABIS_SYNCD_BILANZIERUNGSGEBIET_ID"  # BNetzA zone code
+bilanzierungsgebiet_id  = "env:MABIS_SYNCD_BILANZIERUNGSGEBIET_ID"  # Y-type (Area) EIC
 
 [edmd]
 url     = "http://edmd:8380"
@@ -433,6 +437,17 @@ erp_hmac_secret = "env:MABIS_SYNCD_ERP_HMAC_SECRET"
 # endpoint = "http://otel-collector:4317"
 ```
 
+Two values are checked at startup, where refusing still costs nothing:
+
+- **`bilanzierungsgebiet_id`** must be a 16-character EIC of ENTSO-E object type
+  **`Y` (Area)**. A Bilanzkreis is type `X` (Party) and the same length, and
+  `LOC+107` carries the value as free text, so the BIKO would accept either.
+- **`submission_target`** must be one that has an implementation.
+
+The alternative is discovering either at 05:00 on the Erstaufschlag-Werktag,
+after a month of metering data has been aggregated and the run's version number
+consumed.
+
 ### `env:` indirection
 
 Every value above may be written as `env:VARNAME` and is resolved at startup by
@@ -449,15 +464,22 @@ be withdrawn once the BIKO acks it. Every route is therefore authorised, and the
 service refuses to start without `[oidc]` unless
 `allow_insecure_no_auth = true` is set explicitly.
 
-| Route | Cedar action |
-|---|---|
-| `GET /api/v1/runs`, `GET /api/v1/runs/{id}` | `read-mabis-run` |
-| `POST /api/v1/sync`, `PUT /api/v1/runs/{id}/retry` | `trigger-mabis-run` |
+| Route | Cedar action | Granted to |
+|---|---|---|
+| `GET /api/v1/runs`, `/runs/{id}`, `/korrekturbedarf` | `read-mabis-run` | any caller in the tenant |
+| `POST /api/v1/datenstatus`, `/pruefmitteilung` | `record-biko-response` | any caller in the tenant |
+| `POST /api/v1/sync`, `PUT /api/v1/runs/{id}/retry` | `trigger-mabis-run` | **NB / ÜNB** |
 
-Triggering is separated from reading and restricted to the **NB** and **ÜNB**
-roles — the roles that aggregate a Bilanzierungsgebiet and have standing to file
-a Summenzeitreihe in the tenant's name. Read access is scoped to the tenant
-because run history discloses which Bilanzierungsgebiete it settles.
+Three different powers, three actions. Filing is restricted to the roles that
+aggregate a Bilanzierungsgebiet and have standing to send a Summenzeitreihe in
+the tenant's name. Recording an inbound BIKO response only states what arrived,
+so the ingest identity that relays IFTSTA needs none of that power. Read access
+is tenant-scoped because run history discloses which territories are settled.
+
+Cedar is deny-by-default, so an action the code checks and the policy does not
+permit is a permanent 403. `tests/authorization_guard.rs` pins both lists
+together and asserts that the two ingest routes do **not** require
+`trigger-mabis-run`.
 
 Policies live in `services/mabis-syncd/policies/mabis-syncd.cedar`.
 
@@ -475,20 +497,27 @@ Policies live in `services/mabis-syncd/policies/mabis-syncd.cedar`.
 ## Submission run lifecycle
 
 ```
-pending
-  │
-  ├──► aggregating
-  │         │
-  │         └──► submitted
-  │                   │
-  │                   ├──► acked         (terminal — success)
-  │                   └──► rejected      (terminal — BIKO rejected message)
-  │
-  └──► failed         (retry allowed, attempt_count < 3)
+pending ──► submitted ──► acked      (terminal — every territory filed)
+   │            │
+   └────────────┴──► failed          (retry allowed, attempt_count < 3)
 ```
 
-A `failed` run can be retried via `PUT /api/v1/runs/{id}/retry`.
-After 3 failed attempts, manual intervention is required.
+A `failed` run can be retried via `PUT /api/v1/runs/{id}/retry`; after three
+attempts, manual intervention is required. A retry carries the original's
+`corrects_run_id`, so a retried correction still closes its Korrekturbedarf.
+
+**A run may be partly filed.** One MSCONS goes out per Bilanzierungsgebiet, and
+an acked Summenzeitreihe cannot be withdrawn — so when one territory fails, the
+others are already with the BIKO. `submission_series` records each territory
+with its own `message_ref` or its reason for failing, a retry skips the ones
+already acked, and the run still fails as a whole because a month settled short
+is not a success.
+
+`GET /api/v1/runs/{id}` returns the per-territory `series`.
+
+`POST /api/v1/sync` refuses a period that already has a live run: filing it
+again is a correction under a higher version, which is what `corrects_run_id`
+is for.
 
 ---
 
@@ -541,8 +570,10 @@ curl -X PUT http://mabis-syncd:8880/api/v1/runs/550e8400-e29b-41d4-a716-44665544
 
 | Table | Purpose |
 |---|---|
-| `submission_runs` | One row per aggregation + submission attempt. Tracks status, period, version, BIKO message_ref. |
-| `submission_malo_log` | One row per MaLo per run. Used for audit trail and coverage gap analysis. |
+| `submission_runs` | One row per aggregation + submission attempt: status, period, version, Datenstatus. |
+| `submission_series` | One row per **Bilanzierungsgebiet** per run — the MSCONS that actually went out, with its `message_ref` or its failure reason. |
+| `submission_malo_log` | One row per MaLo per run: coverage and gap analysis. |
+| `pruefmitteilung` | Inbound BIKO objections (IFTSTA 21000/21001) and the run that corrected each. |
 
 ---
 
@@ -550,10 +581,11 @@ curl -X PUT http://mabis-syncd:8880/api/v1/runs/550e8400-e29b-41d4-a716-44665544
 
 | Metric / Alert | Target |
 |---|---|
-| `submission_runs.status = failed` older than 24h | Immediate escalation — regulatory deadline at risk |
-| No acked submission by the 10. Werktag | Erstaufschlag window closed — a later version starts as `Prüfdaten` (BK6-24-174 Anlage 3 §3.10) |
-| Open Korrekturbedarf after the 30. Werktag | Clearingphase for the ordinary BKA closing (BK6-24-174 Anlage 3 §3.10) |
-| MaLo coverage < 95% in `submission_malo_log` | Missing data — check edmd quality warnings |
+| `submission_runs.status = failed` older than 24 h | Immediate escalation — regulatory deadline at risk |
+| `submission_series.status <> 'acked'` on an otherwise finished run | A territory was not filed; the month is settled short |
+| No acked submission by the 10. Werktag | Erstaufschlag window closed — a later version starts as `Prüfdaten` (§3.10) |
+| Open Korrekturbedarf after the 30. Werktag | Clearingphase for the ordinary BKA closing (§3.10) |
+| MaLo coverage < 95 % in `submission_malo_log` | Missing data — check `edmd` quality warnings |
 
 The **`mabis-syncd-agent`** in `agentd` monitors submission deadlines automatically and escalates via the ERP webhook when a run is overdue or missing.
 

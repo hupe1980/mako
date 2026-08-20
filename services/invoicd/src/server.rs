@@ -1,17 +1,24 @@
-//! Axum router for `invoicd`.
+#![allow(clippy::result_large_err)] // the error *is* the HTTP response
+
+//! Axum router and daemon wiring for `invoicd`.
 //!
-//! Routes:
-//! - `POST /webhook`                                  — inbound MarktEvent CloudEvents from `marktd` (HMAC-auth)
-//! - `GET  /api/v1/receipts`                          — query INVOIC receipts (OIDC+Cedar)
-//! - `GET  /api/v1/receipts/:id`                      — get a single receipt (OIDC+Cedar)
-//! - `POST /api/v1/receipts/:id/confirm-payment`      — ERP confirms payment received; sets `payment_confirmed_at` (§ 147 AO / GoBD)
-//! - `GET  /api/v1/disputes`                          — list open disputes (OIDC+Cedar)
-//! - `GET  /api/v1/overdue-remadv`                    — receipts approaching `pay_by` without dispatch
-//! - `GET  /api/v1/zahlungsstatus/{malo_id}`          — payment status per MaLo (pending / settled / overdue)
-//! - `POST /api/v1/selbstausstellen/{malo_id}`        — trigger outbound selbstausgestellt INVOIC 31006 (M16)
-//! - `GET  /metrics`                                  — Prometheus metrics (no auth, internal only)
-//! - `GET  /health/live`                              — liveness probe (always 200)
-//! - `GET  /health/ready`                             — readiness probe (200 OK)
+//! | Method | Path | Cedar action |
+//! |---|---|---|
+//! | `POST` | `/webhook` | — (HMAC from `marktd`) |
+//! | `GET` | `/api/v1/receipts` | `read-receipt` |
+//! | `GET` | `/api/v1/receipts/{id}` | `read-receipt` |
+//! | `GET` | `/api/v1/receipts/{id}/rechnung` | `read-receipt` |
+//! | `POST` | `/api/v1/receipts/{id}/confirm-payment` | `write-receipt` |
+//! | `POST` | `/api/v1/receipts/{id}/dispatch-answer` | `write-receipt` |
+//! | `POST` | `/api/v1/receipts/{id}/resolve-dispute` | `write-receipt` |
+//! | `GET` | `/api/v1/disputes` | `read-disputes` |
+//! | `GET` | `/api/v1/overdue-remadv` | `read-overdue-remadv` |
+//! | `GET` | `/api/v1/zahlungsstatus/{malo_id}` | `read-receipt` |
+//! | `POST` | `/api/v1/selbstausstellen` | `dispatch-selbstausstellen` |
+//! | `GET` | `/invoicd/metrics` | — (internal) |
+//!
+//! `/health/*` and the generic `/metrics` are the runner's and are not mounted
+//! here.
 
 use std::sync::Arc;
 
@@ -20,142 +27,213 @@ use axum::{
     Extension, Json, Router,
     extract::{Path, Query, State},
     http::StatusCode,
-    response::IntoResponse,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
-use mako_service::ServiceContext;
 use mako_service::cedar::CedarEnforcer;
 use mako_service::oidc::Claims;
+use mako_service::{Daemon, ServiceContext};
 use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use time::format_description::well_known::Rfc3339;
 
 use crate::{
     config::Config,
     handler::{HandlerState, handle_webhook},
     pg,
+    routing::route_for,
 };
 use mako_markt::{makod_client::MakodClient, marktd_client::MarktdClient};
 
+// ── Daemon ────────────────────────────────────────────────────────────────────
+
+/// The `invoicd` daemon.
+pub struct Invoicd;
+
+impl Daemon for Invoicd {
+    type Config = Config;
+    const NAME: &'static str = "invoicd";
+
+    async fn migrate(pool: &PgPool) -> anyhow::Result<()> {
+        sqlx::migrate!("./migrations")
+            .run(pool)
+            .await
+            .context("run invoicd migrations")
+    }
+
+    async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
+        build(cfg, ctx).await
+    }
+}
+
+// ── Authorization ─────────────────────────────────────────────────────────────
+
+/// Authorise `action` for the caller against this deployment's tenant.
+///
+/// Cedar is deny-by-default, so an action named here and missing from
+/// `policies/invoicd.cedar` is a permanent 403 no configuration can lift.
+/// `tests/cedar_actions.rs` pins the two together.
+fn authorize(
+    cedar: &CedarEnforcer,
+    claims: &Claims,
+    action: &str,
+    tenant: &str,
+) -> Result<(), Response> {
+    cedar
+        .check(&claims.principal(), action, tenant)
+        .map_err(|e| {
+            (
+                StatusCode::FORBIDDEN,
+                Json(serde_json::json!({ "error": e.to_string() })),
+            )
+                .into_response()
+        })
+}
+
+/// Every Cedar action this router checks — the list `tests/cedar_actions.rs`
+/// compares against the policy file.
+pub const CEDAR_ACTIONS: &[&str] = &[
+    "read-receipt",
+    "read-disputes",
+    "read-overdue-remadv",
+    "write-receipt",
+    "dispatch-selbstausstellen",
+    "use-mcp",
+];
+
 // ── Router ────────────────────────────────────────────────────────────────────
 
-/// Build and return the Axum router with all routes attached.
-///
-/// `/webhook` is HMAC-authenticated (no OIDC — `marktd` is the caller).
-/// `/api/v1/*` routes require a valid JWT via the `Claims` extractor.
+/// Build the domain router.
 pub fn router(state: HandlerState) -> Router {
     Router::new()
         .route("/webhook", post(handle_webhook))
         .route("/api/v1/receipts", get(list_receipts))
         .route("/api/v1/receipts/{id}", get(get_receipt))
+        .route("/api/v1/receipts/{id}/rechnung", get(get_rechnung))
         .route(
             "/api/v1/receipts/{id}/confirm-payment",
             post(confirm_payment),
         )
         .route(
-            "/api/v1/receipts/{id}/dispatch-remadv",
-            post(dispatch_remadv),
+            "/api/v1/receipts/{id}/dispatch-answer",
+            post(dispatch_answer),
         )
         .route(
             "/api/v1/receipts/{id}/resolve-dispute",
-            post(resolve_dispute_endpoint),
+            post(resolve_dispute),
         )
-        .route("/api/v1/receipts/{id}/rechnung", get(get_rechnung))
         .route("/api/v1/disputes", get(list_disputes))
         .route("/api/v1/overdue-remadv", get(list_overdue_remadv))
         .route("/api/v1/zahlungsstatus/{malo_id}", get(get_zahlungsstatus))
         .route(
-            "/api/v1/selbstausstellen/{malo_id}",
-            post(post_selbstausstellen),
+            "/api/v1/selbstausstellen",
+            post(crate::selbstausstellen::post_selbstausstellen),
         )
         .route("/invoicd/metrics", get(metrics))
         .with_state(state)
 }
 
-/// `GET /invoicd/metrics` — invoicd-specific Prometheus gauges (receipt counts,
-/// disputes, overdue REMADV, per-PID breakdowns).
-///
-/// The runner's generic `/metrics` (request counters) is mounted separately by
-/// `mako_service::run`; the `/health/live` + `/health/ready` probes are owned by
-/// the runner too (real DB ping), so they no longer live in this router.
-/// No authentication required; restrict network access at the ingress layer.
-async fn metrics(State(state): State<HandlerState>) -> impl IntoResponse {
-    let mut out = String::with_capacity(512);
+// ── Metrics ───────────────────────────────────────────────────────────────────
 
-    let (receipt_count, dispute_count) = if let Some(pool) = state.pool.as_ref() {
-        let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM invoic_receipts")
+/// `GET /invoicd/metrics` — receipt counts, disputes, overdue answers, and the
+/// two queues an operator has to watch.
+///
+/// **Every gauge is tenant-scoped.** Three of them were not: the totals counted
+/// every tenant in the database, so a shared deployment published one
+/// operator's invoice volume on another's dashboard, and any single-tenant
+/// alert threshold was meaningless.
+///
+/// Unauthenticated by design — restrict network access at the ingress.
+async fn metrics(State(state): State<HandlerState>) -> Response {
+    let pool = &state.pool;
+    let tenant = &state.tenant;
+
+    let scalar = |sql: &'static str| async move {
+        sqlx::query_scalar::<_, i64>(sql)
+            .bind(tenant)
             .fetch_one(pool)
             .await
-            .unwrap_or(0);
-        let disputes: i64 =
-            sqlx::query_scalar("SELECT COUNT(*) FROM invoic_receipts WHERE outcome = 'Dispute'")
-                .fetch_one(pool)
-                .await
-                .unwrap_or(0);
-        (total, disputes)
-    } else {
-        (0, 0)
+            .unwrap_or(0)
     };
-
-    let overdue: i64 = if let Some(pool) = state.pool.as_ref() {
-        sqlx::query_scalar(
-            "SELECT COUNT(*) FROM invoic_receipts \
-             WHERE pay_by < now() + INTERVAL '3 days' AND dispatched_at IS NULL",
-        )
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0)
-    } else {
-        0
-    };
-
-    out.push_str(
-        "# HELP invoicd_receipts_total Total INVOIC receipts persisted (§ 147 AO / GoBD).\n",
+    let (total, disputes, overdue, undelivered, dead_letters) = tokio::join!(
+        scalar("SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1"),
+        scalar("SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 AND outcome = 'Dispute'"),
+        scalar(
+            "SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 \
+             AND pay_by < now() + INTERVAL '3 days' AND dispatched_at IS NULL"
+        ),
+        scalar(
+            "SELECT COUNT(*) FROM invoic_receipts WHERE tenant = $1 \
+             AND erp_notified_at IS NULL AND erp_attempts >= 5"
+        ),
+        scalar("SELECT COUNT(*) FROM invoic_dlq WHERE tenant = $1 AND resolved_at IS NULL"),
     );
-    out.push_str("# TYPE invoicd_receipts_total gauge\n");
-    out.push_str(&format!("invoicd_receipts_total {receipt_count}\n"));
-    out.push_str("# HELP invoicd_disputes_total Receipts with Dispute outcome.\n");
-    out.push_str("# TYPE invoicd_disputes_total gauge\n");
-    out.push_str(&format!("invoicd_disputes_total {dispute_count}\n"));
-    out.push_str("# HELP invoicd_overdue_remadv_total Receipts approaching pay_by without REMADV dispatch.\n");
-    out.push_str("# TYPE invoicd_overdue_remadv_total gauge\n");
-    out.push_str(&format!("invoicd_overdue_remadv_total {overdue}\n"));
 
-    // Per-PID breakdowns — useful for detecting volume spikes on specific billing PIDs.
-    if let Some(pool) = state.pool.as_ref() {
-        let pid_rows: Vec<(i16, String, i64)> = sqlx::query_as(
-            r"SELECT pid, outcome, COUNT(*) AS cnt
-              FROM invoic_receipts
-              WHERE tenant = $1
-              GROUP BY pid, outcome",
-        )
-        .bind(&state.tenant)
-        .fetch_all(pool)
-        .await
-        .unwrap_or_default();
+    let mut out = String::with_capacity(1024);
+    for (name, help, value) in [
+        (
+            "invoicd_receipts_total",
+            "INVOIC receipts persisted (§ 147 AO / GoBD).",
+            total,
+        ),
+        (
+            "invoicd_disputes_total",
+            "Receipts with a Dispute outcome.",
+            disputes,
+        ),
+        (
+            "invoicd_overdue_remadv_total",
+            "Receipts within 3 days of the Zahlungsziel whose answer never went out.",
+            overdue,
+        ),
+        (
+            "invoicd_erp_dead_lettered_total",
+            "Receipts the ERP webhook never accepted. Non-zero means the ERP is not hearing about settled invoices.",
+            undelivered,
+        ),
+        (
+            "invoicd_dlq_open_total",
+            "INVOICs that could not become receipts. Non-zero is an unprocessed Buchungsbeleg.",
+            dead_letters,
+        ),
+    ] {
+        out.push_str(&format!(
+            "# HELP {name} {help}\n# TYPE {name} gauge\n{name} {value}\n"
+        ));
+    }
 
-        if !pid_rows.is_empty() {
-            out.push_str(
-                "# HELP invoicd_receipts_by_pid_outcome Receipts broken down by PID and outcome.\n",
-            );
-            out.push_str("# TYPE invoicd_receipts_by_pid_outcome gauge\n");
-            for (pid, outcome, cnt) in &pid_rows {
-                out.push_str(&format!(
-                    "invoicd_receipts_by_pid_outcome{{pid=\"{pid}\",outcome=\"{outcome}\"}} {cnt}\n"
-                ));
-            }
+    let by_pid: Vec<(i16, String, i64)> = sqlx::query_as(
+        r"SELECT pid, outcome, COUNT(*) FROM invoic_receipts WHERE tenant = $1 GROUP BY pid, outcome",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+    if !by_pid.is_empty() {
+        out.push_str(
+            "# HELP invoicd_receipts_by_pid_outcome Receipts by PID and outcome.\n\
+             # TYPE invoicd_receipts_by_pid_outcome gauge\n",
+        );
+        for (pid, outcome, count) in by_pid {
+            out.push_str(&format!(
+                "invoicd_receipts_by_pid_outcome{{pid=\"{pid}\",outcome=\"{outcome}\"}} {count}\n"
+            ));
         }
     }
 
     (
-        axum::http::StatusCode::OK,
+        StatusCode::OK,
         [(
             axum::http::header::CONTENT_TYPE,
             "text/plain; version=0.0.4",
         )],
         out,
     )
+        .into_response()
 }
+
+// ── Reads ─────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Deserialize)]
 struct ReceiptListQuery {
@@ -163,126 +241,77 @@ struct ReceiptListQuery {
     outcome: Option<String>,
     from: Option<String>,
     to: Option<String>,
-    #[serde(default = "default_page")]
+    #[serde(default)]
     page: u32,
     #[serde(default = "default_size")]
     size: u32,
 }
-fn default_page() -> u32 {
-    0
-}
+
 fn default_size() -> u32 {
     50
 }
 
-#[derive(Debug, Serialize)]
-struct ReceiptRow {
-    pub id: uuid::Uuid,
-    pub process_id: uuid::Uuid,
-    pub pid: i16,
-    pub sender_mp_id: String,
-    pub outcome: String,
-    pub received_at: time::OffsetDateTime,
-    pub bo4e_version: String,
+/// Largest receipt page a caller may request.
+const MAX_PAGE: u32 = 500;
+
+#[derive(Debug, Serialize, sqlx::FromRow)]
+struct ReceiptSummary {
+    id: uuid::Uuid,
+    process_id: uuid::Uuid,
+    pid: i16,
+    sender_mp_id: String,
+    outcome: String,
+    invoice_ref: Option<String>,
+    rechnungsnummer: Option<String>,
+    #[serde(serialize_with = "ser_ts")]
+    received_at: time::OffsetDateTime,
+    bo4e_version: String,
 }
 
-// ── Receipt handlers (OIDC + Cedar protected) ─────────────────────────────────
+/// RFC 3339 on the wire — never `time`'s derived component array, which
+/// round-trips only through `time` itself (`xtask check-wire-timestamps`).
+fn ser_ts<S: serde::Serializer>(t: &time::OffsetDateTime, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&t.format(&Rfc3339).unwrap_or_default())
+}
 
-/// `GET /api/v1/receipts` — list receipts for the caller's tenant.
+fn fmt_ts(t: Option<time::OffsetDateTime>) -> Option<String> {
+    t.and_then(|t| t.format(&Rfc3339).ok())
+}
+
+fn db_error(e: sqlx::Error) -> Response {
+    tracing::warn!(error = %e, "invoicd: query failed");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": "query failed" })),
+    )
+        .into_response()
+}
+
+/// `GET /api/v1/receipts` — list receipts for this tenant.
 async fn list_receipts(
     claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Query(params): Query<ReceiptListQuery>,
-) -> impl IntoResponse {
-    let principal = claims.principal();
-    let resource_tenant = &state.tenant;
-    if let Err(e) = enforcer.check(&principal, "read-receipt", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
+        return r;
     }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    match fetch_receipts(pool, resource_tenant, &params).await {
+    match fetch_receipts(&state.pool, &state.tenant, &params).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => db_error(e),
     }
 }
 
-/// `GET /api/v1/receipts/:id` — fetch a single receipt by UUID.
-async fn get_receipt(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    let principal = claims.principal();
-    let resource_tenant = &state.tenant;
-    if let Err(e) = enforcer.check(&principal, "read-receipt", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    match fetch_receipt_by_id(pool, id, resource_tenant).await {
-        Ok(Some(row)) => Json(row).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /api/v1/disputes` — list receipts with outcome = 'Dispute'.
+/// `GET /api/v1/disputes` — the open exception queue.
 async fn list_disputes(
     claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
-) -> impl IntoResponse {
-    let principal = claims.principal();
-    let resource_tenant = &state.tenant;
-    if let Err(e) = enforcer.check(&principal, "read-disputes", resource_tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "read-disputes", &state.tenant) {
+        return r;
     }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
     let params = ReceiptListQuery {
         sender_mp_id: None,
         outcome: Some("Dispute".to_owned()),
@@ -291,51 +320,84 @@ async fn list_disputes(
         page: 0,
         size: 200,
     };
-    match fetch_receipts(pool, resource_tenant, &params).await {
+    match fetch_receipts(&state.pool, &state.tenant, &params).await {
         Ok(rows) => Json(rows).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
+        Err(e) => db_error(e),
+    }
+}
+
+/// `GET /api/v1/receipts/{id}`
+async fn get_receipt(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
+        return r;
+    }
+    let row = sqlx::query_as::<_, ReceiptSummary>(
+        r"SELECT id, process_id, pid, sender_mp_id, outcome, invoice_ref, rechnungsnummer,
+                 received_at, bo4e_version
+          FROM invoic_receipts WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(&state.tenant)
+    .fetch_optional(&state.pool)
+    .await;
+    match row {
+        Ok(Some(r)) => Json(r).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => db_error(e),
+    }
+}
+
+/// `GET /api/v1/receipts/{id}/rechnung` — the invoice exactly as received.
+async fn get_rechnung(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
+        return r;
+    }
+    let row: Result<Option<(serde_json::Value, String, i16)>, _> = sqlx::query_as(
+        "SELECT rechnung, bo4e_version, pid FROM invoic_receipts WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(&state.tenant)
+    .fetch_optional(&state.pool)
+    .await;
+    match row {
+        Ok(Some((rechnung, bo4e_version, pid))) => Json(
+            serde_json::json!({ "rechnung": rechnung, "bo4e_version": bo4e_version, "pid": pid }),
         )
-            .into_response(),
+        .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => db_error(e),
     }
 }
 
 /// `GET /api/v1/overdue-remadv`
 ///
-/// List receipts whose `pay_by` Zahlungsziel is within 3 days and for which no
-/// REMADV has yet been dispatched (`dispatched_at IS NULL`).
-///
-/// Alert rule: run every 6 h; alert when non-empty.  Undispatched REMADV past
-/// the Zahlungsziel is a § 147 AO / GoBD compliance gap.
-///
-/// Source: GPKE BK6-22-024; Allgemeine Festlegungen §7 (Zahlungsziel).
+/// Receipts whose Zahlungsziel is within three days and whose answer never went
+/// out. An undispatched answer past the Zahlungsziel is both a market-process
+/// breach and a § 147 AO gap, so this is the alert query: run it every 6 h and
+/// alert when it is non-empty.
 async fn list_overdue_remadv(
     claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "read-receipt", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "read-overdue-remadv", &state.tenant) {
+        return r;
     }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    let rows = sqlx::query(
-        r"SELECT id, process_id, pid, sender_mp_id, outcome, pay_by, received_at, tenant
+    let rows: Result<Vec<ReceiptSummary>, _> = sqlx::query_as(
+        r"SELECT id, process_id, pid, sender_mp_id, outcome, invoice_ref, rechnungsnummer,
+                 received_at, bo4e_version
           FROM invoic_receipts
           WHERE tenant = $1
-            AND outcome IN ('Ok', 'AcceptedPartial', 'Warn')
             AND pay_by IS NOT NULL
             AND pay_by < now() + INTERVAL '3 days'
             AND dispatched_at IS NULL
@@ -343,379 +405,38 @@ async fn list_overdue_remadv(
           LIMIT 200",
     )
     .bind(&state.tenant)
-    .fetch_all(pool)
+    .fetch_all(&state.pool)
     .await;
-
     match rows {
-        Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows
-                .iter()
-                .map(|r| {
-                    use sqlx::Row;
-                    serde_json::json!({
-                        "id": r.try_get::<uuid::Uuid, _>("id").ok(),
-                        "process_id": r.try_get::<uuid::Uuid, _>("process_id").ok(),
-                        "pid": r.try_get::<i16, _>("pid").ok(),
-                        "sender_mp_id": r.try_get::<String, _>("sender_mp_id").ok(),
-                        "outcome": r.try_get::<String, _>("outcome").ok(),
-                        "pay_by": r.try_get::<time::OffsetDateTime, _>("pay_by").ok()
-                            .and_then(|t| {
-                                use time::format_description::well_known::Rfc3339;
-                                t.format(&Rfc3339).ok()
-                            }),
-                        "received_at": r.try_get::<time::OffsetDateTime, _>("received_at").ok()
-                            .and_then(|t| {
-                                use time::format_description::well_known::Rfc3339;
-                                t.format(&Rfc3339).ok()
-                            }),
-                    })
-                })
-                .collect();
+        Ok(items) => {
             Json(serde_json::json!({ "count": items.len(), "items": items })).into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => db_error(e),
     }
 }
 
-/// `POST /api/v1/receipts/{id}/confirm-payment`
-///
-/// Called by the ERP when it confirms that payment for an invoice has been
-/// received (bank transfer confirmed).  Sets `payment_confirmed_at = now()`.
-///
-/// This closes the § 147 AO / GoBD payment audit trail: every `invoic_receipt`
-/// record transitions from `dispatched` → `payment_confirmed` state once
-/// the ERP sends this callback.
-///
-/// Request body: optional `{ "reference": "bank-transfer-id" }` (ignored).
-///
-/// Response: `204 No Content` on success; `404` if receipt not found.
-async fn confirm_payment(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "write-receipt", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    let result = sqlx::query(
-        r"UPDATE invoic_receipts
-          SET payment_confirmed_at = now()
-          WHERE id = $1 AND tenant = $2 AND payment_confirmed_at IS NULL",
-    )
-    .bind(id)
-    .bind(&state.tenant)
-    .execute(pool)
-    .await;
-
-    match result {
-        Ok(r) if r.rows_affected() == 0 => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "receipt not found or already confirmed" })),
-        )
-            .into_response(),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `POST /api/v1/receipts/{id}/dispatch-remadv`
-///
-/// Manually trigger a REMADV dispatch for a receipt whose auto-dispatch failed
-/// or was never attempted.  Useful when `dispatched_at IS NULL` and the
-/// Zahlungsziel is approaching.
-///
-/// The command dispatched depends on the current `outcome`:
-/// - `Ok` / `Warn` / `AcceptedPartial` → REMADV 33001 (Zahlungsavis / acceptance)
-/// - `Dispute` → REMADV 33002 (dispute re-dispatch)
-///
-/// Returns `409 Conflict` when the receipt was already dispatched.
-async fn dispatch_remadv(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "write-receipt", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    // Fetch the receipt.
-    let row = sqlx::query(
-        r"SELECT process_id, pid, outcome, dispatched_at
-          FROM invoic_receipts
-          WHERE id = $1 AND tenant = $2",
-    )
-    .bind(id)
-    .bind(&state.tenant)
-    .fetch_optional(pool)
-    .await;
-
-    let row = match row {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({ "error": "receipt not found" })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-
-    use sqlx::Row;
-    let already_dispatched = row
-        .try_get::<Option<time::OffsetDateTime>, _>("dispatched_at")
-        .ok()
-        .flatten()
-        .is_some();
-    if already_dispatched {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({ "error": "receipt already dispatched" })),
-        )
-            .into_response();
-    }
-
-    let process_id: uuid::Uuid = match row.try_get("process_id") {
-        Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(serde_json::json!({ "error": e.to_string() })),
-            )
-                .into_response();
-        }
-    };
-    let pid: i16 = row.try_get("pid").unwrap_or(0);
-    let outcome: String = row.try_get("outcome").unwrap_or_default();
-
-    let (cmd_name, is_dispute) = match outcome.as_str() {
-        "Dispute" => ("gpke.abrechnung.ablehnen", true),
-        _ => ("gpke.abrechnung.annehmen", false),
-    };
-
-    let idem = uuid::Uuid::new_v5(&process_id, b"manual-dispatch").to_string();
-    let payload = if is_dispute {
-        serde_json::json!({ "invoice_ref": process_id.to_string(), "ablehnungsgrund": "Manuell ausgelöst (Operator)" })
-    } else {
-        serde_json::json!({ "invoice_ref": process_id.to_string() })
-    };
-
-    let cmd = mako_markt::makod_client::ForwardCommand {
-        marktrolle: None,
-        command: cmd_name.to_owned(),
-        malo_id: None,
-        melo_id: None,
-        payload,
-    };
-
-    match state.makod.post_command(&idem, &cmd).await {
-        Ok(_) => {
-            let _ =
-                pg::receipts::mark_dispatched(pool, process_id, time::OffsetDateTime::now_utc())
-                    .await;
-            (
-                StatusCode::OK,
-                Json(serde_json::json!({
-                    "dispatched": true,
-                    "process_id": process_id,
-                    "pid": pid,
-                    "command": cmd_name,
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => (
-            StatusCode::BAD_GATEWAY,
-            Json(serde_json::json!({ "error": format!("makod dispatch failed: {e}") })),
-        )
-            .into_response(),
-    }
-}
-
-/// `POST /api/v1/receipts/{id}/resolve-dispute`
-///
-/// Record the resolution of a disputed receipt after operator negotiation (e.g.
-/// via phone, COMDIS, or corrected re-invoice).  Transitions `outcome` from
-/// `'Dispute'` to `'Resolved'` and stores an optional operator note.
-///
-/// Request body (JSON):
-/// ```json
-/// { "note": "NB confirmed pricing error; corrected invoice received PID 31001 on 2026-08-01" }
-/// ```
-///
-/// Returns `404` if not found or not currently in `'Dispute'` state.
-#[derive(serde::Deserialize)]
-struct ResolveDisputeBody {
-    note: Option<String>,
-}
-
-async fn resolve_dispute_endpoint(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(id): Path<uuid::Uuid>,
-    body: Option<Json<ResolveDisputeBody>>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "write-receipt", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    let note = body.as_ref().and_then(|b| b.note.as_deref());
-    match pg::receipts::resolve_dispute(pool, id, &state.tenant, note).await {
-        Ok(true) => StatusCode::NO_CONTENT.into_response(),
-        Ok(false) => (
-            StatusCode::NOT_FOUND,
-            Json(serde_json::json!({ "error": "receipt not found or not in Dispute state" })),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /api/v1/receipts/{id}/rechnung`
-///
-/// Retrieve the full BO4E `Rechnung` JSON stored for a receipt.  Useful for
-/// debugging disputes: the full invoice as received is returned without
-/// modification, alongside the `bo4e_version` it was stored under.
-///
-/// Restricted to callers with the `read-receipt` Cedar action.
-async fn get_rechnung(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "read-receipt", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    let row = sqlx::query(
-        r"SELECT rechnung, bo4e_version, pid FROM invoic_receipts WHERE id = $1 AND tenant = $2",
-    )
-    .bind(id)
-    .bind(&state.tenant)
-    .fetch_optional(pool)
-    .await;
-
-    match row {
-        Ok(Some(r)) => {
-            use sqlx::Row;
-            let rechnung: serde_json::Value = r.try_get("rechnung").unwrap_or_default();
-            let bo4e_version: String = r.try_get("bo4e_version").unwrap_or_default();
-            let pid: i16 = r.try_get("pid").unwrap_or(0);
-            Json(serde_json::json!({ "rechnung": rechnung, "bo4e_version": bo4e_version, "pid": pid })).into_response()
-        }
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-/// `GET /api/v1/zahlungsstatus/{malo_id}`
-///
-/// Returns the payment status for all INVOIC receipts linked to a MaLo,
-/// grouped by status:
-///
-/// - `pending`  — REMADV dispatched but `payment_confirmed_at IS NULL` and
-///   `pay_by` is still in the future.
-/// - `overdue`  — REMADV dispatched, `pay_by` has passed, `payment_confirmed_at IS NULL`.
-/// - `settled`  — `payment_confirmed_at IS NOT NULL`.
-///
-/// Uses the indexed `malo_id` column (migration 0002) — no JSONB scan.
+/// `GET /api/v1/zahlungsstatus/{malo_id}` — payment lifecycle per MaLo.
 async fn get_zahlungsstatus(
     claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(&claims.principal(), "read-receipt", &state.tenant) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "read-receipt", &state.tenant) {
+        return r;
     }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    // Use the indexed `malo_id` column (migration 0002) — avoids full JSONB scan.
-    // Includes all outcome states so disputes and resolved receipts are visible.
-    let rows = sqlx::query(
+    type Row = (
+        uuid::Uuid,
+        uuid::Uuid,
+        i16,
+        String,
+        String,
+        Option<time::OffsetDateTime>,
+        Option<time::OffsetDateTime>,
+        Option<time::OffsetDateTime>,
+        time::OffsetDateTime,
+    );
+    let rows: Result<Vec<Row>, _> = sqlx::query_as(
         r"SELECT id, process_id, pid, sender_mp_id, outcome, pay_by,
                  dispatched_at, payment_confirmed_at, received_at
           FROM invoic_receipts
@@ -725,603 +446,276 @@ async fn get_zahlungsstatus(
     )
     .bind(&state.tenant)
     .bind(&malo_id)
-    .fetch_all(pool)
+    .fetch_all(&state.pool)
     .await;
 
-    match rows {
-        Ok(rows) => {
-            let items: Vec<serde_json::Value> = rows
-                .iter()
-                .map(|r| {
-                    use sqlx::Row;
-                    let pay_by = r
-                        .try_get::<time::OffsetDateTime, _>("pay_by")
-                        .ok();
-                    let dispatched = r
-                        .try_get::<Option<time::OffsetDateTime>, _>("dispatched_at")
-                        .ok()
-                        .flatten();
-                    let confirmed = r
-                        .try_get::<Option<time::OffsetDateTime>, _>("payment_confirmed_at")
-                        .ok()
-                        .flatten();
-
-                    let zahlungsstatus = if confirmed.is_some() {
-                        "settled"
-                    } else if dispatched.is_some()
-                        && pay_by.is_some_and(|d| d < time::OffsetDateTime::now_utc())
-                    {
-                        "overdue"
-                    } else if dispatched.is_some() {
-                        "pending"
-                    } else {
-                        "undispatched"
-                    };
-
-                    let fmt = |t: time::OffsetDateTime| {
-                        use time::format_description::well_known::Rfc3339;
-                        t.format(&Rfc3339).ok()
-                    };
-
-                    serde_json::json!({
-                        "id":                     r.try_get::<uuid::Uuid, _>("id").ok(),
-                        "process_id":             r.try_get::<uuid::Uuid, _>("process_id").ok(),
-                        "pid":                    r.try_get::<i16, _>("pid").ok(),
-                        "sender_mp_id":           r.try_get::<String, _>("sender_mp_id").ok(),
-                        "zahlungsstatus":         zahlungsstatus,
-                        "pay_by":                 pay_by.and_then(fmt),
-                        "dispatched_at":          dispatched.and_then(fmt),
-                        "payment_confirmed_at":   confirmed.and_then(fmt),
-                        "received_at":            r.try_get::<time::OffsetDateTime, _>("received_at").ok().and_then(fmt),
-                    })
-                })
-                .collect();
-
-            let overdue_count = items
-                .iter()
-                .filter(|i| i.get("zahlungsstatus").and_then(|v| v.as_str()) == Some("overdue"))
-                .count();
-            let pending_count = items
-                .iter()
-                .filter(|i| i.get("zahlungsstatus").and_then(|v| v.as_str()) == Some("pending"))
-                .count();
-            let settled_count = items
-                .iter()
-                .filter(|i| i.get("zahlungsstatus").and_then(|v| v.as_str()) == Some("settled"))
-                .count();
-
-            Json(serde_json::json!({
-                "malo_id":        malo_id,
-                "overdue_count":  overdue_count,
-                "pending_count":  pending_count,
-                "settled_count":  settled_count,
-                "items":          items,
-            }))
-            .into_response()
-        }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response(),
-    }
-}
-
-// ── BO4E conversion ───────────────────────────────────────────────────────────
-//
-// The `InvoiceDocument` → `Rechnung` rendering lives in the shared
-// feature-gated `grid_billing::bo4e` module (also used by netzbilanzd), so the two
-// services cannot drift apart again: the bridge sets `rechnungsnummer` AND
-// emits `mako:calculation_trace` / `mako:legal_references` /
-// `mako:settlement_warnings` ZusatzAttribute.
-
-/// `POST /api/v1/selbstausstellen/{malo_id}`
-///
-/// Trigger outbound selbstausgestellt INVOIC 31006 (LF → NB).
-///
-/// # Prerequisites
-///
-/// - M15: `edmd` `billing-period` endpoint must be live (for RLM Leistungspreis)
-/// - `marktd` must have a valid `PreisblattNetznutzung` for the NB
-/// - `marktd` must have a valid `NbContractRecord` for the MaLo
-///
-/// # § 147 AO / GoBD
-///
-/// The receipt is written to `invoic_receipts` (direction=outbound,
-/// outcome=Dispatched) in a single PostgreSQL transaction BEFORE the command
-/// is dispatched to `makod`.  A crash between persist and dispatch is
-/// recoverable; a crash before persist would break the § 147 AO audit trail.
-///
-/// Source: GPKE Teil 3 BK6-24-174; § 147 AO / GoBD.
-#[derive(Debug, serde::Deserialize)]
-struct SelbstausstellenRequest {
-    /// Start of billing period (ISO 8601 date `YYYY-MM-DD`).
-    pub period_from: String,
-    /// End of billing period (ISO 8601 date `YYYY-MM-DD`).
-    pub period_to: String,
-    /// 13-digit NB Marktpartner-ID (BDEW-Codenummer or GLN).
-    pub nb_mp_id: String,
-}
-
-async fn post_selbstausstellen(
-    claims: Claims,
-    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
-    State(state): State<HandlerState>,
-    Path(malo_id): Path<String>,
-    Json(body): Json<SelbstausstellenRequest>,
-) -> impl IntoResponse {
-    if let Err(e) = enforcer.check(
-        &claims.principal(),
-        "dispatch-selbstausstellen",
-        &state.tenant,
-    ) {
-        return (
-            StatusCode::FORBIDDEN,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
-    let Some(ref pool) = state.pool else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({ "error": "database not configured" })),
-        )
-            .into_response();
-    };
-
-    use time::macros::format_description;
-    let fmt = format_description!("[year]-[month]-[day]");
-    let period_from = match time::Date::parse(&body.period_from, &fmt) {
-        Ok(d) => d,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "invalid period_from — use YYYY-MM-DD" })),
-            )
-                .into_response();
-        }
-    };
-    let period_to = match time::Date::parse(&body.period_to, &fmt) {
-        Ok(d) => d,
-        Err(_) => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(serde_json::json!({ "error": "invalid period_to — use YYYY-MM-DD" })),
-            )
-                .into_response();
-        }
-    };
-
-    if period_to < period_from {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "period_to must be >= period_from" })),
-        )
-            .into_response();
-    }
-
-    // ── Step 1: Fetch MeterBillingPeriod from edmd ───────────────────────────
-    // Required for RLM (Leistungspreis) and Gas (Brennwert/Zustandszahl).
-    let Some(ref edmd_url) = state.edmd_url else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "error": "edmd not configured — add [edmd] url to invoicd.toml for PID 31006"
-            })),
-        )
-            .into_response();
-    };
-
-    let billing_period_url = format!(
-        "{edmd_url}/api/v1/billing-period/{malo_id}?from={}&to={}",
-        body.period_from, body.period_to
-    );
-    let mut req = state.http_client.get(&billing_period_url);
-    if let Some(ref api_key) = state.edmd_api_key {
-        use secrecy::ExposeSecret as _;
-        req = req.bearer_auth(api_key.expose_secret());
-    }
-    // Local deserialize DTO for edmd's `MeterBillingPeriod` response — only the
-    // fields selbstausstellen consumes.
-    #[derive(serde::Deserialize)]
-    struct MeterBillingPeriod {
-        arbeitsmenge_kwh: rust_decimal::Decimal,
-        #[serde(default)]
-        spitzenleistung_kw: Option<rust_decimal::Decimal>,
-    }
-    let billing_period: MeterBillingPeriod = match req.send().await {
-        Ok(resp) if resp.status().is_success() => match resp.json().await {
-            Ok(bp) => bp,
-            Err(e) => {
-                tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: failed to parse MeterBillingPeriod from edmd");
-                return (
-                    StatusCode::BAD_GATEWAY,
-                    Json(serde_json::json!({ "error": format!("edmd parse error: {e}") })),
-                )
-                    .into_response();
-            }
-        },
-        Ok(resp) => {
-            let status = resp.status();
-            tracing::warn!(%status, malo_id, "invoicd: selbstausstellen: edmd returned non-2xx");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("edmd returned {status}") })),
-            )
-                .into_response();
-        }
-        Err(e) => {
-            tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: edmd unreachable");
-            return (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("edmd unreachable: {e}") })),
-            )
-                .into_response();
-        }
-    };
-
-    // ── Step 2: Fetch PreisblattNetznutzung from marktd ───────────────────────
-    let sheet = state
-        .preisblatt_client
-        .get_preisblatt(&body.nb_mp_id, period_from)
-        .await
-        .ok()
-        .flatten();
-    let Some(sheet) = sheet else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("no PreisblattNetznutzung for NB {} on {period_from}", body.nb_mp_id)
-            })),
-        )
-            .into_response();
-    };
-
-    // ── Step 3: Extract tariff params from PreisblattNetznutzung ─────────────
-    // Find Arbeitspreis (Leistungstyp::ArbeitspreisWirkarbeit) from Preisblatt.
-    use rubo4e::current::Leistungstyp;
-
-    let arbeitspreis_ct = sheet
-        .preispositionen
-        .iter()
-        .flatten()
-        .find(|pos| {
-            pos.leistungstyp
-                .as_ref()
-                .is_some_and(|lt| *lt == Leistungstyp::ArbeitspreisWirkarbeit)
-        })
-        .and_then(|pos| pos.preisstaffeln.as_ref())
-        .and_then(|staffeln| staffeln.first())
-        .and_then(|s| s.preis);
-
-    let Some(arbeitspreis_ct) = arbeitspreis_ct else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": "PreisblattNetznutzung has no ArbeitspreisWirkarbeit position — cannot generate Rechnung"
-            })),
-        )
-            .into_response();
-    };
-
-    // Find Leistungspreis if present (RLM only).
-    let leistungspreis_eur = sheet
-        .preispositionen
-        .iter()
-        .flatten()
-        .find(|pos| {
-            pos.leistungstyp
-                .as_ref()
-                .is_some_and(|lt| *lt == Leistungstyp::LeistungspreisWirkleistung)
-        })
-        .and_then(|pos| pos.preisstaffeln.as_ref())
-        .and_then(|staffeln| staffeln.first())
-        .and_then(|s| s.preis);
-
-    // ── Step 4: Build NneInput and generate Rechnung via grid-billing ─────
-    use time::OffsetDateTime;
-
-    let invoice_date = OffsetDateTime::now_utc().date();
-    // Standard Zahlungsziel: 30 days from invoice date.
-    let due_date = invoice_date + time::Duration::days(30);
-    let rechnungsnummer = format!(
-        "SELBST-{}-{}-{}",
-        state.tenant,
-        malo_id,
-        invoice_date.to_string().replace('-', "")
-    );
-
-    let Ok(period) = grid_billing::SettlementPeriod::new(period_from, period_to) else {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({ "error": "period_from must not be after period_to" })),
-        )
-            .into_response();
-    };
-
-    let input = grid_billing::NneInput {
-        blindarbeit: None,
-        malo_id: malo_id.clone(),
-        nb_mp_id: body.nb_mp_id.clone(),
-        lf_mp_id: state.tenant.clone(), // LF is selbstaussteller (= our own tenant)
-        period,
-        arbeitspreis: grid_billing::ArbeitspreisModell::Einheitlich(grid_billing::MengePreis {
-            menge_kwh: billing_period.arbeitsmenge_kwh,
-            preis_ct_per_kwh: arbeitspreis_ct,
-        }),
-        leistungspreis: match (
-            billing_period.spitzenleistung_kw,
-            if billing_period.spitzenleistung_kw.is_some() {
-                leistungspreis_eur
-            } else {
-                None
-            },
-        ) {
-            (Some(kw), Some(p)) => Some(grid_billing::Leistungspreis {
-                spitzenleistung_kw: kw,
-                preis_eur_per_kw: p,
-            }),
-            _ => None,
-        },
-        letztverbrauchergruppe: Default::default(),
-        sect19_umlage_ct_per_kwh: None,
-        offshore_umlage_ct_per_kwh: None,
-        kwkg_umlage_ct_per_kwh: None,
-        netzebene: None,
-        sect19: None,
-        gas_kapazitaet: None,
-        jahreshoechstleistung_kw: None,
-        jahresarbeit_kwh: None,
-        konzessionsabgabe: None,
-        grundpreis: None,
-        tariff_sheet_id: None,
-        sparte: grid_billing::Sparte::Strom,
-    };
-
-    let billing_result = match grid_billing::settle_nne(&input) {
+    let rows = match rows {
         Ok(r) => r,
-        Err(e) => {
-            tracing::warn!(%e, malo_id, "invoicd: selbstausstellen: invoice generation failed");
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invoice generation error: {e}") })),
-            )
-                .into_response();
-        }
+        Err(e) => return db_error(e),
     };
-
-    // Convert domain invoice to BO4E Rechnung (service-layer concern; grid-billing is BO4E-free)
-    // The settlement becomes a document here — the only place an invoice number,
-    // issue date and Prüfidentifikator enter. PID 31006 is the
-    // Selbstausstellen-Netznutzungsrechnung (INVOIC AHB Selbstausstellung).
-    let document = grid_billing::InvoiceDocument {
-        settlement: billing_result,
-        pid: 31006,
-        rechnungsnummer,
-        correction_of: None,
-        invoice_date,
-        due_date,
-        // The Mehrmenge leg the LF self-issues has its own dedicated
-        // `netznutzungrechnungstyp`, so it states no separate cadence — and a
-        // self-issued invoice settles no Abschläge.
-        cadence: None,
-        abschlaege: Vec::new(),
-    };
-    let billing_result = &document.settlement;
-    let rechnung = grid_billing::bo4e::into_rechnung(&document);
-    let rechnung_json = serde_json::to_value(&rechnung).unwrap_or_default();
-
-    tracing::info!(
-        malo_id = %malo_id,
-        nb_mp_id = %body.nb_mp_id,
-        period_from = %period_from,
-        period_to = %period_to,
-        total_eur = %billing_result.total_eur,
-        "invoicd: selbstausstellen 31006 — full Rechnung generated"
-    );
-
-    // ── Step 5: Persist as Dispatched (§ 147 AO / GoBD) ───────────────────────────
-    let process_id = uuid::Uuid::new_v4();
     let now = time::OffsetDateTime::now_utc();
-
-    let row = pg::ReceiptRow {
-        process_id,
-        pid: 31006,
-        direction: pg::receipts::DIRECTION_OUTBOUND.to_owned(),
-        sender_mp_id: state.tenant.clone(),
-        receiver_gln: body.nb_mp_id.clone(),
-        malo_id: Some(malo_id.clone()),
-        rechnung: rechnung_json, // real BO4E Rechnung (not a placeholder)
-        bo4e_version: "v202607.0.0".to_owned(),
-        outcome: "Dispatched".to_owned(),
-        findings: serde_json::json!([]),
-        pay_by: None,
-        received_at: now,
-        checked_at: now,
-        dispatched_at: None,
-        tenant: state.tenant.clone(),
-    };
-
-    if let Err(e) = pg::upsert_receipt(pool, &row).await {
-        tracing::warn!(%e, "invoicd: failed to persist selbstausstellen receipt");
-        return (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({ "error": "failed to persist receipt — § 147 AO / GoBD; aborting dispatch" }))).into_response();
-    }
-
-    // ── Step 6: Dispatch to makod ─────────────────────────────────────────────
-    let idempotency_key = format!("invoicd-selbst-31006-{process_id}");
-    let cmd = mako_markt::makod_client::ForwardCommand {
-        marktrolle: None,
-        command: "gpke.abrechnung.selbstausstellen".to_owned(),
-        malo_id: Some(malo_id.clone()),
-        melo_id: None,
-        payload: serde_json::json!({
-            "pid": 31006,
-            "nb_mp_id": body.nb_mp_id,
-            "period_from": body.period_from,
-            "period_to": body.period_to,
-            "total_eur": billing_result.total_eur.to_string(),
-            "rechnung": rechnung,
-        }),
-    };
-
-    match state.makod.post_command(&idempotency_key, &cmd).await {
-        Ok(accepted) => {
-            if let Err(e) =
-                pg::receipts::mark_dispatched(pool, process_id, time::OffsetDateTime::now_utc())
-                    .await
-            {
-                tracing::warn!(%e, %process_id, "invoicd: failed to mark selbstausstellen as dispatched");
-            }
-            (
-                StatusCode::ACCEPTED,
-                Json(serde_json::json!({
-                    "process_id": accepted.process_id,
-                    "malo_id": malo_id,
-                    "nb_mp_id": body.nb_mp_id,
-                    "period_from": body.period_from,
-                    "period_to": body.period_to,
-                    "total_eur": billing_result.total_eur.to_string(),
-                    "outcome": "Dispatched",
-                })),
-            )
-                .into_response()
-        }
-        Err(e) => {
-            tracing::warn!(%e, %process_id, "invoicd: selbstausstellen dispatch to makod failed");
-            (
-                StatusCode::BAD_GATEWAY,
-                Json(serde_json::json!({ "error": format!("makod dispatch failed: {e}") })),
-            )
-                .into_response()
-        }
-    }
-}
-
-// ── Database helpers ──────────────────────────────────────────────────────────
-
-async fn fetch_receipts(
-    pool: &PgPool,
-    tenant: &str,
-    params: &ReceiptListQuery,
-) -> Result<Vec<ReceiptRow>, sqlx::Error> {
-    // Runtime query to avoid compile-time DB requirement.
-    // All filtering is done server-side; param binding prevents injection.
-    let limit = params.size.min(500) as i64;
-    let offset = (params.page as i64) * limit;
-
-    use time::format_description::well_known::Rfc3339;
-    let from_ts = params
-        .from
-        .as_deref()
-        .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok());
-    let to_ts = params
-        .to
-        .as_deref()
-        .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok());
-
-    let rows = sqlx::query_as::<
-        _,
-        (
-            uuid::Uuid,
-            uuid::Uuid,
-            i16,
-            String,
-            String,
-            time::OffsetDateTime,
-            String,
-        ),
-    >(
-        r#"
-        SELECT id, process_id, pid, sender_mp_id, outcome, received_at, bo4e_version
-        FROM invoic_receipts
-        WHERE tenant = $1
-          AND ($2::text IS NULL OR sender_mp_id = $2)
-          AND ($3::text IS NULL OR outcome = $3)
-          AND ($4::timestamptz IS NULL OR received_at >= $4)
-          AND ($5::timestamptz IS NULL OR received_at <= $5)
-        ORDER BY received_at DESC
-        LIMIT $6 OFFSET $7
-        "#,
-    )
-    .bind(tenant)
-    .bind(params.sender_mp_id.as_deref())
-    .bind(params.outcome.as_deref())
-    .bind(from_ts)
-    .bind(to_ts)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(pool)
-    .await?;
-
-    Ok(rows
+    let items: Vec<serde_json::Value> = rows
         .into_iter()
         .map(
-            |(id, process_id, pid, sender_mp_id, outcome, received_at, bo4e_version)| ReceiptRow {
+            |(
                 id,
                 process_id,
                 pid,
                 sender_mp_id,
                 outcome,
-                received_at,
-                bo4e_version,
+                pay_by,
+                dispatched,
+                confirmed,
+                received,
+            )| {
+                let status = if confirmed.is_some() {
+                    "settled"
+                } else if dispatched.is_none() {
+                    "undispatched"
+                } else if pay_by.is_some_and(|d| d < now) {
+                    "overdue"
+                } else {
+                    "pending"
+                };
+                serde_json::json!({
+                    "id":                   id,
+                    "process_id":           process_id,
+                    "pid":                  pid,
+                    "sender_mp_id":         sender_mp_id,
+                    "outcome":              outcome,
+                    "zahlungsstatus":       status,
+                    "pay_by":               fmt_ts(pay_by),
+                    "dispatched_at":        fmt_ts(dispatched),
+                    "payment_confirmed_at": fmt_ts(confirmed),
+                    "received_at":          fmt_ts(Some(received)),
+                })
             },
         )
-        .collect())
+        .collect();
+
+    let count = |s: &str| items.iter().filter(|i| i["zahlungsstatus"] == s).count();
+    Json(serde_json::json!({
+        "malo_id":            malo_id,
+        "settled_count":      count("settled"),
+        "pending_count":      count("pending"),
+        "overdue_count":      count("overdue"),
+        "undispatched_count": count("undispatched"),
+        "items":              items,
+    }))
+    .into_response()
 }
 
-async fn fetch_receipt_by_id(
-    pool: &PgPool,
-    id: uuid::Uuid,
-    tenant: &str,
-) -> Result<Option<ReceiptRow>, sqlx::Error> {
-    let row = sqlx::query_as::<
-        _,
-        (
-            uuid::Uuid,
-            uuid::Uuid,
-            i16,
-            String,
-            String,
-            time::OffsetDateTime,
-            String,
-        ),
-    >(
-        r#"
-        SELECT id, process_id, pid, sender_mp_id, outcome, received_at, bo4e_version
-        FROM invoic_receipts
-        WHERE id = $1 AND tenant = $2
-        "#,
-    )
-    .bind(id)
-    .bind(tenant)
-    .fetch_optional(pool)
-    .await?;
+// ── Writes ────────────────────────────────────────────────────────────────────
 
-    Ok(row.map(
-        |(id, process_id, pid, sender_mp_id, outcome, received_at, bo4e_version)| ReceiptRow {
-            id,
-            process_id,
-            pid,
-            sender_mp_id,
-            outcome,
-            received_at,
-            bo4e_version,
-        },
-    ))
-}
-
-// ── Domain router assembly ─────────────────────────────────────────────────────
-
-/// Build invoicd's domain [`Router`]: resolve config secrets, build the OIDC
-/// verifier + Cedar enforcer, wire the `HandlerState` + MCP server, spawn the ERP
-/// outbox and payment-overdue workers on `ctx.shutdown`, and register the
-/// `marktd` subscription.
+/// `POST /api/v1/receipts/{id}/confirm-payment`
 ///
-/// The runner ([`mako_service::run`]) owns the tuned pool, migrations, the
-/// health / metrics infra routes, bind and graceful serve — none of those live
-/// here. The receipt store is § 147 AO / GoBD-critical, so the pool is always
-/// present (the runner connects it before this is called).
+/// The ERP reports that the money moved. Closes the § 147 AO payment trail and
+/// stops the receipt appearing in the overdue view.
+async fn confirm_payment(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
+        return r;
+    }
+    match pg::receipts::confirm_payment(&state.pool, id, &state.tenant).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "receipt not found or already confirmed" })),
+        )
+            .into_response(),
+        Err(e) => db_error(e),
+    }
+}
+
+#[derive(Deserialize)]
+struct ResolveDisputeBody {
+    note: Option<String>,
+}
+
+/// `POST /api/v1/receipts/{id}/resolve-dispute`
+///
+/// Record that a dispute was settled out of band (a corrected invoice, a phone
+/// call, a COMDIS). Moves `Dispute` → `Resolved` with the operator's note.
+async fn resolve_dispute(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+    body: Option<Json<ResolveDisputeBody>>,
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
+        return r;
+    }
+    let note = body.as_ref().and_then(|b| b.note.as_deref());
+    match pg::receipts::resolve_dispute(&state.pool, id, &state.tenant, note).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({ "error": "receipt not found or not in Dispute state" })),
+        )
+            .into_response(),
+        Err(e) => db_error(e),
+    }
+}
+
+/// `POST /api/v1/receipts/{id}/dispatch-answer`
+///
+/// Re-send the market answer for a receipt whose automatic dispatch failed.
+///
+/// Both the routing key and the command come from the receipt:
+///
+/// - **The routing key** is the EDIFACT message reference, which is what
+///   `makod` correlates the answer by.
+/// - **The command** is the answering PID's, from [`crate::routing`].
+///
+/// Getting either wrong fails silently — `makod` accepts the command and only
+/// the correlation misses — so neither is defaulted.
+async fn dispatch_answer(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    State(state): State<HandlerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Response {
+    if let Err(r) = authorize(&cedar, &claims, "write-receipt", &state.tenant) {
+        return r;
+    }
+    let target = match pg::receipts::dispatch_target(&state.pool, id, &state.tenant).await {
+        Ok(Some(t)) => t,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return db_error(e),
+    };
+
+    if target.already_dispatched {
+        return (
+            StatusCode::CONFLICT,
+            Json(serde_json::json!({ "error": "receipt already dispatched" })),
+        )
+            .into_response();
+    }
+    let Some(invoice_ref) = target.invoice_ref else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": "receipt has no INVOIC message reference — the answer cannot be routed"
+            })),
+        )
+            .into_response();
+    };
+    let Some(route) = route_for(target.pid as u32) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("PID {} is not answered by this service", target.pid)
+            })),
+        )
+            .into_response();
+    };
+
+    let dispute = target.outcome == "Dispute";
+    let (command, payload) = if dispute {
+        (
+            route.reject,
+            serde_json::json!({
+                "invoice_ref": invoice_ref,
+                "ablehnungsgrund": "Erneute Übermittlung der Ablehnung (Operator)",
+            }),
+        )
+    } else {
+        (
+            route.accept,
+            serde_json::json!({ "invoice_ref": invoice_ref }),
+        )
+    };
+
+    // A distinct salt from the automatic dispatch: this is a second command for
+    // the same process, and reusing the key would make it indistinguishable
+    // from the attempt that failed.
+    let key = uuid::Uuid::new_v5(&target.process_id, b"manual-dispatch").to_string();
+    let cmd = mako_markt::makod_client::ForwardCommand {
+        marktrolle: None,
+        command: command.to_owned(),
+        malo_id: None,
+        melo_id: None,
+        payload,
+    };
+    match state.makod.post_command(&key, &cmd).await {
+        Ok(_) => {
+            if let Err(e) = pg::receipts::mark_dispatched(
+                &state.pool,
+                target.process_id,
+                time::OffsetDateTime::now_utc(),
+            )
+            .await
+            {
+                tracing::warn!(%e, process_id = %target.process_id, "invoicd: manual dispatch not recorded");
+            }
+            Json(serde_json::json!({
+                "dispatched":  true,
+                "process_id":  target.process_id,
+                "pid":         target.pid,
+                "command":     command,
+                "invoice_ref": invoice_ref,
+            }))
+            .into_response()
+        }
+        Err(e) => (
+            StatusCode::BAD_GATEWAY,
+            Json(serde_json::json!({ "error": format!("makod dispatch failed: {e}") })),
+        )
+            .into_response(),
+    }
+}
+
+// ── Queries ───────────────────────────────────────────────────────────────────
+
+async fn fetch_receipts(
+    pool: &PgPool,
+    tenant: &str,
+    params: &ReceiptListQuery,
+) -> Result<Vec<ReceiptSummary>, sqlx::Error> {
+    let limit = i64::from(params.size.clamp(1, MAX_PAGE));
+    let offset = i64::from(params.page) * limit;
+    let from = params
+        .from
+        .as_deref()
+        .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok());
+    let to = params
+        .to
+        .as_deref()
+        .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok());
+
+    sqlx::query_as::<_, ReceiptSummary>(
+        r"SELECT id, process_id, pid, sender_mp_id, outcome, invoice_ref, rechnungsnummer,
+                 received_at, bo4e_version
+          FROM invoic_receipts
+          WHERE tenant = $1
+            AND ($2::text IS NULL OR sender_mp_id = $2)
+            AND ($3::text IS NULL OR outcome = $3)
+            AND ($4::timestamptz IS NULL OR received_at >= $4)
+            AND ($5::timestamptz IS NULL OR received_at <= $5)
+          ORDER BY received_at DESC
+          LIMIT $6 OFFSET $7",
+    )
+    .bind(tenant)
+    .bind(params.sender_mp_id.as_deref())
+    .bind(params.outcome.as_deref())
+    .bind(from)
+    .bind(to)
+    .bind(limit)
+    .bind(offset)
+    .fetch_all(pool)
+    .await
+}
+
+// ── Assembly ──────────────────────────────────────────────────────────────────
+
+/// Resolve secrets, build the OIDC verifier and Cedar enforcer, wire the
+/// handler state and MCP server, spawn the background workers, and register the
+/// `marktd` subscription.
 pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Router> {
     let oidc = mako_service::oidc::OidcConfig::build_verifier(
         cfg.oidc.as_ref(),
@@ -1335,62 +729,45 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
             .map_err(|e| anyhow::anyhow!("Cedar policy error: {e}"))?,
     );
 
-    // Resolve `env:`-referenced secrets (previously done in `main`).
-    let makod_api_key = cfg
-        .makod
-        .api_key
-        .as_deref()
-        .map(crate::config::resolve_env_secret)
-        .transpose()
-        .context("makod.api_key")?;
+    let resolve = |v: Option<&str>, what: &'static str| -> anyhow::Result<Option<SecretString>> {
+        v.map(crate::config::resolve_env_secret)
+            .transpose()
+            .context(what)
+    };
+    let makod_api_key = resolve(cfg.makod.api_key.as_deref(), "makod.api_key")?;
     let marktd_api_key =
         crate::config::resolve_env_secret(&cfg.marktd.api_key).context("marktd.api_key")?;
-    let inbound_secret = cfg
-        .webhook
-        .inbound_secret
-        .as_deref()
-        .map(crate::config::resolve_env_secret)
-        .transpose()
-        .context("webhook.inbound_secret")?;
-    let webhook_secret = inbound_secret.clone();
-    let erp_hmac_secret = cfg
-        .erp
-        .hmac_secret
-        .as_deref()
-        .map(crate::config::resolve_env_secret)
-        .transpose()
-        .context("erp.hmac_secret")?;
-    let edmd_api_key = cfg
-        .edmd
-        .api_key
-        .as_deref()
-        .map(crate::config::resolve_env_secret)
-        .transpose()
-        .context("edmd.api_key")?;
+    let inbound_secret = resolve(
+        cfg.webhook.inbound_secret.as_deref(),
+        "webhook.inbound_secret",
+    )?;
+    let erp_hmac_secret = resolve(cfg.erp.hmac_secret.as_deref(), "erp.hmac_secret")?;
+    let edmd_api_key = resolve(cfg.edmd.api_key.as_deref(), "edmd.api_key")?;
 
     let tenant = cfg.identity.tenant.clone();
     let pool = ctx.pool().clone();
-
-    let preisblatt_client = MarktdClient::new(&cfg.marktd.url, marktd_api_key, ctx.http.clone());
-    let api_key = makod_api_key.unwrap_or_else(|| SecretString::new(String::new().into()));
-    let makod = MakodClient::new(&cfg.makod.url, api_key);
+    let marktd = MarktdClient::new(&cfg.marktd.url, marktd_api_key, ctx.http.clone());
+    let makod = MakodClient::new(
+        &cfg.makod.url,
+        makod_api_key.unwrap_or_else(|| SecretString::new(String::new().into())),
+    );
 
     let state = HandlerState {
-        preisblatt_client: preisblatt_client.clone(),
+        marktd: marktd.clone(),
         makod,
         check_config: Arc::new(cfg.check_config()),
-        inbound_secret: Arc::new(inbound_secret),
+        inbound_secret: Arc::new(inbound_secret.clone()),
         auto_dispute_threshold_raw: cfg.auto_dispute_threshold_raw(),
-        pool: Some(pool.clone()),
+        pool: pool.clone(),
         tenant: tenant.clone(),
         erp_webhook_url: cfg.erp.webhook_url.clone(),
         erp_hmac_secret: erp_hmac_secret.clone(),
+        edmd: cfg.edmd.url.as_deref().map(|url| {
+            mako_service::http::Upstream::new("edmd", url, edmd_api_key, ctx.http.clone())
+        }),
         http_client: ctx.http.clone(),
-        edmd_url: cfg.edmd.url.clone(),
-        edmd_api_key: edmd_api_key.clone(),
     };
 
-    // ── MCP state ─────────────────────────────────────────────────────────────
     let mcp_state = Arc::new(crate::mcp_server::InvoicdMcpState {
         pool: pool.clone(),
         tenant: tenant.clone(),
@@ -1402,42 +779,46 @@ pub async fn build(cfg: Arc<Config>, ctx: ServiceContext) -> anyhow::Result<Rout
         ),
     });
 
-    // Spawn the ERP outbox + payment-overdue workers when an ERP webhook is configured.
     if let Some(erp_url) = cfg.erp.webhook_url.clone() {
-        // The ERP outbox worker retries failed ERP notifications with backoff.
         crate::erp_outbox::spawn(
             pool.clone(),
             tenant.clone(),
             erp_url.clone(),
             erp_hmac_secret.clone(),
+            ctx.http.clone(),
             ctx.shutdown.clone(),
         );
-
-        // The payment-overdue worker polls every 6 h and emits
-        // `de.invoic.payment.overdue` when `pay_by` has passed without
-        // `payment_confirmed_at` — closes the § 147 AO / GoBD dunning gap.
         crate::payment_overdue::spawn(
             pool.clone(),
             tenant.clone(),
             erp_url,
-            erp_hmac_secret.clone(),
+            erp_hmac_secret,
+            ctx.http.clone(),
             ctx.shutdown.clone(),
+        );
+    } else {
+        tracing::warn!(
+            "invoicd: no [erp] webhook_url — de.invoic.receipt.* and de.invoic.payment.overdue \
+             events are recorded but nothing delivers them; the ERP will not learn that an \
+             invoice was settled, disputed or has passed its Zahlungsziel"
         );
     }
 
-    // Register subscription with marktd using the shared MarktdClient.
-    preisblatt_client
+    // The PIDs registered as the subscription filter come from the routing
+    // table, so a PID added there starts arriving without a second edit — and
+    // one removed stops being delivered.
+    let pids: Vec<u32> = crate::routing::ROUTES.iter().map(|r| r.pid).collect();
+    marktd
         .put_subscription(
             &cfg.subscription.subscriber_id,
             &mako_markt::marktd_client::SubscriptionRequest {
                 webhook_url: &cfg.subscription.webhook_url,
-                webhook_secret: webhook_secret.as_ref().map(|s| {
-                    use secrecy::ExposeSecret;
-                    let secret: &str = s.expose_secret();
-                    secret
+                webhook_secret: inbound_secret.as_ref().map(|s| {
+                    use secrecy::ExposeSecret as _;
+                    s.expose_secret()
                 }),
                 event_types: &[mako_events::mako::PROCESS_INITIATED],
-                makopid_filter: &[],
+                makopid_filter: &pids,
                 active: true,
             },
         )

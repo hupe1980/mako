@@ -20,6 +20,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
+use mako_service::http::Upstream;
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Row as _};
 use time::Date;
@@ -487,14 +488,12 @@ impl OutboundWorker {
                     .get("endpoint")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("start-supply");
-                let body = self
-                    .post_json(
-                        &self.cfg.processd_url,
-                        endpoint,
-                        self.cfg.processd_api_key.as_deref(),
-                        payload,
-                    )
-                    .await?;
+                let processd = self.upstream(
+                    "processd",
+                    &self.cfg.processd_url,
+                    self.cfg.processd_api_key.as_deref(),
+                );
+                let body = self.post_json(&processd, endpoint, payload).await?;
                 let process_id = body
                     .get("process_id")
                     .and_then(serde_json::Value::as_str)
@@ -518,24 +517,18 @@ impl OutboundWorker {
                     .get("endpoint")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or("end-supply");
-                self.post_json(
+                let processd = self.upstream(
+                    "processd",
                     &self.cfg.processd_url,
-                    endpoint,
                     self.cfg.processd_api_key.as_deref(),
-                    payload,
-                )
-                .await?;
+                );
+                self.post_json(&processd, endpoint, payload).await?;
                 Ok(())
             }
             TaskKind::AblesungBeginn | TaskKind::AblesungEnde => {
-                let body = self
-                    .post_json(
-                        &self.cfg.edmd_url,
-                        "reading-orders",
-                        self.cfg.edmd_api_key.as_deref(),
-                        payload,
-                    )
-                    .await?;
+                let edmd =
+                    self.upstream("edmd", &self.cfg.edmd_url, self.cfg.edmd_api_key.as_deref());
+                let body = self.post_json(&edmd, "reading-orders", payload).await?;
                 // Keep the trail from a Schlussrechnung back to the reading it
                 // was built on. edmd's POST is not idempotent, so the id is
                 // recorded here and the dedupe key stops a second order.
@@ -558,50 +551,45 @@ impl OutboundWorker {
                 Ok(())
             }
             TaskKind::Abrechnungskonto => {
-                self.post_json(
+                let accountingd = self.upstream(
+                    "accountingd",
                     &self.cfg.accountingd_url,
-                    "accounts",
                     self.cfg.accountingd_api_key.as_deref(),
-                    payload,
-                )
-                .await?;
+                );
+                self.post_json(&accountingd, "accounts", payload).await?;
                 Ok(())
             }
         }
     }
 
+    /// Address a peer, sharing this worker's HTTP client.
+    fn upstream(&self, name: &'static str, base: &str, key: Option<&str>) -> Upstream {
+        Upstream::new(
+            name,
+            base,
+            key.map(|k| secrecy::SecretString::from(k.to_owned())),
+            self.http.clone(),
+        )
+    }
+
+    /// POST a task's payload to `/api/v1/{path}` on `up`.
+    ///
+    /// A `404` is a failure here, not absence: the task named an endpoint the
+    /// peer does not serve, and acknowledging it would drop the obligation the
+    /// task exists to discharge.
     async fn post_json(
         &self,
-        base: &str,
+        up: &Upstream,
         path: &str,
-        key: Option<&str>,
         body: &serde_json::Value,
     ) -> Result<serde_json::Value> {
-        self.send(self.http.post(url(base, path)), key, body).await
+        let path = format!("/api/v1/{path}");
+        Ok(up
+            .json(up.post(&path).json(body))
+            .await
+            .context("outbound task dispatch")?
+            .unwrap_or(serde_json::Value::Null))
     }
-
-    async fn send(
-        &self,
-        req: reqwest::RequestBuilder,
-        key: Option<&str>,
-        body: &serde_json::Value,
-    ) -> Result<serde_json::Value> {
-        let req = match key {
-            Some(k) => req.bearer_auth(k),
-            None => req,
-        };
-        let resp = req.json(body).send().await.context("request failed")?;
-        let status = resp.status();
-        if !status.is_success() {
-            let detail = resp.text().await.unwrap_or_default();
-            anyhow::bail!("upstream returned {status}: {}", detail.trim());
-        }
-        Ok(resp.json().await.unwrap_or(serde_json::Value::Null))
-    }
-}
-
-fn url(base: &str, path: &str) -> String {
-    format!("{}/api/v1/{path}", base.trim_end_matches('/'))
 }
 
 /// Exponential backoff, capped so a long outage does not push the next attempt

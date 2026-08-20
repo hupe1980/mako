@@ -39,6 +39,9 @@ impl Daemon for MabisSyncd {
         // handlers, which read those fields verbatim at request time.
         let mut cfg = (*cfg).clone();
         cfg.resolve_env_refs()?;
+        // Refuses an unimplemented submission target and a Bilanzierungsgebiet
+        // that is not one, while the window is still open.
+        cfg.validate()?;
         let cfg = Arc::new(cfg);
 
         // A MaBiS submission settles a balance group and cannot be withdrawn once

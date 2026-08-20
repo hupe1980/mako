@@ -1,7 +1,18 @@
 //! MCP (Model Context Protocol) server for `portald` — Customer Portal Gateway.
 //!
-//! Aggregates customer data from all upstream services into a single LLM-accessible
-//! read-model. All tools are read-only (`readOnlyHint = true`).
+//! Aggregates customer data from all upstream services into a single
+//! LLM-accessible read model. All tools are read-only (`readOnlyHint = true`).
+//!
+//! # This surface is operator-facing, not customer-facing
+//!
+//! Every tool takes a `malo_id` parameter and carries no customer token, so it
+//! does **not** run through [`crate::auth::authorize`] the way the REST routes
+//! do — whoever can call `/mcp` can read every customer in the tenant. That is
+//! the right shape for a customer-service agent and the wrong one for a
+//! customer-facing portal: gate it with an API key or OIDC
+//! (`[mcp]` in `portald.toml`), keep it off the public ingress, and never hand
+//! its credential to an end user. `McpAuth::dev()` leaves it open and is for
+//! development only.
 //!
 //! ## Tools (8)
 //! | Tool | Description |
@@ -37,16 +48,18 @@ use schemars::JsonSchema;
 use serde::Deserialize;
 use tokio_util::sync::CancellationToken;
 
-use crate::handlers::PortalClients;
+use crate::clients::PortalClients;
 
 // ── Shared state ──────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
 pub struct PortaldMcpState {
     pub clients: Arc<PortalClients>,
-    /// MCP authentication. In typical portald deployments MCP is customer-facing
-    /// and read-only — set to `McpAuth::dev()` for open access or configure an
-    /// API key for token-gated access.
+    /// MCP authentication.
+    ///
+    /// The tools here are not customer-scoped (see the module docs), so this is
+    /// the only thing standing between a caller and every customer in the
+    /// tenant. Configure an API key or OIDC in production.
     pub auth: mako_service::mcp_auth::McpAuth,
 }
 

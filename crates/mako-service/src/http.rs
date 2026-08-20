@@ -63,9 +63,267 @@ pub fn default_client_with(request_timeout: std::time::Duration) -> reqwest::Cli
         .expect("reqwest default_client: TLS initialisation is infallible on supported platforms")
 }
 
+/// A peer service this daemon calls: base URL, optional service credential, and
+/// the status conventions every mako service shares.
+///
+/// The transport primitive only — where the credential goes, what a `404`
+/// means, how a non-2xx is reported. Typed domain clients own their request
+/// shapes and response types and use this underneath; a gateway that must relay
+/// an upstream's raw body and status builds that on top (`portald` does).
+///
+/// The credential is sent as `Authorization: Bearer`. It is a **service**
+/// credential and never stands in for an end user's token: a call made on
+/// behalf of somebody must carry their identity in a header this type does not
+/// set.
+#[derive(Debug, Clone)]
+pub struct Upstream {
+    name: &'static str,
+    base_url: String,
+    api_key: Option<secrecy::SecretString>,
+    client: reqwest::Client,
+}
+
+impl Upstream {
+    /// Address `name` at `base_url`, sharing `client`.
+    ///
+    /// Sharing the daemon's `ServiceContext::http` client is the point: a
+    /// per-upstream `reqwest::Client` gets its own connection pool and its own
+    /// (often mis-specified) timeouts.
+    #[must_use]
+    pub fn new(
+        name: &'static str,
+        base_url: &str,
+        api_key: Option<secrecy::SecretString>,
+        client: reqwest::Client,
+    ) -> Self {
+        Self {
+            name,
+            // Trailing slashes are a config-file accident; `{base}{path}` would
+            // otherwise produce `//api/v1/…`, which some routers 404.
+            base_url: base_url.trim_end_matches('/').to_owned(),
+            api_key,
+            client,
+        }
+    }
+
+    /// The service's name, for logs and errors.
+    #[must_use]
+    pub fn name(&self) -> &'static str {
+        self.name
+    }
+
+    /// The normalised base URL, without a trailing slash.
+    #[must_use]
+    pub fn base_url(&self) -> &str {
+        &self.base_url
+    }
+
+    /// A `GET` to `path`, credential attached.
+    pub fn get(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authed(self.client.get(self.url(path)))
+    }
+
+    /// A `POST` to `path`, credential attached.
+    pub fn post(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authed(self.client.post(self.url(path)))
+    }
+
+    /// A `PUT` to `path`, credential attached.
+    pub fn put(&self, path: &str) -> reqwest::RequestBuilder {
+        self.authed(self.client.put(self.url(path)))
+    }
+
+    fn url(&self, path: &str) -> String {
+        format!("{}{path}", self.base_url)
+    }
+
+    fn authed(&self, req: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(key) => {
+                use secrecy::ExposeSecret as _;
+                req.bearer_auth(key.expose_secret())
+            }
+            None => req,
+        }
+    }
+
+    /// Send `req` and deserialize the body, mapping `404` to `None`.
+    ///
+    /// `404` is absence, not failure: a MaLo with no billing period and a MaLo
+    /// that does not exist are the same answer to a reader, and both differ from
+    /// an upstream that is broken.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure, a non-404 error status, or a body that does not
+    /// deserialize. Every message names the upstream, so a failure in a handler
+    /// that calls three of them says which one.
+    pub async fn json<T: serde::de::DeserializeOwned>(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<Option<T>, UpstreamError> {
+        let Some(resp) = self.send(req).await? else {
+            return Ok(None);
+        };
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| UpstreamError::Body {
+                service: self.name,
+                source: e,
+            })
+    }
+
+    /// Send `req` and read the body as text — an XML rendering, a CSV export.
+    /// `404` maps to `None`.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a non-404 error status.
+    pub async fn text(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<Option<String>, UpstreamError> {
+        let Some(resp) = self.send(req).await? else {
+            return Ok(None);
+        };
+        resp.text()
+            .await
+            .map(Some)
+            .map_err(|e| UpstreamError::Body {
+                service: self.name,
+                source: e,
+            })
+    }
+
+    /// Send `req`, returning the response for a 2xx, `None` for a `404`.
+    ///
+    /// Use this when the body needs handling the helpers above do not cover —
+    /// streaming, or a header the caller reads.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a non-404 error status.
+    pub async fn send(
+        &self,
+        req: reqwest::RequestBuilder,
+    ) -> Result<Option<reqwest::Response>, UpstreamError> {
+        let resp = req.send().await.map_err(|e| UpstreamError::Transport {
+            service: self.name,
+            source: e,
+        })?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let status = resp.status();
+        if !status.is_success() {
+            // The body carries the upstream's own error code and message;
+            // dropping it leaves an operator with a bare number.
+            let body = resp.text().await.unwrap_or_default();
+            return Err(UpstreamError::Status {
+                service: self.name,
+                status,
+                body: body.chars().take(512).collect(),
+            });
+        }
+        Ok(Some(resp))
+    }
+}
+
+/// A call to a peer service that did not produce a usable answer.
+#[derive(Debug, thiserror::Error)]
+pub enum UpstreamError {
+    /// The service could not be reached, or the request timed out.
+    #[error("{service} unreachable: {source}")]
+    Transport {
+        service: &'static str,
+        source: reqwest::Error,
+    },
+    /// The service answered with an error status.
+    #[error("{service} returned {status}: {body}")]
+    Status {
+        service: &'static str,
+        status: reqwest::StatusCode,
+        body: String,
+    },
+    /// The service answered 2xx with a body the caller cannot use.
+    #[error("{service} returned an unusable body: {source}")]
+    Body {
+        service: &'static str,
+        source: reqwest::Error,
+    },
+}
+
+impl UpstreamError {
+    /// `true` when the upstream answered, but with an error.
+    ///
+    /// Separates "the peer is down" from "the peer refused this request", which
+    /// a caller deciding between `503` and `502` needs.
+    #[must_use]
+    pub fn is_status(&self) -> bool {
+        matches!(self, Self::Status { .. })
+    }
+
+    /// The status the upstream answered with, if it answered at all.
+    #[must_use]
+    pub fn status(&self) -> Option<reqwest::StatusCode> {
+        match self {
+            Self::Status { status, .. } => Some(*status),
+            _ => None,
+        }
+    }
+}
+
 #[cfg(all(test, feature = "oidc", feature = "cedar"))]
 mod tests {
-    use super::default_client;
+    use super::{Upstream, default_client};
+
+    fn upstream(base: &str) -> Upstream {
+        Upstream::new("edmd", base, None, default_client())
+    }
+
+    /// A trailing slash in the configured URL must not produce `//api/v1/…`,
+    /// which some routers answer with a 404 that reads as missing data.
+    #[test]
+    fn a_trailing_slash_in_the_base_url_is_normalised() {
+        assert_eq!(upstream("http://edmd:8380/").base_url(), "http://edmd:8380");
+        assert_eq!(upstream("http://edmd:8380").base_url(), "http://edmd:8380");
+        assert_eq!(
+            upstream("http://edmd:8380///").base_url(),
+            "http://edmd:8380"
+        );
+    }
+
+    /// An error names the upstream that produced it. A handler that calls three
+    /// services otherwise reports "returned 500" with no way to tell which.
+    #[test]
+    fn every_error_names_the_service() {
+        let e = super::UpstreamError::Status {
+            service: "marktd",
+            status: reqwest::StatusCode::UNPROCESSABLE_ENTITY,
+            body: "no price sheet".to_owned(),
+        };
+        let msg = e.to_string();
+        assert!(msg.contains("marktd"), "{msg}");
+        assert!(msg.contains("422"), "{msg}");
+        assert!(
+            msg.contains("no price sheet"),
+            "the upstream's reason survives: {msg}"
+        );
+    }
+
+    /// "The peer is down" and "the peer refused this request" are different
+    /// answers — a caller choosing between 503 and 502 needs to tell them apart.
+    #[test]
+    fn a_refusal_is_distinguishable_from_an_outage() {
+        let refused = super::UpstreamError::Status {
+            service: "marktd",
+            status: reqwest::StatusCode::FORBIDDEN,
+            body: String::new(),
+        };
+        assert!(refused.is_status());
+        assert_eq!(refused.status(), Some(reqwest::StatusCode::FORBIDDEN));
+    }
 
     /// An operator- or partner-supplied URL must not be able to redirect an
     /// outbound call onto infrastructure the caller never named — the

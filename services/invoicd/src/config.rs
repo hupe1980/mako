@@ -27,6 +27,11 @@
 //! webhook_url   = "http://invoicd:8280/webhook"
 //! subscriber_id = "invoicd"
 //!
+//! # Required only for POST /api/v1/selbstausstellen (PID 31006).
+//! # [edmd]
+//! # url     = "http://edmd:8380"
+//! # api_key = "env:INVOICD_EDMD_API_KEY"
+//!
 //! [check]
 //! # All tolerances are relative (0.01 = 1 %)
 //! arithmetic_tolerance = 0.01
@@ -62,7 +67,8 @@ pub struct Config {
     pub subscription: SubscriptionConfig,
     #[serde(default)]
     pub check: CheckSectionConfig,
-    /// Optional `edmd` connection — required for PID 31006 selbstausstellen.
+    /// `edmd` connection — required by `POST /api/v1/selbstausstellen`, which
+    /// reads the measured quantity for the Bilanzierungsmonat from it.
     #[serde(default)]
     pub edmd: EdmdConfig,
     /// Optional ERP webhook for outbound payment CloudEvents (A8).
@@ -157,9 +163,11 @@ pub struct MarktdConfig {
 
 #[derive(Debug, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
-/// Optional `edmd` connection — required for `POST /api/v1/selbstausstellen` (PID 31006).
+/// `edmd` connection — required by `POST /api/v1/selbstausstellen` (PID 31006).
 ///
-/// When omitted, selbstausstellen returns 503 (edmd not configured).
+/// A Mehrmengen-Rechnung settles measured against balanced energy, and `edmd`
+/// holds the measured half. Omitted, that endpoint answers 503; nothing else in
+/// the service needs it.
 pub struct EdmdConfig {
     /// `edmd` base URL.  Example: `http://edmd:8380`
     #[serde(default)]
@@ -177,6 +185,12 @@ pub struct WebhookConfig {
     pub inbound_secret: Option<String>,
 }
 
+/// The `marktd` subscription registered at startup.
+///
+/// The event type and the PID filter are deliberately not configurable:
+/// `invoicd` acts on `de.mako.process.initiated` for the PIDs in
+/// [`crate::routing::ROUTES`] and nothing else, so a key offering to change
+/// either would promise a behaviour the service does not have.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionConfig {
@@ -184,18 +198,10 @@ pub struct SubscriptionConfig {
     pub webhook_url: String,
     #[serde(default = "default_subscriber_id")]
     pub subscriber_id: String,
-    #[serde(default = "default_event_types")]
-    pub event_types: Vec<String>,
 }
 
 fn default_subscriber_id() -> String {
     "invoicd".to_owned()
-}
-fn default_event_types() -> Vec<String> {
-    vec![
-        mako_events::mako::PROCESS_INITIATED.to_owned(),
-        mako_events::mako::PROCESS_COMPLETED.to_owned(),
-    ]
 }
 
 impl Default for SubscriptionConfig {
@@ -203,7 +209,6 @@ impl Default for SubscriptionConfig {
         Self {
             webhook_url: "http://invoicd:8280/webhook".to_owned(),
             subscriber_id: default_subscriber_id(),
-            event_types: default_event_types(),
         }
     }
 }

@@ -167,8 +167,6 @@ pub async fn run_jahresablesung_campaign(
     marktd_api_key: &secrecy::SecretString,
     req: &JahresablesungCampaignRequest,
 ) -> Result<CampaignOutcome, CampaignError> {
-    use secrecy::ExposeSecret as _;
-
     let year = req
         .campaign_year
         .unwrap_or_else(|| time::OffsetDateTime::now_utc().year());
@@ -184,9 +182,12 @@ pub async fn run_jahresablesung_campaign(
     });
 
     let max_malos = req.max_malos.unwrap_or(5_000).min(50_000);
-    let marktd_base = marktd_url.trim_end_matches('/').to_owned();
-    let api_key = marktd_api_key.expose_secret().to_owned();
-    let client = mako_service::http::default_client();
+    let marktd = mako_service::http::Upstream::new(
+        "marktd",
+        marktd_url,
+        Some(marktd_api_key.clone()),
+        mako_service::http::default_client(),
+    );
 
     // Enumerate the SLP MaLos in **this NB's** grid area (paginated, 500 per
     // page). `zuordnungstyp=NB` with `rollencodenummer` restricts the result to
@@ -204,32 +205,20 @@ pub async fn run_jahresablesung_campaign(
     let page_size = 500i64;
 
     loop {
-        let url = format!(
-            "{marktd_base}/api/v1/malos\
-             ?bilanzierungsmethode=SLP\
-             &zuordnungstyp=NB\
-             &rollencodenummer={nb_mp_id}\
-             &size={page_size}&page={page}"
-        );
-        let mut get_req = client.get(&url);
-        if !api_key.is_empty() {
-            get_req = get_req.bearer_auth(&api_key);
-        }
-        let resp = match get_req.send().await {
-            Ok(r) => r,
+        let request = marktd.get("/api/v1/malos").query(&[
+            ("bilanzierungsmethode", "SLP".to_owned()),
+            ("zuordnungstyp", "NB".to_owned()),
+            ("rollencodenummer", nb_mp_id.to_owned()),
+            ("size", page_size.to_string()),
+            ("page", page.to_string()),
+        ]);
+        let body: serde_json::Value = match marktd.json(request).await {
+            Ok(Some(v)) => v,
+            // marktd knows no MaLos for this grid area — an empty campaign, not
+            // a failure.
+            Ok(None) => break,
             Err(e) => {
-                tracing::error!(error = %e, "edmd: campaign failed to reach marktd");
-                return Err(CampaignError::Marktd(format!("marktd unreachable: {e}")));
-            }
-        };
-        if !resp.status().is_success() {
-            let status = resp.status();
-            tracing::error!(%status, "edmd: marktd list_malo returned error");
-            return Err(CampaignError::Marktd(format!("marktd error: {status}")));
-        }
-        let body: serde_json::Value = match resp.json().await {
-            Ok(v) => v,
-            Err(e) => {
+                tracing::error!(error = %e, "edmd: campaign could not enumerate MaLos");
                 return Err(CampaignError::Marktd(e.to_string()));
             }
         };

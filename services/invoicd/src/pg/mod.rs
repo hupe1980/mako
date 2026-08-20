@@ -2,4 +2,4 @@
 
 pub mod receipts;
 
-pub use receipts::{ReceiptRow, upsert_receipt};
+pub use receipts::{ReceiptRow, bo4e_version, upsert_receipt};

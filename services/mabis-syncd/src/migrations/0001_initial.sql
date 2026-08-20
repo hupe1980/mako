@@ -40,6 +40,11 @@
 
 CREATE TABLE submission_runs (
     id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- The tenant's own Bilanzierungsgebiet, as configured. A run may span
+    -- several — what actually went out per territory is `submission_series`.
+    -- This column keys the scheduler's duplicate guard and the inbound
+    -- Datenstatus/Prüfmitteilung lookups, which name a territory the BIKO
+    -- echoes back.
     bilanzierungsgebiet_id  TEXT        NOT NULL,
     period_from             DATE        NOT NULL,
     period_to               DATE        NOT NULL,
@@ -127,6 +132,54 @@ CREATE INDEX sr_triggered ON submission_runs (triggered_at DESC);
 CREATE INDEX sr_settling_version ON submission_runs
     (tenant, bilanzierungsgebiet_id, period_from, period_to, version DESC)
     WHERE datenstatus IN ('ABRECHNUNGSDATEN', 'ABRECHNUNGSDATEN_KBKA');
+
+-- ── Per-territory submission ──────────────────────────────────────────────────
+--
+-- A run aggregates every MaLo the tenant holds, and MaBiS settles **per
+-- Bilanzierungsgebiet**, so one run files one MSCONS 13003 per territory.
+--
+-- This table is what actually went out, per territory; `submission_runs` keeps
+-- the aggregate. The distinction matters because an acked Summenzeitreihe
+-- cannot be withdrawn: when one territory of a run fails, the others are
+-- already filed, and a retry has to know which.
+
+CREATE TABLE submission_series (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    run_id                  UUID        NOT NULL REFERENCES submission_runs(id) ON DELETE CASCADE,
+    -- The territory this series settles, resolved from marktd master data.
+    bilanzierungsgebiet_id  TEXT        NOT NULL,
+    -- The MaBiS-Zählpunkt it is filed under (MSCONS SG6 LOC+172).
+    mabis_zp_id             TEXT        NOT NULL,
+    malo_count              INTEGER     NOT NULL DEFAULT 0,
+    interval_count          INTEGER     NOT NULL DEFAULT 0,
+    total_kwh               TEXT,
+    -- 'pending' until the submission is attempted, then 'acked' or 'failed'.
+    -- A territory that reached the BIKO stays 'acked' even when a later one in
+    -- the same run fails: recording it as failed would send a correction for a
+    -- submission that was accepted.
+    status                  TEXT        NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending', 'acked', 'failed')),
+    message_ref             TEXT,
+    process_id              UUID,
+    error_msg               TEXT,
+    submitted_at            TIMESTAMPTZ,
+
+    -- One series per territory per run.
+    CONSTRAINT ss_one_per_territory UNIQUE (run_id, bilanzierungsgebiet_id),
+    -- An acked series names what was filed; a failed one names why it was not.
+    CONSTRAINT ss_acked_has_reference CHECK (
+        status <> 'acked' OR message_ref IS NOT NULL
+    )
+);
+
+COMMENT ON TABLE submission_series IS
+    'One MSCONS 13003 per Bilanzierungsgebiet within a run. A run files one per territory; '
+    'this records which of them reached the BIKO.';
+
+CREATE INDEX ss_run     ON submission_series (run_id);
+CREATE INDEX ss_gebiet  ON submission_series (bilanzierungsgebiet_id);
+-- Territories of a run that did not reach the BIKO — the retry list.
+CREATE INDEX ss_open    ON submission_series (run_id) WHERE status <> 'acked';
 
 -- ── Per-MaLo contribution log ─────────────────────────────────────────────────
 

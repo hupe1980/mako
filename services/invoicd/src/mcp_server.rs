@@ -15,7 +15,7 @@
 //! | `list_overdue_remadv`      | Receipts approaching Zahlungsziel without dispatched REMADV |
 //! | `get_zahlungsstatus`       | Payment status per MaLo-ID (settled / pending / overdue) |
 //! | `summarize_billing_month`  | Monthly billing volume and dispute rate per NB |
-//! | `dispatch_remadv`          | Manually trigger REMADV dispatch for a stuck receipt |
+//! | `list_exceptions`          | The two operator queues: undispatched answers and dead-lettered INVOICs |
 //!
 //! ## Prompts
 //!
@@ -84,12 +84,6 @@ pub struct SummarizeBillingMonthParams {
     pub year: i32,
     /// Month 1–12.
     pub month: u8,
-}
-
-#[derive(Debug, Deserialize, JsonSchema)]
-pub struct DispatchRemadvParams {
-    /// UUID of the receipt to manually dispatch.
-    pub id: String,
 }
 
 // ── MCP handler ───────────────────────────────────────────────────────────────
@@ -492,53 +486,81 @@ impl InvoicdMcpHandler {
         .map_err(|e| McpError::internal_error(e.message, None))
     }
 
-    /// Manually trigger REMADV dispatch for a receipt with `dispatched_at IS NULL`.
+    /// The two queues an operator has to clear, with the reason for each entry.
     ///
-    /// Call this when auto-dispatch failed and the Zahlungsziel is approaching.
-    /// Returns an error if the receipt is already dispatched (`dispatched_at IS NOT NULL`).
-    ///
-    /// **This tool modifies state** — it sends a command to makod.
+    /// Read-only, like every tool here: acting on either queue goes through the
+    /// REST API, which authorises the caller. `how_to_act` in the result says
+    /// how.
     #[tool(
-        description = "Manually trigger REMADV dispatch for a stuck receipt (dispatched_at IS NULL)",
-        annotations(read_only_hint = false, open_world_hint = false)
+        description = "The invoicd exception queues: receipts whose answer never went out, and INVOICs that could not be processed at all",
+        annotations(read_only_hint = true, open_world_hint = false)
     )]
-    async fn dispatch_remadv(
-        &self,
-        Parameters(p): Parameters<DispatchRemadvParams>,
-    ) -> Result<CallToolResult, McpError> {
-        let id: uuid::Uuid =
-            p.id.parse()
-                .map_err(|_| McpError::invalid_params("id is not a valid UUID", None))?;
+    async fn list_exceptions(&self) -> Result<CallToolResult, McpError> {
+        let undispatched = sqlx::query(
+            r"SELECT id, process_id, pid, sender_mp_id, outcome, invoice_ref, pay_by
+              FROM invoic_receipts
+              WHERE tenant = $1 AND dispatched_at IS NULL
+              ORDER BY pay_by ASC NULLS LAST
+              LIMIT 50",
+        )
+        .bind(&self.state.tenant)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        // Check current dispatched_at.
-        let row =
-            sqlx::query(r"SELECT dispatched_at FROM invoic_receipts WHERE id = $1 AND tenant = $2")
-                .bind(id)
-                .bind(&self.state.tenant)
-                .fetch_optional(&self.state.pool)
-                .await
-                .map_err(|e| McpError::internal_error(e.to_string(), None))?;
-
-        let Some(row) = row else {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(format!(
-                "receipt_not_found: No receipt with id '{}'.",
-                p.id
-            ))]));
-        };
+        let dlq = sqlx::query(
+            r"SELECT id, process_id, pid, malo_id, failure_reason, failed_at
+              FROM invoic_dlq
+              WHERE tenant = $1 AND resolved_at IS NULL
+              ORDER BY failed_at ASC
+              LIMIT 50",
+        )
+        .bind(&self.state.tenant)
+        .fetch_all(&self.state.pool)
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         use sqlx::Row;
-        let already: Option<time::OffsetDateTime> = row.try_get("dispatched_at").ok().flatten();
-        if already.is_some() {
-            return Ok(CallToolResult::error(vec![ContentBlock::text(
-                "already_dispatched: This receipt was already dispatched. Check the EDIFACT pipeline status.",
-            )]));
-        }
+        use time::format_description::well_known::Rfc3339;
+        let undispatched: Vec<serde_json::Value> = undispatched
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "receipt_id":   r.try_get::<uuid::Uuid, _>("id").ok(),
+                    "process_id":   r.try_get::<uuid::Uuid, _>("process_id").ok(),
+                    "pid":          r.try_get::<i16, _>("pid").ok(),
+                    "sender_mp_id": r.try_get::<String, _>("sender_mp_id").ok(),
+                    "outcome":      r.try_get::<String, _>("outcome").ok(),
+                    "invoice_ref":  r.try_get::<Option<String>, _>("invoice_ref").ok().flatten(),
+                    "pay_by":       r.try_get::<Option<time::OffsetDateTime>, _>("pay_by").ok()
+                        .flatten().and_then(|t| t.format(&Rfc3339).ok()),
+                })
+            })
+            .collect();
+        let dead_letters: Vec<serde_json::Value> = dlq
+            .iter()
+            .map(|r| {
+                serde_json::json!({
+                    "dlq_id":     r.try_get::<uuid::Uuid, _>("id").ok(),
+                    "process_id": r.try_get::<Option<uuid::Uuid>, _>("process_id").ok().flatten(),
+                    "pid":        r.try_get::<Option<i16>, _>("pid").ok().flatten(),
+                    "malo_id":    r.try_get::<Option<String>, _>("malo_id").ok().flatten(),
+                    "reason":     r.try_get::<String, _>("failure_reason").ok(),
+                    "failed_at":  r.try_get::<time::OffsetDateTime, _>("failed_at").ok()
+                        .and_then(|t| t.format(&Rfc3339).ok()),
+                })
+            })
+            .collect();
 
-        Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "To dispatch REMADV for receipt {id}: call POST /api/v1/receipts/{id}/dispatch-remadv \
-                 with your operator bearer token. The MCP tool cannot dispatch commands directly — \
-                 use the REST API or the dispatch_remadv MCP action tool once connected to invoicd."
-        ))]))
+        ContentBlock::json(serde_json::json!({
+            "undispatched_answers": undispatched,
+            "undispatched_count":   undispatched.len(),
+            "dead_letters":         dead_letters,
+            "dead_letter_count":    dead_letters.len(),
+            "how_to_act": "Re-send an answer with POST /api/v1/receipts/{receipt_id}/dispatch-answer (operator bearer token, LF role). A dead letter has no receipt yet: fix the cause named in `reason`, then have marktd redeliver the process event.",
+        }))
+        .map(|b| CallToolResult::success(vec![b]))
+        .map_err(|e| McpError::internal_error(e.message, None))
     }
 }
 
@@ -590,7 +612,7 @@ impl InvoicdMcpHandler {
                 "1. Use `list_overdue_remadv` — returns receipts past Zahlungsziel without dispatched REMADV.\n\
                  2. For each overdue receipt:\n\
                     a. Use `get_receipt` to confirm Zahlungsziel and current status.\n\
-                    b. Use `dispatch_remadv` tool (or POST /api/v1/receipts/{id}/dispatch-remadv).\n\
+                    b. POST /api/v1/receipts/{id}/dispatch-answer re-sends it (LF role).\n\
                  3. The REMADV (33001 accept / 33002 dispute) is sent via makod EDIFACT pipeline.\n\
                  4. § 147 AO / GoBD: REMADV must be dispatched within the payment term.\n\
                     Missed dispatches are a compliance violation — escalate to operations.",
@@ -625,7 +647,7 @@ impl InvoicdMcpHandler {
                  \n\
                  **3. Overdue REMADV**\n\
                  Call `list_overdue_remadv` — any result here is a § 147 AO / GoBD gap.\n\
-                 Use `dispatch_remadv` to manually trigger the REMADV for each overdue receipt.\n\
+                 POST /api/v1/receipts/{id}/dispatch-answer re-sends the answer for each of them.\n\
                  \n\
                  **4. Payment confirmation**\n\
                  For accepted invoices past Zahlungsziel: query `get_zahlungsstatus` per MaLo.\n\
@@ -669,13 +691,14 @@ impl InvoicdMcpHandler {
                  **Step 3: Root-cause confirmation**\n\
                  - Check 4 systematic: verify `tarifbd` has current PreisblattNetznutzung for the NB.\n\
                    If yes, the error is on the NB's side — send formal Beanstandungsschreiben.\n\
-                 - Check 6 systematic: call `marktd GET /api/v1/mmma/{year}/{month}` to verify\n\
-                   your MMMA reference prices are current.\n\
+                 - Check 6 systematic: call `marktd GET /api/v1/mmm-preise/strom/{year}/{month}`\n\
+                   (Gas: `/api/v1/mmma-preise/gas/{year}/{month}`) to verify the reference\n\
+                   prices for the month are imported and current.\n\
                  \n\
                  **Step 4: Action**\n\
                  - Escalate to accounts-payable: request corrected invoices for all disputed months.\n\
-                 - If check 4 is your error (missing tariff): update tarifbd and trigger\n\
-                   `GET /api/v1/selbstausstellen/{malo_id}` for affected MaLos.\n\
+                 - If check 4 is your error (a missing Preisblatt): import it into marktd —\n\
+                   the dispute was raised against reference data you do not hold.\n\
                  - Document findings: POST /api/v1/receipts/{id}/resolve-dispute for each settled dispute.",
             ),
         ]
@@ -708,7 +731,7 @@ impl ServerHandler for InvoicdMcpHandler {
              - `list_overdue_remadv`     — receipts approaching Zahlungsziel without REMADV\n\
              - `get_zahlungsstatus`      — payment status per MaLo-ID (settled/pending/overdue)\n\
              - `summarize_billing_month` — monthly volume + dispute rate per NB\n\
-             - `dispatch_remadv`         — check dispatch status for a stuck receipt\n\
+             - `list_exceptions`         — undispatched answers and dead-lettered INVOICs\n\
              \n\
              ## Prompts\n\
              - `resolve-dispute`          — guided dispute investigation workflow\n\

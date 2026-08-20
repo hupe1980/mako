@@ -1,341 +1,62 @@
 //! HTTP handlers for `portald` — customer portal read-model gateway.
+//!
+//! # Shape of every handler
+//!
+//! ```text
+//! (cfg, clients, headers, Path(malo_id)) -> authorize(..)? -> proxy upstream
+//! ```
+//!
+//! [`crate::auth::authorize`] is the only way to obtain a
+//! [`PortalAuthCtx`], and every customer-scoped handler takes one. A handler
+//! that skips the check has no context to carry, which is what keeps the gate
+//! from being forgotten on the next route.
+//!
+//! # Ownership is checked on the object, not only the path
+//!
+//! Authorising `malo_id` is not enough for routes that also take an object id.
+//! `GET …/invoices/{record_id}/download` re-reads the billing record and
+//! compares its `malo_id` to the authorised one before rendering: otherwise any
+//! authenticated customer could stream any other customer's XRechnung by id.
+
+#![allow(clippy::result_large_err)] // the error *is* the HTTP response
 
 use axum::{
     Extension, Json,
     extract::{Path, Query},
-    http::StatusCode,
-    response::{IntoResponse, Response, Sse},
+    http::{HeaderMap, StatusCode},
+    response::{IntoResponse, Response},
 };
 use serde::Deserialize;
 use std::sync::Arc;
 
-use crate::{clients::UpstreamClient, config::PortaldConfig};
+use crate::{
+    auth::{PortalAuthCtx, authorize},
+    clients::{PortalClients, UpstreamClient},
+    config::PortaldConfig,
+};
 
-// ── State ─────────────────────────────────────────────────────────────────────
+// ── Shared plumbing ───────────────────────────────────────────────────────────
 
-/// Shared upstream clients injected via `Extension`.
-#[derive(Clone)]
-pub struct PortalClients {
-    pub edmd: Option<Arc<UpstreamClient>>,
-    pub billingd: Option<Arc<UpstreamClient>>,
-    pub accountingd: Option<Arc<UpstreamClient>>,
-    pub einsd: Option<Arc<UpstreamClient>>,
-    pub marktd: Option<Arc<UpstreamClient>>,
-    /// Write-capable client for `vertragd` — used by portal self-service write API (L3).
-    pub vertragd: Option<Arc<UpstreamClient>>,
-    /// Shared reqwest client for auth calls to `vertragd /kunden/authenticate`.
-    ///
-    /// Created once at startup (connection-pooled) instead of per-request.
-    pub auth_client: reqwest::Client,
-}
+/// Config + clients, as every handler receives them.
+type Cfg = Extension<Arc<PortaldConfig>>;
+type Clients = Extension<Arc<PortalClients>>;
 
-// ── Authorization ─────────────────────────────────────────────────────────────
-
-/// Verify the authenticated customer may access `malo_id`.
-///
-/// Calls `vertragd GET /kunden/authenticate?malo_id={malo_id}`, passing the
-/// inbound `Authorization: Bearer` header unchanged.  `vertragd` decodes the
-/// JWT sub and checks whether this customer owns the MaLo.
-///
-/// Returns `Ok(())` when authorized or when `vertragd_url` is absent (dev mode).
-/// Returns `Err(Response)` with 401/403 when denied.
-async fn authorize_malo_access(
-    cfg: &PortaldConfig,
-    clients: &PortalClients,
-    headers: &axum::http::HeaderMap,
-    malo_id: &str,
-) -> Result<(), axum::response::Response> {
-    let vertragd_url = match &cfg.vertragd_url {
-        Some(url) => url.trim_end_matches('/').to_owned(),
-        None => {
-            tracing::debug!(
-                malo_id,
-                "portald: no vertragd_url — authorization skipped (dev mode)"
-            );
-            return Ok(());
-        }
-    };
-    let auth_header = match headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    {
-        Some(h) => h.to_owned(),
-        None => {
-            return Err(
-                (StatusCode::UNAUTHORIZED, "Authorization: Bearer required").into_response()
-            );
-        }
-    };
-
-    let mut req = clients
-        .auth_client
-        .get(format!("{vertragd_url}/api/v1/kunden/authenticate"))
-        .query(&[("malo_id", malo_id)])
-        .header("Authorization", &auth_header);
-    if let Some(ref key) = cfg.vertragd_api_key {
-        req = req.bearer_auth(key);
-    }
-
-    match req.send().await {
-        Ok(resp) if resp.status().is_success() => Ok(()),
-        Ok(resp) if resp.status() == reqwest::StatusCode::UNAUTHORIZED => {
-            Err((StatusCode::UNAUTHORIZED, "not authenticated").into_response())
-        }
-        Ok(resp) if resp.status() == reqwest::StatusCode::FORBIDDEN => {
-            tracing::warn!(malo_id, "portald: customer not authorized for this MaLo");
-            Err((
-                StatusCode::FORBIDDEN,
-                "not authorized to access this delivery point",
-            )
-                .into_response())
-        }
-        Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => Err((
-            StatusCode::UNAUTHORIZED,
-            "no customer profile found for this identity",
-        )
-            .into_response()),
-        Ok(_) | Err(_) => {
-            tracing::warn!(malo_id, "portald: vertragd auth check failed");
-            Err((
-                StatusCode::SERVICE_UNAVAILABLE,
-                "authorization service unavailable",
-            )
-                .into_response())
-        }
-    }
-}
-
-// ── Dashboard ─────────────────────────────────────────────────────────────────
-
-/// `GET /api/v1/portal/{malo_id}/dashboard`
-///
-/// Aggregates supply status, account balance, current meter read, latest invoice,
-/// and EEG settlement status into a single JSON object.  Each field is `null`
-/// when the upstream service is not configured or returned 404.
-pub async fn get_dashboard(
-    headers: axum::http::HeaderMap,
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    // Authorize: verify the JWT sub owns this MaLo via vertragd.
-    if let Err(resp) = authorize_malo_access(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
-    // Fetch in parallel.
-    let (versorgung, balance, last_invoice, lastgang_summary) = tokio::join!(
-        async {
-            match &clients.marktd {
-                Some(c) => c
-                    .get_json(&format!("/api/v1/versorgung/{malo_id}"))
-                    .await
-                    .ok()
-                    .flatten(),
-                None => None,
-            }
-        },
-        async {
-            match &clients.accountingd {
-                Some(c) => c
-                    .get_json(&format!("/api/v1/accounts/{malo_id}/balance"))
-                    .await
-                    .ok()
-                    .flatten(),
-                None => None,
-            }
-        },
-        async {
-            match &clients.billingd {
-                Some(c) => c
-                    .get_json(&format!("/api/v1/billing?malo_id={malo_id}&limit=1"))
-                    .await
-                    .ok()
-                    .flatten(),
-                None => None,
-            }
-        },
-        async {
-            match &clients.edmd {
-                Some(c) => c
-                    .get_json(&format!("/api/v1/billing-period/{malo_id}"))
-                    .await
-                    .ok()
-                    .flatten(),
-                None => None,
-            }
-        },
-    );
-
-    (
-        StatusCode::OK,
-        Json(serde_json::json!({
-            "malo_id": malo_id,
-            "tenant": cfg.tenant,
-            "versorgung": versorgung,
-            "balance": balance,
-            "last_invoice": last_invoice,
-            "meter_summary": lastgang_summary,
-        })),
-    )
-        .into_response()
-}
-
-// ── Lastgang ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct LastgangQuery {
-    pub from: Option<String>,
-    pub to: Option<String>,
-}
-
-/// `GET /api/v1/portal/{malo_id}/lastgang`
-///
-/// Proxies `GET edmd /api/v1/lastgang/{malo_id}?from=…&to=…`.
-pub async fn get_lastgang(
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-    Query(q): Query<LastgangQuery>,
-) -> impl IntoResponse {
-    let Some(edmd) = &clients.edmd else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "edmd not configured").into_response();
-    };
-    let mut path = format!("/api/v1/lastgang/{malo_id}");
-    if let (Some(from), Some(to)) = (q.from, q.to) {
-        path = format!("{path}?from={from}&to={to}");
-    }
-    proxy_json(edmd, &path).await
-}
-
-// ── Invoices ──────────────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-pub struct InvoicesQuery {
-    pub limit: Option<i64>,
-    pub outcome: Option<String>,
-}
-
-/// `GET /api/v1/portal/{malo_id}/invoices`
-///
-/// Proxies `GET billingd /api/v1/billing?malo_id=…`.
-pub async fn get_invoices(
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-    Query(q): Query<InvoicesQuery>,
-) -> impl IntoResponse {
-    let Some(billingd) = &clients.billingd else {
-        return (StatusCode::SERVICE_UNAVAILABLE, "billingd not configured").into_response();
-    };
-    let limit = q.limit.unwrap_or(24);
-    let mut path = format!("/api/v1/billing?malo_id={malo_id}&limit={limit}");
-    if let Some(outcome) = q.outcome {
-        path = format!("{path}&outcome={outcome}");
-    }
-    proxy_json(billingd, &path).await
-}
-
-// ── Account balance + ledger ──────────────────────────────────────────────────
-
-/// `GET /api/v1/portal/{malo_id}/balance`
-pub async fn get_balance(
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    proxy_or_unavailable(
-        &clients.accountingd,
-        &format!("/api/v1/accounts/{malo_id}/balance"),
-        "accountingd",
-    )
-    .await
-}
-
-/// `GET /api/v1/portal/{malo_id}/kontoauszug`
-pub async fn get_kontoauszug(
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    proxy_or_unavailable(
-        &clients.accountingd,
-        &format!("/api/v1/accounts/{malo_id}/kontoauszug"),
-        "accountingd",
-    )
-    .await
-}
-
-// ── EEG status ────────────────────────────────────────────────────────────────
-
-/// `GET /api/v1/portal/{malo_id}/eeg`
-///
-/// Returns EEG plant list and latest settlements for a given MaLo.
-/// Proxies `GET einsd /api/v1/anlagen?malo_id={malo_id}`.
-pub async fn get_eeg_status(
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    proxy_or_unavailable(
-        &clients.einsd,
-        &format!("/api/v1/anlagen?malo_id={malo_id}"),
-        "einsd",
-    )
-    .await
-}
-
-// ── VersorgungsStatus ─────────────────────────────────────────────────────────
-
-/// `GET /api/v1/portal/{malo_id}/versorgung`
-pub async fn get_versorgung(
-    Extension(clients): Extension<Arc<PortalClients>>,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    proxy_or_unavailable(
-        &clients.marktd,
-        &format!("/api/v1/versorgung/{malo_id}"),
-        "marktd",
-    )
-    .await
-}
-
-// ── Server-Sent Events stream ─────────────────────────────────────────────────
-
-/// `GET /api/v1/portal/{malo_id}/events`
-///
-/// Real-time SSE stream.  Currently emits a keepalive heartbeat every 30 s.
-/// In production, wire this to an internal notification channel populated by
-/// `accountingd` / `billingd` / `einsd` CloudEvents.
-pub async fn sse_events(Path(malo_id): Path<String>) -> impl IntoResponse {
-    use axum::response::sse::{Event, KeepAlive};
-    use tokio::time::interval;
-    use tokio_stream::StreamExt as _;
-    use tokio_stream::wrappers::IntervalStream;
-
-    let malo = malo_id.clone();
-    let stream = IntervalStream::new(interval(std::time::Duration::from_secs(30))).map(move |_| {
-        Ok::<_, std::convert::Infallible>(
-            Event::default()
-                .event("heartbeat")
-                .data(serde_json::json!({ "malo_id": malo }).to_string()),
-        )
-    });
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-async fn proxy_json(client: &UpstreamClient, path: &str) -> Response {
+/// Proxy a GET to an upstream, mapping absence to 404 and outage to 502.
+async fn proxy(client: &UpstreamClient, path: &str) -> Response {
     match client.get_json(path).await {
         Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+        Err(e) => {
+            tracing::warn!(path, error = %e, "portald: upstream GET failed");
+            (StatusCode::BAD_GATEWAY, e.to_string()).into_response()
+        }
     }
 }
 
-async fn proxy_or_unavailable(
-    client: &Option<Arc<UpstreamClient>>,
-    path: &str,
-    service: &'static str,
-) -> Response {
+/// [`proxy`], for an upstream that may not be configured at all.
+async fn proxy_opt(client: Option<&Arc<UpstreamClient>>, path: &str, service: &str) -> Response {
     match client {
-        Some(c) => proxy_json(c, path).await,
+        Some(c) => proxy(c, path).await,
         None => (
             StatusCode::SERVICE_UNAVAILABLE,
             format!("{service} not configured"),
@@ -344,297 +65,493 @@ async fn proxy_or_unavailable(
     }
 }
 
-// ── Self-service write API (L3 — §41 EnWG customer rights) ───────────────────
-
-/// Resolved portal authentication context.
-///
-/// Returned by `authenticate_and_resolve()` after verifying the customer's
-/// OIDC JWT against `vertragd /kunden/authenticate`.
-struct PortalAuthCtx {
-    pub kunden_id: uuid::Uuid,
-    #[allow(dead_code)]
-    pub kundentyp: String,
-}
-
-/// Authenticate the customer and return identity context.
-///
-/// Calls `vertragd GET /kunden/authenticate?malo_id={malo_id}` with the
-/// inbound Authorization header.  Returns the resolved `kunden_id` on success
-/// or an HTTP error response on failure.
-async fn authenticate_and_resolve(
-    cfg: &PortaldConfig,
-    clients: &PortalClients,
-    headers: &axum::http::HeaderMap,
-    malo_id: &str,
-) -> Result<PortalAuthCtx, Response> {
-    let vertragd_url = match &cfg.vertragd_url {
-        Some(u) => u.trim_end_matches('/').to_owned(),
-        None => {
-            // Dev mode: skip auth, return dummy context.
-            return Ok(PortalAuthCtx {
-                kunden_id: uuid::Uuid::nil(),
-                kundentyp: "B2C".into(),
-            });
-        }
-    };
-    let auth = match headers
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-    {
-        Some(h) => h.to_owned(),
-        None => {
-            return Err(
-                (StatusCode::UNAUTHORIZED, "Authorization: Bearer required").into_response()
-            );
-        }
-    };
-
-    let mut req = clients
-        .auth_client
-        .get(format!("{vertragd_url}/api/v1/kunden/authenticate"))
-        .query(&[("malo_id", malo_id)])
-        .header("Authorization", &auth);
-    if let Some(ref key) = cfg.vertragd_api_key {
-        req = req.header("X-Api-Key", key.as_str());
-    }
-    let resp = match req.send().await {
-        Ok(r) => r,
-        Err(e) => return Err((StatusCode::SERVICE_UNAVAILABLE, e.to_string()).into_response()),
-    };
-    match resp.status() {
-        s if s.is_success() => {
-            let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            let kunden_id = body
-                .get("kunden_id")
-                .and_then(|v| v.as_str())
-                .and_then(|s| s.parse::<uuid::Uuid>().ok())
-                .unwrap_or(uuid::Uuid::nil());
-            Ok(PortalAuthCtx {
-                kunden_id,
-                kundentyp: body
-                    .get("kundentyp")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("B2C")
-                    .to_owned(),
-            })
-        }
-        reqwest::StatusCode::UNAUTHORIZED => {
-            Err((StatusCode::UNAUTHORIZED, "not authenticated").into_response())
-        }
-        reqwest::StatusCode::FORBIDDEN => Err((
-            StatusCode::FORBIDDEN,
-            "not authorized for this delivery point",
-        )
-            .into_response()),
-        reqwest::StatusCode::NOT_FOUND => {
-            Err((StatusCode::UNAUTHORIZED, "no customer profile found").into_response())
-        }
-        s => Err((
+/// Require an upstream, or produce the 503 to return.
+fn require<'a>(
+    client: Option<&'a Arc<UpstreamClient>>,
+    service: &str,
+) -> Result<&'a UpstreamClient, Response> {
+    client.map(AsRef::as_ref).ok_or_else(|| {
+        (
             StatusCode::SERVICE_UNAVAILABLE,
-            format!("vertragd auth check failed: {s}"),
+            format!("{service} not configured"),
         )
-            .into_response()),
+            .into_response()
+    })
+}
+
+/// Relay an upstream write verdict unchanged.
+///
+/// A 422 from `vertragd` carries the rule it applied (a notice period, a
+/// contract state); rewriting it into a generic error would strip exactly the
+/// part the customer needs. Only the success code is this service's own — it
+/// reports `202` because the market message the write triggers is asynchronous.
+fn relay_write(status: u16, body: serde_json::Value, on_success: serde_json::Value) -> Response {
+    if (200..300).contains(&status) {
+        return (StatusCode::ACCEPTED, Json(on_success)).into_response();
+    }
+    (
+        StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+        Json(body),
+    )
+        .into_response()
+}
+
+// ── Dashboard ─────────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/portal/{malo_id}/dashboard`
+///
+/// Supply status, account balance, latest invoice, current billing period and
+/// advance-payment schedule in one call, fetched concurrently.
+///
+/// A field is `null` when its upstream is not configured or has no data — one
+/// unreachable backend degrades a tile rather than the whole screen.
+pub async fn get_dashboard(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    async fn opt(client: Option<&Arc<UpstreamClient>>, path: String) -> Option<serde_json::Value> {
+        client?.get_json(&path).await.ok().flatten()
+    }
+
+    let (versorgung, balance, last_invoice, meter_summary, vorauszahlung) = tokio::join!(
+        opt(
+            clients.marktd.as_ref(),
+            format!("/api/v1/versorgung/{malo_id}")
+        ),
+        opt(
+            clients.accountingd.as_ref(),
+            format!("/api/v1/accounts/{malo_id}/balance")
+        ),
+        opt(
+            clients.billingd.as_ref(),
+            format!("/api/v1/billing?malo_id={malo_id}&limit=1")
+        ),
+        opt(
+            clients.edmd.as_ref(),
+            format!("/api/v1/billing-period/{malo_id}")
+        ),
+        opt(
+            clients.accountingd.as_ref(),
+            format!("/api/v1/accounts/{malo_id}/vorauszahlung")
+        ),
+    );
+
+    Json(serde_json::json!({
+        "malo_id":       malo_id,
+        "tenant":        cfg.tenant,
+        "kundentyp":     ctx.kundentyp,
+        "versorgung":    versorgung,
+        "balance":       balance,
+        "last_invoice":  last_invoice,
+        "meter_summary": meter_summary,
+        "vorauszahlung": vorauszahlung,
+    }))
+    .into_response()
+}
+
+// ── Consumption ───────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct LastgangQuery {
+    pub from: Option<String>,
+    pub to: Option<String>,
+}
+
+/// `GET /api/v1/portal/{malo_id}/lastgang?from=&to=`
+///
+/// Proxies `edmd GET /api/v1/lastgang/{malo_id}`. Both bounds are passed only
+/// when both are present — `edmd` reads them as a pair.
+pub async fn get_lastgang(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+    Query(q): Query<LastgangQuery>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    let path = match (q.from.as_deref(), q.to.as_deref()) {
+        (Some(from), Some(to)) => format!("/api/v1/lastgang/{malo_id}?from={from}&to={to}"),
+        _ => format!("/api/v1/lastgang/{malo_id}"),
+    };
+    proxy_opt(clients.edmd.as_ref(), &path, "edmd").await
+}
+
+// ── Invoices ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct InvoicesQuery {
+    pub limit: Option<u32>,
+    pub outcome: Option<String>,
+}
+
+/// `GET /api/v1/portal/{malo_id}/invoices?limit=&outcome=`
+///
+/// Proxies `billingd GET /api/v1/billing?malo_id=…`. The page size is clamped
+/// here: an unbounded `limit` reaches `billingd` as a full-table read on a
+/// customer-facing route.
+pub async fn get_invoices(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+    Query(q): Query<InvoicesQuery>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    let limit = q.limit.unwrap_or(24).clamp(1, MAX_INVOICE_PAGE);
+    let mut path = format!("/api/v1/billing?malo_id={malo_id}&limit={limit}");
+    if let Some(outcome) = q.outcome.as_deref() {
+        path.push_str(&format!("&outcome={outcome}"));
+    }
+    proxy_opt(clients.billingd.as_ref(), &path, "billingd").await
+}
+
+/// Largest invoice page a portal caller may request.
+pub const MAX_INVOICE_PAGE: u32 = 100;
+
+/// `GET /api/v1/portal/{malo_id}/invoices/{record_id}/download`
+///
+/// Stream a billing document as XRechnung 3.0 CII XML (EN 16931).
+///
+/// The record is read back and its `malo_id` compared to the authorised one
+/// before anything is rendered. Authorising only the path's `malo_id` would let
+/// any authenticated customer download any invoice in the tenant by id — the id
+/// is a UUID, but that is obscurity, not authorization.
+pub async fn get_portal_invoice_download(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path((malo_id, record_id)): Path<(String, String)>,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let billingd = match require(clients.billingd.as_ref(), "billingd") {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    match billingd
+        .get_json(&format!("/api/v1/billing/{record_id}"))
+        .await
+    {
+        Ok(Some(record)) => {
+            let owner = record["malo_id"].as_str().unwrap_or_default();
+            if owner != ctx.malo_id {
+                tracing::warn!(
+                    record_id,
+                    requested_malo = %ctx.malo_id,
+                    "portald: invoice download refused — record belongs to another Marktlokation"
+                );
+                // 404, not 403: confirming the record exists would turn the id
+                // space into an oracle for which invoices the tenant holds.
+                return StatusCode::NOT_FOUND.into_response();
+            }
+        }
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::warn!(record_id, error = %e, "portald: billingd record lookup failed");
+            return (StatusCode::BAD_GATEWAY, e.to_string()).into_response();
+        }
+    }
+
+    match billingd
+        .get_text(&format!("/api/v1/billing/{record_id}/xrechnung"))
+        .await
+    {
+        Ok(Some(xml)) => (
+            StatusCode::OK,
+            [
+                (
+                    axum::http::header::CONTENT_TYPE,
+                    "application/xml".to_owned(),
+                ),
+                (
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"rechnung-{record_id}.xml\""),
+                ),
+            ],
+            xml,
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 
-/// Resolve the active Versorgungsvertrag ID for a MaLo via vertragd.
+// ── Account ledger ────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/portal/{malo_id}/balance` — open-items balance.
+pub async fn get_balance(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    proxy_opt(
+        clients.accountingd.as_ref(),
+        &format!("/api/v1/accounts/{malo_id}/balance"),
+        "accountingd",
+    )
+    .await
+}
+
+/// `GET /api/v1/portal/{malo_id}/kontoauszug` — full account statement (§ 666 BGB).
+pub async fn get_kontoauszug(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    proxy_opt(
+        clients.accountingd.as_ref(),
+        &format!("/api/v1/accounts/{malo_id}/kontoauszug"),
+        "accountingd",
+    )
+    .await
+}
+
+/// `GET /api/v1/portal/{malo_id}/vorauszahlung` — Abschlag schedule (§ 40 Abs. 1 EnWG).
+pub async fn get_portal_vorauszahlung(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    proxy_opt(
+        clients.accountingd.as_ref(),
+        &format!("/api/v1/accounts/{malo_id}/vorauszahlung"),
+        "accountingd",
+    )
+    .await
+}
+
+// ── EEG + supply status ───────────────────────────────────────────────────────
+
+/// `GET /api/v1/portal/{malo_id}/eeg` — EEG/KWKG plants and settlements.
+pub async fn get_eeg_status(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    proxy_opt(
+        clients.einsd.as_ref(),
+        &format!("/api/v1/anlagen?malo_id={malo_id}"),
+        "einsd",
+    )
+    .await
+}
+
+/// `GET /api/v1/portal/{malo_id}/versorgung` — supply status.
+pub async fn get_versorgung(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    proxy_opt(
+        clients.marktd.as_ref(),
+        &format!("/api/v1/versorgung/{malo_id}"),
+        "marktd",
+    )
+    .await
+}
+
+// ── Contract lookup ───────────────────────────────────────────────────────────
+
+/// Resolve `(vertrag_id, komponente_id)` for the authorised customer's MaLo.
 ///
-/// Calls `GET /api/v1/vertraege?kunden_id={id}` and finds the vertrag whose
-/// Vertragskomponente matches `malo_id`.  Returns the vertrag UUID or None.
+/// `vertragd` keys contracts by customer, and the portal speaks MaLo-IDs, so
+/// this walks the customer's contracts to the component that carries the MaLo.
+/// The detail fetches run concurrently — the sequential version issued one
+/// round-trip per contract before it could answer, on the critical path of
+/// every write route.
+///
+/// A component without a parseable `id` is skipped rather than aborting the
+/// search — one malformed row must not make the lookup answer "no contract"
+/// and reject a lawful Kündigung.
 async fn resolve_vertrag_for_malo(
     vertragd: &UpstreamClient,
-    kunden_id: uuid::Uuid,
-    malo_id: &str,
+    ctx: &PortalAuthCtx,
 ) -> Option<(uuid::Uuid, uuid::Uuid)> {
-    // GET /api/v1/kunden/{kunden_id}/vertraege
-    let vertraege = vertragd
-        .get_json(&format!("/api/v1/kunden/{kunden_id}/vertraege"))
+    let list = vertragd
+        .get_json(&format!("/api/v1/kunden/{}/vertraege", ctx.kunden_id))
         .await
-        .ok()??;
-    let arr = vertraege.as_array()?;
+        .ok()
+        .flatten()?;
+    let ids: Vec<uuid::Uuid> = list
+        .as_array()?
+        .iter()
+        .filter_map(|v| v["id"].as_str()?.parse().ok())
+        .collect();
 
-    for v in arr {
-        let vtid: uuid::Uuid = v.get("id")?.as_str()?.parse().ok()?;
-        // GET /api/v1/vertraege/{vtid} — returns { vertrag, komponenten }
-        if let Some(detail) = vertragd
+    let details = futures::future::join_all(ids.iter().map(|vtid| async move {
+        let detail = vertragd
             .get_json(&format!("/api/v1/vertraege/{vtid}"))
             .await
             .ok()
-            .flatten()
-            && let Some(komps) = detail.get("komponenten").and_then(|k| k.as_array())
-        {
-            for komp in komps {
-                if komp.get("malo_id").and_then(|v| v.as_str()) == Some(malo_id) {
-                    let komp_id: uuid::Uuid = komp.get("id")?.as_str()?.parse().ok()?;
-                    return Some((vtid, komp_id));
-                }
+            .flatten();
+        (*vtid, detail)
+    }))
+    .await;
+
+    for (vtid, detail) in details {
+        let Some(detail) = detail else { continue };
+        let Some(komps) = detail["komponenten"].as_array() else {
+            continue;
+        };
+        for komp in komps {
+            if komp["malo_id"].as_str() == Some(ctx.malo_id.as_str())
+                && let Some(komp_id) = komp["id"].as_str().and_then(|s| s.parse().ok())
+            {
+                return Some((vtid, komp_id));
             }
         }
     }
     None
 }
 
-/// `GET /api/v1/portal/{malo_id}/vertrag`
-///
-/// Returns the active supply contract for the authenticated customer.
-///
-/// Response includes:
-/// - Current product + tariff (from `tarifbd` via `vertragd`)
-/// - Contract dates (Lieferbeginn, Lieferende)
-/// - Notice periods (Kündigungsfrist)
-/// - Vertragskomponenten with OBIS codes
-///
-/// **Prerequisite for all portal write operations** — clients should call this
-/// before presenting Tarifwechsel / Kündigung options to the user.
-pub async fn get_portal_vertrag(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        Ok(ctx) => ctx,
-        Err(resp) => return resp,
-    };
-    let vertragd = match &clients.vertragd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "vertragd not configured").into_response();
-        }
-    };
-
-    match resolve_vertrag_for_malo(vertragd, auth_ctx.kunden_id, &malo_id).await {
-        Some((vtid, _komp_id)) => {
-            match vertragd
-                .get_json(&format!("/api/v1/vertraege/{vtid}"))
-                .await
-            {
-                Ok(Some(v)) => (StatusCode::OK, Json(v)).into_response(),
-                Ok(None) => StatusCode::NOT_FOUND.into_response(),
-                Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-            }
-        }
-        None => (
+/// Resolve the contract, or produce the 404/503 to return.
+async fn require_vertrag<'a>(
+    clients: &'a PortalClients,
+    ctx: &PortalAuthCtx,
+) -> Result<(&'a UpstreamClient, uuid::Uuid, uuid::Uuid), Response> {
+    let vertragd = require(clients.vertragd.as_ref(), "vertragd")?;
+    match resolve_vertrag_for_malo(vertragd, ctx).await {
+        Some((vtid, komp_id)) => Ok((vertragd, vtid, komp_id)),
+        None => Err((
             StatusCode::NOT_FOUND,
-            "no active supply contract found for this delivery point",
+            "no active supply contract for this delivery point",
         )
-            .into_response(),
+            .into_response()),
     }
 }
 
+/// `GET /api/v1/portal/{malo_id}/vertrag`
+///
+/// The active supply contract: product and tariff, delivery dates, notice
+/// periods, and the Vertragskomponenten with their OBIS codes. A portal calls
+/// this before offering Tarifwechsel or Kündigung.
+pub async fn get_portal_vertrag(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let (vertragd, vtid, _) = match require_vertrag(&clients, &ctx).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
+    };
+    proxy(vertragd, &format!("/api/v1/vertraege/{vtid}")).await
+}
+
+// ── Self-service writes (§ 41 EnWG customer rights) ──────────────────────────
+
 /// Request body for `POST /api/v1/portal/{malo_id}/tarifwechsel`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct PortalTarifwechselRequest {
     /// New product code in `tarifbd`.
     pub new_product_code: String,
-    /// Effective date of the tariff switch (YYYY-MM-DD).
+    /// When the new tariff takes effect (`YYYY-MM-DD`).
     ///
-    /// **§41 EnWG** — must be at least 14 days from today.  Typically the
-    /// 1st of the following month (billing cycle alignment).
+    /// Whether that date is reachable is `vertragd`'s decision: it depends on
+    /// the Vertragsart, the running Preisgarantie and the billing cycle.
     pub wirksamkeit: String,
-    /// Optional customer reason (stored in audit trail).
+    /// Optional customer reason, kept in the contract audit trail.
     pub grund: Option<String>,
 }
 
 /// `POST /api/v1/portal/{malo_id}/tarifwechsel`
 ///
-/// Customer-initiated tariff switch (§41 Abs. 1 EnWG).
+/// Customer-initiated tariff switch.
 ///
-/// Validates:
-/// - JWT authentication + MaLo ownership
-/// - `wirksamkeit >= today + 14 days` (§41 EnWG minimum notice)
-/// - Resolves `vertrag_id` + `komp_id` from `malo_id` — customers need not know internal UUIDs
-///
-/// Proxies to `POST /api/v1/vertraege/{id}/tarifwechsel` on `vertragd`.
+/// **The notice period is not checked here.** § 41 EnWG states none for a
+/// tariff switch, and the facts that decide the real one — Vertragsart,
+/// running Preisgarantie, billing cycle — live in `vertragd`. A second, simpler
+/// rule here could only disagree with the one that decides. Only the date
+/// *format* is this service's business; `vertragd` answers 422 with the rule it
+/// applied, relayed unchanged.
 pub async fn post_portal_tarifwechsel(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalTarifwechselRequest>,
-) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        Ok(ctx) => ctx,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    if !is_iso_date(&req.wirksamkeit) {
+        return (StatusCode::BAD_REQUEST, "wirksamkeit must be YYYY-MM-DD").into_response();
+    }
+    let (vertragd, vtid, komp_id) = match require_vertrag(&clients, &ctx).await {
+        Ok(v) => v,
         Err(resp) => return resp,
     };
 
-    // Validate wirksamkeit date.
-    let wirksamkeit = match time::Date::parse(
-        &req.wirksamkeit,
-        &time::format_description::well_known::Iso8601::DATE,
-    ) {
-        Ok(d) => d,
-        Err(_) => {
-            return (StatusCode::BAD_REQUEST, "wirksamkeit must be YYYY-MM-DD").into_response();
-        }
-    };
-    let today = time::OffsetDateTime::now_utc().date();
-    if wirksamkeit < today + time::Duration::days(14) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "wirksamkeit must be at least 14 days from today (§41 EnWG minimum notice)",
-        )
-            .into_response();
-    }
-
-    let vertragd = match &clients.vertragd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "vertragd not configured").into_response();
-        }
-    };
-
-    let (vtid, komp_id) =
-        match resolve_vertrag_for_malo(vertragd, auth_ctx.kunden_id, &malo_id).await {
-            Some(ids) => ids,
-            None => {
-                return (
-                    StatusCode::NOT_FOUND,
-                    "no active supply contract for this delivery point",
-                )
-                    .into_response();
-            }
-        };
-
     let body = serde_json::json!({
-        "komp_id": komp_id,
+        "komp_id":          komp_id,
         "new_product_code": req.new_product_code,
-        "wirksamkeit": req.wirksamkeit,
-        "grund": req.grund,
+        "wirksamkeit":      req.wirksamkeit,
+        "grund":            req.grund,
     });
-
     match vertragd
         .post_json(&format!("/api/v1/vertraege/{vtid}/tarifwechsel"), &body)
         .await
     {
-        Ok((200..=299, resp_body)) => (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({
-                "message": "Tarifwechsel registered",
-                "wirksamkeit": req.wirksamkeit,
+        Ok((status, resp_body)) => relay_write(
+            status,
+            resp_body.clone(),
+            serde_json::json!({
+                "message":          "Tarifwechsel registered",
+                "wirksamkeit":      req.wirksamkeit,
                 "new_product_code": req.new_product_code,
-                "detail": resp_body,
-            })),
-        )
-            .into_response(),
-        Ok((status, body)) => (
-            axum::http::StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(body),
-        )
-            .into_response(),
+                "detail":           resp_body,
+            }),
+        ),
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 
 /// Request body for `POST /api/v1/portal/{malo_id}/kuendigen`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct PortalKuendigungRequest {
-    /// Last day of supply (YYYY-MM-DD).
+    /// Last day of supply (`YYYY-MM-DD`).
     ///
-    /// The notice period is `vertragd`'s to decide — it depends on the
-    /// Vertragsart, on whether the customer is a Haushaltskunde and on the
-    /// reason. `GET /api/v1/portal/{malo_id}/kuendigungsfrist` answers what is
-    /// possible before this is sent.
+    /// `GET /api/v1/portal/{malo_id}/kuendigungsfrist` answers which dates are
+    /// reachable before this is sent.
     pub lieferende: String,
     /// Why. Decides the notice period: `ORDENTLICH` (default),
     /// `PREISANPASSUNG` (§ 41 Abs. 5 Satz 4 EnWG), `UMZUG` (§ 41b Abs. 5 EnWG)
@@ -646,138 +563,82 @@ pub struct PortalKuendigungRequest {
 
 /// `GET /api/v1/portal/{malo_id}/kuendigungsfrist`
 ///
-/// The earliest date this contract can end, for every termination reason, with
-/// the rule that produced it. A portal that offers self-service termination has
-/// to show the customer the date *before* they pick one, and the four statutes
-/// behind it (§ 20 Abs. 1 StromGVV/GasGVV, § 41b Abs. 5 EnWG, § 41 Abs. 5 Satz 4
-/// EnWG, § 309 Nr. 9 lit. c BGB) belong in `vertragd` rather than in a second
-/// implementation here.
+/// The earliest date this contract can end, per termination reason, with the
+/// rule that produced it. A portal offering self-service termination has to
+/// show the customer the date *before* they pick one, and the statutes behind
+/// it (§ 20 Abs. 1 StromGVV/GasGVV, § 41b Abs. 5 EnWG, § 41 Abs. 5 Satz 4 EnWG,
+/// § 309 Nr. 9 lit. c BGB) live in `vertragd`, not in a second implementation.
 pub async fn get_portal_kuendigungsfrist(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
     Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        Ok(ctx) => ctx,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
         Err(resp) => return resp,
     };
-    let vertragd = match &clients.vertragd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "vertragd not configured").into_response();
-        }
+    let (vertragd, vtid, _) = match require_vertrag(&clients, &ctx).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
     };
-    let Some((vtid, _)) = resolve_vertrag_for_malo(vertragd, auth_ctx.kunden_id, &malo_id).await
-    else {
-        return (
-            StatusCode::NOT_FOUND,
-            "no active supply contract for this delivery point",
-        )
-            .into_response();
-    };
-    match vertragd
-        .get_json(&format!("/api/v1/vertraege/{vtid}/kuendigungsfrist"))
-        .await
-    {
-        Ok(Some(body)) => (StatusCode::OK, Json(body)).into_response(),
-        Ok(None) => StatusCode::NOT_FOUND.into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-    }
+    proxy(
+        vertragd,
+        &format!("/api/v1/vertraege/{vtid}/kuendigungsfrist"),
+    )
+    .await
 }
 
 /// `POST /api/v1/portal/{malo_id}/kuendigen`
 ///
-/// Customer-initiated termination.
-///
-/// Validates JWT authentication and MaLo ownership, then proxies to
-/// `POST /api/v1/vertraege/{id}/kuendigen` on `vertragd`.
-///
-/// **The notice period is not checked here.** It depends on the Vertragsart
-/// (§ 20 Abs. 1 StromGVV/GasGVV in the Grundversorgung), on whether the
-/// customer is a Haushaltskunde (§ 3 Nr. 57 EnWG) and on the reason
-/// (§ 41b Abs. 5 EnWG on a move, § 41 Abs. 5 Satz 4 EnWG after a price change),
-/// and `vertragd` owns all four facts. A second, simpler rule here — the flat
-/// "14 days to a month end" this used to apply — could only ever disagree with
-/// the one that decides, and rejected lawful terminations. `vertragd` answers
-/// 422 with the rule it applied, and that answer is relayed unchanged.
+/// Customer-initiated termination. Format-checked here, decided by `vertragd`
+/// — see [`get_portal_kuendigungsfrist`] for why the period is not duplicated.
 pub async fn post_portal_kuendigen(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalKuendigungRequest>,
-) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        Ok(ctx) => ctx,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
         Err(resp) => return resp,
     };
-
-    // Only the format is this service's business; the period is vertragd's.
-    if time::Date::parse(
-        &req.lieferende,
-        &time::format_description::well_known::Iso8601::DATE,
-    )
-    .is_err()
-    {
+    if !is_iso_date(&req.lieferende) {
         return (StatusCode::BAD_REQUEST, "lieferende must be YYYY-MM-DD").into_response();
     }
-
-    let vertragd = match &clients.vertragd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "vertragd not configured").into_response();
-        }
-    };
-
-    let (vtid, _) = match resolve_vertrag_for_malo(vertragd, auth_ctx.kunden_id, &malo_id).await {
-        Some(ids) => ids,
-        None => {
-            return (
-                StatusCode::NOT_FOUND,
-                "no active supply contract for this delivery point",
-            )
-                .into_response();
-        }
+    let (vertragd, vtid, _) = match require_vertrag(&clients, &ctx).await {
+        Ok(v) => v,
+        Err(resp) => return resp,
     };
 
     let body = serde_json::json!({
         "lieferende": req.lieferende,
-        "grund": req.grund.as_deref().unwrap_or("ORDENTLICH"),
-        "bemerkung": req
-            .bemerkung
-            .as_deref()
-            .unwrap_or("Kündigung über das Kundenportal"),
+        "grund":      req.grund.as_deref().unwrap_or("ORDENTLICH"),
+        "bemerkung":  req.bemerkung.as_deref().unwrap_or("Kündigung über das Kundenportal"),
     });
-
     match vertragd
         .post_json(&format!("/api/v1/vertraege/{vtid}/kuendigen"), &body)
         .await
     {
-        Ok((200..=299, resp_body)) => (
-            StatusCode::ACCEPTED,
-            Json(serde_json::json!({
-                "message": "Kündigung registered — UTILMD Lieferendemeldung will be dispatched",
+        Ok((status, resp_body)) => relay_write(
+            status,
+            resp_body.clone(),
+            serde_json::json!({
+                "message":    "Kündigung registered — UTILMD Lieferendemeldung will be dispatched",
                 "lieferende": req.lieferende,
-                "detail": resp_body,
-            })),
-        )
-            .into_response(),
-        Ok((409, body)) => (StatusCode::CONFLICT, Json(body)).into_response(),
-        Ok((status, body)) => (
-            axum::http::StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
-            Json(body),
-        )
-            .into_response(),
+                "detail":     resp_body,
+            }),
+        ),
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 
 /// Request body for `PUT /api/v1/portal/{malo_id}/kontakt`.
-#[derive(Debug, serde::Deserialize)]
+#[derive(Debug, Deserialize)]
 pub struct PortalKontaktRequest {
-    /// Updated `Geschaeftspartner` BO4E COM JSON (name, address, contact).
-    /// Partial update — fields absent in the request are preserved.
+    /// Updated BO4E `Geschaeftspartner` (name, address, contact). Partial —
+    /// fields absent in the request are preserved by `vertragd`.
     pub geschaeftspartner: Option<serde_json::Value>,
     /// Updated SEPA consent flag.
     pub sepa_erlaubt: Option<bool>,
@@ -785,106 +646,40 @@ pub struct PortalKontaktRequest {
 
 /// `PUT /api/v1/portal/{malo_id}/kontakt`
 ///
-/// Update customer contact details (GDPR Art. 16 right to rectification).
-///
-/// Accepts `geschaeftspartner` (BO4E Geschaeftspartner COM — name, address,
-/// email) and `sepa_erlaubt`.  Proxies to `PUT /api/v1/kunden/{id}` on
-/// `vertragd` after resolving the kunden_id from the authenticated sub.
+/// Update contact details (GDPR Art. 16 right to rectification). Proxies to
+/// `PUT /api/v1/kunden/{kunden_id}` on `vertragd` — the customer id comes from
+/// the authorization result, never from the request body.
 pub async fn put_portal_kontakt(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalKontaktRequest>,
-) -> impl IntoResponse {
-    let auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        Ok(ctx) => ctx,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
         Err(resp) => return resp,
     };
-
-    let vertragd = match &clients.vertragd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "vertragd not configured").into_response();
-        }
+    if req.geschaeftspartner.is_none() && req.sepa_erlaubt.is_none() {
+        return (StatusCode::BAD_REQUEST, "nothing to update").into_response();
+    }
+    let vertragd = match require(clients.vertragd.as_ref(), "vertragd") {
+        Ok(c) => c,
+        Err(resp) => return resp,
     };
 
     let body = serde_json::json!({
         "geschaeftspartner": req.geschaeftspartner,
-        "sepa_erlaubt": req.sepa_erlaubt,
+        "sepa_erlaubt":      req.sepa_erlaubt,
     });
-
     match vertragd
-        .put_json(&format!("/api/v1/kunden/{}", auth_ctx.kunden_id), &body)
+        .put_json(&format!("/api/v1/kunden/{}", ctx.kunden_id), &body)
         .await
     {
         Ok((200..=299, _)) => StatusCode::NO_CONTENT.into_response(),
         Ok((status, body)) => (
-            axum::http::StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
             Json(body),
-        )
-            .into_response(),
-        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
-    }
-}
-
-/// `GET /api/v1/portal/{malo_id}/invoices/{record_id}/download`
-///
-/// Download a billing document as XRechnung 3.0 CII XML (EN 16931).
-///
-/// Authenticates the customer and verifies they own `malo_id` before
-/// proxying to `billingd GET /api/v1/billing/{record_id}/xrechnung`.
-///
-/// The `Content-Type: application/xml` response can be opened directly in
-/// ERP systems that support EN16931 e-invoicing (SAP, DATEV, etc.).
-pub async fn get_portal_invoice_download(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
-    Path((malo_id, record_id)): Path<(String, String)>,
-) -> impl IntoResponse {
-    if let Err(resp) = authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
-    let billingd = match &clients.billingd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (StatusCode::SERVICE_UNAVAILABLE, "billingd not configured").into_response();
-        }
-    };
-    // Proxy XRechnung XML from billingd.
-    let url = format!(
-        "{}/api/v1/billing/{}/xrechnung",
-        billingd.base_url(),
-        &record_id
-    );
-    let mut req = billingd.client().get(&url);
-    if let Some(key) = billingd.api_key() {
-        req = req.bearer_auth(key);
-    }
-    match req.send().await {
-        Ok(resp) if resp.status().is_success() => {
-            let xml = resp.text().await.unwrap_or_default();
-            (
-                StatusCode::OK,
-                [
-                    (axum::http::header::CONTENT_TYPE, "application/xml"),
-                    (
-                        axum::http::header::CONTENT_DISPOSITION,
-                        &format!("attachment; filename=\"rechnung-{record_id}.xml\""),
-                    ),
-                ],
-                xml,
-            )
-                .into_response()
-        }
-        Ok(resp) if resp.status() == reqwest::StatusCode::NOT_FOUND => {
-            StatusCode::NOT_FOUND.into_response()
-        }
-        Ok(resp) => (
-            axum::http::StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY),
-            resp.text().await.unwrap_or_default(),
         )
             .into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
@@ -896,220 +691,126 @@ pub async fn get_portal_invoice_download(
 /// Request body for `PUT /api/v1/portal/{malo_id}/sepa`.
 #[derive(Debug, Deserialize)]
 pub struct PortalSepaRequest {
-    /// IBAN in any whitespace-separated format — validated via mod-97 by `accountingd`.
+    /// IBAN in any whitespace-separated form — `accountingd` validates mod-97.
     pub iban: String,
-    /// BIC/SWIFT (optional for SEPA SCT/SDD within SEPA zone).
+    /// BIC/SWIFT — optional within the SEPA zone.
     pub bic: Option<String>,
-    /// Kontoinhaber (account holder name — defaults to customer name if absent).
+    /// Account holder. Defaults to the customer name held by `accountingd`.
     pub kontoinhaber: Option<String>,
-    /// Signed-at date in ISO 8601 format (`YYYY-MM-DD`). Defaults to today.
-    pub signed_at: Option<String>,
-    /// SEPA sequence type: `FRST` (first), `RCUR` (recurring), `OOFF` (one-off).
-    /// Defaults to `FRST` for new mandates.
-    #[serde(default = "default_sequence_type")]
-    pub sequence_type: String,
     /// The debtor's own postal address (`Dbtr/PstlAdr`), forwarded verbatim to
     /// `accountingd`, which validates it.
     ///
     /// Optional until **15 November 2026**, when version 1.1 of the 2025 SEPA
     /// rulebooks ends the unstructured address and the schemes begin requiring
-    /// `town` + `country` on every collection. Shape:
-    /// `{ "town", "country", "street", "building_number", "post_code",
-    /// "country_subdivision" }`. A half-filled address (a street with no town
-    /// and country) is refused rather than silently dropped.
-    #[serde(default)]
+    /// `town` + `country` on every collection. Shape: `{ "town", "country",
+    /// "street", "building_number", "post_code", "country_subdivision" }`.
     pub debtor_address: Option<serde_json::Value>,
-}
-
-fn default_sequence_type() -> String {
-    "FRST".to_string()
 }
 
 /// `PUT /api/v1/portal/{malo_id}/sepa`
 ///
-/// Register a new SEPA direct-debit mandate for the customer's account.
+/// Register a SEPA direct-debit mandate for the customer's account.
 ///
-/// IBAN is validated by `accountingd` using the ISO 13616 mod-97 algorithm
-/// before being stored. Invalid IBANs return `422 Unprocessable Entity`.
+/// Two things the caller does not supply:
 ///
-/// The endpoint auto-generates a `mandatsref` from the MaLo-ID if not
-/// provided, and uses today's date as `signed_at` when absent.
-///
-/// Proxies to `POST /api/v1/sepa/mandates` on `accountingd`.
+/// - **`sequence_type`** — the scheme requires a `FRST` collection before any
+///   `RCUR`, and the sequence is `accountingd`'s to track across the mandate's
+///   life rather than a portal input.
+/// - **`mandatsref`** — derived here with a random suffix, so a customer
+///   correcting a mistyped IBAN the same day gets a new mandate rather than
+///   reusing the reference of the one being replaced.
 pub async fn put_portal_sepa(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
     Path(malo_id): Path<String>,
     Json(req): Json<PortalSepaRequest>,
-) -> impl IntoResponse {
-    let _auth_ctx = match authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        Ok(ctx) => ctx,
+) -> Response {
+    if let Err(resp) = authorize(&cfg, &clients, &headers, &malo_id).await {
+        return resp;
+    }
+    let accountingd = match require(clients.accountingd.as_ref(), "accountingd") {
+        Ok(c) => c,
         Err(resp) => return resp,
     };
 
-    let accountingd = match &clients.accountingd {
-        Some(c) => c.as_ref(),
-        None => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "accountingd not configured",
-            )
-                .into_response();
-        }
-    };
-
-    // Auto-generate mandatsref if not supplied.
-    let mandatsref = format!(
-        "PORTAL-{}-{}",
-        malo_id.replace(' ', ""),
-        time::OffsetDateTime::now_utc()
-            .date()
-            .to_string()
-            .replace('-', "")
-    );
-
-    let signed_at = req
-        .signed_at
-        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date().to_string());
-
     let body = serde_json::json!({
-        "malo_id":      &malo_id,
-        "lf_mp_id":     cfg.lf_mp_id.as_deref().unwrap_or(&cfg.tenant),
-        "iban":         &req.iban,
-        "bic":          req.bic,
-        "kontoinhaber": req.kontoinhaber,
-        "mandatsref":   mandatsref,
-        "sequence_type": req.sequence_type,
-        "signed_at":    signed_at,
-        "debtor_address": req.debtor_address.unwrap_or_else(|| serde_json::json!({})),
+        "malo_id":        &malo_id,
+        "lf_mp_id":       cfg.lf_mp_id(),
+        "iban":           &req.iban,
+        "bic":            req.bic,
+        "kontoinhaber":   req.kontoinhaber,
+        "mandatsref":     mandatsref(&malo_id),
+        "signed_at":      time::OffsetDateTime::now_utc().date().to_string(),
+        "debtor_address": req.debtor_address,
     });
 
-    // Proxy to accountingd — IBAN is validated there (mod-97 checksum).
-    let client = accountingd.client();
-    let url = format!("{}/api/v1/sepa/mandates", accountingd.base_url());
-    let mut post_req = client.post(&url).json(&body);
-    if let Some(key) = accountingd.api_key() {
-        post_req = post_req.bearer_auth(key);
-    }
-
-    match post_req.send().await {
-        Ok(resp) if resp.status().is_success() => match resp.json::<serde_json::Value>().await {
-            Ok(body) => (StatusCode::CREATED, Json(body)).into_response(),
-            Err(_) => StatusCode::CREATED.into_response(),
-        },
-        Ok(resp) if resp.status().as_u16() == 422 => {
-            // Forward validation error (e.g. invalid IBAN) back to the portal customer.
-            let body = resp.json::<serde_json::Value>().await.unwrap_or_default();
-            (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response()
-        }
-        Ok(resp) => (
-            axum::http::StatusCode::from_u16(resp.status().as_u16())
-                .unwrap_or(StatusCode::BAD_GATEWAY),
-            resp.text().await.unwrap_or_default(),
+    match accountingd.post_json("/api/v1/sepa/mandates", &body).await {
+        Ok((200..=299, body)) => (StatusCode::CREATED, Json(body)).into_response(),
+        Ok((status, body)) => (
+            StatusCode::from_u16(status).unwrap_or(StatusCode::BAD_GATEWAY),
+            Json(body),
         )
             .into_response(),
         Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
     }
 }
 
-// ── Vorauszahlung (advance payment preview) ───────────────────────────────────
-
-/// `GET /api/v1/portal/{malo_id}/vorauszahlung`
+/// A mandate reference unique to one mandate.
 ///
-/// Retrieve the typed `Vorauszahlung` (advance payment schedule) for the portal
-/// customer.  Used by portal UIs to show the current Abschlag amount and
-/// billing schedule. Proxies to `accountingd`.
-pub async fn get_portal_vorauszahlung(
-    Extension(cfg): Extension<Arc<PortaldConfig>>,
-    Extension(clients): Extension<Arc<PortalClients>>,
-    headers: axum::http::HeaderMap,
-    Path(malo_id): Path<String>,
-) -> impl IntoResponse {
-    if let Err(resp) = authenticate_and_resolve(&cfg, &clients, &headers, &malo_id).await {
-        return resp;
-    }
-    proxy_or_unavailable(
-        &clients.accountingd,
-        &format!("/api/v1/accounts/{}/vorauszahlung", malo_id),
-        "accountingd",
-    )
-    .await
+/// Kept under the SEPA scheme's 35-character limit for `MndtId`: the MaLo is 11
+/// digits, so `PORTAL-` + 11 + `-` + 16 hex = 35 exactly.
+fn mandatsref(malo_id: &str) -> String {
+    let unique = uuid::Uuid::new_v4().simple().to_string();
+    format!("PORTAL-{malo_id}-{}", &unique[..16])
+}
+
+/// `YYYY-MM-DD`, and a date that exists.
+fn is_iso_date(s: &str) -> bool {
+    time::Date::parse(s, &time::format_description::well_known::Iso8601::DATE).is_ok()
 }
 
 #[cfg(test)]
 mod tests {
-    // ── URL construction ───────────────────────────────────────────────────────
+    use super::*;
 
-    /// Verify the Lastgang URL includes from/to query params when both are set.
+    /// The SEPA scheme caps `MndtId` at 35 characters, and a reference that is
+    /// silently truncated by the bank stops matching the collections booked
+    /// against it.
     #[test]
-    fn lastgang_url_with_date_range() {
-        let malo_id = "51238696012";
-        let from = "2026-01-01";
-        let to = "2026-01-31";
-        let path = format!("/api/v1/lastgang/{malo_id}?from={from}&to={to}");
-        assert!(path.contains("?from="), "should contain from param");
-        assert!(path.contains("&to="), "should contain to param");
+    fn a_mandate_reference_fits_the_sepa_field() {
+        let r = mandatsref("51238696012");
+        assert_eq!(r.len(), 35, "MndtId is capped at 35 characters: {r}");
+        assert!(r.starts_with("PORTAL-51238696012-"));
     }
 
-    /// Verify the invoice limit is clamped to a sensible default.
+    /// Two mandates for the same MaLo on the same day are different mandates —
+    /// a customer correcting a mistyped IBAN must not reuse the reference of
+    /// the one being replaced.
     #[test]
-    fn invoice_limit_default_and_cap() {
-        // Default should be 24
-        let default: i64 = 24;
-        assert_eq!(default, 24);
-
-        // MCP default is 10, max 50
-        let mcp_default: u32 = 10;
-        let mcp_limit = mcp_default.min(50);
-        assert_eq!(mcp_limit, 10);
-
-        let mcp_big: u32 = 100;
-        let mcp_capped = mcp_big.min(50);
-        assert_eq!(mcp_capped, 50, "MCP limit must be capped at 50");
+    fn mandate_references_are_unique_per_mandate() {
+        assert_ne!(mandatsref("51238696012"), mandatsref("51238696012"));
     }
 
-    /// Verify MaLo ID path formatting is correct for all endpoints.
+    /// A present-but-malformed date is a 400. Both write routes accept the date
+    /// the customer typed and pass it to `vertragd`, so the format check is the
+    /// only thing standing between a typo and a rejected market message.
     #[test]
-    fn portal_path_formats_are_correct() {
-        let malo_id = "51238696012";
-        assert_eq!(
-            format!("/api/v1/accounts/{malo_id}/balance"),
-            "/api/v1/accounts/51238696012/balance"
-        );
-        assert_eq!(
-            format!("/api/v1/accounts/{malo_id}/kontoauszug"),
-            "/api/v1/accounts/51238696012/kontoauszug"
-        );
-        assert_eq!(
-            format!("/api/v1/accounts/{malo_id}/vorauszahlung"),
-            "/api/v1/accounts/51238696012/vorauszahlung"
-        );
-        assert_eq!(
-            format!("/api/v1/versorgung/{malo_id}"),
-            "/api/v1/versorgung/51238696012"
-        );
-        assert_eq!(
-            format!("/api/v1/anlagen?malo_id={malo_id}"),
-            "/api/v1/anlagen?malo_id=51238696012"
-        );
+    fn date_validation_accepts_iso_and_rejects_the_rest() {
+        assert!(is_iso_date("2026-06-01"));
+        assert!(!is_iso_date("01.06.2026"), "German format is not ISO 8601");
+        assert!(!is_iso_date("2026-6-1"), "unpadded components are not ISO");
+        assert!(!is_iso_date("2026-02-30"), "a date that does not exist");
+        assert!(!is_iso_date(""));
     }
 
-    /// Verify vertragd auth URL construction is correct.
+    /// An unbounded `limit` on a customer-facing route reaches `billingd` as a
+    /// full-table read.
     #[test]
-    fn vertragd_auth_url_construction() {
-        let base = "http://vertragd:9780";
-        let trimmed = base.trim_end_matches('/');
-        let url = format!("{trimmed}/api/v1/kunden/authenticate");
-        assert_eq!(url, "http://vertragd:9780/api/v1/kunden/authenticate");
-    }
-
-    /// Verify URL construction when base_url has trailing slash.
-    #[test]
-    fn vertragd_url_trailing_slash_trimmed() {
-        let base = "http://vertragd:9780/";
-        let trimmed = base.trim_end_matches('/');
-        let url = format!("{trimmed}/api/v1/kunden/authenticate");
-        assert_eq!(url, "http://vertragd:9780/api/v1/kunden/authenticate");
+    fn the_invoice_page_size_is_clamped_at_both_ends() {
+        let clamp = |l: Option<u32>| l.unwrap_or(24).clamp(1, MAX_INVOICE_PAGE);
+        assert_eq!(clamp(None), 24);
+        assert_eq!(clamp(Some(0)), 1, "zero would return nothing");
+        assert_eq!(clamp(Some(10_000)), MAX_INVOICE_PAGE);
     }
 }

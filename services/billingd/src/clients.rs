@@ -1,39 +1,37 @@
 //! HTTP clients for external service calls in `billingd`.
 
 use anyhow::{Context as _, Result};
+use mako_service::http::Upstream;
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use energy_billing::{DynamicInterval, MeterInput, Product};
 
+/// Address a peer service, sharing the daemon's HTTP client.
+///
+/// Every catalogue, contract and metering route these clients call is
+/// authenticated, so a deployment without a credential gets 401s on the lookups
+/// every invoice depends on rather than a diagnosable failure.
+fn upstream(name: &'static str, base_url: &str, api_key: Option<String>) -> Upstream {
+    Upstream::new(
+        name,
+        base_url,
+        api_key.map(secrecy::SecretString::from),
+        mako_service::http::default_client(),
+    )
+}
+
 // ── TarifbdClient ─────────────────────────────────────────────────────────────
 
 pub struct TarifbdClient {
-    base_url: String,
-    client: reqwest::Client,
-    api_key: Option<String>,
+    up: Upstream,
 }
 
 impl TarifbdClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            client: mako_service::http::default_client(),
-            api_key,
-        }
-    }
-
-    /// A GET carrying this deployment's `tarifbd` credential.
-    ///
-    /// Every catalogue route is authenticated — only the § 41c EnWG comparison
-    /// feed is public — so a client that sent no credential got 401s on the
-    /// tariff, EPEX and nEHS lookups every invoice depends on.
-    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
-        let req = self.client.get(url);
-        match &self.api_key {
-            Some(key) => req.bearer_auth(key),
-            None => req,
+            up: upstream("tarifbd", base_url, api_key),
         }
     }
 
@@ -54,7 +52,7 @@ impl TarifbdClient {
         if anfragen.is_empty() {
             return Ok(Vec::new());
         }
-        let url = format!("{}/api/v1/products/{}/resolve", self.base_url, lf_mp_id);
+        let path = format!("/api/v1/products/{lf_mp_id}/resolve");
         let body = serde_json::json!({
             "anfragen": anfragen
                 .iter()
@@ -64,14 +62,12 @@ impl TarifbdClient {
                 }))
                 .collect::<Vec<_>>(),
         });
-        let mut req = self.client.post(&url).json(&body);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req.send().await.context("tarifbd POST products/resolve")?;
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("tarifbd {e}"))?;
-        let payload: serde_json::Value = resp.json().await.context("parse resolved products")?;
+        let payload: serde_json::Value = self
+            .up
+            .json(self.up.post(&path).json(&body))
+            .await
+            .context("tarifbd POST products/resolve")?
+            .context("tarifbd knows no products for this Lieferant")?;
         let mut out = Vec::with_capacity(anfragen.len());
         for entry in payload
             .get("produkte")
@@ -93,18 +89,18 @@ impl TarifbdClient {
     /// auction-formed (§10 Abs. 1 BEHG); billingd derives the Gas CO₂
     /// component from this series when no explicit override is configured.
     pub async fn get_latest_nehs_price(&self, date: time::Date) -> Result<Option<Decimal>> {
-        let url = format!("{}/api/v1/nehs-prices/latest?date={}", self.base_url, date);
-        let resp = self
-            .authed_get(&url)
-            .send()
+        let request = self
+            .up
+            .get("/api/v1/nehs-prices/latest")
+            .query(&[("date", date.to_string())]);
+        let Some(body) = self
+            .up
+            .json::<serde_json::Value>(request)
             .await
-            .context("tarifbd GET nehs-prices latest")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            .context("tarifbd GET nehs-prices latest")?
+        else {
             return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("tarifbd nehs {e}"))?;
-        let body: serde_json::Value = resp.json().await.context("parse nehs latest")?;
+        };
         Ok(body
             .get("eur_per_t")
             .and_then(|v| {
@@ -128,25 +124,20 @@ impl TarifbdClient {
         let mut map = HashMap::new();
         let mut day = period_from;
         while day <= period_to {
-            let url = format!(
-                "{}/api/v1/epex-prices/{}/quarter-hourly",
-                self.base_url, day,
-            );
-            let resp = self
-                .authed_get(&url)
-                .send()
+            let path = format!("/api/v1/epex-prices/{day}/quarter-hourly");
+            let body: serde_json::Value = match self
+                .up
+                .json(self.up.get(&path))
                 .await
-                .context("tarifbd GET epex-prices quarter-hourly")?;
-
-            if resp.status() == reqwest::StatusCode::NOT_FOUND {
-                tracing::warn!(date = %day, "billingd: EPEX prices not found for date");
-                day = day.next_day().unwrap_or(day);
-                continue;
-            }
-            resp.error_for_status_ref()
-                .map_err(|e| anyhow::anyhow!("tarifbd epex {e}"))?;
-
-            let body: serde_json::Value = resp.json().await.context("parse epex prices")?;
+                .context("tarifbd GET epex-prices quarter-hourly")?
+            {
+                Some(b) => b,
+                None => {
+                    tracing::warn!(date = %day, "billingd: EPEX prices not found for date");
+                    day = day.next_day().unwrap_or(day);
+                    continue;
+                }
+            };
             let entries = body
                 .get("prices")
                 .and_then(|v| v.as_array())
@@ -530,17 +521,13 @@ mod slice_tests {
 // ── EdmdClient ────────────────────────────────────────────────────────────────
 
 pub struct EdmdClient {
-    base_url: String,
-    api_key: Option<String>,
-    client: reqwest::Client,
+    up: Upstream,
 }
 
 impl EdmdClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            api_key,
-            client: mako_service::http::default_client(),
+            up: upstream("edmd", base_url, api_key),
         }
     }
 
@@ -551,22 +538,19 @@ impl EdmdClient {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Result<Option<MeterInput>> {
-        let url = format!(
-            "{}/api/v1/billing-period/{}?from={}&to={}",
-            self.base_url, malo_id, period_from, period_to
-        );
-        let mut req = self.client.get(&url);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req.send().await.context("edmd GET billing-period")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let path = format!("/api/v1/billing-period/{malo_id}");
+        let request = self.up.get(&path).query(&[
+            ("from", period_from.to_string()),
+            ("to", period_to.to_string()),
+        ]);
+        let Some(body) = self
+            .up
+            .json::<serde_json::Value>(request)
+            .await
+            .context("edmd GET billing-period")?
+        else {
             return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("edmd {e}"))?;
-
-        let body: serde_json::Value = resp.json().await.context("parse billing period")?;
+        };
         let meter = MeterInput {
             arbeitsmenge_kwh: decimal_from_json(body.get("arbeitsmenge_kwh"))
                 .unwrap_or(Decimal::ZERO),
@@ -611,25 +595,19 @@ impl EdmdClient {
             .midnight()
             .assume_utc();
         let rfc3339 = time::format_description::well_known::Rfc3339;
-        let url = format!(
-            "{}/api/v1/lastgang/{}?from={}&to={}",
-            self.base_url,
-            malo_id,
-            from_dt.format(&rfc3339).context("format from")?,
-            to_dt.format(&rfc3339).context("format to")?,
-        );
-        let mut req = self.client.get(&url);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req.send().await.context("edmd GET lastgang")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let path = format!("/api/v1/lastgang/{malo_id}");
+        let request = self.up.get(&path).query(&[
+            ("from", from_dt.format(&rfc3339).context("format from")?),
+            ("to", to_dt.format(&rfc3339).context("format to")?),
+        ]);
+        let Some(body) = self
+            .up
+            .json::<serde_json::Value>(request)
+            .await
+            .context("edmd GET lastgang")?
+        else {
             return Ok(Vec::new());
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("edmd lastgang {e}"))?;
-
-        let body: serde_json::Value = resp.json().await.context("parse lastgang")?;
+        };
         let mut intervals: Vec<DynamicInterval> = body
             .as_array()
             .cloned()
@@ -685,22 +663,19 @@ impl EdmdClient {
         period_from: time::Date,
         period_to: time::Date,
     ) -> Result<Option<GasBillingPeriod>> {
-        let url = format!(
-            "{}/api/v1/billing-period/{}?from={}&to={}",
-            self.base_url, malo_id, period_from, period_to
-        );
-        let mut req = self.client.get(&url);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req.send().await.context("edmd GET billing-period (gas)")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let path = format!("/api/v1/billing-period/{malo_id}");
+        let request = self.up.get(&path).query(&[
+            ("from", period_from.to_string()),
+            ("to", period_to.to_string()),
+        ]);
+        let Some(body) = self
+            .up
+            .json::<serde_json::Value>(request)
+            .await
+            .context("edmd GET billing-period (gas)")?
+        else {
             return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("edmd gas billing-period: {e}"))?;
-
-        let body: serde_json::Value = resp.json().await.context("parse gas billing period")?;
+        };
 
         // edmd's `MeterBillingPeriod` identifies the commodity via `sparte` and
         // reports gas energy as `arbeitsmenge_kwh` (kWh_Hs) with the applied
@@ -735,19 +710,15 @@ impl EdmdClient {
     /// Returns `None` on 404 (MaLo has no gas quality data yet).
     /// Returns `Ok(Some(vec![]))` when the response is empty.
     pub async fn get_gas_quality(&self, malo_id: &str) -> Result<Option<Vec<GasQualityRecord>>> {
-        let url = format!("{}/api/v1/gas-quality/{}", self.base_url, malo_id);
-        let mut req = self.client.get(&url);
-        if let Some(key) = &self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req.send().await.context("edmd GET gas-quality")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        let path = format!("/api/v1/gas-quality/{malo_id}");
+        let Some(body) = self
+            .up
+            .json::<serde_json::Value>(self.up.get(&path))
+            .await
+            .context("edmd GET gas-quality")?
+        else {
             return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("edmd gas-quality: {e}"))?;
-
-        let body: serde_json::Value = resp.json().await.context("parse gas quality")?;
+        };
         let records: Vec<GasQualityRecord> = body
             .get("gas_quality")
             .and_then(|v| v.as_array())
@@ -842,30 +813,17 @@ pub struct GasQualityRecord {
 /// Used by `billingd` to:
 /// - List active MaLo IDs for a Rahmenvertrag (Sammelrechnung)
 pub struct VertragdClient {
-    base_url: String,
-    client: reqwest::Client,
-    /// Bearer for `vertragd`. Every contract route there is authenticated —
-    /// the responses carry customer master data and the buyer terms an invoice
-    /// is addressed to — so a deployment without a key gets 401s rather than
-    /// silently unaddressed invoices.
-    api_key: Option<String>,
+    /// Every contract route there is authenticated — the responses carry
+    /// customer master data and the buyer terms an invoice is addressed to — so
+    /// a deployment without a credential gets 401s rather than silently
+    /// unaddressed invoices.
+    up: Upstream,
 }
 
 impl VertragdClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            client: mako_service::http::default_client(),
-            api_key,
-        }
-    }
-
-    /// A GET carrying this deployment's `vertragd` credential.
-    fn authed_get(&self, url: &str) -> reqwest::RequestBuilder {
-        let req = self.client.get(url);
-        match &self.api_key {
-            Some(key) => req.bearer_auth(key),
-            None => req,
+            up: upstream("vertragd", base_url, api_key),
         }
     }
 
@@ -878,21 +836,13 @@ impl VertragdClient {
         &self,
         rahmenvertrag_id: &str,
     ) -> Result<RahmenvertragSites> {
-        let url = format!(
-            "{}/api/v1/rahmenvertraege/{}/malos",
-            self.base_url, rahmenvertrag_id
-        );
-        let resp = self
-            .authed_get(&url)
-            .send()
+        let path = format!("/api/v1/rahmenvertraege/{rahmenvertrag_id}/malos");
+        Ok(self
+            .up
+            .json(self.up.get(&path))
             .await
-            .context("vertragd GET rahmenvertrag malos")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(RahmenvertragSites::default());
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
-        resp.json().await.context("parse rahmenvertrag malos")
+            .context("vertragd GET rahmenvertrag malos")?
+            .unwrap_or_default())
     }
 
     /// `GET /api/v1/malo/{malo_id}/produkte?from=…&to=…`
@@ -912,22 +862,18 @@ impl VertragdClient {
         from: time::Date,
         to: time::Date,
     ) -> Result<Vec<ProductSlice>> {
-        let url = format!(
-            "{}/api/v1/malo/{}/produkte?from={}&to={}",
-            self.base_url, malo_id, from, to
-        );
-        let resp = self
-            .authed_get(&url)
-            .send()
+        let path = format!("/api/v1/malo/{malo_id}/produkte");
+        let request = self
+            .up
+            .get(&path)
+            .query(&[("from", from.to_string()), ("to", to.to_string())]);
+        Ok(self
+            .up
+            .json::<SliceResponse>(request)
             .await
-            .context("vertragd GET malo produkte")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(Vec::new());
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
-        let body: SliceResponse = resp.json().await.context("parse product slices")?;
-        Ok(body.slices)
+            .context("vertragd GET malo produkte")?
+            .map(|b| b.slices)
+            .unwrap_or_default())
     }
 
     /// `GET /api/v1/vertraege/by-malo/{malo_id}`
@@ -937,18 +883,11 @@ impl VertragdClient {
     /// possible Kündigungstermin) the invoice must state. `Ok(None)` when the
     /// MaLo has no active contract in vertragd.
     pub async fn get_vertrag_by_malo(&self, malo_id: &str) -> Result<Option<VertragByMalo>> {
-        let url = format!("{}/api/v1/vertraege/by-malo/{}", self.base_url, malo_id);
-        let resp = self
-            .authed_get(&url)
-            .send()
+        let path = format!("/api/v1/vertraege/by-malo/{malo_id}");
+        self.up
+            .json(self.up.get(&path))
             .await
-            .context("vertragd GET vertrag by malo")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
-        resp.json().await.context("parse vertrag by malo")
+            .context("vertragd GET vertrag by malo")
     }
 
     /// `GET /api/v1/ggv/{ggv_id}/betreiber`
@@ -960,23 +899,17 @@ impl VertragdClient {
     /// is recorded; the bundle then ships with its buyer findings, exactly as
     /// an unconfigured retail buyer does.
     pub async fn get_ggv_betreiber(&self, ggv_id: &str) -> Result<Option<Rechnungsempfaenger>> {
-        let url = format!("{}/api/v1/ggv/{}/betreiber", self.base_url, ggv_id);
-        let resp = self
-            .authed_get(&url)
-            .send()
-            .await
-            .context("vertragd GET ggv betreiber")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
         #[derive(serde::Deserialize)]
         struct Answer {
             rechnungsempfaenger: Option<Rechnungsempfaenger>,
         }
-        let answer: Answer = resp.json().await.context("parse ggv betreiber")?;
-        Ok(answer.rechnungsempfaenger)
+        let path = format!("/api/v1/ggv/{ggv_id}/betreiber");
+        Ok(self
+            .up
+            .json::<Answer>(self.up.get(&path))
+            .await
+            .context("vertragd GET ggv betreiber")?
+            .and_then(|a| a.rechnungsempfaenger))
     }
 
     /// `GET /api/v1/aggregatorvertraege?sr_id={sr_id}&on={date}`
@@ -994,21 +927,14 @@ impl VertragdClient {
         sr_id: &str,
         on_date: time::Date,
     ) -> Result<Option<Aggregatorvertrag>> {
-        let url = format!(
-            "{}/api/v1/aggregatorvertraege?sr_id={}&on={}",
-            self.base_url, sr_id, on_date
-        );
-        let resp = self
-            .authed_get(&url)
-            .send()
+        let request = self
+            .up
+            .get("/api/v1/aggregatorvertraege")
+            .query(&[("sr_id", sr_id.to_owned()), ("on", on_date.to_string())]);
+        self.up
+            .json(request)
             .await
-            .context("vertragd GET aggregatorvertrag")?;
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            return Ok(None);
-        }
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
-        resp.json().await.context("parse aggregatorvertrag")
+            .context("vertragd GET aggregatorvertrag")
     }
 
     /// `GET /api/v1/vertraege/billing-candidates`
@@ -1016,15 +942,12 @@ impl VertragdClient {
     /// Active supply components with their §40b EnWG billing cadence — the
     /// work list for the scheduled billing-run worker.
     pub async fn get_billing_candidates(&self) -> Result<Vec<BillingCandidate>> {
-        let url = format!("{}/api/v1/vertraege/billing-candidates", self.base_url);
-        let resp = self
-            .authed_get(&url)
-            .send()
+        let body: serde_json::Value = self
+            .up
+            .json(self.up.get("/api/v1/vertraege/billing-candidates"))
             .await
-            .context("vertragd GET billing-candidates")?;
-        resp.error_for_status_ref()
-            .map_err(|e| anyhow::anyhow!("vertragd {e}"))?;
-        let body: serde_json::Value = resp.json().await.context("parse billing candidates")?;
+            .context("vertragd GET billing-candidates")?
+            .unwrap_or_default();
         let candidates = body
             .get("candidates")
             .cloned()
@@ -1182,21 +1105,17 @@ pub enum OutputdError {
 /// print. This client carries the model and the payload across that boundary
 /// and brings back the PDF plus the template hash to pin.
 pub struct OutputdClient {
-    base_url: String,
-    api_key: Option<String>,
-    client: reqwest::Client,
+    up: Upstream,
 }
 
 impl OutputdClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
+        // The shared 30 s request timeout stays above outputd's 20 s render
+        // budget (which already includes queueing for a render slot), so a slow
+        // render surfaces as outputd's own diagnostic rather than a transport
+        // error here.
         Self {
-            base_url: base_url.trim_end_matches('/').to_owned(),
-            api_key,
-            // The 30 s default must stay above outputd's 20 s render budget
-            // (which already includes queueing for a render slot), or a slow
-            // render would surface here as a transport error instead of
-            // outputd's own diagnostic.
-            client: mako_service::http::default_client(),
+            up: upstream("outputd", base_url, api_key),
         }
     }
 
@@ -1218,7 +1137,6 @@ impl OutputdClient {
         date: time::Date,
         ident: &str,
     ) -> Result<RenderedDocument, OutputdError> {
-        let url = format!("{}/api/v1/render/INVOICE", self.base_url);
         // The **semantic model**, not a projected view. outputd owns the
         // projection onto what a template may print, and it owns it once: the
         // publish gate proves every operator template against that projection,
@@ -1230,11 +1148,16 @@ impl OutputdClient {
             "date": date.to_string(),
             "ident": ident,
         });
-        let mut req = self.client.post(&url).json(&body);
-        if let Some(ref key) = self.api_key {
-            req = req.bearer_auth(key);
-        }
-        let resp = req.send().await.context("outputd POST render")?;
+        // Not `Upstream::send`: it maps a 404 to absence, and here a 404 *is*
+        // the answer — outputd saying the pinned template does not exist, which
+        // is a refusal the caller must see with its message.
+        let resp = self
+            .up
+            .post("/api/v1/render/INVOICE")
+            .json(&body)
+            .send()
+            .await
+            .context("outputd POST render")?;
         let status = resp.status();
         if status.is_client_error() {
             let message = resp.text().await.unwrap_or_default();
