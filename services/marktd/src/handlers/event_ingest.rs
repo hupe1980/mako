@@ -423,7 +423,7 @@ pub async fn derive_supply_state(
             .await?;
             if !transitioned {
                 // A different supplier already holds the announcement. Keeping
-                // it is what lets `netz-checker` reject the second Anmeldung
+                // it is what lets `mako-pruefung` reject the second Anmeldung
                 // with A06 „Andere Anmeldung in Bearbeitung"; overwriting it
                 // made that check compare the new Anmeldung against itself.
                 warn!(

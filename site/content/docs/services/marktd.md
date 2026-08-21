@@ -27,7 +27,7 @@ Beyond data storage, `marktd` includes:
 
 `marktd` is a **pure data hub**. Automated Anmeldung STP decisions are the
 responsibility of `processd`'s NB module, which subscribes to `marktd`'s fan-out
-and uses the pure `netz-checker` library for all decisions.
+and uses the pure `mako-pruefung` library for all decisions.
 This separation keeps `marktd` free of domain policy and makes `processd` independently
 scalable and testable.
 
@@ -62,7 +62,7 @@ The clean separation of concerns:
 |---------|----------------|
 | `makod` | EDIFACT parsing, BDEW process rules, AS4 delivery, regulatory deadlines |
 | `marktd` | Market data, VersorgungsStatus, ERP subscriptions, durable fan-out |
-| `processd` | Automated STP decisions (NB: netz-checker; LF: answers to 55007 / 55010) |
+| `processd` | Automated STP decisions (NB: `mako-pruefung`; LF: answers to 55007 / 55010) |
 
 ---
 

@@ -63,7 +63,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -95,7 +95,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // Only populated for Gas PIDs; Strom UTILMD has no TM+Z10.
                 fallgruppe: extract_fallgruppe(u.segments()),
                 // SG4 STS Transaktionsgrund (Statuskategorie 7) — drives the
-                // netz-checker date-plausibility rules (retroactive Einzug).
+                // `mako-pruefung` date-plausibility rules (retroactive Einzug).
                 //
                 // The value is DE 9013 in C556 (`STS+7++E01'`), not DE 4405 in
                 // C555: the UTILMD MIG marks C555 *nicht benutzt* for this
@@ -109,7 +109,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 }),
                 // SG4 STS Transaktionsgrundergänzung 9013=ZW3 („Erzeugende
                 // Marktlokation") — an EEG-/KWKG-Einspeise-MaLo. Drives the §10c
-                // EEG Monatserster date rule in the netz-checker.
+                // EEG Monatserster date rule in the `mako-pruefung`.
                 ist_erzeugende_marktlokation: u.transactions().first().is_some_and(|t| {
                     t.sts.iter().any(|s| {
                         s.category.as_deref() == Some("7")
@@ -555,7 +555,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -667,7 +667,7 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -745,7 +745,7 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -755,11 +755,89 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
+                // 55010 names a Zuordnungs**ende** — `DTM+93` Ende zum, the
+                // qualifier the AHB marks Muss on this Anwendungsfall.
                 process_date: u
                     .transactions()
                     .first()
-                    .and_then(|t| t.dtm.iter().find(|d| d.qualifier == "92"))
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
+/// Build an [`AdapterRegistry`] for [`mako_gpke::GpkeKuendigungWorkflow`].
+///
+/// Adapts inbound UTILMD PID 55016 (Kündigung, LFN → LFA) to a
+/// [`mako_gpke::KuendigungCommand::ReceiveKuendigung`]. The Kündigungstermin is `DTM+93`.
+#[must_use]
+pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Kündigung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Kündigung adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Kündigung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            Ok(mako_gpke::KuendigungCommand::ReceiveKuendigung {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                location_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
                     .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                // The Kündigungstermin: `DTM+93` Ende zum.
+                process_date: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
@@ -853,7 +931,7 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                 location_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -1264,7 +1342,7 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
                 vorgang_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -1332,11 +1410,12 @@ pub fn gpke_anfrage_bestellung_registry() -> AdapterRegistry<GpkeAnfrageBestellu
                 .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
                 .unwrap_or_default();
 
-            // Vorgangsnummer from IDE+Z19 (element 1, component 0 = object ID).
+            // Vorgangsnummer from `IDE+24` DE 7402 — this one really is a
+            // Vorgang reference, not a Lokations-ID.
             let vorgang_id = MaLo::new(
                 u.transactions()
                     .first()
-                    .and_then(|t| t.ide.object_id.as_deref())
+                    .and_then(|t| t.vorgangsnummer())
                     .unwrap_or(""),
             );
 
@@ -1703,7 +1782,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
             let first_tx = u.transactions().first();
             let location_id = MaLo::new(
                 first_tx
-                    .and_then(|t| t.ide.object_id.as_deref())
+                    .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                     .unwrap_or(""),
             );
 
@@ -1830,7 +1909,7 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
             let first_tx = u.transactions().first();
             let location_id = MaLo::new(
                 first_tx
-                    .and_then(|t| t.ide.object_id.as_deref())
+                    .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                     .unwrap_or(""),
             );
             let aenderungsdatum = first_tx

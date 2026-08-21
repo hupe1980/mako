@@ -214,7 +214,7 @@ pub struct MeloRecord {
     /// and `StandorteigenschaftenGas` (druckstufe). Required for:
     /// - Redispatch 2.0 `NetworkConstraintDocument` cross-references
     /// - Gas billing zone assignment (`druckstufe`) for GeLi Gas MMM
-    /// - netz-checker check 5 (Bilanzierungszone at MeLo level)
+    /// - `mako-pruefung` check 5 (Bilanzierungszone at MeLo level)
     pub standorteigenschaften: Option<serde_json::Value>,
     /// Lokationsbündel object code extracted from
     /// `Messlokation.lokationsbuendelObjektcode` (UTILMD Lokationsbündelstruktur).
@@ -1976,7 +1976,7 @@ where
 /// NOTE: This is NOT MaStR data. MaStR (BNetzA) covers generation/consumption
 /// units, not NB grid topology or Bilanzierungsgebiet assignments.
 ///
-/// Without a grid record, `netz-checker` returns `NetzCheckResult::Escalate`
+/// Without a grid record, `mako-pruefung` returns `NetzCheckResult::Escalate`
 /// — the NB cannot auto-decide.
 ///
 /// # STP impact
@@ -1993,7 +1993,7 @@ pub struct MaloGridRecord {
     /// Bilanzierungsgebiet-EIC (`LOC+237` in UTILMD), if known.
     ///
     /// `None` when the NIS has not yet provided this value.  Check 4 in
-    /// `netz-checker` is skipped (not failed) when both this and the
+    /// `mako-pruefung` is skipped (not failed) when both this and the
     /// UTILMD value are absent.
     pub bilanzierungsgebiet: Option<String>,
     /// NB-internal Netzgebiet code (optional).

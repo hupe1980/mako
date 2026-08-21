@@ -89,6 +89,8 @@ static SEGMENTS: &[SegmentDefinition] = &[
             ElementRef::new(1, "C601", Status::Mandatory, 1),
             ElementRef::new(2, "C555", Status::Conditional, 1),
             ElementRef::new(3, "C556", Status::Conditional, 1),
+            ElementRef::new(4, "C556", Status::Conditional, 1),
+            ElementRef::new(5, "C556", Status::Conditional, 1),
         ],
     ),
     SegmentDefinition::new(
@@ -399,7 +401,7 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             "SG1" | "SG6" => &["RFF"],
             "SG2" | "SG12" => &["NAD"],
             "SG3" => &["CTA", "COM"],
-            "SG4" => &["IDE", "STS", "DTM", "FTX", "AGR"],
+            "SG4" => &["IDE", "DTM", "STS", "FTX", "AGR"],
             "SG5" => &["LOC"],
             _ => &[],
         }
@@ -521,7 +523,7 @@ static AHB_44001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44001-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44001", "44001", issues);
             })
             .with_named_stateless_rule_fn("AHB-44001-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44001-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44001", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44001-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44001", issues);
             })
             .with_named_stateless_rule_fn("AHB-44001-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44001-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44001", "44001", issues);
@@ -601,7 +603,7 @@ static AHB_44002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44002-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44002", "44002", issues);
             })
             .with_named_stateless_rule_fn("AHB-44002-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44002-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44002", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44002-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44002", issues);
             })
             .with_named_stateless_rule_fn("AHB-44002-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44002-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44002", "44002", issues);
@@ -681,7 +683,7 @@ static AHB_44003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44003-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44003", "44003", issues);
             })
             .with_named_stateless_rule_fn("AHB-44003-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44003-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44003", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44003-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44003", issues);
             })
             .with_named_stateless_rule_fn("AHB-44003-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44003-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44003", "44003", issues);
@@ -761,7 +763,7 @@ static AHB_44004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44004-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44004", "44004", issues);
             })
             .with_named_stateless_rule_fn("AHB-44004-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44004-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44004", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44004-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44004", issues);
             })
             .with_named_stateless_rule_fn("AHB-44004-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44004-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44004", "44004", issues);
@@ -852,7 +854,7 @@ static AHB_44005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44005-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44005", "44005", issues);
             })
             .with_named_stateless_rule_fn("AHB-44005-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44005-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44005", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44005-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44005", issues);
             })
             .with_named_stateless_rule_fn("AHB-44005-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44005-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44005", "44005", issues);
@@ -943,7 +945,7 @@ static AHB_44006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44006-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44006", "44006", issues);
             })
             .with_named_stateless_rule_fn("AHB-44006-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44006-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44006", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44006-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44006", issues);
             })
             .with_named_stateless_rule_fn("AHB-44006-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44006-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44006", "44006", issues);
@@ -1034,7 +1036,7 @@ static AHB_44017_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44017-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44017", "44017", issues);
             })
             .with_named_stateless_rule_fn("AHB-44017-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44017-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44017", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44017-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44017", issues);
             })
             .with_named_stateless_rule_fn("AHB-44017-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44017-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44017", "44017", issues);
@@ -1103,7 +1105,7 @@ static AHB_44018_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "IDE", "AHB-44018-IDE-M", "mandatory segment IDE is missing for Pruefidentifikator 44018", "44018", issues);
             })
             .with_named_stateless_rule_fn("AHB-44018-IDE-7495-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "IDE", "AHB-44018-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['Z19']", |q| matches!(q, "Z19"), "44018", issues);
+                ahb_check_qualifier(segs, "IDE", "AHB-44018-IDE-7495-Q", "segment IDE DE 7495 (element 0, component 0): qualifier is not one of the allowed values ['24']", |q| matches!(q, "24"), "44018", issues);
             })
             .with_named_stateless_rule_fn("AHB-44018-RFF-M", |segs, issues| {
                 ahb_check_mandatory(segs, "RFF", "AHB-44018-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 44018", "44018", issues);

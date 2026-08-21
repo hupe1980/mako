@@ -53,7 +53,7 @@ pub(super) fn cmd_gpke_nb_lieferende_bestaetigen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p, true))
+    Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p))
 }
 
 pub(super) fn cmd_gpke_nb_lieferende_ablehnen<'a>(
@@ -62,7 +62,7 @@ pub(super) fn cmd_gpke_nb_lieferende_ablehnen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p, false))
+    Box::pin(dispatch_gpke_nb_lieferende_antwort(s, p))
 }
 
 pub(super) fn cmd_gpke_beendigung_zuordnung_bestaetigen<'a>(
@@ -71,7 +71,7 @@ pub(super) fn cmd_gpke_beendigung_zuordnung_bestaetigen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_gpke_beendigung_zuordnung_antwort(s, p, true))
+    Box::pin(dispatch_gpke_beendigung_zuordnung_antwort(s, p))
 }
 
 pub(super) fn cmd_gpke_beendigung_zuordnung_ablehnen<'a>(
@@ -80,7 +80,7 @@ pub(super) fn cmd_gpke_beendigung_zuordnung_ablehnen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_gpke_beendigung_zuordnung_antwort(s, p, false))
+    Box::pin(dispatch_gpke_beendigung_zuordnung_antwort(s, p))
 }
 
 pub(super) fn cmd_gpke_zuordnung_lf_bestaetigen<'a>(
@@ -89,7 +89,7 @@ pub(super) fn cmd_gpke_zuordnung_lf_bestaetigen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_gpke_zuordnung_lf_antwort(s, p, true))
+    Box::pin(dispatch_gpke_zuordnung_lf_antwort(s, p))
 }
 
 pub(super) fn cmd_gpke_zuordnung_lf_ablehnen<'a>(
@@ -98,7 +98,27 @@ pub(super) fn cmd_gpke_zuordnung_lf_ablehnen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_gpke_zuordnung_lf_antwort(s, p, false))
+    Box::pin(dispatch_gpke_zuordnung_lf_antwort(s, p))
+}
+
+/// `gpke.kuendigung.bestaetigen` — the LFA agrees to an inbound Kündigung (55017).
+pub(super) fn cmd_gpke_kuendigung_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_kuendigung_antwort(s, p))
+}
+
+/// `gpke.kuendigung.ablehnen` — the LFA refuses an inbound Kündigung (55018).
+pub(super) fn cmd_gpke_kuendigung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_kuendigung_antwort(s, p))
 }
 
 pub(super) fn cmd_gpke_lieferbeginn_bestaetigen<'a>(
@@ -526,6 +546,116 @@ pub(super) async fn dispatch_maloid_lieferbeginn_fortsetzen(
     dispatch_lf_anmeldung(state, &synthetic_payload, 55001, "lieferbeginn_datum").await
 }
 
+/// Read an LF answer out of an ERP command payload.
+///
+/// | Field | Required | Wire slot |
+/// |---|---|---|
+/// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 |
+/// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 (absent on the Gas Codelisten) |
+/// | `bemerkung` | — | `FTX+ACB` Erläuterung |
+/// | `termin` | — | `SG4 DTM+93`, `YYYYMMDD`, when the answer states its own date |
+///
+/// The code is **validated against its EBD** before it goes anywhere: a code
+/// the named tree does not publish is a rejected command, not a message the
+/// counterparty gets to refuse. Whether the answer is a Bestätigung or an
+/// Ablehnung is read from the code's published Cluster — the caller does not
+/// get a separate say, which is what kept `A35` „Vertragsbindung" from ever
+/// riding a Bestätigungs-PID.
+fn extract_lf_antwort(
+    payload: &serde_json::Value,
+    default_ebd: Option<&str>,
+) -> Result<mako_gpke::LfAntwort, DispatchError> {
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "payload must contain \"antwort_code\" — the EBD Antwortcode for \
+                 SG4 STS+E01. The AHB marks that segment Muss on every \
+                 Antwortnachricht{}",
+                default_ebd
+                    .map(|e| format!(", and restricts the code to the {e} cluster"))
+                    .unwrap_or_default()
+            ))
+        })?
+        .to_owned();
+
+    let ebd = payload
+        .get("antwort_ebd")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| default_ebd.map(ToOwned::to_owned));
+
+    // Resolve the code inside its own tree. `A02` means three different things
+    // across E_0607, E_0622 and E_0609, so a bare code is not checkable.
+    let zustimmung = match ebd.as_deref() {
+        Some(tree) => {
+            let entry = mako_pruefung::codes::lookup(tree, &antwort_code).ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "Antwortcode {antwort_code:?} is not published by {tree}. \
+                     Only codes from that Entscheidungsbaum's Codeliste are admissible."
+                ))
+            })?;
+            entry.ist_zustimmung()
+        }
+        None => {
+            // Gas Codelisten carry no DE 1131, so the caller states the cluster.
+            payload
+                .get("zustimmung")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| {
+                    DispatchError::InvalidPayload(
+                        "an answer without an \"antwort_ebd\" must state \"zustimmung\": \
+                         the Gas Codelisten are not named in STS DE 1131, so the cluster \
+                         cannot be derived from the code alone"
+                            .into(),
+                    )
+                })?
+        }
+    };
+
+    Ok(mako_gpke::LfAntwort {
+        antwort_code,
+        ebd,
+        zustimmung,
+        bemerkung: payload
+            .get("bemerkung")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+        termin: payload
+            .get("termin")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned),
+    })
+}
+
+/// Dispatch the LFA's answer to an inbound **Kündigung** (55016, EBD `E_0614`).
+///
+/// Both `gpke.kuendigung.bestaetigen` and `.ablehnen` land here: which of
+/// 55017 / 55018 goes out is decided by the Antwortcode's published Cluster,
+/// not by which command name the ERP happened to call. `A03` „Vertrag wurde
+/// bereits zum angefragten Kündigungstermin gekündigt" is a **Zustimmung**
+/// despite reading like a complaint, and a command-name-driven split would send
+/// it as an Ablehnung.
+///
+/// The inbound 55016 runs on its own `gpke-kuendigung` workflow, so an LFA
+/// answer can never resume the grid operator's Anmeldung on the same MaLo.
+pub(super) async fn dispatch_kuendigung_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+    let antwort = extract_lf_antwort(payload, Some(mako_pruefung::codes::EBD_KUENDIGUNG))?;
+
+    dispatch_to_process::<mako_gpke::GpkeKuendigungWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        mako_gpke::kuendigung::WORKFLOW_NAME,
+        move || mako_gpke::KuendigungCommand::SendAntwort { antwort },
+    )
+    .await
+}
+
 /// Dispatch LF's response to a NB-initiated Lieferende (PIDs 55008/55009).
 ///
 /// Called for `gpke.nb-lieferende.bestaetigen` (→ 55008 Bestätigung) and
@@ -544,20 +674,15 @@ pub(super) async fn dispatch_maloid_lieferbeginn_fortsetzen(
 pub(super) async fn dispatch_gpke_nb_lieferende_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
-    accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
-
-    let reason = payload
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let antwort = extract_lf_antwort(payload, Some(mako_pruefung::codes::EBD_ABMELDUNG))?;
 
     dispatch_to_process::<GpkeLfAbmeldungWorkflow, _>(
         state,
         malo_id.as_str(),
         "gpke-lf-abmeldung",
-        move || mako_gpke::LfAbmeldungCommand::SendAntwort { accepted, reason },
+        move || mako_gpke::LfAbmeldungCommand::SendAntwort { antwort },
     )
     .await
 }
@@ -582,20 +707,18 @@ pub(super) async fn dispatch_gpke_nb_lieferende_antwort(
 pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
-    accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
-
-    let reason = payload
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    let antwort = extract_lf_antwort(
+        payload,
+        Some(mako_pruefung::codes::EBD_BEENDIGUNG_ZUORDNUNG),
+    )?;
 
     dispatch_to_process::<GpkeBeendigungZuordnungWorkflow, _>(
         state,
         malo_id.as_str(),
         "gpke-beendigung-zuordnung",
-        move || mako_gpke::BeendigungZuordnungCommand::SendAntwort { accepted, reason },
+        move || mako_gpke::BeendigungZuordnungCommand::SendAntwort { antwort },
     )
     .await
 }
@@ -618,20 +741,23 @@ pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
 pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
-    accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
-
-    let reason = payload
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    // 55607–55609 is governed by **four** trees, one per Anwendungsfall of the
+    // NB's Ankündigung — `E_0603` EEG, `E_0604` EEG mit DV-Pflicht, `E_0605`
+    // KWKG, `E_0606`. They publish the same two codes (`A01` Zustimmung, `A99`
+    // Sonstiges) and differ only in which case they belong to, so the caller
+    // names the one the inbound message carried in `SG4 STS+E01` DE 1131.
+    //
+    // This previously passed `None` on the belief that the family had no
+    // published EBD, which sent every answer with an empty DE 1131.
+    let antwort = extract_lf_antwort(payload, Some(mako_pruefung::codes::EBD_ZUORDNUNG_LF[0]))?;
 
     dispatch_to_process::<GpkeAnkuendigungZuordnungLfWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_gpke::ankuendigung_zuordnung_lf::WORKFLOW_NAME,
-        move || AnkuendigungZuordnungLfCommand::SendAntwort { accepted, reason },
+        move || AnkuendigungZuordnungLfCommand::SendAntwort { antwort },
     )
     .await
 }

@@ -227,7 +227,7 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 malo_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -252,7 +252,7 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
                 fallgruppe: extract_fallgruppe(u.segments()),
                 // SG4 STS Transaktionsgrund (category 7) — drives the
-                // netz-checker date-plausibility rules (retroactive Einzug).
+                // `mako-pruefung` date-plausibility rules (retroactive Einzug).
                 transaktionsgrund: u.transactions().first().and_then(|t| {
                     t.sts
                         .iter()
@@ -613,7 +613,7 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
                 vorgang_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -894,7 +894,7 @@ pub fn geli_gas_stammdaten_registry()
             let first_tx = u.transactions().first();
             let location_id = MaLo::new(
                 first_tx
-                    .and_then(|t| t.ide.object_id.as_deref())
+                    .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
                     .unwrap_or(""),
             );
             let aenderungsdatum = first_tx

@@ -86,7 +86,7 @@ async fn cancelled_lieferbeginn_clears_the_announced_future_supplier() {
 /// A second supplier's Anmeldung must **not** displace the pending one.
 ///
 /// `marktd` writes `lf_mp_id_next` while ingesting the `process.initiated`,
-/// *before* fanning the event out to `processd` — so by the time `netz-checker`
+/// *before* fanning the event out to `processd` — so by the time `mako-pruefung`
 /// runs its EBD `E_0622` Prüfschritt 70 check, the Anmeldung under evaluation
 /// has already written its own marker. The check therefore compares MP-IDs
 /// rather than testing for presence, and that is only meaningful if the *first*

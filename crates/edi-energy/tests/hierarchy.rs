@@ -429,7 +429,7 @@ fn utilmd_transaction_dtm_and_loc() {
     let tx = &u.transactions()[0];
     assert_eq!(tx.dtm.len(), 1, "DTM 92 within transaction");
     assert_eq!(tx.dtm[0].qualifier, "92");
-    let loc = tx.loc.as_ref().expect("LOC within transaction");
+    let loc = tx.locations.first().expect("LOC within transaction");
     assert_eq!(loc.qualifier, "172");
     assert_eq!(loc.location_id.as_deref(), Some("12345678989"));
 }

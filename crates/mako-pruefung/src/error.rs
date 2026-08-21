@@ -1,12 +1,12 @@
-//! Error types for `netz-checker`.
+//! Error types for `mako-pruefung`.
 
 use thiserror::Error;
 
-/// Errors that can be returned by `netz-checker` — currently only input
-/// validation errors.  The `evaluate` function itself never fails;
-/// structural problems with the input produce `NetzCheckResult::Escalate`.
+/// Errors that can be returned by `mako-pruefung` — currently only input
+/// validation errors. A tree walk itself never fails: a Prüfschritt the caller's
+/// records cannot answer produces an escalation, not an `Err`.
 #[derive(Debug, Error)]
-pub enum NetzCheckerError {
+pub enum CheckError {
     /// The `AnmeldungAnfrage.pid` is not a recognised Lieferbeginn PID.
     ///
     /// Only PIDs 55001, 55016 (Strom) and 44001 (Gas) are valid Lieferbeginn

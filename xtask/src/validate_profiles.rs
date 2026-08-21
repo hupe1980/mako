@@ -77,6 +77,8 @@ struct MigElement {
     id: String,
     status: String,
     components: Option<u32>,
+    /// How many times this composite repeats in the segment (`STS` `C556` = 3).
+    max_repeat: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]

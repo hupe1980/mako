@@ -633,7 +633,7 @@ pub async fn tarifwechsel(
 
     // ── Notice period (§ 41 Abs. 5 EnWG / § 5 Abs. 2 GVV) ────────────────────
     if is_future {
-        let fruehestens = today + time::Duration::days(regime.vorlauf_tage);
+        let fruehestens = regime.fruehestens_wirksam(today);
         if input.wirksamkeit < fruehestens {
             return Err(unprocessable_json(serde_json::json!({
                 "error": "die Wirksamkeit wahrt die gesetzliche Ankündigungsfrist nicht",

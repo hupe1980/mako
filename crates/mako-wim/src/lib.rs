@@ -69,7 +69,7 @@
 //!     sender:            u.sender().and_then(|n| n.party_id.clone()).unwrap_or_default(),
 //!     receiver:          u.receiver().and_then(|n| n.party_id.clone()).unwrap_or_default(),
 //!     melo_id:           u.transactions().first()
-//!                         .and_then(|t| t.ide.object_id.clone()).unwrap_or_default(),
+//!                         .and_then(|t| t.marktlokation()).unwrap_or_default(),
 //!     device_id:         u.transactions().first()
 //!                         .and_then(|t| t.device_id().cloned()).unwrap_or_default(),
 //!     document_date:     u.dtm().iter().find(|d| d.is_document_date())

@@ -2,7 +2,7 @@
 //!
 //! Source: the NB's own **NIS/GIS** (Network/Geographic Information System).
 //! Imported via `xtask import-grid` (CSV/API adapter) or provisioned manually.
-//! Read by `processd` NB module for Anmeldung STP decisions via `netz-checker`.
+//! Read by `processd` NB module for Anmeldung STP decisions via `mako-pruefung`.
 //!
 //! NOTE: This is NOT MaStR data. MaStR (BNetzA Marktstammdatenregister) covers
 //! generation/consumption units — not NB grid topology or Bilanzierungsgebiet.

@@ -22,7 +22,7 @@
 // which asserts that absence).
 #![cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
 
-use processd::lf_module::{BEENDIGUNG_ZUORDNUNG, LF_ANTWORT_PROCESSES, NB_LIEFERENDE};
+use processd::lf_module::{BEENDIGUNG_ZUORDNUNG, NB_LIEFERENDE, lf_antwort_processes};
 
 #[test]
 fn the_lf_module_triggers_on_the_pids_makod_spawns_from() {
@@ -45,7 +45,7 @@ fn no_lf_trigger_is_an_answer_pid() {
     // The answers to the two processes. An event never carries these as
     // `makopid`, so a module keyed on one can never fire.
     const ANSWER_PIDS: &[u32] = &[55_008, 55_009, 55_011, 55_012];
-    for process in LF_ANTWORT_PROCESSES {
+    for process in lf_antwort_processes() {
         assert!(
             !ANSWER_PIDS.contains(&process.trigger_pid),
             "{} is keyed on {}, which is an answer PID — `makod` only emits \
@@ -58,7 +58,7 @@ fn no_lf_trigger_is_an_answer_pid() {
 
 #[test]
 fn every_lf_process_dispatches_a_registered_command() {
-    for process in LF_ANTWORT_PROCESSES {
+    for process in lf_antwort_processes() {
         for command in [process.bestaetigen, process.ablehnen] {
             assert!(
                 mako_markt::commands::DISPATCHED_BY_SERVICES.contains(&command),
@@ -79,25 +79,28 @@ fn every_lf_process_dispatches_a_registered_command() {
 /// them.
 #[test]
 fn each_process_carries_its_own_ebd() {
-    assert_eq!(BEENDIGUNG_ZUORDNUNG.ebd, Some("E_0624"));
-    assert_eq!(NB_LIEFERENDE.ebd, Some("E_0609"));
+    assert_eq!(BEENDIGUNG_ZUORDNUNG.ebd, "E_0624");
+    assert_eq!(NB_LIEFERENDE.ebd, "E_0609");
 }
 
 /// The descriptors' EBD and answer PIDs must agree with the shared GPKE table
 /// that also drives the Fristen — one source, checked from both ends.
 #[test]
 fn the_descriptors_agree_with_the_shared_gpke_table() {
-    for process in LF_ANTWORT_PROCESSES {
-        let o = mako_gpke::antwort_obligation(process.trigger_pid).unwrap_or_else(|| {
-            panic!(
-                "{} (PID {}) has no entry in mako_gpke::ANTWORT_OBLIGATIONS, so nothing \
-                 gives its queue entry a regulatory Frist",
-                process.name, process.trigger_pid
-            )
-        });
+    for process in lf_antwort_processes() {
+        let o = mako_gpke::antwort_obligation(process.trigger_pid)
+            .or_else(|| mako_geli_gas::antwortfrist::antwort_obligation(process.trigger_pid))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{} (PID {}) has no entry in the shared Antwortfrist table, so nothing \
+                     gives its queue entry a regulatory Frist",
+                    process.name, process.trigger_pid
+                )
+            });
         assert_eq!(
-            o.ebd, process.ebd,
-            "{} disagrees with the GPKE table about its EBD",
+            o.ebd,
+            Some(process.ebd),
+            "{} disagrees with the shared table about its EBD",
             process.name
         );
         assert!(
@@ -112,7 +115,7 @@ fn the_descriptors_agree_with_the_shared_gpke_table() {
 #[test]
 fn the_two_processes_do_not_share_a_trigger() {
     let mut seen = std::collections::BTreeSet::new();
-    for process in LF_ANTWORT_PROCESSES {
+    for process in lf_antwort_processes() {
         assert!(
             seen.insert(process.trigger_pid),
             "{} duplicates trigger PID {} — the first match would shadow the second",

@@ -456,8 +456,18 @@ mod tests {
     #[test]
     fn an_unpublished_window_yields_no_deadline() {
         let t = datetime!(2026-07-14 00:00 UTC);
-        for pid in [31_001_u32, 37_000, 23_001, 44_010, 13_003] {
+        // 44020 Änderungsmeldung zur Bestandsliste is the GeLi Gas process
+        // whose Frist really is per-Netzbetreiber. 44010 sat in this list until
+        // the AWH was read: Kap. 2.5.2 Nr. 4 quantifies it at Ablauf des 3. WT,
+        // so obsd raised no breach alert for the supplier's own answer window.
+        for pid in [31_001_u32, 37_000, 23_001, 44_020, 13_003] {
             assert!(compute_deadline(pid, t).is_none(), "PID {pid}");
+        }
+        for pid in [44_007_u32, 44_010] {
+            assert!(
+                compute_deadline(pid, t).is_some(),
+                "PID {pid} has a published Antwortfrist"
+            );
         }
     }
 

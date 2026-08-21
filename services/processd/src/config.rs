@@ -254,7 +254,7 @@ pub struct NbConfig {
 }
 
 fn default_gas_bearbeitungsfrist_wt() -> u32 {
-    netz_checker::checks::GAS_BEARBEITUNGSFRIST_WT_DEFAULT
+    mako_pruefung::nb::anmeldung::GAS_BEARBEITUNGSFRIST_WT_DEFAULT
 }
 
 impl Default for NbConfig {
@@ -320,10 +320,28 @@ impl Default for EogConfig {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LfConfig {
-    /// When `true` (default), `processd` automatically dispatches
-    /// `einwilligung` / `ablehnen` for E_0624 queries without ERP involvement.
+    /// When `true` (default), `processd` dispatches the resolved answer itself.
+    ///
+    /// `false` does **not** mean "nobody answers": the decision still runs and
+    /// its outcome is queued for an operator with the Antwortfrist attached.
     #[serde(default = "default_lf_auto_respond")]
     pub auto_respond: bool,
+
+    /// Base URL of `vertragd`, when this deployment runs the retail layer.
+    ///
+    /// Half of what the LF Entscheidungsbäume ask about is contract state —
+    /// „Bleibt das Vertragsverhältnis bestehen?", „Ist der Kunde identisch?",
+    /// „Ist der Vertrag zum Termin kündbar?". Without this URL those facts stay
+    /// unknown and every decision that reaches one of them escalates to an
+    /// operator. That is deliberate: a supplier with no contract database
+    /// cannot truthfully claim a Vertragsbindung, and must not silently agree
+    /// to release the customer instead.
+    #[serde(default)]
+    pub vertragd_url: Option<String>,
+
+    /// Bearer token for `vertragd`.
+    #[serde(default)]
+    pub vertragd_api_key: Option<String>,
 }
 
 fn default_lf_auto_respond() -> bool {
@@ -334,6 +352,8 @@ impl Default for LfConfig {
     fn default() -> Self {
         Self {
             auto_respond: default_lf_auto_respond(),
+            vertragd_url: None,
+            vertragd_api_key: None,
         }
     }
 }

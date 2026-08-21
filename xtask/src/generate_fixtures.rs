@@ -157,8 +157,12 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
         "utilmd" => Some(TypeMeta {
             unh_prefix: "UTILMD:D:11A:UN",
             bgm: |pid| format!("BGM+E01:::+{pid:08}::+9'"),
-            extra: &["IDE+Z19+51238696781::'"],
-            seg_count_base: 8,
+            // `IDE+24` is the only Vorgangs-Qualifier UTILMD defines (DE 7495);
+            // DE 7402 carries a Vorgangsnummer. The Marktlokation follows in
+            // `SG5 LOC+Z16`.
+            extra: &["IDE+24+VORGANG-0001'", "LOC+Z16+51238696781'"],
+            // UNH, BGM, DTM, RFF, NAD, NAD and UNT — `extra` is added on top.
+            seg_count_base: 7,
         }),
         "utilts" => Some(TypeMeta {
             unh_prefix: "UTILTS:D:18A:UN",

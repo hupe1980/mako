@@ -1,6 +1,6 @@
 +++
 title = "processd Operator Guide"
-description = "processd operator guide: Process decision engine — NB Anmeldung STP (netz-checker), LF answers to the NB-initiated GPKE processes (55007 / 55010), MSB REQOTE and §14a ORDRSP, EoG gap closure. Role-gated binaries for §7 EnWG separation, Cedar ABAC on every route, MCP tools, PostgreSQL audit log."
+description = "processd operator guide: Process decision engine — NB Anmeldung STP, LF answers to every process the market asks a supplier about (Strom and Gas), MSB REQOTE and §14a ORDRSP, EoG gap closure. Role-gated binaries for §7 EnWG separation, Cedar ABAC on every route, MCP tools, PostgreSQL audit log."
 weight = 23
 [extra]
 mermaid = true
@@ -20,14 +20,14 @@ graph TB
     marktd -->|"de.mako.process.initiated<br/>de.markt.versorgung.gap-detected<br/>HMAC POST /webhook"| processd
 
     subgraph NB ["NB module (--features nb-only)"]
-        NC["netz-checker<br/>Anmeldung E_0622 · Abmeldung E_0607<br/>STP target ≥ 95%"]
+        NC["mako-pruefung<br/>NB: E_0622 · E_0607<br/>LF: E_0609 · E_0624 · E_0614 · E_0615<br/>STP target ≥ 95%"]
         EOG["EoG gap closure<br/>§36/§38 EnWG · §38 timer"]
         NC --> pg
         EOG --> pg
     end
 
     subgraph LF ["LF module (--features lf-only)"]
-        LFA["LF answers 55007 / 55010<br/>05:00 / 09:00 Uhr des 1. WT nach dem ÜT"]
+        LFA["LF answers · Strom 55007 / 55010 / 55016<br/>Gas 44007 / 44010 / 44016"]
         LFA --> pg
     end
 
@@ -67,7 +67,7 @@ This ensures §7 EnWG separation: an `nb-only` binary provably contains no LF PI
 
 ```toml
 [features]
-role-lf-strom  = []  # LF answers 55007 + 55010, LFN Strom bootstrap
+role-lf-strom  = []  # LF answers 55007 / 55010 / 55016, LFN Strom bootstrap
 role-lf-gas    = []  # LFA GeLi Gas stornierung + LFN Gas bootstrap (PID 44001)
 role-nb-strom  = []  # GPKE An-/Abmeldung STP (55001, 55077, 55004), EoG closure
 role-nb-gas    = []  # GeLi Gas An-/Abmeldung STP (44001, 44004)
@@ -79,11 +79,12 @@ msb-only   = ["role-msb-strom"]
 integrated = ["role-lf-strom", "role-lf-gas", "role-nb-strom", "role-nb-gas", "role-msb-strom"]
 ```
 
-**PID 55016 „Kündigung" is not an NB process** and is answered by no role here.
-The *Anwendungsübersicht der Prüfidentifikatoren 4.0* (lfd. Nr. 20030) has it
-going LFN → LFA, answered 55017/55018 by the Altlieferant under EBD `E_0614`.
-Routing it into the NB module would make an `nb-only` binary answer a
-supplier-role message — exactly what these feature flags exist to prevent.
+**PID 55016 „Kündigung" is not an NB process.** The *Anwendungsübersicht der
+Prüfidentifikatoren 4.0* (lfd. Nr. 20030) has it going LFN → LFA, answered
+55017/55018 by the Altlieferant under EBD `E_0614` — so it belongs to
+`role-lf-strom`. Routing it into the NB module would make an `nb-only` binary
+answer a supplier-role message, exactly what these feature flags exist to
+prevent.
 
 For §7 EnWG deployments (≥ 100k Netzkunden): BNetzA inspects the binary SHA to
 confirm no cross-contamination. Use separate container images compiled with
@@ -114,10 +115,11 @@ de.mako.process.initiated
 
 The two trees have **separate ERC code spaces**: `A02` is „Marktlokation nimmt
 nicht an der Marktkommunikation teil" in `E_0622` and „Vorlauffrist nicht
-eingehalten" in `E_0607`, so `netz-checker` exposes two functions rather than one
+eingehalten" in `E_0607`, so `mako-pruefung` exposes one function per tree and
+resolves every code against the tree that publishes it
 with a flag.
 
-### netz-checker `evaluate` — the Anmeldung, 6 checks
+### `mako_pruefung::nb::evaluate` — the Anmeldung, 6 checks
 
 | # | Rule | On failure |
 |---|------|------------|
@@ -128,7 +130,7 @@ with a flag.
 | 5 | Bilanzierungsgebiet in UTILMD matches grid record | `Reject A05` |
 | 6 | LF MP-ID in partner directory | `Reject A05` |
 
-### netz-checker `evaluate_abmeldung` — the Abmeldung, EBD `E_0607`
+### `mako_pruefung::nb::evaluate_abmeldung` — the Abmeldung, EBD `E_0607`
 
 Inbound **55004** (Strom) / **44004** (Gas): the supplier ends the assignment
 and the NB answers 55005/55006 (44005/44006).
@@ -149,7 +151,7 @@ a supplier they have left.
 ### STP rate targets
 
 `processd` targets ≥ 95 % straight-through processing on NB Anmeldung. The `malo_grid`
-record is a prerequisite: `netz-checker` check 1 (grid record exists) can only pass when
+record is a prerequisite: `mako-pruefung` check 1 (grid record exists) can only pass when
 the record is present, so NB Anmeldung STP improves markedly once the record is provisioned.
 
 Grid records are the NB’s own grid topology — **not** from MaStR. Provision them via
@@ -258,30 +260,59 @@ notify_webhook_url       = "https://erp.example/hooks/eog"
 
 ---
 
-## LF module — answering the NB-initiated GPKE processes
+## LF module — answering what the market asks a supplier
 
-Two processes, two EBDs: **55007** „Ankündigung der Beendigung der Zuordnung"
-(NB → LF, answered 55008/55009, EBD `E_0609`) and **55010** „Anfrage zur
-Beendigung der Zuordnung" (NB → LFA, answered 55011/55012, EBD `E_0624`). They
-share the evaluation and differ in the command pair and the Frist.
+Six inbound processes, each with its own Entscheidungsbaum, its own Codeliste
+and its own Antwortfrist:
 
-### Decision rules (inbound 55007 / 55010)
+| Sparte | Inbound | Process | EBD | Answers | Frist |
+|---|---|---|---|---|---|
+| Strom | 55007 | Lieferende von NB an LF | `E_0609` | 55008 / 55009 | 05:00 Uhr des 1. WT nach dem ÜT |
+| Strom | 55010 | Beendigung der Zuordnung | `E_0624` | 55011 / 55012 | 09:00 Uhr des 1. WT nach dem ÜT |
+| Strom | 55016 | Kündigung (LFN → LFA) | `E_0614` | 55017 / 55018 | Ablauf des 1. WT nach dem ÜT |
+| Gas | 44007 | Abmeldung NN vom NB | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
+| Gas | 44010 | Abmeldeanfrage des NB | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
+| Gas | 44016 | Kündigung beim Altlieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
 
-"Supplying" means `lieferstatus` is `Beliefert`, `Grundversorgung` or
-`Ersatzversorgung` **and** `lf_mp_id == own_mp_id` — all three are a supply this
-LF may be asked to end.
+### How a decision is made
 
-| VersorgungsStatus | Scenario | Decision |
-|-------------------|----------|----------|
-| supplying | `standard` | `einwilligung` |
-| supplying | `einzug` | `ablehnen A32` |
-| supplying | `vertragsbindung` | `ablehnen A35` |
-| supplying | `ersatzversorgung` | `einwilligung` |
-| MaLo unknown | any | `approval_queue` |
-| not supplying / `lf_mp_id != own_mp_id` | any | `approval_queue` |
+`mako-pruefung` walks the published Prüfschritte. `processd` assembles the facts
+they ask about and routes the outcome:
 
-The `scenario` marker is matched case-insensitively — the AHB does not fix its
-casing.
+```
+de.mako.process.initiated (an answerable PID)
+  → LfAnfrage from the CloudEvent — Transaktionsgrund and its Ergänzung
+    (ZW3/ZW4/ZW5/ZAP, which selects the tree's branch), Termin, ÜT
+  → LfVertragslage from marktd (supply state) + vertragd (contract state)
+  → pruefe_*(…)
+      Antwort    → makod command carrying the Antwortcode and its EBD
+      Eskalation → approval_queue, naming the Prüfschritt it stopped at
+```
+
+The Antwortcode's published **Cluster** selects the answer PID, not the command
+name: `A36` „Vertragsverhältnis wurde beendet" rides 55011, `A35` „Es besteht
+eine Vertragsbindung" rides 55012.
+
+### Contract facts
+
+Half of what the trees ask is about a contract, not about supply state:
+
+| Prüfschritt | Question | Source |
+|---|---|---|
+| `E_0624` 50 | Ist der Kunde aus der Anfrage identisch mit dem Kunden beim LFA? | `vertragd` |
+| `E_0624` 60 | Hat der LFA Informationen, dass sein Kunde nicht ausgezogen ist? | `vertragd` |
+| `E_0624` 90 | Bleibt das Vertragsverhältnis zum Folgetag bestehen? | `vertragd` |
+| `E_0614` 70 | Ist der Vertrag zum Kündigungstermin kündbar? | `vertragd` |
+| `E_0609` 40 | Wurde die Vorlauffrist eingehalten? | `mako-fristen` |
+| `E_0624` 20 | Besteht zum Folgetag noch eine Zuordnung? | `marktd` |
+
+Set `[lf] vertragd_url` to answer them. Without it those facts are
+`Bekannt::Unbekannt` and any decision reaching one escalates to an operator —
+deliberately: a supplier with no contract database cannot claim a
+Vertragsbindung, and must not agree to release the customer instead.
+
+`auto_respond = false` means *an operator decides*, not *nobody answers*: the
+walk still runs and its outcome is queued with the Antwortfrist attached.
 
 ### Approval queue
 
@@ -298,6 +329,10 @@ resolved from the trigger PID at enqueue time.
 | GPKE Abmeldung 55004 | 06:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferende von LF an NB 2/3 |
 | GPKE LF answer 55007 | 05:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferende von NB an LF 2 |
 | GPKE LFA answer 55010 | 09:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Lieferbeginn 4 |
+| GPKE LFA answer 55016 | Ablauf des 1. WT nach dem ÜT | BK6-24-174 Teil 2, SD Kündigung 2 |
+| GeLi Gas LF answer 44007 | Ablauf des 3. WT | AWH GeLi Gas 2.0 Kap. 2.3.2 Nr. 2 |
+| GeLi Gas LFA answer 44010 | Ablauf des 3. WT | AWH GeLi Gas 2.0 Kap. 2.5.2 Nr. 4 |
+| GeLi Gas LFA answer 44016 | Ablauf des 3. WT | GeLi Gas 3.0 Kap. 3.1 |
 | GeLi Gas Anmeldung 44001 | Ablauf des 4. WT nach Eingang | BK7-24-01-009 Kap. 3.2.3 |
 | GeLi Gas Abmeldung 44004 | Ablauf des 3. WT nach Eingang | BK7-24-01-009 Kap. 3.2.2 |
 | WiM MSB-Wechsel 55039 / 55042 / 55051 / 55168 | 3 / 5 / 7 / 1 WT | WiM Strom Teil 1 |
@@ -383,13 +418,19 @@ curl -X POST http://processd:8580/api/v1/start-supply-gas \
 
 | Field | Required | Notes |
 |---|---|---|
-| `malo_id` | ✓ | 11-digit Gas-MaLo-ID (IDE+Z19) |
+| `malo_id` | ✓ | Gas-MaLo-ID — rendered into `SG5 LOC+Z16` |
 | `zaehlpunkt` | ✓ | Zählpunktbezeichnung (RFF+Z13) |
 | `process_date` | ✓ | Lieferbeginn date (YYYYMMDD, CET/CEST) |
+| `transaktionsgrund` | — | `E03` Wechsel (default), `E01`/`E02` Einzug |
 
-The GNB responds with PID 44002 (Bestätigung) or 44003 (Ablehnung). The LF
-process (`geli-gas-lf-anmeldung`) tracks the 10-Werktage response deadline
-automatically.
+**Mindestvorlauffrist: 10 WT** for a Lieferantenwechsel (AWH GeLi Gas 2.0
+Kap. 2.5.2 Nr. 1), enforced here. An Einzug passes with a
+`vorlauffrist_hinweis`: the NB corrects the date to the second Werktag after
+confirmation rather than rejecting (Kap. 4).
+
+The GNB responds with PID 44002 (Bestätigung) or 44003 (Ablehnung) by the
+**Ablauf des 4. WT** (Kap. 3.2.3) — a different clock from the supplier's own
+10-WT lead time.
 
 > **No API-Webdienste equivalent for Gas.** The ERP must supply the Gas-MaLo-ID
 > (`malo_id`) upfront from the customer contract, MaStR, or DVGW Codevergabe.

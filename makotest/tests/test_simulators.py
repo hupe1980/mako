@@ -47,7 +47,7 @@ def nb() -> MarktpartnerSim:
 class TestMarktpartnerSim:
     def test_the_reply_is_edifact_the_platform_can_be_fed(self, nb, anmeldung):
         """The whole point. A dict answer cannot close the loop."""
-        nb.on(55001).bestaetigung(process_dates=[("163", "20260501")])
+        nb.on(55001).bestaetigung(process_dates=[("92", "20260501")])
         reply = nb.receive(anmeldung)
 
         assert reply.pid == 55002, "Bestätigung Anmeldung is 55002"
@@ -186,9 +186,9 @@ class TestMultiMessageInterchange:
                     document_code=document_code,
                     transactions=[
                         UtilmdTransaction(
-                            "melo",
-                            MELO,
-                            process_dates=[("163", "20260501")],
+                            f"VORGANG-{index + 1}",
+                            locations=[("melo", MELO)],
+                            dates=[("92", "20260501")],
                             references=[("Z13", str(pid))],
                         )
                     ],

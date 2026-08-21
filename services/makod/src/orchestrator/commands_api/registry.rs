@@ -74,12 +74,28 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55006),
         dispatch: cmd_gpke_lieferende_ablehnen,
     },
-    // ── GPKE Kündigung ────────────────────────────────────────────────────────
+    // ── GPKE Kündigung (LFN → LFA, EBD E_0614) ───────────────────────────────
+    //
+    // Both sides are the *supplier*: the incoming LF terminates the incumbent's
+    // contract directly, and the incumbent answers 55017/55018 by the Ablauf
+    // des 1. WT nach dem ÜT.
     CommandDescriptor {
         name: "gpke.kuendigung.anmelden",
         permitted_roles: &[Marktrolle::Lf],
         primary_pid: pid(55016),
         dispatch: cmd_gpke_kuendigung_anmelden,
+    },
+    CommandDescriptor {
+        name: "gpke.kuendigung.bestaetigen",
+        permitted_roles: &[Marktrolle::Lf],
+        primary_pid: pid(55017),
+        dispatch: cmd_gpke_kuendigung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.kuendigung.ablehnen",
+        permitted_roles: &[Marktrolle::Lf],
+        primary_pid: pid(55018),
+        dispatch: cmd_gpke_kuendigung_ablehnen,
     },
     // ── GPKE NB-seitiges Lieferende (PID 55007 NB→LF) ────────────────────────
     // The NB sends PID 55007 (Ankündigung) via AS4; the LF responds.
@@ -324,12 +340,71 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(44006),
         dispatch: cmd_geli_lieferende_ablehnen,
     },
+    // ── GeLi Gas — the answers the *supplier* owes ───────────────────────────
+    //
+    // The Gas answer commands above belong to the GNB; these are addressed
+    // **to** the supplier. All are `Lfg`, like every other Gas command: the
+    // Strom/Gas split is enforced at the role level.
+    CommandDescriptor {
+        // 44007 Abmeldung NN vom NB → 44008 / 44009 (Codeliste `E_3002`).
+        name: "geli.abmeldung-nb.bestaetigen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44008),
+        dispatch: cmd_geli_abmeldung_nb_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.abmeldung-nb.ablehnen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44009),
+        dispatch: cmd_geli_abmeldung_nb_ablehnen,
+    },
+    CommandDescriptor {
+        // 44010 Abmeldungsanfrage des NB → 44011 / 44012 (Codeliste `E_3020`).
+        name: "geli.abmeldungsanfrage.bestaetigen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44011),
+        dispatch: cmd_geli_abmeldungsanfrage_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.abmeldungsanfrage.ablehnen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44012),
+        dispatch: cmd_geli_abmeldungsanfrage_ablehnen,
+    },
+    CommandDescriptor {
+        // 44016 Kündigung beim alten Lieferanten → 44017 / 44018 (`E_3001`).
+        // LFN → LFA, so both parties are suppliers and the GNB never sees it.
+        name: "geli.kuendigung.bestaetigen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44017),
+        dispatch: cmd_geli_kuendigung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.kuendigung.ablehnen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44018),
+        dispatch: cmd_geli_kuendigung_ablehnen,
+    },
+    CommandDescriptor {
+        // 44013 Anmeldung EoG → 44014 / 44015 (`E_3008`) — how a Gas
+        // Grundversorger answers an assignment under § 36 / § 38 EnWG.
+        name: "geli.eog.bestaetigen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44014),
+        dispatch: cmd_geli_eog_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "geli.eog.ablehnen",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44015),
+        dispatch: cmd_geli_eog_ablehnen,
+    },
     // ── GeLi Gas LF Stornierung (ERP-initiated, LF sends 44022 to GNB) ────────
     // LFN/LFA initiates a supply-change cancellation; ERP supplies `malo_id`
     // and optional `bgm_qualifier` (E01=Kündigung, E02=Rücktritt, E35=Sperrung).
     CommandDescriptor {
         name: "geli.gas.stornierung.initiieren",
-        permitted_roles: &[Marktrolle::Lf],
+        permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44022),
         dispatch: cmd_geli_gas_stornierung_initiieren,
     },
@@ -338,7 +413,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // Spawns a GeliGasDatanabrufWorkflow that tracks the 10-Werktage response.
     CommandDescriptor {
         name: "geli.gas.datenabruf.anfragen",
-        permitted_roles: &[Marktrolle::Lf],
+        permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(17103),
         dispatch: cmd_geli_gas_datenabruf_anfragen,
     },

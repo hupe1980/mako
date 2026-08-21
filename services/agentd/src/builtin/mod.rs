@@ -409,7 +409,7 @@ completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix 
 
 const PROCESSD_AGENT: Specialist = Specialist {
     name: "processd-agent",
-    specialty: "NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which of 6 netz-checker checks failed), and tracks approval_queue items.",
+    specialty: "NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which of 6 `mako-pruefung` checks failed), and tracks approval_queue items.",
     trigger_patterns: &[
         mako_events::mako::PROCESS_INITIATED,
         mako_events::mako::APERAK_REJECTED,

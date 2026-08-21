@@ -31,7 +31,7 @@
 //!   → GET /api/v1/versorgung/{malo}            → GET /api/v1/versorgung/{malo}
 //!   → GET /api/v1/malos/{malo}/grid
 //!   → GET /api/v1/partners/{lf}
-//!   → netz_checker::evaluate                   → netz_checker::evaluate_abmeldung
+//!   → mako_pruefung::evaluate                   → mako_pruefung::evaluate_abmeldung
 //!       Accept   → bestaetigen [auto_accept]       Accept   → bestaetigen [auto_accept]
 //!                  else approval_queue                        else approval_queue
 //!       Reject   → ablehnen (ERC)                  Reject   → ablehnen (ERC)
@@ -41,7 +41,7 @@
 //! The two decision trees have **separate ERC code spaces** — `A02` is
 //! „Marktlokation nimmt nicht an der Marktkommunikation teil" in `E_0622` and
 //! „Vorlauffrist nicht eingehalten" in `E_0607` — which is why they are
-//! separate functions in `netz-checker` rather than one with a flag.
+//! separate functions in `mako-pruefung` rather than one with a flag.
 //!
 //! # Regulatory basis
 //!
@@ -51,8 +51,8 @@
 //! - § 20 EnWG parity: `initiator_is_affiliate` recorded on every decision
 
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
-use netz_checker::types::RejectReason;
-use netz_checker::{AnmeldungAnfrage, Messtyp, NetzCheckResult};
+use mako_pruefung::nb::types::RejectReason;
+use mako_pruefung::{AnmeldungAnfrage, Messtyp, NbEntscheidung};
 use time::OffsetDateTime;
 use tracing::{info, warn};
 use uuid::Uuid;
@@ -74,18 +74,18 @@ pub struct NbModuleConfig {
     pub tenant: String,
     pub auto_accept: bool,
     /// Gas Bearbeitungsfrist (WT) added to the 6-week retroactive Anmeldung
-    /// window. Defaults to [`netz_checker::checks::GAS_BEARBEITUNGSFRIST_WT_DEFAULT`]
+    /// window. Defaults to [`mako_pruefung::nb::anmeldung::GAS_BEARBEITUNGSFRIST_WT_DEFAULT`]
     /// (3 WT); operators whose AWH reading differs may override it.
     pub gas_bearbeitungsfrist_wt: u32,
 }
 
 impl NbModuleConfig {
-    /// Build the pure-library [`netz_checker::NetzCheckConfig`] from this config.
+    /// Build the pure-library [`mako_pruefung::NetzCheckConfig`] from this config.
     #[must_use]
-    pub fn netz_check_config(&self) -> netz_checker::NetzCheckConfig {
-        netz_checker::NetzCheckConfig {
+    pub fn netz_check_config(&self) -> mako_pruefung::NetzCheckConfig {
+        mako_pruefung::NetzCheckConfig {
             gas_bearbeitungsfrist_wt: self.gas_bearbeitungsfrist_wt,
-            ..netz_checker::NetzCheckConfig::default()
+            ..mako_pruefung::NetzCheckConfig::default()
         }
     }
 }
@@ -211,7 +211,7 @@ impl AnmeldungPayload {
         })
     }
 
-    /// Derive `AnmeldungAnfrage` for passing to `netz-checker`.
+    /// Derive `AnmeldungAnfrage` for passing to `mako-pruefung`.
     pub fn into_anfrage(self) -> AnmeldungAnfrage {
         let sparte = sparte_of(self.pid);
         // PID 55077 *is* the „Anmeldung erz. MaLo" use case, so the § 10c EEG
@@ -322,16 +322,16 @@ pub async fn evaluate_and_decide(
     let now = OffsetDateTime::now_utc();
 
     // ── 4. Evaluate ───────────────────────────────────────────────────────
-    // Build a grid record for netz-checker from the best available source:
+    // Build a grid record for `mako-pruefung` from the best available source:
     //  1. `malo_grid` side table (NB-role PUT provisioning) — most authoritative
     //  2. `malo.bilanzierungsgebiet` (B1 typed extraction) — fallback when the
     //     malo_grid record is absent; raises STP from ~60% to ~80% for SLP MaLos
     let vs_ref = versorgung.as_ref();
-    let grid_nc: Option<netz_checker::MaloGridRecord> = if grid.is_some() {
+    let grid_nc: Option<mako_pruefung::MaloGridRecord> = if grid.is_some() {
         grid.as_ref().map(Into::into)
     } else if let Some(ref m) = malo {
         if m.bilanzierungsgebiet.is_some() || m.netzebene.is_some() {
-            Some(netz_checker::MaloGridRecord {
+            Some(mako_pruefung::MaloGridRecord {
                 malo_id: malo_id.clone(),
                 nb_mp_id: anfrage.grid_operator_gln.clone(),
                 bilanzierungsgebiet: m.bilanzierungsgebiet.clone(),
@@ -345,7 +345,7 @@ pub async fn evaluate_and_decide(
     };
     let grid_ref = grid_nc.as_ref();
 
-    let result = netz_checker::evaluate(
+    let result = mako_pruefung::evaluate(
         &anfrage,
         vs_ref,
         grid_ref,
@@ -358,20 +358,22 @@ pub async fn evaluate_and_decide(
         %process_id, pid, %malo_id,
         grid_source = if grid.is_some() { "malo_grid" } else if grid_nc.is_some() { "malo_typed" } else { "none" },
         outcome = ?result,
-        "processd NB: netz-checker result"
+        "processd NB: `mako-pruefung` result"
     );
 
     // ── 5. Persist decision ───────────────────────────────────────────────
-    let (decision, erc_code, detail) = match &result {
-        NetzCheckResult::Accept => (AnmeldungDecision::Accept, None, None),
-        NetzCheckResult::Reject(RejectReason {
-            erc_code, detail, ..
+    let (decision, antwortcode, detail) = match &result {
+        NbEntscheidung::Accept => (AnmeldungDecision::Accept, None, None),
+        NbEntscheidung::Reject(RejectReason {
+            antwortcode,
+            detail,
+            ..
         }) => (
             AnmeldungDecision::Reject,
-            Some(erc_code.clone()),
+            Some(antwortcode.clone()),
             Some(detail.clone()),
         ),
-        NetzCheckResult::Escalate { reason } => {
+        NbEntscheidung::Escalate { reason } => {
             (AnmeldungDecision::Escalate, None, Some(reason.clone()))
         }
     };
@@ -383,7 +385,7 @@ pub async fn evaluate_and_decide(
         malo_id: malo_id.clone(),
         lf_mp_id: lf_mp_id.clone(),
         decision,
-        erc_code: erc_code.clone(),
+        antwortcode: antwortcode.clone(),
         detail: detail.clone(),
         initiator_is_affiliate,
         decided_at: now,
@@ -399,7 +401,7 @@ pub async fn evaluate_and_decide(
 
     // ── 6. Dispatch command to makod ──────────────────────────────────────
     match &result {
-        NetzCheckResult::Accept => {
+        NbEntscheidung::Accept => {
             // §20 EnWG Diskriminierungsfreiheitspflicht:
             // When the initiating LF shares the same MP-ID as our operator
             // (vertically integrated utility — §6b EnWG deployment), automatic
@@ -417,7 +419,7 @@ pub async fn evaluate_and_decide(
                     &payload_meta,
                     &format!(
                         "§20 EnWG affiliate Anmeldung (LF {lf_mp_id} is this operator) — \
-                         netz-checker says Accept, but an affiliate may not take the \
+                         `mako-pruefung` says Accept, but an affiliate may not take the \
                          automatic path a third party does not get"
                     ),
                 )
@@ -443,13 +445,13 @@ pub async fn evaluate_and_decide(
                     queue,
                     config,
                     &payload_meta,
-                    "netz-checker says Accept; auto_accept is off, so the \
+                    "`mako-pruefung` says Accept; auto_accept is off, so the \
                      Bestätigung is dispatched on operator approval",
                 )
                 .await?;
             }
         }
-        NetzCheckResult::Reject(reason) => {
+        NbEntscheidung::Reject(reason) => {
             let cmd_body = ForwardCommand {
                 marktrolle: Some("NB".to_owned()),
                 command: answer_commands(pid).1.to_owned(),
@@ -457,7 +459,7 @@ pub async fn evaluate_and_decide(
                 melo_id: None,
                 payload: serde_json::json!({
                     "process_id": process_id,
-                    "erc_code": reason.erc_code,
+                    "antwortcode": reason.antwortcode,
                     "detail": reason.detail,
                 }),
             };
@@ -465,9 +467,9 @@ pub async fn evaluate_and_decide(
                 .post_command(&format!("processd-nb-reject-{process_id}"), &cmd_body)
                 .await
                 .inspect_err(|e| warn!(%e, %process_id, "processd NB: ablehnen dispatch failed"))?;
-            info!(%process_id, pid, %malo_id, erc = %reason.erc_code, "processd NB: dispatched ablehnen");
+            info!(%process_id, pid, %malo_id, erc = %reason.antwortcode, "processd NB: dispatched ablehnen");
         }
-        NetzCheckResult::Escalate { reason } => {
+        NbEntscheidung::Escalate { reason } => {
             warn!(%process_id, pid, %malo_id, %reason, "processd NB: Escalate — operator action required");
             enqueue_for_operator(queue, config, &payload_meta, reason).await?;
         }
@@ -619,10 +621,10 @@ impl AbmeldungPayload {
         })
     }
 
-    /// Derive the `netz-checker` input.
+    /// Derive the `mako-pruefung` input.
     #[must_use]
-    pub fn into_anfrage(self) -> netz_checker::AbmeldungAnfrage {
-        netz_checker::AbmeldungAnfrage {
+    pub fn into_anfrage(self) -> mako_pruefung::AbmeldungAnfrage {
+        mako_pruefung::AbmeldungAnfrage {
             pid: self.pid,
             process_id: self.process_id,
             malo_id: self.malo_id,
@@ -650,7 +652,7 @@ fn parse_civil_date(raw: &str) -> Option<time::Date> {
     }
 }
 
-/// UTILMD TM+EM marker → `netz-checker` metering class. SLP is the default: it
+/// UTILMD TM+EM marker → `mako-pruefung` metering class. SLP is the default: it
 /// is the class with the *widest* retroactive window, so an unknown marker can
 /// never turn an admissible date into an auto-reject.
 fn messtyp_of(bilanzierungsmethode: Option<&str>) -> Messtyp {
@@ -695,7 +697,7 @@ async fn decide_abmeldung(
 
     let anfrage = payload.into_anfrage();
     let now = OffsetDateTime::now_utc();
-    let result = netz_checker::evaluate_abmeldung(
+    let result = mako_pruefung::evaluate_abmeldung(
         &anfrage,
         versorgung.as_ref(),
         now,
@@ -704,7 +706,7 @@ async fn decide_abmeldung(
 
     info!(%process_id, pid, %malo_id, outcome = ?result, "processd NB: E_0607 result");
 
-    let (decision, erc_code, detail) = classify(&result);
+    let (decision, antwortcode, detail) = classify(&result);
     let rec = AnmeldungDecisionRecord {
         id: Uuid::new_v4(),
         process_id,
@@ -712,7 +714,7 @@ async fn decide_abmeldung(
         malo_id: malo_id.clone(),
         lf_mp_id: lf_mp_id.clone(),
         decision,
-        erc_code,
+        antwortcode,
         detail,
         initiator_is_affiliate,
         decided_at: now,
@@ -730,7 +732,7 @@ async fn decide_abmeldung(
     };
 
     match &result {
-        NetzCheckResult::Accept => {
+        NbEntscheidung::Accept => {
             // § 20 EnWG parity applies to the Abmeldung too: an affiliate must
             // not get an automatic path a third party does not get.
             if initiator_is_affiliate {
@@ -760,20 +762,20 @@ async fn decide_abmeldung(
                 .await?;
             }
         }
-        NetzCheckResult::Reject(reason) => {
+        NbEntscheidung::Reject(reason) => {
             dispatch(
                 makod,
                 pid,
                 &malo_id,
                 process_id,
                 false,
-                Some((&reason.erc_code, &reason.detail)),
+                Some((&reason.antwortcode, &reason.detail)),
             )
             .await?;
-            info!(%process_id, pid, %malo_id, erc = %reason.erc_code,
+            info!(%process_id, pid, %malo_id, erc = %reason.antwortcode,
                   "processd NB: dispatched Ablehnung Abmeldung");
         }
-        NetzCheckResult::Escalate { reason } => {
+        NbEntscheidung::Escalate { reason } => {
             warn!(%process_id, pid, %malo_id, %reason, "processd NB: Abmeldung escalated");
             enqueue_for_operator(queue, config, &meta, reason).await?;
         }
@@ -791,18 +793,20 @@ fn received_at(event: &serde_json::Value) -> OffsetDateTime {
         .unwrap_or_else(OffsetDateTime::now_utc)
 }
 
-/// Map a `netz-checker` verdict onto the audit-log columns.
-fn classify(result: &NetzCheckResult) -> (AnmeldungDecision, Option<String>, Option<String>) {
+/// Map a `mako-pruefung` verdict onto the audit-log columns.
+fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Option<String>) {
     match result {
-        NetzCheckResult::Accept => (AnmeldungDecision::Accept, None, None),
-        NetzCheckResult::Reject(RejectReason {
-            erc_code, detail, ..
+        NbEntscheidung::Accept => (AnmeldungDecision::Accept, None, None),
+        NbEntscheidung::Reject(RejectReason {
+            antwortcode,
+            detail,
+            ..
         }) => (
             AnmeldungDecision::Reject,
-            Some(erc_code.clone()),
+            Some(antwortcode.clone()),
             Some(detail.clone()),
         ),
-        NetzCheckResult::Escalate { reason } => {
+        NbEntscheidung::Escalate { reason } => {
             (AnmeldungDecision::Escalate, None, Some(reason.clone()))
         }
     }
@@ -826,7 +830,7 @@ async fn dispatch(
         payload: match reject_reason {
             Some((erc, detail)) => serde_json::json!({
                 "process_id": process_id,
-                "erc_code": erc,
+                "antwortcode": erc,
                 // makod forwards `reason` onto the APERAK; carry the code
                 // inside it so the ground survives the hop.
                 "reason": format!("{erc}: {detail}"),
@@ -880,7 +884,7 @@ mod tests {
         assert!(!payload.ist_erzeugende_marktlokation);
         // Messtyp derives from the TM+EM marker in the payload.
         let anfrage = payload.into_anfrage();
-        assert_eq!(anfrage.messtyp, netz_checker::Messtyp::Rlm);
+        assert_eq!(anfrage.messtyp, mako_pruefung::Messtyp::Rlm);
         assert_eq!(anfrage.transaktionsgrund.as_deref(), Some("E01"));
         assert!(!anfrage.ist_erzeugende_marktlokation);
     }
@@ -906,7 +910,7 @@ mod tests {
             .into_anfrage();
         assert!(
             anfrage.ist_erzeugende_marktlokation,
-            "ZW3 Erzeugende flag must reach the netz-checker to trigger §10c EEG"
+            "ZW3 Erzeugende flag must reach the `mako-pruefung` to trigger §10c EEG"
         );
     }
 

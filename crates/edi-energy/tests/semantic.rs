@@ -43,9 +43,13 @@ fn assert_valid(report: &edi_energy::EdiEnergyReport) {
     );
 }
 
-// ── UTILMD: SEM-UTILMD-MALO-FORMAT ───────────────────────────────────────────
+// ── UTILMD: SEM-UTILMD-LOKATIONS-ID ──────────────────────────────────────────
+//
+// The Lokations-ID lives in `SG5 LOC` DE 3225, keyed by the DE 3227
+// Lokationstyp. `IDE+24` DE 7402 is the sender's own Vorgangsnummer (`an..35`,
+// free-form) and is deliberately *not* checked against a location scheme.
 
-/// A minimal UTILMD interchange with a valid 11-char market location ID.
+/// A minimal UTILMD interchange with a valid 11-char Marktlokations-ID.
 #[cfg(feature = "utilmd")]
 const UTILMD_VALID_MALO: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
@@ -54,11 +58,14 @@ BGM+E01:::+00055001::+9'\
 DTM+137:20230101:102'\
 RFF+Z13:REF001'\
 NAD+MS+4012345000023::293'\
-IDE+Z19+51238696781::'\
-UNT+7+1'\
+IDE+24+VORGANG-0001'\
+DTM+92:20230201:102'\
+STS+7++E03+ZW4'\
+LOC+Z16+51238696781'\
+UNT+10+1'\
 UNZ+1+1'";
 
-/// A UTILMD interchange where the IDE identifier is too short (7 chars).
+/// A UTILMD interchange where the `LOC+Z16` ID is too short (7 chars).
 #[cfg(feature = "utilmd")]
 const UTILMD_BAD_MALO_SHORT: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
@@ -67,11 +74,12 @@ BGM+E01:::+00055001::+9'\
 DTM+137:20230101:102'\
 RFF+Z13:REF001'\
 NAD+MS+4012345000023::293'\
-IDE+Z19+MELO001::'\
-UNT+7+1'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+MELO001'\
+UNT+8+1'\
 UNZ+1+1'";
 
-/// A UTILMD interchange where the IDE identifier contains a lowercase letter.
+/// A UTILMD interchange where the `LOC+Z16` ID contains a lowercase letter.
 #[cfg(feature = "utilmd")]
 const UTILMD_BAD_MALO_LOWERCASE: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
@@ -80,8 +88,26 @@ BGM+E01:::+00055001::+9'\
 DTM+137:20230101:102'\
 RFF+Z13:REF001'\
 NAD+MS+4012345000023::293'\
-IDE+Z19+5123869678a::'\
-UNT+7+1'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+5123869678a'\
+UNT+8+1'\
+UNZ+1+1'";
+
+/// A UTILMD interchange whose Vorgangsnummer looks nothing like a location ID.
+///
+/// It must still validate: `IDE` DE 7402 is `an..35` free-form, and the rule
+/// this file exercises only reads `SG5 LOC`.
+#[cfg(feature = "utilmd")]
+const UTILMD_FREEFORM_VORGANGSNUMMER: &[u8] = b"\
+UNB+UNOC:3+4012345000023:14+9900357000004:14+190101:0000+1'\
+UNH+1+UTILMD:D:11A:UN:S2.1'\
+BGM+E01:::+00055001::+9'\
+DTM+137:20230101:102'\
+RFF+Z13:REF001'\
+NAD+MS+4012345000023::293'\
+IDE+24+lfn-2026-000042'\
+LOC+Z16+51238696781'\
+UNT+8+1'\
 UNZ+1+1'";
 
 #[cfg(feature = "utilmd")]
@@ -101,7 +127,7 @@ fn utilmd_short_malo_id_triggers_sem_rule() {
         .parse(UTILMD_BAD_MALO_SHORT)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "SEM-UTILMD-MALO-FORMAT");
+    assert_has_rule(&report, "SEM-UTILMD-LOKATIONS-ID");
 }
 
 #[cfg(feature = "utilmd")]
@@ -111,7 +137,21 @@ fn utilmd_lowercase_malo_id_triggers_sem_rule() {
         .parse(UTILMD_BAD_MALO_LOWERCASE)
         .unwrap();
     let report = msg.validate().unwrap();
-    assert_has_rule(&report, "SEM-UTILMD-MALO-FORMAT");
+    assert_has_rule(&report, "SEM-UTILMD-LOKATIONS-ID");
+}
+
+/// A free-form Vorgangsnummer is not a malformed Marktlokations-ID.
+///
+/// The old rule read `IDE` DE 7402 and rejected every conformant message on
+/// this exact shape.
+#[cfg(feature = "utilmd")]
+#[test]
+fn a_freeform_vorgangsnummer_is_not_a_location_id() {
+    let msg = Platform::with_all_profiles()
+        .parse(UTILMD_FREEFORM_VORGANGSNUMMER)
+        .unwrap();
+    let report = msg.validate().unwrap();
+    assert_valid(&report);
 }
 
 // ── MSCONS: SEM-MSCONS-LOCATION-FORMAT ───────────────────────────────────────

@@ -40,9 +40,9 @@ def utilmd_interchange(
         document_code=document_code,
         transactions=[
             UtilmdTransaction(
-                "melo",
-                melo,
-                process_dates=[("163", "20260501")],
+                "VORGANG-1",
+                locations=[("melo", melo)],
+                dates=[("92", "20260501")],
                 references=[("Z13", str(pid))],
             )
         ],

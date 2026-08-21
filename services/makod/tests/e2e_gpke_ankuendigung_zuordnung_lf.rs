@@ -69,9 +69,10 @@ DTM+137:20250115:102'\
 RFF+Z13:ZUORD-REF-001'\
 NAD+MS+9900357000004::293'\
 NAD+MR+4012345000023::293'\
-IDE+Z19+51238696781::'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+51238696781'\
 DTM+92:20250401:102'\
-UNT+9+MSG-ZUORD-001'\
+UNT+10+MSG-ZUORD-001'\
 UNZ+1+ZUORD-2025-001'";
 
 // ── Mock LFN ERP backend ──────────────────────────────────────────────────────
@@ -150,7 +151,7 @@ impl MockLfn {
                 assert_eq!(
                     location_id.as_str(),
                     MALO_ID,
-                    "adapter must extract MaLo from IDE+Z19"
+                    "adapter must extract MaLo from IDE+24"
                 );
                 assert_eq!(
                     message_ref.as_str(),
@@ -185,8 +186,19 @@ impl MockLfn {
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) {
         self.process
             .execute(AnkuendigungZuordnungLfCommand::SendAntwort {
-                accepted,
-                reason: reason.map(str::to_owned),
+                antwort: {
+                    // `E_0603`…`E_0606` publish `A01` Zustimmung and `A99`
+                    // Sonstiges; the Anwendungsfall picks which id rides along.
+                    let a = if accepted {
+                        mako_gpke::LfAntwort::zustimmung("A01", "E_0603")
+                    } else {
+                        mako_gpke::LfAntwort::ablehnung("A99", "E_0603")
+                    };
+                    match reason {
+                        Some(text) => a.with_bemerkung(text),
+                        None => a,
+                    }
+                },
             })
             .await
             .expect("LFN: execute SendAntwort");

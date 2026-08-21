@@ -388,13 +388,47 @@ mod tests {
         assert_eq!(normalise_date("20260101"), "20260101");
     }
 
+    /// The SG4 process date carries the qualifier the MIG defines for it.
+    ///
+    /// `163`/`164` are absent on purpose: UTILMD uses them for *Beginn* and
+    /// *Ende Messperiode* inside SG8/SG9, never for a SG4 process date. This
+    /// function used to return `163` for every PID and `164` for the two
+    /// Anmeldung *confirmations* — a qualifier UTILMD does not define at SG4,
+    /// on a message that marks the Anmeldung as a delivery *end*.
     #[test]
     fn utilmd_dtm_qualifier_by_pid() {
-        assert_eq!(utilmd_dtm_qualifier(55001), "163");
-        assert_eq!(utilmd_dtm_qualifier(55002), "164");
-        assert_eq!(utilmd_dtm_qualifier(55016), "163");
-        assert_eq!(utilmd_dtm_qualifier(44001), "163");
-        assert_eq!(utilmd_dtm_qualifier(44002), "164");
+        use edi_energy::utilmd_codes::dtm;
+
+        // Lieferbeginn — Anmeldung and both its answers: „Beginn zum".
+        assert_eq!(utilmd_dtm_qualifier(55001), dtm::BEGINN_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(55002), dtm::BEGINN_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(55003), dtm::BEGINN_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(44001), dtm::BEGINN_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(44002), dtm::BEGINN_ZUM);
+
+        // Lieferende, Beendigung der Zuordnung and Kündigung: „Ende zum".
+        assert_eq!(utilmd_dtm_qualifier(55004), dtm::ENDE_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(55007), dtm::ENDE_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(55010), dtm::ENDE_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(55016), dtm::ENDE_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(44007), dtm::ENDE_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(44016), dtm::ENDE_ZUM);
+
+        // Stammdatenänderung: „Änderung zum".
+        assert_eq!(utilmd_dtm_qualifier(55109), dtm::AENDERUNG_ZUM);
+        assert_eq!(utilmd_dtm_qualifier(55616), dtm::AENDERUNG_ZUM);
+
+        // WiM Messstellenbetrieb: the planned execution date.
+        assert_eq!(utilmd_dtm_qualifier(55042), dtm::LEISTUNGSBEGINN_GEPLANT);
+
+        // Nothing may resolve to a Messperioden-Qualifier.
+        for pid in [55001_u32, 55007, 55010, 55016, 55042, 44001, 44007, 44016] {
+            let q = utilmd_dtm_qualifier(pid);
+            assert!(
+                q != "163" && q != "164",
+                "PID {pid} resolved to the Messperioden-Qualifier {q}"
+            );
+        }
     }
 
     #[test]

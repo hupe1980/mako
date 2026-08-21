@@ -4,7 +4,12 @@
   "title": "EDI@Energy MIG Profile",
   "description": "Message Implementation Guide profile for one (message_type, release) pair.",
   "type": "object",
-  "required": ["message_type", "release", "segments", "segment_groups"],
+  "required": [
+    "message_type",
+    "release",
+    "segments",
+    "segment_groups"
+  ],
   "additionalProperties": false,
   "properties": {
     "schema_version": {
@@ -26,7 +31,10 @@
     "pid_source": {
       "type": "string",
       "description": "Where the Prüfidentifikator is located in this message type. 'bgm_de1004' (default): BGM element 1 (DE 1004). 'rff_z13': top-level RFF segment with qualifier Z13.",
-      "enum": ["bgm_de1004", "rff_z13"],
+      "enum": [
+        "bgm_de1004",
+        "rff_z13"
+      ],
       "default": "bgm_de1004"
     },
     "valid_from": {
@@ -34,34 +42,47 @@
       "format": "date",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
       "description": "First date on which this profile is normatively valid (BDEW 'Gültig ab'). Should match the fvYYYYMMDD component of the profile directory name. Added in F-020 to make the date self-describing and independently verifiable.",
-      "examples": ["2025-10-01"]
+      "examples": [
+        "2025-10-01"
+      ]
     },
     "valid_until": {
       "type": "string",
       "format": "date",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
       "description": "Last date on which this profile is normatively valid (BDEW 'Gültig bis'). Absent means open-ended.",
-      "examples": ["2026-09-30"]
+      "examples": [
+        "2026-09-30"
+      ]
     },
     "ahb_revision": {
       "type": "string",
       "description": "AHB revision letter for same-wire-code correction tracking. May differ from the wire release code when BDEW issues an AHB correction without a MIG change.",
-      "examples": ["3.2", "2.0h"]
+      "examples": [
+        "3.2",
+        "2.0h"
+      ]
     },
     "source_document": {
       "type": "string",
       "description": "BDEW document title this profile was derived from, including revision date.",
-      "examples": ["MSCONS AHB 3.2, Stand 01.10.2025"]
+      "examples": [
+        "MSCONS AHB 3.2, Stand 01.10.2025"
+      ]
     },
     "supersedes_directory": {
       "type": "string",
       "description": "Directory name of the earlier same-wire-code profile that this profile supersedes. Required when two directories share the same wire release code (AHB correction cycle).",
-      "examples": ["fv20240401"]
+      "examples": [
+        "fv20240401"
+      ]
     },
     "ordering_hint": {
       "type": "array",
       "description": "Explicit segment-tag ordering for segment-order validation. Only meaningful for multi-section messages that contain a UNS segment (e.g. MSCONS, ORDCHG, PARTIN, ORDERS): list all tags in the expected order including 'UNS' — segments before UNS form the header section and segments after form the repeating detail section. For profiles with segment_groups (any other message type) the codegen derives per-group expected order automatically from the MIG and this field is ignored — set it to [] or omit it.",
-      "items": { "type": "string" }
+      "items": {
+        "type": "string"
+      }
     },
     "archived": {
       "type": "boolean",
@@ -76,33 +97,63 @@
     "segments": {
       "type": "array",
       "description": "Flat list of segment definitions at the message level.",
-      "items": { "$ref": "#/$defs/SegmentDef" }
+      "items": {
+        "$ref": "#/$defs/SegmentDef"
+      }
     },
     "segment_groups": {
       "type": "array",
       "description": "Top-level segment groups; groups may be nested via 'groups'.",
-      "items": { "$ref": "#/$defs/GroupDef" }
+      "items": {
+        "$ref": "#/$defs/GroupDef"
+      }
     }
   },
   "$defs": {
     "Status": {
       "type": "string",
-      "enum": ["M", "C", "R"],
+      "enum": [
+        "M",
+        "C",
+        "R"
+      ],
       "description": "M = mandatory, C = conditional, R = recommended (used in some BDEW profiles)."
     },
     "Requirement": {
       "type": "string",
-      "enum": ["M", "C", "O", "N"],
+      "enum": [
+        "M",
+        "C",
+        "O",
+        "N"
+      ],
       "description": "M = mandatory, C = conditional, O = optional, N = not used."
     },
     "ElementRef": {
       "type": "object",
-      "required": ["id", "status"],
+      "required": [
+        "id",
+        "status"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id":         { "type": "string", "description": "Composite/element identifier, e.g. \"C002\"." },
-        "status":     { "$ref": "#/$defs/Status" },
-        "components": { "type": "integer", "minimum": 1, "description": "Number of expected sub-components." }
+        "id": {
+          "type": "string",
+          "description": "Composite/element identifier, e.g. \"C002\"."
+        },
+        "status": {
+          "$ref": "#/$defs/Status"
+        },
+        "components": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Number of expected sub-components."
+        },
+        "max_repeat": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "How many times this composite repeats in the segment (EDIFACT allows a composite to occur several times in a row, e.g. STS C556 three times: STS+7++E01+ZW4+E03). Defaults to 1."
+        }
       }
     },
     "QualifierMap": {
@@ -110,31 +161,74 @@
       "description": "Map from DE identifier to list of allowed qualifier values.",
       "additionalProperties": {
         "type": "array",
-        "items": { "type": "string" }
+        "items": {
+          "type": "string"
+        }
       }
     },
     "SegmentDef": {
       "type": "object",
-      "required": ["tag", "name", "mandatory", "max_occurrences", "elements"],
+      "required": [
+        "tag",
+        "name",
+        "mandatory",
+        "max_occurrences",
+        "elements"
+      ],
       "additionalProperties": false,
       "properties": {
-        "tag":                    { "type": "string", "pattern": "^[A-Z]{2,3}$" },
-        "name":                   { "type": "string" },
-        "mandatory":              { "type": "boolean" },
-        "max_occurrences":        { "type": "integer", "minimum": 1 },
-        "elements":               { "type": "array", "items": { "$ref": "#/$defs/ElementRef" } },
-        "qualifier_restrictions": { "$ref": "#/$defs/QualifierMap" }
+        "tag": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}$"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mandatory": {
+          "type": "boolean"
+        },
+        "max_occurrences": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "elements": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/ElementRef"
+          }
+        },
+        "qualifier_restrictions": {
+          "$ref": "#/$defs/QualifierMap"
+        }
       }
     },
     "GroupDef": {
       "type": "object",
-      "required": ["id", "trigger_segment", "mandatory", "max_occurrences", "segments", "groups"],
+      "required": [
+        "id",
+        "trigger_segment",
+        "mandatory",
+        "max_occurrences",
+        "segments",
+        "groups"
+      ],
       "additionalProperties": false,
       "properties": {
-        "id":              { "type": "string", "pattern": "^SG[0-9]+$" },
-        "trigger_segment": { "type": "string", "pattern": "^[A-Z]{2,3}$" },
-        "mandatory":       { "type": "boolean" },
-        "max_occurrences": { "type": "integer", "minimum": 1 },
+        "id": {
+          "type": "string",
+          "pattern": "^SG[0-9]+$"
+        },
+        "trigger_segment": {
+          "type": "string",
+          "pattern": "^[A-Z]{2,3}$"
+        },
+        "mandatory": {
+          "type": "boolean"
+        },
+        "max_occurrences": {
+          "type": "integer",
+          "minimum": 1
+        },
         "min_occurrences": {
           "type": "integer",
           "minimum": 0,
@@ -142,11 +236,15 @@
         },
         "segments": {
           "type": "array",
-          "items": { "$ref": "#/$defs/SegmentDef" }
+          "items": {
+            "$ref": "#/$defs/SegmentDef"
+          }
         },
         "groups": {
           "type": "array",
-          "items": { "$ref": "#/$defs/GroupDef" }
+          "items": {
+            "$ref": "#/$defs/GroupDef"
+          }
         }
       }
     }

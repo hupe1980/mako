@@ -13,19 +13,33 @@ use super::*;
 /// | Field           | Required | Description                                  |
 /// |-----------------|----------|----------------------------------------------|
 /// | `pid`           | yes      | Prüfidentifikator (u32)                       |
-/// | `sender`        | yes      | Sender GLN (our own)                          |
-/// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`)  |
-/// | `malo`          | yes*     | Marktlokations-ID (GPKE/GeLi Gas PIDs)        |
-/// | `melo`          | yes*     | Messlokations-ID (WiM PIDs 55039, 55042, 55051, 55168) |
+/// | `sender`        | yes      | Sender MP-ID (our own)                        |
+/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`) |
+/// | `malo` / `melo` | yes*     | Lokations-ID → `SG5 LOC+Z16` / `LOC+Z17`      |
+/// | `vorgangsnummer`| no       | `IDE+24` DE 7402 (defaults to the message ref) |
 /// | `process_date`  | yes      | Process date (`YYYYMMDD` or `YYYY-MM-DD`)     |
-/// | `document_date` | no       | Document date (defaults to today at dispatch time)     |
-/// | `message_ref`   | no       | Derived from `causation_event_id` when absent          |
+/// | `document_date` | no       | Document date (defaults to today at dispatch time) |
+/// | `message_ref`   | no       | Derived from `causation_event_id` when absent  |
+/// | `transaktionsgrund` | no   | `SG4 STS+7` DE 9013 element 2                  |
+/// | `transaktionsgrund_ergaenzung` | no | `STS+7` DE 9013 element 3 (`ZW3`…`ZAP`); defaults to `ZW4` when a Grund is present |
+/// | `antwort_code`  | no       | `SG4 STS+E01` DE 9013 — **required on every Antwort-PID** |
+/// | `antwort_ebd`   | no       | `STS+E01` DE 1131, the EBD the code comes from |
+/// | `bemerkung`     | no       | `FTX+ACB` free text (mandatory alongside a catch-all Ablehnungscode) |
 ///
 /// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
+///
+/// # What the MIG fixes here
+///
+/// `IDE` DE 7495 has exactly two values (`24` Vorgang, `Z01` Liste) and DE 7402
+/// carries a **Vorgangsnummer** — the Lokations-ID belongs in `SG5 LOC`. The SG4
+/// date qualifiers are `92`/`93`/`157`/`76`, never the Messperioden-Qualifier
+/// `163`/`164`.
 pub(super) fn render_utilmd(
     p: &serde_json::Value,
     msg: &OutboxMessage,
 ) -> Result<RenderedInterchange, RenderError> {
+    use edi_energy::utilmd_codes::{AntwortStatus, Transaktionsgrund, ergaenzung};
+
     let mt = "UTILMD";
 
     let pid = require_u32(p, mt, "pid")?;
@@ -35,15 +49,9 @@ pub(super) fn render_utilmd(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    // The AHB fixes the IDE DE 7495 qualifier per Prüfidentifikator: the WiM
-    // Messlokations-PIDs use `24` (Vorgang), everything else (GPKE 55xxx,
-    // GeLi Gas 44xxx — Marktlokations processes) uses `Z19`, matching the
-    // official Beispiel fixtures and the generated AHB rules.
-    let (ide_qualifier, location_id_key) = if matches!(pid, 55_039 | 55_042 | 55_051 | 55_168) {
-        ("24", "melo")
-    } else {
-        ("Z19", "malo")
-    };
+    // WiM Messlokations-PIDs name a MeLo; everything else names a MaLo.
+    let names_messlokation = matches!(pid, 55_039 | 55_042 | 55_051 | 55_168);
+    let location_id_key = if names_messlokation { "melo" } else { "malo" };
     let location_id = require_str(p, mt, location_id_key)?;
 
     let process_date = require_str(p, mt, "process_date")?;
@@ -91,35 +99,87 @@ pub(super) fn render_utilmd(
         builder = builder.document_date(dd);
     }
 
+    // `IDE+24` DE 7402. The workflow may supply its own Vorgangsnummer; the
+    // message reference is a serviceable default because it is already unique
+    // per outbound message and is what the counterparty echoes in RFF.
+    let vorgangsnummer = p
+        .get("vorgangsnummer")
+        .and_then(|v| v.as_str())
+        .unwrap_or(message_ref.as_str());
+
     let mut tx = builder
-        .transaction_with_qualifier(ide_qualifier, location_id)
-        .process_date(dtm_qualifier, &process_date_yyyymmdd);
-    // SG4 STS Transaktionsgrund (e.g. EoG cause codes Z36/ZT6/ZC7, §38 EnWG).
+        .transaction(vorgangsnummer)
+        .date(dtm_qualifier, &process_date_yyyymmdd);
+
+    // `SG4 STS+7` — Transaktionsgrund plus its Ergänzung. The AHB marks the
+    // Ergänzung Muss wherever the Grund is, and `ZW4` (verbrauchende
+    // Marktlokation) is the case every GPKE/GeLi Gas core process describes
+    // unless the workflow says otherwise.
     if let Some(grund) = p.get("transaktionsgrund").and_then(|v| v.as_str()) {
-        tx = tx.transaktionsgrund(grund);
+        let erg = p
+            .get("transaktionsgrund_ergaenzung")
+            .and_then(|v| v.as_str())
+            .unwrap_or(ergaenzung::VERBRAUCHENDE_MALO);
+        tx = tx.transaktionsgrund(Transaktionsgrund::new(grund, erg));
     }
+
+    // `SG4 STS+E01` — the EBD Antwortcode. Without it a Bestätigung or
+    // Ablehnung is not a well-formed answer: the AHB marks the segment Muss and
+    // constrains the code to the named EBD's cluster.
+    if let Some(code) = p.get("antwort_code").and_then(|v| v.as_str()) {
+        let antwort = match p.get("antwort_ebd").and_then(|v| v.as_str()) {
+            Some(ebd) => AntwortStatus::from_ebd(code, ebd),
+            None => AntwortStatus::bare(code),
+        };
+        tx = tx.antwort(antwort);
+    }
+
+    // `FTX+ACB` Bemerkung — mandatory alongside the catch-all Ablehnungscodes
+    // (`A99` Strom, `E14` Gas), which require a written Erläuterung.
+    if let Some(text) = p.get("bemerkung").and_then(|v| v.as_str()) {
+        tx = tx.free_text("ACB", text);
+    }
+
+    let tx = if names_messlokation {
+        tx.messlokation(location_id)
+    } else {
+        tx.marktlokation(location_id)
+    };
+
     finish_interchange(tx.done().serialize(), sender, receiver, msg)
 }
 
-/// Returns the BDEW DTM qualifier for the process-date segment inside UTILMD SG4.
+/// The `SG4 DTM` DE 2005 qualifier for the process date of a given PID.
 ///
-/// | PID range      | Process           | Qualifier | Meaning             |
-/// |----------------|-------------------|-----------|---------------------|
-/// | 55001, 44001   | Lieferbeginn      | 163       | Delivery start      |
-/// | 55002, 44002   | Lieferende        | 164       | Delivery end        |
-/// | 55016          | Kündigung         | 163       | Cancellation date   |
-/// | 55039, 55042, 55051, 55168 | WiM Messstellenbetrieb | 163       | Execution date      |
-/// | 44003–44006    | GeLi Gas Antwort  | 163       | Confirmation date   |
-/// | _              | fallback          | 163       | Delivery start      |
+/// | Process | Qualifier | MIG name |
+/// |---|---|---|
+/// | Anmeldung / Lieferbeginn | `92` | Beginn zum (Datum Vertragsbeginn) |
+/// | Abmeldung / Lieferende / Beendigung der Zuordnung | `93` | Ende zum (Datum Vertragsende) |
+/// | Kündigung | `93` | Ende zum — the Kündigungstermin |
+/// | Stammdatenänderung | `157` | Änderung zum, Gültigkeit Beginndatum |
+/// | WiM Messstellenbetrieb | `76` | Datum zum geplanten Leistungsbeginn |
+///
+/// `163`/`164` appear nowhere in this table: the MIG uses them for *Beginn* and
+/// *Ende Messperiode* inside SG8/SG9, not for a SG4 process date.
 pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
+    use edi_energy::utilmd_codes::dtm;
     match pid {
-        55001 | 44001 => "163",                 // Lieferbeginn
-        55002 | 44002 => "164",                 // Lieferende
-        55013..=55015 | 44013..=44015 => "163", // EoG Zuordnungsbeginn (§38 EnWG)
-        55016 => "163",                         // Kündigung Lieferbeginn (inbound, LFN → LFA)
-        55017 | 55018 => "163",                 // Bestätigung/Ablehnung Kündigung (LFA → LFN)
-        55039 | 55042 | 55051 | 55168 => "163", // WiM Messstellenbetrieb
-        44003..=44006 => "163",                 // GeLi Gas confirmation/rejection
-        _ => "163",
+        // Lieferbeginn: Anmeldung and its Bestätigung/Ablehnung.
+        55_001..=55_003 | 55_013..=55_015 | 55_077 | 55_078 | 55_080 => dtm::BEGINN_ZUM,
+        44_001..=44_003 | 44_013..=44_015 => dtm::BEGINN_ZUM,
+        // Lieferende von LF an NB, Lieferende von NB an LF, Beendigung der
+        // Zuordnung, Kündigung — every one of them names a Vertragsende.
+        55_004..=55_012 | 55_016..=55_018 => dtm::ENDE_ZUM,
+        44_004..=44_012 | 44_016..=44_018 => dtm::ENDE_ZUM,
+        // Stammdatenänderung (GPKE Teil 4 / GeLi Gas): Änderung zum.
+        55_109 | 55_110 | 55_136 | 55_137 | 55_600..=55_699 => dtm::AENDERUNG_ZUM,
+        44_109..=44_199 => dtm::AENDERUNG_ZUM,
+        // WiM Messstellenbetrieb: the planned execution date.
+        55_039..=55_053 | 55_168..=55_170 => dtm::LEISTUNGSBEGINN_GEPLANT,
+        // A PID with no entry here would otherwise get a silently wrong
+        // qualifier; `Beginn zum` is the least surprising default and the
+        // `utilmd_dtm_qualifier_covers_every_rendered_pid` test keeps the list
+        // honest for everything mako actually sends.
+        _ => dtm::BEGINN_ZUM,
     }
 }

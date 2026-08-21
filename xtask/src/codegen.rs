@@ -123,6 +123,13 @@ struct MigElement {
     id: String,
     status: String,
     components: Option<u32>,
+    /// How many times this composite repeats in the segment.
+    ///
+    /// EDIFACT lets a composite occur several times in a row, and the MIG uses
+    /// it: `STS` carries `C556` three times — Transaktionsgrund, Ergänzung and
+    /// Transaktionsgrund für das Lieferende einer befristeten Anmeldung
+    /// (`STS+7++E01+ZW4+E03'`). Each repeat is one element position.
+    max_repeat: Option<u8>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1596,6 +1603,9 @@ fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
         writeln!(out, "            {:?},", seg.tag).unwrap();
         writeln!(out, "            {:?},", seg.name).unwrap();
         writeln!(out, "            &[").unwrap();
+        // A composite that occupies several consecutive element positions shifts
+        // everything after it, so the running offset is carried along.
+        let mut shift = 0usize;
         for (idx, elem) in seg.elements.iter().enumerate() {
             let status = if elem.status == "M" {
                 "Status::Mandatory"
@@ -1604,13 +1614,27 @@ fn emit_segments_array(out: &mut String, segments: &[&MigSegment]) {
             };
             // Sequential order is only correct when the MIG lists every element.
             // Where it omits unused ones, the canonical directory position wins.
-            let pos = canonical_position(&seg.tag, &elem.id).unwrap_or(idx + 1);
-            writeln!(
-                out,
-                "                ElementRef::new({}, {:?}, {}, 1),",
-                pos, elem.id, status
-            )
-            .unwrap();
+            let pos = canonical_position(&seg.tag, &elem.id).unwrap_or(idx + 1) + shift;
+            // `max_repeat` means "this composite occurs N times in a row",
+            // which in EDIFACT is N *element positions*. Only the first is
+            // code-addressable; the rest give the element-count check the range
+            // the MIG documents.
+            let repeats = usize::from(elem.max_repeat.unwrap_or(1)).max(1);
+            for occurrence in 0..repeats {
+                writeln!(
+                    out,
+                    "                ElementRef::new({}, {:?}, {}, 1),",
+                    pos + occurrence,
+                    elem.id,
+                    if occurrence == 0 {
+                        status
+                    } else {
+                        "Status::Conditional"
+                    }
+                )
+                .unwrap();
+            }
+            shift += repeats - 1;
         }
         writeln!(out, "            ],").unwrap();
         writeln!(out, "        ),").unwrap();

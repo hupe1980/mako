@@ -20,6 +20,37 @@ struct RemadvBuilderInner {
     document_code: Option<String>,
     document_id: Option<String>,
     document_date: Option<String>,
+    abweichungsgruende: Vec<Abweichungsgrund>,
+}
+
+/// `AJT` — an Abweichungsgrund on a REMADV Rückmeldung.
+///
+/// The invoice recipient's rejection reason: DE 4465 carries the **Antwortcode**
+/// („Code des Prüfschritts") and DE 1082 the **EBD** it is drawn from —
+/// `AJT+A70+E_0406'`. Structurally the REMADV twin of UTILMD's
+/// `STS+E01++<code>:<ebd>`, and required for the same reason: a rejection
+/// without its code gives the sender nothing to correct.
+///
+/// The MIG places it at two levels — `SG7` on the Kopfebene (once) and `SG12`
+/// per Rechnungsposition (up to ten), which is the shape `E_0406`'s
+/// Kopf-/Positions-/Summenebene traversal produces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Abweichungsgrund {
+    /// DE 4465 — the Antwortcode.
+    pub code: String,
+    /// DE 1082 — the EBD that publishes it (`E_0406`, `E_0519`, …).
+    pub ebd: Option<String>,
+}
+
+impl Abweichungsgrund {
+    /// An Abweichungsgrund drawn from a named EBD.
+    #[must_use]
+    pub fn new(code: impl Into<String>, ebd: impl Into<String>) -> Self {
+        Self {
+            code: code.into(),
+            ebd: Some(ebd.into()),
+        }
+    }
 }
 
 /// Fluent builder for `REMADV` (Remittance Advice) messages.
@@ -68,6 +99,7 @@ impl RemadvBuilder<Unset, Unset> {
                 document_code: None,
                 document_id: None,
                 document_date: None,
+                abweichungsgruende: Vec::new(),
             },
         }
     }
@@ -134,6 +166,26 @@ impl<S, R> RemadvBuilder<S, R> {
         self
     }
 
+    /// Add an `SG7 AJT` Abweichungsgrund (Kopfebene).
+    ///
+    /// A REMADV Abweisung must state why: DE 4465 the Antwortcode, DE 1082 the
+    /// EBD it comes from.
+    ///
+    /// ```rust
+    /// # use edi_energy::{Release, builders::{RemadvBuilder, Abweichungsgrund}};
+    /// let edi = RemadvBuilder::new(Release::new("2.9e"))
+    ///     .sender("9900987654321")
+    ///     .receiver("9900123456789")
+    ///     .abweichungsgrund(Abweichungsgrund::new("A70", "E_0406"))
+    ///     .serialize()?;
+    /// assert!(String::from_utf8(edi).unwrap().contains("AJT+A70+E_0406"));
+    /// # Ok::<(), edi_energy::Error>(())
+    /// ```
+    pub fn abweichungsgrund(mut self, grund: Abweichungsgrund) -> Self {
+        self.inner.abweichungsgruende.push(grund);
+        self
+    }
+
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let dtm_val = self
             .inner
@@ -154,6 +206,14 @@ impl<S, R> RemadvBuilder<S, R> {
         );
         emit_seg!(w, "BGM", code, doc_id);
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        for grund in &self.inner.abweichungsgruende {
+            // `SG7 AJT` — Abweichungsgrund auf Kopfebene.
+            if let Some(ebd) = grund.ebd.as_deref() {
+                emit_seg!(w, "AJT", &grund.code, ebd);
+            } else {
+                emit_seg!(w, "AJT", &grund.code);
+            }
+        }
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,

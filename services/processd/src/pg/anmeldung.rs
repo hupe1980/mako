@@ -57,7 +57,7 @@ pub struct AnmeldungDecisionRecord {
     pub malo_id: String,
     pub lf_mp_id: String,
     pub decision: AnmeldungDecision,
-    pub erc_code: Option<String>,
+    pub antwortcode: Option<String>,
     pub detail: Option<String>,
     pub initiator_is_affiliate: bool,
     pub decided_at: OffsetDateTime,
@@ -80,7 +80,7 @@ fn map_decision(row: &PgRow) -> Result<AnmeldungDecisionRecord, sqlx::Error> {
         malo_id: row.try_get("malo_id")?,
         lf_mp_id: row.try_get("lf_mp_id")?,
         decision,
-        erc_code: row.try_get("erc_code")?,
+        antwortcode: row.try_get("antwortcode")?,
         detail: row.try_get("detail")?,
         initiator_is_affiliate: row.try_get("initiator_is_affiliate")?,
         decided_at: row.try_get("decided_at")?,
@@ -107,7 +107,7 @@ impl PgAnmeldungRepository {
     /// counter measures decisions rather than deliveries.
     pub async fn insert(&self, rec: &AnmeldungDecisionRecord) -> Result<bool, sqlx::Error> {
         sqlx::query(
-            "INSERT INTO anmeldung_decisions (id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, initiator_is_affiliate, decided_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (process_id, tenant) DO NOTHING",
+            "INSERT INTO anmeldung_decisions (id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, initiator_is_affiliate, decided_at, tenant) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT (process_id, tenant) DO NOTHING",
         )
         .bind(rec.id)
         .bind(rec.process_id)
@@ -115,7 +115,7 @@ impl PgAnmeldungRepository {
         .bind(&rec.malo_id)
         .bind(&rec.lf_mp_id)
         .bind(rec.decision.to_string())
-        .bind(&rec.erc_code)
+        .bind(&rec.antwortcode)
         .bind(&rec.detail)
         .bind(rec.initiator_is_affiliate)
         .bind(rec.decided_at)
@@ -131,7 +131,7 @@ impl PgAnmeldungRepository {
         limit: u32,
     ) -> Result<Vec<AnmeldungDecisionRecord>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, initiator_is_affiliate, decided_at, tenant FROM anmeldung_decisions WHERE tenant = $1 ORDER BY decided_at DESC LIMIT $2",
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, initiator_is_affiliate, decided_at, tenant FROM anmeldung_decisions WHERE tenant = $1 ORDER BY decided_at DESC LIMIT $2",
         )
         .bind(tenant)
         .bind(limit as i64)
@@ -164,7 +164,7 @@ impl PgAnmeldungRepository {
         tenant: &str,
     ) -> Result<Option<AnmeldungDecisionRecord>, sqlx::Error> {
         let row = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, \
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, \
              initiator_is_affiliate, decided_at, tenant \
              FROM anmeldung_decisions WHERE process_id = $1 AND tenant = $2 LIMIT 1",
         )
@@ -183,7 +183,7 @@ impl PgAnmeldungRepository {
         limit: u32,
     ) -> Result<Vec<AnmeldungDecisionRecord>, sqlx::Error> {
         let rows = sqlx::query(
-            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, erc_code, detail, \
+            "SELECT id, process_id, pid, malo_id, lf_mp_id, decision, antwortcode, detail, \
              initiator_is_affiliate, decided_at, tenant \
              FROM anmeldung_decisions \
              WHERE tenant = $1 AND initiator_is_affiliate = true \
@@ -200,18 +200,18 @@ impl PgAnmeldungRepository {
 
     /// STP breakdown by ERC code — for root-cause analysis when STP drops.
     ///
-    /// Returns rows: `(erc_code, count)` ordered by count descending.
+    /// Returns rows: `(antwortcode, count)` ordered by count descending.
     pub async fn stp_breakdown_by_erc(
         &self,
         tenant: &str,
         days: u32,
     ) -> Result<Vec<(Option<String>, i64)>, sqlx::Error> {
         let rows: Vec<(Option<String>, i64)> = sqlx::query_as(
-            "SELECT erc_code, COUNT(*)::bigint AS cnt \
+            "SELECT antwortcode, COUNT(*)::bigint AS cnt \
              FROM anmeldung_decisions \
              WHERE tenant = $1 AND decision = 'Reject' \
                AND decided_at >= now() - ($2::int * INTERVAL '1 day') \
-             GROUP BY erc_code ORDER BY cnt DESC",
+             GROUP BY antwortcode ORDER BY cnt DESC",
         )
         .bind(tenant)
         .bind(days as i32)

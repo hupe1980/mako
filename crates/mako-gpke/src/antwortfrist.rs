@@ -61,6 +61,7 @@ mod tests {
             .copied()
             .chain(crate::LF_ABMELDUNG_PIDS.iter().copied())
             .chain(crate::BEENDIGUNG_ZUORDNUNG_PIDS.iter().copied())
+            .chain(crate::kuendigung::KUENDIGUNG_PIDS.iter().copied())
             .collect();
         for o in ANTWORT_OBLIGATIONS {
             assert!(

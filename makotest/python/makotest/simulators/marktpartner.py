@@ -79,8 +79,8 @@ class Answer:
     #: `Reply`; see the module docstring for why it is not written into the
     #: message.
     erc: str | None = None
-    #: `(qualifier, YYYYMMDD)` DTM pairs for the answer transaction, e.g.
-    #: `("163", "20261101")` for a confirmed Zuordnungsbeginn.
+    #: `(qualifier, YYYYMMDD)` SG4 DTM pairs for the answer transaction, e.g.
+    #: `("92", "20261101")` for a confirmed Zuordnungsbeginn.
     process_dates: tuple[tuple[str, str], ...] = ()
     #: Extra `(qualifier, value)` RFF pairs for the answer transaction.
     references: tuple[tuple[str, str], ...] = ()
@@ -290,7 +290,7 @@ class MarktpartnerSim:
         nb = MarktpartnerSim(
             mp_id="9900357000003", rolle="NB", reference_date="2026-04-01"
         )
-        nb.on(55001).bestaetigung(process_dates=[("163", "20260501")])
+        nb.on(55001).bestaetigung(process_dates=[("92", "20260501")])
         nb.on(55004).ablehnung(erc="A06")
         nb.on(55016).timeout()
 

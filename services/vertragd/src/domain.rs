@@ -203,17 +203,95 @@ pub fn zulaessige_kuendigungsfrist_monate(haushaltskunde: bool, vertraglich: i32
 
 // ── Preisanpassung (§ 41 Abs. 5 EnWG / § 5 Abs. 2 GVV) ────────────────────────
 
+/// The shape of a statutory notice period.
+///
+/// Weeks and months are **not** interchangeable with a day count. § 188 Abs. 2
+/// BGB ends a month-denominated period on the day of the following month that
+/// bears the same number as the start day — so „1 Monat" from 1 January ends on
+/// 1 February (31 days), and from 1 February on 1 March (28). A flat 30 days is
+/// one day *short* of the statute for every 31-day month, and two days longer
+/// than it for February.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(tag = "einheit", rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Frist {
+    /// A day-denominated period. Weeks are exact multiples of 7 days, so they
+    /// are expressed here.
+    Tage {
+        /// Number of days.
+        tage: i64,
+    },
+    /// A month-denominated period under § 188 Abs. 2 BGB.
+    Monate {
+        /// Number of months.
+        monate: u32,
+    },
+}
+
+impl Frist {
+    /// The earliest date on which a notice given on `ab` may take effect.
+    ///
+    /// § 188 Abs. 3 BGB: where the target month has no day of that number, the
+    /// period ends on its last day — one month from 31 January is 28 (or 29)
+    /// February.
+    #[must_use]
+    pub fn fruehestens_ab(self, ab: Date) -> Date {
+        match self {
+            Self::Tage { tage } => ab + time::Duration::days(tage),
+            Self::Monate { monate } => add_monate(ab, monate),
+        }
+    }
+
+    /// Whether a notice given on `ab` is early enough for `wirksamkeit`.
+    #[must_use]
+    pub fn gewahrt(self, ab: Date, wirksamkeit: Date) -> bool {
+        wirksamkeit >= self.fruehestens_ab(ab)
+    }
+}
+
+/// Add whole calendar months, clamping to the last day of the target month.
+fn add_monate(from: Date, monate: u32) -> Date {
+    let total = i32::from(u8::from(from.month())) - 1 + i32::try_from(monate).unwrap_or(0);
+    let jahr = from.year() + total.div_euclid(12);
+    let monat_index = u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1);
+    let monat = time::Month::try_from(monat_index).unwrap_or(time::Month::January);
+    // § 188 Abs. 3 BGB — the 31st of a 30-day month is that month's last day.
+    let letzter = time::util::days_in_month(monat, jahr);
+    let tag = from.day().min(letzter);
+    Date::from_calendar_date(jahr, monat, tag).unwrap_or(from)
+}
+
 /// How much notice a price change needs, and under which rule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Preisanpassungsregime {
-    /// Minimum days between the notice and the effective date.
-    pub vorlauf_tage: i64,
+    /// The statutory period, in the unit the statute uses.
+    pub frist: Frist,
     pub rechtsgrundlage: &'static str,
     /// Human-readable period.
-    pub frist: String,
+    pub bezeichnung: String,
     /// § 5 Abs. 2 GVV lets a Grundversorgungs-price change take effect only at
     /// the start of a month.
     pub nur_zum_monatsersten: bool,
+}
+
+impl Preisanpassungsregime {
+    /// The earliest Wirksamkeit for a notice given on `ab`.
+    ///
+    /// For the Grundversorgung the § 5 Abs. 2 GVV Monatsersten rule applies on
+    /// top: a change may only take effect at the start of a month, so the
+    /// earliest date rolls forward to the next one.
+    #[must_use]
+    pub fn fruehestens_wirksam(&self, ab: Date) -> Date {
+        let fruehestens = self.frist.fruehestens_ab(ab);
+        if self.nur_zum_monatsersten && fruehestens.day() != 1 {
+            add_monate(
+                Date::from_calendar_date(fruehestens.year(), fruehestens.month(), 1)
+                    .unwrap_or(fruehestens),
+                1,
+            )
+        } else {
+            fruehestens
+        }
+    }
 }
 
 /// The notice regime for a price change on this contract.
@@ -232,23 +310,23 @@ pub fn preisanpassungsregime(
 ) -> Preisanpassungsregime {
     if vertragsart.ist_grundversorgung() {
         Preisanpassungsregime {
-            vorlauf_tage: 42,
+            frist: Frist::Tage { tage: 42 },
             rechtsgrundlage: "§ 5 Abs. 2 StromGVV / GasGVV",
-            frist: "6 Wochen".to_owned(),
+            bezeichnung: "6 Wochen".to_owned(),
             nur_zum_monatsersten: true,
         }
     } else if haushaltskunde {
         Preisanpassungsregime {
-            vorlauf_tage: 30,
+            frist: Frist::Monate { monate: 1 },
             rechtsgrundlage: "§ 41 Abs. 5 Satz 2 EnWG",
-            frist: "1 Monat".to_owned(),
+            bezeichnung: "1 Monat".to_owned(),
             nur_zum_monatsersten: false,
         }
     } else {
         Preisanpassungsregime {
-            vorlauf_tage: 14,
+            frist: Frist::Tage { tage: 14 },
             rechtsgrundlage: "§ 41 Abs. 5 Satz 2 EnWG",
-            frist: "2 Wochen".to_owned(),
+            bezeichnung: "2 Wochen".to_owned(),
             nur_zum_monatsersten: false,
         }
     }
@@ -529,16 +607,87 @@ mod tests {
     #[test]
     fn die_drei_vorlauffristen_stimmen_mit_der_norm_ueberein() {
         let gv = preisanpassungsregime(Vertragsart::Grundversorgung, true);
-        assert_eq!(gv.vorlauf_tage, 42);
+        assert_eq!(gv.frist, Frist::Tage { tage: 42 });
         assert!(gv.nur_zum_monatsersten);
 
         let haushalt = preisanpassungsregime(Vertragsart::Sondervertrag, true);
-        assert_eq!(haushalt.vorlauf_tage, 30);
+        assert_eq!(haushalt.frist, Frist::Monate { monate: 1 });
         assert_eq!(haushalt.rechtsgrundlage, "§ 41 Abs. 5 Satz 2 EnWG");
         assert!(!haushalt.nur_zum_monatsersten);
 
         let gewerbe = preisanpassungsregime(Vertragsart::Sondervertrag, false);
-        assert_eq!(gewerbe.vorlauf_tage, 14);
+        assert_eq!(gewerbe.frist, Frist::Tage { tage: 14 });
+    }
+
+    /// „1 Monat" is a calendar month under § 188 Abs. 2 BGB, not 30 days.
+    ///
+    /// A flat 30 days is one day **short** of the statute for every 31-day
+    /// month — a notice given on 1 January would be admitted for 31 January
+    /// when the statute requires 1 February.
+    #[test]
+    fn ein_monat_ist_ein_kalendermonat_kein_30_tage_fenster() {
+        let monat = Frist::Monate { monate: 1 };
+
+        // 31-day month: 30 days would have been a day short.
+        assert_eq!(
+            monat.fruehestens_ab(date!(2026 - 01 - 01)),
+            date!(2026 - 02 - 01)
+        );
+        assert!(!monat.gewahrt(date!(2026 - 01 - 01), date!(2026 - 01 - 31)));
+        assert!(monat.gewahrt(date!(2026 - 01 - 01), date!(2026 - 02 - 01)));
+
+        // 28-day month: 30 days would have over-required by two.
+        assert_eq!(
+            monat.fruehestens_ab(date!(2026 - 02 - 01)),
+            date!(2026 - 03 - 01)
+        );
+        assert!(monat.gewahrt(date!(2026 - 02 - 01), date!(2026 - 03 - 01)));
+    }
+
+    /// § 188 Abs. 3 BGB — a month from the 31st ends on the target month's last
+    /// day when it has no 31st.
+    #[test]
+    fn ein_monat_vom_monatsletzten_klemmt_auf_den_letzten_tag() {
+        let monat = Frist::Monate { monate: 1 };
+        assert_eq!(
+            monat.fruehestens_ab(date!(2026 - 01 - 31)),
+            date!(2026 - 02 - 28)
+        );
+        assert_eq!(
+            monat.fruehestens_ab(date!(2026 - 03 - 31)),
+            date!(2026 - 04 - 30)
+        );
+        // Leap year.
+        assert_eq!(
+            monat.fruehestens_ab(date!(2028 - 01 - 31)),
+            date!(2028 - 02 - 29)
+        );
+    }
+
+    /// Weeks are exact multiples of seven days, so they stay day-denominated.
+    #[test]
+    fn wochenfristen_bleiben_tagesfristen() {
+        assert_eq!(
+            Frist::Tage { tage: 42 }.fruehestens_ab(date!(2026 - 01 - 01)),
+            date!(2026 - 02 - 12)
+        );
+    }
+
+    /// § 5 Abs. 2 GVV: a Grundversorgungs-price change takes effect only at a
+    /// month start, so the six-week date rolls forward to the next one.
+    #[test]
+    fn die_grundversorgung_wirkt_nur_zum_monatsersten() {
+        let gv = preisanpassungsregime(Vertragsart::Grundversorgung, true);
+        // 1 Jan + 42 days = 12 Feb, which is not a Monatserster.
+        assert_eq!(
+            gv.fruehestens_wirksam(date!(2026 - 01 - 01)),
+            date!(2026 - 03 - 01)
+        );
+        // A six-week date that already lands on the 1st stays put.
+        assert_eq!(
+            gv.fruehestens_wirksam(date!(2025 - 12 - 21)),
+            date!(2026 - 02 - 01)
+        );
     }
 
     // ── § 309 Nr. 9 BGB ──────────────────────────────────────────────────────

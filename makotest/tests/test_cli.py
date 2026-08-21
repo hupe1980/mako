@@ -44,7 +44,7 @@ class TestValidate:
         code, out = run(capsys, "validate", str(path), "--on", ON)
         assert code == 1
         assert "INVALID" in out
-        assert "SEM-UTILMD-MALO-FORMAT" in out
+        assert "SEM-UTILMD-LOKATIONS-ID" in out
 
     def test_a_vacuous_pass_exits_one(self, capsys, tmp_path):
         """`is_valid` is true and nothing was checked, so this is not a pass.
@@ -66,7 +66,7 @@ class TestValidate:
         assert payload["valid"] is False
         assert payload["envelope"]["sender_qualifier"] == "14"
         rules = {f["rule_id"] for f in payload["messages"][0]["findings"]}
-        assert "SEM-UTILMD-MALO-FORMAT" in rules
+        assert "SEM-UTILMD-LOKATIONS-ID" in rules
 
     def test_a_missing_file_is_a_usage_error_not_a_verdict(self, capsys, tmp_path):
         assert main(["validate", str(tmp_path / "nope.edi"), "--on", ON]) == 2

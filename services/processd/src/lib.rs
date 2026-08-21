@@ -30,7 +30,7 @@
 //! - **Abmeldung** — **55004** and **44004**, the Lieferende a supplier
 //!   initiates. EBD `E_0607`, whose ERC codes are a *different* space from the
 //!   Anmeldung's.
-//! - Evaluation via the `netz-checker` pure library.
+//! - Evaluation via the `mako-pruefung` pure library.
 //! - **EoG gap closure** (§ 36/§ 38 EnWG) and the daily 3-month timer.
 //! - The MSB-Wechsel PIDs the NB answers: **55042** (Anmeldung MSB) and
 //!   **55051** (Ende MSB).

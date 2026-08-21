@@ -5,7 +5,10 @@ use std::marker::PhantomData;
 use edifact_rs::Writer;
 
 use crate::AgencyCode;
-use crate::{Error, ObjectType, Pruefidentifikator, Release};
+use crate::utilmd_codes::{
+    AntwortStatus, IDE_VORGANG, STS_STATUS_ANTWORT, STS_TRANSAKTIONSGRUND, Transaktionsgrund,
+};
+use crate::{Error, Lokationstyp, Pruefidentifikator, Release};
 
 use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 
@@ -13,14 +16,18 @@ use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 
 #[derive(Debug, Clone, Default)]
 struct UtilmdTransactionSpec {
+    /// `IDE` DE 7495 — [`IDE_VORGANG`] on every process message.
     ide_qualifier: String,
-    ide_id: String,
-    transaktionsgrund: Option<String>,
+    /// `IDE` DE 7402 — the **Vorgangsnummer**, never a location ID.
+    vorgangsnummer: String,
     process_dates: Vec<(String, String)>,
-    location: Option<(String, String)>,
-    references: Vec<(String, String)>,
+    transaktionsgrund: Option<Transaktionsgrund>,
+    antwort: Option<AntwortStatus>,
     free_texts: Vec<(String, String)>,
     agr: Option<(String, String)>,
+    /// `SG5 LOC` — one entry per Lokation the Vorgang names.
+    locations: Vec<(String, String)>,
+    references: Vec<(String, String)>,
     customer_nad: Option<(String, String)>,
 }
 
@@ -181,41 +188,41 @@ impl<S, R> UtilmdBuilder<S, R> {
         self
     }
 
-    /// Start configuring a transaction (SG4 / IDE block) in the message.
+    /// Start configuring a Vorgang (SG4 / IDE block).
     ///
-    /// `object_type` is the BDEW supply-point object type (DE 7495 qualifier).
-    /// Use the [`ObjectType`](crate::ObjectType) enum for type-safe, self-documenting
-    /// code — e.g. `ObjectType::Marktlokation` (wire code `"Z18"`) or
-    /// `ObjectType::Messlokation` (wire code `"Z19"`).
-    /// `ide_id` is the object identifier (DE 7402).
+    /// `vorgangsnummer` is `IDE` DE 7402 — the sender's own reference for this
+    /// transaction, unique across `IDE+24` **and** `IDE+Z01`. It is *not* a
+    /// location ID: the Marktlokation goes into `SG5 LOC+Z16` via
+    /// [`marktlokation`](UtilmdTransactionBuilder::marktlokation).
     ///
     /// Returns a [`UtilmdTransactionBuilder`] sub-builder. Call
     /// [`done`](UtilmdTransactionBuilder::done) to finalize and return.
-    pub fn transaction(
-        self,
-        object_type: ObjectType,
-        ide_id: impl Into<String>,
-    ) -> UtilmdTransactionBuilder<S, R> {
-        self.transaction_with_qualifier(object_type.qualifier_code(), ide_id)
+    pub fn transaction(self, vorgangsnummer: impl Into<String>) -> UtilmdTransactionBuilder<S, R> {
+        self.transaction_with_qualifier(IDE_VORGANG, vorgangsnummer)
     }
 
-    /// Start configuring a transaction with an explicit DE 7495 qualifier.
+    /// Start an `IDE+Z01` list block (`MaBiS` Summenzeitreihen).
     ///
-    /// The AHB fixes the IDE qualifier **per Prüfidentifikator** (e.g. `Z19`
-    /// for GPKE/GeLi Lieferbeginn 55001/44001, `24` for the `WiM`
-    /// Messlokations-PIDs), which does not always coincide with the
-    /// [`ObjectType`] wire codes. Use this when the caller resolves the
-    /// qualifier from the AHB rather than from an object type.
+    /// UTILMD DE 7495 has exactly two values; this is the other one.
+    pub fn list_transaction(self, list_id: impl Into<String>) -> UtilmdTransactionBuilder<S, R> {
+        self.transaction_with_qualifier(crate::utilmd_codes::IDE_LISTE, list_id)
+    }
+
+    /// Start a Vorgang with an explicit DE 7495 qualifier.
+    ///
+    /// Reserved for round-tripping messages from counterparties that use a
+    /// qualifier outside the MIG's `24` / `Z01` pair. New code should call
+    /// [`transaction`](Self::transaction).
     pub fn transaction_with_qualifier(
         self,
         ide_qualifier: impl Into<String>,
-        ide_id: impl Into<String>,
+        vorgangsnummer: impl Into<String>,
     ) -> UtilmdTransactionBuilder<S, R> {
         UtilmdTransactionBuilder {
             parent: self,
             spec: UtilmdTransactionSpec {
                 ide_qualifier: ide_qualifier.into(),
-                ide_id: ide_id.into(),
+                vorgangsnummer: vorgangsnummer.into(),
                 ..Default::default()
             },
         }
@@ -266,29 +273,69 @@ impl<S, R> UtilmdBuilder<S, R> {
             );
         }
         for tx in &self.inner.transactions {
-            emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.ide_id);
-            if let Some(grund) = &tx.transaktionsgrund {
-                // `STS+7++<code>` — Statuskategorie 7 (Transaktionsgrund) in
-                // C601, the code in C556 (DE 9013). C555 sits between them and
-                // is *nicht benutzt* for this category, so it is written empty
-                // rather than omitted: a two-element STS puts the code in the
-                // composite the MIG says is unused.
-                emit_seg!(w, "STS", "7", "", grund);
-            }
+            // MIG Zähler order inside SG4: IDE (0190), DTM (0230), STS (0250),
+            // FTX (0280), AGR (0290), then SG5 LOC (0330), SG6 RFF (0360) and
+            // SG12 NAD. Layer 3.5 checks it, on both sides of the wire.
+            emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.vorgangsnummer);
             for (qualifier, date_val) in &tx.process_dates {
-                emit_comp!(w, "DTM", [qualifier, date_val, "102"]);
+                // DE 2379 `102` = CCYYMMDD, `303` = CCYYMMDDHHMMZZZ. The
+                // format code follows the value's own length rather than being
+                // fixed, so a UTC-stamped Zuordnungsbeginn keeps its time.
+                let fmt = if date_val.len() > 8 { "303" } else { "102" };
+                emit_comp!(w, "DTM", [qualifier, date_val, fmt]);
             }
-            if let Some((loc_q, loc_id)) = &tx.location {
-                emit_comp!(w, "LOC", [loc_q], [loc_id, "", "293"]);
+            if let Some(grund) = &tx.transaktionsgrund {
+                // `STS+7++<grund>+<ergaenzung>+<befristet>` — Statuskategorie 7
+                // in C601, then one repeated C556 per code. C555 sits between
+                // C601 and the first C556 and is *nicht benutzt*, so it is
+                // written empty rather than omitted. MIG example:
+                // `STS+7++E01+ZW4+E03'`.
+                let ergaenzung = grund.ergaenzung.as_deref().unwrap_or("");
+                match grund.befristet.as_deref() {
+                    Some(befristet) => emit_seg!(
+                        w,
+                        "STS",
+                        STS_TRANSAKTIONSGRUND,
+                        "",
+                        &grund.grund,
+                        ergaenzung,
+                        befristet
+                    ),
+                    None if !ergaenzung.is_empty() => {
+                        emit_seg!(
+                            w,
+                            "STS",
+                            STS_TRANSAKTIONSGRUND,
+                            "",
+                            &grund.grund,
+                            ergaenzung
+                        );
+                    }
+                    None => emit_seg!(w, "STS", STS_TRANSAKTIONSGRUND, "", &grund.grund),
+                }
             }
-            for (rff_q, rff_ref) in &tx.references {
-                emit_comp!(w, "RFF", [rff_q, rff_ref]);
+            if let Some(antwort) = &tx.antwort {
+                // `STS+E01++<code>:<ebd>` — the EBD Antwortcode in C556 DE 9013
+                // and the EBD id in DE 1131. The AHB marks this Muss on every
+                // Bestätigung and Ablehnung and constrains the code to that
+                // EBD's Zustimmungs- or Ablehnungs-Cluster.
+                if let Some(ebd) = antwort.ebd.as_deref() {
+                    emit_comp!(w, "STS", [STS_STATUS_ANTWORT], [""], [&antwort.code, ebd]);
+                } else {
+                    emit_seg!(w, "STS", STS_STATUS_ANTWORT, "", &antwort.code);
+                }
             }
             for (ftx_q, ftx_text) in &tx.free_texts {
                 emit_comp!(w, "FTX", [ftx_q], [""], [""], [ftx_text]);
             }
             if let Some((svc_req, resp_type)) = &tx.agr {
                 emit_comp!(w, "AGR", [svc_req, resp_type]);
+            }
+            for (loc_q, loc_id) in &tx.locations {
+                emit_comp!(w, "LOC", [loc_q], [loc_id]);
+            }
+            for (rff_q, rff_ref) in &tx.references {
+                emit_comp!(w, "RFF", [rff_q, rff_ref]);
             }
             if let Some((nad_q, nad_id)) = &tx.customer_nad {
                 emit_comp!(w, "NAD", [nad_q], [nad_id, "", "293"]);
@@ -346,35 +393,100 @@ pub struct UtilmdTransactionBuilder<S = Unset, R = Unset> {
 }
 
 impl<S, R> UtilmdTransactionBuilder<S, R> {
-    /// Set the SG4 **Transaktionsgrund** — DE 9013 in `C556`, not DE 9015.
+    /// Set the SG4 **Transaktionsgrund** (`STS+7`, MIG Nr. 00033).
     ///
-    /// Emits `STS+7++<code>`: Statuskategorie `7` (Transaktionsgrund) in
-    /// `C601`, the code in `C556`. `C555` sits between them and is *nicht
-    /// benutzt* for this Statuskategorie, so it is written empty rather than
-    /// omitted — an element between two populated ones cannot be left out.
+    /// Takes the whole [`Transaktionsgrund`] rather than a bare code because
+    /// the AHB marks the *Ergänzung* Muss alongside the Grund on the GPKE and
+    /// `GeLi` Gas core processes: `ZW3`/`ZW4`/`ZW5`/`ZAP` is what tells the
+    /// receiver whether the Vorgang is about a verbrauchende or erzeugende
+    /// Marktlokation, a Tranche or a ruhende Marktlokation — and therefore
+    /// which branch of the answering EBD applies.
     ///
-    /// Codes are the UTILMD MIG DE 9013 values, e.g. `"E01"` Ein-/Auszug,
-    /// `"E03"` Wechsel, `"E05"` Stornierung, `"ZW3"` erzeugende Marktlokation.
-    pub fn transaktionsgrund(mut self, code: impl Into<String>) -> Self {
-        self.spec.transaktionsgrund = Some(code.into());
+    /// ```rust
+    /// # use edi_energy::{Release, Pruefidentifikator};
+    /// # use edi_energy::builders::UtilmdBuilder;
+    /// # use edi_energy::utilmd_codes::{Transaktionsgrund, transaktionsgrund, dtm, loc};
+    /// let edi = UtilmdBuilder::new(Release::new("S2.2"))
+    ///     .pruefidentifikator(Pruefidentifikator::new(55001).unwrap())
+    ///     .sender("9900987654321")
+    ///     .receiver("9900123456789")
+    ///     .transaction("VORGANG-0001")
+    ///     .date(dtm::BEGINN_ZUM, "20261101")
+    ///     .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(transaktionsgrund::WECHSEL))
+    ///     .marktlokation("51238696012")
+    ///     .done()
+    ///     .serialize()?;
+    /// let text = String::from_utf8(edi).unwrap();
+    /// assert!(text.contains("IDE+24+VORGANG-0001"));
+    /// assert!(text.contains("DTM+92:20261101:102"));
+    /// assert!(text.contains("STS+7++E03+ZW4"));
+    /// assert!(text.contains("LOC+Z16+51238696012"));
+    /// # Ok::<(), edi_energy::Error>(())
+    /// ```
+    pub fn transaktionsgrund(mut self, grund: Transaktionsgrund) -> Self {
+        self.spec.transaktionsgrund = Some(grund);
         self
     }
 
-    /// Add a process-date DTM segment inside SG4.
+    /// Set the SG4 **Status der Antwort** (`STS+E01`, MIG Nr. 00034).
     ///
-    /// `qualifier` is DE 2005 (e.g. `"163"` for delivery start, `"164"` for end).
-    /// `date` is `YYYYMMDD`.
-    pub fn process_date(mut self, qualifier: impl Into<String>, date: impl Into<String>) -> Self {
+    /// Emits `STS+E01++<code>:<ebd>`. Every Bestätigung and Ablehnung needs
+    /// one — the AHB marks the segment Muss and restricts the code to the
+    /// named EBD's Zustimmungs- or Ablehnungs-Cluster.
+    ///
+    /// ```rust
+    /// # use edi_energy::{Release, Pruefidentifikator};
+    /// # use edi_energy::builders::UtilmdBuilder;
+    /// # use edi_energy::utilmd_codes::AntwortStatus;
+    /// let edi = UtilmdBuilder::new(Release::new("S2.2"))
+    ///     .pruefidentifikator(Pruefidentifikator::new(55011).unwrap())
+    ///     .sender("9900987654321")
+    ///     .receiver("9900123456789")
+    ///     .transaction("VORGANG-0001")
+    ///     .antwort(AntwortStatus::from_ebd("A36", "E_0624"))
+    ///     .done()
+    ///     .serialize()?;
+    /// assert!(String::from_utf8(edi).unwrap().contains("STS+E01++A36:E_0624"));
+    /// # Ok::<(), edi_energy::Error>(())
+    /// ```
+    pub fn antwort(mut self, antwort: AntwortStatus) -> Self {
+        self.spec.antwort = Some(antwort);
+        self
+    }
+
+    /// Add a SG4 process-date segment.
+    ///
+    /// `qualifier` is DE 2005 — use the [`dtm`](crate::utilmd_codes::dtm)
+    /// constants (`92` Beginn zum, `93` Ende zum, `154` ÜT der
+    /// Lieferanmeldung, …). `value` is `CCYYMMDD`, or `CCYYMMDDHHMM+00` when
+    /// the process needs the UTC instant; the DE 2379 format code follows.
+    pub fn date(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
         self.spec
             .process_dates
-            .push((qualifier.into(), date.into()));
+            .push((qualifier.into(), value.into()));
         self
     }
 
-    /// Set the SG5/LOC location segment.
-    pub fn location(mut self, qualifier: impl Into<String>, id: impl Into<String>) -> Self {
-        self.spec.location = Some((qualifier.into(), id.into()));
+    /// Add a `SG5 LOC` location segment.
+    ///
+    /// Prefer [`marktlokation`](Self::marktlokation) /
+    /// [`messlokation`](Self::messlokation); this is the escape hatch for the
+    /// rarer Lokationstypen.
+    pub fn location(mut self, lokationstyp: Lokationstyp, id: impl Into<String>) -> Self {
+        self.spec
+            .locations
+            .push((lokationstyp.qualifier_code().to_owned(), id.into()));
         self
+    }
+
+    /// Add `SG5 LOC+Z16` — the Marktlokation this Vorgang is about.
+    pub fn marktlokation(self, malo_id: impl Into<String>) -> Self {
+        self.location(Lokationstyp::Marktlokation, malo_id)
+    }
+
+    /// Add `SG5 LOC+Z17` — the Messlokation this Vorgang is about.
+    pub fn messlokation(self, melo_id: impl Into<String>) -> Self {
+        self.location(Lokationstyp::Messlokation, melo_id)
     }
 
     /// Add a SG6/RFF reference segment.
@@ -390,6 +502,9 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     }
 
     /// Add a free-text (FTX) segment inside SG4.
+    ///
+    /// `FTX+ACB` carries the Erläuterung the Gas Codelisten require whenever an
+    /// Ablehnung uses the catch-all `E14` „Ablehnung Sonstiges".
     pub fn free_text(mut self, text_function: impl Into<String>, text: impl Into<String>) -> Self {
         self.spec
             .free_texts
@@ -407,7 +522,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
         self
     }
 
-    /// Finalize this transaction and return to the parent [`UtilmdBuilder`].
+    /// Finalize this Vorgang and return to the parent [`UtilmdBuilder`].
     pub fn done(mut self) -> UtilmdBuilder<S, R> {
         self.parent.inner.transactions.push(self.spec);
         self.parent

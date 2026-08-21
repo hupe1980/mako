@@ -178,7 +178,7 @@ impl ProcessdMcpHandler {
 
     #[tool(
         description = "Get Anmeldung rejection breakdown by ERC code for the last N days. \
-NB role. Returns (erc_code, count) pairs ordered by frequency. \
+NB role. Returns (antwortcode, count) pairs ordered by frequency. \
 Use this when STP drops below 95% to identify the root cause: \
 A02 = MaLo nimmt nicht an der MaKo teil (Stillgelegt/Ruhend), \
 A06 = andere Anmeldung in Bearbeitung (duplicate), \
@@ -203,7 +203,7 @@ Escalate = data gap (grid record missing) or affiliate initiator \
                     .map(|(erc, count)| {
                         let erc_str = erc.as_deref().unwrap_or("null (internal)");
                         serde_json::json!({
-                            "erc_code": erc_str,
+                            "antwortcode": erc_str,
                             "count": count,
                             "remediation": match erc.as_deref() {
                                 Some("A02") => "PUT /api/v1/malos/{malo_id}/grid in marktd (NB-role grid provisioning)",
@@ -437,7 +437,7 @@ impl ProcessdMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "1. Use `get_decision` with the process_id to see the ERC code.\n\
-                 2. ERC codes from netz-checker:\n\
+                 2. ERC codes from `mako-pruefung`:\n\
                     - A02: MaLo not found in marktd (malo_grid missing or bilanzierungsgebiet mismatch)\n\
                     - A05: Preisblatt missing for the NB MP-ID + Sparte combination\n\
                     - A06: Lieferbeginn date outside allowed range (too far future / past)\n\

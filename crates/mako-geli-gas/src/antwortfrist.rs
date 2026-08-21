@@ -8,9 +8,8 @@
 //! window for the same message is **4 Werktage**. `obsd` computed every Gas
 //! breach alert from the lead time, six Werktage late.
 //!
-//! Only PIDs the Festlegung quantifies are listed; the Abmeldungsanfrage
-//! (44010), the GNB-initiated Abmeldung NN (44007) and the Änderungsmeldung
-//! (44020) have Fristen set per Netzbetreiber under Kap. 2.6, so
+//! Only PIDs the Festlegung quantifies are listed; the Änderungsmeldung zur
+//! Bestandsliste (44020) has its Frist set per Netzbetreiber under Kap. 2.6, so
 //! [`antwort_deadline`] returns `None` — *unknown*, never *unbounded*.
 
 pub use mako_fristen::antwort::{AntwortObligation, GELI_GAS as ANTWORT_OBLIGATIONS};
@@ -113,11 +112,32 @@ mod tests {
     }
 
     /// A PID whose Frist is set per Netzbetreiber is unknown, not unbounded.
+    ///
+    /// Only the Bestandsliste (44019) and its Änderungsmeldung (44020) are in
+    /// that class. The supplier's own answer windows (44007, 44010) are
+    /// quantified — see `the_supplier_answer_windows_are_published`.
     #[test]
     fn a_per_netzbetreiber_frist_is_unknown() {
         let received = utc(2026, Month::March, 2, 9);
-        for pid in [44_007_u32, 44_010, 44_019, 44_020] {
+        for pid in [44_019_u32, 44_020] {
             assert!(antwort_deadline(pid, received).is_none(), "PID {pid}");
+        }
+    }
+
+    /// The two LF-answered Gas processes are quantified — AWH GeLi Gas 2.0
+    /// Kap. 2.3.2 Nr. 2 and Kap. 2.5.2 Nr. 4, both *Ablauf des 3. WT*.
+    #[test]
+    fn the_supplier_answer_windows_are_published() {
+        let received = utc(2026, Month::March, 2, 9);
+        for pid in [44_007_u32, 44_010] {
+            let deadline = antwort_deadline(pid, received)
+                .unwrap_or_else(|| panic!("PID {pid} has a published Antwortfrist"));
+            // Monday + 3 Werktage = Thursday.
+            assert_eq!(
+                deadline.date(),
+                Date::from_calendar_date(2026, Month::March, 5).expect("valid date"),
+                "PID {pid}"
+            );
         }
     }
 }

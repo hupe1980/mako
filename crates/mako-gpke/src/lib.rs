@@ -107,7 +107,7 @@
 //! (Ablehnung) are derived by [`GpkeBeendigungZuordnungWorkflow`]. See
 //! [`beendigung_zuordnung`] for the full model.
 //!
-//! The 4 answerable inbound ANFRAGE PIDs (`UTILMD_ANFRAGE_PIDS`) share
+//! The 3 answerable inbound ANFRAGE PIDs (`UTILMD_ANFRAGE_PIDS`) share
 //! [`GpkeSupplierChangeWorkflow`] (workflow name:
 //! `"gpke-supplier-change"`). The `pruefidentifikator` stored in
 //! [`wechselprozesse::InitiatedData`] lets read-models distinguish variants.
@@ -161,7 +161,7 @@
 //!     sender:            u.sender().and_then(|n| n.party_id.clone()).unwrap_or_default(),
 //!     receiver:          u.receiver().and_then(|n| n.party_id.clone()).unwrap_or_default(),
 //!     location_id:       u.transactions().first()
-//!                         .and_then(|t| t.ide.object_id.clone()).unwrap_or_default(),
+//!                         .and_then(|t| t.marktlokation()).unwrap_or_default(),
 //!     document_date:     u.dtm().iter().find(|d| d.is_document_date())
 //!                         .and_then(|d| d.value.clone()).unwrap_or_default(),
 //!     message_ref:       msg.message_ref().to_owned(),
@@ -197,8 +197,10 @@ pub mod datenabruf;
 pub mod eog;
 pub mod konfiguration;
 pub mod konfiguration_aenderung;
+pub mod kuendigung;
 pub mod lf_abmeldung;
 pub mod lf_anmeldung;
+pub mod lf_antwort;
 pub mod messwerte;
 pub mod neuanlage;
 pub mod partin;
@@ -269,6 +271,9 @@ pub use konfiguration_aenderung::{
     ORDRSP_PIDS as KONFIGURATION_AENDERUNG_ORDRSP_PIDS,
     WORKFLOW_NAME as KONFIGURATION_AENDERUNG_WORKFLOW_NAME,
 };
+pub use kuendigung::{
+    GpkeKuendigungWorkflow, KuendigungCommand, KuendigungData, KuendigungEvent, KuendigungState,
+};
 pub use lf_abmeldung::{
     GpkeLfAbmeldungWorkflow, LF_ABMELDUNG_APERAK_WINDOW_LABEL, LF_ABMELDUNG_PIDS,
     LfAbmeldungCommand, LfAbmeldungData, LfAbmeldungEvent, LfAbmeldungState,
@@ -279,6 +284,7 @@ pub use lf_anmeldung::{
     LfAnmeldungEvent, LfAnmeldungState, NB_RESPONSE_WINDOW_LABEL,
     WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW_NAME,
 };
+pub use lf_antwort::{LfAntwort, antwort_outbox};
 pub use messwerte::{
     GpkeMesswerteLieferungWorkflow, MSCONS_PIDS, MesswerteLieferungCommand, MesswerteLieferungData,
     MesswerteLieferungEvent, MesswerteLieferungState, WORKFLOW_NAME as MESSWERTE_WORKFLOW_NAME,
@@ -443,6 +449,14 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // LFA-role makod receives 55010 and responds with 55011/55012.
         for &pid in beendigung_zuordnung::BEENDIGUNG_ZUORDNUNG_PIDS {
             router.register(pid, beendigung_zuordnung::WORKFLOW_NAME);
+        }
+
+        // PID 55016 (Kündigung, LFN→LFA) — GPKE Teil 2 § 1.2, EBD `E_0614`.
+        // Its own workflow rather than a `gpke-supplier-change` variant: both
+        // are keyed by Marktlokation, and an integrated NB+LF deployment runs
+        // the NB's Anmeldung on the same MaLo.
+        for &pid in kuendigung::KUENDIGUNG_PIDS {
+            router.register(pid, kuendigung::WORKFLOW_NAME);
         }
 
         // PIDs 55013–55015 (Ersatz-/Grundversorgung, §36/§38 EnWG) — gpke-eog.

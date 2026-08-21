@@ -486,7 +486,7 @@ pub enum GasSupplierChangeCommand {
         bilanzierungsmethode: Option<String>,
         /// SG4 STS Transaktionsgrund (DE9013, category 7) — e.g. `E01`
         /// Ein-/Auszug, `E03` Lieferantenwechsel, `E06` Ersatzbelieferung.
-        /// Drives the netz-checker date-plausibility rules and is propagated
+        /// Drives the `mako-pruefung` date-plausibility rules and is propagated
         /// into the `ProcessInitiated` outbox payload.
         transaktionsgrund: Option<String>,
         /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment (L1/N1).
@@ -808,7 +808,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                                     "fallgruppe":           fallgruppe,
                                     "gasqualitaet":         gasqualitaet,
                                     // SG4 STS Transaktionsgrund — consumed by processd
-                                    // netz-checker (date-plausibility rules).
+                                    // `mako-pruefung` (date-plausibility rules).
                                     "transaktionsgrund":    transaktionsgrund,
                                 }),
                             )

@@ -220,12 +220,16 @@ async fn process_invoic(
     // ── Answer the market partner ────────────────────────────────────────────
     let (command, payload) = if verdict.dispute {
         let reason = dispute_reason(&report.findings);
-        warn!(%process_id, pid, %reason, "invoicd: disputing invoice");
+        let antwort_code = dispute_antwortcode(&report.findings);
+        warn!(%process_id, pid, %reason, antwort_code, "invoicd: disputing invoice");
         (
             route.reject,
             serde_json::json!({
                 "invoice_ref": incoming.invoice_ref,
                 "ablehnungsgrund": reason,
+                // `SG7 AJT` — DE 4465 the code, DE 1082 the EBD it comes from.
+                "antwort_code": antwort_code,
+                "antwort_ebd": mako_pruefung::codes::EBD_NETZNUTZUNGSRECHNUNG,
             }),
         )
     } else {
@@ -644,6 +648,40 @@ pub fn ce_type_for(outcome: &str) -> &'static str {
     }
 }
 
+/// The `E_0406` Antwortcode a REMADV Abweisung carries in `AJT` DE 4465.
+///
+/// A rejection without a code gives the invoice sender nothing to correct, and
+/// the MIG marks `AJT` DE 4465 Muss on the Abweichungsgrund segment.
+///
+/// Only one finding maps to a code with an exact counterpart in the tree:
+/// [`FindingKind::TotalMismatch`] is Prüfschritt 900 („Entspricht der
+/// Rechnungsbetrag der Summe aller Rechnungspositionen?"), which is `A70`.
+/// Everything else lands on the catch-alls, which the BDEW requires to carry a
+/// written Erläuterung — supplied here from the finding text.
+///
+/// The full tree — 205 Prüfschritte over Kopf-, Positions- und Summenebene,
+/// answering with a *set* of (Positionsnummer, code) pairs — is not walked
+/// here; see `mako_pruefung::codes::E_0406_CODES`.
+fn dispute_antwortcode(findings: &[invoic_checker::Finding]) -> &'static str {
+    use invoic_checker::FindingKind;
+    let disputes = findings.iter().filter(|f| f.is_dispute);
+    for f in disputes {
+        if matches!(f.kind, FindingKind::TotalMismatch) {
+            // Prüfschritt 900, Cluster: Ablehnung auf Summenebene.
+            return "A70";
+        }
+    }
+    // Positionsebene catch-all when a line was at fault, Summenebene otherwise.
+    if findings
+        .iter()
+        .any(|f| f.is_dispute && f.line_number.is_some())
+    {
+        "A99"
+    } else {
+        "A96"
+    }
+}
+
 /// A human-readable dispute reason from the findings.
 ///
 /// Falls back to the monetary escalation when no individual finding disputed —
@@ -764,6 +802,57 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    /// The Antwortcode is the machine-readable half of the same obligation.
+    ///
+    /// `TotalMismatch` is `E_0406` Prüfschritt 900 exactly; the rest land on a
+    /// catch-all, chosen by whether a line or the sum was at fault.
+    #[test]
+    fn a_dispute_states_a_machine_readable_code() {
+        let total = Finding {
+            kind: FindingKind::TotalMismatch,
+            is_dispute: true,
+            message: "Gesamtnetto weicht ab".into(),
+            line_number: None,
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        };
+        assert_eq!(dispute_antwortcode(&[total]), "A70");
+
+        let line = Finding {
+            kind: FindingKind::ArithmeticError,
+            is_dispute: true,
+            message: "Position 3 rechnet nicht".into(),
+            line_number: Some(3),
+            expected: None,
+            actual: None,
+            deviation_pct: None,
+        };
+        assert_eq!(
+            dispute_antwortcode(&[line]),
+            "A99",
+            "a faulty line takes the Positionsebene catch-all"
+        );
+
+        assert_eq!(
+            dispute_antwortcode(&[]),
+            "A96",
+            "a monetary escalation with no finding takes the Summenebene catch-all"
+        );
+    }
+
+    /// Every code this handler can emit must be one `E_0406` publishes.
+    #[test]
+    fn every_emitted_code_is_published_by_its_ebd() {
+        for code in ["A70", "A99", "A96"] {
+            assert!(
+                mako_pruefung::codes::lookup(mako_pruefung::codes::EBD_NETZNUTZUNGSRECHNUNG, code)
+                    .is_some(),
+                "{code} is not published by E_0406"
+            );
         }
     }
 

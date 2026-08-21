@@ -230,8 +230,9 @@ impl VertragdMcpHandler {
                     "neues_produkt": r.neues_produkt,
                     "wirksam_ab": r.wirksam_ab.to_string(),
                     "vorlauf_tage": vorlauf,
-                    "erforderlicher_vorlauf_tage": regime.vorlauf_tage,
-                    "frist_gewahrt": vorlauf >= regime.vorlauf_tage,
+                    "erforderliche_frist": regime.bezeichnung,
+                    "fruehestens_wirksam": regime.fruehestens_wirksam(today).to_string(),
+                    "frist_gewahrt": regime.frist.gewahrt(today, r.wirksam_ab),
                     "rechtsgrundlage": regime.rechtsgrundlage,
                 })
             })

@@ -81,6 +81,9 @@ pub struct RunConfig {
     pub nb_auto_accept: bool,
     pub nb_gas_bearbeitungsfrist_wt: u32,
     pub lf_auto_respond: bool,
+    /// See [`crate::config::LfConfig::vertragd_url`].
+    pub lf_vertragd_url: Option<String>,
+    pub lf_vertragd_api_key: Option<SecretString>,
     /// See [`ProcessdState::msb_auto_accept`].
     pub msb_auto_accept: bool,
     /// See [`ProcessdState::msb_auto_preisanfrage`].
@@ -270,6 +273,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         let lf_config = crate::lf_module::LfModuleConfig {
             marktd_url: cfg.marktd_url.clone(),
             marktd_api_key: cfg.marktd_api_key.clone(),
+            vertragd_url: cfg.lf_vertragd_url.clone(),
+            vertragd_api_key: cfg.lf_vertragd_api_key.clone(),
             own_mp_id: cfg.own_mp_id.clone(),
             tenant: cfg.tenant.clone(),
             auto_respond: cfg.lf_auto_respond,
@@ -908,6 +913,12 @@ mod rest {
         }
     }
 
+    /// GeLi Gas Mindestvorlauffrist for a Lieferantenwechsel, in Werktagen.
+    ///
+    /// AWH GeLi Gas 2.0 Kap. 2.5.2 SD „Lieferbeginn" Nr. 1. Not to be confused
+    /// with the *GNB's* answer window, which is the Ablauf des 4. WT.
+    const GELI_GAS_VORLAUF_WT: u32 = 10;
+
     /// `POST /api/v1/start-supply-gas` — ERP initiates a GeLi Gas Lieferbeginn (Gas 44001).
     ///
     /// Dispatches `geli.lieferbeginn.anmelden` to `makod`.
@@ -916,9 +927,16 @@ mod rest {
     ///
     /// | Field          | Type   | Required | Notes |
     /// |----------------|--------|----------|-------|
-    /// | `malo_id`      | string | ✓        | 11-digit Gas-MaLo-ID (IDE+Z19, EIC) |
+    /// | `malo_id`      | string | ✓        | Gas-MaLo-ID — rendered into `SG5 LOC+Z16` |
     /// | `zaehlpunkt`   | string | ✓        | Zählpunktbezeichnung (RFF+Z13) — **mandatory** per AHB |
     /// | `process_date` | string | ✓        | Lieferbeginn date (YYYYMMDD in CET/CEST) |
+    /// | `transaktionsgrund` | string | —   | `E03` Wechsel (default), `E01`/`E02` Einzug — selects which Vorlauffrist rule applies |
+    ///
+    /// ## Mindestvorlauffrist
+    ///
+    /// **10 Werktage** for a Lieferantenwechsel (AWH GeLi Gas 2.0 Kap. 2.5.2 SD
+    /// „Lieferbeginn" Nr. 1), enforced here. For an Einzug the NB corrects the
+    /// date instead of rejecting, so those pass with a `vorlauffrist_hinweis`.
     ///
     /// **Both `malo_id` and `zaehlpunkt` are mandatory** (BK7-24-01-009 AHB rules
     /// `AHB-44001-IDE-M` and `AHB-44001-RFF-M`). There is no Gas equivalent of
@@ -977,6 +995,73 @@ mod rest {
                 .into_response();
         }
 
+        // ── GeLi Gas Mindestvorlauffrist ──────────────────────────────────
+        //
+        // AWH GeLi Gas 2.0 Kap. 2.5.2, SD „Lieferbeginn" Nr. 1: „Bei Anmeldungen
+        // anlässlich eines Lieferantenwechsels **mindestens 10 WT** vor Aufnahme
+        // der Belieferung."
+        //
+        // The rule is Transaktionsgrund-dependent, and the two halves have
+        // *different consequences*:
+        //
+        // - **Wechsel (E03):** the lead time is binding. Sending it short earns
+        //   an Ablehnung, so it is refused here rather than on the wire.
+        // - **Einzug / Neuanlage (E01, E02):** Kap. 4 has the NB *correct* the
+        //   date to „den zweiten, auf das Bestätigungsdatum folgenden WT"
+        //   instead. Refusing those would block an Anmeldung the market
+        //   accepts, so they pass with the correction flagged.
+        let transaktionsgrund = body
+            .get("transaktionsgrund")
+            .and_then(|v| v.as_str())
+            .unwrap_or("E03");
+        let ist_wechsel = transaktionsgrund == "E03";
+
+        let lieferbeginn = body
+            .get("process_date")
+            .and_then(|v| v.as_str())
+            .and_then(|d| {
+                time::Date::parse(d, time::macros::format_description!("[year][month][day]")).ok()
+            });
+
+        let mut vorlauf_hinweis = None;
+        if let Some(lieferbeginn) = lieferbeginn {
+            use mako_fristen::{HolidayCalendar, add_werktage};
+            use time_tz::{OffsetDateTimeExt as _, timezones};
+
+            let today_berlin = time::OffsetDateTime::now_utc()
+                .to_timezone(timezones::db::europe::BERLIN)
+                .date();
+            let fruehestens =
+                add_werktage(today_berlin, GELI_GAS_VORLAUF_WT, HolidayCalendar::BdewMaKo);
+
+            if lieferbeginn < fruehestens {
+                if ist_wechsel {
+                    return (
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        axum::Json(serde_json::json!({
+                            "error": "VORLAUFFRIST_VIOLATION",
+                            "message": format!(
+                                "GeLi Gas Mindestvorlauffrist not met. Earliest allowed \
+                                 Lieferbeginn for a Lieferantenwechsel: {fruehestens}. \
+                                 Requested: {lieferbeginn}. (Mindestens 10 WT vor Aufnahme \
+                                 der Belieferung — AWH GeLi Gas 2.0 Kap. 2.5.2 SD Lieferbeginn Nr. 1)"
+                            ),
+                            "earliest_lieferbeginn": fruehestens.to_string(),
+                            "berlin_date": today_berlin.to_string(),
+                            "transaktionsgrund": transaktionsgrund,
+                        })),
+                    )
+                        .into_response();
+                }
+                vorlauf_hinweis = Some(format!(
+                    "Lieferbeginn {lieferbeginn} liegt weniger als {GELI_GAS_VORLAUF_WT} WT in \
+                     der Zukunft (frühestens {fruehestens}). Bei Einzug/Neuanlage setzt der NB \
+                     den Netznutzungswechsel auf den zweiten auf das Bestätigungsdatum \
+                     folgenden WT fest (AWH GeLi Gas 2.0 Kap. 4)."
+                ));
+            }
+        }
+
         // Forward to makod `geli.lieferbeginn.anmelden`.
         //
         // The key carries the Lieferbeginn as well as the MaLo, matching the
@@ -991,7 +1076,9 @@ mod rest {
                 .unwrap_or("unknown")
         );
         let cmd = mako_markt::makod_client::ForwardCommand {
-            marktrolle: Some("LF".to_owned()),
+            // `geli.lieferbeginn.anmelden` is licensed to the **Gas** supplier;
+            // the generic `LF` fails makod's role check.
+            marktrolle: Some("LFG".to_owned()),
             command: mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN.to_owned(),
             malo_id: Some(malo_id.clone()),
             melo_id: None,
@@ -1005,7 +1092,10 @@ mod rest {
                     "command": "geli.lieferbeginn.anmelden",
                     "malo_id": malo_id,
                     "status": "initiated",
-                    "message": "GeLi Gas Lieferbeginn (PID 44001) initiated — awaiting GNB confirmation (10 Werktage)"
+                    // The GNB's answer window, not the supplier's own 10 WT
+                    // Vorlauffrist — two different clocks (Kap. 3.2.3).
+                    "message": "GeLi Gas Lieferbeginn (PID 44001) initiated — GNB-Antwort bis zum Ablauf des 4. Werktages (GeLi Gas Kap. 3.2.3)",
+                    "vorlauffrist_hinweis": vorlauf_hinweis
                 })),
             )
                 .into_response(),

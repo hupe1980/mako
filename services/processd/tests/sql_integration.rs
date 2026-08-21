@@ -193,7 +193,7 @@ async fn anmeldung_decisions_insert_and_list() {
         malo_id: "12345678989".to_owned(),
         lf_mp_id: "9900100000001".to_owned(),
         decision: AnmeldungDecision::Accept,
-        erc_code: None,
+        antwortcode: None,
         detail: None,
         initiator_is_affiliate: false,
         decided_at: now,

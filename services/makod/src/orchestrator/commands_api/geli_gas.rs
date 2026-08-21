@@ -715,3 +715,189 @@ pub(super) fn cmd_geli_gas_rechnung_ablehnen<'a>(
 > {
     Box::pin(dispatch_geli_gas_invoic(s, p, false))
 }
+
+// ── The answers the Gas supplier owes ─────────────────────────────────────────
+//
+// One dispatcher per process, both commands of a pair landing on it: whether
+// the Bestätigungs- or the Ablehnungs-PID goes out is decided by the
+// Antwortcode's published Cluster, not by the command name the ERP called.
+// `Z01` „Zustimmung mit Terminänderung" reads like a refusal and is a
+// Zustimmung; a name-driven split would send it as the wrong message.
+
+/// Dispatch the supplier's answer to a **Abmeldung NN vom NB** (44008/44009).
+pub(super) async fn dispatch_geli_abmeldung_nb_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    dispatch_geli_lf_antwort(state, payload, mako_pruefung::codes::EBD_ABMELDUNG_GAS).await
+}
+
+pub(super) fn cmd_geli_abmeldung_nb_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_abmeldung_nb_antwort(s, p))
+}
+
+pub(super) fn cmd_geli_abmeldung_nb_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_abmeldung_nb_antwort(s, p))
+}
+
+/// Dispatch the supplier's answer to a **Abmeldungsanfrage des NB** (44011/44012).
+pub(super) async fn dispatch_geli_abmeldungsanfrage_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    dispatch_geli_lf_antwort(
+        state,
+        payload,
+        mako_pruefung::codes::EBD_ABMELDUNGSANFRAGE_GAS,
+    )
+    .await
+}
+
+pub(super) fn cmd_geli_abmeldungsanfrage_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_abmeldungsanfrage_antwort(s, p))
+}
+
+pub(super) fn cmd_geli_abmeldungsanfrage_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_abmeldungsanfrage_antwort(s, p))
+}
+
+/// Dispatch the supplier's answer to a **Kündigung beim alten Lieferanten** (44017/44018).
+pub(super) async fn dispatch_geli_kuendigung_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    dispatch_geli_lf_antwort(state, payload, mako_pruefung::codes::EBD_KUENDIGUNG_GAS).await
+}
+
+pub(super) fn cmd_geli_kuendigung_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_kuendigung_antwort(s, p))
+}
+
+pub(super) fn cmd_geli_kuendigung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_kuendigung_antwort(s, p))
+}
+
+/// Dispatch the E/G supplier's answer to a Gas **EoG-Anmeldung** (44014/44015).
+///
+/// `E_3008`; the Gas twin of `gpke.eog.bestaetigen`.
+pub(super) async fn dispatch_geli_eog_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    // `E_3008` has no entry in the shared Codeliste catalogue yet, so the
+    // caller states the cluster alongside the code rather than having it
+    // derived. Passing an unbacked EBD id would look validated and not be.
+    dispatch_geli_lf_antwort_uncoded(state, payload).await
+}
+
+pub(super) fn cmd_geli_eog_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_eog_antwort(s, p))
+}
+
+pub(super) fn cmd_geli_eog_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_eog_antwort(s, p))
+}
+
+/// Shared body: resolve the Antwortcode against its Gas Codeliste, then answer.
+async fn dispatch_geli_lf_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    ebd: &str,
+) -> Result<DispatchOutcome, DispatchError> {
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "payload must contain \"antwort_code\" — a code from the {ebd} Codeliste, \
+                 rendered into SG4 STS+E01 of the answering UTILMD"
+            ))
+        })?;
+    let entry = mako_pruefung::codes::lookup(ebd, antwort_code).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} is not published by {ebd}"
+        ))
+    })?;
+    answer_gas_supplier_change(state, payload, entry.ist_zustimmung()).await
+}
+
+/// Shared body for a process whose Codeliste this build does not carry.
+async fn dispatch_geli_lf_antwort_uncoded(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let zustimmung = payload
+        .get("zustimmung")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must state \"zustimmung\" (true = Bestätigung, false = Ablehnung)".into(),
+            )
+        })?;
+    answer_gas_supplier_change(state, payload, zustimmung).await
+}
+
+async fn answer_gas_supplier_change(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    accepted: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let malo_id = extract_malo_id(payload)?;
+    let reason = payload
+        .get("bemerkung")
+        .or_else(|| payload.get("reason"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+
+    dispatch_to_process::<GeliGasSupplierChangeWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        mako_geli_gas::WORKFLOW_NAME,
+        move || GasSupplierChangeCommand::SendAntwort {
+            accepted,
+            reason: reason.clone(),
+            obligations: vec![],
+        },
+    )
+    .await
+}

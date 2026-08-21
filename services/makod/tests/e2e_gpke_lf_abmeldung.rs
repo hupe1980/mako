@@ -65,9 +65,10 @@ DTM+137:20250115:102'\
 RFF+Z13:LFSEG-REF-001'\
 NAD+MS+9900357000004::293'\
 NAD+MR+4012345000023::293'\
-IDE+Z19+51238696781::'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+51238696781'\
 DTM+92:20250401:102'\
-UNT+9+MSG-LFSEG-001'\
+UNT+10+MSG-LFSEG-001'\
 UNZ+1+LFSEG-2025-001'";
 
 // ── Mock LF ERP backend ───────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ impl MockLf {
                 assert_eq!(
                     location_id.as_str(),
                     MALO_ID,
-                    "adapter must extract MaLo from IDE+Z19"
+                    "adapter must extract MaLo from IDE+24"
                 );
                 assert_eq!(
                     message_ref.as_str(),
@@ -177,8 +178,15 @@ impl MockLf {
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) {
         self.process
             .execute(LfAbmeldungCommand::SendAntwort {
-                accepted,
-                reason: reason.map(str::to_owned),
+                antwort: if accepted {
+                    mako_gpke::LfAntwort::zustimmung("A10", "E_0609")
+                } else {
+                    let a = mako_gpke::LfAntwort::ablehnung("A99", "E_0609");
+                    match reason {
+                        Some(text) => a.with_bemerkung(text),
+                        None => a,
+                    }
+                },
             })
             .await
             .expect("LF: execute SendAntwort");

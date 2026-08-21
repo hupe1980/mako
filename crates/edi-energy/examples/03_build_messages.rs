@@ -12,8 +12,9 @@
 //! cargo run --example 03_build_messages
 //! ```
 
+use edi_energy::utilmd_codes::{Transaktionsgrund, dtm, transaktionsgrund};
 use edi_energy::{
-    EdiEnergyMessage, ObjectType, Platform, Pruefidentifikator, Release,
+    EdiEnergyMessage, Platform, Pruefidentifikator, Release,
     builders::{AperakBuilder, ContrlBuilder, MsconsBuilder, UtilmdBuilder},
 };
 
@@ -45,10 +46,14 @@ fn build_utilmd() -> Result<(), Box<dyn std::error::Error>> {
         .message_ref("MSG-001")
         .document_date("20241101")
         .document_code("E01")
-        // SG4/IDE — one transaction per metering-point process
-        .transaction(ObjectType::Messlokation, "DE00012345678")
-        .process_date("163", "20241101") // delivery start
-        .reference("Z13", "55001") // per-transaction Pruefidentifikator
+        // SG4 — one Vorgang per process, keyed by the sender's Vorgangsnummer
+        .transaction("VORGANG-0001")
+        .date(dtm::BEGINN_ZUM, "20241101") // DTM+92 Zuordnungsbeginn
+        .transaktionsgrund(Transaktionsgrund::verbrauchende_malo(
+            transaktionsgrund::WECHSEL,
+        ))
+        .marktlokation("51238696012") // SG5 LOC+Z16
+        .reference("Z13", "55001") // per-Vorgang Prüfidentifikator
         .done()
         .build()?
         .serialize()?;

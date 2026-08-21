@@ -16,7 +16,7 @@
 //! # Expected JSON schema
 //!
 //! ```json
-//! { "expected_rule_prefixes": ["SEM-UTILMD-MALO-FORMAT"] }
+//! { "expected_rule_prefixes": ["SEM-UTILMD-LOKATIONS-ID"] }
 // Helper functions and imports are gated by the same #[cfg(any(feature = …))]
 // blocks as the test fns that call them — no blanket suppression needed.
 #[cfg(any(

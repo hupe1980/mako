@@ -82,6 +82,28 @@ pub const WIM_PREISANFRAGE_ANGEBOT_SENDEN: &str = "wim.preisanfrage.angebot-send
 ///
 /// `makod` has a registry test asserting each of these is registered; adding a
 /// constant above without registering the command in `makod` fails that test.
+/// UTILMD 55017 — the LFA agrees to an inbound Kündigung (EBD `E_0614`).
+pub const GPKE_KUENDIGUNG_BESTAETIGEN: &str = "gpke.kuendigung.bestaetigen";
+/// UTILMD 55018 — the LFA refuses an inbound Kündigung (EBD `E_0614`).
+pub const GPKE_KUENDIGUNG_ABLEHNEN: &str = "gpke.kuendigung.ablehnen";
+
+/// UTILMD G 44008 — the LF agrees to an Abmeldung NN vom NB (`E_3002`).
+pub const GELI_ABMELDUNG_NB_BESTAETIGEN: &str = "geli.abmeldung-nb.bestaetigen";
+/// UTILMD G 44009 — the LF refuses an Abmeldung NN vom NB (`E_3002`).
+pub const GELI_ABMELDUNG_NB_ABLEHNEN: &str = "geli.abmeldung-nb.ablehnen";
+/// UTILMD G 44011 — the LFA agrees to an Abmeldeanfrage des NB (`E_3020`).
+pub const GELI_ABMELDUNGSANFRAGE_BESTAETIGEN: &str = "geli.abmeldungsanfrage.bestaetigen";
+/// UTILMD G 44012 — the LFA refuses an Abmeldeanfrage des NB (`E_3020`).
+pub const GELI_ABMELDUNGSANFRAGE_ABLEHNEN: &str = "geli.abmeldungsanfrage.ablehnen";
+/// UTILMD G 44017 — the LFA agrees to a Gas Kündigung (`E_3001`).
+pub const GELI_KUENDIGUNG_BESTAETIGEN: &str = "geli.kuendigung.bestaetigen";
+/// UTILMD G 44018 — the LFA refuses a Gas Kündigung (`E_3001`).
+pub const GELI_KUENDIGUNG_ABLEHNEN: &str = "geli.kuendigung.ablehnen";
+/// UTILMD G 44014 — the E/G agrees to a Gas EoG-Anmeldung (`E_3008`).
+pub const GELI_EOG_BESTAETIGEN: &str = "geli.eog.bestaetigen";
+/// UTILMD G 44015 — the E/G refuses a Gas EoG-Anmeldung (`E_3008`).
+pub const GELI_EOG_ABLEHNEN: &str = "geli.eog.ablehnen";
+
 pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_LIEFERBEGINN_ANMELDEN,
     GPKE_EOG_ANMELDEN,
@@ -94,6 +116,16 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_NB_LIEFERENDE_ABLEHNEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GPKE_KUENDIGUNG_BESTAETIGEN,
+    GPKE_KUENDIGUNG_ABLEHNEN,
+    GELI_ABMELDUNG_NB_BESTAETIGEN,
+    GELI_ABMELDUNG_NB_ABLEHNEN,
+    GELI_ABMELDUNGSANFRAGE_BESTAETIGEN,
+    GELI_ABMELDUNGSANFRAGE_ABLEHNEN,
+    GELI_KUENDIGUNG_BESTAETIGEN,
+    GELI_KUENDIGUNG_ABLEHNEN,
+    GELI_EOG_BESTAETIGEN,
+    GELI_EOG_ABLEHNEN,
     GELI_LIEFERBEGINN_ANMELDEN,
     GELI_LIEFERBEGINN_BESTAETIGEN,
     GELI_LIEFERBEGINN_ABLEHNEN,

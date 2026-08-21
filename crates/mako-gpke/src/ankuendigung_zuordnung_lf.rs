@@ -103,12 +103,13 @@ pub enum AnkuendigungZuordnungLfEvent {
     },
     /// Outbound response (55608 or 55609) dispatched to the NB.
     AntwortGesendet {
-        /// Response PID: 55608 (Bestätigung) or 55609 (Ablehnung).
+        /// Response PID actually dispatched.
         response_pid: Pruefidentifikator,
-        /// `true` = accepted (Bestätigung), `false` = rejected (Ablehnung).
+        /// `true` = Bestätigung, `false` = Ablehnung — read from the
+        /// Antwortcode's published Cluster, never supplied separately.
         accepted: bool,
-        /// Rejection reason (when `accepted = false`).
-        reason: Option<String>,
+        /// The answer as sent, kept for the audit trail.
+        antwort: crate::lf_antwort::LfAntwort,
     },
     /// Supply location assignment acknowledged — process complete.
     Zugeordnet,
@@ -260,10 +261,9 @@ pub enum AnkuendigungZuordnungLfCommand {
     ///
     /// The LFN has 24 wall-clock hours (BK6-22-024 §4) to respond.
     SendAntwort {
-        /// `true` = Bestätigung (55608), `false` = Ablehnung (55609).
-        accepted: bool,
-        /// Rejection reason (required when `accepted = false`).
-        reason: Option<String>,
+        /// The resolved answer: Antwortcode, its EBD, and the Cluster that
+        /// selects the response PID.
+        antwort: crate::lf_antwort::LfAntwort,
     },
     /// Confirm that the assignment has been acknowledged and the process is complete.
     ZuordnungBestaetigen,
@@ -475,25 +475,46 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 }
             }
 
-            AnkuendigungZuordnungLfCommand::SendAntwort { accepted, reason } => {
-                match state {
-                    AnkuendigungZuordnungLfState::ValidationPassed(_) => {}
+            AnkuendigungZuordnungLfCommand::SendAntwort { antwort } => {
+                let data = match state {
+                    AnkuendigungZuordnungLfState::ValidationPassed(d) => d,
                     _ => {
                         return Err(WorkflowError::invalid_state(
                             "ValidationPassed",
                             state.label(),
                         ));
                     }
-                }
+                };
+                // The Cluster the Antwortcode sits in decides the PID. A caller
+                // cannot pick one independently of the other — that is how an
+                // Ablehnungscode could otherwise ride a Bestätigung.
+                let accepted = antwort.zustimmung;
                 let response_code: u32 = if accepted { 55608 } else { 55609 };
                 let response_pid = Pruefidentifikator::new(response_code)
                     .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![AnkuendigungZuordnungLfEvent::AntwortGesendet {
-                    response_pid,
-                    accepted,
-                    reason,
-                }]
-                .into())
+
+                // The outbox entry *is* the answer. Without it the event log
+                // recorded the process as answered while the counterparty saw
+                // nothing but its Frist expire.
+                let outbox = vec![
+                    crate::lf_antwort::antwort_outbox(
+                        response_code,
+                        &antwort,
+                        &data.location_id,
+                        &data.sender,
+                        &data.receiver,
+                        &data.process_date,
+                    )
+                    .caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![AnkuendigungZuordnungLfEvent::AntwortGesendet {
+                        response_pid,
+                        accepted,
+                        antwort,
+                    }],
+                    outbox,
+                ))
             }
 
             AnkuendigungZuordnungLfCommand::ZuordnungBestaetigen => {
@@ -609,8 +630,13 @@ mod tests {
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &state,
             AnkuendigungZuordnungLfCommand::SendAntwort {
-                accepted: true,
-                reason: None,
+                antwort: crate::lf_antwort::LfAntwort {
+                    antwort_code: "E15".to_owned(),
+                    ebd: None,
+                    zustimmung: true,
+                    bemerkung: None,
+                    termin: None,
+                },
             },
         )
         .unwrap();
@@ -663,8 +689,14 @@ mod tests {
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &state,
             AnkuendigungZuordnungLfCommand::SendAntwort {
-                accepted: false,
-                reason: Some("Unbekannte Marktlokation".to_owned()),
+                antwort: crate::lf_antwort::LfAntwort {
+                    antwort_code: "E14".to_owned(),
+                    ebd: None,
+                    zustimmung: false,
+                    bemerkung: None,
+                    termin: None,
+                }
+                .with_bemerkung("Unbekannte Marktlokation"),
             },
         )
         .unwrap();
@@ -741,8 +773,13 @@ mod tests {
         let result = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &AnkuendigungZuordnungLfState::New,
             AnkuendigungZuordnungLfCommand::SendAntwort {
-                accepted: true,
-                reason: None,
+                antwort: crate::lf_antwort::LfAntwort {
+                    antwort_code: "E15".to_owned(),
+                    ebd: None,
+                    zustimmung: true,
+                    bemerkung: None,
+                    termin: None,
+                },
             },
         );
         assert!(

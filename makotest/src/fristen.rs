@@ -121,7 +121,9 @@ pub fn next_werktag_at(received: &str, at: &str) -> PyResult<String> {
 /// Parse `"HH:MM"` or `"HH:MM:SS"` into a clock time.
 fn parse_clock(at: &str) -> PyResult<time::Time> {
     let bad = |e: &dyn std::fmt::Display| {
-        PyValueError::new_err(format!("clock time must be \"HH:MM[:SS]\", got {at:?}: {e}"))
+        PyValueError::new_err(format!(
+            "clock time must be \"HH:MM[:SS]\", got {at:?}: {e}"
+        ))
     };
     let mut parts = at.split(':');
     let mut next = |what: &str| -> PyResult<u8> {

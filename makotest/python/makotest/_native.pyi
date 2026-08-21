@@ -93,23 +93,35 @@ def validate_edifact(raw: bytes, on: str) -> ValidationReport:
 class UtilmdTransaction:
     """One SG4/IDE transaction of a UTILMD message."""
 
-    object_type: str
-    """`"malo"`, `"melo"`, `"nelo"`, `"tranche"`, `"tr"` or `"sr"`."""
-    object_id: str
+    vorgangsnummer: str
+    """`IDE+24` DE 7402 — the sender's own reference for this Vorgang."""
     transaktionsgrund: str | None
-    process_dates: list[tuple[str, str]]
-    """`(qualifier, YYYYMMDD)`, e.g. `("163", "20261101")` for delivery start."""
+    """SG4 `STS+7` DE 9013 element 2, e.g. `"E01"`."""
+    transaktionsgrund_ergaenzung: str | None
+    """SG4 `STS+7` element 3; defaults to `"ZW4"` when a Grund is set."""
+    antwort_code: str | None
+    """SG4 `STS+E01` DE 9013 — the EBD Antwortcode on a Bestätigung/Ablehnung."""
+    antwort_ebd: str | None
+    """SG4 `STS+E01` DE 1131 — the EBD it comes from, e.g. `"E_0624"`."""
+    dates: list[tuple[str, str]]
+    """`(qualifier, YYYYMMDD)` SG4 DTM pairs, e.g. `("92", "20261101")` Beginn zum.
+
+    `163`/`164` are Messperioden-Qualifier and never occur at SG4 level.
+    """
     references: list[tuple[str, str]]
     """`(qualifier, value)`, e.g. `("Z13", "55001")`."""
     locations: list[tuple[str, str]]
+    """`(Lokationstyp, id)` SG5 LOC pairs — `("malo", …)`, `("melo", …)`."""
     customers: list[tuple[str, str]]
     free_texts: list[tuple[str, str]]
     def __init__(
         self,
-        object_type: str,
-        object_id: str,
+        vorgangsnummer: str,
         transaktionsgrund: str | None = None,
-        process_dates: list[tuple[str, str]] | None = None,
+        transaktionsgrund_ergaenzung: str | None = None,
+        antwort_code: str | None = None,
+        antwort_ebd: str | None = None,
+        dates: list[tuple[str, str]] | None = None,
         references: list[tuple[str, str]] | None = None,
         locations: list[tuple[str, str]] | None = None,
         customers: list[tuple[str, str]] | None = None,

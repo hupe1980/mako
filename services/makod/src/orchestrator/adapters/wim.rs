@@ -221,7 +221,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
             let melo_id = MeLo::new(
                 u.transactions()
                     .first()
-                    .and_then(|t| t.ide.object_id.as_deref())
+                    .and_then(|t| t.messlokation().or_else(|| t.marktlokation()))
                     .unwrap_or(""),
             );
             // Device ID from the first transaction reference (EIC / AGS).

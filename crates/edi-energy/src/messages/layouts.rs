@@ -19,6 +19,9 @@
 //!   each case. Each data element still resolves to exactly one slot, so one
 //!   definition addresses all three — but *which* is populated is a runtime
 //!   question. See [`crate::messages::segments::Sts::code`].
+//! - **A composite may repeat.** `C556` occurs up to three times in `STS`
+//!   (`STS+7++E01+ZW4+E03'`), so DE 9013 addresses the *first* occurrence and
+//!   the later ones are read positionally.
 //!
 //! Positions are **one-based**, as `ElementRef`/`ComponentRef` require;
 //! `element_slot`/`component_slot` return the zero-based index the accessors
@@ -110,8 +113,14 @@ const C601: &[ComponentRef] = &[ComponentRef::new(1, "9015", M)];
 /// C555 — Status (`STS`). Carries the value for Statuskategorie `Z18` / `10`.
 const C555: &[ComponentRef] = &[ComponentRef::new(1, "4405", M)];
 
-/// C556 — Statusanlass (`STS`). Carries the value for Statuskategorie `7` / `Z33`.
-const C556: &[ComponentRef] = &[ComponentRef::new(1, "9013", M)];
+/// C556 — Statusanlass (`STS`). Carries the value for Statuskategorie `7` / `Z33`
+/// and, on a Bestätigung or Ablehnung, the EBD Antwortcode of Statuskategorie
+/// `E01`. DE 1131 names the Codeliste the code is drawn from — the EBD number:
+/// `STS+E01++A01:E_0004'`.
+const C556: &[ComponentRef] = &[
+    ComponentRef::new(1, "9013", M),
+    ComponentRef::new(2, "1131", C),
+];
 
 /// C056 — Abteilung oder Bearbeiter (`CTA`).
 const C056: &[ComponentRef] = &[
@@ -211,6 +220,12 @@ pub const CCI: SegmentDefinition = SegmentDefinition::new("CCI", "Merkmal/Klasse
 const STS_ELEMENTS: &[ElementRef] = &[
     ElementRef::composite(1, "C601", C, 1, C601),
     ElementRef::composite(2, "C555", C, 1, C555),
+    // `C556` occupies three consecutive *element positions* under
+    // Statuskategorie `7`: Transaktionsgrund, Ergänzung and Transaktionsgrund
+    // für das Lieferende einer befristeten Anmeldung — `STS+7++E01+ZW4+E03'`,
+    // the MIG's own example. Only the first is code-addressable (a data element
+    // declared at two positions cannot be resolved by code); elements 4 and 5
+    // are read positionally by `UtilmdTransaction::transaktionsgrund`.
     ElementRef::composite(3, "C556", C, 1, C556),
 ];
 /// `STS` — Status. Polymorphic in DE 9015; see the module docs.

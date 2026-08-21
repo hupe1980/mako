@@ -56,9 +56,9 @@ mod custom_rule_pack;
 mod error;
 mod interchange;
 mod light_message;
+mod lokationstyp;
 mod message;
 mod message_type;
-mod object_type;
 mod parse;
 mod platform;
 mod pruefidentifikator;
@@ -71,6 +71,7 @@ pub mod builders;
 pub mod messages;
 /// Profile registry mapping `(MessageType, Release)` pairs to validation rules.
 pub mod registry;
+pub mod utilmd_codes;
 
 #[doc(hidden)]
 pub(crate) mod generated;
@@ -81,9 +82,9 @@ pub use custom_rule_pack::CustomRulePack;
 pub use error::{Error, ProfileError};
 pub use interchange::{InterchangeHeader, MessageEnvelope, ParsedInterchange, ReceiptContext};
 pub use light_message::LightMessage;
+pub use lokationstyp::Lokationstyp;
 pub use message::EdiEnergyMessage;
 pub use message_type::MessageType;
-pub use object_type::ObjectType;
 pub use parse::{
     DEFAULT_MAX_SEGMENT_BYTES, InterchangeIter, ParseConfig, Parser, parse, parse_envelope_only,
     parse_interchange,

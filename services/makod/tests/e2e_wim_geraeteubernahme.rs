@@ -65,7 +65,7 @@ DTM+137:20250115:102'\
 RFF+Z13:DEV-001'\
 NAD+MS+9900357000004::293'\
 NAD+MR+4012345000023::293'\
-IDE+Z19+E0000000000000000001::'\
+IDE+24+E0000000000000000001'\
 UNT+8+MSG-001'\
 UNZ+1+WIM-GT-001'";
 
@@ -122,7 +122,7 @@ impl MockNb {
                 assert_eq!(pid.as_u32(), 17001, "adapter must extract PID 17001");
                 assert_eq!(sender.as_str(), NMSB_ID, "sender must be nMSB GLN");
                 assert_eq!(receiver.as_str(), NB_ID, "receiver must be NB GLN");
-                assert_eq!(melo_id.as_str(), MELO_ID, "MeLo must match IDE+Z19");
+                assert_eq!(melo_id.as_str(), MELO_ID, "MeLo must match IDE+24");
                 assert_eq!(device_id.as_str(), DEVICE_ID, "DeviceId must match RFF");
                 assert_eq!(
                     message_ref.as_str(),

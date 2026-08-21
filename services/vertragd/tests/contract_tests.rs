@@ -160,8 +160,11 @@ fn the_notice_a_price_change_needs_depends_on_the_regime_and_the_customer() {
     let gv = domain::preisanpassungsregime(Vertragsart::Grundversorgung, true);
     let haushalt = domain::preisanpassungsregime(Vertragsart::Sondervertrag, true);
     let gewerbe = domain::preisanpassungsregime(Vertragsart::Sondervertrag, false);
-    assert!(gv.vorlauf_tage > haushalt.vorlauf_tage);
-    assert!(haushalt.vorlauf_tage > gewerbe.vorlauf_tage);
+    // Compared as dates, because the three periods are denominated in
+    // different units — six weeks, one calendar month, two weeks.
+    let ab = time::macros::date!(2026 - 01 - 15);
+    assert!(gv.frist.fruehestens_ab(ab) > haushalt.frist.fruehestens_ab(ab));
+    assert!(haushalt.frist.fruehestens_ab(ab) > gewerbe.frist.fruehestens_ab(ab));
     assert!(gv.nur_zum_monatsersten);
     assert!(!haushalt.nur_zum_monatsersten);
 }

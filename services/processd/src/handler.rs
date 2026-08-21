@@ -58,11 +58,7 @@ pub fn answerable_pids() -> Vec<u32> {
         pids.extend_from_slice(crate::msb_module::NB_ANSWERED_PIDS);
     }
     #[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
-    pids.extend(
-        crate::lf_module::LF_ANTWORT_PROCESSES
-            .iter()
-            .map(|p| p.trigger_pid),
-    );
+    pids.extend(crate::lf_module::lf_antwort_processes().map(|p| p.trigger_pid));
     #[cfg(feature = "role-msb-strom")]
     {
         pids.extend_from_slice(crate::msb_module::MSB_ANSWERED_PIDS);

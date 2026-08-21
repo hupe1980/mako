@@ -211,7 +211,7 @@ pub fn wim_gas_stornierung_registry() -> AdapterRegistry<WimGasStornierungWorkfl
                 vorgang_id: MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -317,7 +317,7 @@ pub fn wim_gas_anmeldung_registry() -> AdapterRegistry<WimGasAnmeldungWorkflow> 
                 malo_id: mako_engine::types::MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -410,7 +410,7 @@ pub fn wim_gas_kuendigung_registry() -> AdapterRegistry<WimGasKuendigungWorkflow
                 malo_id: mako_engine::types::MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
                 document_date: u
@@ -508,7 +508,7 @@ pub fn wim_gas_verpflichtungsanfrage_registry()
                 malo_id: mako_engine::types::MaLo::new(
                     u.transactions()
                         .first()
-                        .and_then(|t| t.ide.object_id.as_deref())
+                        .and_then(|t| t.vorgangsnummer())
                         .unwrap_or(""),
                 ),
                 document_date: u

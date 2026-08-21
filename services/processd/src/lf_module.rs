@@ -1,69 +1,62 @@
-//! LF process decision module — answering the NB-seitiges Lieferende.
+//! LF answer automation — the processes a supplier is *asked* about.
 //!
-//! ## The process
+//! Six inbound messages put this deployment in the answering seat. Each one has
+//! a published set of Prüfschritte, its own Codeliste, and its own Antwortfrist:
 //!
-//! GPKE Teil 2 § 2.5 "NB-seitiges Lieferende": the Netzbetreiber announces that
-//! the network assignment is ending, and the supplier answers.
+//! | Sparte | Inbound | Process | EBD | Answers | Frist |
+//! |---|---|---|---|---|---|
+//! | Strom | **55007** | Lieferende von NB an LF | `E_0609` | 55008 / 55009 | 05:00 Uhr des 1. WT nach dem ÜT |
+//! | Strom | **55010** | Beendigung der Zuordnung | `E_0624` | 55011 / 55012 | 09:00 Uhr des 1. WT nach dem ÜT |
+//! | Strom | **55016** | Kündigung (LFN → LFA) | `E_0614` | 55017 / 55018 | Ablauf des 1. WT nach dem ÜT |
+//! | Gas | **44007** | Abmeldung NN vom NB | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
+//! | Gas | **44010** | Abmeldeanfrage des NB | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
+//! | Gas | **44016** | Kündigung beim alten Lieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
 //!
-//! | PID | Direction | Meaning |
-//! |-----|-----------|---------|
-//! | **55007** | NB → LF | Ankündigung NB-seitiges Lieferende — **the inbound trigger** |
-//! | 55008 | LF → NB | Bestätigung (this module's `einwilligung`) |
-//! | 55009 | LF → NB | Ablehnung with an ERC (this module's `ablehnen`) |
+//! ## Two clocks
 //!
-//! The trigger is 55007. 55008/55009 are the *answers* — `makod` never spawns a
-//! process from them (`gpke-lf-abmeldung` accepts 55007 alone, anything else is
-//! `pid_not_in_spawn_table`), so a module keyed on 55008 waits for an event that
-//! cannot arrive.
-//!
-//! ## Two clocks, and which one bounds the queue
-//!
-//! An inbound UTILMD starts two independent timers, and conflating them is the
-//! mistake this note exists to prevent:
+//! An inbound UTILMD starts two independent timers:
 //!
 //! | Clock | Window | Owner |
 //! |-------|--------|-------|
 //! | Technical acknowledgement (APERAK) | **45 min** on weekdays, Sunday 12:00 Berlin for a Saturday arrival (APERAK AHB 1.0 § 2.4.1) | **`makod`**, automatically |
-//! | Business answer (55008/55009) | **05:00 Uhr des 1. WT nach dem ÜT** (GPKE Teil 2 § 2.5.2 SD Prozessschritt 2) | this module / the operator |
+//! | Business answer | the per-PID Frist above | this module / the operator |
 //!
-//! The queue is bounded by the **business** window, read from
-//! [`crate::fristen`] rather than approximated: a Friday-afternoon Ankündigung
-//! is answerable until Monday 05:00, a Tuesday-evening one until Wednesday
-//! 05:00 — nine hours.
+//! The queue is bounded by the **business** window, from [`crate::fristen`].
 //!
-//! ## Not this module
+//! ## How the decision is made
 //!
-//! - **PID 55010** "Anfrage zur Beendigung der Zuordnung" (EBD **E_0624**) is a
-//!   *different* GPKE process, answered 55011/55012 — see the sibling
-//!   [`BEENDIGUNG_ZUORDNUNG`] descriptor below.
-//! - **PID 55013** (Zuordnung EOG, NB → E/G) belongs to `mako-gpke::eog` and,
-//!   on the NB side, to [`crate::eog_module`].
-//!
-//! ## Decision logic
+//! [`mako_pruefung`] walks the Prüfschritte; this module assembles the facts
+//! they ask about — supply state from `marktd`, contract state from `vertragd` —
+//! and routes the outcome:
 //!
 //! ```text
-//! GET /api/v1/versorgung/{malo_id}
-//!   supplying + scenario "standard"          → Bestätigung (55008)
-//!   supplying + scenario "vertragsbindung"   → Ablehnung A35 (55009)
-//!   supplying + scenario "einzug"            → Ablehnung A32 (55009)
-//!   supplying + scenario "ersatzversorgung"  → Bestätigung
-//!   MaLo unknown / not supplying / LF mismatch → approval_queue
+//! de.mako.process.initiated (an answerable PID)
+//!   → build LfAnfrage from the CloudEvent
+//!   → build LfVertragslage from marktd + vertragd
+//!   → mako_pruefung::lf::pruefe_*(…)
+//!       Antwort   → dispatch the makod command carrying the Antwortcode
+//!       Eskalation → approval_queue, expiring an hour before the Frist
 //! ```
+//!
+//! A fact the deployment cannot supply is [`Bekannt::Unbekannt`] and escalates,
+//! naming the Prüfschritt — not "assume the ordinary case". A supplier that
+//! agrees to every Beendigung der Zuordnung hands over its customers on request.
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-24-174 GPKE Teil 2 § 2.5** — NB-seitiges Lieferende; the answer
-//!   Fristen are in [`mako_gpke::antwortfrist`]
-//! - **EBD 4.3** — `E_0609` (55007 → 55008/55009), `E_0624` (55010 → 55011/55012)
+//! - **BK6-24-174 GPKE Teil 2**, **BK7-24-01-009 GeLi Gas 3.0** — the processes
+//! - **EBD 4.3** — the Prüfschritte and Codelisten, in [`mako_pruefung`]
 //! - **APERAK AHB 1.0 § 2.4.1** — the separate 45-minute technical window
 
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
-use time::OffsetDateTime;
+use mako_pruefung::{
+    Bekannt, LfAnfrage, LfAntwort, LfEntscheidung, LfVertragslage, Lokationsart, Vollmacht,
+};
+use secrecy::SecretString;
+use time::{Date, OffsetDateTime};
 use tracing::{info, warn};
 use uuid::Uuid;
-
-use secrecy::SecretString;
 
 use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 
@@ -74,256 +67,352 @@ use crate::pg::approval::{ApprovalQueueEntry, PgApprovalQueue};
 pub struct LfModuleConfig {
     pub marktd_url: String,
     pub marktd_api_key: SecretString,
+    /// Base URL of `vertragd`, when this deployment runs the retail layer.
+    ///
+    /// Without it the contract-side Prüfschritte — Vertragsbindung, customer
+    /// identity, Kündbarkeit — cannot be answered, and every decision that
+    /// reaches one of them escalates. That is the honest outcome: those
+    /// questions are about a contract, and a deployment with no contract
+    /// database does not know the answer.
+    pub vertragd_url: Option<String>,
+    pub vertragd_api_key: Option<SecretString>,
     pub own_mp_id: String,
     pub tenant: String,
-    /// When `true`, dispatch `einwilligung`/`ablehnen` automatically.
+    /// When `true`, dispatch the resolved answer automatically.
     pub auto_respond: bool,
 }
 
-// ── marktd reader (shared with nb_module via direct reqwest) ──────────────────
+// ── Process descriptors ───────────────────────────────────────────────────────
 
-// ── NB-seitiges Lieferende payload ────────────────────────────────────────────────────────────
-
-/// An NB-initiated GPKE process this module answers on the LF's behalf.
-///
-/// Both processes have the same shape — the NB asks the supplier to agree that
-/// something ends, the supplier answers yes or no from its own supply state —
-/// so they share the evaluation and differ only in which PID arrives and which
-/// pair of `makod` commands carries the answer.
+/// One inbound process this module answers on the supplier's behalf.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LfAntwortProcess {
     /// The inbound PID that triggers it.
     pub trigger_pid: u32,
     /// Human-readable process name, for logs and queue reasons.
     pub name: &'static str,
-    /// EBD that governs the decision, where one is published.
-    pub ebd: Option<&'static str>,
-    /// `makod` command for the positive answer.
+    /// The EBD whose Codeliste the answer is drawn from.
+    pub ebd: &'static str,
+    /// `makod` command for a Zustimmung.
     pub bestaetigen: &'static str,
-    /// `makod` command for the negative answer.
+    /// `makod` command for an Ablehnung.
     pub ablehnen: &'static str,
+    /// Which walk decides it.
+    pub walk: Walk,
 }
 
-/// **Ankündigung NB-seitiges Lieferende** (GPKE Teil 2 § 2.5).
-///
-/// Inbound 55007, answered 55008 (Bestätigung) / 55009 (Ablehnung).
+/// Which published tree governs a process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Walk {
+    /// Lieferende von NB an LF — `E_0609` (Strom) / `E_3002` (Gas).
+    Abmeldung,
+    /// Beendigung der Zuordnung — `E_0624` (Strom) / `E_3020` (Gas).
+    BeendigungZuordnung,
+    /// Kündigung — `E_0614` (Strom) / `E_3001` (Gas).
+    Kuendigung,
+}
+
+/// Sparte, derived from the PID range.
+const fn ist_gas(pid: u32) -> bool {
+    pid >= 44_000 && pid < 45_000
+}
+
+/// **55007** Ankündigung der Beendigung der Zuordnung (Lieferende von NB an LF).
 pub const NB_LIEFERENDE: LfAntwortProcess = LfAntwortProcess {
     trigger_pid: 55_007,
-    name: "NB-seitiges Lieferende",
-    // „Abmeldung prüfen" on the LF side — a *different* tree from the NB's
-    // E_0607 of the same name, and different again from the E_0624 that governs
-    // the Beendigung der Zuordnung below.
-    ebd: Some("E_0609"),
+    name: "Lieferende von NB an LF",
+    ebd: mako_pruefung::codes::EBD_ABMELDUNG,
     bestaetigen: mako_markt::commands::GPKE_NB_LIEFERENDE_BESTAETIGEN,
     ablehnen: mako_markt::commands::GPKE_NB_LIEFERENDE_ABLEHNEN,
+    walk: Walk::Abmeldung,
 };
 
-/// **Anfrage zur Beendigung der Zuordnung** — the process EBD **E_0624**
-/// actually governs ("Anfrage zur Beendigung der Zuordnung prüfen").
+/// **55010** Anfrage zur Beendigung der Zuordnung.
 ///
-/// Inbound 55010, answered 55011 (Bestätigung) / 55012 (Ablehnung). The label
-/// belongs here and not on [`NB_LIEFERENDE`], which is a different process with
-/// different PIDs and a different answer pair.
+/// Despite the name this is Prozessschritt 3 of the *Lieferbeginn*: a new
+/// supplier registered and the NB asks the incumbent to release the MaLo.
 pub const BEENDIGUNG_ZUORDNUNG: LfAntwortProcess = LfAntwortProcess {
     trigger_pid: 55_010,
     name: "Beendigung der Zuordnung",
-    ebd: Some("E_0624"),
+    ebd: mako_pruefung::codes::EBD_BEENDIGUNG_ZUORDNUNG,
     bestaetigen: mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     ablehnen: mako_markt::commands::GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    walk: Walk::BeendigungZuordnung,
 };
 
-/// Every process this module answers, in match order.
-pub const LF_ANTWORT_PROCESSES: &[LfAntwortProcess] = &[NB_LIEFERENDE, BEENDIGUNG_ZUORDNUNG];
+/// **55016** Kündigung, sent LFN → LFA without the NB in between.
+pub const KUENDIGUNG: LfAntwortProcess = LfAntwortProcess {
+    trigger_pid: 55_016,
+    name: "Kündigung",
+    ebd: mako_pruefung::codes::EBD_KUENDIGUNG,
+    bestaetigen: mako_markt::commands::GPKE_KUENDIGUNG_BESTAETIGEN,
+    ablehnen: mako_markt::commands::GPKE_KUENDIGUNG_ABLEHNEN,
+    walk: Walk::Kuendigung,
+};
 
-/// Parsed fields from a `de.mako.process.initiated` for one of
-/// [`LF_ANTWORT_PROCESSES`].
+/// **44007** Abmeldung NN vom NB.
+pub const NB_LIEFERENDE_GAS: LfAntwortProcess = LfAntwortProcess {
+    trigger_pid: 44_007,
+    name: "Abmeldung NN vom NB (Gas)",
+    ebd: mako_pruefung::codes::EBD_ABMELDUNG_GAS,
+    bestaetigen: mako_markt::commands::GELI_ABMELDUNG_NB_BESTAETIGEN,
+    ablehnen: mako_markt::commands::GELI_ABMELDUNG_NB_ABLEHNEN,
+    walk: Walk::Abmeldung,
+};
+
+/// **44010** Abmeldungsanfrage des NB.
+pub const BEENDIGUNG_ZUORDNUNG_GAS: LfAntwortProcess = LfAntwortProcess {
+    trigger_pid: 44_010,
+    name: "Abmeldeanfrage des NB (Gas)",
+    ebd: mako_pruefung::codes::EBD_ABMELDUNGSANFRAGE_GAS,
+    bestaetigen: mako_markt::commands::GELI_ABMELDUNGSANFRAGE_BESTAETIGEN,
+    ablehnen: mako_markt::commands::GELI_ABMELDUNGSANFRAGE_ABLEHNEN,
+    walk: Walk::BeendigungZuordnung,
+};
+
+/// **44016** Kündigung beim alten Lieferanten.
+pub const KUENDIGUNG_GAS: LfAntwortProcess = LfAntwortProcess {
+    trigger_pid: 44_016,
+    name: "Kündigung beim alten Lieferanten (Gas)",
+    ebd: mako_pruefung::codes::EBD_KUENDIGUNG_GAS,
+    bestaetigen: mako_markt::commands::GELI_KUENDIGUNG_BESTAETIGEN,
+    ablehnen: mako_markt::commands::GELI_KUENDIGUNG_ABLEHNEN,
+    walk: Walk::Kuendigung,
+};
+
+/// The GPKE processes, compiled in only for `role-lf-strom`.
+#[cfg(feature = "role-lf-strom")]
+const STROM_PROCESSES: &[LfAntwortProcess] = &[NB_LIEFERENDE, BEENDIGUNG_ZUORDNUNG, KUENDIGUNG];
+#[cfg(not(feature = "role-lf-strom"))]
+const STROM_PROCESSES: &[LfAntwortProcess] = &[];
+
+/// The GeLi Gas processes, compiled in only for `role-lf-gas`.
+#[cfg(feature = "role-lf-gas")]
+const GAS_PROCESSES: &[LfAntwortProcess] =
+    &[NB_LIEFERENDE_GAS, BEENDIGUNG_ZUORDNUNG_GAS, KUENDIGUNG_GAS];
+#[cfg(not(feature = "role-lf-gas"))]
+const GAS_PROCESSES: &[LfAntwortProcess] = &[];
+
+/// Every process *this build* answers.
+///
+/// Sparte-scoped: a `role-lf-strom` deployment must not answer a GeLi Gas
+/// Abmeldung, because it holds no Gas Lieferverhältnis to answer from. The
+/// gate is on the routing table rather than the walks, which are shared.
+pub fn lf_antwort_processes() -> impl Iterator<Item = &'static LfAntwortProcess> {
+    STROM_PROCESSES.iter().chain(GAS_PROCESSES)
+}
+
+// ── CloudEvent → LfAnfrage ────────────────────────────────────────────────────
+
+/// A parsed inbound event, ready for a walk.
 #[derive(Debug, Clone)]
-pub struct NbLieferendePayload {
+pub struct LfAnfragePayload {
     /// Which process this event belongs to.
     pub process: LfAntwortProcess,
-    pub process_id: Uuid,
-    pub malo_id: String,
-    /// GLN of the grid operator who sent the NB-seitiges Lieferende.
-    pub initiating_nb_gln: String,
-    /// Requested Lieferende date.
-    pub lieferende_date: Option<time::Date>,
-    /// Whether this is a Vertragsbindung or Einzug scenario.
-    pub scenario: NbLieferendeScenario,
+    /// The request, in the shape [`mako_pruefung`] takes.
+    pub anfrage: LfAnfrage,
     /// The business answer deadline and the operator window derived from it.
     pub window: crate::fristen::OperatorWindow,
 }
 
-/// The situation the NB states in the Ankündigung, which decides the answer.
-///
-/// The variants are exactly the ones the AHB's `scenario` marker can carry —
-/// there is no `Unknown`, because nothing could construct it and a variant no
-/// value reaches is a branch that only ever reads as covered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NbLieferendeScenario {
-    /// An ordinary end of the assignment — the supplier agrees.
-    Standard,
-    /// The Anschlussnutzer moved in and a new supply has begun; the supplier
-    /// refuses with `A32`.
-    Einzug,
-    /// The MaLo passes into the statutory fallback supply — the supplier
-    /// agrees, whatever its own contract says.
-    Ersatzversorgung,
-    /// A running Vertragsbindung (Mindestvertragslaufzeit / Kündigungsfrist)
-    /// that the announced Zuordnungsende would break; the supplier refuses with
-    /// `A35`.
-    Vertragsbindung,
-}
-
-impl NbLieferendePayload {
+impl LfAnfragePayload {
+    /// Parse a `de.mako.process.initiated`, or `None` when the PID is not ours.
+    #[must_use]
     pub fn parse(event: &serde_json::Value) -> Option<Self> {
         let data = &event["data"];
         let pid = event
             .get("makopid")
-            .and_then(|v| v.as_u64())
-            .or_else(|| data.get("pid")?.as_u64())?;
-        let process = *LF_ANTWORT_PROCESSES
-            .iter()
-            .find(|p| u64::from(p.trigger_pid) == pid)?;
+            .and_then(serde_json::Value::as_u64)
+            .or_else(|| data.get("pid").and_then(serde_json::Value::as_u64))?;
+        let process = *lf_antwort_processes().find(|p| u64::from(p.trigger_pid) == pid)?;
 
-        let subject = event["subject"].as_str()?;
-        let process_id: Uuid = subject.parse().ok()?;
+        let process_id: Uuid = event["subject"].as_str()?.parse().ok()?;
         let malo_id = data.get("malo_id")?.as_str()?.to_owned();
-        let initiating_nb_gln = data
-            .get("grid_operator")
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
 
-        let scenario_str = data
-            .get("scenario")
-            .and_then(|v| v.as_str())
-            .unwrap_or("standard");
-        let scenario = match scenario_str.to_ascii_lowercase().as_str() {
-            "einzug" => NbLieferendeScenario::Einzug,
-            "ersatzversorgung" => NbLieferendeScenario::Ersatzversorgung,
-            "vertragsbindung" => NbLieferendeScenario::Vertragsbindung,
-            _ => NbLieferendeScenario::Standard,
+        let str_field = |key: &str| {
+            data.get(key)
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(ToOwned::to_owned)
         };
 
-        let lieferende_date = data
-            .get("lieferende")
-            .and_then(|v| v.as_str())
-            .and_then(|s| {
-                if s.len() == 8 {
-                    let fmt = time::macros::format_description!("[year][month][day]");
-                    time::Date::parse(s, &fmt).ok()
-                } else {
-                    let fmt = time::macros::format_description!("[year]-[month]-[day]");
-                    time::Date::parse(s, &fmt).ok()
-                }
-            });
+        // `STS+7` DE 9013 element 3 — the Transaktionsgrundergänzung, which is
+        // the first thing every tree branches on. A message without it cannot
+        // be classified, and the AHB marks it Muss, so the conservative
+        // reading is „verbrauchende Marktlokation" — the branch whose codes are
+        // the ones the counterparty expects for an ordinary MaLo.
+        let lokationsart = str_field("transaktionsgrund_ergaenzung")
+            .as_deref()
+            .and_then(Lokationsart::from_ergaenzung)
+            .unwrap_or(Lokationsart::VerbrauchendeMalo);
 
-        // The **business** answer window, from the same GPKE Teil 2 table
-        // `makod` registers the process deadline from. The 45-minute APERAK
-        // window is a different clock on the same message and is `makod`'s.
         let event_time = event["time"]
             .as_str()
             .and_then(|s| {
                 OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
             })
             .unwrap_or_else(OffsetDateTime::now_utc);
-        let window = crate::fristen::operator_window(process.trigger_pid, event_time);
 
-        Some(Self {
-            process,
+        let anfrage = LfAnfrage {
+            pid: process.trigger_pid,
             process_id,
             malo_id,
-            initiating_nb_gln,
-            lieferende_date,
-            scenario,
+            vorgangsnummer: str_field("vorgangsnummer"),
+            absender_mp_id: str_field("grid_operator")
+                .or_else(|| str_field("sender"))
+                .unwrap_or_default(),
+            empfaenger_mp_id: str_field("receiver").unwrap_or_default(),
+            lokationsart,
+            transaktionsgrund: str_field("transaktionsgrund"),
+            termin: str_field("lieferende")
+                .or_else(|| str_field("termin"))
+                .or_else(|| str_field("process_date"))
+                .as_deref()
+                .and_then(parse_date),
+            uet_lieferanmeldung: str_field("uet_lieferanmeldung")
+                .as_deref()
+                .and_then(parse_date),
+            eingang: event_time,
+        };
+
+        let window = crate::fristen::operator_window(process.trigger_pid, event_time);
+        Some(Self {
+            process,
+            anfrage,
             window,
         })
     }
 }
 
-// ── LF decision ───────────────────────────────────────────────────────────────
-
-/// Outcome of the NB-seitiges-Lieferende evaluation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LfDecision {
-    /// Dispatch `einwilligung` (consent to Abmeldung).
-    Einwilligung,
-    /// Dispatch `ablehnen` with `erc_code` (A32 = Einzug, A35 = Vertragsbindung).
-    Ablehnen { erc_code: String },
-    /// Enqueue for ERP review.
-    Escalate { reason: String },
+/// Accept both `YYYYMMDD` (EDIFACT) and `YYYY-MM-DD` (JSON) dates.
+fn parse_date(s: &str) -> Option<Date> {
+    if s.len() == 8 {
+        Date::parse(s, time::macros::format_description!("[year][month][day]")).ok()
+    } else {
+        Date::parse(
+            &s[..s.len().min(10)],
+            time::macros::format_description!("[year]-[month]-[day]"),
+        )
+        .ok()
+    }
 }
 
-/// Evaluate the LF's answer from the current VersorgungsStatus.
-fn evaluate_lf_antwort(
-    payload: &NbLieferendePayload,
+// ── Fact gathering ────────────────────────────────────────────────────────────
+
+/// Build the supply half of [`LfVertragslage`] from `marktd`.
+///
+/// Everything the contract database owns stays [`Bekannt::Unbekannt`] here and
+/// is filled in by [`apply_vertrag`].
+#[must_use]
+pub fn lage_from_versorgung(
     versorgung: Option<&VersorgungsStatusRecord>,
     own_mp_id: &str,
-) -> LfDecision {
+    termin: Option<Date>,
+) -> LfVertragslage {
     let Some(vs) = versorgung else {
-        return LfDecision::Escalate {
-            reason: format!(
-                "MaLo {} not found in master data. Cannot auto-decide NB-seitiges Lieferende.",
-                payload.malo_id
-            ),
-        };
+        return LfVertragslage::default();
     };
 
-    // Verify this LF is actually supplying the MaLo.
-    if vs.lieferstatus != LieferStatus::Beliefert
-        && vs.lieferstatus != LieferStatus::Grundversorgung
-        && vs.lieferstatus != LieferStatus::Ersatzversorgung
-    {
-        return LfDecision::Escalate {
-            reason: format!(
-                "MaLo {} is not in Beliefert/Grundversorgung/Ersatzversorgung state \
-                 (current: {}). Cannot auto-decide.",
-                payload.malo_id, vs.lieferstatus
-            ),
-        };
-    }
+    // „Beliefert" for these trees means *we* hold the assignment — under our own
+    // MP-ID, in any of the three states that are a supply.
+    let ours = vs.lf_mp_id.as_deref() == Some(own_mp_id);
+    let beliefert = ours
+        && matches!(
+            vs.lieferstatus,
+            LieferStatus::Beliefert
+                | LieferStatus::Grundversorgung
+                | LieferStatus::Ersatzversorgung
+        );
 
-    // Verify the LF GLN matches our own.
-    if vs.lf_mp_id.as_deref().is_some_and(|lf| lf != own_mp_id) {
-        let active_lf = vs.lf_mp_id.as_deref().unwrap_or("");
-        return LfDecision::Escalate {
-            reason: format!(
-                "MaLo {} is supplied by {} but our GLN is {}. \
-                 Cannot auto-decide — LF mismatch.",
-                payload.malo_id, active_lf, own_mp_id
-            ),
-        };
-    }
+    // „Besteht zum Folgetag des genannten Termins eine Zuordnung?" — the
+    // question E_0624 Prüfschritt 20 asks. A confirmed Lieferende on or before
+    // the requested date answers it; otherwise the supply continues.
+    let zuordnung_am_folgetag = match (beliefert, vs.lieferende, termin) {
+        (false, _, _) => Bekannt::Nein,
+        (true, Some(ende), Some(t)) if ende <= t => Bekannt::Nein,
+        (true, _, _) => Bekannt::Ja,
+    };
 
-    // Apply the scenario rules. Every branch is reachable: the guard above has
-    // already narrowed `lieferstatus` to Beliefert / Grundversorgung /
-    // Ersatzversorgung, all three of which are a supply this LF may end.
-    match payload.scenario {
-        NbLieferendeScenario::Einzug => LfDecision::Ablehnen {
-            erc_code: ERC_EINZUG.to_owned(),
-        },
-        NbLieferendeScenario::Vertragsbindung => LfDecision::Ablehnen {
-            erc_code: ERC_VERTRAGSBINDUNG.to_owned(),
-        },
-        // The statutory fallback supply is not something a supplier can refuse.
-        NbLieferendeScenario::Ersatzversorgung | NbLieferendeScenario::Standard => {
-            LfDecision::Einwilligung
-        }
+    LfVertragslage {
+        beliefert,
+        zuordnung_am_folgetag,
+        // `lieferende` is set once the termination is agreed with the NB.
+        bestaetigtes_zuordnungsende: vs.lieferende,
+        in_ersatzversorgung_am_folgetag: Bekannt::from_option(Some(matches!(
+            vs.lieferstatus,
+            LieferStatus::Ersatzversorgung
+        ))),
+        ist_grundversorger: matches!(
+            vs.lieferstatus,
+            LieferStatus::Grundversorgung | LieferStatus::Ersatzversorgung
+        ) && ours,
+        ..LfVertragslage::default()
     }
 }
 
-/// `A32` — the Anschlussnutzer moved in and a new supply has begun, so the
-/// announced Beendigung cannot be agreed to.
-const ERC_EINZUG: &str = "A32";
-/// `A35` — a running Vertragsbindung prevents the announced Zuordnungsende.
-const ERC_VERTRAGSBINDUNG: &str = "A35";
-
-// ── process_lf_antwort ─────────────────────────────────────────────────────────────
-
-/// Handle one `de.mako.process.initiated` for any of [`LF_ANTWORT_PROCESSES`].
+/// Fold the contract facts from `vertragd` into the supply-derived Lage.
 ///
-/// Returns `true` if the event was handled (even if escalated), `false` if its
-/// PID belongs to none of them.
+/// `vertrag` is the `GET /api/v1/vertraege/by-malo/{malo_id}` body.
+#[must_use]
+pub fn apply_vertrag(
+    mut lage: LfVertragslage,
+    vertrag: &serde_json::Value,
+    termin: Option<Date>,
+) -> LfVertragslage {
+    let v = &vertrag["vertrag"];
+    let vertragsende = v
+        .get("vertragsende")
+        .and_then(|x| x.as_str())
+        .and_then(parse_date);
+    lage.vertragsende = vertragsende;
+
+    // „Bleibt das Vertragsverhältnis zum Tag nach dem Enddatum bestehen?"
+    // A contract with no end date does; one ending on or before the requested
+    // date does not. Without a requested date the question is unanswerable.
+    lage.vertragsbindung_am_folgetag = match (termin, vertragsende) {
+        (None, _) => Bekannt::Unbekannt,
+        (Some(_), None) => Bekannt::Ja,
+        (Some(t), Some(ende)) => Bekannt::from_option(Some(ende > t)),
+    };
+
+    // The next admissible termination date, which `vertragd` computes from the
+    // Vertragsart, the Kündigungsfrist and § 41b EnWG.
+    if let Some(naechster) = vertrag
+        .get("naechstmoeglicher_kuendigungstermin")
+        .and_then(|x| x.as_str())
+        .and_then(parse_date)
+        && let Some(t) = termin
+        && naechster > t
+    {
+        // Notice to a date earlier than the next admissible one is a
+        // Vertragsbindung, whatever the stored Vertragsende says.
+        lage.vertragsbindung_am_folgetag = Bekannt::Ja;
+        lage.vertragsende = Some(naechster);
+    }
+
+    lage.kunde_identisch = Bekannt::from_option(
+        v.get("kunde_identisch_mit_anfrage")
+            .and_then(serde_json::Value::as_bool),
+    );
+    lage.kunde_nicht_ausgezogen = Bekannt::from_option(
+        v.get("kunde_nicht_ausgezogen")
+            .and_then(serde_json::Value::as_bool),
+    );
+    lage.vollmacht = Vollmacht::NichtAngefordert;
+    lage
+}
+
+// ── Dispatch ──────────────────────────────────────────────────────────────────
+
+/// Handle one `de.mako.process.initiated` for a PID this module answers.
+///
+/// Returns `true` when the event was handled — including when it escalated —
+/// and `false` when the PID belongs to another module.
+///
+/// # Errors
+///
+/// Propagates `marktd` and `makod` transport failures so the fan-out redelivers
+/// rather than silently dropping an obligation.
 pub async fn process_lf_antwort(
     event: &serde_json::Value,
     config: &LfModuleConfig,
@@ -331,40 +420,48 @@ pub async fn process_lf_antwort(
     makod: &MakodClient,
     queue: &PgApprovalQueue,
 ) -> Result<bool, Box<dyn std::error::Error + Send + Sync>> {
-    let Some(payload) = NbLieferendePayload::parse(event) else {
+    let Some(payload) = LfAnfragePayload::parse(event) else {
         return Ok(false);
     };
+    let anfrage = &payload.anfrage;
 
     info!(
-        process_id = %payload.process_id,
-        malo_id = %payload.malo_id,
+        process_id = %anfrage.process_id,
+        malo_id = %anfrage.malo_id,
         pid = payload.process.trigger_pid,
         process = payload.process.name,
+        ebd = payload.process.ebd,
         "processd LF: evaluating"
     );
 
-    // ── Fetch VersorgungsStatus ────────────────────────────────────────────
-    let versorgung = reader.get_versorgung(&payload.malo_id).await.inspect_err(
-        |e| warn!(%e, malo_id = %payload.malo_id, "processd LF: marktd fetch failed"),
+    let versorgung = reader.get_versorgung(&anfrage.malo_id).await.inspect_err(
+        |e| warn!(%e, malo_id = %anfrage.malo_id, "processd LF: marktd fetch failed"),
     )?;
 
-    let decision = evaluate_lf_antwort(&payload, versorgung.as_ref(), &config.own_mp_id);
+    let mut lage = lage_from_versorgung(versorgung.as_ref(), &config.own_mp_id, anfrage.termin);
+
+    // The contract half. A deployment without `vertragd` leaves these facts
+    // unknown, and the walk escalates when it reaches one — rather than
+    // assuming the supplier has no contract, which would agree to everything.
+    if let Some(vertrag) = fetch_vertrag(config, &anfrage.malo_id).await {
+        lage = apply_vertrag(lage, &vertrag, anfrage.termin);
+    }
+
+    let entscheidung = entscheide(payload.process, anfrage, &lage);
 
     info!(
-        process_id = %payload.process_id,
-        malo_id = %payload.malo_id,
+        process_id = %anfrage.process_id,
+        malo_id = %anfrage.malo_id,
         process = payload.process.name,
-        outcome = ?decision,
+        outcome = ?entscheidung,
         "processd LF: decision"
     );
 
-    // The queue entry expires with the headroom `crate::fristen` applies, so an
-    // operator acting on it still has time for the answer to reach the NB.
     let enqueue = async |reason: String| -> Result<(), sqlx::Error> {
         let entry = ApprovalQueueEntry::pending(
-            payload.process_id,
+            anfrage.process_id,
             i32::try_from(payload.process.trigger_pid).unwrap_or(0),
-            Some(payload.malo_id.clone()),
+            Some(anfrage.malo_id.clone()),
             format!(
                 "{reason} (Antwortfrist {}: {})",
                 payload.window.deadline, payload.window.source
@@ -383,77 +480,168 @@ pub async fn process_lf_antwort(
             .inspect_err(|e| warn!(%e, "processd LF: failed to enqueue approval entry"))
     };
 
-    match &decision {
-        LfDecision::Einwilligung => {
+    match &entscheidung {
+        LfEntscheidung::Antwort(antwort) => {
             if config.auto_respond {
-                let cmd = ForwardCommand {
-                    marktrolle: None,
-                    command: payload.process.bestaetigen.to_owned(),
-                    malo_id: Some(payload.malo_id.clone()),
-                    melo_id: None,
-                    payload: serde_json::json!({
-                        "process_id": payload.process_id,
-                        "lieferende": payload.lieferende_date,
-                    }),
-                };
-                makod
-                    .post_command(
-                        &format!("processd-lf-einwilligung-{}", payload.process_id),
-                        &cmd,
-                    )
-                    .await
-                    .inspect_err(|e| warn!(%e, "processd LF: einwilligung dispatch failed"))?;
-                info!(process_id = %payload.process_id, "processd LF: dispatched einwilligung");
+                dispatch_antwort(makod, payload.process, anfrage, antwort).await?;
             } else {
-                // auto_respond off is "operator decides", not "nobody answers":
-                // without a queue row the NB-seitiges Lieferende goes unanswered and unseen.
+                // auto_respond off means "an operator decides", not "nobody
+                // answers": without a queue row the process goes unanswered and
+                // unseen.
                 enqueue(format!(
-                    "auto_respond disabled — decidable NB-seitiges Lieferende for MaLo {}: Einwilligung",
-                    payload.malo_id
+                    "auto_respond disabled — {} für MaLo {} ist entschieden: {} {} ({})",
+                    payload.process.name,
+                    anfrage.malo_id,
+                    if antwort.zustimmung {
+                        "Zustimmung"
+                    } else {
+                        "Ablehnung"
+                    },
+                    antwort.code,
+                    antwort.bedeutung,
                 ))
                 .await?;
             }
         }
-        LfDecision::Ablehnen { erc_code } => {
-            if config.auto_respond {
-                let cmd = ForwardCommand {
-                    marktrolle: None,
-                    command: payload.process.ablehnen.to_owned(),
-                    malo_id: Some(payload.malo_id.clone()),
-                    melo_id: None,
-                    payload: serde_json::json!({
-                        "process_id": payload.process_id,
-                        "erc_code": erc_code,
-                    }),
-                };
-                makod
-                    .post_command(
-                        &format!("processd-lf-ablehnen-{}", payload.process_id),
-                        &cmd,
-                    )
-                    .await
-                    .inspect_err(|e| warn!(%e, "processd LF: ablehnen dispatch failed"))?;
-                info!(process_id = %payload.process_id, %erc_code, "processd LF: dispatched ablehnen");
-            } else {
-                enqueue(format!(
-                    "auto_respond disabled — decidable NB-seitiges Lieferende for MaLo {}: Ablehnung {erc_code}",
-                    payload.malo_id
-                ))
-                .await?;
-            }
-        }
-        LfDecision::Escalate { reason } => {
+        LfEntscheidung::Eskalation {
+            grund,
+            pruefschritt,
+        } => {
             warn!(
-                process_id = %payload.process_id,
-                malo_id = %payload.malo_id,
-                %reason,
-                "processd LF: NB-seitiges Lieferende escalated — creating approval_queue entry"
+                process_id = %anfrage.process_id,
+                malo_id = %anfrage.malo_id,
+                ebd = payload.process.ebd,
+                pruefschritt,
+                %grund,
+                "processd LF: escalated — creating approval_queue entry"
             );
-            enqueue(reason.clone()).await?;
+            enqueue(format!(
+                "{} Prüfschritt {pruefschritt}: {grund}",
+                payload.process.ebd
+            ))
+            .await?;
         }
     }
 
     Ok(true)
+}
+
+/// Run the walk this process is governed by.
+#[must_use]
+pub fn entscheide(
+    process: LfAntwortProcess,
+    anfrage: &LfAnfrage,
+    lage: &LfVertragslage,
+) -> LfEntscheidung {
+    let gas = ist_gas(process.trigger_pid);
+    match (process.walk, gas) {
+        (Walk::Abmeldung, false) => mako_pruefung::pruefe_abmeldung(anfrage, lage),
+        (Walk::Abmeldung, true) => mako_pruefung::pruefe_abmeldung_gas(anfrage, lage),
+        (Walk::BeendigungZuordnung, false) => {
+            mako_pruefung::pruefe_beendigung_zuordnung(anfrage, lage)
+        }
+        (Walk::BeendigungZuordnung, true) => {
+            mako_pruefung::pruefe_abmeldungsanfrage_gas(anfrage, lage)
+        }
+        (Walk::Kuendigung, false) => mako_pruefung::pruefe_kuendigung(anfrage, lage),
+        (Walk::Kuendigung, true) => mako_pruefung::pruefe_kuendigung_gas(anfrage, lage),
+    }
+}
+
+/// Send the resolved answer to `makod`.
+///
+/// The command is chosen by the Antwortcode's published Cluster, so a
+/// Zustimmungscode can never be dispatched down the Ablehnung path.
+async fn dispatch_antwort(
+    makod: &MakodClient,
+    process: LfAntwortProcess,
+    anfrage: &LfAnfrage,
+    antwort: &LfAntwort,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    let command = if antwort.zustimmung {
+        process.bestaetigen
+    } else {
+        process.ablehnen
+    };
+    let mut payload = serde_json::json!({
+        "process_id":   anfrage.process_id,
+        "malo_id":      anfrage.malo_id,
+        "antwort_code": antwort.code,
+        "zustimmung":   antwort.zustimmung,
+    });
+    if let Some(ebd) = &antwort.ebd {
+        payload["antwort_ebd"] = serde_json::Value::String(ebd.clone());
+    }
+    if let Some(bemerkung) = &antwort.bemerkung {
+        payload["bemerkung"] = serde_json::Value::String(bemerkung.clone());
+    }
+    if let Some(termin) = antwort.termin {
+        payload["termin"] = serde_json::Value::String(
+            termin
+                .format(time::macros::format_description!("[year][month][day]"))
+                .unwrap_or_default(),
+        );
+    }
+
+    let cmd = ForwardCommand {
+        marktrolle: None,
+        command: command.to_owned(),
+        malo_id: Some(anfrage.malo_id.clone()),
+        melo_id: None,
+        payload,
+    };
+    makod
+        .post_command(
+            &format!("processd-lf-{}-{}", antwort.code, anfrage.process_id),
+            &cmd,
+        )
+        .await
+        .inspect_err(|e| warn!(%e, command, "processd LF: answer dispatch failed"))?;
+    info!(
+        process_id = %anfrage.process_id,
+        command,
+        antwort_code = %antwort.code,
+        "processd LF: dispatched answer"
+    );
+    Ok(())
+}
+
+/// Fetch the contract for a MaLo, or `None` when `vertragd` is not configured
+/// or has no contract on file.
+///
+/// A transport failure is deliberately *not* an error: the walk then reaches an
+/// unknown fact and escalates, which is the right outcome for "we could not
+/// find out". Returning `Err` would instead make the fan-out retry an event
+/// whose answer window may be minutes wide.
+async fn fetch_vertrag(config: &LfModuleConfig, malo_id: &str) -> Option<serde_json::Value> {
+    use secrecy::ExposeSecret;
+
+    let base = config.vertragd_url.as_ref()?;
+    let url = format!(
+        "{}/api/v1/vertraege/by-malo/{malo_id}",
+        base.trim_end_matches('/')
+    );
+    let mut req = reqwest::Client::new().get(&url);
+    if let Some(key) = &config.vertragd_api_key {
+        req = req.bearer_auth(key.expose_secret());
+    }
+    match req.send().await {
+        Ok(resp) if resp.status().is_success() => resp.json().await.ok(),
+        Ok(resp) => {
+            if resp.status() != reqwest::StatusCode::NOT_FOUND {
+                warn!(
+                    status = %resp.status(), malo_id,
+                    "processd LF: vertragd lookup failed — contract facts stay unknown \
+                     and the decision escalates"
+                );
+            }
+            None
+        }
+        Err(e) => {
+            warn!(%e, malo_id, "processd LF: vertragd unreachable — the decision escalates");
+            None
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -462,12 +650,13 @@ pub async fn process_lf_antwort(
 mod tests {
     use super::*;
     use mako_markt::domain::MaloId;
-    use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
-    use time::OffsetDateTime;
+    use time::macros::{date, datetime};
+
+    const OWN: &str = "9900357000004";
 
     fn make_vs(status: LieferStatus, lf_mp_id: Option<&str>) -> VersorgungsStatusRecord {
         VersorgungsStatusRecord {
-            malo_id: "51238696012".parse::<MaloId>().unwrap(),
+            malo_id: "51238696012".parse::<MaloId>().expect("valid MaLo"),
             lieferstatus: status,
             lf_mp_id: lf_mp_id.map(ToOwned::to_owned),
             lf_mp_id_next: None,
@@ -484,122 +673,184 @@ mod tests {
         }
     }
 
-    fn make_payload(scenario: NbLieferendeScenario) -> NbLieferendePayload {
-        NbLieferendePayload {
-            process: NB_LIEFERENDE,
-            process_id: Uuid::new_v4(),
-            malo_id: "51238696012".to_owned(),
-            initiating_nb_gln: "9900000000001".to_owned(),
-            lieferende_date: None,
-            scenario,
-            window: crate::fristen::operator_window(
-                NB_LIEFERENDE.trigger_pid,
-                OffsetDateTime::now_utc(),
-            ),
+    fn event(pid: u32, extra: serde_json::Value) -> serde_json::Value {
+        let mut data = serde_json::json!({ "malo_id": "51238696012" });
+        if let (Some(d), Some(e)) = (data.as_object_mut(), extra.as_object()) {
+            for (k, v) in e {
+                d.insert(k.clone(), v.clone());
+            }
+        }
+        serde_json::json!({
+            "makopid": pid,
+            "subject": Uuid::nil().to_string(),
+            "time": "2026-08-20T09:00:00Z",
+            "data": data,
+        })
+    }
+
+    /// Every one of the six answerable PIDs must parse.
+    #[test]
+    fn all_six_answerable_pids_are_routed() {
+        for p in lf_antwort_processes() {
+            let parsed = LfAnfragePayload::parse(&event(p.trigger_pid, serde_json::json!({})));
+            assert!(
+                parsed.is_some(),
+                "PID {} ({}) is not routed",
+                p.trigger_pid,
+                p.name
+            );
         }
     }
 
+    /// A PID belonging to another module is not ours.
     #[test]
-    fn beliefert_standard_einwilligung() {
-        let vs = make_vs(LieferStatus::Beliefert, Some("9900357000004"));
-        let payload = make_payload(NbLieferendeScenario::Standard);
-        let result = evaluate_lf_antwort(&payload, Some(&vs), "9900357000004");
-        assert_eq!(result, LfDecision::Einwilligung);
+    fn a_foreign_pid_is_declined() {
+        assert!(LfAnfragePayload::parse(&event(55_001, serde_json::json!({}))).is_none());
+        // 55008 is the *answer* to 55007, never an inbound trigger.
+        assert!(LfAnfragePayload::parse(&event(55_008, serde_json::json!({}))).is_none());
     }
 
+    /// The Transaktionsgrundergänzung selects the branch, and therefore the
+    /// code range.
     #[test]
-    fn einzug_ablehnen_a32() {
-        let vs = make_vs(LieferStatus::Beliefert, Some("9900357000004"));
-        let payload = make_payload(NbLieferendeScenario::Einzug);
-        let result = evaluate_lf_antwort(&payload, Some(&vs), "9900357000004");
-        assert_eq!(
-            result,
-            LfDecision::Ablehnen {
-                erc_code: "A32".to_owned()
-            }
+    fn the_ergaenzung_selects_the_lokationsart() {
+        let p = LfAnfragePayload::parse(&event(
+            55_007,
+            serde_json::json!({ "transaktionsgrund_ergaenzung": "ZW5" }),
+        ))
+        .expect("parses");
+        assert_eq!(p.anfrage.lokationsart, Lokationsart::Tranche);
+    }
+
+    /// A supplier that does not hold the MaLo cannot state a contract position
+    /// on it: the walk escalates rather than agreeing.
+    #[test]
+    fn a_malo_we_do_not_supply_escalates() {
+        let vs = make_vs(LieferStatus::Beliefert, Some("9900999000001"));
+        let lage = lage_from_versorgung(Some(&vs), OWN, Some(date!(2026 - 09 - 01)));
+        assert!(!lage.beliefert);
+        assert_eq!(lage.zuordnung_am_folgetag, Bekannt::Nein);
+    }
+
+    /// An unknown MaLo leaves every fact unknown — and `Default` must not be a
+    /// set of convenient `false`s.
+    #[test]
+    fn an_unknown_malo_leaves_the_facts_unknown() {
+        let lage = lage_from_versorgung(None, OWN, None);
+        assert_eq!(lage.vertragsbindung_am_folgetag, Bekannt::Unbekannt);
+        assert_eq!(lage.kunde_identisch, Bekannt::Unbekannt);
+        assert_eq!(lage.zuordnung_am_folgetag, Bekannt::Unbekannt);
+    }
+
+    /// Without contract facts a Beendigung der Zuordnung escalates. Agreeing
+    /// would release a customer the supplier may still hold under contract.
+    #[test]
+    fn without_contract_facts_a_beendigung_escalates_rather_than_agreeing() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let lage = lage_from_versorgung(Some(&vs), OWN, Some(date!(2026 - 09 - 01)));
+        let payload = LfAnfragePayload::parse(&event(
+            55_010,
+            serde_json::json!({ "transaktionsgrund": "E03", "lieferende": "20260901" }),
+        ))
+        .expect("parses");
+
+        let d = entscheide(payload.process, &payload.anfrage, &lage);
+        assert!(
+            d.ist_eskalation(),
+            "a supplier with no contract data must not agree to release a customer: {d:?}"
         );
     }
 
+    /// With the contract on file and a Vertragsbindung, the answer is `A35`.
     #[test]
-    fn unknown_malo_escalates() {
-        let payload = make_payload(NbLieferendeScenario::Standard);
-        let result = evaluate_lf_antwort(&payload, None, "9900357000004");
-        assert!(matches!(result, LfDecision::Escalate { .. }));
-    }
-
-    #[test]
-    fn wrong_lf_gln_escalates() {
-        let vs = make_vs(LieferStatus::Beliefert, Some("9900999000001")); // different LF
-        let payload = make_payload(NbLieferendeScenario::Standard);
-        let result = evaluate_lf_antwort(&payload, Some(&vs), "9900357000004"); // own_mp_id differs
-        assert!(matches!(result, LfDecision::Escalate { .. }));
-    }
-
-    /// A35 is only reachable while the scenario enum carries a
-    /// `Vertragsbindung` variant for the parser to produce.
-    #[test]
-    fn vertragsbindung_ablehnen_a35() {
-        let vs = make_vs(LieferStatus::Beliefert, Some("9900357000004"));
-        let payload = make_payload(NbLieferendeScenario::Vertragsbindung);
-        assert_eq!(
-            evaluate_lf_antwort(&payload, Some(&vs), "9900357000004"),
-            LfDecision::Ablehnen {
-                erc_code: "A35".to_owned()
-            }
+    fn a_running_contract_answers_a35() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let termin = Some(date!(2026 - 09 - 01));
+        let lage = apply_vertrag(
+            lage_from_versorgung(Some(&vs), OWN, termin),
+            &serde_json::json!({ "vertrag": { "vertragsende": "2027-12-31" } }),
+            termin,
         );
+        let payload = LfAnfragePayload::parse(&event(
+            55_010,
+            serde_json::json!({ "transaktionsgrund": "E03", "lieferende": "20260901" }),
+        ))
+        .expect("parses");
+
+        let d = entscheide(payload.process, &payload.anfrage, &lage);
+        let a = d.as_antwort().expect("answer");
+        assert_eq!(a.code, "A35");
+        assert!(!a.zustimmung);
+        assert_eq!(a.ebd.as_deref(), Some("E_0624"));
     }
 
-    /// The scenario marker is matched case-insensitively — the AHB does not fix
-    /// its casing and the adapters have emitted both.
+    /// A contract ending before the requested date releases the MaLo — `A36`.
     #[test]
-    fn the_scenario_marker_is_case_insensitive() {
-        for raw in ["Vertragsbindung", "VERTRAGSBINDUNG", "vertragsbindung"] {
-            let event = serde_json::json!({
-                "makopid": 55_007,
-                "subject": Uuid::new_v4().to_string(),
-                "data": { "malo_id": "51238696012", "scenario": raw },
-            });
-            let p = NbLieferendePayload::parse(&event).expect("parses");
-            assert_eq!(p.scenario, NbLieferendeScenario::Vertragsbindung, "{raw}");
-        }
-    }
-
-    /// A MaLo in the statutory fallback supply must not escalate on a Standard
-    /// Ankündigung: the guard admits Ersatzversorgung, so the scenario branch
-    /// has to as well.
-    #[test]
-    fn ersatzversorgung_standard_is_einwilligung() {
-        let vs = make_vs(LieferStatus::Ersatzversorgung, Some("9900357000004"));
-        let payload = make_payload(NbLieferendeScenario::Standard);
-        assert_eq!(
-            evaluate_lf_antwort(&payload, Some(&vs), "9900357000004"),
-            LfDecision::Einwilligung
+    fn a_contract_ending_first_answers_a36() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let termin = Some(date!(2026 - 09 - 01));
+        let lage = apply_vertrag(
+            lage_from_versorgung(Some(&vs), OWN, termin),
+            &serde_json::json!({ "vertrag": { "vertragsende": "2026-08-31" } }),
+            termin,
         );
+        let payload = LfAnfragePayload::parse(&event(
+            55_010,
+            serde_json::json!({ "transaktionsgrund": "E03", "lieferende": "20260901" }),
+        ))
+        .expect("parses");
+
+        let d = entscheide(payload.process, &payload.anfrage, &lage);
+        assert_eq!(d.as_antwort().expect("answer").code, "A36");
+        assert!(d.ist_zustimmung());
     }
 
-    /// The queue window comes from the GPKE table: a Friday-afternoon
-    /// Ankündigung is answerable on Monday, not on Saturday.
+    /// A Kündigung to a date before the next admissible one is a
+    /// Vertragsbindung even when the contract has no stored end date.
     #[test]
-    fn the_answer_window_is_the_next_werktag_at_0500() {
-        use time::{Date, Month, Time};
-        let friday = OffsetDateTime::new_utc(
-            Date::from_calendar_date(2026, Month::March, 6).expect("valid date"),
-            Time::from_hms(13, 0, 0).expect("valid time"),
+    fn notice_before_the_next_admissible_date_is_a_vertragsbindung() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let termin = Some(date!(2026 - 09 - 01));
+        let lage = apply_vertrag(
+            lage_from_versorgung(Some(&vs), OWN, termin),
+            &serde_json::json!({
+                "vertrag": { "vertragsende": serde_json::Value::Null },
+                "naechstmoeglicher_kuendigungstermin": "2026-12-31",
+            }),
+            termin,
         );
-        let w = crate::fristen::operator_window(NB_LIEFERENDE.trigger_pid, friday);
-        assert!(w.is_regulatory);
-        assert_eq!(
-            w.deadline.date(),
-            Date::from_calendar_date(2026, Month::March, 9).expect("valid date"),
-            "Monday, not Saturday"
-        );
+        assert_eq!(lage.vertragsbindung_am_folgetag, Bekannt::Ja);
+        assert_eq!(lage.vertragsende, Some(date!(2026 - 12 - 31)));
     }
 
+    /// The Gas Kündigung answers from its own Codeliste — `Z12`, not `A06`.
     #[test]
-    fn grundversorgung_einwilligung() {
-        let vs = make_vs(LieferStatus::Grundversorgung, Some("9900357000004"));
-        let payload = make_payload(NbLieferendeScenario::Standard);
-        let result = evaluate_lf_antwort(&payload, Some(&vs), "9900357000004");
-        assert_eq!(result, LfDecision::Einwilligung);
+    fn the_gas_kuendigung_uses_gas_codes() {
+        let vs = make_vs(LieferStatus::Beliefert, Some(OWN));
+        let termin = Some(date!(2026 - 09 - 01));
+        let lage = apply_vertrag(
+            lage_from_versorgung(Some(&vs), OWN, termin),
+            &serde_json::json!({ "vertrag": { "vertragsende": "2027-12-31" } }),
+            termin,
+        );
+        let payload =
+            LfAnfragePayload::parse(&event(44_016, serde_json::json!({ "termin": "20260901" })))
+                .expect("parses");
+
+        let a = entscheide(payload.process, &payload.anfrage, &lage)
+            .as_antwort()
+            .cloned()
+            .expect("answer");
+        assert_eq!(a.code, "Z12");
+        assert!(a.ebd.is_none(), "the Gas MIG names no Codeliste in DE 1131");
+    }
+
+    /// The queue window is the business Frist, not the 45-minute APERAK clock.
+    #[test]
+    fn the_queue_window_is_the_business_frist() {
+        let p = LfAnfragePayload::parse(&event(55_007, serde_json::json!({}))).expect("parses");
+        assert!(p.window.is_regulatory);
+        assert!(p.window.expires_at < p.window.deadline);
+        assert!(p.window.deadline > datetime!(2026-08-20 09:00 UTC));
     }
 }

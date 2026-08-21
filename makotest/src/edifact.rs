@@ -22,7 +22,8 @@ use pyo3::types::PyModule;
 use edi_energy::builders::{
     AperakBuilder, ContrlBuilder, InterchangeBuilder, MsconsBuilder, UtilmdBuilder,
 };
-use edi_energy::{EdiEnergyMessage, MessageType, ObjectType, Platform, Pruefidentifikator};
+use edi_energy::utilmd_codes::{AntwortStatus, Transaktionsgrund};
+use edi_energy::{EdiEnergyMessage, Lokationstyp, MessageType, Platform, Pruefidentifikator};
 
 use crate::fristen::{fmt_date, parse_date};
 use crate::pids::resolve_release;
@@ -471,24 +472,36 @@ pub fn validate_edifact(raw: &[u8], on: &str) -> PyResult<ValidationReport> {
 // does not translate to Python. Python collects the parameters and hands them
 // over in one call; the typestate is satisfied internally.
 
-/// One SG4/IDE transaction of a UTILMD message.
+/// One SG4 Vorgang of a UTILMD message.
+///
+/// `IDE+24` carries the **Vorgangsnummer**; the Marktlokation or Messlokation
+/// goes into `SG5 LOC+Z16` / `LOC+Z17` via [`locations`](Self::locations).
 #[pyclass(get_all, set_all, from_py_object)]
 #[derive(Clone, Default)]
 pub struct UtilmdTransaction {
-    /// `"malo"`, `"melo"`, `"nelo"`, `"tranche"`, `"tr"` or `"sr"`.
-    pub object_type: String,
-    pub object_id: String,
-    /// SG4 `STS+7` Transaktionsgrund, e.g. `"E01"` (Ein-/Auszug).
+    /// `IDE+24` DE 7402 — the sender's own reference for this Vorgang.
+    pub vorgangsnummer: String,
+    /// SG4 `STS+7` DE 9013 element 2 — Transaktionsgrund, e.g. `"E01"`.
     pub transaktionsgrund: Option<String>,
-    /// `(qualifier, YYYYMMDD)` pairs, e.g. `("163", "20261101")` for delivery start.
-    pub process_dates: Vec<(String, String)>,
-    /// `(qualifier, value)` pairs, e.g. `("Z13", "55001")`.
+    /// SG4 `STS+7` DE 9013 element 3 — Transaktionsgrundergänzung.
+    ///
+    /// Defaults to `"ZW4"` (verbrauchende Marktlokation) when a Grund is set,
+    /// because the AHB marks the Ergänzung Muss wherever the Grund is.
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// SG4 `STS+E01` DE 9013 — the EBD Antwortcode on a Bestätigung/Ablehnung.
+    pub antwort_code: Option<String>,
+    /// SG4 `STS+E01` DE 1131 — the EBD the Antwortcode comes from, e.g. `"E_0624"`.
+    pub antwort_ebd: Option<String>,
+    /// `(qualifier, YYYYMMDD)` SG4 DTM pairs — `("92", …)` Beginn zum,
+    /// `("93", …)` Ende zum, `("154", …)` ÜT der Lieferanmeldung.
+    pub dates: Vec<(String, String)>,
+    /// `(qualifier, value)` SG6 RFF pairs, e.g. `("Z13", "55001")`.
     pub references: Vec<(String, String)>,
-    /// `(qualifier, id)` LOC pairs, e.g. `("172", "51238696012")`.
+    /// `(Lokationstyp, id)` SG5 LOC pairs — `("malo", …)`, `("melo", …)`.
     pub locations: Vec<(String, String)>,
     /// `(party qualifier, id)` NAD pairs, e.g. `("UD", "…")` for the customer.
     pub customers: Vec<(String, String)>,
-    /// `(text function, text)` FTX pairs.
+    /// `(text function, text)` FTX pairs — `("ACB", …)` is the Bemerkung.
     pub free_texts: Vec<(String, String)>,
 }
 
@@ -496,25 +509,30 @@ pub struct UtilmdTransaction {
 impl UtilmdTransaction {
     #[new]
     #[pyo3(signature = (
-        object_type, object_id, transaktionsgrund=None, process_dates=None,
+        vorgangsnummer, transaktionsgrund=None, transaktionsgrund_ergaenzung=None,
+        antwort_code=None, antwort_ebd=None, dates=None,
         references=None, locations=None, customers=None, free_texts=None
     ))]
     #[allow(clippy::too_many_arguments)]
     fn new(
-        object_type: String,
-        object_id: String,
+        vorgangsnummer: String,
         transaktionsgrund: Option<String>,
-        process_dates: Option<Vec<(String, String)>>,
+        transaktionsgrund_ergaenzung: Option<String>,
+        antwort_code: Option<String>,
+        antwort_ebd: Option<String>,
+        dates: Option<Vec<(String, String)>>,
         references: Option<Vec<(String, String)>>,
         locations: Option<Vec<(String, String)>>,
         customers: Option<Vec<(String, String)>>,
         free_texts: Option<Vec<(String, String)>>,
     ) -> Self {
         Self {
-            object_type,
-            object_id,
+            vorgangsnummer,
             transaktionsgrund,
-            process_dates: process_dates.unwrap_or_default(),
+            transaktionsgrund_ergaenzung,
+            antwort_code,
+            antwort_ebd,
+            dates: dates.unwrap_or_default(),
             references: references.unwrap_or_default(),
             locations: locations.unwrap_or_default(),
             customers: customers.unwrap_or_default(),
@@ -523,22 +541,32 @@ impl UtilmdTransaction {
     }
 
     fn __repr__(&self) -> String {
-        format!("UtilmdTransaction({} {})", self.object_type, self.object_id)
+        format!("UtilmdTransaction({})", self.vorgangsnummer)
     }
 }
 
-fn object_type_from_str(s: &str) -> PyResult<ObjectType> {
+/// Resolve a `SG5 LOC` DE 3227 qualifier from a Python-friendly name.
+///
+/// A raw wire code (`"Z16"`) is accepted too, so a test can pin an exact
+/// qualifier without going through the alias table.
+fn lokationstyp_from_str(s: &str) -> PyResult<Lokationstyp> {
+    if let Some(t) = Lokationstyp::from_qualifier_code(s) {
+        return Ok(t);
+    }
     Ok(match s.to_ascii_lowercase().as_str() {
-        "malo" | "marktlokation" => ObjectType::Marktlokation,
-        "melo" | "messlokation" => ObjectType::Messlokation,
-        "nelo" | "netzlokation" => ObjectType::Netzlokation,
-        "tranche" => ObjectType::Tranche,
-        "tr" | "technische_ressource" => ObjectType::TechnischeRessource,
-        "sr" | "steuerbare_ressource" => ObjectType::SteuerungRessource,
+        "malo" | "marktlokation" => Lokationstyp::Marktlokation,
+        "melo" | "messlokation" => Lokationstyp::Messlokation,
+        "nelo" | "netzlokation" => Lokationstyp::Netzlokation,
+        "tranche" => Lokationstyp::Tranche,
+        "tr" | "technische_ressource" => Lokationstyp::TechnischeRessource,
+        "sr" | "steuerbare_ressource" => Lokationstyp::SteuerbareRessource,
+        "ruhende_malo" | "ruhende_marktlokation" => Lokationstyp::RuhendeMarktlokation,
+        "mabis" | "mabis_zaehlpunkt" => Lokationstyp::MabisZaehlpunkt,
         other => {
             return Err(PyValueError::new_err(format!(
-                "unknown object_type {other:?} — expected one of \
-                 malo, melo, nelo, tranche, tr, sr"
+                "unknown Lokationstyp {other:?} — expected a LOC DE 3227 code \
+                 (Z15…Z22) or one of malo, melo, nelo, tranche, tr, sr, \
+                 ruhende_malo, mabis"
             )));
         }
     })
@@ -623,18 +651,28 @@ pub fn build_utilmd(
     }
 
     for tx in transactions.unwrap_or_default() {
-        let mut t = b.transaction(object_type_from_str(&tx.object_type)?, &tx.object_id);
-        if let Some(grund) = &tx.transaktionsgrund {
-            t = t.transaktionsgrund(grund.as_str());
+        let mut t = b.transaction(&tx.vorgangsnummer);
+        for (q, d) in &tx.dates {
+            t = t.date(q.as_str(), d.as_str());
         }
-        for (q, d) in &tx.process_dates {
-            t = t.process_date(q.as_str(), d.as_str());
+        if let Some(grund) = &tx.transaktionsgrund {
+            let erg = tx
+                .transaktionsgrund_ergaenzung
+                .as_deref()
+                .unwrap_or(edi_energy::utilmd_codes::ergaenzung::VERBRAUCHENDE_MALO);
+            t = t.transaktionsgrund(Transaktionsgrund::new(grund.as_str(), erg));
+        }
+        if let Some(code) = &tx.antwort_code {
+            t = t.antwort(match tx.antwort_ebd.as_deref() {
+                Some(ebd) => AntwortStatus::from_ebd(code.as_str(), ebd),
+                None => AntwortStatus::bare(code.as_str()),
+            });
         }
         for (q, r) in &tx.references {
             t = t.reference(q.as_str(), r.as_str());
         }
         for (q, id) in &tx.locations {
-            t = t.location(q.as_str(), id.as_str());
+            t = t.location(lokationstyp_from_str(q)?, id.as_str());
         }
         for (q, id) in &tx.customers {
             t = t.customer(q.as_str(), id.as_str());
@@ -867,18 +905,21 @@ pub fn build_aperak_for(
 /// This is what a counterparty sends after acknowledging: a Bestätigung or an
 /// Ablehnung under the answer Prüfidentifikator the AHB assigns. Everything
 /// that correlates the answer with the request is mirrored from the request
-/// itself — the parties are swapped, the SG4 `IDE` object (its DE 7495
-/// qualifier and object ID) is echoed with the qualifier the request used, and
-/// so are its `RFF` references, which carry the Vorgangsnummer the requester
-/// matches on.
+/// itself — the parties are swapped and the SG4 `IDE+24` Vorgangsnummer is
+/// echoed, together with the `RFF` references the requester matches on.
 ///
 /// `answer_pid` is not derived here: which of the pair applies is the
 /// counterparty's *decision*, and a simulator that always confirmed would never
 /// exercise a rejection. Resolve it with `bestaetigung_pid` / `ablehnung_pid`.
 ///
+/// `antwort_code` and `antwort_ebd` render the `SG4 STS+E01` the AHB marks Muss
+/// on every Antwortnachricht — `("A36", "E_0624")` for a Zustimmung to a
+/// Beendigung der Zuordnung. A simulator that omits them produces an answer no
+/// conformant counterparty accepts, which is the opposite of a useful test.
+///
 /// `process_dates` and `references` are appended to the echoed ones — that is
-/// where the answer's own content goes, e.g. `("163", "20261101")` for a
-/// confirmed Zuordnungsbeginn.
+/// where the answer's own content goes, e.g. `("93", "20261101")` for a
+/// confirmed Zuordnungsende.
 ///
 /// `message_index` selects which message of the interchange is being answered.
 /// An interchange routinely carries several, and each is a separate Vorgang with
@@ -887,8 +928,8 @@ pub fn build_aperak_for(
 #[pyfunction]
 #[pyo3(signature = (
     received, answer_pid, *, on=None, release=None, message_ref="1",
-    document_date=None, document_code="E01", process_dates=None, references=None,
-    message_index=0
+    document_date=None, document_code="E01", antwort_code=None, antwort_ebd=None,
+    process_dates=None, references=None, message_index=0
 ))]
 #[allow(clippy::too_many_arguments)]
 pub fn build_answer(
@@ -899,6 +940,8 @@ pub fn build_answer(
     message_ref: &str,
     document_date: Option<&str>,
     document_code: &str,
+    antwort_code: Option<&str>,
+    antwort_ebd: Option<&str>,
     process_dates: Option<Vec<(String, String)>>,
     references: Option<Vec<(String, String)>>,
     message_index: usize,
@@ -939,19 +982,35 @@ pub fn build_answer(
     }
 
     for tx in request.transactions() {
-        let Some(object_id) = tx.ide.object_id.as_deref() else {
+        let Some(vorgangsnummer) = tx.vorgangsnummer() else {
             continue;
         };
-        // The AHB fixes the IDE qualifier per Prüfidentifikator, so it is echoed
-        // rather than re-derived from an object type.
-        let mut a = b.transaction_with_qualifier(tx.ide.qualifier.as_str(), object_id);
+        // The answer echoes the request's Vorgangsnummer — that is what
+        // correlates it on the counterparty's side.
+        let mut a = b.transaction(vorgangsnummer);
+        // The Lokation travels with the answer: it lives in `SG5 LOC`, not in
+        // `IDE`, so it is echoed explicitly rather than riding the Vorgang.
+        for loc in &tx.locations {
+            if let (Some(lokationstyp), Some(id)) = (
+                Lokationstyp::from_qualifier_code(&loc.qualifier),
+                loc.location_id.as_deref(),
+            ) {
+                a = a.location(lokationstyp, id);
+            }
+        }
+        for (q, d) in process_dates.iter().flatten() {
+            a = a.date(q.as_str(), d.as_str());
+        }
+        if let Some(code) = antwort_code {
+            a = a.antwort(match antwort_ebd {
+                Some(ebd) => AntwortStatus::from_ebd(code, ebd),
+                None => AntwortStatus::bare(code),
+            });
+        }
         for rff in &tx.references {
             if let Some(reference) = rff.reference.as_deref() {
                 a = a.reference(rff.qualifier.as_str(), reference);
             }
-        }
-        for (q, d) in process_dates.iter().flatten() {
-            a = a.process_date(q.as_str(), d.as_str());
         }
         for (q, r) in references.iter().flatten() {
             a = a.reference(q.as_str(), r.as_str());
@@ -1093,9 +1152,9 @@ mod tests {
             "E01",
             None,
             Some(vec![UtilmdTransaction {
-                object_type: "melo".into(),
-                object_id: "DE00014559929E00856996N5139699L01".into(),
-                process_dates: vec![("163".into(), "20251101".into())],
+                vorgangsnummer: "VORGANG-0001".into(),
+                dates: vec![("92".into(), "20251101".into())],
+                locations: vec![("malo".into(), "51238696012".into())],
                 references: vec![("Z13".into(), "55001".into())],
                 ..Default::default()
             }]),
@@ -1314,7 +1373,9 @@ mod tests {
                 "ANS-1",
                 Some("20251102"),
                 "E01",
-                Some(vec![("163".into(), "20261101".into())]),
+                Some("A10"),
+                Some("E_0609"),
+                Some(vec![("92".into(), "20261101".into())]),
                 None,
                 0,
             ),
@@ -1327,14 +1388,17 @@ mod tests {
             "mirrored sender: {text}"
         );
         assert!(
-            text.contains("DE00014559929E00856996N5139699L01"),
-            "the request's object is echoed: {text}"
+            text.contains("IDE+24+VORGANG-0001"),
+            "the request's Vorgangsnummer is echoed: {text}"
         );
         assert!(
             text.contains("RFF+Z13:55001"),
             "the request's RFF is echoed: {text}"
         );
-        assert!(text.contains("DTM+163:20261101"), "{text}");
+        // `92` Beginn zum, not the Messperioden-Qualifier `163`.
+        assert!(text.contains("DTM+92:20261101"), "{text}");
+        // Every Antwortnachricht carries its EBD Antwortcode — AHB Muss.
+        assert!(text.contains("STS+E01++A10:E_0609"), "{text}");
 
         let report = ok(validate_edifact(&answer, "2025-10-01"), "validate");
         assert_eq!(report.messages[0].pruefidentifikator, Some(55002));

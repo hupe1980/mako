@@ -16,7 +16,7 @@
 //!    path for PID 55016 (LFA responds with 55017 Bestätigung).
 //!
 //! Each leg is an independent [`GpkeLfAnmeldungWorkflow`] process on the LFN side
-//! and an independent [`GpkeSupplierChangeWorkflow`] process on the receiving
+//! and an independent workflow process on the receiving
 //! party side.
 //!
 //! # Protocol trace
@@ -451,14 +451,20 @@ impl MockNb {
 
 // ── Mock LFA ERP backend ──────────────────────────────────────────────────────
 
-/// Simulates the **old supplier's (LFA) ERP** receiving LFN's Kündigung
-/// Lieferbeginn (PID 55016) and issuing the mandatory Bestätigung Kündigung
-/// (PID 55017).
+/// Simulates the **old supplier's (LFA) ERP** receiving the LFN's Kündigung
+/// (PID 55016) and answering it (55017 / 55018).
 ///
-/// Per LFW24 (BK6-22-024): a Kündigung Lieferbeginn **must always be accepted**
-/// by LFA — there is no rejection path for PID 55016.
+/// The answer is decided by `E_0614` „Kündigung Vertrag prüfen", which publishes
+/// six Ablehnungscodes (`A01` Fristüberschreitung, `A04` kein Vertragsverhältnis
+/// mehr, `A05`/`A06` Vertragsbindung, `A08` Vollmacht unwirksam, `A99`) — so
+/// 55018 is a real path, not a theoretical one. This mock takes the Zustimmung
+/// `A09`.
+///
+/// It runs `gpke-kuendigung`, not `gpke-supplier-change`: both are keyed by
+/// Marktlokation, and an integrated NB+LF deployment would otherwise have the
+/// NB's Anmeldung and this Kündigung contending for the same key.
 struct MockLfa {
-    process: Process<GpkeSupplierChangeWorkflow, InMemoryEventStore>,
+    process: Process<mako_gpke::GpkeKuendigungWorkflow, InMemoryEventStore>,
     platform: Platform,
     fv: FormatVersion,
 }
@@ -469,7 +475,7 @@ impl MockLfa {
             process: Process::new(
                 InMemoryEventStore::new(),
                 TenantId::from_party_id(LFA_ID),
-                WorkflowId::new("gpke-supplier-change", FV),
+                WorkflowId::new(mako_gpke::kuendigung::WORKFLOW_NAME, FV),
             ),
             platform: Platform::with_all_profiles(),
             fv: FormatVersion::new(FV),
@@ -493,11 +499,11 @@ impl MockLfa {
             "UNH message_ref must be derived from causation_event_id; got: {unh_ref:?}",
         );
 
-        let cmd = gpke_registry()
+        let cmd = makod::orchestrator::adapters::gpke_kuendigung_registry()
             .dispatch(&raw as &dyn Any, &self.fv)
-            .expect("LFA: adapt LFN UTILMD to SupplierChangeCommand");
+            .expect("LFA: adapt LFN UTILMD to KuendigungCommand");
         let cmd = match cmd {
-            SupplierChangeCommand::ReceiveUtilmd {
+            mako_gpke::KuendigungCommand::ReceiveKuendigung {
                 pid,
                 sender,
                 receiver,
@@ -510,14 +516,14 @@ impl MockLfa {
                 assert_eq!(
                     pid.as_u32(),
                     55016,
-                    "LFA must receive PID 55016 (Kündigung Lieferbeginn), got {pid}"
+                    "LFA must receive PID 55016 (Kündigung), got {pid}"
                 );
                 assert_eq!(
                     message_ref.as_str(),
                     unh_ref.as_str(),
                     "adapter must preserve UNH message_ref from parsed UTILMD",
                 );
-                SupplierChangeCommand::ReceiveUtilmd {
+                mako_gpke::KuendigungCommand::ReceiveKuendigung {
                     pid,
                     sender,
                     receiver,
@@ -525,17 +531,11 @@ impl MockLfa {
                     document_date,
                     process_date,
                     message_ref,
-                    received_at: time::OffsetDateTime::now_utc(),
-                    bilanzierungsgebiet: None,
-                    bilanzierungsmethode: None,
-                    fallgruppe: None,
-                    transaktionsgrund: None,
-                    ist_erzeugende_marktlokation: false,
                     validation_passed: true,
                     validation_errors: vec![],
                 }
             }
-            _ => panic!("expected SupplierChangeCommand::ReceiveUtilmd"),
+            _ => panic!("expected KuendigungCommand::ReceiveKuendigung"),
         };
         self.process
             .execute(cmd)
@@ -543,10 +543,7 @@ impl MockLfa {
             .expect("LFA: execute ReceiveUtilmd (55016)");
     }
 
-    /// ERP action: send Bestätigung Kündigung (PID 55017).
-    ///
-    /// A Kündigung Lieferbeginn (55016) is **always accepted** per LFW24 —
-    /// `accepted = true` is not optional here.
+    /// ERP action: send Bestätigung Kündigung (PID 55017) with `E_0614` `A09`.
     ///
     /// Asserts:
     /// - Exactly one outbox entry (UTILMD 55017 only — no MSCONS for Kündigung,
@@ -558,10 +555,10 @@ impl MockLfa {
     async fn send_bestaetigung(&self) -> Vec<u8> {
         let (_, outbox) = self
             .process
-            .execute_and_collect(SupplierChangeCommand::SendAntwort {
-                accepted: true, // mandatory: LFA cannot reject PID 55016 per LFW24
-                reason: None,
-                obligations: vec![],
+            .execute_and_collect(mako_gpke::KuendigungCommand::SendAntwort {
+                // `A09` „Zustimmung" — E_0614 Prüfschritt 120. The Cluster it
+                // sits in is what selects 55017 over 55018.
+                antwort: mako_gpke::LfAntwort::zustimmung("A09", "E_0614"),
             })
             .await
             .expect("LFA: execute SendAntwort (55016 → 55017)");
@@ -590,7 +587,7 @@ impl MockLfa {
             .bytes
     }
 
-    async fn state(&self) -> SupplierChangeState {
+    async fn state(&self) -> mako_gpke::KuendigungState {
         self.process.state().await.unwrap()
     }
 }
@@ -644,14 +641,17 @@ async fn e2e_lieferantenwechsel_strom_happy_path() {
     // ── LFA: receive UTILMD 55016, send 55017 ────────────────────────────────────
     lfa.receive_kuendigung(&wire_55016).await;
     assert!(
-        matches!(lfa.state().await, SupplierChangeState::ValidationPassed(_)),
+        matches!(
+            lfa.state().await,
+            mako_gpke::KuendigungState::ValidationPassed(_)
+        ),
         "LFA must be ValidationPassed after receiving UTILMD 55016"
     );
     let wire_55017 = lfa.send_bestaetigung().await;
     assert!(
         matches!(
             lfa.state().await,
-            SupplierChangeState::AntwortGesendet { .. }
+            mako_gpke::KuendigungState::AntwortGesendet { .. }
         ),
         "LFA must be AntwortGesendet after sending Bestätigung Kündigung"
     );
@@ -727,7 +727,7 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
     assert!(
         matches!(
             lfa.state().await,
-            SupplierChangeState::AntwortGesendet { .. }
+            mako_gpke::KuendigungState::AntwortGesendet { .. }
         ),
         "LFA must be AntwortGesendet — the Kündigung leg is independent of the NB leg"
     );

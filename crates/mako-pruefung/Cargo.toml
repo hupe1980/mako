@@ -1,0 +1,37 @@
+[package]
+name             = "mako-pruefung"
+version.workspace = true
+description      = "Decides the Antwortnachricht a German energy market participant owes — the BDEW answer rules for GPKE and GeLi Gas, as a pure library"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+readme           = "README.md"
+keywords         = ["energy", "mako", "bdew", "gpke", "edifact"]
+categories       = ["data-structures"]
+
+[features]
+default = ["role-nb", "role-lf"]
+## The trees whose prüfende Rolle is the Netzbetreiber (`E_0622`, `E_0607`).
+role-nb = ["dep:mako-markt"]
+## The trees whose prüfende Rolle is the Lieferant (`E_0609`, `E_0624`, `E_0614`,
+## and the Gas Codelisten `E_3001`, `E_3002`, `E_3020`).
+role-lf = []
+## Enable in-memory test doubles. Must never appear in production builds.
+testing = []
+
+[dependencies]
+mako-fristen = { workspace = true }
+mako-markt  = { workspace = true, optional = true }
+
+serde        = { workspace = true }
+serde_json   = { workspace = true }
+thiserror    = { workspace = true }
+time         = { workspace = true }
+time-tz      = { workspace = true }
+uuid         = { workspace = true }
+
+[dev-dependencies]
+serde_json   = { workspace = true }
+time         = { workspace = true }

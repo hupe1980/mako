@@ -51,7 +51,7 @@ use makod::adapters::gpke_anfrage_bestellung_registry;
 
 const LFN_ID: &str = "4012345000023"; // Lieferant (sender of UTILMD 55555)
 const NB_ID: &str = "9900357000004"; // Netzbetreiber (receiver / process owner)
-const VORGANG_ID: &str = "DE0000000000000000000000000012345"; // Vorgangsnummer (IDE+Z19)
+const VORGANG_ID: &str = "DE0000000000000000000000000012345"; // Vorgangsnummer (IDE+24)
 const FV: &str = "FV2025-10-01";
 
 // ── UTILMD 55555 wire fixture ─────────────────────────────────────────────────
@@ -61,7 +61,7 @@ const FV: &str = "FV2025-10-01";
 //
 // BGM qualifier E03 (Änderungsmeldung) + PID 55555 in element 2 per BDEW GPKE AHB.
 // STS+E07 = Anfrage für aktiven/bestätigten Vorgang.
-// IDE+Z19 carries the Vorgangsnummer.
+// IDE+24 carries the Vorgangsnummer.
 // RFF+Z13 provides the correlating reference (UNH 0062 of the original UTILMD).
 const UTILMD_55555_BYTES: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+ANFRAGE-2025-001'\
@@ -70,10 +70,10 @@ BGM+E03+00055555'\
 DTM+137:20250115:102'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+DE0000000000000000000000000012345::'\
+IDE+24+DE0000000000000000000000000012345'\
 STS+E07'\
 RFF+Z13:ANFRAGE-REF-001'\
-UNT+9+MSG-ANF-001'\
+UNT+8+MSG-ANF-001'\
 UNZ+1+ANFRAGE-2025-001'";
 
 // ── Mock NB ERP backend ───────────────────────────────────────────────────────
@@ -147,7 +147,7 @@ impl MockNb {
                 assert_eq!(
                     vorgang_id.as_str(),
                     VORGANG_ID,
-                    "adapter must extract Vorgangsnummer from IDE+Z19"
+                    "adapter must extract Vorgangsnummer from IDE+24"
                 );
                 assert_eq!(
                     bearbeitungsstatus, "E07",

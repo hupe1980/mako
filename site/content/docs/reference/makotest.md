@@ -71,7 +71,7 @@ from a shell by whoever is holding a real message rather than writing a test:
 $ makotest validate inbound.edi --on 2026-04-01
 UNB 4012345000023:14 → 9900357000003:500  ref=REF1
 #0 UTILMD S2.1 pid=55001 INVALID
-    error    [SEM-UTILMD-MALO-FORMAT] SG4/LOC[1].0: not a Messlokations-ID
+    error    [SEM-UTILMD-LOKATIONS-ID] SG4/LOC[1].0: not a Messlokations-ID
 
 INVALID on 2026-04-01
 
@@ -221,9 +221,9 @@ msg = build_utilmd(
     on="2026-04-01",                     # → release S2.1, DTM+137:20260401
     transactions=[
         UtilmdTransaction(
-            "melo",
-            "DE00014559929E00856996N5139699L01",
-            process_dates=[("163", "20260501")],
+            "VORGANG-1",                  # IDE+24 — never a location ID
+            locations=[("melo", "DE00014559929E00856996N5139699L01")],
+            dates=[("92", "20260501")],   # SG4 DTM — Beginn zum
             references=[("Z13", "55001")],
         )
     ],
@@ -271,7 +271,7 @@ report.errors[0].position             # 'IDE' — plus [element].component when 
 report.errors[0].rule_origin          # 'semantic' — the layer that fired
 
 assert_edifact_valid(wire, on="2026-04-01")
-assert_rule_fires(bad, "SEM-UTILMD-MALO-FORMAT", on="2026-04-01")
+assert_rule_fires(bad, "SEM-UTILMD-LOKATIONS-ID", on="2026-04-01")
 ```
 
 The report covers the whole interchange: the envelope's structural integrity and
@@ -355,7 +355,7 @@ against its own Fristen, and that is where regulated processes fail.
 
 ```python
 def test_nb_bestaetigt(nb_sim, anmeldung):
-    nb_sim.on(55001).bestaetigung(process_dates=[("163", "20260501")])
+    nb_sim.on(55001).bestaetigung(process_dates=[("92", "20260501")])
     reply = nb_sim.receive(anmeldung, received_at="2026-03-02T09:00:00Z")
 
     assert reply.pid == 55002

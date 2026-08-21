@@ -7,7 +7,7 @@
 //! 06:00 Uhr des 1. Werktags nach dem ÜT for Strom, Ablauf des dritten Werktags
 //! for Gas.
 //!
-//! Counterpart to [`crate::evaluate`], which decides the *Anmeldung*. They are
+//! Counterpart to [`super::evaluate`], which decides the *Anmeldung*. They are
 //! separate functions because the trees have **separate code spaces**: `A02` is
 //! „Marktlokation nimmt nicht an der Marktkommunikation teil" in `E_0622` and
 //! „Vorlauffrist nicht eingehalten" in `E_0607`. Reusing the Anmeldung codes
@@ -52,9 +52,9 @@ use time::{Date, Duration, OffsetDateTime};
 use mako_markt::domain::Sparte;
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 
-use crate::checks::{GAS_RUECKWIRKUNG_WOCHEN, has_werktag_strictly_between, today_berlin};
-use crate::config::NetzCheckConfig;
-use crate::types::{AbmeldungAnfrage, Messtyp, NetzCheckResult, RejectReason};
+use super::anmeldung::{GAS_RUECKWIRKUNG_WOCHEN, has_werktag_strictly_between, today_berlin};
+use super::config::NetzCheckConfig;
+use super::types::{AbmeldungAnfrage, Messtyp, NbEntscheidung, RejectReason};
 
 /// `A02` — Vorlauffrist nicht eingehalten (`E_0607` Prüfschritt 50).
 ///
@@ -83,25 +83,25 @@ const AUSZUG_GRUENDE: &[&str] = &["E01", "E02"];
 /// - `versorgung` — current supply state from `marktd`. `None` means the MaLo
 ///   is unknown to this NB.
 /// - `now` — current instant, injected by the caller for testability.
-/// - `config` — the same tunables [`crate::evaluate`] takes.
+/// - `config` — the same tunables [`super::evaluate`] takes.
 ///
 /// # Returns
 ///
-/// [`NetzCheckResult::Accept`] — dispatch `gpke.lieferende.bestaetigen` /
+/// [`NbEntscheidung::Accept`] — dispatch `gpke.lieferende.bestaetigen` /
 /// `geli.lieferende.bestaetigen`.
-/// [`NetzCheckResult::Reject`] — dispatch the matching `…ablehnen` with
-/// `reason.erc_code`.
-/// [`NetzCheckResult::Escalate`] — an operator decides.
+/// [`NbEntscheidung::Reject`] — dispatch the matching `…ablehnen` with
+/// `reason.antwortcode`.
+/// [`NbEntscheidung::Escalate`] — an operator decides.
 #[must_use]
 pub fn evaluate_abmeldung(
     anfrage: &AbmeldungAnfrage,
     versorgung: Option<&VersorgungsStatusRecord>,
     now: OffsetDateTime,
     config: &NetzCheckConfig,
-) -> NetzCheckResult {
+) -> NbEntscheidung {
     // ── Check 1: the MaLo is known ───────────────────────────────────────────
     let Some(vs) = versorgung else {
-        return NetzCheckResult::Escalate {
+        return NbEntscheidung::Escalate {
             reason: format!(
                 "MaLo {} is unknown to this Netzbetreiber — an Abmeldung for a MaLo \
                  with no supply state cannot be decided from master data.",
@@ -120,7 +120,7 @@ pub fn evaluate_abmeldung(
     match vs.lf_mp_id.as_deref() {
         Some(lf) if lf == anfrage.lf_mp_id => {}
         Some(other) => {
-            return NetzCheckResult::Escalate {
+            return NbEntscheidung::Escalate {
                 reason: format!(
                     "MaLo {} is assigned to LF {other}, but the Abmeldung came from \
                      {}. E_0607 Prüfschritt 110 — operator review required.",
@@ -129,7 +129,7 @@ pub fn evaluate_abmeldung(
             };
         }
         None => {
-            return NetzCheckResult::Escalate {
+            return NbEntscheidung::Escalate {
                 reason: format!(
                     "MaLo {} carries no assigned Lieferant (lieferstatus = {}), so the \
                      Abmeldung by {} cannot be matched against one.",
@@ -160,7 +160,7 @@ pub fn evaluate_abmeldung(
             .transaktionsgrund
             .as_deref()
             .is_some_and(|g| AUSZUG_GRUENDE.contains(&g));
-        let (erc_code, detail) = if is_auszug {
+        let (antwortcode, detail) = if is_auszug {
             (
                 ERC_ALREADY_CONFIRMED_SAME_REASON,
                 format!(
@@ -180,14 +180,15 @@ pub fn evaluate_abmeldung(
                 ),
             )
         };
-        return NetzCheckResult::Reject(RejectReason {
-            erc_code: erc_code.to_owned(),
+        return NbEntscheidung::Reject(RejectReason {
+            antwortcode: antwortcode.to_owned(),
+            ebd: Some("E_0607".into()),
             detail,
             check_number: 4,
         });
     }
 
-    NetzCheckResult::Accept
+    NbEntscheidung::Accept
 }
 
 /// `E_0607` Prüfschritt 50 — „Wurde die Vorlauffrist eingehalten?"
@@ -197,7 +198,7 @@ fn check_vorlauffrist(
     anfrage: &AbmeldungAnfrage,
     today: Date,
     config: NetzCheckConfig,
-) -> Option<NetzCheckResult> {
+) -> Option<NbEntscheidung> {
     match anfrage.sparte {
         Sparte::Strom => check_vorlauffrist_strom(anfrage, today, config),
         Sparte::Gas => check_vorlauffrist_gas(anfrage, today, config),
@@ -208,15 +209,16 @@ fn check_vorlauffrist_strom(
     anfrage: &AbmeldungAnfrage,
     today: Date,
     config: NetzCheckConfig,
-) -> Option<NetzCheckResult> {
+) -> Option<NbEntscheidung> {
     let d = anfrage.abmeldedatum;
 
     // EEG-Marktlokationen und Tranchen davon: Monatserster, spätester ÜT liegt
     // einen Monat vor dem Zuordnungsende (GPKE Teil 2 § 2.5.1 SD Nr. 1).
     if anfrage.ist_erzeugende_marktlokation {
         if d.day() != 1 {
-            return Some(NetzCheckResult::Reject(RejectReason {
-                erc_code: ERC_VORLAUFFRIST.to_owned(),
+            return Some(NbEntscheidung::Reject(RejectReason {
+                antwortcode: ERC_VORLAUFFRIST.to_owned(),
+                ebd: Some("E_0607".into()),
                 detail: format!(
                     "Abmeldung einer EEG-Marktlokation zum {d}, das kein Monatserster ist. \
                      „Das Zuordnungsende muss ein Monatserster sein\" (GPKE Teil 2 § 2.5.1 \
@@ -227,10 +229,11 @@ fn check_vorlauffrist_strom(
             }));
         }
         let earliest =
-            crate::checks::first_of_month_after(today, config.eeg_zuordnung_vorlauf_monate);
+            super::anmeldung::first_of_month_after(today, config.eeg_zuordnung_vorlauf_monate);
         return (d < earliest).then(|| {
-            NetzCheckResult::Reject(RejectReason {
-                erc_code: ERC_VORLAUFFRIST.to_owned(),
+            NbEntscheidung::Reject(RejectReason {
+                antwortcode: ERC_VORLAUFFRIST.to_owned(),
+                ebd: Some("E_0607".into()),
                 detail: format!(
                     "Vorlauffrist nicht eingehalten: Abmeldung einer EEG-Marktlokation zum \
                      {d}, frühestmöglicher Monatserster ist {earliest} (spätester ÜT liegt \
@@ -247,8 +250,9 @@ fn check_vorlauffrist_strom(
     if has_werktag_strictly_between(today, d, config.holiday_calendar) {
         return None;
     }
-    Some(NetzCheckResult::Reject(RejectReason {
-        erc_code: ERC_VORLAUFFRIST.to_owned(),
+    Some(NbEntscheidung::Reject(RejectReason {
+        antwortcode: ERC_VORLAUFFRIST.to_owned(),
+        ebd: Some("E_0607".into()),
         detail: format!(
             "Vorlauffrist nicht eingehalten: Zuordnungsende {d} bei Eingang {today}. \
              „Spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsende\" \
@@ -264,7 +268,7 @@ fn check_vorlauffrist_gas(
     anfrage: &AbmeldungAnfrage,
     today: Date,
     config: NetzCheckConfig,
-) -> Option<NetzCheckResult> {
+) -> Option<NbEntscheidung> {
     let d = anfrage.abmeldedatum;
     if d >= today {
         return None; // future or same-day Abmeldung is always plausible
@@ -273,8 +277,9 @@ fn check_vorlauffrist_gas(
     // Lieferantenwechsel: „Wechsel sind nur in die Zukunft gerichtet möglich"
     // (GeLi Gas 3.0 Kap. 3.2.1).
     if anfrage.transaktionsgrund.as_deref() == Some("E03") {
-        return Some(NetzCheckResult::Reject(RejectReason {
-            erc_code: ERC_VORLAUFFRIST.to_owned(),
+        return Some(NbEntscheidung::Reject(RejectReason {
+            antwortcode: ERC_VORLAUFFRIST.to_owned(),
+            ebd: Some("E_0607".into()),
             detail: format!(
                 "Rückwirkende Gas-Abmeldung zum {d} (Eingang {today}) anlässlich eines \
                  Lieferantenwechsels — Wechsel sind nur in die Zukunft gerichtet möglich \
@@ -292,8 +297,9 @@ fn check_vorlauffrist_gas(
                 config.holiday_calendar,
             );
             (today > window_end).then(|| {
-                NetzCheckResult::Reject(RejectReason {
-                    erc_code: ERC_VORLAUFFRIST.to_owned(),
+                NbEntscheidung::Reject(RejectReason {
+                    antwortcode: ERC_VORLAUFFRIST.to_owned(),
+                    ebd: Some("E_0607".into()),
                     detail: format!(
                         "Rückwirkende Gas-Abmeldung zum {d} liegt außerhalb des \
                          6-Wochen-Fensters (+{} WT Bearbeitungsfrist, Ende {window_end}; \
@@ -308,8 +314,9 @@ fn check_vorlauffrist_gas(
         // „Für Letztverbraucher mit registrierender Leistungsmessung, sowie für
         // neue Messeinrichtungen, die an ein Smart-Meter-Gateway angeschlossen
         // sind, können An- und Abmeldedatum nur nach dem Eingangsdatum liegen."
-        Messtyp::Rlm | Messtyp::Imsys => Some(NetzCheckResult::Reject(RejectReason {
-            erc_code: ERC_VORLAUFFRIST.to_owned(),
+        Messtyp::Rlm | Messtyp::Imsys => Some(NbEntscheidung::Reject(RejectReason {
+            antwortcode: ERC_VORLAUFFRIST.to_owned(),
+            ebd: Some("E_0607".into()),
             detail: format!(
                 "Rückwirkende Gas-Abmeldung zum {d} ist bei {}-Messung nicht zulässig — \
                  An- und Abmeldedatum können nur nach dem Eingangsdatum liegen \
@@ -382,7 +389,7 @@ mod tests {
     fn a_clean_future_abmeldung_is_accepted() {
         let vs = versorgung(LieferStatus::Beliefert, Some(OWN_LF), None);
         let r = evaluate_abmeldung(&anfrage(d(2026, Month::April, 1)), Some(&vs), NOW, &cfg());
-        assert_eq!(r, NetzCheckResult::Accept);
+        assert_eq!(r, NbEntscheidung::Accept);
     }
 
     #[test]
@@ -406,7 +413,7 @@ mod tests {
     fn a_next_day_abmeldung_misses_the_vorlauffrist() {
         let vs = versorgung(LieferStatus::Beliefert, Some(OWN_LF), None);
         let r = evaluate_abmeldung(&anfrage(d(2026, Month::March, 3)), Some(&vs), NOW, &cfg());
-        assert_eq!(r.erc_code(), Some("A02"), "{r:?}");
+        assert_eq!(r.antwortcode(), Some("A02"), "{r:?}");
     }
 
     /// The Vorlauffrist code is `A02` in E_0607 — the same string means
@@ -415,8 +422,8 @@ mod tests {
     fn the_vorlauffrist_code_is_a02_not_a07() {
         let vs = versorgung(LieferStatus::Beliefert, Some(OWN_LF), None);
         let r = evaluate_abmeldung(&anfrage(d(2026, Month::March, 2)), Some(&vs), NOW, &cfg());
-        assert_eq!(r.erc_code(), Some("A02"));
-        assert_ne!(r.erc_code(), Some("A07"));
+        assert_eq!(r.antwortcode(), Some("A02"));
+        assert_ne!(r.antwortcode(), Some("A07"));
     }
 
     #[test]
@@ -424,7 +431,7 @@ mod tests {
         let ende = d(2026, Month::April, 1);
         let vs = versorgung(LieferStatus::Unbeliefert, Some(OWN_LF), Some(ende));
         let r = evaluate_abmeldung(&anfrage(ende), Some(&vs), NOW, &cfg());
-        assert_eq!(r.erc_code(), Some("A09"), "{r:?}");
+        assert_eq!(r.antwortcode(), Some("A09"), "{r:?}");
     }
 
     #[test]
@@ -434,7 +441,7 @@ mod tests {
         let mut a = anfrage(ende);
         a.transaktionsgrund = Some("E01".to_owned());
         let r = evaluate_abmeldung(&a, Some(&vs), NOW, &cfg());
-        assert_eq!(r.erc_code(), Some("A10"), "{r:?}");
+        assert_eq!(r.antwortcode(), Some("A10"), "{r:?}");
     }
 
     /// A confirmed Lieferende at a *different* date must not block a new one.
@@ -446,7 +453,7 @@ mod tests {
             Some(d(2026, Month::January, 1)),
         );
         let r = evaluate_abmeldung(&anfrage(d(2026, Month::April, 1)), Some(&vs), NOW, &cfg());
-        assert_eq!(r, NetzCheckResult::Accept);
+        assert_eq!(r, NbEntscheidung::Accept);
     }
 
     // ── EEG-Marktlokation ─────────────────────────────────────────────────────
@@ -457,7 +464,7 @@ mod tests {
         let mut a = anfrage(d(2026, Month::May, 15));
         a.ist_erzeugende_marktlokation = true;
         assert_eq!(
-            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).erc_code(),
+            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).antwortcode(),
             Some("A02")
         );
     }
@@ -468,7 +475,7 @@ mod tests {
         let mut a = anfrage(d(2026, Month::March, 1));
         a.ist_erzeugende_marktlokation = true;
         assert_eq!(
-            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).erc_code(),
+            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).antwortcode(),
             Some("A02"),
             "1 March is inside the receipt month"
         );
@@ -477,7 +484,7 @@ mod tests {
         ok.ist_erzeugende_marktlokation = true;
         assert_eq!(
             evaluate_abmeldung(&ok, Some(&vs), NOW, &cfg()),
-            NetzCheckResult::Accept
+            NbEntscheidung::Accept
         );
     }
 
@@ -490,7 +497,7 @@ mod tests {
         a.pid = 44_004;
         a.sparte = Sparte::Gas;
         assert_eq!(
-            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).erc_code(),
+            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).antwortcode(),
             Some("A02")
         );
     }
@@ -504,7 +511,7 @@ mod tests {
         a.transaktionsgrund = Some("E01".to_owned());
         assert_eq!(
             evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()),
-            NetzCheckResult::Accept
+            NbEntscheidung::Accept
         );
     }
 
@@ -517,7 +524,7 @@ mod tests {
         a.transaktionsgrund = Some("E01".to_owned());
         a.messtyp = Messtyp::Rlm;
         assert_eq!(
-            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).erc_code(),
+            evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()).antwortcode(),
             Some("A02")
         );
     }
@@ -531,7 +538,7 @@ mod tests {
         a.sparte = Sparte::Gas;
         assert_eq!(
             evaluate_abmeldung(&a, Some(&vs), NOW, &cfg()),
-            NetzCheckResult::Accept
+            NbEntscheidung::Accept
         );
     }
 }

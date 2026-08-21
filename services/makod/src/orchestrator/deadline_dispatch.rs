@@ -55,12 +55,12 @@ use mako_gpke::{
     AnkuendigungZuordnungLfCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
     GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
-    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
-    GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungLfWorkflow, GpkeSperrungWorkflow,
-    GpkeStornierungCommand, GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
-    KonfigurationAenderungCommand, KonfigurationCommand, LfAbmeldungCommand, LfAnmeldungCommand,
-    NeuanlageCommand, SperrungCommand, SperrungLfCommand, SupplierChangeCommand,
-    anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
+    GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeKuendigungWorkflow,
+    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow,
+    GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, GpkeStornierungCommand, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow, KonfigurationAenderungCommand, KonfigurationCommand,
+    LfAbmeldungCommand, LfAnmeldungCommand, NeuanlageCommand, SperrungCommand, SperrungLfCommand,
+    SupplierChangeCommand, anfrage_bestellung::WORKFLOW_NAME as ANFRAGE_BESTELLUNG_WORKFLOW,
     ankuendigung_zuordnung_lf::WORKFLOW_NAME as ANKUENDIGUNG_ZUORDNUNG_LF_WORKFLOW,
     lf_anmeldung::WORKFLOW_NAME as LF_ANMELDUNG_WORKFLOW,
     sperrung_lf::WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW,
@@ -102,7 +102,8 @@ use mako_engine::store_slatedb::{SlateDbSnapshotStore, SlateDbStore};
 // literal parses; these bring the module-qualified ones into scope.
 use mako_geli_gas::GasStammdatenCommand;
 use mako_gpke::{
-    BeendigungZuordnungCommand, EogCommand, StammdatenCommand as GpkeStammdatenCommand,
+    BeendigungZuordnungCommand, EogCommand, KuendigungCommand as GpkeKuendigungCommand,
+    StammdatenCommand as GpkeStammdatenCommand,
 };
 use mako_wim::RechnungsabwicklungCommand;
 use mako_wim::esa_wertebestellung::EsaWertebestellungCommand;
@@ -208,6 +209,7 @@ deadline_dispatch! {
     "gpke-neuanlage" => GpkeNeuanlageWorkflow : NeuanlageCommand::TimeoutExpired,
     "gpke-lf-abmeldung" => GpkeLfAbmeldungWorkflow : LfAbmeldungCommand::TimeoutExpired,
     "gpke-beendigung-zuordnung" => GpkeBeendigungZuordnungWorkflow : BeendigungZuordnungCommand::TimeoutExpired,
+    "gpke-kuendigung" => GpkeKuendigungWorkflow : GpkeKuendigungCommand::TimeoutExpired,
     "gpke-eog" => mako_gpke::GpkeEogWorkflow : EogCommand::TimeoutExpired,
     "gpke-stammdatenaenderung" => mako_gpke::GpkeStammdatenaenderungWorkflow : GpkeStammdatenCommand::TimeoutExpired,
     "geli-gas-stammdatenaenderung" => mako_geli_gas::GeliGasStammdatenaenderungWorkflow : GasStammdatenCommand::TimeoutExpired,

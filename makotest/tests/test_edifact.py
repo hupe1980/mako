@@ -34,9 +34,9 @@ def _message(
         references=[("Z13", str(pid))],
         transactions=[
             UtilmdTransaction(
-                "melo",
-                melo,
-                process_dates=[("163", "20260501")],
+                "VORGANG-1",
+                locations=[("melo", melo)],
+                dates=[("92", "20260501")],
                 references=[("Z13", str(pid))],
             )
         ],
@@ -103,7 +103,7 @@ class TestReport:
 class TestFindings:
     def test_a_bad_location_id_fires_the_semantic_rule(self):
         wire = utilmd_interchange(melo="NOTAMELO")
-        assert_rule_fires(wire, "SEM-UTILMD-MALO-FORMAT", on=ON)
+        assert_rule_fires(wire, "SEM-UTILMD-LOKATIONS-ID", on=ON)
 
     def test_a_finding_carries_its_position_and_layer(self):
         report = validate_edifact(utilmd_interchange(melo="NOTAMELO"), ON)

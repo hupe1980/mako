@@ -94,8 +94,7 @@ async fn send_antwort_bestaetigung_transitions_to_antwort_gesendet() {
         .expect("ReceiveAnkuendigung");
 
     p.execute(LfAbmeldungCommand::SendAntwort {
-        accepted: true,
-        reason: None,
+        antwort: mako_gpke::LfAntwort::zustimmung("A10", "E_0609"),
     })
     .await
     .expect("SendAntwort Bestätigung must succeed from ValidationPassed");
@@ -123,8 +122,8 @@ async fn send_antwort_ablehnung_transitions_to_rejected() {
         .expect("ReceiveAnkuendigung");
 
     p.execute(LfAbmeldungCommand::SendAntwort {
-        accepted: false,
-        reason: Some("Belieferung läuft noch; NB-Kündigung unbegründet".to_owned()),
+        antwort: mako_gpke::LfAntwort::ablehnung("A99", "E_0609")
+            .with_bemerkung("Belieferung läuft noch; NB-Kündigung unbegründet"),
     })
     .await
     .expect("SendAntwort Ablehnung must succeed");
@@ -145,8 +144,7 @@ async fn beenden_bestaetigen_transitions_to_beendet() {
         .await
         .expect("ReceiveAnkuendigung");
     p.execute(LfAbmeldungCommand::SendAntwort {
-        accepted: true,
-        reason: None,
+        antwort: mako_gpke::LfAntwort::zustimmung("A10", "E_0609"),
     })
     .await
     .expect("SendAntwort Bestätigung");
@@ -235,8 +233,7 @@ async fn send_antwort_from_new_returns_error() {
 
     let result = p
         .execute(LfAbmeldungCommand::SendAntwort {
-            accepted: true,
-            reason: None,
+            antwort: mako_gpke::LfAntwort::zustimmung("A10", "E_0609"),
         })
         .await;
 

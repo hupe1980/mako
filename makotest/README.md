@@ -117,7 +117,9 @@ msg = build_utilmd(
     sender=LF,
     receiver=NB,
     on="2026-04-01",
-    transactions=[UtilmdTransaction("melo", melo, process_dates=[("163", start)])],
+    transactions=[
+        UtilmdTransaction("VORGANG-1", locations=[("melo", melo)], dates=[("92", start)])
+    ],
 )
 wire = build_interchange(
     sender=LF, receiver=NB, dar="REF1", messages=[msg], on="2026-04-01"
@@ -131,7 +133,7 @@ partner has never had its Fristüberwachung exercised.
 
 ```python
 def test_nb_bestaetigt(nb_sim, anmeldung):
-    nb_sim.on(55001).bestaetigung(process_dates=[("163", "20260501")])
+    nb_sim.on(55001).bestaetigung(process_dates=[("92", "20260501")])
     reply = nb_sim.receive(anmeldung, received_at="2026-03-02T09:00:00Z")
 
     assert reply.pid == 55002  # the AHB answer PID — never Anfrage + 1

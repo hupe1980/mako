@@ -55,7 +55,12 @@ CREATE TABLE anmeldung_decisions (
     malo_id                TEXT        NOT NULL,
     lf_mp_id               TEXT        NOT NULL,
     decision               TEXT        NOT NULL CHECK (decision IN ('Accept','Reject','Escalate')),
-    erc_code               TEXT,
+    -- The BDEW **Antwortcode** the decision landed on, and the Entscheidungsbaum
+    -- that publishes it. Not an ERC: `ERC` is the APERAK/CONTRL processability
+    -- segment. `A02` means three different things across E_0607, E_0622 and the
+    -- LF's E_0609, so the code alone does not identify the finding.
+    antwortcode            TEXT,
+    antwortcode_ebd        TEXT,
     detail                 TEXT,
     -- §20 EnWG parity: TRUE when lf_mp_id = operator's own GLN
     initiator_is_affiliate BOOLEAN     NOT NULL DEFAULT false,

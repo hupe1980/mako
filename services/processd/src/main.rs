@@ -8,6 +8,7 @@
 //! this only supplies the migrations and the domain router + background workers
 //! via [`processd::server::build_router`].
 
+use secrecy::SecretString;
 use std::sync::Arc;
 
 use anyhow::Context as _;
@@ -90,6 +91,8 @@ impl Daemon for Processd {
                 nb_auto_accept: cfg.nb.auto_accept,
                 nb_gas_bearbeitungsfrist_wt: cfg.nb.gas_bearbeitungsfrist_wt,
                 lf_auto_respond: cfg.lf.auto_respond,
+                lf_vertragd_url: cfg.lf.vertragd_url.clone(),
+                lf_vertragd_api_key: cfg.lf.vertragd_api_key.clone().map(SecretString::from),
                 msb_auto_accept: cfg.msb.auto_accept,
                 msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,
                 eog_auto_activate: cfg.eog.auto_activate,

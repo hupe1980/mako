@@ -12,8 +12,9 @@
 
 // Items used via `use super::*` inside feature-gated test modules.
 #[allow(unused_imports)]
+use edi_energy::utilmd_codes::{Transaktionsgrund, dtm};
 use edi_energy::{
-    AnyMessage, EdiEnergyMessage, MessageType, ObjectType, Platform, Pruefidentifikator, Release,
+    AnyMessage, EdiEnergyMessage, MessageType, Platform, Pruefidentifikator, Release,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -298,9 +299,9 @@ mod utilmd_transaction_tests {
     use super::*;
     use edi_energy::{AnyMessage, builders::UtilmdBuilder};
 
-    /// A UTILMD S2.1 message with a transaction block (SG4/IDE) must round-trip
-    /// correctly: the IDE qualifier, location ID, status, and references survive
-    /// serialization and re-parsing.
+    /// A UTILMD S2.1 Vorgang (SG4) must round-trip: the `IDE+24` Vorgangsnummer,
+    /// the `SG5 LOC+Z16` Marktlokation, the process date and the references all
+    /// survive serialization and re-parsing.
     #[test]
     fn utilmd_s21_transaction_roundtrip() {
         let pid = Pruefidentifikator::new(55001).unwrap();
@@ -310,8 +311,9 @@ mod utilmd_transaction_tests {
             .sender("4012345000023")
             .receiver("9900357000004")
             .document_date("20241101")
-            .transaction(ObjectType::Messlokation, "DE00012345678")
-            .process_date("163", "20241101")
+            .transaction("VORGANG-0001")
+            .date(dtm::BEGINN_ZUM, "20241101")
+            .marktlokation("51238696012")
             .reference("Z13", "55001")
             .done()
             .serialize()
@@ -330,9 +332,10 @@ mod utilmd_transaction_tests {
         // Transaction block must be extractable
         assert_eq!(u.transactions().len(), 1, "one transaction expected");
         let tx = &u.transactions()[0];
-        assert_eq!(tx.ide.qualifier, "Z19");
-        assert_eq!(tx.ide.object_id.as_deref(), Some("DE00012345678"));
-        assert!(!tx.dtm.is_empty(), "process DTM must be captured");
+        assert_eq!(tx.ide.qualifier, "24", "UTILMD DE 7495 has only 24 and Z01");
+        assert_eq!(tx.vorgangsnummer(), Some("VORGANG-0001"));
+        assert_eq!(tx.marktlokation(), Some("51238696012"));
+        assert_eq!(tx.date(dtm::BEGINN_ZUM), Some("20241101"));
         assert!(
             tx.references.iter().any(|r| r.qualifier == "Z13"),
             "Z13 Pruefidentifikator reference must survive roundtrip"
@@ -349,8 +352,8 @@ mod utilmd_transaction_tests {
             .document_code("E03")
             .sender("4012345000023")
             .receiver("9900357000004")
-            .transaction(ObjectType::Messlokation, "DE00012345678")
-            .transaktionsgrund("E07")
+            .transaction("VORGANG-SPERR")
+            .transaktionsgrund(Transaktionsgrund::verbrauchende_malo("E07"))
             .reference("Z13", "55555")
             .done()
             .serialize()
@@ -365,12 +368,15 @@ mod utilmd_transaction_tests {
 
         let tx = &u.transactions()[0];
         assert_eq!(tx.sts.len(), 1, "STS segment must be captured");
-        // `STS+7++E07'` — Statuskategorie 7 in C601, the Transaktionsgrund in
-        // C556. C555 is *nicht benutzt* for this category and stays empty.
+        // `STS+7++E07+ZW4'` — Statuskategorie 7 in C601, the Transaktionsgrund
+        // in the first C556 and the Ergänzung in the second. C555 is *nicht
+        // benutzt* for this category and stays empty.
         assert_eq!(tx.sts[0].category.as_deref(), Some("7"));
         assert_eq!(tx.sts[0].status_code.as_deref(), None);
         assert_eq!(tx.sts[0].reason_code.as_deref(), Some("E07"));
-        assert_eq!(tx.sts[0].code(), Some("E07"));
+        let grund = tx.transaktionsgrund().expect("Transaktionsgrund parsed");
+        assert_eq!(grund.grund, "E07");
+        assert_eq!(grund.ergaenzung.as_deref(), Some("ZW4"));
     }
 
     /// UTILMD S2.2 message — structurally identical to S2.1, different assoc_code.
@@ -381,7 +387,8 @@ mod utilmd_transaction_tests {
             .pruefidentifikator(pid)
             .sender("4012345000023")
             .receiver("9900357000004")
-            .transaction(ObjectType::Marktlokation, "12345678989")
+            .transaction("VORGANG-0002")
+            .marktlokation("51238696012")
             .reference("Z13", "55001")
             .done()
             .serialize()
@@ -394,7 +401,8 @@ mod utilmd_transaction_tests {
             panic!("expected Utilmd")
         };
         assert_eq!(u.assoc_code(), "S2.2");
-        assert_eq!(u.transactions()[0].ide.qualifier, "Z18");
+        assert_eq!(u.transactions()[0].ide.qualifier, "24");
+        assert_eq!(u.transactions()[0].marktlokation(), Some("51238696012"));
     }
 
     /// Multiple transactions in a single message must all be captured.
@@ -403,13 +411,13 @@ mod utilmd_transaction_tests {
         let bytes = UtilmdBuilder::new(Release::new("S2.1"))
             .sender("4012345000023")
             .receiver("9900357000004")
-            .transaction(ObjectType::Messlokation, "DE00000000001")
+            .transaction("VORGANG-0001")
             .reference("Z13", "55001")
             .done()
-            .transaction(ObjectType::Messlokation, "DE00000000002")
+            .transaction("VORGANG-0002")
             .reference("Z13", "55001")
             .done()
-            .transaction(ObjectType::Messlokation, "DE00000000003")
+            .transaction("VORGANG-0003")
             .reference("Z13", "55002")
             .done()
             .serialize()
@@ -426,14 +434,8 @@ mod utilmd_transaction_tests {
             3,
             "all three transactions must be captured"
         );
-        assert_eq!(
-            u.transactions()[0].ide.object_id.as_deref(),
-            Some("DE00000000001")
-        );
-        assert_eq!(
-            u.transactions()[2].ide.object_id.as_deref(),
-            Some("DE00000000003")
-        );
+        assert_eq!(u.transactions()[0].vorgangsnummer(), Some("VORGANG-0001"));
+        assert_eq!(u.transactions()[2].vorgangsnummer(), Some("VORGANG-0003"));
     }
 }
 

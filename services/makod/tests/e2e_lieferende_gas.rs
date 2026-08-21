@@ -72,8 +72,9 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-REF-002'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662076::'\
-UNT+8+MSG-002'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+52695662076'\
+UNT+9+MSG-002'\
 UNZ+1+GAS-2025-002'";
 
 // ── Mock GNB ERP backend ──────────────────────────────────────────────────────
@@ -132,7 +133,7 @@ impl MockGnb {
                 assert_eq!(pid.as_u32(), 44004, "adapter must extract PID 44004");
                 assert_eq!(sender.as_str(), LFN_GAS_ID, "sender GLN must match NAD+MS");
                 assert_eq!(receiver.as_str(), GNB_ID, "receiver GLN must match NAD+MR");
-                assert_eq!(malo_id.as_str(), MALO_GAS_ID, "MaLo must match IDE+Z19");
+                assert_eq!(malo_id.as_str(), MALO_GAS_ID, "MaLo must match IDE+24");
                 assert_eq!(
                     message_ref.as_str(),
                     unh_ref.as_str(),

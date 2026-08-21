@@ -141,19 +141,19 @@ class TestBusinessAnswer:
     def test_the_answer_mirrors_the_request(self, anmeldung):
         """Everything correlating the answer with the request is echoed.
 
-        The SG4 IDE object keeps the qualifier the request used — the AHB fixes
-        it per Prüfidentifikator, so re-deriving it from an object type would be
-        a guess — and the request's RFF references travel with it.
+        `IDE+24` carries the Vorgangsnummer, which is what correlates the answer
+        on the counterparty's side. The Lokation lives in `SG5 LOC`, so it is
+        echoed as its own segment rather than riding the Vorgang, and the
+        request's RFF references travel with it.
         """
-        answer = build_answer(
-            anmeldung, 55002, on=ON, process_dates=[("163", "20260501")]
-        )
+        answer = build_answer(anmeldung, 55002, on=ON, process_dates=[("92", "20260501")])
         text = answer.decode("latin-1")
         assert "BGM+E01+55002" in text
         assert f"NAD+MS+{NB_ID}" in text, "the request's receiver answers"
-        assert MELO in text
+        assert f"LOC+Z17+{MELO}" in text, "the Messlokation rides SG5 LOC"
+        assert "IDE+24+" in text, "IDE carries the Vorgangsnummer, not a location"
         assert "RFF+Z13:55001" in text, "the request's reference is echoed"
-        assert "DTM+163:20260501" in text
+        assert "DTM+92:20260501" in text
 
     def test_the_answer_validates_on_the_same_format_version(self, anmeldung):
         answer = build_answer(anmeldung, 55002, on=ON)

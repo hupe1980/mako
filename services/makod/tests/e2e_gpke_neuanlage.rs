@@ -65,9 +65,10 @@ DTM+137:20250115:102'\
 RFF+Z13:NANLG-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+51238696781::'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+51238696781'\
 DTM+92:20250401:102'\
-UNT+9+MSG-NANLG-001'\
+UNT+10+MSG-NANLG-001'\
 UNZ+1+NANLG-2025-001'";
 
 /// PID 55601: Neue erzeugende Marktlokation (Anmeldung von LF an NB).
@@ -79,9 +80,10 @@ DTM+137:20250115:102'\
 RFF+Z13:NANLG-REF-002'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+51238696781::'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+51238696781'\
 DTM+92:20250401:102'\
-UNT+9+MSG-NANLG-002'\
+UNT+10+MSG-NANLG-002'\
 UNZ+1+NANLG-2025-002'";
 
 // ── Mock NB ERP backend ───────────────────────────────────────────────────────
@@ -156,7 +158,7 @@ impl MockNb {
                 assert_eq!(
                     location_id.as_str(),
                     MALO_ID,
-                    "adapter must extract MaLo from IDE+Z19"
+                    "adapter must extract MaLo from IDE+24"
                 );
                 assert_eq!(
                     message_ref.as_str(),

@@ -544,6 +544,15 @@ pub async fn dispatch_migrations(
                 report,
                 count,
                 store,
+                mako_gpke::GpkeKuendigungWorkflow,
+                "gpke-kuendigung",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
                 mako_gpke::GpkeAnkuendigungZuordnungLfWorkflow,
                 "gpke-ankuendigung-zuordnung-lf",
                 from,

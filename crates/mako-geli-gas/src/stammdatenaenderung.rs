@@ -830,7 +830,7 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                         "receiver":     data.sender.as_str(),
                         "malo":         data.location_id.as_str(),
                         "process_date": data.aenderungsdatum,
-                        "antwort":      antwort.code(),
+                        "pruefung":      antwort.code(),
                     }),
                 )];
                 // Apply to marktd only on Zustimmung (the patch captured at
@@ -1016,7 +1016,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(out.outbox[0].payload["pid"], 44115);
-        assert_eq!(out.outbox[0].payload["antwort"], "E15");
+        assert_eq!(out.outbox[0].payload["pruefung"], "E15");
         // Zustimmung → apply outbox present.
         assert_eq!(out.outbox.len(), 2);
         assert_eq!(out.outbox[1].message_type.as_ref(), "ProcessCompleted");
@@ -1039,7 +1039,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(out.outbox[0].payload["antwort"], "E17");
+        assert_eq!(out.outbox[0].payload["pruefung"], "E17");
         // Ablehnung → no apply outbox.
         assert_eq!(out.outbox.len(), 1);
     }
@@ -1059,7 +1059,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(out.outbox[0].payload["antwort"], "E15");
+        assert_eq!(out.outbox[0].payload["pruefung"], "E15");
     }
 
     #[test]
@@ -1077,7 +1077,7 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(out.outbox[0].payload["antwort"], "E13");
+        assert_eq!(out.outbox[0].payload["pruefung"], "E13");
         assert_eq!(out.outbox.len(), 1); // no apply on Ablehnung
     }
 

@@ -48,7 +48,8 @@ use mako_gpke::{GpkeSupplierChangeWorkflow, SupplierChangeCommand, SupplierChang
 /// - RFF  — Z13 reference (SG1, Auftragsreferenz)
 /// - NAD+MS — sender (new supplier GLN)
 /// - NAD+MR — receiver (grid operator GLN)
-/// - IDE  — metering point / process (SG4, Z19 qualifier)
+/// - IDE  — `24` Vorgang plus the Vorgangsnummer (SG4)
+/// - LOC  — `Z16` Marktlokation (SG5); the MaLo lives here, not in IDE
 /// - UNT  — message trailer
 /// - UNZ  — interchange trailer
 const UTILMD_55001_BYTES: &[u8] = b"\
@@ -59,8 +60,9 @@ DTM+137:20250115:102'\
 RFF+Z13:REF-2025-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+51238696781::'\
-UNT+8+MSG-001'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+51238696781'\
+UNT+9+MSG-001'\
 UNZ+1+INTER-2025-001'";
 
 // ── end-to-end pipeline test ──────────────────────────────────────────
@@ -138,7 +140,7 @@ async fn end_to_end_lieferbeginn_strom_pipeline() {
                 utilmd
                     .transactions()
                     .first()
-                    .and_then(|tx| tx.ide.object_id.as_deref())
+                    .and_then(|tx| tx.marktlokation())
                     .unwrap_or("MALO-UNKNOWN"),
             );
             (

@@ -10,7 +10,7 @@
 //! | Question | Answer |
 //! |---|---|
 //! | *When is the 4th Werktag after this instant?* | [`add_werktage`], [`deadline_at_werktage`], [`end_of_werktag_after`], [`next_werktag_at`] |
-//! | *Which window does PID 55001 carry?* | [`antwort`] |
+//! | *Which window does PID 55001 carry?* | `mako-pruefung` |
 //! | *When must the CONTRL / APERAK go out?* | [`contrl_due_at`], [`aperak_strom_due_at`], [`aperak_gas_folgeprozess_due_at`], [`aperak_gas_initialprozess_due_at`] |
 //!
 //! `mako-engine` re-exports this crate as `mako_fristen`, so existing
@@ -32,7 +32,7 @@
 //! with one, attributed to BK6-22-024, and `obsd` computed every GPKE breach
 //! alert from it. The technical acknowledgement is 45 minutes
 //! ([`aperak_strom_due_at`]) and the business answer is a wall-clock instant on
-//! the first Werktag after the Übertragungstag ([`antwort`]). A flat 24 h is
+//! the first Werktag after the Übertragungstag (`mako-pruefung`). A flat 24 h is
 //! neither, and it is wrong in the direction that does not announce itself: it
 //! reports a lapsed Frist as still running.
 //!

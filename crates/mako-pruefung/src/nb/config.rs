@@ -1,6 +1,6 @@
 //! Runtime configuration for the NB Anmeldung checks.
 //!
-//! `netz-checker` stays a pure, I/O-free library: the only tunables that vary
+//! `mako-pruefung` stays a pure, I/O-free library: the only tunables that vary
 //! by operator or by regulatory ambiguity are collected here and passed in by
 //! value. Defaults reproduce the exact behaviour the crate shipped with before
 //! the config seam existed, so `NetzCheckConfig::default()` is always safe.
@@ -43,8 +43,8 @@ impl Default for NetzCheckConfig {
     fn default() -> Self {
         Self {
             holiday_calendar: HolidayCalendar::BdewMaKo,
-            gas_bearbeitungsfrist_wt: crate::checks::GAS_BEARBEITUNGSFRIST_WT_DEFAULT,
-            eeg_zuordnung_vorlauf_monate: crate::checks::EEG_ZUORDNUNG_VORLAUF_MONATE_DEFAULT,
+            gas_bearbeitungsfrist_wt: super::anmeldung::GAS_BEARBEITUNGSFRIST_WT_DEFAULT,
+            eeg_zuordnung_vorlauf_monate: super::anmeldung::EEG_ZUORDNUNG_VORLAUF_MONATE_DEFAULT,
         }
     }
 }

@@ -33,7 +33,7 @@
 //! - The cross-FV response transitions the LFN process to `Active` (not
 //!   `Rejected`), confirming mid-flight FV upgrade tolerance.
 
-use edi_energy::{AnyMessage, EdiEnergyMessage, ObjectType, Platform, Pruefidentifikator, Release};
+use edi_energy::{AnyMessage, EdiEnergyMessage, Platform, Pruefidentifikator, Release};
 use mako_engine::{
     deadline::{Deadline, DeadlineStore, InMemoryDeadlineStore},
     event_store::InMemoryEventStore,
@@ -112,7 +112,8 @@ fn render_utilmd(
         .message_ref(msg_ref)
         .document_date("20250115")
         .rff("Z13", msg_ref)
-        .transaction(ObjectType::Messlokation, malo)
+        .transaction("VORGANG-0001")
+        .marktlokation(malo)
         .done()
         .serialize()
         .unwrap_or_else(|e| panic!("UTILMD {pid_u32} serialization failed: {e}"))

@@ -34,7 +34,7 @@
 //!
 //! **Strom EEG-/KWKG-MaLo Zuordnung (§10c EEG):** when the Anmeldung carries the
 //! `ZW3` „Erzeugende Marktlokation" Transaktionsgrundergänzung (surfaced as
-//! [`AnmeldungAnfrage::ist_erzeugende_marktlokation`](crate::AnmeldungAnfrage))
+//! [`AnmeldungAnfrage::ist_erzeugende_marktlokation`](super::AnmeldungAnfrage))
 //! the Zuordnung of an Einspeise-MaLo to a Bilanzkreis is a monatsscharfer
 //! Prozess: the
 //! Zuordnungsbeginn must be a **Monatserster** and lie at least one whole month
@@ -73,8 +73,8 @@ use mako_fristen::{self as fristen, HolidayCalendar};
 use mako_markt::domain::Sparte;
 use mako_markt::repository::{LieferStatus, VersorgungsStatusRecord};
 
-use crate::config::NetzCheckConfig;
-use crate::types::{AnmeldungAnfrage, MaloGridRecord, Messtyp, NetzCheckResult, RejectReason};
+use super::config::NetzCheckConfig;
+use super::types::{AnmeldungAnfrage, MaloGridRecord, Messtyp, NbEntscheidung, RejectReason};
 
 // ── Regulatory constants ──────────────────────────────────────────────────────
 
@@ -106,7 +106,7 @@ pub const EEG_ZUORDNUNG_VORLAUF_MONATE_DEFAULT: u32 = 1;
 /// EEG Monatserster rule never fired. The real signal is `ZW3`; it arrives as a
 /// *second* STS+7 (Transaktionsgrundergänzung) alongside the main Anmeldegrund
 /// (`E01`/`E03`), which the `makod` adapter surfaces as
-/// [`AnmeldungAnfrage::ist_erzeugende_marktlokation`](crate::AnmeldungAnfrage).
+/// [`AnmeldungAnfrage::ist_erzeugende_marktlokation`](super::AnmeldungAnfrage).
 pub const EEG_ERZEUGENDE_MARKTLOKATION_CODE: &str = "ZW3";
 
 // ── Berlin timezone helper ────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ fn check_date_strom(
     anfrage: &AnmeldungAnfrage,
     today: Date,
     config: NetzCheckConfig,
-) -> Option<NetzCheckResult> {
+) -> Option<NbEntscheidung> {
     if anfrage.ist_erzeugende_marktlokation {
         return check_date_eeg(anfrage, today, config);
     }
@@ -166,8 +166,9 @@ fn check_date_strom(
     if has_werktag_strictly_between(today, anfrage.process_date, config.holiday_calendar) {
         return None;
     }
-    Some(NetzCheckResult::Reject(RejectReason {
-        erc_code: "A07".to_owned(),
+    Some(NbEntscheidung::Reject(RejectReason {
+        antwortcode: "A07".to_owned(),
+        ebd: Some("E_0622".into()),
         detail: format!(
             "Vorlauffrist not met: requested Zuordnungsbeginn {} vs receipt day {}. \
              GPKE (BK6-24-174, Teil 2 SD Lieferbeginn): spätester ÜT ist der Tag \
@@ -207,14 +208,15 @@ fn check_date_eeg(
     anfrage: &AnmeldungAnfrage,
     today: Date,
     config: NetzCheckConfig,
-) -> Option<NetzCheckResult> {
+) -> Option<NbEntscheidung> {
     let d = anfrage.process_date;
     let grund = anfrage.transaktionsgrund.as_deref().unwrap_or("");
 
     // Rule 1: must be a Monatserster.
     if d.day() != 1 {
-        return Some(NetzCheckResult::Reject(RejectReason {
-            erc_code: "A07".to_owned(),
+        return Some(NbEntscheidung::Reject(RejectReason {
+            antwortcode: "A07".to_owned(),
+            ebd: Some("E_0622".into()),
             detail: format!(
                 "EEG-MaLo Zuordnung (Transaktionsgrund {grund}) requested for {d}, \
                  which is not a Monatserster. The bilanzielle Zuordnung einer \
@@ -231,8 +233,9 @@ fn check_date_eeg(
     if d >= earliest {
         None
     } else {
-        Some(NetzCheckResult::Reject(RejectReason {
-            erc_code: "A07".to_owned(),
+        Some(NbEntscheidung::Reject(RejectReason {
+            antwortcode: "A07".to_owned(),
+            ebd: Some("E_0622".into()),
             detail: format!(
                 "Vorlauffrist not met: EEG-MaLo Zuordnung (Transaktionsgrund \
                  {grund}) requested for {d}, but the earliest admissible \
@@ -250,7 +253,7 @@ fn check_date_gas(
     anfrage: &AnmeldungAnfrage,
     today: Date,
     config: NetzCheckConfig,
-) -> Option<NetzCheckResult> {
+) -> Option<NbEntscheidung> {
     let cal = config.holiday_calendar;
     let d = anfrage.process_date;
     match anfrage.transaktionsgrund.as_deref() {
@@ -260,8 +263,9 @@ fn check_date_gas(
             if d >= earliest {
                 None
             } else {
-                Some(NetzCheckResult::Reject(RejectReason {
-                    erc_code: "E17".to_owned(),
+                Some(NbEntscheidung::Reject(RejectReason {
+                    antwortcode: "E17".to_owned(),
+                    ebd: None,
                     detail: format!(
                         "Fristüberschreitung: Gas Lieferantenwechsel (E03) requires \
                          ≥ {GAS_WECHSEL_VORLAUF_WT} WT lead — requested Lieferbeginn {d}, \
@@ -289,8 +293,9 @@ fn check_date_gas(
                     if today <= window_end {
                         None // lawful retroactive move-in/move-out
                     } else {
-                        Some(NetzCheckResult::Reject(RejectReason {
-                            erc_code: "E17".to_owned(),
+                        Some(NbEntscheidung::Reject(RejectReason {
+                            antwortcode: "E17".to_owned(),
+                            ebd: None,
                             detail: format!(
                                 "Fristüberschreitung: retroactive Gas Anmeldung {d} is \
                                  outside the 6-week window (+{bearbeitungsfrist} WT \
@@ -304,8 +309,9 @@ fn check_date_gas(
                 }
                 // Hourly-balanced (RLM) and SMGW-attached metering: dates may
                 // only lie after the receipt date (Grundregel 2).
-                Messtyp::Rlm | Messtyp::Imsys => Some(NetzCheckResult::Reject(RejectReason {
-                    erc_code: "E17".to_owned(),
+                Messtyp::Rlm | Messtyp::Imsys => Some(NbEntscheidung::Reject(RejectReason {
+                    antwortcode: "E17".to_owned(),
+                    ebd: None,
                     detail: format!(
                         "Fristüberschreitung: retroactive Gas Anmeldung {d} is not \
                          permitted for {} metering — An- und Abmeldedatum können nur \
@@ -323,7 +329,7 @@ fn check_date_gas(
             if d >= today {
                 None
             } else {
-                Some(NetzCheckResult::Escalate {
+                Some(NbEntscheidung::Escalate {
                     reason: format!(
                         "Backdated Gas Anmeldung ({d}, receipt {today}) without a \
                          readable SG4 STS Transaktionsgrund — cannot distinguish a \
@@ -355,9 +361,9 @@ fn check_date_gas(
 ///
 /// # Returns
 ///
-/// [`NetzCheckResult::Accept`] — all checks passed; auto-accept is permissible.
-/// [`NetzCheckResult::Reject`] — a deterministic rule failed; dispatch `ablehnen`.
-/// [`NetzCheckResult::Escalate`] — data is insufficient; alert the operator.
+/// [`NbEntscheidung::Accept`] — all checks passed; auto-accept is permissible.
+/// [`NbEntscheidung::Reject`] — a deterministic rule failed; dispatch `ablehnen`.
+/// [`NbEntscheidung::Escalate`] — data is insufficient; alert the operator.
 ///
 /// # Notes
 ///
@@ -374,10 +380,10 @@ pub fn evaluate(
     partner_known: bool,
     now: OffsetDateTime,
     config: &NetzCheckConfig,
-) -> NetzCheckResult {
+) -> NbEntscheidung {
     // ── Check 1: Grid record present ─────────────────────────────────────────
     let Some(grid) = grid else {
-        return NetzCheckResult::Escalate {
+        return NbEntscheidung::Escalate {
             reason: format!(
                 "No grid record found for MaLo {} in the NB's grid topology. \
                  Import NIS/GIS data or provision the record manually via \
@@ -399,8 +405,9 @@ pub fn evaluate(
             LieferStatus::Stillgelegt | LieferStatus::Ruhend
         )
     {
-        return NetzCheckResult::Reject(RejectReason {
-            erc_code: "A02".to_owned(),
+        return NbEntscheidung::Reject(RejectReason {
+            antwortcode: "A02".to_owned(),
+            ebd: Some("E_0622".into()),
             detail: format!(
                 "MaLo {} does not participate in market communication \
                  (lieferstatus = {:?}). EBD E_0622 → A02.",
@@ -428,8 +435,9 @@ pub fn evaluate(
             .as_deref()
             .is_some_and(|next| next != anfrage.new_supplier_gln.as_str())
         {
-            return NetzCheckResult::Reject(RejectReason {
-                erc_code: "A06".to_owned(),
+            return NbEntscheidung::Reject(RejectReason {
+                antwortcode: "A06".to_owned(),
+                ebd: Some("E_0622".into()),
                 detail: format!(
                     "MaLo {} already has a pending Lieferbeginn (lf_mp_id_next = {:?}). \
                      Andere Anmeldung in Bearbeitung (EBD E_0622 → A06).",
@@ -444,8 +452,9 @@ pub fn evaluate(
         if vs.lieferstatus == LieferStatus::Beliefert
             && vs.lf_mp_id.as_deref() == Some(anfrage.new_supplier_gln.as_str())
         {
-            return NetzCheckResult::Reject(RejectReason {
-                erc_code: "A06".to_owned(),
+            return NbEntscheidung::Reject(RejectReason {
+                antwortcode: "A06".to_owned(),
+                ebd: Some("E_0622".into()),
                 detail: format!(
                     "MaLo {} is already supplied by LF {} (duplicate Anmeldung).",
                     anfrage.malo_id, anfrage.new_supplier_gln
@@ -478,8 +487,9 @@ pub fn evaluate(
         (&anfrage.bilanzierungsgebiet, &grid.bilanzierungsgebiet)
         && req_big != grid_big
     {
-        return NetzCheckResult::Reject(RejectReason {
-            erc_code: "A05".to_owned(),
+        return NbEntscheidung::Reject(RejectReason {
+            antwortcode: "A05".to_owned(),
+            ebd: Some("E_0622".into()),
             detail: format!(
                 "Bilanzierungsgebiet mismatch: UTILMD contains '{}' but grid \
                  record for MaLo {} has '{}'. Anforderungen können nicht erfüllt \
@@ -493,7 +503,7 @@ pub fn evaluate(
     // Also escalate when the UTILMD provides a Bilanzierungsgebiet but the grid
     // record has none — we cannot confirm the assertion.
     if anfrage.bilanzierungsgebiet.is_some() && grid.bilanzierungsgebiet.is_none() {
-        return NetzCheckResult::Escalate {
+        return NbEntscheidung::Escalate {
             reason: format!(
                 "UTILMD message provides Bilanzierungsgebiet {:?} but grid record \
                  for MaLo {} has no Bilanzierungsgebiet — cannot confirm consistency. \
@@ -509,8 +519,9 @@ pub fn evaluate(
     // valid partner record, AS4 delivery of the response is impossible —
     // the Anmeldung's requirements cannot be fulfilled (A05).
     if !partner_known {
-        return NetzCheckResult::Reject(RejectReason {
-            erc_code: "A05".to_owned(),
+        return NbEntscheidung::Reject(RejectReason {
+            antwortcode: "A05".to_owned(),
+            ebd: Some("E_0622".into()),
             detail: format!(
                 "LF GLN {} is not registered in the partner directory. \
                  The LF must publish their MP-ID at bdew-codes.de and register \
@@ -521,7 +532,7 @@ pub fn evaluate(
         });
     }
 
-    NetzCheckResult::Accept
+    NbEntscheidung::Accept
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -533,7 +544,7 @@ mod tests {
     use time::{Date, Month, OffsetDateTime, macros::datetime};
     use uuid::Uuid;
 
-    use crate::types::Messtyp;
+    use super::super::types::Messtyp;
     use mako_markt::domain::Sparte;
 
     fn make_anfrage(pid: u32, process_date: Date) -> AnmeldungAnfrage {
@@ -623,7 +634,7 @@ mod tests {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 9));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
     }
 
     #[test]
@@ -634,7 +645,7 @@ mod tests {
         anfrage.transaktionsgrund = Some("E01".to_owned());
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
     }
 
     #[test]
@@ -642,7 +653,7 @@ mod tests {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 8));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
     }
 
     #[test]
@@ -658,7 +669,7 @@ mod tests {
             NOW_FRIDAY,
             &cfg(),
         );
-        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
 
         // D Tue 07-14: Mon 07-13 lies between → Accept.
         let anfrage = make_anfrage(55001, d(2026, Month::July, 14));
@@ -693,7 +704,7 @@ mod tests {
         assert!(evaluate(&ok, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).is_accept());
         let short = make_gas_anfrage(Some("E03"), d(2026, Month::July, 21));
         assert_eq!(
-            evaluate(&short, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).erc_code(),
+            evaluate(&short, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).antwortcode(),
             Some("E17")
         );
     }
@@ -714,7 +725,7 @@ mod tests {
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::May, 20));
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("E17"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("E17"), "got {result:?}");
     }
 
     #[test]
@@ -731,7 +742,7 @@ mod tests {
         let mut anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::July, 1));
         anfrage.messtyp = Messtyp::Rlm;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("E17"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("E17"), "got {result:?}");
     }
 
     #[test]
@@ -771,7 +782,7 @@ mod tests {
         let mut anfrage = make_anfrage(55077, d(2026, Month::September, 15));
         anfrage.ist_erzeugende_marktlokation = true;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
     }
 
     #[test]
@@ -784,7 +795,7 @@ mod tests {
         let mut anfrage = make_anfrage(55077, d(2026, Month::July, 1));
         anfrage.ist_erzeugende_marktlokation = true;
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A07"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A07"), "got {result:?}");
     }
 
     #[test]
@@ -809,7 +820,7 @@ mod tests {
         let anfrage = make_gas_anfrage(Some("E01"), d(2026, Month::May, 20));
 
         assert_eq!(
-            evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).erc_code(),
+            evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg()).antwortcode(),
             Some("E17"),
         );
 
@@ -843,7 +854,7 @@ mod tests {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Stillgelegt, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A02"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A02"), "got {result:?}");
     }
 
     #[test]
@@ -851,7 +862,7 @@ mod tests {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Ruhend, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A02"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A02"), "got {result:?}");
     }
 
     // ── Remaining checks ──────────────────────────────────────────────────────
@@ -873,7 +884,7 @@ mod tests {
             Some("9900999000001".to_owned()),
         );
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A06"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A06"), "got {result:?}");
     }
 
     #[test]
@@ -885,7 +896,7 @@ mod tests {
             None,
         );
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A06"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A06"), "got {result:?}");
     }
 
     #[test]
@@ -895,7 +906,7 @@ mod tests {
         grid.bilanzierungsgebiet = Some("11YB-AMPRION----W".to_owned());
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&grid), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A05"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A05"), "got {result:?}");
     }
 
     // ── Check 3: A06 only for a *foreign* pending Anmeldung ──────────────────
@@ -912,7 +923,7 @@ mod tests {
             Some(anfrage.new_supplier_gln.clone()),
         );
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_ne!(result.erc_code(), Some("A06"), "got {result:?}");
+        assert_ne!(result.antwortcode(), Some("A06"), "got {result:?}");
     }
 
     /// A pending Anmeldung from a *different* LF is a genuine
@@ -926,7 +937,7 @@ mod tests {
             Some("9900000000009".to_owned()),
         );
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), true, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A06"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A06"), "got {result:?}");
     }
 
     #[test]
@@ -934,7 +945,7 @@ mod tests {
         let anfrage = make_anfrage(55001, d(2026, Month::July, 10));
         let vs = make_versorgung(LieferStatus::Unbeliefert, None, None);
         let result = evaluate(&anfrage, Some(&vs), Some(&make_grid()), false, NOW, &cfg());
-        assert_eq!(result.erc_code(), Some("A05"), "got {result:?}");
+        assert_eq!(result.antwortcode(), Some("A05"), "got {result:?}");
     }
 
     #[test]

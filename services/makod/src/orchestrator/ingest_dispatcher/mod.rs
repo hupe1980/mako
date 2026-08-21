@@ -239,6 +239,7 @@ impl EdifactIngestDispatcher {
         "gpke-eog",
         "gpke-konfiguration",
         "gpke-konfiguration-aenderung",
+        "gpke-kuendigung",
         "gpke-lf-abmeldung",
         "gpke-lf-anmeldung",
         "gpke-messwerte",
@@ -1201,7 +1202,7 @@ pub fn extract_melo_from_utilmd(msg: &AnyMessage) -> String {
     };
     u.transactions()
         .first()
-        .and_then(|t| t.ide.object_id.as_deref())
+        .and_then(|t| t.messlokation().or_else(|| t.marktlokation()))
         .unwrap_or("")
         .to_owned()
 }

@@ -111,7 +111,7 @@ flowchart LR
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement library — `calculate_settlement` for all 10 settlement schemes (`SettlementScheme + TariffSource`, EEG 2000–2023 + KWKG 2023); §51 Negativpreisregel (version-aware: EEG 2017/2021/2023 thresholds + Bestandsschutz); §51a Verlängerungsanspruch; §52 Pflichtzahlungen (€10/kW) + §52 Abs. 6 Netting; Anlage 1 gleitende Marktprämie (no additive Managementprämie); §49 semi-annual solar degression; §36h Abs. 1/2 Wind Korrekturfaktor + Standortgüte re-eval; §39n Innovationsausschreibung feste Marktprämie; §51a Förderende-Verlängerung; §24 multi-block `CapacityBlock`; `SettlementPeriodState` lifecycle state machine; **§14 UStG Gutschrift** (opt-in `bo4e` feature → BO4E `Rechnung` with per-rate USt breakdown, VAT from declared `ust_status`); zero float money; no I/O |
 | `energy-billing` | Retail energy billing engine (LF role) — `Product` typed enum (13 categories, serde-tagged); per-category typed structs (`ElectricityProduct`, `GasProduct`, …); `ControllableLoadProvider` for §14a; `BillingEngine.validate()` + `bill_batch()`; `Invoice.warnings`; §41a Abs. 1 iMSys guard; `Invoice::to_en16931` (EN 16931 model, opt-in `en16931` feature); `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; RLM demand charge; §54 EnergieStG exemption; historic levy lookups; §41a EPEX; HT/NT ToU; zero I/O; rubo4e behind the opt-in `bo4e` feature (typed `Rechnung` bridge) |
 | `invoic-checker` | INVOIC plausibility — 6 checks (period validity, position arithmetic, document total, tariff match ToU-aware, tariff found, MMM settlement price check) |
-| `netz-checker` | NB Anmeldung validation — 6 deterministic checks, ERC A02/A05/A06/A07/E17 (EBD E_0622 / G_0011); no I/O |
+| `mako-pruefung` | The BDEW answer rules, executable — NB trees (`E_0622`, `E_0607`) and LF trees (`E_0609`, `E_0624`, `E_0614`, `E_0615` + Gas); resolves the Antwortcode for `SG4 STS+E01` / REMADV `AJT`; no I/O, no clock |
 
 ### Production Services (17 daemons)
 
@@ -189,7 +189,7 @@ flowchart LR
 
 ### BO4E typed API (`marktd`)
 
-**83 active `rubo4e::current` types — schema validated at every read/write boundary.**
+**82 active `rubo4e::current` types — schema validated at every read/write boundary.**
 
 | Category | Detail |
 |---|---|
@@ -533,7 +533,7 @@ mako/
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   ├── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │   ├── invoic-checker/      # INVOIC plausibility-check pipeline (LF side)
-│   ├── netz-checker/        # NB-side Anmeldung decision checks
+│   ├── mako-pruefung/       # Antwortnachricht decisions (NB + LF Entscheidungsbäume)
 │   ├── energy-billing/      # LF consumption billing engine (§§40–41a EnWG)
 │   ├── grid-billing/        # NB grid-fee billing — NNE/KA/MMM, §14a, Entgeltregime
 │   ├── eeg-billing/         # EEG feed-in remuneration + Marktprämie
@@ -600,7 +600,7 @@ Process::execute_and_enqueue  ──  replay state · Workflow::handle · Atomic
                                ┌────────────────┼──────────────┬──────────────┐
                                ▼                ▼              ▼              ▼
                          processd :8580   invoicd :8280   edmd :8380   obsd :8480
-                         netz-checker     invoic-checker  meter reads  projections
+                         mako-pruefung    invoic-checker  meter reads  projections
                          NB STP + LF E0624 § 147 AO / GoBD    billing-period §20 parity
                                │                │
                                └────────────────┴──► makod :8080 (bestaetigen / ablehnen)

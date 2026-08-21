@@ -86,12 +86,13 @@ pub enum BeendigungZuordnungEvent {
     },
     /// Outbound response (55011 or 55012) dispatched to the NB.
     AntwortGesendet {
-        /// Response PID: 55011 (accepted) or 55012 (rejected).
+        /// Response PID actually dispatched.
         response_pid: Pruefidentifikator,
-        /// `true` = accepted (Bestätigung), `false` = rejected (Ablehnung).
+        /// `true` = Bestätigung, `false` = Ablehnung — read from the
+        /// Antwortcode's published Cluster, never supplied separately.
         accepted: bool,
-        /// Rejection reason (when `accepted = false`).
-        reason: Option<String>,
+        /// The answer as sent, kept for the audit trail.
+        antwort: crate::lf_antwort::LfAntwort,
     },
     /// Zuordnung ended per the NB Anfrage.
     Beendet,
@@ -241,10 +242,9 @@ pub enum BeendigungZuordnungCommand {
     ///
     /// The LFA has 24 wall-clock hours (BK6-22-024 §4) to respond.
     SendAntwort {
-        /// `true` = Bestätigung (55011), `false` = Ablehnung (55012).
-        accepted: bool,
-        /// Rejection reason (required when `accepted = false`).
-        reason: Option<String>,
+        /// The resolved answer: Antwortcode, its EBD, and the Cluster that
+        /// selects the response PID.
+        antwort: crate::lf_antwort::LfAntwort,
     },
     /// Record that the Zuordnung has ended.
     BeendenBestaetigen,
@@ -437,25 +437,46 @@ impl Workflow for GpkeBeendigungZuordnungWorkflow {
                 }
             }
 
-            BeendigungZuordnungCommand::SendAntwort { accepted, reason } => {
-                match state {
-                    BeendigungZuordnungState::ValidationPassed(_) => {}
+            BeendigungZuordnungCommand::SendAntwort { antwort } => {
+                let data = match state {
+                    BeendigungZuordnungState::ValidationPassed(d) => d,
                     _ => {
                         return Err(WorkflowError::invalid_state(
                             "ValidationPassed",
                             state.label(),
                         ));
                     }
-                }
+                };
+                // The Cluster the Antwortcode sits in decides the PID. A caller
+                // cannot pick one independently of the other — that is how an
+                // Ablehnungscode could otherwise ride a Bestätigung.
+                let accepted = antwort.zustimmung;
                 let response_code: u32 = if accepted { 55011 } else { 55012 };
                 let response_pid = Pruefidentifikator::new(response_code)
                     .map_err(|e| WorkflowError::rejected(e.clone()))?;
-                Ok(vec![BeendigungZuordnungEvent::AntwortGesendet {
-                    response_pid,
-                    accepted,
-                    reason,
-                }]
-                .into())
+
+                // The outbox entry *is* the answer. Without it the event log
+                // recorded the process as answered while the counterparty saw
+                // nothing but its Frist expire.
+                let outbox = vec![
+                    crate::lf_antwort::antwort_outbox(
+                        response_code,
+                        &antwort,
+                        &data.location_id,
+                        &data.sender,
+                        &data.receiver,
+                        &data.process_date,
+                    )
+                    .caused_by(0),
+                ];
+                Ok(WorkflowOutput::with_outbox(
+                    vec![BeendigungZuordnungEvent::AntwortGesendet {
+                        response_pid,
+                        accepted,
+                        antwort,
+                    }],
+                    outbox,
+                ))
             }
 
             BeendigungZuordnungCommand::BeendenBestaetigen => {
@@ -571,8 +592,7 @@ mod tests {
         let out = GpkeBeendigungZuordnungWorkflow::handle(
             &state,
             BeendigungZuordnungCommand::SendAntwort {
-                accepted: true,
-                reason: None,
+                antwort: crate::lf_antwort::LfAntwort::zustimmung("A36", "E_0624"),
             },
         )
         .unwrap();
@@ -602,8 +622,8 @@ mod tests {
         let out = GpkeBeendigungZuordnungWorkflow::handle(
             &state,
             BeendigungZuordnungCommand::SendAntwort {
-                accepted: false,
-                reason: Some("Widerspruch".to_owned()),
+                antwort: crate::lf_antwort::LfAntwort::ablehnung("A35", "E_0624")
+                    .with_bemerkung("Widerspruch"),
             },
         )
         .unwrap();

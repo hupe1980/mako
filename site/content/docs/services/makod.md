@@ -1430,7 +1430,7 @@ key.
 
 **Self-addressed messages are held to the network's standard.** In a combined-role
 deployment (NB + MSB on one GLN) a large share of traffic never leaves the
-process. That path now runs the same pre-send AHB conformance gate as the network
+process. That path runs the same pre-send AHB conformance gate as the network
 path, refuses to skip a message of its own interchange that will not parse back,
 and visits every message rather than stopping at the first PID with no workflow
 on this side. An interchange that dispatched nothing is an error, not an
@@ -1700,7 +1700,8 @@ never be the reason a long conversation stalls.
 | 19118, 19119 (ORDRSP) | resume by MaLo | `gpke-sperrung` — `ReceiveMsbAntwort` |
 | 19116, 19117 (ORDRSP) | resume by MaLo | `gpke-sperrung-lf` — `ReceiveOrdrsp` |
 | 19116, 19117 (ORDRSP Gas) | resume by MaLo | `geli-gas-sperrung-lf` — `ReceiveOrdrsp` |
-| 55001, 55002, 55016 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
+| 55001, 55004, 55077 | spawn by MaLo | `gpke-supplier-change` — `ReceiveUtilmd` |
+| 55016 | spawn by MaLo | `gpke-kuendigung` — `ReceiveKuendigung` (its own workflow: `gpke-supplier-change` shares the MaLo key with the NB's Anmeldung) |
 | 55003–55006, 55017, 55018 | resume by MaLo | `gpke-lf-anmeldung` — `ReceiveAntwort` |
 | 44001–44021 | spawn by MaLo | `geli-gas-supplier-change` — `ReceiveUtilmd` |
 

@@ -1,6 +1,6 @@
 +++
 title = "Getting Started"
-description = "Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd auto-accept via netz-checker, and receive the UTILMD 55002 confirmation. BDEW FV2026-10-01 compliant."
+description = "Run the full mako NB STP demo stack — makod, marktd, processd, and a webhook receiver — in under 5 minutes. Submit a UTILMD 55001, watch processd auto-accept via `mako-pruefung`, and receive the UTILMD 55002 confirmation. BDEW FV2026-10-01 compliant."
 weight = 2
 [extra]
 mermaid = true
@@ -17,7 +17,7 @@ complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 5500
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `8000` | Demo ERP event receiver (Python, in-memory) |
 | `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, durable fan-out, `event_log` replay |
-| `processd` | `8580` | NB STP auto-responder — netz-checker (6 checks), LF answers 55007/55010 (24 h) |
+| `processd` | `8580` | NB STP auto-responder — `mako-pruefung` (6 checks), LF answers 55007/55010 (24 h) |
 | `makod` | `8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
 ```mermaid
@@ -36,7 +36,7 @@ sequenceDiagram
     processd->>marktd: GET /api/v1/versorgung/{malo_id}
     processd->>marktd: GET /api/v1/malos/{malo_id}/grid
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}
-    Note over processd: netz-checker: 6 checks → Accept
+    Note over processd: `mako-pruefung`: 6 checks → Accept
     processd->>makod: gpke.lieferbeginn.bestaetigen
     makod-->>webhook: UTILMD 55002 Bestätigung
 ```
@@ -71,7 +71,7 @@ docker build --target processd-runtime -t processd:dev  .
 ```
 
 > The `processd-runtime` stage builds with `--features integrated` (includes
-> both the NB netz-checker and the LF answer modules).
+> both the NB `mako-pruefung` and the LF answer modules).
 
 ---
 
@@ -118,7 +118,7 @@ curl -s http://localhost:8580/health/ready
 
 ## Step 4 — Seed master data
 
-`processd`'s netz-checker needs three items in `marktd` to reach an `Accept`
+`processd`'s `mako-pruefung` needs three items in `marktd` to reach an `Accept`
 decision.
 
 ### 4a — Price sheet
@@ -143,7 +143,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID" \
   -w "\nHTTP %{http_code}\n"
 # → HTTP 201
 
-# MaLo grid record (netz-checker check 1)
+# MaLo grid record (`mako-pruefung` check 1)
 curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
   -H "Content-Type: application/json" \
   -d '{"nb_mp_id":"9900357000004","bilanzierungsgebiet":"11YN0------0STXG","netzgebiet":"DEMO-NZ-001","sparte":"STROM","source":"manual"}' \
@@ -151,7 +151,7 @@ curl -s -X PUT "http://localhost:8180/api/v1/malos/$MALO_ID/grid" \
 # → HTTP 204
 ```
 
-### 4c — LF trading partner (netz-checker check 5)
+### 4c — LF trading partner (`mako-pruefung` check 5)
 
 ```bash
 # Register in marktd partner directory
@@ -201,7 +201,7 @@ Expected response:
 ## Step 6 — Automatic NB decision
 
 Within ~200 ms, `processd` receives the `de.mako.process.initiated` event from
-`marktd`'s fan-out and runs all 6 netz-checker validation checks synchronously.
+`marktd`'s fan-out and runs all 6 `mako-pruefung` validation checks synchronously.
 
 ```bash
 # Check the decision log

@@ -171,7 +171,7 @@ pub enum MsbDecisionOutcome {
     /// Auto-accept — nMSB eligible; NB has no valid grounds to reject.
     Accept,
     /// Auto-reject — specific ground enumerated in ERC code.
-    Reject { erc_code: String, reason: String },
+    Reject { antwortcode: String, reason: String },
     /// Requires manual operator decision.
     Escalate { reason: String },
 }
@@ -212,7 +212,7 @@ pub fn evaluate_msb_anmeldung(
     // Check 1: MeLo must exist in marktd device registry.
     if !melo_exists {
         return MsbDecisionOutcome::Reject {
-            erc_code: ERC_MELO_NOT_FOUND.to_owned(),
+            antwortcode: ERC_MELO_NOT_FOUND.to_owned(),
             reason: format!("MeLo {} not found in grid registry", payload.melo_id),
         };
     }
@@ -220,7 +220,7 @@ pub fn evaluate_msb_anmeldung(
     // Check 2: nMSB must be registered in partner directory.
     if !nmsb_registered {
         return MsbDecisionOutcome::Reject {
-            erc_code: ERC_NMSB_NOT_REGISTERED.to_owned(),
+            antwortcode: ERC_NMSB_NOT_REGISTERED.to_owned(),
             reason: format!(
                 "nMSB {} not registered in partner directory",
                 payload.nmsb_mp_id
@@ -290,13 +290,13 @@ pub fn evaluate_msb_kuendigung(
 ) -> MsbDecisionOutcome {
     if !melo_exists {
         return MsbDecisionOutcome::Reject {
-            erc_code: ERC_MELO_NOT_FOUND.to_owned(),
+            antwortcode: ERC_MELO_NOT_FOUND.to_owned(),
             reason: format!("MeLo {} not found in grid registry", payload.melo_id),
         };
     }
     if !nmsb_registered {
         return MsbDecisionOutcome::Reject {
-            erc_code: ERC_NMSB_NOT_REGISTERED.to_owned(),
+            antwortcode: ERC_NMSB_NOT_REGISTERED.to_owned(),
             reason: format!("nMSB {} not registered", payload.nmsb_mp_id),
         };
     }
@@ -505,11 +505,14 @@ pub async fn handle_msb_wechsel(
                 );
             }
         }
-        MsbDecisionOutcome::Reject { erc_code, reason } => {
+        MsbDecisionOutcome::Reject {
+            antwortcode,
+            reason,
+        } => {
             info!(
                 process_id = %payload.process_id,
                 pid = payload.pid,
-                erc_code,
+                antwortcode,
                 reason,
                 "processd MSB STP: Reject"
             );
@@ -521,10 +524,10 @@ pub async fn handle_msb_wechsel(
                 melo_id: Some(payload.melo_id.clone()),
                 payload: serde_json::json!({
                     "process_id": payload.process_id,
-                    "erc_code": erc_code,
+                    "antwortcode": antwortcode,
                     // makod's APERAK dispatch forwards `reason`; carry the ERC
                     // code inside it so the rejection ground survives the hop.
-                    "reason": format!("{erc_code}: {reason}"),
+                    "reason": format!("{antwortcode}: {reason}"),
                 }),
             };
             let idem = format!("msb-wechsel-reject-{}", payload.process_id);
@@ -538,7 +541,7 @@ pub async fn handle_msb_wechsel(
             info!(
                 process_id = %payload.process_id,
                 command = command_name,
-                erc_code,
+                antwortcode,
                 "processd MSB STP: dispatched Reject command"
             );
         }
@@ -792,14 +795,18 @@ mod tests {
     fn anmeldung_reject_melo_not_found() {
         let result =
             evaluate_msb_anmeldung(&payload(55042, None), false, true, 1, Some(false), false);
-        assert!(matches!(result, MsbDecisionOutcome::Reject { erc_code, .. } if erc_code == "A02"));
+        assert!(
+            matches!(result, MsbDecisionOutcome::Reject { antwortcode, .. } if antwortcode == "A02")
+        );
     }
 
     #[test]
     fn anmeldung_reject_nmsb_not_registered() {
         let result =
             evaluate_msb_anmeldung(&payload(55042, None), true, false, 1, Some(false), false);
-        assert!(matches!(result, MsbDecisionOutcome::Reject { erc_code, .. } if erc_code == "A05"));
+        assert!(
+            matches!(result, MsbDecisionOutcome::Reject { antwortcode, .. } if antwortcode == "A05")
+        );
     }
 
     #[test]

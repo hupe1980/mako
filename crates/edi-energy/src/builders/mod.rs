@@ -283,7 +283,7 @@ pub use reqote::ReqoteBuilder;
 #[cfg(feature = "remadv")]
 mod remadv;
 #[cfg(feature = "remadv")]
-pub use remadv::RemadvBuilder;
+pub use remadv::{Abweichungsgrund, RemadvBuilder};
 
 #[cfg(feature = "ordchg")]
 mod ordchg;

@@ -1,4 +1,4 @@
-//! Core types for `netz-checker`.
+//! Inputs and outputs of the Netzbetreiber's `E_0622` / `E_0607` decisions.
 //!
 //! All types are `Clone + Debug + Serialize + Deserialize` so that callers can
 //! log inputs/outputs and store audit records without extra conversions.
@@ -41,7 +41,7 @@ impl std::fmt::Display for Messtyp {
 
 /// Parsed fields from a `de.mako.process.initiated` event for a Lieferbeginn PID.
 ///
-/// All fields that `netz-checker` needs are extracted at the transport boundary
+/// All fields that `mako-pruefung` needs are extracted at the transport boundary
 /// by `processd` before calling `evaluate`.  No raw CloudEvent JSON arrives here.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnmeldungAnfrage {
@@ -140,7 +140,7 @@ pub struct AbmeldungAnfrage {
 /// NOTE: This is NOT MaStR data. MaStR covers generation/consumption units,
 /// not NB grid topology or Bilanzierungsgebiet assignments.
 ///
-/// Absence of this record triggers `NetzCheckResult::Escalate` (rule 1) — the
+/// Absence of this record triggers `NbEntscheidung::Escalate` (rule 1) — the
 /// NB cannot auto-decide without grid topology.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MaloGridRecord {
@@ -157,17 +157,18 @@ pub struct MaloGridRecord {
     pub netzgebiet: Option<String>,
 }
 
-// ── NetzCheckResult ───────────────────────────────────────────────────────────
+// ── NbEntscheidung ───────────────────────────────────────────────────────────
 
-/// Outcome of the NB Anmeldung validation pipeline.
+/// Outcome of an NB decision tree.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "outcome", rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum NetzCheckResult {
+pub enum NbEntscheidung {
     /// All checks passed.  If `auto_accept = true`, dispatch `bestaetigen`.
     Accept,
     /// A deterministic, verifiable rule failed.
     ///
-    /// Dispatch `ablehnen` with `reason.erc_code` as the EDIFACT ERC.
+    /// Dispatch `ablehnen` with `reason.antwortcode` — it renders into
+    /// `SG4 STS+E01++<code>:<ebd>` of the answering UTILMD.
     Reject(RejectReason),
     /// Validation could not complete — data is missing or ambiguous.
     ///
@@ -179,26 +180,42 @@ pub enum NetzCheckResult {
     },
 }
 
-/// A structured rejection with the standard BDEW ERC code and a human-readable
-/// explanation for the BNetzA audit log.
+/// A structured rejection: the BDEW **Antwortcode**, the EBD it comes from, and
+/// a human-readable explanation for the BNetzA audit log.
+///
+/// The EBD is part of the value, not context the caller is expected to carry:
+/// `A02` means three different things across `E_0607`, `E_0622` and the LF's
+/// `E_0609`, and a combined deployment runs all three.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RejectReason {
-    /// BDEW ERC code (e.g. `"A02"`, `"A05"`, `"A06"`, `"A07"`, `"E17"`).
+    /// `SG4 STS+E01` DE 9013 — the Antwortcode (e.g. `"A02"`, `"A05"`, `"E17"`).
     ///
-    /// Source: GPKE AHB / GeLi Gas AHB ERC decision trees.
-    pub erc_code: String,
+    /// Not an ERC code: `ERC` is the APERAK/CONTRL processability segment.
+    pub antwortcode: String,
+    /// `SG4 STS+E01` DE 1131 — the EBD that publishes the code (`"E_0622"`,
+    /// `"E_0607"`), or `None` on the Gas Codelisten the MIG leaves unnamed.
+    pub ebd: Option<String>,
     /// Human-readable explanation for the operator and BNetzA audit log.
     pub detail: String,
     /// Which check number failed (1–6).
     pub check_number: u8,
 }
 
-impl NetzCheckResult {
-    /// Returns the ERC code if this is a `Reject` result.
+impl NbEntscheidung {
+    /// Returns the Antwortcode if this is a `Reject` result.
     #[must_use]
-    pub fn erc_code(&self) -> Option<&str> {
+    pub fn antwortcode(&self) -> Option<&str> {
         match self {
-            Self::Reject(r) => Some(&r.erc_code),
+            Self::Reject(r) => Some(&r.antwortcode),
+            _ => None,
+        }
+    }
+
+    /// Returns the EBD the Antwortcode belongs to, if this is a `Reject`.
+    #[must_use]
+    pub fn ebd(&self) -> Option<&str> {
+        match self {
+            Self::Reject(r) => r.ebd.as_deref(),
             _ => None,
         }
     }
@@ -252,23 +269,24 @@ mod tests {
 
     #[test]
     fn result_helpers() {
-        assert!(NetzCheckResult::Accept.is_accept());
-        assert!(!NetzCheckResult::Accept.is_reject());
-        assert!(!NetzCheckResult::Accept.is_escalate());
+        assert!(NbEntscheidung::Accept.is_accept());
+        assert!(!NbEntscheidung::Accept.is_reject());
+        assert!(!NbEntscheidung::Accept.is_escalate());
 
-        let reject = NetzCheckResult::Reject(RejectReason {
-            erc_code: "A06".to_owned(),
+        let reject = NbEntscheidung::Reject(RejectReason {
+            antwortcode: "A06".to_owned(),
+            ebd: Some("E_0622".into()),
             detail: "Conflicting supply".to_owned(),
             check_number: 2,
         });
         assert!(reject.is_reject());
-        assert_eq!(reject.erc_code(), Some("A06"));
+        assert_eq!(reject.antwortcode(), Some("A06"));
 
-        let escalate = NetzCheckResult::Escalate {
+        let escalate = NbEntscheidung::Escalate {
             reason: "Grid record missing".to_owned(),
         };
         assert!(escalate.is_escalate());
-        assert!(escalate.erc_code().is_none());
+        assert!(escalate.antwortcode().is_none());
     }
 
     #[test]

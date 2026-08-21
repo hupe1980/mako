@@ -26,6 +26,14 @@ use super::*;
 /// | `document_code` | no       | BGM type code (default `"380"`)               |
 /// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent |
+/// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
+/// | `antwort_ebd`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
+/// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
+///
+/// # An Abweisung must state why
+///
+/// `AJT` is what carries the reason: DE 4465 the code, DE 1082 the EBD. The
+/// REMADV twin of UTILMD's `STS+E01++<code>:<ebd>`.
 pub(super) fn render_invoic(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -73,7 +81,6 @@ pub(super) fn render_invoic(
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);
     }
-
     finish_interchange(builder.serialize(), sender, receiver, msg)
 }
 
@@ -95,6 +102,14 @@ pub(super) fn render_invoic(
 /// | `document_code` | no       | BGM type code (default `"239"`)               |
 /// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent |
+/// | `antwort_code`  | no       | `SG7 AJT` DE 4465 — the Antwortcode on an Abweisung |
+/// | `antwort_ebd`   | no       | `SG7 AJT` DE 1082 — the EBD the code comes from |
+/// | `ablehnungsgrund` | no     | Free-text reason, rendered as `FTX+ACB`        |
+///
+/// # An Abweisung must state why
+///
+/// `AJT` is what carries the reason: DE 4465 the code, DE 1082 the EBD. The
+/// REMADV twin of UTILMD's `STS+E01++<code>:<ebd>`.
 pub(super) fn render_remadv(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -142,6 +157,18 @@ pub(super) fn render_remadv(
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);
     }
-
+    // `SG7 AJT` — the Abweichungsgrund. An Abweisung without one gives the
+    // invoice sender nothing to correct; `invoicd` computes the reason and it
+    // must reach the wire.
+    if let Some(code) = p.get("antwort_code").and_then(|v| v.as_str()) {
+        let grund = match p.get("antwort_ebd").and_then(|v| v.as_str()) {
+            Some(ebd) => builders::Abweichungsgrund::new(code, ebd),
+            None => builders::Abweichungsgrund {
+                code: code.to_owned(),
+                ebd: None,
+            },
+        };
+        builder = builder.abweichungsgrund(grund);
+    }
     finish_interchange(builder.serialize(), sender, receiver, msg)
 }

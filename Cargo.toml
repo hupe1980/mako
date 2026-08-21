@@ -23,7 +23,7 @@ members = [
     "crates/mako-service",
     "crates/mako-plugin",
     "crates/invoic-checker",
-    "crates/netz-checker",
+    "crates/mako-pruefung",
     "crates/grid-billing",
     "crates/eeg-billing",
     "crates/energy-billing",
@@ -123,7 +123,7 @@ asx-rs           = { version = "0.13" }
 mako-service     = { path = "crates/mako-service",     version = "0.16" }
 mako-plugin      = { path = "crates/mako-plugin",      version = "0.16" }
 invoic-checker   = { path = "crates/invoic-checker",   version = "0.16" }
-netz-checker     = { path = "crates/netz-checker",     version = "0.16" }
+mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.16" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.16" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.16" }
 metering         = { version = "0.18" }

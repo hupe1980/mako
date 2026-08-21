@@ -119,7 +119,7 @@ Each is independently testable and suitable for crates.io publication.
 | `energy-billing` | Pure multi-product retail energy billing (LF) | `Product` typed enum (13 categories, serde-tagged); `BillingEngine`/`BillingProvider` pipeline; `ControllableLoadProvider` (§14a); `validate()` + `bill_batch()`; `Invoice.warnings` + `§41a Abs. 1` guard; `StromsteuerBefreiung` typed enum; `EnergieQuellen` CO₂ label; HT/NT (`billing::TimeOfUsePricing`); block tariffs (`billing::RateSchedule`); **RLM demand charge**; **gas §54 exemption**; **historic levy rates**; §41a EPEX; `Invoice::merge()`, `Invoice::allocate_proportionally()`; `eeg` optional feature; rubo4e-free core, opt-in `bo4e` feature → `Invoice::to_rechnung()`; zero I/O |
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants; opt-in `bo4e` feature → **§14 UStG Gutschrift** (`settlement_to_gutschrift` → BO4E `Rechnung` with per-rate USt breakdown) |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
-| `netz-checker` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
+| `mako-pruefung` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `outbox`, `ServiceBuilder` |
 | `mako-plugin` | Operator CloudEvent extension point | `CloudEventPlugin`, `PluginRegistry`, re-exported by `mako-service`. No daemon runs a registry today — it is an integration seam, not an active hook |
@@ -221,7 +221,7 @@ and `agentd`, which is the MCP *host* that calls the others.
 |--------|------|------|-------------|
 | `makod` | `:8080` / `:4080` / `:8090` | Protocol gateway — EDIFACT ↔ BO4E, 69 workflows, AS4 ingest, deadlines | `makod.toml` |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR/SR, Lokationszuordnung graph, preisblaetter, VersorgungsStatus, `event_log` replay, durable fan-out; **Geraet** typed konfigurationen sub-resource (16-variant `Konfigurationsparameter` enum, GIN-indexed); **Zaehlzeitdefinition** typed endpoint; ZaehlzeitRegister auto-population from WiM Stammdaten | `marktd.toml` |
-| `processd` | `:8580` | Process decision engine — NB STP (`netz-checker`), LF answers to the NB-initiated GPKE processes, MSB REQOTE/ORDRSP, EoG gap closure; role-gated binaries (§ 7 EnWG) | `processd.toml` |
+| `processd` | `:8580` | Process decision engine — NB STP (`mako-pruefung`), LF answers to the NB-initiated GPKE processes, MSB REQOTE/ORDRSP, EoG gap closure; role-gated binaries (§ 7 EnWG) | `processd.toml` |
 | `invoicd` | `:8280` | INVOIC plausibility — REMADV, selbstausstellen, overdue-REMADV, § 147 AO / GoBD audit | `invoicd.toml` |
 | `netzbilanzd` | `:8680` | NNE/KA/MMM billing daemon (NB role) — generates INVOIC 31002 (NN-Rechnung) / 31005 (MMM) / 31009 (MSB) / 31011 (AWH), invoice draft lifecycle | `netzbilanzd.toml` |
 | `sperrd` | `:8780` | Sperr-/Entsperrauftrag execution queue (NB role) — ORDERS 17115/17117 ingest, field dispatch, IFTSTA 21039 with a retry queue | `sperrd.toml` |
@@ -312,7 +312,7 @@ makes automated decisions within regulatory deadlines.
 **NB module** (`--features nb-only` or `integrated`):
 - Handles GPKE Lieferbeginn (55001/55016) and GeLi Gas Lieferbeginn (44001)
 - Fetches `VersorgungsStatus` + `MaloGridRecord` from `marktd`
-- Evaluates 6 objective checks via the pure `netz-checker` library
+- Evaluates 6 objective checks via the pure `mako-pruefung` library
 - Dispatches `bestaetigen`/`ablehnen` to `makod` with §20 EnWG parity logging
 - STP improves when the `malo_grid` record is present (provisioned via marktd's NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint — manual/ERP provisioning)
 

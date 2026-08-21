@@ -18,9 +18,9 @@ publish          = false
 # Features:
 #   role-lf-strom  — LF answers to NB-initiated GPKE processes, LFN bootstrap
 #   role-lf-gas    — LF answers to NB-initiated GeLi Gas processes
-#   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via netz-checker;
+#   role-nb-strom  — GPKE Anmeldung STP (55001, 55016) via `mako-pruefung`;
 #                    EoG gap closure; the MSB-Wechsel PIDs the *NB* answers
-#   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via netz-checker
+#   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via `mako-pruefung`
 #   role-msb-strom — the MSB's own obligations: REQOTE→QUOTES, §14a
 #                    Steuerungsauftrag ORDRSP, and the MSB-Wechsel PIDs the
 #                    *MSB* answers
@@ -39,14 +39,16 @@ publish          = false
 [features]
 default = []
 
-## LFA E_0624 auto-response + LFN Strom bootstrap.
-role-lf-strom = []
-## LFA GeLi Gas auto-response.
-role-lf-gas   = []
-## GPKE Anmeldung STP for Strom (PIDs 55001, 55016) via `netz-checker`.
-role-nb-strom = []
-## GeLi Gas Anmeldung STP (PID 44001) via `netz-checker`.
-role-nb-gas   = []
+## LFA answers to the NB-initiated GPKE processes (`E_0609`, `E_0624`,
+## `E_0614`) + LFN Strom bootstrap.
+role-lf-strom = ["mako-pruefung/role-lf"]
+## LFA answers to the NB-initiated GeLi Gas processes (`E_3001`, `E_3002`,
+## `E_3020`).
+role-lf-gas   = ["mako-pruefung/role-lf"]
+## GPKE Anmeldung/Abmeldung STP for Strom (`E_0622`, `E_0607`) via `mako-pruefung`.
+role-nb-strom = ["mako-pruefung/role-nb"]
+## GeLi Gas Anmeldung STP (PID 44001) via `mako-pruefung`.
+role-nb-gas   = ["mako-pruefung/role-nb"]
 ## MSB obligations: REQOTE→QUOTES, §14a Steuerungsauftrag ORDRSP, MSB-answered
 ## MSB-Wechsel PIDs.
 role-msb-strom = []
@@ -77,7 +79,9 @@ mako-markt    = { workspace = true, features = ["makod-client", "marktd-client"]
 mako-gpke     = { path = "../../crates/mako-gpke" }
 mako-geli-gas = { path = "../../crates/mako-geli-gas" }
 mako-wim      = { workspace = true }
-netz-checker  = { path = "../../crates/netz-checker" }
+# The role features above select which Entscheidungsbäume compile in, so a
+# role-gated binary carries only the decisions it is licensed to make (§7 EnWG).
+mako-pruefung  = { path = "../../crates/mako-pruefung", default-features = false }
 
 anyhow             = { workspace = true }
 thiserror          = { workspace = true }
@@ -102,7 +106,7 @@ sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "pos
 
 [dev-dependencies]
 mako-markt   = { workspace = true }
-netz-checker = { path = "../../crates/netz-checker" }
+mako-pruefung = { path = "../../crates/mako-pruefung" }
 # The PID-contract guard compares processd's trigger PIDs against the canonical
 # workflow constants that drive makod's spawn table.
 tokio        = { version = "1", features = ["full"] }

@@ -77,8 +77,9 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662076::'\
-UNT+8+MSG-001'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+52695662076'\
+UNT+9+MSG-001'\
 UNZ+1+GAS-2025-001'";
 
 // ── Mock GNB ERP backend ───────────────────────────────────────────────────────
@@ -163,7 +164,7 @@ impl MockGnb {
                 assert_eq!(
                     malo_id.as_str(),
                     MALO_GAS_ID,
-                    "adapter must extract MaLo from IDE+Z19"
+                    "adapter must extract MaLo from IDE+24"
                 );
                 assert_eq!(
                     message_ref.as_str(),

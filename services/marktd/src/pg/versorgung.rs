@@ -278,7 +278,7 @@ impl PgVersorgungsStatusRepository {
     /// **The first announcement wins.** A second Anmeldung by a *different*
     /// supplier while one is pending is the situation EBD `E_0622` Prüfschritt
     /// 70 rejects with `A06` „Andere Anmeldung in Bearbeitung", and
-    /// `netz-checker` decides it by comparing `lf_mp_id_next` against the
+    /// `mako-pruefung` decides it by comparing `lf_mp_id_next` against the
     /// requesting supplier. Overwriting the marker makes that comparison always
     /// succeed — the check runs after the ingest, so the second Anmeldung would
     /// find its own MP-ID there.

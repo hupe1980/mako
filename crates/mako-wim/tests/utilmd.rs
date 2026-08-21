@@ -60,9 +60,10 @@ DTM+137:20250115:102'\
 RFF+Z13:WIM-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+DE0001000001234567890000000000001::'\
+IDE+24+VORGANG-0001'\
+LOC+Z17+DE0001000001234567890000000000001'\
 LOC+172+ZHR-12345678::'\
-UNT+9+MSG-001'\
+UNT+10+MSG-001'\
 UNZ+1+WIM-2025-001'";
 
 // ── E2E pipeline test ─────────────────────────────────────────────────────────
@@ -125,12 +126,12 @@ async fn end_to_end_geraetewechsel_pipeline() {
                     .and_then(|r| r.rff.reference.as_deref())
                     .unwrap_or("REF-UNKNOWN"),
             );
-            // MeLo from IDE Z19 transaction
+            // The MeLo lives in `SG5 LOC+Z17`; `IDE+24` carries a Vorgangsnummer.
             let melo_id = MeLo::new(
                 utilmd
                     .transactions()
                     .first()
-                    .and_then(|tx| tx.ide.object_id.as_deref())
+                    .and_then(|tx| tx.messlokation())
                     .unwrap_or("MELO-UNKNOWN"),
             );
             (sender, receiver, melo_id, document_date, message_ref)
@@ -257,11 +258,15 @@ UNZ+1+WIM-NEG-001'";
     );
 }
 
-/// AHB conformance — wrong IDE qualifier (Z19 instead of 24) on PID 55039 must
-/// produce a validation error.  Z19 is the GPKE qualifier (MaLo); WiM uses 24
-/// (Transaktion).  Before the fix this was silently accepted.
+/// AHB conformance — an IDE qualifier UTILMD does not define must be rejected.
+///
+/// DE 7495 has exactly two values in UTILMD: `24` Vorgang and `Z01` Liste. `Z19`
+/// is a **`SG5 LOC`** code (Steuerbare Ressource) and never appears in `IDE`.
+///
+/// The check is not WiM-specific: no UTILMD Anwendungsfall admits `Z19` in
+/// `IDE`, in either Sparte.
 #[test]
-fn negative_ahb_wrong_ide_qualifier_pid_55039() {
+fn negative_ahb_undefined_ide_qualifier_pid_55039() {
     let invalid_bytes: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+WIM-NEG-002'\
 UNH+MSG-001+UTILMD:D:11A:UN:S2.1'\
@@ -270,8 +275,9 @@ DTM+137:20250115:102'\
 RFF+Z13:WIM-REF-NEG-002'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+51238696781::'\
-UNT+8+MSG-001'\
+IDE+Z19+VORGANG-0001'\
+LOC+Z16+51238696781'\
+UNT+9+MSG-001'\
 UNZ+1+WIM-NEG-002'";
 
     let platform = Platform::with_all_profiles();
@@ -286,7 +292,7 @@ UNZ+1+WIM-NEG-002'";
 
     assert!(
         !report.is_valid(),
-        "IDE+Z19 on WiM PID 55039 must fail AHB validation (Z19 is GPKE, WiM requires 24)."
+        "IDE+Z19 must fail AHB validation — UTILMD DE 7495 defines only 24 and Z01."
     );
 
     let ide_rule_fired = report.errors().iter().any(|e| {

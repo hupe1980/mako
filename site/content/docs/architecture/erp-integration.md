@@ -227,7 +227,7 @@ graph TB
     invoicd["invoicd :8280 · PostgreSQL<br/>INVOIC plausibility · REMADV<br/>§ 147 AO / GoBD receipts"]
     edmd["edmd :8380 · PostgreSQL<br/>Vec<Energiemenge> deliveries<br/>Lastgang · MeterBillingPeriod"]
     obsd["obsd :8480 · PostgreSQL<br/>process projections<br/>BNetzA §20 KPI reports"]
-    processd["processd :8580<br/>NB STP netz-checker<br/>LF answers 55007 / 55010"]
+    processd["processd :8580<br/>NB STP `mako-pruefung`<br/>LF answers 55007 / 55010"]
     billingd["billingd :9280 · PostgreSQL<br/>energy billing · EN 16931<br/>XRechnung CII / PEPPOL UBL"]
     outputd["outputd :9880<br/>template store · ZUGFeRD PDF/A-3<br/>Textform proofs"]
     accountingd["accountingd :9380 · PostgreSQL<br/>double-entry ledger · Kontokorrent<br/>SEPA pain.008 / camt.05x"]

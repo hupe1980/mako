@@ -85,9 +85,10 @@ DTM+137:20250115:102'\
 RFF+Z13:WIM-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+DE0001000001234567890000000000001::'\
+IDE+24+VORGANG-0001'\
+LOC+Z17+DE0001000001234567890000000000001'\
 LOC+172+ZHR-12345678::'\
-UNT+9+MSG-WIM-001'\
+UNT+10+MSG-WIM-001'\
 UNZ+1+WIM-2025-001'";
 
 // ── Mock NB ERP backend ────────────────────────────────────────────────────────
@@ -169,7 +170,7 @@ impl MockNb {
                 assert_eq!(
                     melo_id.as_str(),
                     MELO_ID,
-                    "adapter must extract MeLo from IDE+Z19"
+                    "adapter must extract MeLo from IDE+24"
                 );
                 assert_eq!(
                     message_ref.as_str(),

@@ -237,6 +237,40 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_spawn_table",
                 }),
             },
+            // PID 55016 (Kündigung, LFN → LFA) — GPKE Teil 2 § 1.2. Its own
+            // workflow rather than `gpke-supplier-change`: both are keyed by
+            // Marktlokation, and an integrated NB+LF deployment runs the NB's
+            // Anmeldung on the same MaLo.
+            "gpke-kuendigung" => match pid {
+                55016 => {
+                    let cmd = adapters::gpke_kuendigung_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    let received = OffsetDateTime::now_utc();
+                    // Ablauf des 1. WT nach dem ÜT (GPKE Teil 2, SD Kündigung
+                    // Prozessschritt 2).
+                    let process_due_at =
+                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let aperak_due_at = fristen::aperak_strom_due_at(received);
+                    self.spawn_or_resume::<mako_gpke::GpkeKuendigungWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-kuendigung",
+                        cmd,
+                        &fv,
+                        &[
+                            (
+                                mako_gpke::kuendigung::KUENDIGUNG_APERAK_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-kuendigung",
+                    reason: "pid_not_in_spawn_table",
+                }),
+            },
             // ── GPKE Ersatz-/Grundversorgung (§36/§38 EnWG) ─────────────────
             //
             // PID 55013 (Anmeldung/Zuordnung EOG, NB → LF) — spawn the E/G

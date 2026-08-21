@@ -35,19 +35,88 @@ pub struct UtilmdReference {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct UtilmdTransaction {
-    /// IDE — object / process identifier (e.g. metering-point ID).
+    /// IDE — `24` Vorgang (or `Z01` Liste) plus the **Vorgangsnummer**.
+    ///
+    /// Not a location: read the Marktlokation from
+    /// [`marktlokation()`](Self::marktlokation).
     pub ide: Ide,
-    /// DTM — date/time segments scoped to this transaction.
+    /// DTM — date/time segments scoped to this Vorgang.
     pub dtm: Vec<Dtm>,
-    /// LOC — location information for this transaction (e.g. grid connection
-    /// area), if present.
-    pub loc: Option<Loc>,
-    /// RFF — references related to this transaction (e.g. contract number).
+    /// SG5 LOC — every Lokation this Vorgang names, in wire order.
+    pub locations: Vec<Loc>,
+    /// SG6 RFF — references related to this Vorgang (e.g. Vorgangsnummer der
+    /// Anfragenachricht).
     pub references: Vec<Rff>,
-    /// STS — status segments (S2.1/S2.2 only; e.g. Sperrung E07/E08).
+    /// STS — `7` Transaktionsgrund and `E01` Status der Antwort, raw.
     pub sts: Vec<Sts>,
-    /// FTX — free-text remarks scoped to this transaction.
+    /// FTX — free-text remarks scoped to this Vorgang.
     pub ftx: Vec<Ftx>,
+    /// `STS+7` parsed across its repeated `C556` composites.
+    transaktionsgrund: Option<crate::utilmd_codes::Transaktionsgrund>,
+    /// `STS+E01` parsed with its DE 1131 EBD reference.
+    antwort: Option<crate::utilmd_codes::AntwortStatus>,
+}
+
+impl UtilmdTransaction {
+    /// The `IDE` DE 7402 Vorgangsnummer.
+    #[must_use]
+    pub fn vorgangsnummer(&self) -> Option<&str> {
+        self.ide.object_id.as_deref()
+    }
+
+    /// The ID carried by the first `SG5 LOC` with the given DE 3227 qualifier.
+    #[must_use]
+    pub fn location(&self, lokationstyp: crate::Lokationstyp) -> Option<&str> {
+        let want = lokationstyp.qualifier_code();
+        self.locations
+            .iter()
+            .find(|l| l.qualifier == want)
+            .and_then(|l| l.location_id.as_deref())
+    }
+
+    /// `SG5 LOC+Z16` — the Marktlokations-ID.
+    #[must_use]
+    pub fn marktlokation(&self) -> Option<&str> {
+        self.location(crate::Lokationstyp::Marktlokation)
+    }
+
+    /// `SG5 LOC+Z17` — the Messlokations-ID.
+    #[must_use]
+    pub fn messlokation(&self) -> Option<&str> {
+        self.location(crate::Lokationstyp::Messlokation)
+    }
+
+    /// The first `SG4 DTM` with the given DE 2005 qualifier.
+    ///
+    /// Use the [`dtm`](crate::utilmd_codes::dtm) constants: `92` Beginn zum,
+    /// `93` Ende zum, `154` ÜT der Lieferanmeldung des LFN.
+    #[must_use]
+    pub fn date(&self, qualifier: &str) -> Option<&str> {
+        self.dtm
+            .iter()
+            .find(|d| d.qualifier == qualifier)
+            .and_then(|d| d.value.as_deref())
+    }
+
+    /// `SG4 STS+7` — the Transaktionsgrund with its Ergänzung.
+    ///
+    /// The Ergänzung (`ZW3` erzeugende / `ZW4` verbrauchende Marktlokation,
+    /// `ZW5` Tranche, `ZAP` ruhende Marktlokation) selects the branch every
+    /// answering EBD opens with, so it is returned alongside the Grund rather
+    /// than left for the caller to dig out of the repeated composite.
+    #[must_use]
+    pub fn transaktionsgrund(&self) -> Option<crate::utilmd_codes::Transaktionsgrund> {
+        self.transaktionsgrund.clone()
+    }
+
+    /// `SG4 STS+E01` — the EBD Antwortcode a Bestätigung or Ablehnung carries.
+    ///
+    /// `None` on an Anfrage, and on an answer that omits the segment the AHB
+    /// marks Muss — which the receiving side needs to see rather than infer.
+    #[must_use]
+    pub fn antwort(&self) -> Option<&crate::utilmd_codes::AntwortStatus> {
+        self.antwort.as_ref()
+    }
 }
 
 // ── UtilmdMessage ─────────────────────────────────────────────────────────────
@@ -285,10 +354,12 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
         };
 
         let mut dtm = Vec::new();
-        let mut loc: Option<Loc> = None;
+        let mut locations = Vec::new();
         let mut references = Vec::new();
         let mut sts = Vec::new();
         let mut ftx = Vec::new();
+        let mut transaktionsgrund = None;
+        let mut antwort = None;
         let mut j = i + 1;
 
         while j < segments.len() && segments[j].tag != "IDE" && segments[j].tag != "UNT" {
@@ -299,8 +370,8 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
                     }
                 }
                 "LOC" => {
-                    if loc.is_none() {
-                        loc = try_deserialize::<Loc>(&segments[j]);
+                    if let Some(l) = try_deserialize::<Loc>(&segments[j]) {
+                        locations.push(l);
                     }
                 }
                 "RFF" => {
@@ -309,6 +380,19 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
                     }
                 }
                 "STS" => {
+                    // The repeated `C556` composites are read positionally from
+                    // the raw segment: DE 9013 resolves to the *first*
+                    // occurrence only, so a code-addressed read cannot see the
+                    // Ergänzung at element 4 or the DE 1131 EBD reference.
+                    match sts_category(&segments[j]) {
+                        Some(crate::utilmd_codes::STS_TRANSAKTIONSGRUND) => {
+                            transaktionsgrund = parse_transaktionsgrund(&segments[j]);
+                        }
+                        Some(crate::utilmd_codes::STS_STATUS_ANTWORT) => {
+                            antwort = parse_antwort(&segments[j]);
+                        }
+                        _ => {}
+                    }
                     if let Some(s) = try_deserialize::<Sts>(&segments[j]) {
                         sts.push(s);
                     }
@@ -326,14 +410,55 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
         result.push(UtilmdTransaction {
             ide,
             dtm,
-            loc,
+            locations,
             references,
             sts,
             ftx,
+            transaktionsgrund,
+            antwort,
         });
         i = j;
     }
     result
+}
+
+/// `STS` DE 9015 — the Statuskategorie, read from element 1 component 0.
+fn sts_category<'a>(seg: &'a edifact_rs::Segment<'_>) -> Option<&'a str> {
+    seg.get_element(0)
+        .and_then(|e| e.get_component(0))
+        .filter(|c| !c.is_empty())
+}
+
+/// `STS+7++<grund>+<ergaenzung>+<befristet>` — the three repeated `C556`
+/// composites at elements 3, 4 and 5 (zero-based 2, 3, 4).
+fn parse_transaktionsgrund(
+    seg: &edifact_rs::Segment<'_>,
+) -> Option<crate::utilmd_codes::Transaktionsgrund> {
+    let at = |idx: usize| {
+        seg.get_element(idx)
+            .and_then(|e| e.get_component(0))
+            .filter(|c| !c.is_empty())
+            .map(ToOwned::to_owned)
+    };
+    Some(crate::utilmd_codes::Transaktionsgrund {
+        grund: at(2)?,
+        ergaenzung: at(3),
+        befristet: at(4),
+    })
+}
+
+/// `STS+E01++<code>:<ebd>` — the Antwortcode in DE 9013 and the EBD id in
+/// DE 1131, both inside the single `C556` at element 3 (zero-based 2).
+fn parse_antwort(seg: &edifact_rs::Segment<'_>) -> Option<crate::utilmd_codes::AntwortStatus> {
+    let c556 = seg.get_element(2)?;
+    let code = c556.get_component(0).filter(|c| !c.is_empty())?;
+    Some(crate::utilmd_codes::AntwortStatus {
+        code: code.to_owned(),
+        ebd: c556
+            .get_component(1)
+            .filter(|c| !c.is_empty())
+            .map(ToOwned::to_owned),
+    })
 }
 
 // ── Layer 5: UTILMD semantic rule pack ───────────────────────────────────────
@@ -342,49 +467,65 @@ fn parse_transactions(segments: &[edifact_rs::Segment<'_>]) -> Vec<UtilmdTransac
 ///
 /// These rules check business-level constraints that are not expressible in
 /// the structural MIG/AHB schemas:
-/// - [`rule_sem_malo_format`]: IDE market-location IDs must be exactly 11
-///   upper-case alphanumeric characters ([A-Z0-9]{11}).
+/// - [`rule_sem_lokations_id_format`]: `SG5 LOC` location IDs must match the
+///   BDEW scheme for the Lokationstyp the qualifier names.
 fn utilmd_semantic_pack() -> ProfileRulePack {
     ProfileRulePack::new("UTILMD-SEM")
         .for_message_type("UTILMD")
-        .with_stateless_rule_fn(rule_sem_malo_format)
+        .with_stateless_rule_fn(rule_sem_lokations_id_format)
 }
 
-/// `SEM-UTILMD-MALO-FORMAT` — Validate market/metering location IDs in IDE
-/// segments.
+/// `SEM-UTILMD-LOKATIONS-ID` — validate `SG5 LOC` location identifiers.
 ///
-/// Every `IDE` segment that carries a non-empty `C206.7402` identifier must
-/// hold either a Marktlokations-ID (11 upper-case alphanumerics, `[A-Z0-9]{11}`)
-/// or a Messlokations-ID (33 characters opening with an ISO 3166-1 country
-/// code) — the two BDEW location-ID schemes.
-fn rule_sem_malo_format(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    for seg in segments.iter().filter(|s| s.tag == "IDE") {
-        // IDE: element[0] = 7495 (type qualifier), element[1] = C206 composite.
-        // C206 component[0] = 7402 (free-form identification number).
+/// The Lokations-ID lives in `SG5 LOC` DE 3225, keyed by the DE 3227
+/// Lokationstyp — **not** in `IDE`, whose DE 7402 carries the sender's own
+/// Vorgangsnummer and is deliberately free-form (`an..35`).
+///
+/// Only the qualifiers whose ID scheme the BDEW fixes are checked:
+/// `Z16`/`Z22` Marktlokation (11 chars) and `Z17` Messlokation (33 chars). A
+/// Netzlokation, Tranche or Ressourcen-ID has its own scheme and is left alone.
+fn rule_sem_lokations_id_format(
+    segments: &[edifact_rs::Segment<'_>],
+    issues: &mut Vec<ValidationIssue>,
+) {
+    use crate::utilmd_codes::loc;
+    for seg in segments.iter().filter(|s| s.tag == "LOC") {
+        let qualifier = seg
+            .get_element(0)
+            .and_then(|e| e.get_component(0))
+            .unwrap_or("");
+        let expects_location_id = matches!(
+            qualifier,
+            q if q == loc::MARKTLOKATION
+                || q == loc::RUHENDE_MARKTLOKATION
+                || q == loc::MESSLOKATION
+        );
+        if !expects_location_id {
+            continue;
+        }
         let id = seg
             .get_element(1)
             .and_then(|e| e.get_component(0))
             .unwrap_or("");
-        if id.is_empty() {
+        if id.is_empty() || super::common::is_valid_location_id(id) {
             continue;
         }
-        if !super::common::is_valid_location_id(id) {
-            issues.push(
-                ValidationIssue::new(
-                    ValidationSeverity::Error,
-                    "IDE element 7402 (C206 component 0): value is neither a \
-                     Marktlokations-ID ([A-Z0-9]{11}) nor a Messlokations-ID (33 characters)"
-                        .to_owned(),
-                )
-                .with_span(seg.span)
-                .with_rule_id("SEM-UTILMD-MALO-FORMAT")
-                .with_segment("IDE")
-                .with_suggestion(
-                    "IDE C206 must carry either an 11-character Marktlokations-ID matching \
-                     [A-Z0-9]{11} or a 33-character Messlokations-ID starting with an \
-                     ISO 3166-1 country code",
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!(
+                    "LOC+{qualifier} element 3225: value is neither a \
+                     Marktlokations-ID ([A-Z0-9]{{11}}) nor a Messlokations-ID (33 characters)"
                 ),
-            );
-        }
+            )
+            .with_span(seg.span)
+            .with_rule_id("SEM-UTILMD-LOKATIONS-ID")
+            .with_segment("LOC")
+            .with_suggestion(
+                "LOC+Z16 / LOC+Z22 carry an 11-character Marktlokations-ID matching \
+                 [A-Z0-9]{11}; LOC+Z17 carries a 33-character Messlokations-ID starting \
+                 with an ISO 3166-1 country code",
+            ),
+        );
     }
 }

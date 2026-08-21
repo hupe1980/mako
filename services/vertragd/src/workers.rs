@@ -103,13 +103,13 @@ pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Resu
             row.haushaltskunde,
         );
         let vorlauf_tage = (row.wirksam_ab - today).whole_days();
-        let frist_gewahrt = vorlauf_tage >= regime.vorlauf_tage;
+        let frist_gewahrt = regime.frist.gewahrt(today, row.wirksam_ab);
         if !frist_gewahrt {
             // The API refuses a Wirksamkeit this close, so reaching here means
             // the slice predates that guard or was written around it. Say so
             // loudly — a notice that is late is a breach, not a warning.
             tracing::error!(
-                komp_id = %row.komp_id, vorlauf_tage, erforderlich = regime.vorlauf_tage,
+                komp_id = %row.komp_id, vorlauf_tage, erforderlich = %regime.bezeichnung,
                 rechtsgrundlage = regime.rechtsgrundlage,
                 "vertragd: Preisänderungsanzeige verspätet — die gesetzliche Frist ist nicht gewahrt"
             );
@@ -129,7 +129,8 @@ pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Resu
                 "new_product_code": row.neues_produkt,
                 "wirksamkeit": row.wirksam_ab.to_string(),
                 "vorlauf_tage": vorlauf_tage,
-                "erforderlicher_vorlauf_tage": regime.vorlauf_tage,
+                "erforderliche_frist": regime.bezeichnung,
+                "fruehestens_wirksam": regime.fruehestens_wirksam(today).to_string(),
                 "frist_gewahrt": frist_gewahrt,
                 "rechtsgrundlage": regime.rechtsgrundlage,
                 // § 41 Abs. 5 Satz 1 EnWG obliges the supplier to state the
@@ -151,7 +152,7 @@ pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Resu
         tx.commit().await?;
         tracing::info!(
             komp_id = %row.komp_id, wirksamkeit = %row.wirksam_ab,
-            frist = %regime.frist, "vertragd: Preisänderungsanzeige versandt"
+            frist = %regime.bezeichnung, "vertragd: Preisänderungsanzeige versandt"
         );
     }
     Ok(())

@@ -19,8 +19,12 @@
 use processd::handler::answerable_pids;
 
 /// PIDs that belong to a supplier's own answer obligation.
+///
+/// Strom 55007/55010/55016 and their GeLi Gas twins 44007/44010/44016. All six
+/// arrive at the *old* supplier, who is the only party holding the
+/// Lieferverhältnis the answer is decided from.
 #[allow(dead_code)] // unused in an `integrated` build, where no exclusion applies
-const LF_PIDS: &[u32] = &[55_007, 55_010];
+const LF_PIDS: &[u32] = &[44_007, 44_010, 44_016, 55_007, 55_010, 55_016];
 /// PIDs the Netzbetreiber answers.
 ///
 /// 55016 „Kündigung" is deliberately absent: the Anwendungsübersicht 4.0 has it
@@ -90,8 +94,18 @@ fn an_lf_only_build_answers_no_nb_or_msb_process() {
     let pids = answerable_pids();
     assert_disjoint(&pids, NB_PIDS, "lf-only", "NB");
     assert_disjoint(&pids, MSB_WECHSEL_PIDS, "lf-only", "MSB");
+
+    // Sparte-scoped: the expected set is the enabled Spartes' PIDs, so a
+    // `role-lf-strom` build that answered a GeLi Gas Abmeldung would fail here.
+    let mut expected: Vec<u32> = Vec::new();
+    if cfg!(feature = "role-lf-gas") {
+        expected.extend_from_slice(&[44_007, 44_010, 44_016]);
+    }
+    if cfg!(feature = "role-lf-strom") {
+        expected.extend_from_slice(&[55_007, 55_010, 55_016]);
+    }
     assert_eq!(
-        pids, LF_PIDS,
+        pids, expected,
         "an lf-only build answers exactly the supplier's inbound processes"
     );
 }

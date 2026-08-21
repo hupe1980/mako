@@ -391,6 +391,7 @@ coverage_table! {
     gpke_anfrage_bestellung_registry,
     gpke_ankuendigung_zuordnung_lf_registry,
     gpke_beendigung_zuordnung_registry,
+    gpke_kuendigung_registry,
     gpke_datenabruf_registry,
     gpke_eog_registry,
     gpke_konfiguration_aenderung_registry,

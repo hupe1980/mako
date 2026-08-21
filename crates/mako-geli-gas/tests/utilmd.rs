@@ -49,7 +49,8 @@ use mako_geli_gas::{
 /// - RFF  — Z13 reference (Auftragsreferenz)
 /// - NAD+MS — new gas supplier (LF, sender)
 /// - NAD+MR — gas grid operator (NB, receiver)
-/// - IDE  — MaLo identifier (Z19 qualifier)
+/// - IDE  — `24` Vorgang plus the Vorgangsnummer
+/// - LOC  — `Z16` Marktlokation (the MaLo lives here, not in IDE)
 /// - UNT  — message trailer
 /// - UNZ  — interchange trailer
 ///
@@ -65,8 +66,9 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662076::'\
-UNT+8+MSG-001'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+52695662076'\
+UNT+9+MSG-001'\
 UNZ+1+GAS-2025-001'";
 
 // ── E2E pipeline test ─────────────────────────────────────────────────────────
@@ -137,7 +139,7 @@ async fn end_to_end_lieferbeginn_gas_pipeline() {
                 utilmd
                     .transactions()
                     .first()
-                    .and_then(|tx| tx.ide.object_id.as_deref())
+                    .and_then(|tx| tx.marktlokation())
                     .unwrap_or("MALO-UNKNOWN"),
             );
             (sender, receiver, malo_id, document_date, message_ref)
@@ -263,8 +265,9 @@ DTM+137:20250115:102'\
 RFF+Z13:GAS-NEG-REF-001'\
 NAD+MS+4012345000023::293'\
 NAD+MR+9900357000004::293'\
-IDE+Z19+52695662076::'\
-UNT+8+MSG-001'\
+IDE+24+VORGANG-0001'\
+LOC+Z16+52695662076'\
+UNT+9+MSG-001'\
 UNZ+1+GAS-NEG-001'";
 
     let platform = Platform::with_all_profiles();

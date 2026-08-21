@@ -226,21 +226,25 @@ pub const GPKE: &[AntwortObligation] = &[
 ///
 /// | PID | Process | Answerer | Frist |
 /// |---|---|---|---|
+/// | PID | Process | Answerer | Frist |
+/// |---|---|---|---|
 /// | 44001 | Anmeldung NN (Lieferbeginn) | NB | Ablauf des 4. WT |
 /// | 44004 | Abmeldung NN (Lieferende) | NB | Ablauf des 3. WT |
+/// | 44007 | Abmeldung NN vom NB (Lieferende von NB an LF) | LF | Ablauf des 3. WT |
+/// | 44010 | Abmeldeanfrage des NB | LFA | Ablauf des 3. WT |
 /// | 44013 | Zuordnung Ersatz-/Grundversorgung | E/G | Ablauf des 2. WT |
 /// | 44016 | Kündigung beim Altlieferanten | LFA | Ablauf des 3. WT |
 ///
-/// The Abmeldungsanfrage (44010), the GNB-initiated Abmeldung NN (44007) and the
-/// Änderungsmeldung (44020) have Fristen set per Netzbetreiber under Kap. 2.6,
-/// so they are absent — *unknown*, never *unbounded*.
+/// The Änderungsmeldung zur Bestandsliste (44020) has no quantified Frist — it
+/// is set per Netzbetreiber under Kap. 2.6 — so it is absent here: *unknown*,
+/// never *unbounded*.
 pub const GELI_GAS: &[AntwortObligation] = &[
     AntwortObligation {
         trigger_pid: 44_001,
         name: "Anmeldung NN (Lieferbeginn)",
         answered_by: "NB",
         antwort_pids: (44_002, 44_003),
-        ebd: None,
+        ebd: Some("E_3005"),
         frist: FristShape::EndOfWerktag(4),
         family: Family::GeliGas,
         source: "GeLi Gas 3.0 Kap. 3.2.3 — „spätestens bis zum Ablauf des 4. Werktages nach \
@@ -251,18 +255,41 @@ pub const GELI_GAS: &[AntwortObligation] = &[
         name: "Abmeldung NN (Lieferende)",
         answered_by: "NB",
         antwort_pids: (44_005, 44_006),
-        ebd: None,
+        ebd: Some("E_3019"),
         frist: FristShape::EndOfWerktag(3),
         family: Family::GeliGas,
         source: "GeLi Gas 3.0 Kap. 3.2.2 — „spätestens jedoch bis zum Ablauf des 3. Werktags \
                  nach Eingang der Abmeldung\"",
     },
     AntwortObligation {
+        trigger_pid: 44_007,
+        name: "Abmeldung NN vom NB (Lieferende von NB an LF)",
+        answered_by: "LF",
+        antwort_pids: (44_008, 44_009),
+        ebd: Some("E_3002"),
+        frist: FristShape::EndOfWerktag(3),
+        family: Family::GeliGas,
+        source: "AWH GeLi Gas 2.0 Kap. 2.3.2 SD „Lieferende von NB an LF\" Nr. 2 — \
+                 „Unverzüglich, jedoch spätestens bis zum Ablauf des 3. WT nach Eingang \
+                 der Abmeldung\"",
+    },
+    AntwortObligation {
+        trigger_pid: 44_010,
+        name: "Abmeldeanfrage des NB",
+        answered_by: "LFA",
+        antwort_pids: (44_011, 44_012),
+        ebd: Some("E_3020"),
+        frist: FristShape::EndOfWerktag(3),
+        family: Family::GeliGas,
+        source: "AWH GeLi Gas 2.0 Kap. 2.5.2 SD „Lieferbeginn\" Nr. 4 — „Beantwortung der \
+                 Abmeldeanfrage: Unverzüglich, jedoch Ablauf des 3. WT\"",
+    },
+    AntwortObligation {
         trigger_pid: 44_013,
         name: "Zuordnung Ersatz-/Grundversorgung",
         answered_by: "E/G",
         antwort_pids: (44_014, 44_015),
-        ebd: None,
+        ebd: Some("E_3008"),
         frist: FristShape::EndOfWerktag(2),
         family: Family::GeliGas,
         source: "GeLi Gas 3.0 Kap. 3.3.2 — „spätestens bis zum Ablauf des 2. Werktages\"",
@@ -272,7 +299,7 @@ pub const GELI_GAS: &[AntwortObligation] = &[
         name: "Kündigung beim Altlieferanten",
         answered_by: "LFA",
         antwort_pids: (44_017, 44_018),
-        ebd: None,
+        ebd: Some("E_3001"),
         frist: FristShape::EndOfWerktag(3),
         family: Family::GeliGas,
         source: "GeLi Gas 3.0 Kap. 3.1 — „spätestens jedoch bis zum Ablauf des 3. Werktages \
@@ -631,8 +658,13 @@ mod tests {
     #[test]
     fn an_unquantified_pid_is_unknown_rather_than_defaulted() {
         let received = utc(2026, Month::March, 2, 9);
-        // 44010 Abmeldungsanfrage — Frist set per Netzbetreiber under Kap. 2.6.
-        assert!(antwortfrist(44_010, received).is_none());
+        // 44020 Änderungsmeldung zur Bestandsliste — Frist set per
+        // Netzbetreiber under GeLi Gas Kap. 2.6, so there is nothing to
+        // compute. 44007 and 44010 *are* quantified (Ablauf des 3. WT), which
+        // is why they are asserted present rather than absent.
+        assert!(antwortfrist(44_020, received).is_none());
+        assert!(antwortfrist(44_007, received).is_some());
+        assert!(antwortfrist(44_010, received).is_some());
         for pid in [31_001_u32, 37_000, 23_001, 55_557, 99_999, 0] {
             assert!(antwortfrist(pid, received).is_none(), "PID {pid}");
         }

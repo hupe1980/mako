@@ -74,6 +74,16 @@ fn generated_positions() -> BTreeMap<String, BTreeMap<String, BTreeSet<usize>>> 
     out
 }
 
+/// `{3, 4, 5}` is one composite repeated three times; `{2, 5}` is a conflict.
+fn is_contiguous_run(positions: &BTreeSet<usize>) -> bool {
+    let first = positions.iter().copied().next().unwrap_or(0);
+    positions
+        .iter()
+        .copied()
+        .enumerate()
+        .all(|(offset, pos)| pos == first + offset)
+}
+
 #[test]
 fn an_element_has_one_position_across_every_message_family() {
     let positions = generated_positions();
@@ -86,7 +96,11 @@ fn an_element_has_one_position_across_every_message_family() {
     let mut conflicts = Vec::new();
     for (tag, elements) in &positions {
         for (id, seen) in elements {
-            if seen.len() > 1 {
+            // A composite the MIG declares with a repeat legitimately occupies
+            // consecutive positions — `STS` carries `C556` at 3, 4 and 5
+            // (`STS+7++E01+ZW4+E03'`). What must never happen is the *same*
+            // element landing on unrelated slots in different families.
+            if seen.len() > 1 && !is_contiguous_run(seen) {
                 conflicts.push(format!("  {tag}.{id} appears at positions {seen:?}"));
             }
         }
@@ -94,8 +108,9 @@ fn an_element_has_one_position_across_every_message_family() {
 
     assert!(
         conflicts.is_empty(),
-        "a data element must sit at one position in every message that carries it — \
-         a MIG may drop an element, but it cannot renumber the ones around it.\n\
+        "a data element must sit at one position — or one contiguous run of \
+         repeat positions — in every message that carries it; a MIG may drop an \
+         element, but it cannot renumber the ones around it.\n\
          Add the segment to `CANONICAL_ELEMENT_POSITIONS` in xtask/src/codegen.rs \
          with its UN/EDIFACT directory positions, then re-run `cargo xtask codegen`.\n{}",
         conflicts.join("\n")
@@ -112,10 +127,16 @@ fn the_known_edifact_layouts_are_exact() {
         let Some(seen) = positions.get(tag).and_then(|m| m.get(id)) else {
             return; // this element is not used by any generated profile
         };
+        // A repeated composite occupies a run; the canonical position is where
+        // that run starts.
         assert_eq!(
-            seen.iter().copied().collect::<Vec<_>>(),
-            vec![want],
-            "{tag}.{id} must sit at EDIFACT position {want}"
+            seen.iter().copied().next(),
+            Some(want),
+            "{tag}.{id} must start at EDIFACT position {want} (found {seen:?})"
+        );
+        assert!(
+            is_contiguous_run(seen),
+            "{tag}.{id} occupies non-contiguous positions {seen:?}"
         );
     };
 

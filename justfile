@@ -410,7 +410,7 @@ validate-release-codes:
 check-release-coverage:
     cargo xtask check-release-coverage
 
-# Verify the rubo4e::current active-type count matches the README.md claim (delta ≤ 2).
+# Verify the rubo4e::current active-type count matches the README.md claim exactly.
 check-bo4e-coverage:
     cargo xtask check-bo4e-coverage
 

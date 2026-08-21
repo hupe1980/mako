@@ -87,7 +87,7 @@ use time::macros::date;
 const LFN_ID: &str = "9907317000007";
 /// GLN of the Netzbetreiber — as in the fixture (receiver NAD+MR).
 const NB_ID: &str = "4012345000023";
-/// Marktlokation — from IDE+Z19 in the fixture.
+/// Marktlokation — from IDE+24 in the fixture.
 const MALO_ID: &str = "51238696781";
 /// BDEW FV matching the fixture's S2.2 release.
 const FV_2026: &str = "FV2026-10-01";
@@ -101,7 +101,7 @@ const VALIDATION_DATE: time::Date = date!(2026 - 10 - 01);
 const GAS_NLFN_ID: &str = "4012345000023";
 /// GLN of the Gasnetzbetreiber (GNB) — NAD+MR in the Gas fixture.
 const GAS_GNB_ID: &str = "9907317000007";
-/// Marktlokation from IDE+Z19 in the Gas fixture.
+/// Marktlokation from IDE+24 in the Gas fixture.
 const GAS_MALO_ID: &str = "51238696781";
 /// BDEW FV matching the Gas fixture's G1.1 release.
 const GAS_FV_2025: &str = "FV2025-10-01";
@@ -246,7 +246,7 @@ async fn ahb_55001_lieferbeginn_validates_and_dispatches() {
     assert_eq!(
         cmd_location.as_str(),
         MALO_ID,
-        "MaLo must match IDE+Z19 in fixture"
+        "MaLo must match IDE+24 in fixture"
     );
     assert_eq!(
         cmd_ref.as_str(),
@@ -435,7 +435,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
     assert_eq!(
         cmd_malo.as_str(),
         GAS_MALO_ID,
-        "MaLo must match IDE+Z19 in fixture"
+        "MaLo must match IDE+24 in fixture"
     );
     assert_eq!(
         cmd_ref.as_str(),

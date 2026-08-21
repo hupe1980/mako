@@ -15,7 +15,6 @@
 //! |-------|-------------------------------------------------|------------|
 //! | 55001 | Anmeldung verb. MaLo                            | LF → NB   |
 //! | 55004 | Abmeldung                                       | LF → NB   |
-//! | 55016 | Kündigung Lieferbeginn (LFN → LFA)              | LFN → LFA |
 //!
 //! ## Outbound ANTWORT — derived by this workflow, NOT routed as inbound
 //!
@@ -29,8 +28,6 @@
 //! | 55003 | Ablehnung Anmeldung verb. MaLo (NB → LF)        | 55001 reject |
 //! | 55005 | Bestätigung Abmeldung (NB → LF)                 | 55004 accept |
 //! | 55006 | Ablehnung Abmeldung (NB → LF)                   | 55004 reject |
-//! | 55017 | Bestätigung Kündigung Lieferbeginn (LFA → LFN)  | 55016 accept |
-//! | 55018 | Ablehnung Kündigung Lieferbeginn (LFA → LFN)    | 55016 reject |
 //!
 //!
 //! ORDERS Sperrung (PIDs 17115/17116/17117) is handled by `GpkeSperrungWorkflow` — see
@@ -78,14 +75,13 @@ pub const WORKFLOW_NAME: &str = "gpke-supplier-change";
 /// Inbound ANFRAGE PIDs handled by this workflow as a receiving NB/LFA.
 ///
 /// Only these PIDs are routed to `GpkeSupplierChangeWorkflow` by the engine.
-/// The corresponding outbound ANTWORT PIDs (55002/55003, 55005/55006, 55017, 55018, 55078, 55080)
+/// The corresponding outbound ANTWORT PIDs (55002/55003, 55005/55006, 55078, 55080)
 /// are derived internally by `response_pid_for` and stored in the `AntwortGesendet` event.
 ///
 /// | PID   | Process (LFW24 AHB name)                          | AHB profile  |
 /// |-------|---------------------------------------------------|--------------|
 /// | 55001 | Anfrage Lieferbeginn verb. MaLo (LFN → NB)        | S2.1–S2.2 ✅ |
 /// | 55004 | Abmeldung / Lieferende verb. MaLo (LFN → NB)      | S2.1–S2.2 ✅ |
-/// | 55016 | Kündigung Lieferbeginn (LFN → LFA)                | S2.1–S2.2 ✅ |
 /// | 55077 | Anmeldung Lieferbeginn erz. MaLo (LFN → NB)       | S2.1–S2.2 ✅ |
 /// | 55557 | Änderung MSB-Abr.-Daten der MaLo (LFN ↔ NB)       | GPKE Teil 4  |
 ///
@@ -97,7 +93,6 @@ pub const WORKFLOW_NAME: &str = "gpke-supplier-change";
 pub const UTILMD_PIDS: &[u32] = &[
     55001, // Anmeldung verb. MaLo (LF → NB); answers 55002/55003
     55004, // Abmeldung (LF → NB); answers 55005/55006
-    55016, // Kündigung Lieferbeginn (LFN → LFA)
     55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
     55557, // Änderung MSB-Abr.-Daten der MaLo (GPKE Teil 4, PID 3.3 + PID 4.0)
 ];
@@ -113,7 +108,7 @@ pub const UTILMD_PIDS: &[u32] = &[
 /// `55557` (Änderung MSB-Abrechnungsdaten, GPKE Teil 4) stays registered so the
 /// router still resolves it, but has no Antwort mapping and therefore no
 /// receiving implementation yet.
-pub const UTILMD_ANFRAGE_PIDS: &[u32] = &[55001, 55004, 55016, 55077];
+pub const UTILMD_ANFRAGE_PIDS: &[u32] = &[55001, 55004, 55077];
 
 /// IFTSTA GPKE Prüfidentifikatoren — PIDs 21024–21028, 21033, 21035.
 ///
@@ -182,7 +177,7 @@ pub enum SupplierChangeEvent {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// Outbound UTILMD business response (55002/55003/55005/55006/55017/55018/55078/55080) was sent
+    /// Outbound UTILMD business response (55002/55003/55005/55006/55078/55080) was sent
     /// to the counterparty. The response PID is derived from the anfrage PID and
     /// the `accepted` flag by `response_pid_for`.
     AntwortGesendet {
@@ -314,7 +309,7 @@ pub enum SupplierChangeState {
     AntwortGesendet {
         /// Process data from the Anfrage.
         data: InitiatedData,
-        /// Derived outbound response PID (e.g. 55002 for accepted 55001, 55017 for accepted 55016).
+        /// Derived outbound response PID (e.g. 55002 for an accepted 55001).
         response_pid: Option<Pruefidentifikator>,
     },
     /// Supply relationship is active (or Kündigung is complete).
@@ -404,14 +399,14 @@ pub enum SupplierChangeCommand {
         /// SG4 STS Transaktionsgrund (DE9013, category 7) — e.g. `E01`
         /// Ein-/Auszug (Umzug), `E03` Lieferantenwechsel, `Z33`, `E06`.
         ///
-        /// Drives the `netz-checker` date-plausibility rules: GPKE permits a
+        /// Drives the `mako-pruefung` date-plausibility rules: GPKE permits a
         /// retroactive Lieferbeginn for Ein-/Auszug but not for a regular
         /// Wechsel. Propagated into the `ProcessInitiated` outbox payload.
         transaktionsgrund: Option<String>,
         /// `true` when a SG4 STS Transaktionsgrundergänzung `9013=ZW3`
         /// („Erzeugende Marktlokation") is present — an EEG-/KWKG-Einspeise-MaLo.
         /// Kept separate from `transaktionsgrund` (the main Anmeldegrund, which is
-        /// re-rendered outbound) so `processd`'s `netz-checker` can trigger the
+        /// re-rendered outbound) so `processd`'s `mako-pruefung` can trigger the
         /// §10c EEG Monatserster date rule without conflating the two codes.
         ist_erzeugende_marktlokation: bool,
         /// EDIFACT message reference.
@@ -431,7 +426,6 @@ pub enum SupplierChangeCommand {
     /// the `accepted` flag:
     /// - 55001 (Anmeldung / Lieferbeginn) → 55002 (accepted) / 55003 (rejected)
     /// - 55004 (Abmeldung / Lieferende)   → 55005 (accepted) / 55006 (rejected)
-    /// - 55016 (Kündigung)                → 55017 (accepted) / 55018 (rejected)
     /// - 55077 (Anmeldung erz. MaLo)      → 55078 (accepted) / 55080 (rejected)
     ///
     /// BDEW GPKE / BK6-22-024: Response must be sent within **24 wall-clock
@@ -525,7 +519,6 @@ impl CommandPayload for SupplierChangeCommand {}
 /// |---------|----------------|---------------|----------------|
 /// | 55001   | Anmeldung verb. MaLo | 55002   | 55003          |
 /// | 55004   | Abmeldung            | 55005   | 55006          |
-/// | 55016   | Kündigung            | 55017   | 55018          |
 /// | 55077   | Anmeldung erz. MaLo  | 55078   | 55080          |
 ///
 /// The UTILMD AHB Strom lays each Anwendungsfall out as a **triple** of adjacent
@@ -739,7 +732,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
                 // PID guard — accepts only inbound ANFRAGE PIDs per UTILMD AHB S2.1/S2.2.
-                // Response PIDs 55002/55003, 55005/55006, 55017, 55018 are outbound; they are derived
+                // Response PIDs 55002/55003, 55005/55006 are outbound; they are derived
                 // internally by response_pid_for() and stored in AntwortGesendet events.
                 // ORDERS Sperrung (17115/17116/17117) is routed to GpkeSperrungWorkflow.
                 // PID 55555 is "Anfrage Daten der individuellen Bestellung" (GPKE Teil 4).
@@ -749,8 +742,8 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 // DO NOT add 55007–55009 to UTILMD_PIDS here.
                 if !UTILMD_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected an inbound ANFRAGE PID (55001, 55002, or 55016), \
-                         got {pid}. Response PIDs (55002/55003, 55005/55006, 55017, 55018) \
+                        "expected an inbound ANFRAGE PID (55001, 55004 or 55077), \
+                         got {pid}. Response PIDs (55002/55003, 55005/55006) \
                          are outbound only. ORDERS Sperrung (17115/17116/17117) \
                          routes to GpkeSperrungWorkflow.",
                     )));
@@ -802,10 +795,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 "bilanzierungsmethode":  bilanzierungsmethode,
                                 "fallgruppe":            fallgruppe,
                                 // SG4 STS Transaktionsgrund — consumed by processd
-                                // netz-checker (date-plausibility rules).
+                                // `mako-pruefung` (date-plausibility rules).
                                 "transaktionsgrund":     transaktionsgrund,
                                 // Erzeugende-MaLo flag (STS 9013=ZW3) — drives the
-                                // §10c EEG Monatserster rule in the netz-checker.
+                                // §10c EEG Monatserster rule in the `mako-pruefung`.
                                 "ist_erzeugende_marktlokation": ist_erzeugende_marktlokation,
                             }),
                         )
@@ -886,7 +879,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }];
 
                 // Always enqueue the UTILMD response back to the new supplier
-                // (55002/55003/55005/55006/55017/55018/55078/55080).
+                // (55002/55003/55005/55006/55078/55080).
                 let mut outbox: Vec<PendingOutbox> = vec![];
                 if let Some(rpid) = response_pid {
                     outbox.push(PendingOutbox::new(
