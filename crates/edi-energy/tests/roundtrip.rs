@@ -1041,7 +1041,7 @@ mod ordrsp_roundtrip {
 /// QUOTES has one fv-dated profile:
 /// - fv20260401 (AHB 1.1a, MIG 1.3c) → wire release "1.3c" (valid from 2026-04-01)
 ///
-/// All 5 Prüfidentifikatoren (15001–15005) are covered.
+/// All 5 Prüfidentifikatoren (15001/15002/15004/15005) are covered.
 #[cfg(feature = "quotes")]
 const QUOTES_RELEASES: &[&str] = &["1.3c"];
 

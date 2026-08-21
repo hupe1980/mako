@@ -194,7 +194,7 @@ reference to the published set.
 | 55126 | Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
 | 55136 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55137 | Rückmeldung/Anfrage Daten der MaLo | GPKE Teil 4 | NB → LF | 55109 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
-| 55156 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | LF → NB | 55126 | ✅ | — | ✅ | ✅ | — |
+| 55156 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. verb. MaLo | GPKE Teil 2 | LF → NB | 55126 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
 | 55168 | Verpflichtungsanfrage / Aufforderung | WiM Strom Teil 1 | NB → gMSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55169 | Bestätigung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 55170 | Ablehnung Verpflichtungsanfrage | WiM Strom Teil 1 | gMSB → NB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
@@ -224,7 +224,7 @@ reference to the published set.
 | 55213 | Antwort auf Deaktivierung ZP | MaBiS | BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55214 | Weiterleitung Deaktivierung ZP | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55218 | Abr.-Daten NNA | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55220 | Rückmeldung/Anfrage Abr.-Daten NNA | GPKE Teil 2 | LF → NB | 55218 | ✅ | — | ✅ | ✅ | — |
+| 55220 | Rückmeldung/Anfrage Abr.-Daten NNA | GPKE Teil 2 | LF → NB | 55218 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
 | 55223 | DZÜ-Liste | MaBiS | ÜNB → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55224 | Antwort auf DZÜ-Liste | MaBiS | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
 | 55225 | Änderung Blindabr.-Daten der NeLo | GPKE Teil 4 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
@@ -311,7 +311,7 @@ reference to the published set.
 | 55670 | Stammdaten BK-Treue | GPKE Teil 4 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55671 | Rückmeldung auf Stammdaten BK-Treue | GPKE Teil 4 | ÜNB → NB | 55670 | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 | 55672 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 / AWH NBW | NB → LF · NBA → NBN | — | ✅ | — | ✅ | ✅ | — |
-| 55673 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | LF → NB | 55672 | ✅ | — | ✅ | ✅ | — |
+| 55673 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | LF → NB | 55672 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
 | 55674 | Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | NB → ÜNB | — | ✅ | — | ✅ | ✅ | — |
 | 55675 | Rückmeldung/Anfrage Abr.-Daten BK-Abr. erz. Malo | GPKE Teil 2 | ÜNB → NB | 55674 | ✅ | — | ✅ | ✅ | — |
 | 55684 | Änderung Daten der MaLo | GPKE Teil 4 | MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
@@ -561,7 +561,7 @@ reference to the published set.
 | 21043 | Bestellungsantwort / -mitteilung | GPKE Teil 3 | NB → LF · MSB → MSB · MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 21044 | Bestellungsbeendigung | GPKE Teil 3 | MSB → NB · MSB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 21045 | EnFG Informationen | GPKE Teil 4 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
-| 21047 | Bearbeitungsstandsmeldung | GPKE Teil 2 / GPKE Teil 4 | NB → LF · NB → ÜNB · NB → MSB · LF → NB · LF → MSB · MSB → NB · MSB → LF · MSB → MSB · MSB → ÜNB | 55156, 55220, 55673 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
+| 21047 | Bearbeitungsstandsmeldung | GPKE Teil 2 / GPKE Teil 4 | NB → LF · NB → ÜNB · NB → MSB · LF → NB · LF → MSB · MSB → NB · MSB → LF · MSB → MSB · MSB → ÜNB | 55156, 55220, 55673 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnungsdaten` |
 
 ## MSCONS AHB
 

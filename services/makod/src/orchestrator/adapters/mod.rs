@@ -77,9 +77,10 @@ use mako_geli_gas::{
     LfStornierungCommand,
 };
 use mako_gpke::{
-    AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
-    AnkuendigungZuordnungLfCommand, BeendigungZuordnungCommand, DatanabrufCommand,
-    GpkeAbrechnungWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    AbrechnungCommand, AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand,
+    AllokationslisteCommand, AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand,
+    BeendigungZuordnungCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
+    GpkeAbrechnungsdatenWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
@@ -396,6 +397,7 @@ coverage_table! {
     gpke_eog_registry,
     gpke_konfiguration_aenderung_registry,
     gpke_konfiguration_registry,
+    gpke_abrechnungsdaten_registry,
     gpke_lf_abmeldung_registry,
     gpke_lf_anmeldung_registry,
     gpke_messwerte_registry,

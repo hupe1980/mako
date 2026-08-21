@@ -297,10 +297,12 @@ pub enum NeuanlageCommand {
     ///
     /// BK6-24-174 / BK6-22-024: Response within **24 wall-clock hours**.
     SendAntwort {
-        /// `true` = Bestätigung, `false` = Ablehnung.
-        accepted: bool,
-        /// Rejection reason (required when `accepted = false`).
-        reason: Option<String>,
+        /// The NB's answer: the resolved `E_0608` Antwortcode and its cluster.
+        ///
+        /// `SG4 STS+E01` is Muss on every Antwortnachricht, and the published
+        /// **Cluster** selects the response PID — `A09` / `A18` ride 55602 /
+        /// 55603, every other code rides 55604 / 55605.
+        antwort: crate::LfAntwort,
     },
     /// Mark the new Marktlokation as active in the grid.
     Aktivieren,
@@ -506,7 +508,7 @@ impl Workflow for GpkeNeuanlageWorkflow {
                 }
             }
 
-            NeuanlageCommand::SendAntwort { accepted, reason } => {
+            NeuanlageCommand::SendAntwort { antwort } => {
                 let data = match state {
                     NeuanlageState::ValidationPassed(d) => d,
                     _ => {
@@ -516,14 +518,40 @@ impl Workflow for GpkeNeuanlageWorkflow {
                         ));
                     }
                 };
+                let accepted = antwort.zustimmung;
                 let response_pid =
                     neuanlage_response_pid(data.pruefidentifikator.as_u32(), accepted);
-                Ok(vec![NeuanlageEvent::AntwortGesendet {
+                let events = vec![NeuanlageEvent::AntwortGesendet {
                     response_pid,
                     accepted,
-                    reason,
-                }]
-                .into())
+                    reason: antwort.bemerkung.clone(),
+                }];
+
+                // The answer is a message, not just an event: an
+                // `AntwortGesendet` with no outbox entry records the process as
+                // answered while the Lieferant watches its 61-Werktage window
+                // expire.
+                let mut outbox = Vec::new();
+                if let Some(rpid) = response_pid {
+                    outbox.push(PendingOutbox::new(
+                        "UTILMD",
+                        data.sender.as_str(),
+                        serde_json::json!({
+                            "pid":          rpid.as_u32(),
+                            "anfrage_pid":  data.pruefidentifikator.as_u32(),
+                            "sender":       data.receiver.as_str(),
+                            "receiver":     data.sender.as_str(),
+                            "malo":         data.location_id.as_str(),
+                            "process_date": data.process_date,
+                            // `SG4 STS+E01++<code>:E_0608` — Muss on every
+                            // Antwortnachricht.
+                            "antwort_code": antwort.antwort_code,
+                            "antwort_ebd":  antwort.ebd,
+                            "bemerkung":    antwort.bemerkung,
+                        }),
+                    ));
+                }
+                Ok(WorkflowOutput::with_outbox(events, outbox))
             }
 
             NeuanlageCommand::Aktivieren => {
@@ -627,8 +655,7 @@ mod tests {
         let out = GpkeNeuanlageWorkflow::handle(
             &state,
             NeuanlageCommand::SendAntwort {
-                accepted: true,
-                reason: None,
+                antwort: crate::LfAntwort::zustimmung("A09", "E_0608"),
             },
         )
         .unwrap();
@@ -663,8 +690,7 @@ mod tests {
         let out = GpkeNeuanlageWorkflow::handle(
             &state,
             NeuanlageCommand::SendAntwort {
-                accepted: false,
-                reason: Some("Kapazitätsmangel".to_owned()),
+                antwort: crate::LfAntwort::ablehnung("A03", "E_0608"),
             },
         )
         .unwrap();

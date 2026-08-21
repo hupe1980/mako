@@ -26,8 +26,18 @@ use serde::{Deserialize, Serialize};
 
 /// Which side of an EBD a code sits on.
 ///
-/// The BDEW calls these „Cluster: Zustimmung" and „Cluster: Ablehnung" and
-/// prints them beside every code.
+/// The BDEW prints „Cluster: …" beside every code, and **the name is the tree's
+/// own**. Most answer trees pair Zustimmung with Ablehnung, and there the
+/// cluster selects the answer PID. `E_0595` („Bestellung prüfen") pairs
+/// „Änderung der Daten" with „keine Änderung der Daten", which is a *different
+/// axis*: it says whether a Stammdatenänderung follows the Bearbeitungsstand,
+/// not whether the Bestellung was granted. `A06` sits in „Änderung der Daten"
+/// while stating that no change is made — because the Verantwortliche still
+/// sends its own data back.
+///
+/// Collapsing the two pairs would read `A06` as an agreement, so they are
+/// distinct variants and [`AntwortCode::ist_zustimmung`] answers `None` off the
+/// agreement axis.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Cluster {
@@ -35,6 +45,36 @@ pub enum Cluster {
     Zustimmung,
     /// The answer refuses — carried by the Ablehnungs-PID.
     Ablehnung,
+    /// `E_0595` — a Stammdatenänderung follows this Bearbeitungsstand.
+    AenderungDerDaten,
+    /// `E_0595` — none follows.
+    KeineAenderungDerDaten,
+}
+
+impl Cluster {
+    /// The BDEW's own wording, as it appears beside the code.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Zustimmung => "Zustimmung",
+            Self::Ablehnung => "Ablehnung",
+            Self::AenderungDerDaten => "Änderung der Daten",
+            Self::KeineAenderungDerDaten => "keine Änderung der Daten",
+        }
+    }
+
+    /// `true` when a Stammdatenänderung follows the answer carrying this code.
+    ///
+    /// `None` for the Zustimmung/Ablehnung pair, which says nothing about
+    /// follow-up data.
+    #[must_use]
+    pub const fn sendet_stammdatenaenderung(self) -> Option<bool> {
+        match self {
+            Self::AenderungDerDaten => Some(true),
+            Self::KeineAenderungDerDaten => Some(false),
+            Self::Zustimmung | Self::Ablehnung => None,
+        }
+    }
 }
 
 /// One published Antwortcode.
@@ -55,10 +95,26 @@ pub struct AntwortCode {
 }
 
 impl AntwortCode {
-    /// `true` when this code agrees with the request.
+    /// `true` when this code agrees with the request, `false` when it refuses.
+    ///
+    /// `None` on a tree whose cluster is not the agreement axis — `E_0595` says
+    /// whether a Stammdatenänderung follows, and neither of its clusters is a
+    /// Zustimmung. A caller that derives an answer PID from agreement must
+    /// handle that rather than read `false` as a refusal.
     #[must_use]
-    pub const fn ist_zustimmung(&self) -> bool {
-        matches!(self.cluster, Cluster::Zustimmung)
+    pub const fn ist_zustimmung(&self) -> Option<bool> {
+        match self.cluster {
+            Cluster::Zustimmung => Some(true),
+            Cluster::Ablehnung => Some(false),
+            Cluster::AenderungDerDaten | Cluster::KeineAenderungDerDaten => None,
+        }
+    }
+
+    /// `true` when a Stammdatenänderung follows the answer carrying this code
+    /// (`E_0595`); `None` on the agreement axis.
+    #[must_use]
+    pub const fn sendet_stammdatenaenderung(&self) -> Option<bool> {
+        self.cluster.sendet_stammdatenaenderung()
     }
 }
 
@@ -1165,6 +1221,147 @@ pub const E_3019_CODES: &[AntwortCode] = &[
     code!("Z14", None, Ablehnung, "Ablehnung (Doppelmeldung)"),
 ];
 
+// ── E_0595 — Bestellung prüfen (55156/55220/55673 → IFTSTA 21047) ────────────
+
+/// EBD id of „Bestellung prüfen" — the NB's answer to a Bestellung einer
+/// Änderung von Abrechnungsdaten (GPKE Teil 2 § 3.1.3) and to a Bestellung zur
+/// Stammdatenänderung (Teil 4 § 1.5).
+///
+/// **Its clusters are not Zustimmung and Ablehnung.** The BDEW prints „Änderung
+/// der Daten" / „keine Änderung der Daten", and the Hinweis spells out what that
+/// decides: „Eine Stammdatenänderung wird versendet" versus „wird nicht
+/// versendet". `A06` is „Änderung der Daten" *while stating that no change is
+/// made*, because the Verantwortliche still sends its own data back. Reading
+/// that cluster as agreement inverts five codes.
+///
+/// The answer always rides IFTSTA **21047** regardless of cluster, so nothing
+/// here selects a PID — which is exactly why the axis had to stay separate.
+pub const EBD_BESTELLUNG: &str = "E_0595";
+const E_0595: Option<&'static str> = Some(EBD_BESTELLUNG);
+
+/// The `E_0595` codes that answer a **UTILMD** Bestellung des Stammdaten-Clearing.
+///
+/// Prüfschritt 10 splits the tree: „ja" (→ 15) is a Bestellung mittels ORDERS,
+/// „nein" (→ 210) the Clearing. Only the second branch answers 55156 / 55220 /
+/// 55673 with an IFTSTA 21047, so an `A2x` code on one of those is a code the
+/// branch does not define.
+pub const E_0595_CLEARING_CODES: &[&str] = &["A01", "A02", "A03", "A04", "A05", "A06"];
+
+/// `E_0595` — Bestellung prüfen.
+///
+/// Prüfschritte 10–200 answer an ORDERS Bestellung, 210–250 a UTILMD
+/// Stammdaten-Clearing ([`E_0595_CLEARING_CODES`]). The six codes of the
+/// Clearing branch encode a *pair* of facts — whether the Berechtigte's data
+/// matched, and whether the Verantwortliche changes anything — which is why
+/// there are six and not four.
+pub const E_0595_CODES: &[AntwortCode] = &[
+    // ── Stammdaten-Clearing (Prüfschritte 210–250) ──
+    code!(
+        "A01",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Die vorliegenden Daten stimmen überein; es wurden keine Stammdaten zur Änderung angegeben (Prüfschritt 220)"
+    ),
+    code!(
+        "A02",
+        E_0595,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen überein; Änderungen an den Stammdaten werden vorgenommen (Prüfschritt 230)"
+    ),
+    code!(
+        "A03",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Die vorliegenden Daten stimmen überein; Änderungen an den Stammdaten werden nicht vorgenommen (Prüfschritt 230)"
+    ),
+    code!(
+        "A04",
+        E_0595,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen nicht überein; es wurden keine Stammdaten zur Änderung angegeben (Prüfschritt 240)"
+    ),
+    code!(
+        "A05",
+        E_0595,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen nicht überein; Änderungen an den Stammdaten werden vorgenommen (Prüfschritt 250)"
+    ),
+    code!(
+        "A06",
+        E_0595,
+        AenderungDerDaten,
+        "Die vorliegenden Daten stimmen nicht überein; Änderungen werden nicht vorgenommen — die Stammdaten werden dennoch versendet (Prüfschritt 250)"
+    ),
+    // ── ORDERS-Bestellung (Prüfschritte 10–200) ──
+    code!(
+        "A20",
+        E_0595,
+        AenderungDerDaten,
+        "Der Bestellung der Stammdaten konnte zugestimmt werden — der NB versendet neue Stammdaten (Prüfschritt 200)"
+    ),
+    code!(
+        "A21",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Die Frist zur Änderung wurde nicht eingehalten — Änderung der Netzentgelte aufgrund netzorientierter Steuerungsmöglichkeit, mindestens 2 WT vor dem Änderungszeitpunkt (Prüfschritt 17)"
+    ),
+    code!(
+        "A22",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Die Frist zur Änderung von Bilanzkreis oder Jahresverbrauchsprognose wurde nicht eingehalten — mindestens 7 WT vor dem Änderungszeitpunkt (Prüfschritt 100)"
+    ),
+    code!(
+        "A23",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Sondervertragskunden-Konzessionsabgabe gemäß § 2 Abs. 3 KAV, daher keine Änderung möglich (Prüfschritt 40)"
+    ),
+    code!(
+        "A24",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Änderung nicht möglich, da die Marktlokation von der Konzessionsabgabe befreit ist (Prüfschritt 50)"
+    ),
+    code!(
+        "A25",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Der gewünschte Zustand ist bereits an der Marktlokation hinterlegt (Prüfschritt 55)"
+    ),
+    code!(
+        "A26",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Eine rückwirkende Änderung der Konzessionsabgabe wird abgelehnt (Prüfschritt 65)"
+    ),
+    code!(
+        "A27",
+        E_0595,
+        KeineAenderungDerDaten,
+        "An der Marktlokation kann die Energie in den Schwachlastzeiten nicht zum angefragten Zeitpunkt separat erfasst werden (Prüfschritt 70)"
+    ),
+    code!(
+        "A28",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Bilanzkreis nicht gültig (Prüfschritt 110)"
+    ),
+    code!(
+        "A29",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Bilanzkreis und der erforderliche Zeitreihentyp sind in der Zuordnungsermächtigung nicht aufgeführt (Prüfschritt 120)"
+    ),
+    code!(
+        "A99",
+        E_0595,
+        KeineAenderungDerDaten,
+        "Der Bestellung der Stammdaten konnte nicht zugestimmt werden — das identifizierte Problem ist zu benennen (Prüfschritt 200)",
+        bemerkung
+    ),
+];
+
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
 /// Every Codeliste this crate knows, keyed by its EBD id.
@@ -1188,6 +1385,7 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     ("E_0604", E_0604_CODES),
     ("E_0605", E_0605_CODES),
     ("E_0606", E_0606_CODES),
+    (EBD_BESTELLUNG, E_0595_CODES),
     (EBD_NETZNUTZUNGSRECHNUNG, E_0406_CODES),
 ];
 
@@ -1230,34 +1428,97 @@ pub fn lookup(ebd: &str, code: &str) -> Option<&'static AntwortCode> {
 mod tests {
     use super::*;
 
-    /// Every UTILMD-answered Codeliste must offer both a way to agree and a way
-    /// to refuse; a tree with only one cluster cannot answer its process.
+    /// Every Codeliste must offer **both sides of whichever axis it uses** — a
+    /// tree with one cluster cannot answer its process.
     ///
-    /// Two kinds of tree are exempt, and both must say so out loud:
-    /// `E_0406` answers a REMADV Abweisung, whose Bestätigung (33001) carries
-    /// no `AJT` at all; and a Vorprüfung named in [`VORPRUEFUNG_TREES`] hands a
-    /// surviving message to the tree that holds its Zustimmung.
+    /// Two kinds of tree are exempt, and both say so out loud: `E_0406` answers
+    /// a REMADV Abweisung, whose Bestätigung (33001) carries no `AJT` at all;
+    /// and a Vorprüfung named in [`VORPRUEFUNG_TREES`] hands a surviving message
+    /// to the tree that holds its Zustimmung.
+    ///
+    /// A tree may not mix axes: `E_0595` is „Änderung der Daten" throughout and
+    /// every other tree is Zustimmung/Ablehnung. One code from the wrong pair
+    /// would make „which PID does this ride" unanswerable.
     #[test]
-    fn every_codeliste_has_both_clusters() {
+    fn every_codeliste_has_both_sides_of_its_axis() {
         for (ebd, codes) in CODELISTEN {
+            let auf_zustimmungsachse = codes.iter().any(|c| c.ist_zustimmung().is_some());
+            let auf_datenachse = codes
+                .iter()
+                .any(|c| c.sendet_stammdatenaenderung().is_some());
+            assert!(
+                auf_zustimmungsachse != auf_datenachse,
+                "{ebd} mixes the Zustimmung/Ablehnung axis with the Datenänderung one"
+            );
+
+            if auf_datenachse {
+                for want in [true, false] {
+                    assert!(
+                        codes
+                            .iter()
+                            .any(|c| c.sendet_stammdatenaenderung() == Some(want)),
+                        "{ebd} has no '{}Änderung der Daten' code",
+                        if want { "" } else { "keine " }
+                    );
+                }
+                continue;
+            }
+
             let ablehnung_only =
                 *ebd == EBD_NETZNUTZUNGSRECHNUNG || zustimmung_tree_of(ebd).is_some();
             if ablehnung_only {
                 assert!(
-                    codes.iter().all(|c| !c.ist_zustimmung()),
+                    codes.iter().all(|c| c.ist_zustimmung() != Some(true)),
                     "{ebd} is declared Ablehnung-only but publishes a Zustimmungscode"
                 );
                 continue;
             }
             assert!(
-                codes.iter().any(AntwortCode::ist_zustimmung),
+                codes.iter().any(|c| c.ist_zustimmung() == Some(true)),
                 "{ebd} has no Zustimmungscode"
             );
             assert!(
-                codes.iter().any(|c| !c.ist_zustimmung()),
+                codes.iter().any(|c| c.ist_zustimmung() == Some(false)),
                 "{ebd} has no Ablehnungscode"
             );
         }
+    }
+
+    /// `E_0595`'s cluster is not agreement. `A06` says „Änderungen werden nicht
+    /// vorgenommen" and still sits in „Änderung der Daten", because the
+    /// Verantwortliche sends its own data back — reading that as a Zustimmung,
+    /// or `A03` as an Ablehnung, inverts the meaning.
+    #[test]
+    fn the_bestellung_tree_is_not_on_the_agreement_axis() {
+        for (code, sendet) in [
+            ("A01", false),
+            ("A02", true),
+            ("A03", false),
+            ("A04", true),
+            ("A05", true),
+            ("A06", true),
+            ("A20", true),
+            ("A21", false),
+            ("A99", false),
+        ] {
+            let e = lookup(EBD_BESTELLUNG, code).unwrap_or_else(|| panic!("{code}"));
+            assert_eq!(e.sendet_stammdatenaenderung(), Some(sendet), "{code}");
+            assert_eq!(
+                e.ist_zustimmung(),
+                None,
+                "{code} must not answer the agreement question"
+            );
+        }
+    }
+
+    /// The Clearing branch is a subset of the tree, and every member resolves.
+    #[test]
+    fn the_clearing_branch_is_part_of_its_tree() {
+        for code in E_0595_CLEARING_CODES {
+            assert!(lookup(EBD_BESTELLUNG, code).is_some(), "{code}");
+        }
+        // The ORDERS branch answers PID 55555, not the Abrechnungsdaten pair.
+        assert!(!E_0595_CLEARING_CODES.contains(&"A20"));
     }
 
     /// The tree a Vorprüfung defers to must itself be a Codeliste this crate
@@ -1272,7 +1533,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{vor} defers to unknown tree {ok}"))
                 .1;
             assert!(
-                codes.iter().any(AntwortCode::ist_zustimmung),
+                codes.iter().any(|c| c.ist_zustimmung() == Some(true)),
                 "{vor} defers to {ok}, which has no Zustimmungscode"
             );
         }
@@ -1328,8 +1589,11 @@ mod tests {
     #[test]
     fn the_e0609_zustimmung_is_a10() {
         let c = lookup(EBD_ABMELDUNG, "A10").expect("A10 is published");
-        assert!(c.ist_zustimmung());
-        assert!(lookup(EBD_ABMELDUNG, "A29").expect("A29").ist_zustimmung());
+        assert_eq!(c.ist_zustimmung(), Some(true));
+        assert_eq!(
+            lookup(EBD_ABMELDUNG, "A29").expect("A29").ist_zustimmung(),
+            Some(true)
+        );
     }
 
     /// No Codeliste may declare the same code twice — a duplicate would make

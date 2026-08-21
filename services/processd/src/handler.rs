@@ -138,13 +138,46 @@ pub async fn handle_webhook(
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    // ── 4. NB module ──────────────────────────────────────────────────────
+    // ── 4a. NB Neuanlage (55600/55601) ────────────────────────────────────
+    //
+    // Ahead of the NB module because a Neuanlage is not a one-shot decision:
+    // `E_0608` runs a 60-Werktage identification Prüflauf, so the event opens a
+    // case rather than producing an answer.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    {
+        use crate::neuanlage_module;
+        if let Some(ref nb) = state.nb {
+            match neuanlage_module::handle_process_initiated(
+                &event,
+                &state.neuanlage,
+                &state.pool,
+                &nb.makod,
+            )
+            .await
+            {
+                Ok(true) => return StatusCode::OK.into_response(),
+                Ok(false) => {}
+                Err(e) => {
+                    warn!(error = %e, "processd Neuanlage: evaluation error");
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+            }
+        }
+    }
+
+    // ── 4b. NB module ─────────────────────────────────────────────────────
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     {
         use crate::nb_module;
         if let Some(ref nb) = state.nb {
             match nb_module::evaluate_and_decide(
-                &event, &nb.config, &nb.reader, &nb.makod, &nb.repo, &nb.queue,
+                &event,
+                &nb.config,
+                &nb.reader,
+                nb.einsd.as_ref(),
+                &nb.makod,
+                &nb.repo,
+                &nb.queue,
             )
             .await
             {
@@ -495,4 +528,66 @@ pub async fn handle_webhook(
     }
 
     StatusCode::NO_CONTENT.into_response()
+}
+
+#[cfg(test)]
+mod frist_tests {
+    use mako_fristen::antwort::operator_window;
+    use time::{Date, Month, OffsetDateTime, Time};
+
+    fn utc(y: i32, m: Month, d: u8, h: u8) -> OffsetDateTime {
+        OffsetDateTime::new_utc(
+            Date::from_calendar_date(y, m, d).expect("valid date"),
+            Time::from_hms(h, 0, 0).expect("valid time"),
+        )
+    }
+
+    /// Every PID a compiled role can answer must resolve to a *regulatory*
+    /// window — an operating-convention fallback on a process this deployment
+    /// actually runs means an unread Festlegung, not an acceptable default.
+    #[test]
+    fn every_answerable_pid_has_a_published_frist() {
+        let received = utc(2026, Month::March, 2, 9);
+        let unknown: Vec<u32> = super::answerable_pids()
+            .into_iter()
+            .filter(|p| !operator_window(*p, received).is_regulatory)
+            .collect();
+        assert!(
+            unknown.is_empty(),
+            "these PIDs are answered but have no published Antwortfrist: {unknown:?}"
+        );
+    }
+
+    /// The headroom must never invert the window.
+    #[test]
+    fn the_queue_expires_before_the_deadline() {
+        let received = utc(2026, Month::March, 2, 9);
+        for pid in super::answerable_pids() {
+            let w = operator_window(pid, received);
+            assert!(w.expires_at < w.deadline, "PID {pid}");
+            assert!(
+                w.expires_at > received,
+                "PID {pid} expires before it arrives"
+            );
+        }
+    }
+
+    /// A Friday Gas Anmeldung: four Werktage, not ten, and not 24 hours.
+    #[test]
+    fn a_gas_anmeldung_is_four_werktage() {
+        let w = operator_window(44_001, utc(2026, Month::March, 2, 9));
+        assert!(w.is_regulatory);
+        assert_eq!(
+            w.deadline.date(),
+            Date::from_calendar_date(2026, Month::March, 6).expect("valid date")
+        );
+    }
+
+    #[test]
+    fn an_unknown_pid_still_expires() {
+        let received = utc(2026, Month::March, 2, 9);
+        let w = operator_window(99_999, received);
+        assert!(!w.is_regulatory);
+        assert!(w.expires_at > received);
+    }
 }

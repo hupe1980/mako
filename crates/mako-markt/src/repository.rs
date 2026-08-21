@@ -917,7 +917,7 @@ pub struct PreisblattDienstleistungRecord {
 /// Read/write access to MSB service price sheets.
 ///
 /// Used by `invoic-checker` for INVOIC 31009 service position validation
-/// and by `mako-wim` REQOTE/QUOTES (PIDs 35001–35005).
+/// and by `mako-wim` REQOTE/QUOTES (PIDs 35001/35002/35004/35005).
 #[allow(async_fn_in_trait)]
 pub trait PreisblattDienstleistungRepository: Send + Sync {
     async fn upsert_dienstleistung(

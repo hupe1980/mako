@@ -51,8 +51,9 @@ use mako_geli_gas::{
     LfStornierungCommand,
 };
 use mako_gpke::{
-    AbrechnungCommand, AllokationslisteCommand, AnfrageBestellungCommand,
-    AnkuendigungZuordnungLfCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
+    AbrechnungCommand, AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand,
+    AllokationslisteCommand, AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand,
+    DatanabrufCommand, GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow,
     GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeKuendigungWorkflow,
@@ -207,6 +208,7 @@ deadline_dispatch! {
     "geli-gas-sperrung-nb" => GeliGasSperrungNbWorkflow : GasSperrungNbCommand::TimeoutExpired,
     "mabis-billing" => MabisBillingWorkflow : BillingCommand::PruefmitteilungDeadlineExpired,
     "gpke-neuanlage" => GpkeNeuanlageWorkflow : NeuanlageCommand::TimeoutExpired,
+    "gpke-abrechnungsdaten" => GpkeAbrechnungsdatenWorkflow : GpkeAbrechnungsdatenCommand::TimeoutExpired,
     "gpke-lf-abmeldung" => GpkeLfAbmeldungWorkflow : LfAbmeldungCommand::TimeoutExpired,
     "gpke-beendigung-zuordnung" => GpkeBeendigungZuordnungWorkflow : BeendigungZuordnungCommand::TimeoutExpired,
     "gpke-kuendigung" => GpkeKuendigungWorkflow : GpkeKuendigungCommand::TimeoutExpired,

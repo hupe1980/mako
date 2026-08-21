@@ -47,20 +47,6 @@ mod tests {
         )
     }
 
-    /// Trigger PIDs whose answer Frist is published but which **no workflow in
-    /// this crate spawns from yet**.
-    ///
-    /// The Frist is real — `obsd` alerts on it and the operator queue sizes by
-    /// it — but no `process.initiated` fires, so nothing starts the clock.
-    /// Enumerating them keeps the gap visible; the list may only shrink.
-    /// `ROADMAP.md` carries the routing work.
-    const UNROUTED_TRIGGERS: &[u32] = &[
-        // GPKE Teil 2 § 3.1 — Rückmeldung / Bestellung Abrechnungsdaten.
-        55_156, 55_220, 55_673,
-        // GPKE Teil 4 — Stammdatenänderungen missing from `STAMMDATEN_PAIRS`.
-        55_230, 55_557,
-    ];
-
     /// Every listed trigger must be an inbound PID of a registered workflow —
     /// `makod` only emits `process.initiated` for messages it spawns from, so a
     /// table entry keyed on an answer PID would describe a clock that never
@@ -77,6 +63,11 @@ mod tests {
             .chain(crate::BEENDIGUNG_ZUORDNUNG_PIDS.iter().copied())
             .chain(crate::kuendigung::KUENDIGUNG_PIDS.iter().copied())
             .chain(crate::neuanlage::NEUANLAGE_PIDS.iter().copied())
+            .chain(
+                crate::abrechnungsdaten::ABRECHNUNGSDATEN_PIDS
+                    .iter()
+                    .copied(),
+            )
             .chain(crate::sperrung::SPERRUNG_PIDS.iter().copied())
             .chain(crate::sperrung::ORDCHG_STORNIERUNG_PIDS.iter().copied())
             .chain(
@@ -84,7 +75,6 @@ mod tests {
                     .iter()
                     .map(|(aenderung, _, _)| *aenderung),
             )
-            .chain(UNROUTED_TRIGGERS.iter().copied())
             .collect();
         for o in ANTWORT_OBLIGATIONS {
             assert!(
@@ -92,33 +82,6 @@ mod tests {
                 "{} ({}) is not an inbound PID of any registered workflow",
                 o.trigger_pid,
                 o.name
-            );
-        }
-    }
-
-    /// The unrouted list may only shrink: once a workflow spawns from one of
-    /// these, its entry here is stale and must go.
-    #[test]
-    fn the_unrouted_list_only_shrinks() {
-        let routed: std::collections::BTreeSet<u32> = crate::UTILMD_ANFRAGE_PIDS
-            .iter()
-            .copied()
-            .chain(crate::LF_ABMELDUNG_PIDS.iter().copied())
-            .chain(crate::BEENDIGUNG_ZUORDNUNG_PIDS.iter().copied())
-            .chain(crate::kuendigung::KUENDIGUNG_PIDS.iter().copied())
-            .chain(crate::neuanlage::NEUANLAGE_PIDS.iter().copied())
-            .chain(crate::sperrung::SPERRUNG_PIDS.iter().copied())
-            .chain(crate::sperrung::ORDCHG_STORNIERUNG_PIDS.iter().copied())
-            .chain(
-                crate::stammdatenaenderung::STAMMDATEN_PAIRS
-                    .iter()
-                    .map(|(aenderung, _, _)| *aenderung),
-            )
-            .collect();
-        for pid in UNROUTED_TRIGGERS {
-            assert!(
-                !routed.contains(pid),
-                "PID {pid} is routed now — drop it from UNROUTED_TRIGGERS"
             );
         }
     }

@@ -130,6 +130,33 @@ pub(super) fn cmd_gpke_lieferbeginn_bestaetigen<'a>(
     Box::pin(dispatch_supplier_change_antwort(s, p, true))
 }
 
+pub(super) fn cmd_gpke_abrechnungsdaten_bearbeitungsstand<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_abrechnungsdaten_bearbeitungsstand(s, p))
+}
+
+pub(super) fn cmd_gpke_neuanlage_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_neuanlage_antwort(s, p, true))
+}
+
+pub(super) fn cmd_gpke_neuanlage_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_neuanlage_antwort(s, p, false))
+}
+
 pub(super) fn cmd_gpke_lieferbeginn_ablehnen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
@@ -605,7 +632,13 @@ fn extract_lf_antwort(
                      Only codes from that Entscheidungsbaum's Codeliste are admissible."
                 ))
             })?;
-            entry.ist_zustimmung()
+            entry.ist_zustimmung().ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "Antwortcode {antwort_code:?} belongs to {tree}, whose Cluster is \"{}\" \
+                     — not the Zustimmung/Ablehnung pair this answer's PID is derived from.",
+                    entry.cluster.label(),
+                ))
+            })?
         }
         None => {
             // Neither key nor wire value: the caller must state the cluster,
@@ -826,6 +859,133 @@ pub(super) async fn dispatch_supplier_change_antwort(
         move || SupplierChangeCommand::SendAntwort {
             antwort,
             obligations: vec![],
+        },
+    )
+    .await
+}
+
+/// Dispatch the NB's Neuanlage decision (`E_0608`) to `GpkeNeuanlageWorkflow`.
+///
+/// Called for `gpke.neuanlage.bestaetigen` and `gpke.neuanlage.ablehnen`.
+/// Business key = `malo_id` once the Marktlokation is identified; a case the NB
+/// could not identify is refused `A07` / `A16` and carries the `process_id`
+/// instead, which is what `processd` sends.
+///
+/// The Antwortcode is resolved inside `E_0608` and its published **Cluster**
+/// selects the response PID — `A09` / `A18` ride 55602 / 55603, everything else
+/// 55604 / 55605 — so a `bestaetigen` command carrying a refusal is rejected
+/// rather than sent.
+pub(super) async fn dispatch_neuanlage_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    accepted: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let antwort = extract_lf_antwort(payload, Some(mako_pruefung::codes::EBD_NEUANLAGE))?;
+    if antwort.zustimmung != accepted {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {:?} is a{} in {}, but the command asks for a{}.",
+            antwort.antwort_code,
+            if antwort.zustimmung {
+                " Zustimmung"
+            } else {
+                "n Ablehnung"
+            },
+            mako_pruefung::codes::EBD_NEUANLAGE,
+            if accepted {
+                " Bestätigung"
+            } else {
+                "n Ablehnung"
+            },
+        )));
+    }
+
+    // A Neuanlage that could not be identified has no MaLo-ID at all — the
+    // refusal is keyed on the process the inbound 55600/55601 spawned.
+    let key = payload
+        .get("malo_id")
+        .or_else(|| payload.get("process_id"))
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"malo_id\" or, for a Marktlokation the NB could \
+                 not identify, \"process_id\""
+                    .into(),
+            )
+        })?
+        .to_owned();
+
+    dispatch_to_process::<mako_gpke::GpkeNeuanlageWorkflow, _>(
+        state,
+        &key,
+        mako_gpke::neuanlage::WORKFLOW_NAME,
+        move || mako_gpke::NeuanlageCommand::SendAntwort {
+            antwort: antwort.clone(),
+        },
+    )
+    .await
+}
+
+/// Dispatch the NB's Bearbeitungsstand on Abrechnungsdaten (`E_0595`).
+///
+/// Called for `gpke.abrechnungsdaten.bearbeitungsstand`. `E_0595` is not on the
+/// Zustimmung/Ablehnung axis — its clusters say whether a Stammdatenänderung
+/// follows — so there is one command and one answer PID (IFTSTA 21047), and the
+/// cluster is read from the catalogue rather than taken from the caller. Only
+/// the tree's UTILMD Stammdaten-Clearing branch answers these three PIDs.
+pub(super) async fn dispatch_abrechnungsdaten_bearbeitungsstand(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let ebd = mako_pruefung::codes::EBD_BESTELLUNG;
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "payload must contain \"antwort_code\" — {ebd} states the Bearbeitungsstand"
+            ))
+        })?
+        .to_owned();
+    // Prüfschritt 10 splits `E_0595`: the ORDERS branch answers PID 55555, the
+    // UTILMD Stammdaten-Clearing branch these three. Only the latter's codes may
+    // ride the IFTSTA 21047 this command sends.
+    if !mako_pruefung::codes::E_0595_CLEARING_CODES.contains(&antwort_code.as_str()) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} is not in the {ebd} Stammdaten-Clearing branch \
+             (Prüfschritt 210 ff.), which is what 55156/55220/55673 are answered from"
+        )));
+    }
+    let entry = mako_pruefung::codes::lookup(ebd, &antwort_code).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "{ebd} does not publish Antwortcode {antwort_code:?}"
+        ))
+    })?;
+    let sendet_stammdatenaenderung = entry.sendet_stammdatenaenderung().ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} is clustered \"{}\", which does not say whether a \
+             Stammdatenänderung follows",
+            entry.cluster.label(),
+        ))
+    })?;
+    let bemerkung = payload
+        .get("bemerkung")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned);
+    if entry.braucht_bemerkung && bemerkung.is_none() {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} requires a free-text Bemerkung"
+        )));
+    }
+    let malo_id = extract_malo_id(payload)?;
+
+    dispatch_to_process::<mako_gpke::GpkeAbrechnungsdatenWorkflow, _>(
+        state,
+        malo_id.as_str(),
+        mako_gpke::abrechnungsdaten::WORKFLOW_NAME,
+        move || mako_gpke::AbrechnungsdatenCommand::SendBearbeitungsstand {
+            antwort_code: antwort_code.clone(),
+            sendet_stammdatenaenderung,
+            bemerkung: bemerkung.clone(),
         },
     )
     .await

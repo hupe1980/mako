@@ -608,6 +608,38 @@ impl EdifactIngestDispatcher {
                     reason: "pid_not_in_dispatch_table",
                 }),
             },
+            // ── GPKE Abrechnungsdaten (PIDs 55156/55220/55673) ────────────────
+            "gpke-abrechnungsdaten" => match pid {
+                55156 | 55220 | 55673 => {
+                    let cmd = adapters::gpke_abrechnungsdaten_registry().dispatch(raw, &fv)?;
+                    let malo_id = extract_malo_from_msg(msg);
+                    // „2. Werktag nach dem ÜT" (GPKE Teil 2 §§ 3.1.1.2 /
+                    // 3.1.2.2 / 3.1.3.2) — a business Frist, longer than the
+                    // 45-minute APERAK clock that runs beside it.
+                    let received = OffsetDateTime::now_utc();
+                    let process_due_at =
+                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let aperak_due_at = fristen::aperak_strom_due_at(received);
+                    self.spawn_or_resume::<mako_gpke::GpkeAbrechnungsdatenWorkflow>(
+                        malo_id.as_str(),
+                        "gpke-abrechnungsdaten",
+                        cmd,
+                        &fv,
+                        &[
+                            (
+                                mako_gpke::abrechnungsdaten::BEARBEITUNGSSTAND_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                    )
+                    .await
+                }
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: "gpke-abrechnungsdaten",
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             // ── GPKE Anfrage / Bestellung (PID 55555) ─────────────────────────
             "gpke-anfrage-bestellung" => match pid {
                 55555 => {

@@ -241,8 +241,8 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // AHB profile coverage — the difference is the deliberate
     // `KNOWN_PROFILE_GAPS` set, routed but without AHB rules. Both numbers are
     // correct and appear in different places; do not "harmonise" them.
-    const LANDING_PAGE_PIDS: usize = 422;
-    const LANDING_PAGE_WORKFLOWS: usize = 69;
+    const LANDING_PAGE_PIDS: usize = 428;
+    const LANDING_PAGE_WORKFLOWS: usize = 70;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

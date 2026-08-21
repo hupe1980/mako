@@ -219,6 +219,7 @@ the `processd` EoG module automates gap detection and the timer.
 | Abmeldung (NB-initiiert) | NB → LFA | UTILMD **55007** | 55008 | 55009 | `mako-gpke` ✅ |
 | Änderung MSB-Abrechnungsdaten der MaLo | LFN ↔ NB | UTILMD **55557** | — | — | `mako-gpke` ✅ |
 | Ankündigung Zuordnung LF | NB → LFN | UTILMD **55607** | 55608 | 55609 | `mako-gpke` ✅ |
+| Rückmeldung/Bestellung Abrechnungsdaten | LF → NB | UTILMD **55156**/**55220**/**55673** | IFTSTA 21047 | IFTSTA 21047 | `mako-gpke` ✅ |
 | Stornierung Zuordnungsprozess | orig. → orig. | UTILMD **55022** | 55023 | 55024 | `mako-gpke` ✅ |
 
 > **Lieferbeginn = T.** Both UTILMD 55001 (LFN → NB) and 55016 (LFN → LFA) are sent

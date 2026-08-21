@@ -282,7 +282,9 @@ impl LfEntscheidung {
         Self::Antwort(LfAntwort {
             code: code.code.to_owned(),
             ebd: code.ebd.map(ToOwned::to_owned),
-            zustimmung: code.ist_zustimmung(),
+            // The LF trees are all on the Zustimmung/Ablehnung axis; a code
+            // that is not would have no answer PID to select here.
+            zustimmung: code.ist_zustimmung().unwrap_or(false),
             bedeutung: code.bedeutung.to_owned(),
             // A code the BDEW says must be explained gets a default explanation
             // rather than silently going out bare.

@@ -589,6 +589,97 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
     registry
 }
 
+// ── GPKE Abrechnungsdaten (PIDs 55156/55220/55673) ───────────────────────────
+
+/// Build an [`AdapterRegistry`] for [`GpkeAbrechnungsdatenWorkflow`].
+///
+/// Adapts an inbound UTILMD Rückmeldung / Bestellung Abrechnungsdaten (LF → NB,
+/// GPKE Teil 2 § 3.1) to a [`GpkeAbrechnungsdatenCommand::ReceiveRueckmeldung`].
+/// The NB answers with an IFTSTA 21047 via a later `SendBearbeitungsstand`.
+#[must_use]
+pub fn gpke_abrechnungsdaten_registry() -> AdapterRegistry<GpkeAbrechnungsdatenWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for GPKE Abrechnungsdaten adapter".into(),
+                )
+            })?;
+            let AnyMessage::Utilmd(u) = msg else {
+                return Err(EngineError::Deserialization(
+                    "GPKE Abrechnungsdaten adapter: expected UTILMD message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "GPKE Abrechnungsdaten adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let mut validation_passed = validation_result.as_ref().is_some_and(|r| r.is_valid());
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            // 55156/55220/55673 have no imported AHB rules yet, so a pass here
+            // means nothing was checked. Fail closed rather than answer a
+            // message whose Bestellung was never validated.
+            if validation_passed {
+                let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
+                    .map(|edi_pid| {
+                        edi_energy::registry::ReleaseRegistry::global()
+                            .pid_has_ahb_rules(edi_energy::MessageType::Utilmd, edi_pid)
+                    })
+                    .unwrap_or(false);
+                if !has_ahb_rules {
+                    tracing::warn!(
+                        pid = pid.as_u32(),
+                        message_ref = msg.message_ref(),
+                        "GPKE Abrechnungsdaten adapter: no UTILMD AHB profile compiled for \
+                         this PID — vacuous validation forced to failed."
+                    );
+                    validation_passed = false;
+                }
+            }
+
+            Ok(GpkeAbrechnungsdatenCommand::ReceiveRueckmeldung {
+                pid,
+                sender: MarktpartnerCode::new(
+                    u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                receiver: MarktpartnerCode::new(
+                    u.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                location_id: MaLo::new(
+                    u.transactions()
+                        .first()
+                        .and_then(|t| t.marktlokation().or_else(|| t.messlokation()))
+                        .unwrap_or(""),
+                ),
+                document_date: u
+                    .dtm()
+                    .iter()
+                    .find(|d| d.is_document_date())
+                    .and_then(|d| d.value_str())
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
+            })
+        },
+    ));
+    registry
+}
+
 // ── GPKE NB-initiated Lieferende (PID 55007) ─────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GpkeLfAbmeldungWorkflow`].

@@ -231,6 +231,7 @@ impl EdifactIngestDispatcher {
         "geli-gas-stornierung-lf",
         "geli-gas-supplier-change",
         "gpke-abrechnung",
+        "gpke-abrechnungsdaten",
         "gpke-allokationsliste",
         "gpke-anfrage-bestellung",
         "gpke-ankuendigung-zuordnung-lf",

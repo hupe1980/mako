@@ -16,7 +16,7 @@ applyTo: "crates/mako-gpke/**, crates/mako-wim/**, crates/mako-geli-gas/**, crat
 | 31001–31002, 31005–31006 | `mako-gpke` `gpke-abrechnung` (INVOIC) | BK6-24-174 |
 | 31007–31008 | `mako-gabi-gas` `gabi-gas-invoic` (Aggreg. MMM-Rechnung Gas) | BK7-24-01-008 |
 | 37000–37006 | `mako-gpke` `gpke-partin` (PARTIN Strom) | PARTIN AHB 1.0f |
-| 35001–35005 (REQOTE), 15001–15005 (QUOTES) | `mako-wim` `wim-preisanfrage` | BK6-24-174 |
+| 35001/35002/35004/35005 (REQOTE), 15001/15002/15004/15005 (QUOTES) | `mako-wim` `wim-preisanfrage` | BK6-24-174 |
 | 27001–27003 (PRICAT) | `mako-wim` `wim-preisliste` | BK6-24-174 |
 | 17001–17011 (Geräteübernahme, ORDERS) | `mako-wim` `wim-geraeteubernahme` | BK6-24-174 |
 | 17011/17118/17121 → 19003–19007 (Technik-Änderung) | `mako-wim` `wim-technik-aenderung` | BK6-24-174 |

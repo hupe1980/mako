@@ -158,10 +158,16 @@ pub const STAMMDATEN_PAIRS: &[(u32, u32, StammdatenObjekt)] = &[
     (55688, 55689, StammdatenObjekt::Marktlokation),
     // S4 — LF → NB
     (55109, 55137, StammdatenObjekt::Marktlokation),
+    (55230, 55232, StammdatenObjekt::Netzlokation),
     (55693, 55694, StammdatenObjekt::TechnischeRessource),
     // S5 — LF → MSB
     (55110, 55136, StammdatenObjekt::Marktlokation),
     // S6 — MSB → NB
+    //
+    // Two rows carry the Marktlokation: 55640 the ordinary Stammdaten and 55557
+    // the **MSB-Abrechnungsdaten**. Same object, different data set — the pair
+    // table keys on the Änderung PID, so both resolve.
+    (55557, 55559, StammdatenObjekt::Marktlokation),
     (55639, 55644, StammdatenObjekt::Netzlokation),
     (55640, 55645, StammdatenObjekt::Marktlokation),
     (55641, 55646, StammdatenObjekt::SteuerbareRessource),
@@ -887,8 +893,15 @@ mod tests {
         assert!(is_aenderung_pid(55616));
         assert!(is_rueckmeldung_pid(55622));
         assert!(!is_rueckmeldung_pid(55616));
-        // Excluded PIDs (belong to other workflows) are not in the table.
-        assert!(!is_aenderung_pid(55557));
+        // 55230 „Änderung Blindabr.-Daten der NeLo" (LF → NB) and 55557
+        // „Änderung MSB-Abr.-Daten der MaLo" (MSB → NB) are ordinary GPKE
+        // Teil 4 Stammdatenänderungen — PID overview 4.0, „Stammdatenänderung
+        // vom LF / vom MSB (verantwortlich) ausgehend" Prozessschritte 1/2.
+        assert_eq!(rueckmeldung_pid_for(55230), Some(55232));
+        assert_eq!(objekt_of(55230), Some(StammdatenObjekt::Netzlokation));
+        assert_eq!(rueckmeldung_pid_for(55557), Some(55559));
+        assert_eq!(objekt_of(55557), Some(StammdatenObjekt::Marktlokation));
+        // The IFTSTA Bearbeitungsstandsmeldung is not a Stammdaten pair.
         assert!(objekt_of(21047).is_none());
     }
 

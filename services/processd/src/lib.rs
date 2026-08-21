@@ -26,10 +26,14 @@
 //! ## NB module (`role-nb-strom`, `role-nb-gas`)
 //!
 //! - **Anmeldung** — **55001** (verbrauchende MaLo), **55077** (erzeugende
-//!   MaLo, § 10c EEG Monatserster rule) and **44001** (Gas). EBD `E_0622`.
+//!   MaLo, whose Vorlauffrist is one of six keyed on the Veräußerungsform,
+//!   § 21b Abs. 1 EEG 2023) and **44001** (Gas). `E_0622` / `G_0011`.
 //! - **Abmeldung** — **55004** and **44004**, the Lieferende a supplier
-//!   initiates. EBD `E_0607`, whose ERC codes are a *different* space from the
-//!   Anmeldung's.
+//!   initiates. `E_0607` / `G_0007`, whose codes are a *different* space from
+//!   the Anmeldung's.
+//! - **Neuanlage** — **55600** / **55601**, `E_0608`, with the **60-Werktage
+//!   Prüflauf**: an unidentifiable Marktlokation is re-checked daily and may
+//!   only be refused once the window has run out.
 //! - Evaluation via the `mako-pruefung` pure library.
 //! - **EoG gap closure** (§ 36/§ 38 EnWG) and the daily 3-month timer.
 //! - The MSB-Wechsel PIDs the NB answers: **55042** (Anmeldung MSB) and
@@ -53,9 +57,9 @@
 //!
 //! ## Fristen
 //!
-//! Every business answer window comes from [`fristen`], which reads the same
-//! per-family tables `makod` registers the process deadline from. They are not
-//! flat durations: the GPKE ones are wall-clock instants on the first Werktag
+//! Every business answer window comes from [`mako_fristen::antwort`], the same
+//! table `makod` registers the process deadline from. They are not flat
+//! durations: the GPKE ones are wall-clock instants on the first Werktag
 //! after the Übertragungstag, and the GeLi Gas ones run to the end of the
 //! *n*-th Werktag after receipt.
 //!
@@ -66,19 +70,22 @@
 //! - GeLi Gas: BK7-24-01-009 Kap. 2.6 / 3.2.2 / 3.2.3, in
 //!   [`mako_geli_gas::antwortfrist`]
 //! - WiM Strom Teil 1: per-PID Antwortfristen (3 / 5 / 7 / 1 WT)
-//! - EBD 4.3: `E_0607`, `E_0609`, `E_0614`, `E_0622`, `E_0624`
+//! - EBD 4.3: `E_0607`, `E_0608`, `E_0609`, `E_0614`, `E_0622`, `E_0623`,
+//!   `E_0624`, and the Gas `G_0007` / `G_0011` / `G_0012`
 //! - § 7 EnWG: the role features are separate binaries; § 20 EnWG:
 //!   `initiator_is_affiliate` recorded for every decision
 #![deny(unsafe_code)]
 #![allow(clippy::doc_markdown)]
 
 pub mod config;
-pub mod fristen;
 pub mod handler;
 pub mod mcp_server;
 pub mod metrics;
 pub mod pg;
 pub mod server;
+
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+pub mod einsd_client;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 pub mod nb_module;
@@ -97,3 +104,6 @@ pub mod msb_module;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
 pub mod eog_module;
+
+#[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+pub mod neuanlage_module;

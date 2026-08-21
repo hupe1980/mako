@@ -61,9 +61,10 @@ use mako_engine::{
 use mako_gabi_gas::GaBiGasInvoicWorkflow;
 use mako_geli_gas::{GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow};
 use mako_gpke::{
-    GpkeAbrechnungWorkflow, GpkeAnfrageBestellungWorkflow, GpkeKonfigurationWorkflow,
-    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeNeuanlageWorkflow, GpkeSperrungWorkflow,
-    GpkeStornierungWorkflow, GpkeSupplierChangeWorkflow,
+    GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow, GpkeAnfrageBestellungWorkflow,
+    GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
+    GpkeNeuanlageWorkflow, GpkeSperrungWorkflow, GpkeStornierungWorkflow,
+    GpkeSupplierChangeWorkflow,
 };
 use mako_mabis::MabisBillingWorkflow;
 use mako_redispatch::{
@@ -282,6 +283,15 @@ pub async fn dispatch_migrations(
                 store,
                 GpkeNeuanlageWorkflow,
                 "gpke-neuanlage",
+                from,
+                to
+            );
+            identity!(
+                report,
+                count,
+                store,
+                GpkeAbrechnungsdatenWorkflow,
+                "gpke-abrechnungsdaten",
                 from,
                 to
             );

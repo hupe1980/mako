@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use axum::{
     Router,
-    routing::{get, post},
+    routing::{get, post, put},
 };
 use mako_markt::makod_client::MakodClient;
 use secrecy::SecretString;
@@ -25,6 +25,8 @@ use crate::{handler::handle_webhook, mcp_server::ProcessdMcpState};
 pub struct NbState {
     pub config: crate::nb_module::NbModuleConfig,
     pub reader: mako_markt::marktd_client::MarktdClient,
+    /// The EEG-/KWKG-Register reader, when one is configured.
+    pub einsd: Option<crate::einsd_client::EinsdClient>,
     pub makod: MakodClient,
     pub repo: PgAnmeldungRepository,
     pub queue: PgApprovalQueue,
@@ -66,6 +68,9 @@ pub struct ProcessdState {
     /// EoG gap-closure config (§36/§38 EnWG).
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
     pub eog: Arc<crate::eog_module::EogModuleConfig>,
+    /// NB Neuanlage (`E_0608`) — the case log and its 60-Werktage Prüflauf.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    pub neuanlage: Arc<crate::neuanlage_module::NeuanlageModuleConfig>,
 }
 
 // ── RunConfig ─────────────────────────────────────────────────────────────────
@@ -80,6 +85,9 @@ pub struct RunConfig {
     pub tenant: String,
     pub nb_auto_accept: bool,
     pub nb_gas_bearbeitungsfrist_wt: u32,
+    /// See [`crate::config::NbConfig::einsd_url`].
+    pub nb_einsd_url: Option<String>,
+    pub nb_einsd_api_key: Option<SecretString>,
     pub lf_auto_respond: bool,
     /// See [`crate::config::LfConfig::vertragd_url`].
     pub lf_vertragd_url: Option<String>,
@@ -254,8 +262,12 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             auto_accept: cfg.nb_auto_accept,
             gas_bearbeitungsfrist_wt: cfg.nb_gas_bearbeitungsfrist_wt,
         };
+        let einsd = cfg.nb_einsd_url.as_ref().map(|url| {
+            crate::einsd_client::EinsdClient::new(url, cfg.nb_einsd_api_key.clone(), http.clone())
+        });
         Some(Arc::new(NbState {
             config: nb_config,
+            einsd,
             reader: mako_markt::marktd_client::MarktdClient::new(
                 &cfg.marktd_url,
                 cfg.marktd_api_key.clone(),
@@ -358,7 +370,55 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             notify_webhook_url: cfg.eog_notify_webhook_url.clone(),
             notify_webhook_secret: cfg.eog_notify_webhook_secret.clone(),
         }),
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        neuanlage: Arc::new(crate::neuanlage_module::NeuanlageModuleConfig {
+            own_mp_id: cfg.own_mp_id.clone(),
+            tenant: cfg.tenant.clone(),
+            auto_accept: cfg.nb_auto_accept,
+        }),
     };
+
+    // ── Background: E_0608 Neuanlage Prüflauf (daily) ─────────────────────
+    //
+    // A regulatory obligation, not housekeeping: GPKE Teil 2 § 2.2.2 and
+    // `E_0608` Prüfschritte 110/590 have the NB re-attempt identification of a
+    // newly commissioned Marktlokation **every day** for 60 Werktage before it
+    // may answer `A07` / `A16`. A pass that does not run is a Prüfung the NB
+    // owes and did not make.
+    #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+    {
+        let pruflauf_pool = pool.clone();
+        let pruflauf_makod = makod.clone();
+        let pruflauf_cfg = crate::neuanlage_module::NeuanlageModuleConfig {
+            own_mp_id: cfg.own_mp_id.clone(),
+            tenant: cfg.tenant.clone(),
+            auto_accept: cfg.nb_auto_accept,
+        };
+        let pruflauf_shutdown = ctx.shutdown.clone();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(86_400));
+            interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        match crate::neuanlage_module::run_pruflauf(
+                            &pruflauf_cfg, &pruflauf_pool, &pruflauf_makod,
+                        ).await {
+                            Ok(n) if n > 0 => tracing::info!(
+                                evaluated = n,
+                                "processd Neuanlage: E_0608 Prüflauf pass complete"
+                            ),
+                            Err(e) => tracing::warn!(
+                                error = %e, "processd Neuanlage: Prüflauf pass failed"
+                            ),
+                            _ => {}
+                        }
+                    }
+                    _ = pruflauf_shutdown.cancelled() => break,
+                }
+            }
+        });
+    }
 
     // ── Background: §38 EnWG Ersatzversorgung 3-month timer (daily) ────────
     #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
@@ -437,6 +497,11 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         .route("/api/v1/end-supply", post(rest::end_supply))
         .route("/api/v1/end-supply-gas", post(rest::end_supply_gas))
         .route("/api/v1/eog", get(rest::list_eog_cases))
+        .route("/api/v1/neuanlage", get(rest::list_neuanlage_cases))
+        .route(
+            "/api/v1/neuanlage/{id}/identifikation",
+            put(rest::set_neuanlage_identifikation),
+        )
         .with_state(state)
         .layer(axum::Extension(cfg.oidc.clone()))
         .layer(axum::Extension(cfg.cedar.clone()))
@@ -597,6 +662,93 @@ mod rest {
         #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
         {
             let _ = (pool, state, q);
+            (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
+        }
+    }
+
+    /// `GET /api/v1/neuanlage` — the `E_0608` case log.
+    ///
+    /// `?status=offen` is what an operator watches: those are the Neuanlagen
+    /// whose Marktlokation the NB has not identified yet, each with the
+    /// `letzter_pruefungstag` its refusal only becomes admissible after.
+    pub async fn list_neuanlage_cases(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>,
+    ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "read-neuanlage", &state.tenant) {
+            return deny;
+        }
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        {
+            match crate::pg::neuanlage::list_cases(
+                &pool,
+                &state.tenant,
+                q.get("status").map(String::as_str),
+                200,
+            )
+            .await
+            {
+                Ok(rows) => Json(serde_json::to_value(rows).unwrap_or_default()).into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
+        {
+            let _ = (pool, state, q);
+            (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
+        }
+    }
+
+    /// `PUT /api/v1/neuanlage/{id}/identifikation` — record the Marktlokation.
+    ///
+    /// A Neuanlage carries address and device data, not a MaLo-ID: the NB
+    /// matches it against its own NIS/GIS, the same source that provisions
+    /// `malo_grid`. This is where that answer arrives, from an operator or an
+    /// ERP integration. The next Prüflauf pass then walks `E_0608` with it.
+    pub async fn set_neuanlage_identifikation(
+        State(state): State<ProcessdState>,
+        Extension(pool): Extension<PgPool>,
+        Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+        claims: Claims,
+        Path(id): Path<uuid::Uuid>,
+        Json(body): Json<serde_json::Value>,
+    ) -> impl IntoResponse {
+        if let Err(deny) = authorize(&enforcer, &claims, "identify-neuanlage", &state.tenant) {
+            return deny;
+        }
+        #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
+        {
+            let Some(malo_id) = body.get("malo_id").and_then(|v| v.as_str()) else {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": "MISSING_MALO_ID",
+                        "message": "body must contain \"malo_id\" — the Marktlokation the \
+                                    NB identified for this Neuanlage",
+                    })),
+                )
+                    .into_response();
+            };
+            match crate::pg::neuanlage::set_identifikation(&pool, id, &state.tenant, malo_id).await
+            {
+                Ok(true) => StatusCode::NO_CONTENT.into_response(),
+                Ok(false) => (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "NO_OPEN_CASE",
+                        "message": "no open Neuanlage case with that id in this tenant",
+                    })),
+                )
+                    .into_response(),
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+            }
+        }
+        #[cfg(not(any(feature = "role-nb-strom", feature = "role-nb-gas")))]
+        {
+            let _ = (pool, state, id, body);
             (StatusCode::NOT_IMPLEMENTED, "NB role not compiled in").into_response()
         }
     }

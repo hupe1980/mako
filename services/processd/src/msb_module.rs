@@ -462,7 +462,8 @@ pub async fn handle_msb_wechsel(
                     geraetewechsel_answer_command(payload.pid, true),
                     geraetewechsel_answer_command(payload.pid, false),
                 );
-                let window = crate::fristen::operator_window(payload.pid, payload.received_at);
+                let window =
+                    mako_fristen::antwort::operator_window(payload.pid, payload.received_at);
                 let entry = ApprovalQueueEntry::pending(
                     payload.process_id,
                     payload.pid as i32,
@@ -587,7 +588,7 @@ fn msb_wechsel_process_name(pid: u32) -> &'static str {
 ///
 /// A `warn!`-only escalation let this Frist lapse unseen.
 fn msb_wechsel_expires_at(pid: u32, received_at: time::OffsetDateTime) -> time::OffsetDateTime {
-    crate::fristen::operator_window(pid, received_at).expires_at
+    mako_fristen::antwort::operator_window(pid, received_at).expires_at
 }
 
 // ── M3: Preisanfrage REQOTE auto-response ──────────────────────────────────────
@@ -677,7 +678,7 @@ pub async fn handle_preisanfrage_reqote(
     // command that sends the quote, so an operator can dispatch it from the
     // queue rather than reconstructing it in the ERP.
     let escalate = async |reason: String| -> anyhow::Result<bool> {
-        let window = crate::fristen::operator_window(pid, received_at);
+        let window = mako_fristen::antwort::operator_window(pid, received_at);
         let entry = ApprovalQueueEntry::pending(
             process_id,
             pid as i32,

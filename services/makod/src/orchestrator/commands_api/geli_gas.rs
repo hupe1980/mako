@@ -621,11 +621,20 @@ pub(super) async fn dispatch_geli_gas_antwort(
              that Codeliste are admissible."
         ))
     })?;
-    if entry.ist_zustimmung() != positive {
+    // `None` means the code's tree is not on the agreement axis at all, which no
+    // Gas Anmeldung/Abmeldung Codeliste is — refuse rather than guess.
+    let Some(zustimmung) = entry.ist_zustimmung() else {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} belongs to {tree}, whose Cluster is \"{}\" — not \
+             the Zustimmung/Ablehnung pair this command derives its answer PID from.",
+            entry.cluster.label(),
+        )));
+    };
+    if zustimmung != positive {
         return Err(DispatchError::InvalidPayload(format!(
             "Antwortcode {antwort_code:?} is a{} in {tree}, but the command asks for a{}. \
              The published Cluster decides the answer PID.",
-            if entry.ist_zustimmung() {
+            if zustimmung {
                 " Zustimmung"
             } else {
                 "n Ablehnung"
@@ -916,7 +925,14 @@ async fn dispatch_geli_lf_antwort(
             "Antwortcode {antwort_code:?} is not published by {ebd}"
         ))
     })?;
-    answer_gas_supplier_change(state, payload, entry.ist_zustimmung(), antwort_code).await
+    let zustimmung = entry.ist_zustimmung().ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} belongs to {ebd}, whose Cluster is \"{}\" — not the \
+             Zustimmung/Ablehnung pair this answer's PID is derived from.",
+            entry.cluster.label(),
+        ))
+    })?;
+    answer_gas_supplier_change(state, payload, zustimmung, antwort_code).await
 }
 
 /// Shared body for a process whose Codeliste this build does not carry.

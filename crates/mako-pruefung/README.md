@@ -14,7 +14,7 @@ from its own Codeliste. This crate is those rules, executable.
 
 | Module | Prüfende Rolle | Processes |
 |---|---|---|
-| `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage-Codeliste (`E_0608`) |
+| `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage (`E_0608`) |
 | `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`) |
 
 The document defines around sixty trees with the LF as prüfende Rolle. The ones
@@ -39,9 +39,16 @@ role-gated binary carries only the decisions it is licensed to make (§ 7 EnWG).
 - „Lieferende zum Abmeldedatum wurde bereits bestätigt" in `E_0609`,
 
 and a combined NB+LF deployment runs all three. `codes::lookup(ebd, code)`
-resolves a code **within** its tree, and the code's published `Cluster` —
-Zustimmung or Ablehnung — is what selects the answer PID. A caller never passes
-an `accepted: bool` alongside a code, because the two can disagree.
+resolves a code **within** its tree, and the code's published `Cluster` is what
+selects the answer PID. A caller never passes an `accepted: bool` alongside a
+code, because the two can disagree.
+
+Not every tree clusters on agreement. `E_0595` („Bestellung prüfen", the
+Bearbeitungsstand on Abrechnungsdaten) splits its codes into „Änderung der Daten"
+/ „keine Änderung der Daten" — whether a Stammdatenänderung follows, which both
+IFTSTA 21047 answers carry. `ist_zustimmung()` returns `None` there rather than
+reading „keine Änderung" as a refusal, and `sendet_stammdatenaenderung()` is the
+question that tree does answer.
 
 The split runs deeper than one code. `E_0622` Prüfschritt 10 divides Strom into a
 verbrauchende/ruhende branch and an erzeugende one that share **nothing**: „andere
@@ -49,6 +56,12 @@ Anmeldung in Bearbeitung" is `A06` in the first and `A45` in the second. Gas
 answers from a different alphabet again — `ZC5` for the same question, `A16`
 where Strom says `A02`, `E17` where it says `A07`, `E13` where it says `A05`. A
 Strom code on a 44003 is not a wrong reason; it is undefined.
+
+`E_0608` (Neuanlage) has a **third outcome** on top of the usual three:
+Prüfschritte 110 / 590 loop, so a Marktlokation the NB cannot yet identify is
+re-checked daily for 60 Werktage before a refusal is admissible.
+`NeuanlageEntscheidung::Vertagen` is that state — the NB answers nothing at all
+that day, which no two-outcome engine can express.
 
 A **Vorprüfung** publishes only Ablehnungen. `E_0622` and `E_3005` can refuse a
 message but never agree to one — a survivor is confirmed out of `E_0623` / `E_3007`,

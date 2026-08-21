@@ -44,8 +44,8 @@ Two producers, one queue:
 * **The market inbox.** `POST /webhook` consumes `de.mako.process.initiated` and
   turns PIDs 17115 and 17117 into work orders, keyed on the `makod` process so a
   redelivery over AS4 does not queue a second disconnection. This is what makes
-  `sperrd` an NB service — before it existed, a Sperrauftrag arriving from a
-  third-party Lieferant spawned a `makod` process and then reached nobody.
+  `sperrd` an NB service: a Sperrauftrag arriving from a third-party Lieferant
+  reaches an executing party rather than only a `makod` process.
 * **Operators.** `POST /api/v1/sperr-orders` for an order with no market
   correspondent. It has no `process_id`, so no IFTSTA is owed for it.
 
@@ -129,24 +129,19 @@ The response tells you which of two things happened:
 A terminal order whose `iftsta_dispatched_at` is NULL is an order whose Lieferant
 does not know the outcome.
 
-The previous design created that state on every crash between claiming an order
-and dispatching its IFTSTA, counted it in `/stats`, indexed it — and had **no way
-to clear it**. The documented recovery, "call `PUT .../execute` again, it is
-idempotent", could not work: the claim guards on `status = 'pending'`, so a second
-call returned 404 and dispatched nothing.
-
-It is now a queue. A background worker re-sends under the same idempotency key
+A background worker drains it, re-sending under the same idempotency key
 `makod` deduplicates on, so a re-send after a lost response is the same command
 rather than a second IFTSTA. After `IFTSTA_MAX_ATTEMPTS` it announces
 `de.sperr.iftsta.ausstehend` once and stops — a dispatch that has failed eight
 times is not a transport problem but a `makod` process in the wrong state, and
 retrying that forever only hides it behind a rising attempt count.
 
-`/stats` reports the two apart:
+`/stats` reports the three apart:
 
 | Field | Meaning |
 |---|---|
 | `iftsta_outstanding` | Dispatches in flight. Normal for seconds after an execution. |
+| `iftsta_ueberfaellig` | Past the 1-WT window of GPKE Teil 2 § 3.5.1.2 Nr. 5. |
 | `iftsta_stuck` | Past the retry budget. **This is the number that needs a human.** |
 
 ### Diagnosing a stuck IFTSTA
@@ -168,6 +163,7 @@ All through the transactional outbox.
 | `de.sperr.ausgefuehrt` | Carried out — IFTSTA `Z14` |
 | `de.sperr.fehlgeschlagen` | Not carried out — IFTSTA `Z13`, with the Prüfschritt code |
 | `de.sperr.storniert` | A pending order was withdrawn; no IFTSTA |
+| `de.sperr.ausfuehrung.ueberfaellig` | The 6-WT execution window closed with the order still open |
 | `de.sperr.iftsta.ausstehend` | The retry budget is spent and the LF is still uninformed |
 
 `agentd`'s `sperrd-agent` subscribes to the `de.sperr.*` glob.
@@ -208,6 +204,12 @@ CREATE TABLE sperr_orders (
     ausfuehrung_am       DATE,
     fruehestens_am       DATE,
     CHECK (ausfuehrung_am IS NULL OR fruehestens_am IS NULL),
+    ausfuehrung_faellig_am   DATE,          -- 6 WT, GPKE Teil 2 § 3.5.1.2 Nr. 1
+    ausfuehrung_eskaliert_at TIMESTAMPTZ,
+    sperrversuche            INTEGER NOT NULL DEFAULT 0,   -- max. 2, Nr. 5
+    letzter_versuch_am       DATE,
+    letzter_versuch_grund    TEXT,
+    iftsta_faellig_am        DATE,          -- 1. WT nach Abschluss, Nr. 5
     arbeitszeit          TEXT CHECK (arbeitszeit IN ('innerhalb','auch_ausserhalb')),
     treffpunkt_hinweis   TEXT,
     treffpunkt_strasse   TEXT,
@@ -236,10 +238,8 @@ CREATE TABLE sperr_orders (
 
 ## MCP surface
 
-Read-only by construction. The previous version exposed `cancel_sperr_order` — a
-tool that withdraws a §41f disconnection order — on a surface a language model
-drives; every other MCP server on this platform is read-only and keeps the
-mutating decision with an operator.
+Read-only by construction: withdrawing a § 41f disconnection order stays on the
+authenticated REST routes, with an operator.
 
 | Tool | Description |
 |---|---|
@@ -275,6 +275,6 @@ written down explicitly: these routes create and confirm physical disconnections
 ## Tests
 
 `cargo test -p sperrd` runs the unit and guard tests. `just test-sperrd-db` runs
-10 scenarios against real PostgreSQL: the redelivery guard, the claim guard, a
+13 scenarios against real PostgreSQL: the redelivery guard, the claim guard, a
 failed dispatch keeping the report and queueing a retry, budget exhaustion
 escalating once, tenant isolation, and the mutually-exclusive ORDERS dates.

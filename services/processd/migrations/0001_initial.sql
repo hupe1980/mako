@@ -122,3 +122,77 @@ COMMENT ON TABLE eog_activations IS
 CREATE INDEX eog_tenant_status ON eog_activations (tenant, status);
 CREATE INDEX eog_timer ON eog_activations (tenant, eog_seit)
     WHERE status IN ('active', 'expiring') AND eog_art = 'ERSATZVERSORGUNG';
+
+-- ── NB Neuanlage — the 60-Werktage Prüflauf (E_0608) ─────────────────────────
+--
+-- GPKE Teil 2 § 2.2.2 and `E_0608` Prüfschritte 110 / 590: an Anmeldung whose
+-- newly commissioned Marktlokation cannot yet be identified must **not** be
+-- refused. The NB re-checks it daily for 60 Werktage and only then answers
+-- `A07` / `A16` — which is why the answer window is „00:00 Uhr des 61. WT nach
+-- dem ÜT" and not a day.
+--
+-- One row per inbound 55600 / 55601. The row exists precisely because the
+-- decision is *not* a single evaluation: it is a loop with a deadline, and a
+-- process that carries no state between runs has no way to remember either.
+
+CREATE TABLE neuanlage_faelle (
+    id                    UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                TEXT        NOT NULL,
+    process_id            UUID        NOT NULL,
+    pid                   INTEGER     NOT NULL CHECK (pid IN (55600, 55601)),
+    lf_mp_id              TEXT        NOT NULL,
+    -- Which `E_0608` branch answers. The two share no Antwortcode.
+    marktlokationsart     TEXT        NOT NULL
+                          CHECK (marktlokationsart IN ('VERBRAUCHEND', 'ERZEUGEND')),
+    -- SG10 CCI+Z22 DE 7037, on an erzeugende Neuanlage: it decides whether the
+    -- Vorlauffrist is the month (Direktvermarktung ab Inbetriebnahmedatum) or
+    -- the Tag-vor-dem-letzten-WT rule.
+    veraeusserungsform    TEXT        CHECK (veraeusserungsform IN ('Z90','Z91','Z92','Z94')),
+
+    -- The ÜT starts the 60-Werktage clock; the Zuordnungsbeginn is what the
+    -- Vorlauffrist is measured against.
+    uebertragungstag      DATE        NOT NULL,
+    zuordnungsbeginn      DATE        NOT NULL,
+    -- Computed once from the ÜT with the BDEW-MaKo calendar: the last day on
+    -- which a refusal for non-identification is still premature.
+    letzter_pruefungstag  DATE        NOT NULL,
+
+    status                TEXT        NOT NULL DEFAULT 'offen' CHECK (status IN (
+                              'offen',        -- in the Prüflauf, not identified yet
+                              'beantwortet',  -- answered (Bestätigung or Ablehnung)
+                              'eskaliert'     -- a fact the tree needs is missing
+                          )),
+    -- Written by the operator or an NIS integration once the Marktlokation is
+    -- identified. Until it is, the daily run defers.
+    malo_id               TEXT,
+    -- How many daily Prüfläufe have run. Operator-visible evidence that the
+    -- obligation was met, not just a counter.
+    pruefungen            INTEGER     NOT NULL DEFAULT 0,
+    letzte_pruefung_am    DATE,
+
+    antwortcode           TEXT,
+    detail                TEXT,
+    beantwortet_at        TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    -- A redelivered ORDERS/UTILMD must not open a second case.
+    UNIQUE (tenant, process_id),
+    -- An answered case states what it answered.
+    CHECK (status <> 'beantwortet' OR antwortcode IS NOT NULL)
+);
+
+COMMENT ON TABLE neuanlage_faelle IS
+    'NB Neuanlage (UTILMD 55600/55601) case log and the E_0608 60-Werktage '
+    'Prüflauf. A case stays `offen` while the Marktlokation cannot be '
+    'identified; the daily worker re-evaluates it and answers A07/A16 only once '
+    'letzter_pruefungstag has passed.';
+
+COMMENT ON COLUMN neuanlage_faelle.letzter_pruefungstag IS
+    'ÜT + 60 Werktage (BDEW-MaKo calendar). A refusal for non-identification '
+    'before this date contradicts E_0608 Prüfschritt 110/590.';
+
+-- The daily sweep: open cases not yet checked today, oldest deadline first.
+CREATE INDEX nf_pruflauf ON neuanlage_faelle (tenant, letzter_pruefungstag)
+    WHERE status = 'offen';
+CREATE INDEX nf_tenant_status ON neuanlage_faelle (tenant, status);

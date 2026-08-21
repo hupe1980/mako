@@ -717,13 +717,13 @@ pub fn wim_stammdaten_registry() -> AdapterRegistry<WimStammdatenWorkflow> {
     registry
 }
 
-// ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────────────────
+// ── WiM Preisanfrage REQOTE (PIDs 35001/35002/35004/35005) ────────────────────────────────
 
 /// Build an [`AdapterRegistry`] for [`WimPreisanfrageWorkflow`].
 ///
 /// Handles **both** legs of the WiM Preisanfrage exchange:
-/// - inbound **REQOTE** 35001–35005 (nMSB → MSB) → [`PreisanfrageCommand::ReceiveReqote`];
-/// - inbound **QUOTES** 15001–15005 (MSB → nMSB, the Angebot answering our REQOTE)
+/// - inbound **REQOTE** 35001/35002/35004/35005 (nMSB → MSB) → [`PreisanfrageCommand::ReceiveReqote`];
+/// - inbound **QUOTES** 15001/15002/15004/15005 (MSB → nMSB, the Angebot answering our REQOTE)
 ///   → [`PreisanfrageCommand::ReceiveAngebot`], which resumes the process the
 ///   REQOTE opened.
 #[must_use]
@@ -771,14 +771,14 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
                         validation_errors,
                     })
                 }
-                // QUOTES 15001–15005: the MSB's Angebot answering our REQOTE.
+                // QUOTES 15001/15002/15004/15005: the MSB's Angebot answering our REQOTE.
                 AnyMessage::Quotes(_) => Ok(PreisanfrageCommand::ReceiveAngebot {
                     pid,
                     message_ref: MessageRef::new(msg.message_ref()),
                 }),
                 _ => Err(EngineError::Deserialization(
-                    "WiM Preisanfrage adapter: expected REQOTE (35001–35005) or QUOTES \
-                     (15001–15005) message"
+                    "WiM Preisanfrage adapter: expected REQOTE (35001/35002/35004/35005) or QUOTES \
+                     (15001/15002/15004/15005) message"
                         .into(),
                 )),
             }

@@ -1,7 +1,7 @@
 //! Ingest coverage for the WiM Preisanfrage QUOTES Angebot reply PIDs.
 //!
-//! REQOTE 35001–35005 (Preisanfrage) opened the `wim-preisanfrage` process, but
-//! the MSB's answering QUOTES 15001–15005 (Angebot) had no ingest arm and fell
+//! REQOTE 35001/35002/35004/35005 (Preisanfrage) opened the `wim-preisanfrage` process, but
+//! the MSB's answering QUOTES 15001/15002/15004/15005 (Angebot) had no ingest arm and fell
 //! through to `Skipped { pid_not_in_dispatch_table }` — the Angebot was dropped.
 //!
 //! QUOTES carries the MaLo in LOC (like REQOTE), so the Angebot now resumes the

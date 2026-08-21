@@ -510,6 +510,112 @@ pub async fn get_anlage(
     }
 }
 
+/// `GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`
+///
+/// The plant register's answer to the one question `E_0622` Prüfschritte
+/// 400–830 ask that the UTILMD cannot: **which Veräußerungsform is in force**
+/// at a Marktlokation today.
+///
+/// `processd` needs it to choose between the six Vorlauffristen GPKE Teil 2
+/// § 2.1.1 publishes for an Anmeldung erzeugender Marktlokation. Two facts come
+/// back, because the wire cannot carry the second:
+///
+/// - `veraeusserungsform` — the UTILMD `SG10 CCI+Z22` DE 7037 code.
+/// - `ausfallverguetung` — `Z90` covers both the uneingeschränkte
+///   Einspeisevergütung (§ 21 Abs. 1 Nr. 1 EEG 2023) and the Ausfallvergütung
+///   (Nr. 2), and the two take *different* Fristen: a month versus the verkürzte
+///   fünf Werktage. Only the register separates them.
+///
+/// `404` means the Marktlokation is not in this NB's EEG-/KWKG-Register. That is
+/// **not** the same as „Nicht-EEG-Marktlokation" — it may equally be a plant
+/// nobody has registered yet — so `processd` escalates rather than assuming.
+pub async fn get_veraeusserungsform_by_malo(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<std::sync::Arc<EinsdConfig>>,
+    Path(malo_id): Path<String>,
+) -> impl IntoResponse {
+    if let Err(e) = enforcer.check(&claims.principal(), "read-anlage", &cfg.tenant) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    let row = sqlx::query(
+        r"SELECT tr_id, settlement_model
+          FROM eeg_anlagen
+          WHERE malo_id = $1 AND tenant = $2
+          ORDER BY inbetriebnahme DESC
+          LIMIT 1",
+    )
+    .bind(&malo_id)
+    .bind(&cfg.tenant)
+    .fetch_optional(&pool)
+    .await;
+
+    match row {
+        Ok(Some(r)) => {
+            use sqlx::Row as _;
+            let tr_id: String = r.get("tr_id");
+            let model: String = r.get("settlement_model");
+            match veraeusserungsform_of(&model) {
+                Some(form) => Json(serde_json::json!({
+                    "malo_id":            malo_id,
+                    "tr_id":              tr_id,
+                    "settlement_model":   model,
+                    "veraeusserungsform": form,
+                    "ausfallverguetung":  model == "AUSFALLVERGUETUNG",
+                }))
+                .into_response(),
+                // Mieterstrom, GGV, Eigenverbrauch, Post-EEG and the
+                // Flexibilitäts-models are settlement models, not
+                // Veräußerungsformen — `CCI+Z22` has no code for them.
+                None => (
+                    StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({
+                        "error": "NO_VERAEUSSERUNGSFORM",
+                        "message": format!(
+                            "settlement_model {model:?} is not a Veräußerungsform in the \
+                             CCI+Z22 sense"
+                        ),
+                        "settlement_model": model,
+                    })),
+                )
+                    .into_response(),
+            }
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "NOT_REGISTERED",
+                "message": "no plant with that MaLo-ID in this EEG-/KWKG-Register",
+            })),
+        )
+            .into_response(),
+        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{e:#}")).into_response(),
+    }
+}
+
+/// Map a settlement model onto its UTILMD `SG10 CCI+Z22` DE 7037 code.
+///
+/// `AUSSCHREIBUNG` is the wettbewerblich ermittelte Marktprämie (§ 22 EEG 2023)
+/// — still a Marktprämie on the wire; the auction only sets the anzulegender
+/// Wert. `Z90` is deliberately shared by `VERGUETUNG` and `AUSFALLVERGUETUNG`:
+/// the MIG has one code for both, which is why the caller also gets the flag.
+#[must_use]
+pub fn veraeusserungsform_of(settlement_model: &str) -> Option<&'static str> {
+    match settlement_model {
+        "VERGUETUNG" | "AUSFALLVERGUETUNG" => Some("Z90"),
+        "DIREKTVERMARKTUNG" | "AUSSCHREIBUNG" => Some("Z91"),
+        "SONSTIGE_DIREKTVERMARKTUNG" => Some("Z92"),
+        "KWKG_ZUSCHLAG" => Some("Z94"),
+        _ => None,
+    }
+}
+
 /// `GET /api/v1/anlagen`  — List plants with optional filters.
 pub async fn get_anlagen(
     claims: Claims,
@@ -1978,6 +2084,68 @@ pub async fn post_jahresabrechnung(
             Json(serde_json::json!({ "error": e.to_string() })),
         )
             .into_response(),
+    }
+}
+
+#[cfg(test)]
+mod veraeusserungsform_tests {
+    use super::veraeusserungsform_of;
+
+    /// The settlement model → `SG10 CCI+Z22` DE 7037 mapping is a regulatory
+    /// judgement, not a rename: `processd` picks one of six Vorlauffristen from
+    /// it (`E_0622` Prüfschritte 400–830).
+    ///
+    /// Two facts it has to get right — `AUSSCHREIBUNG` is still the Marktprämie
+    /// (§ 22 EEG 2023 sets the anzulegender Wert competitively, not the form),
+    /// and `Z90` is shared by the uneingeschränkte Einspeisevergütung and the
+    /// Ausfallvergütung, which is why the endpoint returns the flag beside it.
+    #[test]
+    fn the_settlement_model_maps_onto_the_cci_z22_code() {
+        assert_eq!(veraeusserungsform_of("VERGUETUNG"), Some("Z90"));
+        assert_eq!(veraeusserungsform_of("AUSFALLVERGUETUNG"), Some("Z90"));
+        assert_eq!(veraeusserungsform_of("DIREKTVERMARKTUNG"), Some("Z91"));
+        assert_eq!(veraeusserungsform_of("AUSSCHREIBUNG"), Some("Z91"));
+        assert_eq!(
+            veraeusserungsform_of("SONSTIGE_DIREKTVERMARKTUNG"),
+            Some("Z92")
+        );
+        assert_eq!(veraeusserungsform_of("KWKG_ZUSCHLAG"), Some("Z94"));
+    }
+
+    /// Settlement models that are not Veräußerungsformen have no code —
+    /// answering one would send the Frist decision down the wrong branch.
+    #[test]
+    fn a_settlement_model_that_is_not_a_veraeusserungsform_has_no_code() {
+        for model in [
+            "MIETERSTROM",
+            "GGV",
+            "EIGENVERBRAUCH",
+            "POST_EEG_SPOT",
+            "FLEXIBILITAET",
+            "FLEXIBILITAET_ZUSCHLAG",
+        ] {
+            assert_eq!(veraeusserungsform_of(model), None, "{model}");
+        }
+    }
+
+    /// Every code the mapping emits is one `mako-pruefung` can parse — the two
+    /// sides of the lookup must agree on the alphabet.
+    #[test]
+    fn every_emitted_code_parses_on_the_reading_side() {
+        for model in [
+            "VERGUETUNG",
+            "AUSFALLVERGUETUNG",
+            "DIREKTVERMARKTUNG",
+            "AUSSCHREIBUNG",
+            "SONSTIGE_DIREKTVERMARKTUNG",
+            "KWKG_ZUSCHLAG",
+        ] {
+            let code = veraeusserungsform_of(model).expect("mapped");
+            assert!(
+                mako_pruefung::nb::types::Veraeusserungsform::from_wire_code(code).is_some(),
+                "{model} → {code} is not a code mako-pruefung knows"
+            );
+        }
     }
 }
 

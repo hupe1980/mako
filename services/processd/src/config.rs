@@ -251,6 +251,20 @@ pub struct NbConfig {
     /// here. Override when the operator's AWH reading differs. Defaults to `3`.
     #[serde(default = "default_gas_bearbeitungsfrist_wt")]
     pub gas_bearbeitungsfrist_wt: u32,
+
+    /// Base URL of the `einsd` EEG-/KWKG-Register, for the one fact an
+    /// Anmeldung erzeugender Marktlokation needs and the UTILMD cannot carry:
+    /// the **bestehende** Veräußerungsform (`E_0622` Prüfschritt 400 / 600).
+    ///
+    /// Without it every 55077 escalates — the § 20 EnWG-safe outcome, since
+    /// `E_0622` chooses between six published Vorlauffristen and none of them
+    /// is a defensible default.
+    #[serde(default)]
+    pub einsd_url: Option<String>,
+
+    /// Bearer token for [`Self::einsd_url`].
+    #[serde(default)]
+    pub einsd_api_key: Option<String>,
 }
 
 fn default_gas_bearbeitungsfrist_wt() -> u32 {
@@ -262,6 +276,8 @@ impl Default for NbConfig {
         Self {
             auto_accept: false,
             gas_bearbeitungsfrist_wt: default_gas_bearbeitungsfrist_wt(),
+            einsd_url: None,
+            einsd_api_key: None,
         }
     }
 }
@@ -363,7 +379,8 @@ impl Default for LfConfig {
 /// MSB process automation configuration.
 ///
 /// When `auto_preisanfrage = true` (default), `processd` automatically dispatches
-/// a QUOTES response when a REQOTE Preisanfrage (PIDs 35001–35005) arrives,
+/// a QUOTES response when a REQOTE Preisanfrage (PIDs 35001/35002/35004/35005)
+/// arrives,
 /// sourcing prices from the current `PreisblattMessung` in `marktd`.
 ///
 /// If no active `PreisblattMessung` exists for the aMSB MP-ID, the auto-response

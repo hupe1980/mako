@@ -95,6 +95,14 @@ pub fn build_router(
             "/api/v1/anlagen/{tr_id}/zusammenlegen",
             post(crate::handlers::post_zusammenlegen),
         )
+        // ── Veräußerungsform lookup by MaLo — read by processd's NB module ────
+        // `E_0622` Prüfschritte 400–830 choose the Vorlauffrist from the
+        // *bestehende* Veräußerungsform, which is register data and not on the
+        // wire. See `get_veraeusserungsform_by_malo`.
+        .route(
+            "/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform",
+            get(crate::handlers::get_veraeusserungsform_by_malo),
+        )
         // ── §21b EEG 2023 — Veräußerungsform switch ───────────────────────────
         .route(
             "/api/v1/anlagen/{tr_id}/switch-veraeusserungsform",

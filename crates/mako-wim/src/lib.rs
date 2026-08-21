@@ -15,7 +15,7 @@
 //! | Verpflichtungsanfrage (NB → **gMSB**) | 55168 → 55169/55170 | UTILMD | `geraetewechsel` | ✅ Implemented |
 //! | Geräteübernahme (Bestellung/Weiterverpflichtung/Gerätewechselabsicht) | 17001, 17002, 17009 | ORDERS | `geraeteubernahme` | ✅ Implemented |
 //! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | ✅ Implemented |
-//! | Preisanfrage (REQOTE/QUOTES) | 35001–35005 (REQOTE in), 15001–15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
+//! | Preisanfrage (REQOTE/QUOTES) | 35001/35002/35004/35005 (REQOTE in), 15001/15002/15004/15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
 //! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | ✅ Implemented |
 //! | ESA Wertebestellung (Anfrage/Angebot/Bestellung/Storno) | 35003, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | ✅ Implemented |
 //! | MSB-Rechnung (INVOIC) | 31009 | INVOIC | `rechnung` | ✅ Implemented (send + receive; auto-REMADV pending in deadline_dispatch) |
@@ -373,7 +373,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             }
         }
 
-        // REQOTE 35001–35005 (Preisanfrage) and QUOTES 15001–15005 (Angebot).
+        // REQOTE 35001/35002/35004/35005 (Preisanfrage) and QUOTES 15001/15002/15004/15005 (Angebot).
         for &pid in preisanfrage::REQOTE_PIDS
             .iter()
             .chain(preisanfrage::QUOTES_PIDS)

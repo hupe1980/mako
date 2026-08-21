@@ -52,7 +52,10 @@ graph TB
 │  POST /api/v1/queue/{id}/approve|reject  ← operator action       │
 │  POST /api/v1/start-supply              ← LFN Strom bootstrap    │
 │  POST /api/v1/start-supply-gas          ← LFN Gas 44001 bootstrap│
+│  POST /api/v1/end-supply[-gas]          ← LF Lieferende bootstrap│
 │  GET  /api/v1/eog           ← EoG gap-closure case log (§36/§38) │
+│  GET  /api/v1/neuanlage     ← E_0608 case log                    │
+│  PUT  /api/v1/neuanlage/{id}/identifikation                      │
 │  GET  /health/live  /health/ready                                │
 │  POST|GET /mcp       ← MCP Streamable HTTP (2025-11-25)          │
 └────────────────────────────────────────────────────────────────────┘
@@ -67,11 +70,11 @@ This ensures §7 EnWG separation: an `nb-only` binary provably contains no LF PI
 
 ```toml
 [features]
-role-lf-strom  = []  # LF answers 55007 / 55010 / 55016, LFN Strom bootstrap
-role-lf-gas    = []  # LFA GeLi Gas stornierung + LFN Gas bootstrap (PID 44001)
-role-nb-strom  = []  # GPKE An-/Abmeldung STP (55001, 55077, 55004), EoG closure
-role-nb-gas    = []  # GeLi Gas An-/Abmeldung STP (44001, 44004)
-role-msb-strom = []  # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel
+role-lf-strom  = ["mako-pruefung/role-lf"]  # LF answers 55007 / 55010 / 55016
+role-lf-gas    = ["mako-pruefung/role-lf"]  # LFA Gas 44007 / 44010 / 44016
+role-nb-strom  = ["mako-pruefung/role-nb"]  # GPKE STP (55001, 55077, 55004, 55600/55601), EoG closure
+role-nb-gas    = ["mako-pruefung/role-nb"]  # GeLi Gas An-/Abmeldung STP (44001, 44004)
+role-msb-strom = []                          # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel
 
 lf-only    = ["role-lf-strom", "role-lf-gas"]
 nb-only    = ["role-nb-strom", "role-nb-gas"]
@@ -156,13 +159,36 @@ only stillgelegte Marktlokationen and the Modell-2-Zuordnung, and Prüfschritte
 **Strom, erzeugende Marktlokation** (Prüfschritte 220–830) uses `A45` / `A25` for
 the same two questions and then picks between the **six** Vorlauffristen GPKE
 Teil 2 § 2.1.1 publishes, keyed on `(Geschäftsvorfall, bestehende, angemeldete
-Veräußerungsform)` — `SG10 CCI+Z22` on the wire, the register for the rest. When a
-needed fact is missing the engine escalates and names it; the statutory anchor
+Veräußerungsform)`. The *angemeldete* one is `SG10 CCI+Z22` on the wire; the
+*bestehende* one and the Ausfallvergütung flag come from `einsd`
+(`GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform`, configured as
+`[nb] einsd_url`) — wire code `Z90` covers both the uneingeschränkte
+Einspeisevergütung and the Ausfallvergütung, whose Fristen differ by a month
+versus five Werktage. A missing fact escalates and is named; the statutory anchor
 for the Monatserster rule is **§ 21b Abs. 1 EEG 2023**, not § 10c.
 
 **Gas** (`G_0011`) runs the `A03`/`A04`/`A16`/`A17` identification checks first,
 as the AHB requires, then `E17` for a Fristüberschreitung, `E13` for a
 Bilanzierungsproblem and `ZC5` / `Z08` for a conflicting or duplicate Anmeldung.
+
+### `mako_pruefung::nb::evaluate_neuanlage` — the Neuanlage, `E_0608`
+
+Inbound **55600** / **55601**: a Lieferant registers a Marktlokation being
+commissioned for the first time. The tree has a **third outcome** — Prüfschritte
+110 / 590 loop, so a Marktlokation the NB cannot yet identify is re-checked
+**daily for 60 Werktage** and may only then be refused `A07` / `A16`.
+
+`processd` therefore keeps a case log (`neuanlage_faelle`) and a daily worker
+rather than deciding once:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/neuanlage?status=offen` | The Prüflauf view — each row carries the `letzter_pruefungstag` a refusal only becomes admissible after, and the `pruefungen` count that evidences the daily attempts |
+| `PUT /api/v1/neuanlage/{id}/identifikation` | The MaLo-ID the NB matched from its NIS/GIS. A Neuanlage carries address and device data, not an ID, so this is where the identification arrives — the next pass then walks the tree with it |
+
+The two branches share no code (`A01`–`A09` verbrauchend, `A10`–`A19`
+erzeugend), and the Vorlauffrist is measured against the **Übertragungstag**, so
+a case re-evaluated on day 40 reaches the same verdict it did on day one.
 
 ### `mako_pruefung::nb::evaluate_abmeldung` — the Abmeldung, `E_0607` / `E_3019`
 
@@ -187,9 +213,11 @@ a supplier they have left.
 
 `processd` targets ≥ 95 % straight-through processing on a **verbrauchende**
 Anmeldung. The `malo_grid` record is a prerequisite — a missing one escalates —
-so STP improves markedly once it is provisioned. An **erzeugende** Marktlokation
-escalates until the Veräußerungsform register lookup lands: `E_0622` chooses
-between six published Vorlauffristen and none is a safe default.
+so STP improves markedly once it is provisioned. An **erzeugende** Marktlokation additionally needs
+`[nb] einsd_url`: `E_0622` chooses between six published Vorlauffristen from the
+*bestehende* Veräußerungsform, which is register data and not on the wire. A
+deployment without it escalates every 55077 — the § 20 EnWG-safe outcome, since
+none of the six is a defensible default.
 
 Grid records are the NB’s own grid topology — **not** from MaStR. Provision them via
 marktd’s NB-role `PUT /api/v1/malos/{malo_id}/grid` endpoint (manual / ERP provisioning).
@@ -396,8 +424,8 @@ POST /api/v1/queue/{id}/reject        → dispatch reject command via makod AND 
 ```
 
 > **Regulatory deadline:** `expires_at` is the per-PID business Frist less an
-> hour of headroom, read from `processd::fristen` — the table `makod` also
-> registers the process deadline from.
+> hour of headroom (`OPERATOR_HEADROOM`), read from `mako_fristen::antwort` —
+> the table `makod` also registers the process deadline from.
 >
 > The approve/reject handlers **claim** the entry (`status = 'Pending'` guard)
 > before dispatching to `makod`, releasing the claim if the dispatch fails so the
@@ -559,13 +587,21 @@ inbound_secret = "env:INBOUND_WEBHOOK_SECRET"   # optional; omit for dev
 # No manual curl required — topology is fully config-driven.
 webhook_url   = "http://processd:8580/webhook"  # optional; omit to skip registration
 subscriber_id = "processd"                       # default
-event_types   = "de.mako.process.initiated"     # default
+# default: de.mako.process.initiated + de.markt.versorgung.{gap-detected,eog-begonnen,changed}
+event_types   = "de.mako.process.initiated"
 
 [nb]
-auto_accept = false   # true → dispatch bestaetigen automatically on Accept
+auto_accept              = false  # true → dispatch bestaetigen automatically on Accept
+gas_bearbeitungsfrist_wt = 3      # AWH GeLi Gas 2.0 Kap. 2.2
+einsd_url                = ""     # EEG-/KWKG-Register; without it every 55077 escalates
+einsd_api_key            = ""
 
 [lf]
 auto_respond = true   # false → every inbound LF process routed to approval_queue
+
+[msb]
+auto_accept       = false   # true → dispatch the MSB-Wechsel Bestätigung
+auto_preisanfrage = true    # false → the REQOTE goes to the approval queue
 
 [eog]                                     # §36/§38 EnWG gap closure (NB role)
 auto_activate             = false         # true → dispatch gpke.eog.anmelden on gap-detected
@@ -631,9 +667,7 @@ For Helm charts, map `[subscription]` to `values.yaml` under `processd.subscript
 
 ## Monitoring
 
-`GET /processd/metrics` returns Prometheus-compatible domain metrics sourced
-from PostgreSQL (the generic request-counter `/metrics` is mounted separately by
-the shared runner):
+Domain metrics register on the shared `/metrics` served by `mako_service::run`:
 
 | Metric | Type | Description |
 |--------|------|-------------|
@@ -641,8 +675,6 @@ the shared runner):
 | `processd_approval_queue_pending` | gauge | Processes waiting for an operator decision |
 | `processd_approval_queue_overdue` | gauge | Pending entries past `expires_at` — the answer deadline has been missed. **Alert on > 0** |
 | `processd_eog_open` | gauge | Ersatz-/Grundversorgung cases not yet closed (§ 36/§ 38 EnWG) |
-| `processd_db_pool_size` | gauge | PostgreSQL connection pool size |
-| `processd_db_pool_idle` | gauge | Idle PostgreSQL connections |
 
 ### Alert rules
 
@@ -661,21 +693,24 @@ Alert when:
 
 ## MSB module — WiM MSB-Wechsel STP
 
-`processd` includes a **WiM MSB-Wechsel STP** engine (feature: `role-nb-strom`) that
-automatically evaluates inbound UTILMD 55039 (Kündigung MSB) and 55042 (Anmeldung MSB)
-requests from new Messstellenbetreiber. STP target: **≥ 80 %**.
+`processd` includes a **WiM MSB-Wechsel STP** engine that automatically evaluates
+inbound UTILMD requests from new Messstellenbetreiber: `role-nb-strom` answers 55042
+(Anmeldung MSB) and 55051 (Ende MSB), `role-msb-strom` answers 55039 (Kündigung MSB)
+and 55168 (Verpflichtungsanfrage). STP target: **≥ 80 %**.
 
 ### Decision pipeline (`msb_module.rs`)
 
 ```
-de.mako.process.initiated (PID 55039 / 55042)
-  → GET marktd /api/v1/versorgung/{malo_id}   ← MeLo exists?
-  → GET marktd /api/v1/partners/{nmsb_mp_id}  ← nMSB registered?
-  → GET marktd /api/v1/technische-ressourcen/{sr_id} ← SR linked?
+de.mako.process.initiated (PID 55039 / 55042 / 55051 / 55168)
+  → GET marktd /api/v1/melos/{melo_id}                ← MeLo exists?
+  → GET marktd /api/v1/melos/{melo_id}/zaehler        ← meters + Zählertyp
+  → GET marktd /api/v1/partners/{nmsb_mp_id}          ← nMSB registered?
+  → GET marktd /api/v1/technische-ressourcen/{sr_id}  ← SR linked?
   → evaluate_msb_anmeldung / evaluate_msb_kuendigung (pure, no I/O)
-      Accept   → wim.geraetewechsel.bestaetigen
+      Accept   → wim.geraetewechsel.bestaetigen [if auto_accept]
+                 else approval_queue with the WiM Frist
       Reject   → wim.geraetewechsel.ablehnen (ERC code in reason)
-      Escalate → operator alert (manual decision required)
+      Escalate → approval_queue with the WiM Frist
 ```
 
 ### Evaluation checks (PID 55042 — Anmeldung)
@@ -691,8 +726,9 @@ de.mako.process.initiated (PID 55039 / 55042)
 Checks 1–2 are hard rejects (A02/A05). Checks 3–5 trigger operator escalation — `processd`
 cannot make the §14a eligibility determination autonomously.
 
-**Kündigung (PID 55039)** only applies checks 1–2. The NB has no valid grounds to reject
-termination when the MeLo exists and the nMSB is registered.
+**Kündigung (PID 55039)** only applies checks 1–2. It runs in the `role-msb-strom`
+binary — the Altmessstellenbetreiber has no valid grounds to reject termination when the
+MeLo exists and the nMSB is registered.
 
 ### Escalation reasons
 
@@ -708,16 +744,16 @@ All escalated decisions still generate an `anmeldung_decisions` row for §20 EnW
 
 ## MSB module — REQOTE auto-response
 
-When `processd` receives `de.mako.process.initiated` for PIDs 35001–35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. Dispatching from master data rather than from a manual ERP trigger is what keeps the response inside the REQOTE answer window.
+When `processd` receives `de.mako.process.initiated` for PIDs 35001, 35002, 35004 or 35005 (REQOTE Preisanfrage from an nMSB), it **automatically dispatches a QUOTES response** sourced from the active `PreisblattMessung` in `marktd`. Dispatching from master data rather than from a manual ERP trigger is what keeps the response inside the REQOTE answer window.
 
 ### Decision pipeline
 
 ```
-de.mako.process.initiated (PIDs 35001–35005, REQOTE)
+de.mako.process.initiated (PIDs 35001/35002/35004/35005, REQOTE)
   → GET marktd /api/v1/preisblaetter-messung/{own_mp_id}  ← PreisblattMessung current?
       Found   → wim.preisanfrage.angebot-senden
                  (includes preisblatt_gueltigkeit in payload for makod QUOTES build)
-      Not found → operator alert (no auto-response — prevents blind QUOTES)
+      Not found → approval_queue with the REQOTE Frist — an operator quotes
 ```
 
 Enable in `processd.toml`:
@@ -727,7 +763,7 @@ Enable in `processd.toml`:
 auto_preisanfrage = true   # default: true
 ```
 
-Set `auto_preisanfrage = false` to require manual QUOTES dispatch via ERP (e.g. during PreisblattMessung update windows).
+Set `auto_preisanfrage = false` to route every REQOTE to the approval queue instead (e.g. during PreisblattMessung update windows); it lands there with its Frist either way.
 
 ---
 

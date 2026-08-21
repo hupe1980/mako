@@ -83,18 +83,18 @@ pub const WORKFLOW_NAME: &str = "gpke-supplier-change";
 /// | 55001 | Anfrage Lieferbeginn verb. MaLo (LFN → NB)        | S2.1–S2.2 ✅ |
 /// | 55004 | Abmeldung / Lieferende verb. MaLo (LFN → NB)      | S2.1–S2.2 ✅ |
 /// | 55077 | Anmeldung Lieferbeginn erz. MaLo (LFN → NB)       | S2.1–S2.2 ✅ |
-/// | 55557 | Änderung MSB-Abr.-Daten der MaLo (LFN ↔ NB)       | GPKE Teil 4  |
 ///
 /// ORDERS Sperrung (PIDs 17115/17116/17117) is handled by `GpkeSperrungWorkflow`
-/// (see `sperrung` module). **PID 55555** and **PID 55557** are GPKE Teil 4
-/// UTILMD data-request processes ("Anfrage Daten der individuellen Bestellung"
-/// / "Änderung MSB-Abr.-Daten der MaLo"). **PIDs 55007–55015** are NB-initiated
-/// processes; routing is handled by `GpkeLfAbmeldungWorkflow` for PIDs 55007–55009.
+/// (see `sperrung` module). **PID 55555** is the GPKE Teil 4 data request
+/// („Anfrage Daten der individuellen Bestellung", `gpke-anfrage-bestellung`) and
+/// **PID 55557** the Änderung MSB-Abrechnungsdaten der MaLo, which is an
+/// ordinary Teil-4 Stammdatenänderung answered 55559 by
+/// `GpkeStammdatenaenderungWorkflow`. **PIDs 55007–55015** are NB-initiated;
+/// 55007–55009 route to `GpkeLfAbmeldungWorkflow`.
 pub const UTILMD_PIDS: &[u32] = &[
     55001, // Anmeldung verb. MaLo (LF → NB); answers 55002/55003
     55004, // Abmeldung (LF → NB); answers 55005/55006
     55077, // Anmeldung Lieferbeginn erz. MaLo (LFN → NB, BK6-24-174)
-    55557, // Änderung MSB-Abr.-Daten der MaLo (GPKE Teil 4, PID 3.3 + PID 4.0)
 ];
 
 /// The subset of [`UTILMD_PIDS`] this workflow can carry to completion.

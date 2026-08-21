@@ -21,7 +21,7 @@
 //! | Technical acknowledgement (APERAK) | **45 min** on weekdays, Sunday 12:00 Berlin for a Saturday arrival (APERAK AHB 1.0 § 2.4.1) | **`makod`**, automatically |
 //! | Business answer | the per-PID Frist above | this module / the operator |
 //!
-//! The queue is bounded by the **business** window, from [`crate::fristen`].
+//! The queue is bounded by the **business** window, from [`mako_fristen::antwort`].
 //!
 //! ## How the decision is made
 //!
@@ -212,7 +212,7 @@ pub struct LfAnfragePayload {
     /// The request, in the shape [`mako_pruefung`] takes.
     pub anfrage: LfAnfrage,
     /// The business answer deadline and the operator window derived from it.
-    pub window: crate::fristen::OperatorWindow,
+    pub window: mako_fristen::antwort::OperatorWindow,
 }
 
 impl LfAnfragePayload {
@@ -275,7 +275,7 @@ impl LfAnfragePayload {
             eingang: event_time,
         };
 
-        let window = crate::fristen::operator_window(process.trigger_pid, event_time);
+        let window = mako_fristen::antwort::operator_window(process.trigger_pid, event_time);
         Some(Self {
             process,
             anfrage,

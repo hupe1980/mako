@@ -261,7 +261,7 @@ pub(super) async fn dispatch_wim_aperak(
 /// `WimPreisanfrageWorkflow` process looked up by `melo_id`.
 ///
 /// Called for `wim.preisanfrage.angebot-senden` — the aMSB answers an inbound
-/// REQOTE Preisanfrage (35001–35005) with the QUOTES Angebot (15001–15005).
+/// REQOTE Preisanfrage (35001/35002/35004/35005) with the QUOTES Angebot (15001/15002/15004/15005).
 /// The response PID is derived inside the workflow from the stored REQOTE PID;
 /// the price content comes from the aMSB's current PreisblattMessung.
 pub(super) async fn dispatch_wim_preisanfrage_angebot_senden(

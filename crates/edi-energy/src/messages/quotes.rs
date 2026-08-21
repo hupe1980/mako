@@ -27,7 +27,7 @@ use crate::{
 /// - `releases::quotes_fv20250401()` (wire: `"1.3b"`, AHB 1.1, valid from 2025-04-01)
 /// - `releases::quotes_fv20260401()` (wire: `"1.3c"`, AHB 1.1a, valid from 2026-04-01)
 ///
-/// Both releases share the same 5 Prüfidentifikatoren (15001–15005).
+/// Both releases share the same 5 Prüfidentifikatoren (15001/15002/15004/15005).
 #[derive(Debug, Clone)]
 pub struct QuotesMessage {
     pub(crate) core: MessageCore,

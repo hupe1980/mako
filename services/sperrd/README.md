@@ -15,7 +15,7 @@ way to find out what happened but to ask.
 | **Market ingest** | `POST /webhook` — `de.mako.process.initiated` for PIDs 17115/17117 becomes a work order, deduplicated per market process |
 | **Status machine** | `pending` → `executed` / `failed` / `cancelled` |
 | **IFTSTA 21039** | Dispatched via `makod` on a terminal outcome; **retried** by a background worker and escalated once the budget is spent |
-| **Events** | `de.sperr.{auftrag.eingegangen,ausgefuehrt,fehlgeschlagen,storniert,iftsta.ausstehend}` via the transactional outbox |
+| **Events** | `de.sperr.{auftrag.eingegangen,ausgefuehrt,fehlgeschlagen,storniert,ausfuehrung.ueberfaellig,iftsta.ausstehend}` via the transactional outbox |
 | **Health** | `GET /health/live`, `GET /health/ready` |
 
 ## What the queue carries
@@ -140,5 +140,5 @@ migrations, graceful shutdown, and a real `/health/ready`. Start it with `sperrd
 ## Tests
 
 `cargo test -p sperrd` runs the unit and guard tests; `just test-sperrd-db` runs
-10 scenarios against real PostgreSQL — redelivery, the claim guard, the retry
+13 scenarios against real PostgreSQL — redelivery, the claim guard, the retry
 queue, tenant isolation, the mutually-exclusive ORDERS dates.

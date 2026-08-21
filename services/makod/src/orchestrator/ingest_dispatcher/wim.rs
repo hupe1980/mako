@@ -403,7 +403,7 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
-            // ── WiM Preisanfrage REQOTE (PIDs 35001–35005) ────────────────────
+            // ── WiM Preisanfrage REQOTE (PIDs 35001/35002/35004/35005) ────────────────────
             "wim-preisanfrage" => {
                 if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
@@ -424,7 +424,7 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 } else if mako_wim::preisanfrage::QUOTES_PIDS.contains(&pid) {
-                    // QUOTES 15001–15005: the MSB's Angebot answering our REQOTE —
+                    // QUOTES 15001/15002/15004/15005: the MSB's Angebot answering our REQOTE —
                     // resume the process by MaLo (QUOTES carries it in LOC).
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);

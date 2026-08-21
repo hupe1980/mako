@@ -17,6 +17,12 @@
 pub const GPKE_LIEFERBEGINN_ANMELDEN: &str = "gpke.lieferbeginn.anmelden";
 /// NB: confirm an inbound Lieferbeginn Anmeldung (UTILMD 55002 / 55078).
 pub const GPKE_LIEFERBEGINN_BESTAETIGEN: &str = "gpke.lieferbeginn.bestaetigen";
+/// NB: confirm a Neuanlage — inbound 55600 / 55601, answered UTILMD 55602 /
+/// 55603 (EBD `E_0608`, Zustimmung `A09` / `A18`).
+pub const GPKE_NEUANLAGE_BESTAETIGEN: &str = "gpke.neuanlage.bestaetigen";
+/// NB: refuse a Neuanlage — inbound 55600 / 55601, answered UTILMD 55604 /
+/// 55605 (EBD `E_0608`).
+pub const GPKE_NEUANLAGE_ABLEHNEN: &str = "gpke.neuanlage.ablehnen";
 /// NB: assign a contractless `MaLo` to the Grundversorger (UTILMD 55013, §38 `EnWG`).
 pub const GPKE_EOG_ANMELDEN: &str = "gpke.eog.anmelden";
 /// NB: reject an inbound Lieferbeginn Anmeldung (UTILMD 55003 / 55080).
@@ -72,8 +78,8 @@ pub const WIM_GERAETEWECHSEL_ABLEHNEN: &str = "wim.geraetewechsel.ablehnen";
 pub const WIM_STEUERUNGSAUFTRAG_BESTAETIGEN: &str = "wim.steuerungsauftrag.bestaetigen";
 /// MSB: answer an inbound Steuerungsauftrag negatively (ORDRSP).
 pub const WIM_STEUERUNGSAUFTRAG_ABLEHNEN: &str = "wim.steuerungsauftrag.ablehnen";
-/// aMSB: answer an inbound REQOTE Preisanfrage (35001–35005) with the
-/// QUOTES Angebot (15001–15005).
+/// aMSB: answer an inbound REQOTE Preisanfrage (35001/35002/35004/35005) with the
+/// QUOTES Angebot (15001/15002/15004/15005).
 pub const WIM_PREISANFRAGE_ANGEBOT_SENDEN: &str = "wim.preisanfrage.angebot-senden";
 
 // ── Cross-check list ──────────────────────────────────────────────────────────
@@ -109,6 +115,8 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_EOG_ANMELDEN,
     GPKE_LIEFERBEGINN_BESTAETIGEN,
     GPKE_LIEFERBEGINN_ABLEHNEN,
+    GPKE_NEUANLAGE_BESTAETIGEN,
+    GPKE_NEUANLAGE_ABLEHNEN,
     GPKE_LIEFERENDE_ANMELDEN,
     GPKE_LIEFERENDE_BESTAETIGEN,
     GPKE_LIEFERENDE_ABLEHNEN,

@@ -18,7 +18,7 @@
 //! | 55004 | Abmeldung — Lieferende (LFN → NB)                         | ✅ Implemented |
 //! | 55016 | Kündigung Lieferbeginn (LFN → LFA)                        | ✅ Implemented |
 //! | 55077 | Anmeldung erz. MaLo (LFN → NB, BK6-24-174)                | ✅ Implemented |
-//! | 55557 | Änderung MSB-Abrechnungsdaten (GPKE Teil 4)               | Registered, no receiver |
+//! | 55557 | Änderung MSB-Abrechnungsdaten der MaLo (GPKE Teil 4)      | `gpke-stammdatenaenderung`, answers 55559 |
 //!
 //! #### Outbound ANTWORT — derived by `GpkeSupplierChangeWorkflow`, NOT routed (NB role)
 //!
@@ -187,6 +187,7 @@
 #![allow(clippy::items_after_statements)]
 
 pub mod abrechnung;
+pub mod abrechnungsdaten;
 pub mod allokationsliste;
 pub mod anfrage_bestellung;
 pub mod ankuendigung_zuordnung_lf;
@@ -217,6 +218,11 @@ pub use abrechnung::{
     AbrechnungProjection, AbrechnungRecord, AbrechnungState, GPKE_COMDIS_ABLEHNUNG_PID,
     GPKE_INVOIC_PIDS, GPKE_REMADV_PIDS, GpkeAbrechnungWorkflow,
     WORKFLOW_NAME as ABRECHNUNG_WORKFLOW_NAME,
+};
+pub use abrechnungsdaten::{
+    ABRECHNUNGSDATEN_PIDS, AbrechnungsdatenCommand, AbrechnungsdatenData, AbrechnungsdatenEvent,
+    AbrechnungsdatenState, BEARBEITUNGSSTAND_PID, BEARBEITUNGSSTAND_WINDOW_LABEL,
+    GpkeAbrechnungsdatenWorkflow, WORKFLOW_NAME as ABRECHNUNGSDATEN_WORKFLOW_NAME,
 };
 pub use allokationsliste::{
     AllokationslisteCommand, AllokationslisteEvent, AllokationslisteState, AnforderungData,
@@ -419,6 +425,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
             konfiguration_aenderung::WORKFLOW_NAME,
             datenabruf::WORKFLOW_NAME,
             allokationsliste::WORKFLOW_NAME,
+            abrechnungsdaten::WORKFLOW_NAME,
         ]
     }
 
@@ -469,11 +476,19 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         // GPKE Teil 4 Stammdatenänderung (55615–55694, 55109/55110). Both the
         // Änderung PIDs (inbound change → apply + Rückmeldung) and the
         // Rückmeldung PIDs (resume a change we initiated) route here.
-        // 55557/55559 (MSB-Abr.-Daten) stay on gpke-supplier-change; 21047
-        // (Bearbeitungsstand) stays on the IFTSTA route.
+        // 55557/55559 (MSB-Abrechnungsdaten der MaLo) belong here too — they
+        // are „Stammdatenänderung vom MSB (verantwortlich) ausgehend"
+        // Prozessschritte 1/2. 21047 (Bearbeitungsstand) stays on the IFTSTA route.
         for &(aenderung_pid, rueckmeldung_pid, _) in stammdatenaenderung::STAMMDATEN_PAIRS {
             router.register(aenderung_pid, stammdatenaenderung::WORKFLOW_NAME);
             router.register(rueckmeldung_pid, stammdatenaenderung::WORKFLOW_NAME);
+        }
+
+        // PIDs 55156/55220/55673 (Rückmeldung/Bestellung Abrechnungsdaten, LF → NB)
+        // — GPKE Teil 2 § 3.1. The NB answers with IFTSTA 21047 by the 2. WT
+        // nach dem ÜT.
+        for &pid in ABRECHNUNGSDATEN_PIDS {
+            router.register(pid, abrechnungsdaten::WORKFLOW_NAME);
         }
 
         // PID 55607 (Ankündigung Zuordnung LF, NB→LFN) — GPKE Teil 2 §2.2, BK6-24-174.
@@ -575,8 +590,6 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         //
         // PIDs 21024–21028 are "GPKE / Vollzugsmeldung" per the IFTSTA AHB.
         // PID 21033 is "GPKE / Statusmeldung Kündigung" (Ablehnung GPKE Teil 3).
-        // Previously, 21024–21028 were incorrectly attributed to WiM Gas in
-        // site/content/docs/regulatory/pid-reference.md; the AHB profile is authoritative.
         // PID 21039 (Auftragsstatus Sperren) is registered to `gpke-sperrung-lf` above.
         for &pid in wechselprozesse::IFTSTA_PIDS {
             router.register(pid, "gpke-supplier-change");

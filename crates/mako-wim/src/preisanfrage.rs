@@ -145,7 +145,7 @@ pub enum PreisanfrageEvent {
         receiver: MarktpartnerCode,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// BDEW Prüfidentifikator (35001–35005).
+        /// BDEW Prüfidentifikator (35001/35002/35004/35005).
         pruefidentifikator: Pruefidentifikator,
     },
     /// EDIFACT message passed profile validation.
@@ -155,14 +155,14 @@ pub enum PreisanfrageEvent {
     },
     /// Outbound QUOTES response dispatched to the counterparty.
     AngebotGesendet {
-        /// QUOTES response PID (15001–15005).
+        /// QUOTES response PID (15001/15002/15004/15005).
         response_pid: Option<Pruefidentifikator>,
         /// EDIFACT message reference of the QUOTES response.
         message_ref: MessageRef,
     },
     /// QUOTES response received (nMSB perspective).
     AngebotErhalten {
-        /// QUOTES Prüfidentifikator (15001–15005).
+        /// QUOTES Prüfidentifikator (15001/15002/15004/15005).
         response_pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
@@ -217,7 +217,7 @@ pub struct PreisanfrageData {
     pub sender: MarktpartnerCode,
     /// GLN of the receiving aMSB.
     pub receiver: MarktpartnerCode,
-    /// BDEW Prüfidentifikator (35001–35005).
+    /// BDEW Prüfidentifikator (35001/35002/35004/35005).
     pub pruefidentifikator: Pruefidentifikator,
 }
 
@@ -279,7 +279,7 @@ impl PreisanfrageState {
 pub enum PreisanfrageCommand {
     /// Inbound REQOTE received.
     ReceiveReqote {
-        /// BDEW Prüfidentifikator (35001–35005).
+        /// BDEW Prüfidentifikator (35001/35002/35004/35005).
         pid: Pruefidentifikator,
         /// GLN of the sender.
         sender: MarktpartnerCode,
@@ -299,7 +299,7 @@ pub enum PreisanfrageCommand {
     },
     /// Inbound QUOTES received (nMSB side).
     ReceiveAngebot {
-        /// QUOTES Prüfidentifikator (15001–15005).
+        /// QUOTES Prüfidentifikator (15001/15002/15004/15005).
         pid: Pruefidentifikator,
         /// EDIFACT message reference.
         message_ref: MessageRef,
@@ -326,7 +326,7 @@ impl CommandPayload for PreisanfrageCommand {}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
-/// WiM Preisanfrage workflow (REQOTE/QUOTES, PIDs 35001–35005 / 15001–15005).
+/// WiM Preisanfrage workflow (REQOTE/QUOTES, PIDs 35001/35002/35004/35005 / 15001/15002/15004/15005).
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore
@@ -430,7 +430,7 @@ impl Workflow for WimPreisanfrageWorkflow {
                 }
                 if !REQOTE_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected REQOTE PID (35001–35005), got {pid}",
+                        "expected REQOTE PID (35001/35002/35004/35005), got {pid}",
                     )));
                 }
                 let mut events = vec![PreisanfrageEvent::AnfrageErhalten {
@@ -470,7 +470,7 @@ impl Workflow for WimPreisanfrageWorkflow {
             PreisanfrageCommand::ReceiveAngebot { pid, message_ref } => {
                 if !QUOTES_PIDS.contains(&pid.as_u32()) {
                     return Err(WorkflowError::rejected(format!(
-                        "expected QUOTES PID (15001–15005), got {pid}",
+                        "expected QUOTES PID (15001/15002/15004/15005), got {pid}",
                     )));
                 }
                 match state {

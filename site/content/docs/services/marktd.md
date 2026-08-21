@@ -1301,7 +1301,7 @@ responses without ERP involvement (GPKE Teil 1 §5).
 
 `marktd` stores **MSB metering price sheets** (`PreisblattMessung`) in the
 `preisblaetter_messung` table. These cover Messentgelte per Messpreistyp and
-form the tariff basis for REQOTE/QUOTES (PIDs 35001–35005) and for
+form the tariff basis for REQOTE/QUOTES (PIDs 35001/35002/35004/35005) and for
 `invoicd` plausibility checks on INVOIC 31009 (MSB-Rechnung).
 
 The API mirrors `PreisblattNetznutzung` exactly but is keyed by `msb_mp_id`

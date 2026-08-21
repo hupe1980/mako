@@ -191,8 +191,7 @@ impl MockNb {
     async fn send_antwort(&self, accepted: bool, reason: Option<&str>) {
         self.process
             .execute(NeuanlageCommand::SendAntwort {
-                accepted,
-                reason: reason.map(str::to_owned),
+                antwort: neuanlage_antwort(accepted, reason),
             })
             .await
             .expect("NB: execute SendAntwort");
@@ -344,4 +343,17 @@ async fn e2e_neuanlage_validation_failure_rejects() {
         matches!(final_state, NeuanlageState::Rejected { .. }),
         "NB must be Rejected after validation failure; got: {final_state:?}"
     );
+}
+
+/// The NB's `E_0608` answer: `A09` for a verbrauchende Bestätigung, `A03`
+/// („Keine Neuanlage, falscher Anwendungsfall") for a refusal. `SG4 STS+E01` is
+/// Muss on every Antwortnachricht, and the published Cluster picks the PID.
+fn neuanlage_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let mut a = if accepted {
+        mako_gpke::LfAntwort::zustimmung("A09", "E_0608")
+    } else {
+        mako_gpke::LfAntwort::ablehnung("A03", "E_0608")
+    };
+    a.bemerkung = reason.map(ToOwned::to_owned);
+    a
 }

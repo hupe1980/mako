@@ -18,9 +18,12 @@ What it cannot decide it puts in front of an operator with the deadline attached
 | **NB** | 44004 | GeLi Gas Abmeldung NN | **Ablauf des 3. Werktags** | `mako_pruefung::evaluate_abmeldung` (`G_0007`) |
 | **NB** | 55042 | WiM Anmeldung MSB (MSBN → NB) | 5 WT | MeLo / partner / Zählertyp checks |
 | **NB** | 55051 | WiM Ende MSB (MSBA → NB) | 7 WT | operator queue |
+| **NB** | 55600, 55601 | GPKE Neuanlage (verb. / erz. MaLo) | **00:00 Uhr des 61. WT nach dem ÜT** | `mako_pruefung::nb::neuanlage` (`E_0608`), daily Prüflauf |
 | **NB** | *(event)* | EoG gap closure → 55013 (§ 36/§ 38 EnWG) | unverzüglich; 3-month timer | `grundversorger` from `marktd` |
 | **LF** | 55007 | Ankündigung NB-seitiges Lieferende (EBD `E_0609`) | **05:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
 | **LFA** | 55010 | Anfrage zur Beendigung der Zuordnung (EBD `E_0624`) | **09:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
+| **LFA** | 55016 | GPKE Kündigung (LFN → LFA, EBD `E_0614`) | **1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
+| **LFA** | 44007, 44010, 44016 | GeLi Gas Abmeldung NB / Abmeldungsanfrage / Kündigung | 3 Werktage | `VersorgungsStatus` from `marktd` |
 | **MSB** | 55039 | WiM Kündigung MSB (MSBN → MSBA) | 3 WT | MeLo / partner checks |
 | **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
 | **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
@@ -45,8 +48,10 @@ Four properties of that table, each of which fails silently when broken:
   master data, a transport failure answers `5xx` so the fan-out redelivers; only
   a genuine *absence* of that data escalates to an operator.
 
-`src/fristen.rs` reads the same tables `makod` registers the process deadline
-from, so the two cannot disagree about whether an obligation was met.
+Every window comes straight from `mako_fristen::antwort` — the same table
+`makod` registers the process deadline from — so the two cannot disagree about
+whether an obligation was met. `processd` adds only `OPERATOR_HEADROOM`, the hour
+between when an operator must decide and when the answer is due.
 
 ### Two clocks on every inbound message
 
@@ -64,8 +69,8 @@ headroom so an operator's answer still reaches the counterparty in time.
 *Anwendungsübersicht der Prüfidentifikatoren 4.0* (lfd. Nr. 20030) has it going
 **LFN → LFA**, answered 55017/55018 by the *Altlieferant* under EBD `E_0614`.
 Answering it from an `nb-only` binary would breach the § 7 EnWG separation the
-Cargo features exist for. `concepts/ROADMAP.md` records what the LFA answer path
-needs first.
+Cargo features exist for; it belongs to `role-lf-strom`, which answers it as the
+Altlieferant.
 
 ## § 7 EnWG role separation
 
@@ -159,12 +164,27 @@ test for presence.
 
 **Strom, erzeugende Marktlokation** (220–830) picks between the **six**
 Vorlauffristen GPKE Teil 2 § 2.1.1 publishes, keyed on `(Geschäftsvorfall,
-bestehende, angemeldete Veräußerungsform)` — `SG10 CCI+Z22` on the wire, the NB's
-EEG register for the rest. A missing fact escalates and is named. The statutory
-anchor for the Monatserster rule is **§ 21b Abs. 1 EEG 2023**, not § 10c.
+bestehende, angemeldete Veräußerungsform)`. The *angemeldete* one is `SG10
+CCI+Z22` on the wire; the *bestehende* one and the Ausfallvergütung flag come
+from `einsd` (`[nb] einsd_url`), because wire code `Z90` covers two regimes whose
+Fristen differ by a month versus five Werktage. A missing fact escalates and is
+named. The Monatserster rule is **§ 21b Abs. 1 EEG 2023**, not § 10c.
 
 **Gas** (`G_0011`) runs the `A03`/`A04`/`A16`/`A17` identification checks first as
 the AHB requires, then `E17`, `E13`, `ZC5` / `Z08`.
+
+### `mako_pruefung::evaluate_neuanlage` — `E_0608`, and its third outcome
+
+Inbound **55600** / **55601**. Prüfschritte 110 / 590 loop: a Marktlokation the
+NB cannot yet identify is re-checked **daily for 60 Werktage** and may only then
+be refused `A07` / `A16`, which is why the answer window is 00:00 Uhr des 61. WT.
+`processd` keeps a case log (`neuanlage_faelle`) and a daily worker rather than
+deciding once, and counts the Prüfungen as evidence the obligation was met.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/v1/neuanlage?status=offen` | The Prüflauf view, with `letzter_pruefungstag` and `pruefungen` per case |
+| `PUT /api/v1/neuanlage/{id}/identifikation` | The MaLo-ID the NB matched from its NIS/GIS — a Neuanlage carries address and device data, not an ID |
 
 ### `mako_pruefung::evaluate_abmeldung` — `E_0607` / `E_3019`
 
@@ -184,8 +204,8 @@ a supplier they have left.
 
 STP is ~60 % without `malo_grid` coverage (missing records escalate) and ≥ 95 %
 once the NB has provisioned it via `marktd`'s NB-role PUT. An erzeugende
-Marktlokation reaches STP only once the Veräußerungsform register lookup is
-wired — see `ROADMAP.md`.
+Marktlokation additionally needs `[nb] einsd_url`; without it every 55077
+escalates.
 
 **§ 20 EnWG parity.** Every decision row carries `initiator_is_affiliate`
 (`lf_mp_id == own_mp_id`), and `auto_accept` is suppressed for affiliate-initiated
@@ -195,7 +215,7 @@ third party.
 ## LF decision pipeline
 
 ```text
-de.mako.process.initiated (55007 | 55010)
+de.mako.process.initiated (55007 | 55010 | 55016 | 44007 | 44010 | 44016)
   → GET marktd /api/v1/versorgung/{malo_id}
   → evaluate against own_mp_id
       supplying + scenario "standard"          → Bestätigung   (55008 / 55011)
@@ -206,9 +226,12 @@ de.mako.process.initiated (55007 | 55010)
 ```
 
 "supplying" is `Beliefert`, `Grundversorgung` or `Ersatzversorgung` — all three
-are a supply this LF may be asked to end. The two processes share the evaluation
-and differ in the command pair (`gpke.nb-lieferende.*` vs
-`gpke.beendigung-zuordnung.*`), the EBD (`E_0609` vs `E_0624`) and the Frist.
+are a supply this LF may be asked to end. Six processes share this evaluation and
+differ only in the command pair, the EBD and the Frist: Strom 55007
+(`gpke.nb-lieferende.*`, `E_0609`), 55010 (`gpke.beendigung-zuordnung.*`,
+`E_0624`) and 55016 (`gpke.kuendigung.*`, `E_0614`); Gas 44007
+(`geli.abmeldung-nb.*`), 44010 (`geli.abmeldungsanfrage.*`) and 44016
+(`geli.kuendigung.*`).
 
 ---
 
@@ -221,8 +244,9 @@ them: approving a queue entry dispatches the market answer, and `start-supply` /
 
 | Action | Requirement | Routes |
 |---|---|---|
-| `read-decisions` · `read-queue` · `read-eog` | any principal of the tenant | the three `GET` logs |
+| `read-decisions` · `read-queue` · `read-eog` · `read-neuanlage` | any principal of the tenant | the four `GET` logs |
 | `decide-queue` | `NB`, `LF` or `MSB` role | `POST /api/v1/queue/{id}/approve\|reject` |
+| `identify-neuanlage` | `NB` role | `PUT /api/v1/neuanlage/{id}/identifikation` |
 | `initiate-supply` | `LF` role | `POST /api/v1/{start,end}-supply[-gas]` |
 | `use-mcp` | any principal of the tenant | `/mcp` |
 
@@ -248,6 +272,8 @@ action is checked somewhere, and every routed handler takes a `Claims` extractor
 | `POST` | `/api/v1/start-supply` · `-gas` | `initiate-supply` | LFN bootstrap (Strom / Gas) |
 | `POST` | `/api/v1/end-supply` · `-gas` | `initiate-supply` | LF Lieferende bootstrap |
 | `GET` | `/api/v1/eog` | `read-eog` | EoG case log (`?status=`) |
+| `GET` | `/api/v1/neuanlage` | `read-neuanlage` | `E_0608` case log (`?status=`), with each case's `letzter_pruefungstag` |
+| `PUT` | `/api/v1/neuanlage/{id}/identifikation` | `identify-neuanlage` | Record the MaLo-ID the NB matched from address/device data |
 | `GET` | `/health/live` · `/health/ready` · `/metrics` | — | Mounted by `mako_service::run` |
 | `GET\|POST` | `/mcp` | `use-mcp` | MCP Streamable HTTP |
 
@@ -289,7 +315,10 @@ webhook_url   = "http://processd:8580/webhook"
 subscriber_id = "processd"
 
 [nb]
-auto_accept = false             # enable only after verifying grid + partner coverage
+auto_accept              = false  # enable only after verifying grid + partner coverage
+gas_bearbeitungsfrist_wt = 3      # AWH GeLi Gas 2.0 Kap. 2.2
+einsd_url                = ""     # EEG-/KWKG-Register; without it every 55077 escalates
+einsd_api_key            = ""
 
 [lf]
 auto_respond = true             # false → every inbound LF process goes to the queue
@@ -335,6 +364,7 @@ principal needs `manage-subscription` on `marktd` (ADMIN role).
 | `anmeldung_decisions` | NB STP audit log for both An- and Abmeldung decisions — `UNIQUE (process_id, tenant)`, so an at-least-once redelivery does not double-record |
 | `approval_queue` | Entries awaiting an operator — from **every** compiled role — with the market command to dispatch on approve/reject, the business Frist they expire at, and `decided_by` once decided. A background worker expires `Pending` rows past `expires_at`; it is deliberately **not** role-gated, because the NB, LF and MSB all enqueue |
 | `eog_activations` | EoG case log; the daily § 38 Abs. 4 timer scans it |
+| `neuanlage_faelle` | `E_0608` case log; the daily Prüflauf re-runs the tree per open case and counts the Prüfungen |
 
 Migrations run at startup from `migrations/0001_initial.sql`.
 
@@ -402,10 +432,9 @@ just test-processd-db                    # SQL suite against a real PostgreSQL
 | § 38 Abs. 4 Ersatzversorgung maximum | 3 months from Zuordnungsbeginn | EnWG |
 | § 20 EnWG parity audit | provable at BNetzA | `initiator_is_affiliate` |
 
-Every Frist is read from one table per family — `mako_gpke::antwortfrist`,
-`mako_geli_gas::antwortfrist`, `mako_wim` — by both `processd` (to size the
-operator queue) and `makod` (to register the process deadline), so the two can
-never disagree about whether an obligation was met. GeLi Gas Werktage are
+Every Frist is read from one table, `mako_fristen::antwort`, by both
+`processd` (to size the operator queue) and `makod` (to register the process
+deadline), so the two can never disagree about whether an obligation was met. GeLi Gas Werktage are
 counted from the first Werktag after receipt, per § 187 Abs. 1 BGB as GeLi Gas
 3.0 Kap. 2.6 restates it.
 

@@ -31,6 +31,7 @@ permit(
         Action::"read-decisions",
         Action::"read-queue",
         Action::"read-eog",
+        Action::"read-neuanlage",
         Action::"use-mcp"
     ],
     resource
@@ -58,6 +59,22 @@ permit(
     (context.principal_roles.contains("NB") ||
      context.principal_roles.contains("LF") ||
      context.principal_roles.contains("MSB"))
+};
+
+// ── Identifying a Neuanlage — NB only ────────────────────────────────────────
+//
+// `PUT /api/v1/neuanlage/{id}/identifikation` names the Marktlokation the NB
+// matched a newly commissioned Anmeldung to. It is what ends the `E_0608`
+// Prüflauf and lets the answer go out, so it is a write and it belongs to the
+// grid operator's own NIS — no other role has a basis for it.
+
+permit(
+    principal,
+    action == Action::"identify-neuanlage",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant &&
+    context.principal_roles.contains("NB")
 };
 
 // ── Initiating a supply process — LF only ────────────────────────────────────

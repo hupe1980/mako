@@ -90,6 +90,8 @@ impl Daemon for Processd {
                 tenant,
                 nb_auto_accept: cfg.nb.auto_accept,
                 nb_gas_bearbeitungsfrist_wt: cfg.nb.gas_bearbeitungsfrist_wt,
+                nb_einsd_url: cfg.nb.einsd_url.clone(),
+                nb_einsd_api_key: cfg.nb.einsd_api_key.clone().map(SecretString::from),
                 lf_auto_respond: cfg.lf.auto_respond,
                 lf_vertragd_url: cfg.lf.vertragd_url.clone(),
                 lf_vertragd_api_key: cfg.lf.vertragd_api_key.clone().map(SecretString::from),

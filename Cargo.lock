@@ -3923,6 +3923,7 @@ dependencies = [
  "billing",
  "eeg-billing",
  "mako-events",
+ "mako-pruefung",
  "mako-service",
  "reqwest 0.13.4",
  "rmcp",

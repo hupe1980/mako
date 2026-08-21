@@ -11,7 +11,7 @@
 //! | **44001** | Anmeldung NN (Gas Lieferbeginn) | 44002 / 44003 | — | Ablauf des 4. Werktags |
 //! | **44004** | Abmeldung NN (Gas Lieferende) | 44005 / 44006 | — | Ablauf des 3. Werktags |
 //!
-//! Every Frist comes from [`crate::fristen`], which reads the same tables
+//! Every Frist comes from [`mako_fristen::antwort`], which reads the same tables
 //! `makod` registers the process deadline from.
 //!
 //! ## What is deliberately *not* here
@@ -315,10 +315,12 @@ fn erzeugung_of(
 /// pipeline (55004 / 44004). Returns `true` when this module handled the event
 /// — including when it escalated — and `false` when the PID belongs to another
 /// role or another module.
+#[allow(clippy::too_many_arguments)]
 pub async fn evaluate_and_decide(
     event: &serde_json::Value,
     config: &NbModuleConfig,
     reader: &mako_markt::marktd_client::MarktdClient,
+    einsd: Option<&crate::einsd_client::EinsdClient>,
     makod: &MakodClient,
     repo: &PgAnmeldungRepository,
     queue: &PgApprovalQueue,
@@ -382,7 +384,29 @@ pub async fn evaluate_and_decide(
         |e| warn!(%e, lf_mp_id = %lf_mp_id, "processd NB: marktd partner check failed"),
     )?;
 
-    let anfrage = payload.into_anfrage();
+    let mut anfrage = payload.into_anfrage();
+    // `E_0622` Prüfschritt 400 / 600 („Verändert sich die Veräußerungsform?")
+    // needs the form in force at the Zuordnungsbeginn. That is the NB's own
+    // EEG-/KWKG-Register, not the message — and `Z90` covers two regimes with
+    // different Fristen, so the Ausfallvergütung flag comes from there too.
+    if let (Some(erz), Some(einsd)) = (anfrage.erzeugung.as_mut(), einsd) {
+        match einsd.veraeusserungsform(&malo_id).await {
+            Ok(Some(auskunft)) => {
+                erz.bestehende_veraeusserungsform = Some(auskunft.veraeusserungsform);
+                erz.ausfallverguetung = auskunft.ausfallverguetung;
+            }
+            // Not in the register. That is not evidence of a
+            // „Nicht-EEG-/-KWKG"-Marktlokation, so the engine escalates.
+            Ok(None) => {}
+            // A transport failure is not an answer: propagate so the fan-out
+            // redelivers rather than deciding on a missing fact.
+            Err(e) => {
+                warn!(%e, %malo_id, "processd NB: einsd Veräußerungsform lookup failed");
+                return Err(Box::new(e));
+            }
+        }
+    }
+    let anfrage = anfrage;
     let now = OffsetDateTime::now_utc();
 
     // ── 4. Evaluate ───────────────────────────────────────────────────────
@@ -525,7 +549,7 @@ async fn enqueue_for_operator(
     meta: &AnmeldungMeta,
     reason: &str,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let window = crate::fristen::operator_window(meta.pid, meta.received_at);
+    let window = mako_fristen::antwort::operator_window(meta.pid, meta.received_at);
     let (accept, reject) = answer_commands(meta.pid);
     let entry = ApprovalQueueEntry::pending(
         meta.process_id,

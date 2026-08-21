@@ -1590,7 +1590,7 @@ fn quotes_fv20260401_valid_from_is_2026_04_01() {
 /// - 2025-04-01 to 2026-03-31: fv20250401 (wire "1.3b", MIG 1.3b)
 /// - From 2026-04-01: fv20260401 (wire "1.3c", MIG 1.3c)
 ///
-/// Both releases share the same 5 Prüfidentifikatoren (15001–15005).
+/// Both releases share the same 5 Prüfidentifikatoren (15001/15002/15004/15005).
 #[cfg(feature = "quotes")]
 #[test]
 fn process_context_selects_active_quotes_release() {

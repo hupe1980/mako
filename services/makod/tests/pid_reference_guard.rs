@@ -63,10 +63,7 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     (55_194, "outside STAMMDATEN_PAIRS"),
     (55_225, "outside STAMMDATEN_PAIRS"),
     (55_227, "outside STAMMDATEN_PAIRS"),
-    (55_230, "outside STAMMDATEN_PAIRS"),
-    (55_232, "outside STAMMDATEN_PAIRS"),
     (55_553, "individuelle Bestellung; outside STAMMDATEN_PAIRS"),
-    (55_559, "MSB-Abrechnungsdaten; outside STAMMDATEN_PAIRS"),
 ];
 
 /// Every PID the reference table credits to a crate/workflow.

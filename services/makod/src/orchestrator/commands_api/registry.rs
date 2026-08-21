@@ -45,6 +45,30 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55003),
         dispatch: cmd_gpke_lieferbeginn_ablehnen,
     },
+    // GPKE Teil 2 § 2.2 Neuanlage. The answer window is 00:00 Uhr des 61. WT
+    // nach dem ÜT — `E_0608` Prüfschritte 110/590 run a daily identification
+    // Prüflauf for 60 Werktage before a refusal is admissible.
+    CommandDescriptor {
+        name: "gpke.neuanlage.bestaetigen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55602),
+        dispatch: cmd_gpke_neuanlage_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "gpke.neuanlage.ablehnen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(55604),
+        dispatch: cmd_gpke_neuanlage_ablehnen,
+    },
+    // GPKE Teil 2 § 3.1 Bearbeitungsstand Abrechnungsdaten. One command: the
+    // `E_0595` clusters say whether a Stammdatenänderung follows, not whether
+    // the LF's Bestellung was granted, and IFTSTA 21047 carries both.
+    CommandDescriptor {
+        name: "gpke.abrechnungsdaten.bearbeitungsstand",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(21047),
+        dispatch: cmd_gpke_abrechnungsdaten_bearbeitungsstand,
+    },
     CommandDescriptor {
         name: "gpke.lieferbeginn.aktivieren",
         permitted_roles: &[Marktrolle::Lf],
@@ -565,7 +589,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55039),
         dispatch: cmd_wim_geraetewechsel_ablehnen,
     },
-    // ── WiM Preisanfrage (REQOTE 35001–35005 → QUOTES 15001–15005) ────────────
+    // ── WiM Preisanfrage (REQOTE 35001/35002/35004/35005 → QUOTES 15001/15002/15004/15005) ────────────
     // aMSB answers an inbound REQOTE with the QUOTES Angebot. `processd` M3
     // auto-dispatches this when a current PreisblattMessung exists.
     CommandDescriptor {
@@ -905,6 +929,29 @@ mod tests {
                  but not registered in COMMAND_REGISTRY"
             );
         }
+    }
+
+    /// The service reference's command table must list every registry entry.
+    ///
+    /// It is what an integrator reads to find a command name; a name that is
+    /// only in the code is a command nobody can discover.
+    #[test]
+    fn every_command_is_in_the_service_reference() {
+        let doc = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../site/content/docs/services/makod.md"
+        ))
+        .expect("site/content/docs/services/makod.md");
+        let missing: Vec<&str> = COMMAND_REGISTRY
+            .iter()
+            .map(|d| d.name)
+            .filter(|n| !doc.contains(&format!("`{n}`")))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these commands are registered but absent from the \"Command registry\" table \
+             in site/content/docs/services/makod.md: {missing:?}"
+        );
     }
 
     /// Registry names must be unique — `dispatch_command` and

@@ -1601,6 +1601,52 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MABIS | 21000–21003, 21005, 21007 | MABIS IFTSTA informational status received via REST |
 | `mabis.datenstatus.empfangen` | `BKV`/`NB`/`BIKO` | MABIS | 21004 | MABIS Datenstatus received via REST (BIKO → BKV/NB) |
 
+| `gpke.lieferbeginn.ablehnen` | `NB` | GPKE | 55003 | DSO rejects supply start (`E_0622`/`E_0623` code) |
+| `gpke.neuanlage.bestaetigen` | `NB` | GPKE | 55602/55603 | NB confirms a Neuanlage (`E_0608`; cluster picks the PID) |
+| `gpke.neuanlage.ablehnen` | `NB` | GPKE | 55604/55605 | NB refuses a Neuanlage — admissible only after the 60-WT Prüflauf |
+| `gpke.abrechnungsdaten.bearbeitungsstand` | `NB` | GPKE | 21047 | Bearbeitungsstand on 55156/55220/55673 (`E_0595`, IFTSTA) |
+| `gpke.lieferbeginn.aktivieren` | `LF` | GPKE | — | LF marks its own Anmeldung active once the NB confirmed |
+| `gpke.lieferende.ablehnen` | `NB` | GPKE | 55006 | DSO rejects supply end (`E_0607`) |
+| `gpke.kuendigung.bestaetigen` | `LF` | GPKE | 55017 | LFA confirms the Kündigung (`E_0614`) |
+| `gpke.kuendigung.ablehnen` | `LF` | GPKE | 55018 | LFA rejects the Kündigung (`E_0614`) |
+| `gpke.nb-lieferende.bestaetigen` | `LF` | GPKE | 55008 | LF confirms the NB's Ankündigung Lieferende (55007) |
+| `gpke.nb-lieferende.ablehnen` | `LF` | GPKE | 55009 | LF rejects the NB's Ankündigung Lieferende |
+| `gpke.beendigung-zuordnung.bestaetigen` | `LF` | GPKE | 55011 | LFA confirms the Beendigung der Zuordnung (55010, `E_0624`) |
+| `gpke.beendigung-zuordnung.ablehnen` | `LF` | GPKE | 55012 | LFA rejects the Beendigung der Zuordnung |
+| `gpke.zuordnung-lf.bestaetigen` | `LF` | GPKE | 55608 | LFN confirms the Ankündigung Zuordnung LF (55607) |
+| `gpke.zuordnung-lf.ablehnen` | `LF` | GPKE | 55609 | LFN rejects the Ankündigung Zuordnung LF |
+| `maloid.lieferbeginn.fortsetzen` | `LF` | GPKE | 55001 | Resume an Anmeldung once the MaLo-ID arrived from the MaLo-ID-Vergabe |
+| `gpke.abrechnung.selbstausstellen` | `LF` | GPKE | 31006 | LF issues the MMM invoice itself (Gutschriftverfahren) |
+| `gpke.nne-abschlag.rechnung.stellen` | `NB` or `GNB` | GPKE | 31001 | Abschlagsrechnung Netznutzung |
+| `gpke.nne.rechnung.stellen` | `NB` | GPKE | 31002 | Netznutzungsabrechnung Strom |
+| `gpke.mmm.rechnung.stellen` | `NB` | GPKE | 31005 | Mehr-/Mindermengenrechnung |
+| `gpke.nne-gas.rechnung.stellen` | `NB` or `GNB` | GeLi Gas | 31002 | Netznutzungsabrechnung Gas |
+| `wim.msb-rechnung.stellen` | `NB` or `MSB` | WiM | 31009 | MSB invoices the NB/LF/ESA for Messstellenbetrieb |
+| `geli.lieferende.ablehnen` | `GNB` | GeLi Gas | 44006 | GNB rejects the Abmeldung (`G_0007`) |
+| `geli.abmeldung-nb.ablehnen` | `LFG` | GeLi Gas | 44009 | LFG rejects the GNB-initiated Lieferende |
+| `geli.abmeldungsanfrage.ablehnen` | `LFG` | GeLi Gas | 44012 | LFA rejects the Abmeldungsanfrage |
+| `geli.kuendigung.ablehnen` | `LFG` | GeLi Gas | 44018 | LFA rejects the Kündigung (`G_0001`) |
+| `geli.eog.ablehnen` | `LFG` | GeLi Gas | 44015 | E/G rejects the EoG Zuordnung |
+| `geli.gas.stornierung.initiieren` | `LFG` | GeLi Gas | 44022 | LF cancels a running Gas Zuordnungsprozess |
+| `geli.gas.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Gas Netzzustandsdaten (ORDERS) |
+| `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55039 | Reject a Gerätewechsel announcement |
+| `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001 | MSB answers a Preisanfrage with a QUOTES Angebot |
+| `wim.rechnung.annehmen` | `LF` | WiM | 31009 | LF accepts the MSB invoice (REMADV) |
+| `wim.rechnung.ablehnen` | `LF` | WiM | 31009 | LF disputes the MSB invoice (REMADV with `E_0406` codes) |
+| `wim.gas.rechnung.annehmen` | `NB` or `GNB` | WiM Gas | 31003 | GNB accepts the GMSB invoice (REMADV) |
+| `wim.gas.rechnung.ablehnen` | `NB` or `GNB` | WiM Gas | 31003 | GNB disputes the GMSB invoice (REMADV) |
+| `invoic.stornorechnung.annehmen` | any invoice party | INVOIC | 31004 | Accept a Sparte-neutral Stornorechnung (REMADV) |
+| `invoic.stornorechnung.ablehnen` | any invoice party | INVOIC | 31004 | Dispute a Stornorechnung by the invoice's Zahlungsziel |
+| `geli.gas.awh-rechnung.stellen` | `NB` or `GNB` | GeLi Gas | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse Gas) |
+| `geli.gas.rechnung.annehmen` | `LF` or `LFG` | GeLi Gas | 31011 | LF accepts the AWH invoice (REMADV) |
+| `geli.gas.rechnung.ablehnen` | `LF` or `LFG` | GeLi Gas | 31011 | LF disputes the AWH invoice (REMADV) |
+| `gabi.gas.mmm.rechnung.annehmen` | `BKV` | GaBi Gas | 31007 | BKV accepts the Gas Mehr-/Mindermengenrechnung |
+| `gabi.gas.mmm.rechnung.ablehnen` | `BKV` | GaBi Gas | 31007 | BKV disputes the Gas Mehr-/Mindermengenrechnung |
+| `geli.lieferbeginn.ablehnen` | `GNB` | GeLi Gas | 44003 | GNB rejects the Anmeldung Netznutzung (`G_0011`) |
+| `geli.abmeldung-nb.bestaetigen` | `LFG` | GeLi Gas | 44008 | LFG confirms the GNB-initiated Lieferende |
+| `geli.abmeldungsanfrage.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |
+| `geli.kuendigung.bestaetigen` | `LFG` | GeLi Gas | 44017 | LFA confirms the Kündigung (`G_0001`) |
+| `geli.eog.bestaetigen` | `LFG` | GeLi Gas | 44014 | E/G confirms the EoG Zuordnung |
 Commands with a single Marktrolle never need a `marktrolle` field.
 Commands listing two Marktrollen (`NB`/`MSB`, `BKV`/`ÜNB`) **always** require it.
 

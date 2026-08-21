@@ -10,7 +10,7 @@ through Förderdauer expiry.
 | **Database** | PostgreSQL (eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
 | **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT from the operator's declared `eeg_anlagen.ust_status` (Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 % category `E`) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
-| **Validated registration** | `POST /api/v1/anlagen` refuses a plant the settlement could not act on, naming the field — above all a Marktprämie model with no anzulegender Wert. A tender plant may carry its AW in `zuschlagswert_ct` (preferred) or `direktverm_aw_ct`. The engine holds the same line: a Marktprämie with no AW is `PriceMissing` |
+| **Validated registration** | `POST /api/v1/anlagen` refuses a plant the settlement could not act on, naming the field. A tender plant may carry its AW in `zuschlagswert_ct` (preferred) or `direktverm_aw_ct`; a Marktprämie with no AW is `PriceMissing` in the engine too |
 | **§44b Biogas quota** | 45 % Bemessungsleistung measured against the §3 Nr. 6 hours — the actual hours of the calendar year (**8 784 in a leap year**) less the hours before first generation, not a flat 8 760 |
 | **One settle path** | REST, batch, MCP `trigger_settle` and the monthly worker all call `settle::settle_plant`, so the entry point cannot change the amount. They differ only in what they choose to override |
 | **Cumulative counters** | `kwk_strom_kwh_gesamt` (§8 KWKG), `biogas_quota_kwh_ytd` (§44b) and `negative_price_qh_gesamt` (§51a) are running totals the settlement both reads and writes, so they are re-read under a `FOR UPDATE` lock on the plant row as the transaction's first statement — the only point serialising *every* settle of one plant. `settlement_period_accruals` holds each period's absolute contribution, so a re-settle applies the difference |
@@ -55,6 +55,30 @@ by unit tests without a database:
 cargo test -p einsd --test settlement_tests
 ```
 
+## The register answers `processd`
+
+`GET /api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` is the one read the NB
+Anmeldung engine makes here. `E_0622` Prüfschritte 400–830 choose an Anmeldung
+erzeugender Marktlokation's Vorlauffrist from the **bestehende** Veräußerungsform,
+which is register data and not on the wire — and UTILMD `SG10 CCI+Z22` code `Z90`
+covers both the uneingeschränkte Einspeisevergütung (§ 21 Abs. 1 Nr. 1 EEG 2023)
+and the Ausfallvergütung (Nr. 2), whose Fristen differ by a month versus five
+Werktage. So the response carries both the code and the flag:
+
+| `settlement_model` | `veraeusserungsform` | `ausfallverguetung` |
+|---|---|---|
+| `VERGUETUNG` | `Z90` | `false` |
+| `AUSFALLVERGUETUNG` | `Z90` | **`true`** |
+| `DIREKTVERMARKTUNG`, `AUSSCHREIBUNG` | `Z91` | `false` |
+| `SONSTIGE_DIREKTVERMARKTUNG` | `Z92` | `false` |
+| `KWKG_ZUSCHLAG` | `Z94` | `false` |
+
+`AUSSCHREIBUNG` is still the Marktprämie — § 22 EEG 2023 sets the anzulegender
+Wert competitively, not the Veräußerungsform. Mieterstrom, GGV, Eigenverbrauch,
+Post-EEG and the Flexibilitäts-models are settlement models with no `CCI+Z22`
+code and answer `404`, as does a MaLo the register does not hold: neither is
+evidence of a „Nicht-EEG-/-KWKG"-Marktlokation, so `processd` escalates.
+
 ## MCP server — `/mcp` (19 tools, 6 prompts)
 
 `einsd` exposes a Streamable HTTP MCP server at `/mcp`. All tools are read-only
@@ -79,7 +103,7 @@ floating point, and 0,1 ct/kWh has no exact `f64`.
 | `import_epex_monthly_price` | Import a new monthly average price |
 | `get_compliance_status` | Every §52 Abs. 1 violation `einsd` derives, priced with the engine's Abs. 2/3/5 rules |
 | `list_plants_without_mastr` | Plants not registered in MaStR (§52 Abs. 1 Nr. 11); a pre-2023 plant owes no Pflichtzahlung and is excluded from the total |
-| `check_direktvermarktung_compliance` | Plants >100 kW on an Einspeisevergütung model — §52 Abs. 1 Nr. 4, now charged by the settlement too |
+| `check_direktvermarktung_compliance` | Plants >100 kW on an Einspeisevergütung model — §52 Abs. 1 Nr. 4; the settlement charges it |
 | `check_sect44b_quota` | **§44b EEG 2023**: annual biogas cap (leistung × 0.45 × the §3 Nr. 6 hours of *that* year — 8 784 in a leap year, less the hours before first generation), YTD, remaining, 75 %/90 % alert |
 | `explain_settlement` | The full position trace behind one month's EUR amount — every `SettlePosition` with its `legal_basis`, kWh and rate. What an operator dispute or a BNetzA inspection actually asks for |
 | `get_aw_reduktionen` | Why the anzulegender Wert is cut on a date: every active §53b / §53c / §54 reduction with its statutory amount. These cuts shrink the payment without touching the Einspeisemenge or the rate table, so they are the first thing to check when a Gutschrift is smaller than expected |
@@ -99,13 +123,11 @@ floating point, and 0,1 ct/kWh has no exact `f64`.
 just test-einsd-db      # throwaway PostgreSQL, runs the #[ignore]d suite
 ```
 
-The two suites answer different questions. The guards are text-level: they assert
-that every `ON CONFLICT` on `settlement_receipts` repeats the partial-index
-predicate, that no query names a column the schema does not define, and that a
-`settlement_state` change records the transition it came from. The integration
-suite proves the same rules against a real PostgreSQL and drives the router
-through its actual layers. Neither is reachable from a pure arithmetic test,
-which is why both exist alongside the `eeg-billing` unit tests.
+The guards are text-level: every `ON CONFLICT` on `settlement_receipts` repeats
+the partial-index predicate, no query names a column the schema does not define,
+and a `settlement_state` change records the transition it came from. The
+integration suite proves the same rules against a real PostgreSQL, driving the
+router through its actual layers.
 
 ## Jahresabrechnung
 
@@ -135,10 +157,6 @@ month and never sums both.
 `missing_months` is bounded by the commissioning date and the Förderende — a plant
 commissioned in June is not missing January, so its first and last years can reach
 `endgueltig` rather than demanding all twelve.
-
-A partial sum is never presented as the year: an incomplete year yields
-`vorlaeufig` and a list of what is missing, because the total on its own looks
-entirely plausible.
 
 Re-running replaces the statement, so it can be produced provisionally during the
 year and finalised once the last entitled month is settled.
