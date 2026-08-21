@@ -20,18 +20,24 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only",
     "Topic :: Software Development :: Testing",
 ]
+# No runtime dependencies. Everything regulated is compiled into the extension,
+# and the pure-Python layer is stdlib only — including the EPEX generator, whose
+# day boundary comes from the platform's own timezone resolution rather than
+# from a Python tz database. A test library that pins numpy is a test library
+# that fights its consumers' lockfiles.
 dependencies = []
 
 [project.optional-dependencies]
-# Data generation (EPEX curves, Lastgänge). Kept optional so a consumer that
-# only needs identifiers/Fristen/EDIFACT does not pull numpy.
-data    = ["numpy>=1.26", "pandas>=2.0"]
-# BO4E business objects on the boundary. Pinned to the generation mako's
-# `rubo4e` targets — see `bo4e_generation()`.
-bo4e    = ["bo4e>=202607,<202608"]
-# Property-based strategies over the domain types.
+# Property-based strategies over the domain types. The only extra: `hypothesis`
+# is genuinely imported by `makotest.strategies` and by nothing else.
 hypothesis = ["hypothesis>=6.100"]
-dev     = ["pytest>=8.0", "makotest[data,bo4e,hypothesis]"]
+dev = ["pytest>=8.0", "ruff>=0.6", "makotest[hypothesis]"]
+
+# A domain validator you cannot point at a file from a shell is a library, not a
+# toolkit — and the people debugging a real inbound message are not always the
+# people writing the tests.
+[project.scripts]
+makotest = "makotest.cli:main"
 
 [project.urls]
 Repository = "https://github.com/hupe1980/mako"
@@ -48,3 +54,36 @@ module-name   = "makotest._native"
 # `cargo test --workspace --all-features` link the test harness against it and
 # fail on undefined Python symbols.
 features      = ["pyo3/extension-module"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# `tests/` is not a package; conftest.py is imported by the shared helpers.
+pythonpath = ["tests"]
+# An unknown marker or a typo in an ini key is a silent no-op otherwise, and a
+# marker that never applies is a test that never runs.
+addopts = "--strict-markers --strict-config"
+# A DeprecationWarning from this package is a defect its own suite must not step
+# over: consumers run with `-W error` far more often than a library author does.
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 90
+src = ["python", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E", "F", "W",   # pycodestyle + pyflakes
+    "I",             # import sorting
+    "UP",            # pyupgrade — the floor is 3.11
+    "B",             # bugbear
+    "RUF",
+]
+# The prose in this package is about a German regulatory domain and quotes it
+# directly: „Ablauf des n. Werktages", 92 × 15 min, Δ 12,4 kWh. Rewriting those
+# characters as ASCII would make the citations wrong, which is a worse defect
+# than the homoglyph confusion the rule guards against.
+ignore = ["RUF001", "RUF002", "RUF003"]
+
+[tool.ruff.lint.per-file-ignores]
+# The strategy tests import after `importorskip`, which has to run first.
+"tests/test_strategies.py" = ["E402"]

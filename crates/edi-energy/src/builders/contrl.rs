@@ -70,6 +70,41 @@ impl ContrlBuilder<Unset, Unset> {
 }
 
 impl<S, R> ContrlBuilder<S, R> {
+    /// Address this CONTRL as the acknowledgement of a received interchange.
+    ///
+    /// Mirrors the UNB parties and carries the received Datenaustauschreferenz
+    /// into UCI element 0. A CONTRL acknowledges the **interchange**, not a
+    /// message inside it, which is why this takes the header rather than a
+    /// [`ReceiptContext`](crate::interchange::ReceiptContext): a syntax failure
+    /// can prevent any message from being identified at all.
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(all(feature = "contrl", feature = "utilmd"))]
+    /// # fn main() -> Result<(), edi_energy::Error> {
+    /// use edi_energy::{Platform, Release};
+    /// use edi_energy::builders::ContrlBuilder;
+    ///
+    /// # let wire: &[u8] = b"";
+    /// let received = Platform::with_all_profiles().parse_interchange_full(wire)?;
+    /// let ack = ContrlBuilder::new(Release::new("2.0c"))
+    ///     .for_interchange(&received.header)
+    ///     .accept()
+    ///     .serialize()?;
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(all(feature = "contrl", feature = "utilmd")))]
+    /// # fn main() {}
+    /// ```
+    pub fn for_interchange(
+        mut self,
+        header: &crate::interchange::InterchangeHeader,
+    ) -> ContrlBuilder<Set, Set> {
+        self.inner.sender_id = Some(header.receiver_id.to_string());
+        self.inner.receiver_id = Some(header.sender_id.to_string());
+        self.inner.interchange_ref = header.control_ref.to_string();
+        self.transition()
+    }
+
     fn transition<S2, R2>(self) -> ContrlBuilder<S2, R2> {
         ContrlBuilder {
             _ph: PhantomData,

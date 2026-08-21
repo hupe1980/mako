@@ -6981,9 +6981,8 @@ name = "makotest-native"
 version = "0.16.0"
 dependencies = [
  "edi-energy",
- "mako-engine",
+ "mako-events",
  "mako-fristen",
- "mako-wim",
  "pyo3",
  "rubo4e",
  "time",

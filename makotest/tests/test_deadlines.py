@@ -1,13 +1,14 @@
-"""Deadline instants — what the engine registers, not what a calendar suggests.
+"""Answer Fristen — three shapes, one table, and no default.
 
-`add_werktage` answers "which date", these answer "which moment". The two are
-different, and only the moment is the obligation: a Werktage Frist expires at
-**17:00 Europe/Berlin** on the due Werktag.
+`add_werktage` answers "which date". These answer "which moment", and the moment
+is the obligation.
 
-A monitor in this repo once approximated Werktage as calendar days and reported
-breaches that had not happened. These bindings exist so a test can assert the
-platform's own instant rather than re-deriving it — and so the difference is
-visible in the test itself.
+The trap this module exists to close: "a Werktage Frist expires at 17:00
+Europe/Berlin" is true of the WiM MSB-Wechsel windows and of nothing else. A
+GPKE answer window is a **clock time on the first Werktag after the
+Übertragungstag** and a GeLi Gas window runs to the **end** of the n-th Werktag.
+Sizing all three the same is wrong in both directions, and the loose direction
+reports a lapsed Frist as still running.
 """
 
 import pytest
@@ -15,123 +16,193 @@ import pytest
 from makotest import (
     add_hours,
     add_werktage,
+    antwort_deadline,
+    antwort_obligation,
+    antwort_obligations,
     aperak_gas_folgeprozess_due_at,
     aperak_gas_initialprozess_due_at,
     aperak_strom_due_at,
     assert_deadline_is,
+    assert_frist_met,
     contrl_due_at,
     deadline_at_werktage,
-    wim_antwort_frist_werktage,
+    end_of_werktag_after,
+    next_werktag_at,
 )
 
-
-def test_a_werktage_deadline_expires_at_1700_berlin_not_midnight():
-    """The reason `add_werktage` is not enough on its own."""
-    received = "2026-03-02T09:00:00Z"          # Monday
-    assert add_werktage("2026-03-02", 3) == "2026-03-05"   # a date
-    due = deadline_at_werktage(received, 3)                # an instant
-    assert due.startswith("2026-03-05T17:00:00")
-    # March is still CET, so the offset is +01:00 — not UTC.
-    assert due.endswith("+01:00")
+MONDAY = "2026-03-02T09:00:00Z"
 
 
-def test_the_offset_follows_the_cet_cest_transition():
-    """Rendering the deadline in UTC would hide the hour that matters."""
-    winter = deadline_at_werktage("2026-01-12T09:00:00Z", 1)
-    summer = deadline_at_werktage("2026-07-13T09:00:00Z", 1)
-    assert winter.endswith("+01:00")   # CET
-    assert summer.endswith("+02:00")   # CEST
-    assert "T17:00:00" in winter and "T17:00:00" in summer
+class TestTheThreeShapes:
+    def test_gpke_is_a_clock_time_on_the_next_werktag(self):
+        """BK6-24-174 Teil 2: „11:00 Uhr des 1. WT nach dem ÜT" — not 24 hours.
+
+        A message arriving Friday afternoon is answerable until Monday morning;
+        one arriving Tuesday evening has under sixteen hours. A flat 24 h is
+        both too tight and too loose.
+        """
+        o = antwort_obligation(55001)
+        assert o.shape == "next_werktag_at"
+        assert o.clock_time == "11:00"
+        assert o.werktage is None
+        assert antwort_deadline(55001, MONDAY) == "2026-03-03T11:00:00+01:00"
+        assert antwort_deadline(55001, MONDAY) != add_hours(MONDAY, 24)
+
+    def test_geli_gas_runs_to_the_end_of_the_nth_werktag(self):
+        """GeLi Gas 3.0 Kap. 3.2.3: „bis zum Ablauf des 4. Werktages".
+
+        Day-granular, so it expires at the end of the day and not at an
+        end-of-business hour. Sizing it at 17:00 expires it seven hours early.
+        """
+        o = antwort_obligation(44001)
+        assert o.shape == "end_of_werktag"
+        assert o.werktage == 4
+        due = antwort_deadline(44001, MONDAY)
+        assert due == end_of_werktag_after(MONDAY, 4)
+        assert due.startswith("2026-03-06T23:59:59")
+
+    def test_wim_expires_at_the_1700_cutoff(self):
+        """BK6-24-174 WiM Teil 1: „spätester ÜT ist der n. WT", 17:00 MaKo cut-off."""
+        o = antwort_obligation(55039)
+        assert o.shape == "werktage_at_cutoff"
+        assert o.werktage == 3
+        assert antwort_deadline(55039, MONDAY) == deadline_at_werktage(MONDAY, 3)
+        assert antwort_deadline(55039, MONDAY).startswith("2026-03-05T17:00:00")
+
+    def test_the_three_are_three_different_instants(self):
+        instants = {antwort_deadline(pid, MONDAY) for pid in (55001, 44001, 55039)}
+        assert len(instants) == 3
 
 
-def test_weekends_and_holidays_push_the_deadline_out():
-    # Friday + 1 WT lands on Monday, not Saturday.
-    assert deadline_at_werktage("2026-03-06T09:00:00Z", 1).startswith("2026-03-09")
-    # The sharpest case in the calendar: **one** Werktag from Wednesday 30.12.
-    # expires on Monday 04.01. — five calendar days later. 31.12. and 01.01. are
-    # non-Werktage under the BDEW calendar and 02./03.01. is a weekend.
-    #
-    # Any "n Werktage ≈ n + 2 calendar days" rule reports this one as breached
-    # three days early.
-    assert (
-        deadline_at_werktage("2026-12-30T09:00:00Z", 1) == "2027-01-04T17:00:00+01:00"
-    )
+class TestTheTable:
+    def test_all_four_families_are_published(self):
+        families = {o.family for o in antwort_obligations()}
+        assert families == {"gpke", "geli-gas", "wim", "wim-gas"}
+
+    def test_every_obligation_cites_its_fundstelle(self):
+        for o in antwort_obligations():
+            assert o.source, f"{o.trigger_pid} has no citation"
+            assert (o.werktage is None) != (o.clock_time is None)
+
+    def test_the_wim_msb_wechsel_windows_are_not_one_value(self):
+        """Four separate Use-Cases of WiM Teil 1, four different windows.
+
+        Sizing all four the same escalates the Abmeldung (7 WT) early and hides
+        a missed Verpflichtungsanfrage (1 WT) for days.
+        """
+        assert {
+            antwort_obligation(pid).werktage for pid in (55039, 55042, 55051, 55168)
+        } == {1, 3, 5, 7}
+
+    def test_an_unquantified_pid_reports_unknown_not_unbounded(self):
+        """44020's Frist is set per Netzbetreiber under Kap. 2.6, so it is absent."""
+        assert antwort_obligation(44020) is None
+        assert antwort_deadline(44020, MONDAY) is None
+
+    def test_the_answer_pids_come_from_the_same_row(self):
+        o = antwort_obligation(55001)
+        assert (o.bestaetigung_pid, o.ablehnung_pid) == (55002, 55003)
+        assert antwort_obligation(55077).ablehnung_pid == 55080, "55079 is unassigned"
 
 
-# ── WiM MSB-Wechsel: four processes, four windows ────────────────────────────
+class TestTheOtherClocks:
+    def test_aperak_strom_is_45_minutes_not_werktage(self):
+        """The acknowledgement and the business answer are different clocks.
+
+        Conflating them is the classic WiM error — 45 minutes versus days.
+        """
+        due = aperak_strom_due_at(MONDAY)
+        assert due.startswith("2026-03-02T")
+        assert due < antwort_deadline(55001, MONDAY)
+
+    def test_gas_aperak_windows_differ_by_process_kind(self):
+        assert aperak_gas_folgeprozess_due_at(MONDAY) < aperak_gas_initialprozess_due_at(
+            MONDAY
+        )
+
+    def test_contrl_is_six_wall_clock_hours(self):
+        assert contrl_due_at(MONDAY) == add_hours(MONDAY, 6)
+
+    def test_add_hours_is_wall_clock_and_ignores_the_calendar(self):
+        """GPKE's clock times survive a weekend; wall-clock hours run through it."""
+        assert add_hours("2026-03-07T09:00:00Z", 24).startswith("2026-03-08")
+
+    def test_next_werktag_at_takes_an_explicit_clock_time(self):
+        assert next_werktag_at(MONDAY, "06:00") == "2026-03-03T06:00:00+01:00"
 
 
-@pytest.mark.parametrize(
-    ("pid", "werktage"),
-    [(55039, 3), (55042, 5), (55051, 7), (55168, 1)],
-)
-def test_the_wim_msb_wechsel_frist_is_per_pid(pid, werktage):
-    """BK6-22-024 WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2.
+class TestCalendarEdges:
+    def test_the_offset_follows_the_cet_cest_transition(self):
+        """Rendering a deadline in UTC hides the hour that makes it correct."""
+        assert deadline_at_werktage("2026-01-12T09:00:00Z", 1).endswith("+01:00")
+        assert deadline_at_werktage("2026-07-13T09:00:00Z", 1).endswith("+02:00")
 
-    Sizing all four the same escalates the Abmeldung (7 WT) early and hides a
-    missed Verpflichtungsanfrage (1 WT) for days.
+    def test_one_werktag_from_30_december_is_five_calendar_days(self):
+        """The sharpest case in the calendar.
+
+        31.12. and 01.01. are non-Werktage and 02./03.01. is a weekend, so any
+        "n Werktage ≈ n + 2 calendar days" rule reports this one as breached
+        three days early.
+        """
+        assert add_werktage("2026-12-30", 1) == "2027-01-04"
+        assert (
+            deadline_at_werktage("2026-12-30T09:00:00Z", 1) == "2027-01-04T17:00:00+01:00"
+        )
+
+    def test_a_bad_datetime_is_rejected_with_a_useful_message(self):
+        with pytest.raises(ValueError, match="RFC 3339"):
+            deadline_at_werktage("2026-03-02", 3)
+
+
+class TestAssertions:
+    def test_assert_deadline_is_takes_the_pid_and_finds_the_shape(self):
+        assert_deadline_is(antwort_deadline(55001, MONDAY), received=MONDAY, pid=55001)
+        assert_deadline_is(antwort_deadline(44001, MONDAY), received=MONDAY, pid=44001)
+
+    def test_asserting_a_gpke_deadline_with_werktage_arithmetic_fails(self):
+        """The whole reason `pid=` exists."""
+        with pytest.raises(AssertionError) as excinfo:
+            assert_deadline_is(
+                deadline_at_werktage(MONDAY, 1), received=MONDAY, pid=55001
+            )
+        assert "BK6-24-174" in str(excinfo.value), "the failure must cite the Frist"
+
+    def test_the_werktage_escape_hatch_is_explicit(self):
+        assert_deadline_is(deadline_at_werktage(MONDAY, 3), received=MONDAY, werktage=3)
+        with pytest.raises(ValueError, match="exactly one of"):
+            assert_deadline_is("x", received=MONDAY, pid=55001, werktage=3)
+        with pytest.raises(ValueError, match="exactly one of"):
+            assert_deadline_is("x", received=MONDAY)
+
+    def test_asserting_a_deadline_for_an_unquantified_pid_says_so(self):
+        with pytest.raises(ValueError, match="unknown, not unbounded"):
+            assert_deadline_is("x", received=MONDAY, pid=44020)
+
+    def test_assert_frist_met_measures_against_the_published_window(self):
+        assert_frist_met(55001, received=MONDAY, answered_at="2026-03-03T10:59:00+01:00")
+        with pytest.raises(AssertionError, match="was late"):
+            assert_frist_met(
+                55001, received=MONDAY, answered_at="2026-03-03T11:00:01+01:00"
+            )
+
+
+class TestInstantComparison:
+    """A Frist is an instant, and RFC 3339 strings do not sort like one.
+
+    `"…T10:30:00Z"` sorts before `"…T11:00:00+01:00"` while being half an hour
+    later, so a string comparison passes a late answer whenever the deadline and
+    the answer carry different offsets — which is the normal case, because a
+    deadline is Europe/Berlin and a platform timestamps in UTC.
     """
-    assert wim_antwort_frist_werktage(pid) == werktage
 
+    def test_a_late_answer_in_utc_is_still_late(self):
+        # 11:00+01:00 is 10:00Z, so 10:30Z is thirty minutes past the Frist.
+        with pytest.raises(AssertionError, match="was late"):
+            assert_frist_met(55001, received=MONDAY, answered_at="2026-03-03T10:30:00Z")
 
-def test_a_non_msb_wechsel_pid_has_no_antwortfrist():
-    assert wim_antwort_frist_werktage(55001) is None
+    def test_an_answer_in_utc_inside_the_window_passes(self):
+        assert_frist_met(55001, received=MONDAY, answered_at="2026-03-03T09:59:00Z")
 
-
-def test_the_four_windows_are_not_one_value():
-    windows = {wim_antwort_frist_werktage(p) for p in (55039, 55042, 55051, 55168)}
-    assert windows == {1, 3, 5, 7}
-
-
-# ── The other clocks ─────────────────────────────────────────────────────────
-
-
-def test_aperak_strom_is_45_minutes_on_a_weekday_not_werktage():
-    """The APERAK acknowledgement and the business answer are different clocks.
-
-    Conflating them is the classic WiM error — 45 minutes versus days.
-    """
-    due = aperak_strom_due_at("2026-03-02T09:00:00Z")
-    assert due.startswith("2026-03-02T")
-    # Far shorter than even the shortest business window.
-    assert due < deadline_at_werktage("2026-03-02T09:00:00Z", 1)
-
-
-def test_gas_aperak_windows_differ_by_process_kind():
-    received = "2026-03-02T09:00:00Z"
-    folge = aperak_gas_folgeprozess_due_at(received)
-    initial = aperak_gas_initialprozess_due_at(received)
-    assert folge < initial, "the Folgeprozess window is the tighter of the two"
-
-
-def test_contrl_is_six_wall_clock_hours():
-    assert contrl_due_at("2026-03-02T09:00:00Z") == add_hours("2026-03-02T09:00:00Z", 6)
-
-
-def test_add_hours_is_wall_clock_and_ignores_the_calendar():
-    """GPKE's 24 hours run through a weekend; Werktage do not."""
-    saturday_deadline = add_hours("2026-03-07T09:00:00Z", 24)
-    assert saturday_deadline.startswith("2026-03-08")   # Sunday
-
-
-# ── The assertion helper ─────────────────────────────────────────────────────
-
-
-def test_assert_deadline_is_accepts_the_engine_instant():
-    received = "2026-03-02T09:00:00Z"
-    assert_deadline_is(deadline_at_werktage(received, 7), received=received, werktage=7)
-
-
-def test_assert_deadline_is_rejects_a_date_only_comparison():
-    """Midnight on the right day is still the wrong instant."""
-    received = "2026-03-02T09:00:00Z"
-    with pytest.raises(AssertionError) as excinfo:
-        assert_deadline_is("2026-03-11T00:00:00Z", received=received, werktage=7)
-    message = str(excinfo.value)
-    assert "expected:" in message and "actual:" in message
-    assert "17:00" in message, "the failure must show the real cutoff"
-
-
-def test_a_bad_datetime_is_rejected_with_a_useful_message():
-    with pytest.raises(ValueError, match="RFC 3339"):
-        deadline_at_werktage("2026-03-02", 3)
+    def test_a_naive_timestamp_is_refused(self):
+        with pytest.raises(AssertionError, match="no UTC offset"):
+            assert_frist_met(55001, received=MONDAY, answered_at="2026-03-03T09:00:00")

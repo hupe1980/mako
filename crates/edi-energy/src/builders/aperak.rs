@@ -63,6 +63,53 @@ impl AperakBuilder<Unset, Unset> {
 }
 
 impl<S, R> AperakBuilder<S, R> {
+    /// Address this APERAK as the acknowledgement of a received message.
+    ///
+    /// Mirrors the parties (the original receiver becomes the sender), carries
+    /// the acknowledged message's UNH reference into `RFF+ACW`, and adopts its
+    /// transmission date. Those three fields are what correlate an
+    /// acknowledgement with what it acknowledges, and deriving them from the
+    /// received message is the only way they cannot drift apart.
+    ///
+    /// The release is the **APERAK's own**, set on [`new`](Self::new) — not the
+    /// release of the message being acknowledged, which is usually a different
+    /// message type on a different track.
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(all(feature = "aperak", feature = "utilmd"))]
+    /// # fn main() -> Result<(), edi_energy::Error> {
+    /// use edi_energy::{Platform, Release};
+    /// use edi_energy::builders::AperakBuilder;
+    ///
+    /// # let wire: &[u8] = b"";
+    /// let received = Platform::with_all_profiles().parse_interchange_full(wire)?;
+    /// let ack = AperakBuilder::new(Release::new("2.1i"))
+    ///     .for_receipt(&received.messages[0].receipt_context())
+    ///     .error_code("Z10")
+    ///     .serialize()?;
+    /// # Ok(())
+    /// # }
+    /// # #[cfg(not(all(feature = "aperak", feature = "utilmd")))]
+    /// # fn main() {}
+    /// ```
+    pub fn for_receipt(
+        mut self,
+        ctx: &crate::interchange::ReceiptContext<'_>,
+    ) -> AperakBuilder<Set, Set> {
+        self.inner.sender_id = Some(ctx.original_receiver.to_owned());
+        self.inner.receiver_id = Some(ctx.original_sender.to_owned());
+        self.inner.acw_ref = Some(ctx.message_ref.to_owned());
+        if let Some(date) = ctx.transmission_date {
+            self.inner.document_date = Some(format!(
+                "{:04}{:02}{:02}",
+                date.year(),
+                date.month() as u8,
+                date.day()
+            ));
+        }
+        self.transition()
+    }
+
     fn transition<S2, R2>(self) -> AperakBuilder<S2, R2> {
         AperakBuilder {
             _ph: PhantomData,

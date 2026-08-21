@@ -1,12 +1,12 @@
 """PID introspection and the AHB answer table."""
 
-from __future__ import annotations
-
 import pytest
 
+from conftest import ON
 from makotest import (
     ablehnung_pid,
     answer_pids,
+    assert_answer_pid,
     bestaetigung_pid,
     message_types_of,
     pid_has_ahb_rules,
@@ -32,10 +32,25 @@ class TestEnumeration:
         not know, so a `rule_count() > 0` test would report every PID as known.
         56xxx is an unassigned band and is the check for that.
         """
-        pids = pruefidentifikatoren("UTILMD")
-        assert not [p for p in pids if 56000 <= p <= 56999]
+        assert not [p for p in pruefidentifikatoren("UTILMD") if 56000 <= p <= 56999]
         assert not pid_has_ahb_rules("UTILMD", 56001)
         assert not pid_has_ahb_rules("UTILMD", 99999)
+
+    def test_dating_the_enumeration_narrows_it_to_the_active_profile(self):
+        """A PID retired at the last Formatumstellung is still known to the
+        registry through its old profile — but a message carrying it today
+        validates vacuously anyway, so a generator should not draw it.
+        """
+        everything = pruefidentifikatoren("UTILMD", sparte="STROM")
+        today = pruefidentifikatoren("UTILMD", on=ON, sparte="STROM")
+        assert today, "a live format version carries PIDs"
+        assert set(today) <= set(everything)
+        assert all(55000 <= p <= 55999 for p in today)
+
+    def test_the_sparte_splits_the_utilmd_band(self):
+        assert all(
+            44000 <= p <= 44999 for p in pruefidentifikatoren("UTILMD", sparte="GAS")
+        )
 
     def test_contrl_has_no_pruefidentifikatoren(self):
         """CONTRL is a technical ack — the AHB assigns it no PIDs."""
@@ -122,3 +137,17 @@ class TestAnswerTable:
     def test_non_request_pids_have_no_answer(self):
         assert answer_pids(13025) is None
         assert answer_pids(99999) is None
+
+
+class TestAssertAnswerPid:
+    def test_a_conformant_answer_passes(self):
+        assert_answer_pid(55002, anfrage=55001, accepted=True)
+        assert_answer_pid(55080, anfrage=55077, accepted=False)
+
+    def test_the_plus_one_guess_fails(self):
+        with pytest.raises(AssertionError, match="wrong answer"):
+            assert_answer_pid(55079, anfrage=55077, accepted=False)
+
+    def test_an_answer_the_ahb_does_not_define_says_so(self):
+        with pytest.raises(ValueError, match="never rejectable"):
+            assert_answer_pid(44022, anfrage=44020, accepted=False)

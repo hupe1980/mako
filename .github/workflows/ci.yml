@@ -40,12 +40,22 @@ jobs:
   clippy:
     name: Clippy (-D warnings, all targets)
     runs-on: ubuntu-latest
+    env:
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
+      # cargo leaves an already-set variable alone, so naming the runner's
+      # interpreter here is what makes the workspace build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
       # -D warnings: clippy lints are hard errors. RUSTFLAGS='-D warnings' (from
@@ -91,10 +101,20 @@ jobs:
   test-workspace:
     name: Test workspace crates
     runs-on: ubuntu-latest
+    env:
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
+      # cargo leaves an already-set variable alone, so naming the runner's
+      # interpreter here is what makes the workspace build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
       # Exclude edi-energy (covered by the feature-matrix job above) and the
@@ -140,11 +160,20 @@ jobs:
     name: Documentation
     runs-on: ubuntu-latest
     env:
+      PYO3_PYTHON: python3
       RUSTDOCFLAGS: "-D warnings"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
+      # cargo leaves an already-set variable alone, so naming the runner's
+      # interpreter here is what makes the workspace build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
       - run: cargo doc --no-deps --all-features
@@ -153,12 +182,22 @@ jobs:
   msrv:
     name: Minimum Supported Rust Version (1.94)
     runs-on: ubuntu-latest
+    env:
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
+      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
+      # cargo leaves an already-set variable alone, so naming the runner's
+      # interpreter here is what makes the workspace build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler
       - run: cargo check --workspace --all-features
@@ -194,12 +233,22 @@ jobs:
   codegen-check:
     name: Codegen check (generated files are up-to-date)
     runs-on: ubuntu-latest
+    env:
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
+      # cargo leaves an already-set variable alone, so naming the runner's
+      # interpreter here is what makes the workspace build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
       - run: cargo xtask codegen --check
 
   makotest:
@@ -233,9 +282,17 @@ jobs:
       # the property-based surface would go untested in CI.
       - name: Install the wheel and run the Python suite
         run: |
-          pip install pytest hypothesis dist/*.whl
+          pip install pytest hypothesis ruff dist/*.whl
           cd makotest && pytest -q
           python -c "import makotest.strategies"   # the extra really is importable
+
+      # `makotest` is published to PyPI, so its Python surface gets the same
+      # gate the Rust side does — a consumer reads these files.
+      - name: Lint the Python layer
+        working-directory: makotest
+        run: |
+          ruff check .
+          ruff format --check .
 
       # The sdist is only exercised at release time otherwise, and it is the
       # artifact pip falls back to when no wheel matches. It must build
@@ -258,8 +315,9 @@ jobs:
           /tmp/sdist-venv/bin/pip install --no-binary :all: sdist-out/*.tar.gz
           /tmp/sdist-venv/bin/python -c "
           import makotest
-          assert makotest.malo_from_base('5123869678') == '51238696012'
+          assert makotest.malo_from_base('5123869601') == '51238696012'
           assert makotest.add_werktage('2026-12-24', 2) == '2026-12-29'
+          assert makotest.antwort_obligation(55001).clock_time == '11:00'
           print('sdist OK', makotest.__version__)
           "
 

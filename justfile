@@ -208,7 +208,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -282,8 +282,18 @@ zugferd-verify: zugferd-specimen
 # no activation is needed.
 test-makotest:
     cd makotest && test -d .venv || python3 -m venv .venv
-    cd makotest && .venv/bin/pip install -q --upgrade pip 'maturin>=1.9,<2.0' pytest hypothesis
+    cd makotest && .venv/bin/pip install -q --upgrade pip 'maturin>=1.9,<2.0' pytest hypothesis ruff
     cd makotest && .venv/bin/maturin develop && .venv/bin/pytest -q
+
+# Lint and format-check the Python layer (ruff).
+#
+# `makotest` is a published PyPI artifact, so its Python surface gets the same
+# gate the Rust side does — a consumer reads these files.
+lint-makotest:
+    cd makotest && test -d .venv || python3 -m venv .venv
+    cd makotest && .venv/bin/pip install -q --upgrade pip ruff
+    cd makotest && .venv/bin/python -m ruff check .
+    cd makotest && .venv/bin/python -m ruff format --check .
 
 # Build a release wheel (abi3, one wheel for Python ≥ 3.11).
 build-makotest:

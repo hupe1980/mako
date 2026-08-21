@@ -139,9 +139,15 @@ impl InterchangeHeader {
 /// Context needed to build an acknowledgement (APERAK / CONTRL) for a received
 /// message.
 ///
-/// Produced by [`MessageEnvelope::receipt_context`].  Pass this to
-/// `AperakBuilder::for_receipt()` or `ContrlBuilder::for_interchange()` to
-/// construct the outgoing acknowledgement with the correct mirror fields.
+/// Produced by [`MessageEnvelope::receipt_context`]. Pass it to
+/// `AperakBuilder::for_receipt` to construct the acknowledgement with the
+/// correct mirror fields.
+///
+/// A **CONTRL** acknowledges the interchange rather than a message, so it takes
+/// the [`InterchangeHeader`] instead — see `ContrlBuilder::for_interchange`.
+/// Keeping the two apart is the point: a CONTRL reports a *syntax* failure and
+/// an APERAK reports an *application* one, and answering either with the other
+/// tells the counterparty to retry the wrong thing.
 #[derive(Debug, Clone)]
 pub struct ReceiptContext<'m> {
     /// GLN or ID of the original sender (becomes the recipient in the ACK).

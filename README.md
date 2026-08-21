@@ -26,7 +26,7 @@ The workspace covers the full BDEW MaKo stack across five layers:
 | **Market data** | `mako-markt` library · `marktd` Market Data Hub (PostgreSQL, CloudEvents, OIDC/JWT, EventBus) |
 | **Settlement & billing** | `grid-billing` + `netzbilanzd` NNE/MMM/MSB settlement · `eeg-billing` + `einsd` EEG/KWKG · `energy-billing` + `billingd` retail billing |
 | **Customer management** | `accountingd` FI-CA ledger · `portald` customer portal · `outputd` customer documents · `vertragd` contracts · `tarifbd` tariff catalog · `agentd` AI orchestration |
-| **Testing** | `makotest` — Python toolkit over the same Rust core: BDEW identifier check digits, Werktag/Fristen arithmetic, AHB-validated EDIFACT, seeded EPEX curves, and a `pytest` plugin ([README](makotest/README.md)) |
+| **Testing** | `makotest` — Python toolkit over the same Rust core: BDEW identifier check digits, the published answer-Frist table, AHB-validated EDIFACT, counterparties that answer in EDIFACT, seeded EPEX curves, and a `pytest` plugin ([README](makotest/README.md)) |
 
 ---
 

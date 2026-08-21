@@ -2,256 +2,206 @@
 
 **Test & simulation toolkit for German market-communication (MaKo) platforms.**
 
-Generates regulator-conformant inputs — EDIFACT, EPEX price curves, meter data —
-simulates the external counterparties a MaKo platform talks to, and asserts on
-the result.
+Builds regulator-conformant EDIFACT, simulates the counterparties a MaKo
+platform talks to — in EDIFACT, so a test can feed the answer back — and asserts
+on both wire contracts it exposes: the messages and the event stream.
 
 `makotest` targets [mako](https://github.com/hupe1980/mako) first but is **not
-mako-specific**: everything it drives is a public wire contract (EDIFACT over
-AS4, REST, CloudEvents), so it can exercise any MaKo implementation.
+mako-specific**. Everything it drives is public (EDIFACT over AS4, REST,
+CloudEvents), so it can exercise any MaKo implementation.
 
 ```python
-from makotest import malo_from_base, deadline_at_werktage, validate_edifact
+from makotest import antwort_obligation, malo_from_base, validate_edifact
 
-malo_from_base("5123869678")      # '51238696012' — BDEW check digit applied
+malo_from_base("5123869601")  # '51238696012' — BDEW check digit applied
 
-# The instant a Frist expires — 17:00 Europe/Berlin on the due Werktag.
-deadline_at_werktage("2026-12-30T09:00:00Z", 1)
-# '2027-01-04T17:00:00+01:00' — one Werktag, five calendar days:
-# 31.12. and 01.01. are non-Werktage and 02./03.01. is a weekend.
+o = antwort_obligation(55001)  # what a Netzbetreiber owes on an Anmeldung
+o.clock_time  # '11:00' — a clock time, not n × 24 h
+o.due_at("2026-03-02T09:00:00Z")  # '2026-03-03T11:00:00+01:00'
 
-report = validate_edifact(utilmd_bytes, "2026-10-01")
-report.is_valid                   # MIG + AHB + semantic rules, on that FV
+validate_edifact(utilmd_bytes, "2026-10-01").is_valid  # MIG + AHB + semantic
 ```
-
-## Why
-
-The regulated domain makes this sharper than ordinary integration testing:
-deadlines are legal obligations, message content is defined by AHB rule tables,
-and a wrong Prüfidentifikator is a compliance defect rather than a bug. Tests
-need to express *"this is what the counterparty is entitled to send, and this is
-what we owe them by when"* — which a `curl` script cannot.
-
-## Design
-
-**One source of truth for wire formats.** EDIFACT validation, identifier check
-digits and the Werktag calendar come from the same Rust crates the platform
-runs, through PyO3 bindings. They are never reimplemented in Python: a second
-implementation would drift from the BDEW profiles at the first Formatumstellung,
-and a harness that disagrees with production about validity is worse than none.
-
-The rule for what goes where: **anything a regulator defines in a table is
-Rust; anything shaped by test ergonomics is Python.**
-
-| Concern | Home |
-|---|---|
-| EDIFACT MIG/AHB/semantic validation | Rust (`edi-energy`) |
-| MaLo/MeLo check digits and formats | Rust (`rubo4e`) |
-| Werktag calendar **and deadline instants** | Rust (`mako-engine::fristen`) |
-| WiM per-PID Antwortfristen | Rust (`mako-wim`) |
-| EPEX curves, load profiles | Python |
-| Counterparty behaviour, fixtures, DSL | Python |
-
-**A consequence worth stating:** because validation runs the platform's own AHB
-engine, `makotest` proves *process and integration* behaviour — it is not an
-independent check of mako's format conformance. The BDEW reference examples
-remain the authority for that.
-
-**Deterministic by construction.** Every generator takes a seed; every clock is
-injected. A test that passes on Tuesday and fails on a Feiertag is not a test of
-the system.
-
-**Framework-agnostic core, pytest on top.** The generators and simulators are
-plain objects usable from a script or a notebook. Only `makotest.plugin` imports
-pytest, so a demo and a CI test drive the same code path.
-
----
-
-## Fristen and deadlines
-
-Two different questions, two different answers.
-
-`add_werktage` / `next_werktag` / `is_werktag` do **calendar arithmetic** and
-return a date. `deadline_at_werktage` and the `*_due_at` helpers return the
-**instant a Frist expires**, which is what the platform registers on a deadline
-and what an operator is measured against.
-
-```python
-from makotest import add_werktage, deadline_at_werktage
-
-add_werktage("2026-03-02", 3)                       # '2026-03-05'          — a date
-deadline_at_werktage("2026-03-02T09:00:00Z", 3)     # '2026-03-05T17:00:00+01:00'
-```
-
-A Werktage Frist expires at **17:00 Europe/Berlin** on the due Werktag, and the
-offset follows the CET/CEST transition — rendering it in UTC hides the hour that
-makes it correct. Comparing dates instead of instants passes a deadline that is
-hours wrong; approximating Werktage as calendar days is worse still, because one
-Werktag from 30.12. is five calendar days.
-
-| Function | Window | Basis |
-|---|---|---|
-| `deadline_at_werktage(received, n)` | *n* Werktage → 17:00 Berlin | BDEW MaKo calendar |
-| `add_hours(received, h)` | wall-clock hours (GPKE 24 h) | runs through weekends |
-| `contrl_due_at(received)` | 6 hours | CONTRL |
-| `aperak_strom_due_at(received)` | 45 min on a weekday | APERAK AHB §2.4.1 |
-| `aperak_gas_folgeprozess_due_at(received)` | next Werktag 12:00 | GeLi Gas |
-| `aperak_gas_initialprozess_due_at(received)` | 3 Werktage | GeLi Gas |
-| `wim_antwort_frist_werktage(pid)` | 3 / 5 / 7 / 1 WT, per PID | BK6-22-024 WiM Teil 1 |
-
-The **APERAK acknowledgement and the business answer are separate clocks** —
-45 minutes versus days. Conflating them is the classic WiM error.
-
-WiM MSB-Wechsel is per process, not one window:
-
-```python
-from makotest import assert_deadline_is, wim_antwort_frist_werktage
-
-wim_antwort_frist_werktage(55039)   # 3 — Kündigung          (Kap. 2.2.2 Nr. 2)
-wim_antwort_frist_werktage(55042)   # 5 — Beginn             (Kap. 2.3.2 Nr. 2)
-wim_antwort_frist_werktage(55051)   # 7 — Ende               (Kap. 2.4.2 Nr. 2)
-wim_antwort_frist_werktage(55168)   # 1 — Verpflichtungsanfrage (Kap. 2.5.2 Nr. 4)
-
-assert_deadline_is(
-    response["deadline"],
-    received="2026-03-02T09:00:00Z",
-    werktage=wim_antwort_frist_werktage(55051),
-)
-```
-
-## Building EDIFACT
-
-`makotest` builds messages through the same Rust builders the platform uses, so
-a message it constructs is one the platform would accept.
-
-```python
-from makotest import UtilmdTransaction, build_utilmd, build_interchange
-
-msg = build_utilmd(
-    pruefidentifikator=55001,
-    sender="4012345000023",
-    receiver="9900357000004",
-    release="S2.1",
-    document_date="20251101",
-    transactions=[
-        UtilmdTransaction(
-            object_type="melo",
-            object_id="DE00014559929E00856996N5139699L01",
-            process_dates=[("163", "20251101")],   # delivery start
-            references=[("Z13", "55001")],
-        )
-    ],
-)
-```
-
-`build_utilmd` and `build_mscons` return a **message** (`UNH`…`UNT`). That is not
-sendable on its own — the wire unit a market partner receives is an
-**interchange**:
-
-```python
-wire = build_interchange(
-    sender="4012345000023",
-    receiver="9900357000004",
-    dar="REF001",
-    messages=[msg],
-    date="260802", time="0915",
-)
-# UNB+UNOC:3+4012345000023:14+9900357000004:500+260802:0915+REF001'...UNZ+1+REF001'
-```
-
-Building and validation are deliberately **separate steps**: a test must be able
-to construct a knowingly-invalid message and assert that the right rule rejects
-it. Pass the result to `assert_edifact_valid` when you want the happy path.
-
-## Install
 
 ```bash
-pip install makotest                  # core: identifiers, Fristen, EDIFACT
-pip install 'makotest[data]'          # + EPEX / Lastgang generators (numpy, pandas)
-pip install 'makotest[bo4e]'          # + BO4E business objects
+pip install makotest                  # no runtime dependencies
 pip install 'makotest[hypothesis]'    # + property-based strategies
 ```
 
-## pytest usage
+Wheels are **abi3** (`abi3-py311`) — one wheel serves Python 3.11 and later.
 
-The plugin registers itself through the `pytest11` entry point — no `conftest.py`
-wiring needed.
+The same answers are reachable from a shell, for whoever is holding a real
+message rather than writing a test:
 
-```python
-def test_frist_is_met(frozen_clock, epex_sim):
-    frozen_clock.advance_werktage(4)     # BDEW calendar, not naive +4 days
-    assert frozen_clock.date == "2026-11-09"
+```console
+$ makotest validate inbound.edi --on 2026-04-01
+$ makotest frist 55001 --received 2026-03-02T09:00:00Z
+$ makotest id 9900357000004      # → satisfies NEITHER check-digit procedure
 ```
 
-Fixtures: `epex_sim`, `nb_sim`, `biko_sim`, `imsys_sim`, `frozen_clock`,
-`makotest_seed`, `mako_endpoint`.
-Markers: `@pytest.mark.regulatory("GPKE Teil 2")`, `@pytest.mark.requires_docker`.
-Options: `--mako-endpoint URL` (run against a live deployment),
-`--makotest-seed N` (reproduce a failing run exactly).
+---
 
-## Counterparty simulators
+## Why
 
-Each simulator models what a counterparty *does* — including what it does not
-do. Silence is the mode worth having: a platform that never sees it is never
-tested against its own Fristen.
+Deadlines are legal obligations, message content is defined by AHB rule tables,
+and a wrong Prüfidentifikator is a compliance defect rather than a bug. A test
+has to express *"this is what the counterparty is entitled to send, and this is
+what we owe them by when"* — which a `curl` script cannot.
+
+Two failure modes shape the whole design, because both produce a **green suite
+that proves nothing**:
+
+- a message whose Prüfidentifikator has no AHB rules *validates* — having
+  checked nothing;
+- an assertion naming an event type the platform does not declare finds no such
+  event — forever.
+
+Every validation report therefore carries `rules_applied`, and every event
+assertion resolves the type against the platform's own catalog first.
+
+## Design
+
+**One source of truth.** EDIFACT construction and validation, identifier check
+digits, the Werktag calendar, the published answer Fristen and the CloudEvents
+catalog come from the same Rust crates the platform runs, through PyO3 bindings.
+None is reimplemented in Python: a second implementation drifts from the BDEW
+documents at the first Formatumstellung, and a harness that disagrees with the
+system under test about what is valid — or about when a Frist expires — is worse
+than none.
+
+The rule: **anything a regulator defines in a table is Rust; anything shaped by
+test ergonomics is Python.**
+
+| Concern | Home |
+|---|---|
+| EDIFACT build + MIG/AHB/semantic validation, release per format version | Rust — `edi-energy` |
+| Identifier check digits (MaLo, MP-ID, EIC, §8.2 resources) | Rust — `rubo4e` |
+| Werktag calendar, acknowledgement clocks, answer Fristen | Rust — `mako-fristen` |
+| CloudEvents type catalog and subscription matcher | Rust — `mako-events` |
+| Counterparty behaviour, EPEX curves, fixtures | Python |
+
+Because validation runs the platform's own AHB engine, `makotest` proves
+*process and integration* behaviour — not format conformance. The BDEW reference
+examples remain the authority for that.
+
+**Deterministic by construction.** Every generator is seeded, every clock is
+injected, and the format version is an argument rather than a read of today's
+date. Two runs of the same scenario produce byte-identical EDIFACT.
+
+**Framework-agnostic core, pytest on top.** Only `makotest.plugin` imports
+pytest, so a demo and a CI test drive the same code path.
+
+**Two failures, two exceptions.** `AssertionError` means the system under test is
+wrong; `ValueError` means the test is.
+
+---
+
+## A tour
+
+**Fristen have three shapes, so ask the table.** "A Werktage Frist expires at
+17:00 Berlin" is true of the WiM MSB-Wechsel windows and of nothing else — GPKE
+states a clock time on the 1. Werktag after the ÜT, GeLi Gas the *end* of the
+n-th Werktag.
 
 ```python
-def test_nb_bestaetigt(nb_sim):
-    nb_sim.on(55001).bestaetigung(zuordnungsbeginn="2026-11-01")
-    answer = nb_sim.receive(interchange)
-    assert answer["pid"] == 55002          # the AHB answer PID, not 55001+1
-
-def test_frist_faellt(nb_sim):
-    nb_sim.on(55001).timeout()             # no answer, not even a CONTRL
-    assert nb_sim.receive(interchange) is None
+assert_deadline_is(response["deadline"], received=received, pid=55001)
+assert_frist_met(55001, received=received, answered_at=answer["sent_at"])
 ```
 
-The answer PIDs come from the same table `mako-gpke` and `mako-geli-gas` derive
-their outbound response from, so the simulator cannot answer with a code the
-platform rejects. It is not `Anfrage + 1`: GPKE 55077 rejects with **55080**
-because 55079 is unassigned, and GeLi Gas 44020 can be confirmed but never
-rejected.
-
-`BikoSim` receives Abrechnungssummenzeitreihen and can raise a Klärfall —
-queued rather than sticky, so the re-submission after Clearing can be asserted.
-`ImsysSim` models the SMGW compliance surface (TAF profile, CLS channel state,
-certificate expiry and revocation, Zählerstandsgang gaps) rather than
-reimplementing TR-03109 crypto.
-
-## Property-based testing
+**The send date picks the format version.** Pinning a release by hand and
+validating on a date where another is in force reports the mismatch rather than
+the message.
 
 ```python
-from hypothesis import given
-from makotest.strategies import malo_ids, pruefidentifikatoren
+msg = build_utilmd(
+    55001,
+    sender=LF,
+    receiver=NB,
+    on="2026-04-01",
+    transactions=[UtilmdTransaction("melo", melo, process_dates=[("163", start)])],
+)
+wire = build_interchange(
+    sender=LF, receiver=NB, dar="REF1", messages=[msg], on="2026-04-01"
+)
+assert_edifact_valid(wire, on="2026-04-01")
+```
 
+**Counterparties answer in EDIFACT — or badly, or not at all.** The unhappy modes
+are the ones worth having: a platform that only ever sees a punctual, conformant
+partner has never had its Fristüberwachung exercised.
+
+```python
+def test_nb_bestaetigt(nb_sim, anmeldung):
+    nb_sim.on(55001).bestaetigung(process_dates=[("163", "20260501")])
+    reply = nb_sim.receive(anmeldung, received_at="2026-03-02T09:00:00Z")
+
+    assert reply.pid == 55002  # the AHB answer PID — never Anfrage + 1
+    platform.ingest(reply.business)  # a rendered interchange, not a dict
+
+
+def test_frist_faellt(nb_sim, anmeldung):
+    nb_sim.on(55001).timeout()  # no answer, not even a CONTRL
+    assert not nb_sim.receive(anmeldung)
+
+
+def test_verspaetete_antwort(nb_sim, anmeldung):
+    nb_sim.on(55001).bestaetigung(delay_werktage=3)  # right message, wrong day
+    reply = nb_sim.receive(anmeldung, received_at="2026-03-02T09:00:00Z")
+    assert reply.answered_at > reply.due_at
+```
+
+An interchange carries several messages, each its own Vorgang — the reply answers
+all of them, and `reply.pid` raises rather than speaking for one.
+
+**Events are the other wire contract.**
+
+```python
+assert_event_emitted(webhook_bodies, "de.mako.process.*", subject=malo)
+assert_no_event_emitted(webhook_bodies, "de.mako.aperak.timeout")
+```
+
+**Strategies draw values the platform accepts.** A random 11-digit string is a
+valid MaLo one time in ten and a random 16-character string is essentially never
+a valid EIC, so a hand-rolled strategy spends its budget on the rejection path.
+
+```python
 @given(malo=malo_ids(), pid=pruefidentifikatoren(message_type="UTILMD"))
 def test_every_utilmd_roundtrips(malo, pid): ...
 ```
 
-Every strategy draws from the Rust core: MaLo-IDs carry a real check digit, and
-`pruefidentifikatoren()` yields only PIDs the compiled profiles have AHB rules
-for. Generating a PID without rules would produce a test that cannot fail —
-validation returns valid having checked nothing.
-
-Strategies: `malo_ids`, `melo_ids`, `marktpartner_ids`, `bilanzierungsgebiete`,
-`pruefidentifikatoren`, `werktage`, `zeitreihen`.
-
-`message_types_of(pid)` returns a **list**, because a Prüfidentifikator does
-not identify one message type: APERAK and COMDIS both declare 29001 and
-29002. It resolves against the compiled profiles rather than a PID-band
-table, so it cannot disagree with what the platform validates.
-
-## BO4E generation
-
-`makotest` builds business objects from BO4E **202607** — the same release
-mako's `rubo4e` generates from. Assert it once per session; testing v202607
-objects against a platform on another generation produces passes that mean
-nothing:
+**EPEX days are Europe/Berlin days**, so the DST days carry 92 and 100
+quarter-hourly MTUs rather than 96 — and negative prices are supported, which
+§51 EEG and §41a EnWG dynamic tariffs both need.
 
 ```python
-from makotest.assertions import assert_bo4e_generation_matches
-assert_bo4e_generation_matches(platform.bo4e_version)
+EpexGenerator(seed=42).day("2026-06-21", profile="solar_glut", negative_hours=6)
 ```
+
+The full reference — every builder, assertion, strategy and simulator, with the
+Fundstelle behind each rule — is in the
+[mako documentation](https://hupe1980.github.io/mako/docs/reference/makotest/).
+
+---
+
+## pytest plugin
+
+Registered through the `pytest11` entry point — no `conftest.py` wiring.
+
+| | |
+|---|---|
+| **Fixtures** | `nb_sim`, `biko_sim`, `imsys_sim`, `epex`, `frozen_clock`, `makotest_seed`, `makotest_on`, `mako_endpoint` |
+| **Markers** | `@pytest.mark.regulatory("GPKE Teil 2")`, `@pytest.mark.requires_docker` |
+| **Options** | `--makotest-on ISO_DATE`, `--makotest-seed N`, `--mako-endpoint URL` |
+
+`--makotest-on` pins the format version for the whole suite, so re-running on a
+future date shows what the next Formatumstellung breaks. Every dated fixture
+takes it, so one test is never about two days. `--mako-endpoint` names a running
+deployment; bring your own HTTP client.
+
+`--hypothesis-profile=makotest` selects a registered profile with `deadline=None`
+and `derandomize=True` — a strategy here draws through the Rust core, and
+Hypothesis' 200 ms per-example deadline is written for pure functions.
+
+---
 
 ## Development
 
@@ -259,48 +209,44 @@ assert_bo4e_generation_matches(platform.bo4e_version)
 [maturin](https://www.maturin.rs/):
 
 ```bash
-cd makotest
-maturin develop --extras dev
-pytest
+just test-makotest      # maturin develop + pytest
+just lint-makotest      # ruff check + format check
+just build-makotest     # release wheel
 ```
 
-`pyo3/extension-module` is deliberately **not** a Cargo feature of this crate —
-maturin enables it at build time. Declaring it would make `cargo test
---workspace --all-features` link the test harness against it and fail on
-undefined Python symbols.
+`pyo3/extension-module` is deliberately **not** a Cargo feature — maturin enables
+it at build time. Declaring it would make `cargo test --workspace --all-features`
+link the Rust test harness against it and fail on undefined Python symbols. CI
+exercises both paths.
 
-Because `abi3-py311` sets a floor of Python 3.11, *every* workspace-wide cargo
-command builds this crate against an interpreter — `cargo test --workspace`,
-`just ci` and `just doc-check` included. The workspace therefore pins
-`PYO3_PYTHON` to `.venv/bin/python` in [`.cargo/config.toml`](../.cargo/config.toml);
-create that venv once and the rest of the workspace builds:
+`abi3-py311` sets a floor of Python 3.11, so *every* workspace-wide cargo command
+builds this crate against an interpreter. The workspace pins `PYO3_PYTHON` to
+`.venv/bin/python` in [`.cargo/config.toml`](../.cargo/config.toml); create that
+venv once and the rest of the workspace builds:
 
 ```bash
 python3.11 -m venv .venv    # or any ≥ 3.11
 ```
 
-Without it PyO3 falls back to the first `python3` on `PATH` — still 3.9 on
-macOS — and the whole workspace fails to build on a message about a crate
-nobody was working on. Cargo does not override an already-set `PYO3_PYTHON`, so
-pointing it elsewhere still works.
+Without it PyO3 falls back to the first `python3` on `PATH` — still 3.9 on macOS
+— and the whole workspace fails to build on a message about a crate nobody was
+working on.
 
-## Status
+`py.typed` ships with the wheel, so `_native.pyi` is the only thing a consumer's
+type checker sees; a test pins it against the compiled module in both directions.
 
-Pre-1.0. Shipping today: the Rust core (identifiers, Fristen **and deadline
-instants**, Prüfidentifikator
-introspection, the AHB answer table, EDIFACT build + interchange envelope +
-validation), the EPEX generator, the Marktpartner / BIKO / iMSys simulators,
-hypothesis strategies, domain assertions, and the pytest plugin.
+## Scope
 
-Not built: AS4 transport for the Marktpartner simulator (it is a plain object
-with `receive()`, so a transport layers on top), the testcontainers harness, and
-the MaStR / UBA simulators — neither integration exists in mako yet, and a
-simulator written before its consumer would encode guesses about an interface
-nobody has implemented.
+The Marktpartner simulator carries no AS4 transport of its own: it is a plain
+object with `receive()`, so a transport layers on top instead of being a
+dependency of the many tests that do not need one.
 
-The package version tracks `workspace.package.version` through Cargo.toml
-(`dynamic = ["version"]`), so the wheel and the crates it binds can never report
-different versions.
+A counterparty is modelled once it has a consumer. One written ahead of its
+consumer encodes guesses about an interface nobody has implemented, and to the
+next reader those guesses are indistinguishable from requirements.
+
+The package version tracks `workspace.package.version` through Cargo.toml, so the
+wheel and the crates it binds can never report different versions.
 
 ## Licence
 

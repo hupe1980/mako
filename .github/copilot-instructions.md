@@ -63,10 +63,20 @@ services/obsd/            Business-process observability daemon — process proj
 xtask/                    Build/codegen/validation tasks
 makotest/                 Python test & simulation toolkit (PyO3 + maturin, abi3-py311).
                           Binds the same Rust crates the platform runs: BDEW identifier
-                          check digits, Werktag/Fristen arithmetic, EDIFACT build +
-                          interchange envelope + AHB validation. Pure-Python layer adds
-                          EPEX curve generation, domain assertions and a `pytest11`
-                          plugin. `just test-makotest`.
+                          check digits **and constructors** (MaLo, MP-ID both procedures,
+                          EIC Party vs Area, §8.2 resources), Werktag calendar, the
+                          published **answer-Frist table** (`mako-fristen::antwort` — GPKE
+                          clock times, GeLi Gas end-of-Werktag, WiM 17:00 cut-off; never
+                          one shape), release-per-format-version, EDIFACT build +
+                          interchange envelope + AHB validation over **every** message.
+                          the **CloudEvents catalog** (`mako-events`) so an assertion on a
+                          renamed/typo'd type fails instead of passing as "never emitted".
+                          Pure-Python layer adds counterparties that answer **in EDIFACT**
+                          (CONTRL for syntax, APERAK for application, one `Reply` shape),
+                          DST-correct EPEX curves, domain assertions and a `pytest11`
+                          plugin. The reference date is always an argument, never today;
+                          `AssertionError` = the system is wrong, `ValueError` = the test
+                          is. `just test-makotest`, `just lint-makotest`.
 site/                     Zola documentation site (published to hupe1980.github.io/mako)
 demos/                    Runnable end-to-end scenarios (nb-stp, eeg-billing)
 Dockerfile                Multi-stage cargo-chef + distroless image for makod

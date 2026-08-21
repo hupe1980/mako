@@ -64,39 +64,64 @@ struct Finding {
 
 /// IDs that are *meant* to be invalid, with the reason.
 ///
-/// A test that proves a malformed MaLo is refused needs a malformed MaLo. Each
-/// entry is a deliberate negative, not an oversight.
-const DELIBERATE: &[(&str, &str)] = &[(
-    "51238696782",
-    "the refusal fixture: `crates/mako-markt`, `crates/energy-api` and \
+/// A test that proves a malformed identifier is refused needs a malformed
+/// identifier. Each entry is a deliberate negative, not an oversight. The
+/// allowlist covers both families this guard checks — MaLo-IDs and EIC codes.
+const DELIBERATE: &[(&str, &str)] = &[
+    (
+        "51238696782",
+        "the refusal fixture: `crates/mako-markt`, `crates/energy-api` and \
          `services/tarifbd` assert that a wrong check digit is rejected. It fails \
          the BDEW Anwendungshilfe arithmetic, and also failed the Luhn variant a \
          dependency briefly used — so the assertion states the rule rather than \
          pinning one implementation's behaviour",
-)];
+    ),
+    (
+        "41373559242",
+        "`makotest` pins its MaLo binding to the BDEW §8.1 worked example \
+         (`4137355924` → `41373559241`) and asserts the neighbouring digit is \
+         refused. Without the negative, the test would pass against a binding \
+         that accepted anything",
+    ),
+    (
+        "10YDE-EON------2",
+        "`makotest` pins its EIC binding to the ENTSO-E worked example \
+         (`10YDE-EON------` → `…1`) and asserts the neighbouring check character \
+         is refused",
+    ),
+];
 
-/// Every allowlisted identifier must still *fail* its check digit.
+/// Every allowlisted identifier must still *fail* its check digit or character.
 ///
 /// The allowlist exists so a fixture that is invalid on purpose can stay in the
 /// tree. That only works while it really is invalid — and "invalid" is a
 /// property of an arithmetic that has already been corrected under us once. An
-/// entry that quietly became valid would silently exempt a real MaLo from every
-/// check this guard makes, and the tests asserting rejection would be asserting
-/// nothing.
+/// entry that quietly became valid would silently exempt a real identifier from
+/// every check this guard makes, and the tests asserting rejection would be
+/// asserting nothing.
 fn deliberate_entries_that_are_actually_valid() -> Vec<Finding> {
     DELIBERATE
         .iter()
-        .filter(|(id, _)| id.len() == 11 && check_digit(&id[..10]).is_some_and(|c| id.ends_with(c)))
+        .filter(|(id, _)| is_actually_valid(id))
         .map(|(id, reason)| Finding {
             path: PathBuf::from("xtask/src/check_malo_ids.rs"),
             line: 0,
             message: format!(
-                "{id} is allowlisted as deliberately invalid but its check digit is \
-                 correct, so it is a valid MaLo-ID. Every test relying on it to be \
-                 refused now asserts nothing. Allowlist reason given: {reason}"
+                "{id} is allowlisted as deliberately invalid but it validates, so \
+                 every test relying on it to be refused now asserts nothing. \
+                 Allowlist reason given: {reason}"
             ),
         })
         .collect()
+}
+
+/// `true` when an allowlisted literal is in fact a valid identifier.
+fn is_actually_valid(id: &str) -> bool {
+    match id.len() {
+        11 => check_digit(&id[..10]).is_some_and(|c| id.ends_with(c)),
+        16 => rubo4e::identifiers::EicCode::new(id).is_ok(),
+        _ => false,
+    }
 }
 
 /// The BDEW check digit for the first ten digits, or `None` if `d10` is not ten
@@ -324,6 +349,9 @@ fn offending_eics(src: &str) -> Vec<(String, usize)> {
         }
         for tok in line.split(|c: char| !(c.is_ascii_alphanumeric() || c == '-')) {
             if tok.len() != 16 {
+                continue;
+            }
+            if DELIBERATE.iter().any(|(d, _)| *d == tok) {
                 continue;
             }
             let b = tok.as_bytes();

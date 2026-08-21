@@ -16,14 +16,13 @@ name       = "makotest_native"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+mako-events  = { workspace = true }
 mako-fristen = { workspace = true }
-edi-energy   = { path = "../crates/edi-energy", features = [
+edi-energy   = { workspace = true, features = [
     "utilmd", "mscons", "aperak", "contrl", "invoic", "remadv", "orders",
     "iftsta", "insrpt", "reqote", "partin", "ordchg", "ordrsp", "quotes",
     "comdis", "pricat", "utilts",
 ] }
-mako-engine  = { path = "../crates/mako-engine" }
-mako-wim     = { workspace = true }
 rubo4e       = { workspace = true }
 time         = { workspace = true }
 

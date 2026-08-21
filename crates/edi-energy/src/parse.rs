@@ -793,9 +793,9 @@ fn parse_interchange_header_from_segments(
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
     let sender_id = unb.component_str(1, 0).unwrap_or("").to_owned();
-    let sender_qualifier = unb.component_str(1, 2).unwrap_or("").to_owned();
+    let sender_qualifier = unb.component_str(1, 1).unwrap_or("").to_owned();
     let receiver_id = unb.component_str(2, 0).unwrap_or("").to_owned();
-    let receiver_qualifier = unb.component_str(2, 2).unwrap_or("").to_owned();
+    let receiver_qualifier = unb.component_str(2, 1).unwrap_or("").to_owned();
     let transmission_datetime = parse_unb_datetime(
         unb.component_str(3, 0).unwrap_or(""),
         unb.component_str(3, 1).unwrap_or(""),
@@ -863,13 +863,15 @@ fn parse_interchange_full_from_segments_with_registry(
         .and_then(|s| s.parse().ok())
         .unwrap_or(3);
 
-    // S002: sender — components: [id, sub_id, id_qualifier, routing]
+    // S002 sender — [0004 identification, 0007 qualifier, 0008 reverse routing].
+    // The qualifier is the *second* component (ISO 9735-1 S002); the third is
+    // the reverse-routing address, which BDEW interchanges omit.
     let sender_id = unb.component_str(1, 0).unwrap_or("").to_owned();
-    let sender_qualifier = unb.component_str(1, 2).unwrap_or("").to_owned();
+    let sender_qualifier = unb.component_str(1, 1).unwrap_or("").to_owned();
 
-    // S003: receiver — components: [id, sub_id, id_qualifier, routing]
+    // S003 receiver — [0010 identification, 0007 qualifier, 0014 routing].
     let receiver_id = unb.component_str(2, 0).unwrap_or("").to_owned();
-    let receiver_qualifier = unb.component_str(2, 2).unwrap_or("").to_owned();
+    let receiver_qualifier = unb.component_str(2, 1).unwrap_or("").to_owned();
 
     // S004: date+time of preparation — components: [date (YYMMDD), time (HHMM)]
     let transmission_datetime = parse_unb_datetime(

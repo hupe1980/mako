@@ -8,13 +8,16 @@ Not mako-specific: everything it drives is a public wire contract (EDIFACT over
 AS4, REST, CloudEvents), so it can exercise any MaKo implementation.
 
 The wire-format primitives come from the same Rust crates the platform runs, so
-`makotest` and the system under test can never disagree about what "valid" means::
+`makotest` and the system under test can never disagree about what "valid"
+means, nor about when a Frist expires::
 
-    >>> from makotest import malo_from_base, add_werktage
-    >>> malo_from_base("5123869678")
+    >>> from makotest import malo_from_base, add_werktage, antwort_obligation
+    >>> malo_from_base("5123869601")
     '51238696012'
-    >>> add_werktage("2026-12-24", 2)   # skips Christmas + the weekend
+    >>> add_werktage("2026-12-24", 2)   # skips Christmas and the weekend
     '2026-12-29'
+    >>> antwort_obligation(55001).clock_time   # GPKE: a clock time, not n × 24 h
+    '11:00'
 
 Because validation runs the platform's own AHB engine, `makotest` proves process
 and integration behaviour — it is not an *independent* check of mako's format
@@ -36,71 +39,179 @@ except ImportError:  # pytest not installed — core still fully usable
     pass
 
 from ._native import (
+    AntwortObligation,
+    Envelope,
     Finding,
+    MessageReport,
     UtilmdTransaction,
     ValidationReport,
     ablehnung_pid,
     add_hours,
     add_werktage,
     answer_pids,
+    antwort_deadline,
+    antwort_obligation,
+    antwort_obligations,
     aperak_gas_folgeprozess_due_at,
     aperak_gas_initialprozess_due_at,
     aperak_strom_due_at,
+    berlin_day_bounds,
+    berlin_instant,
+    berlin_mtu_count,
     bestaetigung_pid,
+    bilanzierungsgebiet_from_prefix,
+    bilanzierungsgebiet_is_valid,
+    bilanzkreis_from_prefix,
+    bilanzkreis_is_valid,
+    bo4e_schema_version,
+    build_answer,
+    build_aperak,
+    build_aperak_for,
+    build_contrl,
+    build_contrl_for,
     build_interchange,
     build_mscons,
     build_utilmd,
+    cloudevent_core_attributes,
+    cloudevent_json_members,
     contrl_due_at,
     deadline_at_werktage,
+    eic_from_prefix,
+    eic_is_valid,
+    eic_type_char,
+    end_of_werktag_after,
+    event_matches,
+    event_type_exists,
+    event_types,
+    event_types_matching,
+    format_versions,
+    is_valid_extension_key,
     is_werktag,
     malo_check_digit,
     malo_from_base,
     malo_is_valid,
     melo_is_valid,
     message_types_of,
+    mp_id_authority,
+    mp_id_check_digit_schemes,
+    mp_id_from_base,
+    mp_id_is_valid,
+    mp_id_unb_qualifier,
     next_werktag,
+    next_werktag_at,
+    parse_cloudevent_time,
     pid_has_ahb_rules,
     pruefidentifikatoren,
+    release_for,
+    releases,
+    resource_id_from_base,
+    resource_id_is_valid,
+    resource_id_kinds,
     validate_edifact,
-    wim_antwort_frist_werktage,
 )
-from .assertions import assert_deadline_is
-from .simulators import BikoSim, ImsysSim, Klaerfall, MarktpartnerSim
+from .assertions import (
+    assert_answer_pid,
+    assert_bo4e_generation_matches,
+    assert_cloudevent,
+    assert_deadline_is,
+    assert_edifact_valid,
+    assert_event_emitted,
+    assert_frist_met,
+    assert_invoice_reconciles,
+    assert_no_event_emitted,
+    assert_rule_fires,
+    assert_rules_applied,
+    find_events,
+)
+from .simulators import BikoSim, ImsysSim, Klaerfall, MarktpartnerSim, Reply
 
 __all__ = [
+    "AntwortObligation",
     "BikoSim",
+    "Envelope",
     "Finding",
     "ImsysSim",
     "Klaerfall",
     "MarktpartnerSim",
+    "MessageReport",
+    "Reply",
     "UtilmdTransaction",
     "ValidationReport",
     "ablehnung_pid",
     "add_hours",
     "add_werktage",
     "answer_pids",
+    "antwort_deadline",
+    "antwort_obligation",
+    "antwort_obligations",
     "aperak_gas_folgeprozess_due_at",
     "aperak_gas_initialprozess_due_at",
     "aperak_strom_due_at",
+    "assert_answer_pid",
+    "assert_bo4e_generation_matches",
+    "assert_cloudevent",
     "assert_deadline_is",
+    "assert_edifact_valid",
+    "assert_event_emitted",
+    "assert_frist_met",
+    "assert_invoice_reconciles",
+    "assert_no_event_emitted",
+    "assert_rule_fires",
+    "assert_rules_applied",
+    "berlin_day_bounds",
+    "berlin_instant",
+    "berlin_mtu_count",
     "bestaetigung_pid",
-    "bo4e_generation",
+    "bilanzierungsgebiet_from_prefix",
+    "bilanzierungsgebiet_is_valid",
+    "bilanzkreis_from_prefix",
+    "bilanzkreis_is_valid",
+    "bo4e_schema_version",
+    "build_answer",
+    "build_aperak",
+    "build_aperak_for",
+    "build_contrl",
+    "build_contrl_for",
     "build_interchange",
     "build_mscons",
     "build_utilmd",
+    "cloudevent_core_attributes",
+    "cloudevent_json_members",
+    "contrl_due_at",
+    "deadline_at_werktage",
+    "eic_from_prefix",
+    "eic_is_valid",
+    "eic_type_char",
+    "end_of_werktag_after",
+    "event_matches",
+    "event_type_exists",
+    "event_types",
+    "event_types_matching",
+    "find_events",
+    "format_versions",
+    "is_valid_extension_key",
     "is_werktag",
     "malo_check_digit",
     "malo_from_base",
     "malo_is_valid",
     "melo_is_valid",
     "message_types_of",
+    "mp_id_authority",
+    "mp_id_check_digit_schemes",
+    "mp_id_from_base",
+    "mp_id_is_valid",
+    "mp_id_unb_qualifier",
     "next_werktag",
-    "contrl_due_at",
-    "deadline_at_werktage",
+    "next_werktag_at",
+    "parse_cloudevent_time",
     "pid_has_ahb_rules",
     "pruefidentifikatoren",
+    "release_for",
+    "releases",
+    "resource_id_from_base",
+    "resource_id_is_valid",
+    "resource_id_kinds",
     "validate_edifact",
-    "wim_antwort_frist_werktage",
 ]
 
 try:  # pragma: no cover - packaging metadata lookup
@@ -111,16 +222,3 @@ try:  # pragma: no cover - packaging metadata lookup
     __version__ = _pkg_version("makotest")
 except Exception:  # not installed (e.g. running from a source checkout)
     __version__ = "0.0.0+unknown"
-
-#: The BO4E release this toolkit's objects are generated from.
-#:
-#: mako's Rust side generates from the same release via ``rubo4e``. Testing
-#: v202607 objects against a platform on a different generation produces
-#: meaningless passes, so :func:`assert_bo4e_generation_matches` compares this
-#: against whatever the platform advertises.
-BO4E_GENERATION = "202607"
-
-
-def bo4e_generation() -> str:
-    """The BO4E release `makotest` builds business objects from."""
-    return BO4E_GENERATION
