@@ -60,7 +60,7 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
     // ── Registered, received, but not answerable ─────────────────────────────
     // 55557 (Änderung MSB-Abrechnungsdaten, GPKE Teil 4) has no Antwort mapping
     // in `response_pid_for`, so `gpke-supplier-change` cannot carry it to
-    // completion: spawning it yields a process the 24-hour BK6-22-024 deadline
+    // completion: spawning it yields a process the registered deadline
     // turns into a false `Rejected`. It stays registered so the router resolves
     // it; the receiving implementation is the missing piece.
     (

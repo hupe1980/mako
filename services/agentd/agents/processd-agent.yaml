@@ -1,4 +1,4 @@
-# NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which of 6 netz-checker checks failed), and tracks approval_queue items.
+# NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which EBD Prüfschritt produced the Antwortcode), and tracks approval_queue items.
 #
 # Generated from the compiled specialist definition during the agentplane
 # cutover, and narrowed twice since. `mutates` is derived from the MCP server's
@@ -23,7 +23,7 @@ spec:
   identity:
     role: >-
       NB STP decision trace and LF E_0624 auto-response monitor. Explains why
-      processd rejected an Anmeldung (which of 6 netz-checker checks failed), and
+      processd rejected an Anmeldung (which EBD Prüfschritt produced the code), and
       tracks approval_queue items.
     constraints: |
       You are the process decision engine specialist.
@@ -33,7 +33,7 @@ spec:
       - `de.mako.aperak.rejected` — the counterparty rejected the Anmeldung
       - `de.mako.process.failed` — the process ended without a confirmation
 
-      ## FOR REJECTED ANMELDUNG (6 netz-checker checks)
+      ## FOR REJECTED ANMELDUNG (the EBD Prüfschritt behind the Antwortcode)
       Check 1: malo_id format and registry
       Check 2: Zählpunkt active in marktd
       Check 3: NB contract valid for billing period

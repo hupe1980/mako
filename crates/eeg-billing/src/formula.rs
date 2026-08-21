@@ -493,7 +493,7 @@ pub fn calculate_settlement(input: &SettleInput) -> SettleOutput {
             let gekuerzt = validated_eur(eur * faktor);
             result.positions.push(crate::model::SettlePosition {
                 description: format!(
-                    "\u{00a7}51 Abs. 3 EEG: Meldung der Einspeisung w\u{00e4}hrend negativer                      Preise unterblieben \u{2014} {} % K\u{00fc}rzung ({tage} Kalendertage)",
+ "\u{00a7}51 Abs. 3 EEG: Meldung der Einspeisung w\u{00e4}hrend negativer Preise unterblieben \u{2014} {} % K\u{00fc}rzung ({tage} Kalendertage)",
                     (Decimal::ONE - faktor) * Decimal::from(100)
                 ),
                 legal_basis: "\u{00a7}51 Abs. 3 EEG".to_owned(),
@@ -1018,11 +1018,11 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             let (rate_ct, aw_cuts) = apply_aw_cuts(rate_ct, input);
             let (desc, basis) = match (ist_ausfallverguetung, neg_kwh.is_some()) {
                 (true, true) => (
-                    "Ausfallverg\u{00fc}tung \u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG                      (\u{2212}20 % nach \u{00a7}53 Abs. 3; \u{00a7}51 Negativpreisregel angewendet)",
+                    "Ausfallverg\u{00fc}tung \u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG (\u{2212}20 % nach \u{00a7}53 Abs. 3; \u{00a7}51 Negativpreisregel angewendet)",
                     "\u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG 2023",
                 ),
                 (true, false) => (
-                    "Ausfallverg\u{00fc}tung \u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG                      (\u{2212}20 % nach \u{00a7}53 Abs. 3)",
+                    "Ausfallverg\u{00fc}tung \u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG (\u{2212}20 % nach \u{00a7}53 Abs. 3)",
                     "\u{00a7}21 Abs. 1 Satz 1 Nr. 3 EEG 2023",
                 ),
                 (false, true) => (
@@ -1141,7 +1141,7 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
                     settlement_eur: None,
                     eligible_kwh: None,
                     positions: vec![crate::model::SettlePosition {
-                        description: "Marktpr\u{00e4}mie ohne anzulegenden Wert:                              direktverm_aw_ct fehlt oder ist null"
+ description: "Marktpr\u{00e4}mie ohne anzulegenden Wert: direktverm_aw_ct fehlt oder ist null"
                             .to_owned(),
                         legal_basis: "\u{00a7}20 EEG 2023 i.V.m. Anlage 1".to_owned(),
                         kwh: Decimal::ZERO,

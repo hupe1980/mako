@@ -3,7 +3,7 @@
 //! Covers GPKE Teil 2 §2.2 post-assignment notification: after a Lieferantenwechsel
 //! or Neuanlage has been processed, the Netzbetreiber (NB) sends a UTILMD 55607
 //! "Ankündigung Zuordnung LF" to the new Lieferant (LFN). The LFN must respond
-//! within 24 wall-clock hours (BK6-22-024 §4) with either Bestätigung (55608) or
+//! with either Bestätigung (55608) or
 //! Ablehnung (55609).
 //!
 //! This module implements the **receiving-party perspective** (Lieferant / LFN):
@@ -259,7 +259,8 @@ pub enum AnkuendigungZuordnungLfCommand {
     },
     /// Send the outbound UTILMD response (55608 = Bestätigung, 55609 = Ablehnung).
     ///
-    /// The LFN has 24 wall-clock hours (BK6-22-024 §4) to respond.
+    /// `mako_fristen::antwort` states no published window for 55607; the
+    /// caller's fallback applies and is reported as non-regulatory.
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that
         /// selects the response PID.
@@ -291,7 +292,8 @@ impl CommandPayload for AnkuendigungZuordnungLfCommand {}
 ///
 /// The NB sends a UTILMD 55607 "Ankündigung Zuordnung LF" to the new Lieferant
 /// (LFN) after a Lieferantenwechsel or Neuanlage has been processed. The LFN
-/// must respond within 24 wall-clock hours (BK6-22-024 §4).
+/// must respond inside the window `mako_fristen::antwort` resolves for the
+/// inbound PID.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore

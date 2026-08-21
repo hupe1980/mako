@@ -296,7 +296,7 @@ Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to
 
 | Process family | Unit | Function |
 |---|---|---|
-| GPKE | 24 wall-clock hours | `fristen::add_hours(t, 24)` |
+| GPKE | per-PID clock time on a Werktag (11:00 / 06:00 / 05:00 / 09:00 des 1. WT nach dem ÜT) | `mako_fristen::antwort::antwort_deadline(pid, received)` |
 | WiM Strom | 3 / 5 / 7 / 1 Werktage, per PID | `antwort_frist_werktage(pid)` → `fristen::deadline_at_werktage` |
 | GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
 | WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, BdewMaKo)` |
@@ -602,7 +602,7 @@ Partners are managed at runtime via the REST admin API — see
 
 | Crate | Process family | Key inbound PIDs | APERAK Frist |
 |---|---|---|---|
-| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, NB-Abmeldeanfrage (Beendigung der Zuordnung), Ersatz-/Grundversorgung, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55010 (55011/55012 out), 55013–55015, 55016–55018, 55555, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | **24 wall-clock hours** |
+| `mako-gpke` | GPKE — Lieferbeginn/-ende Strom, NB-Abmeldeanfrage (Beendigung der Zuordnung), Ersatz-/Grundversorgung, Neuanlage, ORDERS Sperrung (NB role), INVOIC billing, Konfiguration | 55001–55002, 55010 (55011/55012 out), 55013–55015, 55016–55018, 55555, 55600/55601, 17115–17117 (NB inbound), 31001–31008, 17134/17135, 19001/19002 | per PID, from `mako_fristen::antwort` |
 | `mako-wim` | WiM Strom — Messstellenwechsel, INSRPT Strom, WiM-Rechnung | 55039, 55042, 55051, 55168, 19001/19002, 23001/23003/23004/23008 | **3 / 5 / 7 / 1 Werktage**, per PID |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 (AWH Sperrprozesse Gas) | 44001–44021, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | **10 Werktage** |
 | `mako-wim-gas` | WiM Gas — Messstellenwechsel Gas, INSRPT Gas, WiM-Rechnung Gas (31003); co-hosts the Sparte-neutral universal Stornorechnung (31004) | 44039–44053, 44168–44170, 23005, 23009, 31003, 31004 | **10 Werktage** (31004 Storno: the invoice's **Zahlungsziel**, DTM+265) |

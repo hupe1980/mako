@@ -2,7 +2,7 @@
 
 End-to-end smoke test for the **NB STP auto-responder** — the core flow of German
 energy market communication: a UTILMD 55001 Anmeldung arrives at `makod`,
-`processd` evaluates it automatically via netz-checker, and a UTILMD 55002
+`processd` evaluates it automatically via `mako-pruefung`, and a UTILMD 55002
 Bestätigung is delivered to the ERP webhook within seconds.
 
 ## What runs in this demo
@@ -12,7 +12,7 @@ Bestätigung is delivered to the ERP webhook within seconds.
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `:8000` | In-memory ERP event receiver (Python) |
 | `marktd` | `:8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, EventBus fan-out |
-| `processd` | `:8580` | NB STP auto-responder — netz-checker Anmeldung (`E_0622`, 6 checks) and Abmeldung (`E_0607`); LF answers 55007/55010 inside their per-PID Frist |
+| `processd` | `:8580` | NB STP auto-responder — `mako-pruefung` Anmeldung (`E_0622` → `E_0623`) and Abmeldung (`E_0607`); LF answers 55007/55010 inside their per-PID Frist |
 | `makod` | `:8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
 The full platform has [17 production services](https://hupe1980.github.io/mako/docs/services/) — `invoicd`,
@@ -26,8 +26,8 @@ ERP        → PUT MaLo + preisblatt into marktd        (master data pre-load)
 ERP        → POST UTILMD 55001 to makod                (Anmeldung Lieferbeginn)
 makod      → de.mako.process.initiated to marktd        (ERP webhook, HMAC-signed)
 marktd     → fans out to processd via subscription
-processd   → GET /versorgung, GET /malo/grid, GET /partners  (netz-checker data fetch)
-processd   → 6 netz-checker checks → Accept
+processd   → GET /versorgung, GET /malo/grid, GET /partners  (mako-pruefung data fetch)
+processd   → mako-pruefung walks E_0622 → Accept (A51 from E_0623)
 processd   → gpke.lieferbeginn.bestaetigen to makod
 makod      → UTILMD 55002 Bestätigung to webhook        (ERP confirmation)
 ```
@@ -48,7 +48,7 @@ sequenceDiagram
     processd->>marktd: GET /versorgung/{malo_id}
     processd->>marktd: GET /malo/{malo_id}/grid
     processd->>marktd: GET /partners/{lf_mp_id}
-    Note over processd: netz-checker: 6 checks → Accept
+    Note over processd: mako-pruefung: E_0622 → Accept (A51)
     processd->>makod: gpke.lieferbeginn.bestaetigen
     makod-->>webhook: UTILMD 55002 Bestätigung Anmeldung
 ```
@@ -78,7 +78,7 @@ docker buildx bake makod marktd processd
 ```
 
 > The `processd-runtime` target compiles with `--features integrated`
-> (NB netz-checker + LF answer automation in one binary).
+> (NB `mako-pruefung` + LF answer automation in one binary).
 
 ## Quick start
 
@@ -125,9 +125,9 @@ Expected output:
 ✓ makod is ready
 ✓ marktd is ready
 ✓ PUT /api/v1/preisblaetter/9900357000004 → 204 (FV2026 preisblatt stored)
-✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for netz-checker)
+✓ PUT /api/v1/partners/4012345000023 → 200 (partner ready for mako-pruefung)
 ✓ PUT /api/v1/malos/17841584119 → 201  (version=1, makod cache push triggered)
-✓ PUT /api/v1/malos/17841584119/grid → 204  (grid record ready for netz-checker)
+✓ PUT /api/v1/malos/17841584119/grid → 204  (grid record ready for mako-pruefung)
 ✓ PUT /api/v1/subscriptions/smoke-test-sub → 200
 ✓ GET /health → ok  (instance: ...)
 ✓ PUT /admin/partners/4012345000023 → 200
@@ -199,7 +199,7 @@ curl http://localhost:8180/health | jq .
 
 ### Seed master data
 
-`netz-checker` needs these before the UTILMD arrives — plus the price sheet below:
+`mako-pruefung` needs these before the UTILMD arrives — plus the price sheet below:
 
 ```bash
 # LF partner directory (check 6)

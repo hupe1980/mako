@@ -171,7 +171,8 @@ impl MockGnb {
             .process
             .execute_and_collect(GasSupplierChangeCommand::SendAntwort {
                 accepted: positive,
-                reason: reason.map(str::to_owned),
+                antwort_code: if positive { "E15" } else { "E17" }.to_owned(),
+                bemerkung: reason.map(str::to_owned),
                 obligations: vec![],
             })
             .await

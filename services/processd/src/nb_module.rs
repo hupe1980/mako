@@ -51,7 +51,9 @@
 //! - § 20 EnWG parity: `initiator_is_affiliate` recorded on every decision
 
 use mako_markt::makod_client::{ForwardCommand, MakodClient};
-use mako_pruefung::nb::types::RejectReason;
+use mako_pruefung::nb::types::{
+    ErzeugungsAnmeldung, Geschaeftsvorfall, Marktlokationsart, Veraeusserungsform,
+};
 use mako_pruefung::{AnmeldungAnfrage, Messtyp, NbEntscheidung};
 use time::OffsetDateTime;
 use tracing::{info, warn};
@@ -145,9 +147,13 @@ pub struct AnmeldungPayload {
     /// SG4 STS Transaktionsgrund (DE9013) — e.g. `E01` Ein-/Auszug,
     /// `E03` Lieferantenwechsel. Drives the date-plausibility rules.
     pub transaktionsgrund: Option<String>,
-    /// `true` when the Anmeldung is for an Erzeugende (EEG-/KWKG-Einspeise-)
-    /// Marktlokation (STS 9013=ZW3). Triggers the §10c EEG Monatserster date rule.
-    pub ist_erzeugende_marktlokation: bool,
+    /// `SG4 STS+7` DE 9013 **element 3** — the Transaktionsgrundergänzung
+    /// (`ZW4` verbrauchende, `ZW3` erzeugende, `ZW5` Tranche, `ZAP` ruhende
+    /// Marktlokation). Decides which `E_0622` code space answers.
+    pub transaktionsgrund_ergaenzung: Option<String>,
+    /// `SG10 CCI+Z22` DE 7037 — the angemeldete Veräußerungsform of an
+    /// erzeugende Marktlokation (`Z90`/`Z91`/`Z92`/`Z94`).
+    pub veraeusserungsform: Option<String>,
     /// Bilanzierungsmethode from UTILMD TM+EM (`SLP` | `RLM` | `IMS`).
     pub bilanzierungsmethode: Option<String>,
 }
@@ -179,10 +185,14 @@ impl AnmeldungPayload {
             .get("transaktionsgrund")
             .and_then(|v| v.as_str())
             .map(ToOwned::to_owned);
-        let ist_erzeugende_marktlokation = data
-            .get("ist_erzeugende_marktlokation")
-            .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false);
+        let transaktionsgrund_ergaenzung = data
+            .get("transaktionsgrund_ergaenzung")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
+        let veraeusserungsform = data
+            .get("veraeusserungsform")
+            .and_then(|v| v.as_str())
+            .map(ToOwned::to_owned);
         let bilanzierungsmethode = data
             .get("bilanzierungsmethode")
             .and_then(|v| v.as_str())
@@ -206,7 +216,8 @@ impl AnmeldungPayload {
             bilanzierungsgebiet,
             process_date,
             transaktionsgrund,
-            ist_erzeugende_marktlokation,
+            transaktionsgrund_ergaenzung,
+            veraeusserungsform,
             bilanzierungsmethode,
         })
     }
@@ -214,19 +225,20 @@ impl AnmeldungPayload {
     /// Derive `AnmeldungAnfrage` for passing to `mako-pruefung`.
     pub fn into_anfrage(self) -> AnmeldungAnfrage {
         let sparte = sparte_of(self.pid);
-        // PID 55077 *is* the „Anmeldung erz. MaLo" use case, so the § 10c EEG
-        // Monatserster rule applies whether or not the adapter also surfaced
-        // the ZW3 Transaktionsgrundergänzung. Relying on the flag alone let a
-        // message without it take the ordinary LFW24 Werktag rule.
-        let ist_erzeugende_marktlokation = self.ist_erzeugende_marktlokation || self.pid == 55_077;
+        let marktlokationsart =
+            marktlokationsart_of(self.pid, self.transaktionsgrund_ergaenzung.as_deref());
+        let erzeugung = (marktlokationsart == Marktlokationsart::Erzeugend)
+            .then(|| {
+                erzeugung_of(
+                    self.transaktionsgrund_ergaenzung.as_deref(),
+                    self.veraeusserungsform.as_deref(),
+                )
+            })
+            .flatten();
         // Messtyp from the UTILMD TM+EM marker carried in the payload
         // (Z01=SLP, Z02=RLM, Z04=IMS → adapter emits "SLP"/"RLM"/"IMS").
         // Default SLP when absent — the conservative Vorlauffrist bound.
-        let messtyp = match self.bilanzierungsmethode.as_deref() {
-            Some("RLM") => Messtyp::Rlm,
-            Some("IMS") => Messtyp::Imsys,
-            _ => Messtyp::Slp,
-        };
+        let messtyp = messtyp_of(self.bilanzierungsmethode.as_deref());
         AnmeldungAnfrage {
             pid: self.pid,
             process_id: self.process_id,
@@ -238,9 +250,61 @@ impl AnmeldungPayload {
             sparte,
             messtyp,
             transaktionsgrund: self.transaktionsgrund,
-            ist_erzeugende_marktlokation,
+            marktlokationsart,
+            erzeugung,
         }
     }
+}
+
+/// Which `E_0622` / `E_0607` branch an inbound message belongs to.
+///
+/// PID 55077 **is** the Anwendungsfall „Anmeldung erzeugende Marktlokation", so
+/// it decides the branch on its own; otherwise the `SG4 STS+7` DE 9013 element 3
+/// Transaktionsgrundergänzung does. `ZW4` (verbrauchende Marktlokation) is the
+/// default the AHB marks Muss on every GPKE core process.
+fn marktlokationsart_of(pid: u32, ergaenzung: Option<&str>) -> Marktlokationsart {
+    if pid == 55_077 {
+        return Marktlokationsart::Erzeugend;
+    }
+    match ergaenzung {
+        Some("ZW3" | "ZW5") => Marktlokationsart::Erzeugend,
+        Some("ZAP") => Marktlokationsart::Ruhend,
+        _ => Marktlokationsart::Verbrauchend,
+    }
+}
+
+/// Build the erzeugende-Marktlokation facts from what the message carries.
+///
+/// Returns `None` when the Veräußerungsform is absent or unknown — `evaluate`
+/// then escalates, which is the § 20 EnWG-safe answer.
+///
+/// **`bestehende_veraeusserungsform` is deliberately `None` here.** It is the
+/// NB's own EEG-/KWKG-Register, not a wire fact, and `processd` has no reader
+/// for it yet; the engine escalates the Veräußerungsformwechsel question rather
+/// than assuming there was none. `ROADMAP.md` records the seam.
+fn erzeugung_of(
+    ergaenzung: Option<&str>,
+    veraeusserungsform: Option<&str>,
+) -> Option<ErzeugungsAnmeldung> {
+    let angemeldete = Veraeusserungsform::from_wire_code(veraeusserungsform?)?;
+    // `ZW5` marks a Tranche, which is Geschäftsvorfall 2 or 3; the two differ by
+    // whether the Tranche already exists, which the message does not say. Only
+    // the non-tranchierte case (`ZW3`) resolves to a Geschäftsvorfall here.
+    let geschaeftsvorfall = match ergaenzung {
+        Some("ZW5") => return None,
+        _ => Geschaeftsvorfall::Eins,
+    };
+    Some(ErzeugungsAnmeldung {
+        geschaeftsvorfall,
+        angemeldete_veraeusserungsform: angemeldete,
+        bestehende_veraeusserungsform: None,
+        // A „Nicht-EEG-/-KWKG"-Marktlokation carries no Klassentyp `Z22`
+        // („Gesetzliche Kategorie") at all, so it never reaches this branch: it
+        // takes the `None` path above and escalates. `Z92` is not it — that is
+        // sonstige Direktvermarktung, still an EEG plant.
+        nicht_eeg_kwkg: false,
+        ausfallverguetung: false,
+    })
 }
 
 // ── evaluate_and_decide ───────────────────────────────────────────────────────
@@ -362,21 +426,7 @@ pub async fn evaluate_and_decide(
     );
 
     // ── 5. Persist decision ───────────────────────────────────────────────
-    let (decision, antwortcode, detail) = match &result {
-        NbEntscheidung::Accept => (AnmeldungDecision::Accept, None, None),
-        NbEntscheidung::Reject(RejectReason {
-            antwortcode,
-            detail,
-            ..
-        }) => (
-            AnmeldungDecision::Reject,
-            Some(antwortcode.clone()),
-            Some(detail.clone()),
-        ),
-        NbEntscheidung::Escalate { reason } => {
-            (AnmeldungDecision::Escalate, None, Some(reason.clone()))
-        }
-    };
+    let (decision, antwortcode, detail) = classify(&result);
 
     let rec = AnmeldungDecisionRecord {
         id: Uuid::new_v4(),
@@ -401,7 +451,7 @@ pub async fn evaluate_and_decide(
 
     // ── 6. Dispatch command to makod ──────────────────────────────────────
     match &result {
-        NbEntscheidung::Accept => {
+        NbEntscheidung::Accept(_) => {
             // §20 EnWG Diskriminierungsfreiheitspflicht:
             // When the initiating LF shares the same MP-ID as our operator
             // (vertically integrated utility — §6b EnWG deployment), automatic
@@ -425,20 +475,9 @@ pub async fn evaluate_and_decide(
                 )
                 .await?;
             } else if config.auto_accept {
-                let cmd_body = ForwardCommand {
-                    marktrolle: Some("NB".to_owned()),
-                    command: answer_commands(pid).0.to_owned(),
-                    malo_id: Some(malo_id.clone()),
-                    melo_id: None,
-                    payload: serde_json::json!({ "process_id": process_id }),
-                };
-                makod
-                    .post_command(&format!("processd-nb-accept-{process_id}"), &cmd_body)
-                    .await
-                    .inspect_err(
-                        |e| warn!(%e, %process_id, "processd NB: bestaetigen dispatch failed"),
-                    )?;
-                info!(%process_id, pid, %malo_id, "processd NB: dispatched bestaetigen");
+                dispatch(makod, pid, &malo_id, process_id, &result).await?;
+                info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
+                      "processd NB: dispatched bestaetigen");
             } else {
                 info!(%process_id, pid, %malo_id, "processd NB: Accept held for operator confirmation (auto_accept = false)");
                 enqueue_for_operator(
@@ -452,22 +491,9 @@ pub async fn evaluate_and_decide(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            let cmd_body = ForwardCommand {
-                marktrolle: Some("NB".to_owned()),
-                command: answer_commands(pid).1.to_owned(),
-                malo_id: Some(malo_id.clone()),
-                melo_id: None,
-                payload: serde_json::json!({
-                    "process_id": process_id,
-                    "antwortcode": reason.antwortcode,
-                    "detail": reason.detail,
-                }),
-            };
-            makod
-                .post_command(&format!("processd-nb-reject-{process_id}"), &cmd_body)
-                .await
-                .inspect_err(|e| warn!(%e, %process_id, "processd NB: ablehnen dispatch failed"))?;
-            info!(%process_id, pid, %malo_id, erc = %reason.antwortcode, "processd NB: dispatched ablehnen");
+            dispatch(makod, pid, &malo_id, process_id, &result).await?;
+            info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
+                  "processd NB: dispatched ablehnen");
         }
         NbEntscheidung::Escalate { reason } => {
             warn!(%process_id, pid, %malo_id, %reason, "processd NB: Escalate — operator action required");
@@ -568,7 +594,8 @@ pub struct AbmeldungPayload {
     pub grid_operator_gln: String,
     pub abmeldedatum: time::Date,
     pub transaktionsgrund: Option<String>,
-    pub ist_erzeugende_marktlokation: bool,
+    /// `SG4 STS+7` DE 9013 element 3 — decides the `E_0607` branch.
+    pub transaktionsgrund_ergaenzung: Option<String>,
     pub bilanzierungsmethode: Option<String>,
 }
 
@@ -610,10 +637,10 @@ impl AbmeldungPayload {
                 .get("transaktionsgrund")
                 .and_then(|v| v.as_str())
                 .map(ToOwned::to_owned),
-            ist_erzeugende_marktlokation: data
-                .get("ist_erzeugende_marktlokation")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false),
+            transaktionsgrund_ergaenzung: data
+                .get("transaktionsgrund_ergaenzung")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned),
             bilanzierungsmethode: data
                 .get("bilanzierungsmethode")
                 .and_then(|v| v.as_str())
@@ -634,7 +661,11 @@ impl AbmeldungPayload {
             sparte: sparte_of(self.pid),
             messtyp: messtyp_of(self.bilanzierungsmethode.as_deref()),
             transaktionsgrund: self.transaktionsgrund,
-            ist_erzeugende_marktlokation: self.ist_erzeugende_marktlokation,
+            marktlokationsart: marktlokationsart_of(
+                self.pid,
+                self.transaktionsgrund_ergaenzung.as_deref(),
+            ),
+            erzeugung: None,
         }
     }
 }
@@ -732,7 +763,7 @@ async fn decide_abmeldung(
     };
 
     match &result {
-        NbEntscheidung::Accept => {
+        NbEntscheidung::Accept(_) => {
             // § 20 EnWG parity applies to the Abmeldung too: an affiliate must
             // not get an automatic path a third party does not get.
             if initiator_is_affiliate {
@@ -749,8 +780,9 @@ async fn decide_abmeldung(
                 )
                 .await?;
             } else if config.auto_accept {
-                dispatch(makod, pid, &malo_id, process_id, true, None).await?;
-                info!(%process_id, pid, %malo_id, "processd NB: dispatched Bestätigung Abmeldung");
+                dispatch(makod, pid, &malo_id, process_id, &result).await?;
+                info!(%process_id, pid, %malo_id, antwortcode = result.antwortcode(),
+                      "processd NB: dispatched Bestätigung Abmeldung");
             } else {
                 enqueue_for_operator(
                     queue,
@@ -763,16 +795,8 @@ async fn decide_abmeldung(
             }
         }
         NbEntscheidung::Reject(reason) => {
-            dispatch(
-                makod,
-                pid,
-                &malo_id,
-                process_id,
-                false,
-                Some((&reason.antwortcode, &reason.detail)),
-            )
-            .await?;
-            info!(%process_id, pid, %malo_id, erc = %reason.antwortcode,
+            dispatch(makod, pid, &malo_id, process_id, &result).await?;
+            info!(%process_id, pid, %malo_id, antwortcode = %reason.antwort.antwortcode,
                   "processd NB: dispatched Ablehnung Abmeldung");
         }
         NbEntscheidung::Escalate { reason } => {
@@ -794,17 +818,21 @@ fn received_at(event: &serde_json::Value) -> OffsetDateTime {
 }
 
 /// Map a `mako-pruefung` verdict onto the audit-log columns.
+///
+/// The Antwortcode is recorded on an **Accept** too: `SG4 STS+E01` is Muss on
+/// every Antwortnachricht, so a Bestätigung states `A51` / `A58` / `E15` and the
+/// § 20 EnWG parity log has to be able to show which one went out.
 fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Option<String>) {
     match result {
-        NbEntscheidung::Accept => (AnmeldungDecision::Accept, None, None),
-        NbEntscheidung::Reject(RejectReason {
-            antwortcode,
-            detail,
-            ..
-        }) => (
+        NbEntscheidung::Accept(a) => (
+            AnmeldungDecision::Accept,
+            Some(a.antwortcode.clone()),
+            Some(a.bedeutung.clone()),
+        ),
+        NbEntscheidung::Reject(r) => (
             AnmeldungDecision::Reject,
-            Some(antwortcode.clone()),
-            Some(detail.clone()),
+            Some(r.antwort.antwortcode.clone()),
+            Some(r.detail.clone()),
         ),
         NbEntscheidung::Escalate { reason } => {
             (AnmeldungDecision::Escalate, None, Some(reason.clone()))
@@ -812,32 +840,60 @@ fn classify(result: &NbEntscheidung) -> (AnmeldungDecision, Option<String>, Opti
     }
 }
 
-/// Post the answer command for `pid` to `makod`.
+/// Post the answer command for `pid` to `makod`, carrying the resolved
+/// Antwortcode.
+///
+/// **The code is the payload.** The AHB marks `SG4 STS+E01` Muss on every
+/// Antwortnachricht and restricts the code to the named EBD's cluster, so an
+/// answer dispatched as a bare `accepted: bool` renders a UTILMD with no
+/// Ablehnungsgrund at all — well-formed EDIFACT that says nothing. `makod`
+/// re-resolves `antwort_code` against `antwort_ebd` and derives the response PID
+/// from the published Cluster, so the two cannot disagree.
+///
+/// The Gas Codelisten are not named in `STS` DE 1131, so a Gas answer sends
+/// `zustimmung` alongside the code instead of an EBD id.
 async fn dispatch(
     makod: &MakodClient,
     pid: u32,
     malo_id: &str,
     process_id: Uuid,
-    accept: bool,
-    reject_reason: Option<(&str, &str)>,
+    result: &NbEntscheidung,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let (accept_cmd, reject_cmd) = answer_commands(pid);
+    let (antwort, accept, detail) = match result {
+        NbEntscheidung::Accept(a) => (a, true, None),
+        NbEntscheidung::Reject(r) => (&r.antwort, false, Some(r.detail.as_str())),
+        NbEntscheidung::Escalate { .. } => {
+            return Err("an escalated decision has no market answer to dispatch".into());
+        }
+    };
+
+    let mut payload = serde_json::json!({
+        "process_id":   process_id,
+        "antwort_code": antwort.antwortcode,
+        // The tree the code was resolved against — always present, and what
+        // `makod` re-validates on. The Gas Codelisten carry no DE 1131, so
+        // `antwort_ebd` is absent there while `antwort_tree` is not.
+        "antwort_tree": antwort.tree,
+        "zustimmung":   accept,
+    });
+    if let Some(ebd) = &antwort.ebd {
+        payload["antwort_ebd"] = serde_json::json!(ebd);
+    }
+    if let Some(detail) = detail {
+        // `FTX+ACB` — required alongside the catch-all codes, useful on all of
+        // them. `reason` is what makod forwards onto an APERAK.
+        payload["bemerkung"] = serde_json::json!(detail);
+        payload["reason"] = serde_json::json!(format!("{}: {detail}", antwort.antwortcode));
+        payload["detail"] = serde_json::json!(detail);
+    }
+
     let cmd = ForwardCommand {
         marktrolle: Some("NB".to_owned()),
         command: if accept { accept_cmd } else { reject_cmd }.to_owned(),
         malo_id: Some(malo_id.to_owned()),
         melo_id: None,
-        payload: match reject_reason {
-            Some((erc, detail)) => serde_json::json!({
-                "process_id": process_id,
-                "antwortcode": erc,
-                // makod forwards `reason` onto the APERAK; carry the code
-                // inside it so the ground survives the hop.
-                "reason": format!("{erc}: {detail}"),
-                "detail": detail,
-            }),
-            None => serde_json::json!({ "process_id": process_id }),
-        },
+        payload,
     };
     let verb = if accept { "accept" } else { "reject" };
     makod
@@ -880,19 +936,19 @@ mod tests {
             Some("11YF-VATTENFALL-2")
         );
         assert_eq!(payload.transaktionsgrund.as_deref(), Some("E01"));
-        // Absent flag → not an Erzeugende MaLo.
-        assert!(!payload.ist_erzeugende_marktlokation);
+        // No Transaktionsgrundergänzung → the default verbrauchende branch.
+        assert!(payload.transaktionsgrund_ergaenzung.is_none());
         // Messtyp derives from the TM+EM marker in the payload.
         let anfrage = payload.into_anfrage();
         assert_eq!(anfrage.messtyp, mako_pruefung::Messtyp::Rlm);
         assert_eq!(anfrage.transaktionsgrund.as_deref(), Some("E01"));
-        assert!(!anfrage.ist_erzeugende_marktlokation);
+        assert_eq!(anfrage.marktlokationsart, Marktlokationsart::Verbrauchend);
     }
 
     #[test]
-    fn parse_erzeugende_malo_sets_eeg_flag() {
-        // An Erzeugende (EEG-/KWKG-) MaLo Anmeldung carries the STS 9013=ZW3
-        // ergänzung, surfaced by the makod adapter as `ist_erzeugende_marktlokation`.
+    fn parse_erzeugende_malo_takes_the_erzeugende_branch() {
+        // `STS+7++E01:ZW3` — the Ergänzung is element 3 of DE 9013, a different
+        // composite from the Anmeldegrund, and the adapter now surfaces it raw.
         let event = serde_json::json!({
             "makopid": 55001,
             "subject": "550e8400-e29b-41d4-a716-446655440000",
@@ -902,16 +958,46 @@ mod tests {
                 "grid_operator": "9900000000001",
                 "process_date": "20261001",
                 "transaktionsgrund": "E01",
-                "ist_erzeugende_marktlokation": true
+                "transaktionsgrund_ergaenzung": "ZW3"
             }
         });
         let anfrage = AnmeldungPayload::parse(&event)
             .expect("should parse")
             .into_anfrage();
-        assert!(
-            anfrage.ist_erzeugende_marktlokation,
-            "ZW3 Erzeugende flag must reach the `mako-pruefung` to trigger §10c EEG"
+        assert_eq!(anfrage.marktlokationsart, Marktlokationsart::Erzeugend);
+        // No `CCI+Z22` on the message → the Veräußerungsform is unknown and
+        // `evaluate` escalates rather than picking one of six Vorlauffristen.
+        assert!(anfrage.erzeugung.is_none());
+    }
+
+    /// With the Veräußerungsform on the wire the engine has what `E_0622`
+    /// Prüfschritte 400–440 ask for.
+    #[test]
+    fn a_veraeusserungsform_reaches_the_engine() {
+        let event = serde_json::json!({
+            "makopid": 55_077,
+            "subject": "550e8400-e29b-41d4-a716-446655440021",
+            "data": {
+                "malo_id": "51238696012",
+                "new_supplier": "9900357000004",
+                "grid_operator": "9900000000001",
+                "process_date": "20261101",
+                "transaktionsgrund": "E03",
+                "transaktionsgrund_ergaenzung": "ZW3",
+                "veraeusserungsform": "Z91"
+            }
+        });
+        let anfrage = AnmeldungPayload::parse(&event)
+            .expect("parses")
+            .into_anfrage();
+        let erz = anfrage.erzeugung.expect("Veräußerungsform present");
+        assert_eq!(
+            erz.angemeldete_veraeusserungsform,
+            mako_pruefung::nb::types::Veraeusserungsform::Marktpraemie
         );
+        assert_eq!(erz.geschaeftsvorfall, Geschaeftsvorfall::Eins);
+        // The *bestehende* form is the NB's own register, not a wire fact.
+        assert!(erz.bestehende_veraeusserungsform.is_none());
     }
 
     #[test]
@@ -1101,7 +1187,7 @@ mod tests {
         let a = AnmeldungPayload::parse(&event)
             .expect("parses")
             .into_anfrage();
-        assert!(a.ist_erzeugende_marktlokation);
+        assert_eq!(a.marktlokationsart, Marktlokationsart::Erzeugend);
     }
 
     // ── Misdirection check ─────────────────────────────────────────────────────

@@ -205,7 +205,8 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
-        ist_erzeugende_marktlokation: false,
+        transaktionsgrund_ergaenzung: None,
+        veraeusserungsform: None,
         fallgruppe: None,
     })
     .await
@@ -261,8 +262,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
     let lfn_code = MarktpartnerCode::new(LFN_ID);
     let obligations = post_acceptance::lieferbeginn_obligations(55001, &malo, &lfn_code, None);
     nb.execute(SupplierChangeCommand::SendAntwort {
-        accepted: true,
-        reason: None,
+        antwort: nb_antwort(true, None),
         obligations,
     })
     .await
@@ -429,7 +429,8 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
-        ist_erzeugende_marktlokation: false,
+        transaktionsgrund_ergaenzung: None,
+        veraeusserungsform: None,
         fallgruppe: None,
     })
     .await
@@ -447,8 +448,7 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
     let lfn_code = MarktpartnerCode::new(LFN_ID);
     let obligations = post_acceptance::lieferbeginn_obligations(55001, &malo, &lfn_code, None);
     nb.execute(SupplierChangeCommand::SendAntwort {
-        accepted: true,
-        reason: None,
+        antwort: nb_antwort(true, None),
         obligations,
     })
     .await
@@ -537,4 +537,22 @@ async fn cross_fv_s2_2_response_accepted_on_s2_1_process() {
         "LFN (S2.1 process) must reach Active on S2.2-encoded acceptance; \
          got {lfn_final:?} — ForwardCompatible policy broken"
     );
+}
+
+/// The NB's answer code — `A51` (`E_0623`) for a Bestätigung, `A07` (`E_0622`)
+/// for an Ablehnung. `SG4 STS+E01` is Muss on every Antwortnachricht, so there
+/// is no codeless answer to construct.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = if accepted {
+        ("A51", "E_0623")
+    } else {
+        ("A07", "E_0622")
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: reason.map(ToOwned::to_owned),
+        termin: None,
+    }
 }

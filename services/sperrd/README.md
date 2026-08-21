@@ -37,13 +37,28 @@ what it needs:
 `ausfuehrung_am` and `fruehestens_am` are mutually exclusive, in the API and in a
 database `CHECK` — the AHB's conditions [55]/[56] make them alternatives.
 
-## Timing
+## Timing — three published clocks
 
-GPKE fixes **no execution deadline in Werktagen** for the physical act. The only
-date is the Lieferant's own, from `DTM+203` or `DTM+469`. BK6-22-024 §5's
-**24 wall-clock hours** is the deadline for the NB's ORDRSP, which `makod`
-tracks — not this service. A guard test keeps invented Werktage windows from
-creeping back in.
+BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state all three:
+
+| Clock | Frist | Tracked by |
+|---|---|---|
+| ORDRSP 19116 / 19117 answering the order | spätester ÜT ist der 1. WT nach dem ÜT | `makod` |
+| The **physical act** | 6 WT nach dem frühestmöglichen Sperrtermin | `ausfuehrung_faellig_am` |
+| IFTSTA 21039 | 1. WT nach dem Abschluss des Sperrauftrags | `iftsta_faellig_am` |
+
+The Lieferant's `DTM+203` / `DTM+469` is a fourth date and a different question —
+what the LF asked for, not what the Festlegung requires. `/stats` reports both:
+`overdue_pending` for the LF's date, `frist_ueberschritten` for the regulatory
+window. A pending order past its window is announced once as
+`de.sperr.ausfuehrung.ueberfaellig`.
+
+**Two Sperrversuche** per Sperrauftrag (§ 3.5.1.2 Nr. 5): `PUT …/fail` records
+the first failed visit and leaves the order queued; the second closes it, as does
+`endgueltig: true` for a legal or factual impossibility.
+
+A guard test rejects the two claims that contradict § 3.5.1.2 Nr. 1: a
+„2 Werktage" window, and the assertion that GPKE fixes none.
 
 ## Endpoints
 
@@ -88,7 +103,7 @@ routes.
 |------|-------------|
 | `list_sperr_orders` | The queue — filter by status, MaLo, or `due` |
 | `get_sperr_order` | One order, with its ORDERS provenance and IFTSTA state |
-| `get_sperr_stats` | Counters, including `iftsta_outstanding` / `iftsta_stuck` |
+| `get_sperr_stats` | Counters, including `frist_ueberschritten` (past the 6-WT execution window) and `iftsta_outstanding` / `iftsta_ueberfaellig` / `iftsta_stuck` |
 | `list_due_orders` | The field-dispatch list, with the Treffpunkt |
 
 Prompts: `execute-sperrung`, `iftsta-sweep`.

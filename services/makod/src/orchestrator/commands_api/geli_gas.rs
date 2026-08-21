@@ -596,24 +596,82 @@ pub(super) async fn dispatch_geli_gas_antwort(
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
 
-    let reason = payload
-        .get("reason")
+    // `SG4 STS+E01` is Muss on every Antwortnachricht, and the Gas Codelisten
+    // are a different alphabet from Strom's: `A16` where `E_0622` says `A02`,
+    // `ZC5` where it says `A06`, `E17` where it says `A07`. The code is resolved
+    // inside the tree the caller names — the Gas MIG does not carry DE 1131, so
+    // `antwort_tree` is the key and nothing rides on the wire beside the code.
+    let tree = payload
+        .get("antwort_tree")
+        .and_then(|v| v.as_str())
+        .unwrap_or(default_gas_tree(response_pid_code));
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "payload must contain \"antwort_code\" — the {tree} Antwortcode for \
+                 SG4 STS+E01, which the AHB marks Muss on every Antwortnachricht"
+            ))
+        })?
+        .to_owned();
+    let entry = mako_pruefung::codes::lookup(tree, &antwort_code).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} is not published by {tree}. Only codes from \
+             that Codeliste are admissible."
+        ))
+    })?;
+    if entry.ist_zustimmung() != positive {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} is a{} in {tree}, but the command asks for a{}. \
+             The published Cluster decides the answer PID.",
+            if entry.ist_zustimmung() {
+                " Zustimmung"
+            } else {
+                "n Ablehnung"
+            },
+            if positive {
+                " Bestätigung"
+            } else {
+                "n Ablehnung"
+            },
+        )));
+    }
+
+    let bemerkung = payload
+        .get("bemerkung")
+        .or_else(|| payload.get("reason"))
         .and_then(|v| v.as_str())
         .map(str::to_owned);
+    if entry.braucht_bemerkung && bemerkung.is_none() {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {antwort_code:?} requires a written Erläuterung in FTX+ACB — \
+             pass \"bemerkung\""
+        )));
+    }
 
-    // GeLi Gas uses SendAntwort — the GNB/LFA sends the UTILMD G Antwort.
-    let _ = response_pid_code; // recorded in audit log, not in SendAntwort
     dispatch_to_process::<GeliGasSupplierChangeWorkflow, _>(
         state,
         malo_id.as_str(),
         mako_geli_gas::WORKFLOW_NAME,
         move || GasSupplierChangeCommand::SendAntwort {
             accepted: positive,
-            reason: reason.clone(),
+            antwort_code: antwort_code.clone(),
+            bemerkung: bemerkung.clone(),
             obligations: vec![],
         },
     )
     .await
+}
+
+/// The Gas Codeliste that governs an answer PID, when the caller does not name
+/// one. An Anmeldung is answered out of `E_3005`/`E_3007`, an Abmeldung out of
+/// `E_3019`.
+const fn default_gas_tree(response_pid: u32) -> &'static str {
+    match response_pid {
+        44_005 | 44_006 => mako_pruefung::codes::EBD_ABMELDUNG_GAS_NB,
+        _ => mako_pruefung::codes::EBD_LIEFERBEGINN_GAS,
+    }
 }
 
 /// Settle or dispute a GeLi Gas AWH Sperrprozesse INVOIC (PID 31011).
@@ -858,7 +916,7 @@ async fn dispatch_geli_lf_antwort(
             "Antwortcode {antwort_code:?} is not published by {ebd}"
         ))
     })?;
-    answer_gas_supplier_change(state, payload, entry.ist_zustimmung()).await
+    answer_gas_supplier_change(state, payload, entry.ist_zustimmung(), antwort_code).await
 }
 
 /// Shared body for a process whose Codeliste this build does not carry.
@@ -874,14 +932,28 @@ async fn dispatch_geli_lf_antwort_uncoded(
                 "payload must state \"zustimmung\" (true = Bestätigung, false = Ablehnung)".into(),
             )
         })?;
-    answer_gas_supplier_change(state, payload, zustimmung).await
+    // No Codeliste for this process in this build, so the code cannot be
+    // resolved — but `SG4 STS+E01` is still Muss, so the caller must state one.
+    let antwort_code = payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "payload must contain \"antwort_code\" — the AHB marks SG4 STS+E01 Muss \
+                 on every Antwortnachricht"
+                    .into(),
+            )
+        })?;
+    answer_gas_supplier_change(state, payload, zustimmung, antwort_code).await
 }
 
 async fn answer_gas_supplier_change(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     accepted: bool,
+    antwort_code: &str,
 ) -> Result<DispatchOutcome, DispatchError> {
+    let antwort_code = antwort_code.to_owned();
     let malo_id = extract_malo_id(payload)?;
     let reason = payload
         .get("bemerkung")
@@ -895,7 +967,8 @@ async fn answer_gas_supplier_change(
         mako_geli_gas::WORKFLOW_NAME,
         move || GasSupplierChangeCommand::SendAntwort {
             accepted,
-            reason: reason.clone(),
+            antwort_code: antwort_code.clone(),
+            bemerkung: reason.clone(),
             obligations: vec![],
         },
     )

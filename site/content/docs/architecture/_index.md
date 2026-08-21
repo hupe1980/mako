@@ -435,9 +435,13 @@ Key facts:
   report and schedules a retry under the same idempotency key; exhausting the
   budget announces `de.sperr.iftsta.ausstehend` once. `/stats` separates
   `iftsta_outstanding` (in flight) from `iftsta_stuck` (needs a human).
-- **No Werktage execution deadline exists.** BK6-22-024 §5's 24 wall-clock hours
-  is the ORDRSP window, which `makod` tracks; the physical date is the
-  Lieferant's own.
+- **Three published clocks** (BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2): the
+  ORDRSP is due the 1. WT nach dem ÜT (`makod`); the physical act within
+  **6 Werktage** after the frühestmöglicher Sperrtermin; the IFTSTA 21039 the
+  1. WT nach dem Abschluss des Auftrags. The Lieferant's `DTM+203`/`DTM+469` is a
+  fourth date — what the LF asked for, not what the Festlegung requires.
+- **Two Sperrversuche** per Sperrauftrag (§ 3.5.1.2 Nr. 5): the first failed
+  visit is recorded and the order stays queued.
 
 See [`sperrd` Operator Guide](@/docs/services/sperrd.md).
 
@@ -551,7 +555,7 @@ sequenceDiagram
     processd->>marktd: GET /api/v1/versorgung/{malo_id}  (VersorgungsStatus)
     processd->>marktd: GET /api/v1/malos/{malo_id}/grid  (MaLo grid record)
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}  (partner known?)
-    Note over processd: netz_checker::evaluate<br/>check 1: grid record exists (else Escalate)<br/>check 2: MaLo participates in MaKo (A02)<br/>check 3: no Anmeldung in Bearbeitung (A06)<br/>check 4: date plausibility (A07 Strom / E17 Gas)<br/>check 5: Bilanzierungsgebiet match (A05)<br/>check 6: LF in partner directory (A05)<br/>→ Accept (or Reject/Escalate)
+    Note over processd: mako_pruefung::evaluate — E_0622 / G_0011<br/>grid record exists (else Escalate)<br/>15: Vorlauffrist (A07 Strom / E17 Gas)<br/>30: MaLo participates in MaKo (A02 / A16)<br/>60: Zuordnungsermächtigung, LF known (A05 / E13)<br/>70: no other Anmeldung in Bearbeitung (A06 / ZC5)<br/>→ Accept A51 (E_0623) · Reject · Escalate
     processd->>makod: POST /api/v1/commands  gpke.lieferbeginn.bestaetigen
     Note over makod: Workflow::handle → events + UTILMD 55003 outbox<br/>AtomicAppend::append_with_outbox (single WriteBatch)
     makod-->>LF: UTILMD PID 55002 Bestätigung Anmeldung (via AS4/REST)

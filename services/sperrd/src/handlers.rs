@@ -189,13 +189,28 @@ pub struct FailRequest {
     /// `SG15 STS DE9013` — the EBD Prüfschritt code from the "gescheitert"
     /// cluster (`A04`/`A05`/`A06` under EBD E_0472 for a Sperrung).
     pub pruefschritt_code: Option<String>,
+    /// `true` when no further Sperrversuch will be made — a court injunction, a
+    /// glaubhaft gemachter Verhinderungsgrund (§ 3.5.1.2 Nr. 5), or simply the
+    /// field team calling it off.
+    ///
+    /// Defaults to `false`: GPKE Teil 2 § 3.5.1.2 Nr. 5 gives the NB **two**
+    /// Sperrversuche within one Sperrauftrag, so an ordinary "nobody home"
+    /// report records the attempt and leaves the order in the queue. The second
+    /// failure closes it regardless of this flag.
+    #[serde(default)]
+    pub endgueltig: bool,
 }
 
 /// `PUT /api/v1/sperr-orders/{id}/fail`
 ///
-/// The order could not be carried out. Dispatches IFTSTA 21039
-/// (`STS Z13 gescheitert`) so the Lieferant learns *why* — meter access denied,
-/// safety block, address not found — instead of waiting out their ORDRSP window.
+/// A Sperrversuch that did not succeed.
+///
+/// The **first** one is recorded and the order stays in the queue: GPKE Teil 2
+/// § 3.5.1.2 Nr. 5 gives the NB two Sperrversuche within one Sperrauftrag, and
+/// answering `Z13 gescheitert` after one visit ends a process that still owes a
+/// second. The second attempt — or `endgueltig: true` for a legal or factual
+/// impossibility — closes the order and dispatches IFTSTA 21039 so the Lieferant
+/// learns *why* instead of waiting out their window.
 pub async fn fail_order(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -217,6 +232,7 @@ pub async fn fail_order(
     let outcome = Outcome::Failed {
         reason: req.reason.trim(),
         pruefschritt_code: req.pruefschritt_code.as_deref(),
+        endgueltig: req.endgueltig,
     };
     finish(&pool, &makod, id, &tenant, &outcome).await
 }
@@ -237,6 +253,31 @@ async fn finish(
 ) -> ApiResult<Response> {
     match report_outcome(pool, makod, id, tenant, outcome).await? {
         Reported::NotFound => Err(ApiError::NotFound),
+        // A Sperrversuch, not an outcome: the order is still owed a second
+        // visit, so no IFTSTA goes out and the LF's process stays open.
+        Reported::VersuchNotiert {
+            sperrversuche,
+            malo_id,
+        } => {
+            if let Outcome::Failed { reason, .. } = outcome {
+                events::versuch_gescheitert(pool, tenant, id, &malo_id, reason, sperrversuche)
+                    .await;
+            }
+            Ok((
+                StatusCode::ACCEPTED,
+                Json(serde_json::json!({
+                    "recorded": true,
+                    "status": "pending",
+                    "sperrversuche": sperrversuche,
+                    "iftsta_dispatched": false,
+                    "note": "Sperrversuch recorded. GPKE Teil 2 § 3.5.1.2 Nr. 5 allows two \
+                             attempts within one Sperrauftrag, so the order stays in the \
+                             queue and no IFTSTA 21039 is sent yet. Use endgueltig=true to \
+                             close it on a legal or factual impossibility.",
+                })),
+            )
+                .into_response())
+        }
         Reported::Recorded { iftsta_dispatched } => {
             events::outcome(pool, tenant, id, outcome, iftsta_dispatched).await;
             if iftsta_dispatched {

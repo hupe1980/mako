@@ -220,7 +220,7 @@ mako-obs         = { path = \"crates/mako-obs\", version = \"0.9\" }
 mako-service     = { path = \"crates/mako-service\", version = \"0.9\" }
 mako-plugin      = { path = \"crates/mako-plugin\", version = \"0.9\" }
 invoic-checker   = { path = \"crates/invoic-checker\", version = \"0.9\" }
-netz-checker     = { path = \"crates/netz-checker\", version = \"0.9\" }
+mako-pruefung    = { path = \"crates/mako-pruefung\", version = \"0.9\" }
 energy-billing   = { path = \"crates/energy-billing\", version = \"0.9\" }
 serde            = { version = \"1\", features = [\"derive\"] }
 ";

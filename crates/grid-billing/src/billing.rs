@@ -207,7 +207,9 @@ pub(crate) fn warn_if_straddles_turnover(
 /// |---|---|---|
 /// | 1 | Gas Grundpreis (Verrechnungspreis) | when `nne_grundpreis_eur_per_month` set (Gas only) |
 /// | next | Netznutzung Arbeit (§14a Modul 1 reduced) | Modul 1 flat reduction mode |
-/// | next | Netznutzung Arbeit HT + NT (§14a Modul 2) | ToU mode (BK6-22-300) |
+/// | next | Netznutzung Arbeit HT + ST + NT (§14a Modul 3) | zeitvariables Netzentgelt (BK6-22-300) |
+/// | next | Netznutzung Arbeit (§14a Modul 2, reduzierter Arbeitspreis) | prozentuale Reduzierung |
+/// | next | Netznutzung Arbeit je Dispatch-Intervall (§14a Modul 3 Spot) | spot-priced mode |
 /// | next | Netznutzung Arbeit | flat mode (no §14a) |
 /// | next | Netznutzung Leistung (StromNEV §17) | RLM only |
 /// | last | Konzessionsabgabe (KAV §2) | when `ka_satz_ct_per_kwh` set |
@@ -217,7 +219,8 @@ pub(crate) fn warn_if_straddles_turnover(
 /// - Gas Grundpreis position → `GasNEV §14`
 /// - Arbeit positions → `StromNEV §21` (or `GasNEV §14` for Gas)
 /// - §14a Modul 1 positions → `Sect14aEnwg { module: Modul1 }` + `BNetzA BK6-22-300`
-/// - §14a ToU positions → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK6-22-300`
+/// - §14a Modul 2 position → `Sect14aEnwg { module: Modul2 }` + `BNetzA BK6-22-300`
+/// - §14a Modul 3 positions (HT/ST/NT and Spot) → `Sect14aEnwg { module: Modul3 }` + `BNetzA BK6-22-300`
 /// - Leistung position → `StromNEV §17`
 /// - Konzessionsabgabe → `KAV §2 Abs. 2`
 ///
@@ -374,7 +377,8 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             severity: WarningSeverity::Warning,
             code: "ARBEITSPREIS_ONLY_OUTSIDE_SECT17_ABS6",
             message: format!(
-                "billed on an Arbeitspreis alone at {} with {arbeit} kWh/a —                  §17 Abs. 6 StromNEV allows this only in Niederspannung up to                  100 000 kWh/a",
+                "billed on an Arbeitspreis alone at {} with {arbeit} kWh/a — §17 Abs. 6 \
+                 StromNEV allows this only in Niederspannung up to 100 000 kWh/a",
                 ebene.label()
             ),
         });
@@ -634,7 +638,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
             warnings.push(SettlementWarning {
                 severity: WarningSeverity::Warning,
                 code: "LEISTUNGSPREIS_ON_GAS",
-                message: "a Leistungspreis was supplied on a Gas settlement — §17 StromNEV                           does not apply to gas, which prices capacity through the                           Kapazitätsentgelt of §15 GasNEV"
+                message: "a Leistungspreis was supplied on a Gas settlement — §17 StromNEV \
+                          does not apply to gas, which prices capacity through the \
+                          Kapazitätsentgelt of §15 GasNEV"
                     .to_owned(),
             });
         }
@@ -1439,7 +1445,8 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
                 severity: WarningSeverity::Warning,
                 code: "MSB_ABOVE_MSBG_POG",
                 message: format!(
-                    "Messstellenbetrieb {annual} EUR/a exceeds the §30 MsbG                      Preisobergrenze {pog} EUR/a for {kategorie:?} / {schuldner:?}"
+                    "Messstellenbetrieb {annual} EUR/a exceeds the §30 MsbG Preisobergrenze \
+                     {pog} EUR/a for {kategorie:?} / {schuldner:?}"
                 ),
             });
         }
@@ -1467,7 +1474,8 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
             severity: WarningSeverity::Warning,
             code: "BILLING_MONTHS_MISMATCH",
             message: format!(
-                "billing {billed} months of Messstellenbetrieb over a period of {} days                  (≈ {period_months:.1} months) — check the period or the month count",
+                "billing {billed} months of Messstellenbetrieb over a period of {} days \
+                 (≈ {period_months:.1} months) — check the period or the month count",
                 input.period.days()
             ),
         });

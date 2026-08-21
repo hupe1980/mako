@@ -589,10 +589,593 @@ pub const E_0406_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── E_0622 — Prüfen, ob Anmeldung direkt ablehnbar (55001/55077 → 55003/55080) ─
+
+/// EBD id of „Prüfen, ob Anmeldung direkt ablehnbar" — the Netzbetreiber's
+/// first tree on an inbound Strom Anmeldung.
+///
+/// Every code it publishes is an **Ablehnung**: the tree has no Zustimmung of
+/// its own. A message that survives it continues into `E_0621` and then
+/// [`EBD_LIEFERBEGINN`] (`E_0623`), which is where the Bestätigungscode comes
+/// from. That asymmetry is why `CODELISTEN`'s both-clusters invariant exempts
+/// this tree by name.
+pub const EBD_ANMELDUNG_DIREKT_ABLEHNBAR: &str = "E_0622";
+const E_0622: Option<&'static str> = Some(EBD_ANMELDUNG_DIREKT_ABLEHNBAR);
+
+/// `E_0622` — the codes of the **verbrauchende / ruhende** Marktlokation branch
+/// (Prüfschritte 15–70) and of the **erzeugende** branch (220–830).
+///
+/// The two branches are disjoint and reached by Prüfschritt 10; they share no
+/// code. `A06` „Andere Anmeldung in Bearbeitung" is the verbrauchende answer
+/// and `A45` the erzeugende one for the *same* condition — sending `A06` on an
+/// Anmeldung erzeugender Marktlokation is an undefined code, not a wrong reason.
+pub const E_0622_CODES: &[AntwortCode] = &[
+    // ── verbrauchende / ruhende Marktlokation (Prüfschritte 15–70) ──
+    code!(
+        "A07",
+        E_0622,
+        Ablehnung,
+        "Vorlauffrist wurde nicht eingehalten (Prüfschritt 15)"
+    ),
+    code!(
+        "A09",
+        E_0622,
+        Ablehnung,
+        "Bei der angemeldeten „ruhenden Marktlokation\" handelt es sich nicht um eine verbrauchende Marktlokation (Prüfschritt 18)"
+    ),
+    code!(
+        "A47",
+        E_0622,
+        Ablehnung,
+        "Die genannte Marktlokation entspricht nicht den Anforderungen, da die messtechnische Einordnung nicht iMS ist (Prüfschritt 22)"
+    ),
+    code!(
+        "A08",
+        E_0622,
+        Ablehnung,
+        "Bei der in der Anmeldung genannten Marktlokation (SG5 LOC+Z16) handelt es sich nicht um eine „Kundenanlage\" (Prüfschritt 25)"
+    ),
+    code!(
+        "A37",
+        E_0622,
+        Ablehnung,
+        "Die zu integrierende Marktlokation befindet sich nicht hinter der/den gleichen Netzlokation(en) wie die Marktlokation der Kundenanlage (Prüfschritt 26)"
+    ),
+    code!(
+        "A46",
+        E_0622,
+        Ablehnung,
+        "Die zu integrierende Marktlokation entspricht nicht den Anforderungen, da die messtechnische Einordnung nicht iMS ist (Prüfschritt 28)"
+    ),
+    code!(
+        "A02",
+        E_0622,
+        Ablehnung,
+        "Marktlokation, die über die Marktlokations-ID identifiziert wurde, nimmt nicht an der Marktkommunikation teil (Prüfschritt 30)"
+    ),
+    code!(
+        "A04",
+        E_0622,
+        Ablehnung,
+        "Falscher Prozess — es handelt sich um eine Anmeldung für eine Neuanlage (Prüfschritt 50)"
+    ),
+    code!(
+        "A05",
+        E_0622,
+        Ablehnung,
+        "Anforderungen können nicht erfüllt werden — die Abweichungen sind zu benennen (Prüfschritt 60)",
+        bemerkung
+    ),
+    code!(
+        "A06",
+        E_0622,
+        Ablehnung,
+        "Andere Anmeldung in Bearbeitung (Prüfschritt 70)"
+    ),
+    // ── erzeugende Marktlokation / Tranche (Prüfschritte 220–830) ──
+    code!(
+        "A21",
+        E_0622,
+        Ablehnung,
+        "Falscher Prozess — es handelt sich um einen „Einzug in Neuanlage\" (Prüfschritt 220)"
+    ),
+    code!(
+        "A24",
+        E_0622,
+        Ablehnung,
+        "Es liegt nicht an allen Messeinrichtungen, die für die Energiemengenermittlung der Marktlokation notwendig sind, die Messtechnik für eine viertelstündliche Messung vor (Prüfschritt 250)"
+    ),
+    code!(
+        "A25",
+        E_0622,
+        Ablehnung,
+        "Anforderungen können nicht erfüllt werden — die Abweichungen sind zu benennen (Prüfschritt 260)",
+        bemerkung
+    ),
+    code!(
+        "A45",
+        E_0622,
+        Ablehnung,
+        "Andere Anmeldung in Bearbeitung (Prüfschritt 270)"
+    ),
+    code!(
+        "A34",
+        E_0622,
+        Ablehnung,
+        "Die Vorlauffrist für eine „Nicht-EEG-/-KWKG\"-Marktlokation wurde nicht eingehalten (Geschäftsvorfall 1, Prüfschritt 406)"
+    ),
+    code!(
+        "A27",
+        E_0622,
+        Ablehnung,
+        "Vorgaben EEG nicht eingehalten — der Lieferbeginn ist nicht der 1. eines Kalendermonats, 00:00 Uhr (Geschäftsvorfall 1, Prüfschritt 410)"
+    ),
+    code!(
+        "A28",
+        E_0622,
+        Ablehnung,
+        "Die Vorlauffrist für EEG-/KWKG-Marktlokationen im Geschäftsvorfall 1 wurde nicht eingehalten (Prüfschritt 430)"
+    ),
+    code!(
+        "A29",
+        E_0622,
+        Ablehnung,
+        "Die verkürzte Vorlauffrist für EEG-/KWKG-Marktlokationen im Geschäftsvorfall 1 wurde nicht eingehalten (Prüfschritt 440)"
+    ),
+    code!(
+        "A30",
+        E_0622,
+        Ablehnung,
+        "Die Vorlauffrist für eine „Nicht-EEG-/-KWKG\"-Marktlokation im Geschäftsvorfall 2 wurde nicht eingehalten (Prüfschritt 610)"
+    ),
+    code!(
+        "A31",
+        E_0622,
+        Ablehnung,
+        "Der Lieferbeginn darf nur der 1. eines Kalendermonats, 00:00 Uhr sein (Geschäftsvorfall 2, Prüfschritt 620)"
+    ),
+    code!(
+        "A32",
+        E_0622,
+        Ablehnung,
+        "Die Vorlauffrist für EEG-/KWKG-Marktlokationen im Geschäftsvorfall 2 wurde nicht eingehalten (Prüfschritt 630)"
+    ),
+    code!(
+        "A35",
+        E_0622,
+        Ablehnung,
+        "Die Vorlauffrist für eine „Nicht-EEG-/-KWKG\"-Marktlokation wurde nicht eingehalten (Geschäftsvorfall 3, Prüfschritt 806)"
+    ),
+    code!(
+        "A44",
+        E_0622,
+        Ablehnung,
+        "Fristüberschreitung — die Vorlauffrist von einem Monat wurde nicht eingehalten (Geschäftsvorfall 3, Prüfschritt 810)"
+    ),
+];
+
+// ── E_0623 — Lieferbeginn prüfen (55001/55077 → 55002/55078 · 55003/55080) ────
+
+/// EBD id of „Lieferbeginn prüfen" — the tree that produces the **Bestätigung**
+/// of an Anmeldung, once `E_0622` has not refused it and the `E_0621` Anfrage
+/// zur Beendigung der Zuordnung (where one was needed) has been answered.
+///
+/// A Bestätigung is `A51` (verbrauchende / ruhende Marktlokation), `A58`
+/// (erzeugende Marktlokation, Geschäftsvorfall 1 / 2) or `A55` / `A56`
+/// (Geschäftsvorfall 3, with or without a direktvermarktungspflichtiger
+/// Restanteil). „Kein Code" is not one of the options: the AHB marks
+/// `SG4 STS+E01` Muss on every Antwortnachricht.
+pub const EBD_LIEFERBEGINN: &str = "E_0623";
+const E_0623: Option<&'static str> = Some(EBD_LIEFERBEGINN);
+
+/// `E_0623` — Lieferbeginn prüfen.
+pub const E_0623_CODES: &[AntwortCode] = &[
+    code!(
+        "A50",
+        E_0623,
+        Ablehnung,
+        "Der LFA hat der Anfrage zur Beendigung der Zuordnung widersprochen (Prüfschritt 50)"
+    ),
+    code!("A51", E_0623, Zustimmung, "Zustimmung (Prüfschritt 60)"),
+    code!(
+        "A53",
+        E_0623,
+        Ablehnung,
+        "Der gewünschte Prozentsatz an der Marktlokation ist nicht frei — keiner Anfrage zur Beendigung der Zuordnung wurde zugestimmt (Prüfschritt 510)"
+    ),
+    code!(
+        "A54",
+        E_0623,
+        Ablehnung,
+        "Der gewünschte Prozentsatz an der Marktlokation ist nicht frei (Prüfschritt 520)"
+    ),
+    code!(
+        "A55",
+        E_0623,
+        Zustimmung,
+        "Zustimmung unter Bildung einer neuen Tranche, mit Information über fehlende Anteile an der Marktlokation in der Bilanzierung (Prüfschritt 540)"
+    ),
+    code!(
+        "A56",
+        E_0623,
+        Zustimmung,
+        "Zustimmung unter Bildung einer neuen Tranche (Prüfschritt 600)"
+    ),
+    code!(
+        "A57",
+        E_0623,
+        Ablehnung,
+        "Der LFA hat der Anfrage zur Beendigung der Zuordnung widersprochen (Prüfschritt 440)"
+    ),
+    code!(
+        "A58",
+        E_0623,
+        Zustimmung,
+        "Zustimmung (erzeugende Marktlokation, Prüfschritt 450)"
+    ),
+    code!("A99", E_0623, Ablehnung, "Sonstiges", bemerkung),
+];
+
+// ── E_0607 — Abmeldung prüfen (55004 → 55005 / 55006) ────────────────────────
+
+/// EBD id of „Abmeldung prüfen" — the NB's tree on an inbound Strom Abmeldung.
+///
+/// `A02` here is „Vorlauffrist nicht eingehalten"; in
+/// [`EBD_ANMELDUNG_DIREKT_ABLEHNBAR`] the same
+/// string means „nimmt nicht an der Marktkommunikation teil". The lookup is
+/// per tree for exactly this reason.
+pub const EBD_ABMELDUNG_NB: &str = "E_0607";
+const E_0607: Option<&'static str> = Some(EBD_ABMELDUNG_NB);
+
+/// `E_0607` — Abmeldung prüfen.
+pub const E_0607_CODES: &[AntwortCode] = &[
+    code!(
+        "A01",
+        E_0607,
+        Ablehnung,
+        "Bei der in der Abmeldung genannten Marktlokation handelt es sich nicht um eine Kundenanlage (Prüfschritt 30)"
+    ),
+    code!(
+        "A02",
+        E_0607,
+        Ablehnung,
+        "Vorlauffrist nicht eingehalten (Prüfschritt 50)"
+    ),
+    code!(
+        "A05",
+        E_0607,
+        Ablehnung,
+        "Die Marktlokation wurde nicht innerhalb der letzten 3 Monate zur Ersatz-/Grundversorgung angemeldet — es kann sich nicht um eine Beendigung einer ESV handeln (Prüfschritt 80)"
+    ),
+    code!(
+        "A06",
+        E_0607,
+        Ablehnung,
+        "Die Aufhebung einer zukünftigen Zuordnung muss zu demselben Zeitpunkt angegeben werden, der im Lieferbeginn bestätigt wurde (Prüfschritt 90)"
+    ),
+    code!(
+        "A09",
+        E_0607,
+        Ablehnung,
+        "Lieferende zum Abmeldedatum wurde bereits bestätigt (Prüfschritt 120)"
+    ),
+    code!(
+        "A10",
+        E_0607,
+        Ablehnung,
+        "Lieferende zum Abmeldedatum wurde aus gleichem Grund bereits bestätigt (Prüfschritt 130)"
+    ),
+    code!("A11", E_0607, Zustimmung, "Zustimmung (Prüfschritt 140)"),
+    code!("A99", E_0607, Ablehnung, "Sonstiges", bemerkung),
+];
+
+// ── E_0608 — Anmeldung einer Zuordnung / Neuanlage (55600/55601 → 55602–55605) ─
+
+/// EBD id of „Anmeldung einer Zuordnung" — the NB's tree on a **Neuanlage**
+/// (GPKE Teil 2 § 2.2), where the Lieferant registers a Marktlokation that is
+/// being commissioned for the first time.
+///
+/// Prüfschritte 110 and 590 are the tree's own loop: an Anmeldung whose
+/// Marktlokation cannot yet be identified is **not refused** — the NB re-checks
+/// it daily and only answers `A07` / `A16` once it has been open for more than
+/// **60 Werktage**. That is why the answer Frist is 00:00 Uhr des 61. WT and
+/// not a day.
+pub const EBD_NEUANLAGE: &str = "E_0608";
+const E_0608: Option<&'static str> = Some(EBD_NEUANLAGE);
+
+/// `E_0608` — Anmeldung einer Zuordnung (Neuanlage).
+///
+/// Prüfschritte 10–130 are the verbrauchende branch (`A01`–`A09`), 500–610 the
+/// erzeugende one (`A10`–`A19`). `A09` and `A18` are the two Zustimmungen.
+pub const E_0608_CODES: &[AntwortCode] = &[
+    // verbrauchende Marktlokation (Prüfschritte 20–130)
+    code!(
+        "A01",
+        E_0608,
+        Ablehnung,
+        "Vorlauffrist wurde nicht eingehalten (Prüfschritt 20)"
+    ),
+    code!(
+        "A02",
+        E_0608,
+        Ablehnung,
+        "Identifizierte Marktlokation nimmt nicht an der Marktkommunikation teil; weiterhin handelt es sich nicht um eine Neuanlage (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0608,
+        Ablehnung,
+        "Keine Neuanlage, falscher Anwendungsfall (Prüfschritt 60)"
+    ),
+    code!(
+        "A04",
+        E_0608,
+        Ablehnung,
+        "Falscher Anwendungsfall — es ist bereits ein LF zugeordnet (Prüfschritt 70)"
+    ),
+    code!(
+        "A05",
+        E_0608,
+        Ablehnung,
+        "Marktlokation befindet sich zum Eingangsdatum der Meldung nicht mehr im Netzgebiet des NB (Prüfschritt 80)"
+    ),
+    code!(
+        "A06",
+        E_0608,
+        Ablehnung,
+        "Anforderungen können nicht erfüllt werden — die Abweichungen sind zu benennen (Prüfschritt 90)",
+        bemerkung
+    ),
+    code!(
+        "A07",
+        E_0608,
+        Ablehnung,
+        "Neu angelegte Marktlokation konnte nicht identifiziert werden (Prüfschritt 110 — mehr als 60 WT offen)"
+    ),
+    code!(
+        "A08",
+        E_0608,
+        Ablehnung,
+        "Keine- oder Mehrfachidentifizierung (Prüfschritt 55)"
+    ),
+    code!("A09", E_0608, Zustimmung, "Zustimmung (Prüfschritt 130)"),
+    // erzeugende Marktlokation / Tranche (Prüfschritte 500–610)
+    code!(
+        "A10",
+        E_0608,
+        Ablehnung,
+        "Vorlauffrist wurde nicht eingehalten (Prüfschritt 500)"
+    ),
+    code!(
+        "A11",
+        E_0608,
+        Ablehnung,
+        "Identifizierte Marktlokation nimmt nicht an der Marktkommunikation teil; weiterhin handelt es sich nicht um eine Neuanlage (Prüfschritt 520)"
+    ),
+    code!(
+        "A12",
+        E_0608,
+        Ablehnung,
+        "Keine Neuanlage, falscher Anwendungsfall (Prüfschritt 540)"
+    ),
+    code!(
+        "A13",
+        E_0608,
+        Ablehnung,
+        "Falscher Anwendungsfall — es ist bereits ein LF zugeordnet (Prüfschritt 550)"
+    ),
+    code!(
+        "A14",
+        E_0608,
+        Ablehnung,
+        "Marktlokation befindet sich zum Eingangsdatum der Meldung nicht mehr im Netzgebiet des NB (Prüfschritt 560)"
+    ),
+    code!(
+        "A15",
+        E_0608,
+        Ablehnung,
+        "Anforderungen können nicht erfüllt werden — die Abweichungen sind zu benennen (Prüfschritt 570)",
+        bemerkung
+    ),
+    code!(
+        "A16",
+        E_0608,
+        Ablehnung,
+        "Neu angelegte Marktlokation konnte nicht identifiziert werden (Prüfschritt 590 — mehr als 60 WT offen)"
+    ),
+    code!(
+        "A17",
+        E_0608,
+        Ablehnung,
+        "Keine- oder Mehrfachidentifizierung (Prüfschritt 535)"
+    ),
+    code!("A18", E_0608, Zustimmung, "Zustimmung (Prüfschritt 610)"),
+    code!(
+        "A19",
+        E_0608,
+        Ablehnung,
+        "Es liegt nicht an allen Messeinrichtungen, die für die Energiemengenermittlung der Marktlokation notwendig sind, die Messtechnik für eine viertelstündliche Messung vor (Prüfschritt 545)"
+    ),
+    code!("A99", E_0608, Ablehnung, "Sonstiges", bemerkung),
+];
+
+// ── E_3005 / E_3007 — Anmeldung Gas (44001 → 44002 / 44003) ──────────────────
+
+/// EBD id of the Gas „Prüfen, ob Anmeldung direkt ablehnbar" (Codeliste
+/// `G_0011`).
+///
+/// The Gas Ablehnungscodes are a **different alphabet** from Strom's: the
+/// „nimmt nicht an der Marktkommunikation teil" refusal is `A16`, not `A02`;
+/// „andere Anmeldung in Bearbeitung" is `ZC5`, not `A06`; a Fristüberschreitung
+/// is `E17`, not `A07`; and a Bilanzkreis-/Zuordnungsermächtigungsproblem is
+/// `E13`, not `A05`. Putting a Strom code on a 44003 is an undefined code.
+pub const EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS: &str = "E_3005";
+
+/// `E_3005` / `G_0011` — Ablehnung der Anmeldung (Gas).
+///
+/// The AHB requires the checks behind `A03`, `A04`, `A16` and `A17` to run
+/// **first**, before any of the Frist- or Bilanzierungsprüfungen.
+pub const E_3005_CODES: &[AntwortCode] = &[
+    code!("A03", None, Ablehnung, "Ablehnung (Keine Identifizierung)"),
+    code!(
+        "A04",
+        None,
+        Ablehnung,
+        "Ablehnung — Marktlokation befindet sich zum Eingangsdatum der Meldung nicht mehr im Netzgebiet des NB"
+    ),
+    code!(
+        "A16",
+        None,
+        Ablehnung,
+        "Ablehnung — identifizierte Marktlokation nimmt nicht an der Marktkommunikation teil"
+    ),
+    code!(
+        "A17",
+        None,
+        Ablehnung,
+        "Ablehnung (Mehrfachidentifizierung)"
+    ),
+    code!(
+        "E13",
+        None,
+        Ablehnung,
+        "Ablehnung (Bilanzierungsproblem) — der Bilanzkreis ist unbekannt oder Bilanzkreis/Zeitreihentyp sind in der Zuordnungsermächtigung nicht aufgeführt"
+    ),
+    code!("E14", None, Ablehnung, "Ablehnung Sonstiges", bemerkung),
+    code!(
+        "E17",
+        None,
+        Ablehnung,
+        "Ablehnung wegen Fristüberschreitung"
+    ),
+    code!(
+        "Z08",
+        None,
+        Ablehnung,
+        "Ablehnung (Transaktion schon stattgefunden)"
+    ),
+    code!(
+        "Z09",
+        None,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+    code!("Z14", None, Ablehnung, "Ablehnung (Doppelmeldung)"),
+    code!(
+        "Z35",
+        None,
+        Ablehnung,
+        "Ablehnung der Abmeldeanfrage — negative Antwort des LFA auf die Abmeldeanfrage des NB"
+    ),
+    code!(
+        "ZC5",
+        None,
+        Ablehnung,
+        "Ablehnung (andere Anmeldung in Bearbeitung)"
+    ),
+    code!(
+        "ZE2",
+        None,
+        Ablehnung,
+        "Ablehnung Kapazitätsproblem — im angemeldeten Marktgebiet ist keine Kapazität vorhanden"
+    ),
+];
+
+/// EBD id of the Gas „Lieferbeginn prüfen" (Codelisten `G_0012` Bestätigung and
+/// `G_0011` Ablehnung).
+pub const EBD_LIEFERBEGINN_GAS: &str = "E_3007";
+
+/// `E_3007` — Bestätigung (`G_0012`) und Ablehnung (`G_0011`) der Gas-Anmeldung.
+pub const E_3007_CODES: &[AntwortCode] = &[
+    code!("E15", None, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!("Z01", None, Zustimmung, "Zustimmung mit Terminänderung"),
+    code!(
+        "Z43",
+        None,
+        Zustimmung,
+        "Zustimmung mit Korrektur von bilanzierungsrelevanten Daten"
+    ),
+    code!(
+        "Z44",
+        None,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!(
+        "E13",
+        None,
+        Ablehnung,
+        "Ablehnung (Bilanzierungsproblem) — der Bilanzkreis ist unbekannt oder Bilanzkreis/Zeitreihentyp sind in der Zuordnungsermächtigung nicht aufgeführt"
+    ),
+    code!("E14", None, Ablehnung, "Ablehnung Sonstiges", bemerkung),
+    code!(
+        "E17",
+        None,
+        Ablehnung,
+        "Ablehnung wegen Fristüberschreitung"
+    ),
+    code!(
+        "Z08",
+        None,
+        Ablehnung,
+        "Ablehnung (Transaktion schon stattgefunden)"
+    ),
+    code!(
+        "Z09",
+        None,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+    code!("Z14", None, Ablehnung, "Ablehnung (Doppelmeldung)"),
+    code!(
+        "Z35",
+        None,
+        Ablehnung,
+        "Ablehnung der Abmeldeanfrage — negative Antwort des LFA auf die Abmeldeanfrage des NB"
+    ),
+];
+
+// ── E_3019 — Abmeldung prüfen Gas (44004 → 44005 / 44006) ────────────────────
+
+/// EBD id of the Gas „Abmeldung prüfen" (Codelisten `G_0007` Ablehnung and
+/// `G_0008` Bestätigung).
+///
+/// Four Ablehnungscodes only — the Strom tree's `A02` / `A09` / `A10` do not
+/// exist here. A Fristüberschreitung is `E17`; a Lieferende that was already
+/// confirmed is `Z08`; a redelivered message is `Z14`.
+pub const EBD_ABMELDUNG_GAS_NB: &str = "E_3019";
+
+/// `E_3019` — Bestätigung (`G_0008`) und Ablehnung (`G_0007`) der Gas-Abmeldung.
+pub const E_3019_CODES: &[AntwortCode] = &[
+    code!("E15", None, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!("Z01", None, Zustimmung, "Zustimmung mit Terminänderung"),
+    code!("E14", None, Ablehnung, "Ablehnung Sonstiges", bemerkung),
+    code!(
+        "E17",
+        None,
+        Ablehnung,
+        "Ablehnung wegen Fristüberschreitung"
+    ),
+    code!(
+        "Z08",
+        None,
+        Ablehnung,
+        "Ablehnung (Transaktion schon stattgefunden)"
+    ),
+    code!("Z14", None, Ablehnung, "Ablehnung (Doppelmeldung)"),
+];
+
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
 /// Every Codeliste this crate knows, keyed by its EBD id.
 pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
+    (EBD_ANMELDUNG_DIREKT_ABLEHNBAR, E_0622_CODES),
+    (EBD_LIEFERBEGINN, E_0623_CODES),
+    (EBD_ABMELDUNG_NB, E_0607_CODES),
+    (EBD_NEUANLAGE, E_0608_CODES),
+    (EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, E_3005_CODES),
+    (EBD_LIEFERBEGINN_GAS, E_3007_CODES),
+    (EBD_ABMELDUNG_GAS_NB, E_3019_CODES),
     (EBD_ABMELDUNG, E_0609_CODES),
     (EBD_BEENDIGUNG_ZUORDNUNG, E_0624_CODES),
     (EBD_KUENDIGUNG, E_0614_CODES),
@@ -607,6 +1190,29 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     ("E_0606", E_0606_CODES),
     (EBD_NETZNUTZUNGSRECHNUNG, E_0406_CODES),
 ];
+
+/// The trees that publish **Ablehnungscodes only**, each paired with the tree
+/// its Zustimmung comes from.
+///
+/// A „Prüfen, ob Anmeldung direkt ablehnbar" tree is a pre-check: it can refuse
+/// a message but never agree to one. Surviving it means continuing into the
+/// tree named here, which is where the Bestätigungscode is drawn from. Listing
+/// the pairs makes the asymmetry a stated fact rather than a gap the
+/// both-clusters invariant has to be silent about — and it is what a caller
+/// needs to know to answer at all.
+pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
+    (EBD_ANMELDUNG_DIREKT_ABLEHNBAR, EBD_LIEFERBEGINN),
+    (EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, EBD_LIEFERBEGINN_GAS),
+];
+
+/// The tree a Vorprüfung hands a surviving message to, if `ebd` is one.
+#[must_use]
+pub fn zustimmung_tree_of(ebd: &str) -> Option<&'static str> {
+    VORPRUEFUNG_TREES
+        .iter()
+        .find(|(vor, _)| *vor == ebd)
+        .map(|(_, ok)| *ok)
+}
 
 /// Look a code up inside the EBD that publishes it.
 ///
@@ -627,15 +1233,19 @@ mod tests {
     /// Every UTILMD-answered Codeliste must offer both a way to agree and a way
     /// to refuse; a tree with only one cluster cannot answer its process.
     ///
-    /// `E_0406` is exempt: a REMADV Bestätigung (33001) carries no `AJT` at
-    /// all, so the tree publishes Ablehnungscodes only.
+    /// Two kinds of tree are exempt, and both must say so out loud:
+    /// `E_0406` answers a REMADV Abweisung, whose Bestätigung (33001) carries
+    /// no `AJT` at all; and a Vorprüfung named in [`VORPRUEFUNG_TREES`] hands a
+    /// surviving message to the tree that holds its Zustimmung.
     #[test]
     fn every_codeliste_has_both_clusters() {
         for (ebd, codes) in CODELISTEN {
-            if *ebd == EBD_NETZNUTZUNGSRECHNUNG {
+            let ablehnung_only =
+                *ebd == EBD_NETZNUTZUNGSRECHNUNG || zustimmung_tree_of(ebd).is_some();
+            if ablehnung_only {
                 assert!(
                     codes.iter().all(|c| !c.ist_zustimmung()),
-                    "{ebd} answers a REMADV Abweisung and has no Zustimmungscode"
+                    "{ebd} is declared Ablehnung-only but publishes a Zustimmungscode"
                 );
                 continue;
             }
@@ -648,6 +1258,54 @@ mod tests {
                 "{ebd} has no Ablehnungscode"
             );
         }
+    }
+
+    /// The tree a Vorprüfung defers to must itself be a Codeliste this crate
+    /// knows, and must carry a Zustimmung — otherwise a message that passes
+    /// every check still has no code to be confirmed with.
+    #[test]
+    fn a_vorpruefung_defers_to_a_tree_that_can_agree() {
+        for (vor, ok) in VORPRUEFUNG_TREES {
+            let codes = CODELISTEN
+                .iter()
+                .find(|(id, _)| id == ok)
+                .unwrap_or_else(|| panic!("{vor} defers to unknown tree {ok}"))
+                .1;
+            assert!(
+                codes.iter().any(AntwortCode::ist_zustimmung),
+                "{vor} defers to {ok}, which has no Zustimmungscode"
+            );
+        }
+    }
+
+    /// `A06` is „andere Anmeldung in Bearbeitung" for a verbrauchende
+    /// Marktlokation. The erzeugende branch of the same tree answers the same
+    /// condition with `A45`, and Gas answers it with `ZC5` — three codes, one
+    /// question, and no tree publishes another's.
+    #[test]
+    fn the_same_condition_has_a_different_code_per_branch_and_sparte() {
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, "A06").is_some());
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, "A45").is_some());
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, "ZC5").is_some());
+        // The Strom codes are not Gas codes.
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, "A06").is_none());
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, "A07").is_none());
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, "A05").is_none());
+        // …and the Gas codes are not Strom codes.
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, "E17").is_none());
+        assert!(lookup(EBD_ANMELDUNG_DIREKT_ABLEHNBAR, "ZC5").is_none());
+    }
+
+    /// The Gas Abmeldung tree has no `A02` / `A09` / `A10`: the Strom Abmeldung
+    /// codes are undefined on a 44006.
+    #[test]
+    fn the_gas_abmeldung_tree_has_no_strom_codes() {
+        for code in ["A02", "A09", "A10"] {
+            assert!(lookup(EBD_ABMELDUNG_NB, code).is_some(), "Strom {code}");
+            assert!(lookup(EBD_ABMELDUNG_GAS_NB, code).is_none(), "Gas {code}");
+        }
+        assert!(lookup(EBD_ABMELDUNG_GAS_NB, "E17").is_some());
+        assert!(lookup(EBD_ABMELDUNG_GAS_NB, "Z08").is_some());
     }
 
     /// A code is looked up *within* its tree: `A32` is an `E_0624` code and

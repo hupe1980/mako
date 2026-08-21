@@ -266,7 +266,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .execute_with(
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
             aperak_ctx,

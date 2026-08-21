@@ -356,7 +356,8 @@ impl MockNb {
                     bilanzierungsmethode: None,
                     fallgruppe: None,
                     transaktionsgrund: None,
-                    ist_erzeugende_marktlokation: false,
+                    transaktionsgrund_ergaenzung: None,
+                    veraeusserungsform: None,
                     validation_passed: true,
                     validation_errors: vec![],
                 }
@@ -387,8 +388,7 @@ impl MockNb {
         let (_, outbox) = self
             .process
             .execute_and_collect(SupplierChangeCommand::SendAntwort {
-                accepted,
-                reason: reason.map(str::to_owned),
+                antwort: nb_antwort(accepted, reason),
                 obligations,
             })
             .await
@@ -754,5 +754,25 @@ async fn e2e_lieferantenwechsel_strom_nb_rejects() {
         assert_eq!(data.location_id.as_str(), MALO_ID);
         assert_eq!(data.sender.as_str(), LFN_ID);
         assert_eq!(data.receiver.as_str(), LFA_ID);
+    }
+}
+
+/// The NB's answer, resolved from the tree that governs the inbound PID.
+///
+/// A Bestätigung of a Lieferbeginn is `A51` out of `E_0623`; of a Lieferende
+/// `A11` out of `E_0607`. An Ablehnung uses that tree's Vorlauffrist code —
+/// `A07` (`E_0622`) and `A02` (`E_0607`) respectively. `SG4 STS+E01` is Muss on
+/// every Antwortnachricht, so there is no "no code" answer to construct.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = match (accepted, reason.is_some()) {
+        (true, _) => ("A51", "E_0623"),
+        (false, _) => ("A07", "E_0622"),
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: reason.map(ToOwned::to_owned),
+        termin: None,
     }
 }

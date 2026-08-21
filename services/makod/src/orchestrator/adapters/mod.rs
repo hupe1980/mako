@@ -806,6 +806,29 @@ pub fn extract_bilanzierungsmethode(segs: &[OwnedSegment]) -> Option<String> {
         })
 }
 
+/// Extract the **Veräußerungsform** of an erzeugende Marktlokation from a
+/// UTILMD segment list — `SG10 CCI+Z22++<DE 7037>`.
+///
+/// UTILMD MIG Strom S2.2 Segmentlayout SG10 (Zähler 0500/0510) names Klassentyp
+/// `Z22` „Gesetzliche Kategorie" and the four Merkmale:
+///
+/// | Code | Veräußerungsform |
+/// |---|---|
+/// | `Z90` | Einspeisevergütung (§ 21 Abs. 1 Nr. 1) bzw. Ausfallvergütung (Nr. 2) |
+/// | `Z91` | Marktprämie — geförderte Direktvermarktung |
+/// | `Z92` | sonstige Direktvermarktung, ohne gesetzliche Vergütung |
+/// | `Z94` | KWKG-Vergütung |
+///
+/// Read by DE 7059 **and** DE 7037, like every other SG10 characteristic: the
+/// two code spaces overlap, so a bare scan for `Z91` would also hit an
+/// unrelated Merkmal in another Klassentyp.
+#[must_use]
+pub fn extract_veraeusserungsform(segs: &[OwnedSegment]) -> Option<String> {
+    cci_merkmal_of_class(segs, "Z22")
+        .filter(|m| matches!(*m, "Z90" | "Z91" | "Z92" | "Z94"))
+        .map(ToOwned::to_owned)
+}
+
 // ── SG10 `CCI`/`CAV` characteristics ─────────────────────────────────────────
 //
 // Every characteristic in UTILMD SG10 is a `CCI` optionally followed by one or

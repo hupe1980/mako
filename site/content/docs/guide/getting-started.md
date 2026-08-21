@@ -17,7 +17,7 @@ complete end-to-end flow: UTILMD 55001 → automatic NB decision → UTILMD 5500
 | `postgres` | `5432` | PostgreSQL — one database per service |
 | `webhook` | `8000` | Demo ERP event receiver (Python, in-memory) |
 | `marktd` | `8180` | Market Data Hub — MaLo/MeLo/NeLo/TR, VersorgungsStatus, durable fan-out, `event_log` replay |
-| `processd` | `8580` | NB STP auto-responder — `mako-pruefung` (6 checks), LF answers 55007/55010 (24 h) |
+| `processd` | `8580` | NB STP auto-responder — `mako-pruefung` (`E_0622`/`G_0011`), LF answers 55007/55010 inside their per-PID Frist |
 | `makod` | `8080` | EDIFACT process engine — GPKE/WiM/GeLi Gas, in-memory |
 
 ```mermaid
@@ -36,7 +36,7 @@ sequenceDiagram
     processd->>marktd: GET /api/v1/versorgung/{malo_id}
     processd->>marktd: GET /api/v1/malos/{malo_id}/grid
     processd->>marktd: GET /api/v1/partners/{lf_mp_id}
-    Note over processd: `mako-pruefung`: 6 checks → Accept
+    Note over processd: `mako-pruefung`: E_0622 → Accept (A51)
     processd->>makod: gpke.lieferbeginn.bestaetigen
     makod-->>webhook: UTILMD 55002 Bestätigung
 ```

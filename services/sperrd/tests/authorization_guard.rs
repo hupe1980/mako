@@ -144,10 +144,16 @@ fn the_mcp_surface_stays_read_only() {
     }
 }
 
+/// No invented citation may appear.
+///
+/// The execution window is **6 Werktage** — BK6-24-174 GPKE Teil 2 § 3.5.1.2
+/// Nr. 1: „Die Sperrung der Marktlokation ist durch den NB spätestens innerhalb
+/// von 6 WT nach dem frühestmöglichen Sperrtermin durchzuführen." This guard
+/// forbids the three claims that contradict it: a „2 Werktage" window,
+/// BK6-22-024 §3.4 / §9 (neither exists), and the assertion that GPKE fixes no
+/// window at all.
 #[test]
 fn no_fabricated_regulatory_citations_remain() {
-    // GPKE fixes no Werktage window for the physical act, and BK6-22-024 has no
-    // §3.4 or §9. Nothing in this service may claim otherwise.
     let sources: Vec<(&str, String)> = ["src/handlers.rs", "src/mcp_server.rs", "src/pg.rs"]
         .iter()
         .map(|p| {
@@ -176,7 +182,19 @@ fn no_fabricated_regulatory_citations_remain() {
         for phrase in ["2 Werktage", "2-Werktage"] {
             assert!(
                 !src.contains(phrase),
-                "{path} names a {phrase:?} execution window; GPKE defines none"
+                "{path} names a {phrase:?} execution window; GPKE Teil 2 § 3.5.1.2 \
+                 Nr. 1 fixes 6 Werktage"
+            );
+        }
+        for phrase in [
+            "no execution deadline in Werktagen",
+            "kein Werktage-Fenster",
+            "GPKE defines none",
+        ] {
+            assert!(
+                !src.contains(phrase),
+                "{path} claims GPKE fixes no execution window; § 3.5.1.2 Nr. 1 fixes \
+                 6 Werktage after the frühestmöglicher Sperrtermin"
             );
         }
     }

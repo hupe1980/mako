@@ -196,7 +196,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
-            ist_erzeugende_marktlokation: false,
+            transaktionsgrund_ergaenzung: None,
+            veraeusserungsform: None,
             fallgruppe: None,
         })
         .await?;
@@ -256,8 +257,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let aperak_envs = process
         .execute_with(
             SupplierChangeCommand::SendAntwort {
-                accepted: true,
-                reason: None,
+                antwort: nb_antwort(true, None),
                 // Build GPKE Teil 3/4 post-acceptance obligations via the
                 // domain helper (MSCONS 13015; ORDERS 17134 omitted — no MSB
                 // GLN available in this example).
@@ -382,7 +382,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             bilanzierungsgebiet: None,
             bilanzierungsmethode: None,
             transaktionsgrund: None,
-            ist_erzeugende_marktlokation: false,
+            transaktionsgrund_ergaenzung: None,
+            veraeusserungsform: None,
             fallgruppe: None,
         })
         .await
@@ -439,4 +440,22 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("══════════════════════════════════════════════════════════════════");
 
     Ok(())
+}
+
+/// The NB's answer code — `A51` (`E_0623`) for a Bestätigung, `A07` (`E_0622`)
+/// for an Ablehnung. `SG4 STS+E01` is Muss on every Antwortnachricht, so there
+/// is no codeless answer to construct.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = if accepted {
+        ("A51", "E_0623")
+    } else {
+        ("A07", "E_0622")
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: reason.map(ToOwned::to_owned),
+        termin: None,
+    }
 }

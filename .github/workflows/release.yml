@@ -205,6 +205,16 @@ jobs:
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
+      # mako-fristen has no workspace dependency of its own and everything that
+      # computes a Frist needs it — publish it before mako-engine.
+      - name: Publish mako-fristen
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          out=$(cargo publish -p mako-fristen 2>&1) && rc=0 || rc=$?
+          echo "$out"
+          if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
+
       - name: Publish mako-engine
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -238,12 +248,12 @@ jobs:
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
-      # netz-checker depends on mako-markt — publish after it.
-      - name: Publish netz-checker
+      # mako-pruefung depends on mako-markt and mako-fristen — publish after them.
+      - name: Publish mako-pruefung
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          out=$(cargo publish -p netz-checker 2>&1) && rc=0 || rc=$?
+          out=$(cargo publish -p mako-pruefung 2>&1) && rc=0 || rc=$?
           echo "$out"
           if [ $rc -ne 0 ] && ! echo "$out" | grep -qE "already uploaded|already exists on crates\.io"; then exit $rc; fi
 
@@ -581,7 +591,7 @@ jobs:
           - service: marktd
             description: "Market Data Hub daemon — MaLo/MeLo/VersorgungsStatus/preisblaetter/EventBus fan-out"
           - service: processd
-            description: "Process Decision Engine — NB STP (netz-checker) + LF E_0624 auto-response"
+            description: "Process Decision Engine — NB STP (mako-pruefung) + LF E_0624 auto-response"
           - service: invoicd
             description: "INVOIC plausibility-check daemon — LF role, § 147 AO / GoBD receipt retention"
           - service: edmd

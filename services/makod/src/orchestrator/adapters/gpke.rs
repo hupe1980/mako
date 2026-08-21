@@ -101,21 +101,28 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                 // C555: the UTILMD MIG marks C555 *nicht benutzt* for this
                 // Statuskategorie, so reading it yields `None` for every
                 // conformant message.
-                transaktionsgrund: u.transactions().first().and_then(|t| {
-                    t.sts
-                        .iter()
-                        .find(|s| s.category.as_deref() == Some("7"))
-                        .and_then(|s| s.reason_code.clone())
-                }),
-                // SG4 STS Transaktionsgrundergänzung 9013=ZW3 („Erzeugende
-                // Marktlokation") — an EEG-/KWKG-Einspeise-MaLo. Drives the §10c
-                // EEG Monatserster date rule in the `mako-pruefung`.
-                ist_erzeugende_marktlokation: u.transactions().first().is_some_and(|t| {
-                    t.sts.iter().any(|s| {
-                        s.category.as_deref() == Some("7")
-                            && s.reason_code.as_deref() == Some("ZW3")
-                    })
-                }),
+                // `STS+7++<grund>:<ergaenzung>:<befristet>` — read from the
+                // positionally parsed `UtilmdTransaction::transaktionsgrund`,
+                // not from the `Sts` list. `Sts::reason_code` deserializes DE
+                // 9013's *first* C556 only, so a code-addressed scan for the
+                // Ergänzung at element 3 could never match it.
+                transaktionsgrund: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.transaktionsgrund())
+                    .map(|g| g.grund),
+                // DE 9013 element 3 — `ZW4` verbrauchende, `ZW3` erzeugende,
+                // `ZAP` ruhende Marktlokation. `processd` maps it onto the
+                // `mako_pruefung::Marktlokationsart` that decides which of
+                // `E_0622`'s two disjoint code spaces answers.
+                transaktionsgrund_ergaenzung: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.transaktionsgrund())
+                    .and_then(|g| g.ergaenzung),
+                // SG10 `CCI+Z22` DE 7037 — the Veräußerungsform of an
+                // erzeugende Marktlokation.
+                veraeusserungsform: extract_veraeusserungsform(u.segments()),
                 message_ref: MessageRef::new(msg.message_ref()),
                 received_at: time::OffsetDateTime::now_utc(),
                 validation_passed,

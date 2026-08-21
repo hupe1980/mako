@@ -254,8 +254,7 @@ fn send_antwort_lieferbeginn_accepted_emits_mscons_13015_outbox() {
     let output = GpkeSupplierChangeWorkflow::handle(
         &state,
         SupplierChangeCommand::SendAntwort {
-            accepted: true,
-            reason: None,
+            antwort: nb_antwort(true, None),
             obligations,
         },
     )
@@ -315,8 +314,7 @@ fn send_antwort_lieferbeginn_with_msb_emits_orders_17134_outbox() {
     let output = GpkeSupplierChangeWorkflow::handle(
         &state,
         SupplierChangeCommand::SendAntwort {
-            accepted: true,
-            reason: None,
+            antwort: nb_antwort(true, None),
             obligations,
         },
     )
@@ -377,8 +375,7 @@ fn send_antwort_abmeldung_accepted_no_cross_domain_outbox() {
     let output = GpkeSupplierChangeWorkflow::handle(
         &state,
         SupplierChangeCommand::SendAntwort {
-            accepted: true,
-            reason: None,
+            antwort: nb_antwort(true, None),
             obligations,
         },
     )
@@ -391,4 +388,21 @@ fn send_antwort_abmeldung_accepted_no_cross_domain_outbox() {
     );
     assert_eq!(output.outbox[0].message_type.as_ref(), "UTILMD");
     assert_eq!(output.outbox[0].payload["pid"].as_u64().unwrap(), 55005);
+}
+
+/// The NB's answer code for a Lieferbeginn — `A51` out of `E_0623`.
+/// `SG4 STS+E01` is Muss on every Antwortnachricht.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = if accepted {
+        ("A51", "E_0623")
+    } else {
+        ("A07", "E_0622")
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: reason.map(ToOwned::to_owned),
+        termin: None,
+    }
 }

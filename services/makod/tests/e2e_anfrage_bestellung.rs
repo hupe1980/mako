@@ -24,7 +24,7 @@
 //!
 //! - **PID 55555**: Anfrage Daten der individuellen Bestellung (LFN → NB, GPKE Teil 4)
 //! - **BK6-24-174** — GPKE Teil 4 (eff. 2025-06-06)
-//! - **APERAK Frist**: 24 wall-clock hours (BK6-22-024 §5)
+//! - **APERAK Frist**: 45 minutes on a Werktag (APERAK AHB 1.0 §2.4.1)
 //! - STS DE 9015 `E07` = Anfrage für aktiven/bestätigten Vorgang
 //! - STS DE 9015 `E08` = Anfrage für noch nicht bestätigten Vorgang
 //!

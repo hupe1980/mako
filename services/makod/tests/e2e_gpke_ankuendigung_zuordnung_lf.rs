@@ -2,7 +2,7 @@
 //!
 //! After a Lieferantenwechsel the Netzbetreiber (NB) announces the completed
 //! supplier assignment to the new Lieferant (LFN) by sending UTILMD 55607.
-//! The LFN must respond within 24 wall-clock hours (BK6-22-024 §4) with
+//! The LFN must respond inside the registered process window with
 //! Bestätigung (55608) or Ablehnung (55609).
 //!
 //! # Protocol trace (accept path)

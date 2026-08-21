@@ -240,7 +240,10 @@ pub enum BeendigungZuordnungCommand {
     },
     /// Send the outbound UTILMD response (55011 = Bestätigung, 55012 = Ablehnung).
     ///
-    /// The LFA has 24 wall-clock hours (BK6-22-024 §4) to respond.
+    /// The LFA answers by **09:00 Uhr des 1. WT nach dem ÜT** — GPKE Teil 2
+    /// § 2.1.2 SD Lieferbeginn Prozessschritt 4, resolved by
+    /// `mako_fristen::antwort` (trigger PID 55010). It is a clock time on a
+    /// Werktag, not a 24-hour duration.
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that
         /// selects the response PID.

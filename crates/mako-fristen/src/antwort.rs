@@ -92,11 +92,19 @@ impl Family {
 /// The shape of an answer Frist.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FristShape {
-    /// „Unverzüglich, jedoch spätester ÜZ ist `HH:MM` Uhr des 1. WT nach dem ÜT."
+    /// „Unverzüglich, jedoch spätester ÜZ ist `HH:MM` Uhr des `werktage`. WT
+    /// nach dem ÜT."
     ///
-    /// A wall-clock instant in German local time on the first Werktag strictly
-    /// after the arrival day.
-    NextWerktagAt(Time),
+    /// A wall-clock instant in German local time on the `werktage`-th Werktag
+    /// strictly after the arrival day. `werktage = 1` is the ordinary GPKE
+    /// Teil 2 shape (11:00 / 06:00 / 05:00 / 09:00); the Neuanlage answer is
+    /// the same shape at `00:00 Uhr des 61. WT`.
+    WerktagAt {
+        /// How many Werktage after the ÜT the deadline falls on.
+        werktage: u32,
+        /// The wall-clock time on that Werktag, in German local time.
+        at: Time,
+    },
     /// „…bis zum **Ablauf** des `n`. Werktags nach Eingang."
     ///
     /// Day-granular: the Frist runs to the end of that Werktag. The arrival day
@@ -112,7 +120,7 @@ impl FristShape {
     #[must_use]
     pub fn due_at(self, received: OffsetDateTime, cal: HolidayCalendar) -> OffsetDateTime {
         match self {
-            Self::NextWerktagAt(at) => crate::next_werktag_at(received, at, cal),
+            Self::WerktagAt { werktage, at } => crate::nth_werktag_at(received, werktage, at, cal),
             Self::EndOfWerktag(n) => crate::end_of_werktag_after(received, n, cal),
             Self::WerktageAtCutoff(n) => crate::deadline_at_werktage(received, n, cal),
         }
@@ -142,6 +150,29 @@ pub struct AntwortObligation {
     pub source: &'static str,
 }
 
+/// The Neuanlage answer window, in Werktage after the ÜT.
+///
+/// `E_0608` Prüfschritte 110 / 590 give the NB **60 Werktage** of daily
+/// re-identification before it may refuse a newly commissioned Marktlokation,
+/// and GPKE Teil 2 § 2.2.2 states the answer window as 00:00 Uhr des 61. WT.
+pub const NEUANLAGE_WERKTAGE: u32 = 61;
+
+/// Bearbeitungsstand / Rückmeldung on Abrechnungsdaten, in Werktage
+/// (GPKE Teil 2 §§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2).
+pub const ABRECHNUNGSDATEN_WERKTAGE: u32 = 2;
+
+/// Rückmeldung auf eine Stammdatenänderung, in Werktage
+/// (GPKE Teil 4 §§ 1.4.2–1.4.5 Prozessschritte 2 / 5).
+///
+/// The **Bestellung** einer Stammdatenänderung is a different window — GPKE
+/// Teil 4 § 1.5.2 gives the NB 10 Werktage for the Bearbeitungsstand — and the
+/// two must not be conflated.
+pub const STAMMDATEN_RUECKMELDUNG_WERKTAGE: u32 = 2;
+
+/// Bearbeitungsstand zur **Bestellung** einer Stammdatenänderung, in Werktage
+/// (GPKE Teil 4 § 1.5.2 Prozessschritte 2 / 4 / 6).
+pub const STAMMDATEN_BESTELLUNG_WERKTAGE: u32 = 10;
+
 const fn at(hour: u8) -> Time {
     match Time::from_hms(hour, 0, 0) {
         Ok(t) => t,
@@ -159,6 +190,27 @@ const fn at(hour: u8) -> Time {
 /// | 55007 | Ankündigung der Beendigung der Zuordnung | LF | 05:00 des 1. WT nach dem ÜT |
 /// | 55010 | Anfrage zur Beendigung der Zuordnung | LFA | 09:00 des 1. WT nach dem ÜT |
 /// | 55016 | Kündigung | LFA | Ablauf des 1. WT nach dem ÜT |
+/// | 55600 | Anmeldung neuer verb. MaLo (Neuanlage) | NB | 00:00 des 61. WT nach dem ÜT |
+/// | 55601 | Anmeldung neuer erz. MaLo (Neuanlage) | NB | 00:00 des 61. WT nach dem ÜT |
+/// | 17115 | Sperrauftrag | NB | spätester ÜT ist der 1. WT nach dem ÜT |
+/// | 17117 | Entsperrauftrag | NB | spätester ÜT ist der 1. WT nach dem ÜT |
+/// | 39000 | Stornierung Sperr-/Entsperrauftrag | NB | spätester ÜT ist der 1. WT nach dem ÜT |
+/// | 17116 | Anfrage Sperrung (NB → MSB) | MSB | spätester ÜT ist der 3. WT nach dem ÜT |
+/// | 55156 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. verb. MaLo | NB | 2. WT nach dem ÜT |
+/// | 55673 | Rückmeldung/Bestellung Abr.-Daten BK-Abr. erz. MaLo | NB | 2. WT nach dem ÜT |
+/// | 55220 | Rückmeldung/Bestellung Abr.-Daten NN-Abr. | NB | 2. WT nach dem ÜT |
+/// | 55109 | Stammdatenänderung vom LF (Änderung der MaLo) | NB | 2. WT nach dem ÜT |
+/// | 55230 | Änderung Blindabr.-Daten der NeLo (LF → NB) | NB | 2. WT nach dem ÜT |
+/// | 55693 | Änderung Daten der TR (LF → NB) | NB | 2. WT nach dem ÜT |
+/// | 55557 | Änderung MSB-Abrechnungsdaten der MaLo (MSB → NB) | NB | 2. WT nach dem ÜT |
+/// | 55639–55643 | Stammdatenänderung vom MSB (NeLo/MaLo/SR/Tranche/MeLo) | NB | 2. WT nach dem ÜT |
+///
+/// **The Neuanlage window is not a mistake.** `E_0608` Prüfschritte 110 and 590
+/// make the identification of a newly commissioned Marktlokation a *daily*
+/// re-check for up to 60 Werktage before the NB may answer `A07` / `A16`, so
+/// GPKE Teil 2 § 2.2.2 states the answer window as „spätester ÜZ ist 00:00 Uhr
+/// des 61. WT nach dem ÜT". A 24-hour deadline on that process manufactures a
+/// rejection roughly three months early.
 pub const GPKE: &[AntwortObligation] = &[
     AntwortObligation {
         trigger_pid: 55_001,
@@ -166,7 +218,10 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_002, 55_003),
         ebd: Some("E_0622"),
-        frist: FristShape::NextWerktagAt(at(11)),
+        frist: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(11),
+        },
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6",
     },
@@ -176,7 +231,10 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_078, 55_080),
         ebd: Some("E_0622"),
-        frist: FristShape::NextWerktagAt(at(11)),
+        frist: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(11),
+        },
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6",
     },
@@ -186,7 +244,10 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "NB",
         antwort_pids: (55_005, 55_006),
         ebd: Some("E_0607"),
-        frist: FristShape::NextWerktagAt(at(6)),
+        frist: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(6),
+        },
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Lieferende von LF an NB Prozessschritte 2/3",
     },
@@ -196,7 +257,10 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "LF",
         antwort_pids: (55_008, 55_009),
         ebd: Some("E_0609"),
-        frist: FristShape::NextWerktagAt(at(5)),
+        frist: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(5),
+        },
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Lieferende von NB an LF Prozessschritt 2",
     },
@@ -206,7 +270,10 @@ pub const GPKE: &[AntwortObligation] = &[
         answered_by: "LFA",
         antwort_pids: (55_011, 55_012),
         ebd: Some("E_0624"),
-        frist: FristShape::NextWerktagAt(at(9)),
+        frist: FristShape::WerktagAt {
+            werktage: 1,
+            at: at(9),
+        },
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritt 4",
     },
@@ -219,6 +286,199 @@ pub const GPKE: &[AntwortObligation] = &[
         frist: FristShape::EndOfWerktag(1),
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Kündigung Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_600,
+        name: "Anmeldung neuer verbrauchender Marktlokation (Neuanlage)",
+        answered_by: "NB",
+        antwort_pids: (55_602, 55_604),
+        ebd: Some("E_0608"),
+        frist: FristShape::WerktagAt {
+            werktage: NEUANLAGE_WERKTAGE,
+            at: at(0),
+        },
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 2.2.2, SD Neuanlage Prozessschritte 2/3 — \
+                 „spätester ÜZ ist 00:00 Uhr des 61. WT nach dem ÜT von Nr. 1\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_601,
+        name: "Anmeldung neuer erzeugender Marktlokation (Neuanlage)",
+        answered_by: "NB",
+        antwort_pids: (55_603, 55_605),
+        ebd: Some("E_0608"),
+        frist: FristShape::WerktagAt {
+            werktage: NEUANLAGE_WERKTAGE,
+            at: at(0),
+        },
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 2.2.2, SD Neuanlage Prozessschritte 2/3",
+    },
+    AntwortObligation {
+        trigger_pid: 17_115,
+        name: "Sperrauftrag (Unterbrechung der Anschlussnutzung)",
+        answered_by: "NB",
+        antwort_pids: (19_116, 19_117),
+        ebd: Some("E_0470"),
+        frist: FristShape::WerktageAtCutoff(1),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 2 — „spätester ÜT ist der \
+                 1. WT nach dem ÜT von Nr. 1\"",
+    },
+    AntwortObligation {
+        trigger_pid: 17_117,
+        name: "Entsperrauftrag (Wiederherstellung der Anschlussnutzung)",
+        answered_by: "NB",
+        antwort_pids: (19_116, 19_117),
+        ebd: Some("E_0497"),
+        frist: FristShape::WerktageAtCutoff(1),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.2.2 Prozessschritt 2 — „spätester ÜT ist der \
+                 1. WT nach dem ÜT von Nr. 1\"",
+    },
+    AntwortObligation {
+        trigger_pid: 39_000,
+        name: "Stornierung eines Sperr-/Entsperrauftrags",
+        answered_by: "NB",
+        antwort_pids: (19_128, 19_129),
+        ebd: Some("E_0468"),
+        frist: FristShape::WerktageAtCutoff(1),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.3.2 Prozessschritt 2 — „spätester ÜT ist der \
+                 1. WT nach dem ÜT\"",
+    },
+    AntwortObligation {
+        trigger_pid: 17_116,
+        name: "Anfrage Sperrung an den MSB",
+        answered_by: "MSB",
+        antwort_pids: (19_118, 19_119),
+        ebd: None,
+        frist: FristShape::WerktageAtCutoff(3),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 3.5.1.2 Prozessschritt 4 — „spätester ÜT ist der \
+                 3. WT nach dem ÜT von Nr. 3\"; Fristverstreichen gilt als Zustimmung",
+    },
+    AntwortObligation {
+        trigger_pid: 55_156,
+        name: "Rückmeldung / Bestellung Abrechnungsdaten Bilanzkreisabrechnung (verb. MaLo)",
+        answered_by: "NB",
+        antwort_pids: (21_047, 21_047),
+        ebd: Some("E_0595"),
+        frist: FristShape::WerktageAtCutoff(ABRECHNUNGSDATEN_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 §§ 3.1.2.2 / 3.1.3.2 — Bearbeitungsstand \
+                 „spätester ÜT ist der 2. WT nach dem ÜT\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_673,
+        name: "Rückmeldung / Bestellung Abrechnungsdaten Bilanzkreisabrechnung (erz. MaLo)",
+        answered_by: "NB",
+        antwort_pids: (21_047, 21_047),
+        ebd: Some("E_0595"),
+        frist: FristShape::WerktageAtCutoff(ABRECHNUNGSDATEN_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 §§ 3.1.2.2 / 3.1.3.2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_220,
+        name: "Rückmeldung / Bestellung Abrechnungsdaten Netznutzungsabrechnung",
+        answered_by: "NB",
+        antwort_pids: (21_047, 21_047),
+        ebd: Some("E_0595"),
+        frist: FristShape::WerktageAtCutoff(ABRECHNUNGSDATEN_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 §§ 3.1.1.2 / 3.1.3.2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_109,
+        name: "Stammdatenänderung vom LF — Daten der Marktlokation",
+        answered_by: "NB",
+        antwort_pids: (55_137, 55_137),
+        ebd: Some("E_0410"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.3 Prozessschritt 2 — „spätester ÜT ist der \
+                 2. WT nach dem ÜT von Nr. 1\"",
+    },
+    AntwortObligation {
+        trigger_pid: 55_230,
+        name: "Stammdatenänderung vom LF — Blindarbeits-Abrechnungsdaten der Netzlokation",
+        answered_by: "NB",
+        antwort_pids: (55_232, 55_232),
+        ebd: Some("E_0410"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.3 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_693,
+        name: "Stammdatenänderung vom LF — Daten der Technischen Ressource",
+        answered_by: "NB",
+        antwort_pids: (55_694, 55_694),
+        ebd: Some("E_0410"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.3 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_557,
+        name: "Stammdatenänderung vom MSB — MSB-Abrechnungsdaten der Marktlokation",
+        answered_by: "NB",
+        antwort_pids: (55_559, 55_559),
+        ebd: Some("E_0415"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_639,
+        name: "Stammdatenänderung vom MSB — Daten der Netzlokation",
+        answered_by: "NB",
+        antwort_pids: (55_644, 55_644),
+        ebd: Some("E_0415"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_640,
+        name: "Stammdatenänderung vom MSB — Daten der Marktlokation",
+        answered_by: "NB",
+        antwort_pids: (55_645, 55_645),
+        ebd: Some("E_0415"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_641,
+        name: "Stammdatenänderung vom MSB — Daten der Steuerbaren Ressource",
+        answered_by: "NB",
+        antwort_pids: (55_646, 55_646),
+        ebd: Some("E_0415"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_642,
+        name: "Stammdatenänderung vom MSB — Daten der Tranche",
+        answered_by: "NB",
+        antwort_pids: (55_647, 55_647),
+        ebd: Some("E_0415"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+    },
+    AntwortObligation {
+        trigger_pid: 55_643,
+        name: "Stammdatenänderung vom MSB — Daten der Messlokation",
+        answered_by: "NB",
+        antwort_pids: (55_648, 55_648),
+        ebd: Some("E_0415"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
     },
 ];
 
@@ -665,7 +925,7 @@ mod tests {
         assert!(antwortfrist(44_020, received).is_none());
         assert!(antwortfrist(44_007, received).is_some());
         assert!(antwortfrist(44_010, received).is_some());
-        for pid in [31_001_u32, 37_000, 23_001, 55_557, 99_999, 0] {
+        for pid in [31_001_u32, 37_000, 23_001, 99_999, 0] {
             assert!(antwortfrist(pid, received).is_none(), "PID {pid}");
         }
     }

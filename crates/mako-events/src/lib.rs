@@ -473,9 +473,17 @@ pub mod sperr {
     /// denied, safety block, address not found. Carries the EBD Prüfschritt code
     /// so the LF learns *why* instead of waiting out its ORDRSP deadline.
     pub const FEHLGESCHLAGEN: &str = "de.sperr.fehlgeschlagen";
+    /// A Sperrversuch did not succeed but the order stays in the queue: GPKE
+    /// Teil 2 § 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
+    /// Sperrauftrag, and only the second turns into `FEHLGESCHLAGEN`.
+    pub const VERSUCH_GESCHEITERT: &str = "de.sperr.versuch.gescheitert";
     /// A pending order was withdrawn before execution (operator action, or an
     /// inbound ORDCHG 39000 Stornierung). No IFTSTA is dispatched.
     pub const STORNIERT: &str = "de.sperr.storniert";
+    /// A pending order is past the window GPKE Teil 2 § 3.5.1.2 Nr. 1 gives the
+    /// NB for the physical act — 6 Werktage after the frühestmöglicher
+    /// Sperrtermin. Announced once per order.
+    pub const AUSFUEHRUNG_UEBERFAELLIG: &str = "de.sperr.ausfuehrung.ueberfaellig";
     /// An order is terminal in `sperrd` but its IFTSTA 21039 has still not
     /// reached `makod` after the retry budget. Until it does, the LF's
     /// `gpke-sperrung-lf` process cannot close — this is the one state in the
@@ -626,6 +634,8 @@ pub fn all() -> &'static [&'static str] {
         obs::DEADLINE_APPROACHING,
         // de.sperr.*
         sperr::AUFTRAG_EINGEGANGEN,
+        sperr::VERSUCH_GESCHEITERT,
+        sperr::AUSFUEHRUNG_UEBERFAELLIG,
         sperr::AUSGEFUEHRT,
         sperr::FEHLGESCHLAGEN,
         sperr::STORNIERT,

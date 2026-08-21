@@ -281,7 +281,8 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
-        ist_erzeugende_marktlokation: false,
+        transaktionsgrund_ergaenzung: None,
+        veraeusserungsform: None,
         fallgruppe: None,
     })
     .await
@@ -329,8 +330,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
     let malo_for_obligations = MaLo::new(MALO_ID);
     let new_supplier_for_obligations = MarktpartnerCode::new(LFN_ID);
     let send_antwort = SupplierChangeCommand::SendAntwort {
-        accepted: true,
-        reason: None,
+        antwort: nb_antwort(true, None),
         obligations: post_acceptance::lieferbeginn_obligations(
             55001,
             &malo_for_obligations,
@@ -507,7 +507,8 @@ async fn bilateral_lieferbeginn_rejection_path() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
-        ist_erzeugende_marktlokation: false,
+        transaktionsgrund_ergaenzung: None,
+        veraeusserungsform: None,
         fallgruppe: None,
     })
     .await
@@ -515,8 +516,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
 
     let nb_state: SupplierChangeState = nb.state().await.unwrap();
     let reject_cmd = SupplierChangeCommand::SendAntwort {
-        accepted: false,
-        reason: Some("MaLo hat laufenden Vertrag".to_owned()),
+        antwort: nb_antwort(false, Some("MaLo hat laufenden Vertrag")),
         obligations: vec![],
     };
 
@@ -603,7 +603,8 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
         bilanzierungsgebiet: None,
         bilanzierungsmethode: None,
         transaktionsgrund: None,
-        ist_erzeugende_marktlokation: false,
+        transaktionsgrund_ergaenzung: None,
+        veraeusserungsform: None,
         fallgruppe: None,
     })
     .await
@@ -678,4 +679,22 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
             .deadlines
             .is_empty()
     );
+}
+
+/// The NB's answer code — `A51` (`E_0623`) for a Bestätigung, `A07` (`E_0622`)
+/// for an Ablehnung. `SG4 STS+E01` is Muss on every Antwortnachricht, so there
+/// is no codeless answer to construct.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = if accepted {
+        ("A51", "E_0623")
+    } else {
+        ("A07", "E_0622")
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: reason.map(ToOwned::to_owned),
+        termin: None,
+    }
 }

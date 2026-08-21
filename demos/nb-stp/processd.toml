@@ -3,7 +3,7 @@
 #
 # processd is the **process decision engine**:
 #   - NB module: evaluates each Anmeldung (55001/55077/44001, EBD E_0622) and
-#     Abmeldung (55004/44004, EBD E_0607) via netz-checker
+#     Abmeldung (55004/44004, E_0607 / G_0007) via mako-pruefung
 #   - LF module: answers the NB-initiated GPKE processes (55007, 55010) within
 #     their per-PID business Frist
 #
@@ -52,7 +52,7 @@ subscriber_id = "processd-demo"
 # management as an operator capability; processd sends `[marktd] api_key`.
 
 [nb]
-# NB Anmeldung STP: automatically dispatch bestaetigen when all 6 netz-checker
+# NB Anmeldung STP: automatically dispatch bestaetigen when every mako-pruefung
 # checks pass.  In production, verify grid record + partner coverage first
 # (STP target ≥ 95 %).  Safe to enable in the demo because all master data is
 # pre-seeded by smoke.sh.

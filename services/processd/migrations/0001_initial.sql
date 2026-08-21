@@ -71,7 +71,8 @@ CREATE TABLE anmeldung_decisions (
 
 COMMENT ON TABLE anmeldung_decisions IS
     'NB STP decision audit log. Written before POST /api/v1/commands to makod. '
-    'decision=Escalate when netz-checker requires operator review (iMSys/SR/no-Zaehler). '
+    'decision=Escalate when mako-pruefung requires operator review — a missing grid '
+    'record, or a fact the EBD needs that the projection does not carry. '
     'Used for BNetzA §20 EnWG parity reports and STP rate KPI.';
 
 -- STP rate KPI

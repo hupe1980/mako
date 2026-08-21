@@ -123,12 +123,20 @@ impl Workflow for MyWorkflow {
 APERAK response deadlines are encoded via `DeadlineStore`. Each domain crate
 uses the correct helper from `fristen`:
 
-| Process family | Deadline | Helper |
-|---|---|---|
-| GPKE | 24 wall-clock hours | `fristen::add_hours(t, 24)` |
-| WiM Strom | 3 / 5 / 7 / 1 Werktage, per PID | `mako_wim::antwort_frist_werktage(pid)` → `fristen::deadline_at_werktage` |
-| GeLi Gas | 10 Werktage | `fristen::add_werktage(d, 10, HolidayCalendar::BdewMaKo)` |
-| WiM Gas | 10 Werktage | `fristen::add_werktage(d, 10, HolidayCalendar::BdewMaKo)` |
+Every business answer window comes from **one** table,
+`mako_fristen::antwort`, keyed on the inbound Prüfidentifikator:
+
+| Process family | Deadline shape |
+|---|---|
+| GPKE | a clock time on the *n*-th Werktag after the ÜT (11:00 / 06:00 / 05:00 / 09:00 on the 1., 00:00 on the 61. for a Neuanlage) |
+| GPKE Sperrung / Teil 4 | „spätester ÜT ist der *n*. WT nach dem ÜT" — 1 WT, 2 WT, 10 WT |
+| WiM Strom | 3 / 5 / 7 / 1 Werktage, per PID |
+| GeLi Gas | „Ablauf des *n*. Werktags nach Eingang" — 4 / 3 / 2 WT |
+| WiM Gas | 10 Werktage |
+
+The **APERAK** deadline is a separate clock: 45 minutes on a Werktag
+(`fristen::aperak_strom_due_at`). A PID with no published window returns `None` —
+unknown, never unbounded.
 
 **Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
 Deadline arithmetic uses **German local time (CET/CEST)** via the `time` crate.

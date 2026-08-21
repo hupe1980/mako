@@ -101,7 +101,7 @@ pub const UTILMD_PIDS: &[u32] = &[
 ///
 /// `SendAntwort` derives its outbound PID from `response_pid_for`, which knows
 /// only these four. Spawning a process for a PID it cannot answer produces one
-/// that sits until the 24-hour BK6-22-024 deadline and then transitions to
+/// that sits until its registered deadline and then transitions to
 /// `Rejected` without anything having gone wrong — worse than not accepting the
 /// message, because it manufactures a false rejection.
 ///
@@ -403,12 +403,25 @@ pub enum SupplierChangeCommand {
         /// retroactive Lieferbeginn for Ein-/Auszug but not for a regular
         /// Wechsel. Propagated into the `ProcessInitiated` outbox payload.
         transaktionsgrund: Option<String>,
-        /// `true` when a SG4 STS Transaktionsgrundergänzung `9013=ZW3`
-        /// („Erzeugende Marktlokation") is present — an EEG-/KWKG-Einspeise-MaLo.
-        /// Kept separate from `transaktionsgrund` (the main Anmeldegrund, which is
-        /// re-rendered outbound) so `processd`'s `mako-pruefung` can trigger the
-        /// §10c EEG Monatserster date rule without conflating the two codes.
-        ist_erzeugende_marktlokation: bool,
+        /// SG4 `STS+7` DE 9013 **element 3** — the Transaktionsgrundergänzung
+        /// (`ZW4` verbrauchende, `ZW3` erzeugende, `ZAP` ruhende Marktlokation).
+        ///
+        /// It is a *different composite* from the Anmeldegrund in element 2, not
+        /// a second `STS+7` segment: `STS+7++E03:ZW3` carries both. Scanning the
+        /// parsed `Sts` list for a `reason_code == "ZW3"` therefore never
+        /// matched, which is why this is the raw Ergänzung and not a boolean.
+        ///
+        /// `processd` maps it onto `mako_pruefung::Marktlokationsart`, which
+        /// decides which of `E_0622`'s two disjoint code spaces answers.
+        transaktionsgrund_ergaenzung: Option<String>,
+        /// SG10 `CCI+Z22` DE 7037 — the Veräußerungsform of an erzeugende
+        /// Marktlokation (`Z90` Einspeise-/Ausfallvergütung, `Z91` Marktprämie,
+        /// `Z92` sonstige Direktvermarktung, `Z94` KWKG-Vergütung).
+        ///
+        /// One of the two facts `E_0622` Prüfschritte 400–830 choose the
+        /// Vorlauffrist from; the other (the *bestehende* Veräußerungsform) is
+        /// the NB's own register.
+        veraeusserungsform: Option<String>,
         /// EDIFACT message reference.
         message_ref: MessageRef,
         /// UTC timestamp at which the inbound UTILMD was received at the transport layer.
@@ -445,10 +458,14 @@ pub enum SupplierChangeCommand {
     /// outside the supplier-change state machine while preserving the atomicity
     /// guarantee required by BK6-22-024.
     SendAntwort {
-        /// `true` to accept the request, `false` to reject.
-        accepted: bool,
-        /// Rejection reason (required when `accepted = false`).
-        reason: Option<String>,
+        /// The NB's answer: the resolved EBD Antwortcode and its cluster.
+        ///
+        /// `SG4 STS+E01` is Muss on every Antwortnachricht and the AHB
+        /// restricts the code to the named tree's cluster, so the answer is a
+        /// code — not a boolean with a free-text reason. The Bestätigung of a
+        /// Lieferbeginn is `A51` / `A58` out of `E_0623`, the Ablehnung one of
+        /// `E_0622`'s; Gas answers out of `G_0011` / `G_0012`.
+        antwort: crate::LfAntwort,
         /// Pre-computed post-acceptance outbox obligations to co-persist
         /// atomically with the `AntwortGesendet` event.
         ///
@@ -456,7 +473,7 @@ pub enum SupplierChangeCommand {
         /// for PID 55001 (Lieferbeginn). Pass an empty `Vec` for all other PIDs
         /// or when no downstream processes must be triggered.
         ///
-        /// Ignored when `accepted = false`.
+        /// Ignored when the answer is an Ablehnung.
         obligations: Vec<PendingOutbox>,
     },
     /// Mark the supply relationship as active after all checks pass.
@@ -575,7 +592,7 @@ pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruef
 ///
 /// Register the deadline immediately after `ReceiveUtilmd` is processed:
 /// ```rust,ignore
-/// let due = mako_fristen::add_hours(OffsetDateTime::now_utc(), 24);
+/// let due = mako_fristen::antwort::antwort_deadline(pid, received).expect("published");
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., GPKE_PROCESS_RESPONSE_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
@@ -722,7 +739,8 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 bilanzierungsmethode,
                 fallgruppe,
                 transaktionsgrund,
-                ist_erzeugende_marktlokation,
+                transaktionsgrund_ergaenzung,
+                veraeusserungsform,
                 message_ref,
                 received_at,
                 validation_passed,
@@ -797,9 +815,13 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                                 // SG4 STS Transaktionsgrund — consumed by processd
                                 // `mako-pruefung` (date-plausibility rules).
                                 "transaktionsgrund":     transaktionsgrund,
-                                // Erzeugende-MaLo flag (STS 9013=ZW3) — drives the
-                                // §10c EEG Monatserster rule in the `mako-pruefung`.
-                                "ist_erzeugende_marktlokation": ist_erzeugende_marktlokation,
+                                // SG4 STS+7 DE 9013 element 3 and SG10 CCI+Z22
+                                // DE 7037 — `processd` derives the Marktlokationsart
+                                // and the angemeldete Veräußerungsform from them,
+                                // which together pick one of E_0622's six published
+                                // Vorlauffristen.
+                                "transaktionsgrund_ergaenzung": transaktionsgrund_ergaenzung,
+                                "veraeusserungsform":    veraeusserungsform,
                             }),
                         )
                         // Caused by ValidationPassed (index 1), not Initiated (index 0),
@@ -858,10 +880,10 @@ impl Workflow for GpkeSupplierChangeWorkflow {
             }
 
             SupplierChangeCommand::SendAntwort {
-                accepted,
-                reason,
+                antwort,
                 obligations,
             } => {
+                let accepted = antwort.zustimmung;
                 let data = match state {
                     SupplierChangeState::ValidationPassed(d) => d,
                     _ => {
@@ -875,7 +897,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 let events = vec![SupplierChangeEvent::AntwortGesendet {
                     response_pid,
                     accepted,
-                    reason,
+                    reason: antwort.bemerkung.clone(),
                 }];
 
                 // Always enqueue the UTILMD response back to the new supplier
@@ -891,6 +913,14 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                             "receiver":     data.new_supplier.as_str(),
                             "malo":         data.location_id.as_str(),
                             "process_date": data.process_date,
+                            // `SG4 STS+E01++<code>:<ebd>` — Muss on every
+                            // Antwortnachricht. Without it the renderer emits a
+                            // well-formed UTILMD that states no Grund at all.
+                            "antwort_code": antwort.antwort_code,
+                            "antwort_ebd":  antwort.ebd,
+                            // `FTX+ACB` — the Erläuterung the catch-all codes
+                            // require and every Ablehnung benefits from.
+                            "bemerkung":    antwort.bemerkung,
                         }),
                     ));
                 }

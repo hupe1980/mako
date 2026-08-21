@@ -8,10 +8,20 @@ and BNetzA rulings:
 - **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — GPKE Teil 1–3 (Lieferantenwechsel, Zuordnungsprozesse)
 - **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 (Stammdatenprozesse, Konfigurationseinrichtung)
 
-## APERAK Frist
+## Fristen — two clocks
 
-GPKE processes use **24 wall-clock hours** (`fristen::add_hours(24)`) for
-the APERAK response deadline — not Werktage. This is enforced by BK6-22-024.
+**APERAK** (the transport acknowledgement): **45 Minuten** on a Werktag for
+UTILMD and ORDERS; a Saturday arrival is due Sunday 12:00 Berlin, everything else
+12:00 of the next Werktag (APERAK AHB 1.0 §2.4.1).
+
+**The business answer** is per Prüfidentifikator and comes from
+`mako_fristen::antwort` — 11:00 / 06:00 / 05:00 / 09:00 Uhr des 1. WT nach dem ÜT
+for the GPKE Teil 2 core processes, 00:00 Uhr des 61. WT for a Neuanlage, the
+1. WT for a Sperr-/Entsperrauftrag, 2 WT for a Teil-4 Stammdaten-Rückmeldung.
+
+GPKE Teil 2 states every window as a wall-clock instant on a Werktag, never as a
+duration: a message arriving Friday afternoon is answerable until Monday morning,
+one arriving Tuesday evening has under sixteen hours.
 
 ## PID Inventory
 
@@ -272,7 +282,8 @@ let events = process.execute(SupplierChangeCommand::ReceiveUtilmd {
 
 - BDEW GPKE Marktprozesse für die Belieferung mit Elektrizität
 - BNetzA **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — GPKE Teil 1–3
-- BNetzA **BK6-22-024** (Beschluss 21.03.2024) — GPKE Teil 4 + APERAK Frist 24 Stunden
+- BNetzA **BK6-22-024** (Beschluss 21.03.2024) — LFW24, superseded for the
+  process descriptions by BK6-24-174
 - EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
 - EDI@Energy INVOIC AHB 2.8e / AHB 1.0 (`FV2025-10-01` onwards)
 - EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)

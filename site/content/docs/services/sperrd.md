@@ -70,16 +70,33 @@ The row is shaped by what the ORDERS AHB actually sends:
 operationally: a missed fixed date is a broken commitment to the Lieferant, while
 a passed earliest-start only means the job became schedulable.
 
-## Timing — read this before building an SLA
+## Timing — three clocks, all published
 
-GPKE fixes **no execution deadline in Werktagen** for the physical act. The only
-date is the Lieferant's own, from `DTM+203` or `DTM+469`.
+BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 state every deadline on a
+Sperr-/Entsperrauftrag, and they are three different ones:
 
-What BK6-22-024 §5 *does* fix is **24 wall-clock hours** for the NB's **ORDRSP**
-(Bestätigung 19116 / Ablehnung 19117), which `makod` tracks — not this service.
+| Clock | Frist | Tracked by |
+|---|---|---|
+| **ORDRSP** 19116 / 19117 answering the order | „spätester ÜT ist der 1. WT nach dem ÜT" (Prozessschritt 2) | `makod`, from `mako_fristen::antwort` |
+| **The physical act** | „…spätestens innerhalb von 6 WT nach dem frühestmöglichen Sperrtermin" (Prozessschritt 1) | `sperrd` — `ausfuehrung_faellig_am` |
+| **IFTSTA 21039** | „spätester ÜT ist der 1. WT nach dem Abschluss des Sperrauftrags" (Prozessschritt 5) | `sperrd` — `iftsta_faellig_am` |
 
-A guard test fails the build if a Werktage execution window is asserted
-anywhere in the service.
+The Lieferant's `DTM+203` / `DTM+469` is a fourth date and a different question:
+when the LF wanted the work done, not when the Festlegung requires it.
+`/stats` reports both — `overdue_pending` for the LF's date,
+`frist_ueberschritten` for the regulatory window. A pending order past its
+6-Werktage window is announced once as `de.sperr.ausfuehrung.ueberfaellig`.
+
+### Two Sperrversuche
+
+„Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags durch"
+(Prozessschritt 5). `PUT .../fail` records the first unsuccessful visit and
+leaves the order `pending`; the second closes it, as does `endgueltig: true` for
+a legal or factual impossibility — a gerichtliche Verfügung, or a glaubhaft
+gemachter Verhinderungsgrund such as lebenserhaltende medizinische Geräte.
+
+A guard test rejects the two claims that contradict Prozessschritt 1: a
+„2 Werktage" window, and the assertion that GPKE fixes none.
 
 ## Reporting the outcome
 

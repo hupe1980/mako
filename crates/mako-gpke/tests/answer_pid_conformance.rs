@@ -40,8 +40,7 @@ fn response_pid(anfrage: u32, accepted: bool) -> Option<u32> {
     let out = GpkeSupplierChangeWorkflow::handle(
         &state,
         SupplierChangeCommand::SendAntwort {
-            accepted,
-            reason: None,
+            antwort: nb_antwort(accepted),
             obligations: vec![],
         },
     )
@@ -93,5 +92,22 @@ fn the_shared_table_covers_exactly_the_workflows_request_pids() {
             "PID {anfrage}: workflow answers={workflow_answers} but shared \
              table answers={table_answers} — one of them is wrong"
         );
+    }
+}
+
+/// The NB's answer code for a Lieferbeginn — `A51` (`E_0623`) or `A07`
+/// (`E_0622`). `SG4 STS+E01` is Muss, so there is no codeless answer.
+fn nb_antwort(accepted: bool) -> mako_gpke::LfAntwort {
+    let (code, ebd) = if accepted {
+        ("A51", "E_0623")
+    } else {
+        ("A07", "E_0622")
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: None,
+        termin: None,
     }
 }

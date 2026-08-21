@@ -18,9 +18,20 @@
 --     abgelehnt, DE1131 EBD number, DE9013 Code des Prüfschritts, and
 --     DTM+293 Fertigstellungsdatum (Muss on Z14, and ≤ the document date).
 --
--- There is deliberately **no execution deadline in Werktagen** here. GPKE fixes
--- a 24-wall-clock-hour window for the NB's *ORDRSP* (BK6-22-024 §5); the timing
--- of the physical act is whatever the Lieferant states in DTM+203/DTM+469.
+-- Three regulatory clocks run on one order, and GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2
+-- (BK6-24-174) states all three:
+--
+--   1. The **ORDRSP** answering the order: „spätester ÜT ist der 1. WT nach dem
+--      ÜT" (Prozessschritt 2). Tracked by makod from `mako_fristen::antwort`.
+--   2. The **physical act**: „Die Sperrung der Marktlokation ist durch den NB
+--      spätestens innerhalb von 6 WT nach dem frühestmöglichen Sperrtermin
+--      durchzuführen" (Prozessschritt 1 Hinweis) → `ausfuehrung_faellig_am`.
+--   3. The **IFTSTA 21039**: „spätester ÜT ist der 1. WT nach dem Abschluss des
+--      Sperrauftrags" (Prozessschritt 5 / Entsperren Prozessschritt 4)
+--      → `iftsta_faellig_am`.
+--
+-- Prozessschritt 5 also caps the field work: „Der NB führt bis zu zwei
+-- Sperrversuche innerhalb eines Sperrauftrags durch" → `sperrversuche`.
 
 CREATE TABLE sperr_orders (
     id                  UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -67,9 +78,27 @@ CREATE TABLE sperr_orders (
     -- SG29 FTX+ACB — the LF's free-text hints.
     hinweis             TEXT,
 
+    -- ── The regulatory execution window (GPKE Teil 2 § 3.5.1.2 Nr. 1) ────────
+    -- „…spätestens innerhalb von 6 WT nach dem frühestmöglichen Sperrtermin."
+    -- Computed on insert from COALESCE(ausfuehrung_am, fruehestens_am) with the
+    -- BDEW-MaKo Werktag calendar; NULL when the order names no date at all
+    -- (an Entsperrauftrag carries neither), where „unverzüglich" governs.
+    ausfuehrung_faellig_am DATE,
+    -- Set when `de.sperr.ausfuehrung.ueberfaellig` was announced, so a missed
+    -- window is reported once instead of on every sweep.
+    ausfuehrung_eskaliert_at TIMESTAMPTZ,
+
     -- ── Execution ────────────────────────────────────────────────────────────
     status              TEXT        NOT NULL DEFAULT 'pending'
                         CHECK (status IN ('pending', 'executed', 'failed', 'cancelled')),
+    -- „Der NB führt bis zu zwei Sperrversuche innerhalb eines Sperrauftrags
+    -- durch" (GPKE Teil 2 § 3.5.1.2 Nr. 5). A first unsuccessful attempt is
+    -- recorded and the order stays `pending`: reporting Z13 gescheitert after
+    -- one try ends a process the Festlegung says still owes a second visit.
+    sperrversuche       INTEGER     NOT NULL DEFAULT 0
+                        CHECK (sperrversuche BETWEEN 0 AND 2),
+    letzter_versuch_am  TIMESTAMPTZ,
+    letzter_versuch_grund TEXT,
     -- DTM+293 Fertigstellungsdatum. Muss when the outcome is Z14 erfolgreich,
     -- and condition [495] requires it to be ≤ the IFTSTA document date — so a
     -- future timestamp is refused at the API boundary, not discovered by the
@@ -89,6 +118,11 @@ CREATE TABLE sperr_orders (
     -- needs work: the LF's gpke-sperrung-lf process cannot close without it. The
     -- retry worker drains these; `iftsta_attempts` bounds it and
     -- `iftsta_last_error` says why it is stuck.
+    -- „…spätester ÜT ist der 1. WT nach dem Abschluss des Sperrauftrags"
+    -- (GPKE Teil 2 § 3.5.1.2 Nr. 5 / § 3.5.2.2 Nr. 4). Set when the order turns
+    -- terminal; an outstanding IFTSTA past this date is a missed Frist, not
+    -- merely a queue backlog.
+    iftsta_faellig_am   DATE,
     iftsta_ref          TEXT,
     iftsta_dispatched_at TIMESTAMPTZ,
     iftsta_attempts     INTEGER     NOT NULL DEFAULT 0,
@@ -115,10 +149,15 @@ COMMENT ON COLUMN sperr_orders.iftsta_dispatched_at IS
 
 CREATE INDEX so_tenant_status ON sperr_orders (tenant, status);
 CREATE INDEX so_malo_status   ON sperr_orders (malo_id, status);
--- Field-dispatch scan: what is due, soonest first. COALESCE folds the fixed and
--- the earliest date into the one ordering key a dispatcher works from.
+-- Field-dispatch scan: what the LF asked for, soonest first. COALESCE folds the
+-- fixed and the earliest date into the one ordering key a dispatcher works from.
 CREATE INDEX so_pending_due   ON sperr_orders (tenant, COALESCE(ausfuehrung_am, fruehestens_am))
     WHERE status = 'pending';
+-- The § 3.5.1.2 Nr. 1 execution-window sweep: which pending orders are past the
+-- 6-Werktage deadline the Festlegung sets, soonest first.
+CREATE INDEX so_pending_frist ON sperr_orders (tenant, ausfuehrung_faellig_am)
+    WHERE status = 'pending' AND ausfuehrung_faellig_am IS NOT NULL
+      AND ausfuehrung_eskaliert_at IS NULL;
 -- The retry worker's queue.
 CREATE INDEX so_iftsta_open   ON sperr_orders (tenant, updated_at)
     WHERE status IN ('executed', 'failed') AND iftsta_dispatched_at IS NULL;

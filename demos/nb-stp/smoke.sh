@@ -7,7 +7,7 @@
 # End-to-end flow:
 #   P1.  PUT preisblatt into marktd            (master data pre-load)
 #   P2.  PUT MaLo with NB=9900357000004        (master data pre-load)
-#   P2b. PUT MaLo grid record                  (netz-checker check 1 — required for auto-accept)
+#   P2b. PUT MaLo grid record                  (mako-pruefung needs the grid record to auto-accept)
 #   P3.  Register ERP subscription with marktd  (receive process events at webhook)
 #         NOTE: processd self-registers its own subscription on startup via
 #         PROCESSD_SELF_REGISTER_WEBHOOK_URL — no P4 script step required.
@@ -220,19 +220,19 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
         fail "PUT /api/v1/preisblaetter/9900357000004 returned $code: $(body "$resp")"
     pass "PUT /api/v1/preisblaetter/9900357000004 → $code (FV2026 preisblatt stored)"
 
-    # ── P1b. Register LF partner in marktd (netz-checker check 6) ────────────
+    # ── P1b. Register LF partner in marktd (E_0622 Prüfschritt 60) ────────────
     #
-    # netz-checker check 6: the initiating LF must be registered in the NB's
+    # E_0622 Prüfschritt 60: the initiating LF must be registered in the NB's
     # partner directory (GET /api/v1/partners/{mp_id} returns 200).
     # The smoke test also registers 4012345000023 in makod (step 3), but that is
     # a separate registry.  Without this step, processd returns ERC A05 (Reject).
-    info "[P1b] PUT LF partner 4012345000023 in marktd partner directory (netz-checker check 6)"
+    info "[P1b] PUT LF partner 4012345000023 in marktd partner directory (E_0622 Prüfschritt 60)"
     LF_PARTNER_JSON='{"mp_id":"4012345000023","display_name":"Demo LF","marktrolle":"LF","sparte":"STROM","makoadresse":[],"channels":{}}'
     resp=$(marktd_put_json "/api/v1/partners/4012345000023" "$LF_PARTNER_JSON")
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" ]] || \
         fail "PUT /api/v1/partners/4012345000023 returned $code: $(body "$resp")"
-    pass "PUT /api/v1/partners/4012345000023 → $code (partner ready for netz-checker)"
+    pass "PUT /api/v1/partners/4012345000023 → $code (partner ready for mako-pruefung)"
 
     # ── P2. PUT MaLo $SMOKE_MALO_ID with NB rollenzuordnung ───────────────────
     #
@@ -249,9 +249,9 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     VERSION=$(body "$resp" | jq -r '.version')
     pass "PUT /api/v1/malos/$SMOKE_MALO_ID → $code  (version=$VERSION, makod cache push triggered)"
 
-    # ── P2b. PUT MaLo grid record (required by netz-checker check 1) ──────────
+    # ── P2b. PUT MaLo grid record (required by the grid-record precondition) ──────────
     #
-    # processd's netz-checker check 1 requires a grid record that maps the MaLo
+    # processd's the grid-record precondition requires a grid record that maps the MaLo
     # to NB 9900357000004 in the NB's grid topology.  Without it, the checker
     # escalates ("No grid record found") and auto_accept does not fire.
     # In production this is populated by `xtask import-mastr` (MaStR N7 sync).
@@ -265,7 +265,7 @@ if [[ -n "${MARKTD_URL:-}" ]]; then
     code=$(status "$resp")
     [[ "$code" == "200" || "$code" == "201" || "$code" == "204" ]] || \
         fail "PUT /api/v1/malos/$SMOKE_MALO_ID/grid returned $code: $(body "$resp")"
-    pass "PUT /api/v1/malos/$SMOKE_MALO_ID/grid → $code  (grid record ready for netz-checker)"
+    pass "PUT /api/v1/malos/$SMOKE_MALO_ID/grid → $code  (grid record ready for mako-pruefung)"
 
     # ── P3. Register ERP subscription for process events → Python webhook ─────
     #
@@ -475,7 +475,7 @@ Check: curl -s $PROCESSD_URL/api/v1/decisions | jq '.[0]'"
         DECISION=$(printf '%s' "$MY_DEC" | jq -r '.decision // "(none)"')
         case "$DECISION" in
             Accept)
-                pass "processd decision → Accept (netz-checker: all 6 checks passed)"
+                pass "processd decision → Accept (mako-pruefung: all 6 checks passed)"
                 ;;
             "(none)")
                 fail "no NB decision recorded for MaLo $SMOKE_MALO_ID — processd did not evaluate the Anmeldung. \

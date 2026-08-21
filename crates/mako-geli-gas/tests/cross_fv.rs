@@ -142,7 +142,8 @@ async fn cross_fv_antwort_accepted_on_fv_start_process() {
 
     gnb.execute(GasSupplierChangeCommand::SendAntwort {
         accepted: true,
-        reason: None,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
         obligations: vec![],
     })
     .await

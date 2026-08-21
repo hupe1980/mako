@@ -25,6 +25,9 @@ anyhow      = { workspace = true }
 # Production code uses only mako-engine's ProfileRequirement for startup checks.
 edi-energy  = { workspace = true, features = ["utilmd", "aperak"] }
 mako-engine = { workspace = true, features = ["testing"] }
+# The Antwortcode catalogue — the tests assert that every code they put on the
+# wire is one its named Entscheidungsbaum publishes.
+mako-pruefung = { workspace = true }
 serde_json  = { workspace = true }
 time        = { workspace = true }
 tokio       = { version = "1", features = ["full"] }

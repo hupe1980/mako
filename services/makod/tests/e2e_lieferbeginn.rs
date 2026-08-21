@@ -256,7 +256,8 @@ impl MockNb {
                     bilanzierungsmethode: None,
                     fallgruppe: None,
                     transaktionsgrund: None,
-                    ist_erzeugende_marktlokation: false,
+                    transaktionsgrund_ergaenzung: None,
+                    veraeusserungsform: None,
                     validation_passed: true, // bypass AHB profile check
                     validation_errors: vec![],
                 }
@@ -289,8 +290,7 @@ impl MockNb {
         let (_, outbox) = self
             .process
             .execute_and_collect(SupplierChangeCommand::SendAntwort {
-                accepted,
-                reason: reason.map(str::to_owned),
+                antwort: nb_antwort(accepted, reason.map(str::to_owned).as_deref()),
                 obligations,
             })
             .await
@@ -431,4 +431,21 @@ async fn e2e_lieferbeginn_strom_rejection_path() {
         matches!(lfn.state().await, LfAnmeldungState::Rejected { .. }),
         "LFN must be Rejected after receiving Ablehnung"
     );
+}
+
+/// The NB's answer code — `A51` (`E_0623`) for a Bestätigung, `A07` (`E_0622`)
+/// for an Ablehnung. `SG4 STS+E01` is Muss on every Antwortnachricht.
+fn nb_antwort(accepted: bool, reason: Option<&str>) -> mako_gpke::LfAntwort {
+    let (code, ebd) = if accepted {
+        ("A51", "E_0623")
+    } else {
+        ("A07", "E_0622")
+    };
+    mako_gpke::LfAntwort {
+        antwort_code: code.to_owned(),
+        ebd: Some(ebd.to_owned()),
+        zustimmung: accepted,
+        bemerkung: reason.map(ToOwned::to_owned),
+        termin: None,
+    }
 }

@@ -87,7 +87,8 @@ async fn happy_path_full_lifecycle() {
     // Step 2: Send positive Antwort → AntwortGesendet
     p.execute(GasSupplierChangeCommand::SendAntwort {
         accepted: true,
-        reason: None,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
         obligations: vec![],
     })
     .await
@@ -140,7 +141,8 @@ async fn negative_antwort_rejects_process() {
 
     p.execute(GasSupplierChangeCommand::SendAntwort {
         accepted: false,
-        reason: Some("Marktlokation nicht im Versorgungsgebiet".to_owned()),
+        antwort_code: "E17".to_owned(),
+        bemerkung: Some("Marktlokation nicht im Versorgungsgebiet".to_owned()),
         obligations: vec![],
     })
     .await
@@ -240,7 +242,8 @@ async fn deadline_on_active_is_absorbed() {
     p.execute(receive_utilmd_cmd(true)).await.unwrap();
     p.execute(GasSupplierChangeCommand::SendAntwort {
         accepted: true,
-        reason: None,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
         obligations: vec![],
     })
     .await
@@ -275,7 +278,8 @@ async fn send_antwort_from_new_is_rejected() {
     let result = p
         .execute(GasSupplierChangeCommand::SendAntwort {
             accepted: true,
-            reason: None,
+            antwort_code: "E15".to_owned(),
+            bemerkung: None,
             obligations: vec![],
         })
         .await;
@@ -298,7 +302,8 @@ async fn projection_tracks_full_lifecycle() {
     p.execute(receive_utilmd_cmd(true)).await.unwrap();
     p.execute(GasSupplierChangeCommand::SendAntwort {
         accepted: true,
-        reason: None,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
         obligations: vec![],
     })
     .await

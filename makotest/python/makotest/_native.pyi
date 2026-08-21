@@ -298,7 +298,7 @@ class AntwortObligation:
     family: str
     """`"gpke"`, `"geli-gas"`, `"wim"` or `"wim-gas"`."""
     shape: str
-    """`"next_werktag_at"`, `"end_of_werktag"` or `"werktage_at_cutoff"`."""
+    """`"werktag_at"`, `"end_of_werktag"` or `"werktage_at_cutoff"`."""
     werktage: int | None
     clock_time: str | None
     source: str

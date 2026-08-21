@@ -22,10 +22,17 @@
 //!
 //! ## Deadlines
 //!
-//! GPKE fixes **no execution deadline in Werktagen** for the physical act. The
-//! field team works to the Lieferant's own `DTM+203 Ausführungsdatum` or
-//! `DTM+469 frühestes Startdatum`. BK6-22-024 §5's 24 wall-clock hours is the
-//! deadline for the NB's **ORDRSP**, which `makod` tracks — not this service.
+//! Three clocks, from BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2:
+//!
+//! | Clock | Frist | Owner |
+//! |---|---|---|
+//! | ORDRSP 19116/19117 answering the order | spätester ÜT ist der 1. WT nach dem ÜT | `makod` |
+//! | The **physical act** | 6 WT nach dem frühestmöglichen Sperrtermin | this service (`ausfuehrung_faellig_am`) |
+//! | IFTSTA 21039 | 1. WT nach dem Abschluss des Sperrauftrags | this service (`iftsta_faellig_am`) |
+//!
+//! The field team also works to the Lieferant's own `DTM+203 Ausführungsdatum`
+//! or `DTM+469 frühestes Startdatum` — that is when the LF wanted the work done,
+//! not when the Festlegung requires it, and both are reported separately.
 
 use axum::{
     Router,
@@ -168,7 +175,7 @@ impl SperrdMcpHandler {
     }
 
     #[tool(
-        description = "Aggregate counters: pending/executed/failed/cancelled, overdue_pending (past the requested execution date), iftsta_outstanding (terminal orders whose IFTSTA 21039 has not reached the Lieferant — their gpke-sperrung-lf process cannot close) and iftsta_stuck (of those, the ones past the retry budget, which need a human).",
+        description = "Aggregate counters: pending/executed/failed/cancelled; overdue_pending (past the date the Lieferant asked for) and frist_ueberschritten (past the 6-Werktage window of GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one); iftsta_outstanding (terminal orders whose IFTSTA 21039 has not reached the Lieferant, so their gpke-sperrung-lf process cannot close), iftsta_ueberfaellig (of those, past the 1-Werktag window after completion) and iftsta_stuck (past the retry budget, needs a human).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     async fn get_sperr_stats(&self) -> Result<CallToolResult, McpError> {
@@ -180,9 +187,11 @@ impl SperrdMcpHandler {
                 "executed":           s.executed,
                 "failed":             s.failed,
                 "cancelled":          s.cancelled,
-                "overdue_pending":    s.overdue_pending,
-                "iftsta_outstanding": s.iftsta_outstanding,
-                "iftsta_stuck":       s.iftsta_stuck,
+                "overdue_pending":      s.overdue_pending,
+                "frist_ueberschritten": s.frist_ueberschritten,
+                "iftsta_outstanding":   s.iftsta_outstanding,
+                "iftsta_ueberfaellig":  s.iftsta_ueberfaellig,
+                "iftsta_stuck":         s.iftsta_stuck,
                 "health": {
                     // Outstanding on its own is normal for a few seconds after an
                     // execution — the retry worker is mid-flight. Stuck is not:

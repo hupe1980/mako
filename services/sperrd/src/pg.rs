@@ -21,6 +21,48 @@ use uuid::Uuid;
 
 use crate::model::{Arbeitszeit, OrderStatus, OrderType};
 
+/// The window GPKE Teil 2 § 3.5.1.2 Nr. 1 gives the NB for the physical act:
+/// „Die Sperrung der Marktlokation ist durch den NB spätestens innerhalb von
+/// **6 WT** nach dem frühestmöglichen Sperrtermin durchzuführen."
+pub const AUSFUEHRUNG_WERKTAGE: u32 = 6;
+
+/// „Unverzüglich, jedoch spätester ÜT ist der **1. WT** nach dem Abschluss des
+/// Sperrauftrags" — the IFTSTA 21039 window (GPKE Teil 2 § 3.5.1.2 Nr. 5,
+/// § 3.5.2.2 Nr. 4).
+pub const IFTSTA_WERKTAGE: u32 = 1;
+
+/// „Der NB führt bis zu **zwei** Sperrversuche innerhalb eines Sperrauftrags
+/// durch" (GPKE Teil 2 § 3.5.1.2 Nr. 5).
+pub const MAX_SPERRVERSUCHE: i32 = 2;
+
+/// The date by which the physical act is due, or `None` when the order names no
+/// date at all — an Entsperrauftrag carries neither `DTM+203` nor `DTM+469`, and
+/// § 41f Abs. 7 EnWG makes restoration „unverzüglich" rather than dated.
+#[must_use]
+pub fn ausfuehrung_faellig_am(
+    ausfuehrung_am: Option<Date>,
+    fruehestens_am: Option<Date>,
+) -> Option<Date> {
+    ausfuehrung_am.or(fruehestens_am).map(|start| {
+        mako_fristen::add_werktage(
+            start,
+            AUSFUEHRUNG_WERKTAGE,
+            mako_fristen::HolidayCalendar::BdewMaKo,
+        )
+    })
+}
+
+/// The date by which the IFTSTA 21039 is due, counted from the day the order
+/// was completed.
+#[must_use]
+pub fn iftsta_faellig_am(abschluss: Date) -> Date {
+    mako_fristen::add_werktage(
+        abschluss,
+        IFTSTA_WERKTAGE,
+        mako_fristen::HolidayCalendar::BdewMaKo,
+    )
+}
+
 /// How many times the worker re-tries an IFTSTA before escalating to a human.
 ///
 /// Bounded because a dispatch that keeps failing is not a transport problem: the
@@ -114,11 +156,19 @@ pub struct SperrOrderRow {
     pub treffpunkt_ort: Option<String>,
     pub treffpunkt_land: Option<String>,
     pub hinweis: Option<String>,
+    /// The § 3.5.1.2 Nr. 1 deadline for the physical act.
+    pub ausfuehrung_faellig_am: Option<Date>,
     pub status: OrderStatus,
+    /// How many Sperrversuche have been made — the Festlegung allows two.
+    pub sperrversuche: i32,
+    pub letzter_versuch_am: Option<OffsetDateTime>,
+    pub letzter_versuch_grund: Option<String>,
     pub executed_at: Option<OffsetDateTime>,
     pub execution_note: Option<String>,
     pub fail_reason: Option<String>,
     pub pruefschritt_code: Option<String>,
+    /// The § 3.5.1.2 Nr. 5 deadline for the IFTSTA 21039.
+    pub iftsta_faellig_am: Option<Date>,
     pub iftsta_ref: Option<String>,
     pub iftsta_dispatched_at: Option<OffsetDateTime>,
     pub iftsta_attempts: i32,
@@ -130,9 +180,10 @@ pub struct SperrOrderRow {
 const ORDER_COLUMNS: &str = "id::TEXT, tenant, malo_id, lf_mp_id, order_type, \
      pruefidentifikator, process_id, ausfuehrung_am, fruehestens_am, arbeitszeit, \
      treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz, treffpunkt_ort, \
-     treffpunkt_land, hinweis, status, executed_at, execution_note, fail_reason, \
-     pruefschritt_code, iftsta_ref, iftsta_dispatched_at, iftsta_attempts, \
-     iftsta_last_error, created_at, updated_at";
+     treffpunkt_land, hinweis, ausfuehrung_faellig_am, status, sperrversuche, \
+     letzter_versuch_am, letzter_versuch_grund, executed_at, execution_note, \
+     fail_reason, pruefschritt_code, iftsta_faellig_am, iftsta_ref, \
+     iftsta_dispatched_at, iftsta_attempts, iftsta_last_error, created_at, updated_at";
 
 /// Aggregate counters for the compliance sweep.
 #[derive(Debug, Serialize)]
@@ -142,11 +193,17 @@ pub struct SperrStats {
     pub executed: i64,
     pub failed: i64,
     pub cancelled: i64,
-    /// Pending orders whose requested execution date has passed.
-    ///
-    /// The date comes from the Lieferant (`DTM+203` or `DTM+469`), not from a
-    /// regulatory window: GPKE fixes no Werktage deadline for the physical act.
+    /// Pending orders whose requested execution date has passed. The date comes
+    /// from the Lieferant (`DTM+203` or `DTM+469`) — it is when the LF wanted
+    /// the work done, not when the Festlegung requires it.
     pub overdue_pending: i64,
+    /// Pending orders past the **regulatory** execution window: 6 Werktage after
+    /// the frühestmöglicher Sperrtermin (GPKE Teil 2 § 3.5.1.2 Nr. 1). This is
+    /// the number a BNetzA audit asks about.
+    pub frist_ueberschritten: i64,
+    /// Terminal orders whose IFTSTA 21039 is past its own Frist — 1 Werktag
+    /// after completion (§ 3.5.1.2 Nr. 5).
+    pub iftsta_ueberfaellig: i64,
     /// Terminal orders whose IFTSTA 21039 has not been dispatched. The LF has
     /// not learned the outcome and their process cannot close.
     pub iftsta_outstanding: i64,
@@ -175,8 +232,8 @@ pub async fn create_order_pg(
               (tenant, malo_id, lf_mp_id, order_type, pruefidentifikator, process_id,
                ausfuehrung_am, fruehestens_am, arbeitszeit,
                treffpunkt_hinweis, treffpunkt_strasse, treffpunkt_plz,
-               treffpunkt_ort, treffpunkt_land, hinweis)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+               treffpunkt_ort, treffpunkt_land, hinweis, ausfuehrung_faellig_am)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
           ON CONFLICT (tenant, process_id) DO NOTHING
           RETURNING id::TEXT",
     )
@@ -195,6 +252,10 @@ pub async fn create_order_pg(
     .bind(&req.treffpunkt.ort)
     .bind(&req.treffpunkt.land)
     .bind(&req.hinweis)
+    .bind(ausfuehrung_faellig_am(
+        req.ausfuehrung_am,
+        req.fruehestens_am,
+    ))
     .fetch_optional(pool)
     .await
     .context("insert sperr_order")?;
@@ -266,6 +327,15 @@ pub enum Outcome<'a> {
         reason: &'a str,
         /// `SG15 STS DE9013` from the EBD "gescheitert" cluster.
         pruefschritt_code: Option<&'a str>,
+        /// `true` when no further attempt will be made — a court injunction, a
+        /// glaubhaft gemachter Verhinderungsgrund, or the second of the two
+        /// Sperrversuche the Festlegung allows.
+        ///
+        /// `false` records the attempt and leaves the order `pending`: GPKE
+        /// Teil 2 § 3.5.1.2 Nr. 5 gives the NB **two** Sperrversuche within one
+        /// Sperrauftrag, and reporting `Z13 gescheitert` after the first ends a
+        /// process that still owes a second visit.
+        endgueltig: bool,
     },
 }
 
@@ -279,12 +349,20 @@ impl Outcome<'_> {
     }
 }
 
-/// What [`report_outcome`] did.
+/// What [`report_outcome`] recorded.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Reported {
     /// The order moved to its terminal state. The IFTSTA is either dispatched
     /// (`iftsta_ref` set) or queued for the retry worker.
     Recorded { iftsta_dispatched: bool },
+    /// A Sperrversuch was recorded and the order stays `pending` — the
+    /// Festlegung allows a second visit, so no IFTSTA goes out yet.
+    VersuchNotiert {
+        /// How many of the two allowed attempts have now been made.
+        sperrversuche: i32,
+        /// The Marktlokation, for the announcement.
+        malo_id: String,
+    },
     /// No pending order with that id in this tenant.
     NotFound,
 }
@@ -322,13 +400,59 @@ pub async fn report_outcome(
         Outcome::Failed {
             reason,
             pruefschritt_code,
+            ..
         } => (None, None, Some(*reason), *pruefschritt_code),
     };
+
+    // A non-final Sperrversuch is recorded and the order stays `pending`: GPKE
+    // Teil 2 § 3.5.1.2 Nr. 5 allows two attempts inside one Sperrauftrag, and
+    // the guard is on the *stored* count so two concurrent field reports cannot
+    // both read "one attempt left".
+    if let Outcome::Failed {
+        reason,
+        endgueltig: false,
+        ..
+    } = outcome
+    {
+        let recorded = sqlx::query(
+            r"UPDATE sperr_orders
+              SET sperrversuche = sperrversuche + 1,
+                  letzter_versuch_am = now(),
+                  letzter_versuch_grund = $3,
+                  updated_at = now()
+              WHERE id = $1 AND tenant = $2 AND status = 'pending'
+                AND sperrversuche + 1 < $4
+              RETURNING sperrversuche, malo_id",
+        )
+        .bind(id)
+        .bind(tenant)
+        .bind(*reason)
+        .bind(MAX_SPERRVERSUCHE)
+        .fetch_optional(pool)
+        .await
+        .context("record Sperrversuch")?;
+        if let Some(row) = recorded {
+            return Ok(Reported::VersuchNotiert {
+                sperrversuche: row.try_get("sperrversuche")?,
+                malo_id: row.try_get("malo_id")?,
+            });
+        }
+        // The allowance is used up — fall through and close the order.
+    }
+
+    // The IFTSTA Frist runs from the day the Sperrauftrag was completed, which
+    // for a success is the Fertigstellungsdatum and otherwise today.
+    let abschluss = executed_at
+        .unwrap_or_else(OffsetDateTime::now_utc)
+        .to_offset(time::UtcOffset::UTC)
+        .date();
 
     let claimed = sqlx::query(
         r"UPDATE sperr_orders
           SET status = $3, executed_at = $4, execution_note = $5, fail_reason = $6,
-              pruefschritt_code = $7, updated_at = now()
+              pruefschritt_code = $7, iftsta_faellig_am = $8,
+              sperrversuche = LEAST(sperrversuche + $9, $10),
+              updated_at = now()
           WHERE id = $1 AND tenant = $2 AND status = 'pending'
           RETURNING malo_id, lf_mp_id, order_type, process_id",
     )
@@ -339,6 +463,9 @@ pub async fn report_outcome(
     .bind(note)
     .bind(reason)
     .bind(code)
+    .bind(iftsta_faellig_am(abschluss))
+    .bind(i32::from(matches!(outcome, Outcome::Failed { .. })))
+    .bind(MAX_SPERRVERSUCHE)
     .fetch_optional(pool)
     .await
     .context("claim order")?;
@@ -656,6 +783,17 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
                     AND COALESCE(ausfuehrung_am, fruehestens_am) < CURRENT_DATE
               )                                                AS overdue_pending,
               COUNT(*) FILTER (
+                  WHERE status = 'pending'
+                    AND ausfuehrung_faellig_am IS NOT NULL
+                    AND ausfuehrung_faellig_am < CURRENT_DATE
+              )                                                AS frist_ueberschritten,
+              COUNT(*) FILTER (
+                  WHERE status IN ('executed', 'failed')
+                    AND iftsta_dispatched_at IS NULL
+                    AND iftsta_faellig_am IS NOT NULL
+                    AND iftsta_faellig_am < CURRENT_DATE
+              )                                                AS iftsta_ueberfaellig,
+              COUNT(*) FILTER (
                   WHERE status IN ('executed', 'failed')
                     AND iftsta_dispatched_at IS NULL
               )                                                AS iftsta_outstanding,
@@ -679,10 +817,77 @@ pub async fn stats_pg(pool: &PgPool, tenant: &str) -> anyhow::Result<SperrStats>
         executed: row.try_get("executed")?,
         failed: row.try_get("failed")?,
         cancelled: row.try_get("cancelled")?,
+        frist_ueberschritten: row.try_get("frist_ueberschritten")?,
+        iftsta_ueberfaellig: row.try_get("iftsta_ueberfaellig")?,
         overdue_pending: row.try_get("overdue_pending")?,
         iftsta_outstanding: row.try_get("iftsta_outstanding")?,
         iftsta_stuck: row.try_get("iftsta_stuck")?,
     })
+}
+
+// ── Execution-window sweep (GPKE Teil 2 § 3.5.1.2 Nr. 1) ─────────────────────
+
+/// Pending orders past their 6-Werktage execution window that have not been
+/// announced yet.
+///
+/// Returns `(id, malo_id, lf_mp_id, faellig_am)`. The announcement is marked on
+/// the row by [`mark_ausfuehrung_escalated`], so a missed Frist is reported once
+/// rather than on every sweep.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_ausfuehrung_ueberfaellig(
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<Vec<(Uuid, String, String, Date)>> {
+    let rows = sqlx::query(
+        r"SELECT id, malo_id, lf_mp_id, ausfuehrung_faellig_am
+          FROM sperr_orders
+          WHERE tenant = $1
+            AND status = 'pending'
+            AND ausfuehrung_faellig_am IS NOT NULL
+            AND ausfuehrung_faellig_am < CURRENT_DATE
+            AND ausfuehrung_eskaliert_at IS NULL
+          ORDER BY ausfuehrung_faellig_am
+          LIMIT 100",
+    )
+    .bind(tenant)
+    .fetch_all(pool)
+    .await
+    .context("list overdue executions")?;
+    rows.into_iter()
+        .map(|r| {
+            Ok((
+                r.try_get("id")?,
+                r.try_get("malo_id")?,
+                r.try_get("lf_mp_id")?,
+                r.try_get("ausfuehrung_faellig_am")?,
+            ))
+        })
+        .collect()
+}
+
+/// Mark an overdue execution as announced.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn mark_ausfuehrung_escalated(
+    conn: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    tenant: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"UPDATE sperr_orders SET ausfuehrung_eskaliert_at = now()
+          WHERE id = $1 AND tenant = $2",
+    )
+    .bind(id)
+    .bind(tenant)
+    .execute(conn)
+    .await
+    .context("mark execution escalated")?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -749,6 +954,45 @@ mod tests {
         // A dispatch that keeps failing is a wrong-state problem, not a
         // transport one; retrying forever hides it behind an attempt counter.
         const { assert!(IFTSTA_MAX_ATTEMPTS > 0 && IFTSTA_MAX_ATTEMPTS <= 32) }
+    }
+
+    /// The execution window is 6 Werktage, counted with the BDEW-MaKo calendar
+    /// from the frühestmöglicher Sperrtermin — not 6 calendar days.
+    #[test]
+    fn the_execution_window_is_six_werktage() {
+        use time::{Date, Month};
+        let start = Date::from_calendar_date(2026, Month::March, 2).expect("Mon 2026-03-02");
+        // Mon +6 WT = the following Tuesday.
+        assert_eq!(
+            ausfuehrung_faellig_am(Some(start), None),
+            Date::from_calendar_date(2026, Month::March, 10).ok()
+        );
+        // The earliest-start date is used when no fixed date was given.
+        assert_eq!(
+            ausfuehrung_faellig_am(None, Some(start)),
+            Date::from_calendar_date(2026, Month::March, 10).ok()
+        );
+        // An Entsperrauftrag carries neither date — „unverzüglich" governs and
+        // there is no computed Frist to miss.
+        assert_eq!(ausfuehrung_faellig_am(None, None), None);
+    }
+
+    /// The IFTSTA is due the first Werktag after completion; a Friday
+    /// completion is due Monday, not Saturday.
+    #[test]
+    fn the_iftsta_window_is_one_werktag_after_completion() {
+        use time::{Date, Month};
+        let friday = Date::from_calendar_date(2026, Month::March, 6).expect("Fri");
+        assert_eq!(
+            iftsta_faellig_am(friday),
+            Date::from_calendar_date(2026, Month::March, 9).expect("Mon")
+        );
+    }
+
+    /// Two Sperrversuche, and the CHECK constraint agrees with the constant.
+    #[test]
+    fn the_festlegung_allows_two_sperrversuche() {
+        const { assert!(MAX_SPERRVERSUCHE == 2) }
     }
 
     #[test]

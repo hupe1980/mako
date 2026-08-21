@@ -586,9 +586,18 @@ fn extract_lf_antwort(
         .map(ToOwned::to_owned)
         .or_else(|| default_ebd.map(ToOwned::to_owned));
 
+    // `antwort_tree` is the **lookup key**, `antwort_ebd` the DE 1131 wire
+    // value. They differ for Gas, whose Codelisten the MIG does not name in the
+    // segment: without the key a Gas answer could carry any string at all.
+    let tree = payload
+        .get("antwort_tree")
+        .and_then(|v| v.as_str())
+        .map(ToOwned::to_owned)
+        .or_else(|| ebd.clone());
+
     // Resolve the code inside its own tree. `A02` means three different things
     // across E_0607, E_0622 and E_0609, so a bare code is not checkable.
-    let zustimmung = match ebd.as_deref() {
+    let zustimmung = match tree.as_deref() {
         Some(tree) => {
             let entry = mako_pruefung::codes::lookup(tree, &antwort_code).ok_or_else(|| {
                 DispatchError::InvalidPayload(format!(
@@ -599,15 +608,16 @@ fn extract_lf_antwort(
             entry.ist_zustimmung()
         }
         None => {
-            // Gas Codelisten carry no DE 1131, so the caller states the cluster.
+            // Neither key nor wire value: the caller must state the cluster,
+            // and nothing validates the code.
             payload
                 .get("zustimmung")
                 .and_then(serde_json::Value::as_bool)
                 .ok_or_else(|| {
                     DispatchError::InvalidPayload(
-                        "an answer without an \"antwort_ebd\" must state \"zustimmung\": \
-                         the Gas Codelisten are not named in STS DE 1131, so the cluster \
-                         cannot be derived from the code alone"
+                        "an answer without an \"antwort_tree\" or \"antwort_ebd\" must \
+                         state \"zustimmung\": the cluster decides the response PID and \
+                         cannot be derived from an unresolved code"
                             .into(),
                     )
                 })?
@@ -762,7 +772,7 @@ pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
     .await
 }
 
-/// Dispatch the NB ERP decision (Bestätigung or Ablehnung) to an existing
+/// Dispatch the NB's decision (Bestätigung or Ablehnung) to an existing
 /// `GpkeSupplierChangeWorkflow` process looked up by `malo_id`.
 ///
 /// Called for `gpke.lieferbeginn.bestaetigen`, `gpke.lieferbeginn.ablehnen`,
@@ -770,29 +780,51 @@ pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
 ///
 /// ## Required payload fields
 ///
-/// | Field | Type | Notes |
+/// | Field | Required | Wire slot |
 /// |---|---|---|
-/// | `malo_id` | string | Marktlokations-ID identifying the NB-side process |
-/// | `reason` | string (opt.) | Rejection reason — required when `accepted = false` |
+/// | `malo_id` | ✓ | Marktlokations-ID identifying the NB-side process |
+/// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 |
+/// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 (absent on the Gas Codelisten) |
+/// | `zustimmung` | Gas only | the cluster, which the Gas code alone cannot give |
+/// | `bemerkung` | — | `FTX+ACB` Erläuterung |
+///
+/// The NB's own answer is validated exactly like the LF's: the code is resolved
+/// inside its tree and the **published Cluster decides the response PID**, so
+/// `gpke.lieferbeginn.bestaetigen` carrying an Ablehnungscode is a rejected
+/// command rather than a 55002 stating a refusal. The `accepted` flag the
+/// command name implies is checked against that cluster, not trusted.
 pub(super) async fn dispatch_supplier_change_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
     accepted: bool,
 ) -> Result<DispatchOutcome, DispatchError> {
     let malo_id = extract_malo_id(payload)?;
+    let antwort = extract_lf_antwort(payload, None)?;
 
-    let reason = payload
-        .get("reason")
-        .and_then(|v| v.as_str())
-        .map(str::to_owned);
+    if antwort.zustimmung != accepted {
+        return Err(DispatchError::InvalidPayload(format!(
+            "Antwortcode {:?} is a {} in {}, but the command asks for a{}. The published              Cluster decides the response PID; the two may not disagree.",
+            antwort.antwort_code,
+            if antwort.zustimmung {
+                "Zustimmung"
+            } else {
+                "Ablehnung"
+            },
+            antwort.ebd.as_deref().unwrap_or("its Gas Codeliste"),
+            if accepted {
+                " Bestätigung"
+            } else {
+                "n Ablehnung"
+            },
+        )));
+    }
 
     dispatch_to_process::<GpkeSupplierChangeWorkflow, _>(
         state,
         malo_id.as_str(),
         "gpke-supplier-change",
         move || SupplierChangeCommand::SendAntwort {
-            accepted,
-            reason,
+            antwort,
             obligations: vec![],
         },
     )

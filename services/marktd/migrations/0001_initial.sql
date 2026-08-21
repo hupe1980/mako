@@ -281,7 +281,7 @@ CREATE TABLE versorgungsstatus (
     -- (55001 / 55077 / 44001) and cleared by its Ablehnung (55003 / 55080 /
     -- 44003) or by the Bestätigung that promotes it. The *first* announcement
     -- wins: a competing supplier's Anmeldung does not overwrite it, because
-    -- netz-checker decides EBD E_0622 A06 „Andere Anmeldung in Bearbeitung"
+    -- mako-pruefung decides E_0622 Prüfschritt 70 „Andere Anmeldung in Bearbeitung"
     -- by comparing this column against the requesting supplier.
     lf_mp_id_next       TEXT,
     lf_next_lieferbeginn DATE,               -- Announced Lieferbeginn of the future LF (WHEN; paired with lf_mp_id_next)

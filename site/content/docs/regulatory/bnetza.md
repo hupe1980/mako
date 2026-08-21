@@ -54,7 +54,10 @@ All GPKE, WiM, and MaBiS processes are regulated under BK6.
 - **Mehr-/Mindermengen Strom** (INVOIC, PIDs 31005–31006) — see Mitteilung Nr. 72 below
 - **Mehr-/Mindermengen Gas** (INVOIC, PIDs 31007–31008; NB → MGV, Gas-only) — belongs to GaBi Gas (`mako-gabi-gas`)
 
-**APERAK Frist (GPKE):** **24 Stunden** (wall-clock hours) — festgelegt in BK6-22-024
+**APERAK Frist (GPKE):** **45 Minuten** an einem Werktag für UTILMD und ORDERS
+(APERAK AHB 1.0 §2.4.1); Samstagseingang bis Sonntag 12:00 Uhr, alles übrige bis
+12:00 Uhr des nächsten Werktags. Nicht die Antwortfrist des Geschäftsprozesses —
+siehe unten.
 
 **Laufende Verfahren:**
 
@@ -288,11 +291,25 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 
 ## APERAK Fristen Summary
 
-| Process family | Crate | Frist | Calculation |
-|---|---|---|---|
-| GPKE (Strom) | `mako-gpke` | **24 Stunden** (wall-clock) | `fristen::add_hours(t, 24)` |
-| WiM (Strom) | `mako-wim` | **3 / 5 / 7 / 1 Werktage** je PID | `antwort_frist_werktage(pid)` → `fristen::deadline_at_werktage` |
-| GeLi Gas | `mako-geli-gas` | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` |
+| Process family | Frist | Shape |
+|---|---|---|
+| GPKE (Strom) | **11:00 / 06:00 / 05:00 / 09:00 Uhr des 1. WT nach dem ÜT**, je Prüfidentifikator | `FristShape::WerktagAt` |
+| GPKE Neuanlage (55600/55601) | **00:00 Uhr des 61. WT nach dem ÜT** — der tägliche Prüflauf nach `E_0608` läuft 60 WT | `FristShape::WerktagAt` |
+| GPKE Sperrung (17115/17117/39000) | **spätester ÜT ist der 1. WT nach dem ÜT** | `FristShape::WerktageAtCutoff` |
+| GPKE Teil 4 Stammdaten-Rückmeldung | **2. WT nach dem ÜT**; die *Bestellung* 10 WT | `FristShape::WerktageAtCutoff` |
+| WiM (Strom) | **3 / 5 / 7 / 1 Werktage** je PID | `FristShape::WerktageAtCutoff` |
+| GeLi Gas | **Ablauf des 4. / 3. / 2. Werktags** je Prozess | `FristShape::EndOfWerktag` |
+
+Alle vier Familien stehen in **einer** Tabelle, `mako_fristen::antwort` — `makod`
+registriert daraus die Prozessfrist, `processd` bemisst die Operator-Queue,
+`obsd` meldet die Verletzung. Eine PID ohne veröffentlichte Frist liefert `None`:
+**unbekannt**, nie *unbefristet*.
+
+> GPKE Teil 2 nennt jede Antwortfrist als Uhrzeit auf einem Werktag, nie als
+> Dauer: eine Freitagnachmittag eingegangene Nachricht ist bis Montag früh zu
+> beantworten, eine am Dienstagabend eingegangene hat keine sechzehn Stunden. Die
+> 10-Werktage-Zahl bei GeLi Gas ist die **Vorlauffrist des Lieferanten**, nicht
+> die Antwortfrist des Netzbetreibers.
 
 > **Werktag rule:** Saturdays, Sundays and public holidays are not Werktage (GPKE Teil 1). 24.12. and 31.12. count as holidays.
 

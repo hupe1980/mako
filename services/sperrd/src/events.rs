@@ -43,6 +43,61 @@ pub async fn auftrag_eingegangen(pool: &PgPool, tenant: &str, id: Uuid, req: &Cr
     enqueue(pool, &ce, id).await;
 }
 
+/// A Sperrversuch that did not succeed and left the order in the queue.
+///
+/// Not `FEHLGESCHLAGEN`: nothing has been reported to the Lieferant, because
+/// GPKE Teil 2 § 3.5.1.2 Nr. 5 still owes them a second visit.
+pub async fn versuch_gescheitert(
+    pool: &PgPool,
+    tenant: &str,
+    id: Uuid,
+    malo_id: &str,
+    reason: &str,
+    sperrversuche: i32,
+) {
+    let ce = mako_service::CloudEvent::new(
+        source(tenant),
+        mako_events::sperr::VERSUCH_GESCHEITERT,
+        malo_id,
+        serde_json::json!({
+            "order_id":      id.to_string(),
+            "malo_id":       malo_id,
+            "grund":         reason,
+            "sperrversuche": sperrversuche,
+            "verbleibend":   crate::pg::MAX_SPERRVERSUCHE - sperrversuche,
+        }),
+    );
+    enqueue(pool, &ce, id).await;
+}
+
+/// A pending order ran past the § 3.5.1.2 Nr. 1 execution window.
+pub async fn ausfuehrung_ueberfaellig(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: &str,
+    id: Uuid,
+    malo_id: &str,
+    lf_mp_id: &str,
+    faellig_am: time::Date,
+) -> anyhow::Result<()> {
+    let ce = mako_service::CloudEvent::new(
+        source(tenant),
+        mako_events::sperr::AUSFUEHRUNG_UEBERFAELLIG,
+        malo_id,
+        serde_json::json!({
+            "order_id":   id.to_string(),
+            "malo_id":    malo_id,
+            "lf_mp_id":   lf_mp_id,
+            "faellig_am": faellig_am.to_string(),
+            "frist":      "6 WT nach dem frühestmöglichen Sperrtermin \
+                           (BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 1)",
+        }),
+    );
+    mako_service::outbox::enqueue(&mut *tx, &ce)
+        .await
+        .map(|_| ())
+        .map_err(Into::into)
+}
+
 /// The field team reported a terminal outcome.
 pub async fn outcome(
     pool: &PgPool,
@@ -67,6 +122,7 @@ pub async fn outcome(
         Outcome::Failed {
             reason,
             pruefschritt_code,
+            ..
         } => (
             mako_events::sperr::FEHLGESCHLAGEN,
             serde_json::json!({

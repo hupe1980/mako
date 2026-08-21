@@ -14,7 +14,7 @@ from its own Codeliste. This crate is those rules, executable.
 
 | Module | Prüfende Rolle | Processes |
 |---|---|---|
-| `nb` | Netzbetreiber | Anmeldung (`E_0622`), Abmeldung (`E_0607`) |
+| `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage-Codeliste (`E_0608`) |
 | `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`) |
 
 The document defines around sixty trees with the LF as prüfende Rolle. The ones
@@ -42,6 +42,19 @@ and a combined NB+LF deployment runs all three. `codes::lookup(ebd, code)`
 resolves a code **within** its tree, and the code's published `Cluster` —
 Zustimmung or Ablehnung — is what selects the answer PID. A caller never passes
 an `accepted: bool` alongside a code, because the two can disagree.
+
+The split runs deeper than one code. `E_0622` Prüfschritt 10 divides Strom into a
+verbrauchende/ruhende branch and an erzeugende one that share **nothing**: „andere
+Anmeldung in Bearbeitung" is `A06` in the first and `A45` in the second. Gas
+answers from a different alphabet again — `ZC5` for the same question, `A16`
+where Strom says `A02`, `E17` where it says `A07`, `E13` where it says `A05`. A
+Strom code on a 44003 is not a wrong reason; it is undefined.
+
+A **Vorprüfung** publishes only Ablehnungen. `E_0622` and `E_3005` can refuse a
+message but never agree to one — a survivor is confirmed out of `E_0623` / `E_3007`,
+and `VORPRUEFUNG_TREES` names the pair. `SG4 STS+E01` is Muss on every
+Antwortnachricht, so `NbEntscheidung::Accept` carries `A51` / `A58` / `E15`
+rather than nothing.
 
 These codes travel in `SG4 STS+E01++<code>:<ebd>` of the answering UTILMD. They
 are **not** ERC codes: `ERC` is the APERAK/CONTRL segment for processability

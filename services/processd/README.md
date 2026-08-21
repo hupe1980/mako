@@ -12,10 +12,10 @@ What it cannot decide it puts in front of an operator with the deadline attached
 
 | Role | Inbound PID | Process | Business Frist | Decision basis |
 |---|---|---|---|---|
-| **NB** | 55001, 55077 | GPKE Anmeldung (verb. / erz. MaLo) | **11:00 Uhr des 1. WT nach dem ÜT** | `netz-checker::evaluate` (6 checks, EBD `E_0622`) |
-| **NB** | 55004 | GPKE Abmeldung — Lieferende von LF an NB | **06:00 Uhr des 1. WT nach dem ÜT** | `netz-checker::evaluate_abmeldung` (EBD `E_0607`) |
-| **NB** | 44001 | GeLi Gas Anmeldung NN | **Ablauf des 4. Werktags** | `netz-checker::evaluate` |
-| **NB** | 44004 | GeLi Gas Abmeldung NN | **Ablauf des 3. Werktags** | `netz-checker::evaluate_abmeldung` |
+| **NB** | 55001, 55077 | GPKE Anmeldung (verb. / erz. MaLo) | **11:00 Uhr des 1. WT nach dem ÜT** | `mako_pruefung::evaluate` — `E_0622`'s two branches, confirmed out of `E_0623` |
+| **NB** | 55004 | GPKE Abmeldung — Lieferende von LF an NB | **06:00 Uhr des 1. WT nach dem ÜT** | `mako_pruefung::evaluate_abmeldung` (`E_0607`) |
+| **NB** | 44001 | GeLi Gas Anmeldung NN | **Ablauf des 4. Werktags** | `mako_pruefung::evaluate` (`G_0011`) |
+| **NB** | 44004 | GeLi Gas Abmeldung NN | **Ablauf des 3. Werktags** | `mako_pruefung::evaluate_abmeldung` (`G_0007`) |
 | **NB** | 55042 | WiM Anmeldung MSB (MSBN → NB) | 5 WT | MeLo / partner / Zählertyp checks |
 | **NB** | 55051 | WiM Ende MSB (MSBA → NB) | 7 WT | operator queue |
 | **NB** | *(event)* | EoG gap closure → 55013 (§ 36/§ 38 EnWG) | unverzüglich; 3-month timer | `grundversorger` from `marktd` |
@@ -97,14 +97,14 @@ MSBN → MSBA and never reaches the NB, and an ORDRSP is the MSB's answer.
 
 ```text
 de.mako.process.initiated
-  ├─ Anmeldung  (55001 / 55077 / 44001)          ─ EBD E_0622
+  ├─ Anmeldung  (55001 / 55077 / 44001)          ─ E_0622 / G_0011
   │    → GET marktd /api/v1/versorgung/{malo_id}    → VersorgungsStatus
   │    → GET marktd /api/v1/malos/{malo_id}/grid    → MaloGridRecord
   │    → GET marktd /api/v1/partners/{lf_mp_id}     → partner_known
-  │    → netz_checker::evaluate(…)
+  │    → mako_pruefung::evaluate(…)
   └─ Abmeldung  (55004 / 44004)                  ─ EBD E_0607
        → GET marktd /api/v1/versorgung/{malo_id}    → VersorgungsStatus
-       → netz_checker::evaluate_abmeldung(…)
+       → mako_pruefung::evaluate_abmeldung(…)
 
   Accept   → anmeldung_decisions(Accept)   → makod bestaetigen   [if auto_accept]
                                            → approval_queue      [otherwise]
@@ -117,37 +117,64 @@ de.mako.process.initiated
 back by `auto_accept = false` or the § 20 EnWG affiliate rule, go to `approval_queue` with
 the answer Frist attached and both commands already resolved from the trigger PID.
 
-### The two decision trees have separate code spaces
+### Three trees, three alphabets
 
-`A02` is „Marktlokation nimmt nicht an der Marktkommunikation teil" in `E_0622`
-and „Vorlauffrist nicht eingehalten" in `E_0607`, so `netz-checker` exposes two
-functions rather than one with a flag. Reusing the Anmeldung codes on an
-Abmeldung puts a valid-looking but wrong Ablehnungsgrund on the market.
+`E_0622` Prüfschritt 10 splits Strom into two branches that share **no**
+Antwortcode, and Gas answers from a different Codeliste again:
 
-### netz-checker `evaluate` — the Anmeldung, 6 deterministic checks
+| Anwendungsfall | Tree | „andere Anmeldung in Bearbeitung" | Fristüberschreitung | Zustimmung |
+|---|---|---|---|---|
+| Strom, verbrauchende / ruhende MaLo | `E_0622` 15–70 | `A06` | `A07` | `A51` (`E_0623`) |
+| Strom, erzeugende MaLo / Tranche | `E_0622` 220–830 | `A45` | `A34`/`A28`/`A29`/`A30`/`A32`/`A35`/`A44` | `A58` (`E_0623`) |
+| Gas Anmeldung | `E_3005` / `G_0011` | `ZC5` | `E17` | `E15` (`G_0012`) |
+| Strom Abmeldung | `E_0607` | — | `A02` | `A11` |
+| Gas Abmeldung | `E_3019` / `G_0007` | — | `E17` | `E15` |
 
-| # | Rule | Outcome on failure |
+`A02` is „nimmt nicht an der Marktkommunikation teil" in `E_0622` and
+„Vorlauffrist nicht eingehalten" in `E_0607`, and the Gas trees define neither.
+`mako-pruefung` resolves every code inside its own tree, `makod` re-checks it at
+the command boundary, and the published **Cluster decides the response PID**.
+
+### `mako_pruefung::evaluate` — the Anmeldung
+
+**Strom, verbrauchende / ruhende Marktlokation** (`E_0622` Prüfschritte 15–70):
+
+| Prüfschritt | Rule | Outcome on failure |
 |---|---|---|
-| 1 | Grid record present in `marktd` | `Escalate` |
-| 2 | MaLo participates in MaKo (not Stillgelegt/Ruhend) | `Reject A02` |
-| 3 | No conflicting Anmeldung in Bearbeitung (`lf_mp_id_next` held by another LF) | `Reject A06` |
-| 4 | Date plausibility, Transaktionsgrund-aware — Strom LFW24 future rule, § 10c EEG Monatserster for 55077; Gas E03 ≥ 10 WT future-only, E01/E02 retroactive ≤ 6 weeks (+3 WT) for SLP | `Reject A07` (Strom) / `Reject E17` (Gas); Gas backdated without Transaktionsgrund → `Escalate` |
-| 5 | Bilanzierungsgebiet consistent with the grid record | `Reject A05` |
-| 6 | LF MP-ID in the partner directory | `Reject A05` |
+| — | Grid record present in `marktd` | `Escalate` — a mako data gap, not a ground to refuse |
+| 15 | Vorlauffrist: one full Werktag between receipt and Zuordnungsbeginn | `Reject A07` |
+| 30 | MaLo participates in MaKo (stillgelegt, or Modell-2-zugeordnet) | `Reject A02` |
+| 60 | Zuordnungsermächtigung: Bilanzierungsgebiet matches, LF known | `Reject A05` |
+| 70 | No other Anmeldung in Bearbeitung | `Reject A06` |
 
-Check 3 is only decidable because `marktd` keeps the **first** announcement:
-`lf_mp_id_next` is written while ingesting the `process.initiated`, before the
-fan-out, so the Anmeldung under evaluation has already written its own marker
-and the check must compare MP-IDs rather than test for presence.
+A **ruhende** Marktlokation is not refused — Prüfschritt 30's own Hinweis names
+only stillgelegte Marktlokationen and the Modell-2-Zuordnung, and Prüfschritte
+16–28 exist to check a ruhende one.
 
-### netz-checker `evaluate_abmeldung` — the Abmeldung, EBD `E_0607`
+Prüfschritt 70 is only decidable because `marktd` keeps the **first**
+announcement: `lf_mp_id_next` is written while ingesting the
+`process.initiated`, before the fan-out, so the Anmeldung under evaluation has
+already written its own marker and the check must compare MP-IDs rather than
+test for presence.
 
-| # | Prüfschritt | Outcome on failure |
+**Strom, erzeugende Marktlokation** (220–830) picks between the **six**
+Vorlauffristen GPKE Teil 2 § 2.1.1 publishes, keyed on `(Geschäftsvorfall,
+bestehende, angemeldete Veräußerungsform)` — `SG10 CCI+Z22` on the wire, the NB's
+EEG register for the rest. A missing fact escalates and is named. The statutory
+anchor for the Monatserster rule is **§ 21b Abs. 1 EEG 2023**, not § 10c.
+
+**Gas** (`G_0011`) runs the `A03`/`A04`/`A16`/`A17` identification checks first as
+the AHB requires, then `E17`, `E13`, `ZC5` / `Z08`.
+
+### `mako_pruefung::evaluate_abmeldung` — `E_0607` / `E_3019`
+
+| Prüfschritt | Rule | Outcome on failure |
 |---|---|---|
-| 1 | The MaLo is known to this NB | `Escalate` |
-| 2 | The requesting LF is the assigned Lieferant (Prüfschritt 110) | `Escalate` |
-| 3 | Vorlauffrist eingehalten (Prüfschritt 50) — Strom: one full Werktag, or Monatserster + 1 Monat for an EEG-MaLo; Gas: the Kap. 3.2.1 retroactivity rules | `Reject A02` |
-| 4 | Kein bereits bestätigtes Lieferende zum selben Datum (Prüfschritte 100–130) | `Reject A09` / `A10` |
+| — | The MaLo is known to this NB | `Escalate` |
+| 110 | The requesting LF is the assigned Lieferant | `Escalate` |
+| 50 | Vorlauffrist — Strom: one full Werktag, or Monatserster + 1 Monat for an EEG-MaLo; Gas: the Kap. 3.2.1 retroactivity rules | `Reject A02` (Strom) / `E17` (Gas) |
+| 120 | Kein bereits bestätigtes Lieferende zum selben Datum | `Reject A09` (Strom) / `Z08` (Gas) |
+| 130 | Did the *already confirmed* Abmeldung name an Auszugsgrund? | `Escalate` — the projection does not keep it, and `A10` and „confirm" are both live outcomes |
 
 Prüfschritte 10–30 (Kundenanlagen-Herauslösung) and 60–90 (ESV-Ende, Aufhebung
 einer zukünftigen Zuordnung) need Transaktionsgründe and prior process history
@@ -156,7 +183,9 @@ the § 20 EnWG-safe direction — an unfounded Ablehnung keeps a customer bound 
 a supplier they have left.
 
 STP is ~60 % without `malo_grid` coverage (missing records escalate) and ≥ 95 %
-once the NB has provisioned it via `marktd`'s NB-role PUT.
+once the NB has provisioned it via `marktd`'s NB-role PUT. An erzeugende
+Marktlokation reaches STP only once the Veräußerungsform register lookup is
+wired — see `ROADMAP.md`.
 
 **§ 20 EnWG parity.** Every decision row carries `initiator_is_affiliate`
 (`lf_mp_id == own_mp_id`), and `auto_accept` is suppressed for affiliate-initiated
@@ -381,5 +410,5 @@ counted from the first Werktag after receipt, per § 187 Abs. 1 BGB as GeLi Gas
 3.0 Kap. 2.6 restates it.
 
 All deadline arithmetic uses **German local time (CET/CEST)** — a Frist stated
-as „11:00 Uhr" is 10:00 UTC in winter and 09:00 UTC in summer. `netz-checker`
+as „11:00 Uhr" is 10:00 UTC in winter and 09:00 UTC in summer. `mako-pruefung`
 receives `now_utc()` and converts internally via `time-tz`.

@@ -617,7 +617,7 @@ impl mako_engine::builder::EngineModule for GpkeModule {
 
         // PID 55555 — Anfrage Daten der individuellen Bestellung (GPKE Teil 4).
         // LFN queries NB for data about a specific order. NB must respond
-        // within 24 wall-clock hours (BK6-22-024 §5). Governed by BK6-24-174.
+        // inside the window `mako_fristen::antwort` resolves (BK6-24-174).
         router.register(
             anfrage_bestellung::ANFRAGE_PID.as_u32(),
             anfrage_bestellung::WORKFLOW_NAME,

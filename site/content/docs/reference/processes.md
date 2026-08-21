@@ -50,7 +50,7 @@ INSRPT last changed with `fv20260101`).
 
 | Domain | APERAK Frist |
 |---|---|
-| GPKE | 24 Stunden (wall-clock) |
+| GPKE | per Prüfidentifikator, als Uhrzeit auf einem Werktag (`mako_fristen::antwort`) |
 | WiM Strom | 45 Minuten (UTILMD Strom; APERAK AHB §2.4.1) |
 | GeLi Gas | 10 Werktage |
 | WiM Gas | 10 Werktage |
@@ -70,23 +70,29 @@ at DST transitions constitutes a regulatory deadline violation.
 
 Quick reference across all process families. Each row is a top-level domain.
 
-| Domain | Sparte | Crate | Key PIDs | Antwort-/APERAK-Frist | Basis |
+> **„nicht quantifiziert" heißt unbekannt, nicht unbefristet.**
+> `mako_fristen::antwort` liefert für eine solche PID `None`; `makod` registriert
+> dann eine Betriebskonvention, gekennzeichnet als `is_regulatory: false`. Die
+> **APERAK**-Frist ist eine eigene Uhr (45 Minuten an einem Werktag, APERAK AHB
+> 1.0 §2.4.1) und steht nicht in dieser Spalte.
+
+| Domain | Sparte | Crate | Key PIDs | Antwortfrist des Geschäftsprozesses | Basis |
 |---|:---:|---|---|---|---|
-| **GPKE Lieferantenwechsel (NB-Sicht)** | ⚡ | `mako-gpke` `gpke-supplier-change` | UTILMD 55001–55018, 55022–55024 | 24 h | BK6-24-174 |
-| **GPKE Lieferantenwechsel (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-lf-anmeldung` | UTILMD 55001/55002/55016/55077 (out) · 55003–55006 (in) | 24 h | BK6-24-174 |
-| **GPKE Neuanlage MaLo** | ⚡ | `mako-gpke` `gpke-neuanlage` | UTILMD 55600/55601 → 55602–55605 | 24 h | BK6-24-174 |
-| **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009 | 24 h | BK6-24-174 |
-| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | 24 h | BK6-24-174 |
-| **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | 24 h | BK6-22-024 |
-| **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | 24 h | BK6-22-024 |
-| **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | 24 h | BK6-24-174 |
-| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` | ORDERS 17004/17102/17113 → ORDRSP rejection | 24 h | BK6-22-024 |
-| **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | 24 h | BK6-22-024 |
-| **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | 24 h | BK6-24-174 |
-| **GPKE Messwerte (MSCONS)** | ⚡ | `mako-gpke` `gpke-messwerte` | MSCONS 13005/13006/13015–13019/13025/13027 | 24 h | BK6-24-174 |
-| **GPKE UTILTS** | ⚡ | `mako-gpke` `gpke-utilts` | UTILTS 25001/25004–25010 | 24 h | BK6-24-174 |
-| **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` | ORDERS 17134/17135 → ORDRSP 19001/19002 | 24 h | BK6-22-024 |
-| **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | 24 h | BK6-22-024 |
+| **GPKE Lieferantenwechsel (NB-Sicht)** | ⚡ | `mako-gpke` `gpke-supplier-change` | UTILMD 55001–55018, 55022–55024 | 11:00 / 06:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.1.2 / § 2.5.1.2 |
+| **GPKE Lieferantenwechsel (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-lf-anmeldung` | UTILMD 55001/55002/55016/55077 (out) · 55003–55006 (in) | — (the NB answers) | BK6-24-174 Teil 2 |
+| **GPKE Neuanlage MaLo** | ⚡ | `mako-gpke` `gpke-neuanlage` | UTILMD 55600/55601 → 55602–55605 | **00:00 Uhr des 61. WT nach dem ÜT** (60 WT täglicher Prüflauf, `E_0608`) | BK6-24-174 Teil 2 § 2.2.2 |
+| **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009 | 05:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.5.2.2 |
+| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | nicht quantifiziert | BK6-24-174 Teil 2 |
+| **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | ORDRSP 1. WT nach dem ÜT · Ausführung 6 WT · IFTSTA 1 WT nach Abschluss | BK6-24-174 Teil 2 § 3.5 |
+| **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 § 3.5 |
+| **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 § 3.3 |
+| **GPKE Datenabruf** | ⚡ | `mako-gpke` `gpke-datenabruf` | ORDERS 17004/17102/17113 → ORDRSP rejection | nicht quantifiziert | BK6-24-174 Teil 4 |
+| **GPKE Anfrage Bestellung (55555)** | ⚡ | `mako-gpke` `gpke-anfrage-bestellung` | UTILMD 55555 | nicht quantifiziert | BK6-24-174 Teil 4 |
+| **GPKE Allokationsliste Strom** | ⚡ | `mako-gpke` `gpke-allokationsliste` | ORDERS 17110/17114 · ORDRSP 19110/19115 · MSCONS 13014 | nicht quantifiziert | BK6-24-174 |
+| **GPKE Messwerte (MSCONS)** | ⚡ | `mako-gpke` `gpke-messwerte` | MSCONS 13005/13006/13015–13019/13025/13027 | nicht quantifiziert | BK6-24-174 |
+| **GPKE UTILTS** | ⚡ | `mako-gpke` `gpke-utilts` | UTILTS 25001/25004–25010 | nicht quantifiziert | BK6-24-174 |
+| **GPKE Konfiguration** | ⚡ | `mako-gpke` `gpke-konfiguration` | ORDERS 17134/17135 → ORDRSP 19001/19002 | nicht quantifiziert | BK6-24-174 Teil 3 |
+| **GPKE Konfiguration Änderung** | ⚡ | `mako-gpke` `gpke-konfiguration-aenderung` | ORDERS/ORDRSP config changes | nicht quantifiziert | BK6-24-174 Teil 3 |
 | **PARTIN Strom Kommunikationsdaten** | ⚡ | `mako-gpke` `gpke-partin` | PARTIN 37000–37006 | — | PARTIN AHB 1.0f |
 | **WiM Strom MSB-Wechsel** | ⚡ | `mako-wim` `wim-device-change` | UTILMD 55039/55042/55051/55168 (out+in) · 55040/55041 · 55043/55044 · 55052/55053 · 55169/55170 (Antwort) | 3/5/7/1 WT — see below | BK6-24-174 |
 | **WiM Strom Geräteübernahme** | ⚡ | `mako-wim` `wim-geraeteubernahme` | ORDERS 17001 · 17002 · 17009 · ORDRSP 19001/19002 · 19003/19004 · 19015/19016 (⚠ role-conditional: registered only under an explicit NMSB role build) | 5 WT | BK6-24-174 |
@@ -168,7 +174,8 @@ Quick reference across all process families. Each row is a top-level domain.
 **Regulatory basis:** BK6-24-174 (Beschluss 24.10.2024, gültig ab 06.06.2025) +
 BK6-22-024 (GPKE Teil 4, Stammdaten und Konfiguration)
 
-**APERAK Frist:** **24 wall-clock hours** from receipt of the triggering message.
+**APERAK Frist:** **45 Minuten** an einem Werktag (APERAK AHB 1.0 §2.4.1) — a
+separate clock from the business Antwortfrist of the process itself.
 
 ---
 

@@ -154,6 +154,7 @@ async fn a_failed_dispatch_keeps_the_report_and_queues_a_retry() {
     let outcome = pg::Outcome::Failed {
         reason: "Zutritt verweigert",
         pruefschritt_code: Some("A04"),
+        endgueltig: true,
     };
     let reported = pg::report_outcome(&pool, &makod, id, TENANT, &outcome)
         .await
@@ -221,6 +222,7 @@ async fn an_order_reaches_exactly_one_terminal_outcome() {
     let failed = pg::Outcome::Failed {
         reason: "Zutritt verweigert",
         pruefschritt_code: Some("A04"),
+        endgueltig: true,
     };
     assert_eq!(
         pg::report_outcome(&pool, &makod, id, TENANT, &failed)
@@ -449,5 +451,167 @@ async fn an_entsperrauftrag_keeps_its_arbeitszeit() {
         row.pruefidentifikator,
         Some(17117),
         "an Entsperrauftrag arrives on 17117"
+    );
+}
+
+/// GPKE Teil 2 § 3.5.1.2 Nr. 5: „Der NB führt bis zu zwei Sperrversuche
+/// innerhalb eines Sperrauftrags durch."
+///
+/// The first unsuccessful visit is recorded and the order stays in the queue —
+/// no IFTSTA, because the Lieferant is still owed a second attempt. The second
+/// closes it and reports `Z13 gescheitert`.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_first_sperrversuch_does_not_close_the_order() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
+        "http://127.0.0.1:1",
+        secrecy::SecretString::from("test"),
+    ));
+    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("zwei-versuche"))))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let versuch = |reason| pg::Outcome::Failed {
+        reason,
+        pruefschritt_code: Some("A04"),
+        endgueltig: false,
+    };
+
+    let first = pg::report_outcome(&pool, &makod, id, TENANT, &versuch("niemand angetroffen"))
+        .await
+        .unwrap();
+    assert_eq!(
+        first,
+        pg::Reported::VersuchNotiert {
+            sperrversuche: 1,
+            malo_id: "51238696012".to_owned(),
+        },
+        "the first attempt is recorded, not reported"
+    );
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, sperrd::model::OrderStatus::Pending);
+    assert_eq!(row.sperrversuche, 1);
+    assert!(
+        row.iftsta_faellig_am.is_none(),
+        "no IFTSTA Frist runs while the order is still open"
+    );
+
+    let second = pg::report_outcome(&pool, &makod, id, TENANT, &versuch("erneut niemand"))
+        .await
+        .unwrap();
+    assert_eq!(
+        second,
+        pg::Reported::Recorded {
+            iftsta_dispatched: false
+        },
+        "the second attempt exhausts the allowance and closes the order"
+    );
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, sperrd::model::OrderStatus::Failed);
+    assert_eq!(row.sperrversuche, 2);
+    assert!(
+        row.iftsta_faellig_am.is_some(),
+        "the IFTSTA Frist starts when the Sperrauftrag is abgeschlossen"
+    );
+}
+
+/// A legal or factual impossibility (§ 3.5.1.2 Nr. 5: „gerichtliche Verfügung",
+/// „lebenserhaltende medizinische Geräte") closes the order on the first
+/// report — there is nothing a second visit could change.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_endgueltige_verhinderung_closes_the_order_at_once() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let makod = std::sync::Arc::new(mako_markt::makod_client::MakodClient::new(
+        "http://127.0.0.1:1",
+        secrecy::SecretString::from("test"),
+    ));
+    let id = pg::create_order_pg(&pool, TENANT, &order(Some(uniq("verfuegung"))))
+        .await
+        .unwrap()
+        .unwrap();
+
+    let reported = pg::report_outcome(
+        &pool,
+        &makod,
+        id,
+        TENANT,
+        &pg::Outcome::Failed {
+            reason: "gerichtliche Verfügung untersagt die Sperrung",
+            pruefschritt_code: Some("A05"),
+            endgueltig: true,
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        reported,
+        pg::Reported::Recorded {
+            iftsta_dispatched: false
+        }
+    );
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(row.status, sperrd::model::OrderStatus::Failed);
+}
+
+/// The 6-Werktage execution window is computed on insert and drives the
+/// overdue sweep — an order whose window has passed is announced once.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_execution_window_is_stored_and_swept() {
+    let Some((pool, _pg)) = setup().await else {
+        return;
+    };
+    let mut req = order(Some(uniq("frist")));
+    // A Sperrtermin well in the past: the 6-WT window has long expired.
+    req.fruehestens_am =
+        Some(time::Date::from_calendar_date(2026, time::Month::January, 5).unwrap());
+    req.ausfuehrung_am = None;
+    let id = pg::create_order_pg(&pool, TENANT, &req)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let row = pg::fetch_order_pg(&pool, id, TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        row.ausfuehrung_faellig_am,
+        pg::ausfuehrung_faellig_am(None, req.fruehestens_am),
+        "the window is stored, not recomputed by every reader"
+    );
+
+    let overdue = pg::list_ausfuehrung_ueberfaellig(&pool, TENANT)
+        .await
+        .unwrap();
+    assert!(
+        overdue.iter().any(|(oid, ..)| *oid == id),
+        "an order past its window shows up in the sweep"
+    );
+    pg::mark_ausfuehrung_escalated(&pool, id, TENANT)
+        .await
+        .unwrap();
+    let overdue = pg::list_ausfuehrung_ueberfaellig(&pool, TENANT)
+        .await
+        .unwrap();
+    assert!(
+        !overdue.iter().any(|(oid, ..)| *oid == id),
+        "a missed Frist is announced once, not on every sweep"
     );
 }

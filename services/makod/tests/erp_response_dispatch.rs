@@ -88,7 +88,8 @@ async fn spawn_supplier_change(
             document_date: "20260701".into(),
             process_date: "20261001".into(),
             transaktionsgrund: None,
-            ist_erzeugende_marktlokation: false,
+            transaktionsgrund_ergaenzung: None,
+            veraeusserungsform: None,
             message_ref: mako_engine::types::MessageRef::new("MSG-001"),
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsgebiet: None,
@@ -357,7 +358,11 @@ async fn nb_lieferbeginn_bestaetigen_dispatches_to_supplier_change_workflow() {
     let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55001).await;
 
     // NB ERP calls gpke.lieferbeginn.bestaetigen.
-    let payload = serde_json::json!({ "malo_id": malo_id });
+    let payload = serde_json::json!({
+        "malo_id": malo_id,
+        "antwort_code": "A51",
+        "antwort_ebd": "E_0623",
+    });
     let outcome =
         makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
             .await
@@ -397,7 +402,12 @@ async fn nb_lieferbeginn_ablehnen_dispatches_to_supplier_change_workflow() {
 
     let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55001).await;
 
-    let payload = serde_json::json!({ "malo_id": malo_id, "reason": "Stammdaten unbekannt" });
+    let payload = serde_json::json!({
+        "malo_id": malo_id,
+        "antwort_code": "A05",
+        "antwort_ebd": "E_0622",
+        "bemerkung": "Stammdaten unbekannt",
+    });
     let outcome =
         makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.ablehnen", &payload)
             .await
@@ -435,7 +445,11 @@ async fn nb_lieferende_bestaetigen_dispatches_to_supplier_change_workflow() {
 
     let process_id = spawn_supplier_change(&state.store, tenant_id, malo_id, 55004).await;
 
-    let payload = serde_json::json!({ "malo_id": malo_id });
+    let payload = serde_json::json!({
+        "malo_id": malo_id,
+        "antwort_code": "A11",
+        "antwort_ebd": "E_0607",
+    });
     let outcome =
         makod::commands_api::dispatch_command(&state, "gpke.lieferende.bestaetigen", &payload)
             .await
@@ -461,7 +475,12 @@ async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
 
     spawn_supplier_change(&state.store, tenant_id, malo_id, 55004).await;
 
-    let payload = serde_json::json!({ "malo_id": malo_id, "reason": "Keine Umzugsmeldung" });
+    let payload = serde_json::json!({
+        "malo_id": malo_id,
+        "antwort_code": "A02",
+        "antwort_ebd": "E_0607",
+        "bemerkung": "Keine Umzugsmeldung",
+    });
     let outcome =
         makod::commands_api::dispatch_command(&state, "gpke.lieferende.ablehnen", &payload)
             .await
@@ -482,7 +501,11 @@ async fn nb_lieferende_ablehnen_dispatches_to_supplier_change_workflow() {
 async fn nb_bestaetigen_unknown_malo_returns_process_not_found() {
     let state = make_state(&["NB"]).await;
 
-    let payload = serde_json::json!({ "malo_id": "99999999945" });
+    let payload = serde_json::json!({
+        "malo_id": "99999999945",
+        "antwort_code": "A51",
+        "antwort_ebd": "E_0623",
+    });
     let err =
         makod::commands_api::dispatch_command(&state, "gpke.lieferbeginn.bestaetigen", &payload)
             .await
@@ -535,4 +558,120 @@ fn lf_commands_rejected_on_nb_instance() {
             "{cmd} must fail with RoleNotConfigured on NB instance; got: {err:?}"
         );
     }
+}
+
+/// The NB's answer is a **code**, not a boolean. `SG4 STS+E01` is Muss on every
+/// Antwortnachricht, so a command without one is refused rather than rendering
+/// a well-formed UTILMD that states no Grund at all.
+#[tokio::test]
+async fn an_nb_answer_without_an_antwortcode_is_refused() {
+    let state = make_state(&["NB"]).await;
+    let malo_id = "51238696012";
+    spawn_supplier_change(&state.store, state.tenant_id, malo_id, 55001).await;
+
+    let err = makod::commands_api::dispatch_command(
+        &state,
+        "gpke.lieferbeginn.bestaetigen",
+        &serde_json::json!({ "malo_id": malo_id }),
+    )
+    .await
+    .expect_err("an answer without SG4 STS+E01 must be refused");
+    assert!(
+        matches!(err, makod::commands_api::DispatchError::InvalidPayload(_)),
+        "got: {err:?}"
+    );
+}
+
+/// The **published Cluster decides the response PID**, so a Bestätigung command
+/// carrying an Ablehnungscode is refused rather than sending a 55002 that
+/// states a refusal.
+#[tokio::test]
+async fn a_bestaetigen_command_may_not_carry_an_ablehnungscode() {
+    let state = make_state(&["NB"]).await;
+    let malo_id = "51238696806";
+    spawn_supplier_change(&state.store, state.tenant_id, malo_id, 55001).await;
+
+    let err = makod::commands_api::dispatch_command(
+        &state,
+        "gpke.lieferbeginn.bestaetigen",
+        &serde_json::json!({
+            "malo_id": malo_id,
+            "antwort_code": "A07",
+            "antwort_ebd": "E_0622",
+        }),
+    )
+    .await
+    .expect_err("A07 is an Ablehnung and cannot ride a Bestätigung");
+    assert!(
+        matches!(err, makod::commands_api::DispatchError::InvalidPayload(_)),
+        "got: {err:?}"
+    );
+}
+
+/// A code the named tree does not publish is refused: `A07` is an `E_0622`
+/// code and `E_0607` does not define it.
+#[tokio::test]
+async fn an_answer_code_must_belong_to_the_named_tree() {
+    let state = make_state(&["NB"]).await;
+    let malo_id = "51238696913";
+    spawn_supplier_change(&state.store, state.tenant_id, malo_id, 55004).await;
+
+    let err = makod::commands_api::dispatch_command(
+        &state,
+        "gpke.lieferende.ablehnen",
+        &serde_json::json!({
+            "malo_id": malo_id,
+            "antwort_code": "A07",
+            "antwort_ebd": "E_0607",
+        }),
+    )
+    .await
+    .expect_err("A07 is not published by E_0607");
+    assert!(
+        matches!(err, makod::commands_api::DispatchError::InvalidPayload(_)),
+        "got: {err:?}"
+    );
+}
+
+/// A Gas answer carries no `STS` DE 1131 — the Gas Codelisten are not named in
+/// the segment — but it still belongs to exactly one tree. `antwort_tree` is
+/// that key, and a code the tree does not publish is refused even though the
+/// wire value is absent.
+#[tokio::test]
+async fn a_gas_answer_is_validated_against_its_tree_without_a_de1131() {
+    let state = make_state(&["NB"]).await;
+    let malo_id = "51238697896";
+    spawn_supplier_change(&state.store, state.tenant_id, malo_id, 55004).await;
+
+    // `A02` is the *Strom* Vorlauffrist code; `G_0007` publishes `E17` instead.
+    let err = makod::commands_api::dispatch_command(
+        &state,
+        "gpke.lieferende.ablehnen",
+        &serde_json::json!({
+            "malo_id": malo_id,
+            "antwort_code": "A02",
+            "antwort_tree": "E_3019",
+            "zustimmung": false,
+        }),
+    )
+    .await
+    .expect_err("A02 is not a G_0007 code");
+    assert!(
+        matches!(err, makod::commands_api::DispatchError::InvalidPayload(_)),
+        "got: {err:?}"
+    );
+
+    // `E17` is, and it dispatches.
+    makod::commands_api::dispatch_command(
+        &state,
+        "gpke.lieferende.ablehnen",
+        &serde_json::json!({
+            "malo_id": malo_id,
+            "antwort_code": "E17",
+            "antwort_tree": "E_3019",
+            "bemerkung": "Vorlauffrist nicht eingehalten",
+        }),
+    )
+    .await
+    .expect("E17 is published by E_3019");
 }

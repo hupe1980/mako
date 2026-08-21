@@ -248,7 +248,9 @@ pub enum LfAbmeldungCommand {
     },
     /// Send the outbound UTILMD response (55008 = Bestätigung, 55009 = Ablehnung).
     ///
-    /// The LF has 24 wall-clock hours (BK6-22-024 §4) to respond.
+    /// The LF answers by **05:00 Uhr des 1. WT nach dem ÜT** — GPKE Teil 2
+    /// § 2.5.2.2 SD Lieferende von NB an LF Prozessschritt 2, resolved by
+    /// `mako_fristen::antwort` (trigger PID 55007).
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that
         /// selects the response PID.

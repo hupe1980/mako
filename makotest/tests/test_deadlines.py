@@ -34,7 +34,7 @@ MONDAY = "2026-03-02T09:00:00Z"
 
 
 class TestTheThreeShapes:
-    def test_gpke_is_a_clock_time_on_the_next_werktag(self):
+    def test_gpke_is_a_clock_time_on_the_nth_werktag(self):
         """BK6-24-174 Teil 2: „11:00 Uhr des 1. WT nach dem ÜT" — not 24 hours.
 
         A message arriving Friday afternoon is answerable until Monday morning;
@@ -42,11 +42,25 @@ class TestTheThreeShapes:
         both too tight and too loose.
         """
         o = antwort_obligation(55001)
-        assert o.shape == "next_werktag_at"
+        assert o.shape == "werktag_at"
         assert o.clock_time == "11:00"
-        assert o.werktage is None
+        assert o.werktage == 1
         assert antwort_deadline(55001, MONDAY) == "2026-03-03T11:00:00+01:00"
         assert antwort_deadline(55001, MONDAY) != add_hours(MONDAY, 24)
+
+    def test_the_neuanlage_window_is_the_same_shape_with_a_larger_n(self):
+        """GPKE Teil 2 § 2.2.2: „00:00 Uhr des 61. WT nach dem ÜT".
+
+        `E_0608` Prüfschritte 110/590 give the NB 60 Werktage of daily
+        re-identification before it may refuse a newly commissioned
+        Marktlokation, so this is a clock time on a far-away Werktag — not a
+        duration, and not a day.
+        """
+        o = antwort_obligation(55600)
+        assert o.shape == "werktag_at"
+        assert o.werktage == 61
+        assert o.clock_time == "00:00"
+        assert antwort_obligation(55601).werktage == 61
 
     def test_geli_gas_runs_to_the_end_of_the_nth_werktag(self):
         """GeLi Gas 3.0 Kap. 3.2.3: „bis zum Ablauf des 4. Werktages".
@@ -80,9 +94,17 @@ class TestTheTable:
         assert families == {"gpke", "geli-gas", "wim", "wim-gas"}
 
     def test_every_obligation_cites_its_fundstelle(self):
+        """Every window is measured in Werktage; only `werktag_at` adds a time.
+
+        So a consumer can format the window from the shape alone, without a
+        fallback branch.
+        """
         for o in antwort_obligations():
             assert o.source, f"{o.trigger_pid} has no citation"
-            assert (o.werktage is None) != (o.clock_time is None)
+            assert o.werktage is not None, f"{o.trigger_pid} names no Werktage"
+            assert (o.clock_time is not None) == (o.shape == "werktag_at"), (
+                f"{o.trigger_pid}: only werktag_at carries a clock time"
+            )
 
     def test_the_wim_msb_wechsel_windows_are_not_one_value(self):
         """Four separate Use-Cases of WiM Teil 1, four different windows.

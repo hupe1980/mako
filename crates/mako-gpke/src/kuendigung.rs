@@ -237,7 +237,9 @@ pub enum KuendigungCommand {
     },
     /// Send the outbound UTILMD response (55017 = Bestätigung, 55018 = Ablehnung).
     ///
-    /// The LFA has 24 wall-clock hours (BK6-22-024 §4) to respond.
+    /// The LFA answers by the **Ablauf des 1. Werktags nach dem ÜT** — GPKE
+    /// Teil 2 § 1.2.2 SD Kündigung Prozessschritt 2, resolved by
+    /// `mako_fristen::antwort` (trigger PID 55016).
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that
         /// selects the response PID.

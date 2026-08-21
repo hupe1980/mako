@@ -312,7 +312,8 @@ impl AntwortObligation {
 
     fn __repr__(&self) -> String {
         let window = match (&self.clock_time, self.werktage) {
-            (Some(t), _) => format!("{t} on the 1. WT"),
+            (Some(t), Some(n)) => format!("{t} on the {n}. WT"),
+            (Some(t), None) => format!("{t} on the 1. WT"),
             (None, Some(n)) => format!("{n} WT"),
             (None, None) => "?".to_owned(),
         };
@@ -325,10 +326,10 @@ impl AntwortObligation {
 
 fn convert(o: &antwort::AntwortObligation) -> AntwortObligation {
     let (shape, werktage, clock_time) = match o.frist {
-        antwort::FristShape::NextWerktagAt(t) => (
-            "next_werktag_at",
-            None,
-            Some(format!("{:02}:{:02}", t.hour(), t.minute())),
+        antwort::FristShape::WerktagAt { werktage, at } => (
+            "werktag_at",
+            Some(werktage),
+            Some(format!("{:02}:{:02}", at.hour(), at.minute())),
         ),
         antwort::FristShape::EndOfWerktag(n) => ("end_of_werktag", Some(n), None),
         antwort::FristShape::WerktageAtCutoff(n) => ("werktage_at_cutoff", Some(n), None),
@@ -509,8 +510,9 @@ mod tests {
         );
     }
 
-    /// Every obligation must expose exactly one of the two window renderings,
-    /// so a consumer can format it without a fallback branch.
+    /// Every obligation names a Werktag count, and only the `werktag_at` shape
+    /// adds a clock time — so a consumer can format the window from the shape
+    /// alone, without a fallback branch.
     #[test]
     fn every_obligation_renders_its_window() {
         let all = antwort_obligations();
@@ -520,10 +522,15 @@ mod tests {
             all.len()
         );
         for o in &all {
-            assert_eq!(
+            assert!(
                 o.werktage.is_some(),
-                o.clock_time.is_none(),
-                "{}: exactly one window rendering",
+                "{}: every window is measured in Werktage",
+                o.trigger_pid
+            );
+            assert_eq!(
+                o.clock_time.is_some(),
+                o.shape == "werktag_at",
+                "{}: only `werktag_at` carries a clock time",
                 o.trigger_pid
             );
             assert!(!o.source.is_empty(), "{} has no Fundstelle", o.trigger_pid);

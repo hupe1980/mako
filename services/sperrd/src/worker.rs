@@ -1,4 +1,5 @@
-//! The IFTSTA 21039 retry worker.
+//! The Fristen worker: the IFTSTA 21039 retry queue and the execution-window
+//! sweep.
 //!
 //! A terminal order whose IFTSTA has not been dispatched is an order whose
 //! Lieferant does not know what happened — most often because the process
@@ -63,6 +64,7 @@ pub async fn sweep(pool: &PgPool, makod: &Arc<MakodClient>, tenant: &str) -> any
     // Escalate first: an order that has run out of attempts must be announced
     // before the sweep spends its cycle on the ones that are still trying.
     let mut did_work = escalate_stuck(pool, tenant).await?;
+    did_work |= announce_overdue_executions(pool, tenant).await?;
 
     if let Some(order) = pg::claim_iftsta_retry(pool, tenant).await? {
         let id = order.id;
@@ -90,6 +92,32 @@ async fn escalate_stuck(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
             "sperrd: IFTSTA 21039 could not be dispatched after {} attempts — the \
              Lieferant has not been told the outcome and their process cannot close",
             pg::IFTSTA_MAX_ATTEMPTS,
+        );
+    }
+    Ok(true)
+}
+
+/// Announce every pending order past the § 3.5.1.2 Nr. 1 execution window, once.
+///
+/// This is a **regulatory** deadline, not a queue-depth signal: GPKE Teil 2
+/// gives the NB 6 Werktage after the frühestmöglicher Sperrtermin to carry the
+/// disconnection out, and an order sitting past it is a compliance finding a
+/// BNetzA audit can see.
+async fn announce_overdue_executions(pool: &PgPool, tenant: &str) -> anyhow::Result<bool> {
+    let overdue = pg::list_ausfuehrung_ueberfaellig(pool, tenant).await?;
+    if overdue.is_empty() {
+        return Ok(false);
+    }
+    for (id, malo_id, lf_mp_id, faellig_am) in overdue {
+        let mut tx = pool.begin().await?;
+        events::ausfuehrung_ueberfaellig(&mut tx, tenant, id, &malo_id, &lf_mp_id, faellig_am)
+            .await?;
+        pg::mark_ausfuehrung_escalated(&mut *tx, id, tenant).await?;
+        tx.commit().await?;
+        tracing::warn!(
+            order_id = %id, %malo_id, %faellig_am,
+            "sperrd: Sperrauftrag past the 6-Werktage execution window \
+             (BK6-24-174 GPKE Teil 2 § 3.5.1.2 Nr. 1)"
         );
     }
     Ok(true)

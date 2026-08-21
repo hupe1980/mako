@@ -514,9 +514,24 @@ pub enum GasSupplierChangeCommand {
     /// **APERAK Frist:** 10 Werktage (BK7-24-01-009).
     SendAntwort {
         /// `true` = Bestätigung (accept), `false` = Ablehnung (reject).
+        ///
+        /// Derived by the caller from the Antwortcode's published **Cluster**,
+        /// not passed alongside it: `mako_pruefung::codes` resolves the code
+        /// inside `E_3005`/`E_3007`/`E_3019` and the cluster is what selects the
+        /// answer PID, so the two cannot disagree.
         accepted: bool,
-        /// Rejection reason (required when `accepted = false`).
-        reason: Option<String>,
+        /// `SG4 STS+E01` DE 9013 — the Antwortcode.
+        ///
+        /// The AHB marks that segment **Muss** on every Antwortnachricht, so an
+        /// answer without one renders a well-formed UTILMD that states no Grund
+        /// at all. The Gas Codelisten are not named in DE 1131, so no EBD id
+        /// rides with it: `E15` / `Z01` / `Z43` / `Z44` on a Bestätigung,
+        /// `E13` / `E14` / `E17` / `Z08` / `Z09` / `Z14` / `Z35` / `ZC5` / `A03` /
+        /// `A04` / `A16` / `A17` / `ZE2` on an Ablehnung.
+        antwort_code: String,
+        /// `FTX+ACB` Bemerkung — required alongside `E14` „Ablehnung Sonstiges",
+        /// and useful on every other Ablehnung.
+        bemerkung: Option<String>,
         /// Post-acceptance downstream obligations (co-persisted atomically).
         obligations: Vec<PendingOutbox>,
     },
@@ -864,7 +879,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
 
             GasSupplierChangeCommand::SendAntwort {
                 accepted,
-                reason,
+                antwort_code,
+                bemerkung,
                 obligations,
             } => {
                 let data = match state {
@@ -897,8 +913,12 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     "document_date": data.document_date,
                     "process_date":  data.process_date,
                     "variant":       format!("{:?}", data.variant),
+                    // `SG4 STS+E01` — Muss on every Antwortnachricht. The Gas
+                    // Codelisten carry no DE 1131, so there is no `antwort_ebd`.
+                    "antwort_code":  antwort_code,
                 });
-                if let Some(ref r) = reason {
+                if let Some(ref r) = bemerkung {
+                    outbox_payload["bemerkung"] = serde_json::Value::String(r.clone());
                     outbox_payload["reason"] = serde_json::Value::String(r.clone());
                 }
                 if let Some(rpid) = response_pid {
@@ -922,7 +942,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 let event = GasSupplierChangeEvent::AntwortGesendet {
                     response_pid,
                     accepted,
-                    reason,
+                    reason: bemerkung,
                 };
                 Ok(WorkflowOutput::with_outbox(vec![event], all_outbox))
             }
@@ -1365,7 +1385,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )
@@ -1400,7 +1421,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: false,
-                reason: Some("MaLo nicht bekannt".to_owned()),
+                antwort_code: "E17".to_owned(),
+                bemerkung: Some("MaLo nicht bekannt".to_owned()),
                 obligations: vec![],
             },
         )
@@ -1425,7 +1447,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )
@@ -1453,7 +1476,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )
@@ -1575,7 +1599,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )
@@ -1624,7 +1649,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )
@@ -1683,7 +1709,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )
@@ -1725,7 +1752,8 @@ mod tests {
             &state,
             GasSupplierChangeCommand::SendAntwort {
                 accepted: true,
-                reason: None,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
                 obligations: vec![],
             },
         )

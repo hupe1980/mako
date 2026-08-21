@@ -455,6 +455,31 @@ pub fn end_of_day_berlin(date: Date) -> OffsetDateTime {
 /// ```
 #[must_use]
 pub fn next_werktag_at(received: OffsetDateTime, at: Time, cal: HolidayCalendar) -> OffsetDateTime {
+    nth_werktag_at(received, 1, at, cal)
+}
+
+/// „Unverzüglich, jedoch spätester ÜZ ist `at` Uhr des `n`. WT nach dem ÜT."
+///
+/// The generalisation of [`next_werktag_at`]: the deadline falls at `at` on the
+/// `n`-th Werktag **strictly after** the arrival day, in German local time.
+/// `n = 1` is the ordinary GPKE Teil 2 shape; the Neuanlage answer window is
+/// `00:00 Uhr des 61. WT nach dem ÜT` — the same shape with a larger `n`, not a
+/// duration.
+///
+/// `n = 0` is meaningless here (the ÜT itself is not „nach dem ÜT") and is
+/// treated as `1`.
+///
+/// # Panics
+///
+/// Never for any practical date; the internal `next_day` cannot overflow inside
+/// the representable calendar range.
+#[must_use]
+pub fn nth_werktag_at(
+    received: OffsetDateTime,
+    n: u32,
+    at: Time,
+    cal: HolidayCalendar,
+) -> OffsetDateTime {
     let berlin = timezones::db::europe::BERLIN;
     let received_date = received.to_timezone(berlin).date();
     // „nach dem ÜT" — strictly after the arrival day, then forward to the first
@@ -462,7 +487,13 @@ pub fn next_werktag_at(received: OffsetDateTime, at: Time, cal: HolidayCalendar)
     let day_after = received_date
         .next_day()
         .expect("date overflow — unreachable for any practical date");
-    berlin_at(next_werktag(day_after, cal), at)
+    let first = next_werktag(day_after, cal);
+    let target = if n <= 1 {
+        first
+    } else {
+        add_werktage(first, n - 1, cal)
+    };
+    berlin_at(target, at)
 }
 
 /// „unverzüglich, spätestens jedoch bis zum Ablauf des `werktage`. Werktags
@@ -833,7 +864,8 @@ fn easter_sunday(year: i32) -> Date {
 ///
 /// **Saturday is not a Werktag** in market communication, unlike the everyday
 /// German sense of the word and unlike §193 BGB.
-fn is_werktag(date: Date, cal: HolidayCalendar) -> bool {
+#[must_use]
+pub fn is_werktag(date: Date, cal: HolidayCalendar) -> bool {
     if matches!(date.weekday(), Weekday::Saturday | Weekday::Sunday) {
         return false;
     }
