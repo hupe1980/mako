@@ -20,13 +20,13 @@ Port: **`:9580`**
 
 | Endpoint | Description |
 |---|---|
-| `POST /webhook` | Inbound CloudEvent trigger (HMAC-verified) |
-| `POST /api/v1/run` | Manual agent invocation (OIDC JWT required) |
+| `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified; at-most-once admission) |
+| `POST /api/v1/run` | Manual agent invocation (OIDC JWT required; honours `Idempotency-Key`) |
 | `GET /api/v1/decisions` | Last 100 agent decisions (in-memory ring buffer). **OIDC** — a decision summary names a real Marktlokation |
 | `GET /api/v1/agents` | Activated specialists and their subscriptions. **OIDC** — in a combined-role deployment the activated set is § 9 EnWG-relevant |
 | `GET /api/v1/agents/catalog` | Every specialist compiled into this binary. **OIDC** |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
-| `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, event delivery (OIDC required) |
+| `/api/v1/oversight/*` | The operator surface: worklist, runs, cases, breached obligations, event delivery (OIDC required) |
 | `GET /health` · `GET /health/ready` | Liveness / readiness |
 
 ---
@@ -95,10 +95,38 @@ to subscribe to.
 `de.agent.decision.made` carries the run's real outcome — `completed`,
 `failed`, `suspended`, `exhausted`, `quarantined`, `replanning` or `cancelled` —
 so a subscriber sees a run waiting on human approval as readily as a successful
-one. Beside it: `run_id` (the journal key an operator looks up), `waiting_for`
-(*what* a suspended run is waiting for — an approval, a message, an instant, so
-an operator knows whether to approve, chase or wait) and `tokens` (what the run
-cost, as the journal metered it).
+one. What travels with it, and what deliberately does not, is set out under
+[decision delivery](#decision-delivery).
+
+### At-least-once delivery, at-most-once admission
+
+Inbound delivery is at-least-once: mako's fan-out retries until it sees a 2xx,
+and a dead-lettered delivery can be replayed by an operator days later.
+
+Each run is admitted under a key built from the CloudEvent's `(source, id)` —
+the standard's own uniqueness pair, which mako's sender also puts in
+`webhook-id` — joined with the specialist's name. The store claims that key
+**inside the transaction that appends the run's first record**, so a ledger can
+never be left holding a key for a run that never existed. A refused admission
+spends no key, so a corrected redelivery is still admitted.
+
+A duplicate is **answered, not refused**: a caller that retried wants the
+original run, not a conflict to interpret. The case that earns the mechanism is
+the suspended one. Elsewhere a duplicate costs only model spend — no effect is
+duplicated inside a run, and no market message is dispatched twice, because the
+one dispatching grant needs a human and the engine sends the message. But a run
+parked on a four-eyes decision has already opened its task, and a reviewer who
+cannot tell two proposals from one proposal shown twice is a four-eyes control
+degrading into a guess.
+
+The key is **per specialist**, because one event fans out to several independent
+runs; an event-wide key would answer the second and third opinions with the
+first's. An event missing `id`, `source` or `type` is `400` rather than
+defaulted: an unset attribute arrives as `""`, which is a perfectly good key.
+
+Retiring a key reopens the door it closed, so nothing retires one by default.
+`admission_retention_days` is the opt-in; 30 days is sized for an operator
+replaying a dead letter, not for the emitter's retry schedule.
 
 ### A2A Protocol compliance
 
@@ -196,6 +224,7 @@ The worklist itself is agentplane's operator surface, mounted at
 | `POST /tasks/{id}/decide` | Approve or reject, **as myself** |
 | `GET /runs?outcome=…` · `GET /runs/{run}` | What ended this way, and why is this one not finishing? |
 | `GET /cases/{case}` | What has happened on this matter, and by when must it end? |
+| `GET /obligations` | What did we miss? — obligations in the `breached` state |
 | `POST /runs/{run}/cancel` | Stop it, with a reason on the record |
 | `POST /events` | This message arrived; wake whoever wanted it |
 
@@ -215,20 +244,41 @@ convenience:
   is two layers: Cedar decides who may use the surface at all, the task store
   narrows per task by `candidate_roles` — a `metering` reviewer who passes Cedar
   still cannot decide `gabi-gas-agent`'s dispatch. The Cedar set admits the
-  union of every `oversight.approvers` entry and every `triage[].audience`, and
-  a test parses the manifests and fails when one names a role the policy does
-  not admit. Without that guard the two drift apart silently, and a worklist row
-  whose audience is refused at the door is worse than no row at all.
+  union of every `oversight.approvers` entry, every `triage[].audience` and
+  every `escalate_to` role, and a test parses the manifests and fails when one
+  names a role the policy does not admit. Without that guard the two drift apart
+  silently, and a worklist row whose audience is refused at the door is worse
+  than no row at all. The escalation audience needs the check most: it arrives
+  hours late, from the sweeper, and a widening to somebody Cedar refuses looks —
+  from the worklist — exactly like the row having been answered.
 - **Every route is authorized, not just authenticated.** Each one asks the
   plane's Cedar policy under an `api:` action — reading, claiming and deciding
   are separate verbs, and `POST /events` (the machine door for mako's own
   services) is separate from all of them.
 
+  A verb the runtime asks about and the policy set never mentions is a
+  **permanent 403** on that route, with a policy set that compiles clean and
+  nothing anywhere reporting it — so a test walks
+  `agentplane::api::action::ALL` and fails when any verb is granted to no role.
+  `api:obligation.list` is its own verb so that *what did we miss* can be
+  granted to a compliance function without the contents of every matter; it is
+  held to `mako-operations` and `regulatory`, because `GET /obligations` does
+  not narrow by domain and handing it to `metering` would hand `metering` every
+  other domain's missed Fristen.
+
 Behind it, the **sweeper** ticks every `sweep_interval_secs`: it warns on
-approaching obligations, breaches the ones that passed, expires overdue approvals
-under their declared `on_expiry`, wakes runs whose instant arrived, and
-dead-letters events nobody correlated. A deadline nobody looks at is not a
-deadline.
+approaching obligations, breaches the ones that passed, applies each overdue
+task's declared `on_expiry`, wakes runs whose instant arrived, and dead-letters
+events nobody correlated. A deadline nobody looks at is not a deadline.
+
+`on_expiry` has one name and two jobs, and mako answers it opposite ways. An
+**approval** gates a real market message, so an unanswered window must send
+nothing: `deny`. A **triage row** gates nothing — the run already finished, and
+the row *is* the finding — so `deny` there would delete the delivery of a breach
+the agent correctly detected. All fourteen triage specialists declare
+`escalate` with an `escalate_to` audience: the wider roles **join** the
+audience rather than replacing it, the stale reservation is cleared, and the row
+keeps waiting.
 
 Deadlines resolve through **mako's own BDEW Werktage calendar**, so
 `kind: working-days` means the same thing to an agent's approval window as it
@@ -639,10 +689,33 @@ its first model call.
 
 ```toml
 # agentd.toml
-tenant          = "9900357000004"
-public_base_url = "https://agentd.internal:9580"   # what an A2A card advertises
+#
+# Every top-level key comes first. TOML binds a bare key to the most recent
+# table header, so a key written after `[mcp_servers]` is read as an MCP
+# endpoint — and every config type here is `deny_unknown_fields`, so the
+# deployment refuses to start rather than running with the key ignored.
+#
 # `tenant` scopes every store key and the erasure keys with them, so one
 # operator's cryptographic erasure cannot reach another's bytes.
+tenant          = "9900357000004"
+public_base_url = "https://agentd.internal:9580"
+
+max_sessions         = 20
+session_timeout_secs = 300   # bounds one event's whole fan-out
+sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes
+
+mcp_api_key         = "env:AGENTD_MCP_API_KEY"
+inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
+
+# Where a completed run's decision is delivered, durably — see below.
+audit_webhook_url = "https://erp.example/hooks/agent-decisions"
+audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
+
+# How long a claimed admission key is kept. Absent means forever, which is the
+# only setting that cannot admit a duplicate on a timer: retiring a key reopens
+# the door it closed. 30 days is sized for an operator replaying a
+# dead-lettered delivery, not for the emitter's retry schedule. `0` is refused.
+# admission_retention_days = 30
 
 # ── Durable state ─────────────────────────────────────────────────────────────
 # One backend holds the journal, the cases, the tasks, the timers and the
@@ -665,48 +738,27 @@ api_key = "env:ANTHROPIC_API_KEY"
 # api_base = "http://vllm:8000/v1"      # required — no default for your server
 
 # ── Which specialists this deployment runs ────────────────────────────────────
+# There are no per-agent overrides. Prompts, models, tool grants and ceilings
+# are declared in agents/<name>.yaml, where the digest covers them.
+#
+# There is no `trigger_event_types` key either, deliberately: which events wake
+# an agent is the manifests' subscription table, and a second list in config
+# that nothing checks against it is a mute switch.
 [bundled_agents]
 enable_all = true
 # enable = ["mako-agent", "billing-anomaly-agent"]   # or name them
 
-# There are no per-agent overrides. Prompts, models, tool grants and ceilings
-# are declared in agents/<name>.yaml, where the digest covers them.
-
-# Every server a manifest grants a tool on must appear here. One that is missing
-# is a startup failure, not a specialist that fails at its first tool call.
-[mcp_servers]
-makod       = "http://makod:8080/mcp"
-marktd      = "http://marktd:8180/mcp"
-billingd    = "http://billingd:9280/mcp"
-edmd        = "http://edmd:8380/mcp"
-obsd        = "http://obsd:8480/mcp"
-# A key may not contain `-` (agentplane reserves hyphens in tool wire names),
-# so a hyphenated service is keyed with an underscore.
-mabis_syncd = "http://mabis-syncd:8880/mcp"
-# ... every MCP-exposing service
-mcp_api_key = "env:AGENTD_MCP_API_KEY"
-
-# There is no `trigger_event_types` here, deliberately. Which events wake an
-# agent is the manifests' subscription table, and a second list in config that
-# nothing checks against it is a mute switch: the key's own default named four
-# event types while the specialists subscribe to dozens, so most of them were
-# answered 204 at the door. `plane::Router::accepts` is the only filter now.
-
-# ── Security ──────────────────────────────────────────────────────────────────
-inbound_hmac_secret  = "env:AGENTD_INBOUND_HMAC_SECRET"
-max_sessions         = 20
-session_timeout_secs = 300   # bounds one event's whole fan-out
-sweep_interval_secs  = 60    # warns, breaches, expires, wakes
-
+# ── Identity ──────────────────────────────────────────────────────────────────
 # Required for the oversight surface. Without it the worklist is not mounted,
 # and every approval a manifest declares would wait for somebody who cannot act.
 [oidc]
 issuer   = "https://keycloak:8080/realms/mako"
 audience = "agentd"
 
-# Envelope encryption. The wrapping key is created inside Vault and never
-# leaves it, so erasure is something mako asks for and cannot undo. Omit and
-# the plane starts unsealed, with a warning that names the consequence.
+# ── Sealing ───────────────────────────────────────────────────────────────────
+# The wrapping key is created inside Vault and never leaves it, so erasure is
+# something mako asks for and cannot undo. Omit and the plane starts unsealed,
+# with a warning that names the consequence.
 [keyring]
 required = true
 [keyring.vault]
@@ -714,11 +766,25 @@ address = "https://vault.internal:8200"
 mount   = "transit"
 token   = "env:VAULT_TOKEN"
 
-# Cedar rules. Omit to use mako's own, embedded from policy/agentd.cedar.
-# A file here *replaces* them: Cedar allows on any matching permit, so a
-# least-privilege file cannot narrow one it inherited.
+# ── Authorization ─────────────────────────────────────────────────────────────
+# Omit to use mako's own, embedded from policy/agentd.cedar. A file here
+# *replaces* them: Cedar allows on any matching permit, so a least-privilege
+# file cannot narrow one it inherited.
 [policy]
 # path = "/etc/agentd/policy.cedar"
+
+# ── Tool transports ───────────────────────────────────────────────────────────
+# Every server a manifest grants a tool on must appear here. One that is missing
+# is a startup failure, not a specialist that fails at its first tool call. A
+# key may not contain `-` (agentplane reserves hyphens in tool wire names), so a
+# hyphenated service is keyed with an underscore.
+[mcp_servers]
+makod       = "http://makod:8080/mcp"
+marktd      = "http://marktd:8180/mcp"
+billingd    = "http://billingd:9280/mcp"
+edmd        = "http://edmd:8380/mcp"
+obsd        = "http://obsd:8480/mcp"
+mabis_syncd = "http://mabis-syncd:8880/mcp"
 ```
 
 A name in `enable` that matches no compiled specialist is a **startup failure**,
@@ -743,11 +809,20 @@ curl -X POST http://agentd:9580/webhook \
   }'
 ```
 
-**Manual run** — `agent` addresses one specialist directly, bypassing routing:
+`type`, `source` and `id` are all required — `source` and `id` are the identity
+a redelivery keeps, and therefore the admission key, so neither may be defaulted.
+Posting the same envelope again is answered `202` with the run it already
+started rather than starting a second one.
+
+**Manual run** — `agent` addresses one specialist directly, bypassing routing.
+An `Idempotency-Key` makes a retried request answer with the run it already
+started; without one, each request is its own event. A name no activated
+specialist answers to is `404`, not an empty result:
 
 ```bash
 curl -X POST http://agentd:9580/api/v1/run \
   -H "Content-Type: application/json" \
+  -H "Idempotency-Key: dispute-R2026-001" \
   -d '{
     "agent": "billing-anomaly-agent",
     "event_type": "manual.billing.dispute-analysis",
@@ -779,13 +854,28 @@ curl -X POST -H "Authorization: Bearer $JWT" -H "Content-Type: application/json"
 
 | Event type | When |
 |---|---|
-| `de.agent.decision.made` | A run reaches a terminal state. Carries `outcome`, the summary, `run_id` (the journal key), `waiting_for` (present only when suspended) and `tokens`. |
+| `de.agent.decision.made` | A run reaches a terminal state. Carries `{run, case, outcome, chain_head}` under a `tenantid` extension, with the run id as both `id` and `subject`. |
+
+The **answer is deliberately not in it.** A run's output is domain data with a
+label on it, and shipping it by default would make an egress decision nobody
+declared. `chain_head` is the hash the conclusion was drawn over, so a receiver
+can ask this plane to prove the run it was told about;
+`GET /api/v1/oversight/runs/{run}` is where the reasoning lives.
+
+There is no `time` attribute, and that is honest: time inside a run comes from
+journaled `clock.now` effects so a replay sees the instant the run saw, and
+stamping the moment the outbox swept would be a lie about when the run finished.
 
 `outcome` is one of `completed`, `failed`, `suspended`, `exhausted`,
-`quarantined`, `replanning`, `cancelled` or `not-admitted` — the last meaning the
-plane declined to start the run, which for a `planned` specialist means the event
-carried no identifier that re-validated. A **suspended** run is not a failure:
-it is waiting for a human decision or an inbound event.
+`quarantined`, `replanning` or `cancelled`. A **suspended** run is not a
+failure — it waits for a human decision or an inbound event — and a
+**quarantined** one means the durable record is untrustworthy, which is why it
+is its own outcome rather than `failed`.
+
+`GET /api/v1/decisions` is a different, richer shape: agent name, summary,
+`waiting_for`, `tokens`, and whether this dispatch admitted the run or met one
+already admitted (`running`, `not-admitted`). It is in-memory, best-effort and
+delivered nowhere — a dashboard, not a record.
 
 ---
 
@@ -816,8 +906,22 @@ discipline every other mako service applies to its transactional outbox.
 
 ```toml
 audit_webhook_url = "https://erp.example/hooks/agent-decisions"
-# webhook-signature: sha256=HMAC(secret, body) over the exact bytes posted, the
-# convention every mako receiver already verifies. A signature authenticates the
-# bytes, not their freshness — the receiver deduplicates on the CloudEvent id.
+# Standard Webhooks: `webhook-signature: v1,<base64>` over
+# `{webhook-id}.{webhook-timestamp}.{body}` — the same scheme every other mako
+# outbound carries, so `mako_service::webhook::verify_request` accepts an agentd
+# delivery like any other. Because the id and the timestamp are inside the
+# signed material, a captured delivery stops verifying once the tolerance
+# window passes; the body-only HMAC this replaced replayed forever.
 audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
+
+# Mid-rotation only. `webhook-signature` is a space-separated list, so a
+# delivery can present both keys and a receiver holding either verifies —
+# which makes a rollover each receiver's own pace instead of a flag day.
+# Remove once every receiver has the new key. Setting it alone is a startup
+# failure: "also" with no primary key signs nothing.
+# audit_hmac_secret_previous = "env:AGENTD_AUDIT_HMAC_OLD"
 ```
+
+A bad key is refused at startup naming the destination, rather than aborting the
+process — a panic inside `Daemon::build` arrives before the exit code and the
+log line that would have said which destination was wrong.

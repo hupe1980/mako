@@ -27,7 +27,9 @@ pub mod providers;
 pub mod runtime;
 pub mod sweep;
 pub mod tools;
-pub use runtime::{Activation, AgentDecision, Plane, PlaneConfig, Route, Router, Stores};
+pub use runtime::{
+    Activation, Admitted, AgentDecision, Envelope, Plane, PlaneConfig, Route, Router, Stores,
+};
 
 use std::collections::BTreeMap;
 
@@ -508,6 +510,138 @@ mod tests {
              Add an `oversight.triage` rule, or explain in the file why the finding needs \
              no human"
         );
+    }
+
+    /// Every manifest file is embedded, and every embedded manifest is a file.
+    ///
+    /// `manifests![]` lists paths rather than globbing, which is right — what a
+    /// plane runs must be what a reviewer reads. It leaves one hole, in the
+    /// direction nobody notices: a **file nobody added to the list** is a
+    /// specialist that was written, reviewed and merged and is not in the binary
+    /// at all. It has no builtin entry, so no subscription test names it, and no
+    /// route, so no routing test misses it. (The other direction already fails
+    /// at compile time, on `include_str!`.)
+    #[test]
+    fn the_agents_directory_and_the_embedded_set_are_the_same_set() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+        let on_disk: std::collections::BTreeSet<String> = std::fs::read_dir(&dir)
+            .expect("the agents directory is beside the crate")
+            .filter_map(|entry| {
+                let path = entry.ok()?.path();
+                (path.extension()? == "yaml")
+                    .then(|| path.file_stem()?.to_str().map(str::to_owned))?
+            })
+            .collect();
+        let embedded: std::collections::BTreeSet<String> = manifests().keys().cloned().collect();
+
+        let unembedded: Vec<&String> = on_disk.difference(&embedded).collect();
+        assert!(
+            unembedded.is_empty(),
+            "these manifests are on disk but absent from `manifests![]`, so they are not in \
+             the binary and no test would ever mention them: {unembedded:?}"
+        );
+        // A file whose `metadata.name` differs from its filename embeds fine and
+        // then cannot be found by anyone reading the directory.
+        let misnamed: Vec<&String> = embedded.difference(&on_disk).collect();
+        assert!(
+            misnamed.is_empty(),
+            "these specialists declare a `metadata.name` that is not their filename: \
+             {misnamed:?}"
+        );
+    }
+
+    /// Every manifest points an editor at the schema it is written against.
+    ///
+    /// The modeline turns agentplane's published JSON Schema into autocomplete,
+    /// hover documentation and inline unknown-field errors *while a manifest is
+    /// being written*, rather than at `cargo test`. The URL is read off
+    /// `Manifest::json_schema()` rather than typed here, so a file cannot end up
+    /// pointing at a document that has moved.
+    #[test]
+    fn every_manifest_carries_the_schema_modeline() {
+        let schema = Manifest::json_schema();
+        let id = schema["$id"]
+            .as_str()
+            .expect("the published schema names its own origin in `$id`");
+        let expected = format!("# yaml-language-server: $schema={id}");
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+        let mut wrong = Vec::new();
+        for entry in std::fs::read_dir(&dir).expect("the agents directory") {
+            let path = entry.expect("a directory entry").path();
+            if path.extension().is_none_or(|ext| ext != "yaml") {
+                continue;
+            }
+            let src = std::fs::read_to_string(&path).expect("a readable manifest");
+            if src.lines().next() != Some(expected.as_str()) {
+                wrong.push(path.file_name().map(std::ffi::OsStr::to_os_string));
+            }
+        }
+        assert!(
+            wrong.is_empty(),
+            "these manifests do not open with `{expected}`, so an editor writing them has no \
+             schema to check against: {wrong:?}"
+        );
+    }
+
+    /// **A finding widens when nobody answers it; a dispatch fails closed.**
+    ///
+    /// `on_expiry` has one name and two jobs, and the right answer is opposite
+    /// in each:
+    ///
+    /// * A **triage** row gates nothing — the run already finished, and the row
+    ///   *is* the finding: a §20 EnWG parity deviation, an EEG breach, a
+    ///   §§41f/41g sequence out of compliance. `deny` expires it and takes it
+    ///   out of the worklist, so a breach that was correctly detected and
+    ///   correctly delivered is deleted when its window closes. `escalate` is
+    ///   the only disposition that keeps it findable.
+    /// * An **approval** gates a real market message, where expiring closed is
+    ///   the whole point: nobody looked, so nothing is sent.
+    #[test]
+    fn an_unanswered_finding_widens_and_an_unanswered_dispatch_fails_closed() {
+        use agentplane::manifest::{Approval, Expiry};
+
+        for (name, m) in manifests() {
+            let Some(oversight) = m.spec.oversight.as_ref() else {
+                continue;
+            };
+            let gates_a_dispatch = oversight.approval != Approval::None
+                || m.spec.tools.iter().any(|grant| grant.requires_approval);
+
+            if gates_a_dispatch {
+                assert_eq!(
+                    oversight.on_expiry,
+                    Expiry::Deny,
+                    "{name}: an approval that gates a dispatch must fail closed when its \
+                     window passes — anything else sends a market message nobody reviewed"
+                );
+                continue;
+            }
+
+            assert_eq!(
+                oversight.on_expiry,
+                Expiry::Escalate,
+                "{name}: its triage rows are findings, not gates, so expiring them deletes \
+                 the delivery of something the agent correctly detected. Declare \
+                 `on_expiry: escalate` with an `escalate_to` audience"
+            );
+            assert!(
+                !oversight.escalate_to.is_empty(),
+                "{name}: escalates to nobody"
+            );
+            // Widening to the audience that already has it is not a widening.
+            for rule in &oversight.triage {
+                assert!(
+                    oversight
+                        .escalate_to
+                        .iter()
+                        .any(|wider| !rule.audience.contains(wider)),
+                    "{name}: triage rule '{}' escalates only to roles already in its \
+                     audience, so the escalation adds nobody",
+                    rule.name
+                );
+            }
+        }
     }
 
     #[test]

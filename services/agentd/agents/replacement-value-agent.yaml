@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # § 60 Abs. 2 MsbG Ersatzwertbildung orchestrator. Selects and applies the correct substitute-value method (linear/prior-period/profile) for missing meter intervals, with full audit trail.
 #
 # Generated from the compiled specialist definition during the agentplane

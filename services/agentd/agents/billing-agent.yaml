@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # INVOIC dispute resolution and O2C lifecycle. Handles receipt.disputed events, checks REMADV positions against Rechnung, and coordinates with netzbilanzd for settlement corrections.
 #
 # Generated from the compiled specialist definition during the agentplane

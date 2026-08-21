@@ -184,6 +184,27 @@ when {
     .containsAny(context.roles)
 };
 
+// What this plane missed: obligations in the `breached` state, plane-wide.
+//
+// Its own verb rather than a widened `api:case.list`, and granted to a
+// deliberately narrower audience than the read permit above, for the reason the
+// verb was split out at all: the party who must answer for a breach is a
+// compliance function, and it has no reason to read the contents of every
+// matter. The two roles here are the only ones in mako whose remit is the whole
+// plane — `GET /obligations` does not narrow by domain, so granting it to
+// `metering` or `credit-control` would hand each of them every other domain's
+// missed Fristen rather than their own.
+//
+// It must be granted to *somebody*. A breach reaches an operator as the
+// escalation it produced — a case status — and `close` admits a case once no
+// obligation is still *outstanding*, which a breached one is not. So without
+// this route the record of what a matter missed leaves every listing at the
+// moment the matter is filed away, which is the moment people stop looking.
+permit(principal, action == Action::"api:obligation.list", resource)
+when {
+  ["mako-operations", "regulatory"].containsAny(context.roles)
+};
+
 // Claiming and releasing a proposal: the same eligibility as reading, because a
 // reservation is not a decision and a queue nobody can claim duplicates work.
 permit(

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards, § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.
 #
 # Generated from the compiled specialist definition during the agentplane

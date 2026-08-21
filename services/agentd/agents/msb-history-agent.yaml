@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # WiM Strom MSB-change history and INSRPT reading-order lifecycle. Detects stuck reading orders, quality issues after MSB transitions, and iMSys rollout progress per §31 MsbG.
 #
 # Generated from the compiled specialist definition during the agentplane

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # VPP settlement anomaly monitor. Verifies that every `de.vpp.dispatch.confirmed` event produced a matching `de.vpp.settlement.berechnet` within 5 minutes, alerts on missing settlements, and performs Art. 17 RL (EU) 2019/944 audit checks.
 #
 # Generated from the compiled specialist definition during the agentplane

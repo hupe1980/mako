@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # APERAK / response-window deadline triage.
 #
 # ## This specialist runs no model, and that is declared

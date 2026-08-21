@@ -444,6 +444,28 @@ fn every_subscribing_specialist_is_routed_not_just_the_first() {
             && names.contains(&"billing-regulatory-guard-agent"),
         "both opinions must be routed, got: {names:?}"
     );
+
+    // …and each opinion is admitted on its own key.
+    //
+    // Admission is at-most-once per key, so an event-wide key would admit the
+    // first specialist and answer every other one with *its* run — the fan-out
+    // this test exists to protect, defeated by the mechanism that protects the
+    // fan-out from duplicating. It would present as the second and third
+    // opinions "completing" instantly with somebody else's answer.
+    let envelope = agentd::plane::Envelope {
+        id: "ce-fanout",
+        source: "urn:mako:test:tenant:9900357000004",
+        event_type: mako_events::billing::RECHNUNG_ERSTELLT,
+    };
+    let keys: std::collections::BTreeSet<String> = matched
+        .iter()
+        .map(|r| envelope.admission_key(r.name))
+        .collect();
+    assert_eq!(
+        keys.len(),
+        matched.len(),
+        "one event's specialists must not share an admission key: {keys:?}"
+    );
 }
 
 /// **A key ring seals the journal, so journaled personal data is erasable.**

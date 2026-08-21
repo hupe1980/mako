@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # BNetzA §20 EnWG annual Diskriminierungsbericht generator and quarterly KPI reporter. Aggregates process STP rates, APERAK response times, and parity metrics for regulatory submissions.
 #
 # Generated from the compiled specialist definition during the agentplane

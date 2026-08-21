@@ -80,6 +80,39 @@ pub struct AgentdConfig {
     /// once the tolerance window has passed.
     pub audit_hmac_secret: Option<SecretString>,
 
+    /// The retiring signing secret, presented **beside** `audit_hmac_secret`
+    /// during a rotation.
+    ///
+    /// Standard Webhooks makes `webhook-signature` a space-separated list, so a
+    /// delivery can carry both and a receiver holding either verifies. That is
+    /// what turns a key rollover into something each receiver does at its own
+    /// pace instead of a flag day where every delivery fails until both sides
+    /// restart together. Remove it once every receiver has the new key.
+    ///
+    /// Setting this without `audit_hmac_secret` is a startup failure: "also"
+    /// with no primary key signs nothing.
+    pub audit_hmac_secret_previous: Option<SecretString>,
+
+    /// How long a claimed admission key is kept, in days. Absent means forever.
+    ///
+    /// `POST /webhook` admits at most one run per `(CloudEvent source, id,
+    /// specialist)`, and the claim is what makes that true across instances and
+    /// restarts. **Retiring a key reopens the door it closed**, so there is
+    /// deliberately no default: absent this, keys are kept, which is the only
+    /// setting that cannot admit a duplicate on a timer.
+    ///
+    /// When a deployment does set it, the window must exceed every emitter's
+    /// retry horizon. mako's own fan-out gives up after five attempts over
+    /// roughly two and a half hours — but a dead-lettered delivery can be
+    /// replayed by an operator days later, and that replay is the *same*
+    /// message and must still be answered with the original run. **30 days** is
+    /// the recommended figure for that reason, not for the retry schedule.
+    ///
+    /// A window under a day is refused at startup: it is short enough to expire
+    /// a key while its own emitter is still retrying, which is the failure the
+    /// key exists to prevent, delivered on a schedule.
+    pub admission_retention_days: Option<u32>,
+
     /// HMAC-SHA256 secret for verifying **inbound** CloudEvent webhook signatures.
     /// When set, `POST /webhook` verifies the Standard Webhooks headers through
     /// `mako_service::webhook::verify_request`, which also refuses a stale
@@ -322,6 +355,8 @@ pub struct Secrets {
     pub mcp_api_key: SecretString,
     /// Secret signing outbound audit deliveries (Standard Webhooks).
     pub audit_hmac_secret: Option<SecretString>,
+    /// The retiring secret, signed with beside the current one mid-rotation.
+    pub audit_hmac_secret_previous: Option<SecretString>,
     pub inbound_hmac_secret: Option<SecretString>,
     /// The Vault token, when a key ring is configured.
     pub vault_token: Option<SecretString>,
@@ -363,6 +398,11 @@ impl AgentdConfig {
                 .audit_hmac_secret
                 .as_ref()
                 .map(|s| secret("audit_hmac_secret", s))
+                .transpose()?,
+            audit_hmac_secret_previous: self
+                .audit_hmac_secret_previous
+                .as_ref()
+                .map(|s| secret("audit_hmac_secret_previous", s))
                 .transpose()?,
             inbound_hmac_secret: self
                 .inbound_hmac_secret
@@ -468,6 +508,48 @@ url = "postgres://localhost/agentd"
             JournalConfig::Postgres { url } => assert!(url.contains("agentd")),
             JournalConfig::Redb { .. } => panic!("named backend was ignored"),
         }
+    }
+
+    /// **The documented example config parses.**
+    ///
+    /// TOML binds a bare key to the most recent table header, so a top-level
+    /// key written below `[policy]` is read as `policy.<key>` — and every type
+    /// here is `deny_unknown_fields`, so the deployment refuses to start. The
+    /// README's example had seven keys past a table header, including
+    /// `mcp_api_key`; copying it produced a daemon that would not boot, and
+    /// nothing checked the block because a fenced snippet is prose.
+    ///
+    /// It is read out of the README rather than restated, which is the whole
+    /// point: a second copy would be the one that stays correct while the
+    /// documented one rots.
+    #[test]
+    fn the_readme_example_config_parses() {
+        let readme = include_str!("../README.md");
+        let block = readme
+            .split_once("```toml\n# agentd.toml")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split_once("\n```"))
+            .map(|(block, _)| block)
+            .expect("the README documents an agentd.toml");
+
+        let cfg: AgentdConfig = toml::from_str(block)
+            .expect("the documented example config must be one an operator can copy");
+
+        // Spot-check the keys most likely to be swallowed by a table above
+        // them — the ones that were.
+        assert_eq!(cfg.tenant, "9900357000004");
+        assert_eq!(cfg.max_sessions, 20);
+        assert!(cfg.inbound_hmac_secret.is_some(), "inbound_hmac_secret");
+        assert!(cfg.audit_hmac_secret.is_some(), "audit_hmac_secret");
+        assert!(
+            cfg.mcp_servers.contains_key("makod"),
+            "the MCP table survived: {:?}",
+            cfg.mcp_servers.keys().collect::<Vec<_>>()
+        );
+        assert!(
+            cfg.policy.path.is_none(),
+            "[policy] took a key that is not its own"
+        );
     }
 
     /// A key ring declared required with no Vault parses — and is refused later,

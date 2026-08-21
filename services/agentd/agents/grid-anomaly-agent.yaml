@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # NB grid-assignment and contract gap detection. Flags MaLos whose marktd malo_grid record is missing or lacks a valid NB contract (Vertrag), which would block NB STP auto-decisions (processd check 5).
 #
 # Generated from the compiled specialist definition during the agentplane
@@ -141,6 +142,13 @@ spec:
       name: grid-assignment-review
       kind: working-days
       params: { n: 1 }
+    # A triage row *is* the finding, so an unanswered one widens rather than
+    # closes: `deny` would take it out of the worklist and delete the delivery
+    # of a breach that was correctly detected. (gabi-gas-agent's dispatching
+    # approval stays `deny` for the opposite reason — it gates, so it must fail
+    # closed.)
+    on_expiry: escalate
+    escalate_to: [mako-operations]
     triage:
       - name: grid-assignment
         audience: [grid-operations]

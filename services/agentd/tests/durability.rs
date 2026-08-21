@@ -25,7 +25,20 @@ use agentplane::testkit::{FakeProvider, Fault, Faulty, Schedule};
 use agentplane::tools::{ToolClient, ToolError, ToolId};
 use serde_json::{Value, json};
 
-use agentd::plane::{Activation, Plane, PlaneConfig, Stores};
+use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Stores};
+
+/// One inbound event's identity, as `POST /webhook` would have read it off the
+/// CloudEvent envelope.
+///
+/// `source` is the producer half of the admission key: an id is unique only
+/// within one emitter, so the key `run_correlated_once` claims carries both.
+fn ce<'a>(id: &'a str, event_type: &'a str) -> Envelope<'a> {
+    Envelope {
+        id,
+        source: "urn:mako:test:tenant:9900357000004",
+        event_type,
+    }
+}
 
 const AGENT: &str = "gabi-gas-agent";
 const EVENT_TYPE: &str = "de.gabi.imbalance.notified";
@@ -180,7 +193,7 @@ async fn a_quiet_schedule_changes_nothing() {
     let (plane, faulty) = faulty_plane(&provider, &tools, Schedule::seeded(7));
 
     let decision = plane
-        .dispatch_one(AGENT, "ce-quiet", EVENT_TYPE, event())
+        .dispatch_one(AGENT, ce("ce-quiet", EVENT_TYPE), event())
         .await
         .expect("activated");
 
@@ -217,7 +230,7 @@ async fn a_committed_then_lost_append_duplicates_no_effect() {
     );
 
     let decision = plane
-        .dispatch_one(AGENT, "ce-lost", EVENT_TYPE, event())
+        .dispatch_one(AGENT, ce("ce-lost", EVENT_TYPE), event())
         .await
         .expect("activated");
 

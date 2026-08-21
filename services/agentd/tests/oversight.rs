@@ -35,7 +35,20 @@ use agentplane::testkit::FakeProvider;
 use agentplane::tools::{ToolClient, ToolError, ToolId};
 use serde_json::{Value, json};
 
-use agentd::plane::{Activation, Plane, PlaneConfig, Stores};
+use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Stores};
+
+/// One inbound event's identity, as `POST /webhook` would have read it off the
+/// CloudEvent envelope.
+///
+/// `source` is the producer half of the admission key: an id is unique only
+/// within one emitter, so the key `run_correlated_once` claims carries both.
+fn ce<'a>(id: &'a str, event_type: &'a str) -> Envelope<'a> {
+    Envelope {
+        id,
+        source: "urn:mako:test:tenant:9900357000004",
+        event_type,
+    }
+}
 
 /// The specialist under test: `planned`, and the one that dispatches.
 const AGENT: &str = "gabi-gas-agent";
@@ -209,7 +222,7 @@ async fn a_mutating_tool_call_waits_for_a_named_approver() {
     let plane = plane(&provider, &tools);
 
     let decision = plane
-        .dispatch_one(AGENT, "ce-1", EVENT_TYPE, event())
+        .dispatch_one(AGENT, ce("ce-1", EVENT_TYPE), event())
         .await
         .expect("the specialist is activated");
 
@@ -267,7 +280,7 @@ async fn an_approval_resumes_the_run_and_the_call_lands() {
     let plane = plane(&provider, &tools);
 
     plane
-        .dispatch_one(AGENT, "ce-2", EVENT_TYPE, event())
+        .dispatch_one(AGENT, ce("ce-2", EVENT_TYPE), event())
         .await
         .expect("dispatched");
     let task = only_open_task(&plane, &[APPROVER.to_owned()]).await;
@@ -316,7 +329,7 @@ async fn a_rejection_stops_the_call() {
     let plane = plane(&provider, &tools);
 
     plane
-        .dispatch_one(AGENT, "ce-3", EVENT_TYPE, event())
+        .dispatch_one(AGENT, ce("ce-3", EVENT_TYPE), event())
         .await
         .expect("dispatched");
     let task = only_open_task(&plane, &[APPROVER.to_owned()]).await;
@@ -350,7 +363,7 @@ async fn an_ineligible_actor_cannot_decide() {
     let plane = plane(&provider, &tools);
 
     plane
-        .dispatch_one(AGENT, "ce-4", EVENT_TYPE, event())
+        .dispatch_one(AGENT, ce("ce-4", EVENT_TYPE), event())
         .await
         .expect("dispatched");
     let task = only_open_task(&plane, &[APPROVER.to_owned()]).await;
@@ -418,15 +431,15 @@ async fn runs_about_one_malo_share_a_case() {
     other["malo_id"] = json!("51238696781");
 
     let first = plane
-        .dispatch_one(AGENT, "ce-5", EVENT_TYPE, malo.clone())
+        .dispatch_one(AGENT, ce("ce-5", EVENT_TYPE), malo.clone())
         .await
         .expect("dispatched");
     let second = plane
-        .dispatch_one(AGENT, "ce-6", EVENT_TYPE, malo)
+        .dispatch_one(AGENT, ce("ce-6", EVENT_TYPE), malo)
         .await
         .expect("dispatched");
     let third = plane
-        .dispatch_one(AGENT, "ce-7", EVENT_TYPE, other)
+        .dispatch_one(AGENT, ce("ce-7", EVENT_TYPE), other)
         .await
         .expect("dispatched");
 
@@ -453,4 +466,115 @@ async fn runs_about_one_malo_share_a_case() {
     assert!(a.is_some(), "a dispatched run must belong to a case");
     assert_eq!(a, b, "two events about one MaLo belong to one matter");
     assert_ne!(a, c, "a different MaLo is a different matter");
+}
+
+/// **A redelivered CloudEvent does not put a second approval in front of a
+/// reviewer.**
+///
+/// `POST /webhook` is at-least-once — mako's fan-out retries until it sees a
+/// 2xx, and a dead-lettered delivery can be replayed by hand days later — so
+/// the same message arriving twice is ordinary, not exceptional.
+///
+/// What used to stop a second fan-out was an in-process TTL map, which
+/// deduplicated neither across instances nor across a restart: exactly the two
+/// topologies the shared journal exists to serve. The blast radius looked small
+/// — no effect is duplicated *inside* a run, and no market message is dispatched
+/// twice, because the one dispatching grant needs a human and the deterministic
+/// engine sends the message — but this is the case that is not merely wasted
+/// tokens. A second identical Freigabe for one Sperrauftrag turns a four-eyes
+/// control into a guess: the reviewer cannot tell two proposals from one
+/// proposal shown twice, and approving both is indistinguishable from approving
+/// once.
+///
+/// `run_correlated_once` claims `(tenant, key)` in the transaction that appends
+/// the run's first record, so this holds without a ledger of its own. The
+/// assertion that matters is the last one: **one task, not two.**
+#[tokio::test]
+async fn a_redelivered_event_is_answered_with_the_run_it_already_admitted() {
+    let provider = FakeProvider::new();
+    // Scripted once. A second admission would ask the provider for a second
+    // plan and find nothing queued, which is itself part of the assertion:
+    // FakeProvider running dry would fail the run rather than pass quietly.
+    script(&provider);
+    let tools = Arc::new(CountingTools::default());
+    let plane = plane(&provider, &tools);
+
+    // Byte-identical envelopes, as a redelivery is: same source, same id.
+    let envelope = ce("ce-redelivered", EVENT_TYPE);
+
+    let first = plane
+        .dispatch_one(AGENT, envelope, event())
+        .await
+        .expect("the specialist is activated");
+    let second = plane
+        .dispatch_one(AGENT, envelope, event())
+        .await
+        .expect("the specialist is activated");
+
+    assert_eq!(
+        first.admitted,
+        Some(agentd::plane::Admitted::Fresh),
+        "the first delivery is the one that admits: {first:?}"
+    );
+    assert_eq!(
+        second.admitted,
+        Some(agentd::plane::Admitted::Replayed),
+        "the redelivery must be answered, not admitted: {second:?}"
+    );
+    assert_eq!(
+        first.run_id, second.run_id,
+        "a caller that retried wants the original run, not a conflict to interpret"
+    );
+    assert_eq!(
+        second.outcome, "suspended",
+        "the replayed answer is the original run's own status: {second:?}"
+    );
+
+    // The whole point, stated as the thing a reviewer would have seen.
+    let runtime = plane.runtime();
+    let tasks = runtime.tasks().expect("the plane has a task store").clone();
+    let queue = tasks
+        .queue(&[APPROVER.to_owned()], 10)
+        .await
+        .expect("queue readable");
+    assert_eq!(
+        queue.len(),
+        1,
+        "one Sperrauftrag produced {} approval tasks — four-eyes degrades into a guess \
+         the moment a reviewer cannot tell two proposals from one shown twice: {queue:#?}",
+        queue.len()
+    );
+}
+
+/// A different event about the same MaLo is still its own run.
+///
+/// The complement of the test above, and the failure it guards is worse than a
+/// duplicate: an admission key too coarse — the MaLo, the case, the event type —
+/// would answer every later event about a customer with the *first* one's run,
+/// so the plane would stop working on a Marktlokation after its first message
+/// and report success for each one it swallowed.
+#[tokio::test]
+async fn two_distinct_events_about_one_malo_are_two_runs() {
+    let provider = FakeProvider::new();
+    script(&provider);
+    script(&provider);
+    let tools = Arc::new(CountingTools::default());
+    let plane = plane(&provider, &tools);
+
+    let first = plane
+        .dispatch_one(AGENT, ce("ce-distinct-a", EVENT_TYPE), event())
+        .await
+        .expect("dispatched");
+    let second = plane
+        .dispatch_one(AGENT, ce("ce-distinct-b", EVENT_TYPE), event())
+        .await
+        .expect("dispatched");
+
+    assert_eq!(first.admitted, Some(agentd::plane::Admitted::Fresh));
+    assert_eq!(
+        second.admitted,
+        Some(agentd::plane::Admitted::Fresh),
+        "a distinct message must be admitted on its own: {second:?}"
+    );
+    assert_ne!(first.run_id, second.run_id, "two messages, two runs");
 }

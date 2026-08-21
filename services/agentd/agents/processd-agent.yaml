@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which EBD Prüfschritt produced the Antwortcode), and tracks approval_queue items.
 #
 # Generated from the compiled specialist definition during the agentplane
@@ -106,6 +107,13 @@ spec:
       name: stp-rejection-review
       kind: working-days
       params: { n: 2 }
+    # A triage row *is* the finding, so an unanswered one widens rather than
+    # closes: `deny` would take it out of the worklist and delete the delivery
+    # of a breach that was correctly detected. (gabi-gas-agent's dispatching
+    # approval stays `deny` for the opposite reason — it gates, so it must fail
+    # closed.)
+    on_expiry: escalate
+    escalate_to: [mako-operations]
     triage:
       - name: stp-rejection
         audience: [marktkommunikation]

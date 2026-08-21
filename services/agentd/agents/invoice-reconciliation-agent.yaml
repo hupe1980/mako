@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # REMADV payment reconciliation and overdue invoice resolution. Matches incoming REMADV 33001/33002 against open invoices, identifies partial payments, and triggers dunning when appropriate.
 #
 # Generated from the compiled specialist definition during the agentplane
@@ -103,6 +104,13 @@ spec:
       name: invoice-escalation-review
       kind: working-days
       params: { n: 1 }
+    # A triage row *is* the finding, so an unanswered one widens rather than
+    # closes: `deny` would take it out of the worklist and delete the delivery
+    # of a breach that was correctly detected. (gabi-gas-agent's dispatching
+    # approval stays `deny` for the opposite reason — it gates, so it must fail
+    # closed.)
+    on_expiry: escalate
+    escalate_to: [mako-operations]
     triage:
       - name: invoice-escalation
         audience: [credit-control]

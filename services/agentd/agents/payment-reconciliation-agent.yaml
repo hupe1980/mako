@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # SEPA payment reconciliation and Mahnwesen escalation. Matches CAMT.054 bank returns against accountingd ledger, triggers Mahnstufe escalation (1→2→3), and generates Sperrauftrag when needed.
 #
 # Generated from the compiled specialist definition during the agentplane
@@ -142,6 +143,13 @@ spec:
       name: sperr-review-review
       kind: working-days
       params: { n: 1 }
+    # A triage row *is* the finding, so an unanswered one widens rather than
+    # closes: `deny` would take it out of the worklist and delete the delivery
+    # of a breach that was correctly detected. (gabi-gas-agent's dispatching
+    # approval stays `deny` for the opposite reason — it gates, so it must fail
+    # closed.)
+    on_expiry: escalate
+    escalate_to: [mako-operations]
     triage:
       - name: sperr-review
         audience: [credit-control]

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Product catalog hygiene, §41a EPEX price availability monitor, and §42 Energiemix completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix disclosures (annual update), expired B2B quotations needing ERP follow-up, and DRAFT products not yet published.
 #
 # Generated from the compiled specialist definition during the agentplane

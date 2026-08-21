@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # EEG/KWKG monthly auto-settlement orchestrator and §52 violation sweep. Triggers batch settlement for all active plants, detects §52 Pflichtzahlungen accrual, checks §44b biogas cap utilisation, and ensures post-EEG plants are on correct remuneration scheme.
 #
 # Generated from the compiled specialist definition during the agentplane

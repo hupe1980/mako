@@ -8,7 +8,7 @@
 //!
 //! [`plane::oversight`]: crate::plane::oversight
 
-use crate::plane::{AgentDecision, Plane};
+use crate::plane::{AgentDecision, Envelope, Plane};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -91,77 +91,24 @@ pub struct AppState {
     pub decisions: DecisionLog,
     /// Bounds concurrent agent runs to `cfg.max_sessions`.
     pub session_sem: Arc<Semaphore>,
-    /// CloudEvent-id dedup window (at-least-once delivery must not double-run).
-    pub seen_events: SeenEvents,
 }
 
-/// Bounded, TTL-windowed CloudEvent-id dedup set — **per process**.
+/// The three CloudEvents attributes this door cannot work without.
 ///
-/// Inbound webhooks are at-least-once: the emitter retries until it sees a 2xx,
-/// so the same `ce_id` can arrive more than once. One fan-out per event id
-/// within the window; entries expire after `ttl` and the set is capped so a
-/// flood of unique ids cannot grow memory unboundedly.
-///
-/// ## What it does not cover, stated rather than assumed
-///
-/// This set lives in memory, so it does **not** deduplicate across instances or
-/// across a restart. With the Postgres journal — the multi-instance topology —
-/// a redelivery that lands on a different pod starts a second fan-out.
-/// [`crate::config::JournalConfig::Postgres`] therefore warns at startup.
-///
-/// The consequence is bounded and worth naming, because "at-least-once
-/// delivery, at-most-once execution" is a claim this plane must not make
-/// loosely:
-///
-/// * **No effect is duplicated inside a run.** Each fan-out is its own run on
-///   its own journal, and the effect protocol is what makes a single run's tool
-///   calls at-most-once. Two runs are two records, not one record executed
-///   twice.
-/// * **No market message is dispatched twice.** The only grant that can
-///   dispatch requires a human decision, and the deterministic engine — not the
-///   agent — puts the message on the wire.
-/// * **What is duplicated is cost and worklist noise**: a second set of model
-///   calls, and a second approval task on the same case.
-///
-/// Closing it properly means a dedup key in the shared store rather than in this
-/// map; it is on the roadmap because the primitive belongs in agentplane, beside
-/// the journal that already arbitrates fencing.
-#[derive(Clone)]
-pub struct SeenEvents {
-    inner: Arc<std::sync::Mutex<std::collections::HashMap<String, std::time::Instant>>>,
-    ttl: std::time::Duration,
-    capacity: usize,
-}
-
-impl SeenEvents {
-    #[must_use]
-    pub fn new(ttl: std::time::Duration, capacity: usize) -> Self {
-        Self {
-            inner: Arc::new(std::sync::Mutex::new(std::collections::HashMap::new())),
-            ttl,
-            capacity,
+/// Refused rather than defaulted. `id` and `source` are the identity a
+/// redelivery keeps and therefore the admission key: an unset attribute arrives
+/// as `""`, which is a perfectly good key, so one message would claim it and
+/// every later one — from any emitter — would be answered with that message's
+/// run. `type` is what the router matches on, and a placeholder matches
+/// nothing, which is answered `204` and reads exactly like "nobody subscribes".
+fn identify(event: &Value) -> Result<(&str, &str, &str), &'static str> {
+    let attribute = |name: &'static str| -> Result<&str, &'static str> {
+        match event[name].as_str() {
+            Some(v) if !v.trim().is_empty() => Ok(v),
+            _ => Err(name),
         }
-    }
-
-    /// `true` when this id has not been seen within the TTL window (and
-    /// records it); `false` for a duplicate.
-    pub fn first_seen(&self, id: &str) -> bool {
-        let now = std::time::Instant::now();
-        let mut map = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        map.retain(|_, t| now.duration_since(*t) < self.ttl);
-        if map.contains_key(id) {
-            return false;
-        }
-        if map.len() >= self.capacity {
-            // Evict the oldest entry — losing dedup for the oldest id beats
-            // unbounded growth under an id flood.
-            if let Some(oldest) = map.iter().min_by_key(|(_, t)| **t).map(|(k, _)| k.clone()) {
-                map.remove(&oldest);
-            }
-        }
-        map.insert(id.to_owned(), now);
-        true
-    }
+    };
+    Ok((attribute("id")?, attribute("source")?, attribute("type")?))
 }
 
 /// A decision recording that dispatch exceeded its wall-clock ceiling.
@@ -179,6 +126,7 @@ fn timed_out(event_id: &str, event_type: &str, secs: u64) -> AgentDecision {
             "Waiting for this event's specialists exceeded {secs}s. Their runs are journaled \
              and continue; look them up under /api/v1/oversight/runs."
         ),
+        admitted: None,
         waiting_for: None,
         tokens: 0,
     }
@@ -194,17 +142,28 @@ pub async fn webhook(
     // The shared verifier, not a hand-rolled header read: it also refuses a
     // stale `webhook-timestamp`, which is the half of the check a local copy
     // omits.
+    //
+    // The returned `webhook-id` is deliberately dropped: it *is* the CloudEvent
+    // id, and this plane admits on the CloudEvents `(source, id)` pair, so
+    // deduplicating on the transport header too would be the same check under a
+    // narrower identity.
+    //
+    // The refusal is matched rather than mapped straight to a status, because
+    // "the signature did not match" and "this arrived forty minutes ago" are
+    // different operational problems behind the same 401. Nothing warns about a
+    // missing secret here: the daemon says that once at startup, and a line per
+    // request trains operators to skip it.
     let secret = state
         .secrets
         .inbound_hmac_secret
         .as_ref()
         .map(|s| s.expose_secret().as_bytes().to_vec());
-    if secret.is_none() {
-        tracing::warn!("agentd: inbound_hmac_secret not set — accepting all webhooks (dev mode)");
-    }
-    if let Err(err) = mako_service::webhook::verify_request(secret.as_deref(), &headers, &body) {
-        tracing::warn!(%err, "agentd: inbound webhook refused");
-        return StatusCode::from(err).into_response();
+    match mako_service::webhook::verify_request(secret.as_deref(), &headers, &body) {
+        Ok(_deduplicated_on_the_cloudevent_pair_instead) => {}
+        Err(err) => {
+            tracing::warn!(%err, "agentd: inbound webhook refused");
+            return StatusCode::from(err).into_response();
+        }
     }
 
     // ── Parse CloudEvent ─────────────────────────────────────────────────
@@ -216,8 +175,22 @@ pub async fn webhook(
         }
     };
 
-    let event_type = event["type"].as_str().unwrap_or("unknown").to_owned();
-    let event_id = event["id"].as_str().unwrap_or("unknown").to_owned();
+    // Identity first, and refused rather than defaulted — see `identify`.
+    let (event_id, event_source, event_type) = match identify(&event) {
+        Ok(triple) => triple,
+        Err(missing) => {
+            tracing::warn!(
+                attribute = missing,
+                "agentd: CloudEvent is missing a required attribute — refused"
+            );
+            return StatusCode::BAD_REQUEST.into_response();
+        }
+    };
+    let (event_id, event_source, event_type) = (
+        event_id.to_owned(),
+        event_source.to_owned(),
+        event_type.to_owned(),
+    );
     let data = event["data"].clone();
 
     // Tenant binding: a CloudEvent carrying a `tenantid` extension for a
@@ -229,14 +202,11 @@ pub async fn webhook(
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    // Duplicate suppression: at-least-once event delivery must not start a
-    // second fan-out for the same CloudEvent id within the dedup window.
-    if !state.seen_events.first_seen(&event_id) {
-        tracing::info!(event_id, "agentd: duplicate CloudEvent suppressed");
-        return StatusCode::ACCEPTED.into_response();
-    }
-
-    // The routing table is the admission filter, and the only one. A second
+    // There is deliberately no duplicate check here: deduplication happens where
+    // the run is admitted, so it holds across instances and across a restart
+    // rather than in this process's memory. See `Envelope::admission_key`.
+    //
+    // The routing table is therefore the only admission filter. A second
     // event-type list in config that nothing reconciles with the manifests mutes
     // a specialist behind a 204 that reads exactly like "nobody subscribes".
     if !state.plane.router().accepts(&event_type) {
@@ -265,9 +235,14 @@ pub async fn webhook(
         // One run per subscribing specialist. There is no dead-letter queue:
         // a run that fails is durable, and resumes from its last completed
         // effect rather than being replayed from the top by a retry loop.
+        let envelope = Envelope {
+            id: &event_id,
+            source: &event_source,
+            event_type: &event_type,
+        };
         let decisions = match tokio::time::timeout(
             std::time::Duration::from_secs(timeout_secs),
-            state2.plane.dispatch(&event_id, &event_type, data),
+            state2.plane.dispatch(envelope, data),
         )
         .await
         {
@@ -288,6 +263,7 @@ pub async fn webhook(
 pub async fn manual_run(
     State(state): State<Arc<AppState>>,
     _claims: Claims,
+    headers: HeaderMap,
     Json(req): Json<Value>,
 ) -> impl IntoResponse {
     // ── Concurrency cap ──────────────────────────────────────────────────
@@ -304,9 +280,44 @@ pub async fn manual_run(
 
     let agent_name = req["agent"].as_str().map(str::to_owned);
     let event_type = req["event_type"].as_str().unwrap_or("manual").to_owned();
-    let event_id = uuid::Uuid::new_v4().to_string();
     let data = req.get("input").cloned().unwrap_or_default();
+
+    // A named agent that does not exist is a 404, not an empty list: `200 OK []`
+    // is byte-identical to "the specialists ran and had nothing to say".
+    if let Some(name) = agent_name.as_deref()
+        && !state.plane.router().routes().iter().any(|r| r.name == name)
+    {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": format!(
+                    "no specialist named '{name}' is activated in this deployment — \
+                     GET /api/v1/agents lists the ones that are"
+                )
+            })),
+        )
+            .into_response();
+    }
+
+    // The webhook's at-most-once admission, offered rather than imposed: with an
+    // `Idempotency-Key` a retried POST is answered with the run it already
+    // started; without one, every request is its own event.
+    let event_id = headers
+        .get("idempotency-key")
+        .and_then(|v| v.to_str().ok())
+        .map(str::trim)
+        .filter(|k| !k.is_empty())
+        .map_or_else(|| uuid::Uuid::new_v4().to_string(), str::to_owned);
+    // The plane itself is the producer here, which keeps a manual run's key out
+    // of every bus emitter's namespace.
+    let event_source = mako_service::source("agentd", &state.cfg.tenant);
     tracing::info!(event_type, event_id, ?agent_name, "agentd: manual run");
+
+    let envelope = Envelope {
+        id: &event_id,
+        source: &event_source,
+        event_type: &event_type,
+    };
 
     // The wall-clock timeout must wrap the dispatch FUTURE — wrapping the
     // already-awaited value would make the timeout a no-op.
@@ -317,11 +328,11 @@ pub async fn manual_run(
         match agent_name.as_deref() {
             Some(name) => state
                 .plane
-                .dispatch_one(name, &event_id, &event_type, data)
+                .dispatch_one(name, envelope, data)
                 .await
                 .map(|d| vec![d])
                 .unwrap_or_default(),
-            None => state.plane.dispatch(&event_id, &event_type, data).await,
+            None => state.plane.dispatch(envelope, data).await,
         }
     };
 

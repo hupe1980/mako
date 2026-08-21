@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # EEG/KWKG plant lifecycle and settlement. Handles Förderung expiry, post-EEG transition planning, settlement history queries, and iMSys rollout detection from edmd direct pushes.
 #
 # Generated from the compiled specialist definition during the agentplane

@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # §20 EnWG Diskriminierungsfreiheit parity monitor and BNetzA KPI reporting. Tracks STP rates across market roles, generates BNetzA Diskriminierungsbericht, and flags parity violations.
 #
 # Generated from the compiled specialist definition during the agentplane
@@ -144,6 +145,13 @@ spec:
       name: parity-breach-review
       kind: working-days
       params: { n: 2 }
+    # A triage row *is* the finding, so an unanswered one widens rather than
+    # closes: `deny` would take it out of the worklist and delete the delivery
+    # of a breach that was correctly detected. (gabi-gas-agent's dispatching
+    # approval stays `deny` for the opposite reason — it gates, so it must fail
+    # closed.)
+    on_expiry: escalate
+    escalate_to: [mako-operations]
     triage:
       - name: parity-breach
         audience: [regulatory]

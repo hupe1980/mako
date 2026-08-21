@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # GaBi Gas 2.1 balancing and allocation specialist.
 #
 # Converted from `builtin::GABI_GAS_AGENT`. Three things moved out of the Rust

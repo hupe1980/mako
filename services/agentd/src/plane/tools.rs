@@ -135,12 +135,42 @@ async fn connect_one(
     // `host_info` advertises exactly what agentplane implements. Elicitation,
     // sampling and roots are deliberately not advertised: a server offered one
     // would open an interaction that has no governed runtime path.
-    let service = McpClient::host_info()
+    let host_info = McpClient::host_info();
+    // What we offered, read off the very value we send rather than restated —
+    // agentplane bumping its revision must not leave a stale constant here
+    // reporting drift that is not there.
+    let offered = host_info.protocol_version.as_str().to_owned();
+    let service = host_info
         .serve(transport)
         .await
         .with_context(|| format!("MCP handshake with '{name}'"))?;
 
-    Ok(Arc::new(McpClient::new(name, Arc::new(service))) as Arc<dyn ToolClient>)
+    // Fallible since 0.21: rmcp deserializes any string into a protocol
+    // version, so a server answering a revision nobody implements would
+    // otherwise be talked to in a dialect that does not exist. Refusing here is
+    // a startup failure naming the server, which is the same class as a granted
+    // server missing from `[mcp_servers]`.
+    let client = McpClient::new(name, Arc::new(service))
+        .with_context(|| format!("MCP protocol negotiation with '{name}'"))?;
+
+    // MCP negotiates *down* by design, and a downgrade is silent: the tasks
+    // extension and structured tool responses defined by the offered revision
+    // are simply absent, so a long-running tool behaves synchronously and the
+    // governed suspension never happens with nothing saying why. agentd
+    // connects at startup, so the one moment an operator can see it is here.
+    match client.negotiated_version() {
+        Some(version) if version != offered => tracing::warn!(
+            server = %name,
+            negotiated = %version,
+            %offered,
+            "MCP server negotiated down — the tasks extension and structured tool responses \
+             are absent on this transport, so a long-running tool answers synchronously and \
+             never suspends the run"
+        ),
+        _ => tracing::info!(server = %name, version = %offered, "MCP transport connected"),
+    }
+
+    Ok(Arc::new(client) as Arc<dyn ToolClient>)
 }
 
 #[cfg(test)]

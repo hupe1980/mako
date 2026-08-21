@@ -255,6 +255,13 @@ mod tests {
                 continue;
             };
             roles.extend(oversight.approvers.iter().cloned());
+            // The escalation audience counts. It is the one that arrives late
+            // and unannounced: a role named only here is handed a row by the
+            // sweeper, hours after the fact, and a Cedar set that does not
+            // admit it turns escalation into a widening to nobody — which
+            // reads, from the worklist, exactly like the row having been
+            // answered.
+            roles.extend(oversight.escalate_to.iter().cloned());
             for rule in &oversight.triage {
                 roles.extend(rule.audience.iter().cloned());
             }
@@ -351,22 +358,110 @@ mod tests {
         assert!(!permitted(&d), "cancel is not a gas-operations verb: {d:?}");
     }
 
+    /// **Every verb the oversight surface asks about is granted to somebody.**
+    ///
+    /// mako's pinned authorization failure class, in the tier where it is
+    /// quietest: a Cedar action in the runtime's route table but in no rule here
+    /// is a **permanent 403** on that route, with a policy set that compiles
+    /// clean and nothing anywhere reporting it — no test, no startup check, no
+    /// log line.
+    ///
+    /// The list is read from `action::ALL` rather than restated, so a verb
+    /// agentplane adds fails here on the first `cargo test` after the bump
+    /// rather than on a compliance function's first visit.
+    #[test]
+    fn every_action_the_oversight_surface_asks_about_is_granted_to_somebody() {
+        // Every role the Cedar set names, plus the umbrella. A verb granted to
+        // none of these is granted to nobody: the authenticator mints exactly
+        // these from `mako_roles`.
+        const ROLES: &[&str] = &[
+            "mako-operations",
+            "gas-operations",
+            "billing-operations",
+            "billing-compliance",
+            "credit-control",
+            "eeg-operations",
+            "grid-operations",
+            "marktkommunikation",
+            "metering",
+            "netzbilanz",
+            "regulatory",
+            "mako-service",
+        ];
+
+        let engine = engine();
+        let orphaned: Vec<&str> = agentplane::api::action::ALL
+            .iter()
+            .copied()
+            .filter(|action| {
+                !ROLES.iter().any(|role| {
+                    let context = json!({ "roles": [role], "tenant": "9900357000004" });
+                    permitted(&engine.authorize(&PolicyRequest {
+                        principal: "user:reviewer",
+                        action,
+                        resource: "*",
+                        context: &context,
+                    }))
+                })
+            })
+            .collect();
+
+        assert!(
+            orphaned.is_empty(),
+            "the oversight surface asks the policy engine about these actions and \
+             `policy/agentd.cedar` grants them to no role, so the routes behind them answer \
+             403 to every caller forever: {orphaned:?}. Add a `permit` naming the audience \
+             each belongs to — deliberately: a verb agentplane split out is one it expects \
+             to be granted separately."
+        );
+    }
+
+    /// The narrower verb stays narrow.
+    ///
+    /// `api:obligation.list` is its own action so *what did we miss* can be
+    /// granted without *the contents of every matter*. Granting it to the whole
+    /// read audience would satisfy the test above while discarding the
+    /// distinction it exists for.
+    #[test]
+    fn listing_breached_obligations_is_narrower_than_reading_cases() {
+        let engine = engine();
+        let ask = |role: &str, action: &str| {
+            let context = json!({ "roles": [role], "tenant": "9900357000004" });
+            permitted(&engine.authorize(&PolicyRequest {
+                principal: "user:reviewer",
+                action,
+                resource: "*",
+                context: &context,
+            }))
+        };
+
+        for role in ["mako-operations", "regulatory"] {
+            assert!(
+                ask(role, "api:obligation.list"),
+                "`{role}` answers for what this plane missed and cannot list it"
+            );
+        }
+        for role in ["metering", "credit-control", "gas-operations"] {
+            assert!(
+                ask(role, "api:case.read"),
+                "`{role}` must still be able to read its own matters"
+            );
+            assert!(
+                !ask(role, "api:obligation.list"),
+                "`{role}` was handed every domain's missed Fristen — the route does not \
+                 narrow by domain, so a broad grant is a cross-domain disclosure"
+            );
+        }
+    }
+
     /// An unauthenticated-shaped request — no roles at all — reaches nothing.
+    ///
+    /// Over `action::ALL` rather than a hand-written list, for the same reason
+    /// as above: a verb this file forgets is a verb nobody checks is closed.
     #[test]
     fn a_caller_with_no_roles_is_refused_everywhere() {
         let none = json!({ "roles": [], "tenant": "9900357000004" });
-        for action in [
-            "api:run.read",
-            "api:run.list",
-            "api:run.cancel",
-            "api:task.list",
-            "api:task.read",
-            "api:task.claim",
-            "api:task.release",
-            "api:task.decide",
-            "api:case.read",
-            "api:event.deliver",
-        ] {
+        for action in agentplane::api::action::ALL {
             let d = engine().authorize(&PolicyRequest {
                 principal: "user:nobody",
                 action,

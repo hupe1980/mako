@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # BSI TR-03109 Smart Meter Gateway lifecycle diagnostics. Detects certificate expiry (TLS/SIG/ENC/KEY_AGREEMENT), CLS channel §14a compliance gaps, communication faults, and stalled iMSys rollout. Uses edmd SMGW registry API.
 #
 # Generated from the compiled specialist definition during the agentplane
@@ -130,6 +131,13 @@ spec:
       name: smgw-critical-review
       kind: hours
       params: { n: 8 }
+    # A triage row *is* the finding, so an unanswered one widens rather than
+    # closes: `deny` would take it out of the worklist and delete the delivery
+    # of a breach that was correctly detected. (gabi-gas-agent's dispatching
+    # approval stays `deny` for the opposite reason — it gates, so it must fail
+    # closed.)
+    on_expiry: escalate
+    escalate_to: [mako-operations]
     triage:
       - name: smgw-critical
         audience: [metering]

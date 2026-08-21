@@ -31,7 +31,7 @@ use agentplane::case::{CaseStore, EventStore, TaskStore, TimerStore};
 use agentplane::core::{PolicyEngine, TenantId};
 use agentplane::journal::JournalStore;
 use agentplane::keyring::KeyRing;
-use agentplane::runtime::{Agent, RunStatus, Runtime};
+use agentplane::runtime::{Admission, Agent, RunStatus, Runtime};
 use serde_json::Value;
 use tracing::{info, warn};
 
@@ -207,12 +207,79 @@ impl Router {
     }
 }
 
-/// What one specialist concluded, in the shape the CloudEvent carries.
+/// The identity a redelivery of one CloudEvent keeps.
+///
+/// `POST /webhook` is at-least-once: an emitter retries until it sees a 2xx, so
+/// the same message arrives more than once and must not start a second fan-out.
+/// What makes two deliveries *the same message* is the CloudEvents pair
+/// `(source, id)` — the standard's own uniqueness rule, and the one mako's
+/// emitters hold stable across attempts (`mako_service`'s sender puts the
+/// CloudEvent id in `webhook-id` for exactly this reason).
+///
+/// Borrowed rather than owned because every use is one dispatch's worth: this
+/// exists to stop three `&str` parameters being transposed at a call site, not
+/// to be stored.
+#[derive(Debug, Clone, Copy)]
+pub struct Envelope<'a> {
+    /// CloudEvents `id`. Never empty — the door refuses an event without one,
+    /// because an unset id arrives as `""` and `""` is a perfectly good
+    /// admission key: the first message claims it and every later message is
+    /// answered with the first one's run.
+    pub id: &'a str,
+    /// CloudEvents `source`. The producer half of the identity: an id is unique
+    /// only within one emitter, so a bare id lets two services swallow each
+    /// other's messages as apparent retries.
+    pub source: &'a str,
+    /// CloudEvents `type`, which the router matches against.
+    pub event_type: &'a str,
+}
+
+impl Envelope<'_> {
+    /// The admission key for **one specialist's** run of this event.
+    ///
+    /// Per specialist, not per event: one event fans out to several independent
+    /// runs, so an event-wide key would admit the first specialist and answer
+    /// every other one with its run.
+    ///
+    /// The `(source, id)` half is spelled the way agentplane spells it
+    /// (`InboundEvent::dedup_key` — U+001F-joined), so the identity the buffer
+    /// would use and the identity admission uses are the same string. They are
+    /// deliberately not the same *table*: an event nobody subscribes to is
+    /// dead-lettered by the sweep, and using the buffer as an idempotency
+    /// ledger would spend that signal to buy deduplication.
+    #[must_use]
+    pub fn admission_key(&self, agent: &str) -> String {
+        format!("{}\u{1f}{}\u{1f}{agent}", self.source, self.id)
+    }
+}
+
+/// Whether this dispatch is the one that admitted the run.
+///
+/// Recorded rather than inferred: "the same decision twice in the log" and "a
+/// redelivery answered with the original run" look identical without it, and
+/// only the first is a fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Admitted {
+    /// This call is the one that started the run.
+    Fresh,
+    /// The key already admitted a run that has rested. Its answer, again.
+    Replayed,
+    /// The key already admitted a run that is still executing.
+    InFlight,
+}
+
+/// What one specialist concluded.
 ///
 /// Every field is read off the run's own outcome. There is deliberately no
 /// per-turn count and no handoff target: the runtime drives the turn loop and
 /// no specialist delegates, so either field would be structurally empty — and a
 /// zero that reads as "this agent called no tools" is worse than no field.
+///
+/// **This is not the shape an ERP subscriber receives.** `de.agent.decision.made`
+/// is delivered by the journal-backed outbox from the run's own sealed record —
+/// see [`crate::plane::sweep::spawn_delivery`]. This is the operator's
+/// "what just happened" view and the answer to a manual run.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AgentDecision {
     pub agent_name: String,
@@ -222,9 +289,15 @@ pub struct AgentDecision {
     pub event_id: String,
     pub event_type: String,
     /// `completed` · `failed` · `suspended` · `exhausted` · `quarantined` ·
-    /// `replanning` · `cancelled` · `not-admitted`
+    /// `replanning` · `cancelled` · `running` · `not-admitted`
     pub outcome: String,
     pub summary: String,
+    /// Whether this dispatch admitted the run or met one already admitted.
+    ///
+    /// Absent when nothing was admitted at all — a refused envelope, a dispatch
+    /// that timed out.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub admitted: Option<Admitted>,
     /// What a suspended run is waiting for — an approval, a message, an instant.
     ///
     /// "Suspended" tells an operator a run is stuck; it does not tell them
@@ -234,19 +307,6 @@ pub struct AgentDecision {
     pub waiting_for: Option<String>,
     /// Model tokens this run consumed, as the journal metered them.
     pub tokens: u64,
-}
-
-impl AgentDecision {
-    /// The CloudEvent an ERP subscriber receives.
-    #[must_use]
-    pub fn to_cloud_event(&self, tenant: &str) -> mako_service::CloudEvent {
-        mako_service::CloudEvent::new(
-            mako_service::source("agentd", tenant),
-            mako_events::agent::DECISION_MADE,
-            self.event_id.clone(),
-            serde_json::to_value(self).unwrap_or(Value::Null),
-        )
-    }
 }
 
 /// Everything the plane persists to.
@@ -513,24 +573,22 @@ impl Plane {
     /// Each match is its own run on its own journal — independent opinions, not
     /// one run's internal concurrency. Returns one decision per specialist, in
     /// routing order; an empty result means nothing subscribed.
-    pub async fn dispatch(
-        &self,
-        event_id: &str,
-        event_type: &str,
-        payload: Value,
-    ) -> Vec<AgentDecision> {
-        let matched = self.router.matching(event_type);
+    ///
+    /// Admission is keyed, so a redelivery of the same `(source, id)` is
+    /// answered with the runs it already started rather than starting more.
+    pub async fn dispatch(&self, event: Envelope<'_>, payload: Value) -> Vec<AgentDecision> {
+        let matched = self.router.matching(event.event_type);
         if matched.is_empty() {
-            info!(event_type, "no specialist subscribes to this event");
+            info!(
+                event_type = event.event_type,
+                "no specialist subscribes to this event"
+            );
             return Vec::new();
         }
 
         let mut decisions = Vec::with_capacity(matched.len());
         for route in matched {
-            decisions.push(
-                self.run_one(route, event_id, event_type, payload.clone())
-                    .await,
-            );
+            decisions.push(self.run_one(route, event, payload.clone()).await);
         }
         decisions
     }
@@ -541,12 +599,11 @@ impl Plane {
     pub async fn dispatch_one(
         &self,
         name: &str,
-        event_id: &str,
-        event_type: &str,
+        event: Envelope<'_>,
         payload: Value,
     ) -> Option<AgentDecision> {
         let route = self.router.routes.iter().find(|r| r.name == name)?;
-        Some(self.run_one(route, event_id, event_type, payload).await)
+        Some(self.run_one(route, event, payload).await)
     }
 
     /// A decision recording that the plane declined to start a run.
@@ -554,26 +611,26 @@ impl Plane {
     /// Not a failure of the agent — the agent never ran. It is on the record
     /// because a specialist that silently receives nothing is indistinguishable
     /// from one that ran and found nothing.
-    fn did_not_run(route: &Route, event_id: &str, event_type: &str, why: &str) -> AgentDecision {
+    ///
+    /// It spends no admission key either, which is the point of admitting late:
+    /// a refusal here leaves the key unclaimed, so a corrected redelivery is
+    /// admitted rather than answered with the refusal.
+    fn did_not_run(route: &Route, event: Envelope<'_>, why: &str) -> AgentDecision {
         AgentDecision {
             agent_name: route.name.to_owned(),
             run_id: String::new(),
-            event_id: event_id.to_owned(),
-            event_type: event_type.to_owned(),
+            event_id: event.id.to_owned(),
+            event_type: event.event_type.to_owned(),
             outcome: "not-admitted".to_owned(),
             summary: why.to_owned(),
+            admitted: None,
             waiting_for: None,
             tokens: 0,
         }
     }
 
-    async fn run_one(
-        &self,
-        route: &Route,
-        event_id: &str,
-        event_type: &str,
-        payload: Value,
-    ) -> AgentDecision {
+    async fn run_one(&self, route: &Route, event: Envelope<'_>, payload: Value) -> AgentDecision {
+        let (event_id, event_type) = (event.id, event.event_type);
         // Read the business keys before the payload is consumed by labelling:
         // which case this run joins is a question of fact about the message,
         // decided the same way for every specialist that receives it.
@@ -599,8 +656,7 @@ impl Plane {
                     );
                     return Self::did_not_run(
                         route,
-                        event_id,
-                        event_type,
+                        event,
                         "The event carried no identifier this plane could re-validate, so a \
                          planned specialist had no trusted input to compile a plan from.",
                     );
@@ -609,36 +665,106 @@ impl Plane {
             false => super::label::admit(event_type, payload),
         };
 
-        // Correlated, not bare. A run outside a case cannot register an
-        // obligation or open a task, so `requires_approval` — declared on the
-        // one grant across the 28 manifests that can dispatch — would fail at
-        // dispatch instead of asking a human. The keys are
-        // the re-validated identifiers, which makes the case the erasure unit
-        // for one Marktlokation: destroying its wrapping key destroys every
-        // sealed payload of every run about that customer.
-        let outcome = self
+        // Correlated **and keyed**, neither alone.
+        //
+        // Correlated: a run outside a case cannot register an obligation or open
+        // a task, so `requires_approval` would fail at dispatch instead of
+        // asking a human. The keys are the re-validated identifiers, which makes
+        // the case the erasure unit for one Marktlokation.
+        //
+        // Keyed: correlation decides *which case*, the key decides *whether at
+        // all*. Correlation alone would join a redelivery to the right case and
+        // start a second run inside it — and since the one dispatching grant
+        // suspends on a four-eyes decision, that second run puts a second
+        // identical Freigabe in front of a reviewer. The store claims the key
+        // inside the transaction that appends the run's first record, so this
+        // holds across instances and across a restart.
+        let admitted = self
             .runtime
-            .run_correlated(
+            .run_correlated_once(
                 &route.capability,
                 input,
                 correlation.kind,
                 &correlation.keys,
+                &event.admission_key(route.name),
             )
             .await;
 
-        let (run_id, status, summary, tokens) = match outcome {
-            Ok(o) => {
-                // The answer when there is one; the *reason* when there is not.
-                // A failed run with an empty summary reads as "the agent said
-                // nothing", when the truth is "the runtime refused, and said
-                // why" — and the why is the only actionable part.
-                let summary = o
-                    .output
-                    .as_ref()
-                    .map(|t| t.peek().to_string())
-                    .or_else(|| o.reason().map(|r| r.into_owned()))
-                    .unwrap_or_default();
-                (o.run_id.to_string(), o.status, summary, o.spend.tokens)
+        // The answer when there is one; the *reason* when there is not. A failed
+        // run with an empty summary reads as "the agent said nothing", when the
+        // truth is "the runtime refused, and said why" — and the why is the only
+        // actionable part.
+        let told = |o: &agentplane::runtime::RunOutcome| {
+            o.output
+                .as_ref()
+                .map(|t| t.peek().to_string())
+                .or_else(|| o.reason().map(|r| r.into_owned()))
+                .unwrap_or_default()
+        };
+
+        let (run_id, status, summary, tokens, admission) = match admitted {
+            Ok(Admission::Fresh(o)) => (
+                o.run_id.to_string(),
+                o.status.clone(),
+                told(&o),
+                o.spend.tokens,
+                Admitted::Fresh,
+            ),
+            // A duplicate is answered, not refused: a caller that retried wants
+            // the original run. `Replayed` carries no output — a step's result
+            // is reconstructed by replay rather than stored — so the summary is
+            // the conclusion's reason, and its absence means the original run
+            // succeeded and its answer is under `/oversight/runs/{id}`.
+            Ok(Admission::Replayed(o)) => {
+                info!(
+                    agent = route.name,
+                    event_id,
+                    run_id = %o.run_id,
+                    "this event was already admitted — answering with the original run"
+                );
+                let summary = o.reason().map_or_else(
+                    || {
+                        format!(
+                            "This event was already admitted for {}. The original run's answer \
+                             stands; read it at /api/v1/oversight/runs/{}.",
+                            route.name, o.run_id
+                        )
+                    },
+                    std::borrow::Cow::into_owned,
+                );
+                (
+                    o.run_id.to_string(),
+                    o.status.clone(),
+                    summary,
+                    o.spend.tokens,
+                    Admitted::Replayed,
+                )
+            }
+            // Still executing. The honest answer is *accepted, already in
+            // progress*, naming the run — never a failure, because a
+            // retry-provoking answer here is how a redelivery storm starts.
+            Ok(Admission::InFlight(run)) => {
+                info!(
+                    agent = route.name,
+                    event_id,
+                    run_id = %run,
+                    "this event is already being handled"
+                );
+                return AgentDecision {
+                    agent_name: route.name.to_owned(),
+                    run_id: run.to_string(),
+                    event_id: event_id.to_owned(),
+                    event_type: event_type.to_owned(),
+                    outcome: "running".to_owned(),
+                    summary: format!(
+                        "This event was already admitted for {} and that run has not \
+                         concluded yet; follow it at /api/v1/oversight/runs/{run}.",
+                        route.name
+                    ),
+                    admitted: Some(Admitted::InFlight),
+                    waiting_for: None,
+                    tokens: 0,
+                };
             }
             Err(e) => {
                 warn!(agent = route.name, error = %e, "agent run failed to start");
@@ -649,6 +775,10 @@ impl Plane {
                     event_type: event_type.to_owned(),
                     outcome: "failed".to_owned(),
                     summary: e.to_string(),
+                    // A refused admission spends no key — the key and the
+                    // records commit together or not at all — so a corrected
+                    // redelivery is admitted rather than answered with this.
+                    admitted: None,
                     waiting_for: None,
                     tokens: 0,
                 };
@@ -677,7 +807,9 @@ impl Plane {
             _ => None,
         };
 
-        if !matches!(status, RunStatus::Succeeded) {
+        // A replayed conclusion is old news: warning on it would page somebody
+        // about a run they already looked at.
+        if !matches!(status, RunStatus::Succeeded) && admission == Admitted::Fresh {
             warn!(
                 agent = route.name,
                 run_id,
@@ -694,6 +826,7 @@ impl Plane {
             event_type: event_type.to_owned(),
             outcome: outcome_label.to_owned(),
             summary,
+            admitted: Some(admission),
             waiting_for,
             tokens,
         }

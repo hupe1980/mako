@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # GPKE/WiM/GeLi Gas process lifecycle expert. Diagnoses Anmeldung rejections, APERAK errors, stuck processes, and format-version mismatches. Queries makod MCP and obsd KPI reports.
 #
 # Generated from the compiled specialist definition during the agentplane

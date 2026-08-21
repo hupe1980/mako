@@ -25,7 +25,20 @@ use agentplane::testkit::FakeProvider;
 use agentplane::tools::{ToolClient, ToolError, ToolId};
 use serde_json::{Value, json};
 
-use agentd::plane::{Activation, Plane, PlaneConfig, Stores};
+use agentd::plane::{Activation, Envelope, Plane, PlaneConfig, Stores};
+
+/// One inbound event's identity, as `POST /webhook` would have read it off the
+/// CloudEvent envelope.
+///
+/// `source` is the producer half of the admission key: an id is unique only
+/// within one emitter, so the key `run_correlated_once` claims carries both.
+fn ce<'a>(id: &'a str, event_type: &'a str) -> Envelope<'a> {
+    Envelope {
+        id,
+        source: "urn:mako:test:tenant:9900357000004",
+        event_type,
+    }
+}
 
 /// Answers every read with an empty-but-shaped result.
 #[derive(Debug, Default)]
@@ -184,7 +197,11 @@ async fn every_specialist_completes_a_run() {
         }
 
         let decision = plane
-            .dispatch_one(name, &format!("ce-smoke-{name}"), "de.smoke.test", event())
+            .dispatch_one(
+                name,
+                ce(&format!("ce-smoke-{name}"), "de.smoke.test"),
+                event(),
+            )
             .await
             .expect("every compiled specialist is activated");
 

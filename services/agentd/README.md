@@ -49,6 +49,20 @@ a reviewer sees in a diff. There are consequently **no per-agent config
 overrides** — moving a regulated decision onto a different model is a manifest
 edit, on the reviewable path.
 
+Every file opens with a schema modeline:
+
+```yaml
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
+```
+
+agentplane publishes the manifest format as a draft-07 JSON Schema generated
+from the types its parser deserializes into, so an editor gives autocomplete,
+hover documentation and inline unknown-field errors while a manifest is being
+written. The parser stays authoritative — its semantic refusals (an unstated
+budget, a declared control nothing performs) run only there — and a test reads
+the URL off `Manifest::json_schema()` so no file can point at a document that
+has moved.
+
 Two properties decide how a specialist can be built:
 
 - **The payload is not trusted because mako emitted it.** A CloudEvent field is
@@ -128,6 +142,7 @@ can return.
 | What waits | the run suspends before the tool call | nothing; the run completes |
 | Who is asked | `oversight.approvers` | the rule's `audience` |
 | Fires on | reaching a mutating tool | an answer matching a predicate over `output.schema` |
+| When nobody answers | `on_expiry: deny` — fails closed, nothing is sent | `on_expiry: escalate` — widens the audience and keeps waiting |
 | Used by | `gabi-gas-agent` | 14 specialists, on a terminal finding |
 
 Triage exists because most specialists cannot act, so gating their answer would
@@ -135,12 +150,29 @@ gate nothing while suspending a run per finding. A triage rule changes nothing
 about the run — same answer, same validation, same memories — and its only
 effect is a worklist row.
 
+**That is also why the two expire differently.** An approval gates a real market
+message, so a window that closes unanswered must send nothing. A triage row
+gates nothing — it *is* the finding — so expiring it deletes the delivery of
+something the agent correctly detected. Escalation is the only disposition under
+which an unanswered §20 EnWG parity deviation or an out-of-compliance §§41f/41g
+sequence stays findable: the `escalate_to` roles **join** the audience (the
+original reviewers stay eligible), the stale reservation is cleared, and the row
+keeps waiting. A test pins the two dispositions apart.
+
 Eligibility is two layers: Cedar decides who may use the worklist at all, and
 the task store narrows per task by `candidate_roles`. The Cedar set admits the
-union of every `oversight.approvers` entry and every `triage[].audience`, and a
-test parses the manifests and fails when one names a role the policy does not
-admit — without it the two drift apart silently, and a row whose audience is
-refused at the door is worse than no row.
+union of every `oversight.approvers` entry, every `triage[].audience` **and
+every `escalate_to` role**, and a test parses the manifests and fails when one
+names a role the policy does not admit — without it the two drift apart
+silently, and a row whose audience is refused at the door is worse than no row.
+The escalation audience most needs the check: it arrives hours late, from the
+sweeper, and a widening to somebody Cedar refuses looks — from the worklist —
+exactly like the row having been answered.
+
+A second test walks `agentplane::api::action::ALL` and fails when any verb the
+oversight surface asks about is granted to no role. That is the quietest
+authorization failure there is: a permanent `403` on a route, with a policy set
+that compiles clean.
 
 Who is acting comes from the OIDC token, never from the request body. Four-eyes
 is enforced in the task store. **Without OIDC the surface is not mounted at
@@ -180,7 +212,7 @@ model to do it.
 | `cargo xtask check-tool-grants` | A grant naming a tool no server declares; a `mutates` flag disagreeing with the server's `read_only_hint`; a mutating grant on a `tool-calling` agent |
 | `cargo xtask check-prompt-tools` | A procedure instructing the model to call a tool the manifest never granted |
 | `cargo xtask check-wire-timestamps` | A `time` value reaching a JSON wire as its component array |
-| `plane::` unit tests | An unsubscribed specialist, an open answer schema, a customer-pooling memory subject, a terminal finding no triage rule reports, a role the policy set does not admit |
+| `plane::` unit tests | An unsubscribed specialist, an open answer schema, a customer-pooling memory subject, a terminal finding no triage rule reports, a role the policy set does not admit, an oversight verb the policy set grants to nobody, a triage row that expires instead of escalating, a manifest on disk that nobody embedded, a manifest with no schema modeline |
 
 The prompt guard is the least obvious. agentplane reports an unknown tool name
 back to the model as a failed call rather than ending the run, so a procedure
@@ -205,8 +237,34 @@ the way the engine workflows are — deterministically, and for free.
 
 ```toml
 # agentd.toml
+#
+# Every top-level key comes first. TOML binds a bare key to the most recent
+# table header, so anything written after `[policy]` would be read as
+# `policy.<key>` — which the parser refuses, because every config type here is
+# `deny_unknown_fields`.
 tenant           = "9900357000004"
 public_base_url  = "https://agentd.internal:9580"   # what an A2A card advertises
+max_sessions         = 20
+session_timeout_secs = 300   # bounds one event's whole fan-out
+sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes
+
+mcp_api_key         = "env:AGENTD_MCP_API_KEY"            # SecretString — never logged
+inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
+
+# Where a completed run's decision is delivered, durably. Standard Webhooks,
+# the same scheme every other mako outbound carries, so a receiver verifies an
+# agentd delivery with `mako_service::webhook::verify_request` like any other.
+audit_webhook_url = "https://erp.example/hooks/agent-decisions"
+audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
+# Mid-rotation only: the retiring key, presented *beside* the current one so a
+# receiver holding either verifies. Remove once every receiver has the new key.
+# Setting it alone is a startup failure — "also" with no primary key signs nothing.
+# audit_hmac_secret_previous = "env:AGENTD_AUDIT_HMAC_OLD"
+
+# How long an admission key is kept. Absent means forever, which is the only
+# setting that cannot admit a duplicate on a timer. 30 days is sized for an
+# operator replaying a dead-lettered delivery, not for the retry schedule.
+# admission_retention_days = 30
 
 # The journal, the cases, the tasks, the timers and the events — one backend.
 [journal]
@@ -220,7 +278,7 @@ path    = "/var/lib/agentd/journal.redb"
 # your own vLLM changes no manifest.
 [providers.anthropic]
 backend = "anthropic"
-api_key = "env:ANTHROPIC_API_KEY"   # SecretString — never logged
+api_key = "env:ANTHROPIC_API_KEY"
 
 # [providers.local]
 # backend  = "chat-completions"
@@ -252,23 +310,14 @@ token   = "env:VAULT_TOKEN"
 [policy]
 # path = "/etc/agentd/policy.cedar"
 
-inbound_hmac_secret  = "env:AGENTD_INBOUND_HMAC_SECRET"
-max_sessions         = 20
-session_timeout_secs = 300   # bounds one event's whole fan-out
-sweep_interval_secs  = 60    # warns, breaches, expires, wakes
-
-mcp_api_key = "env:AGENTD_MCP_API_KEY"   # SecretString — never logged
-
-# Keys are free-form names; values are MCP endpoints. Must come last: any
-# key after a table header belongs to that table. A key may not contain `-`
-# (agentplane reserves hyphens so the model-facing wire rendering stays
-# injective), so a hyphenated service is keyed with an underscore.
+# A key may not contain `-` (agentplane reserves hyphens so the model-facing
+# wire rendering stays injective), so a hyphenated service is keyed with an
+# underscore.
 [mcp_servers]
 makod       = "http://makod:8080/mcp"
 marktd      = "http://marktd:8180/mcp"
 billingd    = "http://billingd:9280/mcp"
 mabis_syncd = "http://mabis-syncd:8880/mcp"
-# ... more services
 ```
 
 ## Operating notes
@@ -276,11 +325,30 @@ mabis_syncd = "http://mabis-syncd:8880/mcp"
 **Durability instead of retries.** A failed run is not a message with nowhere to
 go: its effects are journaled, so it resumes from the last completed effect
 rather than being replayed from the top. There is no dead-letter queue.
-`de.agent.decision.made` carries the run's real outcome — `completed`, `failed`,
-`suspended`, `exhausted`, `quarantined`, `replanning`, `cancelled` or
-`not-admitted` — with `run_id` (the journal key), `waiting_for` (*what* a
-suspended run waits for, so an operator knows whether to approve, chase or wait)
-and `tokens`.
+
+**Admission is at-most-once, in the store.** Inbound delivery is at-least-once,
+so `POST /webhook` admits each run under a key built from the CloudEvent's
+`(source, id)` and the specialist's name, claimed **inside the transaction that
+appends the run's first record**. A redelivery is answered with the run it
+already started — across instances and across a restart — and a refused
+admission spends no key, so a corrected redelivery is still admitted. The key is
+per specialist because one event fans out to several independent runs. An event
+missing `id`, `source` or `type` is `400`, not a default: an unset attribute
+arrives as `""`, which is a perfectly good admission key.
+
+`POST /api/v1/run` takes the same path and honours an `Idempotency-Key`;
+without one, every request is its own event.
+
+Retiring a key reopens the door it closed, so nothing retires one by default.
+`admission_retention_days` turns on a daily pass; 30 days is sized for an
+operator replaying a dead letter, not for the emitter's retry schedule.
+
+**What the ERP receives.** `de.agent.decision.made` is projected from the run's
+sealed record: `{run, case, outcome, chain_head}` under a `tenantid` extension.
+The answer is deliberately not in it — a run's output is domain data with a
+label on it, and shipping it by default would be an egress decision made by a
+default. `GET /api/v1/oversight/runs/{run}` is where an operator reads why.
+`GET /api/v1/decisions` is a richer in-memory view, delivered nowhere.
 
 **Fan-out.** Several specialists may subscribe to one event; they are
 independent opinions, so each gets its own run and its own journal. There is

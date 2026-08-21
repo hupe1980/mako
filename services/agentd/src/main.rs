@@ -9,6 +9,7 @@
 //! ```text
 //! CloudEvent  →  Router          one run per subscribing specialist
 //!             →  plane::label    re-validated identifiers trusted, the rest not
+//!             →  admission key   (source, id, specialist) — at most once, in the store
 //!             →  Runtime         journaled effects, strict replay, Cedar gate
 //!                  ├─ tools      MCP calls to mako's own services
 //!                  ├─ tasks      a mutating call waits for a named approver
@@ -18,13 +19,13 @@
 //!
 //! | Route | What it is for |
 //! |---|---|
-//! | `POST /webhook` | CloudEvent ingest (HMAC-verified) |
-//! | `POST /api/v1/run` | Run a specialist by hand (OIDC) |
+//! | `POST /webhook` | CloudEvent ingest (Standard Webhooks-verified) |
+//! | `POST /api/v1/run` | Run a specialist by hand (OIDC; honours `Idempotency-Key`) |
 //! | `GET /api/v1/decisions` | The last 100 decisions |
 //! | `GET /api/v1/agents` | What this deployment activated |
 //! | `GET /api/v1/agents/catalog` | Everything compiled in |
 //! | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
-//! | `/api/v1/oversight/*` | agentplane's operator surface: worklist, runs, cases |
+//! | `/api/v1/oversight/*` | agentplane's operator surface: worklist, runs, cases, breached obligations |
 //!
 //! Port: 9580
 //!
@@ -97,17 +98,6 @@ impl Daemon for Agentd {
             // resolved: connecting with the literal placeholder would fail as a
             // hostname nobody can find.
             JournalConfig::Postgres { .. } => {
-                // The multi-instance topology. Say the one thing about it that
-                // is not true of the embedded backend, at the moment an operator
-                // is choosing it.
-                warn!(
-                    "agentd: the Postgres journal is the multi-instance backend. Inbound \
-                     CloudEvent deduplication is per-process, so a redelivery that lands on \
-                     another instance starts a second fan-out: extra model spend and a second \
-                     approval task on the same case. No effect is duplicated inside a run and \
-                     no market message is dispatched twice — the one dispatching grant needs a \
-                     human, and the engine sends the message."
-                );
                 let url = secrets
                     .journal_url
                     .as_deref()
@@ -163,30 +153,64 @@ impl Daemon for Agentd {
         // unwatched, and the cursor advances only on 2xx, so a receiver that is
         // down for a deploy is caught up rather than having missed everything.
         let journal_for_delivery = std::sync::Arc::clone(&stores.journal);
+        let journal_for_retention = std::sync::Arc::clone(&stores.journal);
         let push_store_for_delivery = std::sync::Arc::clone(&stores.push);
         // Built once and handed to BOTH the outbox (which registers them at
         // admission) and the sender (which signs deliveries). The sender takes
         // the list rather than offering a setter, and that is the control: a
         // sender built without the destinations would deliver unsigned, and
         // only the receiver's refusal would ever show it.
-        let destinations: Vec<agentplane::push::Destination> = cfg
-            .audit_webhook_url
-            .as_ref()
-            .map(|url| {
-                let destination = agentplane::push::Destination::new("erp-audit", url);
+        let destinations: Vec<agentplane::push::Destination> = match cfg.audit_webhook_url.as_ref()
+        {
+            None => Vec::new(),
+            Some(url) => {
+                let secret = |s: &secrecy::SecretString| {
+                    agentplane::core::Secret::new(secrecy::ExposeSecret::expose_secret(s))
+                };
+                let mut destination = agentplane::push::Destination::new("erp-audit", url);
                 // Standard Webhooks, the same scheme `mako_service::webhook`
                 // signs every other mako outbound with — so `de.agent.decision.made`
                 // verifies through the shared verifier like everything else, and
                 // gains the replay protection a body-only HMAC could not give it.
-                let destination = match secrets.audit_hmac_secret.as_ref() {
-                    Some(secret) => destination.signed_with(&agentplane::core::Secret::new(
-                        secrecy::ExposeSecret::expose_secret(secret),
-                    )),
-                    None => destination,
-                };
+                //
+                // `try_signed_with`, not `signed_with`: the latter panics on a
+                // key under 24 bytes or a malformed `whsec_` secret, and this
+                // call is inside `Daemon::build` — so a mistyped secret would
+                // abort the process before the exit code and the log line that
+                // name which destination was wrong. A deployment's own
+                // configuration is refused the way every other configuration
+                // error here is refused.
+                if let Some(current) = secrets.audit_hmac_secret.as_ref() {
+                    destination = destination
+                        .try_signed_with(&secret(current))
+                        .context("audit_hmac_secret is not a usable signing key")?;
+                    // The retiring key, presented beside the current one so a
+                    // receiver holding either verifies. Rotation is then the
+                    // receiver's pace rather than a flag day where every
+                    // delivery fails until both sides are restarted together.
+                    //
+                    // This one has no `try_` form yet, so it still aborts on a
+                    // malformed key — reported upstream. What we *can* keep
+                    // unreachable is its other panic, "also with no primary
+                    // key", which the branch below refuses properly.
+                    if let Some(previous) = secrets.audit_hmac_secret_previous.as_ref() {
+                        destination = destination.also_signed_with(&secret(previous));
+                        info!(
+                            "agent decisions are signed with both audit_hmac_secret and \
+                             audit_hmac_secret_previous — remove the latter once every \
+                             receiver has the new key"
+                        );
+                    }
+                } else if secrets.audit_hmac_secret_previous.is_some() {
+                    anyhow::bail!(
+                        "audit_hmac_secret_previous is set without audit_hmac_secret — \
+                         \"also\" with no primary key signs nothing, and the deliveries \
+                         would go out unsigned"
+                    );
+                }
                 vec![destination]
-            })
-            .unwrap_or_default();
+            }
+        };
         let outbox = (!destinations.is_empty()).then(|| {
             std::sync::Arc::new(agentplane::push::Outbox::new(
                 std::sync::Arc::clone(&stores.push),
@@ -221,6 +245,34 @@ impl Daemon for Agentd {
             ctx.shutdown.clone(),
         );
 
+        // ── The tick that bounds the admission index ─────────────────────
+        //
+        // No default window: retiring a key reopens the door it closed, so
+        // absent an operator's choice the keys are kept and the index's size is
+        // a fact their database monitoring already reports.
+        match cfg.admission_retention_days {
+            None => info!(
+                "agentd: admission keys are kept indefinitely — set \
+                 admission_retention_days (30 is the recommended figure) to retire them"
+            ),
+            Some(0) => anyhow::bail!(
+                "admission_retention_days = 0 retires a key the moment it is claimed, which \
+                 is the duplicate fan-out the key exists to prevent, on a schedule. Omit the \
+                 field to keep keys, or choose a window longer than every emitter's retry \
+                 horizon (30 days is recommended — a dead-lettered mako delivery can be \
+                 replayed by hand days later, and that replay is the same message)"
+            ),
+            Some(days) => {
+                let retention = std::time::Duration::from_secs(u64::from(days) * 24 * 60 * 60);
+                agentd::plane::sweep::spawn_admission_retention(
+                    journal_for_retention,
+                    retention,
+                    ctx.shutdown.clone(),
+                );
+                info!(days, "agent admission keys are retired on a daily tick");
+            }
+        }
+
         // ── The tick that makes a registration mean something ────────────
         //
         // `Outbox` puts a run in front of the receiver at admission; this loop
@@ -238,7 +290,12 @@ impl Daemon for Agentd {
                             "agentd",
                             &cfg.tenant,
                         ))
-                        .event_type(mako_events::agent::DECISION_MADE),
+                        .event_type(mako_events::agent::DECISION_MADE)
+                        // The `tenantid` extension every mako receiver binds on
+                        // — including this service's own `POST /webhook`. Without
+                        // it two operators' completions are indistinguishable
+                        // envelopes on one ERP bus.
+                        .for_tenant(cfg.tenant.clone()),
                     ),
                 )),
                 std::time::Duration::from_secs(cfg.sweep_interval_secs),
@@ -293,9 +350,6 @@ impl Daemon for Agentd {
             plane,
             decisions: DecisionLog::new(100),
             session_sem: Arc::new(tokio::sync::Semaphore::new(max_sessions as usize)),
-            // 1h dedup window, 10k ids — comfortably beyond any legitimate
-            // emitter's retry horizon.
-            seen_events: handlers::SeenEvents::new(std::time::Duration::from_secs(3600), 10_000),
         });
 
         let mut app = Router::new()

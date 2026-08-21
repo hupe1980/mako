@@ -1,3 +1,4 @@
+# yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Customer portal proactive notification orchestrator. Triggers invoice-ready notifications, EEG Förderung expiry alerts, Mahnung reminders, and Tarifwechsel confirmation messages.
 #
 # Generated from the compiled specialist definition during the agentplane

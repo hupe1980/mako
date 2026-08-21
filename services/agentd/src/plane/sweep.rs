@@ -100,6 +100,54 @@ pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken
     });
 }
 
+/// Retire admission keys older than `retention`, on a slow tick.
+///
+/// The index `run_correlated_once` claims into only grows, and nothing retires a
+/// row by default — deliberately, upstream and here: **retiring a key reopens
+/// the door it closed**, so the window is the operator's to choose and absent a
+/// choice keys are kept. This loop exists so that a deployment which *has*
+/// chosen one does not have to reach for a CLI on a cron.
+///
+/// It ticks once a day rather than on the sweep interval. The unit of the window
+/// is days, so a minute-by-minute pass would do the same work 1 440 times to
+/// retire the same rows, and there is nothing time-critical about forgetting: a
+/// key retired an hour late is a key that worked for an hour longer.
+pub fn spawn_admission_retention(
+    journal: Arc<dyn agentplane::journal::JournalStore>,
+    retention: Duration,
+    shutdown: CancellationToken,
+) {
+    const EVERY: Duration = Duration::from_secs(24 * 60 * 60);
+
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(EVERY);
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        // `interval` fires immediately; the first tick is deliberately taken so
+        // a restart-loop deployment still retires, rather than never reaching
+        // the 24-hour mark.
+        loop {
+            tokio::select! {
+                () = shutdown.cancelled() => {
+                    info!("agent admission-retention worker stopping");
+                    return;
+                }
+                _ = ticker.tick() => {}
+            }
+
+            let older_than = time::OffsetDateTime::now_utc() - retention;
+            match journal.forget_admissions(older_than).await {
+                Ok(0) => {}
+                Ok(retired) => info!(
+                    retired,
+                    days = retention.as_secs() / (24 * 60 * 60),
+                    "agent admission keys retired"
+                ),
+                Err(e) => error!(error = %e, "agent admission retention failed"),
+            }
+        }
+    });
+}
+
 /// Run the outbox delivery worker until shutdown.
 ///
 /// Registering a destination is not what delivers to it. `Outbox` puts a run in
