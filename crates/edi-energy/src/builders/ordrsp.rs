@@ -20,9 +20,18 @@ struct OrdrespBuilderInner {
     document_id: Option<String>,
     document_date: Option<String>,
     pruefidentifikator: Option<u32>,
-    order_reference: Option<String>,
+    /// BGM DE 1001. Defaults to `7`; the ESA answers use `Z57`.
+    document_code: Option<String>,
+    /// SG1 references as `(1153 qualifier, 1154 value)`. Additive: an ESA
+    /// answer carries the correlation reference *and* `RFF+Z13`.
+    references: Vec<(String, String)>,
+    /// `IMD+7081` Abonnement code — Muss on 19011/19012.
+    abonnement: Option<String>,
     // Additive ESA-Antwort (PID 19011-19014) content — ORDRSP carries no LOC.
+    /// SG2 `AJT` as `(4465 Prüfschritt-Code, 1082 EBD)`.
     adjustment: Option<String>,
+    /// SG2 `AJT` DE 1082 — the Entscheidungsbaum the Prüfschritt comes from.
+    adjustment_ebd: Option<String>,
     adjustment_reason: Option<String>,
     item_description: bool,
     line_item: bool,
@@ -75,8 +84,11 @@ impl OrdrespBuilder<Unset, Unset> {
                 document_id: None,
                 document_date: None,
                 pruefidentifikator: None,
-                order_reference: None,
+                document_code: None,
+                references: Vec::new(),
+                abonnement: None,
                 adjustment: None,
+                adjustment_ebd: None,
                 adjustment_reason: None,
                 item_description: false,
                 line_item: false,
@@ -147,15 +159,39 @@ impl<S, R> OrdrespBuilder<S, R> {
         self
     }
 
-    /// Reference the original order/request this answers (RFF+ACW).
-    pub fn order_reference(mut self, reference: impl Into<String>) -> Self {
-        self.inner.order_reference = Some(reference.into());
+    /// Add an SG1 reference `RFF+<qual>:<value>`. Additive.
+    pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
+        self.inner.references.push((qualifier.into(), value.into()));
         self
     }
 
-    /// Set the SG2 adjustment code — emits `AJT+<code>` (DE 4465).
-    pub fn adjustment(mut self, code: impl Into<String>) -> Self {
+    /// Set the BGM DE 1001 document code. Defaults to `7`.
+    ///
+    /// The ESA Wertebestellung answers use `Z57` („Übermittlung von Werten an
+    /// ESA“, ORDRSP AHB 1.1b §4.15).
+    pub fn document_code(mut self, code: impl Into<String>) -> Self {
+        self.inner.document_code = Some(code.into());
+        self
+    }
+
+    /// Set the `IMD+7081` Abonnement code (`Z01`/`Z02`/`Z03`).
+    ///
+    /// **Muss** on ORDRSP 19011/19012; it echoes the ORDERS being answered and
+    /// selects the EBD the `AJT` cites.
+    pub fn abonnement(mut self, code: impl Into<String>) -> Self {
+        self.inner.abonnement = Some(code.into());
+        self
+    }
+
+    /// Set the SG2 adjustment — emits `AJT+<4465 Prüfschritt>+<1082 EBD>`.
+    ///
+    /// **Muss** on every ESA answer PID: DE 4465 carries the Prüfschritt code
+    /// and DE 1082 the Entscheidungsbaum it belongs to (`E_0254`, `E_0256`,
+    /// `E_0257`). Without the EBD the receiver cannot resolve what the code
+    /// means — the same numeric code lives in several trees.
+    pub fn adjustment(mut self, code: impl Into<String>, ebd: impl Into<String>) -> Self {
         self.inner.adjustment = Some(code.into());
+        self.inner.adjustment_ebd = Some(ebd.into());
         self
     }
 
@@ -192,11 +228,13 @@ impl<S, R> OrdrespBuilder<S, R> {
 
         // BGM DE 1004 carries the Prüfidentifikator (profile pid_source =
         // BgmDe1004); fall back to `document_id` for non-MaKo callers.
-        let pid_str = self.inner.pruefidentifikator.map(|p| format!("{p:05}"));
-        let bgm_1004 = pid_str
+        // BGM DE 1004 is the **Dokumentennummer** (ORDRSP AHB 1.1b); the
+        // Prüfidentifikator has its own `SG1 RFF+Z13`.
+        let bgm_1004 = self
+            .inner
+            .document_id
             .as_deref()
-            .or(self.inner.document_id.as_deref())
-            .unwrap_or("");
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
@@ -206,19 +244,34 @@ impl<S, R> OrdrespBuilder<S, R> {
         // ORDRSP BGM: DE 1001 = 7 (the only value the MIG permits), DE 1004 =
         // the Prüfidentifikator. (An earlier draft emitted an invalid `231` and
         // a spurious third element.)
-        emit_seg!(w, "BGM", "7", bgm_1004);
+        emit_seg!(
+            w,
+            "BGM",
+            self.inner.document_code.as_deref().unwrap_or("7"),
+            bgm_1004
+        );
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
-        // Item description (IMD) — before the SG1 reference.
-        if self.inner.item_description {
+        // Abonnement — `IMD++<7081>` (DE 7081 sits in C272, element 2).
+        if let Some(code) = &self.inner.abonnement {
+            emit_comp!(w, "IMD", [""], [code]);
+        } else if self.inner.item_description {
+            // Free-form indicator, for the non-ESA answer PIDs.
             emit_comp!(w, "IMD", ["A"]);
         }
-        // ── SG1: reference (RFF+ACW echoes the order this answers) ───────────
-        if let Some(order_ref) = &self.inner.order_reference {
-            emit_comp!(w, "RFF", ["ACW", order_ref]);
+        // ── SG1: references ──────────────────────────────────────────────────
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
-        // ── SG2: adjustment + coded reason ───────────────────────────────────
+        for (q, v) in &self.inner.references {
+            emit_comp!(w, "RFF", [q, v]);
+        }
+        // ── SG2: adjustment (Prüfschritt + EBD) + coded reason ───────────────
         if let Some(code) = &self.inner.adjustment {
-            emit_comp!(w, "AJT", [code]);
+            if let Some(ebd) = &self.inner.adjustment_ebd {
+                emit_comp!(w, "AJT", [code], [ebd]);
+            } else {
+                emit_comp!(w, "AJT", [code]);
+            }
         }
         if let Some(code) = &self.inner.adjustment_reason {
             emit_comp!(w, "FTX", [code]);

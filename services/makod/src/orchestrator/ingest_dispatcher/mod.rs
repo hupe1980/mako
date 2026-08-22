@@ -301,17 +301,25 @@ impl EdifactIngestDispatcher {
     /// [`mako_wim::consent::gate_inbound`]. With no marktd client configured the
     /// command passes through unchanged (the gate is defence-in-depth; the
     /// durable stop signal remains the 17008 Abbestellung fired on revocation).
+    /// Gate an inbound ESA order against the consent registry.
+    ///
+    /// `location` must be supplied for a Bestellung: only the REQOTE carries a
+    /// `LOC`, so extracting one from an ORDERS finds nothing and the check
+    /// would pass on an empty key. The caller reads it from the running
+    /// process ([`Self::esa_location_of`]).
     async fn gate_esa_consent(
         &self,
         msg: &AnyMessage,
         cmd: mako_wim::wertebestellung::WertebestellungCommand,
+        location: Option<&str>,
     ) -> mako_wim::wertebestellung::WertebestellungCommand {
         let Some(marktd) = &self.marktd_client else {
             return cmd;
         };
         let esa = extract_sender_mp_id(msg);
         let msb = extract_receiver_mp_id(msg);
-        let location = extract_malo_from_msg(msg);
+        let location =
+            location.map_or_else(|| extract_malo_from_msg(msg), mako_engine::types::MaLo::new);
         mako_wim::consent::gate_inbound(
             cmd,
             &esa,
@@ -320,6 +328,34 @@ impl EdifactIngestDispatcher {
             &MarktdConsentGate { client: marktd },
         )
         .await
+    }
+
+    /// The location an ESA-Wertebestellung process is running for, found by
+    /// one of its correlation keys.
+    ///
+    /// The consent registry is keyed on locations, and every message after the
+    /// opening REQOTE carries only a Belegnummer — so a re-check between the
+    /// Angebot and the Bestellung has to read the location back off the
+    /// process. `None` when no process matches, which is the orphan case the
+    /// caller skips anyway.
+    async fn esa_location_of(&self, key: &str) -> Option<String> {
+        if key.is_empty() {
+            return None;
+        }
+        let identity = self
+            .store
+            .as_process_registry()
+            .lookup_correlated(self.tenant_id, key)
+            .await
+            .ok()?
+            .into_iter()
+            .find(|id| id.workflow_id.name.as_ref() == mako_wim::wertebestellung::WORKFLOW_NAME)?;
+        let process = Process::<
+            mako_wim::wertebestellung::WimWertebestellungWorkflow,
+            Arc<SlateDbStore>,
+        >::from_identity(Arc::clone(&self.store), identity);
+        let state = process.state().await.ok()?;
+        state.data().map(|d| d.lokations_id.clone())
     }
 
     /// Construct a new dispatcher backed by the given stores.
@@ -890,9 +926,137 @@ impl EdifactIngestDispatcher {
             process_id,
         })
     }
+
+    /// Resume a process by correlation key, arm deadlines, and index the
+    /// process under further keys so later messages can find it.
+    ///
+    /// The ESA Wertebestellung needs all three at once: an inbound ORDERS
+    /// correlates by the reference it echoes, owes an answer within 2 WT, and
+    /// must itself become a key because the ORDRSP that answers it and any
+    /// later ORDCHG both reference *its* Belegnummer. Resume-only by design —
+    /// an order for which no Anfrage was ever seen is an orphan, not a new
+    /// process.
+    async fn resume_by_key_indexing<W>(
+        &self,
+        key: &str,
+        workflow_name_static: &'static str,
+        cmd: W::Command,
+        deadlines: &[(&'static str, time::OffsetDateTime)],
+        extra_keys: &[&str],
+    ) -> Result<IngestOutcome, EngineError>
+    where
+        W: Workflow + 'static,
+        W::Command: CommandPayload + Clone,
+        W::State: serde::Serialize,
+    {
+        if key.is_empty() {
+            tracing::warn!(
+                workflow_name = %workflow_name_static,
+                "ingest dispatcher: no correlation key in message — skipping",
+            );
+            return Ok(IngestOutcome::Skipped {
+                workflow_name: workflow_name_static,
+                reason: "no_correlation_key",
+            });
+        }
+        let identities = self
+            .store
+            .as_process_registry()
+            .lookup_correlated(self.tenant_id, key)
+            .await?;
+        let Some(identity) = identities
+            .iter()
+            .find(|id| id.workflow_id.name.as_ref() == workflow_name_static)
+            .cloned()
+        else {
+            tracing::warn!(
+                workflow_name = %workflow_name_static,
+                key           = %key,
+                "ingest dispatcher: no active process for this correlation key — message \
+                 dropped; ensure the initiating message was processed first",
+            );
+            return Ok(IngestOutcome::Skipped {
+                workflow_name: workflow_name_static,
+                reason: "process_not_found",
+            });
+        };
+
+        let process =
+            Process::<W, Arc<SlateDbStore>>::from_identity(Arc::clone(&self.store), identity);
+        let process_id = process.process_id();
+        let pending: Vec<Deadline> = deadlines
+            .iter()
+            .map(|(label, due)| {
+                Deadline::new(
+                    process.stream_id().clone(),
+                    process_id,
+                    self.tenant_id,
+                    process.identity().workflow_id.clone(),
+                    *label,
+                    *due,
+                )
+            })
+            .collect();
+        process
+            .execute_and_enqueue_with_deadlines(cmd, &pending)
+            .await?;
+
+        let identity = process.identity();
+        for k in extra_keys.iter().filter(|k| !k.is_empty()) {
+            let _ = self
+                .store
+                .as_process_registry()
+                .register_correlated(self.tenant_id, k, process_id, identity.clone())
+                .await;
+        }
+
+        Ok(IngestOutcome::Dispatched {
+            workflow_name: workflow_name_static,
+            process_id,
+        })
+    }
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// The correlation key of an ESA-Wertebestellung message, taken from the
+/// Zuordnungsschlüssel the BDEW *Anwendungsübersicht der Prüfidentifikatoren*
+/// 4.0 publishes for its PID.
+///
+/// Only the opening REQOTE 35003 is keyed on a location (`ZO-T17`,
+/// `LOC+172`). Every later step is keyed on a **Belegnummer** the message
+/// echoes, and a conformant ORDERS, ORDCHG, ORDRSP or IFTSTA of Kapitel 4
+/// carries no `LOC` at all — so extracting a MaLo from them yields nothing.
+///
+/// The IFTSTA puts its reference in `SG15 RFF+AGI`; the rest use `SG1 RFF`.
+/// Both are plain `RFF` segments on the wire, so one scan covers them.
+pub fn esa_korrelation_key(msg: &AnyMessage, pid: u32) -> String {
+    let Some(korrelation) = mako_wim::esa::korrelation(pid) else {
+        return String::new();
+    };
+    let Some(qualifier) = korrelation.rff_qualifier() else {
+        // `ZO-T17` — the Meldepunkt of the opening REQOTE.
+        return String::from(extract_malo_from_msg(msg));
+    };
+    msg.segments()
+        .iter()
+        .find(|s| s.tag == "RFF" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+        .filter(|v| !v.is_empty())
+        .map_or_else(
+            || {
+                // A QUOTES also carries `LOC+172` (Muss), so a partner that
+                // omits the `RFF+AAV` is still routable. No other step has a
+                // location to fall back on.
+                if pid == 15003 {
+                    String::from(extract_malo_from_msg(msg))
+                } else {
+                    String::new()
+                }
+            },
+            str::to_owned,
+        )
+}
 
 /// Extract the Messlokations-ID from an ORDERS/ORDRSP/ORDCHG message's IDE segment.
 ///
@@ -1126,18 +1290,15 @@ impl mako_wim::consent::ConsentGate for MarktdConsentGate<'_> {
     }
 }
 
-/// Extract the echoed order reference from an ORDRSP / ORDCHG.
+/// Extract the first echoed order reference from an ORDRSP / ORDCHG, under
+/// either `RFF+ACW` or `RFF+ON`.
 ///
-/// These two messages carry **no** LOC in their conformant ESA-Wertebestellung
-/// form, so they cannot be correlated by MaLo. Instead:
-/// - an **ORDRSP** answer echoes the order it answers in `RFF+ACW`, and
-/// - the ESA's **ORDCHG** Stornierung references the original Bestellung's
-///   Belegnummer in `RFF+ON`.
+/// A **shape-agnostic** fallback for the non-ESA processes that use these
+/// messages. The ESA Wertebestellung has a per-PID Zuordnungsschlüssel — an
+/// ORDRSP 19011 keys on `ON` and a 19013 on `ACW`, which point at *different*
+/// messages — so it uses [`esa_korrelation_key`] instead, and never this.
 ///
-/// The referenced process is registered under that Belegnummer (the dispatcher
-/// indexes it under the inbound ORDERS' Belegnummer via `extra_keys`), so
-/// returning it here lets the dispatcher resume the correct process. Empty when
-/// absent.
+/// Empty when the message carries neither.
 pub fn extract_order_ref_from_msg(msg: &AnyMessage) -> String {
     let segs = match msg {
         AnyMessage::Ordrsp(o) => o.segments(),

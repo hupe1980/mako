@@ -3868,6 +3868,9 @@ impl Profile for IftstaFv20261001Profile {
     fn source_document(&self) -> Option<&'static str> {
         Some("IFTSTA MIG 2.1, Stand 01.10.2026")
     }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
+    }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()
     }

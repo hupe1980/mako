@@ -671,11 +671,6 @@ version = "=0.6"
 reason  = "companion to toml 0.8 (toml_edit 0.22 chain)."
 
 [[bans.skip]]
-name    = "toml_datetime"
-version = "=0.7"
-reason  = "companion to toml 0.9 (cbindgen build-dep chain)."
-
-[[bans.skip]]
 name    = "serde_spanned"
 version = "=0.6"
 reason  = "companion to toml 0.8 (runtime figment/slatedb chain); toml 0.9 (build-dep chain) uses serde_spanned 1.1."

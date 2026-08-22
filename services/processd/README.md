@@ -27,6 +27,10 @@ What it cannot decide it puts in front of an operator with the deadline attached
 | **MSB** | 55039 | WiM Kündigung MSB (MSBN → MSBA) | 3 WT | MeLo / partner checks |
 | **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
 | **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
+| **MSB** | 35003 | ESA Werteanfrage (WiM Teil 2 Kap. 4) | 5 WT | operator queue — `E_0253` publishes no tree |
+| **MSB** | 17007 | ESA Bestellung von Werten | 2 WT | `mako_pruefung::msb::esa` (`E_0256`) |
+| **MSB** | 39002 | ESA Stornierung der Bestellung | 2 WT | `mako_pruefung::msb::esa` (`E_0257`) |
+| **MSB** | 17008 | ESA Abbestellung von Werten | 2 WT | `mako_pruefung::msb::esa` (`E_0254`) |
 | **MSB** | *(workflow)* | § 14a Steuerungsauftrag → ORDRSP | 5 WT | contracted `konfigurationsprodukte` |
 
 Four properties of that table, each of which fails silently when broken:
@@ -326,6 +330,11 @@ auto_respond = true             # false → every inbound LF process goes to the
 [msb]
 auto_accept       = false       # false → MSB-Wechsel Accepts go to the queue
 auto_preisanfrage = true        # false → the REQOTE goes to the queue for an operator
+
+[esa]                              # WiM Teil 2 Kap. 4 — the MSB's answers to an ESA
+auto_accept = false                # true → dispatch the E_0254/E_0256/E_0257 Zustimmungscode
+auto_reject = false                # true → dispatch a deterministic Ablehnungscode
+accept_after_bindungsfrist = false # E_0256 Prüfschritt 2 — a commercial decision
 
 [eog]
 auto_activate           = false

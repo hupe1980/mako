@@ -100,6 +100,7 @@ pub mod lf_module;
     feature = "role-nb-gas",
     feature = "role-msb-strom"
 ))]
+pub mod esa_module;
 pub mod msb_module;
 
 #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]

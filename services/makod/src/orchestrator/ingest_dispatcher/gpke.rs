@@ -695,6 +695,29 @@ impl EdifactIngestDispatcher {
                 if mako_gpke::messwerte::MSCONS_PIDS.contains(&pid) {
                     let cmd = adapters::gpke_messwerte_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
+                    // A 13027 „Werte nach Typ 2" is also the ESA's own signal
+                    // that its subscription has started delivering. UC 4.1 Nr. 5
+                    // admits a Stornierung only while it has not, so without
+                    // this the ESA-side window never closes and the ESA can send
+                    // a 39002 the MSB has to refuse (`E_0257` `A02`).
+                    //
+                    // Best-effort and separate from storage: the values are
+                    // stored either way, and a delivery for which this
+                    // deployment holds no ESA process is simply not ours to
+                    // mark. `SG1 RFF+AGI` names the ORDERS the ESA indexed its
+                    // process under (MSCONS AHB 3.2 §11.2 hint [574]).
+                    if pid == 13027 {
+                        let key = esa_korrelation_key(msg, pid);
+                        if !key.is_empty() {
+                            let _ = self
+                                .resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
+                                    &key,
+                                    mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+                                    mako_wim::esa_wertebestellung::EsaWertebestellungCommand::MarkLieferungBegonnen,
+                                )
+                                .await;
+                        }
+                    }
                     // No deadline for pure data delivery.
                     self.spawn_or_resume::<GpkeMesswerteLieferungWorkflow>(
                         malo_id.as_str(),

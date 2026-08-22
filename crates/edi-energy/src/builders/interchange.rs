@@ -34,6 +34,8 @@ pub struct InterchangeBuilder {
     dar: String,
     date: String,
     time: String,
+    /// UNB DE 0026 Anwendungsreferenz, where the AHB fixes one.
+    application_reference: Option<String>,
     messages: Vec<Vec<u8>>,
 }
 
@@ -55,6 +57,7 @@ impl InterchangeBuilder {
             dar: dar.into(),
             date: "000000".to_owned(),
             time: "0000".to_owned(),
+            application_reference: None,
             messages: Vec::new(),
         }
     }
@@ -64,6 +67,17 @@ impl InterchangeBuilder {
     pub fn transmission(mut self, date: impl Into<String>, time: impl Into<String>) -> Self {
         self.date = date.into();
         self.time = time.into();
+        self
+    }
+
+    /// Set the UNB **application reference** (DE 0026).
+    ///
+    /// Not decoration: the MSCONS AHB fixes it per use case — `TL` „Lastgang,
+    /// beliebiger Zeitraum" is Muss on the Werte-nach-Typ-2 interchange — and a
+    /// receiver may route on it before the message is parsed at all.
+    #[must_use]
+    pub fn application_reference(mut self, reference: impl Into<String>) -> Self {
+        self.application_reference = Some(reference.into());
         self
     }
 
@@ -88,17 +102,33 @@ impl InterchangeBuilder {
         let payload_len: usize = self.messages.iter().map(Vec::len).sum();
         let mut w = edifact_rs::Writer::new(Vec::with_capacity(payload_len + 96))
             .with_charset(INTERCHANGE_CHARSET);
-        w.write_composites(
-            "UNB",
-            &[
-                &["UNOC", "3"],
-                &[&self.sender, unb_qualifier(&self.sender)],
-                &[&self.receiver, unb_qualifier(&self.receiver)],
-                &[&self.date, &self.time],
-                &[&self.dar],
-            ],
-        )
-        .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
+        // DE 0026 sits after S005 (Referenz/Passwort des Empfängers), which
+        // MaKo never uses — so the empty position is only held when an
+        // application reference actually follows it. Emitting it unconditionally
+        // would put trailing separators on every interchange.
+        let unb: &[&[&str]] = &[
+            &["UNOC", "3"],
+            &[&self.sender, unb_qualifier(&self.sender)],
+            &[&self.receiver, unb_qualifier(&self.receiver)],
+            &[&self.date, &self.time],
+            &[&self.dar],
+        ];
+        let app_ref_slot: [&str; 1];
+        let with_app_ref: Vec<&[&str]>;
+        let unb = match self.application_reference.as_deref() {
+            None => unb,
+            Some(app_ref) => {
+                app_ref_slot = [app_ref];
+                with_app_ref = unb
+                    .iter()
+                    .copied()
+                    .chain([&[][..], &app_ref_slot[..]])
+                    .collect();
+                &with_app_ref
+            }
+        };
+        w.write_composites("UNB", unb)
+            .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
         let mut bytes = w
             .finish()
             .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;

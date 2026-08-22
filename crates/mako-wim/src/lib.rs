@@ -100,6 +100,7 @@
 #![allow(clippy::items_after_statements)]
 
 pub mod consent;
+pub mod esa;
 pub mod esa_wertebestellung;
 pub mod geraeteubernahme;
 pub mod geraetewechsel;

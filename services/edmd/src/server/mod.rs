@@ -550,6 +550,8 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     });
 
     let typ2_repo = MeterStoreTyp2Repository::new(typ2_store);
+    // The surveillance worker watches the Typ-2 store on its own thresholds.
+    let typ2_for_surveillance = typ2_repo.clone();
     // Clone the webhook URL/secret and tenant before they are moved into HandlerState.
     let smgw_webhook_url = cfg.erp_webhook_url.clone();
     let smgw_webhook_secret = cfg.erp_webhook_secret.clone();
@@ -685,6 +687,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     if cfg.surveillance.enabled {
         crate::surveillance::spawn_surveillance_worker(
             repo_for_surveillance,
+            Some(typ2_for_surveillance),
             cfg.surveillance.clone(),
             smgw_tenant.clone(),
             smgw_webhook_url.clone(),

@@ -186,6 +186,7 @@ pub async fn gate_inbound<G: ConsentGate>(
             msb,
             ebene,
             lokations_id,
+            gegenstand,
             message_ref,
             quittung,
             ..
@@ -195,6 +196,7 @@ pub async fn gate_inbound<G: ConsentGate>(
             msb,
             ebene,
             lokations_id,
+            gegenstand,
             message_ref,
             quittung,
             consent_block: Some(decision.reason),
@@ -202,11 +204,13 @@ pub async fn gate_inbound<G: ConsentGate>(
         C::ReceiveBestellung {
             pid,
             message_ref,
+            abonnement,
             quittung,
             ..
         } => C::ReceiveBestellung {
             pid,
             message_ref,
+            abonnement,
             quittung,
             consent_block: Some(decision.reason),
         },
@@ -294,6 +298,17 @@ mod tests {
         }
     }
 
+    fn gegenstand() -> Box<crate::esa::Bestellgegenstand> {
+        Box::new(crate::esa::Bestellgegenstand {
+            // Pflichtprodukt: MaLo, Wirkarbeit, Lastgang, 1/4 h.
+            messprodukt: "9991000003056".to_owned(),
+            wunschtermin: time::macros::date!(2026 - 03 - 01),
+            zeitraum_bis: None,
+            abonnement: crate::esa::Abonnement::StartAbo,
+            smgw: None,
+        })
+    }
+
     fn anfrage() -> WertebestellungCommand {
         WertebestellungCommand::ReceiveAnfrage {
             pid: Pruefidentifikator::const_new(35003),
@@ -301,6 +316,7 @@ mod tests {
             msb: MarktpartnerCode::new("9900000000002"),
             ebene: Lokationsebene::Marktlokation,
             lokations_id: "57685676748".to_owned(),
+            gegenstand: gegenstand(),
             message_ref: MessageRef::new("MSG-1"),
             quittung: Zustellquittung::positive(OffsetDateTime::UNIX_EPOCH),
             consent_block: None,
@@ -311,6 +327,7 @@ mod tests {
         WertebestellungCommand::ReceiveBestellung {
             pid: Pruefidentifikator::const_new(17007),
             message_ref: MessageRef::new("MSG-2"),
+            abonnement: crate::esa::Abonnement::StartAbo,
             quittung: Zustellquittung::positive(OffsetDateTime::UNIX_EPOCH),
             consent_block: None,
         }

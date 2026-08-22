@@ -1683,6 +1683,150 @@ pub const E_0250_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── ESA Wertebestellung (WiM Strom Teil 2 Kap. 4) ────────────────────────────
+//
+// The three trees whose prüfende Rolle is the **MSB serving an ESA**. All
+// three answer with an ORDRSP, so the code rides `SG2 AJT` DE 4465 and the
+// tree id DE 1082 — not `STS+E01`. ORDRSP AHB 1.1b §4.15 conditions [17]/[18]
+// say the code „muss im EBD dem Cluster Zustimmung / Ablehnung zugeordnet
+// sein", which is precisely what [`Cluster`] decides here.
+//
+// Two neighbouring decisions deliberately have **no** tree, and the EBD
+// document says so in as many words: `E_0253` („Angebot zur Anfrage prüfen")
+// and `E_0258` („Antwort auf Bestellung prüfen") — „derzeit ist für diese
+// Entscheidung kein Entscheidungsbaum notwendig, da keine Antwort gegeben
+// wird". So the QUOTES 15003 Ablehnung carries a free-text Begründung and no
+// Antwortcode at all.
+
+/// `E_0256` — Bestellung prüfen (ORDERS 17007 → ORDRSP 19011/19012).
+pub const EBD_ESA_BESTELLUNG: &str = "E_0256";
+const E_0256: Option<&'static str> = Some(EBD_ESA_BESTELLUNG);
+
+/// `E_0256` — the MSB's answer to an ESA Bestellung von Werten.
+///
+/// Prüfschritte 1–11. `A11` is the sole Zustimmung and is reached from two
+/// places: directly at Prüfschritt 10 for a Messlokation order, or at
+/// Prüfschritt 11 for a Marktlokation/Tranche/Netzlokation order once the MSB
+/// has confirmed it also operates every underlying Messlokation — the UC 4.1.1
+/// Vorbedingung, checked here rather than assumed.
+pub const E_0256_CODES: &[AntwortCode] = &[
+    code!("A11", E_0256, Zustimmung, "Bestellung ist angenommen"),
+    code!(
+        "A01",
+        E_0256,
+        Ablehnung,
+        "Die Bindungsfrist des Angebots ist abgelaufen"
+    ),
+    code!(
+        "A04",
+        E_0256,
+        Ablehnung,
+        "Der MSB sieht für das gewünschte Messprodukt keine Übermittlung als Abo vor"
+    ),
+    code!(
+        "A05",
+        E_0256,
+        Ablehnung,
+        "Der MSB sieht für das gewünschte Messprodukt keine einmalige Übermittlung vor"
+    ),
+    code!(
+        "A06",
+        E_0256,
+        Ablehnung,
+        "Die vertragliche Grundlage zwischen dem MSB und dem ESA ist nicht mehr gültig"
+    ),
+    code!(
+        "A07",
+        E_0256,
+        Ablehnung,
+        "Der MSB ist der Lokation für den im Angebot spezifizierten Zeitraum / Zeitpunkt der Messwertermittlung nicht zugeordnet"
+    ),
+    code!(
+        "A08",
+        E_0256,
+        Ablehnung,
+        "Der Anschlussnutzer hat gegenüber dem ESA seine Einwilligung widerrufen oder ihre Gültigkeit ist abgelaufen"
+    ),
+    code!(
+        "A09",
+        E_0256,
+        Ablehnung,
+        "Die Gerätetechnik misst die angeforderten Messwerte nicht"
+    ),
+    code!(
+        "A10",
+        E_0256,
+        Ablehnung,
+        "Der MSB der Marktlokation / Netzlokation ist nicht zeitgleich der allen Messlokationen zugeordnete MSB"
+    ),
+];
+
+/// `E_0257` — Stornierung prüfen (ORDCHG 39002 → ORDRSP 19013/19014).
+pub const EBD_ESA_STORNIERUNG: &str = "E_0257";
+const E_0257: Option<&'static str> = Some(EBD_ESA_STORNIERUNG);
+
+/// `E_0257` — the MSB's answer to an ESA Stornierung einer Bestellung.
+///
+/// The tree splits on the Abo mode (`IMD+7081`) and lands on different refusal
+/// codes for the same fact: `A02` when a **subscription** has already started
+/// delivering, `A03` when a **one-shot** has already been transmitted. Reading
+/// „delivery has begun" as one condition would put the wrong code on the wire.
+pub const E_0257_CODES: &[AntwortCode] = &[
+    code!("A04", E_0257, Zustimmung, "Stornierung wird bestätigt"),
+    code!(
+        "A01",
+        E_0257,
+        Ablehnung,
+        "Die Bestellung des ESA wurde durch den MSB nicht bestätigt"
+    ),
+    code!(
+        "A02",
+        E_0257,
+        Ablehnung,
+        "Mit der Übermittlung von Werten aus dem Abo wurde bereits begonnen"
+    ),
+    code!(
+        "A03",
+        E_0257,
+        Ablehnung,
+        "Die einmalige Übermittlung der Werte ist bereits erfolgt"
+    ),
+];
+
+/// `E_0254` — Beendigung prüfen (ORDERS 17008 → ORDRSP 19011/19012).
+pub const EBD_ESA_BEENDIGUNG: &str = "E_0254";
+const E_0254: Option<&'static str> = Some(EBD_ESA_BEENDIGUNG);
+
+/// `E_0254` — the MSB's answer to an ESA Abbestellung von Werten.
+///
+/// Prüfschritt 1 makes the UC 4.3 Vorbedingung executable: a one-shot order is
+/// **stornierbar, nicht abbestellbar**, and `A01` says so. Prüfschritt 2 says
+/// the same about a Beendigung dated before the Abo even starts (`A02` — „Die
+/// Bestellung ist zu stornieren"), which is why the two termination paths are
+/// not interchangeable.
+pub const E_0254_CODES: &[AntwortCode] = &[
+    code!("A05", E_0254, Zustimmung, "Beendigung wird bestätigt"),
+    code!(
+        "A01",
+        E_0254,
+        Ablehnung,
+        "Es handelte sich bei der Bestellung um eine einmalige Übermittlung"
+    ),
+    code!("A02", E_0254, Ablehnung, "Die Bestellung ist zu stornieren"),
+    code!(
+        "A03",
+        E_0254,
+        Ablehnung,
+        "Die Übermittlung wurde bereits zu einem früheren oder zu dem in der Beendigung genannten Zeitpunkt beendet"
+    ),
+    code!(
+        "A04",
+        E_0254,
+        Ablehnung,
+        "Es wurden bereits Daten nach dem gewünschten Beendigungsdatum übermittelt"
+    ),
+];
+
 /// Every Codeliste this crate knows, keyed by its EBD id.
 pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_ANMELDUNG_DIREKT_ABLEHNBAR, E_0622_CODES),
@@ -1716,6 +1860,10 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_BESTELLUNG_GERAETEUEBERNAHME, E_0247_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_NB, E_0249_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_LF, E_0250_CODES),
+    // WiM Strom Teil 2 — ESA Wertebestellung.
+    (EBD_ESA_BESTELLUNG, E_0256_CODES),
+    (EBD_ESA_STORNIERUNG, E_0257_CODES),
+    (EBD_ESA_BEENDIGUNG, E_0254_CODES),
 ];
 
 /// The trees that publish **Ablehnungscodes only**, each paired with the tree

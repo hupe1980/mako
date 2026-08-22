@@ -452,6 +452,40 @@ mod tests {
     }
 
     /// A PID with no published window gets no deadline — unknown, not
+    /// The ESA Wertebestellung is monitored like any other WiM process: its
+    /// four inbound PIDs carry published windows, so a Werteanfrage or
+    /// Bestellung that goes unanswered is visible as a breach rather than as a
+    /// process with no deadline at all.
+    #[test]
+    fn the_esa_wertebestellung_is_monitored() {
+        let received = datetime!(2026-03-02 08:00 UTC); // Monday
+        for pid in [35_003_u32, 17_007, 17_008, 39_002] {
+            let f = answer_frist(pid, received)
+                .unwrap_or_else(|| panic!("PID {pid} must carry a published window"));
+            assert!(f.due_at > received, "PID {pid}");
+            assert!(
+                f.source.contains("Teil 2"),
+                "PID {pid} draws its window from WiM Teil 2, got {:?}",
+                f.source
+            );
+            assert_eq!(derive_family("", pid), "wim", "PID {pid}");
+        }
+    }
+
+    /// The §7a Abs. 5 Gleichbehandlung report covers the processes the
+    /// operator's **network** arm answers for a Lieferant. An ESA order is
+    /// answered by the MSB and names no Lieferant, so it must stay out.
+    #[test]
+    fn an_esa_order_is_not_in_the_affiliate_report() {
+        let own: HashSet<String> = ["9900357000004".to_owned()].into_iter().collect();
+        for pid in [35_003_u32, 17_007, 17_008, 39_002] {
+            assert!(
+                !counterparty_is_affiliate(pid, None, Some("9900357000004"), &own),
+                "PID {pid} is an MSB obligation, not an NB one"
+            );
+        }
+    }
+
     /// unbounded, and never measured against an instant nobody can cite.
     #[test]
     fn an_unpublished_window_yields_no_deadline() {

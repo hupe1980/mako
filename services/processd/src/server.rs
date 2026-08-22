@@ -63,6 +63,12 @@ pub struct ProcessdState {
     pub msb_auto_accept: bool,
     /// When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE arrival.
     pub msb_auto_preisanfrage: bool,
+    /// `[esa]` — how much of the WiM Teil 2 Kap. 4 answer runs without an
+    /// operator. Serving an ESA itself is mandatory (§34 Abs. 2 S. 2 Nr. 10
+    /// MsbG); these only gate the automation.
+    pub esa_auto_accept: bool,
+    pub esa_auto_reject: bool,
+    pub esa_accept_after_bindungsfrist: bool,
     /// `vertragd`, when this deployment runs the contract layer.
     ///
     /// Read by the LF and the MSB module alike: the split is by kind of fact,
@@ -108,6 +114,12 @@ pub struct RunConfig {
     pub msb_auto_accept: bool,
     /// See [`ProcessdState::msb_auto_preisanfrage`].
     pub msb_auto_preisanfrage: bool,
+    /// See [`ProcessdState::esa_auto_accept`].
+    pub esa_auto_accept: bool,
+    /// See [`ProcessdState::esa_auto_reject`].
+    pub esa_auto_reject: bool,
+    /// See [`ProcessdState::esa_accept_after_bindungsfrist`].
+    pub esa_accept_after_bindungsfrist: bool,
     /// EoG gap-closure automation (§36/§38 EnWG) — see `[eog]` in TOML.
     pub eog_auto_activate: bool,
     pub eog_default_transaktionsgrund: String,
@@ -373,6 +385,9 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         marktd: marktd_for_state,
         msb_auto_accept: cfg.msb_auto_accept,
         msb_auto_preisanfrage: cfg.msb_auto_preisanfrage,
+        esa_auto_accept: cfg.esa_auto_accept,
+        esa_auto_reject: cfg.esa_auto_reject,
+        esa_accept_after_bindungsfrist: cfg.esa_accept_after_bindungsfrist,
         vertragd_url: cfg.vertragd_url.clone(),
         vertragd_api_key: cfg.vertragd_api_key.clone(),
         pool: pool.clone(),

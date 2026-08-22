@@ -17,7 +17,7 @@ use super::*;
 /// | `sender`          | yes      | Sender (MSB) MP-ID                             |
 /// | `receiver`        | no       | Receiver (ESA) MP-ID (falls back to `msg.recipient`) |
 /// | `sts_code`        | no       | STS DE4405 status reason (default `105` „beendet") |
-/// | `order_reference` | no       | Belegnummer of the Bestellung → SG15 `RFF+AGI` |
+/// | `korrelation_ref` | no       | Belegnummer of the Bestellung → SG15 `RFF+AGI` (`ZG-T47`) |
 /// | `beendigung_zum`  | no       | Vertragsende date → SG15 `DTM+93`              |
 /// | `document_id`     | no       | BGM Dokumentennummer                           |
 /// | `document_date`   | no       | DTM+137 date                                   |
@@ -69,7 +69,11 @@ pub(super) fn render_iftsta(
     if let Some(d) = p.get("document_date").and_then(|v| v.as_str()) {
         builder = builder.document_date(normalise_date(d));
     }
-    if let Some(order_ref) = p.get("order_reference").and_then(|v| v.as_str()) {
+    if let Some(order_ref) = p
+        .get("korrelation_ref")
+        .or_else(|| p.get("order_reference"))
+        .and_then(|v| v.as_str())
+    {
         builder = builder.order_reference(order_ref);
     }
     if let Some(ende) = p.get("beendigung_zum").and_then(|v| v.as_str()) {

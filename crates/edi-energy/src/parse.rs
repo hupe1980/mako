@@ -1056,18 +1056,40 @@ pub(crate) fn dispatch_message(
     // this message type stores its PID in BGM element 1 (DE 1004) or in a
     // top-level RFF+Z13 segment.  The strategy is driven by the profile
     // registry so that no message-type list needs to be maintained here.
+    //
+    // Both locations are tried, the profile's declared one first. `SG1 RFF+Z13`
+    // is where the AHBs put it — every BGM DE 1004 row in the MSCONS, REQOTE,
+    // ORDERS, ORDRSP, ORDCHG and QUOTES handbooks reads „Dokumentennummer" —
+    // while some mako-rendered messages historically carried it in BGM. Reading
+    // only one of the two makes a conformant partner's message undetectable,
+    // and an undetectable message is dropped without an APERAK.
+    //
+    // Both readers require a **plausible** Prüfidentifikator — a 5-digit code
+    // in `10000..=99999`. Accepting any parseable integer would let a numeric
+    // Belegnummer in BGM DE 1004 win over the real PID in `RFF+Z13` and defeat
+    // the fallback entirely.
+    let plausible = |s: &str| -> Option<u32> {
+        s.parse::<u32>().ok().filter(|v| {
+            (crate::Pruefidentifikator::MIN..=crate::Pruefidentifikator::MAX).contains(v)
+        })
+    };
+    let from_rff = || -> Option<u32> {
+        segments
+            .iter()
+            .filter(|s| s.tag == "RFF" && (s.element_str(0) == Some("Z13")))
+            .find_map(|rff| rff.component_str(0, 1).and_then(plausible))
+    };
+    let from_bgm = || -> Option<u32> {
+        segments
+            .iter()
+            .find(|s| s.tag == "BGM")
+            .and_then(|bgm| bgm.element_str(1))
+            .and_then(plausible)
+    };
     let pruefidentifikator: Option<u32> =
         match resolve_pid_source(&msg_type_code, &assoc_code, registry) {
-            crate::registry::PidSource::RffZ13 => segments
-                .iter()
-                .find(|s| s.tag == "RFF" && (s.element_str(0) == Some("Z13")))
-                .and_then(|rff| rff.component_str(0, 1))
-                .and_then(|s| s.parse().ok()),
-            crate::registry::PidSource::BgmDe1004 => segments
-                .iter()
-                .find(|s| s.tag == "BGM")
-                .and_then(|bgm| bgm.element_str(1))
-                .and_then(|s| s.parse().ok()),
+            crate::registry::PidSource::RffZ13 => from_rff().or_else(from_bgm),
+            crate::registry::PidSource::BgmDe1004 => from_bgm().or_else(from_rff),
         };
 
     // Warn when the association code is not one of the recognised EDI@Energy release

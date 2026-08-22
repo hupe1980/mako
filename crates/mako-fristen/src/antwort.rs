@@ -636,8 +636,9 @@ pub const GELI_GAS: &[AntwortObligation] = &[
 /// lookup would have to pick one; [`stoerungsmeldung_werktage`] takes the
 /// Messtechnik instead.
 ///
-/// 35003 is deliberately absent: it is the ESA „Anfrage von Werten", not a
-/// Preisanfrage, and must never be answered with a PreisblattMessung quote.
+/// 35003 is the ESA „Anfrage von Werten", **not** a Preisanfrage: it carries
+/// its own 5-Werktage window here, and must never be routed into the
+/// Preisanfrage auto-quote path — see [`ESA_WERTEANFRAGE_PID`].
 pub const WIM: &[AntwortObligation] = &[
     AntwortObligation {
         trigger_pid: 55_039,
@@ -789,7 +790,76 @@ pub const WIM: &[AntwortObligation] = &[
         family: Family::Wim,
         source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
     },
+    // ── ESA Wertebestellung (WiM Strom Teil 2 Kap. 4) ───────────────────────
+    //
+    // All four are answered by the MSB serving the ESA. Only the Werteanfrage
+    // has its own window (5 WT); the three order-level steps share the 2-WT
+    // answer window of UC 4.1 Nr. 4 / Nr. 6 and UC 4.3 Nr. 2.
+    AntwortObligation {
+        trigger_pid: ESA_WERTEANFRAGE_PID,
+        name: "Anfrage von Werten (ESA)",
+        answered_by: "MSB",
+        // One PID carries both the Angebot and the Ablehnung; they are told
+        // apart by the Bindungsfrist (`DTM+273`), not by a second PID.
+        antwort_pids: (15_003, 15_003),
+        // `E_0253` „Angebot zur Anfrage prüfen" is published without a tree —
+        // „derzeit ist für diese Entscheidung kein Entscheidungsbaum
+        // notwendig, da keine Antwort gegeben wird" — so the Ablehnung carries
+        // a free-text Begründung rather than an Antwortcode.
+        ebd: None,
+        frist: FristShape::WerktageAtCutoff(ESA_ANGEBOT_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 2 — 5 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: 17_007,
+        name: "Bestellung von Werten (ESA)",
+        answered_by: "MSB",
+        antwort_pids: (19_011, 19_012),
+        ebd: Some("E_0256"),
+        frist: FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 4 — 2 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: 17_008,
+        name: "Abbestellung von Werten (ESA)",
+        answered_by: "MSB",
+        // Same answer PIDs as the Bestellung; the `IMD+7081` on the answer is
+        // what says which of the two it answers, and therefore which tree.
+        antwort_pids: (19_011, 19_012),
+        ebd: Some("E_0254"),
+        frist: FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 4.3.2 Nr. 2 — 2 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: 39_002,
+        name: "Stornierung der Bestellung von Werten (ESA)",
+        answered_by: "MSB",
+        antwort_pids: (19_013, 19_014),
+        ebd: Some("E_0257"),
+        frist: FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 2 Kap. 4.1.2 Nr. 6 — 2 Werktage",
+    },
 ];
+
+/// REQOTE „Anfrage von Werten" — the ESA Werteanfrage (WiM Teil 2 Kap. 4).
+///
+/// Named because it must never be routed into the Preisanfrage auto-quote
+/// path: it asks for a Messprodukt from Codeliste der Konfigurationen Kap. 4.6,
+/// not for a `PreisblattMessung`. `mako_wim::preisanfrage::REQOTE_PIDS` holds
+/// the four that are Preisanfragen, and 35003 is not among them.
+pub const ESA_WERTEANFRAGE_PID: u32 = 35_003;
+
+/// Angebot window on an ESA Werteanfrage, in Werktage
+/// (WiM Strom Teil 2 Kap. 4.1.2 Nr. 2).
+pub const ESA_ANGEBOT_WERKTAGE: u32 = 5;
+
+/// Answer window on an ESA Bestellung, Stornierung or Abbestellung, in
+/// Werktage (WiM Strom Teil 2 Kap. 4.1.2 Nr. 4/6, Kap. 4.3.2 Nr. 2).
+pub const ESA_ANTWORT_WERKTAGE: u32 = 2;
 
 /// The Geräteübernahmeangebot window, in Werktage
 /// (WiM Strom Teil 1 Kap. 3.2.2 Nr. 2).
@@ -1077,11 +1147,55 @@ mod tests {
         assert_eq!(all.len(), 4, "each WiM Strom PID carries its own Frist");
     }
 
-    /// 35003 is the ESA Werteanfrage, not a Preisanfrage, and must not carry a
-    /// PreisblattMessung answer window.
+    /// 35003 is the ESA Werteanfrage: it has its **own** 5-Werktage window
+    /// (WiM Teil 2 Kap. 4.1.2 Nr. 2), answered with a QUOTES 15003 built from
+    /// a Kapitel-4.6 Messprodukt — never from a `PreisblattMessung`.
+    ///
+    /// The distinction the routing depends on is that it is not one of the
+    /// four Preisanfrage REQOTEs, not that it lacks a Frist: an ESA
+    /// Werteanfrage left without a window is one no operator queue can size.
     #[test]
-    fn the_esa_werteanfrage_is_not_a_preisanfrage() {
-        assert!(antwort_obligation(35_003).is_none());
+    fn the_esa_werteanfrage_has_its_own_window_and_is_not_a_preisanfrage() {
+        let o = antwort_obligation(ESA_WERTEANFRAGE_PID).expect("published in WiM Teil 2");
+        assert_eq!(o.frist, FristShape::WerktageAtCutoff(ESA_ANGEBOT_WERKTAGE));
+        assert_eq!(o.antwort_pids, (15_003, 15_003));
+        assert_eq!(o.ebd, None, "E_0253 is published without a tree");
+        // Its window comes from Teil 2, not from the Teil 1 Preisanfrage
+        // chapters — two processes may share a *length* (35002 is also 5 WT)
+        // without sharing an obligation.
+        assert!(
+            o.source.contains("Teil 2"),
+            "the ESA window is WiM Teil 2, got {:?}",
+            o.source
+        );
+        for preisanfrage in [35_001_u32, 35_002, 35_005] {
+            let p = antwort_obligation(preisanfrage).expect("published");
+            assert!(
+                p.source.contains("Teil 1"),
+                "{preisanfrage} is a Teil 1 Preisanfrage, got {:?}",
+                p.source
+            );
+        }
+    }
+
+    /// The three order-level steps share the 2-Werktage answer window and each
+    /// names the tree its Antwortcode must come from.
+    #[test]
+    fn the_esa_order_steps_carry_their_own_ebd() {
+        for (pid, ebd, antwort_pids) in [
+            (17_007_u32, "E_0256", (19_011_u32, 19_012_u32)),
+            (17_008, "E_0254", (19_011, 19_012)),
+            (39_002, "E_0257", (19_013, 19_014)),
+        ] {
+            let o = antwort_obligation(pid).unwrap_or_else(|| panic!("{pid} published"));
+            assert_eq!(o.ebd, Some(ebd), "{pid}");
+            assert_eq!(o.antwort_pids, antwort_pids, "{pid}");
+            assert_eq!(
+                o.frist,
+                FristShape::WerktageAtCutoff(ESA_ANTWORT_WERKTAGE),
+                "{pid}"
+            );
+        }
     }
 
     /// The four WiM REQOTE PIDs open four different Use-Cases, so one flat

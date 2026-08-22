@@ -22,8 +22,10 @@ publish          = false
 #                    EoG gap closure; the MSB-Wechsel PIDs the *NB* answers
 #   role-nb-gas    — GeLi Gas Anmeldung STP (44001) via `mako-pruefung`
 #   role-msb-strom — the MSB's own obligations: REQOTE→QUOTES, §14a
-#                    Steuerungsauftrag ORDRSP, and the MSB-Wechsel PIDs the
-#                    *MSB* answers
+#                    Steuerungsauftrag ORDRSP, the MSB-Wechsel PIDs the *MSB*
+#                    answers, and the ESA Wertebestellung (WiM Teil 2 Kap. 4 —
+#                    35003/17007/17008/39002), a mandatory Zusatzleistung under
+#                    §34 Abs. 2 S. 2 Nr. 10 MsbG
 #
 # The MSB role is its own feature because its work is its own: a Kündigung MSB
 # (55039) is MSBN → MSBA and never reaches the NB, and a Steuerungsauftrag

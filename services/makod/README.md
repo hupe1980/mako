@@ -344,9 +344,15 @@ the outbox message type and — for MSCONS — on the Prüfidentifikator.
 | 13015 | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn | `Z27` |
 | 13016 | Energiemenge und Leistungsmaximum | `Z28` |
 | 13019 | Energiemenge (Strom) | `7` |
+| 13027 | Werte nach Typ 2 (MSB → ESA) | `Z83` |
 
 `BGM` DE 1001 names the document type the receiver routes by, so it is set per
-Anwendungsfall. An unimplemented PID is refused by name — rendering it in a
+Anwendungsfall. DE 1004 is the **Dokumentennummer** — all sixteen BGM rows of
+MSCONS AHB 3.2 spell it that way, and the Prüfidentifikator travels in
+`SG1 RFF+Z13` instead. Inbound detection reads both locations (profile
+`pid_source` first) and accepts only a plausible 5-digit code, so a numeric
+Belegnummer cannot outrank the real PID; a PID-bearing message that carries none
+is dead-lettered and reported as `missing_pid`, not silently accepted. An unimplemented PID is refused by name — rendering it in a
 supported shape would produce a syntactically valid message stating something the
 sender did not say.
 

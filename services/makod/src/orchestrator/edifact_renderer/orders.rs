@@ -4,6 +4,47 @@
 //! payload-extraction helpers live in `super`.
 
 use super::*;
+
+// ── ESA Wertebestellung helpers (WiM Strom Teil 2 Kap. 4) ────────────────────
+
+/// Emit the `RFF` that correlates an ESA-Wertebestellung message, under the
+/// qualifier the BDEW *Anwendungsübersicht der Prüfidentifikatoren* 4.0
+/// publishes for that PID.
+///
+/// The qualifier is **not** interchangeable: `RFF+ON` on an ORDRSP 19011 and
+/// `RFF+ACW` on an ORDRSP 19013 point at different messages (the ORDERS and
+/// the ORDCHG respectively), and a receiver keying on the wrong one finds no
+/// process. [`mako_wim::esa::korrelation`] is that table; reading the
+/// qualifier from it is what keeps the renderer and the ingest dispatcher from
+/// drifting apart.
+fn esa_korrelation_qualifier(pid: Option<u32>) -> Option<&'static str> {
+    pid.and_then(mako_wim::esa::korrelation)
+        .and_then(mako_wim::esa::Korrelation::rff_qualifier)
+}
+
+/// The `korrelation_ref` the workflow put in the render intent.
+fn esa_korrelation_ref(p: &serde_json::Value) -> Option<&str> {
+    p.get("korrelation_ref")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+}
+
+/// A `CCYYMMDDHHMM` stamp for the `303`-format DTM segments the ESA PIDs use.
+///
+/// The AHBs give DE 2379 as `303` (`CCYYMMDDHHMMZZZ`) throughout Kapitel 4,
+/// with condition `[931]` fixing the offset to `+00`; the builders append the
+/// zone, so this produces the minute-precision part from a `YYYY-MM-DD` date.
+fn esa_dtm303(date: &str) -> String {
+    let digits: String = date.chars().filter(char::is_ascii_digit).collect();
+    let mut out = digits;
+    out.truncate(8);
+    while out.len() < 8 {
+        out.push('0');
+    }
+    out.push_str("0000");
+    out
+}
+
 // ── ORDERS ────────────────────────────────────────────────────────────────────
 
 /// Render an ORDERS (Beauftragung) message from domain-intent JSON.
@@ -61,7 +102,8 @@ pub(super) fn render_reqote(
         .message_ref(message_ref);
 
     if let Some(pv) = pid {
-        builder = builder.document_id(pv.to_string());
+        // `SG1 RFF+Z13`; BGM DE 1004 keeps the Belegnummer.
+        builder = builder.pruefidentifikator(pv);
     }
     if let Some(loc) = p.get("location").and_then(|v| v.as_str())
         && !loc.is_empty()
@@ -71,16 +113,21 @@ pub(super) fn render_reqote(
 
     // ── ESA Werteanfrage (PID 35003) full-conformance content ────────────────
     //
-    // On top of the shared skeleton, REQOTE AHB §4.3 requires SG1 RFF+Z13, the
-    // SG14 CTA/COM contact, an FTX, an SG10 characteristic and one SG27 per
-    // requested Messprodukt (LIN++Z67 with PIA+5 for "Werte nach Typ 2 aus
-    // Backend", LIN++Z68 for the SMGW Konfigurationserlaubnis).
+    // REQOTE AHB 1.2 §4.3. Muss beyond the shared skeleton: `BGM+Z57`,
+    // `DTM+76` (der Wunschtermin — WiM Teil 2 UC 4.1.2 Nr. 1: „Der ESA gibt
+    // u. a. seinen Wunschtermin für die erstmalige Übermittlung von Werten
+    // mit"), `SG1 RFF+Z13`, `SG14 CTA/COM`, `SG11 NAD+DP` before the
+    // `LOC+172` Meldepunkt, and one `SG27 LIN+Z67` with `PIA+5+<code>:Z11`
+    // naming a Messprodukt from Codeliste der Konfigurationen Kapitel 4.6.1.
     //
-    // The Messprodukt is what makes this message a Werteanfrage — it is
-    // mandatory here, which is why sniffing for a `PIA` segment used to work as
-    // a heuristic when the wrong PID (35002) was being sent.
+    // `FTX+ACB` is a *Kann* segment and is emitted only when the caller
+    // supplied a note — the builder drops an empty one rather than putting a
+    // blank free text on the wire.
     if pid == Some(35003) {
-        builder = builder.reference("Z13", "35003");
+        builder = builder.document_code("Z57").delivery_party();
+        if let Some(termin) = p.get("wunschtermin").and_then(|v| v.as_str()) {
+            builder = builder.leistungsbeginn(esa_dtm303(termin));
+        }
         let contact = p
             .get("contact")
             .and_then(|v| v.as_str())
@@ -88,25 +135,41 @@ pub(super) fn render_reqote(
         let comm = p
             .get("contact_comm")
             .and_then(|v| v.as_str())
-            .unwrap_or("esa@example.de");
-        builder = builder
-            .contact(contact, comm)
-            .free_text(
-                "ACB",
-                p.get("bemerkung").and_then(|v| v.as_str()).unwrap_or(""),
-            )
-            .characteristic(
-                "Z19",
-                p.get("cav_code").and_then(|v| v.as_str()).unwrap_or("Z01"),
+            .unwrap_or_else(|| registry.primary_mp_id());
+        builder = builder.contact(contact, comm);
+        if let Some(note) = p.get("bemerkung").and_then(|v| v.as_str())
+            && !note.is_empty()
+        {
+            builder = builder.free_text("ACB", note);
+        }
+        // The Messprodukt is what makes this message a Werteanfrage, and DE
+        // 7140 accepts only Kapitel-4.6 codes — so it is resolved against the
+        // catalogue rather than defaulted.
+        let Some(messprodukt) = p.get("messprodukt").and_then(|v| v.as_str()) else {
+            return Err(RenderError::MissingField {
+                message_type: mt.into(),
+                field: "messprodukt".into(),
+            });
+        };
+        let produkt = mako_wim::esa::messprodukt(messprodukt).ok_or(RenderError::MissingField {
+            message_type: mt.into(),
+            field: "messprodukt (nicht in Codeliste der Konfigurationen Kapitel 4.6)".into(),
+        })?;
+        builder = builder.product(produkt.weg.lin_code(), produkt.code);
+        // Kapitel 4.6.2 products additionally carry the SM-PKI delivery target
+        // (`FTX+Z17/Z24/Z23`) and, when Schwellwert-triggered, `SG28 CCI+Z60`.
+        if let Some(smgw) = p.get("smgw").filter(|v| !v.is_null())
+            && let Ok(ziel) = serde_json::from_value::<mako_wim::esa::SmgwZiel>(smgw.clone())
+        {
+            builder = builder.smgw_delivery(
+                &ziel.uri_ipv4,
+                &ziel.uri_ipv6,
+                &ziel.zertifikat_aussteller,
+                &ziel.zertifikat_nutzer,
             );
-        // Codeliste der Konfigurationen §4.6.1 "Werte nach Typ 2 aus Backend".
-        let messprodukt = p
-            .get("messprodukt")
-            .and_then(|v| v.as_str())
-            .unwrap_or("Z01");
-        builder = builder.product("Z67", messprodukt);
-        if let Some(smgw) = p.get("smgw_produkt").and_then(|v| v.as_str()) {
-            builder = builder.product("Z68", smgw);
+            for sw in &ziel.schwellwerte {
+                builder = builder.schwellwert(&sw.position_code, &sw.oberer, &sw.unterer);
+            }
         }
     }
 
@@ -151,22 +214,45 @@ pub(super) fn render_orders(
         .message_ref(message_ref);
 
     if let Some(pv) = pid {
-        builder = builder.document_id(pv.to_string());
+        // `SG1 RFF+Z13`; BGM DE 1004 keeps the Belegnummer.
+        builder = builder.pruefidentifikator(pv);
     }
-    // ESA-originated Bestellung/Abbestellung carries the location in LOC.
+    // A `LOC` is emitted only where the AHB has one. §4.15 of the ORDERS AHB
+    // lists **no** Meldepunkt segment for 17007/17008, so the ESA order PIDs
+    // never carry one — the workflow already leaves `location` null for them,
+    // and this guard keeps a hand-written payload from re-introducing it.
+    let ist_esa_order = pid == Some(17007) || pid == Some(17008);
     if let Some(loc) = p.get("location").and_then(|v| v.as_str())
         && !loc.is_empty()
+        && !ist_esa_order
     {
         builder = builder.location(loc);
     }
     // ── ESA Bestellung/Abbestellung (17007/17008) full conformance ───────────
-    // A valid BGM 1001 (Z55–Z64), the mandatory SG1 RFF+Z13 and an IMD, emitted
-    // only for the ESA order PIDs so the many other ORDERS PIDs are untouched.
-    if pid == Some(17007) || pid == Some(17008) {
-        builder = builder
-            .document_code("Z56")
-            .reference("Z13", pid.map_or_else(String::new, |p| p.to_string()))
-            .item_description("Werte nach Typ 2");
+    //
+    // ORDERS AHB 1.1b §4.15. Muss: `BGM+Z57` („Übermittlung von Werten an
+    // ESA"), `DTM+203` Ausführungsdatum, `IMD++<7081>` (Z01 Start Abo / Z02
+    // Ende Abo / Z03 ohne Abo), `SG1 RFF+Z13`, and the correlation reference —
+    // `RFF+AAG` (the QUOTES Angebotsnummer) on 17007, `RFF+ACW` (the ORDERS
+    // Bestellnummer) on 17008. Without the latter two the MSB has no way at all
+    // to match the order: these messages carry no location.
+    if ist_esa_order {
+        builder = builder.document_code("Z57");
+        if let (Some(qual), Some(reference)) =
+            (esa_korrelation_qualifier(pid), esa_korrelation_ref(p))
+        {
+            builder = builder.reference(qual, reference);
+        }
+        if let Some(datum) = p
+            .get("ausfuehrungsdatum")
+            .and_then(|v| v.as_str())
+            .or_else(|| p.get("wunschtermin").and_then(|v| v.as_str()))
+        {
+            builder = builder.ausfuehrungsdatum(esa_dtm303(datum));
+        }
+        if let Some(abo) = p.get("abonnement").and_then(|v| v.as_str()) {
+            builder = builder.abonnement(abo);
+        }
     }
 
     finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
@@ -219,18 +305,26 @@ pub(super) fn render_ordchg(
         .message_ref(message_ref);
 
     if let Some(pv) = pid {
-        builder = builder.document_id(pv.to_string());
+        // `SG1 RFF+Z13`; BGM DE 1004 keeps the Belegnummer.
+        builder = builder.pruefidentifikator(pv);
     }
-    // ORDCHG mandates an SG1 RFF and carries no LOC. Reference the original
-    // order (`ON` = its message reference) when the caller supplies one, else
-    // fall back to the Prüfidentifikator (`Z13`). The ESA Stornierung's target
-    // MaLo travels via this reference, not a location segment.
-    if let Some(order_ref) = p.get("order_reference").and_then(|v| v.as_str())
-        && !order_ref.is_empty()
+    // ORDCHG mandates an SG1 RFF and carries no LOC. Both references are Muss
+    // on the ESA Stornierung (ORDCHG AHB 1.1 §3.2): `RFF+ON` names the ORDERS
+    // being cancelled — its published Zuordnungsschlüssel `ZG-T51`, and the
+    // only way the MSB can identify the target — and `RFF+Z13` the PID. They
+    // are additive, not alternatives — a Stornierung without `RFF+ON` is one
+    // the MSB cannot correlate.
+    if let Some(reference) =
+        esa_korrelation_ref(p).or_else(|| p.get("order_reference").and_then(|v| v.as_str()))
+        && !reference.is_empty()
     {
-        builder = builder.reference("ON", order_ref);
-    } else if let Some(pv) = pid {
-        builder = builder.reference("Z13", pv.to_string());
+        let qualifier = esa_korrelation_qualifier(pid).unwrap_or("ON");
+        builder = builder.reference(qualifier, reference);
+    }
+    // `BGM+Z57` — „Übermittlung von Werten an ESA" (the builder already emits
+    // DE 1225 = 1, Aufhebung/Stornierung).
+    if pid == Some(39002) {
+        builder = builder.document_code("Z57");
     }
 
     finish_interchange(builder.serialize(), sender, msg.recipient.as_ref(), msg)
@@ -268,6 +362,10 @@ pub(super) fn render_ordrsp(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
     let document_id = p.get("document_id").and_then(|v| v.as_str());
+    let pid = p
+        .get("pid")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|n| u32::try_from(n).ok());
     let doc_date = p
         .get("document_date")
         .and_then(|v| v.as_str())
@@ -291,37 +389,56 @@ pub(super) fn render_ordrsp(
 
     // ESA / MaKo: the Prüfidentifikator (BGM DE 1004) is the routing key of the
     // answer — 19011/19012 (Ab-/Bestellung) or 19013/19014 (Stornierung).
-    if let Some(pid) = p.get("pid").and_then(serde_json::Value::as_u64) {
-        builder = builder.pruefidentifikator(pid as u32);
+    if let Some(pid) = pid {
+        builder = builder.pruefidentifikator(pid);
     }
     if let Some(id) = document_id {
         builder = builder.document_id(id);
     }
-    // Reference the original ORDERS/ORDCHG this ORDRSP answers.
-    if let Some(order_ref) = p
-        .get("order_reference")
-        .or_else(|| p.get("orig_message_ref"))
-        .and_then(serde_json::Value::as_str)
-    {
-        builder = builder.order_reference(order_ref);
+    // Reference the original ORDERS/ORDCHG this ORDRSP answers, under the
+    // qualifier the PID's own Zuordnungsschlüssel names: `RFF+ON` for
+    // 19011/19012 (the ORDERS, `ZG-T14`), `RFF+ACW` for 19013/19014 (the
+    // ORDCHG, `ZG-T50`). These are not interchangeable — they point at
+    // different messages.
+    if let Some(reference) = esa_korrelation_ref(p).or_else(|| {
+        p.get("orig_message_ref")
+            .and_then(serde_json::Value::as_str)
+    }) {
+        let qualifier = esa_korrelation_qualifier(pid).unwrap_or("ACW");
+        builder = builder.reference(qualifier, reference);
     }
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);
     }
 
     // ── ESA answer (19011-19014) full conformance ────────────────────────────
-    // ORDRSP carries no LOC — the ESA correlates by the RFF+ACW echo above.
-    // AJT is mandatory for all four; 19011/19012 also need IMD; 19011 (a
-    // Bestätigung) additionally carries an SG27 LIN + FTX.
-    let esa_pid = p.get("pid").and_then(serde_json::Value::as_u64);
-    if matches!(esa_pid, Some(19011..=19014)) {
-        builder = builder.adjustment("Z10");
-        if matches!(esa_pid, Some(19011 | 19012)) {
-            builder = builder.item_description();
+    //
+    // ORDRSP AHB 1.1b §4.15. Muss: `BGM+Z57`, `SG1 RFF+Z13`, and `SG2 AJT`
+    // carrying the Prüfschritt code (DE 4465) **with** the EBD that publishes
+    // it (DE 1082). Conditions [17]/[18] require the code to sit in that tree's
+    // Zustimmungs- resp. Ablehnungs-Cluster, so the code comes from
+    // `mako-pruefung` via the workflow and is never synthesised here.
+    //
+    // 19011/19012 additionally carry `IMD++<7081>`, which is what tells an
+    // answer to a Bestellung (`E_0256`) from one to a Beendigung (`E_0254`) —
+    // the two share these PIDs.
+    if matches!(pid, Some(19011..=19014)) {
+        builder = builder.document_code("Z57");
+        if let Some(abo) = p.get("abonnement").and_then(serde_json::Value::as_str)
+            && matches!(pid, Some(19011 | 19012))
+        {
+            builder = builder.abonnement(abo);
         }
-        if esa_pid == Some(19011) {
-            // Bestätigung: an SG2 coded reason (FTX) plus an SG27 line item.
-            builder = builder.adjustment_reason("Z27").line_item();
+        if let (Some(code), Some(ebd)) = (
+            p.get("antwort_code").and_then(serde_json::Value::as_str),
+            p.get("antwort_ebd").and_then(serde_json::Value::as_str),
+        ) {
+            builder = builder.adjustment(code, ebd);
+        } else {
+            return Err(RenderError::MissingField {
+                message_type: mt.into(),
+                field: "antwort_code/antwort_ebd (SG2 AJT is Muss on 19011-19014)".into(),
+            });
         }
     }
 
@@ -339,7 +456,11 @@ pub(super) fn render_ordrsp(
 /// | `sender`          | no       | Sender MP-ID (falls back to primary)         |
 /// | `receiver`        | no       | Receiver MP-ID (falls back to `msg.recipient`)|
 /// | `document_id`     | no       | BGM document id (Angebotsnummer)             |
-/// | `order_reference` | no       | RFF+ACW — the REQOTE this answers            |
+/// | `korrelation_ref` | no       | `RFF+AAV` — the REQOTE this answers (`ZG-T16`) |
+/// | `bindungsfrist_tage` | no    | `DTM+273` — a **duration**, in Tagen          |
+/// | `fruehester_start`| no       | `DTM+469` — earliest delivery start           |
+/// | `messprodukt`     | no       | `SG27 PIA+5` — the offered Messprodukt        |
+/// | `artikel_ids` / `preise` | no | `PIA+Z02` / `SG31 PRI+CAL` per Artikel-ID    |
 /// | `document_date`   | no       | DTM+137 date                                 |
 /// | `message_ref`     | no       | Derived from `causation_event_id` when absent|
 pub(super) fn render_quotes(
@@ -379,17 +500,10 @@ pub(super) fn render_quotes(
         .message_ref(message_ref);
 
     if let Some(pid) = p.get("pid").and_then(serde_json::Value::as_u64) {
-        builder = builder.pruefidentifikator(pid as u32);
+        builder = builder.pruefidentifikator(u32::try_from(pid).unwrap_or_default());
     }
     if let Some(id) = p.get("document_id").and_then(serde_json::Value::as_str) {
         builder = builder.document_id(id);
-    }
-    if let Some(order_ref) = p
-        .get("order_reference")
-        .or_else(|| p.get("orig_message_ref"))
-        .and_then(serde_json::Value::as_str)
-    {
-        builder = builder.order_reference(order_ref);
     }
     if let Some(d) = doc_date.as_deref() {
         builder = builder.document_date(d);
@@ -402,10 +516,15 @@ pub(super) fn render_quotes(
     }
     // Bindungsfrist (Angebot only) — its presence distinguishes an Angebot from
     // an Anfrage-Ablehnung on the ESA inbound side.
-    if let Some(bf) = p.get("bindungsfrist").and_then(|v| v.as_str())
-        && !bf.is_empty()
+    //
+    // `DTM+273` is a **duration**: DE 2380 „Zeitraum" (1 bis n) plus DE 2379
+    // ∈ {802 Monat, 803 Woche, 804 Tag}. The workflow hands over a day count.
+    if let Some(tage) = p
+        .get("bindungsfrist_tage")
+        .and_then(serde_json::Value::as_i64)
+        && tage > 0
     {
-        builder = builder.bindungsfrist(bf);
+        builder = builder.bindungsfrist(tage.to_string(), builders::DauerEinheit::Tag);
     }
     // Ablehnungsgrund (Ablehnung der Anfrage) — free text.
     if let Some(reason) = p.get("reason").and_then(|v| v.as_str())
@@ -423,25 +542,67 @@ pub(super) fn render_quotes(
     let is_angebot = p.get("pid").and_then(serde_json::Value::as_u64) == Some(15003)
         && p.get("reason").is_none();
     if is_angebot {
-        // SG1 RFF+Z13 = Prüfidentifikator.
-        builder = builder.reference("Z13", "15003");
+        // `BGM+Z57`, `SG1 RFF+AAV` (the REQOTE this answers — `ZG-T16`) and
+        // `RFF+Z13`, `SG4 CUX`, `SG14 CTA/COM`, `SG11 NAD+DP` before the
+        // `LOC+172`, and the SG27 Messprodukt line with its SG31 prices.
+        builder = builder.document_code("Z57").delivery_party();
+        if let Some(reference) = esa_korrelation_ref(p) {
+            builder = builder.reference("AAV", reference);
+        }
         builder = builder.currency(p.get("currency").and_then(|v| v.as_str()).unwrap_or("EUR"));
+        // `DTM+469` — the earliest start the MSB can deliver from (Muss).
+        if let Some(start) = p.get("fruehester_start").and_then(|v| v.as_str()) {
+            builder = builder.fruehester_start(esa_dtm303(start));
+        }
         let contact = p
             .get("contact")
             .and_then(|v| v.as_str())
-            .unwrap_or("ESA-Service");
+            .unwrap_or("MSB-Service");
         let comm = p
             .get("contact_comm")
             .and_then(|v| v.as_str())
-            .unwrap_or("esa@example.de");
+            .unwrap_or(sender);
         builder = builder.contact(contact, comm);
-        // Messprodukt (OBIS or product code) and offer price.
-        let product = p
-            .get("product")
-            .and_then(|v| v.as_str())
-            .unwrap_or("1-0:1.29.0");
-        builder = builder.product(product);
-        builder = builder.price(p.get("price").and_then(|v| v.as_str()).unwrap_or("0"));
+        // The Messprodukt is the one that was asked for — the Angebot prices
+        // *that* product (condition [77]), so it is echoed rather than
+        // defaulted to an OBIS-Kennzahl, which is a different PIA qualifier.
+        if let Some(messprodukt) = p.get("messprodukt").and_then(|v| v.as_str()) {
+            builder = builder.product(messprodukt);
+        }
+        for id in p
+            .get("artikel_ids")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            builder = builder.artikel_id(id);
+        }
+        for obis in p
+            .get("obis")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(serde_json::Value::as_str)
+        {
+            builder = builder.obis_kennzahl(obis);
+        }
+        // `PRI+CAL` per Artikel-ID: Z01 Einrichtungs-, Z02 Transaktions-,
+        // Z03 Betriebspreis, with H87 Stück / DAY Tag as the base unit.
+        for preis in p
+            .get("preise")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let betrag = preis.get("betrag").and_then(|v| v.as_str()).unwrap_or("0");
+            let art = preis.get("art").and_then(|v| v.as_str()).unwrap_or("Z01");
+            let einheit = preis
+                .get("einheit")
+                .and_then(|v| v.as_str())
+                .unwrap_or(if art == "Z03" { "DAY" } else { "H87" });
+            builder = builder.preis(betrag, art, einheit);
+        }
     }
 
     finish_interchange(builder.serialize(), sender, receiver, msg)

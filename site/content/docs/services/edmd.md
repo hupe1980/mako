@@ -788,18 +788,31 @@ chases estimates already written. All of them are triggered by a delivery.
 Silence triggers nothing. A head-end that breaks, a gateway that loses its WAN, a
 Kafka producer redeployed onto the wrong topic — none produce an ingest, so none
 produce a validation, a grade, or an event. The measuring point simply stops
-appearing, and until now nothing in the service was looking for an absence.
+appearing, and nothing else in the service looks for an absence.
 
 That failure surfaces at settlement, which is too late: the Summenzeitreihe is
 short, the Bilanzkreis carries the difference, and the window in which the values
 could still have been re-read or substituted under § 60 Abs. 2 MsbG has closed.
 
-An hourly sweep now asks the complementary question.
+An hourly sweep asks the complementary question.
 
 | State | Meaning | Typical cause |
 |---|---|---|
 | `SILENT` | Newest interval ends more than `silent_after_hours` ago (default 36) | Gateway offline, head-end down, routing broken |
 | `UNDER_COVERED` | Still delivering, but under `min_coverage_pct` of the window | Partial batches, dropped intervals |
+
+### The ESA Typ-2 stream
+
+Swept separately, with its own threshold (`typ2_silent_after_hours`), register
+rows (`stream = 'TYP2'`) and events (`de.messwert.esa.typ2.delivery.overdue` /
+`.resumed`). A Typ-2 gap breaches the §60 Abs. 1 MsbG delivery duty toward one
+ESA and reaches no billing run that could come up short, so nothing else would
+notice it.
+
+Keyed on the delivered **OBIS register**: a MSCONS 13027 names its register per
+line item and its subscription only in `SG1 RFF+AGI`, which `esa_typ2_reads`
+does not record. Coverage is not scored — a Typ-2 series is delivered as ordered
+and never reconciled or substituted, so only silence is a defect.
 
 ```bash
 curl -s "http://edmd:8380/api/v1/surveillance/delivery?state=SILENT" \

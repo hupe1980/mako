@@ -74,7 +74,8 @@ role-lf-strom  = ["mako-pruefung/role-lf"]  # LF answers 55007 / 55010 / 55016
 role-lf-gas    = ["mako-pruefung/role-lf"]  # LFA Gas 44007 / 44010 / 44016
 role-nb-strom  = ["mako-pruefung/role-nb"]  # GPKE STP (55001, 55077, 55004, 55600/55601), EoG closure
 role-nb-gas    = ["mako-pruefung/role-nb"]  # GeLi Gas An-/Abmeldung STP (44001, 44004)
-role-msb-strom = []                          # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel
+role-msb-strom = []                          # REQOTE→QUOTES, §14a ORDRSP, MSB-answered MSB-Wechsel,
+                                             # ESA Wertebestellung (35003/17007/17008/39002)
 
 lf-only    = ["role-lf-strom", "role-lf-gas"]
 nb-only    = ["role-nb-strom", "role-nb-gas"]
@@ -629,6 +630,11 @@ auto_respond = true   # false → every inbound LF process routed to approval_qu
 auto_accept       = false   # true → dispatch the MSB-Wechsel Bestätigung
 auto_preisanfrage = true    # false → the REQOTE goes to the approval queue
 
+[esa]                                 # WiM Teil 2 Kap. 4 — the MSB's answers to an ESA
+auto_accept                = false    # true → dispatch the E_0256/E_0257/E_0254 Zustimmungscode
+auto_reject                = false    # true → dispatch a deterministic Ablehnungscode
+accept_after_bindungsfrist = false    # E_0256 Prüfschritt 2 — a commercial decision
+
 [eog]                                     # §36/§38 EnWG gap closure (NB role)
 auto_activate             = false         # true → dispatch gpke.eog.anmelden on gap-detected
 default_transaktionsgrund = "ZT6"         # SG4 STS DE9013 for automatic Anmeldungen
@@ -821,6 +827,74 @@ auto_preisanfrage = true   # default: true
 ```
 
 Set `auto_preisanfrage = false` to route every REQOTE to the approval queue instead (e.g. during PreisblattMessung update windows); it lands there with its Frist either way.
+
+---
+
+## MSB module — ESA Wertebestellung (WiM Teil 2 Kap. 4)
+
+Serving an Energieserviceanbieter is a **mandatory** Zusatzleistung (§34 Abs. 2
+S. 2 Nr. 10 MsbG), so `role-msb-strom` always carries these four obligations:
+
+| Inbound PID | Process | Answered with | Frist | EBD |
+|---|---|---|---|---|
+| **35003** | Werteanfrage (REQOTE) | QUOTES 15003 | 5 WT | — |
+| **17007** | Bestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0256` |
+| **39002** | Stornierung der Bestellung | ORDRSP 19013/19014 | 2 WT | `E_0257` |
+| **17008** | Abbestellung von Werten | ORDRSP 19011/19012 | 2 WT | `E_0254` |
+
+The Prüfschritte are `mako_pruefung::msb::esa`; `esa_module.rs` is the plumbing.
+
+### Decision pipeline (`esa_module.rs`)
+
+```
+de.mako.process.initiated (PID 35003 / 17007 / 17008 / 39002)
+  → GET marktd /api/v1/esa/framework/{msb}/{esa}   ← Rahmenvertrag established?   (E_0256 Nr. 6)
+  → GET marktd /api/v1/esa/consent-check           ← Einwilligung still valid?    (E_0256 Nr. 8)
+  → GET marktd /api/v1/melos/{melo}/msb?at=        ← MSB assigned for the period? (E_0256 Nr. 7)
+  → GET marktd /api/v1/malos/{malo}/buendel?at=    ← one MSB across the bundle?  (E_0256 Nr. 11)
+  → mako_pruefung::msb::esa::pruefe_{bestellung,stornierung,beendigung}
+      Accept   → wim.wertebestellung.*-beantworten (Zustimmungscode) [if auto_accept]
+                 else approval_queue with the WiM Frist
+      Reject   → the same command with the tree's Ablehnungscode      [if auto_reject]
+      Escalate → approval_queue with the WiM Frist
+```
+
+The answer command is the same for both clusters: the code's **Cluster** picks
+the PID, so there is no separate „ablehnen" command to route to.
+
+### The Werteanfrage always reaches an operator
+
+`E_0253` „Angebot zur Anfrage prüfen" is published **without a tree**, and the
+Angebot is a priced offer — Bindungsfrist, earliest start, one `PRI+CAL` per
+Artikel-ID — whose terms the Festlegung does not specify. 35003 therefore goes
+to the queue with its 5-Werktage window and both candidate commands
+(`anbieten` / `anfrage-ablehnen`) attached.
+
+### What escalates on the order PIDs
+
+Three Prüfschritte reach facts no mako service holds, so the walk escalates
+rather than guessing:
+
+- **Optional Messprodukte.** Whether *this* MSB offers a product is commercial.
+  The seven Pflichtprodukte (BNetzA *Mitteilung Nr. 3*) are answered; an
+  otherwise-clean order for an optional one escalates.
+- **Gerätetechnik** (Prüfschritt 9) is a device fact mako does not hold, so it is
+  never asserted false.
+- **`E_0254` Prüfschritte 3/4** compare the requested end against values already
+  delivered — that state lives in the `makod` process, not in the event.
+
+Enable in `processd.toml`:
+
+```toml
+[esa]
+auto_accept = false                 # true → dispatch the Zustimmungscode directly
+auto_reject = false                 # true → dispatch a deterministic Ablehnungscode
+accept_after_bindungsfrist = false  # E_0256 Prüfschritt 2 — a commercial decision
+```
+
+Both automation flags default to `false` and are deliberately separate: a wrong
+Bestätigung commits the MSB to a delivery it may not be able to make, a wrong
+Ablehnung denies a §34-mandated Zusatzleistung.
 
 ---
 

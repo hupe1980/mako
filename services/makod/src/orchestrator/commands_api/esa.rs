@@ -86,13 +86,13 @@ pub(super) fn cmd_wim_wertebestellung_stornierung_beantworten<'a>(
     Box::pin(dispatch_wim_wertebestellung_stornierung_beantworten(s, p))
 }
 
-pub(super) fn cmd_wim_wertebestellung_abbestellung_bestaetigen<'a>(
+pub(super) fn cmd_wim_wertebestellung_abbestellung_beantworten<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_wim_wertebestellung_abbestellung_bestaetigen(s, p))
+    Box::pin(dispatch_wim_wertebestellung_abbestellung_beantworten(s, p))
 }
 
 // ── ESA Wertebestellung — ESA origination side ────────────────────────────────
@@ -140,6 +140,82 @@ pub(super) async fn esa_outbound_consent_gate(
 
 fn parse_iso_date(s: &str) -> Option<time::Date> {
     time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+}
+
+/// Read the ordered Messprodukt, Wunschtermin and Abo mode out of an
+/// `esa.werteanfrage.stellen` payload.
+///
+/// These are the substance of the request, not decoration: the Messprodukt is
+/// `SG27 PIA+5` (restricted by REQOTE AHB 1.2 §4.3 condition `[41]` to Codeliste
+/// der Konfigurationen Kapitel 4.6), the Wunschtermin is the `DTM+76` **Muss**,
+/// and the Abo mode is the `IMD+7081` **Muss** on the ORDERS that follows.
+///
+/// `zeitraum_von` doubles as the Wunschtermin: WiM Teil 2 UC 4.1.1 bounds a
+/// request to the period the Anschlussnutzer held the location, and that
+/// period's start is the earliest the delivery can begin.
+fn parse_gegenstand(
+    payload: &serde_json::Value,
+) -> Result<Box<mako_wim::esa::Bestellgegenstand>, DispatchError> {
+    let messprodukt = payload
+        .get("messprodukt")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "messprodukt is required — a Messprodukt-Code from the Codeliste der \
+                 Konfigurationen 1.4 Kapitel 4.6 (e.g. \"9991 00000 305 6\")"
+                    .to_owned(),
+            )
+        })?;
+    let wunschtermin = payload
+        .get("wunschtermin")
+        .or_else(|| payload.get("zeitraum_von"))
+        .or_else(|| payload.get("von"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso_date)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "wunschtermin (or zeitraum_von, YYYY-MM-DD) is required — DTM+76 is Muss on \
+                 the REQOTE 35003"
+                    .to_owned(),
+            )
+        })?;
+    let zeitraum_bis = payload
+        .get("zeitraum_bis")
+        .or_else(|| payload.get("bis"))
+        .and_then(|v| v.as_str())
+        .and_then(parse_iso_date);
+    // `IMD+7081`: a subscription (`Z01`) unless the caller asks for a single
+    // transmission. Historical requests are naturally one-shots, but the caller
+    // states it — guessing from `zeitraum_bis` would silently change which
+    // termination path applies (Stornierung vs Abbestellung).
+    let abonnement = match payload.get("abonnement").and_then(|v| v.as_str()) {
+        None => mako_wim::esa::Abonnement::StartAbo,
+        Some(code) => mako_wim::esa::Abonnement::from_imd_code(code)
+            .or(match code {
+                "abo" | "start_abo" => Some(mako_wim::esa::Abonnement::StartAbo),
+                "einmalig" | "ohne_abo" => Some(mako_wim::esa::Abonnement::OhneAbo),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "abonnement {code:?} is not an IMD DE 7081 code (Z01 Start Abo, \
+                     Z03 ohne Abo)"
+                ))
+            })?,
+    };
+    let smgw = match payload.get("smgw").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| {
+            DispatchError::InvalidPayload(format!("smgw target is malformed: {e}"))
+        })?),
+    };
+    Ok(Box::new(mako_wim::esa::Bestellgegenstand {
+        messprodukt: mako_wim::esa::normalize_code(messprodukt),
+        wunschtermin,
+        zeitraum_bis,
+        abonnement,
+        smgw,
+    }))
 }
 
 /// How a Werteanfrage's MSB is determined — decided purely from the payload.
@@ -261,17 +337,23 @@ pub(super) async fn dispatch_esa_werteanfrage(
         .and_then(|v| v.as_str())
         .ok_or_else(|| DispatchError::InvalidPayload("malo_id is required".to_owned()))?
         .to_owned();
+    // Parse (and thereby validate) the order before any I/O — a Messprodukt
+    // outside Kapitel 4.6 is not orderable by this Marktrolle at all.
+    let gegenstand = parse_gegenstand(payload)?;
     let msb = resolve_werteanfrage_msb(state, payload, &location).await?;
     let esa = state.sender_party_id.clone();
 
     esa_outbound_consent_gate(state, &esa, &msb, &location).await?;
 
-    // Duplicate guard — an order that was cancelled, ended or refused is
-    // terminal, so the ESA may place a new one. See `find_occupying_process`.
+    // Duplicate guard, keyed on the (location, Messprodukt) pair: several
+    // Kapitel-4.6 products exist for the same Marktlokation and an ESA may
+    // subscribe to more than one. An order that was cancelled, ended or refused
+    // is terminal, so the ESA may place a new one for the same pair.
+    let subscription_key = mako_wim::esa::business_key(&location, &gegenstand.messprodukt);
     if let Some(dup_id) =
         find_occupying_process::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
             state,
-            &location,
+            &subscription_key,
             mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         )
         .await?
@@ -282,12 +364,19 @@ pub(super) async fn dispatch_esa_werteanfrage(
         });
     }
 
-    let message_ref = MessageRef::new(format!("ESA-WA-{}", uuid::Uuid::new_v4()));
+    // The Belegnummer must equal the wire UNH reference the renderer emits:
+    // the MSB's QUOTES echoes it in `RFF+AAV`, which is how the Angebot finds
+    // its way back to this process.
+    let message_ref =
+        crate::edifact_renderer::msg_ref_from_uuid(&format!("ESAWA{}", uuid::Uuid::new_v4()));
+    let anfrage_key = message_ref.clone();
+    let message_ref = MessageRef::new(message_ref);
     let domain_cmd = mako_wim::esa_wertebestellung::EsaWertebestellungCommand::SendWerteanfrage {
         esa: MarktpartnerCode::new(esa),
         msb: MarktpartnerCode::new(msb),
         ebene: esa_ebene(&location),
         lokations_id: location.clone(),
+        gegenstand,
         message_ref,
     };
 
@@ -322,12 +411,20 @@ pub(super) async fn dispatch_esa_werteanfrage(
         .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
         .await?;
 
+    // Index the process under the location *and* the REQOTE's Belegnummer.
+    // Only the opening REQOTE is keyed on a location (`ZO-T17`); every answer
+    // from here on references a Belegnummer instead.
     let identity = process.identity();
-    let _ = state
-        .store
-        .as_process_registry()
-        .register_correlated(state.tenant_id, &location, process_id, identity)
-        .await;
+    let registry = state.store.as_process_registry();
+    for key in [
+        subscription_key.as_str(),
+        location.as_str(),
+        anfrage_key.as_str(),
+    ] {
+        let _ = registry
+            .register_correlated(state.tenant_id, key, process_id, identity.clone())
+            .await;
+    }
 
     Ok(DispatchOutcome::Spawned { process_id })
 }
@@ -338,6 +435,7 @@ pub(super) async fn dispatch_esa_bestellung(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
     // Re-gate: consent can be withdrawn between Anfrage and Bestellung. The
     // parties are optional here (the process already holds them), but when the
     // caller supplies them we enforce the strict gate.
@@ -347,13 +445,14 @@ pub(super) async fn dispatch_esa_bestellung(
     ) {
         esa_outbound_consent_gate(state, &esa, msb, &location).await?;
     }
-    // The Belegnummer must equal the wire UNH reference the renderer emits, so
-    // the MSB's ORDRSP answer (which echoes it in RFF+ACW) correlates back here.
+    // The Belegnummer must equal the wire UNH reference the renderer emits: the
+    // MSB's ORDRSP 19011/19012 echoes it in `RFF+ON` (`ZG-T14`), and a later
+    // ORDCHG Stornierung references it in `RFF+ON` too (`ZG-T51`).
     let message_ref =
         crate::edifact_renderer::msg_ref_from_uuid(&format!("ESABE{}", uuid::Uuid::new_v4()));
     dispatch_to_process_keyed::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         &[message_ref.as_str()],
         || mako_wim::esa_wertebestellung::EsaWertebestellungCommand::SendBestellung {
@@ -369,11 +468,12 @@ pub(super) async fn dispatch_esa_stornierung(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
     let message_ref =
         crate::edifact_renderer::msg_ref_from_uuid(&format!("ESAST{}", uuid::Uuid::new_v4()));
     dispatch_to_process_keyed::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         // The ORDRSP 19013/19014 Storno-Antwort echoes this ORDCHG's Belegnummer.
         &[message_ref.as_str()],
@@ -397,6 +497,7 @@ pub(super) async fn dispatch_wim_wertebestellung_liefern(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
     let reads = payload
         .get("reads")
         .cloned()
@@ -408,7 +509,7 @@ pub(super) async fn dispatch_wim_wertebestellung_liefern(
     }
     dispatch_to_process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::wertebestellung::WORKFLOW_NAME,
         move || mako_wim::wertebestellung::WertebestellungCommand::LiefereWerte {
             message_ref: MessageRef::new(format!("ESA-WERTE-{}", uuid::Uuid::new_v4())),
@@ -440,6 +541,7 @@ pub(super) async fn dispatch_wim_wertebestellung_anbieten(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
     let bindungsfrist = payload
         .get("bindungsfrist")
         .and_then(|v| v.as_str())
@@ -447,13 +549,29 @@ pub(super) async fn dispatch_wim_wertebestellung_anbieten(
             time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
         })
         .unwrap_or_else(|| time::OffsetDateTime::now_utc() + time::Duration::days(14));
-    dispatch_to_process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
+    // `DTM+469` — the earliest start the MSB offers. Defaults inside the
+    // workflow to the ESA's Wunschtermin when the MSB can meet it.
+    let fruehester_start = payload
+        .get("fruehester_start")
+        .and_then(|v| v.as_str())
+        .and_then(|s| {
+            time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+        });
+    // The Angebot's Belegnummer must equal the wire UNH reference: the ESA's
+    // ORDERS echoes it in `RFF+AAG` (`ZG-T24`), so the process is indexed under
+    // it for the Bestellung to come.
+    let message_ref =
+        crate::edifact_renderer::msg_ref_from_uuid(&format!("MSBANG{}", uuid::Uuid::new_v4()));
+    let key = message_ref.clone();
+    dispatch_to_process_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::wertebestellung::WORKFLOW_NAME,
+        &[key.as_str()],
         move || mako_wim::wertebestellung::WertebestellungCommand::SendAngebot {
-            message_ref: MessageRef::new(format!("MSB-ANG-{}", uuid::Uuid::new_v4())),
+            message_ref: MessageRef::new(message_ref),
             bindungsfrist,
+            fruehester_start,
         },
     )
     .await
@@ -466,36 +584,60 @@ pub(super) async fn dispatch_wim_wertebestellung_anfrage_ablehnen(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
     let reason = esa_answer_reason(payload)
         .ok_or_else(|| DispatchError::InvalidPayload("reason is required".to_owned()))?;
     dispatch_to_process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::wertebestellung::WORKFLOW_NAME,
         move || mako_wim::wertebestellung::WertebestellungCommand::RejectAnfrage { reason },
     )
     .await
 }
 
-/// `wim.wertebestellung.bestellung-beantworten` — MSB confirms or refuses the
-/// Bestellung (ORDRSP 19011/19012, UC 4.1 Nr. 4). `accept` is required; a
-/// refusal needs a `reason`.
+/// Read the `AJT` DE 4465 Antwortcode an MSB answer command must carry.
+///
+/// The ESA answers are ORDRSP, where `SG2 AJT` is **Muss** and its code must
+/// sit in the named EBD's Zustimmungs- or Ablehnungs-Cluster (ORDRSP AHB 1.1b
+/// §4.15, conditions `[17]`/`[18]`). The **cluster picks the answer PID**, so this
+/// replaces the old `accept: bool` rather than accompanying it — the two could
+/// disagree, and an answer to the market is a binding statement.
+///
+/// Run [`mako_pruefung::msb::esa`] to obtain the code from the process facts.
+fn esa_antwort_code(payload: &serde_json::Value, tree: &str) -> Result<String, DispatchError> {
+    payload
+        .get("antwort_code")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(format!(
+                "antwort_code is required — an AJT DE 4465 code published by {tree}"
+            ))
+        })
+}
+
+/// `wim.wertebestellung.bestellung-beantworten` — MSB answers the Bestellung
+/// (ORDRSP 19011/19012, UC 4.1 Nr. 4).
+///
+/// `antwort_code` is required and comes from `E_0256`
+/// ([`mako_pruefung::msb::esa::pruefe_bestellung`]); its Cluster decides
+/// whether the answer rides 19011 or 19012.
 pub(super) async fn dispatch_wim_wertebestellung_bestellung_beantworten(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
-    let accept = payload
-        .get("accept")
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| DispatchError::InvalidPayload("accept (bool) is required".to_owned()))?;
+    let process_key = esa_process_key(payload, &location);
+    let antwort_code = esa_antwort_code(payload, mako_pruefung::codes::EBD_ESA_BESTELLUNG)?;
     let reason = esa_answer_reason(payload);
     dispatch_to_process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::wertebestellung::WORKFLOW_NAME,
         move || mako_wim::wertebestellung::WertebestellungCommand::AnswerBestellung {
-            accept,
+            antwort_code,
             message_ref: MessageRef::new(format!("MSB-RSP-{}", uuid::Uuid::new_v4())),
             reason,
         },
@@ -503,24 +645,22 @@ pub(super) async fn dispatch_wim_wertebestellung_bestellung_beantworten(
     .await
 }
 
-/// `wim.wertebestellung.stornierung-beantworten` — MSB confirms or refuses the
-/// Stornierung (ORDRSP 19013/19014, UC 4.1 Nr. 6).
+/// `wim.wertebestellung.stornierung-beantworten` — MSB answers the Stornierung
+/// (ORDRSP 19013/19014, UC 4.1 Nr. 6). Code from `E_0257`.
 pub(super) async fn dispatch_wim_wertebestellung_stornierung_beantworten(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
-    let accept = payload
-        .get("accept")
-        .and_then(serde_json::Value::as_bool)
-        .ok_or_else(|| DispatchError::InvalidPayload("accept (bool) is required".to_owned()))?;
+    let process_key = esa_process_key(payload, &location);
+    let antwort_code = esa_antwort_code(payload, mako_pruefung::codes::EBD_ESA_STORNIERUNG)?;
     let reason = esa_answer_reason(payload);
     dispatch_to_process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::wertebestellung::WORKFLOW_NAME,
         move || mako_wim::wertebestellung::WertebestellungCommand::AnswerStornierung {
-            accept,
+            antwort_code,
             message_ref: MessageRef::new(format!("MSB-STO-{}", uuid::Uuid::new_v4())),
             reason,
         },
@@ -528,19 +668,28 @@ pub(super) async fn dispatch_wim_wertebestellung_stornierung_beantworten(
     .await
 }
 
-/// `wim.wertebestellung.abbestellung-bestaetigen` — MSB confirms the Abbestellung
-/// (ORDRSP 19011, UC 4.3 Nr. 2).
-pub(super) async fn dispatch_wim_wertebestellung_abbestellung_bestaetigen(
+/// `wim.wertebestellung.abbestellung-beantworten` — MSB answers the
+/// Abbestellung (ORDRSP 19011/19012, UC 4.3 Nr. 2). Code from `E_0254`.
+///
+/// Not "bestätigen": `E_0254` publishes four refusals, and one of them (`A01`,
+/// „es handelte sich um eine einmalige Übermittlung") is the normal answer to
+/// an ESA that used the wrong termination path.
+pub(super) async fn dispatch_wim_wertebestellung_abbestellung_beantworten(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
+    let antwort_code = esa_antwort_code(payload, mako_pruefung::codes::EBD_ESA_BEENDIGUNG)?;
+    let reason = esa_answer_reason(payload);
     dispatch_to_process::<mako_wim::wertebestellung::WimWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::wertebestellung::WORKFLOW_NAME,
-        || mako_wim::wertebestellung::WertebestellungCommand::AnswerAbbestellung {
+        move || mako_wim::wertebestellung::WertebestellungCommand::AnswerAbbestellung {
+            antwort_code,
             message_ref: MessageRef::new(format!("MSB-ABB-{}", uuid::Uuid::new_v4())),
+            reason,
         },
     )
     .await
@@ -553,6 +702,7 @@ pub(super) async fn dispatch_esa_abbestellung(
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
     let location = extract_esa_location(payload)?;
+    let process_key = esa_process_key(payload, &location);
     let grund = payload
         .get("grund")
         .and_then(|v| v.as_str())
@@ -565,7 +715,7 @@ pub(super) async fn dispatch_esa_abbestellung(
     let key = message_ref.clone();
     dispatch_to_process_keyed::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow, _>(
         state,
-        &location,
+        &process_key,
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         // The ORDRSP 19011 confirming the Abbestellung echoes this Belegnummer.
         &[key.as_str()],
@@ -576,6 +726,23 @@ pub(super) async fn dispatch_esa_abbestellung(
         },
     )
     .await
+}
+
+/// The process key an ESA follow-up command targets.
+///
+/// A subscription is the (Meldepunkt, Messprodukt) pair, so a location alone is
+/// ambiguous once an ESA holds more than one product at a location. Supplying
+/// `messprodukt` addresses one of them; omitting it keeps the plain location
+/// key, which is unambiguous while only one subscription exists there.
+pub(super) fn esa_process_key(payload: &serde_json::Value, location: &str) -> String {
+    payload
+        .get("messprodukt")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map_or_else(
+            || location.to_owned(),
+            |m| mako_wim::esa::business_key(location, m),
+        )
 }
 
 /// Extract the location (MaLo/MeLo/NeLo) an ESA follow-up command targets.

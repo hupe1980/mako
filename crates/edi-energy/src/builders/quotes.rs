@@ -9,6 +9,57 @@ use crate::{Error, Release};
 
 use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
 
+/// DE 2379 unit of a `DTM` that carries a **duration** rather than a date.
+///
+/// QUOTES AHB 1.1a §4.3 states the Bindungsfrist (`DTM+273`) and the
+/// Einrichtungszeitspanne (`DTM+279`) as a count plus one of these units.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DauerEinheit {
+    /// `802` — Monat.
+    Monat,
+    /// `803` — Woche.
+    Woche,
+    /// `804` — Tag.
+    Tag,
+}
+
+impl DauerEinheit {
+    /// DE 2379 code.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Monat => "802",
+            Self::Woche => "803",
+            Self::Tag => "804",
+        }
+    }
+
+    /// Parse a DE 2379 code that denotes a duration unit.
+    #[must_use]
+    pub const fn from_code(code: &str) -> Option<Self> {
+        match code.as_bytes() {
+            b"802" => Some(Self::Monat),
+            b"803" => Some(Self::Woche),
+            b"804" => Some(Self::Tag),
+            _ => None,
+        }
+    }
+
+    /// The duration `count` of these units expressed as a [`time::Duration`].
+    ///
+    /// A month is taken as 30 days — the AHB gives no calendar rule, and the
+    /// Bindungsfrist is a deadline the ESA must beat, so the conservative
+    /// (shorter) reading is the safe one.
+    #[must_use]
+    pub const fn to_duration(self, count: i64) -> time::Duration {
+        match self {
+            Self::Monat => time::Duration::days(count * 30),
+            Self::Woche => time::Duration::weeks(count),
+            Self::Tag => time::Duration::days(count),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct QuotesBuilderInner {
     release: Release,
@@ -21,12 +72,26 @@ struct QuotesBuilderInner {
     document_date: Option<String>,
     location: Option<String>,
     pruefidentifikator: Option<u32>,
-    order_reference: Option<String>,
+    /// BGM DE 1001. Defaults to `310`; the ESA Angebot uses `Z57`.
+    document_code: Option<String>,
+    /// SG1 references as `(1153 qualifier, 1154 value)`. Additive.
+    references: Vec<(String, String)>,
+    /// `DTM+469` Startdatum/-zeitpunkt, frühestes — Muss on the ESA Angebot.
+    fruehester_start: Option<String>,
+    /// `DTM+279` Einrichtungszeitspanne as `(count, 2379 unit)`.
+    einrichtungszeit: Option<(String, String)>,
+    /// `NAD+DP` Liefer-/Bezugsort — Muss on the ESA Angebot.
+    delivery_party: bool,
+    /// SG27 `PIA+Z02` Artikel-IDs.
+    artikel_ids: Vec<String>,
+    /// SG27 `PIA+5 … :SRW` OBIS-Kennzahlen.
+    obis: Vec<String>,
+    /// SG31 prices as `(5118 Betrag, 5387 Preisart, 6411 Mengeneinheit)`.
+    preise: Vec<(String, String, String)>,
     bindungsfrist: Option<String>,
     reason: Option<String>,
     // Additive ESA-Angebot (PID 15003) content — only emitted when set, so the
     // Geräteübernahme Angebote (15001/15002) that share this builder are unaffected.
-    reference: Option<(String, String)>,
     currency: Option<String>,
     contact: Option<(String, String)>,
     product: Option<String>,
@@ -81,10 +146,16 @@ impl QuotesBuilder<Unset, Unset> {
                 document_date: None,
                 location: None,
                 pruefidentifikator: None,
-                order_reference: None,
+                document_code: None,
+                references: Vec::new(),
+                fruehester_start: None,
+                einrichtungszeit: None,
+                delivery_party: false,
+                artikel_ids: Vec::new(),
+                obis: Vec::new(),
+                preise: Vec::new(),
                 bindungsfrist: None,
                 reason: None,
-                reference: None,
                 currency: None,
                 contact: None,
                 product: None,
@@ -155,12 +226,6 @@ impl<S, R> QuotesBuilder<S, R> {
         self
     }
 
-    /// Reference the original request this quotes (RFF+ACW).
-    pub fn order_reference(mut self, reference: impl Into<String>) -> Self {
-        self.inner.order_reference = Some(reference.into());
-        self
-    }
-
     /// Set the location (MaLo-ID / ZPB / NeLo-ID) this Angebot concerns.
     ///
     /// Emits `LOC+172+<id>` so the ESA can correlate the answer to the process
@@ -170,15 +235,84 @@ impl<S, R> QuotesBuilder<S, R> {
         self
     }
 
-    /// Set the Bindungsfrist (offer validity) — emits `DTM+273+<CCYYMMDD>:102`.
+    /// Set the Bindungsfrist (Gültigkeitsdauer des Angebots) — emits
+    /// `DTM+273+<count>:<unit>`.
     ///
-    /// DE 2005 `273` ("Validity period") is the QUOTES MIG-permitted qualifier
-    /// for the offer's binding period (the MIG restricts 2005 to
-    /// `{137,76,203,469,472,279,273}`). Present on an Angebot; **absent** on an
-    /// Ablehnung der Anfrage — its presence is what tells the ESA an Angebot
-    /// apart from a rejection.
-    pub fn bindungsfrist(mut self, date_ccyymmdd: impl Into<String>) -> Self {
-        self.inner.bindungsfrist = Some(date_ccyymmdd.into());
+    /// **This is a duration, not a date.** QUOTES AHB 1.1a §4.3 gives DE 2380
+    /// as „Zeitraum“ with condition `[908]` („Mögliche Werte: 1 bis n“) and
+    /// DE 2379 as `802` Monat / `803` Woche / `804` Tag. Rendering a
+    /// A `CCYYMMDD` here is an eight-digit number where the AHB expects a
+    /// count, and a receiver parsing it as a date finds none — which is how
+    /// an Angebot gets read as an Ablehnung, since the segment's presence is
+    /// what tells the two apart.
+    ///
+    /// Use [`DauerEinheit`] for `unit`.
+    pub fn bindungsfrist(mut self, count: impl Into<String>, unit: DauerEinheit) -> Self {
+        self.inner.bindungsfrist = Some(format!("{}\u{1}{}", count.into(), unit.as_str()));
+        self
+    }
+
+    /// Set the BGM DE 1001 document code. Defaults to `310`.
+    ///
+    /// The ESA Angebot uses `Z57` („Übermittlung von Werten an ESA“).
+    pub fn document_code(mut self, code: impl Into<String>) -> Self {
+        self.inner.document_code = Some(code.into());
+        self
+    }
+
+    /// Set `DTM+469` — „Startdatum oder -zeitpunkt, frühestes/r“
+    /// (`CCYYMMDDHHMM`). **Muss** on the ESA Angebot: it is when the MSB can
+    /// first deliver, answering the ESA's Wunschtermin.
+    pub fn fruehester_start(mut self, ccyymmddhhmm: impl Into<String>) -> Self {
+        self.inner.fruehester_start = Some(ccyymmddhhmm.into());
+        self
+    }
+
+    /// Set `DTM+279` — „Vom Bestelleingangsdatum bis Lieferdatum“, the lead
+    /// time the MSB needs to set the delivery up. A *Kann* segment.
+    pub fn einrichtungszeit(mut self, count: impl Into<String>, unit: DauerEinheit) -> Self {
+        self.inner.einrichtungszeit = Some((count.into(), unit.as_str().to_owned()));
+        self
+    }
+
+    /// Emit the `NAD+DP` Liefer-/Bezugsort party that introduces the `LOC+172`
+    /// Meldepunkt group. **Muss** on the ESA Angebot.
+    pub fn delivery_party(mut self) -> Self {
+        self.inner.delivery_party = true;
+        self
+    }
+
+    /// Add an SG27 `PIA+Z02+<id>:Z09` Artikel-ID.
+    ///
+    /// QUOTES AHB 1.1a §4.3 condition `[2042]`: at least one, at most three —
+    /// and the last two digits of each ID select the matching
+    /// [`price`](Self::price) kind (`01` Einrichtung, `02` Betrieb, `03`
+    /// Transaktion).
+    pub fn artikel_id(mut self, id: impl Into<String>) -> Self {
+        self.inner.artikel_ids.push(id.into());
+        self
+    }
+
+    /// Add an SG27 `PIA+5+<obis>:SRW` OBIS-Kennzahl for the offered values.
+    pub fn obis_kennzahl(mut self, obis: impl Into<String>) -> Self {
+        self.inner.obis.push(obis.into());
+        self
+    }
+
+    /// Add an SG31 price — emits `PRI+CAL:<betrag>:<art>::1:<einheit>`.
+    ///
+    /// `art` ∈ `{Z01 Einrichtungspreis, Z02 Transaktionspreis, Z03
+    /// Betriebspreis}`, `einheit` ∈ `{H87 Stück, DAY Tag}` (`DAY` only with
+    /// `Z03`). One per Artikel-ID (condition `[2071]`).
+    pub fn preis(
+        mut self,
+        betrag: impl Into<String>,
+        art: impl Into<String>,
+        einheit: impl Into<String>,
+    ) -> Self {
+        self.inner
+            .preise
+            .push((betrag.into(), art.into(), einheit.into()));
         self
     }
 
@@ -191,11 +325,15 @@ impl<S, R> QuotesBuilder<S, R> {
         self
     }
 
-    /// Add an SG1 reference `RFF+<qual>:<value>` (e.g. `Z13` = Prüfidentifikator).
+    /// Add an SG1 reference `RFF+<qual>:<value>`. **Additive** — call once per
+    /// reference the AHB requires.
     ///
-    /// The QUOTES MIG restricts SG1 `1153` to `{AAV, ACW, Z13}`.
+    /// The QUOTES MIG restricts SG1 `1153` to `{AAV, ACW, Z13}`. The ESA
+    /// Angebot needs `AAV` (the REQOTE's Belegnummer — its published
+    /// Zuordnungsschlüssel `ZG-T16`) **and** `Z13`, which is why there is no
+    /// single-slot variant: one would silently drop the other.
     pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
-        self.inner.reference = Some((qualifier.into(), value.into()));
+        self.inner.references.push((qualifier.into(), value.into()));
         self
     }
 
@@ -233,23 +371,40 @@ impl<S, R> QuotesBuilder<S, R> {
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
 
-        let pid_str = self.inner.pruefidentifikator.map(|p| format!("{p:05}"));
-        let bgm_1004 = pid_str
+        // BGM DE 1004 is the **Dokumentennummer** (QUOTES AHB 1.1a); the
+        // Prüfidentifikator has its own `SG1 RFF+Z13`. Defaults to the message
+        // reference so the document always carries a number.
+        let bgm_1004 = self
+            .inner
+            .document_id
             .as_deref()
-            .or(self.inner.document_id.as_deref())
-            .unwrap_or("");
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
             [&self.inner.message_ref],
             ["QUOTES", "D", "10A", "UN", self.inner.release.as_str()]
         );
-        emit_seg!(w, "BGM", "310", bgm_1004);
+        emit_seg!(
+            w,
+            "BGM",
+            self.inner.document_code.as_deref().unwrap_or("310"),
+            bgm_1004
+        );
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
-        // Bindungsfrist (offer validity, DE 2005 = 273) — present only on an
-        // Angebot; the MIG does not permit Z12 here.
+        // `DTM+469` — frühester Start der Übermittlung, format 303.
+        if let Some(start) = &self.inner.fruehester_start {
+            emit_comp!(w, "DTM", ["469", start, "303"]);
+        }
+        // `DTM+279` — Einrichtungszeitspanne (count + 802/803/804 unit).
+        if let Some((count, unit)) = &self.inner.einrichtungszeit {
+            emit_comp!(w, "DTM", ["279", count, unit]);
+        }
+        // Bindungsfrist (Gültigkeitsdauer, DE 2005 = 273) — a *duration*
+        // (count + 802/803/804 unit), present only on an Angebot.
         if let Some(bf) = &self.inner.bindungsfrist {
-            emit_comp!(w, "DTM", ["273", bf, "102"]);
+            let (count, unit) = bf.split_once('\u{1}').unwrap_or((bf.as_str(), "804"));
+            emit_comp!(w, "DTM", ["273", count, unit]);
         }
         // Ablehnungsgrund (Ablehnung der Anfrage) — top-level FTX (DE 4451 = ACB),
         // before the SG1 reference group.
@@ -257,10 +412,10 @@ impl<S, R> QuotesBuilder<S, R> {
             emit_comp!(w, "FTX", ["ACB"], [""], [""], [reason]);
         }
         // ── SG1: references ──────────────────────────────────────────────────
-        if let Some(order_ref) = &self.inner.order_reference {
-            emit_comp!(w, "RFF", ["ACW", order_ref]);
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
-        if let Some((q, v)) = &self.inner.reference {
+        for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
         }
         // ── SG4: currency (CUX+2:<ISO>:4) ────────────────────────────────────
@@ -268,6 +423,10 @@ impl<S, R> QuotesBuilder<S, R> {
             emit_comp!(w, "CUX", ["2", iso, "4"]);
         }
         // ── SG11: parties + location ─────────────────────────────────────────
+        // Segment sequence per the MIG: the SG11 parties, then the SG14
+        // contact, then the SG11 Meldepunkt — `NAD, CTA, COM, LOC`. (The
+        // AHB's 00016–00021 row numbers are guide positions, not a wire
+        // order; they interleave CTA/COM between the NADs.)
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -284,7 +443,10 @@ impl<S, R> QuotesBuilder<S, R> {
                 [id, "", self.inner.receiver_agency.as_str()]
             );
         }
-        // ── SG14: contact — before LOC per the QUOTES segment order ──────────
+        // ── SG11: Liefer-/Bezugsort + Meldepunkt ─────────────────────────────
+        if self.inner.delivery_party {
+            emit_seg!(w, "NAD", "DP");
+        }
         if let Some((name, comm)) = &self.inner.contact {
             emit_comp!(w, "CTA", ["IC"], ["", name]);
             emit_comp!(w, "COM", [comm, "EM"]);
@@ -292,12 +454,29 @@ impl<S, R> QuotesBuilder<S, R> {
         if let Some(loc) = &self.inner.location {
             emit_seg!(w, "LOC", "172", loc);
         }
-        // ── SG27: line item + product ────────────────────────────────────────
+        // ── SG27: Messprodukt line ───────────────────────────────────────────
+        //
+        // `LIN+1+Z67` introduces the offered Messprodukt; `PIA+5+<code>:Z11`
+        // names it (7143 is the *second* component of C212), `PIA+Z02` the
+        // Artikel-IDs and `PIA+5+<obis>:SRW` the OBIS-Kennzahlen.
         if let Some(product) = &self.inner.product {
-            emit_seg!(w, "LIN", "1");
-            emit_comp!(w, "PIA", ["5"], [product, "SRW"]);
-            // ── SG31: price ──────────────────────────────────────────────────
-            if let Some(price) = &self.inner.price {
+            emit_seg!(w, "LIN", "1", "Z67");
+            emit_comp!(w, "PIA", ["5"], [product, "Z11"]);
+            for id in &self.inner.artikel_ids {
+                emit_comp!(w, "PIA", ["Z02"], [id, "Z09"]);
+            }
+            for obis in &self.inner.obis {
+                emit_comp!(w, "PIA", ["5"], [obis, "SRW"]);
+            }
+            // ── SG31: prices ─────────────────────────────────────────────────
+            // `PRI+CAL:<5118>:<5387>::<5284>:<6411>` — Einzelpreisbasis 5284 is
+            // fixed to 1 by condition [903].
+            for (betrag, art, einheit) in &self.inner.preise {
+                emit_comp!(w, "PRI", ["CAL", betrag, art, "", "1", einheit]);
+            }
+            if self.inner.preise.is_empty()
+                && let Some(price) = &self.inner.price
+            {
                 emit_comp!(w, "PRI", ["CAL", price]);
             }
         }

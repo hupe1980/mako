@@ -106,9 +106,14 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         tenant: &str,
         esa_mp_id: &str,
     ) -> Result<Vec<EinwilligungRecord>, MdmError> {
+        // „Active" is the same predicate the gate uses — a listing that showed
+        // expired consents as active would contradict the decision the gate
+        // makes on the very same rows.
         let rows = sqlx::query(
             "SELECT * FROM esa_einwilligungen \
              WHERE tenant = $1 AND esa_mp_id = $2 AND revoked_at IS NULL \
+               AND valid_from <= CURRENT_DATE \
+               AND (valid_to IS NULL OR valid_to >= CURRENT_DATE) \
              ORDER BY granted_at DESC",
         )
         .bind(tenant)
@@ -223,10 +228,22 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         }
 
         // 2. Location consents. An active consent delivers; a record that exists
-        //    but is entirely revoked is the Widerruf clearing case; no record at
-        //    all is self-assertion (never a block).
+        //    but is no longer in force is the Widerruf clearing case; no record
+        //    at all is self-assertion (never a block).
+        //
+        //    „Active" means non-revoked **and inside its validity window**. A
+        //    consent is a time-bounded legal basis: GDPR Art. 7 does not make
+        //    one perpetual, `E_0256` Prüfschritt 8 refuses an order whose
+        //    Einwilligung „widerrufen [wurde] oder ihre Gültigkeit ist
+        //    abgelaufen", and the schema has carried `valid_from`/`valid_to`
+        //    all along. Checking only `revoked_at` let an expired consent go on
+        //    authorising Werteanfragen indefinitely — the one failure mode this
+        //    registry exists to prevent.
         let row = sqlx::query(
-            "SELECT bool_or(revoked_at IS NULL) AS has_active, count(*) AS n \
+            "SELECT bool_or(revoked_at IS NULL \
+                            AND valid_from <= CURRENT_DATE \
+                            AND (valid_to IS NULL OR valid_to >= CURRENT_DATE)) AS has_active, \
+                    count(*) AS n \
              FROM esa_einwilligungen \
              WHERE tenant = $1 AND esa_mp_id = $2 AND $3 = ANY(location_ids)",
         )
@@ -242,6 +259,7 @@ impl EinwilligungRepository for PgEinwilligungRepository {
         let code = if has_active == Some(true) {
             ConsentCode::Active
         } else if n > 0 {
+            // A record exists but is revoked, expired, or not yet in force.
             ConsentCode::Revoked
         } else {
             // Missing record: self-assertion for the MSB, no lawful basis for

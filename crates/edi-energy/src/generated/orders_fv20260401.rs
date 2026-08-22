@@ -153,14 +153,15 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
 static CODES_1001: &[&str] = &[
     "Z55", "Z56", "Z57", "Z58", "Z59", "Z60", "Z61", "Z62", "Z63", "Z64",
 ];
-static CODES_1153: &[&str] = &["AGI", "Z13", "Z18", "Z19"];
+static CODES_1153: &[&str] = &["AAG", "ACW", "AGI", "ON", "Z13", "Z18", "Z19"];
 static CODES_1225: &[&str] = &["9"];
 static CODES_1229: &[&str] = &["Z54", "Z55"];
-static CODES_2005: &[&str] = &["137", "163", "164", "293"];
+static CODES_2005: &[&str] = &["137", "163", "164", "203", "293"];
 static CODES_3035: &[&str] = &["MR", "MS"];
 static CODES_3227: &[&str] = &["172", "237", "Z01"];
 static CODES_4347: &[&str] = &["5"];
 static CODES_4451: &[&str] = &["ZZZ"];
+static CODES_7081: &[&str] = &["Z01", "Z02", "Z03"];
 
 pub(crate) fn is_code_valid(de_id: &str, code: &str) -> bool {
     code_list(de_id).is_none_or(|codes| codes.binary_search(&code).is_ok())
@@ -200,6 +201,7 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
         "3227" => Some(CODES_3227),
         "4347" => Some(CODES_4347),
         "4451" => Some(CODES_4451),
+        "7081" => Some(CODES_7081),
         _ => None,
     }
 }
@@ -1016,6 +1018,66 @@ static AHB_17007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
+            .with_named_stateless_rule_fn("AHB-17007-CAV-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "CAV",
+                    "AHB-17007-CAV-N",
+                    "segment CAV must not appear for Pruefidentifikator 17007 (not used)",
+                    "17007",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17007-CCI-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "CCI",
+                    "AHB-17007-CCI-N",
+                    "segment CCI must not appear for Pruefidentifikator 17007 (not used)",
+                    "17007",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17007-LIN-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "LIN",
+                    "AHB-17007-LIN-N",
+                    "segment LIN must not appear for Pruefidentifikator 17007 (not used)",
+                    "17007",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17007-LOC-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "LOC",
+                    "AHB-17007-LOC-N",
+                    "segment LOC must not appear for Pruefidentifikator 17007 (not used)",
+                    "17007",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17007-PIA-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "PIA",
+                    "AHB-17007-PIA-N",
+                    "segment PIA must not appear for Pruefidentifikator 17007 (not used)",
+                    "17007",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17007-QTY-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "QTY",
+                    "AHB-17007-QTY-N",
+                    "segment QTY must not appear for Pruefidentifikator 17007 (not used)",
+                    "17007",
+                    issues,
+                );
+            })
             .with_max_issues_per_rule(50),
     )
 });
@@ -1075,6 +1137,66 @@ static AHB_17008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     "RFF",
                     "AHB-17008-RFF-M",
                     "mandatory segment RFF is missing for Pruefidentifikator 17008",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-CAV-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "CAV",
+                    "AHB-17008-CAV-N",
+                    "segment CAV must not appear for Pruefidentifikator 17008 (not used)",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-CCI-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "CCI",
+                    "AHB-17008-CCI-N",
+                    "segment CCI must not appear for Pruefidentifikator 17008 (not used)",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-LIN-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "LIN",
+                    "AHB-17008-LIN-N",
+                    "segment LIN must not appear for Pruefidentifikator 17008 (not used)",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-LOC-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "LOC",
+                    "AHB-17008-LOC-N",
+                    "segment LOC must not appear for Pruefidentifikator 17008 (not used)",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-PIA-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "PIA",
+                    "AHB-17008-PIA-N",
+                    "segment PIA must not appear for Pruefidentifikator 17008 (not used)",
+                    "17008",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-17008-QTY-N", |segs, issues| {
+                ahb_check_not_used(
+                    segs,
+                    "QTY",
+                    "AHB-17008-QTY-N",
+                    "segment QTY must not appear for Pruefidentifikator 17008 (not used)",
                     "17008",
                     issues,
                 );
@@ -3706,6 +3828,9 @@ impl Profile for OrdersFv20260401Profile {
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("ORDERS MIG 1.4c, Stand 01.04.2026")
+    }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

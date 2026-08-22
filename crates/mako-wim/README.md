@@ -147,7 +147,7 @@ the same instant. This leg is what makes the Wechsel constitutive.
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
 | `technik_aenderung` | ORDERS 17011/17118 → ORDRSP 19005/19006 — Messlokationsänderung, **10 WT** Antwort against a **20 WT** Vorlauffrist (Kap. 3.3) |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
-| `wertebestellung`  | PIDs 35002/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT). |
+| `wertebestellung`  | PIDs 35003/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012, IFTSTA 21042 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT); answers carry an `E_0254`/`E_0256`/`E_0257` Antwortcode. |
 | `invoic`           | PID 31009 — MSB-Rechnung INVOIC (WiM Strom Teil 1). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-invoic`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. |
 | `preisanfrage`     | PIDs 35001/35002/35004/35005 (REQOTE), 15001/15002/15004/15005 (QUOTES) — Preisanfrage            |
 | `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
@@ -195,47 +195,90 @@ Gerätewechselabsicht) answered by ORDRSP 19015/19016.
 
 §34 Abs. 2 S. 2 Nr. 10 MsbG makes serving an Energieserviceanbieter a mandatory,
 non-discriminatory Zusatzleistung, so an MSB must be able to process the order
-that authorises value delivery and the one that stops it.
+that authorises value delivery and the one that stops it. Both sides are
+modelled: `wertebestellung` (MSB) and `esa_wertebestellung` (ESA), over disjoint
+PID sets so one deployment may hold both roles.
 
-| UC step | Direction | Message | PID | Frist |
-|---|---|---|---|---|
-| 4.1 Nr. 1 Anfrage | ESA → MSB | REQOTE | 35002 | — |
-| 4.1 Nr. 2 Angebot / Ablehnung | MSB → ESA | QUOTES | 15003 | **5 WT** nach ÜT der Anfrage |
-| 4.1 Nr. 3 Bestellung | ESA → MSB | ORDERS | 17007 | bis Ablauf der **Bindungsfrist** |
-| 4.1 Nr. 4 Antwort | MSB → ESA | ORDRSP | 19011 / 19012 | **2 WT** nach ÜT der Bestellung |
-| 4.1 Nr. 5 Stornierung | ESA → MSB | ORDCHG | 39002 | unverzüglich |
-| 4.1 Nr. 6 Antwort | MSB → ESA | ORDRSP | 19013 / 19014 | **2 WT** nach ÜT der Stornierung |
-| 4.3 Nr. 1 Abbestellung | ESA → MSB | ORDERS | 17007 | unverzüglich |
-| 4.3 Nr. 2 Antwort | MSB → ESA | ORDRSP | 19011 / 19012 | **2 WT** nach ÜT der Abbestellung |
-| 4.4 Nr. 1 Beendigung durch MSB | MSB → ESA | IFTSTA | 21042 (STS 4405 = 105 „beendet") | unverzüglich |
+| UC step | Direction | Message | PID | Frist | EBD |
+|---|---|---|---|---|---|
+| 4.1 Nr. 1 Anfrage | ESA → MSB | REQOTE | 35003 | — | — |
+| 4.1 Nr. 2 Angebot / Ablehnung | MSB → ESA | QUOTES | 15003 | **5 WT** nach ÜT der Anfrage | — |
+| 4.1 Nr. 3 Bestellung | ESA → MSB | ORDERS | 17007 | bis Ablauf der **Bindungsfrist** | — |
+| 4.1 Nr. 4 Antwort | MSB → ESA | ORDRSP | 19011 / 19012 | **2 WT** nach ÜT der Bestellung | `E_0256` |
+| 4.1 Nr. 5 Stornierung | ESA → MSB | ORDCHG | 39002 | unverzüglich | — |
+| 4.1 Nr. 6 Antwort | MSB → ESA | ORDRSP | 19013 / 19014 | **2 WT** nach ÜT der Stornierung | `E_0257` |
+| 4.2 Werteübermittlung | MSB → ESA | MSCONS | 13027 | per Messprodukt | — |
+| 4.3 Nr. 1 Abbestellung | ESA → MSB | ORDERS | 17008 | unverzüglich | — |
+| 4.3 Nr. 2 Antwort | MSB → ESA | ORDRSP | 19011 / 19012 | **2 WT** nach ÜT der Abbestellung | `E_0254` |
+| 4.4 Nr. 1 Beendigung durch MSB | MSB → ESA | IFTSTA | 21042 (`STS+Z21` 4405 = 105) | unverzüglich | — |
 
-**Bestellung and Abbestellung share PID 17007** ("Bestellung und Abbestellung von
-Werten ESA"), and 19011/19012 answer both. They are separate commands because
-they are admissible at different points in the lifecycle.
+### What is ordered
 
-**Stornierung and Abbestellung are mutually exclusive.** UC 4.1 Nr. 5 admits a
-Stornierung only while the einmalige Übermittlung has not happened or the
-turnusmäßige has not begun; UC 4.3 Vorbedingung then states *"Eine Stornierung
-der Bestellung ist nicht mehr möglich"*. `MarkLieferungBegonnen` flips the state
-that enforces this, and a late Stornierung is refused with a pointer to UC 4.3.
+The [`esa`](src/esa.rs) module holds the *Codeliste der Konfigurationen* 1.4
+Kapitel 4.6 catalogue — the only Messprodukte the role may order — as data:
+delivery path (4.6.1 EDIFACT back-end vs 4.6.2 SM-PKI from the iMS),
+Lokationsebene, Werteart, Energieflussrichtung, cadence, and whether BNetzA
+*Mitteilung Nr. 3* makes the product mandatory. A [`Bestellgegenstand`] pairs a
+Messprodukt-Code with the `DTM+76` Wunschtermin and the `IMD+7081` Abonnement
+mode, and is carried through both aggregates: without it the process could not
+say what a confirmed delivery is supposed to contain.
 
-### Routing: REQOTE 35002 is shared
+A subscription is the **(Meldepunkt, Messprodukt) pair** (`esa::business_key`) —
+one Marktlokation can carry several products at once, so every follow-up message
+and command has to say which one it means.
 
-No ESA-specific REQOTE Prüfidentifikator exists in any published format version,
-so an ESA Werteanfrage and a Preisanfrage arrive under the **same PID 35002**.
-WiM Teil 2 Kap. 4 resolves this at content level — footnote 5 requires *"die
-entsprechenden Codes der zugehörigen Anwendungsfälle in der Codeliste der
-Messprodukte"*.
+An order is validated against the catalogue before it leaves the system — a
+product outside Kapitel 4.6, one defined for a different Lokationsebene than the
+request addresses, or a 4.6.2 product without its SM-PKI target is refused.
 
-REQOTE **35003** ("Anfrage von Werten", ESA → MSB) is ESA-specific — REQOTE AHB
-1.1 §4.3 — so it routes to `wertebestellung` on the Prüfidentifikator alone.
+### The Prüfidentifikator is not in BGM
 
-mako previously sent and expected **35002** here, which is §4.2 "Anfrage zur
-Rechnungsabwicklung des Messstellenbetriebs über den LF" (LF → MSB, WiM Teil 1).
-That wrong PID manufactured an apparent collision with the Preisanfrage stream,
-which a sender-role classifier then had to resolve. With the correct PID there is
-nothing to resolve, and the classifier plus its ESA-partner configuration are
-gone.
+`BGM` DE 1004 is a **Dokumentennummer** throughout these handbooks; the PID
+travels in `SG1 RFF+Z13`. DE 1001 carries a BDEW document code: `Z57` on the
+order handshake, `Z83` on the MSCONS 13027 delivery, `Z09` on the IFTSTA 21042.
+
+### Correlation
+
+Only the opening REQOTE is keyed on a location. A conformant ORDERS, ORDCHG,
+ORDRSP or IFTSTA of Kapitel 4 carries **no `LOC` at all** and correlates by a
+Belegnummer, under the Zuordnungsschlüssel the BDEW *Anwendungsübersicht der
+Prüfidentifikatoren* 4.0 publishes per PID:
+
+| PID | Schlüssel | Segment | Points at |
+|---|---|---|---|
+| 35003 | `ZO-T17` | `SG11 LOC+172` | the Meldepunkt |
+| 15003 | `ZG-T16` | `SG1 RFF+AAV` | the REQOTE |
+| 17007 | `ZG-T24` | `SG1 RFF+AAG` | the QUOTES Angebot |
+| 17008 | `ZG-T41` | `SG1 RFF+ACW` | the ORDERS Bestellung |
+| 39002 | `ZG-T51` | `SG1 RFF+ON` | the ORDERS Bestellung |
+| 19011 / 19012 | `ZG-T14` | `SG1 RFF+ON` | the ORDERS answered |
+| 19013 / 19014 | `ZG-T50` | `SG1 RFF+ACW` | the ORDCHG |
+| 21042 | `ZG-T47` | `SG15 RFF+AGI` | the ORDERS Bestellung |
+
+`esa::korrelation` is that table; the renderer and the ingest dispatcher both
+read it, so the qualifier they emit and the one they look for cannot drift.
+
+### Answers are Antwortcodes, not booleans
+
+`SG2 AJT` is Muss on all four answer PIDs (ORDRSP AHB 1.1b §4.15) and carries the
+Prüfschritt code in DE 4465 with its EBD in DE 1082. Conditions [17]/[18] require
+the code to sit in that tree's Zustimmungs- resp. Ablehnungs-Cluster, so **the
+cluster selects the answer PID**. The MSB commands therefore take an
+`antwort_code` resolved against [`mako_pruefung::msb::esa`], never an `accept`
+flag alongside it.
+
+19011/19012 answer both the Bestellung and the Beendigung; the `IMD+7081` on the
+answer is what says which tree its code came from.
+
+### Stornierung and Abbestellung are not interchangeable
+
+UC 4.1 Nr. 5 admits a Stornierung only while the einmalige Übermittlung has not
+happened or the turnusmäßige has not begun; UC 4.3's Vorbedingung then states
+*"Eine Stornierung der Bestellung ist nicht mehr möglich"*.
+`MarkLieferungBegonnen` flips the state that enforces this. On the MSB side the
+two trees make the boundary explicit: `E_0254` `A01` refuses a Beendigung of a
+one-shot order, and `E_0257` refuses a Stornierung of a started delivery with
+**different codes** per Abo mode (`A02` Abo, `A03` einmalig).
 
 ## Regulatory references
 

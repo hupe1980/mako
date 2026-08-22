@@ -92,6 +92,10 @@ pub struct Config {
     pub lf: LfConfig,
     #[serde(default)]
     pub msb: MsbConfig,
+
+    /// `[esa]` — the answers an MSB owes an Energieserviceanbieter.
+    #[serde(default)]
+    pub esa: EsaConfig,
     #[serde(default)]
     pub eog: EogConfig,
     /// OIDC configuration.  When omitted, authentication is **disabled** and
@@ -412,6 +416,37 @@ impl Default for MsbConfig {
             auto_preisanfrage: default_msb_auto_preisanfrage(),
         }
     }
+}
+
+/// `[esa]` — the WiM Teil 2 Kap. 4 answers an MSB owes an Energieserviceanbieter.
+///
+/// Serving an ESA is a mandatory Zusatzleistung (§34 Abs. 2 S. 2 Nr. 10 MsbG),
+/// so this is not an opt-in process; the flags decide only how much of the
+/// answer runs without an operator.
+#[derive(Debug, Clone, Default, serde::Deserialize, serde::Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct EsaConfig {
+    /// When `true`, a Zustimmungscode from `E_0254`/`E_0256`/`E_0257` is
+    /// dispatched automatically. When `false` (default) it goes to the approval
+    /// queue with its 2-Werktage Antwortfrist attached.
+    #[serde(default)]
+    pub auto_accept: bool,
+
+    /// When `true`, a deterministic Ablehnungscode is dispatched automatically.
+    ///
+    /// Separate from `auto_accept` because the risks differ: a wrong
+    /// Bestätigung commits the MSB to a delivery it may not be able to make, a
+    /// wrong Ablehnung denies a §34-mandated Zusatzleistung. Default `false`.
+    #[serde(default)]
+    pub auto_reject: bool,
+
+    /// Whether this MSB honours a Bestellung that arrived after its own
+    /// Bindungsfrist.
+    ///
+    /// `E_0256` Prüfschritt 2 asks exactly this and leaves it to the MSB — it
+    /// is a commercial decision, not a rule. `false` (default) answers `A01`.
+    #[serde(default)]
+    pub accept_after_bindungsfrist: bool,
 }
 
 // ── OIDC ──────────────────────────────────────────────────────────────────────

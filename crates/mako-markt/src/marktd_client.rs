@@ -455,6 +455,157 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
+    /// Whether the ESA's Einwilligung is **valid** for this location, seen
+    /// from the MSB.
+    ///
+    /// Three-valued on purpose, because `E_0256` Prüfschritt 8 is:
+    ///
+    /// - `Some(true)` — an active consent inside its validity window;
+    /// - `Some(false)` — a record exists but is revoked or expired, which is
+    ///   the `A08` Ablehnung;
+    /// - `None` — no record at all. That is the ESA's self-assertion, and
+    ///   `BNetzA` *Mitteilung Nr. 3* forbids rejecting on it, so it must not
+    ///   collapse into `Some(false)`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or HTTP errors — a
+    /// transport failure is not evidence of absence and must not become `None`.
+    pub async fn esa_consent_valid(
+        &self,
+        esa_mp_id: &str,
+        msb_mp_id: &str,
+        location_id: &str,
+    ) -> Result<Option<bool>, MarktdClientError> {
+        use crate::repository::ConsentCode;
+        let decision = self
+            .esa_consent_check(
+                esa_mp_id,
+                msb_mp_id,
+                location_id,
+                ConsentPerspective::MsbInbound,
+            )
+            .await?;
+        Ok(match decision.code {
+            ConsentCode::Active => Some(true),
+            ConsentCode::Revoked => Some(false),
+            // `SelfAssertion`/`NoConsent` are the missing record;
+            // `FrameworkRejected` answers a *different* Prüfschritt (6) and
+            // says nothing about the consent. All three leave Prüfschritt 8
+            // unanswered rather than answering it `false`.
+            ConsentCode::SelfAssertion
+            | ConsentCode::NoConsent
+            | ConsentCode::FrameworkRejected => None,
+        })
+    }
+
+    /// `GET /api/v1/esa/framework/{msb}/{esa}` — whether the bilateral
+    /// ESA-Rahmenvertrag is established (`E_0256` Prüfschritt 6).
+    ///
+    /// `true` requires both an EDI agreement on file and a certificate state
+    /// that is not negative. A `404` means no agreement was ever recorded,
+    /// which is `false`: UC 4.1.1 lists the vertragliche Grundlage among the
+    /// Vorbedingungen the MSB must hold.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or HTTP errors.
+    pub async fn esa_framework_established(
+        &self,
+        msb_mp_id: &str,
+        esa_mp_id: &str,
+    ) -> Result<bool, MarktdClientError> {
+        #[derive(serde::Deserialize)]
+        struct Framework {
+            #[serde(default)]
+            edi_agreement: bool,
+            #[serde(default)]
+            cert_state: String,
+        }
+        let url = format!(
+            "{}/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}",
+            self.base_url
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(false);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let f: Framework = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        let cert_negative = matches!(f.cert_state.as_str(), "rejected" | "revoked" | "suspended");
+        Ok(f.edi_agreement && !cert_negative)
+    }
+
+    /// Whether this MSB operates **every** Messlokation of the Lokationsbündel
+    /// rooted at `malo_id`, on `at` (`E_0256` Prüfschritt 11).
+    ///
+    /// UC 4.1.1's Vorbedingung for a `MaLo`-, Tranchen- or `NeLo`-level order is
+    /// that „der Messstellenbetrieb wird an allen Messlokationen … von demselben
+    /// MSB durchgeführt". `A10` refuses the order when it does not hold.
+    ///
+    /// `None` when the bundle cannot be answered — it carries no Messlokation,
+    /// or an assignment is missing for one of them. Both mean „not established",
+    /// which escalates rather than refusing: `A10` is a statement about the
+    /// market, not about a gap in this deployment's records.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`MarktdClientError::Http`] on network or HTTP errors — a
+    /// transport failure must not read as a split bundle.
+    pub async fn msb_serves_whole_buendel(
+        &self,
+        malo_id: &str,
+        msb_mp_id: &str,
+        at: time::Date,
+    ) -> Result<Option<bool>, MarktdClientError> {
+        #[derive(serde::Deserialize)]
+        struct Buendel {
+            #[serde(default)]
+            messlokationen: Vec<String>,
+        }
+        let url = format!("{}/api/v1/malos/{malo_id}/buendel", self.base_url);
+        let resp = self
+            .client
+            .get(&url)
+            .query(&[("at", at.to_string())])
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        let buendel: Buendel = resp
+            .json()
+            .await
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))?;
+        // An empty bundle answers nothing: a MaLo-level order presupposes at
+        // least one Messlokation behind it.
+        if buendel.messlokationen.is_empty() {
+            return Ok(None);
+        }
+        for melo in &buendel.messlokationen {
+            match self.get_melo_msb_at(melo, at).await? {
+                // One Messlokation on another MSB settles it — `A10`.
+                Some(other) if other != msb_mp_id => return Ok(Some(false)),
+                Some(_) => {}
+                // A gap in the timeline is not evidence of a split bundle.
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(true))
+    }
+
     /// `PUT /api/v1/netzzugang/antraege` — upsert a §20b
     /// Netzzugangsplattform request in the marktd registry.
     ///

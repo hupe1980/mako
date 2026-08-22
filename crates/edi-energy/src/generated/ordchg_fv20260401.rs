@@ -727,6 +727,9 @@ impl Profile for OrdchgFv20260401Profile {
     fn source_document(&self) -> Option<&'static str> {
         Some("ORDCHG MIG 1.2, Stand 01.04.2026")
     }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
+    }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()
     }

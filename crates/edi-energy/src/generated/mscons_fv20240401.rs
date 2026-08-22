@@ -1890,6 +1890,9 @@ impl Profile for MsconsFv20240401Profile {
             "MSCONS MIG 2.4c, Stand 01.04.2024 — archived. CCI/COM/CTA are optional with no AHB constraint in release 2.4; <75% AHB segment coverage is structurally expected for this version.",
         )
     }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
+    }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()
     }

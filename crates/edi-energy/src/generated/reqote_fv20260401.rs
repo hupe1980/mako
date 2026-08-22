@@ -133,10 +133,13 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
 
 static CODES_1001: &[&str] = &["311", "Z29", "Z57", "Z74", "Z93"];
 static CODES_1153: &[&str] = &["AEP", "AGK", "AGO", "TN", "Z13"];
-static CODES_2005: &[&str] = &["137", "163", "164", "203", "469", "472"];
+static CODES_1229: &[&str] = &["Z67", "Z68"];
+static CODES_2005: &[&str] = &["137", "163", "164", "203", "469", "472", "76"];
 static CODES_3035: &[&str] = &["BY", "DP", "MR", "MS"];
 static CODES_3227: &[&str] = &["172"];
-static CODES_4451: &[&str] = &["REG", "ZZZ"];
+static CODES_4451: &[&str] = &["ACB", "REG", "Z13", "Z17", "Z23", "Z24", "ZZZ"];
+static CODES_7059: &[&str] = &["Z60"];
+static CODES_7143: &[&str] = &["Z11"];
 
 pub(crate) fn is_code_valid(de_id: &str, code: &str) -> bool {
     code_list(de_id).is_none_or(|codes| codes.binary_search(&code).is_ok())
@@ -161,10 +164,13 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
     match de_id {
         "1001" => Some(CODES_1001),
         "1153" => Some(CODES_1153),
+        "1229" => Some(CODES_1229),
         "2005" => Some(CODES_2005),
         "3035" => Some(CODES_3035),
         "3227" => Some(CODES_3227),
         "4451" => Some(CODES_4451),
+        "7059" => Some(CODES_7059),
+        "7143" => Some(CODES_7143),
         _ => None,
     }
 }
@@ -737,16 +743,6 @@ static AHB_35003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-35003-CCI-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "CCI",
-                    "AHB-35003-CCI-M",
-                    "mandatory segment CCI is missing for Pruefidentifikator 35003",
-                    "35003",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-35003-COM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -777,26 +773,6 @@ static AHB_35003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-35003-FTX-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "FTX",
-                    "AHB-35003-FTX-M",
-                    "mandatory segment FTX is missing for Pruefidentifikator 35003",
-                    "35003",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-35003-LIN-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "LIN",
-                    "AHB-35003-LIN-M",
-                    "mandatory segment LIN is missing for Pruefidentifikator 35003",
-                    "35003",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-35003-LOC-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -817,22 +793,32 @@ static AHB_35003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-35003-PIA-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "PIA",
-                    "AHB-35003-PIA-M",
-                    "mandatory segment PIA is missing for Pruefidentifikator 35003",
-                    "35003",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-35003-RFF-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "RFF",
                     "AHB-35003-RFF-M",
                     "mandatory segment RFF is missing for Pruefidentifikator 35003",
+                    "35003",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-35003-LIN-S", |segs, issues| {
+                ahb_check_soll(
+                    segs,
+                    "LIN",
+                    "AHB-35003-LIN-S",
+                    "segment LIN should be present for Pruefidentifikator 35003 (Soll)",
+                    "35003",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-35003-PIA-S", |segs, issues| {
+                ahb_check_soll(
+                    segs,
+                    "PIA",
+                    "AHB-35003-PIA-S",
+                    "segment PIA should be present for Pruefidentifikator 35003 (Soll)",
                     "35003",
                     issues,
                 );
@@ -1135,6 +1121,9 @@ impl Profile for ReqoteFv20260401Profile {
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("REQOTE MIG 1.3c, Stand 01.04.2026")
+    }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

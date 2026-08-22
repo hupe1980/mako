@@ -577,48 +577,77 @@ mandatory Zusatzleistung. The whole exchange — Anfrage, Angebot, Bestellung,
 delivery, and either cancellation path — is **one correlated process on each
 side**, not a bag of independent messages.
 
-| Step | Message | Direction | Antwort | Frist |
-|---|---|---|---|---|
-| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35003** | ESA → MSB | QUOTES 15003 | 5 WT |
-| Angebot / Ablehnung (UC 4.1 Nr. 2) | QUOTES **15003** | MSB → ESA | — | Bindungsfrist |
-| Bestellung (UC 4.1 Nr. 3) | ORDERS **17007** | ESA → MSB | ORDRSP 19011/19012 | 2 WT |
-| Wertelieferung (UC 4.2) | MSCONS **13027** | MSB → ESA | — | §60 Abs. 1 MsbG, daily |
-| Stornierung (UC 4.1 Nr. 5) | ORDCHG **39002** | ESA → MSB | ORDRSP 19013/19014 | 2 WT |
-| Abbestellung (UC 4.3 Nr. 1) | ORDERS **17008** | ESA → MSB | ORDRSP 19011 | 2 WT |
+| Step | Message | Direction | Antwort | Frist | EBD |
+|---|---|---|---|---|---|
+| Werteanfrage (UC 4.1 Nr. 1) | REQOTE **35003** | ESA → MSB | QUOTES 15003 | 5 WT | — |
+| Angebot / Ablehnung (UC 4.1 Nr. 2) | QUOTES **15003** | MSB → ESA | — | Bindungsfrist | — |
+| Bestellung (UC 4.1 Nr. 3) | ORDERS **17007** | ESA → MSB | ORDRSP 19011/19012 | 2 WT | `E_0256` |
+| Wertelieferung (UC 4.2) | MSCONS **13027** | MSB → ESA | — | per Messprodukt | — |
+| Stornierung (UC 4.1 Nr. 5) | ORDCHG **39002** | ESA → MSB | ORDRSP 19013/19014 | 2 WT | `E_0257` |
+| Abbestellung (UC 4.3 Nr. 1) | ORDERS **17008** | ESA → MSB | ORDRSP 19011/19012 | 2 WT | `E_0254` |
+| Beendigung durch MSB (UC 4.4) | IFTSTA **21042** | MSB → ESA | — | unverzüglich | — |
 
 ```mermaid
 sequenceDiagram
     autonumber
     participant ESA as ESA · esa-wertebestellung
     participant MSB as MSB · wim-wertebestellung
-    ESA->>MSB: REQOTE 35003 Werteanfrage (LOC = MaLo)
-    MSB-->>ESA: QUOTES 15003 Angebot · DTM+273 Bindungsfrist
+    ESA->>MSB: REQOTE 35003 Werteanfrage · LOC+172 · PIA Messprodukt · DTM+76
+    MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · DTM+273 Bindungsfrist
     Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
-    ESA->>MSB: ORDERS 17007 Bestellung (within Bindungsfrist)
-    MSB-->>ESA: ORDRSP 19011 Bestätigung / 19012 Ablehnung
-    Note over ESA,MSB: 2 WT · ORDRSP carries no LOC ⇒ correlate by RFF+ACW
-    loop §60 Abs. 1 MsbG · daily
+    ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081
+    MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT+&lt;code&gt;+E_0256
+    loop per the ordered Messprodukt
         MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
     end
     alt Stornierung before first delivery
-        ESA->>MSB: ORDCHG 39002 Storno · RFF+ON = Bestellung
-        MSB-->>ESA: ORDRSP 19013 / 19014
+        ESA->>MSB: ORDCHG 39002 Storno · RFF+ON
+        MSB-->>ESA: ORDRSP 19013 / 19014 · RFF+ACW · AJT+&lt;code&gt;+E_0257
     else Abbestellung during delivery
-        ESA->>MSB: ORDERS 17008 Abbestellung
-        MSB-->>ESA: ORDRSP 19011
+        ESA->>MSB: ORDERS 17008 Abbestellung · RFF+ACW · IMD++Z02
+        MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT+&lt;code&gt;+E_0254
     end
 ```
 
-**Correlation.** REQOTE, QUOTES and ORDERS carry a `LOC` (the MaLo). The
-MIG-conformant ORDRSP and ORDCHG carry **none** — they are correlated to the
-running process by the order reference each echoes: an answer references the order
-it answers in `RFF+ACW`, and the 39002 Stornierung references the original
-Bestellung in `RFF+ON`. REQOTE 35003 is ESA-specific and routes on the PID alone; the
-sender's registered ESA role (or a `PIA` Messprodukt marker) selects the
-Wertebestellung. The 39002 Stornierung is part of this subscription lifecycle,
-not a standalone process. See the
-[makod ESA messages guide](@/docs/services/makod.md#esa-messages) for the consent
-gate (§49 Abs. 2 Nr. 9 MsbG / GDPR Art. 7) and the loopback command surface.
+**What is ordered.** The request names a Messprodukt from *Codeliste der
+Konfigurationen* 1.4 Kapitel 4.6 — the only products the ESA role may order —
+plus the `DTM+76` Wunschtermin and the `IMD+7081` Abo mode (`Z01` running
+series, `Z03` single transmission). The catalogue distinguishes the two delivery
+paths: 4.6.1 arrives as MSCONS 13027 over AS4, 4.6.2 as XML straight from the
+iMS over SM-PKI, and the latter makes the target address and certificate bodies
+mandatory in the Werteanfrage. A product defined for a different Lokationsebene
+than the request addresses is refused before it reaches the wire.
+
+**The Prüfidentifikator is not in BGM.** Every `BGM` DE 1004 row of the MSCONS,
+REQOTE, QUOTES, ORDERS, ORDCHG and ORDRSP handbooks reads „Dokumentennummer";
+the PID travels in `SG1 RFF+Z13` (`SG15 RFF+Z13` on the IFTSTA). DE 1001 carries
+a BDEW document code — `Z57` on the order handshake, `Z83` on the MSCONS
+delivery, `Z09` on the IFTSTA. mako reads the PID from both locations and
+accepts only a plausible 5-digit code, so a numeric Belegnummer cannot outrank
+the real one.
+
+**Correlation.** Only the opening REQOTE is keyed on a location (`LOC+172`,
+Zuordnungsschlüssel `ZO-T17`). Every later step carries **no `LOC` at all** and
+is matched by the Belegnummer it echoes:
+
+| PID | Schlüssel | Segment | Points at |
+|---|---|---|---|
+| 15003 | `ZG-T16` | `SG1 RFF+AAV` | the REQOTE |
+| 17007 | `ZG-T24` | `SG1 RFF+AAG` | the QUOTES Angebot |
+| 17008 | `ZG-T41` | `SG1 RFF+ACW` | the ORDERS Bestellung |
+| 39002 | `ZG-T51` | `SG1 RFF+ON` | the ORDERS Bestellung |
+| 19011 / 19012 | `ZG-T14` | `SG1 RFF+ON` | the ORDERS answered |
+| 19013 / 19014 | `ZG-T50` | `SG1 RFF+ACW` | the ORDCHG |
+| 21042 | `ZG-T47` | `SG15 RFF+AGI` | the ORDERS Bestellung |
+
+**Answers.** `SG2 AJT` is Muss on all four ORDRSP PIDs: DE 4465 carries the
+Prüfschritt code, DE 1082 the EBD that publishes it. The code's Cluster — not a
+separate accept flag — decides whether the answer rides the Bestätigungs- or the
+Ablehnungs-PID. 19011/19012 answer both the Bestellung and the Beendigung, and
+the `IMD+7081` on the answer says which tree its code came from.
+
+See the [makod ESA messages guide](@/docs/services/makod.md#esa-messages) for the
+consent gate (§49 Abs. 2 Nr. 9 MsbG / GDPR Art. 7) and the command surface.
 
 ### Preisanfrage, Angebote und Preislisten
 

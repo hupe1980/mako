@@ -451,6 +451,22 @@ pub struct SurveillanceConfig {
     /// suppressed points is logged and carried on the summary.
     #[serde(default = "surveillance_default_max_events")]
     pub max_events_per_sweep: usize,
+    /// Hours after which an **ESA Typ-2** subscription counts as overdue.
+    ///
+    /// Separate from [`Self::silent_after_hours`] because the two streams keep
+    /// different clocks. A Typ-1 delivery serves Netznutzungs- and
+    /// Bilanzkreisabrechnung; a Typ-2 delivery serves the ESA's own contract and
+    /// its cadence comes from the ordered Messprodukt (*Codeliste der
+    /// Konfigurationen* 1.4 Kap. 4.6) — the Rohdaten products publish
+    /// „spätestens bis 9:30 Uhr" daily, the aufbereitete-Daten products defer to
+    /// WiM Teil 2 Kap. 2.5.5. Default 36 h, the same daily-plus-retry shape.
+    #[serde(default = "surveillance_default_silent_hours")]
+    pub typ2_silent_after_hours: i64,
+    /// Whether the ESA Typ-2 sweep runs at all. Default: true — an ESA that
+    /// does not notice a stopped subscription has no other signal, since a
+    /// Typ-2 value reaches no billing run that could come up short.
+    #[serde(default = "default_true")]
+    pub typ2_enabled: bool,
 }
 
 fn surveillance_default_silent_hours() -> i64 {
@@ -473,6 +489,8 @@ impl Default for SurveillanceConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            typ2_enabled: true,
+            typ2_silent_after_hours: surveillance_default_silent_hours(),
             silent_after_hours: surveillance_default_silent_hours(),
             min_coverage_pct: surveillance_default_min_coverage(),
             coverage_window_days: surveillance_default_coverage_days(),

@@ -21,12 +21,14 @@
 //! | UTILMD | `pid`, `sender`, `receiver`, `malo`, `process_date` (`document_date` and `message_ref` are engine-derived when absent) |
 //! | APERAK | `pid`, `sender`, `receiver`, `orig_message_ref`, `error_code`, `reason`, `document_date` |
 //! | CONTRL | `sender`, `receiver`, `interchange_ref`, `accepted`, `message_ref` |
-//! | ORDERS | `pid`, `orders_ref` (sender = `tenant_party_id`, receiver = `msg.recipient`) |
-//! | ORDRSP | `pid` (ESA 19011/19012/19013/19014), `sender`, `receiver`, `order_reference`, `document_id`, `document_date`, `message_ref` |
-//! | QUOTES | `pid` (ESA 15003), `sender`, `receiver`, `order_reference`, `document_id`, `document_date`, `message_ref` |
+//! | ORDERS | `pid`, `orders_ref` (sender = `tenant_party_id`, receiver = `msg.recipient`); ESA 17007/17008 additionally `korrelation_ref`, `abonnement`, `ausfuehrungsdatum` |
+//! | REQOTE | `pid`, `sender`, `receiver`, `message_ref`; ESA 35003 additionally `location`, `messprodukt`, `wunschtermin`, `smgw` |
+//! | ORDCHG | `pid`, `sender`, `receiver`, `korrelation_ref` |
+//! | ORDRSP | `pid` (ESA 19011–19014), `sender`, `receiver`, `korrelation_ref`, `abonnement`, `antwort_code`, `antwort_ebd`, `document_id`, `document_date`, `message_ref` |
+//! | QUOTES | `pid` (ESA 15003), `sender`, `receiver`, `korrelation_ref`, `bindungsfrist_tage`, `fruehester_start`, `messprodukt`, `artikel_ids`, `preise`, `document_id`, `document_date`, `message_ref` |
 //! | INVOIC | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
 //! | REMADV | `sender`, `receiver`, `document_id`, `document_code`, `document_date`, `message_ref` |
-//! | IFTSTA | `pid` (WiM 21042), `sender`, `receiver`, `sts_code`, `order_reference`, `beendigung_zum`, `document_id`, `document_date`, `message_ref` |
+//! | IFTSTA | `pid` (WiM 21042), `sender`, `receiver`, `sts_code`, `korrelation_ref`, `beendigung_zum`, `document_id`, `document_date`, `message_ref` |
 //!
 //! ## Not yet renderable — intent-only payloads
 //!
@@ -219,6 +221,19 @@ fn finish_interchange(
     receiver: &str,
     msg: &OutboxMessage,
 ) -> Result<RenderedInterchange, RenderError> {
+    finish_interchange_with_app_ref(serialized, sender, receiver, msg, None)
+}
+
+/// [`finish_interchange`] that also sets the UNB **Anwendungsreferenz**
+/// (DE 0026), where the AHB fixes one — `TL` on the MSCONS Werte-nach-Typ-2
+/// interchange (MSCONS AHB 3.2 §11.2).
+fn finish_interchange_with_app_ref(
+    serialized: Result<Vec<u8>, edi_energy::Error>,
+    sender: &str,
+    receiver: &str,
+    msg: &OutboxMessage,
+    application_reference: Option<&str>,
+) -> Result<RenderedInterchange, RenderError> {
     let message = serialized.map_err(|e| RenderError::BuilderError(e.to_string()))?;
     let dar = dar_for(msg);
     let now = time::OffsetDateTime::now_utc();
@@ -230,8 +245,12 @@ fn finish_interchange(
     );
     let hhmm = format!("{:02}{:02}", now.hour(), now.minute());
 
-    let bytes = edi_energy::builders::InterchangeBuilder::new(sender, receiver, &dar)
-        .transmission(&date, &hhmm)
+    let mut interchange = edi_energy::builders::InterchangeBuilder::new(sender, receiver, &dar)
+        .transmission(&date, &hhmm);
+    if let Some(app_ref) = application_reference {
+        interchange = interchange.application_reference(app_ref);
+    }
+    let bytes = interchange
         .message(message)
         .build()
         .map_err(|e| RenderError::BuilderError(e.to_string()))?;
@@ -498,7 +517,11 @@ mod tests {
 
     #[test]
     fn render_orders_esa_17007_17008_are_mig_conformant() {
-        for pid in [17007_u32, 17008] {
+        // ORDERS AHB 1.1b §4.15. The Bestellung references the QUOTES Angebot
+        // in `RFF+AAG` (`ZG-T24`), the Abbestellung the ORDERS in `RFF+ACW`
+        // (`ZG-T41`); both carry `BGM+Z57`, `DTM+203` and `IMD++<7081>`, and
+        // **neither carries a LOC** — §4.15 lists no Meldepunkt segment.
+        for (pid, qualifier, abo) in [(17007_u32, "AAG", "Z01"), (17008_u32, "ACW", "Z02")] {
             let msg = fake_msg(
                 "ORDERS",
                 "9900357000004",
@@ -506,13 +529,32 @@ mod tests {
                     "pid": pid,
                     "sender_mp_id": "9900555000005",
                     "receiver_mp_id": "9900357000004",
-                    "malo_id": "51238696781",
+                    // A payload that still names a location must not put one on
+                    // the wire for these PIDs.
                     "location": "51238696781",
+                    "korrelation_ref": "ESA-REF-1",
+                    "abonnement": abo,
+                    "ausfuehrungsdatum": "2026-03-01",
                 }),
             );
             let wire = render_to_wire_bytes(&msg, &test_registry("9900555000005"))
                 .unwrap_or_else(|e| panic!("{pid} renders: {e:?}"));
             let wire = String::from_utf8(wire.bytes).expect("utf-8");
+            assert!(wire.contains("BGM+Z57+"), "BGM 1001 = Z57: {wire}");
+            assert!(
+                wire.contains(&format!("RFF+{qualifier}:ESA-REF-1")),
+                "PID {pid} correlates by RFF+{qualifier}: {wire}"
+            );
+            assert!(
+                wire.contains(&format!("RFF+Z13:{pid}")),
+                "Prüfidentifikator: {wire}"
+            );
+            assert!(wire.contains(&format!("IMD++{abo}")), "IMD 7081: {wire}");
+            assert!(wire.contains("DTM+203:202603010000"), "DTM+203: {wire}");
+            assert!(
+                !wire.contains("LOC+"),
+                "ORDERS {pid} carries no LOC (ORDERS AHB 1.1b §4.15): {wire}"
+            );
             edi_energy::EdiEnergyMessage::validate(
                 &edi_energy::parse(wire.as_bytes()).expect("parse"),
             )
@@ -524,7 +566,15 @@ mod tests {
 
     #[test]
     fn render_ordrsp_esa_answers_are_mig_conformant() {
-        for pid in [19011_u32, 19012, 19013, 19014] {
+        // ORDRSP AHB 1.1b §4.15. `SG2 AJT` is Muss on all four and carries the
+        // Prüfschritt code with the EBD that publishes it; the correlation
+        // qualifier differs per PID (`ON` → the ORDERS, `ACW` → the ORDCHG).
+        for (pid, qualifier, ebd, code) in [
+            (19011_u32, "ON", "E_0256", "A11"),
+            (19012_u32, "ON", "E_0256", "A09"),
+            (19013_u32, "ACW", "E_0257", "A04"),
+            (19014_u32, "ACW", "E_0257", "A02"),
+        ] {
             let msg = fake_msg(
                 "ORDRSP",
                 "9900555000005",
@@ -532,14 +582,25 @@ mod tests {
                     "pid": pid,
                     "sender": "9900357000004",
                     "receiver": "9900555000005",
-                    "order_reference": "ESA-BE-0001",
+                    "korrelation_ref": "ESA-BE-0001",
+                    "abonnement": "Z01",
+                    "antwort_ebd": ebd,
+                    "antwort_code": code,
                 }),
             );
             let wire = render_to_wire_bytes(&msg, &test_registry("9900357000004"))
                 .unwrap_or_else(|e| panic!("{pid} renders: {e:?}"));
             let wire = String::from_utf8(wire.bytes).expect("utf-8");
             assert!(!wire.contains("LOC+"), "ORDRSP carries no LOC: {wire}");
-            assert!(wire.contains("BGM+7+"), "BGM 1001 = 7: {wire}");
+            assert!(wire.contains("BGM+Z57+"), "BGM 1001 = Z57: {wire}");
+            assert!(
+                wire.contains(&format!("RFF+{qualifier}:ESA-BE-0001")),
+                "PID {pid} correlates by RFF+{qualifier}: {wire}"
+            );
+            assert!(
+                wire.contains(&format!("AJT+{code}+{ebd}")),
+                "SG2 AJT carries the Prüfschritt code and its EBD: {wire}"
+            );
             edi_energy::EdiEnergyMessage::validate(
                 &edi_energy::parse(wire.as_bytes()).expect("parse"),
             )
@@ -547,6 +608,24 @@ mod tests {
             .into_error_result()
             .unwrap_or_else(|e| panic!("ORDRSP {pid} must be MIG-conformant: {e}\n{wire}"));
         }
+    }
+
+    /// `SG2 AJT` is Muss and its code must come from the answer's own EBD, so
+    /// the renderer refuses rather than synthesising one.
+    #[test]
+    fn an_esa_ordrsp_without_an_antwortcode_is_refused() {
+        let msg = fake_msg(
+            "ORDRSP",
+            "9900555000005",
+            serde_json::json!({
+                "pid": 19011_u32,
+                "sender": "9900357000004",
+                "receiver": "9900555000005",
+                "korrelation_ref": "ESA-BE-0001",
+            }),
+        );
+        let err = render_to_wire_bytes(&msg, &test_registry("9900357000004")).unwrap_err();
+        assert!(format!("{err:?}").contains("antwort_code"), "{err:?}");
     }
 
     #[test]
@@ -563,7 +642,7 @@ mod tests {
                 "sender": "4012345000023",
                 "receiver": "9900555000005",
                 "sts_code": "105",
-                "order_reference": "BEST-4711",
+                "korrelation_ref": "BEST-4711",
                 "beendigung_zum": "2026-08-01T00:00:00Z",
             }),
         );
@@ -594,44 +673,55 @@ mod tests {
     }
 
     #[test]
-    fn ordrsp_and_ordchg_carry_a_correlatable_order_reference() {
-        // ORDRSP echoes the answered order in RFF+ACW; ORDCHG references the
-        // original Bestellung in RFF+ON. The ingest dispatcher resumes the
-        // LOC-less message by this reference.
-        let ordrsp = fake_msg(
-            "ORDRSP",
-            "9900555000005",
-            serde_json::json!({
-                "pid": 19011,
+    fn every_esa_step_round_trips_through_its_published_zuordnungsschluessel() {
+        // What the renderer emits must be exactly what the ingest dispatcher
+        // looks for — one table, read from both ends. The qualifiers differ per
+        // PID and are not interchangeable: `RFF+ON` on a 19011 and `RFF+ACW` on
+        // a 19013 point at different messages.
+        for (msg_type, pid, payload_extra) in [
+            (
+                "ORDRSP",
+                19011_u32,
+                serde_json::json!({"antwort_ebd": "E_0256", "antwort_code": "A11"}),
+            ),
+            (
+                "ORDRSP",
+                19013_u32,
+                serde_json::json!({"antwort_ebd": "E_0257", "antwort_code": "A04"}),
+            ),
+            ("ORDCHG", 39002_u32, serde_json::json!({})),
+            (
+                "ORDERS",
+                17007_u32,
+                serde_json::json!({"abonnement": "Z01"}),
+            ),
+            (
+                "ORDERS",
+                17008_u32,
+                serde_json::json!({"abonnement": "Z02"}),
+            ),
+        ] {
+            let mut payload = serde_json::json!({
+                "pid": pid,
                 "sender": "9900357000004",
                 "receiver": "9900555000005",
-                "order_reference": "ORD-ABC-1",
-            }),
-        );
-        let wire = render_to_wire_bytes(&ordrsp, &test_registry("9900357000004")).unwrap();
-        let msg = edi_energy::parse(&wire.bytes).expect("parse ordrsp");
-        assert_eq!(
-            crate::ingest_dispatcher::extract_order_ref_from_msg(&msg),
-            "ORD-ABC-1",
-        );
-
-        let ordchg = fake_msg(
-            "ORDCHG",
-            "9900357000004",
-            serde_json::json!({
-                "pid": 39002,
-                "sender": "9900555000005",
-                "receiver": "9900357000004",
-                "order_reference": "ORD-ABC-1",
-            }),
-        );
-        let wire = render_to_wire_bytes(&ordchg, &test_registry("9900555000005")).unwrap();
-        let msg = edi_energy::parse(&wire.bytes).expect("parse ordchg");
-        assert_eq!(
-            crate::ingest_dispatcher::extract_order_ref_from_msg(&msg),
-            "ORD-ABC-1",
-            "the Stornierung must reference the original Bestellung"
-        );
+                "korrelation_ref": "ORD-ABC-1",
+            });
+            if let Some(extra) = payload_extra.as_object() {
+                for (k, v) in extra {
+                    payload[k] = v.clone();
+                }
+            }
+            let out = fake_msg(msg_type, "9900555000005", payload);
+            let wire = render_to_wire_bytes(&out, &test_registry("9900357000004"))
+                .unwrap_or_else(|e| panic!("{msg_type} {pid} renders: {e:?}"));
+            let parsed = edi_energy::parse(&wire.bytes).expect("parse");
+            assert_eq!(
+                crate::ingest_dispatcher::esa_korrelation_key(&parsed, pid),
+                "ORD-ABC-1",
+                "{msg_type} {pid} must round-trip its Zuordnungsschlüssel"
+            );
+        }
     }
 
     #[test]
@@ -670,21 +760,60 @@ mod tests {
                 "sender": "9900555000005",
                 "receiver": "9900357000004",
                 "location": "51238696781",
+                // MaLo, Wirkarbeit, Lastgang ¼h — Pflicht since 06.08.2024.
+                "messprodukt": "9991000003056",
+                "wunschtermin": "2026-03-01",
             }),
         );
         let wire =
             render_to_wire_bytes(&msg, &test_registry("9900555000005")).expect("35003 renders");
         let wire = String::from_utf8(wire.bytes).expect("utf-8");
+        assert!(wire.contains("BGM+Z57+"), "BGM 1001 = Z57: {wire}");
+        assert!(wire.contains("DTM+76:202603010000"), "Wunschtermin: {wire}");
+        assert!(wire.contains("NAD+DP"), "Liefer-/Bezugsort: {wire}");
+        assert!(wire.contains("LOC+172+51238696781"), "Meldepunkt: {wire}");
+        // `LIN+1+Z67` then `PIA+5+<code>:Z11` — 7143 is C212's *second*
+        // component, so the code and its type are adjacent.
+        assert!(wire.contains("LIN+1+Z67"), "Backend-Produktzeile: {wire}");
+        assert!(
+            wire.contains("PIA+5+9991000003056:Z11"),
+            "Messprodukt-Code: {wire}"
+        );
+        assert!(
+            !wire.contains("FTX+ACB++"),
+            "no empty free text when no note was given: {wire}"
+        );
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
             .unwrap_or_else(|e| panic!("35003 Werteanfrage must be MIG-conformant: {e}\n{wire}"));
     }
 
+    /// `PIA+5 DE7140` accepts only Kapitel-4.6 codes (REQOTE AHB 1.2 §4.3
+    /// condition `[41]`), so a Typ-1 Standard-Messprodukt is not orderable here.
+    #[test]
+    fn a_reqote_35003_without_a_catalogue_messprodukt_is_refused() {
+        for produkt in [None, Some("9992000000011")] {
+            let mut payload = serde_json::json!({
+                "pid": 35003_u32,
+                "sender": "9900555000005",
+                "receiver": "9900357000004",
+                "location": "51238696781",
+                "wunschtermin": "2026-03-01",
+            });
+            if let Some(p) = produkt {
+                payload["messprodukt"] = serde_json::Value::String(p.to_owned());
+            }
+            let msg = fake_msg("REQOTE", "9900357000004", payload);
+            let err = render_to_wire_bytes(&msg, &test_registry("9900555000005")).unwrap_err();
+            assert!(format!("{err:?}").contains("messprodukt"), "{err:?}");
+        }
+    }
+
     #[test]
     fn render_quotes_angebot_carries_the_bindungsfrist_ablehnung_carries_the_reason() {
         let esa = "9900555000005";
-        // Angebot: Bindungsfrist as DTM+273 (the MIG-permitted DE 2005), no FTX.
+        // Angebot: Bindungsfrist as `DTM+273`, no FTX.
         let angebot = fake_msg(
             "QUOTES",
             esa,
@@ -693,14 +822,30 @@ mod tests {
                 "sender": "9900357000004",
                 "receiver": esa,
                 "location": "51238696781",
-                "bindungsfrist": "20260316",
+                "korrelation_ref": "ESA-WA-1",
+                "bindungsfrist_tage": 14,
+                "fruehester_start": "2026-03-01",
+                "messprodukt": "9991000003056",
+                // Condition [2042]/[2071]: one Artikel-ID per priced position,
+                // and one `PRI+CAL` per Artikel-ID. The last two digits of the
+                // ID select the price kind (01 Einrichtung, 03 Betrieb).
+                "artikel_ids": ["9991000012301", "9991000012303"],
+                "preise": [
+                    { "betrag": "12.50", "art": "Z01", "einheit": "H87" },
+                    { "betrag": "0.35",  "art": "Z03", "einheit": "DAY" }
+                ],
             }),
         );
         let wire = render_to_wire_bytes(&angebot, &test_registry("9900357000004"))
             .expect("angebot renders");
         let wire = String::from_utf8(wire.bytes).expect("utf-8");
-        // DE 2005 = 273 (the MIG-permitted Bindungsfrist qualifier), not Z12.
-        assert!(wire.contains("DTM+273:20260316:102"), "{wire}");
+        // `DTM+273` is a duration: DE 2380 a count, DE 2379 the unit
+        // (802 Monat / 803 Woche / 804 Tag) — not a `CCYYMMDD` date.
+        assert!(wire.contains("DTM+273:14:804"), "{wire}");
+        assert!(wire.contains("DTM+469:202603010000"), "{wire}");
+        assert!(wire.contains("RFF+AAV:ESA-WA-1"), "ZG-T16: {wire}");
+        assert!(wire.contains("BGM+Z57+"), "{wire}");
+        assert!(wire.contains("NAD+DP"), "{wire}");
         assert!(
             !wire.contains("FTX+"),
             "an Angebot carries no reason: {wire}"
@@ -709,7 +854,7 @@ mod tests {
         edi_energy::EdiEnergyMessage::validate(&edi_energy::parse(wire.as_bytes()).expect("parse"))
             .expect("validate")
             .into_error_result()
-            .unwrap_or_else(|e| panic!("15003 Angebot must be MIG-conformant: {e}"));
+            .unwrap_or_else(|e| panic!("15003 Angebot must be MIG-conformant: {e}\n{wire}"));
 
         // Ablehnung: reason as FTX+ACB (the only MIG-permitted DE 4451), no
         // Bindungsfrist.
@@ -762,7 +907,8 @@ mod tests {
         // Angebot (has Bindungsfrist) → ReceiveAngebot.
         let angebot = render(serde_json::json!({
             "pid": 15003_u32, "sender": "9900357000004", "receiver": esa,
-            "location": "51238696781", "bindungsfrist": "20260316",
+            "location": "51238696781", "bindungsfrist_tage": 14,
+            "korrelation_ref": "ESA-WA-1",
         }));
         let msg = edi_energy::parse(&angebot).expect("parse angebot");
         let cmd = registry
@@ -803,6 +949,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": esa,
                 "malo_id": "51238696781",
+                "korrelation_ref": "ORDERDOC0001",
                 "reads": [
                     { "dtm_from": "202603100000+00", "dtm_to": "202603100015+00",
                       "quantity_kwh": "0.250", "obis_code": "1-0:1.29.0" },
@@ -817,8 +964,22 @@ mod tests {
 
         // The ESA is the recipient (NAD+MR) — the addressing this feature adds.
         assert!(wire.contains(&format!("NAD+MR+{esa}")), "{wire}");
-        // PID 13027 travels in RFF+Z13.
+        // PID 13027 travels in RFF+Z13; DE 1004 is a Dokumentennummer.
         assert!(wire.contains("RFF+Z13:13027"), "{wire}");
+        // MSCONS AHB 3.2 §11.2: BGM 1001 = Z83 „Werte nach Typ 2", UNB DE 0026
+        // = TL, DTM+137 in format 303, and RFF+AGI naming the ORDERS that
+        // ordered the values (hint [574]).
+        assert!(wire.contains("BGM+Z83+"), "BGM 1001 = Z83: {wire}");
+        assert!(
+            !wire.contains("BGM+7+13027"),
+            "the PID is not a document code: {wire}"
+        );
+        assert!(
+            wire.contains("+TL'"),
+            "UNB application reference TL: {wire}"
+        );
+        assert!(wire.contains(":303'"), "DTM+137 format 303: {wire}");
+        assert!(wire.contains("RFF+AGI:ORDERDOC0001"), "{wire}");
         // Both quarter-hour Wirkarbeit values, under one OBIS line item.
         assert!(wire.contains("QTY+220:0.250:KWH"), "{wire}");
         assert!(wire.contains("QTY+220:0.310:KWH"), "{wire}");
@@ -1139,20 +1300,31 @@ mod envelope_tests {
 
     // ── ESA outbound leg — the MSB's answers on the wire ──────────────────────
 
-    /// The rendered QUOTES/ORDRSP must parse back and carry the ESA
-    /// Prüfidentifikator (BGM DE 1004): otherwise the answer cannot close the
-    /// 5-WT / 2-WT windows the inbound leg armed.
+    /// The rendered QUOTES/ORDRSP must parse back, carry the ESA
+    /// Prüfidentifikator (BGM DE 1004) — otherwise the answer cannot close the
+    /// 5-WT / 2-WT windows the inbound leg armed — and echo the correlation
+    /// reference under the qualifier its Zuordnungsschlüssel names.
     fn assert_esa_roundtrip(message_type: &str, pid: u32) {
         use edi_energy::EdiEnergyMessage as _;
-        let msg = outbox_msg(
-            message_type,
-            serde_json::json!({
-                "sender": "9900123456789",
-                "receiver": "9900987654321",
-                "pid": pid,
-                "order_reference": "ANFRAGE-REF-1",
-            }),
-        );
+        let mut payload = serde_json::json!({
+            "sender": "9900123456789",
+            "receiver": "9900987654321",
+            "pid": pid,
+            "korrelation_ref": "ANFRAGE-REF-1",
+            "abonnement": "Z01",
+            "bindungsfrist_tage": 14,
+            "messprodukt": "9991000003056",
+        });
+        if message_type == "ORDRSP" {
+            let (ebd, code) = if pid >= 19013 {
+                ("E_0257", "A04")
+            } else {
+                ("E_0256", "A11")
+            };
+            payload["antwort_ebd"] = serde_json::Value::String(ebd.to_owned());
+            payload["antwort_code"] = serde_json::Value::String(code.to_owned());
+        }
+        let msg = outbox_msg(message_type, payload);
         let rendered = render_to_wire_bytes(&msg, &test_registry("9900123456789"))
             .unwrap_or_else(|e| panic!("render {message_type} {pid} must succeed: {e}"));
         let parsed = edi_energy::Platform::with_all_profiles()
@@ -1162,10 +1334,10 @@ mod envelope_tests {
             .detect_pruefidentifikator()
             .unwrap_or_else(|e| panic!("{message_type} {pid}: PID must be detectable: {e}"));
         assert_eq!(detected.as_u32(), pid, "round-trip PID for {message_type}");
-        let wire = String::from_utf8(rendered.bytes).expect("utf-8");
-        assert!(
-            wire.contains("RFF+ACW:ANFRAGE-REF-1"),
-            "order reference: {wire}"
+        assert_eq!(
+            crate::ingest_dispatcher::esa_korrelation_key(&parsed, pid),
+            "ANFRAGE-REF-1",
+            "{message_type} {pid} must round-trip its Zuordnungsschlüssel"
         );
     }
 

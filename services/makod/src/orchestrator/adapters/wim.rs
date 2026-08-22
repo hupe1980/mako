@@ -847,6 +847,60 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
 ///
 /// [`Zustellquittung`]: mako_wim::wertebestellung::Zustellquittung
 #[must_use]
+/// Read `SG27 PIA+5+<Produkt-Code>:Z11` — the ordered Messprodukt.
+///
+/// Also the second half of the subscription's business key: several
+/// Kapitel-4.6 products exist for one Marktlokation.
+///
+/// REQOTE AHB 1.2 §4.3 condition `[41]` restricts DE 7140 to the codes of
+/// *Codeliste der Konfigurationen* Kapitel 4.6, so a code outside it is not a
+/// wrong product but an undefined one.
+pub fn extract_messprodukt(msg: &AnyMessage) -> Option<String> {
+    msg.segments()
+        .iter()
+        .filter(|s| s.tag == "PIA" && s.component_str(0, 0) == Some("5"))
+        .find_map(|s| {
+            // C212: 7140 Produkt-Code, 7143 Produktart. `Z11` = Produkt;
+            // `SRW` on the same qualifier is an OBIS-Kennzahl, not a product.
+            let code = s.component_str(1, 0)?;
+            (s.component_str(1, 1) == Some("Z11")).then(|| code.to_owned())
+        })
+}
+
+/// Read a `DTM` of the given DE 2005 qualifier as a date.
+///
+/// Kapitel 4 uses format `303` (`CCYYMMDDHHMMZZZ`) throughout, so only the
+/// leading eight digits are the date.
+fn extract_dtm_date(msg: &AnyMessage, qualifier: &str) -> Option<time::Date> {
+    msg.segments()
+        .iter()
+        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some(qualifier))
+        .and_then(|s| s.component_str(0, 1))
+        .and_then(|v| {
+            let d: String = v.chars().filter(char::is_ascii_digit).take(8).collect();
+            (d.len() == 8).then_some(d)
+        })
+        .and_then(|d| {
+            time::Date::from_calendar_date(
+                d[0..4].parse().ok()?,
+                time::Month::try_from(d[4..6].parse::<u8>().ok()?).ok()?,
+                d[6..8].parse().ok()?,
+            )
+            .ok()
+        })
+}
+
+/// Read `IMD++<7081>` — the Abonnement mode.
+///
+/// **Muss** on ORDERS 17007/17008 (ORDERS AHB 1.1b §4.15). DE 7081 sits in
+/// C272, i.e. element 2 of the segment, with DE 7077 (element 1) empty.
+fn extract_abonnement(msg: &AnyMessage) -> Option<mako_wim::esa::Abonnement> {
+    msg.segments()
+        .iter()
+        .filter(|s| s.tag == "IMD")
+        .find_map(|s| mako_wim::esa::Abonnement::from_imd_code(s.component_str(1, 0)?))
+}
+
 pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkflow> {
     use mako_wim::wertebestellung::{
         ABBESTELLUNG_PID, ANFRAGE_PID, BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID,
@@ -890,11 +944,34 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                         .and_then(|s| s.component_str(1, 0))
                         .unwrap_or("")
                         .to_owned();
-                    let ebene = match lokations_id.len() {
-                        33 => Lokationsebene::Messlokation,
-                        11 => Lokationsebene::Marktlokation,
-                        _ => Lokationsebene::Netzlokation,
-                    };
+                    // The Messprodukt itself says which level it is for, so
+                    // the identifier length only has to disambiguate when the
+                    // product is unknown — and an unknown product is refused
+                    // by the workflow's own catalogue check anyway.
+                    let messprodukt = extract_messprodukt(msg).unwrap_or_default();
+                    let ebene = mako_wim::esa::messprodukt(&messprodukt).map_or_else(
+                        || match lokations_id.len() {
+                            33 => Lokationsebene::Messlokation,
+                            11 => Lokationsebene::Marktlokation,
+                            _ => Lokationsebene::Netzlokation,
+                        },
+                        |p| p.ebene,
+                    );
+                    // `DTM+76` — der Wunschtermin für die erstmalige
+                    // Übermittlung. Muss on 35003; absent only on a
+                    // non-conformant message, where "today" is the honest
+                    // reading of "as soon as possible".
+                    let wunschtermin = extract_dtm_date(msg, "76")
+                        .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+                    let gegenstand = Box::new(mako_wim::esa::Bestellgegenstand {
+                        messprodukt,
+                        wunschtermin,
+                        zeitraum_bis: None,
+                        // The REQOTE carries no `IMD`; the Abo mode is stated
+                        // on the ORDERS that follows.
+                        abonnement: mako_wim::esa::Abonnement::StartAbo,
+                        smgw: None,
+                    });
                     Ok(WertebestellungCommand::ReceiveAnfrage {
                         pid,
                         esa: MarktpartnerCode::new(
@@ -907,6 +984,7 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                         ),
                         ebene,
                         lokations_id,
+                        gegenstand,
                         message_ref,
                         quittung,
                         // Filled by the makod ingest consent gate before spawn.
@@ -916,26 +994,22 @@ pub fn wim_wertebestellung_registry() -> AdapterRegistry<WimWertebestellungWorkf
                 BESTELLUNG_PID => Ok(WertebestellungCommand::ReceiveBestellung {
                     pid,
                     message_ref,
+                    // `IMD+7081` is Muss on 17007; `Z01` (Abo) is the reading
+                    // that keeps a running subscription terminable, and the
+                    // AHB profile validator rejects a message without it.
+                    abonnement: extract_abonnement(msg)
+                        .unwrap_or(mako_wim::esa::Abonnement::StartAbo),
                     quittung,
                     // Filled by the makod ingest consent gate before spawn.
                     consent_block: None,
                 }),
                 ABBESTELLUNG_PID => {
                     // UC 4.3 Nr. 1: the ESA ends a running delivery. The stop
-                    // date travels in DTM+Z11 where present; else it stops now.
-                    let beendigung_zum = msg
-                        .segments()
-                        .iter()
-                        .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("Z11"))
-                        .and_then(|s| s.component_str(0, 1))
-                        .and_then(|v| {
-                            time::Date::parse(
-                                v,
-                                &time::format_description::well_known::Iso8601::DEFAULT,
-                            )
-                            .ok()
-                            .map(|d| d.midnight().assume_utc())
-                        })
+                    // date is `DTM+203` Ausführungsdatum — **Muss** on 17008
+                    // (ORDERS AHB 1.1b §4.15); `Z11` is not a qualifier this
+                    // message uses.
+                    let beendigung_zum = extract_dtm_date(msg, "203")
+                        .map(|d| d.midnight().assume_utc())
                         .unwrap_or_else(time::OffsetDateTime::now_utc);
                     Ok(WertebestellungCommand::ReceiveAbbestellung {
                         pid,
@@ -1009,20 +1083,35 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
 
             match pid {
                 ANGEBOT_PID => {
-                    // QUOTES 15003 carries both the Angebot and the Ablehnung der
-                    // Anfrage. They are told apart by the Bindungsfrist
-                    // (DTM+273, offer validity): an Angebot has one, an
+                    // QUOTES 15003 carries both the Angebot and the Ablehnung
+                    // der Anfrage. They are told apart by the Bindungsfrist
+                    // (`DTM+273` Gültigkeitsdauer): an Angebot has one, an
                     // Ablehnung does not.
+                    //
+                    // **It is a duration, not a date.** QUOTES AHB 1.1a §4.3
+                    // gives DE 2380 as „Zeitraum" with condition [908]
+                    // („Mögliche Werte: 1 bis n") and DE 2379 as `802` Monat /
+                    // `803` Woche / `804` Tag. Parsed as `CCYYMMDD` it finds
+                    // nothing in a conformant message, and the Angebot then
+                    // reads as a rejection.
                     let bindungsfrist = msg
                         .segments()
                         .iter()
                         .find(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("273"))
-                        .and_then(|s| s.component_str(0, 1))
-                        .and_then(parse_ccyymmdd);
+                        .and_then(|s| {
+                            let count: i64 = s.component_str(0, 1)?.trim().parse().ok()?;
+                            let einheit = edi_energy::builders::DauerEinheit::from_code(
+                                s.component_str(0, 2)?,
+                            )?;
+                            Some(time::OffsetDateTime::now_utc() + einheit.to_duration(count))
+                        });
                     if let Some(bindungsfrist) = bindungsfrist {
                         Ok(EsaWertebestellungCommand::ReceiveAngebot {
                             message_ref,
                             bindungsfrist,
+                            // `DTM+469` — the earliest start the MSB offers.
+                            fruehester_start: extract_dtm_date(msg, "469")
+                                .map(|d| d.midnight().assume_utc()),
                         })
                     } else {
                         // No Bindungsfrist → Ablehnung der Anfrage. Reason from
@@ -1055,15 +1144,14 @@ pub fn esa_wertebestellung_registry() -> AdapterRegistry<EsaWertebestellungWorkf
                     })
                 }
                 BEENDIGUNG_MSB_PID => {
-                    // IFTSTA 21042 (WiM Umsetzungsstatus, MSB → ESA, UC 4.4). The
-                    // Beendigung date is the status DTM; STS 4405 = 105 „beendet"
-                    // is asserted by the profile validator.
-                    let beendigung_zum = msg
-                        .segments()
-                        .iter()
-                        .find(|s| s.tag == "DTM")
-                        .and_then(|s| s.component_str(0, 1))
-                        .and_then(parse_ccyymmdd)
+                    // IFTSTA 21042 (WiM Umsetzungsstatus, MSB → ESA, UC 4.4).
+                    //
+                    // The Beendigung date is `SG15 DTM+93` „Datum
+                    // Vertragsende" (IFTSTA AHB 2.1 §6.9) — **not** the first
+                    // DTM in the message, which is `DTM+137`, the day the MSB
+                    // wrote the notice.
+                    let beendigung_zum = extract_dtm_date(msg, "93")
+                        .map(|d| d.midnight().assume_utc())
                         .unwrap_or_else(time::OffsetDateTime::now_utc);
                     Ok(EsaWertebestellungCommand::ReceiveBeendigungDurchMsb {
                         message_ref,

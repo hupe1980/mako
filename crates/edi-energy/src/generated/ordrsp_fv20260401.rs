@@ -43,7 +43,7 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "IMD",
         "Abonnement / Produkt-/Leistungsbeschreibung",
         &[
-            ElementRef::new(1, "7077", Status::Conditional, 1),
+            ElementRef::new(2, "C272", Status::Conditional, 1),
             ElementRef::new(3, "C273", Status::Conditional, 1),
         ],
     ),
@@ -73,7 +73,10 @@ static SEGMENTS: &[SegmentDefinition] = &[
     SegmentDefinition::new(
         "AJT",
         "Antwortkategorie",
-        &[ElementRef::new(1, "4465", Status::Mandatory, 1)],
+        &[
+            ElementRef::new(1, "4465", Status::Mandatory, 1),
+            ElementRef::new(2, "1082", Status::Conditional, 1),
+        ],
     ),
     SegmentDefinition::new(
         "FTX",
@@ -123,12 +126,14 @@ pub(crate) fn segment_lookup(tag: &str) -> Option<&'static SegmentDefinition> {
     SEGMENT_MAP.get(tag).copied()
 }
 
-static CODES_1001: &[&str] = &["7"];
+static CODES_1001: &[&str] = &["7", "Z57"];
+static CODES_1082: &[&str] = &["E_0254", "E_0256", "E_0257"];
 static CODES_1153: &[&str] = &["ACW", "ON", "TN", "Z13"];
 static CODES_2005: &[&str] = &["137", "163", "164", "203", "469", "472"];
 static CODES_3035: &[&str] = &["MR", "MS", "VY", "Z22"];
 static CODES_4451: &[&str] = &["AAP", "ABO", "Z27", "Z28", "Z33"];
 static CODES_6343: &[&str] = &["11"];
+static CODES_7081: &[&str] = &["Z01", "Z02", "Z03"];
 
 pub(crate) fn is_code_valid(de_id: &str, code: &str) -> bool {
     code_list(de_id).is_none_or(|codes| codes.binary_search(&code).is_ok())
@@ -152,11 +157,13 @@ fn expected_components(tag: &str, idx: usize) -> Option<u8> {
 pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
     match de_id {
         "1001" => Some(CODES_1001),
+        "1082" => Some(CODES_1082),
         "1153" => Some(CODES_1153),
         "2005" => Some(CODES_2005),
         "3035" => Some(CODES_3035),
         "4451" => Some(CODES_4451),
         "6343" => Some(CODES_6343),
+        "7081" => Some(CODES_7081),
         _ => None,
     }
 }
@@ -1424,32 +1431,12 @@ static AHB_19011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     issues,
                 );
             })
-            .with_named_stateless_rule_fn("AHB-19011-FTX-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "FTX",
-                    "AHB-19011-FTX-M",
-                    "mandatory segment FTX is missing for Pruefidentifikator 19011",
-                    "19011",
-                    issues,
-                );
-            })
             .with_named_stateless_rule_fn("AHB-19011-IMD-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
                     "IMD",
                     "AHB-19011-IMD-M",
                     "mandatory segment IMD is missing for Pruefidentifikator 19011",
-                    "19011",
-                    issues,
-                );
-            })
-            .with_named_stateless_rule_fn("AHB-19011-LIN-M", |segs, issues| {
-                ahb_check_mandatory(
-                    segs,
-                    "LIN",
-                    "AHB-19011-LIN-M",
-                    "mandatory segment LIN is missing for Pruefidentifikator 19011",
                     "19011",
                     issues,
                 );
@@ -1470,6 +1457,16 @@ static AHB_19011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                     "RFF",
                     "AHB-19011-RFF-M",
                     "mandatory segment RFF is missing for Pruefidentifikator 19011",
+                    "19011",
+                    issues,
+                );
+            })
+            .with_named_stateless_rule_fn("AHB-19011-LIN-S", |segs, issues| {
+                ahb_check_soll(
+                    segs,
+                    "LIN",
+                    "AHB-19011-LIN-S",
+                    "segment LIN should be present for Pruefidentifikator 19011 (Soll)",
                     "19011",
                     issues,
                 );
@@ -3875,6 +3872,9 @@ impl Profile for OrdrspFv20260401Profile {
     }
     fn source_document(&self) -> Option<&'static str> {
         Some("ORDRSP MIG 1.4c, Stand 01.04.2026")
+    }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

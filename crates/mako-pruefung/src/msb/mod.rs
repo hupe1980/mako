@@ -7,6 +7,12 @@
 //! | [`pruefe_kuendigung`] | 55039 | **MSBA** | `E_0200` | 3 WT |
 //! | [`pruefe_abmeldung`] | 55051 | NB | `E_0202` | 7 WT |
 //! | [`pruefe_weiterverpflichtung`] | 17002 | **MSBA** | `E_0203` | 1 WT |
+//! | [`esa::pruefe_bestellung`] | 17007 | MSB | `E_0256` | 2 WT |
+//! | [`esa::pruefe_stornierung`] | 39002 | MSB | `E_0257` | 2 WT |
+//! | [`esa::pruefe_beendigung`] | 17008 | MSB | `E_0254` | 2 WT |
+//!
+//! The ESA trees ([`esa`]) answer with an **ORDRSP**, so their code rides
+//! `SG2 AJT` (DE 4465 code, DE 1082 tree) rather than `STS+E01`.
 //!
 //! The Verpflichtungsanfrage (55168 → `E_0240`) is deliberately absent: WiM
 //! Teil 1 Kap. 2.4.2 Nr. 4 leaves the answer to the gMSB's own commercial
@@ -50,12 +56,17 @@
 
 pub mod abmeldung;
 pub mod anmeldung;
+pub mod esa;
 pub mod kuendigung;
 pub mod types;
 pub mod weiterverpflichtung;
 
 pub use abmeldung::pruefe_abmeldung;
 pub use anmeldung::pruefe_anmeldung;
+pub use esa::{
+    Bestellart, EsaBeendigung, EsaBestellung, EsaStornierung, ebd_fuer_antwort, pruefe_beendigung,
+    pruefe_bestellung, pruefe_stornierung,
+};
 pub use kuendigung::pruefe_kuendigung;
 pub use types::{
     Abmeldegrund, AbmeldungMsb, AnmeldungMsb, Einrichtungsart, KuendigungMsb, Kuendigungstermin,

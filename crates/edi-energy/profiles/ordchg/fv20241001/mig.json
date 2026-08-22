@@ -213,5 +213,6 @@
   ],
   "valid_until": "2026-09-30",
   "ahb_revision": "1.1",
-  "source_document": "ORDCHG MIG 1.1, Stand 01.10.2024"
+  "source_document": "ORDCHG MIG 1.1, Stand 01.10.2024",
+  "pid_source": "rff_z13"
 }

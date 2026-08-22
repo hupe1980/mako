@@ -298,7 +298,7 @@ pub use ordrsp::OrdrespBuilder;
 #[cfg(feature = "quotes")]
 mod quotes;
 #[cfg(feature = "quotes")]
-pub use quotes::QuotesBuilder;
+pub use quotes::{DauerEinheit, QuotesBuilder};
 
 #[cfg(feature = "comdis")]
 mod comdis;

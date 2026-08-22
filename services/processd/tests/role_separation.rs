@@ -34,6 +34,14 @@ const NB_PIDS: &[u32] = &[55_001, 55_077, 55_004, 44_001, 44_004, 55_042, 55_051
 /// PIDs the Messstellenbetreiber answers (MSB-Wechsel side).
 #[allow(dead_code)]
 const MSB_WECHSEL_PIDS: &[u32] = &[55_039, 55_168];
+/// PIDs the Messstellenbetreiber answers toward an Energieserviceanbieter
+/// (WiM Teil 2 Kap. 4).
+///
+/// Serving an ESA is a mandatory Zusatzleistung (§34 Abs. 2 S. 2 Nr. 10 MsbG),
+/// so an MSB build owes all four — but no NB or LF ever receives one, which is
+/// what makes them a role-separation marker.
+#[allow(dead_code)]
+const MSB_ESA_PIDS: &[u32] = &[35_003, 17_007, 17_008, 39_002];
 
 #[allow(dead_code)]
 fn assert_disjoint(pids: &[u32], forbidden: &[u32], role: &str, other: &str) {
@@ -59,6 +67,7 @@ fn an_nb_only_build_answers_no_lf_or_msb_process() {
     let pids = answerable_pids();
     assert_disjoint(&pids, LF_PIDS, "nb-only", "LF");
     assert_disjoint(&pids, MSB_WECHSEL_PIDS, "nb-only", "MSB");
+    assert_disjoint(&pids, MSB_ESA_PIDS, "nb-only", "MSB/ESA");
     assert!(
         pids.contains(&55_001) && pids.contains(&55_042),
         "an nb-only build must still answer the NB's own processes, got {pids:?}"
@@ -94,6 +103,7 @@ fn an_lf_only_build_answers_no_nb_or_msb_process() {
     let pids = answerable_pids();
     assert_disjoint(&pids, NB_PIDS, "lf-only", "NB");
     assert_disjoint(&pids, MSB_WECHSEL_PIDS, "lf-only", "MSB");
+    assert_disjoint(&pids, MSB_ESA_PIDS, "lf-only", "MSB/ESA");
 
     // Sparte-scoped: the expected set is the enabled Spartes' PIDs, so a
     // `role-lf-strom` build that answered a GeLi Gas Abmeldung would fail here.
@@ -126,6 +136,15 @@ fn an_msb_only_build_answers_no_nb_or_lf_process() {
         pids.contains(&55_039),
         "the MSB owes an answer to 55039 Kündigung MSB, got {pids:?}"
     );
+    // Serving an ESA is mandatory under §34 Abs. 2 S. 2 Nr. 10 MsbG, so an
+    // msb-only build must carry all four Kapitel-4 obligations — an MSB that
+    // silently answered none of them would breach the Zusatzleistung.
+    for pid in MSB_ESA_PIDS {
+        assert!(
+            pids.contains(pid),
+            "the MSB owes an answer to {pid} (WiM Teil 2 Kap. 4), got {pids:?}"
+        );
+    }
 }
 
 /// Whatever the build, a PID is never claimed by two roles at once.

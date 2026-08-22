@@ -19,10 +19,20 @@ struct OrdersBuilderInner {
     message_ref: String,
     document_code: Option<String>,
     document_id: Option<String>,
+    /// `SG1 RFF+Z13` — the Prüfidentifikator. **Not** BGM DE 1004, which the
+    /// AHB reserves for the Dokumentennummer.
+    pruefidentifikator: Option<u32>,
     document_date: Option<String>,
     location: Option<String>,
     // Additive ESA-Bestellung/Abbestellung (PID 17007/17008) content.
-    reference: Option<(String, String)>,
+    /// SG1 references as `(1153 qualifier, 1154 value)`. An ESA Bestellung
+    /// carries `RFF+AAG` (the Angebotsnummer) *and* `RFF+Z13`; an Abbestellung
+    /// carries `RFF+ACW` *and* `RFF+Z13`. One slot cannot hold both.
+    references: Vec<(String, String)>,
+    /// `DTM+203` Ausführungsdatum — **Muss** on 17007/17008.
+    ausfuehrungsdatum: Option<String>,
+    /// `IMD+7081` — `Z01` Start Abo / `Z02` Ende Abo / `Z03` ohne Abo.
+    abonnement: Option<String>,
     item_description: Option<String>,
 }
 
@@ -71,9 +81,12 @@ impl OrdersBuilder<Unset, Unset> {
                 message_ref: "1".to_owned(),
                 document_code: None,
                 document_id: None,
+                pruefidentifikator: None,
                 document_date: None,
                 location: None,
-                reference: None,
+                references: Vec::new(),
+                ausfuehrungsdatum: None,
+                abonnement: None,
                 item_description: None,
             },
         }
@@ -129,6 +142,15 @@ impl<S, R> OrdersBuilder<S, R> {
         self
     }
 
+    /// Set the Prüfidentifikator, emitted as `SG1 RFF+Z13:<pid>`.
+    ///
+    /// The AHBs give BGM DE 1004 as the **Dokumentennummer** and put the
+    /// Prüfidentifikator in its own reference group, so this never touches BGM.
+    pub fn pruefidentifikator(mut self, pid: u32) -> Self {
+        self.inner.pruefidentifikator = Some(pid);
+        self
+    }
+
     /// Override the message reference number.  Defaults to `"1"`.
     pub fn message_ref(mut self, reference: impl Into<String>) -> Self {
         self.inner.message_ref = reference.into();
@@ -150,13 +172,37 @@ impl<S, R> OrdersBuilder<S, R> {
         self
     }
 
-    /// Add the SG1 reference `RFF+<qual>:<value>` (ORDERS SG1 `1153 = Z13`).
+    /// Add an SG1 reference `RFF+<qual>:<value>`.
+    ///
+    /// Additive. The ESA order PIDs need two (`AAG`/`ACW` plus `Z13`).
     pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
-        self.inner.reference = Some((qualifier.into(), value.into()));
+        self.inner.references.push((qualifier.into(), value.into()));
         self
     }
 
-    /// Set a coded item description — emits `IMD+A++:::<text>`.
+    /// Set `DTM+203` Ausführungsdatum (`CCYYMMDDHHMM`).
+    ///
+    /// **Muss** on ORDERS 17007/17008 (ORDERS AHB 1.1b §4.15): on a Bestellung
+    /// it is when the delivery is to start, on an Abbestellung when it stops.
+    pub fn ausfuehrungsdatum(mut self, ccyymmddhhmm: impl Into<String>) -> Self {
+        self.inner.ausfuehrungsdatum = Some(ccyymmddhhmm.into());
+        self
+    }
+
+    /// Set the `IMD+7081` Abonnement code — `Z01` (Start Abo), `Z02` (Ende
+    /// Abo) or `Z03` (ohne Abo).
+    ///
+    /// **Muss** on ORDERS 17007/17008. It is also what decides which EBD the
+    /// MSB's ORDRSP must cite (`E_0256` for Z01/Z03, `E_0254` for Z02).
+    pub fn abonnement(mut self, code: impl Into<String>) -> Self {
+        self.inner.abonnement = Some(code.into());
+        self
+    }
+
+    /// Set a free-form item description — emits `IMD+A`.
+    ///
+    /// Distinct from [`abonnement`](Self::abonnement), which emits the coded
+    /// `IMD++<7081>` the ESA order PIDs require.
     pub fn item_description(mut self, text: impl Into<String>) -> Self {
         self.inner.item_description = Some(text.into());
         self
@@ -173,7 +219,13 @@ impl<S, R> OrdersBuilder<S, R> {
         let mut w = Writer::new(&mut buf);
 
         let code = self.inner.document_code.as_deref().unwrap_or("");
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // BGM DE 1004 is the **Dokumentennummer**, never the Prüfidentifikator
+        // (ORDERS AHB 1.1b).
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
@@ -182,14 +234,24 @@ impl<S, R> OrdersBuilder<S, R> {
         );
         emit_seg!(w, "BGM", code, doc_id);
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
-        // Item description (IMD) — the AHB requires the segment; the free-form
-        // indicator (7077 = A) satisfies it. `_text` is reserved for a future
-        // coded C273 once the 7081 characteristic code list is wired.
-        if let Some(_text) = &self.inner.item_description {
+        // `DTM+203` Ausführungsdatum, format 303 (CCYYMMDDHHMMZZZ).
+        if let Some(ausf) = &self.inner.ausfuehrungsdatum {
+            emit_comp!(w, "DTM", ["203", ausf, "303"]);
+        }
+        // Abonnement — `IMD++<7081>`. DE 7081 sits in C272 (element 2), which
+        // is why DE 7077 (element 1) stays empty.
+        if let Some(code) = &self.inner.abonnement {
+            emit_comp!(w, "IMD", [""], [code]);
+        }
+        // Free-form item description (7077 = A), for the non-ESA order PIDs.
+        if self.inner.abonnement.is_none() && self.inner.item_description.is_some() {
             emit_comp!(w, "IMD", ["A"]);
         }
-        // ── SG1: reference (RFF+Z13 = Prüfidentifikator) ─────────────────────
-        if let Some((q, v)) = &self.inner.reference {
+        // ── SG1: references (RFF+AAG / RFF+ACW / RFF+Z13) ────────────────────
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
+        }
+        for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
         }
         // ── SG2: parties + location ──────────────────────────────────────────

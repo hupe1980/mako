@@ -529,6 +529,17 @@ CREATE INDEX cci_malo ON cls_compliance_issues (tenant, malo_id, resolved_at);
 CREATE TABLE delivery_surveillance (
     tenant            TEXT        NOT NULL,
     malo_id           TEXT        NOT NULL,
+    -- Which value stream this row watches. The two are never mixed: a Typ-2
+    -- value has no bearing on Netznutzungs-, Bilanzkreis- or
+    -- Mehr-/Mindermengenabrechnung (Codeliste der Konfigurationen 1.4 Kap. 4.6),
+    -- so a silent ESA subscription and a silent billing meter are different
+    -- findings with different audiences.
+    stream            TEXT        NOT NULL DEFAULT 'TYP1'
+                                  CHECK (stream IN ('TYP1','TYP2')),
+    -- The delivered register. Empty for TYP1, whose rows are per measuring
+    -- point; a Typ-2 subscription delivers named OBIS registers and one can go
+    -- dark while the others keep arriving.
+    obis_code         TEXT        NOT NULL DEFAULT '',
     -- SILENT: nothing arrived for longer than the threshold.
     -- UNDER_COVERED: still delivering, but too little of the window to settle on.
     state             TEXT        NOT NULL CHECK (state IN ('SILENT','UNDER_COVERED')),
@@ -545,7 +556,7 @@ CREATE TABLE delivery_surveillance (
     last_seen_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     resolved_at       TIMESTAMPTZ,
 
-    PRIMARY KEY (tenant, malo_id)
+    PRIMARY KEY (tenant, stream, malo_id, obis_code)
 );
 
 CREATE INDEX ds_open ON delivery_surveillance (tenant, state, first_detected_at)

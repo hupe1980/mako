@@ -371,7 +371,7 @@ roles = ["LF", "LFG"]
 
 ### ESA messages
 
-REQOTE **35003** ("Anfrage von Werten") is ESA-specific: REQOTE AHB 1.1 §4.3
+REQOTE **35003** ("Anfrage von Werten") is ESA-specific: REQOTE AHB 1.2 §4.3
 gives the Kommunikation as *ESA an MSB* and labels `SG1 RFF+Z13` "35003 Anfrage
 von Werten für ESA". It routes to `wim-wertebestellung` on the
 Prüfidentifikator alone — no sender-role or content classification is involved,
@@ -399,29 +399,60 @@ sequenceDiagram
     autonumber
     participant ESA as ESA · esa-wertebestellung
     participant MSB as MSB · wim-wertebestellung
-    ESA->>MSB: REQOTE 35003 Werteanfrage (LOC = MaLo)
-    MSB-->>ESA: QUOTES 15003 Angebot · DTM+273 Bindungsfrist
+    ESA->>MSB: REQOTE 35003 Werteanfrage · LOC+172 · PIA Messprodukt · DTM+76
+    MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · DTM+273 Bindungsfrist
     Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
-    ESA->>MSB: ORDERS 17007 Bestellung (within Bindungsfrist)
-    MSB-->>ESA: ORDRSP 19011 Bestätigung / 19012 Ablehnung
-    Note over ESA,MSB: 2 WT · ORDRSP has no LOC ⇒ correlate by RFF+ACW
-    loop §60 Abs. 1 MsbG · daily by 09:30
+    ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081
+    MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT+&lt;code&gt;+E_0256
+    loop per the ordered Messprodukt
         MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
     end
     alt Stornierung before first delivery (UC 4.1 Nr. 5)
-        ESA->>MSB: ORDCHG 39002 Storno · RFF+ON = Bestellung
-        MSB-->>ESA: ORDRSP 19013 Bestätigung / 19014 Ablehnung
+        ESA->>MSB: ORDCHG 39002 Storno · RFF+ON
+        MSB-->>ESA: ORDRSP 19013 / 19014 · RFF+ACW · AJT+&lt;code&gt;+E_0257
     else Abbestellung during delivery (UC 4.3)
-        ESA->>MSB: ORDERS 17008 Abbestellung
-        MSB-->>ESA: ORDRSP 19011 Bestätigung
+        ESA->>MSB: ORDERS 17008 Abbestellung · RFF+ACW · IMD++Z02
+        MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT+&lt;code&gt;+E_0254
     end
 ```
 
-Only the REQOTE, QUOTES and ORDERS carry a `LOC` (the MaLo). The conformant
-ORDRSP and ORDCHG carry none — they are correlated to the running process by the
-order reference each echoes (`RFF+ACW` on an answer, `RFF+ON` on the Storno), the
-Belegnummer of the order it responds to. The 39002 Stornierung is part of the
-same subscription lifecycle; it is not a standalone process.
+**What is ordered.** The Werteanfrage names a Messprodukt from *Codeliste der
+Konfigurationen* 1.4 Kapitel 4.6 (`SG27 PIA+5 … :Z11`), the Wunschtermin for the
+first delivery (`DTM+76`) and — from the Bestellung on — the Abo mode
+(`IMD+7081`: `Z01` running series, `Z03` single transmission). makod validates
+the product against the catalogue before rendering: a code outside Kapitel 4.6,
+one defined for a different Lokationsebene than the request addresses, or a
+Kapitel-4.6.2 (SM-PKI) product without its target address and certificates is
+refused with `422`.
+
+A subscription is the **(Meldepunkt, Messprodukt) pair**: several Kapitel-4.6
+products exist for one Marktlokation, so a second Werteanfrage naming a different
+product is a new subscription, not a `409 duplicate_process`. Every follow-up
+command (`esa.bestellung.beauftragen`, the Storno/Abbestellung, and the MSB-side
+answers) therefore accepts a `messprodukt` alongside the location to say which
+subscription it means; omit it while only one exists at that location.
+
+**Correlation.** Only the REQOTE is keyed on a location. Every later message
+carries **no `LOC` at all** and is matched by the Belegnummer it echoes, under
+the Zuordnungsschlüssel the BDEW *Anwendungsübersicht der Prüfidentifikatoren*
+4.0 publishes per PID:
+
+| PID | Schlüssel | Segment | Points at |
+|---|---|---|---|
+| 35003 | `ZO-T17` | `SG11 LOC+172` | the Meldepunkt |
+| 15003 | `ZG-T16` | `SG1 RFF+AAV` | the REQOTE |
+| 17007 | `ZG-T24` | `SG1 RFF+AAG` | the QUOTES Angebot |
+| 17008 | `ZG-T41` | `SG1 RFF+ACW` | the ORDERS Bestellung |
+| 39002 | `ZG-T51` | `SG1 RFF+ON` | the ORDERS Bestellung |
+| 19011 / 19012 | `ZG-T14` | `SG1 RFF+ON` | the ORDERS answered |
+| 19013 / 19014 | `ZG-T50` | `SG1 RFF+ACW` | the ORDCHG |
+| 21042 | `ZG-T47` | `SG15 RFF+AGI` | the ORDERS Bestellung |
+
+Both sides index their process under every Belegnummer they emit, so each answer
+finds its process. The renderer and the ingest dispatcher read the same table
+(`mako_wim::esa::korrelation`), so the qualifier emitted and the one looked for
+cannot drift. The 39002 Stornierung is part of the same subscription lifecycle;
+it is not a standalone process.
 
 #### Consent gate
 
@@ -487,16 +518,13 @@ period that spans an MSB change — the dispatch is refused (`422`) with an
 instruction to split the request per MSB period rather than silently
 mis-addressing part of it.
 
-The MSB's answers come back inbound and resume the process. The QUOTES 15003
-Angebot still carries a `LOC`, so it correlates by MaLo. The ORDRSP
-19011/19012/19013/19014 answers carry **no** `LOC` in their MIG-conformant form,
-so they correlate by the **order reference** the answer echoes in `RFF+ACW` (the
-Belegnummer of the ORDERS/ORDCHG the ESA sent). The ESA indexes its process under
-each outbound order Belegnummer for exactly this lookup; symmetrically, the MSB
-indexes its process under each inbound ORDERS Belegnummer so the LOC-less ORDCHG
-39002 Stornierung (which references the original Bestellung in `RFF+ON`) resumes
-it. A
-`werteanfrage`/`bestellung` is refused (`422`) unless the strict `esa_outbound`
+`esa.werteanfrage.stellen` also carries the order itself: `messprodukt` (a
+Kapitel-4.6 Messprodukt-Code, spaced or bare), `wunschtermin` (or `zeitraum_von`,
+`YYYY-MM-DD`), an optional `abonnement` (`Z01` default / `Z03`), and for a
+Kapitel-4.6.2 product an `smgw` object with the IPv4 and IPv6 target URIs, the
+certificate issuer and subject, and any Schwellwerte.
+
+A `werteanfrage`/`bestellung` is refused (`422`) unless the strict `esa_outbound`
 consent check passes — the ESA is the consent holder and must not request values
 it has no lawful basis for. On the outbound side the gate **fails closed**: if
 marktd is unreachable the request is refused rather than sent without a confirmed
@@ -512,7 +540,10 @@ This closes the revocation loop end-to-end: marktd's consent revocation
 
 The counterpart to the ordering handshake: once the MSB holds a confirmed
 Bestellung it owes the ESA the ordered values — the §60 Abs. 1 MsbG delivery
-duty (daily, by 09:30). The command `wim.wertebestellung.liefern` (role `MSB`)
+duty. The cadence and deadline come from the ordered Messprodukt: the Rohdaten
+products publish „unverzüglich, jedoch spätestens bis 9:30 Uhr", the
+aufbereitete-Daten products defer to *WiM Teil 2 Kapitel 2.5.5*. The command
+`wim.wertebestellung.liefern` (role `MSB`)
 emits an **outbound MSCONS 13027 "Werte nach Typ 2" addressed to the ESA**
 (NAD+MR = the ESA's MP-ID — a recipient that is neither NB nor LF):
 
@@ -539,18 +570,36 @@ can play both roles and a Wertebestellung runs end to end in one deployment (or
 against a real ESA). Each resumes the MSB-side `wim-wertebestellung` process for
 the MaLo (role `MSB`):
 
-| Command | Answer on the wire |
-|---|---|
-| `wim.wertebestellung.anbieten` | QUOTES 15003 Angebot (carries the Bindungsfrist in `DTM+273`) |
-| `wim.wertebestellung.anfrage-ablehnen` | QUOTES 15003 Ablehnung (reason in `FTX+ACB`, **no** Bindungsfrist) |
-| `wim.wertebestellung.bestellung-beantworten` | ORDRSP 19011 (`accept:true`) / 19012 (`accept:false`, needs `reason`) |
-| `wim.wertebestellung.stornierung-beantworten` | ORDRSP 19013 / 19014 |
-| `wim.wertebestellung.abbestellung-bestaetigen` | ORDRSP 19011 |
+| Command | Answer on the wire | EBD |
+|---|---|---|
+| `wim.wertebestellung.anbieten` | QUOTES 15003 Angebot (Bindungsfrist in `DTM+273`) | — |
+| `wim.wertebestellung.anfrage-ablehnen` | QUOTES 15003 Ablehnung (reason in `FTX+ACB`, **no** Bindungsfrist) | — |
+| `wim.wertebestellung.bestellung-beantworten` | ORDRSP 19011 / 19012 | `E_0256` |
+| `wim.wertebestellung.stornierung-beantworten` | ORDRSP 19013 / 19014 | `E_0257` |
+| `wim.wertebestellung.abbestellung-beantworten` | ORDRSP 19011 / 19012 | `E_0254` |
+
+The three answer commands take an **`antwort_code`**, not an `accept` flag:
+`SG2 AJT` is Muss on all four ORDRSP PIDs (ORDRSP AHB 1.1b §4.15) and its code
+must sit in the named EBD's Zustimmungs- or Ablehnungs-Cluster, so **the cluster
+selects the PID**. Resolve the code by running the matching walk in
+`mako_pruefung::msb::esa`; an unpublished code, or one off the agreement axis, is
+refused with `422`.
+
+Three consequences worth knowing:
+
+- `E_0257` refuses a Stornierung of a delivery that has already run with
+  **different codes** per Abo mode — `A02` for a running Abo, `A03` for a
+  one-shot that was already transmitted.
+- `E_0254` publishes four refusals, so an Abbestellung is not always
+  confirmable. `A01` says the order was a one-shot and must be *storniert*
+  instead; a refused Beendigung leaves the delivery running.
+- 19011/19012 answer both the Bestellung and the Beendigung. The `IMD+7081` the
+  answer carries is what says which tree the code came from.
 
 The Angebot and the Anfrage-Ablehnung both travel as QUOTES 15003; the ESA tells
 them apart by the **Bindungsfrist** — an Angebot carries `DTM+273`, an Ablehnung
-does not (its reason rides `FTX+ACB`). So the ESA's `esa-wertebestellung` process
-resumes into `AngebotErhalten` or `Abgelehnt` correctly without a second PID.
+does not (its reason rides `FTX+ACB`). `DTM+273` is a *duration* (a count plus
+`802` Monat / `803` Woche / `804` Tag), not a date.
 
 `marktrollen` declares which market-participant roles this deployment is
 authorised to issue commands for.  Every command submitted to
@@ -1400,6 +1449,27 @@ UNH+...
 }
 ```
 
+**Per-message `status`:**
+
+| Status | Meaning | Counted as |
+|---|---|---|
+| `routed` | PID found and a workflow is registered for it | accepted |
+| `unknown_pid` | PID found, no workflow registered — dead-lettered | accepted |
+| `no_pid` | The message type carries none by design (**CONTRL** only) | accepted |
+| `missing_pid` | A PID-bearing type arrived without one — dead-lettered | **rejected** |
+| `parse_error` | Not parseable at all | **rejected** |
+
+`missing_pid` is a rejection because nothing can be routed without a PID and no
+APERAK can name the process — a silent `accepted: 1` would leave the sender no
+signal at all. CONTRL is the one message type whose AHB publishes no
+Prüfidentifikator, so it keeps `no_pid`.
+
+The PID is read from `SG1 RFF+Z13` and `BGM` DE 1004, in the order the profile's
+`pid_source` declares. The AHBs put it in `RFF+Z13` and give DE 1004 as a
+*Dokumentennummer*, so reading only one location makes a conformant partner's
+message undetectable. Only a plausible 5-digit code is accepted from either, so
+a numeric Belegnummer cannot outrank the real PID.
+
 ### Ingest durability
 
 Three properties hold for every inbound message, whichever transport carried it.
@@ -1882,7 +1952,8 @@ stating something the sender did not say.
 | 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | `Z46` | same |
 | 13015 | Arbeit + Leistungsmaximum im Kalenderjahr vor Lieferbeginn | `Z27` | work entry plus one or two monthly maxima |
 | 13016 | Energiemenge und Leistungsmaximum | `Z28` | same |
-| 13019 | Energiemenge (Strom) | `7` | work entry only |
+| 13019 | Energiemenge (Strom) | `7` |
+| 13027 | Werte nach Typ 2 (MSB → ESA) | `Z83` | work entry only |
 
 `BGM` DE 1001 names what kind of document the message is and the receiver routes
 by it, so it is set per Anwendungsfall rather than left at a default.

@@ -530,5 +530,6 @@
     }
   ],
   "ahb_revision": "2.1",
-  "source_document": "IFTSTA MIG 2.1, Stand 01.10.2026"
+  "source_document": "IFTSTA MIG 2.1, Stand 01.10.2026",
+  "pid_source": "rff_z13"
 }

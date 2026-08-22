@@ -147,3 +147,7 @@ required-features = ["utilmd"]
 [[example]]
 name = "06_parse_reader"
 required-features = ["utilmd"]
+
+[[test]]
+name = "pid_detection"
+required-features = ["mscons", "reqote", "quotes", "orders", "ordchg", "ordrsp"]

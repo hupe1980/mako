@@ -19,8 +19,13 @@ struct OrdchgBuilderInner {
     message_ref: String,
     document_code: Option<String>,
     document_id: Option<String>,
+    /// `SG1 RFF+Z13` — the Prüfidentifikator. **Not** BGM DE 1004, which the
+    /// AHB reserves for the Dokumentennummer.
+    pruefidentifikator: Option<u32>,
     document_date: Option<String>,
-    reference: Option<(String, String)>,
+    /// SG1 references as `(1153 qualifier, 1154 value)`. A Stornierung carries
+    /// `RFF+ON` (the ORDERS' Belegnummer) *and* `RFF+Z13`.
+    references: Vec<(String, String)>,
 }
 
 /// Fluent builder for `ORDCHG` (Purchase Order Change) messages.
@@ -70,8 +75,9 @@ impl OrdchgBuilder<Unset, Unset> {
                 message_ref: "1".to_owned(),
                 document_code: None,
                 document_id: None,
+                pruefidentifikator: None,
                 document_date: None,
-                reference: None,
+                references: Vec::new(),
             },
         }
     }
@@ -128,6 +134,15 @@ impl<S, R> OrdchgBuilder<S, R> {
         self
     }
 
+    /// Set the Prüfidentifikator, emitted as `SG1 RFF+Z13:<pid>`.
+    ///
+    /// The AHBs give BGM DE 1004 as the **Dokumentennummer** and put the
+    /// Prüfidentifikator in its own reference group, so this never touches BGM.
+    pub fn pruefidentifikator(mut self, pid: u32) -> Self {
+        self.inner.pruefidentifikator = Some(pid);
+        self
+    }
+
     /// Override the message reference number. Defaults to `"1"`.
     pub fn message_ref(mut self, reference: impl Into<String>) -> Self {
         self.inner.message_ref = reference.into();
@@ -146,7 +161,7 @@ impl<S, R> OrdchgBuilder<S, R> {
     /// so a Stornierung identifies its target through this reference (e.g.
     /// `ON` = the Bestellung's order number, `Z13` = Prüfidentifikator).
     pub fn reference(mut self, qualifier: impl Into<String>, value: impl Into<String>) -> Self {
-        self.inner.reference = Some((qualifier.into(), value.into()));
+        self.inner.references.push((qualifier.into(), value.into()));
         self
     }
 
@@ -161,7 +176,13 @@ impl<S, R> OrdchgBuilder<S, R> {
         let mut w = Writer::new(&mut buf);
 
         let code = self.inner.document_code.as_deref().unwrap_or("Z51");
-        let doc_id = self.inner.document_id.as_deref().unwrap_or("");
+        // BGM DE 1004 is the **Dokumentennummer**, never the Prüfidentifikator
+        // (ORDCHG AHB 1.1).
+        let doc_id = self
+            .inner
+            .document_id
+            .as_deref()
+            .unwrap_or(&self.inner.message_ref);
         emit_comp!(
             w,
             "UNH",
@@ -171,7 +192,10 @@ impl<S, R> OrdchgBuilder<S, R> {
         emit_seg!(w, "BGM", code, doc_id, "1");
         emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
         // ── SG1: reference (mandatory; the ORDCHG has no LOC) ────────────────
-        if let Some((q, v)) = &self.inner.reference {
+        if let Some(pid) = self.inner.pruefidentifikator {
+            emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
+        }
+        for (q, v) in &self.inner.references {
             emit_comp!(w, "RFF", [q, v]);
         }
         // ── SG3: parties ─────────────────────────────────────────────────────

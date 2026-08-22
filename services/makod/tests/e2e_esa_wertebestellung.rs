@@ -1,15 +1,20 @@
 //! End-to-end loopback: ESA Wertebestellung handshake (WiM Strom Teil 2 Kap. 4)
 //! driven through the **real** command dispatcher, outbox, EDIFACT renderer and
-//! ingest dispatcher — proving the LOC-less ORDRSP answer correlates back to the
-//! ESA's process by the echoed order reference (`RFF+ACW`), not by MaLo.
+//! ingest dispatcher.
+//!
+//! What it proves: every step after the opening REQOTE correlates by the
+//! Belegnummer its own Zuordnungsschlüssel names, because a conformant ORDERS,
+//! ORDCHG or ORDRSP of Kapitel 4 carries **no location at all**.
 //!
 //! ```text
 //!   ESA (tenant A)                                   MSB (tenant B)
 //!   ─────────────────────────────────────────────────────────────────
-//!   esa.werteanfrage.stellen ─ REQOTE 35002 ─►   (spawn wim-wertebestellung)
-//!            (resume) ◄─ QUOTES 15003 ─ wim.wertebestellung.anbieten
-//!   esa.bestellung.beauftragen ─ ORDERS 17007 ─► (resume; index by Belegnummer)
-//!            (resume by RFF+ACW) ◄─ ORDRSP 19011 ─ …bestellung-beantworten
+//!   esa.werteanfrage.stellen ─ REQOTE 35003 ─►   spawn (LOC+172, ZO-T17)
+//!            (resume by RFF+AAV) ◄─ QUOTES 15003 ─ wim.wertebestellung.anbieten
+//!   esa.bestellung.beauftragen ─ ORDERS 17007 ─► resume by RFF+AAG (ZG-T24)
+//!            (resume by RFF+ON) ◄─ ORDRSP 19011 ─ …bestellung-beantworten
+//!   esa.stornierung.beauftragen ─ ORDCHG 39002 ─► resume by RFF+ON (ZG-T51)
+//!            (resume by RFF+ACW) ◄─ ORDRSP 19013 ─ …stornierung-beantworten
 //! ```
 //!
 //! Both roles share one store; each role owns its own tenant, command state and
@@ -142,12 +147,10 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
         100,
         tenant_esa,
     );
-    // The MSB must recognise the ESA as an ESA counterparty to classify the
-    // shared-PID REQOTE 35002 as a Werteanfrage rather than a Preisanfrage.
-    // No ESA-partner registration: REQOTE 35003 is ESA-specific, so the MSB
-    // routes it on the Prüfidentifikator alone. The sender-role classifier this
-    // used to need existed only because mako sent 35002, which belongs to a
-    // different process.
+    // No ESA-partner registration is needed: REQOTE 35003 is ESA-specific
+    // (REQOTE AHB 1.2 §4.3, Kommunikation *ESA an MSB*), so the MSB routes it on
+    // the Prüfidentifikator alone — the Preisanfrage family uses
+    // 35001/35002/35004/35005 and the two never share a PID.
     let dispatcher_msb = EdifactIngestDispatcher::new(
         Arc::clone(&store),
         store.as_snapshot_store(),
@@ -157,11 +160,17 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
 
     let registry = party_registry();
 
-    // 1. ESA originates the Werteanfrage (REQOTE 35002).
+    // 1. ESA originates the Werteanfrage (REQOTE 35003) for the Pflicht
+    //    Messprodukt „ESA, Marktlokation Wirkarbeit Lastgang ¼ h".
     let out = dispatch_command(
         &esa,
         "esa.werteanfrage.stellen",
-        &serde_json::json!({ "msb_mp_id": MSB_MP_ID, "malo_id": MALO_ID }),
+        &serde_json::json!({
+            "msb_mp_id": MSB_MP_ID,
+            "malo_id": MALO_ID,
+            "messprodukt": "9991000003056",
+            "wunschtermin": "2026-03-01",
+        }),
     )
     .await
     .expect("werteanfrage");
@@ -174,7 +183,8 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
         "REQOTE must spawn the MSB process; got {outcomes:?}"
     );
 
-    // 2. MSB answers with a QUOTES 15003 Angebot; the ESA resumes by MaLo (LOC).
+    // 2. MSB answers with a QUOTES 15003 Angebot; the ESA resumes by the
+    //    REQOTE Belegnummer it echoes in `RFF+AAV` (`ZG-T16`).
     dispatch_command(
         &msb,
         "wim.wertebestellung.anbieten",
@@ -185,11 +195,12 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
     let outcomes = relay_pending(&store, &registry, &dispatcher_esa, &dispatcher_msb).await;
     assert!(
         matches!(outcomes.as_slice(), [IngestOutcome::Dispatched { .. }]),
-        "QUOTES must resume the ESA process by MaLo; got {outcomes:?}"
+        "QUOTES must resume the ESA process by RFF+AAV; got {outcomes:?}"
     );
 
-    // 3. ESA places the Bestellung (ORDERS 17007); the ESA process is indexed
-    //    under the order Belegnummer for the LOC-less answer to come.
+    // 3. ESA places the Bestellung (ORDERS 17007). It references the Angebot in
+    //    `RFF+AAG` — its published Zuordnungsschlüssel — and carries no LOC;
+    //    the ESA process is indexed under the order Belegnummer for the answer.
     dispatch_command(
         &esa,
         "esa.bestellung.beauftragen",
@@ -203,12 +214,14 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
         "ORDERS must resume the MSB process; got {outcomes:?}"
     );
 
-    // 4. MSB confirms the Bestellung with an ORDRSP 19011 — which carries NO LOC.
-    //    It must still resume the ESA process, via the RFF+ACW order reference.
+    // 4. MSB confirms the Bestellung with an ORDRSP 19011 — which carries NO
+    //    LOC. It must still resume the ESA process, via the `RFF+ON` reference
+    //    to the ORDERS (`ZG-T14`). `A11` is `E_0256`'s only Zustimmungscode,
+    //    and its Cluster — not a boolean — is what selects 19011 over 19012.
     dispatch_command(
         &msb,
         "wim.wertebestellung.bestellung-beantworten",
-        &serde_json::json!({ "malo_id": MALO_ID, "accept": true }),
+        &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "A11" }),
     )
     .await
     .expect("bestellung-beantworten");
@@ -221,7 +234,7 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
                 ..
             }]
         ),
-        "the LOC-less ORDRSP 19011 must resume the ESA process by RFF+ACW; got {outcomes:?}"
+        "the LOC-less ORDRSP 19011 must resume the ESA process by RFF+ON; got {outcomes:?}"
     );
 
     // 5. ESA cancels the not-yet-delivered Bestellung (ORDCHG 39002). The
@@ -249,10 +262,11 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
 
     // 6. MSB confirms the Stornierung (ORDRSP 19013) — again no LOC; the ESA
     //    resumes by the ORDCHG's Belegnummer echoed in RFF+ACW.
+    // `A04` — „Stornierung wird bestätigt", the Zustimmungscode of `E_0257`.
     dispatch_command(
         &msb,
         "wim.wertebestellung.stornierung-beantworten",
-        &serde_json::json!({ "malo_id": MALO_ID, "accept": true }),
+        &serde_json::json!({ "malo_id": MALO_ID, "antwort_code": "A04" }),
     )
     .await
     .expect("stornierung-beantworten");
@@ -266,5 +280,64 @@ async fn esa_ordrsp_answer_correlates_by_order_reference_not_malo() {
             }]
         ),
         "the LOC-less ORDRSP 19013 must resume the ESA process by RFF+ACW; got {outcomes:?}"
+    );
+}
+
+/// Two different Kapitel-4.6 Messprodukte at the **same** Marktlokation are two
+/// subscriptions, not a duplicate.
+///
+/// The catalogue offers `9991 00000 305 6` (Wirkarbeit Lastgang ¼ h) and
+/// `9991 00000 314 7` (Energiemenge über ein Zeitintervall) for a Marktlokation,
+/// and nothing in WiM Teil 2 limits an ESA to one at a time — so the duplicate
+/// guard is keyed on the (Meldepunkt, Messprodukt) pair, not the location.
+#[tokio::test]
+async fn two_messprodukte_at_one_marktlokation_are_two_subscriptions() {
+    let store = Arc::new(
+        SlateDbStore::open_in_memory()
+            .await
+            .expect("in-memory store"),
+    );
+    let tenant_esa = TenantId::new();
+    let esa = command_state(&store, tenant_esa, ESA_MP_ID, "ESA");
+
+    let order = |messprodukt: &str| {
+        serde_json::json!({
+            "msb_mp_id": MSB_MP_ID,
+            "malo_id": MALO_ID,
+            "messprodukt": messprodukt,
+            "wunschtermin": "2026-03-01",
+        })
+    };
+
+    let first = dispatch_command(&esa, "esa.werteanfrage.stellen", &order("9991000003056"))
+        .await
+        .expect("Lastgang order");
+    assert!(
+        matches!(first, DispatchOutcome::Spawned { .. }),
+        "{first:?}"
+    );
+
+    // A second Werteanfrage for the *same* product is the duplicate the guard
+    // exists for.
+    let dup = dispatch_command(&esa, "esa.werteanfrage.stellen", &order("9991000003056"))
+        .await
+        .expect_err("same product must be refused as a duplicate");
+    assert!(
+        format!("{dup:?}").contains("DuplicateProcess"),
+        "expected a duplicate, got {dup:?}"
+    );
+
+    // A different product at the same location is a separate subscription.
+    let second = dispatch_command(&esa, "esa.werteanfrage.stellen", &order("9991000003147"))
+        .await
+        .expect("Energiemenge order must not collide with the Lastgang order");
+    assert!(
+        matches!(second, DispatchOutcome::Spawned { .. }),
+        "{second:?}"
+    );
+    assert_ne!(
+        format!("{first:?}"),
+        format!("{second:?}"),
+        "the two orders must be distinct processes"
     );
 }

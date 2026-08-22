@@ -308,8 +308,14 @@ impl EdifactIngestDispatcher {
                     // Consent gate: a revoked consent or an unestablished
                     // framework agreement answers the Werteanfrage with a
                     // QUOTES 15003 Ablehnung instead of an Angebot.
-                    let cmd = self.gate_esa_consent(msg, cmd).await;
+                    let cmd = self.gate_esa_consent(msg, cmd, None).await;
+                    // The subscription is the (Meldepunkt, Messprodukt) pair:
+                    // several Kapitel-4.6 products exist for one Marktlokation
+                    // and an ESA may hold more than one at a time.
                     let malo_id = extract_malo_from_msg(msg);
+                    let messprodukt = adapters::extract_messprodukt(msg).unwrap_or_default();
+                    let subscription_key =
+                        mako_wim::esa::business_key(malo_id.as_str(), &messprodukt);
                     // UC 4.1 Nr. 2: "spätester ÜT ist der 5. WT nach dem ÜT von
                     // Nr. 1". makod issues its positive AS4 Receipt for this
                     // message in the same request, so the dispatch instant is
@@ -319,52 +325,77 @@ impl EdifactIngestDispatcher {
                         mako_wim::wertebestellung::ANGEBOT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
-                    self.spawn_or_resume::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
-                        malo_id.as_str(),
+                    // Also index under the REQOTE's own Belegnummer: our QUOTES
+                    // answer echoes it in `RFF+AAV`, and the ESA's ORDERS then
+                    // references our Angebot.
+                    let anfrage_belegnr = msg.message_ref();
+                    self.spawn_or_resume_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        subscription_key.as_str(),
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
                         &fv,
                         &[(mako_wim::wertebestellung::ANGEBOT_WINDOW_LABEL, due_at)],
+                        &[anfrage_belegnr, malo_id.as_str()],
+                        None,
                     )
                     .await
                 } else if pid == mako_wim::wertebestellung::STORNIERUNG_PID.as_u32() {
-                    // ORDCHG 39002 Stornierung carries no LOC — correlate by the
-                    // original Bestellung's Belegnummer echoed in RFF+ON. Resume
-                    // only; a Stornierung without a running order is an orphan.
+                    // ORDCHG 39002 Stornierung carries no LOC — correlate by
+                    // the original Bestellung's Belegnummer echoed in `RFF+ON`
+                    // (`ZG-T51`). Resume only; a Stornierung without a running
+                    // order is an orphan. Index it under its own Belegnummer
+                    // too: our ORDRSP 19013/19014 answer echoes *that* in
+                    // `RFF+ACW`, and the ESA keys its process on it.
                     let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
-                    let cmd = self.gate_esa_consent(msg, cmd).await;
-                    let order_ref = extract_order_ref_from_msg(msg);
-                    self.resume_by_key::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
-                        &order_ref,
+                    let key = esa_korrelation_key(msg, pid);
+                    let cmd = self.gate_esa_consent(msg, cmd, None).await;
+                    let due_at = fristen::deadline_at_werktage(
+                        OffsetDateTime::now_utc(),
+                        mako_wim::wertebestellung::ANTWORT_FRIST_WT,
+                        HolidayCalendar::BdewMaKo,
+                    );
+                    let ordchg_belegnr = msg.message_ref();
+                    self.resume_by_key_indexing::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        &key,
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
+                        &[(mako_wim::wertebestellung::ANTWORT_WINDOW_LABEL, due_at)],
+                        &[ordchg_belegnr],
                     )
                     .await
                 } else if pid == mako_wim::wertebestellung::BESTELLUNG_PID.as_u32()
                     || pid == mako_wim::wertebestellung::ABBESTELLUNG_PID.as_u32()
                 {
                     let cmd = adapters::wim_wertebestellung_registry().dispatch(raw, &fv)?;
-                    // Consent gate: a revoked consent between Angebot and
-                    // Bestellung turns the order into an ORDRSP 19012 Ablehnung.
-                    let cmd = self.gate_esa_consent(msg, cmd).await;
-                    let malo_id = extract_malo_from_msg(msg);
+                    // A conformant ORDERS 17007/17008 carries **no LOC** —
+                    // ORDERS AHB 1.1b §4.15 lists no Meldepunkt segment for
+                    // either PID. It correlates by the reference the PID's own
+                    // Zuordnungsschlüssel names: `RFF+AAG` (our QUOTES
+                    // Angebotsnummer, `ZG-T24`) on the Bestellung, `RFF+ACW`
+                    // (the ORDERS Bestellnummer, `ZG-T41`) on the
+                    // Abbestellung.
+                    let key = esa_korrelation_key(msg, pid);
+                    // Consent can be revoked or expire between the Angebot and
+                    // the Bestellung, and the registry is keyed on locations —
+                    // so the location is read back off the running process.
+                    let location = self.esa_location_of(&key).await;
+                    let cmd = self.gate_esa_consent(msg, cmd, location.as_deref()).await;
                     // UC 4.1 Nr. 4 / Nr. 6 and UC 4.3 Nr. 2: 2 WT nach dem ÜT.
                     let due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
                         mako_wim::wertebestellung::ANTWORT_FRIST_WT,
                         HolidayCalendar::BdewMaKo,
                     );
-                    // Also index the process under this ORDERS' Belegnummer so a
-                    // later ORDCHG Stornierung (which has no LOC) can resume it.
+                    // Index the process under this ORDERS' own Belegnummer too:
+                    // our ORDRSP answer echoes it in `RFF+ON`, and a later
+                    // ORDCHG Stornierung references it in `RFF+ON` as well.
                     let order_belegnr = msg.message_ref();
-                    self.spawn_or_resume_keyed::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
-                        malo_id.as_str(),
+                    self.resume_by_key_indexing::<mako_wim::wertebestellung::WimWertebestellungWorkflow>(
+                        &key,
                         mako_wim::wertebestellung::WORKFLOW_NAME,
                         cmd,
-                        &fv,
                         &[(mako_wim::wertebestellung::ANTWORT_WINDOW_LABEL, due_at)],
                         &[order_belegnr],
-                        None,
                     )
                     .await
                 } else {
@@ -390,11 +421,14 @@ impl EdifactIngestDispatcher {
                     .any(|p| p.as_u32() == pid)
                 {
                     let cmd = adapters::esa_wertebestellung_registry().dispatch(raw, &fv)?;
-                    let key = if matches!(msg, AnyMessage::Ordrsp(_)) {
-                        extract_order_ref_from_msg(msg)
-                    } else {
-                        String::from(extract_malo_from_msg(msg))
-                    };
+                    // Every MSB→ESA answer correlates by the reference its own
+                    // Zuordnungsschlüssel names, not by location: the QUOTES by
+                    // `RFF+AAV` (our REQOTE), the ORDRSP 19011/19012 by
+                    // `RFF+ON` (our ORDERS), the ORDRSP 19013/19014 by
+                    // `RFF+ACW` (our ORDCHG) and the IFTSTA 21042 by
+                    // `SG15 RFF+AGI` (our ORDERS). Only the QUOTES also carries
+                    // a `LOC`, which is why it is the sole location fallback.
+                    let key = esa_korrelation_key(msg, pid);
                     self.resume_by_key::<mako_wim::esa_wertebestellung::EsaWertebestellungWorkflow>(
                         &key,
                         mako_wim::esa_wertebestellung::WORKFLOW_NAME,

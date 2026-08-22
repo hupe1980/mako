@@ -605,15 +605,7 @@
           "requirement": "M"
         },
         {
-          "tag": "FTX",
-          "requirement": "M"
-        },
-        {
           "tag": "IMD",
-          "requirement": "M"
-        },
-        {
-          "tag": "LIN",
           "requirement": "M"
         },
         {
@@ -638,6 +630,16 @@
           "tag": "CUX",
           "requirement": "O",
           "_description": "CUX is optional per MIG 1.4b (no AHB constraint for PID 19011)"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "SG27 FTX+Z27/Z28 (IP-Adresse/-Range) — only inside the SG27 of an SMGW answer"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "S",
+          "_description": "SG27 is Soll [75] — only for an answer to a Kapitel-4.6.2 (SMGW) Messprodukt"
         },
         {
           "tag": "MOA",

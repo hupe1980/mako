@@ -323,10 +323,10 @@ pub async fn run_surveillance_sweep(
         // on the two transitions worth an event: opened now, or reopened now.
         let transition: Option<bool> = match sqlx::query_scalar(
             r"INSERT INTO delivery_surveillance
-                  (tenant, malo_id, state, last_interval_end, hours_silent,
-                   coverage_pct, interval_count)
-              VALUES ($1,$2,$3,$4,$5,$6,$7)
-              ON CONFLICT (tenant, malo_id) DO UPDATE SET
+                  (tenant, malo_id, stream, obis_code, state, last_interval_end,
+                   hours_silent, coverage_pct, interval_count)
+              VALUES ($1,$2,'TYP1','',$3,$4,$5,$6,$7)
+              ON CONFLICT (tenant, stream, malo_id, obis_code) DO UPDATE SET
                   last_seen_at      = now(),
                   state             = EXCLUDED.state,
                   last_interval_end = EXCLUDED.last_interval_end,
@@ -421,7 +421,8 @@ pub async fn run_surveillance_sweep(
     let resumed_rows = sqlx::query(
         r"UPDATE delivery_surveillance
              SET resolved_at = now()
-           WHERE tenant = $1 AND resolved_at IS NULL AND NOT (malo_id = ANY($2))
+           WHERE tenant = $1 AND stream = 'TYP1' AND resolved_at IS NULL
+             AND NOT (malo_id = ANY($2))
        RETURNING malo_id, state, first_detected_at",
     )
     .bind(tenant)
@@ -485,6 +486,7 @@ pub async fn run_surveillance_sweep(
 /// Spawn the delivery-surveillance worker. Runs until `shutdown` is cancelled.
 pub fn spawn_surveillance_worker(
     repo: MeterStoreTimeSeriesRepository,
+    typ2: Option<crate::store::MeterStoreTyp2Repository>,
     cfg: SurveillanceConfig,
     tenant: String,
     erp_webhook_url: Option<String>,
@@ -515,6 +517,22 @@ pub fn spawn_surveillance_worker(
                 erp_webhook_secret.as_deref(),
             )
             .await;
+
+            // The ESA Typ-2 stream rides the same cadence but its own
+            // thresholds and register rows — the two never mix.
+            if cfg.typ2_enabled
+                && let Some(t) = typ2.as_ref()
+            {
+                run_typ2_surveillance_sweep(
+                    t,
+                    repo.pool(),
+                    &cfg,
+                    &tenant,
+                    erp_webhook_url.as_deref(),
+                    erp_webhook_secret.as_deref(),
+                )
+                .await;
+            }
         }
     });
 }
@@ -754,4 +772,303 @@ pub async fn post_delivery_surveillance_scan(
         "findings":       report.findings,
     }))
     .into_response()
+}
+
+// ── ESA "Werte nach Typ 2" surveillance ──────────────────────────────────────
+
+/// Assess Typ-2 delivery per **(Meldepunkt, delivered register)**.
+///
+/// The same question as [`assess_delivery`], asked of the other store. It is a
+/// separate sweep rather than a parameter because the two streams answer to
+/// different regimes: a Typ-1 gap ends in a short Summenzeitreihe and a
+/// Mehr-/Mindermengensaldo, while a Typ-2 gap breaches the §60 Abs. 1 MsbG
+/// delivery duty toward one ESA and reaches no billing run that could come up
+/// short. Nothing else in the platform would ever notice it.
+///
+/// The key is the delivered OBIS register, not the ordered Messprodukt: a
+/// MSCONS 13027 carries `SG9 PIA+5 … :SRW` (the OBIS) per line item and names
+/// its subscription only in `SG1 RFF+AGI`, which `esa_typ2_reads` does not
+/// record. Per-register is the finer signal in any case — a subscription whose
+/// Erzeugung register stops while Verbrauch keeps arriving is broken, and a
+/// per-subscription key would call it healthy.
+///
+/// Coverage is deliberately not scored. A Typ-2 series is delivered as ordered
+/// and never reconciled, corrected or substituted, so "less than the window"
+/// is not a defect the way it is for a billing series — only silence is.
+///
+/// # Errors
+///
+/// Propagates the store's error when the scan cannot run.
+pub async fn assess_typ2_delivery(
+    typ2: &crate::store::MeterStoreTyp2Repository,
+    tenant: &str,
+    cfg: &SurveillanceConfig,
+    now: OffsetDateTime,
+) -> anyhow::Result<(Vec<DeliveryFinding>, usize, OffsetDateTime)> {
+    let window_from = now - time::Duration::days(cfg.coverage_window_days);
+    let store = typ2.store();
+
+    let sql = format!(
+        r#"SELECT "malo_id",
+                  "obis_code",
+                  MAX("to")   AS last_interval_end,
+                  COUNT(*)    AS interval_count
+             FROM "{table}"
+            WHERE "tenant" = $1
+              AND "from" >= $2
+            GROUP BY "malo_id", "obis_code""#,
+        table = store.resolved_table(),
+    );
+
+    let rows: Vec<serde_json::Value> = store
+        .query_with_params(
+            &sql,
+            vec![
+                datafusion::scalar::ScalarValue::Utf8(Some(tenant.to_owned())),
+                crate::server::ts_param(window_from),
+            ],
+        )
+        .await
+        .map_err(|e| anyhow::anyhow!("ESA Typ-2 surveillance scan: {e}"))?
+        .to_json()
+        .map_err(|e| anyhow::anyhow!("ESA Typ-2 surveillance decode: {e}"))?;
+
+    let mut findings = Vec::new();
+    let scanned = rows.len();
+    for row in rows {
+        let malo_id = row
+            .get("malo_id")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        if malo_id.is_empty() {
+            continue;
+        }
+        let obis = row
+            .get("obis_code")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_owned();
+        let last_end = row
+            .get("last_interval_end")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|s| {
+                OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).ok()
+            });
+        let hours_silent = last_end.map_or(i64::MAX, |t| (now - t).whole_hours());
+        if hours_silent < cfg.typ2_silent_after_hours {
+            continue;
+        }
+        findings.push(DeliveryFinding {
+            // The register is carried in `obis_code` on the register row; the
+            // finding keeps the Meldepunkt so the two sweeps report alike.
+            malo_id: format!("{malo_id}|{obis}"),
+            state: DeliveryState::Silent,
+            last_interval_end: last_end,
+            hours_silent,
+            coverage_pct: 0.0,
+            interval_count: row
+                .get("interval_count")
+                .and_then(serde_json::Value::as_i64)
+                .unwrap_or(0),
+        });
+    }
+    Ok((findings, scanned, window_from))
+}
+
+/// Run one ESA Typ-2 sweep: assess, register the transitions, emit.
+///
+/// Mirrors [`run_surveillance_sweep`] over the other store, with its own
+/// `stream = 'TYP2'` rows so a silent ESA subscription and a silent billing
+/// meter never collide in the register.
+pub async fn run_typ2_surveillance_sweep(
+    typ2: &crate::store::MeterStoreTyp2Repository,
+    pool: &sqlx::PgPool,
+    cfg: &SurveillanceConfig,
+    tenant: &str,
+    erp_webhook_url: Option<&str>,
+    erp_webhook_secret: Option<&str>,
+) -> SurveillanceReport {
+    let scanned_at = OffsetDateTime::now_utc();
+    let client = mako_service::http::default_client();
+    let empty = |window_from| SurveillanceReport {
+        scanned_at,
+        window_from,
+        points_scanned: 0,
+        findings: Vec::new(),
+        newly_overdue: 0,
+        resumed: 0,
+        suppressed: 0,
+    };
+
+    let (findings, points_scanned, window_from) =
+        match assess_typ2_delivery(typ2, tenant, cfg, scanned_at).await {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, tenant, "edmd: ESA Typ-2 surveillance: scan failed");
+                return empty(scanned_at);
+            }
+        };
+
+    let mut newly_overdue = 0usize;
+    let mut emitted = 0usize;
+    let mut suppressed = 0usize;
+
+    for finding in &findings {
+        let (malo_id, obis) = finding
+            .malo_id
+            .split_once('|')
+            .unwrap_or((finding.malo_id.as_str(), ""));
+        let transition: Option<bool> = match sqlx::query_scalar(
+            r"INSERT INTO delivery_surveillance
+                  (tenant, malo_id, stream, obis_code, state, last_interval_end,
+                   hours_silent, coverage_pct, interval_count)
+              VALUES ($1,$2,'TYP2',$3,$4,$5,$6,0,$7)
+              ON CONFLICT (tenant, stream, malo_id, obis_code) DO UPDATE SET
+                  last_seen_at      = now(),
+                  state             = EXCLUDED.state,
+                  last_interval_end = EXCLUDED.last_interval_end,
+                  hours_silent      = EXCLUDED.hours_silent,
+                  interval_count    = EXCLUDED.interval_count,
+                  first_detected_at = CASE
+                      WHEN delivery_surveillance.resolved_at IS NOT NULL THEN now()
+                      ELSE delivery_surveillance.first_detected_at END,
+                  resolved_at       = NULL
+              RETURNING first_detected_at = last_seen_at",
+        )
+        .bind(tenant)
+        .bind(malo_id)
+        .bind(obis)
+        .bind(finding.state.as_str())
+        .bind(finding.last_interval_end)
+        .bind(finding.hours_silent)
+        .bind(finding.interval_count)
+        .fetch_optional(pool)
+        .await
+        {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(error = %e, %malo_id,
+                    "edmd: ESA Typ-2 surveillance: register write failed");
+                continue;
+            }
+        };
+
+        if transition != Some(true) {
+            continue;
+        }
+        newly_overdue += 1;
+        if emitted >= cfg.max_events_per_sweep {
+            suppressed += 1;
+            continue;
+        }
+
+        tracing::warn!(
+            %malo_id, %obis,
+            hours_silent = finding.hours_silent,
+            "edmd: ESA Typ-2 subscription has stopped delivering (§60 Abs. 1 MsbG)"
+        );
+
+        if let Some(url) = erp_webhook_url {
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("edmd", tenant),
+                mako_events::messwert::ESA_TYP2_DELIVERY_OVERDUE,
+                malo_id.to_owned(),
+                serde_json::json!({
+                    "malo_id":           malo_id,
+                    "obis_code":         obis,
+                    "last_interval_end": finding.last_interval_end.map(|t| t.to_string()),
+                    "hours_silent":      finding.hours_silent,
+                    "interval_count":    finding.interval_count,
+                    "window_from":       window_from.to_string(),
+                    "legal_basis":       "§60 Abs. 1 MsbG (Übermittlung an berechtigte Stellen)",
+                    "recommended_action":
+                        "Check the MSB's delivery and the subscription's state; a Typ-2 \
+                         value is never substituted or reconciled, so a gap can only be \
+                         closed by the MSB re-sending it",
+                }),
+            )
+            .extension("tenantid", tenant)
+            .extension("worker", "esa-typ2-surveillance");
+            if let Err(e) = mako_service::post_ce_with_retry(
+                &client,
+                url,
+                &ce,
+                erp_webhook_secret.map(str::as_bytes),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+            }
+        }
+        emitted += 1;
+    }
+
+    // Close what this sweep no longer finds.
+    let reported: Vec<String> = findings
+        .iter()
+        .map(|f| {
+            f.malo_id
+                .split_once('|')
+                .map_or_else(|| f.malo_id.clone(), |(m, o)| format!("{m}\u{1}{o}"))
+        })
+        .collect();
+    let resumed_rows = sqlx::query(
+        r"UPDATE delivery_surveillance
+             SET resolved_at = now()
+           WHERE tenant = $1 AND stream = 'TYP2' AND resolved_at IS NULL
+             AND NOT (malo_id || chr(1) || obis_code = ANY($2))
+       RETURNING malo_id, obis_code, state, first_detected_at",
+    )
+    .bind(tenant)
+    .bind(&reported)
+    .fetch_all(pool)
+    .await
+    .unwrap_or_default();
+
+    for row in &resumed_rows {
+        use sqlx::Row as _;
+        let malo_id: String = row.get("malo_id");
+        let obis: String = row.get("obis_code");
+        tracing::info!(%malo_id, %obis,
+            "edmd: ESA Typ-2 subscription is delivering again");
+        if let Some(url) = erp_webhook_url {
+            let ce = mako_service::CloudEvent::new(
+                mako_service::source("edmd", tenant),
+                mako_events::messwert::ESA_TYP2_DELIVERY_RESUMED,
+                malo_id.clone(),
+                serde_json::json!({
+                    "malo_id":       malo_id,
+                    "obis_code":     obis,
+                    "was_state":     row.get::<String, _>("state"),
+                    "overdue_since": row
+                        .get::<OffsetDateTime, _>("first_detected_at")
+                        .to_string(),
+                    "resumed_at":    scanned_at.to_string(),
+                }),
+            )
+            .extension("tenantid", tenant)
+            .extension("worker", "esa-typ2-surveillance");
+            if let Err(e) = mako_service::post_ce_with_retry(
+                &client,
+                url,
+                &ce,
+                erp_webhook_secret.map(str::as_bytes),
+            )
+            .await
+            {
+                tracing::error!(error = %e, "edmd: CloudEvent delivery failed — event lost");
+            }
+        }
+    }
+
+    SurveillanceReport {
+        scanned_at,
+        window_from,
+        points_scanned,
+        findings,
+        newly_overdue,
+        resumed: resumed_rows.len(),
+        suppressed,
+    }
 }

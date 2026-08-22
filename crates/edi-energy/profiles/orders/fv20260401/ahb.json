@@ -382,13 +382,13 @@
         },
         {
           "tag": "CAV",
-          "requirement": "O",
-          "_description": "CAV is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "CCI",
-          "requirement": "O",
-          "_description": "CCI is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "COM",
@@ -407,23 +407,23 @@
         },
         {
           "tag": "LIN",
-          "requirement": "O",
-          "_description": "LIN is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "LOC",
-          "requirement": "O",
-          "_description": "LOC is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+          "requirement": "N",
+          "_description": "ORDERS AHB 1.1b §4.15 lists no Meldepunkt segment for the ESA order PIDs"
         },
         {
           "tag": "PIA",
-          "requirement": "O",
-          "_description": "PIA is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "QTY",
-          "requirement": "O",
-          "_description": "QTY is optional per MIG 1.4c (no AHB constraint for PID 17007)"
+          "requirement": "N",
+          "_description": "not in §4.15"
         }
       ],
       "group_rules": []
@@ -437,12 +437,30 @@
           "requirement": "M"
         },
         {
+          "tag": "DTM",
+          "requirement": "M"
+        },
+        {
+          "tag": "IMD",
+          "requirement": "M"
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M"
+        },
+        {
           "tag": "CAV",
-          "requirement": "O"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "CCI",
-          "requirement": "O"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "COM",
@@ -453,40 +471,28 @@
           "requirement": "O"
         },
         {
-          "tag": "DTM",
-          "requirement": "M"
-        },
-        {
           "tag": "FTX",
           "requirement": "O"
         },
         {
-          "tag": "IMD",
-          "requirement": "M"
-        },
-        {
           "tag": "LIN",
-          "requirement": "O"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "LOC",
-          "requirement": "O"
-        },
-        {
-          "tag": "NAD",
-          "requirement": "M"
+          "requirement": "N",
+          "_description": "ORDERS AHB 1.1b §4.15 lists no Meldepunkt segment for the ESA order PIDs"
         },
         {
           "tag": "PIA",
-          "requirement": "O"
+          "requirement": "N",
+          "_description": "not in §4.15"
         },
         {
           "tag": "QTY",
-          "requirement": "O"
-        },
-        {
-          "tag": "RFF",
-          "requirement": "M"
+          "requirement": "N",
+          "_description": "not in §4.15"
         }
       ],
       "group_rules": []

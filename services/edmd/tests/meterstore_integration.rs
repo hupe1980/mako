@@ -1529,6 +1529,8 @@ async fn a_silent_measuring_point_is_found_reported_once_and_closed_on_return() 
     let (repo, pool, _pg, _wh) = setup().await;
     let now = OffsetDateTime::now_utc();
     let cfg = SurveillanceConfig {
+        typ2_enabled: true,
+        typ2_silent_after_hours: 36,
         enabled: true,
         silent_after_hours: 36,
         min_coverage_pct: 95.0,

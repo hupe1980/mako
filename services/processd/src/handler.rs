@@ -32,6 +32,10 @@ use axum::{
 use secrecy::ExposeSecret;
 use tracing::{debug, warn};
 
+/// The ESA module answers only in an MSB build — serving an ESA is an MSB
+/// obligation (§34 Abs. 2 S. 2 Nr. 10 MsbG), and no NB or LF ever receives one.
+#[cfg(feature = "role-msb-strom")]
+use crate::esa_module;
 #[cfg(any(
     feature = "role-nb-strom",
     feature = "role-nb-gas",
@@ -63,6 +67,9 @@ pub fn answerable_pids() -> Vec<u32> {
     {
         pids.extend_from_slice(crate::msb_module::MSB_ANSWERED_PIDS);
         pids.extend_from_slice(mako_wim::preisanfrage::REQOTE_PIDS);
+        // WiM Teil 2 Kap. 4 — serving an ESA is a mandatory Zusatzleistung
+        // (§34 Abs. 2 S. 2 Nr. 10 MsbG), so an MSB build always owes these.
+        pids.extend_from_slice(crate::esa_module::ESA_ANSWERED_PIDS);
     }
 
     pids.sort_unstable();
@@ -270,6 +277,47 @@ pub async fn handle_webhook(
                 Ok(()) => StatusCode::OK.into_response(),
                 Err(e) => {
                     warn!(error = %e, "processd MSB: STP evaluation failed — fan-out will redeliver");
+                    StatusCode::INTERNAL_SERVER_ERROR.into_response()
+                }
+            };
+        }
+    }
+
+    // ── 6b. ESA Wertebestellung (WiM Teil 2 Kap. 4) ───────────────────────
+    //
+    // The MSB's answers to an Energieserviceanbieter. Routed before the
+    // Steuerungsauftrag block and keyed on its own PID set, which is disjoint
+    // from every WiM Teil 1 PID the MSB module answers.
+    #[cfg(feature = "role-msb-strom")]
+    {
+        let pid = event
+            .get("makopid")
+            .and_then(|v| v.as_u64())
+            .or_else(|| event["data"].get("pid").and_then(|v| v.as_u64()))
+            .unwrap_or(0) as u32;
+        if esa_module::ESA_ANSWERED_PIDS.contains(&pid)
+            && let Some(payload) = esa_module::EsaOrderPayload::parse(&event)
+        {
+            let queue = crate::pg::PgApprovalQueue::new(state.pool.clone());
+            let cfg = esa_module::EsaModuleConfig {
+                own_mp_id: state.own_mp_id.clone(),
+                tenant: state.tenant.clone(),
+                auto_accept: state.esa_auto_accept,
+                auto_reject: state.esa_auto_reject,
+                accept_after_bindungsfrist: state.esa_accept_after_bindungsfrist,
+            };
+            return match esa_module::handle_esa_order(
+                &cfg,
+                payload,
+                &state.marktd,
+                &state.makod,
+                &queue,
+            )
+            .await
+            {
+                Ok(()) => StatusCode::OK.into_response(),
+                Err(e) => {
+                    warn!(error = %e, "processd ESA: STP evaluation failed — fan-out will redeliver");
                     StatusCode::INTERNAL_SERVER_ERROR.into_response()
                 }
             };

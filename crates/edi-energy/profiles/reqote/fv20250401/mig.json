@@ -421,5 +421,6 @@
   ],
   "valid_until": "2026-09-30",
   "ahb_revision": "1.3c",
-  "source_document": "REQOTE MIG 1.3c, Stand 01.04.2025"
+  "source_document": "REQOTE MIG 1.3c, Stand 01.04.2025",
+  "pid_source": "rff_z13"
 }

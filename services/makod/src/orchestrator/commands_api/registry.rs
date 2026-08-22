@@ -569,10 +569,10 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         dispatch: cmd_wim_wertebestellung_stornierung_beantworten,
     },
     CommandDescriptor {
-        name: "wim.wertebestellung.abbestellung-bestaetigen",
+        name: "wim.wertebestellung.abbestellung-beantworten",
         permitted_roles: &[Marktrolle::Msb],
         primary_pid: Some(mako_wim::wertebestellung::BESTAETIGUNG_PID),
-        dispatch: cmd_wim_wertebestellung_abbestellung_bestaetigen,
+        dispatch: cmd_wim_wertebestellung_abbestellung_beantworten,
     },
     // The answering role depends on the inbound PID: 55042 (Anmeldung MSB,
     // MSBN → NB) is answered by the NB; 55039 (Kündigung MSB, MSBN → MSBA) by

@@ -131,10 +131,6 @@
           "requirement": "M"
         },
         {
-          "tag": "CCI",
-          "requirement": "M"
-        },
-        {
           "tag": "COM",
           "requirement": "M"
         },
@@ -147,14 +143,6 @@
           "requirement": "M"
         },
         {
-          "tag": "FTX",
-          "requirement": "M"
-        },
-        {
-          "tag": "LIN",
-          "requirement": "M"
-        },
-        {
           "tag": "LOC",
           "requirement": "M"
         },
@@ -163,17 +151,33 @@
           "requirement": "M"
         },
         {
-          "tag": "PIA",
+          "tag": "RFF",
           "requirement": "M"
         },
         {
-          "tag": "RFF",
-          "requirement": "M"
+          "tag": "CCI",
+          "requirement": "O",
+          "_description": "SG28 CCI+Z60 (Schwellwerte) is Muss only for a Schwellwert-triggered SMGW Messprodukt [43]"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O",
+          "_description": "FTX+ACB is Kann; FTX+Z17/Z23/Z24 belong to the SG27 of an SMGW Messprodukt"
         },
         {
           "tag": "IMD",
           "requirement": "O",
           "_description": "IMD is optional per MIG 1.3c (no AHB constraint for PID 35003)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "S",
+          "_description": "SG27 is Soll [24] — when a Messprodukt is ordered"
+        },
+        {
+          "tag": "PIA",
+          "requirement": "S",
+          "_description": "SG27 PIA+5 is Muss inside the SG27 that Soll [24] introduces"
         }
       ],
       "group_rules": []

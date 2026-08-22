@@ -303,6 +303,17 @@ pub mod messwert {
     pub const CLS_COMPLIANCE_ISSUE: &str = "de.messwert.cls.compliance-issue";
     /// A §14a SMGW/CLS compliance issue a later sweep no longer finds.
     pub const CLS_COMPLIANCE_RESOLVED: &str = "de.messwert.cls.compliance-resolved";
+    /// An **ESA Typ-2** subscription has stopped delivering.
+    ///
+    /// Distinct from [`READING_DELIVERY_OVERDUE`], which watches the
+    /// authoritative Typ-1 stream: a Typ-2 gap breaches the §60 Abs. 1 MsbG
+    /// delivery duty toward one Energieserviceanbieter and reaches no billing
+    /// run that could come up short, so nothing else would notice it. Mixing
+    /// the two would also cross the Typ-1/Typ-2 separation the whole store
+    /// split exists to keep (Codeliste der Konfigurationen 1.4 Kap. 4.6).
+    pub const ESA_TYP2_DELIVERY_OVERDUE: &str = "de.messwert.esa.typ2.delivery.overdue";
+    /// An ESA Typ-2 subscription that was overdue is delivering again.
+    pub const ESA_TYP2_DELIVERY_RESUMED: &str = "de.messwert.esa.typ2.delivery.resumed";
     /// SMGW certificate approaching expiry — tiered advance warning at 90 / 30 /
     /// 7 days before `valid_to`, once per tier per certificate.
     ///

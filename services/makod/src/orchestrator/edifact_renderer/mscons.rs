@@ -23,6 +23,10 @@ pub(super) const fn mscons_document_code(pid: u64) -> &'static str {
         MSCONS_PID_ARBEIT_LEISTUNGSMAX => "Z27",
         // "Energiemenge und Leistungsmaximum"
         MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX => "Z28",
+        // "Werte nach Typ 2" (MSCONS AHB 3.2 §11.2). A `7`
+        // („Prozessdatenbericht") here is refused by the generated rule
+        // `AHB-13027-BGM-1001-Q`, which admits only `Z83`.
+        MSCONS_PID_WERTE_TYP2 => "Z83",
         // "Prozessdatenbericht"
         _ => "7",
     }
@@ -459,18 +463,34 @@ pub(super) fn render_mscons_typ2(
         }
     };
 
-    let mut mp = builders::MsconsBuilder::new(release)
+    let mut builder = builders::MsconsBuilder::new(release)
         .sender(sender)
         .receiver(receiver)
         .message_ref(message_ref)
         .document_code(mscons_document_code(MSCONS_PID_WERTE_TYP2))
+        // MSCONS AHB 3.2 §11.2: DE 2379 = `303` (`CCYYMMDDHHMMZZZ`), not the
+        // date-only `102` the older use cases carry.
+        .document_date_303()
         .pruefidentifikator(
             edi_energy::Pruefidentifikator::new(
                 u32::try_from(MSCONS_PID_WERTE_TYP2).unwrap_or_default(),
             )
             .map_err(|e| RenderError::BuilderError(format!("invalid Prüfidentifikator: {e}")))?,
-        )
-        .metering_point(malo_id);
+        );
+
+    // `SG1 RFF+AGI` — Muss on 13027, hint `[574]`: „Wert aus BGM DE1004 der
+    // ORDERS mit der die Bestellung der Werte nach Typ 2 erfolgt ist". It ties
+    // a delivery to the subscription that authorised it; the MSB-side process
+    // carries the inbound Bestellung's Belegnummer.
+    if let Some(bestellung) = p
+        .get("korrelation_ref")
+        .or_else(|| p.get("order_reference"))
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        builder = builder.header_reference("AGI", bestellung);
+    }
+    let mut mp = builder.metering_point(malo_id);
 
     // Group by OBIS into line items so one register's quarter-hour series lands
     // under one line item; a delivery without OBIS falls back to a bare item.
@@ -502,5 +522,13 @@ pub(super) fn render_mscons_typ2(
         mp = mp.quantity_for_period(qualifier(r), quantity, "KWH", from, to);
     }
 
-    finish_interchange(mp.done().serialize(), sender, receiver, msg)
+    super::finish_interchange_with_app_ref(
+        mp.done().serialize(),
+        sender,
+        receiver,
+        msg,
+        // UNB DE 0026 = `TL` „Lastgang, beliebiger Zeitraum" — Muss on the
+        // Werte-nach-Typ-2 interchange (MSCONS AHB 3.2 §11.2).
+        Some("TL"),
+    )
 }

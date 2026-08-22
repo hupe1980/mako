@@ -527,8 +527,9 @@ where
 /// `extra_keys`.
 ///
 /// The ESA registers its process under the Belegnummer of each outbound
-/// ORDERS/ORDCHG it sends, so the MSB's ORDRSP answer — which carries no LOC —
-/// can be correlated back by the `RFF+ACW` echo.
+/// REQOTE/ORDERS/ORDCHG it sends, so the MSB's answer — which carries no LOC —
+/// can be correlated back by the reference that PID's own Zuordnungsschlüssel
+/// names (`AAV`, `ON` or `ACW`; see [`mako_wim::esa::korrelation`]).
 async fn dispatch_to_process_keyed<W, F>(
     state: &CommandsApiState,
     business_key: &str,

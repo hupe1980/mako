@@ -43,9 +43,10 @@ use time::OffsetDateTime;
 // same PIDs, Fristen and location model.
 pub use super::wertebestellung::{
     ABBESTELLUNG_PID, ABLEHNUNG_PID, ANFRAGE_PID, ANGEBOT_PID, ANTWORT_FRIST_WT,
-    BEENDIGUNG_MSB_PID, BESTAETIGUNG_PID, BESTELLUNG_PID, Lokationsebene, STORNIERUNG_PID,
-    STORNO_ABLEHNUNG_PID, STORNO_BESTAETIGUNG_PID, STS_BEENDET, Zustellquittung,
+    BEENDIGUNG_MSB_PID, BESTAETIGUNG_PID, BESTELLUNG_PID, STORNIERUNG_PID, STORNO_ABLEHNUNG_PID,
+    STORNO_BESTAETIGUNG_PID, STS_BEENDET, Zustellquittung,
 };
+pub use crate::esa::{Abonnement, Bestellgegenstand, Lokationsebene, ProduktFehler};
 
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "esa-wertebestellung";
@@ -77,17 +78,26 @@ pub enum EsaWertebestellungEvent {
         msb: MarktpartnerCode,
         /// Location level requested.
         ebene: Lokationsebene,
-        /// MaLo-ID, ZPB or NeLo-ID.
+        /// MaLo-ID, ZPB, NeLo-ID or Tranchen-ID.
         lokations_id: String,
-        /// Reference of the outbound REQOTE.
+        /// Messprodukt, Wunschtermin and Abo mode — what is being ordered.
+        gegenstand: Box<Bestellgegenstand>,
+        /// Reference of the outbound REQOTE. The MSB's QUOTES echoes it in
+        /// `RFF+AAV` (Zuordnungsschlüssel `ZG-T16`).
         message_ref: MessageRef,
     },
     /// QUOTES 15003 Angebot received — the ESA may order until `bindungsfrist`.
     AngebotErhalten {
-        /// Reference of the inbound QUOTES.
+        /// Belegnummer of the inbound QUOTES. Our ORDERS 17007 must echo it in
+        /// `RFF+AAG` (Zuordnungsschlüssel `ZG-T24`).
         message_ref: MessageRef,
-        /// End of the MSB's Bindungsfrist.
+        /// End of the MSB's Bindungsfrist, resolved from the `DTM+273`
+        /// duration against the day the Angebot arrived.
         bindungsfrist: OffsetDateTime,
+        /// `DTM+469` — the earliest start the MSB offers, which may be later
+        /// than the ESA's Wunschtermin.
+        #[serde(default)]
+        fruehester_start: Option<OffsetDateTime>,
     },
     /// QUOTES 15003 Ablehnung received — the MSB refused the Anfrage; the process
     /// ends. (Distinguished from an Angebot by carrying no Bindungsfrist.)
@@ -112,7 +122,8 @@ pub enum EsaWertebestellungEvent {
     },
     /// ORDCHG 39002 Stornierung sent (before delivery began).
     StornierungGesendet {
-        /// Reference of the outbound ORDCHG.
+        /// Belegnummer of the outbound ORDCHG. The MSB's ORDRSP 19013/19014
+        /// echoes it in `RFF+ACW` (Zuordnungsschlüssel `ZG-T50`).
         message_ref: MessageRef,
     },
     /// ORDRSP 19013 received — the Stornierung was accepted; the order is void.
@@ -198,13 +209,35 @@ pub struct EsaWertebestellungData {
     pub msb: MarktpartnerCode,
     /// Location level requested.
     pub ebene: Lokationsebene,
-    /// MaLo-ID, ZPB or NeLo-ID.
+    /// MaLo-ID, ZPB, NeLo-ID or Tranchen-ID.
     pub lokations_id: String,
-    /// Belegnummer of the ORDERS Bestellung this ESA sent. A later ORDCHG
-    /// Stornierung references it (`RFF+ON`) so the MSB can correlate the
-    /// cancellation — an ORDCHG carries no LOC.
+    /// What is being ordered: Messprodukt, Wunschtermin, Abo mode and — for a
+    /// Kapitel-4.6.2 product — the SM-PKI delivery target.
+    ///
+    /// Without this the process could not say what a confirmed delivery is
+    /// supposed to contain, so a missing daily transmission would be
+    /// undetectable and the outbound REQOTE/ORDERS would have to invent a
+    /// product code.
+    pub gegenstand: Box<Bestellgegenstand>,
+    /// Belegnummer of the REQOTE 35003 this ESA sent.
+    pub anfrage_ref: String,
+    /// Belegnummer of the QUOTES 15003 Angebot. The ORDERS 17007 must echo it
+    /// in `RFF+AAG` — its published Zuordnungsschlüssel (`ZG-T24`).
+    #[serde(default)]
+    pub angebot_ref: Option<String>,
+    /// Belegnummer of the ORDERS 17007 Bestellung. Three later messages
+    /// reference it: the ORDCHG Stornierung (`RFF+ON`), the ORDERS 17008
+    /// Abbestellung (`RFF+ACW`) and the MSB's IFTSTA 21042 (`RFF+AGI`).
     #[serde(default)]
     pub bestellung_ref: Option<String>,
+    /// Belegnummer of the ORDCHG 39002 Stornierung, echoed by the ORDRSP
+    /// 19013/19014 in `RFF+ACW`.
+    #[serde(default)]
+    pub stornierung_ref: Option<String>,
+    /// Belegnummer of the ORDERS 17008 Abbestellung, echoed by the ORDRSP
+    /// 19011/19012 in `RFF+ON`.
+    #[serde(default)]
+    pub abbestellung_ref: Option<String>,
 }
 
 /// State of an ESA-origination Wertebestellung process.
@@ -319,17 +352,22 @@ pub enum EsaWertebestellungCommand {
         msb: MarktpartnerCode,
         /// Location level.
         ebene: Lokationsebene,
-        /// MaLo-ID, ZPB or NeLo-ID.
+        /// MaLo-ID, ZPB, NeLo-ID or Tranchen-ID.
         lokations_id: String,
-        /// Reference of the outbound REQOTE.
+        /// What to order. Checked against the Codeliste-4.6 catalogue and the
+        /// level before anything leaves the system.
+        gegenstand: Box<Bestellgegenstand>,
+        /// Belegnummer of the outbound REQOTE.
         message_ref: MessageRef,
     },
     /// QUOTES 15003 Angebot received (UC 4.1 Nr. 2).
     ReceiveAngebot {
-        /// Reference of the inbound QUOTES.
+        /// Belegnummer of the inbound QUOTES.
         message_ref: MessageRef,
         /// End of the MSB's Bindungsfrist.
         bindungsfrist: OffsetDateTime,
+        /// `DTM+469` — earliest start the MSB offers.
+        fruehester_start: Option<OffsetDateTime>,
     },
     /// QUOTES 15003 Ablehnung received — the MSB refused the Anfrage.
     ReceiveAnfrageAblehnung {
@@ -438,19 +476,33 @@ impl Workflow for EsaWertebestellungWorkflow {
                 msb,
                 ebene,
                 lokations_id,
-                ..
+                gegenstand,
+                message_ref,
             } => S::AnfrageGesendet(Box::new(EsaWertebestellungData {
                 esa: esa.clone(),
                 msb: msb.clone(),
                 ebene: *ebene,
                 lokations_id: lokations_id.clone(),
+                gegenstand: gegenstand.clone(),
+                anfrage_ref: message_ref.as_str().to_owned(),
+                angebot_ref: None,
                 bestellung_ref: None,
+                stornierung_ref: None,
+                abbestellung_ref: None,
             })),
-            E::AngebotErhalten { bindungsfrist, .. } => match state {
-                S::AnfrageGesendet(data) => S::AngebotErhalten {
-                    data,
-                    bindungsfrist: *bindungsfrist,
-                },
+            E::AngebotErhalten {
+                message_ref,
+                bindungsfrist,
+                ..
+            } => match state {
+                S::AnfrageGesendet(mut data) => {
+                    // The ORDERS 17007 must echo this Belegnummer in `RFF+AAG`.
+                    data.angebot_ref = Some(message_ref.as_str().to_owned());
+                    S::AngebotErhalten {
+                        data,
+                        bindungsfrist: *bindungsfrist,
+                    }
+                }
                 other => other,
             },
             E::AnfrageAbgelehnt { reason } => match state {
@@ -476,8 +528,12 @@ impl Workflow for EsaWertebestellungWorkflow {
             E::BestellungAbgelehnt { reason } => S::Abgelehnt {
                 reason: reason.clone(),
             },
-            E::StornierungGesendet { .. } => match state {
-                S::Beliefert { data, .. } => S::StornierungGesendet(data),
+            E::StornierungGesendet { message_ref } => match state {
+                S::Beliefert { mut data, .. } => {
+                    // The ORDRSP 19013/19014 echoes this in `RFF+ACW`.
+                    data.stornierung_ref = Some(message_ref.as_str().to_owned());
+                    S::StornierungGesendet(data)
+                }
                 other => other,
             },
             E::StornierungBestaetigt { .. } => match state {
@@ -492,8 +548,12 @@ impl Workflow for EsaWertebestellungWorkflow {
                 },
                 other => other,
             },
-            E::AbbestellungGesendet { .. } => match state {
-                S::Beliefert { data, .. } => S::AbbestellungGesendet(data),
+            E::AbbestellungGesendet { message_ref, .. } => match state {
+                S::Beliefert { mut data, .. } => {
+                    // The ORDRSP 19011/19012 echoes this in `RFF+ON`.
+                    data.abbestellung_ref = Some(message_ref.as_str().to_owned());
+                    S::AbbestellungGesendet(data)
+                }
                 other => other,
             },
             E::AbbestellungBestaetigt { .. } => match state {
@@ -540,13 +600,23 @@ impl Workflow for EsaWertebestellungWorkflow {
         // Build the outbound render intent that puts a message on the wire to
         // the MSB. The renderer turns this into REQOTE/ORDERS/ORDCHG with the
         // PID in BGM DE 1004 and the location in LOC.
+        // `korrelation_ref` is the Belegnummer this message must echo under the
+        // PID's published Zuordnungsschlüssel; the renderer picks the `RFF`
+        // qualifier from [`crate::esa::korrelation`], so the two cannot drift.
+        //
+        // Only the REQOTE carries a `LOC` — `ZO-T17` is the *only* location
+        // key in the process, and a conformant ORDERS/ORDCHG of Kapitel 4 has
+        // no `LOC` segment at all (ORDERS AHB 1.1b §4.15, ORDCHG AHB 1.1 §3.2).
         fn esa_send(
             message_type: &'static str,
             pid: Pruefidentifikator,
             data: &EsaWertebestellungData,
             message_ref: &MessageRef,
-            order_reference: Option<&str>,
+            korrelation_ref: Option<&str>,
+            ausfuehrungsdatum: Option<OffsetDateTime>,
+            abonnement: Abonnement,
         ) -> PendingOutbox {
+            let traegt_location = pid == ANFRAGE_PID;
             PendingOutbox::new(
                 message_type,
                 data.msb.as_str(),
@@ -555,11 +625,15 @@ impl Workflow for EsaWertebestellungWorkflow {
                     "sender": data.esa.as_str(),
                     "receiver": data.msb.as_str(),
                     "message_ref": message_ref.as_str(),
-                    "location": data.lokations_id,
-                    // The ORDCHG Stornierung carries no LOC; it references the
-                    // original Bestellung's Belegnummer in `RFF+ON` instead so
-                    // the MSB can correlate it.
-                    "order_reference": order_reference,
+                    "location": traegt_location.then(|| data.lokations_id.clone()),
+                    "ebene": data.ebene,
+                    "korrelation_ref": korrelation_ref,
+                    "messprodukt": data.gegenstand.messprodukt,
+                    "wunschtermin": data.gegenstand.wunschtermin.to_string(),
+                    "zeitraum_bis": data.gegenstand.zeitraum_bis.map(|d| d.to_string()),
+                    "abonnement": abonnement.imd_code(),
+                    "ausfuehrungsdatum": ausfuehrungsdatum.map(|d| d.date().to_string()),
+                    "smgw": data.gegenstand.smgw,
                 }),
             )
         }
@@ -574,6 +648,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                 msb,
                 ebene,
                 lokations_id,
+                gegenstand,
                 message_ref,
             } => {
                 if !matches!(state, S::New) {
@@ -585,14 +660,36 @@ impl Workflow for EsaWertebestellungWorkflow {
                         ebene.as_str()
                     )));
                 }
+                // Catalogue check before anything leaves the system: the
+                // Messprodukt must exist in Codeliste der Konfigurationen 1.4
+                // Kapitel 4.6, be defined for the level being addressed, be
+                // usable by the Wunschtermin, and carry its SM-PKI target when
+                // it is a 4.6.2 product.
+                gegenstand
+                    .validate(ebene)
+                    .map_err(|e| WorkflowError::rejected(e.to_string()))?;
                 let data = EsaWertebestellungData {
                     esa: esa.clone(),
                     msb: msb.clone(),
                     ebene,
                     lokations_id: lokations_id.clone(),
+                    gegenstand: gegenstand.clone(),
+                    anfrage_ref: message_ref.as_str().to_owned(),
+                    angebot_ref: None,
                     bestellung_ref: None,
+                    stornierung_ref: None,
+                    abbestellung_ref: None,
                 };
-                let outbox = esa_send("REQOTE", ANFRAGE_PID, &data, &message_ref, None);
+                let wunschtermin = gegenstand.wunschtermin.midnight().assume_utc();
+                let outbox = esa_send(
+                    "REQOTE",
+                    ANFRAGE_PID,
+                    &data,
+                    &message_ref,
+                    None,
+                    Some(wunschtermin),
+                    gegenstand.abonnement,
+                );
                 // The MSB owes an Angebot within 5 WT; arm the window from now
                 // (the AS4 Receipt for our REQOTE is issued in the same request).
                 let due = mako_fristen::deadline_at_werktage(
@@ -606,6 +703,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                         msb,
                         ebene,
                         lokations_id,
+                        gegenstand,
                         message_ref,
                     }],
                     outbox: vec![outbox],
@@ -616,6 +714,7 @@ impl Workflow for EsaWertebestellungWorkflow {
             C::ReceiveAngebot {
                 message_ref,
                 bindungsfrist,
+                fruehester_start,
             } => {
                 if !matches!(state, S::AnfrageGesendet(_)) {
                     return Err(WorkflowError::invalid_state(
@@ -627,6 +726,7 @@ impl Workflow for EsaWertebestellungWorkflow {
                     events: vec![E::AngebotErhalten {
                         message_ref,
                         bindungsfrist,
+                        fruehester_start,
                     }],
                     outbox: Vec::new(),
                     deadlines: vec![PendingDeadline::new(BINDUNGSFRIST_LABEL, bindungsfrist)],
@@ -662,7 +762,24 @@ impl Workflow for EsaWertebestellungWorkflow {
                         "Bindungsfrist des Angebots endete am {bindungsfrist}"
                     )));
                 }
-                let outbox = esa_send("ORDERS", BESTELLUNG_PID, data, &message_ref, None);
+                // ORDERS AHB 1.1b §4.15: `SG1 RFF+AAG` is Muss on 17007 and
+                // carries the QUOTES Angebot's Dokumentennummer — it is the
+                // order's published Zuordnungsschlüssel (`ZG-T24`), so an
+                // order without it cannot be matched to the offer it accepts.
+                let angebot_ref = data.angebot_ref.as_deref().ok_or_else(|| {
+                    WorkflowError::rejected(
+                        "Bestellung ohne Angebotsnummer — RFF+AAG ist Muss (ORDERS AHB 1.1b §4.15)",
+                    )
+                })?;
+                let outbox = esa_send(
+                    "ORDERS",
+                    BESTELLUNG_PID,
+                    data,
+                    &message_ref,
+                    Some(angebot_ref),
+                    Some(data.gegenstand.wunschtermin.midnight().assume_utc()),
+                    data.gegenstand.abonnement,
+                );
                 let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
                     ANTWORT_FRIST_WT,
@@ -730,12 +847,21 @@ impl Workflow for EsaWertebestellungWorkflow {
                          (UC 4.3 Vorbedingung) — nutze die Abbestellung (17008)",
                     ));
                 }
+                // ORDCHG AHB 1.1 §3.2: `SG1 RFF+ON` is Muss and carries the
+                // ORDERS' Dokumentennummer (`ZG-T51`).
+                let bestellung_ref = data.bestellung_ref.as_deref().ok_or_else(|| {
+                    WorkflowError::rejected(
+                        "Stornierung ohne Auftragsnummer — RFF+ON ist Muss (ORDCHG AHB 1.1 §3.2)",
+                    )
+                })?;
                 let outbox = esa_send(
                     "ORDCHG",
                     STORNIERUNG_PID,
                     data,
                     &message_ref,
-                    data.bestellung_ref.as_deref(),
+                    Some(bestellung_ref),
+                    None,
+                    data.gegenstand.abonnement,
                 );
                 let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
@@ -784,8 +910,27 @@ impl Workflow for EsaWertebestellungWorkflow {
                 let S::Beliefert { data, .. } = state else {
                     return Err(WorkflowError::invalid_state("Beliefert", state.label()));
                 };
-                // UC 4.3 Nr. 1: the Abbestellung (17008) ends a running delivery.
-                let outbox = esa_send("ORDERS", ABBESTELLUNG_PID, data, &message_ref, None);
+                // UC 4.3 Nr. 1: the Abbestellung (17008) ends a running
+                // delivery. ORDERS AHB 1.1b §4.15 makes `SG1 RFF+ACW` Muss —
+                // it carries the 17007's Dokumentennummer (`ZG-T41`) and is
+                // the only way the MSB can tell which order is being ended.
+                let bestellung_ref = data.bestellung_ref.as_deref().ok_or_else(|| {
+                    WorkflowError::rejected(
+                        "Abbestellung ohne Referenz auf die Bestellung — RFF+ACW ist Muss \
+                         (ORDERS AHB 1.1b §4.15)",
+                    )
+                })?;
+                let outbox = esa_send(
+                    "ORDERS",
+                    ABBESTELLUNG_PID,
+                    data,
+                    &message_ref,
+                    Some(bestellung_ref),
+                    Some(beendigung_zum),
+                    // `IMD++Z02` Ende Abo — which is also what selects EBD
+                    // `E_0254` for the MSB's answer.
+                    Abonnement::EndeAbo,
+                );
                 let due = mako_fristen::deadline_at_werktage(
                     OffsetDateTime::now_utc(),
                     ANTWORT_FRIST_WT,
@@ -803,10 +948,19 @@ impl Workflow for EsaWertebestellungWorkflow {
             }
 
             C::MarkLieferungBegonnen => {
-                if !matches!(state, S::Beliefert { .. }) {
-                    return Err(WorkflowError::invalid_state("Beliefert", state.label()));
+                // Driven by an inbound MSCONS 13027, which is a fact rather
+                // than a request: values arrived. Anything but a running
+                // delivery is a no-op instead of an error — a batch that lands
+                // after the subscription ended must not fail the ingest, and
+                // repeating the event on every daily delivery would bloat the
+                // stream for no state change.
+                match state {
+                    S::Beliefert {
+                        lieferung_begonnen: false,
+                        ..
+                    } => Ok(WorkflowOutput::events(vec![E::LieferungBegonnen])),
+                    _ => Ok(WorkflowOutput::events(Vec::new())),
                 }
-                Ok(WorkflowOutput::events(vec![E::LieferungBegonnen]))
             }
 
             C::ReceiveBeendigungDurchMsb {

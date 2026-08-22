@@ -116,9 +116,14 @@ pub enum Marktrolle {
     /// a bilateral contract with the MSB, which §34 Abs. 2 S. 2 Nr. 10 MsbG makes
     /// a mandatory, non-discriminatory Zusatzleistung.
     ///
-    /// Sends REQOTE Anfrage, ORDERS 17007 (Bestellung/Abbestellung) and
-    /// ORDCHG 39002 (Stornierung); receives QUOTES 15003 and
-    /// ORDRSP 19011/19012/19013/19014, plus the values themselves.
+    /// Sends REQOTE 35003 (Werteanfrage), ORDERS 17007 (Bestellung), ORDERS
+    /// 17008 (Abbestellung) and ORDCHG 39002 (Stornierung); receives QUOTES
+    /// 15003, ORDRSP 19011–19014 and IFTSTA 21042, plus the values themselves
+    /// as MSCONS 13027.
+    ///
+    /// 17007 and 17008 are **different** Prüfidentifikatoren: one orders a
+    /// delivery, the other ends a running one, and their answers cite different
+    /// Entscheidungsbäume (`E_0256` vs `E_0254`).
     ///
     /// This role is for a deployment that **is** an ESA. An MSB *serving* an ESA
     /// registers the inbound side under [`Marktrolle::Msb`].

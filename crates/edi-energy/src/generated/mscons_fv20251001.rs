@@ -1896,6 +1896,9 @@ impl Profile for MsconsFv20251001Profile {
     fn source_document(&self) -> Option<&'static str> {
         Some("MSCONS MIG 2.4c, Stand 01.10.2025")
     }
+    fn pid_source(&self) -> crate::registry::PidSource {
+        crate::registry::PidSource::RffZ13
+    }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()
     }

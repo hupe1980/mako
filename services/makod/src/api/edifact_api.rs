@@ -229,8 +229,18 @@ pub enum MessageStatus {
     Routed,
     /// Parsed successfully; PID present but not registered in PidRouter.
     UnknownPid,
-    /// Parsed successfully; no PID in this message type (e.g. CONTRL acknowledgement).
+    /// Parsed successfully; this message type carries no Prüfidentifikator by
+    /// design. CONTRL is the only one — it is the EDIFACT syntax
+    /// acknowledgement, and its AHB publishes no PID at all.
     NoPid,
+    /// Parsed successfully, but the Prüfidentifikator is **missing** from a
+    /// message type that must carry one.
+    ///
+    /// A defect, not a routing gap: without a PID nothing can be routed, no
+    /// APERAK can name a process, and the message would otherwise be discarded
+    /// behind a `200 OK`. Counted as rejected and dead-lettered, so the loss is
+    /// visible rather than silent.
+    MissingPid,
     /// Could not be parsed at all.
     ParseError,
 }
@@ -523,14 +533,28 @@ pub(crate) async fn ingest_edifact(
             .and_then(|p| state.resolve_workflow(p.as_u32(), &recipient_mp_id))
             .map(str::to_owned);
 
+        // CONTRL is the EDIFACT syntax acknowledgement and the one message
+        // type whose AHB publishes no Prüfidentifikator; every other type has
+        // them, so a missing PID there is a defect rather than a shape.
+        let carries_no_pid_by_design = matches!(
+            msg.try_message_type(),
+            Some(edi_energy::MessageType::Contrl)
+        );
         let status = match (pid, workflow.as_deref()) {
-            (None, _) => MessageStatus::NoPid,
+            (None, _) if carries_no_pid_by_design => MessageStatus::NoPid,
+            (None, _) => MessageStatus::MissingPid,
             (Some(_), Some(_)) => MessageStatus::Routed,
             (Some(_), None) => MessageStatus::UnknownPid,
         };
 
-        // Dead-letter unroutable messages (§ 147 AO / GoBD).
-        if matches!(status, MessageStatus::UnknownPid) {
+        // Dead-letter unroutable messages (§ 147 AO / GoBD). A missing PID is
+        // dead-lettered on the same path: the message is just as lost, and a
+        // silent `accepted: 1` is worse than a rejection because nothing
+        // signals it.
+        if matches!(
+            status,
+            MessageStatus::UnknownPid | MessageStatus::MissingPid
+        ) {
             let ctx = AuditContext::from_interchange(
                 &env.header.sender_id,
                 &env.header.receiver_id,
@@ -669,7 +693,12 @@ pub(crate) async fn ingest_edifact(
 
     let accepted = messages
         .iter()
-        .filter(|m| !matches!(m.status, MessageStatus::ParseError))
+        .filter(|m| {
+            !matches!(
+                m.status,
+                MessageStatus::ParseError | MessageStatus::MissingPid
+            )
+        })
         .count();
     let rejected = messages.len() - accepted;
 

@@ -8,6 +8,18 @@ use mako_engine::{
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     workflow::Workflow,
 };
+/// The Pflicht-Messprodukt for a Marktlokation Lastgang (Codeliste der
+/// Konfigurationen 1.4 §4.6.1, `9991 00000 305 6`), ordered as a subscription.
+fn gegenstand() -> Box<mako_wim::esa::Bestellgegenstand> {
+    Box::new(mako_wim::esa::Bestellgegenstand {
+        messprodukt: "9991000003056".to_owned(),
+        wunschtermin: time::macros::date!(2026 - 03 - 01),
+        zeitraum_bis: None,
+        abonnement: mako_wim::esa::Abonnement::StartAbo,
+        smgw: None,
+    })
+}
+
 use mako_wim::wertebestellung::{
     ABBESTELLUNG_PID, ABLEHNUNG_PID, ANFRAGE_PID, ANGEBOT_PID, ANGEBOT_WINDOW_LABEL,
     ANTWORT_WINDOW_LABEL, BESTAETIGUNG_PID, BESTELLUNG_PID, BINDUNGSFRIST_LABEL, Lokationsebene,
@@ -35,6 +47,7 @@ fn quittung() -> Zustellquittung {
 
 fn anfrage() -> C {
     C::ReceiveAnfrage {
+        gegenstand: gegenstand(),
         pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
@@ -60,6 +73,7 @@ fn drive(cmds: Vec<C>) -> Result<S, WorkflowError> {
 
 fn angebot() -> C {
     C::SendAngebot {
+        fruehester_start: None,
         message_ref: mref("QUO-1"),
         // Bindungsfrist: two weeks out.
         bindungsfrist: datetime!(2026-03-16 17:00 UTC),
@@ -68,6 +82,7 @@ fn angebot() -> C {
 
 fn bestellung() -> C {
     C::ReceiveBestellung {
+        abonnement: mako_wim::esa::Abonnement::StartAbo,
         pid: BESTELLUNG_PID,
         message_ref: mref("ORD-1"),
         quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),
@@ -77,7 +92,9 @@ fn bestellung() -> C {
 
 fn accept_bestellung() -> C {
     C::AnswerBestellung {
-        accept: true,
+        // `E_0256` A11 — „Bestellung ist angenommen“. The code's Cluster is
+        // what puts the answer on 19011; there is no separate accept flag.
+        antwort_code: "A11".to_owned(),
         message_ref: mref("RSP-1"),
         reason: None,
     }
@@ -161,6 +178,7 @@ fn bestellung_starts_a_two_werktage_answer_window_from_the_uet() {
 #[test]
 fn a_negative_zustellquittung_cannot_start_a_frist() {
     let cmd = C::ReceiveAnfrage {
+        gegenstand: gegenstand(),
         pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
@@ -205,6 +223,7 @@ fn a_bestellung_after_the_bindungsfrist_is_rejected() {
         }
     }
     let late = C::ReceiveBestellung {
+        abonnement: mako_wim::esa::Abonnement::StartAbo,
         pid: BESTELLUNG_PID,
         message_ref: mref("ORD-LATE"),
         quittung: Zustellquittung::positive(datetime!(2026-03-17 09:00 UTC)),
@@ -325,7 +344,8 @@ fn refused_stornierung_restores_the_confirmed_bestellung() {
             quittung: quittung(),
         },
         C::AnswerStornierung {
-            accept: false,
+            // `E_0257` A02 — the Abo has already started delivering.
+            antwort_code: "A02".to_owned(),
             message_ref: mref("RSP-STORNO"),
             reason: Some("Übermittlung bereits eingerichtet".to_owned()),
         },
@@ -343,7 +363,7 @@ fn refused_stornierung_restores_the_confirmed_bestellung() {
 
 /// UC 4.1 Nr. 4: "informiert der MSB den ESA über die Gründe".
 #[test]
-fn rejecting_a_bestellung_requires_a_reason() {
+fn an_antwortcode_outside_the_tree_is_refused() {
     let mut state = S::default();
     for cmd in [anfrage(), angebot(), bestellung()] {
         let out = W::handle(&state, cmd).unwrap();
@@ -351,16 +371,91 @@ fn rejecting_a_bestellung_requires_a_reason() {
             state = W::apply(state.clone(), ev);
         }
     }
+    // `A02` is published by `E_0257` (Stornierung), not by `E_0256`. Answering
+    // a Bestellung with it would state a reason the tree does not define.
     let err = W::handle(
         &state,
         C::AnswerBestellung {
-            accept: false,
+            antwort_code: "A02".to_owned(),
             message_ref: mref("RSP-NEG"),
             reason: None,
         },
     )
     .unwrap_err();
-    assert!(err.to_string().contains("Begründung"), "got: {err}");
+    assert!(err.to_string().contains("E_0256"), "got: {err}");
+
+    // A code published by the tree carries its own Bedeutung as the Grund —
+    // UC 4.1 Nr. 4's „informiert der MSB den ESA über die Gründe" is satisfied
+    // by the Antwortcode, not by free text the MSB has to invent.
+    let out = W::handle(
+        &state,
+        C::AnswerBestellung {
+            antwort_code: "A09".to_owned(),
+            message_ref: mref("RSP-NEG"),
+            reason: None,
+        },
+    )
+    .unwrap();
+    let ob = &out.outbox[0];
+    assert_eq!(
+        ob.payload["pid"].as_u64(),
+        Some(u64::from(ABLEHNUNG_PID.as_u32())),
+        "the code's Cluster puts the answer on the Ablehnungs-PID"
+    );
+    assert_eq!(ob.payload["antwort_ebd"].as_str(), Some("E_0256"));
+}
+
+/// `E_0254` publishes four refusals, so a Beendigung is not always
+/// confirmable — and a refused one leaves the delivery running rather than
+/// silently ending it.
+#[test]
+fn a_refused_abbestellung_leaves_the_delivery_running() {
+    let mut state = S::default();
+    for cmd in [
+        anfrage(),
+        angebot(),
+        bestellung(),
+        accept_bestellung(),
+        C::ReceiveAbbestellung {
+            pid: ABBESTELLUNG_PID,
+            message_ref: mref("ORD-AB"),
+            beendigung_zum: datetime!(2026-04-01 00:00 UTC),
+            quittung: quittung(),
+        },
+    ] {
+        let out = W::handle(&state, cmd).unwrap();
+        for ev in &out.events {
+            state = W::apply(state.clone(), ev);
+        }
+    }
+    assert_eq!(state.label(), "AbbestellungEingegangen");
+    // `A01` — die Bestellung war eine einmalige Übermittlung, sie ist zu
+    // stornieren.
+    let out = W::handle(
+        &state,
+        C::AnswerAbbestellung {
+            antwort_code: "A01".to_owned(),
+            message_ref: mref("RSP-AB"),
+            reason: None,
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        out.outbox[0].payload["pid"].as_u64(),
+        Some(u64::from(ABLEHNUNG_PID.as_u32()))
+    );
+    assert_eq!(
+        out.outbox[0].payload["antwort_ebd"].as_str(),
+        Some("E_0254")
+    );
+    for ev in &out.events {
+        state = W::apply(state.clone(), ev);
+    }
+    assert_eq!(
+        state.label(),
+        "BestellungBestaetigt",
+        "a refused Beendigung must not end the delivery"
+    );
 }
 
 // ── PID guards ────────────────────────────────────────────────────────────────
@@ -370,6 +465,7 @@ fn each_step_rejects_a_foreign_pid() {
     // 55001 is a GPKE UTILMD Lieferbeginn — foreign to the ESA Wertebestellung
     // Anfrage step, which only accepts REQOTE 35002.
     let wrong = C::ReceiveAnfrage {
+        gegenstand: gegenstand(),
         pid: pid(55001),
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
@@ -389,6 +485,7 @@ fn each_step_rejects_a_foreign_pid() {
 #[test]
 fn an_anfrage_without_a_location_id_is_rejected() {
     let bad = C::ReceiveAnfrage {
+        gegenstand: gegenstand(),
         pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
@@ -604,17 +701,28 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
         Some(u64::from(BESTAETIGUNG_PID.as_u32()))
     );
     // The ORDRSP carries no LOC — it echoes the Bestellung's Belegnummer
-    // (`ORD-1`) in RFF+ACW so the ESA can correlate the answer.
+    // (`ORD-1`) in `RFF+ON`, the answer's published Zuordnungsschlüssel
+    // `ZG-T14`. (`ACW` is the Storno-Antwort's key, not this one.)
     assert_eq!(
-        confirm.payload["order_reference"].as_str(),
+        confirm.payload["korrelation_ref"].as_str(),
         Some("ORD-1"),
         "ORDRSP must echo the answered Bestellung Belegnummer"
+    );
+    // `IMD+7081` and the EBD the Prüfschritt code belongs to are Muss on every
+    // ESA answer (ORDRSP AHB 1.1b §4.15, conditions [17]/[21]-[23]).
+    assert_eq!(confirm.payload["abonnement"].as_str(), Some("Z01"));
+    assert_eq!(confirm.payload["antwort_ebd"].as_str(), Some("E_0256"));
+    assert_eq!(confirm.payload["antwort_code"].as_str(), Some("A11"));
+    assert!(
+        confirm.payload["location"].is_null(),
+        "an ORDRSP carries no LOC"
     );
 
     let reject = drive_to_outbox(
         vec![anfrage(), angebot(), bestellung()],
         C::AnswerBestellung {
-            accept: false,
+            // `E_0256` A09 — die Gerätetechnik misst die Werte nicht.
+            antwort_code: "A09".to_owned(),
             message_ref: mref("RSP-2"),
             reason: Some("Messprodukt nicht lieferbar".to_owned()),
         },
@@ -630,6 +738,7 @@ fn answer_bestellung_enqueues_ordrsp_confirm_or_reject() {
 #[test]
 fn a_blocked_consent_rejects_the_anfrage_with_a_quotes_ablehnung() {
     let blocked = C::ReceiveAnfrage {
+        gegenstand: gegenstand(),
         pid: ANFRAGE_PID,
         esa: mp("9900555000005"),
         msb: mp("9900357000004"),
@@ -665,6 +774,7 @@ fn a_blocked_consent_rejects_the_bestellung_with_an_ordrsp_ablehnung() {
         }
     }
     let blocked = C::ReceiveBestellung {
+        abonnement: mako_wim::esa::Abonnement::StartAbo,
         pid: BESTELLUNG_PID,
         message_ref: mref("ORD-BLOCKED"),
         quittung: Zustellquittung::positive(datetime!(2026-03-09 09:00 UTC)),

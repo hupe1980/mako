@@ -286,8 +286,17 @@ fn mscons_builder_constructs_valid_message() {
         .build()
         .expect("MsconsBuilder::build must succeed");
 
+    // BGM DE 1004 is the **Dokumentennummer** — all sixteen BGM rows of MSCONS
+    // AHB 3.2 spell it that way, and none carries a Prüfidentifikator. It
+    // defaults to the message reference; the PID travels in `SG1 RFF+Z13`.
     let bgm = msg.bgm().expect("BGM must be set");
-    assert_eq!(bgm.document_id.as_deref(), Some("13003"));
+    assert_eq!(bgm.document_id.as_deref(), Some("1"));
+    assert_eq!(
+        msg.detect_pruefidentifikator()
+            .expect("PID from RFF+Z13")
+            .as_u32(),
+        13003
+    );
     assert_eq!(
         msg.sender().unwrap().party_id.as_deref(),
         Some("9900111222333")

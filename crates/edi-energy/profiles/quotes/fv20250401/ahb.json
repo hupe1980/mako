@@ -188,10 +188,6 @@
           "requirement": "M"
         },
         {
-          "tag": "LIN",
-          "requirement": "M"
-        },
-        {
           "tag": "LOC",
           "requirement": "M"
         },
@@ -224,7 +220,7 @@
         {
           "tag": "FTX",
           "requirement": "O",
-          "_description": "FTX is optional per MIG 1.3b (no AHB constraint for PID 15003)"
+          "_description": "FTX+ACB is Kann — it carries the Ablehnungsgrund"
         },
         {
           "tag": "GIN",
@@ -235,6 +231,11 @@
           "tag": "IMD",
           "requirement": "O",
           "_description": "IMD is optional per MIG 1.3b (no AHB constraint for PID 15003)"
+        },
+        {
+          "tag": "LIN",
+          "requirement": "S",
+          "_description": "SG27 is Soll [77] — when the Anfrage named a Kapitel-4.6.1 Messprodukt"
         },
         {
           "tag": "RNG",
