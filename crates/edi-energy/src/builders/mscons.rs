@@ -112,7 +112,8 @@ struct MsconsBuilderInner {
     document_code: String,
     /// BGM DE 1004 Dokumentennummer.
     document_number: String,
-    document_date: Option<String>,
+    /// DTM+137 value and its DE 2379 format qualifier.
+    document_date: Option<(String, String)>,
     header_references: Vec<(String, String)>,
     metering_points: Vec<MeteringPointSpec>,
 }
@@ -242,7 +243,14 @@ impl<S, R> MsconsBuilder<S, R> {
 
     /// Set the document date for DTM+137 (`YYYYMMDD`).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
-        self.inner.document_date = Some(date.into());
+        self.inner.document_date = Some((date.into(), "102".to_owned()));
+        self
+    }
+
+    /// Set the document timestamp for DTM+137
+    /// (`CCYYMMDDHHMMZZZ`, EDIFACT format `303`).
+    pub fn document_timestamp(mut self, timestamp: impl Into<String>) -> Self {
+        self.inner.document_date = Some((timestamp.into(), "303".to_owned()));
         self
     }
 
@@ -285,18 +293,19 @@ impl<S, R> MsconsBuilder<S, R> {
             .pruefidentifikator
             .map(|p| format!("{:05}", p.as_u32()))
             .unwrap_or_default();
-        // Defaults to the Prüfidentifikator, which is what BDEW's examples put
-        // in DE 1004 for these use cases.
+        // DE 1004 is a document number, not the Prüfidentifikator. Reusing the
+        // unique UNH reference gives callers a correlatable default while the
+        // PID remains in SG1 RFF+Z13.
         let document_number = if self.inner.document_number.is_empty() {
-            pid_str.clone()
+            self.inner.message_ref.clone()
         } else {
             self.inner.document_number.clone()
         };
-        let dtm_val = self
+        let (dtm_val, dtm_format) = self
             .inner
             .document_date
-            .as_deref()
-            .map_or_else(today_ccyymmdd, str::to_owned);
+            .clone()
+            .unwrap_or_else(|| (today_ccyymmdd(), "102".to_owned()));
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
@@ -311,7 +320,7 @@ impl<S, R> MsconsBuilder<S, R> {
         // SG1 RFF+Z13 (MSCONS AHB 3.2), which is what the receiver routes on —
         // putting it in BGM leaves the message with no detectable PID.
         emit_seg!(w, "BGM", &self.inner.document_code, &document_number, "9");
-        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        emit_comp!(w, "DTM", ["137", &dtm_val, &dtm_format]);
         if !pid_str.is_empty() {
             emit_comp!(w, "RFF", ["Z13", &pid_str]);
         }
@@ -688,5 +697,35 @@ mod summenzeitreihe_tests {
         let wire = String::from_utf8(wire).expect("utf-8");
         assert!(wire.contains("QTY+220:42:KWH"));
         assert!(!wire.contains("DTM+163"), "no invented period: {wire}");
+    }
+
+    #[test]
+    fn document_number_and_timestamp_are_distinct_from_the_pid() {
+        let wire = MsconsBuilder::new(releases::mscons_fv20251001().clone())
+            .sender("9900357000004")
+            .receiver("9900555000005")
+            .message_ref("MSG13027")
+            .document_number("BELEG0001")
+            .document_code("Z83")
+            .document_timestamp("202608221030+00")
+            .pruefidentifikator(Pruefidentifikator::new(13027).unwrap())
+            .header_reference("AGI", "ORDERDOC0001")
+            .metering_point("51238696012")
+            .quantity_for_period(
+                QTY_WAHRER_WERT,
+                "0.250",
+                "KWH",
+                "202606010000+00",
+                "202606010015+00",
+            )
+            .done()
+            .serialize()
+            .expect("serialize");
+        let wire = String::from_utf8(wire).expect("utf-8");
+
+        assert!(wire.contains("BGM+Z83+BELEG0001+9"), "{wire}");
+        assert!(wire.contains("DTM+137:202608221030?+00:303"), "{wire}");
+        assert!(wire.contains("RFF+Z13:13027"), "{wire}");
+        assert!(wire.contains("RFF+AGI:ORDERDOC0001"), "{wire}");
     }
 }

@@ -2,6 +2,7 @@
   "schema_version": 1,
   "message_type": "MSCONS",
   "release": "2.4c",
+  "pid_source": "rff_z13_with_bgm_fallback",
   "valid_from": "2025-10-01",
   "supersedes_directory": "fv20240401",
   "ordering_hint": [

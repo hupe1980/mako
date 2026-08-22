@@ -733,6 +733,11 @@ fn liefere_werte_emits_mscons_13027_addressed_to_the_esa() {
         Some(u64::from(WERTE_UEBERMITTLUNG_PID.as_u32()))
     );
     assert_eq!(ob.payload["receiver_mp_id"].as_str(), Some("9900555000005"));
+    assert_eq!(
+        ob.payload["order_reference"].as_str(),
+        Some("ORD-1"),
+        "MSCONS must reference the originating ORDERS document"
+    );
     assert_eq!(ob.recipient.as_ref(), "9900555000005");
     assert_eq!(ob.payload["reads"].as_array().map(Vec::len), Some(2));
     // An auditable transmission event is recorded, and delivery has begun.

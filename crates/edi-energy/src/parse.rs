@@ -73,7 +73,16 @@ fn resolve_pid_source(
     MessageType::from_unh_code(msg_type_code)
         .and_then(|mt| {
             let rel = crate::release::Release::new(assoc_code);
-            registry.profile(mt, &rel).ok()
+            // Prefer the profile active today when a wire release is shared by
+            // multiple publications. If the release is known but not active
+            // yet, parsing still needs its structural PID location; normative
+            // date checks remain the validation layer's responsibility.
+            registry.profile(mt, &rel).ok().or_else(|| {
+                registry
+                    .profiles_for(mt)
+                    .filter(|profile| profile.release() == &rel)
+                    .max_by_key(|profile| profile.valid_from())
+            })
         })
         .map(super::registry::Profile::pid_source)
         .unwrap_or_default()
@@ -1063,6 +1072,18 @@ pub(crate) fn dispatch_message(
                 .find(|s| s.tag == "RFF" && (s.element_str(0) == Some("Z13")))
                 .and_then(|rff| rff.component_str(0, 1))
                 .and_then(|s| s.parse().ok()),
+            crate::registry::PidSource::RffZ13WithBgmFallback => segments
+                .iter()
+                .find(|s| s.tag == "RFF" && (s.element_str(0) == Some("Z13")))
+                .and_then(|rff| rff.component_str(0, 1))
+                .and_then(|s| s.parse().ok())
+                .or_else(|| {
+                    segments
+                        .iter()
+                        .find(|s| s.tag == "BGM")
+                        .and_then(|bgm| bgm.element_str(1))
+                        .and_then(|s| s.parse().ok())
+                }),
             crate::registry::PidSource::BgmDe1004 => segments
                 .iter()
                 .find(|s| s.tag == "BGM")

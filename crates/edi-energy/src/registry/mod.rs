@@ -27,6 +27,12 @@ pub enum PidSource {
     /// The Prüfidentifikator is in the first top-level RFF segment with qualifier Z13
     /// (composite component 1 of element 0). Used by COMDIS and PRICAT.
     RffZ13,
+    /// The Prüfidentifikator is preferably read from the first top-level
+    /// `RFF+Z13`, with BGM DE 1004 accepted as a compatibility fallback.
+    ///
+    /// Used for MSCONS so conformant messages route by their SG1 reference while
+    /// messages produced by older mako versions remain ingestible.
+    RffZ13WithBgmFallback,
 }
 
 // ── Profile trait ─────────────────────────────────────────────────────────────
@@ -75,9 +81,9 @@ pub trait Profile: Send + Sync {
     /// Where the Prüfidentifikator is located in messages of this type.
     ///
     /// The default implementation returns [`PidSource::BgmDe1004`], which is
-    /// correct for all EDI@Energy message types except COMDIS and PRICAT.
+    /// correct for message types that place the Prüfidentifikator in DE 1004.
     /// Generated profile implementations override this when the `mig.json`
-    /// specifies `"pid_source": "rff_z13"`.
+    /// specifies another strategy.
     fn pid_source(&self) -> PidSource {
         PidSource::BgmDe1004
     }

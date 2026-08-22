@@ -219,6 +219,17 @@ fn finish_interchange(
     receiver: &str,
     msg: &OutboxMessage,
 ) -> Result<RenderedInterchange, RenderError> {
+    finish_interchange_with_application_reference(serialized, sender, receiver, msg, None)
+}
+
+/// Wrap a message and optionally populate UNB DE 0026.
+fn finish_interchange_with_application_reference(
+    serialized: Result<Vec<u8>, edi_energy::Error>,
+    sender: &str,
+    receiver: &str,
+    msg: &OutboxMessage,
+    application_reference: Option<&str>,
+) -> Result<RenderedInterchange, RenderError> {
     let message = serialized.map_err(|e| RenderError::BuilderError(e.to_string()))?;
     let dar = dar_for(msg);
     let now = time::OffsetDateTime::now_utc();
@@ -230,8 +241,12 @@ fn finish_interchange(
     );
     let hhmm = format!("{:02}{:02}", now.hour(), now.minute());
 
-    let bytes = edi_energy::builders::InterchangeBuilder::new(sender, receiver, &dar)
-        .transmission(&date, &hhmm)
+    let mut interchange = edi_energy::builders::InterchangeBuilder::new(sender, receiver, &dar)
+        .transmission(&date, &hhmm);
+    if let Some(reference) = application_reference {
+        interchange = interchange.application_reference(reference);
+    }
+    let bytes = interchange
         .message(message)
         .build()
         .map_err(|e| RenderError::BuilderError(e.to_string()))?;
@@ -803,6 +818,7 @@ mod tests {
                 "sender_mp_id": "9900357000004",
                 "receiver_mp_id": esa,
                 "malo_id": "51238696781",
+                "order_reference": "ORDERDOC0001",
                 "reads": [
                     { "dtm_from": "202603100000+00", "dtm_to": "202603100015+00",
                       "quantity_kwh": "0.250", "obis_code": "1-0:1.29.0" },
@@ -819,14 +835,31 @@ mod tests {
         assert!(wire.contains(&format!("NAD+MR+{esa}")), "{wire}");
         // PID 13027 travels in RFF+Z13.
         assert!(wire.contains("RFF+Z13:13027"), "{wire}");
+        assert!(wire.contains("BGM+Z83+"), "BGM DE 1001: {wire}");
+        assert!(
+            !wire.contains("BGM+Z83+13027+9"),
+            "BGM DE 1004 must be a document number: {wire}"
+        );
+        assert!(wire.contains("RFF+AGI:ORDERDOC0001"), "{wire}");
+        assert!(wire.contains("++TL'UNH"), "UNB DE 0026: {wire}");
+        assert!(
+            wire.split('\'')
+                .any(|segment| segment.starts_with("DTM+137:") && segment.ends_with(":303")),
+            "DTM+137 format 303: {wire}"
+        );
         // Both quarter-hour Wirkarbeit values, under one OBIS line item.
         assert!(wire.contains("QTY+220:0.250:KWH"), "{wire}");
         assert!(wire.contains("QTY+220:0.310:KWH"), "{wire}");
         assert_eq!(wire.matches("LIN+").count(), 1, "one OBIS register: {wire}");
 
         // The message re-parses cleanly.
-        let parsed = edi_energy::parse(wire.as_bytes());
-        assert!(parsed.is_ok(), "13027 must round-trip: {parsed:?}");
+        let parsed = edi_energy::parse(wire.as_bytes()).expect("13027 must round-trip");
+        assert_eq!(
+            edi_energy::EdiEnergyMessage::detect_pruefidentifikator(&parsed)
+                .expect("PID from RFF+Z13")
+                .as_u32(),
+            13027
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@ use serde::Deserialize;
 // ── JSON model ────────────────────────────────────────────────────────────────
 
 /// Deserialisation-only mirror of `PidSource` in the runtime crate.
-#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 enum PidSourceJson {
     /// Prüfidentifikator is in BGM element 1 (DE 1004). Default for all message types.
@@ -22,6 +22,8 @@ enum PidSourceJson {
     BgmDe1004,
     /// Prüfidentifikator is in the first top-level RFF segment with qualifier Z13.
     RffZ13,
+    /// Prefer RFF+Z13 and fall back to BGM DE 1004 for legacy messages.
+    RffZ13WithBgmFallback,
 }
 
 #[derive(Debug, Deserialize)]
@@ -52,6 +54,7 @@ struct MigProfile {
     ///
     /// `"bgm_de1004"` (default): extracted from BGM element 1 (DE 1004).
     /// `"rff_z13"`: extracted from the first top-level RFF segment with qualifier Z13.
+    /// `"rff_z13_with_bgm_fallback"`: RFF+Z13 first, then BGM DE 1004.
     #[serde(default)]
     pid_source: PidSourceJson,
     /// First date on which this profile is normatively valid (BDEW 'Gültig ab').
@@ -4645,8 +4648,13 @@ fn emit_profile_impl(out: &mut String, p: &ProfileData, struct_name: &str, _feat
         "        fn source_document(&self) -> Option<&'static str> {{ {source_document_expr} }}"
     )
     .unwrap();
-    if p.mig.pid_source == PidSourceJson::RffZ13 {
-        writeln!(out, "        fn pid_source(&self) -> crate::registry::PidSource {{ crate::registry::PidSource::RffZ13 }}").unwrap();
+    if p.mig.pid_source != PidSourceJson::BgmDe1004 {
+        let variant = match p.mig.pid_source {
+            PidSourceJson::BgmDe1004 => unreachable!(),
+            PidSourceJson::RffZ13 => "RffZ13",
+            PidSourceJson::RffZ13WithBgmFallback => "RffZ13WithBgmFallback",
+        };
+        writeln!(out, "        fn pid_source(&self) -> crate::registry::PidSource {{ crate::registry::PidSource::{variant} }}").unwrap();
     }
     writeln!(
         out,

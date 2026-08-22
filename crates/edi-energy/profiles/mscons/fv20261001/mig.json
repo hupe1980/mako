@@ -2,6 +2,7 @@
   "schema_version": 1,
   "message_type": "MSCONS",
   "release": "2.5",
+  "pid_source": "rff_z13_with_bgm_fallback",
   "valid_from": "2026-10-01",
   "ordering_hint": [
     "UNH",

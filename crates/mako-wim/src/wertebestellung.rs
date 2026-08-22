@@ -1191,6 +1191,7 @@ impl Workflow for WimWertebestellungWorkflow {
                         "receiver_mp_id": data.esa.as_str(),
                         "malo_id": data.lokations_id,
                         "message_ref": message_ref.as_str(),
+                        "order_reference": data.inbound_order_ref,
                         "reads": reads,
                     }),
                 );

@@ -23,6 +23,8 @@ pub(super) const fn mscons_document_code(pid: u64) -> &'static str {
         MSCONS_PID_ARBEIT_LEISTUNGSMAX => "Z27",
         // "Energiemenge und Leistungsmaximum"
         MSCONS_PID_ENERGIEMENGE_LEISTUNGSMAX => "Z28",
+        // "Werte nach Typ 2"
+        MSCONS_PID_WERTE_TYP2 => "Z83",
         // "Prozessdatenbericht"
         _ => "7",
     }
@@ -438,6 +440,10 @@ pub(super) fn render_mscons_typ2(
         .and_then(|v| v.as_array())
         .filter(|a| !a.is_empty())
         .ok_or_else(|| missing("reads"))?;
+    let order_reference = p
+        .get("order_reference")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| missing("order_reference"))?;
 
     let message_ref = p
         .get("message_ref")
@@ -459,10 +465,22 @@ pub(super) fn render_mscons_typ2(
         }
     };
 
+    let now = time::OffsetDateTime::now_utc();
+    let document_timestamp = format!(
+        "{:04}{:02}{:02}{:02}{:02}+00",
+        now.year(),
+        now.month() as u8,
+        now.day(),
+        now.hour(),
+        now.minute()
+    );
+
     let mut mp = builders::MsconsBuilder::new(release)
         .sender(sender)
         .receiver(receiver)
-        .message_ref(message_ref)
+        .message_ref(&message_ref)
+        .document_number(&message_ref)
+        .document_timestamp(document_timestamp)
         .document_code(mscons_document_code(MSCONS_PID_WERTE_TYP2))
         .pruefidentifikator(
             edi_energy::Pruefidentifikator::new(
@@ -470,6 +488,7 @@ pub(super) fn render_mscons_typ2(
             )
             .map_err(|e| RenderError::BuilderError(format!("invalid Prüfidentifikator: {e}")))?,
         )
+        .header_reference("AGI", order_reference)
         .metering_point(malo_id);
 
     // Group by OBIS into line items so one register's quarter-hour series lands
@@ -502,5 +521,11 @@ pub(super) fn render_mscons_typ2(
         mp = mp.quantity_for_period(qualifier(r), quantity, "KWH", from, to);
     }
 
-    finish_interchange(mp.done().serialize(), sender, receiver, msg)
+    finish_interchange_with_application_reference(
+        mp.done().serialize(),
+        sender,
+        receiver,
+        msg,
+        Some("TL"),
+    )
 }

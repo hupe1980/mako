@@ -34,6 +34,7 @@ pub struct InterchangeBuilder {
     dar: String,
     date: String,
     time: String,
+    application_reference: Option<String>,
     messages: Vec<Vec<u8>>,
 }
 
@@ -55,6 +56,7 @@ impl InterchangeBuilder {
             dar: dar.into(),
             date: "000000".to_owned(),
             time: "0000".to_owned(),
+            application_reference: None,
             messages: Vec::new(),
         }
     }
@@ -64,6 +66,14 @@ impl InterchangeBuilder {
     pub fn transmission(mut self, date: impl Into<String>, time: impl Into<String>) -> Self {
         self.date = date.into();
         self.time = time.into();
+        self
+    }
+
+    /// Set UNB DE 0026, the application reference identifying the business
+    /// process carried by this interchange (for example `TL` for MSCONS 13027).
+    #[must_use]
+    pub fn application_reference(mut self, reference: impl Into<String>) -> Self {
+        self.application_reference = Some(reference.into());
         self
     }
 
@@ -88,17 +98,21 @@ impl InterchangeBuilder {
         let payload_len: usize = self.messages.iter().map(Vec::len).sum();
         let mut w = edifact_rs::Writer::new(Vec::with_capacity(payload_len + 96))
             .with_charset(INTERCHANGE_CHARSET);
-        w.write_composites(
-            "UNB",
-            &[
-                &["UNOC", "3"],
-                &[&self.sender, unb_qualifier(&self.sender)],
-                &[&self.receiver, unb_qualifier(&self.receiver)],
-                &[&self.date, &self.time],
-                &[&self.dar],
-            ],
-        )
-        .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
+        let sender = [&*self.sender, unb_qualifier(&self.sender)];
+        let receiver = [&*self.receiver, unb_qualifier(&self.receiver)];
+        let transmission = [&*self.date, &*self.time];
+        let dar = [&*self.dar];
+        let syntax = ["UNOC", "3"];
+        let empty = [""];
+        let application_reference = self.application_reference.as_deref().map(|value| [value]);
+        let mut composites: Vec<&[&str]> = vec![&syntax, &sender, &receiver, &transmission, &dar];
+        if let Some(reference) = &application_reference {
+            // UNB S005 is omitted but must retain its position before DE 0026.
+            composites.push(&empty);
+            composites.push(reference);
+        }
+        w.write_composites("UNB", &composites)
+            .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
         let mut bytes = w
             .finish()
             .map_err(|e| Error::Serialize(format!("UNB envelope: {e}")))?;
@@ -185,5 +199,20 @@ mod tests {
             .unwrap();
         let text = String::from_utf8(wire).unwrap();
         assert!(text.ends_with("UNZ+0+R1'"), "{text}");
+    }
+
+    #[test]
+    fn application_reference_is_written_to_unb_de_0026() {
+        let wire = InterchangeBuilder::new("9900123456789", "9900987654321", "R1")
+            .transmission("260822", "1030")
+            .application_reference("TL")
+            .message(b"UNH+1+MSCONS:D:04B:UN:2.4c'UNT+2+1'".to_vec())
+            .build()
+            .unwrap();
+        let text = String::from_utf8(wire).unwrap();
+        assert!(
+            text.starts_with("UNB+UNOC:3+9900123456789:500+9900987654321:500+260822:1030+R1++TL'"),
+            "{text}"
+        );
     }
 }
