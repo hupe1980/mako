@@ -3,6 +3,7 @@
   "schema_version": 1,
   "message_type": "MSCONS",
   "release": "2.4c",
+  "pid_source": "rff_z13_with_bgm_fallback",
   "valid_from": "2024-04-01",
   "ordering_hint": [
     "UNH",

@@ -83,6 +83,18 @@ impl LightMessage {
                     .find(|s| s.tag == "RFF" && s.element_str(0).is_some_and(|q| q == "Z13"))
                     .and_then(|rff| rff.component_str(0, 1))
                     .and_then(|s| s.parse().ok()),
+                crate::registry::PidSource::RffZ13WithBgmFallback => segments
+                    .iter()
+                    .find(|s| s.tag == "RFF" && s.element_str(0).is_some_and(|q| q == "Z13"))
+                    .and_then(|rff| rff.component_str(0, 1))
+                    .and_then(|s| s.parse().ok())
+                    .or_else(|| {
+                        segments
+                            .iter()
+                            .find(|s| s.tag == "BGM")
+                            .and_then(|bgm| bgm.element_str(1))
+                            .and_then(|s| s.parse().ok())
+                    }),
                 crate::registry::PidSource::BgmDe1004 => segments
                     .iter()
                     .find(|s| s.tag == "BGM")

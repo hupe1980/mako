@@ -521,6 +521,27 @@ UNT+4+MSG002'";
     assert_eq!(pid.as_u32(), 21001);
 }
 
+#[cfg(feature = "mscons")]
+#[test]
+fn mscons_prefers_pruefidentifikator_from_rff_z13() {
+    let input = b"\
+UNH+MSG002+MSCONS:D:04B:UN:2.4c'\
+BGM+Z83+BELEG0001+9'\
+RFF+Z13:13027'\
+NAD+MS+9900111222333::293'\
+NAD+MR+9900444555666::293'\
+UNT+5+MSG002'";
+
+    let msg = Platform::with_all_profiles().parse(input).unwrap();
+    let AnyMessage::Mscons(m) = msg else {
+        panic!("expected MSCONS")
+    };
+    let pid = m
+        .detect_pruefidentifikator()
+        .expect("must detect Pruefidentifikator from RFF+Z13");
+    assert_eq!(pid.as_u32(), 13027);
+}
+
 #[cfg(feature = "aperak")]
 #[test]
 fn aperak_detect_pruefidentifikator_from_bgm() {

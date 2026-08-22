@@ -274,7 +274,7 @@ impl MessageCore {
                             edifact_rs::ValidationSeverity::Warning,
                             "AHB Layer 4 validation skipped: \
                              Pruefidentifikator could not be determined \
-                             from BGM segment"
+                             from the configured PID source"
                                 .to_owned(),
                         )
                         .with_rule_id("AHB-SKIP-NO-PID".to_owned()),

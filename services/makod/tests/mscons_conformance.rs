@@ -132,3 +132,34 @@ fn energiemenge_conforms() {
     let wire = assert_conforms(13019, arbeit_payload(13019, false));
     assert!(wire.contains("BGM+7"), "{wire}");
 }
+
+// ─── ESA Typ-2 delivery (13027) ─────────────────────────────────────────────────────────────────────
+
+#[test]
+fn werte_nach_typ2_conforms_and_routes_by_rff_z13() {
+    let wire = assert_conforms(
+        13027,
+        serde_json::json!({
+            "pid": 13027,
+            "sender_mp_id": "9900357000004",
+            "receiver_mp_id": "9900077000006",
+            "malo_id": "51238696781",
+            "message_ref": "MSG13027",
+            "order_reference": "ORDERDOC0001",
+            "reads": [
+                { "dtm_from": "202606010000+00", "dtm_to": "202606010015+00",
+                  "quantity_kwh": "0.250", "obis_code": "1-0:1.29.0" }
+            ],
+        }),
+    );
+
+    assert!(wire.contains("BGM+Z83+MSG13027+9"), "{wire}");
+    assert!(wire.contains("RFF+Z13:13027"), "{wire}");
+    assert!(wire.contains("RFF+AGI:ORDERDOC0001"), "{wire}");
+    assert!(wire.contains("++TL'UNH"), "{wire}");
+    assert!(
+        wire.split('\'')
+            .any(|segment| segment.starts_with("DTM+137:") && segment.ends_with(":303")),
+        "{wire}"
+    );
+}

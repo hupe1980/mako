@@ -30,10 +30,11 @@
     },
     "pid_source": {
       "type": "string",
-      "description": "Where the Prüfidentifikator is located in this message type. 'bgm_de1004' (default): BGM element 1 (DE 1004). 'rff_z13': top-level RFF segment with qualifier Z13.",
+      "description": "Where the Prüfidentifikator is located in this message type. 'bgm_de1004' (default): BGM element 1 (DE 1004). 'rff_z13': top-level RFF segment with qualifier Z13. 'rff_z13_with_bgm_fallback': prefer RFF+Z13 and accept BGM DE 1004 for legacy messages.",
       "enum": [
         "bgm_de1004",
-        "rff_z13"
+        "rff_z13",
+        "rff_z13_with_bgm_fallback"
       ],
       "default": "bgm_de1004"
     },

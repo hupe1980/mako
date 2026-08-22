@@ -287,7 +287,12 @@ fn mscons_builder_constructs_valid_message() {
         .expect("MsconsBuilder::build must succeed");
 
     let bgm = msg.bgm().expect("BGM must be set");
-    assert_eq!(bgm.document_id.as_deref(), Some("13003"));
+    assert_eq!(
+        bgm.document_id.as_deref(),
+        Some("1"),
+        "BGM DE 1004 defaults to the UNH document reference, not the PID"
+    );
+    assert_eq!(msg.detect_pruefidentifikator().unwrap().as_u32(), 13003);
     assert_eq!(
         msg.sender().unwrap().party_id.as_deref(),
         Some("9900111222333")
