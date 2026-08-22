@@ -274,6 +274,87 @@ CREATE INDEX vv_status ON versorgungsvertraege (tenant, status)
 CREATE UNIQUE INDEX vv_erp_unique ON versorgungsvertraege (tenant, erp_contract_id)
     WHERE erp_contract_id IS NOT NULL;
 
+-- ── Messstellenverträge (§ 9, § 10 MsbG) ──────────────────────────────────────
+--
+-- The contract a Messstellenbetreiber holds with the Anschlussnutzer or
+-- Anschlussnehmer for one Messlokation. It lives here for the same reason
+-- `aggregatorvertraege` does: it is Contract-context master data — parties,
+-- notice period, validity window — that another service reads over HTTP and
+-- keeps no copy of. `marktd` holds *market* data (Lokationen, Marktpartner,
+-- Zuordnungen); a contract with a customer is not that.
+--
+-- WiM Strom Teil 1 Kap. 2.1.3 makes the Kündigung MSB a **contract-layer**
+-- process between the two Messstellenbetreiber — the Netzbetreiber is not a
+-- party and the Kündigung is not constitutive for the Wechsel. Every
+-- Prüfschritt of `E_0200` is therefore a question about this row:
+--
+--   * `Z12` Ablehnung Vertragsbindung → the notice period, and the answer must
+--     name the next admissible date. Derived from `kuendigungsfrist_monate` by
+--     `domain::kuendigungsfrist`, not stored — one date to keep correct rather
+--     than two.
+--   * `Z34` Mehrfachkündigung and `Z29` kein Vertragsverhältnis mehr →
+--     `kuendigung_zum` / `beendet_am`, plus the Kap. 2.2.3 table for a contract
+--     already terminated.
+--   * `ZC9` keine Zuordnung möglich → no row at all.
+--
+-- `kunden_id` is optional: a gMSB serving a Messlokation under its statutory
+-- Grundzuständigkeit (§ 3 MsbG) has no contract with a named customer, and a
+-- required FK would force a phantom Kunde for every such Messlokation.
+CREATE TABLE messstellenvertraege (
+    id                      UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant                  TEXT        NOT NULL,
+    -- The Messlokation, as marktd names it. Not an FK: vertragd holds no
+    -- Lokationsregister, and a contract may be recorded before the MeLo is.
+    melo_id                 TEXT        NOT NULL,
+    -- The MSB holding the contract — this deployment when it acts as MSBA.
+    msb_mp_id               TEXT        NOT NULL,
+    kunden_id               UUID        REFERENCES kunden(id),
+    vertragsbeginn          DATE        NOT NULL,
+    kuendigungsfrist_monate INTEGER     NOT NULL DEFAULT 1
+                            CHECK (kuendigungsfrist_monate >= 0),
+    -- Set once a Kündigung has taken effect, by an MSBN in the customer's name
+    -- or by the customer directly. Kap. 2.2.3: „Ein bereits wirksam gekündigtes
+    -- Vertragsverhältnis kann nicht … durch eine schlichte Kündigung zu einem
+    -- späteren Zeitpunkt wieder verlängert werden."
+    kuendigung_zum          DATE,
+    kuendigung_eingang      DATE,
+    -- The earliest end the MSBA would still accept on an already terminated
+    -- contract — Kap. 2.2.3 „Fall 1". NULL = the Vertragsende cannot move.
+    frueher_moeglich        DATE,
+    -- Set when the contract has ended; `Z29` rather than `Z12`.
+    beendet_am              DATE,
+    created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT msv_dates_ordered CHECK (
+        (kuendigung_zum IS NULL OR kuendigung_zum >= vertragsbeginn)
+        AND (beendet_am IS NULL OR beendet_am >= vertragsbeginn)
+    ),
+    -- „Fall 1" is only meaningful against an existing Vertragsende and must be
+    -- earlier than it — otherwise it is not a *früheres* Vertragsende.
+    CONSTRAINT msv_frueher_is_earlier CHECK (
+        frueher_moeglich IS NULL
+        OR (kuendigung_zum IS NOT NULL AND frueher_moeglich < kuendigung_zum)
+    )
+);
+
+COMMENT ON TABLE messstellenvertraege IS
+    'The Messstellenbetriebsvertrag per Messlokation (§ 9, § 10 MsbG). Read by '
+    'processd over HTTP to answer a WiM Kündigung MSB out of E_0200.';
+
+-- One contract per MSB per Messlokation at any instant: two would let the
+-- Kündigung answer depend on row order.
+ALTER TABLE messstellenvertraege
+    ADD CONSTRAINT msv_no_overlap EXCLUDE USING gist (
+        tenant    WITH =,
+        melo_id   WITH =,
+        msb_mp_id WITH =,
+        daterange(vertragsbeginn, COALESCE(beendet_am, kuendigung_zum), '[)') WITH &&
+    );
+
+CREATE INDEX msv_lookup ON messstellenvertraege (tenant, melo_id, msb_mp_id);
+CREATE INDEX msv_kunde  ON messstellenvertraege (kunden_id) WHERE kunden_id IS NOT NULL;
+
 -- ── Vertragskomponenten (Supply positions per commodity) ──────────────────────
 
 CREATE TABLE vertragskomponenten (

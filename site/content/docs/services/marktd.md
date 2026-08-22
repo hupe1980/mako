@@ -639,7 +639,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 |---|---|
 | `malo` | Marktlokationen — JSONB payload, `bo4e_version`, GIN index |
 | `rollenzuordnungen` | Temporal NB/LF/MSB role assignments per MaLo |
-| `melo_msb_zuordnungen` | Per-MeLo **dated MSB timeline** — `(tenant, melo_id, msb_mp_id, valid_from, valid_to)`; point-in-time MSB resolution for WiM Teil 2 UC 4.1.1 (a MaLo can bundle MeLos with divergent MSB history) |
+| `melo_msb_zuordnungen` | Per-MeLo **dated MSB timeline** — `(tenant, melo_id, msb_mp_id, valid_from, valid_to)`; point-in-time MSB resolution for WiM Teil 2 UC 4.1.1 (a MaLo can bundle MeLos with divergent MSB history). Derived from **IFTSTA 21012** (`derive_msb_zuordnung`), never from the *vorläufige* Anmeldebestätigung 55043 |
 | `bilanzierungen` | **BO4E `Bilanzierung`** (BO #3) — first-class temporal balancing resource per MaLo: `bilanzierungsbeginn/ende` validity, typed `bilanzkreis`/`aggregationsverantwortung`/`prognosegrundlage`/`fallgruppenzuordnung`, full BO in `data JSONB`. Authoritative home for the `Bilanzierung`-model fields. Writing a currently-effective Bilanzierung **derives** `malo.fallgruppe`. Note: `malo.bilanzierungsmethode`/`bilanzierungsgebiet` are **`Marktlokation`** fields (BO #12), correctly on `malo` — not `Bilanzierung` |
 | `lokationszuordnungen` | Location graph edges — `(tenant, von_id, von_typ, nach_id, nach_typ, valid_from, valid_to)`; `von_typ`/`nach_typ` are the canonical BO4E `Lokationstyp` codes (`MALO`/`MELO`/`NELO`/`SR`/`TR`); recursive-CTE BFS traversal |
 | `melo` | Messlokationen — JSONB payload, `bo4e_version` |

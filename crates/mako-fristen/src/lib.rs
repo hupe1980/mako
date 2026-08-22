@@ -75,6 +75,7 @@
 #![allow(clippy::doc_markdown)] // German MaKo terms produce many false positives
 
 pub mod antwort;
+pub mod vorlauf;
 
 use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, Weekday};
 use time_tz::{OffsetDateTimeExt, OffsetResult, PrimitiveDateTimeExt, timezones};
@@ -647,6 +648,87 @@ pub fn add_werktage(from: Date, n: u32, cal: HolidayCalendar) -> Date {
         }
     }
     current
+}
+
+/// Subtract `n` Werktage from `from` — the mirror of [`add_werktage`].
+///
+/// This is the arithmetic behind a **Vorlauffrist**: „spätester ÜT ist der
+/// *n*. WT **vor** dem gewünschten Termin" (WiM Strom Teil 1 Kap. 2.3.2 Nr. 1,
+/// 2.4.2 Nr. 1, 3.3.1.2 Nr. 1). A Vorlauffrist is anchored on a date carried
+/// *in the message* rather than on the arrival instant, so it cannot be
+/// expressed by [`add_werktage`] with a negative count — the two run in
+/// opposite directions from different anchors and conflating them silently
+/// accepts an order that is weeks too late.
+///
+/// # Semantics of `n = 0`
+///
+/// Returns `from` unchanged, symmetric with [`add_werktage`].
+///
+/// # Example
+///
+/// ```rust
+/// use mako_fristen::{self as fristen, HolidayCalendar};
+/// use time::{Date, Month};
+///
+/// // Monday − 5 Werktage. Saturday and Sunday are not Werktage, and
+/// // 2025-01-06 (Heilige Drei Könige) is in the BdewMaKo calendar:
+/// let target = Date::from_calendar_date(2025, Month::January, 13).unwrap();
+/// let latest = fristen::sub_werktage(target, 5, HolidayCalendar::BdewMaKo);
+/// // Fri 10, Thu 09, Wed 08, Tue 07, (Mon 06 skipped), Fri 03 → 2025-01-03
+/// assert_eq!(latest, Date::from_calendar_date(2025, Month::January, 3).unwrap());
+/// ```
+///
+/// # Panics
+///
+/// Panics if date arithmetic underflows the calendar (unreachable for any
+/// realistic date within the Gregorian calendar range).
+#[must_use]
+pub fn sub_werktage(from: Date, n: u32, cal: HolidayCalendar) -> Date {
+    let mut current = from;
+    let mut remaining = n;
+    while remaining > 0 {
+        current = current.previous_day().expect("date underflow");
+        if is_werktag(current, cal) {
+            remaining -= 1;
+        }
+    }
+    current
+}
+
+/// How many Werktage separate `from` and `to`, counting neither endpoint —
+/// the inverse of [`add_werktage`].
+///
+/// `werktage_between(d, add_werktage(d, n, cal), cal) == n` for every `d` and
+/// `n`. Returns `0` when `to <= from`; the caller decides whether a target in
+/// the past is a violation, because for a Vorlauffrist it always is and for a
+/// Realisierungskorridor it need not be.
+///
+/// # Example
+///
+/// ```rust
+/// use mako_fristen::{self as fristen, HolidayCalendar};
+/// use time::{Date, Month};
+///
+/// let mon = Date::from_calendar_date(2025, Month::January, 6).unwrap();
+/// let next_mon = Date::from_calendar_date(2025, Month::January, 13).unwrap();
+/// assert_eq!(fristen::werktage_between(mon, next_mon, HolidayCalendar::BdewMaKo), 5);
+/// ```
+///
+/// # Panics
+///
+/// Panics if date arithmetic overflows the calendar (unreachable for any
+/// realistic date within the Gregorian calendar range).
+#[must_use]
+pub fn werktage_between(from: Date, to: Date, cal: HolidayCalendar) -> u32 {
+    let mut current = from;
+    let mut count = 0_u32;
+    while current < to {
+        current = current.next_day().expect("date overflow");
+        if is_werktag(current, cal) {
+            count += 1;
+        }
+    }
+    count
 }
 
 /// Return the first Werktag that is on or after `from`.

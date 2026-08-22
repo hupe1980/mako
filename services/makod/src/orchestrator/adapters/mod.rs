@@ -96,11 +96,12 @@ use mako_mabis::{
 };
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
-    StammdatenCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
-    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand, WimInvoicWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
-    WimTechnikAenderungWorkflow, esa_wertebestellung::EsaWertebestellungWorkflow,
-    insrpt::StorungsmeldungCommand, wertebestellung::WimWertebestellungWorkflow,
+    StammdatenCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand,
+    WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
+    WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
+    esa_wertebestellung::EsaWertebestellungWorkflow, insrpt::StorungsmeldungCommand,
+    wertebestellung::WimWertebestellungWorkflow,
 };
 use mako_wim_gas::{
     GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
@@ -198,6 +199,28 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
         .as_ref()
         .map(|r| r.errors().iter().map(|e| format!("{e}")).collect())
         .unwrap_or_default();
+    // The Gesamtvorgang leg is not informational: it is what makes a Zuordnung
+    // constitutive (WiM Teil 1 Kap. 2.1.1). 21009/21010 report the outcome and
+    // 21011/21012/21013 answer it, and the date rides `SG15 DTM+2380`.
+    let code = pid.as_u32();
+    if mako_wim::geraetewechsel::GESAMTVORGANG_PIDS.contains(&code) {
+        let zuordnungsbeginn = iftsta_zuordnungsbeginn(i);
+        return Ok(match code {
+            mako_wim::geraetewechsel::GESAMTVORGANG_ERFOLG_PID
+            | mako_wim::geraetewechsel::GESAMTVORGANG_SCHEITERN_PID => {
+                DeviceChangeCommand::ReceiveGesamtvorgang {
+                    pid,
+                    zuordnungsbeginn,
+                    message_ref: MessageRef::new(msg.message_ref()),
+                }
+            }
+            _ => DeviceChangeCommand::ReceiveZuordnungsantwort {
+                pid,
+                zuordnungsbeginn,
+            },
+        });
+    }
+
     Ok(DeviceChangeCommand::ReceiveIftsta {
         pid,
         sender: MarktpartnerCode::new(i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or("")),
@@ -210,6 +233,24 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
         validation_passed,
         validation_errors,
     })
+}
+
+/// `SG15 DTM+2380` — the day the MSBN actually takes over
+/// („Zeitpunkt, ab dem der MSBN tatsächlich den Messstellenbetrieb übernimmt",
+/// IFTSTA AHB 2.1 § 6.2 Bedingung [521]).
+///
+/// The AHB carries it as `CCYYMMDDHHMMZZZ` (DE 2379 = `303`), so only the first
+/// eight digits are the date. `DTM+137` is the document date and `DTM+293` the
+/// Fertigstellungszeitpunkt of a *failed* Gesamtvorgang — neither is a
+/// Zuordnungsbeginn, so the qualifier is matched exactly rather than taking the
+/// first `DTM` in the message.
+fn iftsta_zuordnungsbeginn(i: &edi_energy::messages::iftsta::IftstaMessage) -> Option<String> {
+    i.segments()
+        .iter()
+        .filter(|s| s.tag == "DTM")
+        .find(|s| s.component_str(0, 0) == Some("2380"))
+        .and_then(|s| s.component_str(0, 1))
+        .map(|raw| raw.chars().filter(char::is_ascii_digit).take(8).collect())
 }
 
 /// Extract a [`BillingCommand::ReceiveIftsta`] from an IFTSTA message routed
@@ -437,6 +478,7 @@ coverage_table! {
     wim_stammdaten_registry,
     wim_stammdaten_uebermittlung_registry,
     wim_technik_aenderung_registry,
+    wim_weiterverpflichtung_registry,
     wim_wertebestellung_registry,
 }
 

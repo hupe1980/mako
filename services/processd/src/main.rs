@@ -93,8 +93,11 @@ impl Daemon for Processd {
                 nb_einsd_url: cfg.nb.einsd_url.clone(),
                 nb_einsd_api_key: cfg.nb.einsd_api_key.clone().map(SecretString::from),
                 lf_auto_respond: cfg.lf.auto_respond,
-                lf_vertragd_url: cfg.lf.vertragd_url.clone(),
-                lf_vertragd_api_key: cfg.lf.vertragd_api_key.clone().map(SecretString::from),
+                vertragd_url: cfg.vertragd.as_ref().map(|v| v.url.clone()),
+                vertragd_api_key: cfg
+                    .vertragd
+                    .as_ref()
+                    .map(|v| SecretString::from(v.api_key.clone())),
                 msb_auto_accept: cfg.msb.auto_accept,
                 msb_auto_preisanfrage: cfg.msb.auto_preisanfrage,
                 eog_auto_activate: cfg.eog.auto_activate,

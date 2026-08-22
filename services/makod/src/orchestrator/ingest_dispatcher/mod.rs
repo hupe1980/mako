@@ -75,7 +75,7 @@ use mako_mabis::{MabisBillingWorkflow, MabisClearinglisteWorkflow};
 use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
-    WimTechnikAenderungWorkflow,
+    WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
 };
 use mako_wim_gas::{
     WimGasAnmeldungWorkflow, WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow,
@@ -274,6 +274,7 @@ impl EdifactIngestDispatcher {
         "wim-rechnungsabwicklung",
         "wim-stammdaten",
         "wim-technik-aenderung",
+        mako_wim::weiterverpflichtung::WORKFLOW_NAME,
         mako_wim::wertebestellung::WORKFLOW_NAME,
     ];
 

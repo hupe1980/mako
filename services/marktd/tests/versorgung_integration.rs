@@ -985,3 +985,167 @@ async fn pg_container() -> Option<(String, PgContainer)> {
     let url = format!("postgres://postgres:postgres@127.0.0.1:{port}/postgres");
     Some((url, container))
 }
+
+// ── WiM: the Zuordnung is constitutive, the Anmeldebestätigung is not ─────────
+
+/// The MSB timeline moves on IFTSTA **21012**, from the date the Gesamtvorgang
+/// reported — not on the Anmeldebestätigung 55043, which WiM Strom Teil 1
+/// Kap. 2.3.2 Nr. 2 calls *vorläufig*.
+///
+/// Deriving the assignment from 55043 would move the Messlokation up to nine
+/// Werktage early (the Realisierungskorridor), and would move it at all in the
+/// case where the Gesamtvorgang later fails — which Kap. 2.3.2 Nr. 7 answers by
+/// leaving the MSBA in place.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_msb_zuordnung_follows_the_gesamtvorgang_not_the_anmeldebestaetigung() {
+    use mako_markt::repository::MeloMsbRepository as _;
+    use marktd::handlers::event_ingest::derive_msb_zuordnung;
+    use marktd::pg::PgMeloMsbRepository;
+
+    let Some((pool, _pg)) = test_pool("wim_zuordnung").await else {
+        return;
+    };
+    let repo = PgMeloMsbRepository::new(pool.clone());
+    let melo = "DE0000000001234567890000000000001";
+    let msba = "9900000000001";
+    let msbn = "4012345000023";
+
+    sqlx::query("INSERT INTO melo (melo_id, data) VALUES ($1, $2)")
+        .bind(melo)
+        .bind(serde_json::json!({ "messlokationsId": melo }))
+        .execute(&pool)
+        .await
+        .expect("seed MeLo");
+
+    // The MSBA holds the Messlokation.
+    repo.assign_msb(TENANT, melo, msba, time::macros::date!(2024 - 01 - 01))
+        .await
+        .expect("initial assignment");
+
+    let mut tx = pool.begin().await.expect("begin");
+
+    // The vorläufige Anmeldebestätigung changes nothing.
+    derive_msb_zuordnung(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(55_043),
+        &serde_json::json!({
+            "melo_id":   melo,
+            "msb_mp_id": msbn,
+            "zuordnungsbeginn": "2026-06-01",
+        }),
+    )
+    .await
+    .expect("55043 is not a Zuordnung");
+
+    // …and neither does a 21012 that names no date: without one there is no
+    // day to assign from, and today would silently disagree with the market.
+    derive_msb_zuordnung(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(21_012),
+        &serde_json::json!({ "melo_id": melo, "msb_mp_id": msbn }),
+    )
+    .await
+    .expect("a dateless 21012 is recorded, not applied");
+
+    tx.commit().await.expect("commit");
+    assert_eq!(
+        repo.find_msb_at(TENANT, melo, time::macros::date!(2026 - 06 - 15))
+            .await
+            .expect("find")
+            .as_deref(),
+        Some(msba),
+        "only IFTSTA 21012 with a Zuordnungsbeginn moves the assignment"
+    );
+
+    // The Zuordnung itself.
+    let mut tx = pool.begin().await.expect("begin");
+    derive_msb_zuordnung(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(21_012),
+        &serde_json::json!({
+            "melo_id":          melo,
+            "msb_mp_id":        msbn,
+            "zuordnungsbeginn": "2026-06-10",
+        }),
+    )
+    .await
+    .expect("21012 assigns");
+    tx.commit().await.expect("commit");
+
+    // „Die Zuordnung des MSBA endet entsprechend zu diesem Zeitpunkt."
+    assert_eq!(
+        repo.find_msb_at(TENANT, melo, time::macros::date!(2026 - 06 - 09))
+            .await
+            .expect("find")
+            .as_deref(),
+        Some(msba),
+        "the day before the Zuordnungsbeginn still belongs to the MSBA"
+    );
+    assert_eq!(
+        repo.find_msb_at(TENANT, melo, time::macros::date!(2026 - 06 - 10))
+            .await
+            .expect("find")
+            .as_deref(),
+        Some(msbn),
+        "the MSBN holds the Messlokation from the reported date, 00:00 Uhr"
+    );
+
+    // At-least-once delivery: the same event twice is the same timeline.
+    let mut tx = pool.begin().await.expect("begin");
+    derive_msb_zuordnung(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(21_012),
+        &serde_json::json!({
+            "melo_id":          melo,
+            "msb_mp_id":        msbn,
+            "zuordnungsbeginn": "2026-06-10",
+        }),
+    )
+    .await
+    .expect("redelivery");
+    tx.commit().await.expect("commit");
+    let history = repo.history(TENANT, melo).await.expect("history");
+    assert_eq!(
+        history.len(),
+        2,
+        "redelivery must not add a row: {history:?}"
+    );
+}
+
+/// A Zuordnung for a Messlokation `marktd` does not know must not poison the
+/// ingest queue: `melo_msb_zuordnungen.melo_id` is a foreign key, so letting
+/// the insert fail would roll the whole transaction back — idempotency marker
+/// included — and `makod` would redeliver the same event forever.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_zuordnung_for_an_unknown_melo_is_skipped_not_retried_forever() {
+    use marktd::handlers::event_ingest::derive_msb_zuordnung;
+
+    let Some((pool, _pg)) = test_pool("wim_zuordnung_unknown_melo").await else {
+        return;
+    };
+    let mut tx = pool.begin().await.expect("begin");
+    derive_msb_zuordnung(
+        &mut tx,
+        TENANT,
+        mako_events::mako::PROCESS_COMPLETED,
+        Some(21_012),
+        &serde_json::json!({
+            "melo_id":          "DE0000000009999999990000000000009",
+            "msb_mp_id":        "4012345000023",
+            "zuordnungsbeginn": "2026-06-10",
+        }),
+    )
+    .await
+    .expect("an unknown MeLo is logged, not an error");
+    tx.commit().await.expect("the transaction is still usable");
+}

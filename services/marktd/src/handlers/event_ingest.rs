@@ -198,6 +198,26 @@ where
     // the data payload.  All actions are idempotent under at-least-once delivery.
     // Every failure rolls the whole transaction back — including the idempotency
     // marker — so makod redelivers instead of leaving the projection behind.
+    // The WiM MSB Zuordnung is keyed on the MeLo, so it runs beside the MaLo
+    // supply-state derivation rather than inside it — on the same transaction,
+    // so it commits with the idempotency marker or not at all.
+    if let Err(e) = derive_msb_zuordnung(
+        &mut tx,
+        &state.tenant_gln,
+        &ce_type_for_vs,
+        pid_for_vs,
+        &data_for_vs,
+    )
+    .await
+    {
+        error!(
+            event_id = %event_id_for_vs,
+            error = %e,
+            "event_ingest: MSB-Zuordnung derivation failed — rolling back"
+        );
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    }
+
     let derived = match derive_supply_state(
         &mut tx,
         &state.tenant_gln,
@@ -343,6 +363,92 @@ where
 /// 55001 (Anwendungsübersicht 4.0 lfd. Nr. 20080, LFN → NB) and drives the
 /// identical projection — an EEG-/KWKG-MaLo's supplier change is a supplier
 /// change.
+/// IFTSTA 21012 — the NB's „Statusmeldung (erfolgreich)".
+///
+/// The one message that makes a WiM MSB-Wechsel constitutive. WiM Strom Teil 1
+/// Kap. 2.1.1: „Der NB ordnet den MSBN/gMSB der Messlokation … zu dem Tag des
+/// vom MSBN/gMSB mitgeteilten Termins des erfolgreichen Abschlusses des
+/// Gesamtvorgangs … mit dem Zeitpunkt 00:00 Uhr zu. Die Zuordnung des MSBA
+/// endet entsprechend zu diesem Zeitpunkt."
+///
+/// The Anmeldebestätigung 55043 is explicitly *vorläufig*, so deriving the
+/// assignment from it would move the Messlokation up to nine Werktage early —
+/// and would move it at all in the case where the Gesamtvorgang later fails,
+/// which the Festlegung answers by leaving the MSBA in place.
+const ZUORDNUNG_ERFOLG_PID: u32 = 21_012;
+
+/// Apply a completed WiM Zuordnung to the per-Messlokation MSB timeline.
+///
+/// Keyed on the **MeLo**: the Messstellenbetrieb is assigned per Messlokation,
+/// while [`derive_supply_state`] works on the MaLo and returns early without
+/// one. `valid_from` is the Zuordnungsbeginn the MSBN reported and the NB
+/// confirmed — not the date the message arrived, and not the vorläufig
+/// bestätigter Zuordnungsbeginn the Anmeldung asked for.
+///
+/// # Errors
+///
+/// Propagates any SQL failure so the whole ingest transaction rolls back and
+/// `makod` redelivers.
+pub async fn derive_msb_zuordnung(
+    conn: &mut sqlx::PgConnection,
+    tenant_gln: &str,
+    ce_type: &str,
+    pid: Option<u32>,
+    data: &serde_json::Value,
+) -> Result<(), mako_markt::error::MdmError> {
+    if ce_type != mako_events::mako::PROCESS_COMPLETED || pid != Some(ZUORDNUNG_ERFOLG_PID) {
+        return Ok(());
+    }
+    let (Some(melo_id), Some(msb_mp_id)) = (
+        data.get("melo_id").and_then(|v| v.as_str()),
+        data.get("msb_mp_id")
+            .or_else(|| data.get("new_msb"))
+            .and_then(|v| v.as_str()),
+    ) else {
+        warn!(
+            "event_ingest: IFTSTA {ZUORDNUNG_ERFOLG_PID} without melo_id/msb_mp_id — \
+             no Zuordnung applied"
+        );
+        return Ok(());
+    };
+    let Some(valid_from) = data
+        .get("zuordnungsbeginn")
+        .and_then(|v| v.as_str())
+        .and_then(parse_civil_date)
+    else {
+        // Without the date there is no day to assign from, and picking today
+        // would silently disagree with the market by up to nine Werktage.
+        warn!(
+            %melo_id,
+            "event_ingest: IFTSTA {ZUORDNUNG_ERFOLG_PID} without zuordnungsbeginn — \
+             no Zuordnung applied"
+        );
+        return Ok(());
+    };
+    // `melo_msb_zuordnungen.melo_id` is a foreign key. An unknown Messlokation
+    // would abort the whole ingest transaction, and `makod` would redeliver the
+    // same event forever — so the missing master data is logged and the event
+    // is acked instead of poisoning the queue.
+    let melo_known: bool =
+        sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM melo WHERE melo_id = $1)")
+            .bind(melo_id)
+            .fetch_one(&mut *conn)
+            .await
+            .map_err(|e| mako_markt::error::MdmError::Internal(e.to_string()))?;
+    if !melo_known {
+        warn!(
+            %melo_id, %msb_mp_id,
+            "event_ingest: IFTSTA {ZUORDNUNG_ERFOLG_PID} for an unknown Messlokation — \
+             no Zuordnung applied; import the MeLo and replay"
+        );
+        return Ok(());
+    }
+
+    debug!(%melo_id, %msb_mp_id, %valid_from, "event_ingest: applying WiM MSB-Zuordnung");
+    crate::pg::PgMeloMsbRepository::assign_msb_tx(conn, tenant_gln, melo_id, msb_mp_id, valid_from)
+        .await
+}
+
 const ANMELDUNG_PIDS: &[u32] = &[55_001, 55_077, 44_001];
 
 /// Outbound answers that confirm an Anmeldung — 55002 for 55001, **55078** for

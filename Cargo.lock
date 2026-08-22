@@ -6913,6 +6913,7 @@ dependencies = [
  "edi-energy",
  "mako-engine",
  "mako-fristen",
+ "mako-pruefung",
  "rubo4e",
  "serde",
  "serde_json",

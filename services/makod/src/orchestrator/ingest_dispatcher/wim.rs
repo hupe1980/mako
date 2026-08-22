@@ -211,10 +211,15 @@ impl EdifactIngestDispatcher {
                 23001 => {
                     let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
-                    // INSRPT Frist: 5 Werktage (BK6-24-174 WiM Strom).
+                    // WiM Strom Teil 2 Kap. 1.2 Nr. 2 states two windows for
+                    // this PID — 3 Werktage for a kME ohne RLM or an mME, 1 for
+                    // a kME mit RLM or an iMS — and the Störungsmeldung does
+                    // not say which applies. Until the MSB's device registry is
+                    // consulted at ingest, the shorter one is registered: an
+                    // early alert is visible, a late one is not.
                     let due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
-                        5,
+                        mako_fristen::antwort::STOERUNGSMELDUNG_IMS_WERKTAGE,
                         HolidayCalendar::BdewMaKo,
                     );
                     self.spawn_or_resume_guarded::<WimInsrptWorkflow>(
@@ -408,19 +413,26 @@ impl EdifactIngestDispatcher {
                 if mako_wim::preisanfrage::REQOTE_PIDS.contains(&pid) {
                     let cmd = adapters::wim_preisanfrage_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Preisanfrage deadline (BK6-24-174), from the same
-                    // constant processd sizes its operator queue by.
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        mako_wim::PREISANFRAGE_ANTWORT_FRIST_WT,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    // Per-PID, from the same table processd sizes its operator
+                    // queue by: 35001 → 4 WT, 35002 → 5 WT, 35005 → 10 WT.
+                    // 35004 is GPKE Teil 3 and states no WiM window, so it
+                    // carries no process deadline rather than a guessed one.
+                    let deadlines = mako_wim::preisanfrage::antwort_frist_werktage(pid).map(|wt| {
+                        (
+                            mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL,
+                            fristen::deadline_at_werktage(
+                                OffsetDateTime::now_utc(),
+                                wt,
+                                HolidayCalendar::BdewMaKo,
+                            ),
+                        )
+                    });
                     self.spawn_or_resume::<WimPreisanfrageWorkflow>(
                         malo_id.as_str(),
                         "wim-preisanfrage",
                         cmd,
                         &fv,
-                        &[(mako_wim::preisanfrage::PREISANFRAGE_DEADLINE_LABEL, due_at)],
+                        deadlines.as_slice(),
                     )
                     .await
                 } else if mako_wim::preisanfrage::QUOTES_PIDS.contains(&pid) {
@@ -530,6 +542,52 @@ impl EdifactIngestDispatcher {
                     })
                 }
             }
+            // ── WiM Weiterverpflichtung (ORDERS 17002 → ORDRSP 19003/19004) ──
+            //
+            // NB → MSBA: keep operating a Messlokation whose Abmeldung has no
+            // successor yet (WiM Teil 1 Kap. 2.4.2 Nr. 5). The MSBA answers
+            // within **one** Werktag out of `E_0203`.
+            mako_wim::weiterverpflichtung::WORKFLOW_NAME => match pid {
+                mako_wim::weiterverpflichtung::AUFTRAG_PID => {
+                    let cmd = adapters::wim_weiterverpflichtung_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_orders(msg);
+                    // One Werktag, from the same table `processd` sizes its
+                    // operator queue by and `obsd` raises the breach against.
+                    let process_due_at =
+                        mako_fristen::antwort::antwort_deadline(pid, OffsetDateTime::now_utc())
+                            .unwrap_or_else(|| {
+                                fristen::deadline_at_werktage(
+                                    OffsetDateTime::now_utc(),
+                                    1,
+                                    HolidayCalendar::BdewMaKo,
+                                )
+                            });
+                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    self.spawn_or_resume_guarded::<WimWeiterverpflichtungWorkflow>(
+                        &melo_id,
+                        mako_wim::weiterverpflichtung::WORKFLOW_NAME,
+                        cmd,
+                        &fv,
+                        &[
+                            (
+                                mako_wim::WEITERVERPFLICHTUNG_ANTWORT_WINDOW_LABEL,
+                                process_due_at,
+                            ),
+                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
+                        ],
+                        mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
+                    )
+                    .await
+                }
+                // 19003/19004 are *our* answer, rendered from the outbox. An
+                // inbound one would be a counterparty answering an order we
+                // never sent in this role, so it is skipped rather than
+                // resuming a process it does not belong to.
+                _ => Ok(IngestOutcome::Skipped {
+                    workflow_name: mako_wim::weiterverpflichtung::WORKFLOW_NAME,
+                    reason: "pid_not_in_dispatch_table",
+                }),
+            },
             wf_name => unknown_workflow_skip(wf_name, pid),
         }
     }

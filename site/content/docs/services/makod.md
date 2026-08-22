@@ -1580,7 +1580,7 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44004 | Gas supplier registers supply end (Abmeldung NN) |
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
-| `wim.geraetewechsel.bestaetigen` | `MSB` | WiM | 55039/55042/55051/55168 | MSB confirms physical device swap |
+| `wim.geraetewechsel.bestaetigen` | `NB` or `MSB` | WiM | 55040/55043/55052/55169 | Business **Bestätigung** — UTILMD with `SG4 STS+E01` from the process's EBD |
 | `wim.rechnungsabwicklung.beenden` | `LF` or `MSB` | WiM | 17006 | End the Rechnungsabwicklung MSB über LF (either side may) |
 | `wim.rechnungsabwicklung.zustimmen` | `LF` or `MSB` | WiM | 19009 | Confirm a received Beendigung (ORDRSP) |
 | `wim.rechnungsabwicklung.ablehnen` | `LF` or `MSB` | WiM | 19010 | Reject a received Beendigung (ORDRSP) |
@@ -1629,7 +1629,11 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `geli.eog.ablehnen` | `LFG` | GeLi Gas | 44015 | E/G rejects the EoG Zuordnung |
 | `geli.gas.stornierung.initiieren` | `LFG` | GeLi Gas | 44022 | LF cancels a running Gas Zuordnungsprozess |
 | `geli.gas.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Gas Netzzustandsdaten (ORDERS) |
-| `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55039 | Reject a Gerätewechsel announcement |
+| `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55041/55044/55053/55170 | Business **Ablehnung** — requires an `antwortcode` from the process's EBD |
+| `wim.geraetewechsel.aperak` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Technical APERAK (45 min, APERAK AHB 1.0 §2.4.1) — **not** the business answer |
+| `wim.gesamtvorgang.melden` | `MSB` or `nMSB` | WiM | 21010/21009 | MSBN reports the Gesamtvorgang outcome; the date it names becomes the Zuordnungsbeginn |
+| `wim.zuordnung.bestaetigen` | `NB` | WiM | 21012 | NB makes the Zuordnung from the reported date, 00:00 Uhr |
+| `wim.zuordnung.ablehnen` | `NB` | WiM | 21011 | NB records the MSB-Scheitermeldung; the MSBA stays assigned |
 | `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001 | MSB answers a Preisanfrage with a QUOTES Angebot |
 | `wim.rechnung.annehmen` | `LF` | WiM | 31009 | LF accepts the MSB invoice (REMADV) |
 | `wim.rechnung.ablehnen` | `LF` | WiM | 31009 | LF disputes the MSB invoice (REMADV with `E_0406` codes) |
@@ -1674,6 +1678,11 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 | `geli.lieferbeginn.anmelden` | `malo_id` (gas MaLo), `lieferbeginn_datum` |
 | `geli.lieferende.anmelden` | `malo_id` (gas MaLo), `lieferende_datum` |
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid` (default 55042) |
+| `wim.geraetewechsel.bestaetigen` | `melo_id`², optional `antwortcode` (defaults to the tree's unconditional Zustimmung), optional `bemerkung`, `abweichender_termin` (required with `Z01`) |
+| `wim.geraetewechsel.ablehnen` | `melo_id`², **`antwortcode`** (from `E_0200`/`E_0201`/`E_0202`/`E_0240`), optional `bemerkung`, `abweichender_termin` (required with `Z12`) |
+| `wim.geraetewechsel.aperak` | `melo_id`², optional `positiv` (default `true`), optional `reason` |
+| `wim.gesamtvorgang.melden` | `melo_id`², optional `erfolgreich` (default `true`), **`zuordnungsbeginn`** (YYYYMMDD, required on success) |
+| `wim.zuordnung.bestaetigen` / `.ablehnen` | `melo_id`² |
 | `wim.gas.anmeldung.bestaetigen` | `malo_id` (gas MaLo) |
 | `wim.gas.anmeldung.ablehnen` | `malo_id` (gas MaLo), `reason` (ERC code + text) |
 | `wim.gas.kuendigung.bestaetigen` | `malo_id` (gas MaLo) |

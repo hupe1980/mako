@@ -2,7 +2,7 @@
 
 **The decisions a German energy market participant owes on an inbound message.**
 
-Every GPKE and GeLi Gas message that expects an answer has published rules for
+Every GPKE, GeLi Gas and WiM message that expects an answer has published rules for
 what that answer must be. BDEW prints them as *Entscheidungsbaum-Diagramme und
 Codelisten für die Antwortnachrichten* (4.3, 01.04.2026): each set of rules
 names a **prüfende Rolle**, walks numbered **Prüfschritte**, and lands on a code
@@ -16,6 +16,13 @@ from its own Codeliste. This crate is those rules, executable.
 |---|---|---|
 | `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage (`E_0608`) |
 | `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`) |
+| `msb` | Messstellenbetreiber **und** Netzbetreiber | Anmeldung MSB (`E_0201`), Ende MSB (`E_0202`), Kündigung MSB (`E_0200`), Weiterverpflichtung (`E_0203`) |
+
+The `msb` module is named for the process family, not one Marktrolle: WiM Teil 1
+has the NB answer the Anmeldung and the Abmeldung, while the abgebender MSB
+answers the Kündigung and the Weiterverpflichtung. The Kündigung never reaches
+the NB at all, so its Prüfschritte ask about the MSBA's own
+Messstellenbetriebsvertrag rather than about any grid registry.
 
 The document defines around sixty trees with the LF as prüfende Rolle. The ones
 here are the **process** answers — the messages that move a Marktlokation
@@ -27,8 +34,9 @@ Each role module is split **by process**, with the Strom tree and its Gas
 counterpart together — they are the same business decision expressed in two
 documents.
 
-The `role-nb` and `role-lf` Cargo features compile only their own rules, so a
-role-gated binary carries only the decisions it is licensed to make (§ 7 EnWG).
+The `role-nb`, `role-lf` and `role-msb` Cargo features compile only their own
+rules, so a role-gated binary carries only the decisions it is licensed to make
+(§ 7 EnWG).
 
 ## A code has no meaning without its tree
 
@@ -37,8 +45,11 @@ role-gated binary carries only the decisions it is licensed to make (§ 7 EnWG).
 - „Vorlauffrist nicht eingehalten" in `E_0607`,
 - „Marktlokation nimmt nicht an der Marktkommunikation teil" in `E_0622`,
 - „Lieferende zum Abmeldedatum wurde bereits bestätigt" in `E_0609`,
+- „Änderung kann durchgeführt werden" — a *Zustimmung* — in `E_0249`,
 
-and a combined NB+LF deployment runs all three. `codes::lookup(ebd, code)`
+and a combined NB+LF+MSB deployment runs all four. The WiM MSB-Wechsel trees
+share no code with the GPKE ones at all: a rejection there is `ZC9`, `Z29`,
+`Z34`, `E11`, `E17` or `Z09`. `codes::lookup(ebd, code)`
 resolves a code **within** its tree, and the code's published `Cluster` is what
 selects the answer PID. A caller never passes an `accepted: bool` alongside a
 code, because the two can disagree.

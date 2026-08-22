@@ -18,12 +18,21 @@
 //! Each Frist is counted from the **ÜT** of the preceding step — the day of the
 //! positive AS4-Zustellquittung, not the day the message was parsed.
 //!
-//! # Adjacent processes sharing this workflow
+//! # Adjacent process sharing this workflow
 //!
 //! | Trigger | Answered by |
 //! |---|---|
-//! | ORDERS 17002 Weiterverpflichtung MSBA bei Ende Messstellenbetrieb | ORDRSP 19003 Fortführungsbestätigung / 19004 Ablehnung Fortführung |
-//! | ORDERS 17009 Ankündigung Gerätewechselabsicht | ORDRSP 19015 Bestätigung / 19016 Ablehnung Gerätewechselabsicht |
+//! | ORDERS 17009 Anzeige Gerätewechselabsicht (Kap. 3.1.2 Nr. 1) | ORDRSP 19015 / 19016 (`E_0204`) |
+//!
+//! The Gerätewechsel and the Geräteübernahme are separate Use-Cases that the
+//! MSBN may run in parallel or in either order (Kap. 2.3.2 Nr. 5/6), but they
+//! concern the same devices at the same Messlokation, so one process stream
+//! keyed on the MeLo holds both.
+//!
+//! **ORDERS 17002 is not one of them.** „Weiterverpflichtung" is NB → MSBA and
+//! orders the recipient to keep operating the metering point — a different
+//! direction, a different Frist and a different Entscheidungsbaum. It lives in
+//! [`crate::weiterverpflichtung`].
 //!
 //! # Regulatory basis
 //!
@@ -49,28 +58,36 @@ pub const WORKFLOW_NAME: &str = "wim-geraeteubernahme";
 
 /// Inbound ORDERS PIDs routed to this workflow (WiM Strom Teil 1).
 ///
-/// | PID | AHB name |
-/// |---|---|
-/// | 17001 | Bestellung Geräteübernahmeangebot |
-/// | 17002 | Weiterverpflichtung MSBA bei Ende Messstellenbetrieb |
-/// | 17009 | Ankündigung Gerätewechselabsicht |
+/// | PID | AHB name | Fundstelle |
+/// |---|---|---|
+/// | 17001 | Bestellung Geräteübernahmeangebot | Kap. 3.2.2 Nr. 3 |
+/// | 17009 | Anzeige Gerätewechselabsicht | Kap. 3.1.2 Nr. 1 |
 ///
-/// 17005 ("Bestellung Angebot Rechnungsabwicklung Messstellenbetrieb") and 17011
-/// ("Beauftragung zur Änderung der Technik") are different processes and are not
-/// routed here.
-pub const GERAETEUBERNAHME_PIDS: &[u32] = &[17001, 17002, 17009];
+/// Three neighbouring ORDERS PIDs are deliberately absent:
+///
+/// - **17002** „Weiterverpflichtung" is NB → MSBA and belongs to
+///   [`crate::weiterverpflichtung`]. It sat here as a second „Anfrage", which
+///   made a Weiterverpflichtung spawn a Geräteübernahme process.
+/// - **17005** „Bestellung Rechnungsabwicklung MSB über LF" is LF ↔ MSB
+///   ([`crate::rechnungsabwicklung`]).
+/// - **17011** „Beauftragung zur Änderung der Technik" is NB/LF → MSB
+///   ([`crate::technik_aenderung`]).
+///
+/// The **Anforderung** eines Geräteübernahmeangebots (Kap. 3.2.2 Nr. 1) is not
+/// an ORDERS at all — it is REQOTE 35001, answered by QUOTES 15001, and
+/// `wim-preisanfrage` owns that leg.
+pub const GERAETEUBERNAHME_PIDS: &[u32] = &[17001, 17009];
 
-/// Anfrage PIDs — trigger a new `WimGeraeteubernahmeWorkflow` process.
+/// ORDERS 17001 — „Bestellung Geräteübernahmeangebot" (Kap. 3.2.2 Nr. 3).
 ///
-/// Per BDEW PID 3.3/4.0 xlsx: 17001/17002 are multi-domain (WiM Strom Teil 1 and
-/// WiM Gas). Registering them here covers WiM Strom NB deployments.
-/// WiM Gas Geräteübernahme routing is a future TODO in `mako-wim-gas`.
-pub const ANFRAGE_PIDS: &[u32] = &[17001, 17002];
+/// The Bestellung against a standing Angebot, and the only ORDERS that opens a
+/// Geräteübernahme. Answered by ORDRSP 19001/19002 within 2 Werktagen (`E_0247`).
+pub const ANFRAGE_PIDS: &[u32] = &[17001];
 
 /// ORDERS 17001 — "Bestellung Geräteübernahmeangebot" (WiM Teil 1 Kap. 3.2.2 Nr. 3).
 pub const BESTELLUNG_PIDS: &[u32] = &[17001];
 
-/// ORDERS 17009 — "Ankündigung Gerätewechselabsicht".
+/// ORDERS 17009 — „Anzeige Gerätewechselabsicht" (Kap. 3.1.2 Nr. 1).
 pub const ANKUENDIGUNG_PIDS: &[u32] = &[17009];
 
 /// QUOTES 15001 — "Angebot Geräteübernahme" (Kap. 3.2.2 Nr. 2).
@@ -82,12 +99,15 @@ pub const BESTAETIGUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(1
 /// ORDRSP 19002 — "Ablehnung der Bestellung" (Kap. 3.2.2 Nr. 4, negative).
 pub const ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(19002);
 
-/// ORDRSP 19003 / 19004 — Fortführungsbestätigung / Ablehnung Fortführung,
-/// answering ORDERS 17002 (Weiterverpflichtung).
-pub const FORTFUEHRUNG_PIDS: (u32, u32) = (19003, 19004);
-
-/// ORDRSP 19015 / 19016 — Bestätigung / Ablehnung Gerätewechselabsicht,
-/// answering ORDERS 17009.
+/// ORDRSP 19015 / 19016 — the MSBA's answer to a Gerätewechselabsicht,
+/// answering ORDERS 17009 out of `E_0204`.
+///
+/// **Neither is a refusal of the Gerätewechsel.** The AHB names 19016
+/// „Ablehnung", but the codes say what the pair decides: `ZB4` „Eigenausbau
+/// wird erfolgen" (the MSBA removes its own devices) against `ZB5` „Kein
+/// Eigenausbau des MSBA" (the MSBN does). Treating 19016 as a rejection aborts
+/// a Gerätewechsel the counterparty has just agreed to carry out. The genuine
+/// refusals are `E17` and `Z07`, both Kann.
 pub const GERAETEWECHSELABSICHT_PIDS: (u32, u32) = (19015, 19016);
 
 /// Werktage for the Geräteübernahmeangebot (Kap. 3.2.2 Nr. 2).

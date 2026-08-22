@@ -30,20 +30,25 @@ fn map_row(row: &PgRow) -> Result<MeloMsbZuordnung, sqlx::Error> {
     })
 }
 
-impl MeloMsbRepository for PgMeloMsbRepository {
-    async fn assign_msb(
-        &self,
+impl PgMeloMsbRepository {
+    /// [`MeloMsbRepository::assign_msb`] on a caller-supplied connection.
+    ///
+    /// The WiM Zuordnung is derived inside `event_ingest`'s transaction,
+    /// alongside the idempotency marker and the durable outbox rows: a
+    /// Zuordnung that committed while the marker rolled back would be applied
+    /// twice on redelivery, and one that rolled back while the marker
+    /// committed would never be applied at all.
+    ///
+    /// # Errors
+    ///
+    /// [`MdmError::Internal`] on any SQL failure.
+    pub async fn assign_msb_tx(
+        conn: &mut sqlx::PgConnection,
         tenant: &str,
         melo_id: &str,
         msb_mp_id: &str,
         valid_from: Date,
     ) -> Result<(), MdmError> {
-        let mut tx = self
-            .pool
-            .begin()
-            .await
-            .map_err(|e| MdmError::Internal(e.to_string()))?;
-
         // Close the currently-open assignment at the new start date. Guarded on
         // `valid_from < $new` so a same-day overwrite (handled by the upsert
         // below) does not create a zero-length closed row.
@@ -56,7 +61,7 @@ impl MeloMsbRepository for PgMeloMsbRepository {
         .bind(tenant)
         .bind(melo_id)
         .bind(valid_from)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
@@ -70,11 +75,10 @@ impl MeloMsbRepository for PgMeloMsbRepository {
         .bind(tenant)
         .bind(melo_id)
         .bind(valid_from)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
-        // Insert (or overwrite) the assignment effective `valid_from`.
         sqlx::query(
             r"INSERT INTO melo_msb_zuordnungen (tenant, melo_id, msb_mp_id, valid_from, valid_to)
               VALUES ($1, $2, $3, $4, $5)
@@ -88,10 +92,28 @@ impl MeloMsbRepository for PgMeloMsbRepository {
         .bind(msb_mp_id)
         .bind(valid_from)
         .bind(next_start)
-        .execute(&mut *tx)
+        .execute(&mut *conn)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?;
 
+        Ok(())
+    }
+}
+
+impl MeloMsbRepository for PgMeloMsbRepository {
+    async fn assign_msb(
+        &self,
+        tenant: &str,
+        melo_id: &str,
+        msb_mp_id: &str,
+        valid_from: Date,
+    ) -> Result<(), MdmError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| MdmError::Internal(e.to_string()))?;
+        Self::assign_msb_tx(&mut tx, tenant, melo_id, msb_mp_id, valid_from).await?;
         tx.commit()
             .await
             .map_err(|e| MdmError::Internal(e.to_string()))?;

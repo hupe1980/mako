@@ -152,6 +152,12 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
             "/api/v1/aggregatorvertraege/{sr_id}",
             put(stammdaten::put_aggregatorvertrag),
         )
+        // § 9, § 10 MsbG Messstellenverträge — read by processd to answer a
+        // WiM Kündigung MSB out of `E_0200`.
+        .route(
+            "/api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}",
+            get(stammdaten::get_messstellenvertrag).put(stammdaten::put_messstellenvertrag),
+        )
         .route("/api/v1/outbound/dead", get(stammdaten::list_dead_tasks))
         .route(
             "/api/v1/outbound/dead/{id}/retry",

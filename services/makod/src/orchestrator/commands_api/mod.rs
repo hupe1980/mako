@@ -600,6 +600,71 @@ where
     Ok(DispatchOutcome::Dispatched { process_id })
 }
 
+/// [`dispatch_to_process`] where the command depends on the process's own
+/// state.
+///
+/// Needed when a default can only be resolved from what the process is
+/// answering: the WiM MSB-Wechsel Antwortcode comes from the inbound PID's
+/// Entscheidungsbaum, and the caller of the REST command knows the MeLo but not
+/// which of the four processes is running on it.
+async fn dispatch_to_process_with_state<W, F>(
+    state: &CommandsApiState,
+    business_key: &str,
+    workflow_name: &'static str,
+    make_command: F,
+) -> Result<DispatchOutcome, DispatchError>
+where
+    W: mako_engine::workflow::Workflow,
+    W::Command: mako_engine::workflow::CommandPayload + Clone,
+    W::State: Default + serde::Serialize,
+    F: FnOnce(&W::State) -> Result<W::Command, DispatchError>,
+{
+    let registry = state.store.as_process_registry();
+    let identities = registry
+        .lookup_correlated(state.tenant_id, business_key)
+        .await
+        .map_err(|e| {
+            DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string()))
+        })?;
+    let matching: Vec<_> = identities
+        .into_iter()
+        .filter(|id| id.workflow_id.name.as_ref() == workflow_name)
+        .collect();
+    let identity = match matching.len() {
+        0 => {
+            return Err(DispatchError::ProcessNotFound {
+                business_key: business_key.to_owned(),
+                workflow_name,
+            });
+        }
+        1 => matching.into_iter().next().expect("len == 1"),
+        n => {
+            return Err(DispatchError::AmbiguousProcess {
+                business_key: business_key.to_owned(),
+                count: n,
+            });
+        }
+    };
+    let process_id = identity.process_id;
+    let process = mako_engine::process::Process::<
+        W,
+        Arc<mako_engine::store_slatedb::SlateDbStore>,
+    >::from_identity(Arc::clone(&state.store), identity);
+
+    let current = process.state().await?;
+    let domain_cmd = make_command(&current)?;
+    process
+        .execute_and_enqueue_with_snapshot_and_retry(
+            domain_cmd,
+            3,
+            &state.snapshot_store,
+            state.snapshot_interval,
+        )
+        .await?;
+
+    Ok(DispatchOutcome::Dispatched { process_id })
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

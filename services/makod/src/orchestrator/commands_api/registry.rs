@@ -589,6 +589,37 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(55039),
         dispatch: cmd_wim_geraetewechsel_ablehnen,
     },
+    // The **technical** acknowledgement, on its own command because it is on
+    // its own clock: 45 minutes for Strom UTILMD (APERAK AHB 1.0 §2.4.1),
+    // against 3 / 5 / 7 / 1 Werktage for the business answer above.
+    CommandDescriptor {
+        name: "wim.geraetewechsel.aperak",
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Msb],
+        primary_pid: pid(55039),
+        dispatch: cmd_wim_geraetewechsel_aperak,
+    },
+    // ── WiM Mitteilung über Gesamtvorgang (IFTSTA 21009–21013) ───────────
+    //
+    // The Anmeldebestätigung 55043 is vorläufig; these two commands are what
+    // makes a Zuordnung constitutive (WiM Teil 1 Kap. 2.1.1 / 2.3.2 Nr. 7/8).
+    CommandDescriptor {
+        name: "wim.gesamtvorgang.melden",
+        permitted_roles: &[Marktrolle::Msb, Marktrolle::Nmsb],
+        primary_pid: pid(21010),
+        dispatch: cmd_wim_gesamtvorgang_melden,
+    },
+    CommandDescriptor {
+        name: "wim.zuordnung.bestaetigen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(21012),
+        dispatch: cmd_wim_zuordnung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "wim.zuordnung.ablehnen",
+        permitted_roles: &[Marktrolle::Nb],
+        primary_pid: pid(21011),
+        dispatch: cmd_wim_zuordnung_ablehnen,
+    },
     // ── WiM Preisanfrage (REQOTE 35001/35002/35004/35005 → QUOTES 15001/15002/15004/15005) ────────────
     // aMSB answers an inbound REQOTE with the QUOTES Angebot. `processd` M3
     // auto-dispatches this when a current PreisblattMessung exists.

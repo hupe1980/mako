@@ -395,6 +395,30 @@ validity window; `billingd` reads them per dispatch and keeps no copy. An
 `EXCLUDE USING gist` constraint makes two simultaneously active contracts per
 resource unrepresentable, surfaced as a `409`.
 
+## §§ 9, 10 MsbG Messstellenverträge
+
+The contract a Messstellenbetreiber holds with the Anschlussnutzer for one
+Messlokation. `GET`/`PUT /api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`;
+`processd` reads it to answer a WiM Kündigung MSB out of `E_0200` and keeps no
+copy.
+
+WiM Strom Teil 1 Kap. 2.1.3 makes that Kündigung a **contract-layer** process
+between the two MSB — the Netzbetreiber is not a party — so every Prüfschritt is
+a question about this row: the notice period binds a requested Termin (`Z12`),
+an existing `kuendigung_zum` opens the Kap. 2.2.3 table (`Z34`), `beendet_am` is
+`Z29`, and no row at all is `ZC9`.
+
+The `GET` returns the contract plus `naechstmoeglich`, the date a Kündigung
+received on `?on=` could take effect. It is **derived** from
+`kuendigungsfrist_monate` by the same [`domain`](#the-rules-live-in-one-module)
+cap that governs a Versorgungsvertrag, so there is one date to keep correct
+rather than two. `?haushaltskunde=false` opts out of the § 309 Nr. 9 lit. c BGB
+one-month cap for a business customer.
+
+`kunden_id` is optional: a gMSB serving a Messlokation under its statutory
+Grundzuständigkeit (§ 3 MsbG) has no contract with a named customer, and a
+required foreign key would force a phantom Kunde for every such Messlokation.
+
 ## § 42b EnWG GGV-Betreiber
 
 The operator of a Gemeinschaftliche Gebäudeversorgung is the LF's *customer* for
@@ -403,6 +427,17 @@ deliberately not a Marktpartner: a GGV-Betreiber has no MP-ID and never appears
 in MaKo, so its master data lives here with every other buyer rather than in
 `marktd`. `GET`/`PUT /api/v1/ggv/{ggv_id}/betreiber` maps the operator-assigned
 `ggv_id` to a Kunde.
+
+## Which contracts live here
+
+Two services hold contracts and the line between them is the counterparty. A
+contract whose parties are both Marktpartner with an MP-ID is market data and
+lives in `marktd` — the Netznutzungsvertrag (`nb_contracts`, NB ↔ LF) and the
+MSB-Rahmenvertrag Gas (`msb_rahmenvertraege_gas`, GNB ↔ MSB), where every
+settlement already reads Netzebene and Bilanzierungsmethode. A contract with a
+Kunde on one side lives here, with the lifecycle and the statutory notice
+periods that govern it: Versorgungs-, Rahmen-, Messstellen- and
+Aggregatorverträge, and the GGV-Betreiber behind a § 42b Sammelrechnung.
 
 ## Configuration
 

@@ -182,6 +182,38 @@ pub fn antwort_pid_meaning(pid: u32) -> Option<(u32, bool)> {
         .map(|(_, request, confirmed)| (*request, *confirmed))
 }
 
+/// The Entscheidungsbaum that decides the answer to an MSB-Wechsel request.
+///
+/// The alphabets are disjoint and none of them is a GPKE one: a rejection is
+/// `ZC9` / `Z29` / `Z34` / `E11` / `E17` / `Z09` here, never `A02` or `A05`.
+/// Resolve a code with [`mako_pruefung::codes::lookup`] against the tree this
+/// returns — a code alone identifies no meaning.
+#[must_use]
+pub fn wim_ebd(request_pid: u32) -> Option<&'static str> {
+    use mako_pruefung::codes as c;
+    match request_pid {
+        55_039 => Some(c::EBD_KUENDIGUNG_MSB),
+        55_042 => Some(c::EBD_ANMELDUNG_MSB),
+        55_051 => Some(c::EBD_ABMELDUNG_MSB),
+        55_168 => Some(c::EBD_VERPFLICHTUNGSANFRAGE),
+        _ => None,
+    }
+}
+
+/// The outbound answer PID for an inbound MSB-Wechsel request.
+///
+/// The inverse of [`antwort_pid_meaning`]: this one is used when *we* answer,
+/// that one when the counterparty does.
+///
+/// Returns `None` when `request_pid` is not a WiM MSB-Wechsel request.
+#[must_use]
+pub fn antwort_pid_for(request_pid: u32, bestaetigt: bool) -> Option<u32> {
+    DEVICE_CHANGE_ANTWORT_PIDS
+        .iter()
+        .find(|(_, request, confirmed)| *request == request_pid && *confirmed == bestaetigt)
+        .map(|(antwort, _, _)| *antwort)
+}
+
 /// WiM Strom IFTSTA Prüfidentifikatoren (PIDs 21007, 21009–21015, 21018, 21029–21032).
 ///
 /// These status messages are part of the WiM MSB-Wechsel (WiM Strom Teil 1)
@@ -207,6 +239,90 @@ pub const IFTSTA_PIDS: &[u32] = &[
     21_007, 21_009, 21_010, 21_011, 21_012, 21_013, 21_015, 21_018, 21_029, 21_030, 21_031, 21_032,
 ];
 
+/// The five IFTSTA PIDs of the **Mitteilung über Gesamtvorgang** — the leg that
+/// makes a Zuordnung constitutive (WiM Teil 1 Kap. 2.3.2 Nr. 7/8, 14–18).
+///
+/// The Anmeldebestätigung 55043 is *vorläufig*. Kap. 2.1.1: the NB assigns the
+/// MSBN „zu dem Tag des vom MSBN mitgeteilten Termins des erfolgreichen
+/// Abschlusses des Gesamtvorgangs … mit dem Zeitpunkt 00:00 Uhr", and the
+/// MSBA's Zuordnung ends at the same instant. Until that report arrives the
+/// MSBA stays assigned, and if the Gesamtvorgang fails it stays assigned for
+/// good.
+///
+/// | PID | Meaning | Von → An |
+/// |---|---|---|
+/// | 21009 | Statusmeldung (**gescheitert**) | MSBN → NB |
+/// | 21010 | Statusmeldung (**erfolgreich**) | MSBN → NB |
+/// | 21011 | Statusmeldung (MSB-Scheitermeldung) | NB → MSBN / MSBA / LF |
+/// | 21012 | Statusmeldung (**erfolgreich**) | NB → MSBN |
+/// | 21013 | Statusmeldung (gescheitert) | NB → MSBN / MSBA / LF |
+///
+/// Source: IFTSTA AHB 2.1 § 6.2. Note that 21009 is the *failure* report and
+/// 21010 the success — the numeric order is the reverse of the reading order.
+pub const GESAMTVORGANG_PIDS: &[u32] = &[21_009, 21_010, 21_011, 21_012, 21_013];
+
+/// IFTSTA 21010 — „Statusmeldung (erfolgreich) vom MSBN an NB".
+///
+/// Carries the Zuordnungsbeginn in `SG15 DTM+2380` under Bedingung `[521]`
+/// („Zeitpunkt, ab dem der MSBN tatsächlich den Messstellenbetrieb übernimmt").
+pub const GESAMTVORGANG_ERFOLG_PID: u32 = 21_010;
+
+/// IFTSTA 21009 — „Statusmeldung (gescheitert) vom MSBN an NB".
+pub const GESAMTVORGANG_SCHEITERN_PID: u32 = 21_009;
+
+/// IFTSTA 21012 — the NB's positive answer; the Zuordnung has been made.
+pub const ZUORDNUNG_ERFOLG_PID: u32 = 21_012;
+
+/// IFTSTA 21011 — the NB's answer recording an MSB-Scheitermeldung.
+pub const ZUORDNUNG_SCHEITERN_PID: u32 = 21_011;
+
+/// IFTSTA 21013 — the NB reporting that no Gesamtvorgang report arrived at all
+/// (Kap. 2.3.2 Nr. 16, spätester ÜT der 11. WT nach dem bestätigten
+/// Zuordnungsbeginn).
+pub const GESAMTVORGANG_AUSGEBLIEBEN_PID: u32 = 21_013;
+
+/// Our obligation as MSBN to report the Gesamtvorgang — 10 Werktage after the
+/// Zuordnungsbeginn the NB confirmed (Kap. 2.3.2 Nr. 7).
+pub const GESAMTVORGANG_MELDUNG_WINDOW_LABEL: &str = "wim-gesamtvorgang-meldung";
+
+/// Our obligation as NB to report that no Gesamtvorgang arrived — 11 Werktage
+/// after the confirmed Zuordnungsbeginn (Kap. 2.3.2 Nr. 16).
+pub const GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL: &str = "wim-gesamtvorgang-ausbleiben";
+
+/// Our obligation as NB to answer a Gesamtvorgang report — 1 Werktag
+/// (Kap. 2.3.2 Nr. 8).
+pub const ZUORDNUNG_ANTWORT_WINDOW_LABEL: &str = "wim-gesamtvorgang-antwort";
+
+/// Werktage the MSBN has to report the Gesamtvorgang (Kap. 2.3.2 Nr. 7).
+pub const GESAMTVORGANG_MELDUNG_WT: u32 = 10;
+
+/// Werktage after which the NB reports an absent Gesamtvorgang
+/// (Kap. 2.3.2 Nr. 16).
+pub const GESAMTVORGANG_AUSBLEIBEN_WT: u32 = 11;
+
+/// `YYYYMMDD` → a calendar date, for the dates that ride the wire as strings.
+///
+/// Returns `None` on anything else — a caller that cannot parse the date it was
+/// given must not silently substitute today.
+fn parse_yyyymmdd(raw: &str) -> Option<time::Date> {
+    let digits: String = raw.chars().filter(char::is_ascii_digit).collect();
+    if digits.len() != 8 {
+        return None;
+    }
+    let year: i32 = digits[0..4].parse().ok()?;
+    let month = time::Month::try_from(digits[4..6].parse::<u8>().ok()?).ok()?;
+    let day: u8 = digits[6..8].parse().ok()?;
+    time::Date::from_calendar_date(year, month, day).ok()
+}
+
+/// A calendar date as the 17:00 Europe/Berlin MaKo cut-off instant on it.
+fn berlin_cutoff(date: time::Date) -> OffsetDateTime {
+    mako_fristen::berlin_at(
+        date,
+        time::Time::from_hms(17, 0, 0).expect("17:00 is valid"),
+    )
+}
+
 // ── Domain events ─────────────────────────────────────────────────────────────
 
 /// Events emitted by the WiM Gerätewechsel workflow.
@@ -229,18 +345,83 @@ pub enum DeviceChangeEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator.
         pruefidentifikator: Pruefidentifikator,
+        /// `IDE+24` DE 7402 — the Vorgangsnummer the answer must echo.
+        #[serde(default)]
+        vorgangsnummer: Option<String>,
+        /// `SG4 DTM+76` — the date the order asks for (YYYYMMDD).
+        #[serde(default)]
+        process_date: Option<String>,
     },
     /// EDIFACT message passed profile validation (no rule violations).
     ValidationPassed {
         /// Reference of the validated message.
         message_ref: MessageRef,
     },
-    /// A positive or negative APERAK was dispatched within 5 Werktage.
+    /// A positive or negative APERAK was dispatched.
+    ///
+    /// The **technical** acknowledgement only (APERAK AHB 1.0 §2.1.1,
+    /// BGM+312 / BGM+313), due 45 minutes after receipt for Strom UTILMD. It
+    /// says the message could be processed — it decides nothing. The business
+    /// decision is [`Self::AntwortGesendet`].
     AperakDispatched {
         /// `true` for positive (accepted), `false` for negative (rejected).
         positive: bool,
         /// Rejection reason (only set when `positive = false`).
         reason: Option<String>,
+    },
+    /// The **business** Bestätigung or Ablehnung was dispatched as a UTILMD on
+    /// the answer Prüfidentifikator.
+    ///
+    /// This, not [`Self::AperakDispatched`], is what discharges
+    /// [`ANTWORT_FRIST_WINDOW_LABEL`] and what the counterparty's EBD engine
+    /// reads.
+    AntwortGesendet {
+        /// The answer PID — 55040/55041, 55043/55044, 55052/55053, 55169/55170.
+        pruefidentifikator: Pruefidentifikator,
+        /// `true` for a Bestätigung, `false` for an Ablehnung.
+        bestaetigt: bool,
+        /// `SG4 STS+E01` DE 9013 — the code from the EBD named below.
+        antwort_code: String,
+        /// `SG4 STS+E01` DE 1131 — the Entscheidungsbaum the code comes from.
+        antwort_ebd: String,
+        /// `FTX+ACB` Bemerkung, where the code or the operator supplied one.
+        bemerkung: Option<String>,
+        /// The date the answer confirms, when it differs from the requested
+        /// one (`Z01` „Zustimmung mit Terminänderung", `Z12` nächstmöglicher
+        /// Kündigungstermin).
+        abweichender_termin: Option<String>,
+    },
+    /// The MSBN reported the outcome of the Gesamtvorgang (IFTSTA 21009/21010).
+    ///
+    /// „Erfolgreicher Abschluss des Gesamtvorgangs" is the situation that MSBA
+    /// and MSBN have agreed on every technical installation the MSBN needs —
+    /// through a Geräteübernahme, a Gerätewechsel, or both (Kap. 2.3.2 Nr. 5).
+    /// The date it carries becomes the Zuordnungsbeginn.
+    GesamtvorgangGemeldet {
+        /// `true` for 21010 (erfolgreich), `false` for 21009 (gescheitert).
+        erfolgreich: bool,
+        /// `SG15 DTM+2380` — the day the MSBN actually takes over, 00:00 Uhr.
+        /// `None` on a Scheitermeldung, which reports no takeover date.
+        zuordnungsbeginn: Option<String>,
+        /// Whether this party sent the report (MSBN side) or received it (NB).
+        outbound: bool,
+        /// EDIFACT message reference of the IFTSTA.
+        message_ref: MessageRef,
+    },
+    /// The NB answered the Gesamtvorgang report (IFTSTA 21011/21012/21013).
+    ///
+    /// On 21012 the Zuordnung is made: the MSBN is assigned from
+    /// `zuordnungsbeginn` 00:00 and the MSBA's assignment ends at the same
+    /// instant (Kap. 2.1.1). On 21011/21013 the MSBA stays assigned.
+    ZuordnungEntschieden {
+        /// The answering PID — 21012, 21011 or 21013.
+        pruefidentifikator: Pruefidentifikator,
+        /// `true` only for 21012.
+        zugeordnet: bool,
+        /// The Zuordnungsbeginn the NB confirmed, on 21012.
+        zuordnungsbeginn: Option<String>,
+        /// Whether this party sent the answer (NB side) or received it (MSBN).
+        outbound: bool,
     },
     /// Meter device physically changed; new MSB is active.
     Completed {
@@ -308,6 +489,11 @@ pub enum DeviceChangeEvent {
         is_confirmed: bool,
         /// Rejection reason, when the counterparty supplied one.
         reason: Option<String>,
+        /// The date the answer states when it moves ours — `Z01` on a
+        /// Bestätigung, `Z12` on a Kündigungsablehnung. It replaces the
+        /// requested date for everything downstream.
+        #[serde(default)]
+        bestaetigter_termin: Option<String>,
     },
 }
 
@@ -319,6 +505,9 @@ impl EventPayload for DeviceChangeEvent {
             Self::Initiated { .. } => "WimDeviceChangeInitiated",
             Self::ValidationPassed { .. } => "WimDeviceChangeValidationPassed",
             Self::AperakDispatched { .. } => "WimDeviceChangeAperakDispatched",
+            Self::AntwortGesendet { .. } => "WimDeviceChangeAntwortGesendet",
+            Self::GesamtvorgangGemeldet { .. } => "WimDeviceChangeGesamtvorgangGemeldet",
+            Self::ZuordnungEntschieden { .. } => "WimDeviceChangeZuordnungEntschieden",
             Self::Completed { .. } => "WimDeviceChangeCompleted",
             Self::Rejected { .. } => "WimDeviceChangeRejected",
             Self::DeadlineExpired { .. } => "WimDeviceChangeDeadlineExpired",
@@ -354,6 +543,28 @@ pub struct DeviceChangeData {
     /// `None` only for processes initiated before this field was added (old snapshots).
     #[serde(default)]
     pub message_ref: Option<MessageRef>,
+    /// `IDE+24` DE 7402 of the inbound order.
+    ///
+    /// The answer must echo it — that is how the counterparty correlates a
+    /// Bestätigung to the Vorgang it sent, and the message reference is not a
+    /// substitute: one interchange can carry several Vorgänge.
+    #[serde(default)]
+    pub vorgangsnummer: Option<String>,
+    /// The date the order asks for (`SG4 DTM+76`, YYYYMMDD).
+    ///
+    /// Carried because the answer states a date too, and because it is the
+    /// anchor every Vorlauffrist check in
+    /// [`mako_fristen::vorlauf`] measures against.
+    #[serde(default)]
+    pub process_date: Option<String>,
+    /// The Zuordnungsbeginn the NB **confirmed** (YYYYMMDD).
+    ///
+    /// Distinct from [`Self::process_date`], which is what the order *asked*
+    /// for: a Bestätigung may carry `Z01` and move it. Everything downstream —
+    /// the Realisierungskorridor, the 10- and 11-Werktage Gesamtvorgang
+    /// windows, and the date `marktd` records — measures against this one.
+    #[serde(default)]
+    pub bestaetigter_zuordnungsbeginn: Option<String>,
 }
 
 /// Current state of a WiM Gerätewechsel process stream.
@@ -384,8 +595,14 @@ pub enum DeviceChangeState {
     Initiated(DeviceChangeData),
     /// EDIFACT validation passed; APERAK not yet dispatched.
     ValidationPassed(DeviceChangeData),
-    /// Positive APERAK dispatched; awaiting physical device swap.
+    /// Positive APERAK dispatched; the business answer is still owed.
     AperakSent(DeviceChangeData),
+    /// The business Bestätigung/Ablehnung went out; awaiting the physical
+    /// device swap (or, for an Ablehnung, nothing further).
+    AntwortGesendet(DeviceChangeData),
+    /// The Gesamtvorgang outcome has been reported and the Zuordnung is not
+    /// decided yet — the NB owes its answer within one Werktag.
+    GesamtvorgangGemeldet(DeviceChangeData),
     /// Device physically changed; new MSB is active.
     Completed(DeviceChangeData),
     /// Process rejected (validation failure or negative APERAK).
@@ -404,7 +621,9 @@ impl mako_engine::workflow::OccupiesBusinessKey for DeviceChangeState {
             | Self::AuftragBestaetigt(_)
             | Self::Initiated(_)
             | Self::ValidationPassed(_)
-            | Self::AperakSent(_) => true,
+            | Self::AperakSent(_)
+            | Self::AntwortGesendet(_)
+            | Self::GesamtvorgangGemeldet(_) => true,
             // Terminal. A meter can be changed more than once, so a completed
             // Gerätewechsel must not retire the MeLo.
             Self::New | Self::Completed(_) | Self::Rejected { .. } => false,
@@ -423,6 +642,8 @@ impl DeviceChangeState {
             Self::Initiated(_) => "Initiated",
             Self::ValidationPassed(_) => "ValidationPassed",
             Self::AperakSent(_) => "AperakSent",
+            Self::AntwortGesendet(_) => "AntwortGesendet",
+            Self::GesamtvorgangGemeldet(_) => "GesamtvorgangGemeldet",
             Self::Completed(_) => "Completed",
             Self::Rejected { .. } => "Rejected",
         }
@@ -479,6 +700,8 @@ pub enum DeviceChangeCommand {
         message_ref: MessageRef,
         /// Rejection reason, when the counterparty supplied one.
         reason: Option<String>,
+        /// `SG4 DTM` on an answer that moves the date (`Z01`, `Z12`).
+        bestaetigter_termin: Option<String>,
     },
     /// Inbound UTILMD accepted from the AS4 layer. Domain fields extracted and
     /// validation performed by the caller before constructing this command.
@@ -497,6 +720,14 @@ pub enum DeviceChangeCommand {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// `IDE+24` DE 7402 — the Vorgangsnummer the answer must echo.
+        ///
+        /// Not the message reference: one interchange can carry several
+        /// Vorgänge, so echoing `UNH` would correlate the answer to the wrong
+        /// one whenever a counterparty batches.
+        vorgangsnummer: Option<String>,
+        /// `SG4 DTM+76` — the date the order asks for (YYYYMMDD).
+        process_date: Option<String>,
         /// `true` if `msg.validate()` returned a report with no errors.
         validation_passed: bool,
         /// Human-readable validation issue strings for the `Rejected` event.
@@ -538,6 +769,75 @@ pub enum DeviceChangeCommand {
         positive: bool,
         /// Rejection reason (required when `positive = false`).
         reason: Option<String>,
+    },
+    /// Dispatch the **business** Bestätigung or Ablehnung as a UTILMD on the
+    /// answer Prüfidentifikator.
+    ///
+    /// This is the message the Festlegung means by „Antwort": UTILMD 55040 /
+    /// 55043 / 55052 / 55169 (Bestätigung) or 55041 / 55044 / 55053 / 55170
+    /// (Ablehnung), carrying `SG4 STS+E01` with a code from the process's
+    /// Entscheidungsbaum.
+    ///
+    /// **It is not the APERAK.** That is a transport-level statement that the
+    /// message could be processed, due in 45 minutes; this is the decision, due
+    /// in 3 / 5 / 7 / 1 Werktagen.
+    ///
+    /// `antwort_code` is resolved against the process's own Entscheidungsbaum
+    /// ([`mako_pruefung::codes`]) before anything is enqueued, so a code from
+    /// the wrong tree is refused here rather than becoming an unparseable
+    /// answer on the wire.
+    DispatchAntwort {
+        /// `true` for a Bestätigung, `false` for an Ablehnung.
+        bestaetigt: bool,
+        /// `SG4 STS+E01` DE 9013. Must be published in the request PID's EBD
+        /// and in the matching cluster.
+        antwort_code: String,
+        /// `FTX+ACB` free text. Required by the AHB alongside a catch-all
+        /// rejection and useful on every other.
+        bemerkung: Option<String>,
+        /// The date the answer confirms when it differs from the requested one
+        /// — `Z01` „Zustimmung mit Terminänderung" and `Z12` (nächstmöglicher
+        /// Kündigungstermin) both require it.
+        abweichender_termin: Option<String>,
+    },
+    /// Report the outcome of the Gesamtvorgang as the **MSBN**
+    /// (IFTSTA 21010 erfolgreich / 21009 gescheitert, Kap. 2.3.2 Nr. 7).
+    ///
+    /// The date is what makes the Zuordnung: the NB assigns the MSBN from it,
+    /// 00:00 Uhr, and ends the MSBA's assignment at the same instant
+    /// (Kap. 2.1.1). It must lie inside the ±9-Werktage Realisierungskorridor
+    /// around the Zuordnungsbeginn the NB confirmed, which this command checks.
+    MeldeGesamtvorgang {
+        /// `true` for the erfolgreicher Abschluss, `false` for the Scheitern.
+        erfolgreich: bool,
+        /// `SG15 DTM+2380` (YYYYMMDD) — required when `erfolgreich`.
+        zuordnungsbeginn: Option<String>,
+    },
+    /// Inbound Gesamtvorgang report from the MSBN, as the **NB**.
+    ReceiveGesamtvorgang {
+        /// 21010 (erfolgreich) or 21009 (gescheitert).
+        pid: Pruefidentifikator,
+        /// The takeover date the report carries.
+        zuordnungsbeginn: Option<String>,
+        /// EDIFACT message reference of the IFTSTA.
+        message_ref: MessageRef,
+    },
+    /// Decide the Zuordnung as the **NB** (IFTSTA 21012 / 21011, Nr. 8).
+    ///
+    /// `zugeordnet = false` records the MSB-Scheitermeldung: the MSBA stays
+    /// assigned and continues the Messstellenbetrieb or starts an Ende MSB of
+    /// its own (Nr. 14).
+    DispatchZuordnung {
+        /// `true` for 21012, `false` for 21011.
+        zugeordnet: bool,
+    },
+    /// Inbound Zuordnungsantwort from the NB, as the **MSBN**
+    /// (IFTSTA 21012 / 21011 / 21013).
+    ReceiveZuordnungsantwort {
+        /// 21012, 21011 or 21013.
+        pid: Pruefidentifikator,
+        /// The Zuordnungsbeginn the NB confirmed, on 21012.
+        zuordnungsbeginn: Option<String>,
     },
     /// Mark the device change as completed once the physical swap is confirmed.
     Complete {
@@ -581,9 +881,10 @@ impl CommandPayload for DeviceChangeCommand {}
 
 /// WiM Messstellenbetrieb (PIDs 55039, 55042, 55051, 55168) workflow.
 ///
-/// Implements the BDEW WiM process for change and management of meter operators
-/// (MSB) at a Messlokation. The grid operator receives inbound UTILMD messages
-/// from the MSBN and must respond with an APERAK within **5 Werktage**.
+/// Covers the four Use-Cases of WiM Strom Teil 1 Kap. 2 and the IFTSTA
+/// Gesamtvorgang leg that closes them. An inbound order is acknowledged with an
+/// APERAK within 45 minutes and answered with a UTILMD within 3 / 5 / 7 / 1
+/// Werktagen; on a 55042 the Zuordnung then follows the Gesamtvorgang report.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore
@@ -623,6 +924,32 @@ impl Workflow for WimDeviceChangeWorkflow {
                     label: deadline.label().into(),
                 })
             }
+            // We are the MSBN and let the 10-Werktage Gesamtvorgang window
+            // lapse. The NB will report the Scheitern on the 11. WT and the
+            // MSBA stays assigned (Kap. 2.3.2 Nr. 16), so the process is over.
+            (GESAMTVORGANG_MELDUNG_WINDOW_LABEL, DeviceChangeState::AuftragBestaetigt(_)) => {
+                Some(DeviceChangeCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
+            }
+            // We are the NB and no Gesamtvorgang report arrived. „Es liegt nach
+            // maximaler Frist des Gesamtvorgangs zu Geräteübernahme /
+            // Gerätewechsel keine Meldung des MSBN beim NB vor. Der MSBA bleibt
+            // der einzelnen Messlokation zugeordnet."
+            (GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL, DeviceChangeState::AntwortGesendet(_)) => {
+                Some(DeviceChangeCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
+            }
+            // We owe the Zuordnungsantwort and did not send it.
+            (ZUORDNUNG_ANTWORT_WINDOW_LABEL, DeviceChangeState::GesamtvorgangGemeldet(_)) => {
+                Some(DeviceChangeCommand::TimeoutExpired {
+                    deadline_id: deadline.deadline_id(),
+                    label: deadline.label().into(),
+                })
+            }
             _ => None,
         }
     }
@@ -647,14 +974,24 @@ impl Workflow for WimDeviceChangeWorkflow {
                 document_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 message_ref: Some(message_ref.clone()),
+                vorgangsnummer: None,
+                process_date: Some(process_date.clone()),
+                bestaetigter_zuordnungsbeginn: None,
             }),
             DeviceChangeEvent::AntwortEmpfangen {
                 is_confirmed,
                 reason,
+                bestaetigter_termin,
                 ..
             } => match state {
-                DeviceChangeState::AuftragGesendet(data) => {
+                DeviceChangeState::AuftragGesendet(mut data) => {
                     if *is_confirmed {
+                        // A `Z01` Bestätigung moves the date; everything
+                        // downstream measures against what the NB confirmed,
+                        // not against what we asked for.
+                        data.bestaetigter_zuordnungsbeginn = bestaetigter_termin
+                            .clone()
+                            .or_else(|| data.process_date.clone());
                         DeviceChangeState::AuftragBestaetigt(data)
                     } else {
                         DeviceChangeState::Rejected {
@@ -674,6 +1011,8 @@ impl Workflow for WimDeviceChangeWorkflow {
                 document_date,
                 message_ref,
                 pruefidentifikator,
+                vorgangsnummer,
+                process_date,
             } => DeviceChangeState::Initiated(DeviceChangeData {
                 melo_id: melo_id.clone(),
                 incoming_msb: incoming_msb.clone(),
@@ -682,6 +1021,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                 document_date: document_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
                 message_ref: Some(message_ref.clone()),
+                vorgangsnummer: vorgangsnummer.clone(),
+                process_date: process_date.clone(),
+                bestaetigter_zuordnungsbeginn: None,
             }),
             DeviceChangeEvent::ValidationPassed { .. } => {
                 if let DeviceChangeState::Initiated(data) = state {
@@ -702,8 +1044,76 @@ impl Workflow for WimDeviceChangeWorkflow {
                 }
                 _ => state,
             },
+            DeviceChangeEvent::AntwortGesendet {
+                bestaetigt,
+                abweichender_termin,
+                ..
+            } => match state {
+                DeviceChangeState::ValidationPassed(mut data)
+                | DeviceChangeState::AperakSent(mut data) => {
+                    if *bestaetigt {
+                        data.bestaetigter_zuordnungsbeginn = abweichender_termin
+                            .clone()
+                            .or_else(|| data.process_date.clone());
+                        DeviceChangeState::AntwortGesendet(data)
+                    } else {
+                        // An Ablehnung is terminal for us: the counterparty
+                        // must start a new Vorgang, and nothing further is
+                        // owed on this one.
+                        DeviceChangeState::Rejected {
+                            reason: "Ablehnung versendet".to_owned(),
+                        }
+                    }
+                }
+                other => other,
+            },
+            DeviceChangeEvent::GesamtvorgangGemeldet {
+                erfolgreich,
+                zuordnungsbeginn,
+                ..
+            } => match state {
+                DeviceChangeState::AntwortGesendet(mut data)
+                | DeviceChangeState::AuftragBestaetigt(mut data) => {
+                    if *erfolgreich {
+                        if let Some(d) = zuordnungsbeginn {
+                            data.bestaetigter_zuordnungsbeginn = Some(d.clone());
+                        }
+                        DeviceChangeState::GesamtvorgangGemeldet(data)
+                    } else {
+                        // „Bei Mitteilung des Scheiterns des Gesamtvorgangs
+                        // bleibt der MSBA der einzelnen Messlokation zugeordnet."
+                        DeviceChangeState::Rejected {
+                            reason: "Gesamtvorgang gescheitert — der MSBA bleibt zugeordnet"
+                                .to_owned(),
+                        }
+                    }
+                }
+                other => other,
+            },
+            DeviceChangeEvent::ZuordnungEntschieden {
+                zugeordnet,
+                zuordnungsbeginn,
+                ..
+            } => match state {
+                DeviceChangeState::GesamtvorgangGemeldet(mut data) => {
+                    if *zugeordnet {
+                        if let Some(d) = zuordnungsbeginn {
+                            data.bestaetigter_zuordnungsbeginn = Some(d.clone());
+                        }
+                        DeviceChangeState::Completed(data)
+                    } else {
+                        DeviceChangeState::Rejected {
+                            reason: "Zuordnung nicht erfolgt — der MSBA bleibt zugeordnet"
+                                .to_owned(),
+                        }
+                    }
+                }
+                other => other,
+            },
             DeviceChangeEvent::Completed { device_id } => match state {
                 DeviceChangeState::AperakSent(mut data)
+                | DeviceChangeState::AntwortGesendet(mut data)
+                | DeviceChangeState::GesamtvorgangGemeldet(mut data)
                 | DeviceChangeState::AuftragBestaetigt(mut data) => {
                     data.device_id = device_id.clone();
                     DeviceChangeState::Completed(data)
@@ -780,6 +1190,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 sender,
                 message_ref,
                 reason,
+                bestaetigter_termin,
             } => {
                 let DeviceChangeState::AuftragGesendet(data) = state else {
                     return Err(WorkflowError::invalid_state(
@@ -807,14 +1218,38 @@ impl Workflow for WimDeviceChangeWorkflow {
                     )));
                 }
 
-                Ok(vec![DeviceChangeEvent::AntwortEmpfangen {
+                // A Bestätigung on an Anmeldung opens the Gesamtvorgang leg:
+                // Kap. 2.3.2 Nr. 7 gives us 10 Werktage from the confirmed
+                // Zuordnungsbeginn to report its outcome, and until we do the
+                // MSBA stays assigned.
+                let events = vec![DeviceChangeEvent::AntwortEmpfangen {
                     pruefidentifikator: pid,
                     sender,
                     message_ref,
                     is_confirmed,
                     reason,
-                }]
-                .into())
+                    bestaetigter_termin: bestaetigter_termin.clone(),
+                }];
+                let beginn = bestaetigter_termin.or_else(|| data.process_date.clone());
+                match (
+                    is_confirmed,
+                    request_pid,
+                    beginn.as_deref().and_then(parse_yyyymmdd),
+                ) {
+                    (true, 55_042, Some(d)) => Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        vec![],
+                        vec![PendingDeadline::new(
+                            GESAMTVORGANG_MELDUNG_WINDOW_LABEL,
+                            berlin_cutoff(mako_fristen::add_werktage(
+                                d,
+                                GESAMTVORGANG_MELDUNG_WT,
+                                HolidayCalendar::BdewMaKo,
+                            )),
+                        )],
+                    )),
+                    _ => Ok(events.into()),
+                }
             }
 
             DeviceChangeCommand::ReceiveRestOrder {
@@ -853,6 +1288,10 @@ impl Workflow for WimDeviceChangeWorkflow {
                         document_date: format!("{process_date}|category={device_category}"),
                         message_ref: message_ref.clone(),
                         pruefidentifikator: pid,
+                        // The REST channel carries no EDIFACT Vorgangsnummer;
+                        // the transaction id is what the counterparty echoes.
+                        vorgangsnummer: Some(tx_id.clone()),
+                        process_date: Some(process_date.clone()),
                     },
                     // REST-sourced orders are structurally valid by definition
                     // (the HTTP layer validated the JSON payload); emit
@@ -870,6 +1309,8 @@ impl Workflow for WimDeviceChangeWorkflow {
                 device_id,
                 document_date,
                 message_ref,
+                vorgangsnummer,
+                process_date,
                 validation_passed,
                 validation_errors,
                 received_at,
@@ -899,6 +1340,8 @@ impl Workflow for WimDeviceChangeWorkflow {
                     document_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
+                    vorgangsnummer,
+                    process_date,
                 }];
                 if validation_passed {
                     events.push(DeviceChangeEvent::ValidationPassed { message_ref });
@@ -1003,16 +1446,391 @@ impl Workflow for WimDeviceChangeWorkflow {
                 ))
             }
 
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt,
+                antwort_code,
+                bemerkung,
+                abweichender_termin,
+            } => {
+                let data = match state {
+                    DeviceChangeState::ValidationPassed(d) | DeviceChangeState::AperakSent(d) => d,
+                    _ => {
+                        return Err(WorkflowError::invalid_state(
+                            "ValidationPassed or AperakSent",
+                            state.status_str(),
+                        ));
+                    }
+                };
+                let request_pid = data.pruefidentifikator.as_u32();
+
+                // The code decides the PID, not the other way round: an EBD
+                // publishes each code in exactly one cluster, and a Zustimmung
+                // code on an Ablehnung PID is refused here rather than being
+                // rendered into an answer nobody can read.
+                let ebd = wim_ebd(request_pid).ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "PID {request_pid} is not answered by a WiM Entscheidungsbaum"
+                    ))
+                })?;
+                let code = mako_pruefung::codes::lookup(ebd, &antwort_code).ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "Antwortcode {antwort_code:?} is not published in {ebd}"
+                    ))
+                })?;
+                if code.ist_zustimmung() != Some(bestaetigt) {
+                    return Err(WorkflowError::rejected(format!(
+                        "{ebd} publishes {} in the {} cluster",
+                        code.code,
+                        code.cluster.label()
+                    )));
+                }
+                let antwort_pid = antwort_pid_for(request_pid, bestaetigt).ok_or_else(|| {
+                    WorkflowError::rejected(format!("PID {request_pid} has no answer PID"))
+                })?;
+
+                // `Z01`, `Z12` and `Z14` each mean „to a different date than
+                // you asked for". An answer that asserts one without naming the
+                // date is incomplete — `Z12`'s own Anmerkung says the
+                // nächstmöglicher Kündigungszeitpunkt must be carried in `DTM`.
+                if abweichender_termin.is_none() && matches!(code.code, "Z01" | "Z12" | "Z14") {
+                    return Err(WorkflowError::rejected(format!(
+                        "{ebd} {} ({}) requires `abweichender_termin` — the answer states a \
+                         date change and must name the date",
+                        code.code, code.bedeutung
+                    )));
+                }
+
+                // The answer date: the deviating one where the code declares
+                // one, otherwise the date the order asked for.
+                let process_date = abweichender_termin
+                    .clone()
+                    .or_else(|| data.process_date.clone())
+                    .unwrap_or_else(|| data.document_date.clone());
+
+                let mut payload = serde_json::json!({
+                    "pid":          antwort_pid,
+                    // We answer, so the roles invert: the party that received
+                    // the order is the sender of its answer.
+                    "sender":       data.grid_operator.as_str(),
+                    "receiver":     data.incoming_msb.as_str(),
+                    "melo":         data.melo_id.as_str(),
+                    "process_date": process_date,
+                    "antwort_code": code.code,
+                    "antwort_ebd":  ebd,
+                });
+                if let Some(ref vn) = data.vorgangsnummer {
+                    payload["vorgangsnummer"] = serde_json::Value::String(vn.clone());
+                }
+                if let Some(ref text) = bemerkung {
+                    payload["bemerkung"] = serde_json::Value::String(text.clone());
+                }
+
+                let outbox =
+                    PendingOutbox::new("UTILMD", data.incoming_msb.as_str(), payload).caused_by(0);
+
+                // A confirmed Anmeldung is *vorläufig*: the Zuordnung follows the
+                // MSBN's Gesamtvorgang report, and if none arrives by the 11. WT
+                // after the confirmed Zuordnungsbeginn the NB reports the
+                // Scheitern itself (Kap. 2.3.2 Nr. 16).
+                let deadlines = if bestaetigt && request_pid == 55_042 {
+                    parse_yyyymmdd(&process_date)
+                        .map(|d| {
+                            vec![PendingDeadline::new(
+                                GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL,
+                                berlin_cutoff(mako_fristen::add_werktage(
+                                    d,
+                                    GESAMTVORGANG_AUSBLEIBEN_WT,
+                                    HolidayCalendar::BdewMaKo,
+                                )),
+                            )]
+                        })
+                        .unwrap_or_default()
+                } else {
+                    vec![]
+                };
+
+                Ok(WorkflowOutput::with_outbox_and_deadlines(
+                    vec![DeviceChangeEvent::AntwortGesendet {
+                        pruefidentifikator: Pruefidentifikator::new(antwort_pid)
+                            .map_err(WorkflowError::rejected)?,
+                        bestaetigt,
+                        antwort_code: code.code.to_owned(),
+                        antwort_ebd: ebd.to_owned(),
+                        bemerkung,
+                        abweichender_termin,
+                    }],
+                    vec![outbox],
+                    deadlines,
+                ))
+            }
+
+            // ── Mitteilung über Gesamtvorgang (Kap. 2.3.2 Nr. 7/8) ──────────
+            DeviceChangeCommand::MeldeGesamtvorgang {
+                erfolgreich,
+                zuordnungsbeginn,
+            } => {
+                let DeviceChangeState::AuftragBestaetigt(data) = state else {
+                    return Err(WorkflowError::invalid_state(
+                        "AuftragBestaetigt",
+                        state.status_str(),
+                    ));
+                };
+                if data.pruefidentifikator.as_u32() != 55_042 {
+                    return Err(WorkflowError::rejected(format!(
+                        "the Gesamtvorgang belongs to the Beginn Messstellenbetrieb (55042); \
+                         this process is {}",
+                        data.pruefidentifikator
+                    )));
+                }
+
+                let mut payload = serde_json::json!({
+                    "pid": if erfolgreich {
+                        GESAMTVORGANG_ERFOLG_PID
+                    } else {
+                        GESAMTVORGANG_SCHEITERN_PID
+                    },
+                    "sender":   data.incoming_msb.as_str(),
+                    "receiver": data.grid_operator.as_str(),
+                    "melo":     data.melo_id.as_str(),
+                });
+
+                if erfolgreich {
+                    let Some(ref beginn) = zuordnungsbeginn else {
+                        return Err(WorkflowError::rejected(
+                            "an erfolgreicher Gesamtvorgang must name the Zuordnungsbeginn \
+                             (SG15 DTM+2380) — it is the date the NB assigns from"
+                                .to_owned(),
+                        ));
+                    };
+                    // The Realisierungskorridor: „ein Zeitraum vom 9. WT vor bis
+                    // zum 9. WT nach dem vom NB bestätigten Zuordnungsbeginn"
+                    // (Kap. 2.3.2 Nr. 5/6). A date outside it is one the NB
+                    // cannot assign from.
+                    if let (Some(datum), Some(bestaetigt)) = (
+                        parse_yyyymmdd(beginn),
+                        data.bestaetigter_zuordnungsbeginn
+                            .as_deref()
+                            .and_then(parse_yyyymmdd),
+                    ) && !mako_fristen::vorlauf::VorlaufShape::Korridor(
+                        mako_fristen::vorlauf::REALISIERUNGSKORRIDOR_WT,
+                    )
+                    .check(datum, bestaetigt, HolidayCalendar::BdewMaKo)
+                    .is_ok()
+                    {
+                        let korridor = mako_fristen::vorlauf::realisierungskorridor(
+                            bestaetigt,
+                            HolidayCalendar::BdewMaKo,
+                        );
+                        return Err(WorkflowError::rejected(format!(
+                            "Übernahmezeitpunkt {datum} liegt außerhalb des \
+                             Realisierungskorridors {}..={} um den bestätigten \
+                             Zuordnungsbeginn {bestaetigt} (WiM Teil 1 Kap. 2.3.2 Nr. 5/6)",
+                            korridor.start(),
+                            korridor.end(),
+                        )));
+                    }
+                    payload["zuordnungsbeginn"] = serde_json::Value::String(beginn.clone());
+                }
+
+                let message_ref = data
+                    .message_ref
+                    .clone()
+                    .unwrap_or_else(|| MessageRef::new(data.melo_id.as_str()));
+                Ok(WorkflowOutput::with_outbox(
+                    vec![DeviceChangeEvent::GesamtvorgangGemeldet {
+                        erfolgreich,
+                        zuordnungsbeginn,
+                        outbound: true,
+                        message_ref,
+                    }],
+                    vec![
+                        PendingOutbox::new("IFTSTA", data.grid_operator.as_str(), payload)
+                            .caused_by(0),
+                    ],
+                ))
+            }
+
+            DeviceChangeCommand::ReceiveGesamtvorgang {
+                pid,
+                zuordnungsbeginn,
+                message_ref,
+            } => {
+                if !matches!(state, DeviceChangeState::AntwortGesendet(_)) {
+                    return Err(WorkflowError::invalid_state(
+                        "AntwortGesendet",
+                        state.status_str(),
+                    ));
+                }
+                let erfolgreich = match pid.as_u32() {
+                    GESAMTVORGANG_ERFOLG_PID => true,
+                    GESAMTVORGANG_SCHEITERN_PID => false,
+                    other => {
+                        return Err(WorkflowError::rejected(format!(
+                            "PID {other} is not a Gesamtvorgang report (expected \
+                             {GESAMTVORGANG_ERFOLG_PID} erfolgreich or \
+                             {GESAMTVORGANG_SCHEITERN_PID} gescheitert)"
+                        )));
+                    }
+                };
+                let events = vec![DeviceChangeEvent::GesamtvorgangGemeldet {
+                    erfolgreich,
+                    zuordnungsbeginn,
+                    outbound: false,
+                    message_ref,
+                }];
+                if erfolgreich {
+                    // Kap. 2.3.2 Nr. 8 — „Unverzüglich, jedoch spätester ÜT ist
+                    // der 1. WT nach dem ÜT von Nr. 7."
+                    Ok(WorkflowOutput::with_outbox_and_deadlines(
+                        events,
+                        vec![],
+                        vec![PendingDeadline::new(
+                            ZUORDNUNG_ANTWORT_WINDOW_LABEL,
+                            deadline_at_werktage(
+                                OffsetDateTime::now_utc(),
+                                1,
+                                HolidayCalendar::BdewMaKo,
+                            ),
+                        )],
+                    ))
+                } else {
+                    Ok(events.into())
+                }
+            }
+
+            DeviceChangeCommand::DispatchZuordnung { zugeordnet } => {
+                let DeviceChangeState::GesamtvorgangGemeldet(data) = state else {
+                    return Err(WorkflowError::invalid_state(
+                        "GesamtvorgangGemeldet",
+                        state.status_str(),
+                    ));
+                };
+                let pid = if zugeordnet {
+                    ZUORDNUNG_ERFOLG_PID
+                } else {
+                    ZUORDNUNG_SCHEITERN_PID
+                };
+                let mut payload = serde_json::json!({
+                    "pid":      pid,
+                    "sender":   data.grid_operator.as_str(),
+                    "receiver": data.incoming_msb.as_str(),
+                    "melo":     data.melo_id.as_str(),
+                });
+                if zugeordnet {
+                    let Some(ref beginn) = data.bestaetigter_zuordnungsbeginn else {
+                        return Err(WorkflowError::rejected(
+                            "the Zuordnung needs the Zuordnungsbeginn the MSBN reported — \
+                             without it there is no date to assign from"
+                                .to_owned(),
+                        ));
+                    };
+                    // The NB commits here, so it checks the corridor itself
+                    // rather than trusting the MSBN's arithmetic: assigning
+                    // from a date outside it puts the registry and the market
+                    // on different days.
+                    if let (Some(datum), Some(vorlaeufig)) = (
+                        parse_yyyymmdd(beginn),
+                        data.process_date.as_deref().and_then(parse_yyyymmdd),
+                    ) && !mako_fristen::vorlauf::VorlaufShape::Korridor(
+                        mako_fristen::vorlauf::REALISIERUNGSKORRIDOR_WT,
+                    )
+                    .check(datum, vorlaeufig, HolidayCalendar::BdewMaKo)
+                    .is_ok()
+                    {
+                        let korridor = mako_fristen::vorlauf::realisierungskorridor(
+                            vorlaeufig,
+                            HolidayCalendar::BdewMaKo,
+                        );
+                        return Err(WorkflowError::rejected(format!(
+                            "der gemeldete Übernahmezeitpunkt {datum} liegt außerhalb des \
+                             Realisierungskorridors {}..={} — die Zuordnung ist abzulehnen \
+                             (IFTSTA {ZUORDNUNG_SCHEITERN_PID})",
+                            korridor.start(),
+                            korridor.end(),
+                        )));
+                    }
+                    payload["zuordnungsbeginn"] = serde_json::Value::String(beginn.clone());
+                }
+                let mut outbox = vec![
+                    PendingOutbox::new("IFTSTA", data.incoming_msb.as_str(), payload).caused_by(0),
+                ];
+                // A confirmed Zuordnung is a market-data fact, not just a
+                // message: `marktd` derives the per-Messlokation MSB timeline
+                // from this event (`derive_msb_zuordnung`), which is why it
+                // carries the MeLo, the MSB and the date rather than only the
+                // process UUID.
+                if zugeordnet {
+                    outbox.push(
+                        PendingOutbox::new(
+                            "ProcessCompleted",
+                            "",
+                            serde_json::json!({
+                                "pid":              pid,
+                                "melo_id":          data.melo_id.as_str(),
+                                "msb_mp_id":        data.incoming_msb.as_str(),
+                                "zuordnungsbeginn": data.bestaetigter_zuordnungsbeginn,
+                                "outcome":          "zugeordnet",
+                            }),
+                        )
+                        .caused_by(0),
+                    );
+                }
+
+                Ok(WorkflowOutput::with_outbox(
+                    vec![DeviceChangeEvent::ZuordnungEntschieden {
+                        pruefidentifikator: Pruefidentifikator::new(pid)
+                            .map_err(WorkflowError::rejected)?,
+                        zugeordnet,
+                        zuordnungsbeginn: data.bestaetigter_zuordnungsbeginn.clone(),
+                        outbound: true,
+                    }],
+                    outbox,
+                ))
+            }
+
+            DeviceChangeCommand::ReceiveZuordnungsantwort {
+                pid,
+                zuordnungsbeginn,
+            } => {
+                if !matches!(state, DeviceChangeState::GesamtvorgangGemeldet(_)) {
+                    return Err(WorkflowError::invalid_state(
+                        "GesamtvorgangGemeldet",
+                        state.status_str(),
+                    ));
+                }
+                let zugeordnet = match pid.as_u32() {
+                    ZUORDNUNG_ERFOLG_PID => true,
+                    ZUORDNUNG_SCHEITERN_PID | GESAMTVORGANG_AUSGEBLIEBEN_PID => false,
+                    other => {
+                        return Err(WorkflowError::rejected(format!(
+                            "PID {other} is not a Zuordnungsantwort (expected \
+                             {ZUORDNUNG_ERFOLG_PID}, {ZUORDNUNG_SCHEITERN_PID} or \
+                             {GESAMTVORGANG_AUSGEBLIEBEN_PID})"
+                        )));
+                    }
+                };
+                Ok(vec![DeviceChangeEvent::ZuordnungEntschieden {
+                    pruefidentifikator: pid,
+                    zugeordnet,
+                    zuordnungsbeginn,
+                    outbound: false,
+                }]
+                .into())
+            }
+
             DeviceChangeCommand::Complete { device_id } => {
-                // Reachable from both directions: `AperakSent` closes an inbound
-                // order we acknowledged, `AuftragBestaetigt` closes an outbound
-                // order the counterparty confirmed.
+                // Reachable from both directions: `AntwortGesendet` closes an
+                // inbound order we answered, `AuftragBestaetigt` an outbound
+                // order the counterparty confirmed. `AperakSent` is *not* a
+                // completion state — an acknowledged order whose business
+                // answer never went out is exactly the failure this split
+                // exists to make visible.
                 if !matches!(
                     state,
-                    DeviceChangeState::AperakSent(_) | DeviceChangeState::AuftragBestaetigt(_)
+                    DeviceChangeState::AntwortGesendet(_) | DeviceChangeState::AuftragBestaetigt(_)
                 ) {
                     return Err(WorkflowError::invalid_state(
-                        "AperakSent or AuftragBestaetigt",
+                        "AntwortGesendet or AuftragBestaetigt",
                         state.status_str(),
                     ));
                 }
@@ -1236,6 +2054,29 @@ impl Projection for DeviceChangeProjection {
                     *status = if positive { "AperakSent" } else { "Rejected" };
                 }
             }
+            DeviceChangeEvent::AntwortGesendet { bestaetigt, .. } => {
+                if let DeviceChangeRecord::Active { status, .. } = record {
+                    *status = if bestaetigt {
+                        "AntwortGesendet"
+                    } else {
+                        "Rejected"
+                    };
+                }
+            }
+            DeviceChangeEvent::GesamtvorgangGemeldet { erfolgreich, .. } => {
+                if let DeviceChangeRecord::Active { status, .. } = record {
+                    *status = if erfolgreich {
+                        "GesamtvorgangGemeldet"
+                    } else {
+                        "Rejected"
+                    };
+                }
+            }
+            DeviceChangeEvent::ZuordnungEntschieden { zugeordnet, .. } => {
+                if let DeviceChangeRecord::Active { status, .. } = record {
+                    *status = if zugeordnet { "Completed" } else { "Rejected" };
+                }
+            }
             DeviceChangeEvent::Completed { device_id } => {
                 if let DeviceChangeRecord::Active {
                     status,
@@ -1279,6 +2120,8 @@ mod tests {
             device_id: DeviceId::new("ZHR-12345678"),
             document_date: "20250115".to_owned(),
             message_ref: MessageRef::new("MSG-WIM-001"),
+            vorgangsnummer: Some("VG-WIM-001".to_owned()),
+            process_date: Some("20250201".to_owned()),
             validation_passed,
             validation_errors: if validation_passed {
                 vec![]
@@ -1325,6 +2168,36 @@ mod tests {
             "expected AperakSent"
         );
 
+        // The APERAK acknowledges; it does not answer. The business
+        // Bestätigung is a UTILMD 55043 carrying `E15` from `E_0201`.
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: true,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            },
+        )
+        .expect("dispatch Antwort");
+        let wire = &out.outbox[0];
+        assert_eq!(&*wire.message_type, "UTILMD");
+        assert_eq!(wire.payload["pid"], 55_043);
+        assert_eq!(wire.payload["antwort_code"], "E15");
+        assert_eq!(wire.payload["antwort_ebd"], "E_0201");
+        assert_eq!(wire.payload["vorgangsnummer"], "VG-WIM-001");
+        // The answer inverts the roles of the order it answers.
+        assert_eq!(wire.payload["sender"], "9900357000004");
+        assert_eq!(wire.payload["receiver"], "4012345000023");
+
+        let events = out.events.clone();
+        let state = events.iter().fold(state, WimDeviceChangeWorkflow::apply);
+        assert!(
+            matches!(&state, DeviceChangeState::AntwortGesendet(_)),
+            "expected AntwortGesendet, got {}",
+            state.status_str()
+        );
+
         let events = WimDeviceChangeWorkflow::handle(
             &state,
             DeviceChangeCommand::Complete {
@@ -1337,6 +2210,407 @@ mod tests {
             matches!(&state, DeviceChangeState::Completed(d) if d.device_id == DeviceId::new("ZHR-99999999")),
             "expected Completed with new device_id",
         );
+    }
+
+    /// An acknowledged order whose business answer never went out is not a
+    /// completed process: only the Antwort discharges the Antwortfrist.
+    #[test]
+    fn an_aperak_alone_does_not_complete_the_process() {
+        let state = DeviceChangeState::default();
+        let events =
+            WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(55_042, true)).expect("valid");
+        let state = events.iter().fold(state, WimDeviceChangeWorkflow::apply);
+        let events = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAperak {
+                positive: true,
+                reason: None,
+            },
+        )
+        .expect("aperak");
+        let state = events.iter().fold(state, WimDeviceChangeWorkflow::apply);
+        let err = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::Complete {
+                device_id: DeviceId::new("ZHR-1"),
+            },
+        )
+        .expect_err("an unanswered order cannot complete");
+        assert!(err.to_string().contains("AntwortGesendet"), "{err}");
+    }
+
+    /// A code from another Entscheidungsbaum never reaches the wire. `A02` is
+    /// the GPKE „Marktlokation existiert nicht"; `E_0201` does not publish it.
+    #[test]
+    fn a_foreign_antwortcode_is_refused_before_the_wire() {
+        let state = answered_state(55_042);
+        let err = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: false,
+                antwort_code: "A02".to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            },
+        )
+        .expect_err("A02 is not in E_0201");
+        assert!(err.to_string().contains("E_0201"), "{err}");
+    }
+
+    /// `Z01`/`Z12` assert a date change, so the answer must name the date.
+    #[test]
+    fn a_terminaenderung_must_name_its_date() {
+        let state = answered_state(55_039);
+        let err = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: false,
+                antwort_code: "Z12".to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            },
+        )
+        .expect_err("Z12 without a date");
+        assert!(err.to_string().contains("abweichender_termin"), "{err}");
+
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: false,
+                antwort_code: "Z12".to_owned(),
+                bemerkung: Some("Vertragsbindung bis 30.06.".to_owned()),
+                abweichender_termin: Some("20260630".to_owned()),
+            },
+        )
+        .expect("Z12 with a date");
+        assert_eq!(out.outbox[0].payload["pid"], 55_041);
+        assert_eq!(out.outbox[0].payload["process_date"], "20260630");
+    }
+
+    // ── Mitteilung über Gesamtvorgang (Kap. 2.3.2 Nr. 7/8) ───────────────
+
+    /// Drive an outbound 55042 to `AuftragBestaetigt`, carrying the
+    /// Zuordnungsbeginn the counterparty confirmed.
+    fn auftrag_bestaetigt(bestaetigter_termin: Option<&str>) -> DeviceChangeState {
+        let state = DeviceChangeState::default();
+        let events = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::InitiateDeviceChange {
+                pid: Pruefidentifikator::new(55_042).expect("valid"),
+                sender: MarktpartnerCode::new("4012345000023"),
+                receiver: MarktpartnerCode::new("9900357000004"),
+                melo_id: MeLo::new("DE0000000001234567890000000000001"),
+                process_date: "20260601".to_owned(),
+                message_ref: MessageRef::new("MSG-OUT-1"),
+            },
+        )
+        .expect("initiate");
+        let state = events.iter().fold(state, WimDeviceChangeWorkflow::apply);
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::ReceiveAntwort {
+                pid: Pruefidentifikator::new(55_043).expect("valid"),
+                sender: MarktpartnerCode::new("9900357000004"),
+                message_ref: MessageRef::new("MSG-ANT-1"),
+                reason: None,
+                bestaetigter_termin: bestaetigter_termin.map(str::to_owned),
+            },
+        )
+        .expect("antwort");
+        out.events
+            .iter()
+            .fold(state, WimDeviceChangeWorkflow::apply)
+    }
+
+    /// The Anmeldebestätigung is vorläufig, so confirming one opens the
+    /// 10-Werktage window in which the MSBN owes its Gesamtvorgang report.
+    #[test]
+    fn a_confirmed_anmeldung_opens_the_gesamtvorgang_window() {
+        let state = DeviceChangeState::default();
+        let events = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::InitiateDeviceChange {
+                pid: Pruefidentifikator::new(55_042).expect("valid"),
+                sender: MarktpartnerCode::new("4012345000023"),
+                receiver: MarktpartnerCode::new("9900357000004"),
+                melo_id: MeLo::new("DE0000000001234567890000000000001"),
+                process_date: "20260601".to_owned(),
+                message_ref: MessageRef::new("MSG-OUT-1"),
+            },
+        )
+        .expect("initiate");
+        let state = events.iter().fold(state, WimDeviceChangeWorkflow::apply);
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::ReceiveAntwort {
+                pid: Pruefidentifikator::new(55_043).expect("valid"),
+                sender: MarktpartnerCode::new("9900357000004"),
+                message_ref: MessageRef::new("MSG-ANT-1"),
+                reason: None,
+                bestaetigter_termin: None,
+            },
+        )
+        .expect("antwort");
+        assert!(
+            out.deadlines
+                .iter()
+                .any(|d| d.label == GESAMTVORGANG_MELDUNG_WINDOW_LABEL),
+            "a confirmed 55042 must open the 10-Werktage Gesamtvorgang window"
+        );
+    }
+
+    /// `Z01` moves the date, and everything downstream measures against the
+    /// moved one — the Realisierungskorridor included.
+    #[test]
+    fn a_terminaenderung_moves_the_confirmed_zuordnungsbeginn() {
+        let DeviceChangeState::AuftragBestaetigt(data) = auftrag_bestaetigt(Some("20260701"))
+        else {
+            panic!("expected AuftragBestaetigt");
+        };
+        assert_eq!(
+            data.bestaetigter_zuordnungsbeginn.as_deref(),
+            Some("20260701")
+        );
+        assert_eq!(data.process_date.as_deref(), Some("20260601"));
+    }
+
+    /// The date the MSBN reports becomes the Zuordnungsbeginn, so it may not
+    /// fall outside the ±9-Werktage Realisierungskorridor.
+    #[test]
+    fn the_gesamtvorgang_date_must_lie_in_the_realisierungskorridor() {
+        let state = auftrag_bestaetigt(None);
+        let inside = mako_fristen::add_werktage(
+            time::Date::from_calendar_date(2026, time::Month::June, 1).expect("valid"),
+            9,
+            HolidayCalendar::BdewMaKo,
+        );
+        let outside = mako_fristen::add_werktage(inside, 1, HolidayCalendar::BdewMaKo);
+        let fmt = |d: time::Date| format!("{:04}{:02}{:02}", d.year(), d.month() as u8, d.day());
+
+        assert!(
+            WimDeviceChangeWorkflow::handle(
+                &state,
+                DeviceChangeCommand::MeldeGesamtvorgang {
+                    erfolgreich: true,
+                    zuordnungsbeginn: Some(fmt(inside)),
+                },
+            )
+            .is_ok()
+        );
+        let err = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::MeldeGesamtvorgang {
+                erfolgreich: true,
+                zuordnungsbeginn: Some(fmt(outside)),
+            },
+        )
+        .expect_err("one Werktag past the corridor");
+        assert!(err.to_string().contains("Realisierungskorridor"), "{err}");
+    }
+
+    /// An erfolgreicher Gesamtvorgang without a date names no day to assign
+    /// from, so it cannot go out.
+    #[test]
+    fn an_erfolgreicher_gesamtvorgang_must_name_its_date() {
+        let err = WimDeviceChangeWorkflow::handle(
+            &auftrag_bestaetigt(None),
+            DeviceChangeCommand::MeldeGesamtvorgang {
+                erfolgreich: true,
+                zuordnungsbeginn: None,
+            },
+        )
+        .expect_err("no date");
+        assert!(err.to_string().contains("DTM+2380"), "{err}");
+    }
+
+    /// „Bei Mitteilung des Scheiterns des Gesamtvorgangs bleibt der MSBA der
+    /// einzelnen Messlokation zugeordnet." The process ends without a Zuordnung.
+    #[test]
+    fn a_gescheiterter_gesamtvorgang_leaves_the_msba_assigned() {
+        let state = auftrag_bestaetigt(None);
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::MeldeGesamtvorgang {
+                erfolgreich: false,
+                zuordnungsbeginn: None,
+            },
+        )
+        .expect("Scheitern");
+        assert_eq!(out.outbox[0].payload["pid"], GESAMTVORGANG_SCHEITERN_PID);
+        let state = out
+            .events
+            .iter()
+            .fold(state, WimDeviceChangeWorkflow::apply);
+        assert!(
+            matches!(&state, DeviceChangeState::Rejected { reason } if reason.contains("MSBA")),
+            "got {}",
+            state.status_str()
+        );
+    }
+
+    /// The NB side: a Gesamtvorgang report opens the 1-Werktag answer window,
+    /// and the Zuordnung carries the date the MSBN named.
+    #[test]
+    fn the_nb_answers_the_gesamtvorgang_and_assigns_from_the_reported_date() {
+        // Confirm an inbound 55042 first.
+        let state = answered_state(55_042);
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: true,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            },
+        )
+        .expect("Bestätigung");
+        assert!(
+            out.deadlines
+                .iter()
+                .any(|d| d.label == GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL),
+            "confirming an Anmeldung must arm the 11-Werktage Ausbleiben window"
+        );
+        let state = out
+            .events
+            .iter()
+            .fold(state, WimDeviceChangeWorkflow::apply);
+
+        // Inside the corridor around the vorläufig confirmed 2025-02-01.
+        let gemeldet = mako_fristen::add_werktage(
+            time::Date::from_calendar_date(2025, time::Month::February, 1).expect("valid"),
+            5,
+            HolidayCalendar::BdewMaKo,
+        );
+        let gemeldet_str = format!(
+            "{:04}{:02}{:02}",
+            gemeldet.year(),
+            gemeldet.month() as u8,
+            gemeldet.day()
+        );
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::ReceiveGesamtvorgang {
+                pid: Pruefidentifikator::new(GESAMTVORGANG_ERFOLG_PID).expect("valid"),
+                zuordnungsbeginn: Some(gemeldet_str.clone()),
+                message_ref: MessageRef::new("MSG-IFT-1"),
+            },
+        )
+        .expect("report");
+        assert!(
+            out.deadlines
+                .iter()
+                .any(|d| d.label == ZUORDNUNG_ANTWORT_WINDOW_LABEL)
+        );
+        let state = out
+            .events
+            .iter()
+            .fold(state, WimDeviceChangeWorkflow::apply);
+        assert!(matches!(
+            &state,
+            DeviceChangeState::GesamtvorgangGemeldet(_)
+        ));
+
+        let out = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchZuordnung { zugeordnet: true },
+        )
+        .expect("Zuordnung");
+        assert_eq!(&*out.outbox[0].message_type, "IFTSTA");
+        assert_eq!(out.outbox[0].payload["pid"], ZUORDNUNG_ERFOLG_PID);
+        assert_eq!(out.outbox[0].payload["zuordnungsbeginn"], gemeldet_str);
+        // `marktd` derives the per-Messlokation MSB timeline from this second
+        // entry, so it must carry the MeLo, the MSB and the date.
+        let derived = &out.outbox[1];
+        assert_eq!(&*derived.message_type, "ProcessCompleted");
+        assert_eq!(derived.payload["pid"], ZUORDNUNG_ERFOLG_PID);
+        assert_eq!(
+            derived.payload["melo_id"],
+            "DE0000000001234567890000000000001"
+        );
+        assert_eq!(derived.payload["msb_mp_id"], "4012345000023");
+        assert_eq!(derived.payload["zuordnungsbeginn"], gemeldet_str);
+        let state = out
+            .events
+            .iter()
+            .fold(state, WimDeviceChangeWorkflow::apply);
+        assert!(matches!(&state, DeviceChangeState::Completed(d)
+                if d.bestaetigter_zuordnungsbeginn.as_deref() == Some(gemeldet_str.as_str())));
+    }
+
+    /// The NB commits the Zuordnung, so it checks the corridor itself rather
+    /// than trusting the MSBN's arithmetic — assigning from a date outside it
+    /// puts the registry and the market on different days.
+    #[test]
+    fn the_nb_refuses_to_assign_from_a_date_outside_the_korridor() {
+        let state = answered_state(55_042);
+        let state = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchAntwort {
+                bestaetigt: true,
+                antwort_code: "E15".to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            },
+        )
+        .expect("Bestätigung")
+        .events
+        .iter()
+        .fold(state, WimDeviceChangeWorkflow::apply);
+
+        let state = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::ReceiveGesamtvorgang {
+                pid: Pruefidentifikator::new(GESAMTVORGANG_ERFOLG_PID).expect("valid"),
+                // A year past the vorläufig confirmed 2025-02-01.
+                zuordnungsbeginn: Some("20260210".to_owned()),
+                message_ref: MessageRef::new("MSG-IFT-2"),
+            },
+        )
+        .expect("the report is recorded even when its date is wrong")
+        .events
+        .iter()
+        .fold(state, WimDeviceChangeWorkflow::apply);
+
+        let err = WimDeviceChangeWorkflow::handle(
+            &state,
+            DeviceChangeCommand::DispatchZuordnung { zugeordnet: true },
+        )
+        .expect_err("out of corridor");
+        assert!(err.to_string().contains("Realisierungskorridor"), "{err}");
+
+        // …and refusing the Zuordnung outright is always available.
+        assert!(
+            WimDeviceChangeWorkflow::handle(
+                &state,
+                DeviceChangeCommand::DispatchZuordnung { zugeordnet: false },
+            )
+            .is_ok()
+        );
+    }
+
+    /// The numeric order of the IFTSTA PIDs is the reverse of the reading
+    /// order: 21009 is the failure and 21010 the success (IFTSTA AHB 2.1 § 6.2).
+    #[test]
+    fn the_gesamtvorgang_pids_are_not_in_reading_order() {
+        assert_eq!(GESAMTVORGANG_SCHEITERN_PID, 21_009);
+        assert_eq!(GESAMTVORGANG_ERFOLG_PID, 21_010);
+        assert_eq!(ZUORDNUNG_SCHEITERN_PID, 21_011);
+        assert_eq!(ZUORDNUNG_ERFOLG_PID, 21_012);
+        assert_eq!(GESAMTVORGANG_AUSGEBLIEBEN_PID, 21_013);
+        for pid in GESAMTVORGANG_PIDS {
+            assert!(
+                IFTSTA_PIDS.contains(pid),
+                "{pid} must route to this workflow"
+            );
+        }
+    }
+
+    /// Drive a process to the point where it owes an answer.
+    fn answered_state(pid: u32) -> DeviceChangeState {
+        let state = DeviceChangeState::default();
+        let events =
+            WimDeviceChangeWorkflow::handle(&state, make_receive_cmd(pid, true)).expect("valid");
+        events.iter().fold(state, WimDeviceChangeWorkflow::apply)
     }
 
     #[test]

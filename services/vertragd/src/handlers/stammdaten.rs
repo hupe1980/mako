@@ -86,6 +86,63 @@ pub async fn put_aggregatorvertrag(
     }
 }
 
+/// `GET /api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`
+///
+/// The Messstellenbetriebsvertrag the MSB holds at a Messlokation, plus the
+/// date a Kündigung received on `?on=` (default today) could take effect.
+///
+/// `processd` reads this to answer a WiM Kündigung MSB out of `E_0200`. A `404`
+/// is **no contract** — the `ZC9` case; a `5xx` is a lookup that could not be
+/// performed and must never be read as absence.
+///
+/// `?haushaltskunde=true` applies the § 309 Nr. 9 lit. c BGB one-month cap to
+/// the contractual notice period.
+pub async fn get_messstellenvertrag(
+    _claims: Claims,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Path((melo_id, msb_mp_id)): Path<(String, String)>,
+    Query(q): Query<MessstellenvertragQuery>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let row = pg::find_messstellenvertrag(&ctx.pool, ctx.tenant(), &melo_id, &msb_mp_id)
+        .await
+        .map_err(ApiError::Internal)?
+        .ok_or(ApiError::NotFound)?;
+    let on =
+        q.on.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+    ok(row.view(on, q.haushaltskunde.unwrap_or(true)))
+}
+
+/// `PUT /api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`
+///
+/// Answers `409` when the term overlaps an existing contract for the same MSB
+/// and Messlokation — two simultaneously active ones would let the Kündigung
+/// answer depend on row order.
+pub async fn put_messstellenvertrag(
+    _claims: Claims,
+    Extension(ctx): Extension<Arc<Ctx>>,
+    Path((melo_id, msb_mp_id)): Path<(String, String)>,
+    Json(input): Json<pg::UpsertMessstellenvertragInput>,
+) -> ApiResult<Json<serde_json::Value>> {
+    match pg::upsert_messstellenvertrag(&ctx.pool, ctx.tenant(), &melo_id, &msb_mp_id, &input).await
+    {
+        Ok(id) => ok(serde_json::json!({ "id": id })),
+        Err(e) if is_exclusion_violation(&e) => Err(ApiError::conflict(format!(
+            "überlappender Messstellenvertrag für MeLo {melo_id}"
+        ))),
+        Err(e) => Err(ApiError::Internal(e)),
+    }
+}
+
+#[derive(Deserialize)]
+pub struct MessstellenvertragQuery {
+    /// ISO 8601 date the next admissible Kündigungstermin is computed against;
+    /// defaults to today.
+    pub on: Option<Date>,
+    /// Whether the Anschlussnutzer is a Haushaltskunde — decides the
+    /// § 309 Nr. 9 lit. c BGB cap. Defaults to `true`, the protective reading.
+    pub haushaltskunde: Option<bool>,
+}
+
 #[derive(Deserialize)]
 pub struct AggregatorvertragQuery {
     pub sr_id: Option<String>,

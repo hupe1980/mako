@@ -693,52 +693,83 @@ Alert when:
 
 ## MSB module — WiM MSB-Wechsel STP
 
-`processd` includes a **WiM MSB-Wechsel STP** engine that automatically evaluates
-inbound UTILMD requests from new Messstellenbetreiber: `role-nb-strom` answers 55042
-(Anmeldung MSB) and 55051 (Ende MSB), `role-msb-strom` answers 55039 (Kündigung MSB)
-and 55168 (Verpflichtungsanfrage). STP target: **≥ 80 %**.
+`processd` evaluates inbound WiM MSB-Wechsel requests automatically:
+`role-nb-strom` answers 55042 (Anmeldung MSB) and 55051 (Ende MSB),
+`role-msb-strom` answers 55039 (Kündigung MSB) and 55168 (Verpflichtungsanfrage).
+STP target: **≥ 80 %**.
+
+The Prüfschritte are `mako_pruefung::msb`, the executable form of the published
+Entscheidungsbäume; `msb_module.rs` is the plumbing around them.
 
 ### Decision pipeline (`msb_module.rs`)
 
 ```
 de.mako.process.initiated (PID 55039 / 55042 / 55051 / 55168)
-  → GET marktd /api/v1/melos/{melo_id}                ← MeLo exists?
-  → GET marktd /api/v1/melos/{melo_id}/zaehler        ← meters + Zählertyp
-  → GET marktd /api/v1/partners/{nmsb_mp_id}          ← nMSB registered?
-  → GET marktd /api/v1/technische-ressourcen/{sr_id}  ← SR linked?
-  → evaluate_msb_anmeldung / evaluate_msb_kuendigung (pure, no I/O)
-      Accept   → wim.geraetewechsel.bestaetigen [if auto_accept]
+  → GET marktd /api/v1/melos/{melo_id}          ← MeLo known?
+  → GET marktd /api/v1/partners/{msb_mp_id}     ← Rahmenvertrag § 9 Abs. 1 Nr. 3 MsbG?
+  → mako_pruefung::msb::pruefe_{anmeldung,abmeldung,kuendigung}
+      Accept   → wim.geraetewechsel.bestaetigen (antwortcode) [if auto_accept]
                  else approval_queue with the WiM Frist
-      Reject   → wim.geraetewechsel.ablehnen (ERC code in reason)
+      Reject   → wim.geraetewechsel.ablehnen (antwortcode from the process's EBD)
       Escalate → approval_queue with the WiM Frist
 ```
 
-### Evaluation checks (PID 55042 — Anmeldung)
+The Frist runs from the Übertragungstag the CloudEvent carries in `time`, so a
+redelivery does not restart it.
 
-| # | Check | ERC on failure |
-|---|---|---|
-| 1 | MeLo exists in `marktd` grid registry | A02 |
-| 2 | nMSB registered in partner directory | A05 |
-| 3 | MeLo has an iMSys device (§14a mandatory MSB eligibility review) | Escalate |
-| 4 | `SteuerbareRessource` linked (§14a eligibility review) | Escalate |
-| 5 | Zaehler count > 0 (grid record exists for the MeLo) | Escalate |
+### Anmeldung MSB (55042) — `E_0201`, answered by the NB
 
-Checks 1–2 are hard rejects (A02/A05). Checks 3–5 trigger operator escalation — `processd`
-cannot make the §14a eligibility determination autonomously.
+WiM Strom Teil 1 Kap. 2.3.2 Nr. 2 names three checks, and no others:
 
-**Kündigung (PID 55039)** only applies checks 1–2. It runs in the `role-msb-strom`
-binary — the Altmessstellenbetreiber has no valid grounds to reject termination when the
-MeLo exists and the nMSB is registered.
-
-### Escalation reasons
-
-| Scenario | Escalate reason |
+| Check | Outcome on failure |
 |---|---|
-| iMSys device present | `MeLo {id} has an iMSys device — §14a eligibility check required` |
-| SR-linked §14a load | `MeLo {id} has linked SteuerbareRessource {id} — §14a Modul eligibility check required` |
-| No Zaehler registered | `MeLo {id} has no registered meters — NIS/GIS data import required` |
+| Messlokation known to this NB | `ZC9` |
+| Versicherung über die Beauftragung durch den AN vorhanden | `ZB6` |
+| Mindestvorlaufzeit eingehalten — 15 WT, 7 WT bei erstmaliger Einrichtung | `E17`, naming the earliest reachable Zuordnungsbeginn |
+| Vertrag nach § 9 Abs. 1 Nr. 3 MsbG mit dem MSBN | Escalate — `E_0201` publishes no code |
 
-All escalated decisions still generate an `anmeldung_decisions` row for §20 EnWG audit trail.
+The metering technology at the Messlokation is **not** a ground: §5 MsbG gives the
+Anschlussnutzer a free choice of MSB and §14 MsbG the right to switch, and `E_0201`
+publishes no code for it.
+
+### Ende MSB (55051) — `E_0202`, answered by the NB
+
+A Zuordnungsende inside the 20-Werktage Mindestvorlauffrist is not refused: Kap. 2.4.2
+Nr. 2 has the NB set it to the nächstmögliches Zuordnungsende and confirm with `Z01`.
+An Außerbetriebnahme carries no lead time at all — it is reported after the
+Geräteausbau.
+
+### Kündigung MSB (55039) — `E_0200`, answered by the **MSBA**
+
+The Kündigung runs on the contract layer between the two MSB (Kap. 2.1.3); the
+Netzbetreiber is not a party. Every Prüfschritt is a question about the MSBA's own
+Messstellenbetriebsvertrag, which `vertragd` holds
+(`GET /api/v1/messstellenvertraege/{melo_id}/{msb_mp_id}`) — the same split the LF
+module uses: supply and market state from `marktd`, contract state from `vertragd`:
+
+| Contract state | Outcome |
+|---|---|
+| `vertragd` unreachable or unconfigured | Escalate |
+| `404` — this MSB holds no contract here | `ZC9` |
+| `beendet_am` set | `Z29` |
+| `gekuendigt_zum` set | the Kap. 2.2.3 table — `E15`, `Z01` to an earlier date, or `Z34` |
+| Live, requested date on or after `naechstmoeglich` | `E15` |
+| Live, requested date inside the binding | `Z12`, naming `naechstmoeglich` |
+| Live, no `naechstmoeglich` recorded | Escalate |
+| „Nächstmöglicher Termin" requested (`DTM+471`) | `Z01`, naming the date |
+
+`vertragd` derives `naechstmoeglich` from the contract's notice period, capped by
+§ 309 Nr. 9 lit. c BGB. Its absence on a live contract escalates rather than
+confirming: „no Kündigungsfrist recorded" and „terminable at any time" look identical,
+and only one of them makes every requested date admissible.
+
+### Verpflichtungsanfrage (55168) — `E_0240`
+
+Kap. 2.4.2 Nr. 4 leaves the answer to the gMSB's own commercial judgement („nach
+eigenem Ermessen"), so it escalates with its 1-Werktag window attached.
+
+All escalated decisions still generate an `anmeldung_decisions` row for the §20 EnWG
+audit trail.
 
 ---
 

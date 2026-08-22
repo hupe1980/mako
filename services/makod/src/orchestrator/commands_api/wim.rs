@@ -20,7 +20,7 @@ pub(super) fn cmd_wim_geraetewechsel_bestaetigen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_wim_aperak(s, p, true))
+    Box::pin(dispatch_wim_antwort(s, p, true))
 }
 
 pub(super) fn cmd_wim_geraetewechsel_ablehnen<'a>(
@@ -29,7 +29,48 @@ pub(super) fn cmd_wim_geraetewechsel_ablehnen<'a>(
 ) -> std::pin::Pin<
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
-    Box::pin(dispatch_wim_aperak(s, p, false))
+    Box::pin(dispatch_wim_antwort(s, p, false))
+}
+
+pub(super) fn cmd_wim_geraetewechsel_aperak<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    let positive = p
+        .get("positiv")
+        .or_else(|| p.get("positive"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    Box::pin(dispatch_wim_aperak(s, p, positive))
+}
+
+pub(super) fn cmd_wim_gesamtvorgang_melden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_gesamtvorgang(s, p))
+}
+
+pub(super) fn cmd_wim_zuordnung_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_zuordnung(s, p, true))
+}
+
+pub(super) fn cmd_wim_zuordnung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_zuordnung(s, p, false))
 }
 
 pub(super) fn cmd_wim_preisanfrage_angebot_senden<'a>(
@@ -228,10 +269,175 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
-/// Dispatch `DeviceChangeCommand::DispatchAperak` to an existing
-/// `WimDeviceChangeWorkflow` process looked up by `melo_id`.
+/// Dispatch the **business** Bestätigung or Ablehnung on a WiM MSB-Wechsel
+/// process, looked up by `melo_id`.
 ///
 /// Called for `wim.geraetewechsel.bestaetigen` and `wim.geraetewechsel.ablehnen`.
+///
+/// | Payload field | Required | Meaning |
+/// |---|---|---|
+/// | `melo_id` | yes | Business key of the process being answered |
+/// | `antwortcode` | on Ablehnung | `SG4 STS+E01` DE 9013, from the process's EBD |
+/// | `bemerkung` | no | `FTX+ACB` free text |
+/// | `abweichender_termin` | with `Z01`/`Z12`/`Z14` | The date the answer confirms |
+///
+/// The **technical** APERAK is a separate command on a separate clock
+/// (`wim.geraetewechsel.aperak`, 45 minutes): it says the message could be
+/// processed and decides nothing.
+///
+/// On a Bestätigung the Antwortcode defaults to the tree's unconditional
+/// Zustimmung (`E15` for the three UTILMD trees, `Z13` for the ORDRSP ones); an
+/// Ablehnung has no defensible default and must name its ground.
+pub(super) async fn dispatch_wim_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    bestaetigt: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+
+    // `antwortcode` is the field name every other answering command in this
+    // API uses; `reason` stays accepted as the Bemerkung because processd and
+    // the ERP already send it.
+    let antwortcode = payload
+        .get("antwortcode")
+        .or_else(|| payload.get("antwort_code"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let bemerkung = payload
+        .get("bemerkung")
+        .or_else(|| payload.get("reason"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let abweichender_termin = payload
+        .get("abweichender_termin")
+        .and_then(|v| v.as_str())
+        .map(normalise_process_date);
+
+    if !bestaetigt && antwortcode.is_none() {
+        return Err(DispatchError::InvalidPayload(
+            "an Ablehnung must carry \"antwortcode\" — the ground is a code from the              process's Entscheidungsbaum (E_0200 / E_0201 / E_0202 / E_0240), and no              default is defensible"
+                .to_owned(),
+        ));
+    }
+
+    // The default Zustimmung depends on which process is being answered, and
+    // only the process knows its PID — so resolve it inside the closure
+    // against the loaded state rather than guessing here.
+    dispatch_to_process_with_state::<WimDeviceChangeWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::WORKFLOW_NAME,
+        move |st| {
+            let code = match antwortcode.clone() {
+                Some(c) => c,
+                None => default_zustimmung_for(st).ok_or_else(|| {
+                    DispatchError::InvalidPayload(
+                        "the process is not in a state that owes an answer, so no default                          Antwortcode could be resolved"
+                            .to_owned(),
+                    )
+                })?,
+            };
+            Ok(DeviceChangeCommand::DispatchAntwort {
+                bestaetigt,
+                antwort_code: code,
+                bemerkung: bemerkung.clone(),
+                abweichender_termin: abweichender_termin.clone(),
+            })
+        },
+    )
+    .await
+}
+
+/// The unconditional Zustimmung code for whichever MSB-Wechsel process this
+/// stream is running.
+fn default_zustimmung_for(state: &mako_wim::DeviceChangeState) -> Option<String> {
+    use mako_wim::DeviceChangeState as S;
+    let data = match state {
+        S::ValidationPassed(d) | S::AperakSent(d) => d,
+        _ => return None,
+    };
+    let ebd = mako_wim::geraetewechsel::wim_ebd(data.pruefidentifikator.as_u32())?;
+    // Named on the tree rather than inferred: `E_0202` publishes both `E15`
+    // and `Z01` as Muss with no Bedingung, and picking `Z01` for a plain
+    // acceptance asserts a Terminänderung that did not happen.
+    let code = match ebd {
+        mako_pruefung::codes::EBD_WEITERVERPFLICHTUNG => "Z13",
+        _ => "E15",
+    };
+    mako_pruefung::codes::lookup(ebd, code).map(|c| c.code.to_owned())
+}
+
+/// `YYYY-MM-DD` or `YYYYMMDD` in, `YYYYMMDD` out.
+fn normalise_process_date(raw: &str) -> String {
+    raw.chars().filter(char::is_ascii_digit).collect()
+}
+
+/// Report the outcome of the Gesamtvorgang as the **MSBN**
+/// (`wim.gesamtvorgang.melden`, IFTSTA 21010 / 21009).
+///
+/// | Payload field | Required | Meaning |
+/// |---|---|---|
+/// | `melo_id` | yes | Business key of the Beginn-Messstellenbetrieb process |
+/// | `erfolgreich` | no (default `true`) | 21010 vs. 21009 |
+/// | `zuordnungsbeginn` | on success | `SG15 DTM+2380`, the day the MSBN takes over |
+///
+/// The date must lie inside the ±9-Werktage Realisierungskorridor around the
+/// Zuordnungsbeginn the NB confirmed; the workflow refuses one that does not.
+pub(super) async fn dispatch_wim_gesamtvorgang(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+    let erfolgreich = payload
+        .get("erfolgreich")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let zuordnungsbeginn = payload
+        .get("zuordnungsbeginn")
+        .and_then(|v| v.as_str())
+        .map(normalise_process_date);
+    if erfolgreich && zuordnungsbeginn.is_none() {
+        return Err(DispatchError::InvalidPayload(
+            "an erfolgreicher Gesamtvorgang must carry \"zuordnungsbeginn\" — the NB assigns \
+             the MSBN from that day, 00:00 Uhr (WiM Teil 1 Kap. 2.1.1)"
+                .to_owned(),
+        ));
+    }
+    dispatch_to_process::<WimDeviceChangeWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::WORKFLOW_NAME,
+        move || DeviceChangeCommand::MeldeGesamtvorgang {
+            erfolgreich,
+            zuordnungsbeginn: zuordnungsbeginn.clone(),
+        },
+    )
+    .await
+}
+
+/// Decide the Zuordnung as the **NB** (IFTSTA 21012 / 21011).
+///
+/// This is the constitutive step: on `zugeordnet` the MSBN is assigned from the
+/// date it reported and the MSBA's assignment ends at the same instant.
+pub(super) async fn dispatch_wim_zuordnung(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    zugeordnet: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+    dispatch_to_process::<WimDeviceChangeWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::WORKFLOW_NAME,
+        move || DeviceChangeCommand::DispatchZuordnung { zugeordnet },
+    )
+    .await
+}
+
+/// Dispatch the technical APERAK on a WiM MSB-Wechsel process.
+///
+/// Separate from [`dispatch_wim_antwort`] on purpose: two messages, two
+/// Fristen (45 min vs. 3/5/7/1 Werktage), two decisions.
 pub(super) async fn dispatch_wim_aperak(
     state: &CommandsApiState,
     payload: &serde_json::Value,

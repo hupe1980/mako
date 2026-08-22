@@ -7,18 +7,23 @@
 //! German electricity smart-meter rollout, regulated by the MsbG and BDEW
 //! WiM process documentation:
 //!
-//! | Process | PIDs | Message | Module | Status |
+//! | Process | PIDs | Message | Module | EBD |
 //! |---|---|---|---|---|
-//! | Anmeldung MSB (MSBN → NB) | 55042 → 55043/55044 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Kündigung MSB (MSBN → **MSBA**) | 55039 → 55040/55041 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Ende MSB / Abmeldung (**MSBA → NB**) | 55051 → 55052/55053 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Verpflichtungsanfrage (NB → **gMSB**) | 55168 → 55169/55170 | UTILMD | `geraetewechsel` | ✅ Implemented |
-//! | Geräteübernahme (Bestellung/Weiterverpflichtung/Gerätewechselabsicht) | 17001, 17002, 17009 | ORDERS | `geraeteubernahme` | ✅ Implemented |
-//! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | ✅ Implemented |
-//! | Preisanfrage (REQOTE/QUOTES) | 35001/35002/35004/35005 (REQOTE in), 15001/15002/15004/15005 (QUOTES in) | REQOTE, QUOTES | `preisanfrage` | ✅ Implemented |
-//! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | ✅ Implemented |
-//! | ESA Wertebestellung (Anfrage/Angebot/Bestellung/Storno) | 35003, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | ✅ Implemented |
-//! | MSB-Rechnung (INVOIC) | 31009 | INVOIC | `rechnung` | ✅ Implemented (send + receive; auto-REMADV pending in deadline_dispatch) |
+//! | Anmeldung MSB (MSBN → NB) | 55042 → 55043/55044 | UTILMD | `geraetewechsel` | `E_0201` |
+//! | Kündigung MSB (MSBN → **MSBA**) | 55039 → 55040/55041 | UTILMD | `geraetewechsel` | `E_0200` |
+//! | Ende MSB / Abmeldung (**MSBA → NB**) | 55051 → 55052/55053 | UTILMD | `geraetewechsel` | `E_0202` |
+//! | Verpflichtungsanfrage (NB → **gMSB**) | 55168 → 55169/55170 | UTILMD | `geraetewechsel` | `E_0240` |
+//! | Weiterverpflichtung (**NB → MSBA**) | 17002 → 19003/19004 | ORDERS/ORDRSP | `weiterverpflichtung` | `E_0203` |
+//! | Geräteübernahme Bestellung (MSBN → MSBA) | 17001 → 19001/19002 | ORDERS/ORDRSP | `geraeteubernahme` | `E_0247` |
+//! | Anzeige Gerätewechselabsicht (MSBN → MSBA) | 17009 → 19015/19016 | ORDERS/ORDRSP | `geraeteubernahme` | `E_0204` |
+//! | Messlokationsänderung (NB/LF → MSB) | 17011/17118 → 19005/19006 | ORDERS/ORDRSP | `technik_aenderung` | `E_0249`/`E_0250` |
+//! | Stammdaten Anfrage / Übermittlung | 17132 (req), 17102–17133 (resp) | ORDERS | `stammdaten` | — |
+//! | Preisanfrage (REQOTE/QUOTES) | 35001/35002/35004/35005 → 15001/15002/15004/15005 | REQOTE, QUOTES | `preisanfrage` | — |
+//! | Rechnungsabwicklung über den LF | 17005/17006 → 19009/19010 | ORDERS/ORDRSP | `rechnungsabwicklung` | `E_0206`/`E_0209` |
+//! | Preisliste (PRICAT) | 27001–27003 | PRICAT | `preisliste` | — |
+//! | ESA Wertebestellung | 35003, 15003, 17007/17008, 39002, 19011–19014 | REQOTE/QUOTES/ORDERS/ORDCHG/ORDRSP | `wertebestellung`, `esa_wertebestellung` | — |
+//! | MSB-Rechnung (INVOIC) | 31009 → 33001/33003/33004, 29001 | INVOIC | `invoic` | — |
+//! | INSRPT Störungsmeldung | 23001 → 23003/23004/23008/23011/23012 | INSRPT | `insrpt` | — |
 //!
 //! ## Architecture
 //!
@@ -39,20 +44,18 @@
 //!                   └── Process::execute(cmd)  ← pure domain logic here
 //! ```
 //!
-//! ## Key regulatory distinction from GPKE
+//! ## Three clocks, three messages
 //!
-//! | Aspect | GPKE | WiM |
+//! | Clock | Window | Message |
 //! |---|---|---|
-//! | APERAK Frist (Strom UTILMD) | **45 min** | **45 min** |
-//! | Business Antwortfrist | 24 h wall-clock | **1 / 3 / 5 / 7 Werktage, per process** |
-//! | Frist helper | `fristen::add_hours(24)` | `geraetewechsel::antwort_frist_werktage(pid)` |
-//! | Governing rule | BK6-22-024 | BK6-24-174 |
+//! | **APERAK** — processability | 45 min for Strom UTILMD/ORDERS (APERAK AHB 1.0 §2.4.1) | APERAK BGM+312/313 |
+//! | **Antwortfrist** — the business decision | 3 / 5 / 7 / 1 Werktage per process, from `antwort_frist_werktage(pid)` | the Antwort-PID's UTILMD or ORDRSP |
+//! | **Vorlauffrist** — was the requested date admissible? | anchored on the date the message carries, `mako_fristen::vorlauf` | the inbound message itself |
 //!
-//! Two distinct clocks, easily conflated: the **APERAK** window is the
-//! processability acknowledgement (45 min for UTILMD/ORDERS in Strom, APERAK AHB
-//! §2.4.1); the **Antwortfrist** is the counterparty's business answer and varies
-//! per process — 3 WT Kündigung, 5 WT Anmeldung, 7 WT Abmeldung, 1 WT
-//! Verpflichtungsanfrage.
+//! Only the second discharges the Antwortfrist; the APERAK decides nothing.
+//! Where GPKE states its answer windows as clock times on the first Werktag
+//! after the ÜT, WiM states Werktage — see
+//! [`mako_fristen::antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS`].
 //!
 //! ## Command construction example
 //!
@@ -108,6 +111,7 @@ pub mod rechnungsabwicklung;
 pub mod stammdaten;
 pub mod steuerungsauftrag;
 pub mod technik_aenderung;
+pub mod weiterverpflichtung;
 pub mod wertebestellung;
 
 pub use geraeteubernahme::{
@@ -135,10 +139,9 @@ pub use invoic::{
     WimInvoicEvent, WimInvoicProjection, WimInvoicRecord, WimInvoicState, WimInvoicWorkflow,
 };
 pub use preisanfrage::{
-    ANTWORT_FRIST_WT as PREISANFRAGE_ANTWORT_FRIST_WT, PREISANFRAGE_DEADLINE_LABEL,
-    PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent, PreisanfrageState, QUOTES_PIDS,
-    REQOTE_PIDS, WORKFLOW_NAME as PREISANFRAGE_WORKFLOW_NAME, WimPreisanfrageWorkflow,
-    antwort_frist_werktage as preisanfrage_antwort_frist_werktage,
+    PREISANFRAGE_DEADLINE_LABEL, PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent,
+    PreisanfrageState, QUOTES_PIDS, REQOTE_PIDS, WORKFLOW_NAME as PREISANFRAGE_WORKFLOW_NAME,
+    WimPreisanfrageWorkflow, antwort_frist_werktage as preisanfrage_antwort_frist_werktage,
 };
 pub use preisliste::{
     PRICAT_PIDS, PreislisteCommand, PreislisteData, PreislisteEvent, PreislisteState,
@@ -165,6 +168,13 @@ pub use technik_aenderung::{
     ORDRSP_PIDS as TECHNIK_AENDERUNG_ORDRSP_PIDS, TechnikAenderungCommand, TechnikAenderungEvent,
     TechnikAenderungState, WORKFLOW_NAME as TECHNIK_AENDERUNG_WORKFLOW_NAME,
     WimTechnikAenderungWorkflow,
+};
+pub use weiterverpflichtung::{
+    ANTWORT_WINDOW_LABEL as WEITERVERPFLICHTUNG_ANTWORT_WINDOW_LABEL,
+    AUFTRAG_PID as WEITERVERPFLICHTUNG_AUFTRAG_PID, WEITERVERPFLICHTUNG_PIDS,
+    WORKFLOW_NAME as WEITERVERPFLICHTUNG_WORKFLOW_NAME, WeiterverpflichtungCommand,
+    WeiterverpflichtungData, WeiterverpflichtungEvent, WeiterverpflichtungProjection,
+    WeiterverpflichtungState, WimWeiterverpflichtungWorkflow,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -227,6 +237,7 @@ impl mako_engine::builder::EngineModule for WimModule {
             "wim-preisanfrage",
             "wim-preisliste",
             rechnungsabwicklung::WORKFLOW_NAME,
+            weiterverpflichtung::WORKFLOW_NAME,
             "wim-invoic",
             insrpt::WORKFLOW_NAME,
             technik_aenderung::WORKFLOW_NAME,
@@ -263,7 +274,20 @@ impl mako_engine::builder::EngineModule for WimModule {
             router.register(antwort_pid, "wim-device-change");
         }
 
-        // ORDERS 17001/17002/17009 — Geräteübernahme (Anfrage, Bestellung, Stornierung).
+        // ORDERS 17002 → ORDRSP 19003/19004 — Weiterverpflichtung des MSB
+        // (WiM Teil 1 Kap. 2.4.2 Nr. 5/6, `E_0203`).
+        //
+        // Only the inbound leg is registered. 19003/19004 are *our* answer,
+        // rendered from the outbox — the NB-side receiver (mako sending 17002
+        // and awaiting the MSBA's ORDRSP) is not implemented, and registering
+        // an outbound-only PID would claim a dispatch arm that can never fire.
+        router.register(
+            weiterverpflichtung::AUFTRAG_PID,
+            weiterverpflichtung::WORKFLOW_NAME,
+        );
+
+        // ORDERS 17001/17009 — Geräteübernahme Bestellung and Anzeige
+        // Gerätewechselabsicht.
         //
         // Shared with WiM Gas (`wim-gas-geraeteubernahme`). Registered with
         // `Sparte::Strom` so `route_with_sparte(pid, Sparte::Strom)` resolves here

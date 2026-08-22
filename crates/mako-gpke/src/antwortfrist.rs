@@ -76,7 +76,18 @@ mod tests {
                     .map(|(aenderung, _, _)| *aenderung),
             )
             .collect();
+
+        // REQOTE 35004 „Anfrage einer Konfiguration" states its window in GPKE
+        // Teil 3, so it belongs to the GPKE *family*, but the workflow that
+        // spawns from it is `wim-preisanfrage` in `mako-wim` — this crate has
+        // no REQOTE workflow to list. The Family says which Festlegung states
+        // the number, not which crate owns the process.
+        const ROUTED_ELSEWHERE: &[u32] = &[35_004];
+
         for o in ANTWORT_OBLIGATIONS {
+            if ROUTED_ELSEWHERE.contains(&o.trigger_pid) {
+                continue;
+            }
             assert!(
                 inbound.contains(&o.trigger_pid),
                 "{} ({}) is not an inbound PID of any registered workflow",

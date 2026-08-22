@@ -39,6 +39,17 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     //    NB-initiated Abmeldeanfrage. Never inbound.
     (55_011, "outbound-only: LF response, generated not received"),
     (55_012, "outbound-only: LF response, generated not received"),
+    // The MSBA's ORDRSP answering a Weiterverpflichtung (`E_0203`). mako holds
+    // the MSBA side; the NB side — sending 17002 and awaiting the answer — is
+    // not implemented, so these never arrive inbound.
+    (19_003, "outbound-only: MSBA response to ORDERS 17002"),
+    (19_004, "outbound-only: MSBA response to ORDERS 17002"),
+    // „Ablehnung Anforderung von Werten" answers a Werteanforderung
+    // (ORDRSP AHB 1.1b § 4.13); no workflow covers that leg.
+    (
+        19_007,
+        "Werteanforderung answer; no workflow covers that leg",
+    ),
     // ── Not yet wired: constants exist, nothing registers them.
     (17_134, "konfiguration::ORDERS_PIDS exists; not registered"),
     (17_135, "konfiguration::ORDERS_PIDS exists; not registered"),

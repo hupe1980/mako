@@ -15,11 +15,25 @@
 //! | 23012 | Informationsmeldung    | MSB → LF   | WiM Strom Teil 2    |
 //!
 //! Gas-only INSRPT PIDs 23005 and 23009 are handled by `mako-wim-gas`
-//! (`wim-gas-insrpt`) with the Gas APERAK Frist of **10 Werktage**.
+//! (`wim-gas-insrpt`).
+//!
+//! ## Die Antwortfrist hängt an der Messtechnik
+//!
+//! WiM Strom Teil 2 Kap. 1.2 Nr. 2 states two windows for the same PID:
+//!
+//! | Messtechnik | Frist |
+//! |---|---|
+//! | kME ohne RLM, mME | **3 WT** |
+//! | kME mit RLM, iMS | **1 WT** |
+//!
+//! The Störungsmeldung does not say which applies — the MSB's own device
+//! registry does. Size the deadline with
+//! [`mako_fristen::antwort::stoerungsmeldung_werktage`]; a flat window lets an
+//! iMS Störung run two Werktage past its own.
 //!
 //! ## Regulatory basis
 //!
-//! - **BK6-22-024** — WiM Strom (APERAK Frist 5 Werktage)
+//! - **BK6-22-024 Anlage 2b** — WiM Strom Teil 2 Kap. 1
 //! - **INSRPT 1.x** — EDI@Energy inspection report format
 
 use mako_engine::types::Pruefidentifikator;
@@ -49,16 +63,17 @@ pub const INSRPT_ANFRAGE_PIDS: &[u32] = &[23001];
 /// - 23011: Informationsmeldung (MSB → LF) — WiM Strom Teil 2 only
 /// - 23012: Informationsmeldung (MSB → LF) — WiM Strom Teil 2 only
 ///
-/// Gas-only PIDs 23005 (Ablehnung Gas) and 23009 (Ergebnisbericht Gas) are
-/// registered by `mako-wim-gas` (`wim-gas-insrpt`) with the Gas APERAK Frist
-/// of 10 Werktage. In a combined Strom+Gas deployment `mako-wim` registers
-/// the shared PIDs here (5 WT); `mako-wim-gas` adds 23005/23009 (10 WT).
+/// Gas-only PIDs 23005 (Informationsmeldung über Störung) and 23009
+/// (Informationsmeldung über Behebung) are registered by `mako-wim-gas`
+/// (`wim-gas-insrpt`). In a combined Strom+Gas deployment `mako-wim` registers
+/// the shared PIDs here and `mako-wim-gas` adds 23005/23009.
 pub const INSRPT_ANTWORT_PIDS: &[u32] = &[23003, 23004, 23008, 23011, 23012];
 
 /// Deadline label for the MSB response window.
 ///
-/// The MSB must respond within **5 Werktage** per BK6-24-174 (WiM Strom) /
-/// **10 Werktage** per BK7-24-01-009 (WiM Gas).
+/// Sized per Messtechnik — 3 Werktage for a kME ohne RLM or an mME, 1 for a kME
+/// mit RLM or an iMS (WiM Strom Teil 2 Kap. 1.2 Nr. 2). See
+/// [`mako_fristen::antwort::stoerungsmeldung_werktage`].
 pub const ANTWORT_WINDOW_LABEL: &str = "wim-insrpt-antwort";
 
 // ── Domain data ───────────────────────────────────────────────────────────────

@@ -51,6 +51,8 @@ fn receive_utilmd_cmd(validation_passed: bool) -> DeviceChangeCommand {
         device_id: DeviceId::new("MSB-DEVICE-001"),
         document_date: "2025-01-15".to_owned(),
         message_ref: MessageRef::new("MSG-001"),
+        vorgangsnummer: Some("VG-TEST-001".to_owned()),
+        process_date: Some("20260401".to_owned()),
         validation_passed,
         validation_errors: if validation_passed {
             vec![]
@@ -97,12 +99,29 @@ async fn happy_path_full_lifecycle() {
         "process must be AperakSent after positive APERAK, got: {state:?}",
     );
 
-    // Step 3: Mark device change complete → Completed
+    // Step 3: the business Bestätigung — a UTILMD 55043 carrying `E15` from
+    // `E_0201`. The APERAK above only said the message was processable.
+    p.execute(DeviceChangeCommand::DispatchAntwort {
+        bestaetigt: true,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
+        abweichender_termin: None,
+    })
+    .await
+    .expect("DispatchAntwort must succeed from AperakSent");
+
+    let state = p.state().await.expect("state after DispatchAntwort");
+    assert!(
+        matches!(state, DeviceChangeState::AntwortGesendet(_)),
+        "process must be AntwortGesendet after the Bestätigung, got: {state:?}",
+    );
+
+    // Step 4: Mark device change complete → Completed
     p.execute(DeviceChangeCommand::Complete {
         device_id: DeviceId::new("MSB-DEVICE-001"),
     })
     .await
-    .expect("Complete must succeed from AperakSent");
+    .expect("Complete must succeed from AntwortGesendet");
 
     let state = p.state().await.expect("state after Complete");
     assert!(
@@ -245,6 +264,14 @@ async fn deadline_on_completed_is_absorbed() {
     })
     .await
     .unwrap();
+    p.execute(DeviceChangeCommand::DispatchAntwort {
+        bestaetigt: true,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
+        abweichender_termin: None,
+    })
+    .await
+    .unwrap();
     p.execute(DeviceChangeCommand::Complete {
         device_id: DeviceId::new("MSB-DEVICE-001"),
     })
@@ -310,6 +337,14 @@ async fn projection_tracks_full_lifecycle() {
     })
     .await
     .unwrap();
+    p.execute(DeviceChangeCommand::DispatchAntwort {
+        bestaetigt: true,
+        antwort_code: "E15".to_owned(),
+        bemerkung: None,
+        abweichender_termin: None,
+    })
+    .await
+    .unwrap();
     p.execute(DeviceChangeCommand::Complete {
         device_id: DeviceId::new("MSB-DEVICE-001"),
     })
@@ -334,8 +369,10 @@ async fn projection_tracks_full_lifecycle() {
         "Completed",
         "projection status must be Completed"
     );
-    // Initiated + ValidationPassed + AperakDispatched + Completed = 4 events
-    assert_eq!(record.event_count(), 4, "4 events in the stream");
+    // Initiated + ValidationPassed + AperakDispatched + AntwortGesendet +
+    // Completed = 5 events. The APERAK and the Antwort are two events because
+    // they are two messages with two Fristen.
+    assert_eq!(record.event_count(), 5, "5 events in the stream");
     let data = record
         .active_data()
         .expect("record must be Active after lifecycle completion");
@@ -498,6 +535,7 @@ fn antwort_cmd(pid: u32, reason: Option<&str>) -> DeviceChangeCommand {
         sender: MarktpartnerCode::new("4012345000023"),
         message_ref: MessageRef::new("WIM-GW-ANTWORT-001"),
         reason: reason.map(str::to_owned),
+        bestaetigter_termin: None,
     }
 }
 
@@ -704,6 +742,8 @@ fn the_inbound_antwort_deadline_is_sized_per_pid() {
                 device_id: DeviceId::new("MSB-DEVICE-001"),
                 document_date: "2026-03-02".to_owned(),
                 message_ref: MessageRef::new("MSG-1"),
+                vorgangsnummer: Some("VG-TEST-001".to_owned()),
+                process_date: Some("20260401".to_owned()),
                 validation_passed: true,
                 validation_errors: vec![],
                 received_at,

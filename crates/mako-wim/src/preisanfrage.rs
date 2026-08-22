@@ -80,25 +80,35 @@ pub const REQOTE_PIDS: &[u32] = &[35001, 35002, 35004, 35005];
 /// to [`crate::wertebestellung`], not here.
 pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15004, 15005];
 
-/// The aMSB's answer window for an inbound REQOTE, in Werktage.
-///
-/// BK6-24-174 (WiM Strom). Single-sourced here because `makod` registers the
-/// process deadline from it and `processd` sizes the operator queue by it — two
-/// literals for one Frist is how the two come to disagree about whether an
-/// obligation was met.
-pub use mako_fristen::antwort::PREISANFRAGE_WERKTAGE as ANTWORT_FRIST_WT;
-
 /// The answer window for a REQOTE Preisanfrage PID, in Werktage.
 ///
-/// A view on [`mako_fristen::antwort::WIM`].
+/// A view on [`mako_fristen::antwort::WIM`], which is the same table `makod`
+/// registers the process deadline from and `processd` sizes its operator queue
+/// by — two literals for one Frist is how the two come to disagree about
+/// whether an obligation was met.
 ///
-/// `None` for a PID that is not a Preisanfrage — notably **35003**, the ESA
+/// **There is no single Preisanfrage window.** The four REQOTE PIDs open four
+/// different Use-Cases and WiM Strom Teil 1 gives three of them different
+/// numbers:
+///
+/// | PID | Use-Case | Frist | Fundstelle |
+/// |---|---|---|---|
+/// | 35001 | Anforderung Geräteübernahmeangebot | **4 WT** | Kap. 3.2.2 Nr. 2 |
+/// | 35002 | Anfrage Rechnungsabwicklung über den LF | **5 WT** | Kap. 3.6.3.6.2 Nr. 2 |
+/// | 35005 | Anfrage Angebot Änderung Technik | **10 WT** | Kap. 3.3.1.2 Nr. 2 |
+/// | 35004 | Anfrage einer Konfiguration (GPKE Teil 3) | *unquantified* | — |
+///
+/// A flat 5 Werktage gives the Geräteübernahmeangebot a Werktag it does not
+/// have and lets a Technikänderung run five Werktage past its window unflagged.
+///
+/// `None` means the window is **unknown**, never unbounded: for 35004 because
+/// GPKE Teil 3 states it elsewhere, and for **35003** because that is the ESA
 /// „Anfrage von Werten", which `crate::wertebestellung` owns and which must
 /// never be answered with a PreisblattMessung quote.
 #[must_use]
 pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
     use mako_fristen::antwort::FristShape;
-    if !matches!(request_pid, 35001 | 35002 | 35004 | 35005) {
+    if !REQOTE_PIDS.contains(&request_pid) {
         return None;
     }
     match mako_fristen::antwort::antwort_obligation(request_pid)?.frist {

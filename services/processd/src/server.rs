@@ -63,6 +63,13 @@ pub struct ProcessdState {
     pub msb_auto_accept: bool,
     /// When `true`, auto-dispatch QUOTES from `PreisblattMessung` on REQOTE arrival.
     pub msb_auto_preisanfrage: bool,
+    /// `vertragd`, when this deployment runs the contract layer.
+    ///
+    /// Read by the LF and the MSB module alike: the split is by kind of fact,
+    /// not by role — supply and market state come from `marktd`, contract state
+    /// from `vertragd`.
+    pub vertragd_url: Option<String>,
+    pub vertragd_api_key: Option<SecretString>,
     /// Shared PG pool — used by the EoG module and REST case queries.
     pub pool: sqlx::PgPool,
     /// EoG gap-closure config (§36/§38 EnWG).
@@ -89,9 +96,14 @@ pub struct RunConfig {
     pub nb_einsd_url: Option<String>,
     pub nb_einsd_api_key: Option<SecretString>,
     pub lf_auto_respond: bool,
-    /// See [`crate::config::LfConfig::vertragd_url`].
-    pub lf_vertragd_url: Option<String>,
-    pub lf_vertragd_api_key: Option<SecretString>,
+    /// `vertragd`, when this deployment runs the contract layer.
+    ///
+    /// Read by the LF and the MSB module alike: the split is by kind of fact,
+    /// not by role — supply and market state come from `marktd`, contract state
+    /// from `vertragd`. `None` leaves every contract fact unknown, and each
+    /// decision that reaches one escalates.
+    pub vertragd_url: Option<String>,
+    pub vertragd_api_key: Option<SecretString>,
     /// See [`ProcessdState::msb_auto_accept`].
     pub msb_auto_accept: bool,
     /// See [`ProcessdState::msb_auto_preisanfrage`].
@@ -285,8 +297,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         let lf_config = crate::lf_module::LfModuleConfig {
             marktd_url: cfg.marktd_url.clone(),
             marktd_api_key: cfg.marktd_api_key.clone(),
-            vertragd_url: cfg.lf_vertragd_url.clone(),
-            vertragd_api_key: cfg.lf_vertragd_api_key.clone(),
+            vertragd_url: cfg.vertragd_url.clone(),
+            vertragd_api_key: cfg.vertragd_api_key.clone(),
             own_mp_id: cfg.own_mp_id.clone(),
             tenant: cfg.tenant.clone(),
             auto_respond: cfg.lf_auto_respond,
@@ -361,6 +373,8 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
         marktd: marktd_for_state,
         msb_auto_accept: cfg.msb_auto_accept,
         msb_auto_preisanfrage: cfg.msb_auto_preisanfrage,
+        vertragd_url: cfg.vertragd_url.clone(),
+        vertragd_api_key: cfg.vertragd_api_key.clone(),
         pool: pool.clone(),
         #[cfg(any(feature = "role-nb-strom", feature = "role-nb-gas"))]
         eog: Arc::new(crate::eog_module::EogModuleConfig {

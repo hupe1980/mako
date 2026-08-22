@@ -74,6 +74,14 @@ pub struct Config {
     pub identity: IdentityConfig,
     pub makod: MakodConfig,
     pub marktd: MarktdConfig,
+    /// `vertragd`, when this deployment runs the contract layer.
+    ///
+    /// Optional because a pure NB deployment has no contracts of its own. Both
+    /// the LF and the MSB module read it — the split is by *kind of fact*, not
+    /// by role: supply and market state come from `marktd`, contract state from
+    /// `vertragd`.
+    #[serde(default)]
+    pub vertragd: Option<VertragdConfig>,
     #[serde(default)]
     pub webhook: WebhookConfig,
     #[serde(default)]
@@ -168,6 +176,16 @@ pub struct MarktdConfig {
     /// `marktd` base URL.  Example: `http://marktd:8180`
     pub url: String,
     /// Bearer token / API key.  Use `"env:MARKTD_API_KEY"`.
+    pub api_key: String,
+}
+
+/// `vertragd` connection details.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct VertragdConfig {
+    /// `vertragd` base URL. Example: `http://vertragd:9780`
+    pub url: String,
+    /// Bearer token / API key. Use `"env:VERTRAGD_API_KEY"`.
     pub api_key: String,
 }
 
@@ -342,22 +360,6 @@ pub struct LfConfig {
     /// its outcome is queued for an operator with the Antwortfrist attached.
     #[serde(default = "default_lf_auto_respond")]
     pub auto_respond: bool,
-
-    /// Base URL of `vertragd`, when this deployment runs the retail layer.
-    ///
-    /// Half of what the LF Entscheidungsbäume ask about is contract state —
-    /// „Bleibt das Vertragsverhältnis bestehen?", „Ist der Kunde identisch?",
-    /// „Ist der Vertrag zum Termin kündbar?". Without this URL those facts stay
-    /// unknown and every decision that reaches one of them escalates to an
-    /// operator. That is deliberate: a supplier with no contract database
-    /// cannot truthfully claim a Vertragsbindung, and must not silently agree
-    /// to release the customer instead.
-    #[serde(default)]
-    pub vertragd_url: Option<String>,
-
-    /// Bearer token for `vertragd`.
-    #[serde(default)]
-    pub vertragd_api_key: Option<String>,
 }
 
 fn default_lf_auto_respond() -> bool {
@@ -368,8 +370,6 @@ impl Default for LfConfig {
     fn default() -> Self {
         Self {
             auto_respond: default_lf_auto_respond(),
-            vertragd_url: None,
-            vertragd_api_key: None,
         }
     }
 }

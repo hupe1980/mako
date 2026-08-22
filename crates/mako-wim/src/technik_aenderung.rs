@@ -10,11 +10,8 @@
 //! | 17011 | LF → MSB   | Beauftragung zur Änderung der Technik (Messlokationsänderung Strom) |
 //! | 17118 | MSB → MSB  | Bestellung einer Konfigurationsänderung |
 //! | 17121 | NB → MSB   | Bestellung Änderung (NB an MSB, GPKE Teil 3) |
-//! | 19003 | NB/MSB → LF| Fortführungsbestätigung |
-//! | 19004 | NB/MSB → LF| Ablehnung Fortführung |
-//! | 19005 | MSB → LF   | Auftragsbestätigung der Änderung der Technik |
-//! | 19006 | MSB → LF   | Ablehnung der Änderung der Technik |
-//! | 19007 | MSB → LF   | Ablehnung Anforderung Messwerte |
+//! | 19005 | MSB → NB/LF | Bestätigung Auftrag Änderung Technik |
+//! | 19006 | MSB → NB/LF | Ablehnung Auftrag Änderung Technik |
 //!
 //! The ESA Ab-/Bestellung PIDs (ORDERS 17007, ORDRSP 19011/19012/19013/19014)
 //! belong to [`crate::wertebestellung`], which models their own lifecycle.
@@ -23,7 +20,11 @@
 //!
 //! - **BK6-22-024** — WiM Strom Teil 1 (Messstellenbetrieb)
 //! - **BK7-24-01-009** — WiM Gas AWH V2.0
-//! - APERAK Frist: **5 Werktage** (WiM Strom), **10 Werktage** (WiM Gas)
+//! - Antwortfrist: **10 Werktage** (WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2
+//!   Nr. 2), against a Mindestvorlauffrist of **20 Werktagen** on the
+//!   Beauftragung itself (Nr. 1). Both are anchored differently: the answer
+//!   window runs forward from the ÜT, the Vorlauffrist backward from the
+//!   gewünschter Änderungstermin — see [`mako_fristen::vorlauf`].
 
 use mako_engine::{
     error::WorkflowError,
@@ -48,19 +49,31 @@ pub const ORDERS_PIDS: &[u32] = &[17011, 17118];
 
 /// ORDRSP PIDs received in response to technical change requests.
 ///
-/// | PID   | Description |
-/// |-------|-------------|
-/// | 19003 | Fortführungsbestätigung |
-/// | 19004 | Ablehnung Fortführung |
-/// | 19005 | Auftragsbestätigung der Änderung der Technik |
-/// | 19006 | Ablehnung der Änderung der Technik |
-/// | 19007 | Ablehnung Anforderung Messwerte |
-pub const ORDRSP_PIDS: &[u32] = &[19003, 19004, 19005, 19006, 19007];
+/// | PID   | Description | EBD |
+/// |-------|-------------|-----|
+/// | 19005 | Bestätigung Auftrag Änderung Technik | `E_0249` / `E_0250` |
+/// | 19006 | Ablehnung Auftrag Änderung Technik | `E_0249` / `E_0250` |
+///
+/// Three neighbouring ORDRSP PIDs answer other processes (ORDRSP AHB 1.1b
+/// §§ 4.11–4.13) and are not part of this set:
+///
+/// - **19003 / 19004** „Fortführungsbestätigung / Ablehnung Fortführung"
+///   answer the Weiterverpflichtung ORDERS 17002 out of `E_0203` —
+///   [`crate::weiterverpflichtung`].
+/// - **19007** „Ablehnung Anforderung von Werten" answers a Werteanforderung.
+///
+/// # Two trees, one PID pair
+///
+/// 19005/19006 are shared by `E_0249` (the NB ordered the change) and `E_0250`
+/// (the LF did). `E_0250` adds the Vollmacht Prüfschritte `A03`/`A04` that
+/// `E_0249` has no need for, so a code must be resolved against the tree the
+/// **sender's** Marktrolle selects — never against the answer PID.
+pub const ORDRSP_PIDS: &[u32] = &[19005, 19006];
 
 /// Positive ORDRSP PIDs (confirmation).
-const ORDRSP_BESTAETIGUNG_PIDS: &[u32] = &[19003, 19005];
+const ORDRSP_BESTAETIGUNG_PIDS: &[u32] = &[19005];
 
-/// Deadline label for the response window (5 Werktage, WiM Strom).
+/// Deadline label for the response window (10 Werktage, WiM Strom).
 pub const ANTWORT_WINDOW_LABEL: &str = "wim-technik-aenderung-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────

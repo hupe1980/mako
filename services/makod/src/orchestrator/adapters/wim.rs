@@ -214,6 +214,22 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                                 .join("; ")
                         })
                         .filter(|s| !s.is_empty()),
+                    // `SG4 DTM` on an answer that moves the date — `Z01` on a
+                    // Bestätigung, `Z12` on a Kündigungsablehnung. It replaces
+                    // the requested Zuordnungsbeginn for everything downstream.
+                    bestaetigter_termin: u
+                        .transactions()
+                        .first()
+                        .and_then(|t| {
+                            t.dtm
+                                .iter()
+                                .find(|d| {
+                                    d.qualifier
+                                        == edi_energy::utilmd_codes::dtm::LEISTUNGSBEGINN_GEPLANT
+                                })
+                                .and_then(|d| d.value_str())
+                        })
+                        .map(ToOwned::to_owned),
                 });
             }
 
@@ -253,6 +269,31 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                // `IDE+24` DE 7402 — the Vorgangsnummer the answer must echo.
+                // Not `msg.message_ref()`: one interchange can carry several
+                // Vorgänge, so the UNH reference would correlate a Bestätigung
+                // to whichever of them happened to be first.
+                vorgangsnummer: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.vorgangsnummer())
+                    .map(ToOwned::to_owned),
+                // `SG4 DTM+76` — the requested Zuordnungsbeginn/-ende. The
+                // answer states a date and every WiM Vorlauffrist is measured
+                // against this one.
+                process_date: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| {
+                        t.dtm
+                            .iter()
+                            .find(|d| {
+                                d.qualifier
+                                    == edi_energy::utilmd_codes::dtm::LEISTUNGSBEGINN_GEPLANT
+                            })
+                            .and_then(|d| d.value_str())
+                    })
+                    .map(ToOwned::to_owned),
                 validation_passed,
                 validation_errors,
                 received_at: time::OffsetDateTime::now_utc(),
@@ -1236,6 +1277,88 @@ pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWo
                 ordrsp_pid,
                 reason,
                 message_ref: MessageRef::new(msg.message_ref()),
+            })
+        },
+    ));
+    registry
+}
+
+// ── WiM Weiterverpflichtung (ORDERS 17002 → ORDRSP 19003/19004) ─────────────
+
+/// Build an [`AdapterRegistry`] for [`mako_wim::WimWeiterverpflichtungWorkflow`].
+///
+/// Only the inbound leg: ORDERS 17002, the NB ordering this MSB to keep
+/// operating a Messlokation whose Abmeldung has no successor yet (WiM Teil 1
+/// Kap. 2.4.2 Nr. 5). The ORDRSP answer is an outbox entry the workflow
+/// renders, so it needs no adapter.
+///
+/// The „verschobenes Zuordnungsende" comes from the ORDERS `DTM` — it is the
+/// date the whole decision turns on, because the Weiterverpflichtungszeitraum
+/// is capped at three months or one from the confirmed Zuordnungsende.
+#[must_use]
+pub fn wim_weiterverpflichtung_registry() -> AdapterRegistry<WimWeiterverpflichtungWorkflow> {
+    let mut registry = AdapterRegistry::new();
+    registry.register(FnAdapter::new(
+        is_known_fv,
+        |raw: &dyn Any, _fv: &FormatVersion| {
+            let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
+                EngineError::Deserialization(
+                    "expected AnyMessage for WiM Weiterverpflichtung adapter".into(),
+                )
+            })?;
+            let AnyMessage::Orders(o) = msg else {
+                return Err(EngineError::Deserialization(
+                    "WiM Weiterverpflichtung adapter: expected ORDERS message".into(),
+                ));
+            };
+            let pid = msg
+                .detect_pruefidentifikator()
+                .map_err(|e| {
+                    EngineError::Deserialization(format!(
+                        "WiM Weiterverpflichtung adapter: PID detection failed: {e}"
+                    ))
+                })
+                .and_then(convert_pid)?;
+            let validation_result = msg.validate().ok();
+            let validation_passed = validation_result
+                .as_ref()
+                .map(|r| r.is_valid())
+                .unwrap_or(false);
+            let validation_errors: Vec<String> = validation_result
+                .as_ref()
+                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
+                .unwrap_or_default();
+
+            Ok(WeiterverpflichtungCommand::ReceiveAuftrag {
+                pid,
+                nb: MarktpartnerCode::new(
+                    o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                ),
+                msba: MarktpartnerCode::new(
+                    o.receiver()
+                        .and_then(|n| n.party_id.as_deref())
+                        .unwrap_or(""),
+                ),
+                // MeLo from the IDE segment (element 1, component 0 = object ID).
+                melo_id: MeLo::new(
+                    o.segments()
+                        .iter()
+                        .find(|s| s.tag == "IDE")
+                        .and_then(|s| s.component_str(1, 0))
+                        .unwrap_or(""),
+                ),
+                // The date the NB wants the Messstellenbetrieb continued to —
+                // the „verschobenes Zuordnungsende" the whole decision turns on.
+                verschobenes_zuordnungsende: o
+                    .segments()
+                    .iter()
+                    .find(|s| s.tag == "DTM")
+                    .and_then(|s| s.component_str(0, 1))
+                    .unwrap_or("")
+                    .to_owned(),
+                message_ref: MessageRef::new(msg.message_ref()),
+                validation_passed,
+                validation_errors,
             })
         },
     ));

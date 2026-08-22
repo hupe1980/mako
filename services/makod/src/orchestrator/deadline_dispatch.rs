@@ -82,10 +82,10 @@ use mako_redispatch::{
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
     PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
-    StorungsmeldungCommand, TechnikAenderungCommand, WimDeviceChangeWorkflow,
-    WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand, WimInvoicWorkflow,
-    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
-    WimSteuerungsauftragWorkflow, WimTechnikAenderungWorkflow,
+    StorungsmeldungCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand,
+    WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
+    WimSteuerungsauftragWorkflow, WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
 };
 use mako_wim_gas::{
     GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
@@ -243,6 +243,7 @@ deadline_dispatch! {
     "gpke-datenabruf" => GpkeDatanabrufWorkflow : DatanabrufCommand::TimeoutExpired,
     "gpke-allokationsliste" => GpkeAllokationslisteWorkflow : AllokationslisteCommand::TimeoutExpired,
     "wim-technik-aenderung" => WimTechnikAenderungWorkflow : TechnikAenderungCommand::TimeoutExpired,
+    "wim-weiterverpflichtung" => WimWeiterverpflichtungWorkflow : WeiterverpflichtungCommand::TimeoutExpired,
     }
     no_deadline: [
         // Pure receive-and-record workflows: they record an inbound message and

@@ -74,6 +74,13 @@ pub const WIM_GERAETEWECHSEL_BESTAETIGEN: &str = "wim.geraetewechsel.bestaetigen
 /// NB (PID 55042) / MSBA (PID 55039): answer an inbound MSB-Wechsel order
 /// negatively (APERAK with reason).
 pub const WIM_GERAETEWECHSEL_ABLEHNEN: &str = "wim.geraetewechsel.ablehnen";
+
+/// The **technical** acknowledgement on a `WiM` MSB-Wechsel process — 45
+/// minutes for Strom `UTILMD`, and not the business answer.
+///
+/// [`WIM_GERAETEWECHSEL_BESTAETIGEN`] carries that, on its own clock of
+/// 3 / 5 / 7 / 1 Werktagen. Two messages, two Fristen, two commands.
+pub const WIM_GERAETEWECHSEL_APERAK: &str = "wim.geraetewechsel.aperak";
 /// MSB: answer an inbound Steuerungsauftrag positively (ORDRSP).
 pub const WIM_STEUERUNGSAUFTRAG_BESTAETIGEN: &str = "wim.steuerungsauftrag.bestaetigen";
 /// MSB: answer an inbound Steuerungsauftrag negatively (ORDRSP).

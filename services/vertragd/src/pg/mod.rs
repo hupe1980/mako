@@ -12,6 +12,7 @@ pub mod aggregator;
 pub mod gdpr;
 pub mod kunden;
 pub mod lifecycle;
+pub mod messstellenvertrag;
 pub mod produkte;
 pub mod vertraege;
 
@@ -37,6 +38,10 @@ pub use lifecycle::{
     AutoRenewalRow, ExpiringVertragRow, StuckKomponenteRow, apply_auto_renewal,
     find_auto_renewal_due, find_auto_renewal_overdue, find_expiring_vertraege,
     find_stuck_komponents, mark_ablauf_notified, mark_auto_renewal_notified,
+};
+pub use messstellenvertrag::{
+    MessstellenvertragRow, MessstellenvertragView, UpsertMessstellenvertragInput,
+    find_messstellenvertrag, record_kuendigung, upsert_messstellenvertrag,
 };
 pub use produkte::{
     AnzupassenderPreis, MaloProduktSlice, ProduktSlice, malo_slices, offene_preisanpassungen,

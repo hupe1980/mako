@@ -66,14 +66,18 @@
 //!   an escalation naming that Prüfschritt, not a plausible code. An answer to
 //!   the market is a binding statement about a contract.
 
+pub mod antwort;
 pub mod codes;
 pub mod error;
 
 #[cfg(feature = "role-lf")]
 pub mod lf;
+#[cfg(feature = "role-msb")]
+pub mod msb;
 #[cfg(feature = "role-nb")]
 pub mod nb;
 
+pub use antwort::{AntwortDetail, RejectReason};
 pub use codes::{AntwortCode, Cluster};
 pub use error::CheckError;
 pub use mako_fristen::HolidayCalendar;
@@ -85,10 +89,17 @@ pub use lf::{
     pruefe_anmeldung_eog, pruefe_anmeldung_eog_gas, pruefe_beendigung_zuordnung, pruefe_kuendigung,
     pruefe_kuendigung_gas,
 };
+#[cfg(feature = "role-msb")]
+pub use msb::{
+    Abmeldegrund, AbmeldungMsb, AnmeldungMsb, Einrichtungsart, KuendigungMsb, Kuendigungstermin,
+    MsbEntscheidung, Vertragslage, WeiterverpflichtungAuftrag,
+    pruefe_abmeldung as pruefe_abmeldung_msb, pruefe_anmeldung as pruefe_anmeldung_msb,
+    pruefe_kuendigung as pruefe_kuendigung_msb, pruefe_weiterverpflichtung,
+};
 #[cfg(feature = "role-nb")]
 pub use nb::{
     AbmeldungAnfrage, AnmeldungAnfrage, MaloGridRecord, Messtyp, NbEntscheidung, NetzCheckConfig,
-    RejectReason, evaluate, evaluate_abmeldung,
+    evaluate, evaluate_abmeldung,
 };
 
 // ── Transaktionsgrund codes the trees branch on ───────────────────────────────

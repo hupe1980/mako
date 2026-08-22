@@ -370,7 +370,11 @@ async fn a_redelivered_initiated_event_does_not_move_the_frist() {
         return;
     };
     let tenant = "9900000000008";
-    let first_seen = OffsetDateTime::now_utc() - Duration::hours(30);
+    // Far enough back that the two anchors cannot land on the same Werktag.
+    // 30 hours does not: Saturday and Sunday are not Werktage, so a Friday and
+    // the Saturday after it both resolve to the following Monday — and the
+    // fixture then silently asserted nothing on one weekend in seven.
+    let first_seen = OffsetDateTime::now_utc() - Duration::days(14);
     let anchored = obsd::handler::compute_deadline(55_001, first_seen).expect("published");
 
     let id = Uuid::new_v4();

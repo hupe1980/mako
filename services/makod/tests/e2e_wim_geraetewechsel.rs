@@ -186,6 +186,8 @@ impl MockNb {
                     device_id: DeviceId::new(DEVICE_ID),
                     document_date,
                     message_ref,
+                    vorgangsnummer: Some("VG-E2E-001".to_owned()),
+                    process_date: Some("20260401".to_owned()),
                     validation_passed: true,
                     validation_errors: vec![],
                     received_at: time::OffsetDateTime::now_utc(),
@@ -219,10 +221,31 @@ impl MockNb {
         outbox
     }
 
+    /// ERP action: dispatch the **business** Bestätigung — UTILMD 55043
+    /// carrying `E15` from `E_0201`.
+    ///
+    /// Distinct from [`Self::dispatch_aperak`], which only says the message
+    /// was processable. Returns the outbox entries so callers can assert that a
+    /// UTILMD, not an APERAK, reached the wire.
+    async fn dispatch_antwort(&self, bestaetigt: bool, code: &str) -> Vec<OutboxMessage> {
+        let (_, outbox) = self
+            .process
+            .execute_and_collect(DeviceChangeCommand::DispatchAntwort {
+                bestaetigt,
+                antwort_code: code.to_owned(),
+                bemerkung: None,
+                abweichender_termin: None,
+            })
+            .await
+            .expect("NB: execute DispatchAntwort");
+        outbox
+    }
+
     /// ERP action: record physical completion of the meter device change.
     ///
-    /// This command is issued after the nMSB confirms the device has been
-    /// physically swapped.  Transitions state from `AperakSent` to `Completed`.
+    /// Issued after the nMSB confirms the device has been physically swapped.
+    /// Transitions `AntwortGesendet` → `Completed`; an order that was only
+    /// acknowledged and never answered cannot reach it.
     async fn complete_device_change(&self) {
         self.process
             .execute(DeviceChangeCommand::Complete {
@@ -239,10 +262,14 @@ impl MockNb {
 
 // ── Tests ──────────────────────────────────────────────────────────────────────
 
-/// WiM Gerätewechsel — positive APERAK path (PID 55042 → AperakSent → Completed).
+/// WiM Gerätewechsel — the happy path in full
+/// (PID 55042 → AperakSent → AntwortGesendet → Completed).
 ///
-/// NB receives the UTILMD 55042 and answers it within its 5-Werktage window
-/// (BNetzA BK6-22-024), then records physical completion of the device change.
+/// The NB acknowledges the UTILMD 55042 with an APERAK inside 45 minutes and
+/// then answers it with a **UTILMD 55043** inside its 5-Werktage window. Both
+/// legs are asserted here because sending only the first is the failure this
+/// test exists to catch: the counterparty gets an acknowledged order, no
+/// answer, and a Frist that lapses on a process both sides believe is running.
 ///
 /// Per WiM AHB: Saturdays, Sundays and federal public holidays are not Werktage.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
 /// (10 Werktage).
@@ -292,6 +319,30 @@ async fn e2e_wim_geraetewechsel_positive_aperak() {
     assert!(
         matches!(state_after_aperak, DeviceChangeState::AperakSent(_)),
         "NB must be AperakSent after positive DispatchAperak; got: {state_after_aperak:?}"
+    );
+
+    // ── NB ERP: dispatch the business Bestätigung (UTILMD 55043) ──────────────
+    let antwort_outbox = nb.dispatch_antwort(true, "E15").await;
+    assert_eq!(antwort_outbox.len(), 1);
+    let antwort = &antwort_outbox[0];
+    assert_eq!(
+        antwort.message_type.as_ref(),
+        "UTILMD",
+        "the business answer is a UTILMD, not an APERAK"
+    );
+    assert_eq!(antwort.recipient.as_ref(), NMSB_ID);
+    let p = antwort
+        .payload
+        .as_object()
+        .expect("UTILMD payload must be a JSON object");
+    assert_eq!(p["pid"].as_u64().unwrap(), 55_043);
+    assert_eq!(p["antwort_code"].as_str().unwrap(), "E15");
+    assert_eq!(p["antwort_ebd"].as_str().unwrap(), "E_0201");
+    assert_eq!(p["melo"].as_str().unwrap(), MELO_ID);
+    let state_after_antwort = nb.state().await;
+    assert!(
+        matches!(state_after_antwort, DeviceChangeState::AntwortGesendet(_)),
+        "NB must be AntwortGesendet after the Bestätigung; got: {state_after_antwort:?}"
     );
 
     // ── NB ERP: record device change completion ────────────────────────────────
@@ -393,6 +444,8 @@ async fn e2e_wim_geraetewechsel_ahb_validation_failure() {
             device_id: DeviceId::new(DEVICE_ID),
             document_date: "2025-01-15".to_owned(),
             message_ref: MessageRef::new("MSG-WIM-002"),
+            vorgangsnummer: Some("VG-E2E-001".to_owned()),
+            process_date: Some("20260401".to_owned()),
             validation_passed: false,
             validation_errors: vec![
                 "UTILMD WiM segment RFF missing mandatory Z13 Auftragsreferenz".to_owned(),

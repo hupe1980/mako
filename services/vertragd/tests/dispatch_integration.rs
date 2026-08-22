@@ -1449,6 +1449,167 @@ async fn a_consumer_contract_renews_into_an_open_ended_one() {
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
 
+// ── Messstellenverträge (§ 9, § 10 MsbG) ─────────────────────────────────────
+
+/// The WiM Kündigung MSB is answered from this row, so two simultaneously
+/// active contracts for the same MSB and Messlokation are not representable:
+/// the answer would depend on row order.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_second_overlapping_messstellenvertrag_is_refused() {
+    use vertragd::pg::{UpsertMessstellenvertragInput, upsert_messstellenvertrag};
+
+    let Some((pool, _pg)) = test_pool("msv_overlap").await else {
+        return;
+    };
+    let tenant = "9900357000004";
+    let melo = "DE0000000001234567890000000000001";
+    let msb = "9900000000003";
+
+    upsert_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        &UpsertMessstellenvertragInput {
+            vertragsbeginn: time::macros::date!(2024 - 01 - 01),
+            kuendigungsfrist_monate: 1,
+            kunden_id: None,
+            kuendigung_zum: None,
+            kuendigung_eingang: None,
+            frueher_moeglich: None,
+            beendet_am: None,
+        },
+    )
+    .await
+    .expect("first contract");
+
+    // A second MSB at the same Messlokation is lawful — an MSB-Wechsel is
+    // exactly that — as long as the terms do not overlap.
+    let other = upsert_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        "4012345000023",
+        &UpsertMessstellenvertragInput {
+            vertragsbeginn: time::macros::date!(2024 - 01 - 01),
+            kuendigungsfrist_monate: 1,
+            kunden_id: None,
+            kuendigung_zum: None,
+            kuendigung_eingang: None,
+            frueher_moeglich: None,
+            beendet_am: None,
+        },
+    )
+    .await;
+    assert!(other.is_ok(), "a different MSB is a different contract");
+
+    // A direct INSERT of a second open term for the *same* MSB is what the
+    // exclusion constraint refuses; the repository upserts instead.
+    let clash = sqlx::query(
+        r"INSERT INTO messstellenvertraege
+              (tenant, melo_id, msb_mp_id, vertragsbeginn, kuendigungsfrist_monate)
+          VALUES ($1, $2, $3, $4, 1)",
+    )
+    .bind(tenant)
+    .bind(melo)
+    .bind(msb)
+    .bind(time::macros::date!(2025 - 06 - 01))
+    .execute(&pool)
+    .await;
+    assert!(
+        clash.is_err(),
+        "msv_no_overlap must refuse a second open term for the same MSB"
+    );
+}
+
+/// `E_0200` needs three distinct readings, and the store must keep them apart:
+/// no row (`ZC9`), a live contract with its next admissible date (`E15`/`Z12`),
+/// and one already terminated (`Z34`).
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_contract_round_trips_the_three_e0200_readings() {
+    use vertragd::pg::{
+        UpsertMessstellenvertragInput, find_messstellenvertrag, record_kuendigung,
+        upsert_messstellenvertrag,
+    };
+
+    let Some((pool, _pg)) = test_pool("msv_readings").await else {
+        return;
+    };
+    let tenant = "9900357000004";
+    let melo = "DE0000000001234567890000000000002";
+    let msb = "9900000000003";
+
+    assert!(
+        find_messstellenvertrag(&pool, tenant, melo, msb)
+            .await
+            .expect("lookup")
+            .is_none(),
+        "no contract is the ZC9 case, not an error"
+    );
+
+    upsert_messstellenvertrag(
+        &pool,
+        tenant,
+        melo,
+        msb,
+        &UpsertMessstellenvertragInput {
+            vertragsbeginn: time::macros::date!(2024 - 01 - 01),
+            kuendigungsfrist_monate: 3,
+            kunden_id: None,
+            kuendigung_zum: None,
+            kuendigung_eingang: None,
+            frueher_moeglich: None,
+            beendet_am: None,
+        },
+    )
+    .await
+    .expect("upsert");
+
+    let live = find_messstellenvertrag(&pool, tenant, melo, msb)
+        .await
+        .expect("lookup")
+        .expect("row");
+    let stichtag = time::macros::date!(2026 - 03 - 15);
+    assert_eq!(
+        live.naechstmoeglich(stichtag, false),
+        Some(time::macros::date!(2026 - 06 - 15)),
+        "a business customer keeps the contractual three months"
+    );
+    assert_eq!(
+        live.naechstmoeglich(stichtag, true),
+        Some(time::macros::date!(2026 - 04 - 15)),
+        "§ 309 Nr. 9 lit. c BGB caps a consumer at one month"
+    );
+
+    assert!(
+        record_kuendigung(
+            &pool,
+            tenant,
+            melo,
+            msb,
+            time::macros::date!(2026 - 03 - 15),
+            time::macros::date!(2026 - 06 - 15),
+        )
+        .await
+        .expect("record")
+    );
+    let gekuendigt = find_messstellenvertrag(&pool, tenant, melo, msb)
+        .await
+        .expect("lookup")
+        .expect("row");
+    assert_eq!(
+        gekuendigt.kuendigung_zum,
+        Some(time::macros::date!(2026 - 06 - 15))
+    );
+    assert_eq!(
+        gekuendigt.naechstmoeglich(stichtag, false),
+        None,
+        "a terminated contract has no next date — E_0200 answers Z34"
+    );
+}
+
 /// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
 /// container guard. `None` when Docker is unavailable (tests skip gracefully).
 async fn pg_container() -> Option<(String, PgContainer)> {

@@ -1364,6 +1364,325 @@ pub const E_0595_CODES: &[AntwortCode] = &[
 
 // ── Lookup ───────────────────────────────────────────────────────────────────
 
+// ── WiM Strom (Messstellenbetrieb) ────────────────────────────────────────────
+//
+// Source: Entscheidungsbaum-Diagramme und Codelisten 4.3, Kap. 8 „WiM Strom".
+//
+// None of these alphabets overlaps the GPKE ones, and two of them reuse GPKE
+// spellings for unrelated meanings: `A01`/`A02` are „Frist nicht eingehalten"
+// and „Änderung kann durchgeführt werden" in the Messlokationsänderung trees,
+// where in `E_0607` they are „Marktlokation nicht identifizierbar" and
+// „Vorlauffrist nicht eingehalten". Resolve through [`lookup`], never by code.
+
+/// `E_0200` — Kündigung Messstellenbetrieb prüfen. Prüfende Rolle: **MSBA**.
+pub const EBD_KUENDIGUNG_MSB: &str = "E_0200";
+const E_0200: Option<&'static str> = Some(EBD_KUENDIGUNG_MSB);
+
+/// `E_0200` — the MSBA's answer to a Kündigung des Messstellenbetriebsvertrags.
+///
+/// `Z34` and `Z29` are the two outcomes WiM Teil 1 Kap. 2.2.3 („Antwort MSBA
+/// bei Kündigung eines bereits wirksam gekündigten Vertrages") resolves to, and
+/// `Z12` is the answer to a fixed Kündigungstermin the contract cannot honour —
+/// it must carry the nächstmöglicher Kündigungszeitpunkt in `SG4 DTM`.
+pub const E_0200_CODES: &[AntwortCode] = &[
+    code!("E15", E_0200, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_0200,
+        Zustimmung,
+        "Zustimmung mit Terminänderung (nur wenn SG4 DTM+471 „Ende zum nächstmöglichen Termin\" vorhanden)"
+    ),
+    code!(
+        "Z44",
+        E_0200,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!("E11", E_0200, Ablehnung, "Ablehnung (Messproblem)"),
+    code!(
+        "Z12",
+        E_0200,
+        Ablehnung,
+        "Ablehnung Vertragsbindung — der nächstmögliche Kündigungszeitpunkt ist in SG4 DTM mitzugeben"
+    ),
+    code!(
+        "Z29",
+        E_0200,
+        Ablehnung,
+        "Ablehnung (kein Vertragsverhältnis mehr vorhanden)"
+    ),
+    code!("Z34", E_0200, Ablehnung, "Ablehnung (Mehrfachkündigung)"),
+    code!(
+        "ZC9",
+        E_0200,
+        Ablehnung,
+        "Ablehnung (keine Zuordnung möglich)"
+    ),
+];
+
+/// `E_0201` — Anmeldung Messstellenbetrieb prüfen. Prüfende Rolle: **NB**.
+pub const EBD_ANMELDUNG_MSB: &str = "E_0201";
+const E_0201: Option<&'static str> = Some(EBD_ANMELDUNG_MSB);
+
+/// `E_0201` — the NB's answer to an Anmeldung des Messstellenbetriebs.
+///
+/// `E17` is the Mindestvorlaufzeit of WiM Teil 1 Kap. 2.3.2 Nr. 1 (15 Werktage,
+/// 7 bei erstmaliger Einrichtung) — the check Prozessschritt 2 requires and
+/// [`mako_fristen::vorlauf`] computes. `ZB6` is the missing Versicherung über
+/// die Beauftragung durch den Anschlussnutzer.
+///
+/// The tree publishes **no code for an unknown Marktpartner**. An MSB missing
+/// from the Verzeichnisdienst is not an Ablehnungsgrund here, so that case must
+/// escalate rather than resolve to a rejection.
+pub const E_0201_CODES: &[AntwortCode] = &[
+    code!("E15", E_0201, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_0201,
+        Zustimmung,
+        "Zustimmung mit Terminänderung (nur wenn SG4 STS+7++E02 „Einzug in eine Neuanlage\" vorhanden)"
+    ),
+    code!(
+        "Z44",
+        E_0201,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!("E11", E_0201, Ablehnung, "Ablehnung (Messproblem)"),
+    code!(
+        "E17",
+        E_0201,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung — die Mindestvorlaufzeit ist nicht eingehalten"
+    ),
+    code!(
+        "Z09",
+        E_0201,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+    code!(
+        "Z29",
+        E_0201,
+        Ablehnung,
+        "Ablehnung (kein Vertragsverhältnis mehr vorhanden)"
+    ),
+    code!("ZB6", E_0201, Ablehnung, "Erforderliche Versicherung fehlt"),
+    code!(
+        "ZC9",
+        E_0201,
+        Ablehnung,
+        "Ablehnung (keine Zuordnung möglich)"
+    ),
+];
+
+/// `E_0202` — Abmeldung Messstellenbetrieb prüfen. Prüfende Rolle: **NB**.
+pub const EBD_ABMELDUNG_MSB: &str = "E_0202";
+const E_0202: Option<&'static str> = Some(EBD_ABMELDUNG_MSB);
+
+/// `E_0202` — the NB's answer to an Ende Messstellenbetrieb.
+///
+/// The narrowest tree of the four, and deliberately so: it has **no `ZC9`**, so
+/// the NB may not refuse an Abmeldung for „keine Zuordnung möglich", and no
+/// `E11`. A Zuordnungsende that undershoots the 20-Werktage Mindestvorlauffrist
+/// is not refused either — Kap. 2.4.2 Nr. 2 has the NB *move* it to the
+/// nächstmögliches Zuordnungsende and confirm with `Z01`.
+pub const E_0202_CODES: &[AntwortCode] = &[
+    code!("E15", E_0202, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_0202,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — das vom NB festgesetzte nächstmögliche Zuordnungsende"
+    ),
+    code!(
+        "E17",
+        E_0202,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung (nur bei Transaktionsgrund ZG9/ZH1/ZH2, Aufhebung einer zukünftigen Zuordnung)"
+    ),
+    code!(
+        "Z09",
+        E_0202,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+];
+
+/// `E_0240` — Verpflichtungsanfrage prüfen. Prüfende Rolle: **gMSB**.
+pub const EBD_VERPFLICHTUNGSANFRAGE: &str = "E_0240";
+const E_0240: Option<&'static str> = Some(EBD_VERPFLICHTUNGSANFRAGE);
+
+/// `E_0240` — the grundzuständiger MSB's answer to the NB's Verpflichtungsanfrage.
+///
+/// `Z07` „Keine Berechtigung" is published here and in no other MSB-Wechsel
+/// tree: only this one lets the answering party say the sender was not entitled
+/// to ask at all.
+pub const E_0240_CODES: &[AntwortCode] = &[
+    code!("E15", E_0240, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_0240,
+        Zustimmung,
+        "Zustimmung mit Terminänderung (nur wenn SG4 STS+7++E02 „Einzug in eine Neuanlage\" vorhanden)"
+    ),
+    code!(
+        "Z44",
+        E_0240,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!(
+        "E17",
+        E_0240,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung"
+    ),
+    code!("Z07", E_0240, Ablehnung, "Ablehnung (Keine Berechtigung)"),
+    code!(
+        "Z09",
+        E_0240,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+    code!("ZB6", E_0240, Ablehnung, "Erforderliche Versicherung fehlt"),
+];
+
+/// `E_0203` — Weiterverpflichtung prüfen. Prüfende Rolle: **MSBA** (ORDRSP).
+pub const EBD_WEITERVERPFLICHTUNG: &str = "E_0203";
+const E_0203: Option<&'static str> = Some(EBD_WEITERVERPFLICHTUNG);
+
+/// `E_0203` — the outgoing MSB's answer to the NB's Weiterverpflichtung.
+///
+/// The NB may keep the abmeldender MSB on the Messlokation for at most three
+/// months on an Anschlussnutzerwechsel and one month otherwise (WiM Teil 1
+/// Kap. 2.4.2 Nr. 4). `Z14` is how the MSBA answers a demand that overshoots
+/// that window on the *first* ORDERS — it confirms and states the corrected
+/// Abmeldetermin in `DTM` DE 2380. `Z22` refuses, and only on a *further*
+/// ORDERS after the maximum has already been reached.
+pub const E_0203_CODES: &[AntwortCode] = &[
+    code!("Z13", E_0203, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z14",
+        E_0203,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — der korrigierte Abmeldetermin ist im DTM DE 2380 anzugeben"
+    ),
+    code!(
+        "Z22",
+        E_0203,
+        Ablehnung,
+        "Ablehnung wegen Überschreiten des Weiterverpflichtungszeitraums"
+    ),
+];
+
+/// `E_0204` — Anzeige Gerätewechselabsicht prüfen. Prüfende Rolle: **MSBA**.
+pub const EBD_GERAETEWECHSELABSICHT: &str = "E_0204";
+const E_0204: Option<&'static str> = Some(EBD_GERAETEWECHSELABSICHT);
+
+/// `E_0204` — the outgoing MSB's answer to the incoming MSB's
+/// Gerätewechselabsicht.
+///
+/// **Neither cluster refuses the Gerätewechsel.** The AHB names 19015
+/// „Bestätigung" and 19016 „Ablehnung Gerätewechselabsicht", but the codes say
+/// what the two actually decide: `ZB4` „Eigenausbau wird erfolgen" — the MSBA
+/// removes its own devices — versus `ZB5` „Kein Eigenausbau des MSBA", where
+/// the MSBN does. Reading 19016 as a refusal aborts a Gerätewechsel the
+/// counterparty has just agreed to carry out.
+///
+/// `E17` and `Z07` are the genuine refusals, and the Codeliste marks both Kann.
+pub const E_0204_CODES: &[AntwortCode] = &[
+    code!("ZB4", E_0204, Zustimmung, "Eigenausbau wird erfolgen"),
+    code!("ZB5", E_0204, Ablehnung, "Kein Eigenausbau des MSBA"),
+    code!(
+        "E17",
+        E_0204,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung — die Antwort ist spätestens am 2. WT vor dem Gerätewechseltermin fällig"
+    ),
+    code!("Z07", E_0204, Ablehnung, "Ablehnung (Keine Berechtigung)"),
+];
+
+/// `E_0247` — Bestellung (Geräteübernahme) prüfen. Prüfende Rolle: **MSBA**.
+pub const EBD_BESTELLUNG_GERAETEUEBERNAHME: &str = "E_0247";
+const E_0247: Option<&'static str> = Some(EBD_BESTELLUNG_GERAETEUEBERNAHME);
+
+/// `E_0247` — the outgoing MSB's answer to a Geräteübernahme Bestellung.
+///
+/// `5` is a bare numeric code, not a truncation: the ORDRSP Codeliste uses the
+/// plain EDIFACT DE 4465 value for „Preis / Rechenregel falsch".
+pub const E_0247_CODES: &[AntwortCode] = &[
+    code!("Z13", E_0247, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!("5", E_0247, Ablehnung, "Preis / Rechenregel falsch"),
+    code!(
+        "Z32",
+        E_0247,
+        Ablehnung,
+        "Ablehnung Bestellumfang übersteigt Angebotsumfang"
+    ),
+];
+
+/// `E_0249` — Beauftragung zur Messlokationsänderung prüfen, **vom NB**.
+pub const EBD_MESSLOKATIONSAENDERUNG_NB: &str = "E_0249";
+const E_0249: Option<&'static str> = Some(EBD_MESSLOKATIONSAENDERUNG_NB);
+
+/// `E_0249` — the MSB's answer to an NB-initiated Messlokationsänderung.
+///
+/// One Prüfschritt: „Liegt das gewünschte Änderungsdatum mindestens 20 WT nach
+/// dem Nachrichteneingangsdatum?" `A01` is that Frist and `A02` the Zustimmung,
+/// and neither means what the same spelling means in any GPKE tree.
+pub const E_0249_CODES: &[AntwortCode] = &[
+    code!(
+        "A02",
+        E_0249,
+        Zustimmung,
+        "Änderung kann durchgeführt werden (Prüfschritt 1)"
+    ),
+    code!(
+        "A01",
+        E_0249,
+        Ablehnung,
+        "Frist nicht eingehalten — das Änderungsdatum liegt weniger als 20 WT nach dem Nachrichteneingang (Prüfschritt 1)"
+    ),
+];
+
+/// `E_0250` — Beauftragung zur Messlokationsänderung prüfen, **vom LF**.
+pub const EBD_MESSLOKATIONSAENDERUNG_LF: &str = "E_0250";
+const E_0250: Option<&'static str> = Some(EBD_MESSLOKATIONSAENDERUNG_LF);
+
+/// `E_0250` — the MSB's answer to an LF-initiated Messlokationsänderung.
+///
+/// The LF variant adds the Vollmacht Prüfschritte (20, 30) the NB variant has
+/// no need for, on the **same answer PIDs** 19005/19006. Two trees, one PID
+/// pair — which is why a code must be resolved against the tree the *sender's*
+/// Marktrolle selects and never against the answer PID.
+pub const E_0250_CODES: &[AntwortCode] = &[
+    code!(
+        "A02",
+        E_0250,
+        Zustimmung,
+        "Änderung kann durchgeführt werden (Prüfschritt 40)"
+    ),
+    code!(
+        "A03",
+        E_0250,
+        Ablehnung,
+        "Vollmacht des Letztverbrauchers bzw. Erzeugers liegt nicht vor (Prüfschritt 20)"
+    ),
+    code!(
+        "A04",
+        E_0250,
+        Ablehnung,
+        "Vollmacht ist nicht plausibel und gültig (Prüfschritt 30)"
+    ),
+    code!(
+        "A01",
+        E_0250,
+        Ablehnung,
+        "Frist nicht eingehalten — das Änderungsdatum liegt weniger als 20 WT nach dem Nachrichteneingang (Prüfschritt 40)"
+    ),
+];
+
 /// Every Codeliste this crate knows, keyed by its EBD id.
 pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_ANMELDUNG_DIREKT_ABLEHNBAR, E_0622_CODES),
@@ -1387,6 +1706,16 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     ("E_0606", E_0606_CODES),
     (EBD_BESTELLUNG, E_0595_CODES),
     (EBD_NETZNUTZUNGSRECHNUNG, E_0406_CODES),
+    // WiM Strom — Messstellenbetrieb.
+    (EBD_KUENDIGUNG_MSB, E_0200_CODES),
+    (EBD_ANMELDUNG_MSB, E_0201_CODES),
+    (EBD_ABMELDUNG_MSB, E_0202_CODES),
+    (EBD_VERPFLICHTUNGSANFRAGE, E_0240_CODES),
+    (EBD_WEITERVERPFLICHTUNG, E_0203_CODES),
+    (EBD_GERAETEWECHSELABSICHT, E_0204_CODES),
+    (EBD_BESTELLUNG_GERAETEUEBERNAHME, E_0247_CODES),
+    (EBD_MESSLOKATIONSAENDERUNG_NB, E_0249_CODES),
+    (EBD_MESSLOKATIONSAENDERUNG_LF, E_0250_CODES),
 ];
 
 /// The trees that publish **Ablehnungscodes only**, each paired with the tree

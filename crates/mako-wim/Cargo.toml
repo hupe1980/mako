@@ -11,7 +11,11 @@ keywords     = ["wim", "edifact", "energy", "mako", "bdew"]
 categories   = ["data-structures"]
 
 [dependencies]
-mako-fristen = { workspace = true }
+mako-fristen  = { workspace = true }
+# The Antwortcode catalogue and the WiM Prüfschritte. `role-msb` only: the
+# workflows here never answer a GPKE tree, and a code has no meaning outside
+# the tree that publishes it.
+mako-pruefung = { workspace = true }
 rubo4e      = { workspace = true }
 mako-engine = { workspace = true }
 serde       = { workspace = true }

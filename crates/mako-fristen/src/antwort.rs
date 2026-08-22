@@ -150,6 +150,14 @@ pub struct AntwortObligation {
     pub source: &'static str,
 }
 
+/// The MSB's window to answer an Anfrage einer Konfiguration with a QUOTES
+/// Angebot or an IFTSTA Ablehnung, in Werktage (GPKE Teil 3 SD Prozessschritt 2).
+///
+/// **Not a WiM Preisanfrage window.** REQOTE 35004 opens the GPKE Teil 3
+/// Konfigurationsprozess, where the MSB answers in two Werktagen; folding it
+/// into the WiM family gave it five and hid three days of breach.
+pub const KONFIGURATIONSANGEBOT_WERKTAGE: u32 = 2;
+
 /// The Neuanlage answer window, in Werktage after the ÜT.
 ///
 /// `E_0608` Prüfschritte 110 / 590 give the NB **60 Werktage** of daily
@@ -480,6 +488,18 @@ pub const GPKE: &[AntwortObligation] = &[
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
     },
+    AntwortObligation {
+        trigger_pid: 35_004,
+        name: "Anfrage einer Konfiguration (REQOTE)",
+        answered_by: "MSB",
+        antwort_pids: (15_004, 21_033),
+        // Two trees on one PID: `E_0524` when the NB asked, `E_0531` when the
+        // LF did. The PID cannot pick between them, so none is named here.
+        ebd: None,
+        frist: FristShape::WerktageAtCutoff(KONFIGURATIONSANGEBOT_WERKTAGE),
+        family: Family::Gpke,
+        source: "GPKE Teil 3 § 3.1 / § 3.2 SD Prozessschritt 2 — 2 Werktage",
+    },
 ];
 
 /// GeLi Gas — every inbound PID whose answer Frist the Festlegung quantifies.
@@ -567,12 +587,54 @@ pub const GELI_GAS: &[AntwortObligation] = &[
     },
 ];
 
-/// WiM Strom — the MSB-Wechsel family and the REQOTE Preisanfrage.
+/// WiM Strom — every inbound Prüfidentifikator whose answer window Teil 1
+/// states.
 ///
-/// The MSB-Wechsel windows are **not** one flat number: 3 / 5 / 7 / 1 Werktage
-/// („Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von Nr. 1",
-/// BK6-24-174 WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). A flat window
-/// fires early for the Kündigung and late for the Abmeldung.
+/// | Trigger | Process | Answerer | Frist | EBD |
+/// |---|---|---|---|---|
+/// | 55039 | Kündigung MSB | MSBA | 3 WT | `E_0200` |
+/// | 55042 | Anmeldung MSB | NB | 5 WT | `E_0201` |
+/// | 55051 | Abmeldung (Ende MSB) | NB | 7 WT | `E_0202` |
+/// | 55168 | Verpflichtungsanfrage | gMSB | 1 WT | `E_0240` |
+/// | 17002 | Weiterverpflichtung des MSB | MSBA | 1 WT | `E_0203` |
+/// | 21010 / 21009 | Mitteilung über Gesamtvorgang (erfolgreich / gescheitert) | NB | 1 WT | `E_0232` |
+/// | 35001 | Anforderung Geräteübernahmeangebot | MSBA | **4 WT** | — |
+/// | 17001 | Bestellung Geräteübernahmeangebot | MSBA | 2 WT | `E_0247` |
+/// | 17009 | Anzeige Gerätewechselabsicht | MSBA | *2 WT vor dem Termin* | `E_0204` |
+/// | 35002 | Anfrage Rechnungsabwicklung über LF | MSB | 5 WT | — |
+/// | 15002 | Angebot Rechnungsabwicklung über LF | LF | 8 WT | `E_0205`/`E_0208` |
+/// | 17006 | Beendigung Rechnungsabwicklung über LF | Gegenseite | 8 WT | `E_0206`/`E_0209` |
+/// | 35005 | Anfrage Angebot Änderung Technik | MSB | 10 WT | — |
+/// | 17011 | Beauftragung Änderung Technik | MSB | 10 WT | `E_0249`/`E_0250` ¹ |
+///
+/// **The MSB-Wechsel windows are not one flat number** — 3 / 5 / 7 / 1
+/// Werktage („Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von
+/// Nr. 1"). A flat window fires early for the Kündigung and late for the
+/// Abmeldung.
+///
+/// **Nor is the REQOTE family one window.** The four REQOTE PIDs open four
+/// different Use-Cases and only 35002 is answered in 5 Werktage: 35001 is the
+/// Anforderung eines Geräteübernahmeangebots (Kap. 3.2.2 Nr. 2 — **4 WT**) and
+/// 35005 opens the Messlokationsänderung (Kap. 3.3 — **10 WT**). Answering all
+/// four in 5 gives the Geräteübernahme a day it does not have and lets a
+/// Technikänderung run five Werktage past its window unflagged.
+///
+/// 17009 is in the table for completeness but its Frist is a
+/// [`Vorlauffrist`](crate::vorlauf) in disguise: „spätester ÜT ist der 2. WT
+/// **vor dem Gerätewechseltermin**" (Kap. 3.1.2 Nr. 2) is anchored on a date
+/// the *request* carries, not on the arrival instant, so
+/// [`antwortfrist`] deliberately reports it as unknown rather than as a
+/// forward window it is not. Size it with
+/// [`vorlauf::vorlauf("wim.antwort-geraetewechselabsicht")`](crate::vorlauf::vorlauf).
+///
+/// ¹ A PID answered by two trees names neither: `ebd` is `None` for 17011 and
+/// 35004, and the caller picks the tree from the sender's Marktrolle.
+///
+/// **23001 has no row.** WiM Teil 2 Kap. 1.2 Nr. 2 states two windows for the
+/// Störungsmeldung — 3 Werktage for a kME ohne RLM or an mME, 1 for a kME mit
+/// RLM or an iMS — and the message does not say which applies. A PID-keyed
+/// lookup would have to pick one; [`stoerungsmeldung_werktage`] takes the
+/// Messtechnik instead.
 ///
 /// 35003 is deliberately absent: it is the ESA „Anfrage von Werten", not a
 /// Preisanfrage, and must never be answered with a PreisblattMessung quote.
@@ -582,85 +644,212 @@ pub const WIM: &[AntwortObligation] = &[
         name: "Kündigung MSB",
         answered_by: "MSBA",
         antwort_pids: (55_040, 55_041),
-        ebd: None,
+        ebd: Some("E_0200"),
         frist: FristShape::WerktageAtCutoff(3),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom Teil 1 Kap. 2.2.2 Nr. 2 — 3 Werktage",
+        source: "WiM Strom Teil 1 Kap. 2.2.2 Nr. 2 — 3 Werktage",
     },
     AntwortObligation {
         trigger_pid: 55_042,
         name: "Anmeldung MSB",
         answered_by: "NB",
         antwort_pids: (55_043, 55_044),
-        ebd: None,
+        ebd: Some("E_0201"),
         frist: FristShape::WerktageAtCutoff(5),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom Teil 1 Kap. 2.3.2 Nr. 2 — 5 Werktage",
+        source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 2 — 5 Werktage",
     },
     AntwortObligation {
         trigger_pid: 55_051,
-        name: "Abmeldung MSB",
+        name: "Abmeldung MSB (Ende Messstellenbetrieb)",
         answered_by: "NB",
         antwort_pids: (55_052, 55_053),
-        ebd: None,
+        ebd: Some("E_0202"),
         frist: FristShape::WerktageAtCutoff(7),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom Teil 1 Kap. 2.4.2 Nr. 2 — 7 Werktage",
+        source: "WiM Strom Teil 1 Kap. 2.4.2 Nr. 2 — 7 Werktage",
     },
     AntwortObligation {
         trigger_pid: 55_168,
-        name: "Verpflichtungsanfrage",
-        answered_by: "MSB",
+        name: "Verpflichtungsanfrage an den gMSB",
+        answered_by: "gMSB",
         antwort_pids: (55_169, 55_170),
-        ebd: None,
+        ebd: Some("E_0240"),
         frist: FristShape::WerktageAtCutoff(1),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom Teil 1 Kap. 2.5.2 Nr. 4 — 1 Werktag",
+        // Not Kap. 2.5: the Verpflichtungsanfrage is Prozessschritt 3 of the
+        // *Ende Messstellenbetrieb*, and Kap. 2.5 („Verpflichtung gMSB") is the
+        // separate Use-Case it can lead into.
+        source: "WiM Strom Teil 1 Kap. 2.4.2 Nr. 4 — 1 Werktag",
+    },
+    AntwortObligation {
+        trigger_pid: 17_002,
+        name: "Weiterverpflichtung des MSB",
+        answered_by: "MSBA",
+        antwort_pids: (19_003, 19_004),
+        ebd: Some("E_0203"),
+        frist: FristShape::WerktageAtCutoff(1),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 2.4.2 Nr. 6 — 1 Werktag",
+    },
+    AntwortObligation {
+        trigger_pid: 21_010,
+        name: "Mitteilung über Gesamtvorgang (erfolgreich)",
+        answered_by: "NB",
+        antwort_pids: (21_012, 21_011),
+        ebd: Some("E_0232"),
+        frist: FristShape::WerktageAtCutoff(1),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 8 — 1 Werktag",
+    },
+    AntwortObligation {
+        trigger_pid: 21_009,
+        name: "Mitteilung über Gesamtvorgang (gescheitert)",
+        answered_by: "NB",
+        // A Scheitermeldung has no positive answer: `E_0232` publishes only
+        // `Z66` „MSB-Scheitermeldung liegt vor", carried by 21011.
+        antwort_pids: (21_011, 21_011),
+        ebd: Some("E_0232"),
+        frist: FristShape::WerktageAtCutoff(1),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 2.3.2 Nr. 8 — 1 Werktag",
     },
     AntwortObligation {
         trigger_pid: 35_001,
-        name: "Preisanfrage (REQOTE)",
-        answered_by: "MSB",
+        name: "Anforderung Geräteübernahmeangebot (REQOTE)",
+        answered_by: "MSBA",
         antwort_pids: (15_001, 15_001),
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(PREISANFRAGE_WERKTAGE),
+        frist: FristShape::WerktageAtCutoff(GERAETEUEBERNAHME_ANGEBOT_WERKTAGE),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom — REQOTE Preisanfrage, 5 Werktage",
+        source: "WiM Strom Teil 1 Kap. 3.2.2 Nr. 2 — 4 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: 17_001,
+        name: "Bestellung Geräteübernahmeangebot",
+        answered_by: "MSBA",
+        antwort_pids: (19_001, 19_002),
+        ebd: Some("E_0247"),
+        frist: FristShape::WerktageAtCutoff(2),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 3.2.2 Nr. 4 — 2 Werktage",
     },
     AntwortObligation {
         trigger_pid: 35_002,
-        name: "Preisanfrage Rechnungsabwicklung MSB über LF (REQOTE)",
+        name: "Anfrage Rechnungsabwicklung MSB über LF (REQOTE)",
         answered_by: "MSB",
-        antwort_pids: (15_002, 15_002),
-        ebd: None,
-        frist: FristShape::WerktageAtCutoff(PREISANFRAGE_WERKTAGE),
+        antwort_pids: (15_002, 21_033),
+        ebd: Some("E_0207"),
+        frist: FristShape::WerktageAtCutoff(RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom — REQOTE Preisanfrage, 5 Werktage",
+        source: "WiM Strom Teil 1 Kap. 3.6.3.6.2 Nr. 2 — 5 Werktage",
     },
     AntwortObligation {
-        trigger_pid: 35_004,
-        name: "Preisanfrage (REQOTE)",
-        answered_by: "MSB",
-        antwort_pids: (15_004, 15_004),
-        ebd: None,
-        frist: FristShape::WerktageAtCutoff(PREISANFRAGE_WERKTAGE),
+        trigger_pid: 15_002,
+        name: "Angebot zur Rechnungsabwicklung des Messstellenbetriebes über den LF",
+        answered_by: "LF",
+        antwort_pids: (17_005, 21_032),
+        ebd: Some("E_0205"),
+        frist: FristShape::WerktageAtCutoff(RECHNUNGSABWICKLUNG_WERKTAGE),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom — REQOTE Preisanfrage, 5 Werktage",
+        source: "WiM Strom Teil 1 Kap. 3.6.3.4.2 Nr. 2 — 8 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: 17_006,
+        name: "Beendigung Rechnungsabwicklung des Messstellenbetriebes über den LF",
+        answered_by: "Gegenseite (LF oder MSB)",
+        antwort_pids: (19_009, 19_010),
+        ebd: Some("E_0206"),
+        frist: FristShape::WerktageAtCutoff(RECHNUNGSABWICKLUNG_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 3.6.3.5.2 Nr. 2 — 8 Werktage",
     },
     AntwortObligation {
         trigger_pid: 35_005,
-        name: "Preisanfrage (REQOTE)",
+        name: "Anfrage Angebot Änderung Technik (REQOTE)",
         answered_by: "MSB",
         antwort_pids: (15_005, 15_005),
         ebd: None,
-        frist: FristShape::WerktageAtCutoff(PREISANFRAGE_WERKTAGE),
+        frist: FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE),
         family: Family::Wim,
-        source: "BK6-24-174 WiM Strom — REQOTE Preisanfrage, 5 Werktage",
+        source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
+    },
+    AntwortObligation {
+        trigger_pid: 17_011,
+        name: "Beauftragung Änderung der Technik an der Messlokation",
+        answered_by: "MSB",
+        antwort_pids: (19_005, 19_006),
+        // Two trees on one PID: `E_0249` when the NB ordered the change,
+        // `E_0250` when the LF did — the LF variant adds the Vollmacht
+        // Prüfschritte `A03`/`A04`. The PID cannot pick between them, so none
+        // is named here; `mako_pruefung::msb::technikaenderung_ebd` takes the
+        // sender's Marktrolle instead.
+        ebd: None,
+        frist: FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE),
+        family: Family::Wim,
+        source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2 — 10 Werktage",
     },
 ];
 
-/// The REQOTE Preisanfrage answer window, in Werktage (BK6-24-174).
-pub const PREISANFRAGE_WERKTAGE: u32 = 5;
+/// The Geräteübernahmeangebot window, in Werktage
+/// (WiM Strom Teil 1 Kap. 3.2.2 Nr. 2).
+pub const GERAETEUEBERNAHME_ANGEBOT_WERKTAGE: u32 = 4;
+
+/// Answer window on an Anfrage zur Rechnungsabwicklung *durch den LF*, in
+/// Werktage (WiM Strom Teil 1 Kap. 3.6.3.6.2 Nr. 2).
+pub const RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE: u32 = 5;
+
+/// Answer window on an Angebot or a Beendigung of the Rechnungsabwicklung des
+/// Messstellenbetriebes über den LF, in Werktage
+/// (WiM Strom Teil 1 Kap. 3.6.3.4.2 / 3.6.3.5.2 Nr. 2).
+pub const RECHNUNGSABWICKLUNG_WERKTAGE: u32 = 8;
+
+/// Answer window on a Messlokationsänderung (Änderung der Technik), in
+/// Werktage (WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2).
+pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
+
+/// Answer window on an INSRPT Störungsmeldung for a **kME ohne RLM or an mME**,
+/// in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 2).
+pub const STOERUNGSMELDUNG_KME_WERKTAGE: u32 = 3;
+
+/// Answer window on an INSRPT Störungsmeldung for a **kME mit RLM or an iMS**,
+/// in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 2).
+pub const STOERUNGSMELDUNG_IMS_WERKTAGE: u32 = 1;
+
+/// The INSRPT Störungsmeldung answer window for the Messtechnik at the
+/// Messlokation.
+///
+/// WiM Strom Teil 2 Kap. 1.2 Nr. 2 states two numbers and the message does not
+/// carry which applies — the MSB's own device registry decides it. That is why
+/// 23001 has no row in [`WIM`]: a PID-keyed lookup would have to pick one, and
+/// picking the longer one lets an iMS Störung run two Werktage past its window.
+#[must_use]
+pub const fn stoerungsmeldung_werktage(rlm_oder_ims: bool) -> u32 {
+    if rlm_oder_ims {
+        STOERUNGSMELDUNG_IMS_WERKTAGE
+    } else {
+        STOERUNGSMELDUNG_KME_WERKTAGE
+    }
+}
+
+/// The PIDs that are an answer in one Use-Case and a trigger in another, with
+/// the Fundstelle that makes them one.
+///
+/// `trigger_pid` is documented as never being an answer, and for all but these
+/// it holds. The Rechnungsabwicklung des Messstellenbetriebes über den LF is
+/// specified twice with the roles swapped — the MSB may offer unprompted
+/// (Kap. 3.6.3.4, where QUOTES 15002 is Prozessschritt 1 and the LF owes the
+/// answer in 8 Werktage) and the LF may ask first (Kap. 3.6.3.6, where the same
+/// 15002 is Prozessschritt 2 answering REQOTE 35002). Both are real, so the
+/// table carries both and this list records why the invariant bends.
+///
+/// Adding a PID here is a claim about a Festlegung; the test enforces that it
+/// is one that both starts a window and answers one.
+pub const CHAINED_TRIGGERS: &[(u32, &str)] = &[(
+    15_002,
+    "WiM Strom Teil 1 Kap. 3.6.3.4.2 Nr. 1 (MSB-initiiert, Angebot) vs. Kap. 3.6.3.6.2 Nr. 2 \
+     (LF-initiiert, Antwort auf die Anfrage)",
+)];
 
 /// WiM Gas — the 10-Werktage window, on the PIDs that start the clock.
 ///
@@ -893,13 +1082,48 @@ mod tests {
     #[test]
     fn the_esa_werteanfrage_is_not_a_preisanfrage() {
         assert!(antwort_obligation(35_003).is_none());
-        for pid in [35_001_u32, 35_002, 35_004, 35_005] {
-            assert_eq!(
-                antwort_obligation(pid).map(|o| o.frist),
-                Some(FristShape::WerktageAtCutoff(PREISANFRAGE_WERKTAGE)),
-                "PID {pid}"
-            );
-        }
+    }
+
+    /// The four WiM REQOTE PIDs open four different Use-Cases, so one flat
+    /// window is wrong for three of them. 35004 is the GPKE Teil 3 Anfrage
+    /// einer Konfiguration and has no WiM window at all.
+    #[test]
+    fn the_reqote_family_is_not_one_window() {
+        assert_eq!(
+            antwort_obligation(35_001).map(|o| o.frist),
+            Some(FristShape::WerktageAtCutoff(
+                GERAETEUEBERNAHME_ANGEBOT_WERKTAGE
+            )),
+            "35001 is the Anforderung Geräteübernahmeangebot — 4 WT"
+        );
+        assert_eq!(
+            antwort_obligation(35_002).map(|o| o.frist),
+            Some(FristShape::WerktageAtCutoff(
+                RECHNUNGSABWICKLUNG_ANFRAGE_WERKTAGE
+            )),
+        );
+        assert_eq!(
+            antwort_obligation(35_005).map(|o| o.frist),
+            Some(FristShape::WerktageAtCutoff(TECHNIKAENDERUNG_WERKTAGE)),
+            "35005 opens the Messlokationsänderung — 10 WT"
+        );
+        // 35004 opens the GPKE Teil 3 Konfigurationsprozess, so it lives in
+        // the GPKE table with **2** Werktage — not in the WiM family at five.
+        let o = antwort_obligation(35_004).expect("published");
+        assert_eq!(o.family, Family::Gpke);
+        assert_eq!(
+            o.frist,
+            FristShape::WerktageAtCutoff(KONFIGURATIONSANGEBOT_WERKTAGE)
+        );
+    }
+
+    /// The Antwort auf die Gerätewechselabsicht is anchored on the
+    /// Gerätewechseltermin, not on the arrival instant, so it belongs to
+    /// `vorlauf` and must not be reported as a forward window here.
+    #[test]
+    fn the_geraetewechselabsicht_answer_is_a_vorlauffrist() {
+        assert!(antwort_obligation(17_009).is_none());
+        assert!(crate::vorlauf::vorlauf("wim.antwort-geraetewechselabsicht").is_some());
     }
 
     /// Only WiM Gas *request* PIDs start a clock.
@@ -946,17 +1170,49 @@ mod tests {
 
     /// No trigger may also be an answer — that inversion is the recurring
     /// failure mode these tables exist to prevent.
+    ///
+    /// [`CHAINED_TRIGGERS`] is the one carve-out and it is enumerated, not
+    /// inferred: a PID gets in only because a Festlegung gives it a
+    /// Prozessschritt of its own in a second Use-Case.
     #[test]
     fn no_trigger_is_also_an_answer() {
         let answers: BTreeSet<u32> = all()
             .flat_map(|o| [o.antwort_pids.0, o.antwort_pids.1])
             .collect();
         for o in all() {
+            if CHAINED_TRIGGERS
+                .iter()
+                .any(|(pid, _)| *pid == o.trigger_pid)
+            {
+                continue;
+            }
             assert!(
                 !answers.contains(&o.trigger_pid),
-                "{} is listed both as a trigger and as an answer",
+                "{} is listed both as a trigger and as an answer; if a Festlegung really \
+                 gives it its own Prozessschritt, add it to CHAINED_TRIGGERS with the \
+                 citation rather than deleting this assertion",
                 o.trigger_pid
             );
+        }
+    }
+
+    /// Every carve-out must actually be in the table and actually be an answer
+    /// — otherwise the list quietly grows into a way of muting the check.
+    #[test]
+    fn chained_triggers_are_real() {
+        let answers: BTreeSet<u32> = all()
+            .flat_map(|o| [o.antwort_pids.0, o.antwort_pids.1])
+            .collect();
+        for (pid, source) in CHAINED_TRIGGERS {
+            assert!(
+                antwort_obligation(*pid).is_some(),
+                "{pid} is exempted but starts no window"
+            );
+            assert!(
+                answers.contains(pid),
+                "{pid} is exempted but is not an answer anywhere — the exemption is dead"
+            );
+            assert!(source.contains("Kap."), "{pid} cites no chapter");
         }
     }
 

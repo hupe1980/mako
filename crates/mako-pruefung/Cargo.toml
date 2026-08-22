@@ -12,12 +12,16 @@ keywords         = ["energy", "mako", "bdew", "gpke", "edifact"]
 categories       = ["data-structures"]
 
 [features]
-default = ["role-nb", "role-lf"]
+default = ["role-nb", "role-lf", "role-msb"]
 ## The trees whose prüfende Rolle is the Netzbetreiber (`E_0622`, `E_0607`).
 role-nb = ["dep:mako-markt"]
 ## The trees whose prüfende Rolle is the Lieferant (`E_0609`, `E_0624`, `E_0614`,
 ## and the Gas Codelisten `E_3001`, `E_3002`, `E_3020`).
 role-lf = []
+## The WiM Messstellenbetrieb trees (`E_0200`, `E_0201`, `E_0202`, `E_0203`).
+## Two of them are answered by the MSB and two by the NB, so the feature names
+## the process family rather than one Marktrolle.
+role-msb = []
 ## Enable in-memory test doubles. Must never appear in production builds.
 testing = []
 
