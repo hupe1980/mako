@@ -59,7 +59,9 @@ use marktd::{
         melo_msb::{get_melo_msb_at, get_melo_msb_history, put_melo_msb},
         mmma_preise,
         msb_rahmenvertrag_gas::{get_msb_rv_gas, list_msb_rv_gas, upsert_msb_rv_gas},
-        nb_contract::{get_nb_contract, list_nb_contracts, put_nb_contract},
+        nb_contract::{
+            get_nb_contract, get_nb_contract_by_malo, list_nb_contracts, put_nb_contract,
+        },
         nb_energiemix::{get_nb_energiemix, get_nb_energiemix_history, put_nb_energiemix},
         nelo::{get_nelo, list_nelos, put_nelo},
         netzzugang::{get_antrag, list_antraege, set_antrag_status, upsert_antrag},
@@ -450,6 +452,10 @@ fn preisblatt_routes() -> Router<S> {
 fn registry_routes() -> Router<S> {
     Router::new()
         .route("/api/v1/nb-contracts", get(list_nb_contracts))
+        .route(
+            "/api/v1/nb-contracts/by-malo/{malo_id}",
+            get(get_nb_contract_by_malo),
+        )
         .route(
             "/api/v1/nb-contracts/{id}",
             get(get_nb_contract).put(put_nb_contract),

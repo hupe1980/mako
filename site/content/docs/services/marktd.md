@@ -322,16 +322,19 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/metrics` | — | Prometheus (no auth) |
 | `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path); pushes to makod MaLo cache |
 | `GET` | `/api/v1/malos/{malo_id}` | `read-malo` | Get Marktlokation as typed `rubo4e::current::Marktlokation` (canonical BO4E camelCase) |
+| `GET` | `/api/v1/malos/{malo_id}/lastprofil` | `read-malo` | Lastprofil (SLP/TLP) assigned to the Marktlokation |
 | `GET` | `/api/v1/malos` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
 | `PUT` | `/api/v1/melos/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path) |
 | `GET` | `/api/v1/melos/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
+| `GET` | `/api/v1/melos/{melo_id}/standorteigenschaften` | `read-melo` | BO4E `Standorteigenschaften` for the MeLo |
 | `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner — validates payload as `rubo4e::current::Geschaeftspartner` (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`; canonicalises camelCase) |
 | `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner — returns a `geschaeftspartner` field with the typed `rubo4e::current::Geschaeftspartner` payload (graceful fallback for legacy records) |
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
+| `GET` | `/api/v1/partners/{mp_id}/as4-address` | `read-partner` | AS4 endpoint URL and certificate for a partner |
 | `GET` | `/api/v1/partners/{mp_id}/marktteilnehmer` | `read-partner` | BO4E `Marktteilnehmer` view of a partner (typed `marktrolle`/`rollencodetyp`, mp_id → `rollencodenummer`). Note: partner PUTs with the legacy literal role `"LFG"` are rejected 422 — model gas suppliers as `LF` + Rollencodetyp `DVGW` |
-| `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read/write-mmma-preis` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
+| `GET/PUT` | `/api/v1/mmma-preise/gas/{year}/{month}` | `read-mmma-preis` / `write-mmma-preis` | Gas MMM Abrechnungspreise (Trading Hub Europe / MGV, monthly) — `{mehr_ct_kwh, minder_ct_kwh}`; queried by `netzbilanzd` for INVOIC 31007/31008 billing and `invoicd` check 6 validation |
 | `GET` | `/api/v1/mmma-preise/gas` | `read-mmma-preis` | List all Gas MMM price records (newest first; `?limit=`) |
-| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read/write-mmma-preis` | Strom Mehr-/Mindermengenpreise — `{mehr_ct_kwh, minder_ct_kwh}`. **One nationwide series**: § 13 Abs. 3 StromNZV requires *einheitliche* prices computed from monthly market prices, and the BDEW determines and publishes them centrally, so the application month is the entire key. There is no per-VNB and no per-ÜNB variant. Queried by `netzbilanzd` for MMM INVOIC 31005/31006 and `invoicd` check 6 |
+| `GET/PUT` | `/api/v1/mmm-preise/strom/{year}/{month}` | `read-mmma-preis` / `write-mmma-preis` | Strom Mehr-/Mindermengenpreise — `{mehr_ct_kwh, minder_ct_kwh}`. **One nationwide series**: § 13 Abs. 3 StromNZV requires *einheitliche* prices computed from monthly market prices, and the BDEW determines and publishes them centrally, so the application month is the entire key. There is no per-VNB and no per-ÜNB variant. Queried by `netzbilanzd` for MMM INVOIC 31005/31006 and `invoicd` check 6 |
 | `PUT` | `/api/v1/preisblaetter/{nb_mp_id}` | `write-preisblatt` | Upsert price sheet + store versioned snapshot + emit `de.markt.pricat.published` |
 | `GET` | `/api/v1/preisblaetter/{nb_mp_id}` | `read-preisblatt` | Get price sheet valid on date |
 | `GET` | `/api/v1/pricat/{nb_mp_id}/history` | `read-pricat` | List PRICAT version history (newest first) |
@@ -342,10 +345,10 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `PUT` | `/api/v1/versorgung/{malo_id}` | `write-versorgungsstatus` | Upsert VersorgungsStatus (ERP-driven override) |
 | `GET` | `/api/v1/grundversorger/{nb_mp_id}` | `read-grundversorger` | Grundversorger Feststellung (§36 Abs. 2 EnWG); `?sparte=STROM\|GAS` |
 | `PUT` | `/api/v1/grundversorger/{nb_mp_id}` | `write-grundversorger` | Upsert the Feststellung (NB role) — read by the processd EoG gap closure. Optional `default_bilanzkreis` deposits the GPKE-Teil-4 default BK applied when an EoG completes without the E/G supplying its own (EoG ohne Antwort). |
-| `POST` | `/api/v1/esa/einwilligungen` | — | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG). Emits `de.markt.einwilligung.erteilt`. Evidence-agnostic |
-| `GET` | `/api/v1/esa/einwilligungen` | — | List active consents (`?esa_mp_id=`) |
-| `GET` | `/api/v1/esa/einwilligungen/{id}` | — | Get a consent |
-| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | — | Revoke (GDPR Art. 7(3)) — emits `de.markt.einwilligung.widerrufen` and fires the 17008 Abbestellung at makod |
+| `POST` | `/api/v1/esa/einwilligungen` | `write-einwilligung` | Grant an ESA consent (§49 Abs. 2 Nr. 9 MsbG). Emits `de.markt.einwilligung.erteilt`. Evidence-agnostic |
+| `GET` | `/api/v1/esa/einwilligungen` | `read-einwilligung` | List active consents (`?esa_mp_id=`) |
+| `GET` | `/api/v1/esa/einwilligungen/{id}` | `read-einwilligung` | Get a consent |
+| `DELETE` | `/api/v1/esa/einwilligungen/{id}` | `write-einwilligung` | Revoke (GDPR Art. 7(3)) — emits `de.markt.einwilligung.widerrufen` and fires the 17008 Abbestellung at makod |
 | `PUT`/`GET` | `/api/v1/esa/framework/{msb_mp_id}/{esa_mp_id}` | — | Bilateral EDI@Energy framework agreement + AS4 cert state |
 | `GET` | `/api/v1/esa/consent-check` | — | Gate an ESA message (`?esa_mp_id=&msb_mp_id=&location_id=&perspective=`) → `{allowed, code, reason}`. `perspective=msb_inbound` (default, lenient: missing record = self-assertion) or `esa_outbound` (strict: missing record = no lawful basis). makod calls this before running the Wertebestellung workflow |
 | `GET` | `/api/v1/mabis-zp` | `read-mabis-zp` | Every Bilanzierungsgebiet → MaBiS-Zählpunkt assignment for the tenant |
@@ -364,21 +367,26 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/tranchen` | `read-tranche` | List Tranchen (`?malo_id=` filters by parent MaLo) |
 | `GET` | `/api/v1/tranchen/{id}` | `read-tranche` | Get a Tranche |
 | `PUT` | `/api/v1/tranchen/{id}` | `write-tranche` (NB role) | Insert or update a Tranche (GPKE Teil 4 „Daten der Tranche") |
-| `GET` | `/api/v1/malos/{malo_id}/grid` | `read-malo` | MaLo grid topology (Netzgebiet, Bilanzierungsgebiet) |
-| `PUT` | `/api/v1/malos/{malo_id}/grid` | `write-malo` (NB role) | Upsert grid record from NIS/GIS |
+| `GET` | `/api/v1/malos/{malo_id}/grid` | `read-malo-grid` | MaLo grid topology (Netzgebiet, Bilanzierungsgebiet) |
+| `PUT` | `/api/v1/malos/{malo_id}/grid` | `write-malo-grid` (NB role) | Upsert grid record from NIS/GIS |
 | `GET` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `read-preisblatt` | `PreisblattMessung` valid on date (MSB metering tariffs); includes `auf_abschlaege` |
 | `PUT` | `/api/v1/preisblaetter-messung/{msb_mp_id}` | `write-preisblatt` | Upsert MSB metering price sheet |
+| `GET/PUT` | `/api/v1/preisblaetter-ka/{nb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattKonzessionsabgabe` valid on date |
+| `GET/PUT` | `/api/v1/preisblaetter-dienstleistung/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattDienstleistung` valid on date (MSB services) |
+| `GET/PUT` | `/api/v1/preisblaetter-hardware/{msb_mp_id}` | `read-preisblatt` / `write-preisblatt` | `PreisblattHardware` valid on date (MSB devices) |
 | `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `read-sr` | Get a `SteuerbareRessource` by SR-ID |
 | `PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}` | `write-sr` | Upsert a `SteuerbareRessource` |
 | `GET` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | `read-sr` | List `Konfigurationsprodukte` (§14a steuerbare Verbrauchseinrichtungen) |
 | `GET` | `/api/v1/technische-ressourcen/{tr_id}` | `read-device` | Get a `TechnischeRessource` by `TrId` |
+| `GET/PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | `read-sr` / `write-sr` | §14a Konfigurationsprodukte on a `SteuerbareRessource` |
+| `DELETE` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}` | `write-sr` | Remove one Konfigurationsprodukt |
 | `PUT` | `/api/v1/technische-ressourcen/{tr_id}` | `write-device` | Upsert a `TechnischeRessource` (E-mobility, generation, storage) |
 | `GET` | `/api/v1/malos/{malo_id}/technische-ressourcen` | `read-device` | List `TechnischeRessource` for a `MaLo` |
 | `GET` | `/api/v1/malos/{id}/lokationen` | `read-malo` | Recursive `Lokationszuordnung` graph from a MaLo (`?at=YYYY-MM-DD`) |
 | `GET` | `/api/v1/malos/{id}/buendel` | `read-malo` | First-class **Lokationsbündel** rooted at a MaLo — the bundle projected from the typed graph plus its structural-integrity status (`valid` + `validation_error`; ≥1 MeLo required) |
 | `GET` | `/api/v1/melos/{id}/lokationen` | `read-melo` | Recursive `Lokationszuordnung` graph from a MeLo |
-| `PUT` | `/api/v1/lokationszuordnungen` | `write-malo` | Upsert a directed location graph edge (`lokationsbuendelcode` extracted into a typed column). Note the single-write-path invariant: a MeLo `PUT` reconciles the `melo→malo` graph edge in the same transaction (previous edges closed with `valid_to`, never deleted), so the `melo.malo_id` FK and the graph cannot drift |
-| `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-malo` | Hard-delete an edge pair (all temporal variants) |
+| `PUT` | `/api/v1/lokationszuordnungen` | `write-lokationszuordnung` | Upsert a directed location graph edge (`lokationsbuendelcode` extracted into a typed column). Note the single-write-path invariant: a MeLo `PUT` reconciles the `melo→malo` graph edge in the same transaction (previous edges closed with `valid_to`, never deleted), so the `melo.malo_id` FK and the graph cannot drift |
+| `DELETE` | `/api/v1/lokationszuordnungen/{von_id}/{nach_id}` | `write-lokationszuordnung` | Hard-delete an edge pair (all temporal variants) |
 | `GET` | `/api/v1/melos/{melo_id}/zaehler` | `read-device` | List `Zaehler` for a MeLo (typed `Vec<ZaehlerResponse>` with `data: rubo4e::current::Zaehler`) |
 | `GET` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` | The MSB responsible for the MeLo on `?at=YYYY-MM-DD` (default today) — WiM Teil 2 UC 4.1.1 historical Werteanfrage routing |
 | `PUT` | `/api/v1/melos/{melo_id}/msb` | `write-melo-msb` | Record a dated MSB assignment (`{ msb_mp_id, valid_from }`); closes the previously-open assignment atomically |
@@ -400,6 +408,14 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` | Get NB network contract with typed BO4E `Vertrag` payload |
 | `PUT` | `/api/v1/nb-contracts/{id}` | `write-nb-contract` | Upsert NB network contract; validates `Vertrag` `_typ` and enums (422 on violation); emits `de.markt.nb-contract.updated` |
 | `GET` | `/api/v1/nb-contracts` | `read-nb-contract` | List NB contracts (`?nb_mp_id=...` required) |
+| `GET` | `/api/v1/nb-contracts/by-malo/{malo_id}` | `read-nb-contract` | Contract in force for a MaLo on `?on=` (default today) — the Netznutzer and its type |
+| `GET/PUT` | `/api/v1/energiemix/{nb_mp_id}` | `read-energiemix` / `write-energiemix` | §42 EnWG Energiemix for a Netzbetreiber (`?year=`) |
+| `GET` | `/api/v1/energiemix/{nb_mp_id}/history` | `read-energiemix` | Every published Energiemix year for the NB |
+| `GET` | `/api/v1/subscriptions` | `manage-subscription` | List durable fan-out subscriptions |
+| `GET/PUT/DELETE` | `/api/v1/subscriptions/{id}` | `manage-subscription` | Read, register or remove one subscriber |
+| `POST` | `/api/v1/subscriptions/{id}/test` | `manage-subscription` | Send a probe CloudEvent to the subscriber's webhook |
+| `GET` | `/api/v1/correlations` | `read-correlation` | List process correlations (`?malo_id=`, `?workflow=`) |
+| `GET` | `/api/v1/correlations/{id}` | `read-correlation` | One correlation by `process_id` or `erp_order_id` |
 | `POST` | `/api/v1/events` | — | Inbound CloudEvent from `makod` (HMAC-verified); appended to `event_log` before fan-out |
 | `GET` | `/admin/fanout/dlq` | `manage-fanout` | List unresolved DLQ entries |
 | `POST` | `/admin/fanout/dlq/{event_id}/{subscriber_id}/retry` | `manage-fanout` | Re-deliver a dead-lettered delivery |
@@ -651,7 +667,7 @@ Migrations run automatically at startup via `sqlx migrate run`.
 | `preisblaetter_messung` | MSB metering price sheets — same source-override protection |
 | `versorgungsstatus` | VersorgungsStatus per MaLo — `LieferStatus CHECK`, optimistic concurrency `version BIGINT` |
 | `versorgungsstatus_history` | Append-only audit log of every supply-state transition — powers `?at=` and `/history` |
-| `nb_contracts` | NB network contracts — typed SQL columns (`netzebene`, `bilanzierungsmethode`, `billing_schedule`) + full BO4E `Vertrag` JSONB (`data`) for ERP digital LRV exchange |
+| `nb_contracts` | NB network contracts — typed SQL columns (`netzebene`, `bilanzierungsmethode`, `billing_schedule`, `netznutzer_mp_id`, `netznutzer_typ`) + full BO4E `Vertrag` JSONB (`data`) for ERP digital LRV exchange |
 | `pricat_versions` | Versioned PRICAT snapshots — `(nb_mp_id, tenant, valid_from)` unique, dispatch state |
 | `pricat_dispatch_log` | Dispatch audit log — one row per NB × LF dispatch attempt |
 | `nelo` | Netz-Element-Lokationen (Redispatch 2.0) — EIC or BDEW Codenummer, owner NB GLN, JSONB data |
@@ -707,6 +723,8 @@ every successful upsert so ERP subscribers can rebuild `Vertrag` caches without 
   "netzebene":           "NS",
   "bilanzierungsmethode": "SLP",
   "billing_schedule":    "MONTHLY",
+  "netznutzer_mp_id":    "9905555550003",
+  "netznutzer_typ":      "LIEFERANT",
   "valid_from":          "2026-10-01",
   "valid_to":            null,
   "data": {
@@ -736,6 +754,8 @@ fields (`vertragsart = NETZNUTZUNGSVERTRAG`, `vertragsstatus = AKTIV`).
   "netzebene":           "NS",
   "bilanzierungsmethode": "SLP",
   "billing_schedule":    "MONTHLY",
+  "netznutzer_mp_id":    "9905555550003",
+  "netznutzer_typ":      "LIEFERANT",
   "valid_from":          "2026-10-01",
   "valid_to":            null,
   "data": {
@@ -755,6 +775,29 @@ fields (`vertragsart = NETZNUTZUNGSVERTRAG`, `vertragsstatus = AKTIV`).
 `netzebene` accepts all Strom voltage levels (`NS`/`MS`/`MSP`/`HSP`/`HS`/`HöS`/`HöS/HS`)
 and Gas pressure levels (`GND`/`GMT`/`GHD`). `bilanzierungsmethode` accepts `RLM`, `SLP`,
 `IMS`, and TLP variants.
+
+### The Netznutzer, and the Selbstzahler
+
+`netznutzer_mp_id` is the counterparty — the party that owes the Netznutzungsentgelt.
+`netznutzer_typ` says what kind of party it is:
+
+| Value | Meaning |
+|---|---|
+| `LIEFERANT` (default) | The ordinary case: an all-inclusive supply contract, the LF is Netznutzer |
+| `LETZTVERBRAUCHER` | **Selbstzahler** — „Netznutzer ohne All-Inklusiv-Vertrag". The Letztverbraucher pays the Netznutzung itself |
+
+A Selbstzahler takes the LF role in GPKE (Teil 1, Vorbemerkung) and is an ordinary
+LF on the wire — nothing routes differently. Registered as a Marktpartner with the
+LF role, he already receives the PRICAT Preisblatt and the „sonstige Leistung"
+invoice Teil 2 Kap. 3.4.4 / 3.4.5 owe him. The flag exists for the one carve-out,
+the LF's Lieferantenwechsel-Meldungen, where
+[`processd`](@/docs/services/processd.md#selbstzahler-the-lieferantenwechsel-carve-out)
+holds a Wechsel (`E03`) for the operator rather than answering it automatically.
+
+### `GET /api/v1/nb-contracts/by-malo/{malo_id}?on=YYYY-MM-DD`
+
+The contract in force for a MaLo on a date (default today), or `404`. This is the read
+`processd` uses before it decides an Anmeldung.
 
 ---
 

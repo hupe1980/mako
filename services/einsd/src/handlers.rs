@@ -7,6 +7,7 @@ use axum::{
     response::IntoResponse,
 };
 use mako_service::cedar::CedarEnforcer;
+use mako_service::error::ApiError;
 use mako_service::oidc::Claims;
 use rust_decimal::Decimal;
 use serde::Deserialize;
@@ -345,6 +346,7 @@ pub async fn enqueue_settlement_ce(
     tx: &mut sqlx::PgConnection,
     cfg: &EinsdConfig,
     anlage: &crate::pg::AnlageRow,
+    einspeiser: &crate::pg_einspeiser::Einspeiser,
     result: &crate::pg::SettleResult,
     year: i16,
     month: i16,
@@ -368,9 +370,9 @@ pub async fn enqueue_settlement_ce(
         result,
         year,
         month,
-        anlage.bank_iban.as_deref(),
-        anlage.bank_bic.as_deref(),
-        anlage.zahlungsempfaenger.as_deref(),
+        einspeiser.bank_iban.as_deref(),
+        einspeiser.bank_bic.as_deref(),
+        einspeiser.zahlungsempfaenger.as_deref(),
     ) {
         mako_service::outbox::enqueue(tx, &ce).await?;
     }
@@ -2528,4 +2530,70 @@ fn parse_period(
         ));
     }
     Ok((from, until))
+}
+
+// ── Einspeiser (Anlagenbetreiber) ─────────────────────────────────────────────
+
+/// `GET /api/v1/einspeiser` — list the tenant's operators.
+pub async fn list_einspeiser(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<EinsdConfig>>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einspeiser", &cfg.tenant)
+        .is_err()
+    {
+        return ApiError::Forbidden.into_response();
+    }
+    match crate::pg_einspeiser::list(&pool, &cfg.tenant).await {
+        Ok(rows) => Json(serde_json::json!({ "einspeiser": rows })).into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
+    }
+}
+
+/// `GET /api/v1/einspeiser/{einspeiser_id}` — one operator.
+pub async fn get_einspeiser(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<EinsdConfig>>,
+    Path(einspeiser_id): Path<String>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "read-einspeiser", &cfg.tenant)
+        .is_err()
+    {
+        return ApiError::Forbidden.into_response();
+    }
+    match crate::pg_einspeiser::find(&pool, &cfg.tenant, &einspeiser_id).await {
+        Ok(Some(row)) => Json(row).into_response(),
+        Ok(None) => ApiError::NotFound.into_response(),
+        Err(e) => ApiError::Internal(e).into_response(),
+    }
+}
+
+/// `PUT /api/v1/einspeiser/{einspeiser_id}` — register or update an operator.
+///
+/// The § 19 UStG election lives here and nowhere else, so one call switches the
+/// VAT on every future Gutschrift issued to this operator's plants at once.
+pub async fn put_einspeiser(
+    claims: Claims,
+    Extension(enforcer): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<EinsdConfig>>,
+    Path(einspeiser_id): Path<String>,
+    Json(body): Json<crate::pg_einspeiser::UpsertEinspeiser>,
+) -> impl IntoResponse {
+    if enforcer
+        .check(&claims.principal(), "write-einspeiser", &cfg.tenant)
+        .is_err()
+    {
+        return ApiError::Forbidden.into_response();
+    }
+    match crate::pg_einspeiser::upsert(&pool, &cfg.tenant, &einspeiser_id, &body).await {
+        Ok(()) => (StatusCode::NO_CONTENT).into_response(),
+        Err(e) => ApiError::bad_request(e.to_string()).into_response(),
+    }
 }

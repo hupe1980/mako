@@ -6,6 +6,7 @@
 --   § 147 AO / GoBD (settlement receipts are Buchungsbelege: 8-year retention)
 --
 -- Tables:
+--   einspeiser                — the plant operator: payee, bank details, USt-Status
 --   eeg_anlagen               — central plant register (composite PK: tr_id + tenant)
 --   settlement_receipts       — monthly settlement audit log (§ 147 AO / GoBD)
 --   settlement_period_accruals — per-period contribution to the cumulative counters
@@ -19,6 +20,42 @@
 --   eeg_stromsteuerbefreiungen — §53c per-kWh Stromsteuerbefreiung
 --   eeg_sect54_solar_defekte  — §54 solar first-segment auction defects
 --   jahresabrechnungen        — the year reconciled from the stored monthly receipts
+
+-- ── Einspeiser (Anlagenbetreiber) ─────────────────────────────────────────────
+--
+-- The party behind the plants. `einspeiser_id` is operator-assigned (a customer
+-- number, a MaStR Marktakteur-ID, or a UUID the ERP mints) — einsd does not
+-- invent identities for parties it did not register.
+
+CREATE TABLE einspeiser (
+    einspeiser_id      TEXT        NOT NULL,
+    tenant             TEXT        NOT NULL,
+    name               TEXT        NOT NULL,
+    -- MaStR Marktakteursnummer (`SEE…`/`ABR…`), where the operator has one.
+    mastr_akteur_id    TEXT,
+
+    -- § 19 UStG election. A declared property of the operator: plant size only
+    -- *suggests* it (`VatStatus::default_for_plant`), it never decides it.
+    ust_status         TEXT        NOT NULL DEFAULT 'REGELBESTEUERUNG'
+                       CHECK (ust_status IN ('KLEINUNTERNEHMER', 'REGELBESTEUERUNG')),
+
+    -- Payout account for every Gutschrift issued to this operator.
+    bank_iban          TEXT,
+    bank_bic           TEXT,
+    zahlungsempfaenger TEXT,
+
+    version            BIGINT      NOT NULL DEFAULT 1,
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (einspeiser_id, tenant)
+);
+
+COMMENT ON TABLE einspeiser IS
+    'The Anlagenbetreiber behind one or more EEG/KWKG plants. Not a contract: '
+    '§ 7 Abs. 1 EEG 2023 forbids conditioning the EEG claim on one.';
+
+CREATE INDEX einspeiser_mastr ON einspeiser (tenant, mastr_akteur_id)
+    WHERE mastr_akteur_id IS NOT NULL;
 
 -- ── EEG/KWKG plant register ───────────────────────────────────────────────────
 
@@ -151,18 +188,15 @@ CREATE TABLE eeg_anlagen (
     mastr_nummer               TEXT,
     mastr_datum                DATE,
 
-    -- Bank account for EEG settlement payments
-    bank_iban                  TEXT,
-    bank_bic                   TEXT,
-    zahlungsempfaenger         TEXT,
-
-    -- Operator's declared VAT (Umsatzsteuer) status — decides the feed-in
-    -- Gutschrift VAT: KLEINUNTERNEHMER → §19 UStG (category E, 0 %),
-    -- REGELBESTEUERUNG → §12 Abs. 1 UStG (category S, 19 %). This is a declared
-    -- property of the operator, not inferable from plant size; seeded from
-    -- VatStatus::default_for_plant at upsert when the operator does not state it.
-    ust_status                 TEXT        NOT NULL DEFAULT 'REGELBESTEUERUNG'
-                               CHECK (ust_status IN ('KLEINUNTERNEHMER', 'REGELBESTEUERUNG')),
+    -- The operator. Payout account and § 19 UStG status live on `einspeiser`
+    -- because both belong to the person, not the installation — see that
+    -- table's comment. Nullable so a plant can be registered before its
+    -- operator record exists; `settle` refuses to issue a Gutschrift without
+    -- one rather than guessing the VAT.
+    -- The Anlagenbetreiber. Mandatory: § 7 Abs. 1 EEG 2023 puts the payment on
+    -- the Netzbetreiber, and a plant nobody can be paid for is not a plant this
+    -- service can act on.
+    einspeiser_id              TEXT        NOT NULL,
 
     -- ── Plant attributes ────────────────────────────────────
     -- 'Neubau' | 'Repowering' | 'Modernisierung'
@@ -277,8 +311,16 @@ CREATE TABLE eeg_anlagen (
     created_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at                 TIMESTAMPTZ NOT NULL DEFAULT now(),
 
-    PRIMARY KEY (tr_id, tenant)
+    PRIMARY KEY (tr_id, tenant),
+
+    -- A plant may be re-pointed at a different operator (sale, succession) but
+    -- never at one this tenant does not know: the payout account and the VAT
+    -- status are read through this key on every settlement.
+    CONSTRAINT fk_anlage_einspeiser FOREIGN KEY (einspeiser_id, tenant)
+        REFERENCES einspeiser (einspeiser_id, tenant) ON DELETE RESTRICT
 );
+
+CREATE INDEX eeg_anlagen_einspeiser ON eeg_anlagen (tenant, einspeiser_id);
 
 COMMENT ON TABLE eeg_anlagen IS
     'Central EEG/KWKG plant register. Composite PK (tr_id, tenant) for multi-tenant isolation. '

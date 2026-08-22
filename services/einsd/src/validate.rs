@@ -164,6 +164,7 @@ mod tests {
             "erzeugungsart": "SOLAR_AUFDACH",
             "verguetungssatz_ct": "8.11",
             "settlement_model": "VERGUETUNG",
+            "einspeiser_id": "EB-1",
         }))
         .expect("fixture parses")
     }

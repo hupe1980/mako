@@ -109,6 +109,13 @@ pub async fn settle_plant(
         0
     };
 
+    // §14c UStG: a Gutschrift states the Umsatzsteuer of the party it credits.
+    // `eeg_anlagen.einspeiser_id` is NOT NULL behind a foreign key, so this
+    // resolves for every plant that exists.
+    let einspeiser = crate::pg_einspeiser::find_for_anlage(pool, &cfg.tenant, &anlage.tr_id)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("plant {} no longer exists", anlage.tr_id))?;
+
     let mut tx = pool.begin().await?;
 
     // ── §21 Abs. 1 Satz 1 Nr. 3 — how long the Ausfallvergütung has run ──────
@@ -124,6 +131,7 @@ pub async fn settle_plant(
     let input = crate::pg::build_settle_input(
         &cfg.tenant,
         anlage,
+        &einspeiser,
         year,
         month,
         crate::pg::SettleOverrides {
@@ -137,10 +145,11 @@ pub async fn settle_plant(
             sect51_abs3_unreported_days,
             ausfallverguetung,
         },
-    );
+    )?;
 
     let result = crate::pg::run_settlement(&mut tx, input).await?;
-    crate::handlers::enqueue_settlement_ce(&mut tx, cfg, anlage, &result, year, month).await?;
+    crate::handlers::enqueue_settlement_ce(&mut tx, cfg, anlage, &einspeiser, &result, year, month)
+        .await?;
     tx.commit().await?;
     Ok(result)
 }

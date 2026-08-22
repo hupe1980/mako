@@ -324,7 +324,7 @@ pub struct ElectricityProduct {
     /// → the `eeg_gutschrift_eur` credit carries 0 % USt.
     ///
     /// The feed-in is a **separate supply** from the consumption billed here and
-    /// is governed by the operator's own USt status (`eeg_anlagen.ust_status`).
+    /// is governed by the operator's own USt status (`einspeiser.ust_status`).
     /// Without this, the credit nets against the standard-rate base and
     /// understates the supplier's output VAT on the consumption supply by 19 %
     /// of the credit. Does not affect the consumption positions.

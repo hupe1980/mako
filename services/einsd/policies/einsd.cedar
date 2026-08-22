@@ -8,6 +8,8 @@
 // Actions:
 //   "read-anlage"        — GET  /api/v1/anlagen[/{tr_id}], /foerderung-auslaufend
 //   "write-anlage"       — POST/PUT/DELETE /api/v1/anlagen[/{tr_id}]
+//   "read-einspeiser"    — GET  /api/v1/einspeiser[/{einspeiser_id}]
+//   "write-einspeiser"   — PUT  /api/v1/einspeiser/{einspeiser_id}
 //   "read-settlement"    — GET  /api/v1/anlagen/{tr_id}/settlements
 //   "run-settlement"     — POST /api/v1/anlagen/{tr_id}/settle/... and /api/v1/settle/...
 //   "correct-settlement" — POST .../settlements/{year}/{month}/correction (§147 AO / GoBD)
@@ -24,6 +26,7 @@ permit(
     principal,
     action in [
         Action::"read-anlage",
+        Action::"read-einspeiser",
         Action::"read-settlement",
         Action::"read-marktdaten",
         Action::"use-mcp"
@@ -41,6 +44,7 @@ permit(
     principal,
     action in [
         Action::"write-anlage",
+        Action::"write-einspeiser",
         Action::"run-settlement",
         Action::"manage-lifecycle",
         Action::"write-marktdaten"

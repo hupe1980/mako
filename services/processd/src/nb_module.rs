@@ -103,6 +103,12 @@ impl NbModuleConfig {
 /// supplier role (see the module docs).
 pub const ANMELDUNG_PIDS: &[u32] = &[55_001, 55_077, 44_001];
 
+/// `SG4 STS+7` DE 9013 element 2 — Transaktionsgrund `E03` „Wechsel".
+///
+/// The payload reaches this module as JSON from `makod`, which has already read
+/// the segment; the code itself is the same in both Sparten.
+const WECHSEL: &str = "E03";
+
 /// Inbound **Abmeldung** PIDs the NB answers.
 ///
 /// 55004 „Abmeldung" (LF → NB, GPKE Teil 2 SD Lieferende von LF an NB) and
@@ -384,6 +390,26 @@ pub async fn evaluate_and_decide(
         |e| warn!(%e, lf_mp_id = %lf_mp_id, "processd NB: marktd partner check failed"),
     )?;
 
+    // ── Selbstzahler (GPKE Teil 1, Vorbemerkung) ──────────────────────────
+    // The Festlegung takes the LF's Lieferantenwechsel-Meldungen out of the role
+    // a Selbstzahler otherwise steps into — see [`NetznutzerTyp`] — so the NB
+    // cannot assume the incumbent behaves like an LF there. Only a Wechsel
+    // (`E03`) is affected, so the lookup runs for nothing else. The incumbent is
+    // whoever holds the Netznutzungsvertrag the day before the Zuordnungsbeginn.
+    let incumbent_is_selbstzahler = if payload.transaktionsgrund.as_deref() == Some(WECHSEL) {
+        let am = payload
+            .process_date
+            .previous_day()
+            .unwrap_or(payload.process_date);
+        reader
+            .get_nb_contract_for_malo(&malo_id, am)
+            .await
+            .inspect_err(|e| warn!(%e, %malo_id, "processd NB: marktd NNV fetch failed"))?
+            .is_some_and(|c| c.is_selbstzahler())
+    } else {
+        false
+    };
+
     let mut anfrage = payload.into_anfrage();
     // `E_0622` Prüfschritt 400 / 600 („Verändert sich die Veräußerungsform?")
     // needs the form in force at the Zuordnungsbeginn. That is the NB's own
@@ -481,7 +507,19 @@ pub async fn evaluate_and_decide(
             // (vertically integrated utility — §6b EnWG deployment), automatic
             // acceptance is forbidden.  The operator must review manually.
             // Bypassing this check exposes the NB to BNetzA sanctions.
-            if initiator_is_affiliate {
+            if incumbent_is_selbstzahler {
+                warn!(
+                    %process_id, pid, %malo_id, lf_mp_id = %lf_mp_id,
+                    "processd NB: Lieferantenwechsel on a Selbstzahler MaLo —                      held for operator review (GPKE Teil 1, Vorbemerkung)"
+                );
+                enqueue_for_operator(
+                    queue,
+                    config,
+                    &payload_meta,
+                    "Lieferantenwechsel (E03) on a MaLo whose Netznutzer is the                      Letztverbraucher itself (Selbstzahler). GPKE Teil 1, Vorbemerkung,                      takes the LF's Lieferantenwechsel-Meldungen out of the role the                      Selbstzahler otherwise steps into, so the automatic path does not                      apply — the operator decides",
+                )
+                .await?;
+            } else if initiator_is_affiliate {
                 warn!(
                     %process_id, pid, %malo_id, lf_mp_id = %lf_mp_id,
                     "processd NB: §20 EnWG — affiliate Anmeldung detected; \
@@ -1215,6 +1253,37 @@ mod tests {
     }
 
     // ── Misdirection check ─────────────────────────────────────────────────────
+
+    /// The Selbstzahler hold keys on the Wechsel Transaktionsgrund and on
+    /// nothing else.
+    ///
+    /// GPKE Teil 1, Vorbemerkung, carves out only „die Meldungen des Lieferanten
+    /// im Rahmen des Lieferantenwechsels". An Einzug (`E01`) or an Einzug in
+    /// Neuanlage (`E02`) on a Selbstzahler MaLo stays on the automated path: the
+    /// Letztverbraucher is a full LF there. Widening the hold to every
+    /// Transaktionsgrund would take an industrial customer's whole MaLo
+    /// portfolio off automation.
+    #[test]
+    fn only_the_wechsel_grund_triggers_the_selbstzahler_hold() {
+        assert_eq!(super::WECHSEL, "E03");
+        // The other Anmeldung Transaktionsgründe stay on the automated path:
+        // E01 Ein-/Auszug, E02 Einzug in Neuanlage, E06 Ersatzbelieferung.
+        for other in ["E01", "E02", "E06"] {
+            assert_ne!(other, super::WECHSEL);
+        }
+    }
+
+    /// The incumbent is read at the day *before* the requested Zuordnungsbeginn:
+    /// on the Zuordnungsbeginn itself the new contract may already be in force,
+    /// and the question is who the Wechsel displaces.
+    #[test]
+    fn the_incumbent_is_read_the_day_before_the_zuordnungsbeginn() {
+        let beginn = time::macros::date!(2026 - 07 - 01);
+        assert_eq!(
+            beginn.previous_day().unwrap(),
+            time::macros::date!(2026 - 06 - 30)
+        );
+    }
 
     #[test]
     fn affiliate_detection() {

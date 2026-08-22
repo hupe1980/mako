@@ -135,6 +135,14 @@ pub fn build_router(
             "/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}",
             put(crate::handlers::put_jahresmarktwert).get(crate::handlers::get_jahresmarktwert),
         )
+        // ── Einspeiser (Anlagenbetreiber) ──────────────────────────────────────
+        // The § 19 UStG election and the payout account belong to the operator,
+        // so one PUT here switches the VAT on every one of its plants at once.
+        .route("/api/v1/einspeiser", get(crate::handlers::list_einspeiser))
+        .route(
+            "/api/v1/einspeiser/{einspeiser_id}",
+            get(crate::handlers::get_einspeiser).put(crate::handlers::put_einspeiser),
+        )
         // ── EEG tariff rate lookup ─────────────────────────────────────────────
         .route(
             "/api/v1/verguetungssatz-lookup",

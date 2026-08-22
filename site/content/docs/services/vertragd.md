@@ -439,6 +439,12 @@ Kunde on one side lives here, with the lifecycle and the statutory notice
 periods that govern it: Versorgungs-, Rahmen-, Messstellen- and
 Aggregatorverträge, and the GGV-Betreiber behind a § 42b Sammelrechnung.
 
+There is deliberately no *Einspeisevertrag*. § 7 Abs. 1 EEG 2023 („Gesetzliches
+Schuldverhältnis") forbids the Netzbetreiber from making its EEG obligations
+conditional on a contract, so the feed-in relationship is not one. What the
+settlement needs is a party record, and that lives with the plants in
+[`einsd`](@/docs/services/einsd.md) as `einspeiser`.
+
 ## Configuration
 
 ```toml

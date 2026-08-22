@@ -1196,7 +1196,7 @@ sequenceDiagram
 #### Creditor IBAN resolution
 
 `einsd` forwards `bank_iban` + `bank_bic` + `zahlungsempfaenger` in every
-`de.eeg.verguetung.berechnet` CE (from the `eeg_anlagen.bank_iban` column).
+`de.eeg.verguetung.berechnet` CE (from the plant's `einspeiser` record — the payout account is a property of the Anlagenbetreiber, not of the plant).
 `accountingd` uses the CE-supplied IBAN as the fast path, falling back to
 `accounts.zahlungsinformation.bankverbindung.iban` when the CE lacks bank fields.
 

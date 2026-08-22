@@ -98,19 +98,14 @@ pub struct AnlageUpsertRequest {
     pub mastr_nummer: Option<String>,
     /// Date of MaStR registration (ISO 8601).
     pub mastr_datum: Option<String>,
-    // ── Bankverbindung for EEG Vergütung SEPA CT payment ────────────────────────────────
-    /// IBAN of the plant operator for monthly EEG Vergütung payment (SEPA CT).
-    pub bank_iban: Option<String>,
-    /// BIC/SWIFT of operator bank (optional, derivable from IBAN for SEPA IBANs).
-    pub bank_bic: Option<String>,
-    /// Full name of payment recipient (Zahlungsempfänger).
-    pub zahlungsempfaenger: Option<String>,
-    /// Operator's declared VAT status — `"KLEINUNTERNEHMER"` (§19 UStG, 0 %) or
-    /// `"REGELBESTEUERUNG"` (§12 Abs. 1 UStG, 19 %). This is a property of the
-    /// operator, not of the plant. When omitted, it is seeded from
-    /// [`eeg_billing::ust::VatStatus::default_for_plant`] (a small post-2023 solar
-    /// plant defaults to Kleinunternehmer, everything else to Regelbesteuerung).
-    pub ust_status: Option<String>,
+    /// The operator. Payout account and § 19 UStG election live on the
+    /// `einspeiser` record, because both belong to the person and not to the
+    /// installation — see [`crate::pg_einspeiser`].
+    ///
+    /// Optional so a plant can be registered before its operator is, but
+    /// `settle` refuses to issue a Gutschrift without one rather than guessing
+    /// the VAT rate.
+    pub einspeiser_id: String,
     pub notes: Option<String>,
     /// §9 EEG — how the plant satisfies the Steuerbarkeit requirement:
     /// `"FERNSTEUERBARKEIT"`, `"LEISTUNGSBEGRENZUNG_60"` (the 60 % cap at the
@@ -230,11 +225,8 @@ pub struct AnlageRow {
     pub mastr_registriert: bool,
     pub mastr_nummer: Option<String>,
     pub mastr_datum: Option<Date>,
-    pub bank_iban: Option<String>,
-    pub bank_bic: Option<String>,
-    pub zahlungsempfaenger: Option<String>,
-    /// Operator's declared VAT status (`KLEINUNTERNEHMER` | `REGELBESTEUERUNG`).
-    pub ust_status: String,
+    /// The operator behind the plant (`einspeiser.einspeiser_id`).
+    pub einspeiser_id: String,
     pub notes: Option<String>,
     // Plant attributes
     pub inbetriebnahme_typ: Option<String>,
@@ -419,22 +411,6 @@ pub async fn upsert_anlage(
         &req.settlement_model
     };
 
-    // Operator VAT status is masterdata. When the caller does not declare it, seed
-    // a sensible default from the plant (small post-2023 solar → §19 Kleinunternehmer,
-    // otherwise Regelbesteuerung). The CHECK constraint rejects any other token.
-    let ust_status = req.ust_status.clone().unwrap_or_else(|| {
-        let is_solar = eeg_billing::ErzeugungsArt::from_db_str(&req.erzeugungsart)
-            .map(|a| a.is_solar())
-            .unwrap_or(false);
-        eeg_billing::ust::VatStatus::default_for_plant(
-            is_solar,
-            req.leistung_kwp,
-            Some(inbetriebnahme),
-        )
-        .as_db_str()
-        .to_owned()
-    });
-
     sqlx::query(
         r"INSERT INTO eeg_anlagen (
                tr_id, tenant, malo_id, melo_id, eeg_gesetz, inbetriebnahme,
@@ -446,7 +422,7 @@ pub async fn upsert_anlage(
                kwk_foerderdauer_h, kwk_foerderdauer_years,
                flex_leistung_kw, flex_praemie_ct_kwh,
                mastr_registriert, mastr_nummer, mastr_datum,
-               bank_iban, bank_bic, zahlungsempfaenger, ust_status,
+               einspeiser_id,
                notes, is_biogas_sect51b, zuschlag_erloeschen_datum,
                biomasse_hauptbrennstoff, biomasse_guelle_anteil, biomasse_energiepflanzen_anteil,
                zuschlagswert_ct, zuschlag_datum,
@@ -455,16 +431,19 @@ pub async fn upsert_anlage(
                updated_at
            ) VALUES (
                $1, $2, $3, $4, $5, $6,
-               $7, $8, $9, $43, $10,
+               $7, $8, $9, $40, $10,
                $11, $12, $13, $14, $15, $16,
                $17, $18, $19,
                $20,
                $21, $22,
                $23, $24,
                $25, $26, $27,
-               $28, $29, $30, $41,
-               $31, $32, $33, $34, $35, $36,
-               $37, $38, $39, $40, $42, $44, $45, $46, now()
+               $28,
+               $29, $30, $31,
+               $32, $33, $34,
+               $35, $36,
+               $37, $38, $39,
+               $41, $42, $43, now()
            )
            ON CONFLICT (tr_id, tenant) DO UPDATE SET
                malo_id                   = EXCLUDED.malo_id,
@@ -501,10 +480,7 @@ pub async fn upsert_anlage(
                mastr_registriert         = EXCLUDED.mastr_registriert,
                mastr_nummer              = COALESCE(EXCLUDED.mastr_nummer, eeg_anlagen.mastr_nummer),
                mastr_datum               = COALESCE(EXCLUDED.mastr_datum, eeg_anlagen.mastr_datum),
-               bank_iban                 = COALESCE(EXCLUDED.bank_iban, eeg_anlagen.bank_iban),
-               bank_bic                  = COALESCE(EXCLUDED.bank_bic, eeg_anlagen.bank_bic),
-               zahlungsempfaenger        = COALESCE(EXCLUDED.zahlungsempfaenger, eeg_anlagen.zahlungsempfaenger),
-               ust_status                = EXCLUDED.ust_status,
+               einspeiser_id             = EXCLUDED.einspeiser_id,
                notes                     = EXCLUDED.notes,
                is_biogas_sect51b         = EXCLUDED.is_biogas_sect51b,
                zuschlag_erloeschen_datum = EXCLUDED.zuschlag_erloeschen_datum,
@@ -540,9 +516,7 @@ pub async fn upsert_anlage(
     .bind(req.mastr_registriert)
     .bind(&req.mastr_nummer)
     .bind(mastr_datum)
-    .bind(&req.bank_iban)
-    .bind(&req.bank_bic)
-    .bind(&req.zahlungsempfaenger)
+    .bind(&req.einspeiser_id)
     .bind(&req.notes)
     .bind(req.is_biogas_sect51b)
     .bind(zuschlag_erloeschen_datum)
@@ -553,14 +527,28 @@ pub async fn upsert_anlage(
     .bind(zuschlag_datum)
     .bind(req.ist_innovationsausschreibung.unwrap_or(false))
     .bind(req.ist_buergerenergie.unwrap_or(false))
-    .bind(&ust_status) // $41
-    .bind(req.ist_pilotwindanlage) // $42
-    .bind(&req.verguetungsform) // $43
-    .bind(sect51_optin_erklaert_am) // $44
-    .bind(&req.sect9_erfuellung) // $45
-    .bind(fernsteuerbarkeit_datum) // $46
+    .bind(req.ist_pilotwindanlage) // $39
+    .bind(&req.verguetungsform) // $40
+    .bind(sect51_optin_erklaert_am) // $41
+    .bind(&req.sect9_erfuellung) // $42
+    .bind(fernsteuerbarkeit_datum) // $43
     .execute(pool)
     .await
+    .map_err(|e| {
+        // The only foreign key on this table is the operator. Naming the field
+        // beats leaking the constraint name to an API client.
+        if e.as_database_error()
+            .and_then(sqlx::error::DatabaseError::constraint)
+            == Some("fk_anlage_einspeiser")
+        {
+            anyhow::anyhow!(
+                "einspeiser_id {:?} is not a registered Anlagenbetreiber",
+                req.einspeiser_id
+            )
+        } else {
+            anyhow::Error::new(e)
+        }
+    })
     .context("upsert eeg_anlage")?;
 
     // ── Auto-set mastr_violation_start on first registration without MaStR ──
@@ -778,8 +766,9 @@ pub struct SettleInput {
     /// Plant technology type for §51 EEG 2017 kW exemption dispatch.
     pub erzeugungsart: String,
     /// Operator's declared VAT status — decides the feed-in Gutschrift USt
-    /// (§19 Kleinunternehmer `E`/0 % vs. Regelbesteuerung `S`/19 %). Sourced from
-    /// `eeg_anlagen.ust_status` masterdata, not inferred from plant size.
+    /// (§19 Kleinunternehmer `E`/0 % vs. Regelbesteuerung `S`/19 %). Read from
+    /// `einspeiser.ust_status`: the § 19 election is made by the person, so it is
+    /// never per plant and never inferred from plant size.
     pub vat_status: eeg_billing::ust::VatStatus,
     /// Whether the plant is registered in MaStR (Marktstammdatenregister).
     ///
@@ -1311,14 +1300,23 @@ pub struct SettleOverrides {
 /// and the settlement engine input. All four settlement entry points
 /// (single settle, batch settle, correction settle, MCP settle) use this
 /// function so that any new field is automatically threaded everywhere.
-#[must_use]
+///
+/// `einspeiser` is the plant's operator. The Umsatzsteuerstatus of a Gutschrift
+/// is a property of the invoicing party, not of the plant, so it is read from
+/// the operator record and never inferred here.
+///
+/// # Errors
+/// Returns an error when the operator carries an Umsatzsteuerstatus this build
+/// does not know. Refusing is deliberate: guessing would put two VAT rates on
+/// one operator's Gutschriften.
 pub fn build_settle_input(
     tenant: &str,
     anlage: &AnlageRow,
+    einspeiser: &crate::pg_einspeiser::Einspeiser,
     billing_year: i16,
     billing_month: i16,
     overrides: SettleOverrides,
-) -> SettleInput {
+) -> anyhow::Result<SettleInput> {
     let billing_date = time::Date::from_calendar_date(
         billing_year as i32,
         time::Month::try_from(billing_month as u8).unwrap_or(time::Month::January),
@@ -1358,7 +1356,11 @@ pub fn build_settle_input(
         _ => anlage.wind_korrekturfaktor,
     };
 
-    SettleInput {
+    // The Umsatzsteuerstatus is the operator's declared status. An unknown token
+    // aborts the settlement rather than falling back to a plant-shaped guess.
+    let vat_status = einspeiser.vat_status()?;
+
+    Ok(SettleInput {
         tr_id: anlage.tr_id.clone(),
         tenant: tenant.to_owned(),
         malo_id: anlage.malo_id.clone(),
@@ -1398,17 +1400,7 @@ pub fn build_settle_input(
         billing_date,
         eeg_gesetz: anlage.eeg_gesetz,
         erzeugungsart: anlage.erzeugungsart.clone(),
-        // Declared masterdata status; fall back to the plant-seeded default if a
-        // legacy row carries an unrecognised token.
-        vat_status: eeg_billing::ust::VatStatus::from_db_str(&anlage.ust_status).unwrap_or_else(
-            || {
-                eeg_billing::ust::VatStatus::default_for_plant(
-                    is_solar,
-                    anlage.leistung_kwp,
-                    Some(anlage.inbetriebnahme),
-                )
-            },
-        ),
+        vat_status,
         wind_korrekturfaktor,
         sect9_erfuellung: anlage.sect9_erfuellung(),
         is_biogas_sect51b: anlage.is_biogas_sect51b,
@@ -1449,7 +1441,7 @@ pub fn build_settle_input(
         // §§42–44 EEG 2023: derive biomass fuel composition from the three typed
         // DB columns. `None` for non-biomass plants.
         biomasse: derive_biomasse(anlage),
-    }
+    })
 }
 
 /// The running totals [`refresh_cumulative_counters`] re-reads under the lock.

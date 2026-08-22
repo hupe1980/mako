@@ -1149,6 +1149,93 @@ impl BillingSchedule {
     }
 }
 
+/// The Netznutzungsvertrag as `marktd` serves it over REST.
+///
+/// A read-side projection of [`NbContractRecord`]: only the fields a consumer
+/// decides on, with the dates as the wire strings marktd emits.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NbContractView {
+    /// ERP contract number or UUID.
+    pub contract_id: String,
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// 13-digit BDEW/DVGW GLN of the Netzbetreiber.
+    pub nb_mp_id: String,
+    /// MP-ID of the Netznutzer this contract is with.
+    pub netznutzer_mp_id: String,
+    /// `LIEFERANT` | `LETZTVERBRAUCHER`.
+    #[serde(default)]
+    pub netznutzer_typ: NetznutzerTyp,
+    /// Voltage / pressure level.
+    pub netzebene: String,
+    /// Metering / balancing method.
+    pub bilanzierungsmethode: String,
+}
+
+impl NbContractView {
+    /// Whether the Netznutzer is the Letztverbraucher itself (Selbstzahler).
+    #[must_use]
+    pub const fn is_selbstzahler(&self) -> bool {
+        self.netznutzer_typ.is_selbstzahler()
+    }
+}
+
+/// Who holds the Netznutzungsvertrag.
+///
+/// GPKE Teil 1 (BK6-24-174 Anlage 1a), Vorbemerkung, assumes the Letztverbraucher
+/// has an all-inclusive supply contract and the Lieferant acts as Netznutzer.
+/// „Ist der Letztverbraucher selbst Netznutzer, so tritt er in die Rolle des
+/// Lieferanten i.S. dieser Prozessbeschreibung, soweit diese Regelungen sinngemäß
+/// auf ihn anwendbar sind. Eine Ausnahme bilden die Meldungen des Lieferanten im
+/// Rahmen des Lieferantenwechsels."
+///
+/// A Selbstzahler is therefore an ordinary LF on the wire and needs no separate
+/// message routing — but the NB has to know, because the Preisblatt and the
+/// „sonstige Leistung" invoice go to him in that role (Teil 2 Kap. 3.4.4 / 3.4.5)
+/// and the Lieferantenwechsel exception applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NetznutzerTyp {
+    /// The ordinary case: an all-inclusive supply contract, the LF is Netznutzer.
+    #[default]
+    Lieferant,
+    /// Selbstzahler — „Netznutzer ohne All-Inklusiv-Vertrag". The Letztverbraucher
+    /// pays the Netznutzung itself and steps into the LF role.
+    Letztverbraucher,
+}
+
+impl NetznutzerTyp {
+    /// The DB token.
+    #[must_use]
+    pub const fn as_db_str(self) -> &'static str {
+        match self {
+            Self::Lieferant => "LIEFERANT",
+            Self::Letztverbraucher => "LETZTVERBRAUCHER",
+        }
+    }
+
+    /// Parse a DB token.
+    ///
+    /// `None` on anything else rather than a fallback to the ordinary case: a
+    /// Selbstzahler silently read as `Lieferant` goes back onto the automated
+    /// Lieferantenwechsel path the flag exists to keep it off. The CHECK
+    /// constraint makes an unknown token impossible in the first place.
+    #[must_use]
+    pub fn from_db_str(s: &str) -> Option<Self> {
+        match s {
+            "LIEFERANT" => Some(Self::Lieferant),
+            "LETZTVERBRAUCHER" => Some(Self::Letztverbraucher),
+            _ => None,
+        }
+    }
+
+    /// Whether this Netznutzer is the Letztverbraucher itself.
+    #[must_use]
+    pub const fn is_selbstzahler(self) -> bool {
+        matches!(self, Self::Letztverbraucher)
+    }
+}
+
 /// A typed NB (Netzbetreiber) network contract record.
 ///
 /// Unlike LF supply contracts (stored as opaque `JSONB`), NB contracts are
@@ -1173,6 +1260,11 @@ pub struct NbContractRecord {
     pub bilanzierungsmethode: String,
     /// How often the NB bills for network usage.
     pub billing_schedule: BillingSchedule,
+    /// MP-ID of the Netznutzer this contract is with.
+    pub netznutzer_mp_id: String,
+    /// What kind of party the Netznutzer is.
+    #[serde(default)]
+    pub netznutzer_typ: NetznutzerTyp,
     /// Start of contract validity (local date in MEZ/MESZ).
     #[serde(with = "date_iso")]
     pub valid_from: time::Date,
@@ -3747,5 +3839,39 @@ mod wire_format_guard {
              format; add #[serde(with = \"time::serde::rfc3339\")] (or `::option`):\n  {}",
             offenders.join("\n  ")
         );
+    }
+}
+
+#[cfg(test)]
+mod netznutzer_typ_tests {
+    use super::NetznutzerTyp;
+
+    /// The DB tokens and the enum are one mapping, in both directions.
+    #[test]
+    fn the_db_token_round_trips() {
+        for t in [NetznutzerTyp::Lieferant, NetznutzerTyp::Letztverbraucher] {
+            assert_eq!(NetznutzerTyp::from_db_str(t.as_db_str()), Some(t));
+        }
+    }
+
+    /// An unknown token is refused, not read as the ordinary case: a Selbstzahler
+    /// silently downgraded to `Lieferant` goes back onto the automated
+    /// Lieferantenwechsel path the flag exists to keep it off.
+    #[test]
+    fn an_unknown_token_is_refused() {
+        assert_eq!(NetznutzerTyp::from_db_str("GROSSKUNDE"), None);
+        assert_eq!(NetznutzerTyp::default(), NetznutzerTyp::Lieferant);
+        assert!(!NetznutzerTyp::default().is_selbstzahler());
+        assert!(NetznutzerTyp::Letztverbraucher.is_selbstzahler());
+    }
+
+    /// The wire form is the DB token, so a `marktd` response and a DB row read
+    /// the same.
+    #[test]
+    fn the_json_form_is_the_db_token() {
+        let json = serde_json::to_string(&NetznutzerTyp::Letztverbraucher).unwrap();
+        assert_eq!(json, "\"LETZTVERBRAUCHER\"");
+        let back: NetznutzerTyp = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, NetznutzerTyp::Letztverbraucher);
     }
 }

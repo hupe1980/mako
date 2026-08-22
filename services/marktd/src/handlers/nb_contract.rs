@@ -27,7 +27,8 @@ use mako_markt::{
     error::MdmError,
     repository::{
         AppState, BillingSchedule, CorrelationIndex, MaloRepository, MeloRepository,
-        NbContractRecord, NbContractRepository, PartnerRepository, SubscriptionRepository,
+        NbContractRecord, NbContractRepository, NetznutzerTyp, PartnerRepository,
+        SubscriptionRepository,
     },
 };
 use mako_service::cedar::CedarEnforcer;
@@ -102,6 +103,17 @@ pub struct NbContractUpsertRequest {
     pub bilanzierungsmethode: String,
     /// MONTHLY | QUARTERLY | ANNUALLY
     pub billing_schedule: String,
+    /// MP-ID of the Netznutzer this contract is with — the LF in the ordinary
+    /// case, the Letztverbraucher itself for a Selbstzahler.
+    pub netznutzer_mp_id: String,
+    /// `LIEFERANT` (default) | `LETZTVERBRAUCHER`.
+    ///
+    /// `LETZTVERBRAUCHER` marks a **Selbstzahler** — a „Netznutzer ohne
+    /// All-Inklusiv-Vertrag" who pays the Netznutzung without an LF and steps
+    /// into the LF role (GPKE Teil 1, Vorbemerkung).
+    #[serde(default)]
+    #[schema(value_type = String, example = "LIEFERANT")]
+    pub netznutzer_typ: NetznutzerTyp,
     /// Contract start date (ISO 8601, e.g. `"2026-01-01"`)
     pub valid_from: String,
     #[serde(default)]
@@ -128,6 +140,8 @@ pub struct NbContractResponse {
     pub netzebene: String,
     pub bilanzierungsmethode: String,
     pub billing_schedule: String,
+    pub netznutzer_mp_id: String,
+    pub netznutzer_typ: String,
     pub valid_from: String,
     pub valid_to: Option<String>,
     /// Full BO4E `Vertrag` payload in canonical camelCase form.
@@ -147,6 +161,12 @@ pub struct NbContractResponse {
 #[derive(Debug, Deserialize)]
 pub struct ListNbContractsQuery {
     pub nb_mp_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ByMaloQuery {
+    /// Date the contract must be in force on. Defaults to today in Europe/Berlin.
+    pub on: Option<String>,
 }
 
 // ── Parse helpers ─────────────────────────────────────────────────────────────
@@ -220,6 +240,8 @@ fn parse_req(
         netzebene: req.netzebene,
         bilanzierungsmethode: req.bilanzierungsmethode,
         billing_schedule,
+        netznutzer_mp_id: req.netznutzer_mp_id,
+        netznutzer_typ: req.netznutzer_typ,
         valid_from,
         valid_to,
         data: canonical_data,
@@ -350,6 +372,61 @@ pub async fn list_nb_contracts(
     }
 }
 
+/// `GET /api/v1/nb-contracts/by-malo/{malo_id}?on=YYYY-MM-DD`
+///
+/// The Netznutzungsvertrag in force for a MaLo on a date (default today). Read by
+/// `processd`, which needs the Netznutzer and its type before it decides an
+/// Anmeldung: a Selbstzahler („Netznutzer ohne All-Inklusiv-Vertrag") is an
+/// ordinary LF in GPKE, with one exception — the LF's Lieferantenwechsel-Meldungen
+/// (GPKE Teil 1, Vorbemerkung).
+#[utoipa::path(
+    get,
+    path = "/api/v1/nb-contracts/by-malo/{malo_id}",
+    params(
+        ("malo_id" = String, Path, description = "11-digit Marktlokations-ID"),
+        ("on" = Option<String>, Query, description = "Date the contract must be in force on (default today)"),
+    ),
+    responses(
+        (status = 200, description = "Contract in force", body = NbContractResponse),
+        (status = 404, description = "No contract in force on that date"),
+        (status = 403, description = "Forbidden"),
+    ),
+)]
+pub async fn get_nb_contract_by_malo(
+    Extension(repo): Extension<NbContractRepoExt>,
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(tenant_gln): Extension<TenantGln>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<ByMaloQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-nb-contract", &tenant_gln.0) {
+        tracing::warn!(error = %e, "marktd: Cedar denied read-nb-contract");
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    let date_fmt = format_description!("[year]-[month]-[day]");
+    let on = match q.on.as_deref() {
+        Some(raw) => match time::Date::parse(raw, date_fmt) {
+            Ok(d) => d,
+            Err(_) => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({ "error": "on must be YYYY-MM-DD" })),
+                )
+                    .into_response();
+            }
+        },
+        None => super::malo::today_berlin(),
+    };
+
+    match repo.find_active(&malo_id, on, &tenant_gln.0).await {
+        Ok(Some(rec)) => Json(rec_to_response(rec)).into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => e.into_response(),
+    }
+}
+
 // Silence unused-import warnings for generic bounds that are needed for
 // the State extractor in other handlers but not used directly here.
 #[allow(dead_code)]
@@ -375,6 +452,8 @@ fn rec_to_response(r: NbContractRecord) -> NbContractResponse {
         netzebene: r.netzebene,
         bilanzierungsmethode: r.bilanzierungsmethode,
         billing_schedule: r.billing_schedule.to_string(),
+        netznutzer_mp_id: r.netznutzer_mp_id,
+        netznutzer_typ: r.netznutzer_typ.as_db_str().to_owned(),
         valid_from: r.valid_from.format(date_fmt).unwrap_or_default(),
         valid_to: r.valid_to.map(|d| d.format(date_fmt).unwrap_or_default()),
         data: r.data,

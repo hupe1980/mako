@@ -7,8 +7,9 @@ through Förderdauer expiry.
 | Feature | Detail |
 |---|---|
 | **HTTP port** | `:9180` |
-| **Database** | PostgreSQL (eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
-| **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT from the operator's declared `eeg_anlagen.ust_status` (Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 % category `E`) |
+| **Database** | PostgreSQL (einspeiser, eeg_anlagen, settlement_receipts incl. `rechnung_json` + `gutschrift_nummer`, eeg_verguetungssaetze) |
+| **Einspeiser (Anlagenbetreiber)** | The party behind the plants, held once in `einspeiser`. The § 19 UStG election and the payout account are properties of the *person*, so they live here and not on the plant — one `PUT /api/v1/einspeiser/{id}` switches the VAT on every one of its plants. No Vertrag: § 7 Abs. 1 EEG 2023 forbids conditioning the EEG claim on one. `eeg_anlagen.einspeiser_id` is `NOT NULL` behind a foreign key, so every plant has one |
+| **§14 UStG Gutschrift** | Every billable settlement issues the Gutschrift (Gutschriftverfahren — the NB issues the document) as a BO4E `Rechnung` in `settlement_receipts.rechnung_json`, VAT from the operator's declared `einspeiser.ust_status` (Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 % category `E`) |
 | **Auth** | OIDC/JWT + Cedar ABAC + HMAC-signed CloudEvents |
 | **Validated registration** | `POST /api/v1/anlagen` refuses a plant the settlement could not act on, naming the field. A tender plant may carry its AW in `zuschlagswert_ct` (preferred) or `direktverm_aw_ct`; a Marktprämie with no AW is `PriceMissing` in the engine too |
 | **§44b Biogas quota** | 45 % Bemessungsleistung measured against the §3 Nr. 6 hours — the actual hours of the calendar year (**8 784 in a leap year**) less the hours before first generation, not a flat 8 760 |

@@ -223,6 +223,12 @@ CREATE TABLE nb_contracts (
     bilanzierungsmethode  TEXT        NOT NULL,
     billing_schedule      TEXT        NOT NULL
                               CHECK (billing_schedule IN ('MONTHLY', 'QUARTERLY', 'ANNUALLY')),
+    -- The Netznutzer this contract is with. `LETZTVERBRAUCHER` marks a
+    -- Selbstzahler, who takes the LF role in GPKE except for the LF's
+    -- Lieferantenwechsel-Meldungen (Teil 1, Vorbemerkung).
+    netznutzer_mp_id      TEXT        NOT NULL,
+    netznutzer_typ        TEXT        NOT NULL DEFAULT 'LIEFERANT'
+                              CHECK (netznutzer_typ IN ('LIEFERANT', 'LETZTVERBRAUCHER')),
     valid_from            DATE        NOT NULL,
     valid_to              DATE,
     -- Full BO4E Vertrag payload — stored for ERP digital LRV exchange.
@@ -255,6 +261,10 @@ CREATE INDEX nb_contracts_malo_id
     ON nb_contracts (malo_id);
 CREATE INDEX nb_contracts_vertragsart
     ON nb_contracts (vertragsart, tenant) WHERE vertragsart IS NOT NULL;
+-- Selbstzahler lookup: „which of my MaLos has the Letztverbraucher as Netznutzer".
+CREATE INDEX nb_contracts_selbstzahler
+    ON nb_contracts (tenant, netznutzer_mp_id)
+    WHERE netznutzer_typ = 'LETZTVERBRAUCHER';
 
 -- ── VersorgungsStatus per MaLo ────────────────────────────────────────────────
 --

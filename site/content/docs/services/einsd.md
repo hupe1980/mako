@@ -330,19 +330,13 @@ Content-Type: application/json
   "settlement_model":   "VERGUETUNG",
   "mastr_registriert":  true,
   "mastr_nummer":       "SEE900000012345",
-  "bank_iban":          "DE89370400440532013000",
-  "zahlungsempfaenger": "Max Mustermann",
-  "ust_status":         "KLEINUNTERNEHMER"
+  "einspeiser_id":      "EB-4711"
 }
 ```
 
-`ust_status` is the operator's declared VAT status — `KLEINUNTERNEHMER` (§19 UStG,
-0 %, EN 16931 category `E`) or `REGELBESTEUERUNG` (§12 Abs. 1 UStG, 19 %, category
-`S`) — and drives the feed-in Gutschrift VAT. It is a property of the operator, not
-the plant, so it cannot be inferred from capacity; when omitted, `einsd` seeds a
-sensible default (a ≤30 kWp post-2023 solar plant → `KLEINUNTERNEHMER`, everything
-else → `REGELBESTEUERUNG`). §12 Abs. 3 UStG (the 0 % on PV *hardware* supply) is not
-a feed-in category and never appears here.
+`einspeiser_id` names the plant's Anlagenbetreiber (see below) and is mandatory:
+§ 7 Abs. 1 EEG 2023 puts the payment on the Netzbetreiber, so a plant nobody can be
+paid for is not one this service can act on. Register the operator first.
 
 `verguetungssatz_ct` = **net rate** (gross AW − §53 deduction). For solar: 8.51 ct gross
 AW (Solarpaket I) − 0.4 ct = **8.11 ct net**. Use `POST /api/v1/verguetungssatz-lookup`
@@ -364,6 +358,46 @@ Content-Type: application/json
 ```
 
 Clears the §52 Abs. 1 Nr. 11 violation clock and emits `de.eeg.anlage.mastr-registriert` so the ERP can release any withheld payment. The plant `status` is untouched — it was already `aktiv`.
+
+---
+
+## Einspeiser (Anlagenbetreiber)
+
+The party behind the plants is a record of its own, `einspeiser`, keyed by an
+operator-assigned `einspeiser_id` (a customer number, a MaStR Marktakteur-ID, or a
+UUID the ERP mints — `einsd` does not invent identities for parties it did not
+register). A plant points at one with `eeg_anlagen.einspeiser_id`.
+
+It is deliberately **not** a Vertrag. § 7 Abs. 1 EEG 2023 („Gesetzliches
+Schuldverhältnis") forbids the Netzbetreiber from making its EEG obligations
+conditional on a contract, so what the settlement needs is a party record.
+
+What it carries is the set of facts that belong to the person rather than to any one
+installation:
+
+| Field | Why it is per operator |
+|---|---|
+| `ust_status` | The § 19 UStG Kleinunternehmer election is made by the person, not per installation, and it decides the VAT on every feed-in Gutschrift issued to them (`KLEINUNTERNEHMER` → 0 %, EN 16931 category `E`; `REGELBESTEUERUNG` → 19 %, category `S`). § 12 Abs. 3 UStG (the 0 % on PV *hardware* supply) is not a feed-in category and never appears here |
+| `bank_iban` / `bank_bic` / `zahlungsempfaenger` | One payout account; forwarded in the settlement CloudEvent so `accountingd` builds the pain.001 without a second lookup |
+| `mastr_akteur_id` | The MaStR Marktakteursnummer (`SEE…`/`ABR…`), where the operator has one |
+
+```http
+PUT /api/v1/einspeiser/EB-4711
+Content-Type: application/json
+
+{
+  "name":               "Max Mustermann",
+  "mastr_akteur_id":    "ABR900000012345",
+  "ust_status":         "KLEINUNTERNEHMER",
+  "bank_iban":          "DE89370400440532013000",
+  "bank_bic":           "COBADEFFXXX",
+  "zahlungsempfaenger": "Max Mustermann"
+}
+```
+
+One call switches the VAT on every one of the operator's plants. An `ust_status` this
+build does not know aborts the settlement rather than falling back to a default — a
+§ 14 UStG document may not carry a VAT rate the Netzbetreiber inferred.
 
 ---
 
@@ -680,21 +714,14 @@ library's abstraction for the statutory fallback remuneration).
 | Wind offshore | always |
 
 Plants above these thresholds must use `tariff_source = Auction` with the BNetzA-awarded AW.
-The `direktvermarktung_pflicht` and `capacity_blocks` columns track this.
-
-### Recording Direktvermarktung periods
-
-The `direktvermarktung_perioden` JSONB column stores the history of Direktvermarktung
-engagements per plant. Each entry: `{ beginn_datum, ende_datum, direktvermarkter_mp_id,
-ist_freiwillig, anzulegender_wert_ct }`. Sorted by `beginn_datum` ascending.
+The `direktvermarktung` and `capacity_blocks` columns track this.
 
 ---
 
 ## Multi-Meter Messkonzept
 
-German EEG plants can have multiple measurement points. `einsd` stores only the metering
-**classification** on the plant (`metering_mode` = `SLP` / `RLM` / `IMSYS`); the metering
-**topology and computation** — the Eigenverbrauch/Überschuss split and the §42b EnWG GGV tenant
+German EEG plants can have multiple measurement points. `einsd` stores none of that: the
+metering **topology and computation** — the Eigenverbrauch/Überschuss split and the §42b EnWG GGV tenant
 allocation — belong to the metering domain, owned by `edmd` and the external
 [`metering`](https://github.com/hupe1980/metering) crate (`AggregationRule` with
 `PvSelfConsumption`, `GgvConstantAllocation`, `GgvProportionalAllocation`;
@@ -1251,6 +1278,9 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/api/v1/einspeiser` | List Anlagenbetreiber |
+| `GET` | `/api/v1/einspeiser/{einspeiser_id}` | Fetch one Anlagenbetreiber |
+| `PUT` | `/api/v1/einspeiser/{einspeiser_id}` | Register or update an Anlagenbetreiber (§19 UStG election, payout account) |
 | `POST` | `/api/v1/anlagen` | Register plant |
 | `GET` | `/api/v1/anlagen` | List plants (`?malo_id=&erzeugungsart=&status=`) |
 | `GET` | `/api/v1/anlagen/{tr_id}` | Fetch plant |
@@ -1264,6 +1294,7 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/stromsteuerbefreiung` | §53c — record a granted per-kWh Stromsteuerbefreiung |
 | `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt` | §54 — record solar first-segment defects |
 | `POST` | `/api/v1/anlagen/{tr_id}/aw-reduktionen/sect54-defekt/{id}/nachweis-erbracht` | §54 Abs. 3 Satz 2/3 — close the period once the Nachweis arrives |
+| `GET` | `/api/v1/anlagen/by-malo/{malo_id}/veraeusserungsform` | Veräußerungsform in force for a MaLo — read by `processd`'s NB module, which needs the *bestehende* form to pick the `E_0622` Vorlauffrist |
 | `POST` | `/api/v1/anlagen/{tr_id}/switch-veraeusserungsform` | **§21b** monthly Veräußerungsform switch |
 | `POST` | `/api/v1/anlagen/{tr_id}/wind-reevaluation` | **§36h Abs. 2** Standortgüte re-evaluation (year 6/11/16) |
 | `GET` | `/api/v1/anlagen/foerderung-auslaufend` | Expiring within N days |
@@ -1271,8 +1302,10 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `POST` | `/api/v1/anlagen/{tr_id}/settlements/{year}/{month}/correction` | **§ 147 AO / GoBD** correction receipt (original preserved in history) |
 | `POST` | `/api/v1/settle/{year}/{month}` | Batch settle all active plants |
 | `GET` | `/api/v1/anlagen/{tr_id}/settlements` | Settlement history |
+| `POST` | `/api/v1/anlagen/{tr_id}/jahresabrechnung/{year}` | Annual reconciliation from the stored monthly receipts |
 | `PUT/GET` | `/api/v1/epex-monthly/{year}/{month}` | EPEX monthly average |
 | `PUT` | `/api/v1/epex-spot` | Bulk-load EPEX day-ahead spot prices (§51 auto-derivation) |
+| `PUT/GET` | `/api/v1/jahresmarktwert/{year}/{month}/{erzeugungsart}` | §20 Abs. 2 Jahresmarktwert (ÜNB-published) |
 | `POST` | `/api/v1/verguetungssatz-lookup` | Tariff rate lookup |
 | `GET/POST` | `/mcp` | MCP server (Streamable HTTP 2025-11-25) |
 | `GET` | `/health` | Liveness |
@@ -1291,9 +1324,14 @@ See [BNetzA Einspeisevergütungen](https://www.bundesnetzagentur.de/DE/Fachtheme
 | `erp_hmac_secret` | no | — | HMAC-SHA256 signing secret |
 | `edmd_url` | no | — | `edmd` URL for auto-fetching Einspeisemenge |
 | `edmd_api_key` | no | — | Bearer token for `edmd` |
-| `tarifbd_url` | no | — | `tarifbd` URL for EPEX sync |
 | `alert_interval_secs` | no | `21600` | Förderendedatum alert interval (6h) |
-| `mcp_api_key` | no | — | Bearer token for `/mcp` (open = dev only) |
+| `jahresmarktwert_url` | no | — | ÜNB source for the §20 Abs. 2 Jahresmarktwert import |
+| `jahresmarktwert_import_interval_secs` | no | — | How often to poll it |
+| `auto_settle_from_day` | no | — | Day of month the auto-settle worker may start. The ÜNB publishes the Marktwert around the 5th, so running earlier writes `price_missing` receipts for plants that were merely early |
+| `auto_settle_catchup_months` | no | `3` | How many months back each sweep revisits (clamped 1–24), so a period the service was down for is not left unpaid |
+| `[mcp]` | no | — | MCP `/mcp` authentication — API key, OIDC, or dev mode (`api_key = "env:EINSD_MCP_API_KEY"`) |
+| `[oidc]` | yes | — | OIDC token verification for the REST API; required unless `allow_insecure_no_auth` |
+| `allow_insecure_no_auth` | no | `false` | Serve every REST route unauthenticated — local development only |
 
 ```toml
 # Minimal einsd.toml
@@ -1335,30 +1373,24 @@ One row per Technische Ressource. PK: `(tr_id, tenant)`.
 | `mieter_zuschlag_ct` | NUMERIC? | Mieterstrom surcharge ct/kWh (§21 Abs. 3 EEG 2023) |
 | `mastr_registriert` | BOOL | MaStR confirmed; `false` → §52 penalty |
 | `mastr_nummer` | TEXT? | MaStR Registrierungsnummer (`SEE900000012345`) |
-| `bank_iban` | TEXT? | IBAN for EEG Vergütung payment (SEPA CT, NB→Betreiber) |
-| `ust_status` | TEXT | Operator's declared VAT status — `KLEINUNTERNEHMER` (§19, `E`/0 %) or `REGELBESTEUERUNG` (§12 Abs. 1, `S`/19 %); drives the Gutschrift USt |
+| `einspeiser_id` | TEXT | The plant's Anlagenbetreiber (FK → `einspeiser`, `NOT NULL`). The VAT status and the payout account live there, not here |
 | `status` | TEXT | `aktiv`, `foerderung_beendet`, `abgemeldet` |
 | `inbetriebnahme_typ` | TEXT? | `ERSTINBETRIEBNAHME`, `REPOWERING`, `ERWEITERUNG`, … |
-| `solar_bauform` | TEXT? | `GEBAEUDE`, `FREIFLAECHE`, `AGRI_PV`, `STECKER_PV`, … |
+| `solar_montage` | TEXT? | `GEBAEUDE`, `FREIFLAECHE`, `AGRI_PV`, `STECKER_PV`, … |
 | `wind_guetegrad` | NUMERIC? | §36h Gütegrad (e.g. `0.85` = 85% of reference yield) |
 | `wind_korrekturfaktor` | NUMERIC? | §36h initial certified Korrekturfaktor |
 | `wind_guetefaktor_reevaluations` | JSONB | §36h Abs. 2 re-evaluations (year 6/11/16) — the effective Korrekturfaktor per billing period is derived from these |
 | `fernsteuerbarkeit_datum` | DATE? | §9 EEG Fernsteuerbarkeit installation date |
-| `direktvermarktung_pflicht` | BOOL | `true` for plants > 100 kW (auto-set on creation) |
-| `direktvermarktung_perioden` | JSONB? | History of Direktvermarktung engagements |
+| `direktvermarktung` | BOOL | `true` for plants > 100 kW (auto-set on creation) |
 | `capacity_blocks` | JSONB? | §24 Erweiterung blocks |
-| `metering_mode` | TEXT? | `SLP` / `RLM` / `IMSYS` metering classification |
-| `metering_mode` | TEXT? | `SLP`, `RLM`, `IMSYS` |
-| `sect52_netting_enabled` | BOOL | §52 Abs. 6 netting (default true) |
 | `settlement_state` | TEXT | `active`, `reduced`, `suspended`, `interrupted`, `post_eeg`, `ended` |
 | `ausschreibungs_zuschlag_id` | TEXT? | BNetzA Zuschlag-ID (e.g. `"SEE-2024-001234"`) |
 | `is_biogas_sect51b` | BOOL | §51b EEG 2023: biogas Ausschreibungsanlage (AW=0 when EPEX≤2ct) |
-| `grid_area` | TEXT? | Netzgebiet code (e.g. `"DE-TN-001"`) — reporting and grouping; **not** a §53b input |
 | `standort_id` | TEXT? | §24 Abs. 1 Satz 1 Nr. 1 — Grundstück / Gebäude / Betriebsgelände. NULL cannot establish a shared site |
 | `solar_montage` | TEXT? | §24 Sätze 3/4 — `AN_GEBAEUDE_ODER_LAERMSCHUTZWAND` · `FREIFLAECHE` · `SONSTIGE` |
 | `netzverknuepfungspunkt` | TEXT? | §24 Satz 4 — building solar behind different points is not one plant |
 | `biogaserzeugungsanlage_id` | TEXT? | §24 Satz 2 — biogas from the same Biogaserzeugungsanlage is fused regardless of Satz 1 |
-| `award_expired` | BOOL | Zuschlag erloschen → FoerderungBeendet. The rule is technology-specific: **§36e** (Wind an Land), **§37e** (Solaranlagen des ersten Segments), **§39e** (Biomasseanlagen) EEG 2023 |
+| `zuschlag_erloeschen_datum` → `award_expired` | *derived* | Zuschlag erloschen → FoerderungBeendet, derived from the date against the billing period. Technology-specific: **§36e** (Wind an Land), **§37e** (Solaranlagen des ersten Segments), **§39e** (Biomasseanlagen) EEG 2023 |
 | `zuschlag_erloeschen_datum` | DATE? | Date the Zuschlag lapses for want of timely commissioning (§36e / §37e / §39e). Distinct from **§35a Entwertung von Zuschlägen**, which is a BNetzA act rather than a deadline |
 | `last_veraeusserungsform_switch` | DATE? | §21b: date of last Veräußerungsform switch (monthly guard) |
 | `mastr_violation_start` | DATE? | §52: date MaStR non-registration began (auto-set on registration) |
@@ -1437,9 +1469,9 @@ EPEX Spot monthly averages. Required for `DIREKTVERMARKTUNG`, `AUSSCHREIBUNG` an
 | `de.eeg.anlage.foerderung-auslaufend` | Förderung ending ≤180 days | `tr_id`, `foerderendedatum`, `days_remaining` |
 | `de.eeg.anlage.settlement_state_changed` | State machine transition | `tr_id`, `from_state`, `to_state`, `reason` |
 
-`bank_iban`, `bank_bic`, and `zahlungsempfaenger` are forwarded from the `eeg_anlagen` record
-so `accountingd` can generate a SEPA Credit Transfer pain.001 without a secondary DB lookup.
-They are absent (null) for `EIGENVERBRAUCH` settlements (no payout).
+`bank_iban`, `bank_bic`, and `zahlungsempfaenger` are forwarded from the plant's
+`einspeiser` record so `accountingd` can generate a SEPA Credit Transfer pain.001 without
+a secondary DB lookup. They are absent (null) for `EIGENVERBRAUCH` settlements (no payout).
 
 ### §14 UStG Gutschrift document
 
@@ -1448,7 +1480,7 @@ Netzbetreiber *issues* the settlement document to the Anlagenbetreiber. The sett
 amount alone is not that document — VAT law requires a Gutschrift with the per-rate USt
 breakdown (EN 16931 BG-23). For every **billable** settlement `run_settlement` therefore
 builds one (`eeg-billing`'s `settlement_to_gutschrift`, VAT from the operator's declared
-`eeg_anlagen.ust_status`: Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 %
+`einspeiser.ust_status`: Regelbesteuerung 19 % category `S` / §19 Kleinunternehmer 0 %
 category `E`) and persists it as a BO4E
 `rubo4e::current::Rechnung` in `settlement_receipts.rechnung_json`, with the
 `gutschrift_nummer` (`GS-EEG-<tr>-<year>-<month>`) for lookup. The event carries the net

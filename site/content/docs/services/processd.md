@@ -266,6 +266,32 @@ fail silently.
 and the KPI report exposes the parity delta for **BNetzA audit evidence**.
 See [obsd §20 EnWG parity](obsd#20-enwg-parity) for query examples.
 
+### Selbstzahler — the Lieferantenwechsel carve-out
+
+GPKE Teil 1 (BK6-24-174 Anlage 1a), Vorbemerkung: „Ist der Letztverbraucher selbst
+Netznutzer, so tritt er in die Rolle des Lieferanten i.S. dieser Prozessbeschreibung
+[…]. **Eine Ausnahme bilden die Meldungen des Lieferanten im Rahmen des
+Lieferantenwechsels.**"
+
+A Selbstzahler („Netznutzer ohne All-Inklusiv-Vertrag") is an ordinary LF in every
+other GPKE process, so nothing routes differently. But when a Wechsel displaces one,
+the incumbent is not acting in the LF role the automation assumes. `processd` reads
+the Netznutzungsvertrag in force the day before the requested Zuordnungsbeginn
+(`GET /api/v1/nb-contracts/by-malo/{malo_id}?on=`) and, when its `netznutzer_typ` is
+`LETZTVERBRAUCHER`, holds the decision for the operator instead of dispatching a
+Bestätigung:
+
+```text
+transaktionsgrund == "E03" (Wechsel)
+  ∧ incumbent netznutzer_typ == LETZTVERBRAUCHER
+  → approval_queue (operator review), Antwortfrist attached
+```
+
+Only the Wechsel Transaktionsgrund triggers it. An Einzug (`E01`) or Einzug in
+Neuanlage (`E02`) on the same MaLo stays on the automated path, and the lookup does
+not run at all for those — widening the hold would take an industrial customer's
+whole MaLo portfolio off automation for no regulatory reason.
+
 ---
 
 ## NB module — EoG gap closure (§36/§38 EnWG)

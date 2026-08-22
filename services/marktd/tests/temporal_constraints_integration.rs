@@ -397,6 +397,66 @@ async fn the_tariff_zone_resolves_from_typed_weekday_and_wall_clock_columns() {
 /// The Postgres container guard a test holds until it ends — dropping it removes
 /// the container (testcontainers cleans up on `Drop`; no leak, no external reaper).
 type PgContainer = testcontainers::ContainerAsync<testcontainers_modules::postgres::Postgres>;
+/// The Netznutzungsvertrag names its own Netznutzer, and says what kind of
+/// party that is.
+///
+/// GPKE Teil 1, Vorbemerkung: „Ist der Letztverbraucher selbst Netznutzer, so
+/// tritt er in die Rolle des Lieferanten i.S. dieser Prozessbeschreibung."
+/// A Selbstzahler is an ordinary LF on the wire, so nothing routes differently —
+/// but the NB has to be able to record it, because the Preisblatt and the
+/// „sonstige Leistung" invoice go to him in that role (Teil 2 Kap. 3.4.4 / 3.4.5)
+/// and the Lieferantenwechsel-Meldungen are the one carve-out.
+#[tokio::test]
+async fn a_netznutzungsvertrag_records_who_the_netznutzer_is() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let malo = "51238696012";
+    seed_malo(&pool, malo).await;
+
+    let insert = |contract_id: &'static str, mp_id: &'static str, typ: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO nb_contracts
+                     (contract_id, malo_id, nb_mp_id, sparte, netzebene,
+                      bilanzierungsmethode, billing_schedule,
+                      netznutzer_mp_id, netznutzer_typ, valid_from, tenant)
+                 VALUES ($1, $2, '9900000000003', 'STROM', 'MS', 'RLM', 'MONTHLY',
+                         $3, $4, '2026-01-01', 't')",
+            )
+            .bind(contract_id)
+            .bind(malo)
+            .bind(mp_id)
+            .bind(typ)
+            .execute(&pool)
+            .await
+        }
+    };
+
+    // A Selbstzahler: the Letztverbraucher holds the Netznutzungsvertrag itself.
+    insert("C-SELBST", "9905555550003", "LETZTVERBRAUCHER")
+        .await
+        .expect("a Selbstzahler contract is storable");
+
+    let (mp_id, typ): (String, String) = sqlx::query_as(
+        "SELECT netznutzer_mp_id, netznutzer_typ FROM nb_contracts WHERE contract_id = 'C-SELBST'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("read back");
+    assert_eq!(mp_id, "9905555550003");
+    assert_eq!(typ, "LETZTVERBRAUCHER");
+
+    // The type is a closed set: a free-text party description is refused.
+    let err = insert("C-BAD", "9905555550003", "GROSSKUNDE")
+        .await
+        .expect_err("an unknown Netznutzer type must be refused");
+    assert!(
+        err.to_string().contains("netznutzer_typ"),
+        "the CHECK constraint must name itself: {err}"
+    );
+}
 
 /// Start a fresh throwaway `postgres:17-alpine` and return its URL plus the
 /// container guard. `None` when Docker is unavailable (tests skip gracefully).

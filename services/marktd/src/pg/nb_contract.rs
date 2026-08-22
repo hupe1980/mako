@@ -20,8 +20,8 @@ impl PgNbContractRepository {
 }
 
 const SELECT_COLS: &str = "contract_id, malo_id, nb_mp_id, sparte, netzebene, \
-    bilanzierungsmethode, billing_schedule, valid_from, valid_to, version, tenant, \
-    data, vertragsart, vertragsstatus";
+    bilanzierungsmethode, billing_schedule, netznutzer_mp_id, netznutzer_typ, \
+    valid_from, valid_to, version, tenant, data, vertragsart, vertragsstatus";
 
 impl NbContractRepository for PgNbContractRepository {
     async fn upsert(&self, rec: NbContractRecord) -> Result<i64, MdmError> {
@@ -38,9 +38,11 @@ impl NbContractRepository for PgNbContractRepository {
             r#"INSERT INTO nb_contracts
                (contract_id, malo_id, nb_mp_id, sparte, netzebene,
                 bilanzierungsmethode, billing_schedule,
+                netznutzer_mp_id, netznutzer_typ,
                 valid_from, valid_to, version, tenant, updated_at,
                 data, vertragsart, vertragsstatus)
-               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now(), $12, $13, $14)
+               VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, now(),
+                       $14, $15, $16)
                ON CONFLICT (contract_id) DO UPDATE
                SET malo_id               = EXCLUDED.malo_id,
                    nb_mp_id              = EXCLUDED.nb_mp_id,
@@ -48,6 +50,8 @@ impl NbContractRepository for PgNbContractRepository {
                    netzebene             = EXCLUDED.netzebene,
                    bilanzierungsmethode  = EXCLUDED.bilanzierungsmethode,
                    billing_schedule      = EXCLUDED.billing_schedule,
+                   netznutzer_mp_id      = EXCLUDED.netznutzer_mp_id,
+                   netznutzer_typ        = EXCLUDED.netznutzer_typ,
                    valid_from            = EXCLUDED.valid_from,
                    valid_to              = EXCLUDED.valid_to,
                    version               = EXCLUDED.version,
@@ -63,6 +67,8 @@ impl NbContractRepository for PgNbContractRepository {
         .bind(&rec.netzebene)
         .bind(&rec.bilanzierungsmethode)
         .bind(rec.billing_schedule.to_string())
+        .bind(&rec.netznutzer_mp_id)
+        .bind(rec.netznutzer_typ.as_db_str())
         .bind(rec.valid_from)
         .bind(rec.valid_to)
         .bind(new_version)
@@ -156,6 +162,11 @@ fn row_to_rec(r: PgRow) -> NbContractRecord {
         netzebene: r.get("netzebene"),
         bilanzierungsmethode: r.get("bilanzierungsmethode"),
         billing_schedule,
+        netznutzer_mp_id: r.get("netznutzer_mp_id"),
+        netznutzer_typ: mako_markt::repository::NetznutzerTyp::from_db_str(
+            &r.get::<String, _>("netznutzer_typ"),
+        )
+        .expect("nb_contracts.netznutzer_typ CHECK admits only the two published tokens"),
         valid_from: r.get("valid_from"),
         valid_to: r.get("valid_to"),
         data: r

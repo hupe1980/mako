@@ -260,6 +260,47 @@ impl MarktdClient {
             .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
     }
 
+    /// `GET /api/v1/nb-contracts/by-malo/{malo_id}?on=…` — the Netznutzungsvertrag
+    /// in force for a `MaLo` on a date.
+    ///
+    /// Read by the `processd` NB module for the **Netznutzer** and its type. A
+    /// Selbstzahler („Netznutzer ohne All-Inklusiv-Vertrag") steps into the LF
+    /// role in GPKE and is an ordinary LF on the wire; the one exception is the
+    /// LF's Lieferantenwechsel-Meldungen (GPKE Teil 1, Vorbemerkung).
+    ///
+    /// Returns `None` when no contract is in force on that date.
+    ///
+    /// # Errors
+    /// Transport, non-404 HTTP status, or deserialisation failure.
+    pub async fn get_nb_contract_for_malo(
+        &self,
+        malo_id: &str,
+        on: time::Date,
+    ) -> Result<Option<crate::repository::NbContractView>, MarktdClientError> {
+        let fmt = time::macros::format_description!("[year]-[month]-[day]");
+        let url = format!(
+            "{}/api/v1/nb-contracts/by-malo/{}?on={}",
+            self.base_url,
+            malo_id,
+            on.format(fmt).unwrap_or_default(),
+        );
+        let resp = self
+            .client
+            .get(&url)
+            .bearer_auth(self.api_key.expose_secret())
+            .send()
+            .await?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        resp.error_for_status_ref()
+            .map_err(|e| MarktdClientError::Http(e.to_string()))?;
+        resp.json()
+            .await
+            .map(Some)
+            .map_err(|e| MarktdClientError::Deserialization(e.to_string()))
+    }
+
     /// `GET /api/v1/grundversorger/{nb_mp_id}?sparte=…` — the §36 Abs. 2 `EnWG`
     /// Grundversorger Feststellung for a Netzbetreiber and Sparte.
     ///

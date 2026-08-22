@@ -882,8 +882,8 @@ fn zusammenlegung_13_months_apart_is_outside_window() {
 // ── Umsatzsteuer (VAT) — §19 UStG Kleinunternehmer + Regelbesteuerung ───────
 //
 // A feed-in Gutschrift has exactly two VAT treatments. The operator's status is
-// declared masterdata (`eeg_anlagen.ust_status`); `default_for_plant` only seeds
-// a sensible default. §12 Abs. 3 UStG is a hardware-supply rate and never a
+// declared masterdata (`einspeiser.ust_status`); `default_for_plant` only suggests
+// one at registration. §12 Abs. 3 UStG is a hardware-supply rate and never a
 // feed-in category.
 
 #[test]

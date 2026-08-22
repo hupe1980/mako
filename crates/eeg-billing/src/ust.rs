@@ -18,7 +18,7 @@
 //! | `Regelbesteuerung` | §12 Abs. 1 UStG | `S` (Standard) | **19 %** |
 //!
 //! This is a **declared property of the operator**, not something the plant's
-//! size decides — carry it in masterdata (see `einsd`'s `eeg_anlagen.ust_status`).
+//! size decides — carry it in masterdata (see `einsd`'s `einspeiser.ust_status`).
 //! [`VatStatus::default_for_plant`] only *suggests* the value an operator would
 //! usually declare when seeding a new plant record; the stored value wins.
 //!
@@ -138,7 +138,7 @@ impl VatStatus {
     ///
     /// This is a **seeding heuristic**, not the authoritative value — the operator's
     /// actual tax status is a declared property that belongs in masterdata
-    /// (`einsd`'s `eeg_anlagen.ust_status`). Use this only to pre-fill a new plant
+    /// (`einsd`'s `einspeiser.ust_status`). Use this only to pre-fill a new plant
     /// record when no status was supplied; a stored value always wins.
     ///
     /// ## Logic

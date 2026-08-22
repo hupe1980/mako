@@ -34,7 +34,29 @@ async fn test_pool(_test_name: &str) -> Option<(PgPool, PgContainer)> {
         .execute(&pool)
         .await
         .expect("apply schema");
+    // Every plant needs an operator to be settled — see `regelbesteuert`.
+    seed_operator(&pool, "EB-1", "REGELBESTEUERUNG").await;
     Some((pool, container))
+}
+
+/// Insert an Anlagenbetreiber directly.
+async fn seed_operator(pool: &PgPool, einspeiser_id: &str, ust_status: &str) {
+    seed_operator_for(pool, einspeiser_id, TENANT, ust_status).await;
+}
+
+async fn seed_operator_for(pool: &PgPool, einspeiser_id: &str, tenant: &str, ust_status: &str) {
+    sqlx::query(
+        "INSERT INTO einspeiser (einspeiser_id, tenant, name, ust_status,
+                                 bank_iban, bank_bic, zahlungsempfaenger)
+         VALUES ($1, $2, $1, $3, 'DE02120300000000202051', 'BYLADEM1001', $1)
+         ON CONFLICT (einspeiser_id, tenant) DO UPDATE SET ust_status = EXCLUDED.ust_status",
+    )
+    .bind(einspeiser_id)
+    .bind(tenant)
+    .bind(ust_status)
+    .execute(pool)
+    .await
+    .unwrap_or_else(|e| panic!("seed operator {einspeiser_id}: {e}"));
 }
 
 const TENANT: &str = "9900357000004";
@@ -101,6 +123,23 @@ fn test_router(pool: PgPool) -> axum::Router {
 }
 
 /// A minimal registerable plant.
+/// A regelbesteuerter Anlagenbetreiber.
+///
+/// Every settlement needs one: the Umsatzsteuer of a Gutschrift is the operator's
+/// declared status, so `build_settle_input` takes the operator rather than
+/// deriving a rate from the plant.
+fn regelbesteuert() -> einsd::pg_einspeiser::Einspeiser {
+    einsd::pg_einspeiser::Einspeiser {
+        einspeiser_id: "EB-1".to_owned(),
+        name: "Testbetreiber".to_owned(),
+        mastr_akteur_id: None,
+        ust_status: "REGELBESTEUERUNG".to_owned(),
+        bank_iban: Some("DE02120300000000202051".to_owned()),
+        bank_bic: Some("BYLADEM1001".to_owned()),
+        zahlungsempfaenger: Some("Testbetreiber".to_owned()),
+    }
+}
+
 fn anlage_json(tr_id: &str) -> serde_json::Value {
     serde_json::json!({
         "tr_id": tr_id,
@@ -111,6 +150,7 @@ fn anlage_json(tr_id: &str) -> serde_json::Value {
         "erzeugungsart": "SOLAR_AUFDACH",
         "verguetungssatz_ct": "8.11",
         "settlement_model": "VERGUETUNG",
+        "einspeiser_id": "EB-1",
     })
 }
 
@@ -120,6 +160,26 @@ async fn post_json(app: &axum::Router, uri: &str, body: serde_json::Value) -> (S
         .oneshot(
             Request::builder()
                 .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .expect("router responds");
+    let status = res.status();
+    let bytes = axum::body::to_bytes(res.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn put_json(app: &axum::Router, uri: &str, body: serde_json::Value) -> (StatusCode, String) {
+    let res = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("PUT")
                 .uri(uri)
                 .header("content-type", "application/json")
                 .body(Body::from(body.to_string()))
@@ -158,12 +218,16 @@ async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, String) {
 /// `foerderendedatum` is NOT NULL — the service derives it at registration from
 /// the commissioning date, so a direct insert has to supply it too.
 async fn seed_plant(pool: &PgPool, tr_id: &str, tenant: &str, extra_cols: &str, extra_vals: &str) {
+    // The plant's operator is per tenant, so a second tenant needs its own.
+    seed_operator_for(pool, "EB-1", tenant, "REGELBESTEUERUNG").await;
     let sql = format!(
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum{extra_cols})
+            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
+            einspeiser_id{extra_cols})
          VALUES ($1, $2, '51238696781', 2023, '2024-06-01', 9.5,
-                 'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', '2044-12-31'{extra_vals})"
+                 'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', '2044-12-31',
+                 'EB-1'{extra_vals})"
     );
     sqlx::query(&sql)
         .bind(tr_id)
@@ -400,80 +464,115 @@ async fn registration_derives_the_foerderende_from_the_commissioning_date() {
     );
 }
 
-/// The feed-in Gutschrift VAT follows the operator's declared masterdata status,
-/// not the plant size. A small post-2023 solar plant with no declared status is
-/// seeded as §19 Kleinunternehmer (0 % USt, category E); an operator who declares
-/// REGELBESTEUERUNG bills 19 %. §12 Abs. 3 UStG (hardware supply) never applies.
+/// The feed-in Gutschrift VAT is the *operator's* declared § 19 UStG election,
+/// held once on `einspeiser` and never per plant. Switching it reaches every one
+/// of the operator's plants in the same call: two plants of one operator can
+/// never bill two different VAT rates. § 12 Abs. 3 UStG (hardware supply) never
+/// applies to feed-in.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn ust_status_masterdata_drives_the_gutschrift_vat() {
+async fn the_operators_ust_status_drives_the_gutschrift_vat_for_all_its_plants() {
     let Some((pool, _pg)) = test_pool("ust_status").await else {
         return;
     };
     let app = test_router(pool.clone());
 
-    // (1) Small post-2023 solar, no declared status → seeded KLEINUNTERNEHMER.
-    let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-KU")).await;
-    assert!(status.is_success(), "register KU: {status} {body}");
-    let seeded: String =
-        sqlx::query_scalar("SELECT ust_status FROM eeg_anlagen WHERE tr_id = 'P-KU'")
-            .fetch_one(&pool)
-            .await
-            .expect("read ust_status");
-    assert_eq!(
-        seeded, "KLEINUNTERNEHMER",
-        "a small post-2023 solar plant defaults to §19 Kleinunternehmer"
-    );
+    // One operator, two plants.
+    let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-A")).await;
+    assert!(status.is_success(), "register P-A: {status} {body}");
+    let (status, body) = post_json(&app, "/api/v1/anlagen", anlage_json("P-B")).await;
+    assert!(status.is_success(), "register P-B: {status} {body}");
 
-    let (status, body) = post_json(
+    // (1) Regelbesteuerung — 500 kWh x 8.11 ct = 40.55 EUR net x 19 % = 7.70 EUR.
+    for tr_id in ["P-A", "P-B"] {
+        let steuer = settle_and_read_steuer(&app, tr_id, 7).await;
+        assert_eq!(
+            steuer.round_dp(2),
+            rust_decimal::Decimal::new(770, 2),
+            "{tr_id}: Regelbesteuerung bills 19 %"
+        );
+    }
+
+    // (2) The operator declares § 19 Kleinunternehmer. One PUT, both plants.
+    let (status, body) = put_json(
         &app,
-        "/api/v1/anlagen/P-KU/settle/2026/7",
+        "/api/v1/einspeiser/EB-1",
+        serde_json::json!({
+            "name": "Testbetreiber",
+            "ust_status": "KLEINUNTERNEHMER",
+        }),
+    )
+    .await;
+    assert!(status.is_success(), "switch to §19: {status} {body}");
+
+    for tr_id in ["P-A", "P-B"] {
+        let steuer = settle_and_read_steuer(&app, tr_id, 8).await;
+        assert!(
+            steuer.is_zero(),
+            "{tr_id}: §19 Kleinunternehmer bills no USt, got {steuer}"
+        );
+    }
+
+    // (3) The election is stored once, not copied onto the plants.
+    let copies: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM information_schema.columns
+         WHERE table_name = 'eeg_anlagen' AND column_name = 'ust_status'",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("introspect");
+    assert_eq!(copies, 0, "the plant table must not carry a VAT status");
+}
+
+/// Settle one plant for `month` 2026 and return the Gutschrift's USt amount.
+async fn settle_and_read_steuer(
+    app: &axum::Router,
+    tr_id: &str,
+    month: u8,
+) -> rust_decimal::Decimal {
+    let (status, body) = post_json(
+        app,
+        &format!("/api/v1/anlagen/{tr_id}/settle/2026/{month}"),
         serde_json::json!({ "einspeisemenge_kwh": "500" }),
     )
     .await;
-    assert!(status.is_success(), "settle KU: {status} {body}");
+    assert!(status.is_success(), "settle {tr_id}: {status} {body}");
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let steuer: rust_decimal::Decimal =
-        serde_json::from_value(v["gutschrift_steuer_eur"].clone()).expect("KU steuer present");
+    serde_json::from_value(v["gutschrift_steuer_eur"].clone()).expect("steuer present")
+}
+
+/// A plant cannot exist without an operator.
+///
+/// § 7 Abs. 1 EEG 2023 puts the payment on the Netzbetreiber, so a plant nobody
+/// can be paid for is not one this service can act on. Refusing at registration
+/// rather than at settlement means the Gutschrift path has no VAT-less branch
+/// to guess down.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_plant_cannot_be_registered_without_an_operator() {
+    let Some((pool, _pg)) = test_pool("no_operator").await else {
+        return;
+    };
+    let app = test_router(pool.clone());
+
+    let mut body = anlage_json("P-ORPHAN");
+    body.as_object_mut().unwrap().remove("einspeiser_id");
+    let (status, resp) = post_json(&app, "/api/v1/anlagen", body).await;
+    assert!(!status.is_success(), "no einspeiser_id: {status} {resp}");
+
+    let mut body = anlage_json("P-GHOST");
+    body["einspeiser_id"] = serde_json::json!("EB-NOBODY");
+    let (status, resp) = post_json(&app, "/api/v1/anlagen", body).await;
     assert!(
-        steuer.is_zero(),
-        "§19 Kleinunternehmer → no USt, got {steuer}"
+        !status.is_success(),
+        "unknown einspeiser_id: {status} {resp}"
     );
-
-    // (2) An operator who declares Regelbesteuerung bills 19 %.
-    let mut regel = anlage_json("P-REGEL");
-    regel["ust_status"] = serde_json::json!("REGELBESTEUERUNG");
-    let (status, body) = post_json(&app, "/api/v1/anlagen", regel).await;
-    assert!(status.is_success(), "register REGEL: {status} {body}");
-    let stored: String =
-        sqlx::query_scalar("SELECT ust_status FROM eeg_anlagen WHERE tr_id = 'P-REGEL'")
-            .fetch_one(&pool)
-            .await
-            .expect("read ust_status");
-    assert_eq!(
-        stored, "REGELBESTEUERUNG",
-        "declared status is stored verbatim"
-    );
-
-    let (status, body) = post_json(
-        &app,
-        "/api/v1/anlagen/P-REGEL/settle/2026/7",
-        serde_json::json!({ "einspeisemenge_kwh": "500" }),
-    )
-    .await;
-    assert!(status.is_success(), "settle REGEL: {status} {body}");
-    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
-    let steuer: rust_decimal::Decimal =
-        serde_json::from_value(v["gutschrift_steuer_eur"].clone()).expect("REGEL steuer present");
-    // 500 kWh × 8.11 ct = 40.55 EUR net × 19 % = 7.70 EUR (kaufmännisch gerundet).
-    assert_eq!(
-        steuer.round_dp(2),
-        rust_decimal::Decimal::new(770, 2),
-        "Regelbesteuerung → 19 % USt on the feed-in"
+    assert!(
+        resp.contains("einspeiser_id"),
+        "the refusal must name the field, got {resp}"
     );
 }
 
-/// A settlement for an unknown plant is a 404, not a 500.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn settling_an_unknown_plant_is_not_found() {
@@ -648,6 +747,7 @@ async fn auction_metadata_survives_registration() {
     let input = einsd::pg::build_settle_input(
         TENANT,
         &anlage,
+        &regelbesteuert(),
         2026,
         6,
         einsd::pg::SettleOverrides {
@@ -657,7 +757,7 @@ async fn auction_metadata_survives_registration() {
         },
     );
     let mut tx = pool.begin().await.expect("begin");
-    let res = einsd::pg::run_settlement(&mut tx, input)
+    let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
         .await
         .expect("settle");
     tx.commit().await.expect("commit");
@@ -953,6 +1053,7 @@ async fn re_settling_a_month_does_not_accrue_the_counters_twice() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 6,
                 einsd::pg::SettleOverrides {
@@ -963,7 +1064,7 @@ async fn re_settling_a_month_does_not_accrue_the_counters_twice() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -1510,6 +1611,7 @@ async fn the_sect51_regime_follows_the_commissioning_date() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 6,
                 einsd::pg::SettleOverrides {
@@ -1520,7 +1622,7 @@ async fn the_sect51_regime_follows_the_commissioning_date() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -1585,9 +1687,16 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
                 .await
                 .expect("fetch")
                 .expect("plant exists");
-            let input = einsd::pg::build_settle_input(TENANT, &anlage, 2026, 6, overrides);
+            let input = einsd::pg::build_settle_input(
+                TENANT,
+                &anlage,
+                &regelbesteuert(),
+                2026,
+                6,
+                overrides,
+            );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -1823,6 +1932,7 @@ async fn the_sect100_optin_starts_running_after_the_imsys_year() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 year,
                 month,
                 einsd::pg::SettleOverrides {
@@ -1833,7 +1943,7 @@ async fn the_sect100_optin_starts_running_after_the_imsys_year() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -1913,6 +2023,7 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 6,
                 einsd::pg::SettleOverrides {
@@ -1921,7 +2032,7 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -2013,6 +2124,7 @@ async fn the_ausfallverguetung_is_reduced_and_time_limited() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 month,
                 einsd::pg::SettleOverrides {
@@ -2021,7 +2133,7 @@ async fn the_ausfallverguetung_is_reduced_and_time_limited() {
                     ..Default::default()
                 },
             );
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -2164,6 +2276,7 @@ async fn the_direktvermarktungspflicht_breach_reaches_the_settlement() {
     let input = einsd::pg::build_settle_input(
         TENANT,
         &anlage,
+        &regelbesteuert(),
         2026,
         6,
         einsd::pg::SettleOverrides {
@@ -2172,7 +2285,7 @@ async fn the_direktvermarktungspflicht_breach_reaches_the_settlement() {
         },
     );
     let mut tx = pool.begin().await.expect("begin");
-    einsd::pg::run_settlement(&mut tx, input)
+    einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
         .await
         .expect("settle");
     tx.commit().await.expect("commit");
@@ -2228,6 +2341,7 @@ async fn a_lapsed_zuschlag_stops_the_settlement_on_its_date() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 month,
                 einsd::pg::SettleOverrides {
@@ -2237,7 +2351,7 @@ async fn a_lapsed_zuschlag_stops_the_settlement_on_its_date() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -2316,6 +2430,7 @@ async fn an_unreported_negative_period_cuts_the_ausfallverguetung() {
     let input = einsd::pg::build_settle_input(
         TENANT,
         &anlage,
+        &regelbesteuert(),
         2026,
         6,
         einsd::pg::SettleOverrides {
@@ -2325,7 +2440,7 @@ async fn an_unreported_negative_period_cuts_the_ausfallverguetung() {
         },
     );
     let mut tx = pool.begin().await.expect("begin");
-    let res = einsd::pg::run_settlement(&mut tx, input)
+    let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
         .await
         .expect("settle");
     tx.commit().await.expect("commit");
@@ -2446,6 +2561,7 @@ async fn the_annual_statement_follows_the_corrections() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 month,
                 einsd::pg::SettleOverrides {
@@ -2459,7 +2575,7 @@ async fn the_annual_statement_follows_the_corrections() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            einsd::pg::run_settlement(&mut tx, input)
+            einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -2536,6 +2652,7 @@ async fn a_corrected_away_kwkg_month_releases_the_counter() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 6,
                 einsd::pg::SettleOverrides {
@@ -2544,7 +2661,7 @@ async fn a_corrected_away_kwkg_month_releases_the_counter() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -2636,6 +2753,7 @@ async fn overlapping_settlements_cannot_overspend_the_kwkg_contingent() {
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 month,
                 einsd::pg::SettleOverrides {
@@ -2644,7 +2762,7 @@ async fn overlapping_settlements_cannot_overspend_the_kwkg_contingent() {
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");
@@ -2711,6 +2829,7 @@ async fn corrections_do_not_duplicate_the_untouched_original_in_the_audit_trail(
             let input = einsd::pg::build_settle_input(
                 TENANT,
                 &anlage,
+                &regelbesteuert(),
                 2026,
                 6,
                 einsd::pg::SettleOverrides {
@@ -2720,7 +2839,7 @@ async fn corrections_do_not_duplicate_the_untouched_original_in_the_audit_trail(
                 },
             );
             let mut tx = pool.begin().await.expect("begin");
-            let res = einsd::pg::run_settlement(&mut tx, input)
+            let res = einsd::pg::run_settlement(&mut tx, input.expect("build settle input"))
                 .await
                 .expect("settle");
             tx.commit().await.expect("commit");

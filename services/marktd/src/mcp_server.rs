@@ -534,6 +534,8 @@ impl MdmdMcpHandler {
                 String,             // netzebene
                 String,             // bilanzierungsmethode
                 String,             // billing_schedule
+                String,             // netznutzer_mp_id
+                String,             // netznutzer_typ
                 time::Date,         // valid_from
                 Option<time::Date>, // valid_to
                 i64,                // version
@@ -542,6 +544,7 @@ impl MdmdMcpHandler {
             r#"
             SELECT contract_id, malo_id, nb_mp_id, sparte,
                    netzebene, bilanzierungsmethode, billing_schedule,
+                   netznutzer_mp_id, netznutzer_typ,
                    valid_from, valid_to, version
             FROM nb_contracts
             WHERE tenant = $1
@@ -568,6 +571,8 @@ impl MdmdMcpHandler {
                 netzebene,
                 bilanzierungsmethode,
                 billing_schedule,
+                netznutzer_mp_id,
+                netznutzer_typ,
                 valid_from,
                 valid_to,
                 version,
@@ -579,6 +584,8 @@ impl MdmdMcpHandler {
                 "netzebene": netzebene,
                 "bilanzierungsmethode": bilanzierungsmethode,
                 "billing_schedule": billing_schedule,
+                "netznutzer_mp_id": netznutzer_mp_id,
+                "netznutzer_typ": netznutzer_typ,
                 "valid_from": valid_from.to_string(),
                 "valid_to": valid_to.map(|d| d.to_string()),
                 "version": version,

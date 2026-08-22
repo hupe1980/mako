@@ -14,12 +14,14 @@
 //! | `settle` | the one path that settles a plant for a month |
 //! | `validate` | what a registration must state before it can be settled |
 //! | `pg` | see module docs |
+//! | `pg_einspeiser` | the Anlagenbetreiber — payee, bank details, § 19 UStG election |
 
 pub mod config;
 pub mod handlers;
 pub mod mcp_server;
 pub mod models;
 pub mod pg;
+pub mod pg_einspeiser;
 pub mod routes;
 pub mod sect52;
 pub mod settle;
