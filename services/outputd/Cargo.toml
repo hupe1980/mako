@@ -1,6 +1,6 @@
 [package]
 name        = "outputd"
-description = "Customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, publish gates and the append-only template store. Renders what other services computed — billingd's invoices today, the Mahnung contract is built and awaiting an accountingd client — and will own the delivery channel with per-document evidence. Port :9880."
+description = "Customer-communications daemon: operator-owned Typst templates, the ZUGFeRD PDF/A-3 carrier, publish gates, the append-only template store, and the store of issued documents with per-channel delivery evidence. Renders what other services computed — billingd invoices, accountingd Mahnungen, vertragd price-change notices — and delivers them over portal, e-mail, print spool or ERP. Port :9880."
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true
@@ -28,6 +28,14 @@ time         = { workspace = true }
 thiserror    = { workspace = true }
 tracing      = "0.1"
 anyhow       = "1"
+uuid         = { workspace = true }
+# Document delivery: relay credentials never reach a log or a debug print, and
+# the relay bodies carry the PDF base64-encoded so an operator's own adapter
+# needs nothing but a JSON parser.
+secrecy      = { version = "0.10", features = ["serde"] }
+base64       = { version = "0.22" }
+reqwest      = { workspace = true }
+tokio-util   = { workspace = true }
 
 # The EN 16931 machinery the *gates* need: the invoice specimen is a real
 # semantic model, its payload real CII, and the finished carrier is read back

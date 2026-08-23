@@ -153,13 +153,21 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
     let tenant = "9800000000009";
     let kunde = make_kunde(&pool, tenant).await;
 
-    // A BO4E Geschaeftspartner with a nested Adresse, as the portal stores it.
+    // A real BO4E `Geschaeftspartner`: a natural person is named by
+    // `vorname`/`nachname`, an organisation by `organisationsname`, and BO4E
+    // defines no `name1` — a reader probing for one leaves BT-44 empty here.
+    // The `kontaktwege` entry is deliberate: `rubo4e` types `kontaktwert` as a
+    // `Decimal`, so a naive typed read of this object fails *whole* and
+    // silently empties the buyer.
     sqlx::query(
         "UPDATE kunden SET geschaeftspartner = $2::jsonb, umsatzsteuer_id = $3 WHERE id = $1",
     )
     .bind(kunde)
     .bind(
-        r#"{"name1":"Erika Mustermann",
+        r#"{"_typ":"GESCHAEFTSPARTNER","vorname":"Erika","nachname":"Mustermann",
+            "kontaktwege":[{"_typ":"KONTAKTWEG","kontaktart":"E_MAIL",
+                            "kontaktwert":"erika@example.test",
+                            "istBevorzugterKontaktweg":true}],
             "adresse":{"strasse":"Beispielweg","hausnummer":"7",
                        "postleitzahl":"10115","ort":"Berlin","landescode":"DE"}}"#,
     )
@@ -196,6 +204,15 @@ async fn the_bg7_buyer_resolves_from_the_kunde_behind_the_malo() {
     assert!(
         buyer.stromwiederverkaeufer,
         "the § 13b flag must travel with the BG-7 projection",
+    );
+    // Where the document is *sent*. No EN 16931 BT carries it, and resolving it
+    // separately from the party the document is addressed to is how a notice
+    // ends up addressed to one person and delivered to another.
+    assert_eq!(
+        buyer.email.as_deref(),
+        Some("erika@example.test"),
+        "the bevorzugter E_MAIL Kontaktweg reaches the projection — and the object it sits \
+         in still parses, which a naive typed read of `kontaktwert` would not manage",
     );
 
     // Tenant-scoped: another tenant must not read this customer's address.
@@ -258,7 +275,7 @@ async fn the_rahmenvertrag_holder_resolves_as_the_bundled_invoice_buyer() {
     sqlx::query("UPDATE kunden SET geschaeftspartner = $2::jsonb WHERE id = $1")
         .bind(kunde)
         .bind(
-            r#"{"name1":"Musterfiliale GmbH",
+            r#"{"_typ":"GESCHAEFTSPARTNER","organisationsname":"Musterfiliale GmbH",
                 "adresse":{"strasse":"Zentrale","hausnummer":"1",
                            "postleitzahl":"20095","ort":"Hamburg","landescode":"DE"}}"#,
         )
@@ -518,7 +535,7 @@ async fn the_ggv_bundle_buyer_resolves_from_the_betreiber_kunde() {
     sqlx::query("UPDATE kunden SET geschaeftspartner = $2::jsonb WHERE id = $1")
         .bind(kunde)
         .bind(
-            r#"{"name1":"WEG Sonnenhof Verwaltungs-GmbH",
+            r#"{"_typ":"GESCHAEFTSPARTNER","organisationsname":"WEG Sonnenhof Verwaltungs-GmbH",
                 "adresse":{"strasse":"Solarweg","hausnummer":"1",
                            "postleitzahl":"10115","ort":"Berlin","landescode":"DE"}}"#,
         )
@@ -570,7 +587,7 @@ async fn the_ggv_bundle_buyer_resolves_from_the_betreiber_kunde() {
     let kunde2 = make_kunde(&pool, tenant).await;
     sqlx::query("UPDATE kunden SET geschaeftspartner = $2::jsonb WHERE id = $1")
         .bind(kunde2)
-        .bind(r#"{"name1":"Hausverwaltung Neu GmbH"}"#)
+        .bind(r#"{"_typ":"GESCHAEFTSPARTNER","organisationsname":"Hausverwaltung Neu GmbH"}"#)
         .execute(&pool)
         .await
         .expect("populate second operator");
@@ -1019,6 +1036,7 @@ async fn a_period_containing_a_tarifwechsel_comes_back_as_two_tiling_slices() {
         time::macros::date!(2026 - 11 - 15),
         Some("Tarifwechsel"),
         false,
+        None,
     )
     .await
     .expect("tarifwechsel");
@@ -1077,6 +1095,7 @@ async fn a_future_tarifwechsel_is_invisible_until_it_starts() {
         time::macros::date!(2027 - 01 - 01),
         None,
         false,
+        None,
     )
     .await
     .expect("schedule");
@@ -1179,7 +1198,7 @@ async fn a_replay_is_idempotent_and_a_backdated_change_is_refused() {
         wechsel("STROM-NEU", time::macros::date!(2027 - 01 - 01)),
         wechsel("STROM-NEU", time::macros::date!(2027 - 01 - 01)),
     ] {
-        pg::produkte::tarifwechsel(&mut conn, tenant, komp, &code, d, None, false)
+        pg::produkte::tarifwechsel(&mut conn, tenant, komp, &code, d, None, false, None)
             .await
             .expect("a replay of the same change must succeed");
     }
@@ -1198,6 +1217,7 @@ async fn a_replay_is_idempotent_and_a_backdated_change_is_refused() {
         time::macros::date!(2026 - 12 - 01),
         None,
         true,
+        None,
     )
     .await;
     assert!(

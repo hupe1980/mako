@@ -116,11 +116,16 @@ async fn duplicate_ce_books_once() {
     assert_eq!(acc.balance_ct, 13000, "balance cache reflects one booking");
 }
 
-/// ABSCHLAG advance-payment credits net against the full-cost Rechnung debit, and
-/// the balance cache stays consistent with the authoritative ledger.
+/// The advance lifecycle over one year through the real ledger: twelve demands
+/// raised, twelve payments received, one annual invoice that bills the gross
+/// and discharges the advances it deducted.
+///
+/// The numbers are the point. An advance booked as a *credit* would leave this
+/// year at −1 200,00 EUR and have the Jahresabschluss pay that out by pain.001
+/// to a customer who owes 100,00 EUR.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn abschlag_credit_nets_against_rechnung() {
+async fn an_advance_plan_paid_in_full_leaves_only_the_nachzahlung() {
     let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
@@ -128,31 +133,100 @@ async fn abschlag_credit_nets_against_rechnung() {
     pg::upsert_account(&pool, &malo, "LF1", TENANT)
         .await
         .unwrap();
-    let d = date!(2026 - 01 - 15);
+    sqlx::query("UPDATE accounts SET abschlag_ct = 10000 WHERE malo_id = $1 AND tenant = $2")
+        .bind(&malo)
+        .bind(TENANT)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let account = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap();
 
-    // 12 monthly advance-payment credits of 100.00 EUR.
+    // Twelve Abschlagsforderungen of 100.00 EUR — debits, because an advance is
+    // demanded before it is paid.
+    for m in 1u8..=12 {
+        let periode = date!(2026 - 01 - 01)
+            .replace_month(m.try_into().unwrap())
+            .unwrap();
+        pg::raise_abschlagsforderung(&ledger, &pool, TENANT, &account, periode, periode, periode)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        ledger.balance_ct("LF1", &malo).await.unwrap(),
+        120_000,
+        "twelve advances demanded and none yet paid is a receivable, not a credit"
+    );
+
+    // The register carries the rate each was raised at, and none is deductible
+    // yet because none has been received.
+    let register = pg::list_abschlag_forderungen(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        date!(2026 - 01 - 01),
+        date!(2026 - 12 - 31),
+    )
+    .await
+    .unwrap();
+    assert_eq!(register.len(), 12);
+    assert!(
+        register.iter().all(|a| !a.vereinnahmt()),
+        "nothing has been paid yet"
+    );
+    assert_eq!(register[0].ust_satz, rust_decimal::dec!(0.19));
+
+    // Twelve payments arrive and clear the demands FIFO.
     for m in 1..=12 {
-        let key = format!("abschlag:{malo}:2026-{m:02}");
+        let d = date!(2026 - 01 - 20)
+            .replace_month((m as u8).try_into().unwrap())
+            .unwrap();
         pg::post_entry(
             &ledger,
             &pool,
             TENANT,
             &malo,
             "LF1",
-            "ABSCHLAG",
-            -10000,
-            &key,
+            "ZAHLUNG",
+            -10_000,
+            &format!("pay:{malo}:{m}"),
             None,
             None,
             d,
             d,
-            Some("Abschlag"),
+            Some("SEPA-Einzug"),
             None,
         )
         .await
         .unwrap();
     }
-    // Full annual Rechnung of 1300.00 EUR (Nachzahlung 100.00 EUR).
+    assert_eq!(
+        ledger.balance_ct("LF1", &malo).await.unwrap(),
+        0,
+        "the plan is paid up"
+    );
+    let register = pg::list_abschlag_forderungen(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        date!(2026 - 01 - 01),
+        date!(2026 - 12 - 31),
+    )
+    .await
+    .unwrap();
+    assert!(
+        register.iter().all(pg::AbschlagForderung::deductible),
+        "every advance is now received and unabsorbed — deductible under § 14 Abs. 5 Satz 2 UStG"
+    );
+
+    // The annual invoice: 1 300,00 EUR gross, deducting the 1 200,00 EUR of
+    // advances it settles.
     let ce = uniq("ce");
     pg::post_entry(
         &ledger,
@@ -161,31 +235,137 @@ async fn abschlag_credit_nets_against_rechnung() {
         &malo,
         "LF1",
         "RECHNUNG",
-        130000,
+        130_000,
         &ce,
         Some(&ce),
         None,
-        d,
-        d,
+        date!(2027 - 01 - 15),
+        date!(2027 - 01 - 15),
         Some("Jahresrechnung"),
         None,
+    )
+    .await
+    .unwrap();
+    pg::verrechne_abschlaege(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        120_000,
+        "RE-2027-000001",
+        &format!("{ce}:abschlag-verrechnung"),
+        date!(2027 - 01 - 15),
     )
     .await
     .unwrap();
 
     assert_eq!(
         ledger.balance_ct("LF1", &malo).await.unwrap(),
-        10000,
-        "1300 − 1200 = 100 Nachzahlung"
+        10_000,
+        "1300 gross − 1200 advances discharged = 100.00 Nachzahlung"
+    );
+
+    // Every advance is stamped with the invoice that absorbed it, so a second
+    // settlement cannot deduct it again.
+    let register = pg::list_abschlag_forderungen(
+        &ledger,
+        &pool,
+        TENANT,
+        &malo,
+        "LF1",
+        date!(2026 - 01 - 01),
+        date!(2026 - 12 - 31),
+    )
+    .await
+    .unwrap();
+    assert!(
+        register
+            .iter()
+            .all(|a| a.verrechnet_mit.as_deref() == Some("RE-2027-000001")),
+        "all twelve absorbed by the settling invoice"
+    );
+    assert!(
+        register.iter().all(|a| !a.deductible()),
+        "and none of them deductible a second time"
     );
 
     // The cache matches the authoritative ledger — no drift.
     let rec = pg::reconcile_balance(&ledger, &pool, &malo, "LF1", TENANT, false)
         .await
         .unwrap();
-    assert_eq!(rec.recomputed_balance_ct, 10000);
+    assert_eq!(rec.recomputed_balance_ct, 10_000);
     assert_eq!(rec.cached_balance_ct, rec.recomputed_balance_ct, "no drift");
     assert!(rec.is_consistent);
+}
+
+/// A demanded, unpaid advance is an **open receivable**, so it reaches the
+/// § 41f Abs. 3 Verzug and the Mahnwesen. Booked as a credit it would drive
+/// `balance_ct` further negative every month, and the dunning worker — which
+/// selects on `balance_ct > 0` — would never see the customer at all.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unpaid_advance_is_in_verzug() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    sqlx::query("UPDATE accounts SET abschlag_ct = 12000 WHERE malo_id = $1 AND tenant = $2")
+        .bind(&malo)
+        .bind(TENANT)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let account = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+
+    for m in 1u8..=3 {
+        let periode = date!(2026 - 01 - 01)
+            .replace_month(m.try_into().unwrap())
+            .unwrap();
+        pg::raise_abschlagsforderung(&ledger, &pool, TENANT, &account, periode, periode, periode)
+            .await
+            .unwrap();
+    }
+
+    let verzug = pg::compute_verzug_ct(&ledger, &pool, TENANT, &malo, "LF1")
+        .await
+        .unwrap();
+    assert_eq!(
+        verzug, 36_000,
+        "three unpaid advances of 120.00 are 360.00 of supply debt in Verzug"
+    );
+    let acct = pg::fetch_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(acct.balance_ct, 36_000, "and the dunning worker can see it");
+
+    // …and the § 41f Abs. 3 gates arm on it: 360.00 clears the Satz-2 floor of
+    // 100.00 and is ≥ 2× the 120.00 monthly Abschlag (Satz 1). Three missed
+    // advances is the ordinary shape of this case.
+    let case_id = pg::create_dunning_case(
+        &pool,
+        acct.account_id,
+        TENANT,
+        3,
+        verzug,
+        date!(2026 - 04 - 01),
+    )
+    .await
+    .unwrap();
+    let candidates = pg::list_androhung_candidates(&pool, TENANT, 10_000)
+        .await
+        .unwrap();
+    assert!(
+        candidates.iter().any(|c| c.0 == case_id),
+        "unpaid advances are supply debt, so the §41f Abs. 3 gates see them"
+    );
 }
 
 /// A conflicting reuse of an idempotency key (same key, different amount) is
@@ -2490,13 +2670,12 @@ async fn changing_the_iban_rekeys_the_lookup_hash() {
 
 // ── Jahresabschluss settlement ────────────────────────────────────────────────
 
-/// The annual settlement must account for cash settled outside the Abschlag
-/// plan. Summing only RECHNUNG/STORNO/MAHNGEBUEHR/ABSCHLAG treated a direct
-/// payment as unpaid and still credited a bounced Abschlag — the latter paying
-/// out an Erstattung for money never received.
+/// The settlement is the year's whole Kontokorrent movement, so it cannot miss
+/// a Buchungsart. Direct payments, chargebacks and the Abschlag pair all reach
+/// it — and the figure it produces is by construction the balance it settles.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
-async fn settlement_counts_direct_payments_and_chargebacks() {
+async fn the_settlement_equals_the_balance_it_settles() {
     let Some((pool, ledger, _pg)) = setup().await else {
         return;
     };
@@ -2527,10 +2706,12 @@ async fn settlement_counts_direct_payments_and_chargebacks() {
         .unwrap();
     };
 
-    // 1200.00 billed, 1100.00 collected by Abschlag, of which 100.00 bounced,
-    // and 200.00 paid directly by the customer.
+    // 1200.00 billed gross; 1100.00 demanded as advances and discharged by that
+    // invoice; 1100.00 collected, of which 100.00 bounced; 200.00 paid directly.
     post("RECHNUNG", 120_000, uniq("inv")).await;
-    post("ABSCHLAG", -110_000, uniq("abs")).await;
+    post("ABSCHLAG", 110_000, uniq("abs")).await;
+    post("ABSCHLAG_VERRECHNUNG", -110_000, uniq("ver")).await;
+    post("ZAHLUNG", -110_000, uniq("col")).await;
     post("BANKRUECKLAST", 10_000, uniq("ret")).await;
     post("ZAHLUNG", -20_000, uniq("pay")).await;
 
@@ -2538,22 +2719,22 @@ async fn settlement_counts_direct_payments_and_chargebacks() {
     let s = accountingd::handlers::JahresabschlussSums::from_kind_sums(&sums);
 
     assert_eq!(s.rechnung_sum, 120_000);
-    assert_eq!(s.abschlag_sum, -110_000);
+    assert_eq!(s.abschlag_sum, 0, "demanded and then discharged");
     assert_eq!(
-        s.zahlung_sum, -10_000,
-        "200.00 paid directly less the 100.00 chargeback"
+        s.zahlung_sum, -120_000,
+        "1100 collected + 200 direct − 100 charged back"
     );
-    assert_eq!(
-        s.settlement_ct, 0,
-        "1200 billed − 1100 Abschlag + 100 returned − 200 paid = 0, ausgeglichen"
-    );
+    assert_eq!(s.settlement_ct, 0, "ausgeglichen");
     assert_eq!(
         s.settlement_ct,
         ledger.balance_ct("LF1", &malo).await.unwrap(),
         "the settlement must equal the Kontokorrent balance it settles"
     );
-
-    assert_eq!(s.rechnung_sum + s.abschlag_sum, 10_000);
+    assert_eq!(
+        s.rechnung_sum + s.abschlag_sum + s.zahlung_sum + s.verzugsschaden_sum + s.sonstige_sum,
+        s.settlement_ct,
+        "the buckets partition the total"
+    );
 }
 
 // ── SEPA collection lifecycle: pain.008 → pain.002 / camt → pain.007 ─────────
@@ -3198,4 +3379,158 @@ fn remittance_tokens_cover_both_spellings() {
     assert!(tokens.contains(&"ABSCHLAG".to_owned()));
     // Runs longer than four words are sentences, not identifiers.
     assert!(!tokens.contains(&"ABSCHLAG072026MND000123DANKE".to_owned()));
+}
+
+// ── Jahresabschluss automation (§ 40b Abs. 1 EnWG) ────────────────────────────
+
+/// The annual worker settles exactly the accounts with no settlement for the
+/// year, keyed on the absence of a `jahresabschluss_runs` row — the same table
+/// the endpoint's idempotency guard writes, so a manual `POST` and the worker
+/// cannot disagree about what is outstanding.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_annual_sweep_settles_each_account_once() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, "LF1", TENANT)
+        .await
+        .unwrap();
+    let other = uniq("MALO");
+    pg::upsert_account(&pool, &other, "LF1", TENANT)
+        .await
+        .unwrap();
+
+    let due = |year: i16| {
+        let pool = pool.clone();
+        async move {
+            pg::list_jahresabschluss_candidates(&pool, TENANT, year, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|(m, _)| m)
+                .collect::<Vec<_>>()
+        }
+    };
+    let before = due(2026).await;
+    assert!(before.contains(&malo) && before.contains(&other));
+
+    // Settle one — a balanced year, so no money moves and no IBAN is needed.
+    pg::record_jahresabschluss(&pool, TENANT, &malo, 2026, 0, 0, 0, None)
+        .await
+        .unwrap();
+
+    let after = due(2026).await;
+    assert!(
+        !after.contains(&malo),
+        "a settled account drops out of the candidate set"
+    );
+    assert!(after.contains(&other), "an unsettled one still is");
+    assert!(
+        due(2025).await.contains(&malo),
+        "the guard is per year — 2025 is still outstanding"
+    );
+
+    // An anonymised account is excluded: GDPR Art. 17 destroyed the attribution
+    // a settlement would be addressed to.
+    sqlx::query("UPDATE accounts SET anonymized_at = now() WHERE malo_id = $1 AND tenant = $2")
+        .bind(&other)
+        .bind(TENANT)
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert!(!due(2026).await.contains(&other));
+
+    // And the ledger is untouched by any of this.
+    assert_eq!(ledger.balance_ct("LF1", &malo).await.unwrap(), 0);
+}
+
+/// The settlement runs end to end against a real ledger: a balanced year books
+/// no entry, records its run, and announces itself — whatever the outcome.
+///
+/// The announcement is the point. `de.accounting.erstattung.faellig` fires only
+/// on a refund *and* only with an ERP webhook, so anything downstream of the
+/// annual cycle had to poll `jahresabschluss_runs` to notice a Nachzahlung or a
+/// balanced year had happened at all.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_committed_settlement_announces_itself() {
+    let Some((pool, ledger, _pg)) = setup().await else {
+        return;
+    };
+    let malo = uniq("MALO");
+    pg::upsert_account(&pool, &malo, TENANT, TENANT)
+        .await
+        .unwrap();
+    let d = date!(2026 - 03 - 01);
+    // Billed and paid in full: ausgeglichen, so no money moves and no IBAN is
+    // needed — and the refund event does not fire, which is the whole point.
+    for (kind, amount, key) in [("RECHNUNG", 120_000, "inv"), ("ZAHLUNG", -120_000, "pay")] {
+        pg::post_entry(
+            &ledger,
+            &pool,
+            TENANT,
+            &malo,
+            TENANT,
+            kind,
+            amount,
+            &uniq(key),
+            None,
+            None,
+            d,
+            d,
+            Some(kind),
+            None,
+        )
+        .await
+        .unwrap();
+    }
+
+    // A minimal config: every other field is optional, and a balanced year
+    // touches none of the SEPA or makod ones.
+    let cfg: std::sync::Arc<accountingd::config::AccountingdConfig> = std::sync::Arc::new(
+        serde_json::from_value(serde_json::json!({
+            "database": { "url": "unused-by-this-path" },
+            "tenant":   TENANT,
+        }))
+        .expect("a minimal accountingd config deserialises"),
+    );
+    let q = accountingd::handlers::JahresabschlussQuery {
+        lf_mp_id: Some(TENANT.to_owned()),
+        year: Some(2026),
+        dry_run: Some(false),
+    };
+    let ledger_arc = std::sync::Arc::new(ledger);
+    let body = accountingd::handlers::settle_jahresabschluss(&pool, &ledger_arc, &cfg, &malo, &q)
+        .await
+        .expect("a balanced year settles");
+    assert_eq!(body["action"], "AUSGEGLICHEN");
+    assert_eq!(body["settlement_ct"], 0);
+    assert_eq!(body["committed"], true);
+
+    let announced: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox WHERE ce_type = $1 AND event_id = $2",
+    )
+    .bind(mako_events::accounting::JAHRESABSCHLUSS_ABGESCHLOSSEN)
+    .bind(format!("jahresabschluss:{malo}:2026"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(announced, 1, "every committed settlement announces itself");
+
+    // Idempotent: the second call returns the prior result and enqueues nothing.
+    let again = accountingd::handlers::settle_jahresabschluss(&pool, &ledger_arc, &cfg, &malo, &q)
+        .await
+        .expect("re-run");
+    assert_eq!(again["already_settled"], true);
+    let announced: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM event_outbox WHERE ce_type = $1 AND event_id = $2",
+    )
+    .bind(mako_events::accounting::JAHRESABSCHLUSS_ABGESCHLOSSEN)
+    .bind(format!("jahresabschluss:{malo}:2026"))
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(announced, 1, "and does not announce a second time");
 }

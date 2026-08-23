@@ -2,7 +2,7 @@
 //!
 //! Run: `cargo test -p accountingd --test unit_tests`
 
-use accountingd::handlers::{format_ct_as_eur, validate_iban};
+use accountingd::handlers::{JahresabschlussSums, format_ct_as_eur, validate_iban};
 use sepa::IbanError;
 
 // ── IBAN validation ───────────────────────────────────────────────────────────
@@ -202,145 +202,177 @@ fn format_sub_euro_negative() {
     assert_eq!(format_ct_as_eur(-1), "-0.01");
 }
 
-// ── Ledger entry type coverage ────────────────────────────────────────────────
+// ── Buchungsarten ─────────────────────────────────────────────────────────────
 
-/// Every entry type added in migration 0004 must be documented and covered here.
+/// Every Buchungsart books to a GL account **on purpose**, not through
+/// `Chart::contra`'s catch-all.
+///
+/// The catch-all serves the billing family (`RECHNUNG`, `STORNO`, `KORREKTUR`,
+/// `GUTSCHRIFT`), which all belong on Energieerlöse. Anything else reaching it
+/// is a kind nobody decided a home for, landing on revenue silently.
 #[test]
-fn entry_types_are_complete() {
-    let all_types = [
-        "RECHNUNG",
-        "STORNO",
+fn every_entry_type_books_somewhere_deliberate() {
+    use accountingd::ledger::ENTRY_TYPES;
+    const BILLING_FAMILY: &[&str] = &["RECHNUNG", "STORNO", "KORREKTUR", "GUTSCHRIFT"];
+    const EXPLICIT: &[&str] = &[
         "ZAHLUNG",
-        "GUTSCHRIFT",
+        "BANKRUECKLAST",
+        "SEPA_STORNO",
+        "ABSCHLAG",
+        "ABSCHLAG_VERRECHNUNG",
+        "MAHNGEBUEHR",
+        "VERZUGSZINSEN",
         "EEG_GUTSCHRIFT",
         "EEG_MARKTPRAEMIE",
-        "BANKRUECKLAST",
-        "MAHNGEBUEHR",
-        "ABSCHLAG",
         "JAHRESABSCHLUSS",
-        "KORREKTUR",
     ];
-    // Debit types: customer owes money (positive amount_ct)
-    let debit_types = [
-        "RECHNUNG",
-        "STORNO",
-        "BANKRUECKLAST",
-        "MAHNGEBUEHR",
-        "ABSCHLAG",
-    ];
-    // Credit types: customer receives money (negative amount_ct)
-    let credit_types = [
-        "ZAHLUNG",
-        "GUTSCHRIFT",
-        "EEG_GUTSCHRIFT",
-        "EEG_MARKTPRAEMIE",
-    ];
-    // Signed types: either direction
-    let signed_types = ["JAHRESABSCHLUSS", "KORREKTUR"];
-
-    for t in debit_types {
-        assert!(all_types.contains(&t), "debit type {t} not in list");
+    for kind in ENTRY_TYPES {
+        assert!(
+            BILLING_FAMILY.contains(kind) || EXPLICIT.contains(kind),
+            "{kind} is bookable but this test does not say where it books — add it to \
+             EXPLICIT (with a `Chart::contra` arm) or to BILLING_FAMILY"
+        );
     }
-    for t in credit_types {
-        assert!(all_types.contains(&t), "credit type {t} not in list");
-    }
-    for t in signed_types {
-        assert!(all_types.contains(&t), "signed type {t} not in list");
-    }
-    // Ensure no overlap between strict debit/credit sets
-    for t in debit_types {
-        assert!(!credit_types.contains(&t), "{t} is both debit and credit?");
+    for kind in EXPLICIT {
+        assert!(
+            ENTRY_TYPES.contains(kind),
+            "{kind} has a contra arm but is not bookable"
+        );
     }
 }
 
+/// The Abschlag pair is a debit and a credit on the **same** contra account, so
+/// a demand raised and then settled leaves Erhaltene Anzahlungen flat.
+#[test]
+fn the_abschlag_pair_is_symmetric() {
+    use accountingd::ledger::ENTRY_TYPES;
+    assert!(ENTRY_TYPES.contains(&"ABSCHLAG"));
+    assert!(ENTRY_TYPES.contains(&"ABSCHLAG_VERRECHNUNG"));
+}
+
+/// `KORREKTURRECHNUNG` is not a Buchungsart; billingd's reversals book
+/// `STORNO`.
 #[test]
 fn storno_replaces_korrekturrechnung() {
-    // KORREKTURRECHNUNG is not a valid entry type — the DB CHECK rejects it.
-    // STORNO is its replacement for billing reversals from billingd.
-    let buggy_old = "KORREKTURRECHNUNG";
-    let correct_new = "STORNO";
-    // Old type must NOT be in the valid list
-    let valid = [
-        "RECHNUNG",
-        "STORNO",
-        "ZAHLUNG",
-        "GUTSCHRIFT",
-        "EEG_GUTSCHRIFT",
-        "EEG_MARKTPRAEMIE",
-        "BANKRUECKLAST",
-        "MAHNGEBUEHR",
-        "ABSCHLAG",
-        "JAHRESABSCHLUSS",
-        "KORREKTUR",
-    ];
-    assert!(
-        !valid.contains(&buggy_old),
-        "KORREKTURRECHNUNG must not be in valid list"
-    );
-    assert!(valid.contains(&correct_new), "STORNO must be in valid list");
+    use accountingd::ledger::ENTRY_TYPES;
+    assert!(!ENTRY_TYPES.contains(&"KORREKTURRECHNUNG"));
+    assert!(ENTRY_TYPES.contains(&"STORNO"));
 }
 
 // ── Jahresabschluss settlement calculation ────────────────────────────────────
 //
-// §40 Abs. 1 EnWG: the annual settlement (Jahresabschluss) compares
-// the sum of all Rechnungen (debits) against the sum of all Abschläge (credits).
-//
-// settlement_ct = rechnung_sum + abschlag_sum
-//   > 0 → Nachzahlung (customer underpaid → owes extra)
-//   < 0 → Erstattung  (customer overpaid → gets refund)
-//   = 0 → Ausgeglichen (exactly settled)
+// § 40 Abs. 1 EnWG. The settlement is the signed net of the year's whole
+// Kontokorrent movement, never a hand-picked subset of Buchungsarten: an
+// omitted kind is how a settlement turns into a refund nobody owed.
 
-#[test]
-fn jahresabschluss_nachzahlung() {
-    // Annual bill 1200 EUR, paid 12 × 90 EUR = 1080 EUR → owes 120 EUR
-    let rechnung_sum: i64 = 120_000; // +1200 EUR (debit)
-    let abschlag_sum: i64 = -108_000; // -1080 EUR (credit, 12 × 90 EUR)
-    let settlement = rechnung_sum + abschlag_sum;
-    assert_eq!(settlement, 12_000, "Nachzahlung should be 120 EUR");
-    assert!(settlement > 0, "Positive = customer still owes");
-    assert_eq!(format_ct_as_eur(settlement), "120.00");
+/// Build the kind-sum map [`JahresabschlussSums::from_kind_sums`] consumes.
+fn sums(pairs: &[(&str, i64)]) -> std::collections::HashMap<String, i64> {
+    pairs.iter().map(|(k, v)| ((*k).to_owned(), *v)).collect()
 }
 
+/// A full year on a monthly advance plan, all paid: twelve demands, twelve
+/// payments, one annual invoice that bills the gross and discharges the
+/// advances it deducted. What remains is the Nachzahlung.
+///
+/// Booking an advance as a *credit* would credit the account a second time when
+/// the payment arrives, and the settlement would read the doubled credit as an
+/// overpayment — refunding EUR 1 080 to a customer who owes EUR 120.
 #[test]
-fn jahresabschluss_erstattung() {
-    // Annual bill 800 EUR, paid 12 × 90 EUR = 1080 EUR → refund 280 EUR
-    let rechnung_sum: i64 = 80_000; // +800 EUR
-    let abschlag_sum: i64 = -108_000; // -1080 EUR
-    let settlement = rechnung_sum + abschlag_sum;
-    assert_eq!(settlement, -28_000, "Erstattung should be -280 EUR");
-    assert!(settlement < 0, "Negative = customer overpaid, gets refund");
-    assert_eq!(format_ct_as_eur(settlement), "-280.00");
+fn a_paid_advance_plan_settles_to_the_nachzahlung() {
+    let s = JahresabschlussSums::from_kind_sums(&sums(&[
+        ("RECHNUNG", 120_000),              // the year, gross
+        ("ABSCHLAG", 108_000),              // 12 × 90.00 demanded (debits)
+        ("ABSCHLAG_VERRECHNUNG", -108_000), // the invoice discharges them
+        ("ZAHLUNG", -108_000),              // 12 × 90.00 received
+    ]));
+    assert_eq!(s.rechnung_sum, 120_000);
+    assert_eq!(s.abschlag_sum, 0, "demanded and then discharged");
+    assert_eq!(s.zahlung_sum, -108_000);
+    assert_eq!(s.settlement_ct, 12_000, "Nachzahlung 120.00");
+    assert_eq!(format_ct_as_eur(s.settlement_ct), "120.00");
 }
 
+/// The same year, under-consumed: the customer paid more than the supply cost.
 #[test]
-fn jahresabschluss_ausgeglichen() {
-    let rechnung_sum: i64 = 120_000;
-    let abschlag_sum: i64 = -120_000; // exactly right
-    let settlement = rechnung_sum + abschlag_sum;
-    assert_eq!(settlement, 0);
+fn an_overpaid_year_settles_to_an_erstattung() {
+    let s = JahresabschlussSums::from_kind_sums(&sums(&[
+        ("RECHNUNG", 80_000),
+        ("ABSCHLAG", 108_000),
+        ("ABSCHLAG_VERRECHNUNG", -108_000),
+        ("ZAHLUNG", -108_000),
+    ]));
+    assert_eq!(s.settlement_ct, -28_000, "Erstattung 280.00");
+    assert_eq!(format_ct_as_eur(s.settlement_ct), "-280.00");
 }
 
+/// An advance that was demanded and never paid stays a receivable, and the
+/// settlement says the customer owes it.
 #[test]
-fn jahresabschluss_new_abschlag_from_actual() {
-    // New monthly Abschlag = actual annual billed ÷ 12
-    let rechnung_sum_abs: i64 = 108_000; // 1080 EUR annual actual
-    let new_abschlag = rechnung_sum_abs / 12; // 90 EUR/month
-    assert_eq!(new_abschlag, 9_000);
-    assert_eq!(format_ct_as_eur(new_abschlag), "90.00");
+fn an_unpaid_advance_stays_owed() {
+    let s = JahresabschlussSums::from_kind_sums(&sums(&[
+        ("RECHNUNG", 120_000),
+        ("ABSCHLAG", 108_000),
+        ("ABSCHLAG_VERRECHNUNG", -99_000), // only the eleven received ones
+        ("ZAHLUNG", -99_000),
+    ]));
+    assert_eq!(
+        s.settlement_ct, 30_000,
+        "the 120.00 Nachzahlung plus the 90.00 advance that was never paid"
+    );
 }
 
+/// A Buchungsart the buckets do not name still moves the settlement, so
+/// forgetting to add a kind cannot silently drop it.
 #[test]
-fn jahresabschluss_includes_storno_entries() {
-    // STORNO entries (billing reversals) must be included in rechnung_sum
-    // so the annual settlement reflects the NET billed amount.
-    let rechnung_entries: i64 = 130_000; // +1300 EUR
-    let storno_entries: i64 = -20_000; // -200 EUR reversal
-    let net_rechnung = rechnung_entries + storno_entries;
-    assert_eq!(net_rechnung, 110_000, "Net rechnung includes storno");
+fn an_unbucketed_kind_still_settles() {
+    let s = JahresabschlussSums::from_kind_sums(&sums(&[
+        ("RECHNUNG", 100_000),
+        ("EEG_GUTSCHRIFT", -25_000),
+    ]));
+    assert_eq!(s.sonstige_sum, -25_000, "EEG credit lands in the residue");
+    assert_eq!(s.settlement_ct, 75_000);
+    assert_eq!(
+        s.rechnung_sum + s.abschlag_sum + s.zahlung_sum + s.verzugsschaden_sum + s.sonstige_sum,
+        s.settlement_ct,
+        "the buckets always re-sum to the settlement"
+    );
+}
 
-    let abschlag: i64 = -108_000;
-    let settlement = net_rechnung + abschlag;
-    assert_eq!(settlement, 2_000, "Nachzahlung = 20 EUR");
+/// Verzugsschaden is owed and settles, but never recalibrates the Abschlag:
+/// § 40 Abs. 1 ties the advance to expected consumption, and raising it because
+/// a customer was dunned would make next year's advances a second penalty.
+#[test]
+fn verzugsschaden_settles_but_does_not_set_the_abschlag() {
+    let s = JahresabschlussSums::from_kind_sums(&sums(&[
+        ("RECHNUNG", 120_000),
+        ("MAHNGEBUEHR", 1_500),
+        ("VERZUGSZINSEN", 783),
+    ]));
+    assert_eq!(
+        s.rechnung_sum, 120_000,
+        "the Abschlag base is the supply alone"
+    );
+    assert_eq!(s.verzugsschaden_sum, 2_283);
+    assert_eq!(s.settlement_ct, 122_283);
+    assert_eq!(
+        s.rechnung_sum.abs() / 12,
+        10_000,
+        "new monthly Abschlag 100.00"
+    );
+}
+
+/// A Storno nets against the billing it reverses.
+#[test]
+fn a_storno_nets_against_the_billing() {
+    let s = JahresabschlussSums::from_kind_sums(&sums(&[
+        ("RECHNUNG", 130_000),
+        ("STORNO", -20_000),
+        ("ABSCHLAG", 108_000),
+        ("ABSCHLAG_VERRECHNUNG", -108_000),
+        ("ZAHLUNG", -108_000),
+    ]));
+    assert_eq!(s.rechnung_sum, 110_000);
+    assert_eq!(s.settlement_ct, 2_000);
 }
 
 // ── Dunning fee calculation ───────────────────────────────────────────────────

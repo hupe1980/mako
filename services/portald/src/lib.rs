@@ -1,10 +1,18 @@
 #![deny(unsafe_code)]
 //! `portald` — Customer Portal read-model gateway (LF role), port `:9480`.
 //!
-//! Aggregates Lastgang (`edmd`), invoices (`billingd`), account ledger
-//! (`accountingd`), supply status (`marktd`) and EEG settlement (`einsd`) into
-//! one customer-facing REST API, and proxies the § 41 EnWG self-service writes
-//! to `vertragd` and `accountingd`.
+//! Aggregates Lastgang (`edmd`), invoices (`billingd`), the document inbox
+//! (`outputd`), account ledger (`accountingd`), supply status (`marktd`) and
+//! EEG settlement (`einsd`) into one customer-facing REST API, and proxies the
+//! § 41 EnWG self-service writes to `vertragd` and `accountingd`.
+//!
+//! # Records and documents are two lists
+//!
+//! `/invoices` is what `billingd` *calculated* — drafts the risk gate is
+//! holding included. `/dokumente` is what the customer was *sent*, byte for
+//! byte, with the delivery evidence beside it. An inbox shows the second;
+//! opening a document there records the read receipt a § 41f EnWG dispute asks
+//! about.
 //!
 //! # Stateless by construction
 //!

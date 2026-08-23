@@ -108,6 +108,9 @@ pub fn iban_hash(key: Option<&[u8; 32]>, iban: &str) -> String {
 ///   reason.
 /// - **Erstattungen** is only ever credited — nothing discharges it here — so a
 ///   `NoDebitBalance` limit would be true and could never fire.
+/// - **Anzahlungen** is credited by every Abschlagsforderung and debited by the
+///   Verrechnung on the settling invoice, so it swings in both directions
+///   whenever a Jahresrechnung lands out of order with the advances it settles.
 ///
 /// The invariant that is actually worth enforcing (every entry balances) is
 /// structural and already unconditional.
@@ -130,7 +133,41 @@ pub struct Chart {
     /// (Erstattung): the customer credit is zeroed and this liability recognises
     /// the amount owed until the pain.001 payout discharges it.
     pub erstattung: AccountId,
+    /// SKR 03 1718 / SKR 04 3272 — **Erhaltene Anzahlungen**, the contra for the
+    /// Abschlag pair.
+    ///
+    /// An Abschlag is neither revenue nor cash: it is a demand for a
+    /// part-payment on a supply not yet billed (§ 40 Abs. 1 EnWG,
+    /// § 14 Abs. 5 UStG). `ABSCHLAG` debits the Kontokorrent against this
+    /// account; `ABSCHLAG_VERRECHNUNG` credits it back when the settling
+    /// invoice bills the supply in full. Between the two, the balance is the
+    /// operator's open advance obligation — the § 266 Abs. 3 C.3 HGB line.
+    /// Never `bank`: no money moves at either end.
+    pub anzahlungen: AccountId,
 }
+
+/// Every Buchungsart accountingd books.
+///
+/// `Chart::contra` maps each to a GL account and
+/// `POST /accounts/{malo}/buchen` refuses anything outside the list — one list,
+/// so a kind cannot be bookable by an automated path and rejected by the
+/// operator interface, or fall through `contra`'s catch-all onto Energieerlöse.
+pub const ENTRY_TYPES: &[&str] = &[
+    "RECHNUNG",
+    "STORNO",
+    "KORREKTUR",
+    "GUTSCHRIFT",
+    "ABSCHLAG",
+    "ABSCHLAG_VERRECHNUNG",
+    "ZAHLUNG",
+    "BANKRUECKLAST",
+    "SEPA_STORNO",
+    "MAHNGEBUEHR",
+    "VERZUGSZINSEN",
+    "EEG_GUTSCHRIFT",
+    "EEG_MARKTPRAEMIE",
+    "JAHRESABSCHLUSS",
+];
 
 impl Chart {
     /// The GL contra account for an `entry_type`.
@@ -145,7 +182,10 @@ impl Chart {
             // collection back, so the money leaves the bank account again and
             // the receivable re-opens — the same two accounts as the collection
             // it undoes, in the opposite direction.
-            "ZAHLUNG" | "ABSCHLAG" | "BANKRUECKLAST" | "SEPA_STORNO" => self.bank,
+            "ZAHLUNG" | "BANKRUECKLAST" | "SEPA_STORNO" => self.bank,
+            // The Abschlag pair. Never `bank`: no money moves when an advance is
+            // demanded, and none moves when the settling invoice absorbs it.
+            "ABSCHLAG" | "ABSCHLAG_VERRECHNUNG" => self.anzahlungen,
             "MAHNGEBUEHR" => self.mahnerloese,
             "VERZUGSZINSEN" => self.zinsertrag,
             "EEG_GUTSCHRIFT" | "EEG_MARKTPRAEMIE" => self.eeg_aufwand,
@@ -284,6 +324,11 @@ pub struct OpenReceivable {
     pub outstanding_ct: i64,
     /// Booking date of the original debit.
     pub booking_date: Date,
+    /// The source document the entry cites — an invoice's Rechnungsnummer, an
+    /// advance's demand reference. The item's customer-facing name: a Mahnung
+    /// listing an entry UUID demands something the recipient cannot match to
+    /// anything they hold.
+    pub document: Option<String>,
 }
 
 /// One line of the Summen- und Saldenliste (trial balance / SuSa).
@@ -382,6 +427,11 @@ impl<S: LedgerStore<P>> Ledger<S> {
             erstattung: ensure(
                 &mut registry,
                 "Passiva:Verbindlichkeiten:Erstattungen",
+                AccountKind::Liability,
+            )?,
+            anzahlungen: ensure(
+                &mut registry,
+                "Passiva:Verbindlichkeiten:ErhalteneAnzahlungen",
                 AccountKind::Liability,
             )?,
         };
@@ -798,11 +848,38 @@ impl<S: LedgerStore<P>> Ledger<S> {
                     amount_ct: i.original.to_minor(),
                     outstanding_ct: i.residual.to_minor(),
                     booking_date: date,
+                    // Filled below: the reference lives on the entry, not the
+                    // statement line, so it costs one read per *open* item.
+                    document: None,
                 }
             })
             .collect();
+        for item in &mut out {
+            item.document = self.document_of(item.entry_id).await?;
+        }
         out.sort_by_key(|o| o.booking_date);
         Ok(out)
+    }
+
+    /// The source document one entry cites, if any.
+    ///
+    /// `PostEntry::with_document` records it as a doubleentry `DocumentRef`;
+    /// no statement line carries it, so this is the read that turns an entry id
+    /// back into the Rechnungsnummer a customer knows.
+    ///
+    /// # Errors
+    ///
+    /// Propagates storage errors. An unresolvable entry is `None`, not an
+    /// error — the caller is building a page, and a missing reference degrades
+    /// one line rather than failing the document.
+    pub async fn document_of(&self, entry_id: uuid::Uuid) -> anyhow::Result<Option<String>> {
+        let id = EntryId::from_uuid(entry_id);
+        let stored = self
+            .store
+            .get(id)
+            .await
+            .map_err(|e| anyhow::anyhow!("entry {entry_id}: {e}"))?;
+        Ok(stored.and_then(|s| s.entry.document().map(|d| d.id.as_str().to_owned())))
     }
 
     /// The **Summen- und Saldenliste** (trial balance, § 238 HGB): gross debit and

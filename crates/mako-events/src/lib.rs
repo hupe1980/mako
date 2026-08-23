@@ -200,6 +200,18 @@ pub mod accounting {
     pub const PAYMENT_IMPORTED: &str = "de.accounting.payment.imported";
     /// Refund (Erstattung) due to the customer.
     pub const ERSTATTUNG_FAELLIG: &str = "de.accounting.erstattung.faellig";
+    /// § 40b Abs. 1 EnWG — the annual reconciliation for one Marktlokation is
+    /// committed.
+    ///
+    /// Emitted **unconditionally**, on every settlement, whatever it came to.
+    /// [`ERSTATTUNG_FAELLIG`] is not a substitute: it fires only on a refund and
+    /// only where an ERP webhook is configured, so a Nachzahlung and an
+    /// exactly-balanced year would announce nothing.
+    ///
+    /// Carries the settlement, its components and the recalibrated monthly
+    /// Abschlag, so a consumer reacting to the annual cycle needs no second
+    /// call.
+    pub const JAHRESABSCHLUSS_ABGESCHLOSSEN: &str = "de.accounting.jahresabschluss.abgeschlossen";
     /// Late-payment interest (§288 BGB) charged.
     pub const INTEREST_CHARGED: &str = "de.accounting.interest.charged";
     /// EEG payout rejected (e.g. missing bank data).

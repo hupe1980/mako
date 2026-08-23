@@ -112,6 +112,10 @@ pub struct AccountRow {
     pub iban: Option<String>,
     pub mandatsref: Option<String>,
     pub abschlag_ct: i64,
+    /// The USt rate this account's Abschlagsforderungen are raised at, as a
+    /// fraction (`0.19` = 19 %). Copied onto each demand — see
+    /// [`raise_abschlagsforderung`].
+    pub abschlag_ust_satz: rust_decimal::Decimal,
     pub billing_day: i16,
     pub balance_ct: i64,
     /// `PstlAdr` parts — see [`AccountRow::postal_address`].
@@ -1574,7 +1578,6 @@ pub async fn list_open_dunning(
 
 /// Returns all accounts that have an active SEPA mandate and a positive abschlag_ct.
 /// Used by `run_sepa_collection` MCP tool to build the pain.008 XML.
-#[allow(dead_code)]
 pub async fn list_accounts_with_mandates(
     pool: &PgPool,
     tenant: &str,
@@ -1595,7 +1598,7 @@ pub async fn list_accounts_with_mandates(
                  a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
-                 a.abschlag_ct, a.billing_day, a.balance_ct,
+                 a.abschlag_ct, a.abschlag_ust_satz, a.billing_day, a.balance_ct,
                  a.addr_town, a.addr_country, a.addr_street,
                  a.addr_building_number, a.addr_post_code,
                  a.addr_country_subdivision,
@@ -1645,6 +1648,7 @@ pub async fn list_accounts_with_mandates(
             iban: r.try_get("a_iban")?,
             mandatsref: r.try_get("a_mandatsref")?,
             abschlag_ct: r.try_get("abschlag_ct")?,
+            abschlag_ust_satz: r.try_get("abschlag_ust_satz")?,
             billing_day: r.try_get("billing_day")?,
             balance_ct: r.try_get("balance_ct")?,
             addr_town: r.try_get("addr_town")?,
@@ -1662,7 +1666,6 @@ pub async fn list_accounts_with_mandates(
 
 /// Find all accounts where `billing_day` matches `day_of_month` and `abschlag_ct > 0`.
 /// Used by `run_abschlag_cycle` to process monthly advance payments.
-#[allow(dead_code)]
 pub async fn find_accounts_due(
     pool: &PgPool,
     tenant: &str,
@@ -1670,7 +1673,7 @@ pub async fn find_accounts_due(
 ) -> anyhow::Result<Vec<AccountRow>> {
     sqlx::query_as::<_, AccountRow>(
         r"SELECT account_id, malo_id, lf_mp_id, tenant, iban, mandatsref,
-                 abschlag_ct, billing_day, balance_ct, updated_at
+                 abschlag_ct, abschlag_ust_satz, billing_day, balance_ct, updated_at
           FROM accounts
           WHERE tenant = $1
             AND billing_day = $2
@@ -1708,7 +1711,7 @@ pub async fn find_accounts_due_for_sepa(
                  a.account_id, a.malo_id, a.lf_mp_id, a.tenant,
                  a.iban         AS a_iban,
                  a.mandatsref   AS a_mandatsref,
-                 a.abschlag_ct, a.billing_day, a.balance_ct,
+                 a.abschlag_ct, a.abschlag_ust_satz, a.billing_day, a.balance_ct,
                  a.addr_town, a.addr_country, a.addr_street,
                  a.addr_building_number, a.addr_post_code,
                  a.addr_country_subdivision,
@@ -1760,6 +1763,7 @@ pub async fn find_accounts_due_for_sepa(
             iban: r.try_get("a_iban")?,
             mandatsref: r.try_get("a_mandatsref")?,
             abschlag_ct: r.try_get("abschlag_ct")?,
+            abschlag_ust_satz: r.try_get("abschlag_ust_satz")?,
             billing_day: r.try_get("billing_day")?,
             balance_ct: r.try_get("balance_ct")?,
             addr_town: r.try_get("addr_town")?,
@@ -1775,28 +1779,43 @@ pub async fn find_accounts_due_for_sepa(
     Ok(out)
 }
 
-/// Compute period-end Abgrenzung (accruals) for HGB §250 compliance.
+/// Compute period-end Abgrenzung (accruals) for § 250 HGB.
 ///
 /// Returns:
-/// - `prap_ct`: Passive Rechnungsabgrenzungsposten — Σ(future-period Abschläge already
-///   collected). These are deferred revenue that will be earned in the next period.
-/// - `abschlag_total_ct`: Total Abschläge collected year-to-date across all accounts.
-/// - `accounts_with_advance`: Count of accounts with positive Abschlag balance.
+/// - `prap_ct`: **Passive Rechnungsabgrenzung** — the credit balance of
+///   *Erhaltene Anzahlungen*, i.e. advances demanded and not yet absorbed by a
+///   settling invoice. Read from the ledger, not proxied from customer credit
+///   balances: a Kontokorrent in credit can equally be a Gutschrift or an
+///   overpayment, neither of which is deferred revenue.
+/// - `abschlag_total_ct`: the monthly Abschlag commitment across active accounts.
+/// - `accounts_with_advance`: how many accounts carry one.
 ///
-/// The ERP books: `pRAP = prap_ct` (liability entry) at period-end cutoff.
-/// Note: Forderungen aus unbillierten Leistungen (aRAP) require edmd Lastgang data
-/// and must be computed by the ERP billing system, not accountingd.
-#[allow(dead_code)]
-pub async fn compute_abgrenzung(pool: &PgPool, tenant: &str) -> anyhow::Result<(i64, i64, i64)> {
-    // pRAP: sum of abschlag_ct for accounts where the Abschlag collected > invoiced
-    // (accounts with negative balance = credit = customer overpaid)
+/// The ERP books `pRAP = prap_ct` (liability) at the period-end cutoff.
+/// Forderungen aus unbillierten Leistungen (aRAP) need edmd Lastgang data and
+/// are the ERP billing system's to compute.
+///
+/// # Errors
+///
+/// Propagates ledger and database errors.
+pub async fn compute_abgrenzung(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+) -> anyhow::Result<(i64, i64, i64)> {
+    // The Anzahlungen account is a liability: credits exceed debits while
+    // advances are outstanding, so its `net_ct` (debits − credits) is negative
+    // and the pRAP is its magnitude. A debit balance would mean more was
+    // discharged than demanded, which is not a deferral — hence `max(0)`.
+    let prap = ledger
+        .trial_balance()
+        .await?
+        .into_iter()
+        .find(|line| line.account.ends_with("ErhalteneAnzahlungen"))
+        .map_or(0, |line| (-line.net_ct).max(0));
+
     let row = sqlx::query(
         r"SELECT
-            -- pRAP: Abschläge collected in excess of billed amounts (deferred revenue)
-            COALESCE(SUM(CASE WHEN balance_ct < 0 THEN ABS(balance_ct) ELSE 0 END), 0) AS prap_ct,
-            -- Total monthly Abschlag commitment across all active accounts
             COALESCE(SUM(CASE WHEN abschlag_ct > 0 THEN abschlag_ct ELSE 0 END), 0) AS abschlag_total_ct,
-            -- Count of accounts with active advance payments
             COUNT(*) FILTER (WHERE abschlag_ct > 0) AS accounts_with_advance
           FROM accounts
           WHERE tenant = $1",
@@ -1806,7 +1825,6 @@ pub async fn compute_abgrenzung(pool: &PgPool, tenant: &str) -> anyhow::Result<(
     .await
     .context("compute_abgrenzung")?;
 
-    let prap: i64 = row.try_get("prap_ct")?;
     let total: i64 = row.try_get("abschlag_total_ct")?;
     let count: i64 = row.try_get("accounts_with_advance")?;
     Ok((prap, total, count))
@@ -4074,4 +4092,406 @@ pub async fn record_bank_import(
     .await
     .context("record_bank_import")?;
     Ok(())
+}
+
+// ── Abschlagsforderungen (§ 40 Abs. 1 EnWG / § 14 Abs. 5 UStG) ────────────────
+
+/// The demand reference for one month's Abschlag, which doubles as the ledger
+/// idempotency key — so a re-run of the Abschlagslauf is a no-op on both the
+/// register row and the posting.
+#[must_use]
+pub fn abschlag_reference(malo_id: &str, periode: Date) -> String {
+    format!(
+        "ABSCHLAG-{malo_id}-{:04}-{:02}",
+        periode.year(),
+        periode.month() as u8
+    )
+}
+
+/// One demanded advance, with what the settling invoice needs to deduct it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AbschlagForderung {
+    /// The demand reference (`ABSCHLAG-{malo}-{YYYY}-{MM}`).
+    pub reference: String,
+    /// First day of the month the advance covers.
+    pub periode: Date,
+    /// When payment was owed.
+    pub faellig_am: Date,
+    /// Gross amount demanded, in EUR-cent.
+    pub betrag_ct: i64,
+    /// The USt rate contained in `betrag_ct`, as a fraction.
+    pub ust_satz: rust_decimal::Decimal,
+    /// Still open after FIFO clearing, in EUR-cent. `0` means **vereinnahmt** —
+    /// the only kind § 14 Abs. 5 Satz 2 UStG lets a settlement deduct.
+    pub offen_ct: i64,
+    /// The Rechnungsnummer of the invoice that already absorbed this advance,
+    /// if any. A second settling invoice must not deduct it again.
+    pub verrechnet_mit: Option<String>,
+}
+
+impl AbschlagForderung {
+    /// Whether the advance has actually been received.
+    #[must_use]
+    pub fn vereinnahmt(&self) -> bool {
+        self.offen_ct <= 0
+    }
+
+    /// Whether a settling invoice may still deduct it: received and not yet
+    /// absorbed by an earlier one.
+    #[must_use]
+    pub fn deductible(&self) -> bool {
+        self.vereinnahmt() && self.verrechnet_mit.is_none()
+    }
+}
+
+/// Raise one month's Abschlagsforderung: a Kontokorrent **debit** against
+/// Erhaltene Anzahlungen, plus its register row.
+///
+/// The advance is a demand, not a receipt — the money arrives later as a
+/// `ZAHLUNG` credit that clears this debit FIFO.
+///
+/// Idempotent on `ABSCHLAG-{malo}-{YYYY}-{MM}`: the ledger post replays as a
+/// no-op and the register insert is `ON CONFLICT DO NOTHING`.
+///
+/// # Errors
+///
+/// Propagates ledger and database errors.
+#[allow(clippy::too_many_arguments)]
+pub async fn raise_abschlagsforderung(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    account: &AccountRow,
+    periode: Date,
+    faellig_am: Date,
+    booking_date: Date,
+) -> anyhow::Result<(String, Uuid)> {
+    anyhow::ensure!(
+        account.abschlag_ct > 0,
+        "abschlag_ct must be positive to raise a demand"
+    );
+    let reference = abschlag_reference(&account.malo_id, periode);
+    let entry_id = post_entry(
+        ledger,
+        pool,
+        tenant,
+        &account.malo_id,
+        &account.lf_mp_id,
+        "ABSCHLAG",
+        // DEBIT: the customer owes the advance until they pay it.
+        account.abschlag_ct,
+        &reference,
+        None,
+        Some(&reference),
+        booking_date,
+        faellig_am,
+        Some(&format!(
+            "Abschlagsforderung {:04}-{:02}",
+            periode.year(),
+            periode.month() as u8
+        )),
+        None,
+    )
+    .await?;
+
+    sqlx::query(
+        r"INSERT INTO abschlag_forderungen
+            (tenant, reference, account_id, malo_id, lf_mp_id,
+             periode, faellig_am, betrag_ct, ust_satz, entry_id)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+          ON CONFLICT (tenant, reference) DO NOTHING",
+    )
+    .bind(tenant)
+    .bind(&reference)
+    .bind(account.account_id)
+    .bind(&account.malo_id)
+    .bind(&account.lf_mp_id)
+    .bind(periode)
+    .bind(faellig_am)
+    .bind(account.abschlag_ct)
+    .bind(account.abschlag_ust_satz)
+    .bind(entry_id)
+    .execute(pool)
+    .await
+    .context("record abschlag_forderungen")?;
+
+    Ok((reference, entry_id))
+}
+
+/// The advances of one Marktlokation with `periode` in `[from, to]`, oldest
+/// first, each with its open residual. [`AbschlagForderung::deductible`] selects
+/// the ones § 14 Abs. 5 Satz 2 UStG allows a settlement to deduct.
+///
+/// # Errors
+///
+/// Propagates database and ledger errors.
+pub async fn list_abschlag_forderungen(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+    from: Date,
+    to: Date,
+) -> anyhow::Result<Vec<AbschlagForderung>> {
+    let rows = sqlx::query(
+        r"SELECT reference, periode, faellig_am, betrag_ct, ust_satz, entry_id, verrechnet_mit
+          FROM abschlag_forderungen
+          WHERE tenant = $1 AND malo_id = $2 AND lf_mp_id = $3
+            AND periode >= $4 AND periode <= $5
+          ORDER BY periode, reference",
+    )
+    .bind(tenant)
+    .bind(malo_id)
+    .bind(lf_mp_id)
+    .bind(from)
+    .bind(to)
+    .fetch_all(pool)
+    .await
+    .context("list_abschlag_forderungen")?;
+
+    // One ledger read for the whole set: the open debit residuals of this
+    // account, keyed by entry. An advance absent from the map is fully cleared.
+    let residuals: std::collections::HashMap<Uuid, i64> = ledger
+        .open_receivables(lf_mp_id, malo_id)
+        .await?
+        .into_iter()
+        .map(|r| (r.entry_id, r.outstanding_ct))
+        .collect();
+
+    let mut out = Vec::with_capacity(rows.len());
+    for r in rows {
+        let entry_id: Uuid = r.try_get("entry_id")?;
+        out.push(AbschlagForderung {
+            reference: r.try_get("reference")?,
+            periode: r.try_get("periode")?,
+            faellig_am: r.try_get("faellig_am")?,
+            betrag_ct: r.try_get("betrag_ct")?,
+            ust_satz: r.try_get("ust_satz")?,
+            offen_ct: residuals.get(&entry_id).copied().unwrap_or(0),
+            verrechnet_mit: r.try_get("verrechnet_mit")?,
+        });
+    }
+    Ok(out)
+}
+
+/// Mark advances as absorbed by a settling invoice and book the
+/// `ABSCHLAG_VERRECHNUNG` credit that takes them off the Kontokorrent.
+///
+/// The invoice is booked at its **gross**, because that is what it charges for
+/// the supply; the advances it deducts were already debited when demanded, so
+/// without this credit the customer would owe the year twice. The contra is
+/// Erhaltene Anzahlungen — the advance obligation is discharged by the invoice
+/// that bills the supply.
+///
+/// `deducted_ct` is `gesamtbrutto − zuZahlen`: what the document itself says it
+/// deducted, never a figure recomputed here, so the ledger cannot disagree with
+/// the paper. Idempotent on `idempotency`.
+///
+/// # Errors
+///
+/// Propagates ledger and database errors.
+#[allow(clippy::too_many_arguments)]
+pub async fn verrechne_abschlaege(
+    ledger: &PgLedger,
+    pool: &PgPool,
+    tenant: &str,
+    malo_id: &str,
+    lf_mp_id: &str,
+    deducted_ct: i64,
+    rechnungsnummer: &str,
+    idempotency: &str,
+    booking_date: Date,
+) -> anyhow::Result<Uuid> {
+    anyhow::ensure!(deducted_ct > 0, "nothing deducted");
+    let entry_id = post_entry(
+        ledger,
+        pool,
+        tenant,
+        malo_id,
+        lf_mp_id,
+        "ABSCHLAG_VERRECHNUNG",
+        // CREDIT: the advances are subsumed by the invoice that bills the supply.
+        -deducted_ct,
+        idempotency,
+        Some(idempotency),
+        Some(rechnungsnummer),
+        booking_date,
+        booking_date,
+        Some("Verrechnung geleisteter Abschläge"),
+        None,
+    )
+    .await?;
+
+    // Stamp the register oldest-first up to the deducted total, so a later
+    // invoice cannot deduct the same advance again. Only received advances are
+    // stamped; an unpaid one stays open and stays a receivable.
+    let open = list_abschlag_forderungen(
+        ledger,
+        pool,
+        tenant,
+        malo_id,
+        lf_mp_id,
+        Date::from_calendar_date(1970, time::Month::January, 1)?,
+        booking_date,
+    )
+    .await?;
+    let mut remaining = deducted_ct;
+    for a in open.into_iter().filter(AbschlagForderung::deductible) {
+        if remaining <= 0 {
+            break;
+        }
+        sqlx::query(
+            r"UPDATE abschlag_forderungen
+                 SET verrechnet_mit = $3, verrechnet_at = now()
+               WHERE tenant = $1 AND reference = $2 AND verrechnet_mit IS NULL",
+        )
+        .bind(tenant)
+        .bind(&a.reference)
+        .bind(rechnungsnummer)
+        .execute(pool)
+        .await
+        .context("stamp abschlag_forderungen")?;
+        remaining -= a.betrag_ct;
+    }
+    if remaining > 0 {
+        // More deducted than the register accounts for. Not a reason to refuse
+        // the booking — the document is issued and says what it says — but a
+        // reconciliation signal an operator has to see.
+        tracing::warn!(
+            malo_id,
+            rechnungsnummer,
+            deducted_ct,
+            unaccounted_ct = remaining,
+            "accountingd: settling invoice deducted more than the received, unabsorbed \
+             advances on record — the difference is booked but attributable to no demand"
+        );
+    }
+    Ok(entry_id)
+}
+
+// ── Mahnung documents ─────────────────────────────────────────────────────────
+
+/// Open dunning cases that have not been communicated to the customer.
+///
+/// The candidate scan for [`crate::mahnung::issue_pending`]; `dokument_id IS
+/// NULL` is the whole predicate.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_undocumented_dunning_cases(
+    pool: &PgPool,
+    tenant: &str,
+    limit: i64,
+) -> anyhow::Result<Vec<crate::mahnung::PendingMahnung>> {
+    let rows = sqlx::query(
+        r"SELECT dc.id, dc.account_id, dc.stufe, dc.due_date, dc.issued_at,
+                 dc.sperrandrohung_at, dc.geplantes_sperrdatum,
+                 a.malo_id, a.lf_mp_id, a.kunden_nr, a.iban
+          FROM dunning_cases dc
+          JOIN accounts a ON a.account_id = dc.account_id
+          WHERE dc.tenant = $1
+            AND dc.resolved_at IS NULL
+            AND dc.dokument_id IS NULL
+            AND a.anonymized_at IS NULL
+          ORDER BY dc.issued_at
+          LIMIT $2",
+    )
+    .bind(tenant)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("list_undocumented_dunning_cases")?;
+
+    rows.iter()
+        .map(|r| {
+            Ok(crate::mahnung::PendingMahnung {
+                case_id: r.try_get("id")?,
+                account_id: r.try_get("account_id")?,
+                malo_id: r.try_get("malo_id")?,
+                lf_mp_id: r.try_get("lf_mp_id")?,
+                kunden_nr: r.try_get("kunden_nr")?,
+                stufe: r.try_get("stufe")?,
+                due_date: r.try_get("due_date")?,
+                issued_at: r.try_get("issued_at")?,
+                sperrandrohung_at: r.try_get("sperrandrohung_at")?,
+                geplantes_sperrdatum: r.try_get("geplantes_sperrdatum")?,
+                iban: r.try_get("iban")?,
+            })
+        })
+        .collect()
+}
+
+/// Stamp the document that communicated a dunning case.
+///
+/// Written after outputd recorded it, so a crash between the two leaves the
+/// case undocumented and the sweep retries — safe, because outputd keys the
+/// document on the case id and answers the second call with the first.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn record_dunning_document(
+    pool: &PgPool,
+    tenant: &str,
+    case_id: Uuid,
+    document_id: Uuid,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        r"UPDATE dunning_cases
+             SET dokument_id = $3, dokument_issued_at = now()
+           WHERE tenant = $1 AND id = $2 AND dokument_id IS NULL",
+    )
+    .bind(tenant)
+    .bind(case_id)
+    .bind(document_id)
+    .execute(pool)
+    .await
+    .context("record_dunning_document")?;
+    Ok(())
+}
+
+// ── Jahresabschluss automation (§ 40b Abs. 1 EnWG) ────────────────────────────
+
+pub const LOCK_JAHRESABSCHLUSS: i64 = 0x_acc0_0004;
+
+/// Accounts whose settlement for `year` has not run yet.
+///
+/// Keyed on the absence of a `jahresabschluss_runs` row — the same guard the
+/// endpoint honours, so the worker and a manual `POST` cannot disagree about
+/// what is outstanding. Anonymised accounts are excluded: a GDPR Art. 17
+/// erasure destroyed the attribution a settlement would be addressed to.
+///
+/// # Errors
+///
+/// Propagates database errors.
+pub async fn list_jahresabschluss_candidates(
+    pool: &PgPool,
+    tenant: &str,
+    year: i16,
+    limit: i64,
+) -> anyhow::Result<Vec<(String, String)>> {
+    let rows = sqlx::query(
+        r"SELECT a.malo_id, a.lf_mp_id
+          FROM accounts a
+          WHERE a.tenant = $1
+            AND a.anonymized_at IS NULL
+            AND NOT EXISTS (
+                SELECT 1 FROM jahresabschluss_runs r
+                WHERE r.tenant = a.tenant AND r.malo_id = a.malo_id
+                  AND r.billing_year = $2
+            )
+          ORDER BY a.malo_id
+          LIMIT $3",
+    )
+    .bind(tenant)
+    .bind(year)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("list_jahresabschluss_candidates")?;
+    rows.iter()
+        .map(|r| Ok((r.try_get("malo_id")?, r.try_get("lf_mp_id")?)))
+        .collect()
 }

@@ -1,6 +1,6 @@
 [package]
 name        = "portald"
-description = "Customer portal read-model gateway (LF role). Aggregates Lastgang (edmd), invoices (billingd), account balance (accountingd), VersorgungsStatus (marktd), and EEG settlement (einsd) into a single customer-facing REST/SSE API. OIDC bearer-token authentication. Port :9480."
+description = "Customer portal read-model gateway (LF role). Aggregates Lastgang (edmd), invoices (billingd), the document inbox (outputd), account balance (accountingd), VersorgungsStatus (marktd), and EEG settlement (einsd) into a single customer-facing REST/SSE API. OIDC bearer-token authentication. Port :9480."
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true

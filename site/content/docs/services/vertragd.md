@@ -347,7 +347,7 @@ what was overwritten, by whom and why.
 |---|---|---|
 | Outbound | 5 s | Drains `outbound_tasks`, up to 64 per wake-up |
 | Outbox | per `mako_service::outbox` | Delivers `de.vertrag.*` to the ERP webhook |
-| Preisanpassung | daily | Sends the § 41 Abs. 5 notice for every scheduled Tarifwechsel whose notice is still owed |
+| Preisanpassung | daily | Sends the § 41 Abs. 5 notice for every scheduled Tarifwechsel whose notice is still owed, and issues it as a document where `outputd` is configured |
 | Auto-renewal | daily | Announces the extension once per term, then applies it |
 | Ablauf | daily | Ends supply whose Lieferende has passed and closes the contract behind it; announces a term or price guarantee running out, once per date |
 
@@ -360,6 +360,42 @@ skipped it entirely whenever the worker missed the one day the window was open.
 The event carries the regime that applied, whether the statutory lead was
 actually met, and the Sonderkündigungsrecht § 41 Abs. 5 Satz 4 EnWG grants the
 customer to the day the change lands, free of charge.
+
+Where `outputd_url` is configured the notice is additionally **rendered and
+delivered** as a `PREISANPASSUNG` document — portal, e-mail and post as the
+customer's master data allows — and the document id is stamped on the slice. The
+CloudEvent goes out either way and first, since it is the durable obligation and
+must not depend on a renderer being up.
+
+Three things make a notice unissuable, each logged with what is missing rather
+than silently skipped: no `[absender]` configured (§ 126b BGB names the
+declarant), no customer on file for the Marktlokation (§ 126b names the
+recipient), and **no announced prices**.
+
+That last one is the substantive constraint. § 41 Abs. 5 Satz 1 wants the
+**Umfang** of the change, which one sentence cannot state — a customer whose
+Arbeitspreis rises while their Grundpreis falls has to see both — so a notice
+that lists no price lines is not a valid Preisänderungsanzeige and is not
+issued. The lines travel with the Tarifwechsel that schedules the change:
+
+```bash
+curl -X POST …/tarifwechsel -d '{
+  "komp_id": "…", "new_product_code": "STROM-PREMIUM-2027",
+  "wirksamkeit": "2026-11-01",
+  "grund": "Gestiegene Beschaffungskosten und geänderte Netzentgelte.",
+  "preise": [
+    {"bezeichnung":"Arbeitspreis","einheit":"ct/kWh","bisher":"34.90","neu":"37.20"},
+    {"bezeichnung":"Grundpreis","einheit":"EUR/Jahr","bisher":"143.88","neu":"131.40"}
+  ]
+}'
+```
+
+The caller supplies them because the caller chose the tariff and holds both
+price sheets — `vertragd` owns which product a Marktlokation is on, `tarifbd`
+owns what it costs, and the two are deliberately uncoupled. More to the point,
+what a notice *said* is a fact about the notice: a catalogue lookup years later
+answers what the price is, not what the customer was told, which is exactly the
+question a Schlichtungsstelle asks.
 
 ### The automatic extension
 

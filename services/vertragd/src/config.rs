@@ -48,6 +48,23 @@ pub struct VertragdConfig {
     #[serde(default)]
     pub inbound_secret: Option<String>,
 
+    /// `outputd` — renders and delivers the § 41 Abs. 5 EnWG
+    /// Preisänderungsanzeige.
+    ///
+    /// Absent → the notice is emitted as a CloudEvent only, and a deployment
+    /// without an ERP webhook then schedules price changes and tells nobody.
+    pub outputd_url: Option<String>,
+    pub outputd_api_key: Option<String>,
+
+    /// `[absender]` — the operator as § 126b BGB's declarant, printed on every
+    /// customer notice this service issues.
+    ///
+    /// Configured rather than derived: `vertragd` holds customers, not the
+    /// operator's own letterhead. Absent → the notice is not issued, because a
+    /// Textform declaration that does not name its declarant is not Textform.
+    #[serde(default)]
+    pub absender: Option<AbsenderConfig>,
+
     /// MCP server authentication (API key, OIDC, or dev mode).
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
@@ -126,4 +143,24 @@ impl mako_service::ServiceConfig for VertragdConfig {
     fn bind_addr(&self) -> String {
         format!("0.0.0.0:{}", self.port.unwrap_or(9780))
     }
+}
+
+/// The operator's own identity on a customer notice — § 126b BGB's declarant.
+#[derive(Debug, Deserialize, Clone)]
+pub struct AbsenderConfig {
+    /// The legal name, as it must appear on the page.
+    pub name: Option<String>,
+    /// Street and house number.
+    pub line1: Option<String>,
+    pub post_code: Option<String>,
+    pub city: Option<String>,
+    /// ISO 3166-1 alpha-2. Omitted on a domestic letter.
+    pub country: Option<String>,
+    pub vat_id: Option<String>,
+    /// The department a customer replies to — printed beside the phone number,
+    /// and named in the § 41 Abs. 5 notice as where to exercise the
+    /// Sonderkündigungsrecht.
+    pub contact_name: Option<String>,
+    pub phone: Option<String>,
+    pub email: Option<String>,
 }

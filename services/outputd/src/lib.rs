@@ -15,11 +15,22 @@
 //! |---|---|
 //! | `config` | TOML + env configuration |
 //! | `document` | Renderer sandbox, ZUGFeRD carrier, publish gates, view contracts |
+//! | `delivery` | Issued documents, the channels they go out on, and the evidence |
 //! | `error` | `OutputError` — the one coded JSON envelope every route answers with |
-//! | `handlers` | Axum HTTP handlers: template CRUD + render |
+//! | `handlers` | Axum HTTP handlers: template CRUD, render, issue, delivery |
 //! | `template_store` | Content-addressed, append-only templates |
+//!
+//! # Rendering is not communicating
+//!
+//! `POST /render/{kind}` produces bytes and forgets them — the right shape for a
+//! preview, a re-print, or a caller with its own archive.
+//! `POST /documents/{kind}` is the same render **recorded and queued**, which is
+//! what makes two regulated questions answerable: reproduce the invoice exactly
+//! as issued (§ 14 Abs. 1 UStG, § 147 AO — eight years, unverändert), and show
+//! that the § 41f EnWG notice actually reached the customer. See `delivery`.
 
 pub mod config;
+pub mod delivery;
 pub mod document;
 pub mod error;
 pub mod handlers;

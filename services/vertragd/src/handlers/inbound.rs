@@ -411,18 +411,35 @@ async fn resolve_kunde(
         .and_then(serde_json::Value::as_str)
         .unwrap_or("Unbekannt")
         .to_owned();
+    let contact_email = data
+        .get("contact_email")
+        .and_then(serde_json::Value::as_str)
+        .map(str::to_owned);
+    // A real BO4E `Geschaeftspartner`, so `fetch_rechnungsempfaenger_by_malo`'s
+    // typed read finds it: a CPQ prospect is an organisation, so the name is
+    // `organisationsname`, and the contact address rides as a `Kontaktweg`
+    // where `outputd` can find it.
+    let mut geschaeftspartner = serde_json::json!({
+        "_typ": "GESCHAEFTSPARTNER",
+        "organisationsname": name,
+    });
+    if let Some(ref mail) = contact_email {
+        geschaeftspartner["kontaktwege"] = serde_json::json!([{
+            "_typ": "KONTAKTWEG",
+            "kontaktart": "E_MAIL",
+            "kontaktwert": mail,
+            "istBevorzugterKontaktweg": true,
+        }]);
+    }
     let input = pg::CreateKundeInput {
         kunden_nr: Some(angebotsnummer.to_owned()),
         oidc_sub: None,
-        email: data
-            .get("contact_email")
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned),
+        email: contact_email,
         kundentyp: "B2B_SLP".to_owned(),
         // A CPQ quotation is a commercial one; the § 41 Abs. 5 and § 309 Nr. 9
         // consumer rules do not apply to it.
         haushaltskunde: Some(false),
-        geschaeftspartner: Some(serde_json::json!({ "_typ": "GESCHAEFTSPARTNER", "name1": name })),
+        geschaeftspartner: Some(geschaeftspartner),
         organisations_id: None,
         umsatzsteuer_id: None,
         zahlungsziel_tage: Some(30),

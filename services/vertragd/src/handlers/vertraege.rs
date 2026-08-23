@@ -699,6 +699,10 @@ pub async fn tarifwechsel(
     //
     // The notice is owed only for a change that has not happened yet; a
     // retroactive correction announces a date that has already passed.
+    let preise = (!input.preise.is_empty())
+        .then(|| serde_json::to_value(&input.preise))
+        .transpose()
+        .map_err(|e| ApiError::Internal(e.into()))?;
     pg::produkte::tarifwechsel(
         &mut tx,
         ctx.tenant(),
@@ -707,6 +711,7 @@ pub async fn tarifwechsel(
         input.wirksamkeit,
         input.grund.as_deref(),
         !is_future,
+        preise.as_ref(),
     )
     .await
     .map_err(|e| ApiError::conflict(e.to_string()))?;

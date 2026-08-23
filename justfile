@@ -40,7 +40,7 @@ test-integration name:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-tarifbd-db test-marktd-db test-processd-db
+test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-tarifbd-db test-marktd-db test-processd-db test-sperrd-db
 
 # Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
 # filesystem Iceberg warehouse).
@@ -59,6 +59,9 @@ test-accountingd-db:
 
 # Execution-queue integration tests for sperrd (ORDERS 17115/17117 ingest,
 # the claim guard, and the IFTSTA 21039 retry queue) against real PostgreSQL.
+# In `test-db` since 2026-08: it was defined and listed nowhere, so the one
+# suite covering the §41f disconnection execution path ran only if somebody
+# typed its name.
 test-sperrd-db:
     cargo test -p sperrd --test db_scenarios -- --include-ignored --test-threads=1
 

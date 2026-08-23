@@ -1,6 +1,6 @@
 +++
 title = "portald Operator Guide"
-description = "portald operator guide: customer portal read-model gateway (LF role). Aggregates Lastgang, invoices, account ledger, supply status and EEG settlement into one customer-facing REST API, and proxies the §41 EnWG self-service writes. Every route resolves customer ownership through vertragd. Port :9480."
+description = "portald operator guide: customer portal read-model gateway (LF role). Aggregates Lastgang, invoices, the document inbox, account ledger, supply status and EEG settlement into one customer-facing REST API, and proxies the §41 EnWG self-service writes. Every route resolves customer ownership through vertragd. Port :9480."
 weight = 36
 [extra]
 mermaid = true
@@ -22,6 +22,7 @@ graph LR
     accountingd["accountingd :9380<br/>ledger · SEPA"]
     marktd["marktd :8180<br/>VersorgungsStatus"]
     einsd["einsd :9180<br/>EEG settlement"]
+    outputd["outputd :9880<br/>issued documents"]
 
     customer -->|"GET /portal/{malo_id}/…<br/>Bearer JWT"| portald
     portald -->|"1. authenticate?malo_id=…<br/>(customer token forwarded)"| vertragd
@@ -30,6 +31,7 @@ graph LR
     portald --> accountingd
     portald --> marktd
     portald --> einsd
+    portald --> outputd
 ```
 
 Port: **`:9480`**
@@ -97,6 +99,8 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/lastgang?from=&to=` | `edmd` — BO4E `Lastgang` array |
 | `GET` | `/invoices?limit=&outcome=` | `billingd` — page size clamped to 100 |
 | `GET` | `/invoices/{record_id}/download` | `billingd` — XRechnung 3.0 CII XML (EN 16931) |
+| `GET` | `/dokumente?kind=&limit=` | `outputd` — the **document inbox**: what was issued and sent |
+| `GET` | `/dokumente/{document_id}` | `outputd` — the bytes as issued; opening it records the portal read receipt |
 | `GET` | `/balance` | `accountingd` — open-items balance |
 | `GET` | `/kontoauszug` | `accountingd` — full statement (§ 666 BGB) |
 | `GET` | `/vorauszahlung` | `accountingd` — Abschlag schedule (§ 40 Abs. 1 EnWG) |
@@ -110,6 +114,17 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `PUT` | `/sepa` | `accountingd` |
 
 `/health/live`, `/health/ready` and `/metrics` come from the service runner.
+
+### Invoices and documents are two different lists
+
+`/invoices` is what `billingd` **calculated** — drafts the risk gate is holding
+included. `/dokumente` is what the customer was **sent**, byte for byte, with the
+delivery evidence beside it. An inbox shows the second; opening a document there
+records the read receipt a § 41f EnWG dispute asks about, which is more than
+§ 126b BGB requires and exactly what is asked for afterwards.
+
+Both are scoped twice: portald forwards the authorised MaLo, and `outputd`
+refuses a document query that names neither a MaLo nor a Kundennummer.
 
 ---
 

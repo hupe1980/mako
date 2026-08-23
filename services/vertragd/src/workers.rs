@@ -96,6 +96,12 @@ impl Worker {
 /// continues, because one bad row must not hold up every other notice.
 pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Result<()> {
     let today = time::OffsetDateTime::now_utc().date();
+    let outputd = cfg
+        .outputd_url
+        .as_deref()
+        .filter(|u| !u.is_empty())
+        .map(|u| crate::dokumente::OutputdClient::new(u, cfg.outputd_api_key.clone()));
+    let outputd = outputd.as_ref();
 
     for row in pg::offene_preisanpassungen(pool, &cfg.tenant, today).await? {
         let regime = domain::preisanpassungsregime(
@@ -154,8 +160,157 @@ pub async fn preisanpassung(pool: &PgPool, cfg: &VertragdConfig) -> anyhow::Resu
             komp_id = %row.komp_id, wirksamkeit = %row.wirksam_ab,
             frist = %regime.bezeichnung, "vertragd: Preisänderungsanzeige versandt"
         );
+
+        // ── The document ─────────────────────────────────────────────────────
+        // Outside the transaction, and after the event: the CloudEvent is the
+        // durable obligation and must not depend on a renderer being up. This
+        // is the *additional* path — an operator with no ERP gets a letter
+        // instead of nothing.
+        if let Some(outputd) = outputd {
+            match issue_preisanpassung_document(pool, cfg, outputd, &row, &regime).await {
+                Ok(Some(document_id)) => {
+                    if let Err(e) =
+                        pg::produkte::mark_dokument(pool, row.slice_id, document_id).await
+                    {
+                        tracing::warn!(slice_id = %row.slice_id, error = %e, "vertragd: could not stamp the notice document id");
+                    }
+                    tracing::info!(
+                        komp_id = %row.komp_id, %document_id,
+                        "vertragd: Preisänderungsanzeige als Dokument versandt"
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!(
+                        komp_id = %row.komp_id, error = %e,
+                        "vertragd: the § 41 Abs. 5 notice document could not be issued — the \
+                         CloudEvent went out, so an ERP-driven letter is unaffected"
+                    );
+                }
+            }
+        }
     }
     Ok(())
+}
+
+/// Build and issue the § 41 Abs. 5 EnWG notice for one scheduled change.
+///
+/// `Ok(None)` — deliberately not an error — when the notice cannot be made
+/// valid:
+///
+/// * **no announced prices** on the slice. § 41 Abs. 5 Satz 1 wants the
+///   *Umfang* of the change, and a page that states none is not a
+///   Preisänderungsanzeige. Scheduling a Tarifwechsel with `preise` supplies
+///   them.
+/// * **no addressee** in the customer master. § 126b BGB names the recipient as
+///   part of the form.
+/// * **no configured `[absender]`**. § 126b names the *declarant* too, and a
+///   notice that does not say who is declaring is not Textform.
+///
+/// Each is logged with what is missing, because "the notice did not go out" has
+/// to be answerable without reading code.
+async fn issue_preisanpassung_document(
+    pool: &PgPool,
+    cfg: &VertragdConfig,
+    outputd: &crate::dokumente::OutputdClient,
+    row: &pg::AnzupassenderPreis,
+    regime: &domain::Preisanpassungsregime,
+) -> anyhow::Result<Option<uuid::Uuid>> {
+    use crate::dokumente::{PartyView, PreisPosition, PreisanpassungView, SonderkuendigungView};
+
+    if cfg.absender.is_none() {
+        tracing::warn!(
+            komp_id = %row.komp_id,
+            "vertragd: no [absender] configured — the § 41 Abs. 5 notice cannot name its              declarant (§ 126b BGB), so no document was issued"
+        );
+        return Ok(None);
+    }
+    let Some(positionen) = row
+        .angekuendigte_preise
+        .clone()
+        .and_then(|v| serde_json::from_value::<Vec<PreisPosition>>(v).ok())
+        .filter(|p: &Vec<PreisPosition>| !p.is_empty())
+    else {
+        tracing::warn!(
+            komp_id = %row.komp_id, wirksamkeit = %row.wirksam_ab,
+            "vertragd: the scheduled Tarifwechsel carries no announced prices, so the § 41              Abs. 5 Satz 1 Umfang cannot be stated and no notice document was issued —              supply `preise` on POST /vertraege/{{id}}/tarifwechsel"
+        );
+        return Ok(None);
+    };
+
+    let Some(malo_id) = row.malo_id.as_deref() else {
+        tracing::warn!(
+            komp_id = %row.komp_id,
+            "vertragd: the component has no Marktlokation, so the notice cannot be addressed"
+        );
+        return Ok(None);
+    };
+    let Some(buyer) = pg::fetch_rechnungsempfaenger_by_malo(pool, malo_id, &cfg.tenant).await?
+    else {
+        tracing::warn!(
+            komp_id = %row.komp_id, malo_id,
+            "vertragd: no customer master for this Marktlokation — the § 41 Abs. 5 notice              cannot be addressed (§ 126b BGB), so no document was issued"
+        );
+        return Ok(None);
+    };
+
+    let today = time::OffsetDateTime::now_utc().date();
+    let mut channels = vec!["PORTAL".to_owned()];
+    if buyer.email.is_some() {
+        channels.push("EMAIL".to_owned());
+    }
+    if buyer.post_code.is_some() && buyer.city.is_some() {
+        channels.push("POST".to_owned());
+    }
+
+    let view = PreisanpassungView {
+        datum: today.to_string(),
+        absender: crate::dokumente::absender(cfg),
+        empfaenger: PartyView {
+            name: buyer.name,
+            vat_id: buyer.vat_id,
+            line1: buyer.line1,
+            post_code: buyer.post_code,
+            city: buyer.city,
+            country: buyer.country,
+            email: buyer.email,
+            ..PartyView::default()
+        },
+        vertragsnummer: Some(row.vertrags_nr.clone()),
+        malo_id: Some(malo_id.to_owned()),
+        sparte: Some(row.sparte.clone()),
+        wirksam_ab: row.wirksam_ab.to_string(),
+        // The operator's own words when the Tarifwechsel carried a `grund`;
+        // otherwise the neutral statement the statute's minimum needs. Never
+        // invented prose about *why* prices moved — that is the operator's
+        // assertion to make, not this service's.
+        anlass: row
+            .grund
+            .clone()
+            .unwrap_or_else(|| "Anpassung der Preisbestandteile Ihres Liefervertrags.".to_owned()),
+        ankuendigungsfrist: format!("{} ({})", regime.bezeichnung, regime.rechtsgrundlage),
+        positionen,
+        // § 41 Abs. 5 Satz 4: without notice, to the day the change takes
+        // effect, free of charge. Satz 1 obliges the supplier to state it in
+        // this same notice — which is why it is not optional in the view.
+        sonderkuendigung: SonderkuendigungView {
+            wirksam_zum: row.wirksam_ab.to_string(),
+            rechtsgrundlage: "§ 41 Abs. 5 Satz 4 EnWG".to_owned(),
+            entgeltfrei: true,
+        },
+        hinweis: None,
+    };
+
+    let issued = outputd
+        .issue_preisanpassung(
+            &view,
+            &row.slice_id.to_string(),
+            Some(malo_id),
+            &channels,
+            row.wirksam_ab,
+        )
+        .await?;
+    Ok(Some(issued.document_id))
 }
 
 // ── Auto-renewal (§ 309 Nr. 9 lit. b BGB) ────────────────────────────────────

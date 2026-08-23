@@ -73,6 +73,7 @@ pub async fn open_initial(
 /// # Errors
 ///
 /// Refuses a change behind a later slice; otherwise propagates storage errors.
+#[allow(clippy::too_many_arguments)]
 pub async fn tarifwechsel(
     conn: &mut sqlx::PgConnection,
     tenant: &str,
@@ -81,6 +82,9 @@ pub async fn tarifwechsel(
     ab: Date,
     grund: Option<&str>,
     notif_sent: bool,
+    // § 41 Abs. 5 Satz 1 EnWG — the announced price lines, as the notice
+    // states them. `None` leaves whatever the slice already carried.
+    preise: Option<&serde_json::Value>,
 ) -> Result<()> {
     let spaeter: Option<(Date,)> = sqlx::query_as(
         "SELECT gueltig_von FROM komponenten_produkte
@@ -115,7 +119,9 @@ pub async fn tarifwechsel(
     let updated = sqlx::query(
         "UPDATE komponenten_produkte
             SET product_code = $3, grund = COALESCE($4, grund),
-                preisanpassung_notif_sent = $5, gueltig_bis = NULL, updated_at = now()
+                preisanpassung_notif_sent = $5,
+                angekuendigte_preise = COALESCE($6, angekuendigte_preise),
+                gueltig_bis = NULL, updated_at = now()
           WHERE komp_id = $1 AND gueltig_von = $2",
     )
     .bind(komp_id)
@@ -123,6 +129,7 @@ pub async fn tarifwechsel(
     .bind(product_code)
     .bind(grund)
     .bind(notif_sent)
+    .bind(preise)
     .execute(&mut *conn)
     .await?
     .rows_affected();
@@ -130,8 +137,9 @@ pub async fn tarifwechsel(
     if updated == 0 {
         sqlx::query(
             "INSERT INTO komponenten_produkte
-                 (tenant, komp_id, product_code, gueltig_von, preisanpassung_notif_sent, grund)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+                 (tenant, komp_id, product_code, gueltig_von, preisanpassung_notif_sent,
+                  grund, angekuendigte_preise)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(tenant)
         .bind(komp_id)
@@ -139,6 +147,7 @@ pub async fn tarifwechsel(
         .bind(ab)
         .bind(notif_sent)
         .bind(grund)
+        .bind(preise)
         .execute(&mut *conn)
         .await?;
     }
@@ -247,6 +256,13 @@ pub struct AnzupassenderPreis {
     pub wirksam_ab: Date,
     pub vertragsart: String,
     pub haushaltskunde: bool,
+    /// The contract number as the customer knows it, for the notice.
+    pub vertrags_nr: String,
+    /// § 41 Abs. 5 Satz 1 EnWG — the announced price lines, as scheduled.
+    /// `None` means the change was scheduled without them; see the column
+    /// comment on `komponenten_produkte.angekuendigte_preise`.
+    pub angekuendigte_preise: Option<serde_json::Value>,
+    pub grund: Option<String>,
 }
 
 /// Slices taking effect after `heute` whose notice has not gone out.
@@ -265,7 +281,8 @@ pub async fn offene_preisanpassungen(
 ) -> Result<Vec<AnzupassenderPreis>> {
     Ok(sqlx::query_as::<_, AnzupassenderPreis>(
         r"SELECT p.id AS slice_id, p.komp_id, k.vertrag_id, v.kunden_id,
-                 k.malo_id, k.sparte,
+                 k.malo_id, k.sparte, v.vertrags_nr,
+                 p.angekuendigte_preise, p.grund,
                  p.product_code AS neues_produkt,
                  (SELECT vor.product_code FROM komponenten_produkte vor
                    WHERE vor.komp_id = p.komp_id AND vor.gueltig_von < p.gueltig_von
@@ -299,6 +316,33 @@ pub async fn mark_notif_sent(executor: impl sqlx::PgExecutor<'_>, slice_id: Uuid
           WHERE id = $1",
     )
     .bind(slice_id)
+    .execute(executor)
+    .await?;
+    Ok(())
+}
+
+/// Stamp the `outputd` document that communicated a price change.
+///
+/// Written after outputd has recorded the document, so a crash between the two
+/// leaves the slice undocumented and the worker retries — safe because outputd
+/// keys the document on the slice id and answers the second call with the
+/// first document.
+///
+/// # Errors
+///
+/// Propagates storage errors.
+pub async fn mark_dokument(
+    executor: impl sqlx::PgExecutor<'_>,
+    slice_id: Uuid,
+    dokument_id: Uuid,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE komponenten_produkte
+            SET dokument_id = $2, dokument_issued_at = now(), updated_at = now()
+          WHERE id = $1 AND dokument_id IS NULL",
+    )
+    .bind(slice_id)
+    .bind(dokument_id)
     .execute(executor)
     .await?;
     Ok(())

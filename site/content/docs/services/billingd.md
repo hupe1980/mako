@@ -597,6 +597,7 @@ the database.
 | Action | Routes | Who |
 |---|---|---|
 | `read-billing` | `GET /api/v1/billing…`, `/review-queue`, `/xrechnung`, `/ubl`, `/pdf` | any authenticated caller in the tenant |
+| `issue-billing` | `POST /api/v1/billing/{id}/versenden` | `LF`, `MSB`, `ESA` |
 | `preview-billing` | `POST …/preview` | any authenticated caller in the tenant |
 | `run-billing` | `/calculate`, `/tarifwechsel`, `/sammelrechnung/…`, `/ggv/…` | `LF`, `MSB`, `ESA` |
 | `settle-flexibility` | `POST /api/v1/billing/vpp/{vpp_id}` | `LF`, `MSB`, `ESA` |
@@ -775,6 +776,7 @@ sniffing the body to tell a structured refusal from a bare string.
 | `GET` | `/api/v1/billing/{id}/xrechnung` | CII XML of the stored model (via `en16931-formats`); BT-24 is plain EN 16931 for a retail invoice — only the B2G path declares XRechnung |
 | `GET` | `/api/v1/billing/{id}/ubl` | PEPPOL BIS Billing 3.0 UBL 2.1 (EN16931) |
 | `GET` | `/api/v1/billing/{id}/pdf` | ZUGFeRD PDF/A-3 — the page and the CII XML in one file. Pins the template on first render; a pinned document answers `ETag` + `Cache-Control: immutable`, so `If-None-Match` gets a `304` without a re-render |
+| `POST` | `/api/v1/billing/{id}/versenden` | **Issue it to the customer** — the same render, recorded in `outputd` for the § 147 AO eight years and queued on their channels. Idempotent on the Rechnungsnummer; a draft the risk gate holds is `409` |
 | `POST` | `/api/v1/billing/{id}/correction` | Stornorechnung; cancels the original and releases its period (§ 147 AO / GoBD) |
 | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice for mid-period price change (§41 EnWG) |
 | `POST` | `/api/v1/billing/sammelrechnung/{rv_id}` | B2B consolidated invoice for a Rahmenvertrag — whole run in one transaction, bundle scored by the risk gate |
@@ -1076,6 +1078,27 @@ document *says*, and proves it before anything crosses the boundary:
 Templates, the carrier mechanics, the publish gates and the external validation
 panel (veraPDF + Mustang) are documented in the
 [outputd operator guide](@/docs/services/outputd.md).
+
+### Sending it — `POST /api/v1/billing/{id}/versenden`
+
+`GET …/pdf` renders on demand, which answers neither question a supplier is
+actually asked. § 14 Abs. 1 Satz 2 UStG and § 147 Abs. 1 Nr. 2–3 AO keep the
+Rechnungsdoppel for eight years *in the form in which it was issued*, and a
+re-render follows today's template; § 40c Abs. 2 EnWG puts the invoice in the
+customer's hands within three or six weeks of the period end.
+
+`versenden` runs the same proof and payload and hands them to
+`POST /api/v1/documents/INVOICE`, which renders **inside the call that stores
+the bytes** and queues them on the customer's channels — portal always, e-mail
+where `vertragd` has an address. The record's template hash is pinned to the
+layout the sent document used. Idempotent on the Rechnungsnummer, so a retry
+returns the document already issued rather than sending the invoice twice; a
+draft the risk gate is holding answers `409`, because it has no booked
+receivable.
+
+The § 40b sweep does this per invoice when `[billing_runs] versand = true` (the
+default).
+
 ## Invoice content & arithmetic guarantees
 
 - **Rounding has one authority**: kaufmännisches Runden (DIN 1333, half away
@@ -1175,15 +1198,49 @@ a Storno's period is picked up again on the next sweep.
 Monthly audit lives in `billing_run_log`: one accumulated row per
 tenant/LF/month with three counters. `records_count` is what was billed,
 `errors_count` is what failed — any error pins the month `failed` — and
-`skipped_count` is what the sweep deliberately did **not** bill. An annual
-settlement is the usual skip: § 40 Abs. 1 EnWG requires it to itemise and
-deduct the paid Abschläge, the vertragd candidate carries none, and the
-postings live in `accountingd` *downstream* of billingd, so the sweep refuses
-rather than emitting a document stating the full year's gross with zero
-Vorauszahlungen (`[billing_runs] jahresrechnung = true` opts in anyway).
-Counting those refusals as errors marked every month `failed` for any operator
-with annual contracts and the default configuration — the audit signal buried
-under the configuration's own intended behaviour.
+`skipped_count` is what the sweep deliberately did **not** bill. A skip is not
+a fault: counted as an error it would mark every month `failed` for an operator
+with annual contracts.
+
+### Annual settlements and the advances they deduct
+
+§ 40 Abs. 1 EnWG requires a Jahresrechnung to itemise and deduct the paid
+Abschläge, and § 14 Abs. 5 Satz 2 UStG makes the rate each was raised at part of
+the deduction. The sweep reads both from `accountingd`
+(`GET /api/v1/accounts/{malo}/abschlaege`), already filtered to what a
+settlement may deduct: received (`vereinnahmte Teilentgelte`), not already
+absorbed by an earlier settlement, oldest first.
+
+That read does **not** invert the service graph. `accountingd` is downstream of
+billingd for *events* — an issued invoice becomes a receivable there — and
+billingd never asks it to compute anything; the advance register is customer
+account state only the ledger holds, exactly as SAP IS-U billing reads FI-CA
+advances. An unreachable `accountingd` is an **error**, not an empty list:
+billing the year's gross with no Vorauszahlungen looks like an ordinary invoice
+and demands money the customer already paid.
+
+Without `accountingd_url` configured there is no source at all, and settling
+cadences are skipped with the reason in the log. `[billing_runs] jahresrechnung
+= true` opts into emitting them anyway — for a deployment that genuinely
+collects no advances, where the deduction is empty because there is nothing to
+deduct.
+
+### Sending it
+
+`[billing_runs] versand` (default **true**) issues each invoice the sweep
+produces as an `outputd` document and queues it on the customer's channels.
+§ 40c Abs. 2 EnWG puts the invoice in the customer's hands within three weeks of
+the period end for monthly billing and six otherwise, so a nightly run that
+bills and does not send is a deadline nobody is keeping.
+
+The send happens **outside** the billing transaction. The invoice exists, its
+receivable is booked and its ERP event is enqueued; rendering and delivery fail
+on their own terms — no template rolled out, `outputd` down — and rolling back a
+billed period for that would re-bill it under a second Rechnungsnummer. A
+failure is logged at `error` and repeated by
+`POST /api/v1/billing/{id}/versenden`, which is idempotent on the
+Rechnungsnummer. A **held** invoice is never sent whatever the setting says: the
+risk gate withheld its issuance, so no receivable stands behind it.
 
 iMSys MaLos additionally receive the free monthly Abrechnungsinformation
 (§40b Abs. 2 EnWG) as `de.billing.abrechnungsinformation.monatlich`, enqueued

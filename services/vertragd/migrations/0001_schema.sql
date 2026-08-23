@@ -432,10 +432,35 @@ CREATE TABLE komponenten_produkte (
     -- went out. The first slice of a contract announces nothing — the customer
     -- agreed to it — so it is created already marked.
     preisanpassung_notif_sent BOOLEAN NOT NULL DEFAULT false,
+    -- § 41 Abs. 5 Satz 1 EnWG — the **Umfang** of the announced change, as the
+    -- notice states it: `[{bezeichnung, einheit, bisher, neu}, …]`.
+    --
+    -- Here rather than resolved from `tarifbd` at notice time, and that is the
+    -- whole point. `vertragd` owns which product a Marktlokation is on;
+    -- `tarifbd` owns what a product costs, and the two are deliberately not
+    -- coupled (see BILLING.md § 3). More importantly, the question a customer
+    -- or a Schlichtungsstelle asks afterwards is *"what were we told our new
+    -- price would be"*, which is a fact about the notice — one that a catalogue
+    -- lookup years later cannot answer, because the catalogue has moved on.
+    --
+    -- Supplied by whoever schedules the Tarifwechsel: they chose the tariff, so
+    -- they hold both price sheets. NULL means the change was scheduled without
+    -- them, and the § 41 Abs. 5 notice document is then **not** issued — a
+    -- notice that states no Umfang is not a valid Preisänderungsanzeige, and
+    -- issuing one would make an invalid notice indistinguishable from a sent
+    -- one. The CloudEvent still goes out, so an ERP that composes the letter
+    -- itself is unaffected.
+    angekuendigte_preise JSONB,
+    -- The `outputd` document that communicated the change, and when. A plain
+    -- value, not a foreign key: outputd owns the document and keeps it
+    -- append-only, which is what keeps the reference resolvable.
+    dokument_id   UUID,
+    dokument_issued_at TIMESTAMPTZ,
     grund         TEXT,
     created_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
-    CONSTRAINT kp_range_nonempty CHECK (gueltig_bis IS NULL OR gueltig_von < gueltig_bis)
+    CONSTRAINT kp_range_nonempty CHECK (gueltig_bis IS NULL OR gueltig_von < gueltig_bis),
+    CONSTRAINT kp_dokument_dated CHECK ((dokument_id IS NULL) = (dokument_issued_at IS NULL))
 );
 
 COMMENT ON TABLE komponenten_produkte IS

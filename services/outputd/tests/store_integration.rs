@@ -200,12 +200,12 @@ async fn the_database_refuses_an_unproven_invoice_template() {
             TemplateKind::Invoice,
             "#let render(i) = []",
             Some("a-3b"),
-            Proof::Parsed,
+            Proof::RenderedTextform,
             None,
         )
         .await
         .is_err(),
-        "an invoice template may not be stored on the weaker proof",
+        "an invoice template may not be stored on a Textform proof — it has a carrier to meet",
     );
 
     assert!(
@@ -223,43 +223,49 @@ async fn the_database_refuses_an_unproven_invoice_template() {
         "an invoice template must record the PDF/A level it met",
     );
 
-    // A Mahnung has a view and a specimen now, so the parse proof is no longer
-    // admissible for it — the constraint refuses the downgrade.
+    // A Textform kind may not be stored on the carrier proof either: it has no
+    // PDF/A to meet, so claiming one is a claim about a document that does not
+    // exist.
     assert!(
         template_store::publish(
             &pool,
             tenant,
             TemplateKind::Mahnung,
             "#let render(i) = [Zahlungserinnerung]",
-            None,
-            Proof::Parsed,
+            Some("a-3b"),
+            Proof::RenderedPdfa,
             None,
         )
         .await
         .is_err(),
-        "a MAHNUNG row may not be stored on the parse proof",
+        "a MAHNUNG row may not claim a PDF/A carrier proof",
     );
 
-    // PREISANPASSUNG is the kind that still stores on the proof it can offer.
-    let hash = template_store::publish(
-        &pool,
-        tenant,
-        TemplateKind::Preisanpassung,
-        "#let render(i) = [Preisanpassung nach § 41 Abs. 5 EnWG]",
-        None,
-        Proof::Parsed,
-        None,
-    )
-    .await
-    .expect("a Preisanpassung stores on the parse proof");
-    assert_eq!(
-        template_store::by_hash(&pool, tenant, &hash)
-            .await
-            .unwrap()
-            .map(|t| t.proof),
-        Some("PARSED".to_owned()),
-        "the store records which proof was obtained",
-    );
+    // Both Textform kinds store on the same proof, and only on it: a level
+    // that established merely that the template compiled would let a
+    // PREISANPASSUNG layout printing none of what § 41 Abs. 5 EnWG requires be
+    // rolled out.
+    for kind in [TemplateKind::Mahnung, TemplateKind::Preisanpassung] {
+        let hash = template_store::publish(
+            &pool,
+            tenant,
+            kind,
+            &format!("#let render(i) = [{}]", kind.as_str()),
+            None,
+            Proof::RenderedTextform,
+            None,
+        )
+        .await
+        .expect("a Textform template stores on the Textform proof");
+        assert_eq!(
+            template_store::by_hash(&pool, tenant, &hash)
+                .await
+                .unwrap()
+                .map(|t| t.proof),
+            Some("RENDERED_TEXTFORM".to_owned()),
+            "the store records which proof was obtained",
+        );
+    }
 }
 
 /// The identical source cannot be published under a second identity.
@@ -560,4 +566,300 @@ async fn two_tenants_may_publish_the_same_source() {
             .expect("list");
         assert_eq!(listed.len(), 1, "{tenant} sees exactly its own template");
     }
+}
+
+// ── Issued documents and delivery ─────────────────────────────────────────────
+
+use outputd::delivery::{Channel, store as docs};
+
+/// The issuing operator these tests act as.
+const TENANT: &str = "9900000000001";
+
+fn a_document<'a>(subject: &'a str, content: &'a [u8]) -> docs::NewDocument<'a> {
+    docs::NewDocument {
+        tenant: TENANT,
+        kind: "MAHNUNG",
+        template_hash: "0000000000000000000000000000000000000000000000000000000000000000",
+        subject_ref: subject,
+        malo_id: Some("51238696012"),
+        kunden_nr: Some("K-4711"),
+        content,
+        media_type: "application/pdf",
+        recipient: docs::Recipient {
+            name: Some("Erika Mustermann".to_owned()),
+            email: Some("erika@example.test".to_owned()),
+            address: Some(serde_json::json!({ "plz": "10115", "ort": "Berlin" })),
+        },
+        issued_by: Some("operator-sub"),
+    }
+}
+
+/// Issuing is idempotent on `(tenant, kind, subject_ref)`, and the stored bytes
+/// come back byte-for-byte.
+///
+/// A duplicate invoice row is untidy; a duplicate **Mahnung** is a second
+/// statutory notice with its own deadline and a second § 41f EnWG clock.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn issuing_the_same_subject_twice_sends_one_document() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let pdf = b"%PDF-1.7 first".as_slice();
+    let (first, created) = docs::issue(&pool, &a_document("case-1", pdf), &[Channel::Portal])
+        .await
+        .expect("issue");
+    assert!(created);
+    assert_eq!(first.deliveries.len(), 1);
+
+    // A retry — with *different* bytes, as a re-render after a template rollout
+    // would produce. The stored document must not move: § 147 AO asks for what
+    // was issued.
+    let (again, created) = docs::issue(
+        &pool,
+        &a_document("case-1", b"%PDF-1.7 second".as_slice()),
+        &[Channel::Portal, Channel::Email],
+    )
+    .await
+    .expect("issue again");
+    assert!(!created, "a retry issues nothing");
+    assert_eq!(again.document.document_id, first.document.document_id);
+    assert_eq!(
+        again.deliveries.len(),
+        1,
+        "and queues no second delivery either"
+    );
+
+    let (bytes, media) = docs::content(&pool, TENANT, first.document.document_id)
+        .await
+        .expect("content")
+        .expect("present");
+    assert_eq!(bytes, pdf, "the bytes that were sent, not a re-render");
+    assert_eq!(media, "application/pdf");
+    assert_eq!(first.document.content_sha256, docs::content_hash(pdf));
+}
+
+/// A channel with nothing to send to is stored `SUPPRESSED` **with a reason**,
+/// never omitted — "why did this never go out" has to be answerable from the
+/// row rather than from its absence.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_channel_with_no_target_is_suppressed_with_its_reason() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let mut doc = a_document("case-2", b"%PDF-1.7".as_slice());
+    doc.recipient.email = None;
+    let (issued, _) = docs::issue(&pool, &doc, &[Channel::Portal, Channel::Email])
+        .await
+        .expect("issue");
+
+    let email = issued
+        .deliveries
+        .iter()
+        .find(|d| d.channel == "EMAIL")
+        .expect("the EMAIL row exists even though it cannot be sent");
+    assert_eq!(email.status, "SUPPRESSED");
+    assert!(
+        email
+            .last_error
+            .as_deref()
+            .is_some_and(|e| e.contains("no e-mail address")),
+        "the reason is on the row: {:?}",
+        email.last_error
+    );
+    let portal = issued
+        .deliveries
+        .iter()
+        .find(|d| d.channel == "PORTAL")
+        .expect("portal queued");
+    assert_eq!(portal.status, "PENDING");
+}
+
+/// The worker's claim moves a delivery out of the due set, so two replicas
+/// never send the same document twice — and the claim releases on the backoff,
+/// so a replica that dies mid-send loses nothing.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_claimed_delivery_is_not_claimed_again() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let (issued, _) = docs::issue(
+        &pool,
+        &a_document("case-3", b"%PDF-1.7".as_slice()),
+        &[Channel::Portal],
+    )
+    .await
+    .expect("issue");
+
+    let first = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5))
+        .await
+        .expect("claim");
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].attempts, 1, "the claim counts the attempt");
+    assert_eq!(first[0].channel, Channel::Portal);
+
+    let second = docs::claim_due(&pool, TENANT, 10, time::Duration::minutes(5))
+        .await
+        .expect("claim again");
+    assert!(second.is_empty(), "the backoff holds the claim");
+
+    docs::record_success(
+        &pool,
+        TENANT,
+        first[0].delivery_id,
+        true,
+        Some(serde_json::json!({"published": "portal-inbox"})),
+    )
+    .await
+    .expect("record success");
+
+    let after = docs::deliveries_of(&pool, issued.document.document_id)
+        .await
+        .expect("deliveries");
+    assert_eq!(after[0].status, "DELIVERED");
+    assert!(
+        after[0].delivered_at.is_some(),
+        "a DELIVERED row states when — the schema refuses one that does not"
+    );
+
+    // The portal read receipt: more than § 126b BGB asks for, and exactly what
+    // a dispute over a § 41f notice asks about.
+    assert!(
+        docs::record_read(&pool, TENANT, first[0].delivery_id)
+            .await
+            .expect("record read")
+    );
+    let after = docs::deliveries_of(&pool, issued.document.document_id)
+        .await
+        .expect("deliveries");
+    assert!(after[0].read_at.is_some());
+}
+
+/// A failed attempt stays `PENDING` until the ceiling, then becomes `FAILED` —
+/// the state that says a customer never received something the platform
+/// believes it sent.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn a_failing_delivery_retries_and_then_gives_up() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    let (issued, _) = docs::issue(
+        &pool,
+        &a_document("case-4", b"%PDF-1.7".as_slice()),
+        &[Channel::Email],
+    )
+    .await
+    .expect("issue");
+    let delivery_id = issued.deliveries[0].delivery_id;
+
+    docs::record_failure(
+        &pool,
+        TENANT,
+        delivery_id,
+        "relay answered 503",
+        false,
+        time::Duration::ZERO,
+    )
+    .await
+    .expect("record failure");
+    let rows = docs::deliveries_of(&pool, issued.document.document_id)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].status, "PENDING", "retryable");
+    assert_eq!(rows[0].last_error.as_deref(), Some("relay answered 503"));
+
+    docs::record_failure(
+        &pool,
+        TENANT,
+        delivery_id,
+        "relay answered 503",
+        true,
+        time::Duration::ZERO,
+    )
+    .await
+    .expect("give up");
+    let rows = docs::deliveries_of(&pool, issued.document.document_id)
+        .await
+        .unwrap();
+    assert_eq!(rows[0].status, "FAILED");
+    assert!(rows[0].delivered_at.is_none());
+}
+
+/// The document list refuses to answer without a customer scope. `portald`
+/// forwards a customer's scope into this query, and a filter that silently
+/// degrades to "everything" is one bug away from serving the whole portfolio.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn an_unscoped_document_query_returns_nothing() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    docs::issue(
+        &pool,
+        &a_document("case-5", b"%PDF-1.7".as_slice()),
+        &[Channel::Portal],
+    )
+    .await
+    .expect("issue");
+
+    let unscoped = docs::list(&pool, TENANT, &docs::DocumentFilter::default())
+        .await
+        .expect("list");
+    assert!(unscoped.is_empty(), "no scope, no rows");
+
+    let scoped = docs::list(
+        &pool,
+        TENANT,
+        &docs::DocumentFilter {
+            malo_id: Some("51238696012".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("list");
+    assert_eq!(scoped.len(), 1);
+
+    // Another tenant's identical scope sees nothing: tenant equality is in the
+    // query, not only in the policy.
+    let other = docs::list(
+        &pool,
+        "9910000000002",
+        &docs::DocumentFilter {
+            malo_id: Some("51238696012".to_owned()),
+            ..Default::default()
+        },
+    )
+    .await
+    .expect("list");
+    assert!(other.is_empty());
+}
+
+/// The print spool lists what a Druckdienstleister has not collected yet.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL)"]
+async fn the_postal_spool_lists_what_is_waiting() {
+    let Some((pool, _pg)) = test_pool().await else {
+        return;
+    };
+    docs::issue(
+        &pool,
+        &a_document("case-6", b"%PDF-1.7".as_slice()),
+        &[Channel::Post, Channel::Portal],
+    )
+    .await
+    .expect("issue");
+
+    let spool = docs::postal_spool(&pool, TENANT, 100).await.expect("spool");
+    assert_eq!(spool.len(), 1, "the POST row, not the portal one");
+    assert_eq!(spool[0].channel, Channel::Post);
+    assert!(
+        spool[0]
+            .target
+            .as_deref()
+            .is_some_and(|t| t.contains("Berlin")),
+        "the address travels with the spool entry"
+    );
 }

@@ -81,6 +81,19 @@ pub struct BillingdConfig {
     /// PDF endpoint returns 502; the XML endpoints need no renderer.
     pub outputd_url: Option<String>,
 
+    /// `accountingd` base URL — the Massenkontokorrent that holds the
+    /// advance-payment register (`GET /accounts/{malo}/abschlaege`).
+    ///
+    /// Deliberately **not** defaulted: the §40b sweep needs it to itemise and
+    /// deduct the paid Abschläge a Jahresrechnung must show (§ 40 Abs. 1 EnWG,
+    /// § 14 Abs. 5 Satz 2 UStG), and a localhost default would make a missing
+    /// deployment look like a customer who paid nothing. Absent → the sweep
+    /// refuses settling cadences and says why.
+    pub accountingd_url: Option<String>,
+
+    /// `accountingd` bearer token.
+    pub accountingd_api_key: Option<String>,
+
     /// `outputd` bearer token.
     pub outputd_api_key: Option<String>,
 
@@ -389,21 +402,45 @@ pub struct BillingRunsConfig {
     /// night. Default 13 — a year of monthly periods plus one.
     #[serde(default = "default_catch_up_periods")]
     pub catch_up_periods: usize,
-    /// Bill `JAEHRLICH` contracts from the scheduled sweep. Default: **false**.
+    /// Bill settling cadences (`JAEHRLICH`) from the scheduled sweep **even
+    /// without an advance source**. Default: **false**.
     ///
-    /// A Jahresrechnung is a settlement: §40 Abs. 1 / §41 EnWG require it to
-    /// itemise the advance payments and deduct them from the Zahlbetrag. The
-    /// sweep has no source for them — `vertragd`'s billing candidates carry no
-    /// Abschlag data and the postings live in `accountingd`, which is
-    /// downstream of billingd — so an automated annual run would state the full
-    /// year's gross as `zuZahlen` with zero Vorauszahlungen. Until the
-    /// Abschlag read path exists, the sweep refuses these contracts and they
-    /// are billed through `POST /api/v1/billing/{malo_id}/calculate` with
-    /// `schlussrechnung` + `abschlaege` supplied by the caller.
+    /// A Jahresrechnung is a settlement: §40 Abs. 1 EnWG requires it to itemise
+    /// the advance payments and deduct them from the Zahlbetrag, and
+    /// §14 Abs. 5 Satz 2 UStG requires the tax attributable to each. With
+    /// [`accountingd_url`](BillingdConfig::accountingd_url) configured the sweep
+    /// reads them from the advance register and settles them, and this flag is
+    /// not consulted at all.
     ///
-    /// Setting this to `true` opts into emitting those documents anyway.
+    /// Without one there is no source, so the sweep would state the full year's
+    /// gross as `zuZahlen` with zero Vorauszahlungen — a document demanding
+    /// money the customer already paid, which looks entirely ordinary. Those
+    /// contracts are skipped and billed through
+    /// `POST /api/v1/billing/{malo_id}/calculate` with `abschlaege` supplied by
+    /// the caller.
+    ///
+    /// Setting this to `true` opts into emitting them anyway — for a deployment
+    /// that genuinely collects no advances, where the deduction is empty because
+    /// there is nothing to deduct.
     #[serde(default)]
     pub jahresrechnung: bool,
+
+    /// **Send** each invoice the sweep produces: record it in `outputd` for the
+    /// § 147 AO eight years and queue it on the customer's channels.
+    /// Default: **true**.
+    ///
+    /// § 40c Abs. 2 EnWG puts the invoice in the customer's hands within three
+    /// weeks of the period end for monthly billing and six otherwise, so a
+    /// nightly run that bills and does not send is a deadline nobody is
+    /// keeping. Off is for a deployment whose ERP owns delivery and takes the
+    /// invoice off the `de.billing.rechnung.erstellt` event instead; the
+    /// documents are then never recorded here, and reproducing one is that
+    /// ERP's problem.
+    ///
+    /// A **held** invoice is never sent whatever this says: the risk gate
+    /// withheld its issuance, so no receivable stands behind it.
+    #[serde(default = "default_true")]
+    pub versand: bool,
 }
 
 fn default_billing_run_hour() -> u8 {
@@ -424,6 +461,7 @@ impl Default for BillingRunsConfig {
             abrechnungsinformation: true,
             catch_up_periods: default_catch_up_periods(),
             jahresrechnung: false,
+            versand: true,
         }
     }
 }

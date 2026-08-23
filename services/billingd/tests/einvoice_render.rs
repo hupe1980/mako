@@ -237,6 +237,9 @@ fn a_buyer_from_vertragd_closes_the_address_findings() {
         country: Some("DE".to_owned()),
         vat_id: None,
         stromwiederverkaeufer: false,
+        // Where the document is *sent*. No EN 16931 BT carries it, so it must
+        // not reach the model — pinned below.
+        email: Some("erika@example.test".to_owned()),
     };
     let model = einvoice::build(&mixed_rate_invoice(), &cfg(), "51238696781", Some(&buyer));
 

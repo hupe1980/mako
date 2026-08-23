@@ -29,6 +29,9 @@ pub struct PortalClients {
     pub marktd: Option<Arc<UpstreamClient>>,
     /// Contracts — and the authorization authority for every route.
     pub vertragd: Option<Arc<UpstreamClient>>,
+    /// Customer documents — the inbox: invoices, Mahnungen and price-change
+    /// notices as the customer actually received them.
+    pub outputd: Option<Arc<UpstreamClient>>,
     /// Client for the `vertragd /kunden/authenticate` call.
     ///
     /// Separate from [`Self::vertragd`], which attaches the service credential
@@ -59,6 +62,49 @@ impl UpstreamClient {
     /// Transport failure, a non-404 error status, or a body that is not JSON.
     pub async fn get_json(&self, path: &str) -> Result<Option<serde_json::Value>, UpstreamError> {
         self.0.json(self.0.get(path)).await
+    }
+
+    /// GET raw bytes with their content type — a PDF, which is neither JSON nor
+    /// text. `None` on 404.
+    ///
+    /// # Errors
+    ///
+    /// Transport failure or a non-404 error status.
+    pub async fn get_bytes(&self, path: &str) -> Result<Option<(Vec<u8>, String)>, UpstreamError> {
+        let resp = self
+            .0
+            .get(path)
+            .send()
+            .await
+            .map_err(|source| UpstreamError::Transport {
+                service: "upstream",
+                source,
+            })?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            return Ok(None);
+        }
+        let status = resp.status();
+        let media_type = resp
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("application/octet-stream")
+            .to_owned();
+        let body = resp
+            .bytes()
+            .await
+            .map_err(|source| UpstreamError::Transport {
+                service: "upstream",
+                source,
+            })?;
+        if !status.is_success() {
+            return Err(UpstreamError::Status {
+                service: "upstream",
+                status,
+                body: String::from_utf8_lossy(&body).chars().take(400).collect(),
+            });
+        }
+        Ok(Some((body.to_vec(), media_type)))
     }
 
     /// GET a text body — an XML rendering, which is not JSON. `None` on 404.

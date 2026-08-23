@@ -524,10 +524,23 @@ period without an existing `billing_records` row through the same
 dispatch→persist→emit pipeline as `POST …/calculate`. Each calendar month's
 sweeps accumulate one `billing_run_log` audit row with three counters —
 `records_count`, `skipped_count`, `errors_count`. A **skip** is a period the
-sweep deliberately did not bill (an annual settlement it cannot supply the
-Abschläge for) and is not a fault; only `errors_count` marks the month `failed`.
-Counting the refusals as errors marked every month failed for any operator with
-annual contracts and the default `jahresrechnung = false`.
+sweep deliberately did not bill and is not a fault; only `errors_count` marks
+the month `failed`.
+
+A settling cadence (`JAEHRLICH`) additionally reads the advances it must deduct
+from `accountingd` (`GET /accounts/{malo}/abschlaege`), already filtered to what
+§ 14 Abs. 5 Satz 2 UStG allows a settlement to deduct: received, unabsorbed,
+each with its rate. Without `accountingd_url` configured there is no source and
+those contracts are skipped, because a document stating the year's gross with
+zero Vorauszahlungen demands money the customer already paid;
+`jahresrechnung = true` opts into emitting them anyway.
+
+`versand` (default **true**) then issues each invoice as an `outputd` document
+and queues it on the customer's channels — § 40c Abs. 2 EnWG puts the invoice in
+their hands within three or six weeks of the period end. The send happens
+outside the billing transaction: a delivery failure is logged and repeated by
+`POST /api/v1/billing/{id}/versenden` rather than rolling back a billed period,
+which would re-bill it under a second Rechnungsnummer.
 
 For **iMSys** MaLos the worker additionally delivers the free monthly
 **Abrechnungsinformation** (§40b Abs. 2 EnWG) as a
@@ -544,6 +557,8 @@ for good.
 enabled              = true
 run_hour_utc         = 4
 abrechnungsinformation = true
+versand              = true    # default: issue and deliver each invoice
+jahresrechnung       = false   # default: skip settlements with no advance source
 ```
 
 All outbound CloudEvents (invoices, settlements and monthly infos) go through

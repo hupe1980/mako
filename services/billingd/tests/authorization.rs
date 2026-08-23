@@ -10,6 +10,84 @@ use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
 
 const POLICY: &str = include_str!("../policies/billingd.cedar");
 
+/// The handler sources, so the guard can compare the actions the *code* checks
+/// against the ones the policy grants. A hand-maintained list drifts silently
+/// in both directions: a handler wired to an action no policy mentions is `403`
+/// for every caller (Cedar is deny-by-default), and a granted action nobody
+/// checks is either a lost check or a dead rule.
+const HANDLERS: [&str; 8] = [
+    include_str!("../src/handlers/calculate.rs"),
+    include_str!("../src/handlers/correction.rs"),
+    include_str!("../src/handlers/dispatch.rs"),
+    include_str!("../src/handlers/enrichment.rs"),
+    include_str!("../src/handlers/ggv.rs"),
+    include_str!("../src/handlers/mod.rs"),
+    include_str!("../src/handlers/records.rs"),
+    include_str!("../src/handlers/sammelrechnung.rs"),
+];
+const VPP_HANDLER: &str = include_str!("../src/handlers/vpp.rs");
+
+/// Every action literal passed to `authorize(&cedar, &claims, "…", …)`.
+///
+/// Anchored on the `&claims, ` argument rather than the function name, which
+/// also matches the definition and its own string literals.
+fn actions_used_in_code() -> std::collections::BTreeSet<String> {
+    const CALL: &str = "&claims, \"";
+    let mut found = std::collections::BTreeSet::new();
+    for src in HANDLERS.iter().chain(std::iter::once(&VPP_HANDLER)) {
+        let mut rest = *src;
+        while let Some(idx) = rest.find(CALL) {
+            rest = &rest[idx + CALL.len()..];
+            let Some(close) = rest.find('"') else { break };
+            found.insert(rest[..close].to_owned());
+            rest = &rest[close..];
+        }
+    }
+    found
+}
+
+/// Every `Action::"…"` the policy names.
+fn actions_permitted_in_policy() -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    let mut rest = POLICY;
+    while let Some(idx) = rest.find("Action::\"") {
+        rest = &rest[idx + "Action::\"".len()..];
+        let Some(close) = rest.find('"') else { break };
+        found.insert(rest[..close].to_owned());
+        rest = &rest[close..];
+    }
+    found
+}
+
+/// Every action a handler checks is granted somewhere, and every granted action
+/// is checked.
+#[test]
+fn the_policy_and_the_code_name_the_same_actions() {
+    let used = actions_used_in_code();
+    assert!(
+        !used.is_empty(),
+        "the extractor found no actions — it has drifted from the call shape"
+    );
+    let permitted = actions_permitted_in_policy();
+    let missing: Vec<_> = used.difference(&permitted).cloned().collect();
+    assert!(
+        missing.is_empty(),
+        "these actions are checked in code but appear in no policy, so Cedar's \
+         default-deny makes those routes 403 for every caller: {missing:?}"
+    );
+    let dead: Vec<_> = permitted.difference(&used).cloned().collect();
+    assert!(
+        dead.is_empty(),
+        "these actions are granted by policy but checked nowhere — either a route \
+         lost its check or the grant is dead: {dead:?}"
+    );
+    assert_eq!(
+        used,
+        ALL_ACTIONS.iter().map(|a| (*a).to_owned()).collect(),
+        "ALL_ACTIONS must list exactly what the code checks"
+    );
+}
+
 fn enforcer() -> CedarEnforcer {
     CedarEnforcer::from_policy_str(POLICY).expect("billingd.cedar parses")
 }
@@ -27,7 +105,7 @@ const TENANT: &str = "9910000000002";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 7] = [
+const ALL_ACTIONS: [&str; 8] = [
     "read-billing",
     "preview-billing",
     "run-billing",
@@ -35,6 +113,7 @@ const ALL_ACTIONS: [&str; 7] = [
     "correct-billing",
     "release-billing",
     "submit-b2g",
+    "issue-billing",
 ];
 
 /// The service's own market roles reach every action.
@@ -79,6 +158,7 @@ fn a_roleless_token_cannot_issue_or_reverse_anything() {
         "correct-billing",
         "release-billing",
         "submit-b2g",
+        "issue-billing",
     ] {
         assert!(
             e.check(&anon, action, TENANT).is_err(),

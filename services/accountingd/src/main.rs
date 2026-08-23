@@ -171,6 +171,14 @@ impl Daemon for Accountingd {
                 "/api/v1/accounts/{malo_id}/abschlag",
                 put(handlers::put_abschlag),
             )
+            // The advances a settling invoice may deduct (§ 14 Abs. 5 Satz 2
+            // UStG), with the rate each was raised at. billingd's §40b sweep
+            // reads it; without it an automated Jahresrechnung cannot itemise
+            // the Abschläge § 40 Abs. 1 EnWG requires it to show.
+            .route(
+                "/api/v1/accounts/{malo_id}/abschlaege",
+                get(handlers::get_abschlaege),
+            )
             .route(
                 "/api/v1/accounts/{malo_id}/buchen",
                 post(handlers::post_buchen),
@@ -407,9 +415,18 @@ impl Daemon for Accountingd {
         });
         let app = app.merge(mcp_server::router(mcp_state, ct.clone()));
 
-        // ── Background Abschlagslauf scheduler ──────────────────────────────────
-        // Runs daily at approximately 06:00 and checks which accounts have their
-        // billing_day = today. For each: posts an ABSCHLAG ledger entry.
+        // ── Background Abschlagslauf scheduler ──────────────────────────────
+        //
+        // Daily: every account whose `billing_day` is today gets one
+        // **Abschlagsforderung** — a Kontokorrent debit against Erhaltene
+        // Anzahlungen, plus a register row carrying the § 14 Abs. 5 Satz 2 UStG
+        // rate it was raised at.
+        //
+        // The demand is not the money: payment arrives afterwards as a
+        // `ZAHLUNG` credit that clears this debit FIFO. A credit here would
+        // assert the collection had already settled — crediting the customer
+        // twice for one payment, and leaving an unpaid advance invisible to
+        // both the Mahnwesen and the § 41f Abs. 3 Verzug.
         {
             let pool_bg = pool.clone();
             let ledger_bg = Arc::clone(&ledger);
@@ -438,88 +455,65 @@ impl Daemon for Accountingd {
                             tracing::info!(
                                 day = day_of_month,
                                 count = accounts.len(),
-                                "accountingd: Abschlagslauf — posting ABSCHLAG entries"
+                                "accountingd: Abschlagslauf — raising Abschlagsforderungen"
                             );
+                            // The advance covers the month it is raised in and is
+                            // owed on the day it is raised.
+                            let periode = today.replace_day(1).unwrap_or(today);
                             for acct in &accounts {
-                                let ref_id = format!(
-                                    "ABSCHLAG-{}-{:04}-{:02}",
-                                    acct.malo_id,
-                                    today.year(),
-                                    today.month() as u8
-                                );
-                                if let Err(e) = accountingd::pg::post_entry(
-                                    &ledger_bg,
-                                    &pool_bg,
-                                    &tenant_bg,
-                                    &acct.malo_id,
-                                    &acct.lf_mp_id,
-                                    "ABSCHLAG",
-                                    // Advance payment = CREDIT (negative): reduces the
-                                    // customer's balance. The full annual Rechnung is
-                                    // booked as a debit; balance nets to the Nachzahlung.
-                                    -acct.abschlag_ct,
-                                    // deterministic key → idempotent per (malo, month)
-                                    &ref_id,
-                                    None,
-                                    Some(&ref_id),
-                                    today,
-                                    today,
-                                    Some(&format!("Monatlicher Abschlag Tag {day_of_month}")),
-                                    None,
+                                let raised = accountingd::pg::raise_abschlagsforderung(
+                                    &ledger_bg, &pool_bg, &tenant_bg, acct, periode, today, today,
                                 )
-                                .await
-                                {
-                                    tracing::warn!(
-                                        malo_id = %acct.malo_id,
-                                        error = %e,
-                                        "accountingd: Abschlag entry failed"
-                                    );
-                                } else {
-                                    // Announce the advance payment exactly once
-                                    // per (MaLo, month).
-                                    //
-                                    // `post_entry` is idempotent on its own key,
-                                    // so a second run in the same month is a
-                                    // ledger no-op — but it still returns `Ok`,
-                                    // so announcing on that alone re-sent the
-                                    // event every time the 23-hour loop drifted
-                                    // across midnight or the service restarted.
-                                    //
-                                    // The CloudEvent id is derived from the same
-                                    // (MaLo, month) key, and `outbox::enqueue`
-                                    // is `ON CONFLICT (event_id) DO NOTHING`, so
-                                    // the replay drops at the outbox. No guard
-                                    // table: the schema deliberately has none
-                                    // for Abschläge, because the ledger key
-                                    // already prevents double-booking.
-                                    let ce = mako_service::CloudEvent::new(
-                                        mako_service::source("accountingd", &tenant_bg),
-                                        mako_events::accounting::ABSCHLAG_POSTED,
-                                        &acct.malo_id,
-                                        serde_json::json!({
-                                            "malo_id":      acct.malo_id,
-                                            "lf_mp_id":     acct.lf_mp_id,
-                                            "amount_ct":    acct.abschlag_ct,
-                                            "amount_eur":   format!("{:.2}", acct.abschlag_ct as f64 / 100.0),
-                                            "period_month": format!("{:04}-{:02}", today.year(), today.month() as u8),
-                                            "reference":    ref_id,
-                                        }),
-                                    )
-                                    .with_id(ref_id.clone());
-                                    let announced = async {
-                                        let mut tx = pool_bg.begin().await?;
-                                        mako_service::outbox::enqueue(&mut tx, &ce).await?;
-                                        tx.commit().await?;
-                                        anyhow::Ok(())
-                                    }
-                                    .await;
-                                    if let Err(e) = announced {
+                                .await;
+                                let reference = match raised {
+                                    Ok((reference, _)) => reference,
+                                    Err(e) => {
                                         tracing::warn!(
                                             malo_id = %acct.malo_id,
                                             error = %e,
-                                            "accountingd: Abschlag announcement failed"
+                                            "accountingd: Abschlagsforderung failed"
                                         );
+                                        continue;
                                     }
+                                };
+
+                                // Announced once per (MaLo, month). The
+                                // raise is idempotent on its key but still
+                                // returns `Ok`, so announcing on that alone
+                                // would re-send whenever the 23-hour loop
+                                // drifted across midnight. The CloudEvent id is
+                                // the same key and `outbox::enqueue` is
+                                // `ON CONFLICT DO NOTHING`, so a replay drops
+                                // at the outbox.
+                                let ce = mako_service::CloudEvent::new(
+                                    mako_service::source("accountingd", &tenant_bg),
+                                    mako_events::accounting::ABSCHLAG_POSTED,
+                                    &acct.malo_id,
+                                    serde_json::json!({
+                                        "malo_id":      acct.malo_id,
+                                        "lf_mp_id":     acct.lf_mp_id,
+                                        "amount_ct":    acct.abschlag_ct,
+                                        "amount_eur":   format!("{:.2}", acct.abschlag_ct as f64 / 100.0),
+                                        "ust_satz":     acct.abschlag_ust_satz.to_string(),
+                                        "faellig_am":   today.to_string(),
+                                        "period_month": format!("{:04}-{:02}", today.year(), today.month() as u8),
+                                        "reference":    reference,
+                                    }),
+                                )
+                                .with_id(reference.clone());
+                                let announced = async {
+                                    let mut tx = pool_bg.begin().await?;
+                                    mako_service::outbox::enqueue(&mut tx, &ce).await?;
+                                    tx.commit().await?;
+                                    anyhow::Ok(())
+                                }
+                                .await;
+                                if let Err(e) = announced {
+                                    tracing::warn!(
+                                        malo_id = %acct.malo_id,
+                                        error = %e,
+                                        "accountingd: Abschlag announcement failed"
+                                    );
                                 }
                             }
                         }
@@ -772,11 +766,55 @@ impl Daemon for Accountingd {
         //
         // Idempotent: uses `auto_dunning_runs (tenant, run_date)` UNIQUE constraint
         // to prevent double-execution on crash+restart within the same calendar day.
+        // ── The document side of the Mahnwesen ────────────────────────────
+        // `outputd` renders and delivers; `vertragd` says who the customer is.
+        // Both or neither — an unaddressed Mahnung is not Textform.
+        let documents = match (cfg.outputd_url.as_deref(), cfg.vertragd_url.as_deref()) {
+            (Some(out), Some(vert)) => Some((
+                Arc::new(accountingd::clients::OutputdClient::new(
+                    out,
+                    cfg.outputd_api_key
+                        .as_ref()
+                        .map(|k| secrecy::ExposeSecret::expose_secret(k).to_owned()),
+                )),
+                Arc::new(accountingd::clients::VertragdClient::new(
+                    vert,
+                    cfg.vertragd_api_key
+                        .as_ref()
+                        .map(|k| secrecy::ExposeSecret::expose_secret(k).to_owned()),
+                )),
+            )),
+            (None, None) => None,
+            (out, _) => {
+                anyhow::bail!(
+                    "[{}] is configured without the other: rendering a Mahnung needs `outputd_url` \
+                     and addressing it needs `vertragd_url` (§ 126b BGB names the recipient). \
+                     Configure both, or neither and let the ERP send the letters off the \
+                     de.accounting.mahnung.issued CloudEvent.",
+                    if out.is_some() {
+                        "outputd_url"
+                    } else {
+                        "vertragd_url"
+                    }
+                );
+            }
+        };
+        if documents.is_none() && cfg.erp_webhook_url.is_none() && cfg.dunning_auto_enabled {
+            // Not fatal — an operator may read `dunning_cases` directly — but
+            // it is the state in which customers are escalated toward a
+            // disconnection without being told.
+            tracing::warn!(
+                "accountingd: auto-dunning is on with neither outputd_url nor erp_webhook_url — \
+                 Mahnungen will be recorded and never sent to anyone"
+            );
+        }
+
         if cfg.dunning_auto_enabled {
             let pool_dun = pool.clone();
             let ledger_dun = Arc::clone(&ledger);
             let cfg_dun = Arc::clone(&cfg);
             let makod_dun = makod.clone();
+            let documents_dun = documents.clone();
             tokio::spawn(async move {
                 // Stagger start relative to other workers.
                 tokio::time::sleep(tokio::time::Duration::from_secs(180)).await;
@@ -826,6 +864,37 @@ impl Daemon for Accountingd {
                         }
                     }
 
+                    // Give every open case a document. Separate from the
+                    // escalation because it fails differently: the escalation
+                    // is arithmetic on the ledger, while issuing a document
+                    // needs a rolled-out template, a customer on file and a
+                    // reachable channel. Folded together, one missing e-mail
+                    // address would roll back a Mahnstufe.
+                    if let Some((outputd_dun, vertragd_dun)) = documents_dun.as_ref() {
+                        match accountingd::mahnung::issue_pending(
+                            &pool_dun,
+                            &ledger_dun,
+                            outputd_dun,
+                            vertragd_dun,
+                            &cfg_dun,
+                        )
+                        .await
+                        {
+                            Ok(s) if s.issued + s.unaddressable + s.errors > 0 => {
+                                tracing::info!(
+                                    issued = s.issued,
+                                    unaddressable = s.unaddressable,
+                                    errors = s.errors,
+                                    "accountingd: Mahnung documents issued"
+                                );
+                            }
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::error!(error = %e, "accountingd: Mahnung document sweep failed");
+                            }
+                        }
+                    }
+
                     // §§41f/41g EnWG disconnection sequence — runs **every** cycle,
                     // independently of whether new Mahnungen were created today: a
                     // Stufe-3 case escalated on a previous day still needs its
@@ -869,6 +938,59 @@ impl Daemon for Accountingd {
             tracing::info!("accountingd: auto-dunning disabled (dunning_auto_enabled = false)");
         }
 
+        // ── Annual Jahresabschluss worker (§ 40b Abs. 1 EnWG) ───────────────
+        //
+        // Settles the previous year for every account that has none, through
+        // the same function the operator's POST drives.
+        //
+        // Off by default, and no earlier than `jahresabschluss_start_day`,
+        // because the settlement moves money: an overpaid year is refunded by
+        // pain.001 the moment it is settled, and settling on 1 January would
+        // refund against December invoices the § 40c Abs. 2 six-week window
+        // means nobody has issued yet.
+        if cfg.jahresabschluss_auto_enabled {
+            let pool_ja = pool.clone();
+            let ledger_ja = Arc::clone(&ledger);
+            let cfg_ja = Arc::clone(&cfg);
+            tokio::spawn(async move {
+                tokio::time::sleep(tokio::time::Duration::from_secs(240)).await;
+                let (start_month, start_day) = parse_start_day(
+                    cfg_ja
+                        .jahresabschluss_start_day
+                        .as_deref()
+                        .unwrap_or("02-01"),
+                );
+                loop {
+                    let Some(mut wlock) = accountingd::pg::try_worker_lock(
+                        &pool_ja,
+                        accountingd::pg::LOCK_JAHRESABSCHLUSS,
+                    )
+                    .await
+                    else {
+                        tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+                        continue;
+                    };
+                    let today = time::OffsetDateTime::now_utc().date();
+                    let open = (u8::from(today.month()), today.day()) >= (start_month, start_day);
+                    if open {
+                        let year = today.year() - 1;
+                        run_jahresabschluss_sweep(&pool_ja, &ledger_ja, &cfg_ja, year).await;
+                    } else {
+                        tracing::debug!(
+                            start = %format!("{start_month:02}-{start_day:02}"),
+                            "accountingd: Jahresabschluss window not open yet"
+                        );
+                    }
+                    accountingd::pg::release_worker_lock(
+                        &mut wlock,
+                        accountingd::pg::LOCK_JAHRESABSCHLUSS,
+                    )
+                    .await;
+                    tokio::time::sleep(tokio::time::Duration::from_secs(23 * 3600)).await;
+                }
+            });
+        }
+
         // ── Transactional outbox drain worker ───────────────────────────────────
         // One worker per service, guarded on an ERP webhook being configured.
         // Delivers persisted CloudEvents with signing, retry and dead-lettering;
@@ -890,4 +1012,90 @@ impl Daemon for Accountingd {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     mako_service::run::<Accountingd>().await
+}
+
+/// Parse a `MM-DD` window start, falling back to 1 February.
+///
+/// A malformed value is a configuration mistake, and the fallback is the
+/// documented default rather than "today": settling from an unparsed string on
+/// 1 January would refund a year whose December invoices the § 40c Abs. 2 EnWG
+/// six-week window means nobody has issued yet.
+fn parse_start_day(raw: &str) -> (u8, u8) {
+    let parsed = raw
+        .split_once('-')
+        .and_then(|(m, d)| Some((m.parse::<u8>().ok()?, d.parse::<u8>().ok()?)))
+        .filter(|(m, d)| (1..=12).contains(m) && (1..=28).contains(d));
+    match parsed {
+        Some(v) => v,
+        None => {
+            tracing::warn!(
+                value = raw,
+                "accountingd: jahresabschluss_start_day is not a MM-DD day of the first 28 — \
+                 falling back to 02-01"
+            );
+            (2, 1)
+        }
+    }
+}
+
+/// Settle `year` for every account that has no settlement for it.
+async fn run_jahresabschluss_sweep(
+    pool: &sqlx::PgPool,
+    ledger: &Arc<accountingd::ledger::PgLedger>,
+    cfg: &Arc<accountingd::config::AccountingdConfig>,
+    year: i32,
+) {
+    let year_i16 = match i16::try_from(year) {
+        Ok(y) => y,
+        Err(_) => return,
+    };
+    // Bounded per pass: the sweep runs daily and the candidate query selects on
+    // the absence of a settlement, so whatever is left is picked up tomorrow.
+    // An unbounded pass over a large portfolio would hold the advisory lock for
+    // hours and issue refunds faster than a bank adapter accepts them.
+    const BATCH: i64 = 500;
+    let candidates =
+        match accountingd::pg::list_jahresabschluss_candidates(pool, &cfg.tenant, year_i16, BATCH)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::error!(error = %e, "accountingd: Jahresabschluss candidate scan failed");
+                return;
+            }
+        };
+    if candidates.is_empty() {
+        tracing::debug!(year, "accountingd: every account is settled for the year");
+        return;
+    }
+    let (mut settled, mut refused, mut failed) = (0u32, 0u32, 0u32);
+    for (malo_id, lf_mp_id) in &candidates {
+        let q = accountingd::handlers::JahresabschlussQuery {
+            lf_mp_id: Some(lf_mp_id.clone()),
+            year: Some(year),
+            dry_run: Some(false),
+        };
+        match accountingd::handlers::settle_jahresabschluss(pool, ledger, cfg, malo_id, &q).await {
+            Ok(_) => settled += 1,
+            Err(e) if e.is_transient() => {
+                failed += 1;
+                tracing::error!(%malo_id, year, error = %e, "accountingd: Jahresabschluss failed — retried tomorrow");
+            }
+            Err(e) => {
+                // This account's own state, and it will look the same tomorrow:
+                // no IBAN and no creditor account, an unbuildable pain.001.
+                // Counted and named rather than retried forever.
+                refused += 1;
+                tracing::warn!(%malo_id, year, error = %e, "accountingd: Jahresabschluss refused");
+            }
+        }
+    }
+    tracing::info!(
+        year,
+        settled,
+        refused,
+        failed,
+        remaining = candidates.len() == usize::try_from(BATCH).unwrap_or(usize::MAX),
+        "accountingd: Jahresabschluss sweep complete"
+    );
 }

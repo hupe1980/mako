@@ -599,16 +599,16 @@ sequenceDiagram
     MSB-->>ESA: QUOTES 15003 Angebot · RFF+AAV · DTM+273 Bindungsfrist
     Note over ESA,MSB: 5 WT · no Bindungsfrist ⇒ Ablehnung der Anfrage
     ESA->>MSB: ORDERS 17007 Bestellung · RFF+AAG · IMD+7081
-    MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT+&lt;code&gt;+E_0256
+    MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT code · E_0256
     loop per the ordered Messprodukt
         MSB-->>ESA: MSCONS 13027 Werte nach Typ 2
     end
     alt Stornierung before first delivery
         ESA->>MSB: ORDCHG 39002 Storno · RFF+ON
-        MSB-->>ESA: ORDRSP 19013 / 19014 · RFF+ACW · AJT+&lt;code&gt;+E_0257
+        MSB-->>ESA: ORDRSP 19013 / 19014 · RFF+ACW · AJT code · E_0257
     else Abbestellung during delivery
         ESA->>MSB: ORDERS 17008 Abbestellung · RFF+ACW · IMD++Z02
-        MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT+&lt;code&gt;+E_0254
+        MSB-->>ESA: ORDRSP 19011 / 19012 · RFF+ON · AJT code · E_0254
     end
 ```
 

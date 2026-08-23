@@ -31,6 +31,7 @@
 //! accountingd_url = "http://accountingd:9380"
 //! einsd_url       = "http://einsd:9180"
 //! marktd_url      = "http://marktd:8180"
+//! outputd_url     = "http://outputd:9880"
 //! ```
 
 use serde::Deserialize;
@@ -87,6 +88,17 @@ pub struct PortaldConfig {
     /// Bearer token for `marktd` API.
     pub marktd_api_key: Option<String>,
 
+    /// `outputd` base URL — the customer's **document inbox**:
+    /// `GET /api/v1/documents?malo_id=…` and the stored bytes of each one.
+    ///
+    /// Distinct from `billingd_url`, which lists billing *records* — what was
+    /// calculated, drafts included. This lists what the customer was actually
+    /// sent, which is what an inbox shows and what a § 41f EnWG dispute asks
+    /// about.
+    pub outputd_url: Option<String>,
+    /// Bearer token for `outputd`.
+    pub outputd_api_key: Option<String>,
+
     /// LF MP-ID (BDEW-Codenummer) used when registering a SEPA mandate.
     /// Must match the `lf_mp_id` configured in `accountingd`. Defaults to
     /// [`Self::tenant`].
@@ -142,6 +154,8 @@ impl PortaldConfig {
             &mut self.einsd_api_key,
             &mut self.marktd_url,
             &mut self.marktd_api_key,
+            &mut self.outputd_url,
+            &mut self.outputd_api_key,
             &mut self.lf_mp_id,
         ] {
             if let Some(v) = slot.as_deref() {

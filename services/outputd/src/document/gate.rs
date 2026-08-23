@@ -60,12 +60,11 @@ pub enum Proof {
     RenderedPdfa,
     /// Rendered against the kind's specimen and the page carried its mandatory
     /// content — the full proof for a Textform document, which has no PDF/A to
-    /// meet and nothing to embed. What a MAHNUNG requires.
+    /// meet and nothing to embed. What MAHNUNG and PREISANPASSUNG require.
+    ///
+    /// There is no weaker level: every kind has a specimen, so every template
+    /// is proven against one.
     RenderedTextform,
-    /// Compiled far enough to show the template parses and exports `render`.
-    /// What remains for kinds whose data contract lives in another service and
-    /// has not been projected into a view yet (PREISANPASSUNG).
-    Parsed,
 }
 
 impl Proof {
@@ -75,7 +74,6 @@ impl Proof {
         match self {
             Self::RenderedPdfa => "RENDERED_PDFA",
             Self::RenderedTextform => "RENDERED_TEXTFORM",
-            Self::Parsed => "PARSED",
         }
     }
 }
@@ -120,8 +118,86 @@ pub fn prove(kind: TemplateKind, source: &str, pdf_standard: Option<&str>) -> Re
     match kind {
         TemplateKind::Invoice => prove_invoice(source, pdf_standard),
         TemplateKind::Mahnung => prove_mahnung(source),
-        TemplateKind::Preisanpassung => prove_parses(source),
+        TemplateKind::Preisanpassung => prove_preisanpassung(source),
     }
+}
+
+/// The Textform proof for a **Preisanpassung**: render the mixed-change
+/// specimen, then read the page back.
+///
+/// § 41 Abs. 5 EnWG makes this letter's *content* a form requirement, so the
+/// gate checks the page prints it:
+///
+/// * the **declarant** (§ 126b BGB), without which it is not Textform;
+/// * the **Wirksamkeit**, the date the new prices apply (Satz 1);
+/// * **both** changed prices, including the one that goes down — a template
+///   printing only the first position, or assuming every price rises, is
+///   refused (Satz 1, *Umfang*);
+/// * the **Sonderkündigungsrecht** date (Satz 4), which Satz 1 obliges the
+///   supplier to state in the same notice. A page that announces the price and
+///   omits the right is not a valid Preisänderungsanzeige.
+fn prove_preisanpassung(source: &str) -> Result<Proven> {
+    let view = super::preisanpassung::specimen();
+    let rendered = render(&RenderRequest {
+        template: source.to_owned(),
+        data: Some(serde_json::to_string(&view)?),
+        attachment: None,
+        standard: None,
+        date: SPECIMEN_DATE,
+        ident: "mako-publish-gate-preisanpassung".to_owned(),
+    })?;
+    if rendered.pages > 3 {
+        bail!(
+            "the specimen Preisanpassung came to {} pages; a price-change notice over three \
+             pages has a layout fault",
+            rendered.pages,
+        );
+    }
+
+    let doc = lopdf::Document::load_mem(&rendered.pdf).context("reading back the render")?;
+    let pages: Vec<u32> = doc.get_pages().keys().copied().collect();
+    let text = doc
+        .extract_text(&pages)
+        .context("a Textform document must carry extractable text")?;
+    let flat = page_text(&text);
+
+    let declarant = view.absender.name.clone().unwrap_or_default();
+    if declarant.is_empty() {
+        bail!(
+            "the Preisanpassung specimen carries no declarant name — the § 126b check cannot run"
+        );
+    }
+    // German customer-facing renderings, as in `prove_mahnung`: the view
+    // carries ISO values and the reference template prints them the way a
+    // German letter reads.
+    let required: [(&str, String); 5] = [
+        ("§ 126b declarant", declarant),
+        ("Wirksamkeit der Preisänderung", "01.05.2026".to_owned()),
+        ("neuer Arbeitspreis", "37,20".to_owned()),
+        // The line that falls. A template printing only the first position, or
+        // one that hard-codes an increase, fails here.
+        ("neuer Grundpreis", "131,40".to_owned()),
+        (
+            "§ 41 Abs. 5 Satz 4 Sonderkündigungsrecht",
+            "01.05.2026".to_owned(),
+        ),
+    ];
+    for (term, value) in required {
+        let needle = needle_text(&value);
+        if !contains_standalone(&flat, &needle) {
+            bail!(
+                "the rendered Preisanpassung does not print the {term} (`{value}`, in its \
+                 German customer-facing form) — § 41 Abs. 5 EnWG makes it part of the notice, \
+                 so a template that omits it produces an invalid Preisänderungsanzeige"
+            );
+        }
+    }
+
+    Ok(Proven {
+        proof: Proof::RenderedTextform,
+        pages: rendered.pages,
+        warnings: rendered.warnings,
+    })
 }
 
 /// The Textform proof: render the Stufe-3 specimen, then read the page back.
@@ -154,7 +230,7 @@ fn prove_mahnung(source: &str) -> Result<Proven> {
     let text = doc
         .extract_text(&pages)
         .context("a Textform document must carry extractable text")?;
-    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let flat = page_text(&text);
 
     // German customer-facing renderings, deliberately: the view carries ISO
     // values (`523.40`, `2026-03-15`) and the reference template formats them
@@ -174,7 +250,7 @@ fn prove_mahnung(source: &str) -> Result<Proven> {
         ("§ 41f Sperrtermin", "01.04.2026".to_owned()),
     ];
     for (term, value) in required {
-        let needle: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+        let needle = needle_text(&value);
         if !contains_standalone(&flat, &needle) {
             bail!(
                 "the rendered Mahnung does not print the {term} (`{value}`, in its German \
@@ -188,6 +264,36 @@ fn prove_mahnung(source: &str) -> Result<Proven> {
         warnings: rendered.warnings,
         pages: rendered.pages,
     })
+}
+
+/// The page's text, normalised for the content checks.
+///
+/// Whitespace runs collapse to **one space** rather than vanishing: removing it
+/// entirely runs adjacent table cells together, so an ordinary two-column price
+/// table (`34,90` | `37,20`) flattens to `34,9037,20` and
+/// [`contains_standalone`] reads the second amount as embedded in the first.
+/// One space still absorbs the line breaks and inter-cell padding a PDF text
+/// extraction produces.
+fn page_text(raw: &str) -> String {
+    let mut out = String::with_capacity(raw.len());
+    let mut in_space = false;
+    for c in raw.chars() {
+        if c.is_whitespace() {
+            in_space = true;
+        } else {
+            if in_space && !out.is_empty() {
+                out.push(' ');
+            }
+            in_space = false;
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// A needle in the same normalisation as [`page_text`].
+fn needle_text(value: &str) -> String {
+    page_text(value)
 }
 
 /// Whether `haystack` contains `needle` *not embedded in a larger number* —
@@ -395,7 +501,7 @@ fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
     })?;
     // Kerning and line breaks put arbitrary whitespace between glyphs, so the
     // comparison ignores it entirely rather than guessing where breaks fall.
-    let flat: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let flat = page_text(&text);
 
     for (term, value) in [
         ("BT-1 Rechnungsnummer (§ 14 Abs. 4 Nr. 4)", &model.number),
@@ -403,7 +509,7 @@ fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
         ("BT-44 buyer name (§ 14 Abs. 4 Nr. 1)", &model.buyer.name),
     ] {
         let Some(value) = value else { continue };
-        let needle: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+        let needle = needle_text(value);
         if !flat.contains(&needle) {
             bail!(
                 "the rendered page does not print {term}: `{value}` is nowhere on it. \
@@ -425,7 +531,7 @@ fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
     .collect();
     if !tax_ids.is_empty() {
         let printed = tax_ids.iter().any(|value| {
-            let needle: String = value.chars().filter(|c| !c.is_whitespace()).collect();
+            let needle = needle_text(value);
             flat.contains(&needle)
         });
         if !printed {
@@ -437,28 +543,6 @@ fn the_page_is_an_invoice(pdf: &[u8], model: &en16931::Invoice) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// The weaker proof: the template parses and exports the contract function.
-///
-/// Compiles a harness that imports `render` and never calls it, so the
-/// template's top level is evaluated — catching a syntax error, a bad import or
-/// a missing export — without needing data it has no specimen for.
-fn prove_parses(source: &str) -> Result<Proven> {
-    let rendered = render(&RenderRequest {
-        template: source.to_owned(),
-        // No view — so the harness imports `render` and does not call it.
-        data: None,
-        attachment: None,
-        standard: None,
-        date: SPECIMEN_DATE,
-        ident: "mako-publish-gate-parse".to_owned(),
-    })?;
-    Ok(Proven {
-        proof: Proof::Parsed,
-        warnings: rendered.warnings,
-        pages: rendered.pages,
-    })
 }
 
 /// The date the specimen bears. Fixed, so the gate is deterministic.
@@ -872,21 +956,54 @@ mod tests {
         );
     }
 
-    /// PREISANPASSUNG remains parse-only — its data lives in vertragd.
+    /// A PREISANPASSUNG template that compiles but prints no § 41 Abs. 5 EnWG
+    /// content is refused: rolled out, it would make every price-change notice
+    /// the operator sends invalid.
     #[test]
-    fn preisanpassung_is_parsed_but_not_rendered() {
-        let proven = prove(
+    fn a_preisanpassung_that_prints_nothing_is_refused() {
+        let err = prove(
             TemplateKind::Preisanpassung,
-            "#let render(x) = [Hinweis]",
+            "#let render(x) = [Wir passen unsere Preise an.]",
             None,
         )
-        .expect("a well-formed Textform template parses");
-        assert_eq!(proven.proof, Proof::Parsed);
-
+        .expect_err("a page with no statutory content is not a Preisänderungsanzeige")
+        .to_string();
+        assert!(
+            err.contains("§ 126b declarant"),
+            "the refusal names what is missing: {err}"
+        );
         assert!(
             prove(TemplateKind::Preisanpassung, "#let falsch(x) = []", None).is_err(),
             "a template without the contract function is refused for every kind",
         );
+    }
+
+    /// Two amounts in neighbouring table cells are two amounts, not one —
+    /// while the "not embedded in a larger number" guard still refuses a
+    /// misprinted figure.
+    #[test]
+    fn neighbouring_cells_are_not_one_number() {
+        let page = page_text("Arbeitspreis ct/kWh   34,90\n   37,20\n");
+        assert!(contains_standalone(&page, &needle_text("37,20")));
+        assert!(contains_standalone(&page, &needle_text("34,90")));
+        // …and the guard it exists for still holds: a misprinted
+        // `1.523,40` does not satisfy a demand for `523,40`.
+        let wrong = page_text("Gesamtforderung 1.523,40 EUR");
+        assert!(!contains_standalone(&wrong, &needle_text("523,40")));
+    }
+
+    /// The reference layout mako ships satisfies its own gate — including the
+    /// price line that goes **down**, which a template assuming every price
+    /// rises renders wrong.
+    #[test]
+    fn the_reference_preisanpassung_passes_its_own_gate() {
+        let proven = prove(
+            TemplateKind::Preisanpassung,
+            crate::document::REFERENCE_PREISANPASSUNG,
+            None,
+        )
+        .expect("the shipped Preisanpassung layout must pass the gate");
+        assert_eq!(proven.proof, Proof::RenderedTextform);
     }
 
     /// The specimen's stamped terms match what billingd's production stamps.

@@ -144,7 +144,7 @@ pub struct SuggestPaymentMatchParams {
 pub struct ManualBuchungParams {
     pub malo_id: String,
     /// Buchungsart. One of: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE,
-    /// BANKRUECKLAST, MAHNGEBUEHR, ABSCHLAG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
+    /// BANKRUECKLAST, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO.
     pub entry_type: String,
     /// Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
     pub amount_ct: i64,
@@ -523,20 +523,21 @@ Only generates for MaLo accounts that have an IBAN + signed mandate (sequence_ty
     }
 
     #[tool(
-        description = "Compute the annual Jahresabschluss settlement for a customer MaLo. \
-Compares actual Rechnung/Storno totals vs Σ(Abschläge) collected during the year. \
-Returns: settlement_ct (positive = Nachzahlung; negative = Erstattung/refund), \
-and the recommended new monthly Abschlag (actual annual ÷ 12, §40 Abs. 1 EnWG). \
-Use ?dry_run=true for preview without committing. When committed, writes a JAHRESABSCHLUSS \
-entry and updates the monthly Abschlag. \
+        description = "Preview the annual Jahresabschluss settlement for a customer MaLo. \
+Nets the year's whole Kontokorrent movement — billing, the Abschlag pair, cash and \
+Verzugsschaden — and returns settlement_ct (positive = Nachzahlung; negative = \
+Erstattung/refund) plus the recommended new monthly Abschlag (annual billing ÷ 12, \
+§40 Abs. 1 EnWG). Read-only: committing the settlement, booking the refund and \
+recalibrating the Abschlag is POST /api/v1/jahresabschluss/{malo_id}, idempotent per \
+(MaLo, year). \
 Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumption.",
-        annotations(read_only_hint = false, open_world_hint = false)
+        annotations(read_only_hint = true, idempotent_hint = true, open_world_hint = false)
     )]
     async fn trigger_jahresabschluss(
         &self,
         Parameters(p): Parameters<JahresabschlussParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{fetch_account, list_ledger};
+        use crate::pg::fetch_account;
         let acct = match fetch_account(
             &self.state.pool,
             &p.malo_id,
@@ -554,40 +555,47 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
             }
             Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
         };
-        let entries =
-            match list_ledger(&self.state.ledger, &acct.lf_mp_id, &acct.malo_id, 500).await {
-                Ok(e) => e,
-                Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-            };
-        // Sum monthly Abschläge (credits, negative) and Rechnungen (debits, positive).
-        // `signed_ct` is the signed Kontokorrent contribution (debit +, credit −).
-        let abschlag_sum: i64 = entries
-            .iter()
-            .filter(|e| e.entry_type.as_deref() == Some("ABSCHLAG"))
-            .map(|e| e.signed_ct)
-            .sum();
-        let rechnung_sum: i64 = entries
-            .iter()
-            .filter(|e| e.entry_type.as_deref() == Some("RECHNUNG"))
-            .map(|e| e.signed_ct)
-            .sum();
-        let settlement_ct = rechnung_sum + abschlag_sum;
-        let recommended_abschlag = (rechnung_sum.abs() / 12).max(0);
+        // The declared default — "previous calendar year" — was documented and
+        // never applied: `p.year` only ever reached the JSON echo, so an
+        // omitted year produced a settlement over no year at all.
+        let year = p
+            .year
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().year() - 1);
+        // The same arithmetic the REST endpoint commits, over the same source.
+        // This was a second implementation — the last 500 ledger rows, ABSCHLAG
+        // and RECHNUNG only, with no year filter at all — so the preview
+        // disagreed with the settlement it previews on any account carrying a
+        // chargeback, a direct payment, or more than 500 movements.
+        let sums = match self
+            .state
+            .ledger
+            .year_kind_sums(&acct.lf_mp_id, &acct.malo_id, year)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
+        let s = crate::handlers::JahresabschlussSums::from_kind_sums(&sums);
+        let recommended_abschlag = (s.rechnung_sum.abs() / 12).max(0);
         ContentBlock::json(serde_json::json!({
             "malo_id": p.malo_id,
-            "year": p.year,
-            "rechnung_sum_ct": rechnung_sum,
-            "abschlag_paid_ct": abschlag_sum,
-            "settlement_ct": settlement_ct,
-            "settlement_eur": format!("{:.2}", settlement_ct as f64 / 100.0),
+            "year": year,
+            "rechnung_sum_ct": s.rechnung_sum,
+            "abschlag_net_ct": s.abschlag_sum,
+            "zahlung_net_ct": s.zahlung_sum,
+            "verzugsschaden_ct": s.verzugsschaden_sum,
+            "sonstige_ct": s.sonstige_sum,
+            "settlement_ct": s.settlement_ct,
+            "settlement_eur": format!("{:.2}", s.settlement_ct as f64 / 100.0),
             "recommended_monthly_abschlag_ct": recommended_abschlag,
-            "action": if settlement_ct > 0 {
-                "NACHZAHLUNG: post RECHNUNG debit via billingd /calculate (annual true-up)"
-            } else if settlement_ct < 0 {
-                "GUTSCHRIFT: post GUTSCHRIFT credit to accountingd ledger (refund)"
+            "action": if s.settlement_ct > 0 {
+                "NACHZAHLUNG: the open receivable stands; collect it via SEPA or dunning"
+            } else if s.settlement_ct < 0 {
+                "ERSTATTUNG: POST /api/v1/jahresabschluss/{malo_id} books the refund and pays it out"
             } else {
                 "AUSGEGLICHEN: no adjustment needed"
             },
+            "next_step": "POST /api/v1/jahresabschluss/{malo_id} commits it (idempotent per MaLo and year).",
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -595,8 +603,10 @@ Regulatory: §40 Abs. 1 EnWG — Abschlag must reflect actual estimated consumpt
 
     #[tool(
         description = "Run the monthly Abschlagslauf (advance payment cycle) for all accounts \
-due on the specified billing_day. Posts ABSCHLAG debit entries to the ledger for each \
-affected account and emits de.accounting.payment.due CloudEvent. \
+due on the specified billing_day. Raises one Abschlagsforderung per account: a DEBIT on the \
+customer Kontokorrent against Erhaltene Anzahlungen, plus a register row carrying the USt \
+rate the advance was raised at (§ 14 Abs. 5 Satz 2 UStG). The advance is a demand, not a \
+receipt — the money arrives later as a ZAHLUNG credit that clears this debit FIFO. \
 Without automation, operators must trigger this manually each month — missed runs cause \
 SEPA pre-notification failures. \
 ⚠ dry_run=true returns affected account count without posting entries.",
@@ -610,7 +620,7 @@ SEPA pre-notification failures. \
         &self,
         Parameters(p): Parameters<AbschlagCycleParams>,
     ) -> Result<CallToolResult, McpError> {
-        use crate::pg::{find_accounts_due, post_entry};
+        use crate::pg::{find_accounts_due, raise_abschlagsforderung};
         let dry_run = p.dry_run.unwrap_or(false);
         // Determine billing day (today or explicit)
         let today = time::OffsetDateTime::now_utc().date();
@@ -622,28 +632,16 @@ SEPA pre-notification failures. \
         let mut processed = 0usize;
         let mut errors: Vec<String> = Vec::new();
         if !dry_run {
+            let periode = today.replace_day(1).unwrap_or(today);
             for acct in &accounts {
-                let ref_id = format!(
-                    "ABSCHLAG-{}-{:04}-{:02}",
-                    acct.malo_id,
-                    today.year(),
-                    today.month() as u8
-                );
-                match post_entry(
+                match raise_abschlagsforderung(
                     &self.state.ledger,
                     &self.state.pool,
                     &self.state.tenant,
-                    &acct.malo_id,
-                    &acct.lf_mp_id,
-                    "ABSCHLAG",
-                    -acct.abschlag_ct, // advance payment = credit (reduces balance)
-                    &ref_id,           // deterministic key → idempotent per (malo, month)
-                    None,
-                    Some(&ref_id),
+                    acct,
+                    periode,
                     today,
                     today,
-                    Some(&format!("Monatlicher Abschlag Tag {day}")),
-                    None,
                 )
                 .await
                 {
@@ -660,7 +658,7 @@ SEPA pre-notification failures. \
             "processed": if dry_run { 0 } else { processed },
             "errors": errors,
             "next_step": "Run run_sepa_collection within N-5 bank business days to generate pain.008 XML.",
-            "hint": if dry_run { "Set dry_run=false to actually post ABSCHLAG entries." } else { "ABSCHLAG entries posted. Check list_overdue for collection status." },
+            "hint": if dry_run { "Set dry_run=false to actually raise the Abschlagsforderungen." } else { "Abschlagsforderungen raised. Check list_overdue for collection status." },
         }))
         .map(|b| CallToolResult::success(vec![b]))
         .map_err(|e| McpError::internal_error(e.message, None))
@@ -671,7 +669,9 @@ SEPA pre-notification failures. \
 Returns: pRAP (passive Rechnungsabgrenzungsposten = deferred revenue from advance payments), \
 aRAP guidance (active RAP for unbilled energy — requires edmd data, computed by ERP), \
 and the recommended ERP journal entries for Monatsabschluss / Jahresabschluss. \
-pRAP = Σ(accounts with credit balance) = customers pre-paid more than billed. \
+pRAP is read from the ledger: the credit balance of Erhaltene Anzahlungen — advances demanded \
+and not yet absorbed by a settling invoice. Not proxied from customer credit balances, which \
+can equally be a Gutschrift or an overpayment. \
 aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-period per MaLo.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -682,27 +682,32 @@ aRAP (unbilled) cannot be computed here — requires GET edmd /api/v1/billing-pe
         use crate::pg::compute_abgrenzung;
         let cutoff = p.cutoff_date.as_deref().unwrap_or("today").to_owned();
         let today = time::OffsetDateTime::now_utc().date();
-        let (prap_ct, abschlag_total_ct, accounts_with_advance) =
-            match compute_abgrenzung(&self.state.pool, &self.state.tenant).await {
-                Ok(r) => r,
-                Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
-            };
+        let (prap_ct, abschlag_total_ct, accounts_with_advance) = match compute_abgrenzung(
+            &self.state.ledger,
+            &self.state.pool,
+            &self.state.tenant,
+        )
+        .await
+        {
+            Ok(r) => r,
+            Err(e) => return Err(McpError::internal_error(e.to_string(), None)),
+        };
 
         ContentBlock::json(serde_json::json!({
             "cutoff_date": cutoff,
             "computed_at": today.to_string(),
 
             // ── Passive Rechnungsabgrenzungsposten (pRAP) ─────────────────
-            // Customer overpaid: Abschläge collected > energy billed to date.
-            // Book: Dr. Revenue / Cr. pRAP (liability) at period-end.
-            // Release: Dr. pRAP / Cr. Revenue when energy is billed.
+            // The open advance obligation: Erhaltene Anzahlungen, credited when
+            // an Abschlag is demanded and debited when a settling invoice
+            // absorbs it. § 266 Abs. 3 C.3 HGB.
             "prap_ct": prap_ct,
             "prap_eur": format!("{:.2}", prap_ct as f64 / 100.0),
             "prap_erp_entry": {
                 "debit":  "Umsatzerlöse Energie (SKR03: 8400)",
-                "credit": "Passive Rechnungsabgrenzung (SKR03: 0990)",
+                "credit": "Erhaltene Anzahlungen (SKR03: 1718 / SKR04: 3272)",
                 "amount_eur": format!("{:.2}", prap_ct as f64 / 100.0),
-                "explanation": "Abschläge received in advance of energy delivery."
+                "explanation": "Advances demanded ahead of the supply they pay for; released when the settling invoice absorbs them."
             },
 
             // ── Aktive Rechnungsabgrenzungsposten (aRAP) ─────────────────
@@ -892,7 +897,7 @@ Use for: ZAHLUNG (incoming bank transfer), BANKRUECKLAST (returned SEPA direct d
 KORREKTUR (operator adjustment), GUTSCHRIFT (one-off credit). \
 The entry immediately updates the account balance. \
 Allowed entry_type: RECHNUNG, ZAHLUNG, GUTSCHRIFT, EEG_GUTSCHRIFT, EEG_MARKTPRAEMIE, \
-BANKRUECKLAST, MAHNGEBUEHR, ABSCHLAG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
+BANKRUECKLAST, MAHNGEBUEHR, VERZUGSZINSEN, ABSCHLAG, ABSCHLAG_VERRECHNUNG, JAHRESABSCHLUSS, KORREKTUR, STORNO. \
 amount_ct: positive = debit (increases balance); negative = credit (reduces balance). \
 ⚠ This is an authorised operator action — always document via reference_id and description.",
         annotations(read_only_hint = false, open_world_hint = false)
@@ -966,7 +971,7 @@ impl AccountingdMcpHandler {
             ),
             PromptMessage::new_text(
                 Role::Assistant,
-                "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` posts ABSCHLAG entries (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB.",
+                "1. Use `get_balance` to check current open-items balance.\n                 2. Use `list_ledger` to see recent RECHNUNG/ZAHLUNG/GUTSCHRIFT/ABSCHLAG history.\n                 3. If balance > 0 (overdue): check `list_dunning` for active dunning cases.\n                 4. For missing payments: `import_payments` with CAMT.054 bank entries to match.\n                 5. Monthly Abschlagslauf: `run_abschlag_cycle` raises the Abschlagsforderungen (day=billing_day).\n                 6. Monthly SEPA: `run_sepa_collection` → pain.008 XML (send N-5 bank days before due).\n                 7. After Jahresabschluss: `trigger_jahresabschluss` → review → `update_abschlag`.\n                 8. Period-end HGB accruals: `compute_bilanzielle_abgrenzung` → ERP pRAP/aRAP booking.\n                 9. Mahnstufe 3: de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB.",
             ),
         ]
     }

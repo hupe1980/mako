@@ -20,6 +20,7 @@
 //! | [`handlers`] | HTTP surface |
 //! | [`mcp_server`] | Read-only MCP tools and prompts |
 //! | [`angebot_bo4e`] | Reading an accepted quotation out of its BO4E `Angebot` |
+//! | [`dokumente`] | The § 41 Abs. 5 EnWG price-change notice, rendered and delivered through `outputd` |
 //!
 //! ## The two durability rails
 //!
@@ -27,7 +28,9 @@
 //! contract change and the obligations that follow from it commit together:
 //!
 //! - **customer-facing notices** go into the shared CloudEvent outbox
-//!   (`mako_service::outbox`) and are delivered to the ERP with retry;
+//!   (`mako_service::outbox`) and are delivered to the ERP with retry — and,
+//!   where `outputd_url` is configured, are additionally rendered and sent as
+//!   documents with per-channel delivery evidence ([`dokumente`]);
 //! - **service-to-service calls** go into [`outbound`] and are performed by its
 //!   worker with backoff and a dead-letter.
 //!
@@ -35,6 +38,7 @@
 
 pub mod angebot_bo4e;
 pub mod config;
+pub mod dokumente;
 pub mod domain;
 pub mod events;
 pub mod handlers;

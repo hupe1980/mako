@@ -557,42 +557,117 @@ pub struct RechnungsempfaengerRow {
     /// § 13b Abs. 2 Nr. 5 lit. b UStG — the buyer is a Stromwiederverkäufer;
     /// billingd derives reverse charge (net invoice, `AE` breakdown) from it.
     pub stromwiederverkaeufer: bool,
+    /// The customer's e-mail — the bevorzugter `E_MAIL` Kontaktweg, else the
+    /// first. No EN 16931 BT carries it; it is here because the party an
+    /// invoice is addressed to is the party it is sent to, and resolving those
+    /// separately lets a document reach somebody else.
+    pub email: Option<String>,
 }
 
 /// Read the BG-7 terms out of a BO4E `Geschaeftspartner`.
 ///
-/// The column holds a BO4E `Geschaeftspartner`, whose address is a nested
-/// `Adresse` (`strasse`/`hausnummer`/`postleitzahl`/`ort`/`landescode`). Read
-/// defensively — the column is nullable and operator-populated, and a partly
-/// filled address must yield partly filled terms rather than an error.
+/// Typed, not key-probed: the column is JSONB and BO4E-shaped, so it is read
+/// through `rubo4e` and the reader cannot drift from the schema. BO4E models an
+/// organisation and a natural person in one object — `organisationsname` for
+/// the first, `vorname`/`nachname` for the second, and no `name1` at all.
+///
+/// A payload that does not deserialise yields empty terms rather than an error:
+/// the column is operator-populated and nullable, and a malformed one must not
+/// fail the contract lookup § 40 Abs. 1 EnWG needs — the invoice then carries
+/// the synthesised buyer and says so.
 fn buyer_from_geschaeftspartner(
     gp: Option<&serde_json::Value>,
     vat_id: Option<String>,
     stromwiederverkaeufer: bool,
 ) -> RechnungsempfaengerRow {
-    let s = |v: Option<&serde_json::Value>, k: &str| {
-        v.and_then(|v| v.get(k))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned)
+    use rubo4e::current::Geschaeftspartner;
+
+    // `kontaktwege` is lifted out before the typed read, and that is upstream's
+    // defect rather than a choice: `rubo4e` 0.9 with the workspace's `decimal`
+    // feature types `Kontaktweg.kontaktwert` — its own doc says *"Die Nummer
+    // oder E-Mail-Adresse"* — as `Option<Decimal>`. `serde_json` refuses an
+    // address as a decimal, so a `Geschaeftspartner` carrying any contact
+    // method fails to deserialise entirely: name, address, VAT-ID and all.
+    // Everything else stays typed.
+    let mut raw = gp.cloned();
+    let kontaktwege = raw
+        .as_mut()
+        .and_then(|v| v.get_mut("kontaktwege"))
+        .map(serde_json::Value::take);
+    let email = email_from_kontaktwege(kontaktwege.as_ref());
+
+    let Some(gp) = raw.and_then(|v| serde_json::from_value::<Geschaeftspartner>(v).ok()) else {
+        return RechnungsempfaengerRow {
+            name: None,
+            line1: None,
+            post_code: None,
+            city: None,
+            country: None,
+            vat_id,
+            stromwiederverkaeufer,
+            email,
+        };
     };
-    let adresse = gp.and_then(|g| g.get("adresse"));
-    let line1 = match (s(adresse, "strasse"), s(adresse, "hausnummer")) {
+
+    // Organisation or natural person — BO4E models both in one object.
+    let person = |gp: &Geschaeftspartner| match (gp.vorname.as_deref(), gp.nachname.as_deref()) {
+        (Some(v), Some(n)) => Some(format!("{v} {n}")),
+        (None, Some(n)) => Some(n.to_owned()),
+        (Some(v), None) => Some(v.to_owned()),
+        (None, None) => None,
+    };
+    let name = gp
+        .organisationsname
+        .clone()
+        .filter(|n| !n.trim().is_empty())
+        .or_else(|| person(&gp));
+
+    let adresse = gp.adresse.as_ref();
+    let line1 = match (
+        adresse.and_then(|a| a.strasse.clone()),
+        adresse.and_then(|a| a.hausnummer.clone()),
+    ) {
         (Some(st), Some(nr)) => Some(format!("{st} {nr}")),
         (Some(st), None) => Some(st),
         (None, nr) => nr,
     };
+
     RechnungsempfaengerRow {
-        // BO4E carries a company name in `name1`; a natural person's name is
-        // assembled by vertragd's own portal layer, so `name1` is the one field
-        // that is populated for both.
-        name: s(gp, "name1"),
+        name,
         line1,
-        post_code: s(adresse, "postleitzahl"),
-        city: s(adresse, "ort"),
-        country: s(adresse, "landescode"),
-        vat_id,
+        post_code: adresse.and_then(|a| a.postleitzahl.clone()),
+        city: adresse.and_then(|a| a.ort.clone()),
+        country: adresse.and_then(|a| a.landescode.map(|c| c.to_string())),
+        vat_id: vat_id.or_else(|| gp.umsatzsteuer_id.clone()),
         stromwiederverkaeufer,
+        email,
     }
+}
+
+/// The customer's e-mail out of a raw BO4E `kontaktwege` array: the bevorzugter
+/// `E_MAIL` entry, else the first. Raw only because of the upstream
+/// `kontaktwert` defect noted in [`buyer_from_geschaeftspartner`].
+fn email_from_kontaktwege(kontaktwege: Option<&serde_json::Value>) -> Option<String> {
+    let entries = kontaktwege?.as_array()?;
+    let is_mail = |k: &&serde_json::Value| {
+        k.get("kontaktart").and_then(serde_json::Value::as_str) == Some("E_MAIL")
+    };
+    let value = |k: &serde_json::Value| {
+        k.get("kontaktwert")
+            .and_then(serde_json::Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+            .map(str::to_owned)
+    };
+    entries
+        .iter()
+        .find(|k| {
+            is_mail(k)
+                && k.get("istBevorzugterKontaktweg")
+                    .and_then(serde_json::Value::as_bool)
+                    == Some(true)
+        })
+        .and_then(value)
+        .or_else(|| entries.iter().find(is_mail).and_then(value))
 }
 
 type BuyerCols = (Option<serde_json::Value>, Option<String>, bool);
@@ -677,4 +752,101 @@ pub async fn fetch_rechnungsempfaenger_by_ggv(
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|(gp, vat, wv)| buyer_from_geschaeftspartner(gp.as_ref(), vat, wv)))
+}
+
+#[cfg(test)]
+mod buyer_tests {
+    use super::{buyer_from_geschaeftspartner, email_from_kontaktwege};
+
+    /// The projection reads BO4E's own field names. A reader probing for a key
+    /// BO4E does not define leaves BT-44 empty on every invoice addressed to a
+    /// correctly-formed `Geschaeftspartner`.
+    #[test]
+    fn an_organisation_is_named_by_its_bo4e_field() {
+        let gp = serde_json::json!({
+            "_typ": "GESCHAEFTSPARTNER",
+            "organisationsname": "Stadtwerke Musterstadt GmbH",
+            "adresse": {
+                "strasse": "Musterstraße",
+                "hausnummer": "1",
+                "postleitzahl": "12345",
+                "ort": "Musterstadt",
+                "landescode": "DE"
+            },
+            "umsatzsteuerId": "DE123456789"
+        });
+        let b = buyer_from_geschaeftspartner(Some(&gp), None, false);
+        assert_eq!(b.name.as_deref(), Some("Stadtwerke Musterstadt GmbH"));
+        assert_eq!(b.line1.as_deref(), Some("Musterstraße 1"));
+        assert_eq!(b.post_code.as_deref(), Some("12345"));
+        assert_eq!(b.city.as_deref(), Some("Musterstadt"));
+        assert_eq!(b.country.as_deref(), Some("DE"));
+        assert_eq!(b.vat_id.as_deref(), Some("DE123456789"));
+    }
+
+    /// A natural person is named by `vorname`/`nachname`, which is how BO4E
+    /// models the other half of one object.
+    #[test]
+    fn a_household_customer_is_named_by_their_person_fields() {
+        let gp = serde_json::json!({
+            "_typ": "GESCHAEFTSPARTNER",
+            "vorname": "Erika",
+            "nachname": "Mustermann"
+        });
+        let b = buyer_from_geschaeftspartner(Some(&gp), None, false);
+        assert_eq!(b.name.as_deref(), Some("Erika Mustermann"));
+    }
+
+    /// A contact method must not cost the buyer their name: `rubo4e` types
+    /// `kontaktwert` as a `Decimal`, so an object carrying an e-mail address
+    /// fails to deserialise whole unless the array is lifted out first.
+    #[test]
+    fn an_email_contact_does_not_break_the_typed_read() {
+        let gp = serde_json::json!({
+            "_typ": "GESCHAEFTSPARTNER",
+            "organisationsname": "Beispiel AG",
+            "kontaktwege": [
+                { "_typ": "KONTAKTWEG", "kontaktart": "TELEFON", "kontaktwert": "+49 30 123456" },
+                { "_typ": "KONTAKTWEG", "kontaktart": "E_MAIL",
+                  "kontaktwert": "rechnung@beispiel.test",
+                  "istBevorzugterKontaktweg": true }
+            ]
+        });
+        let b = buyer_from_geschaeftspartner(Some(&gp), None, false);
+        assert_eq!(b.name.as_deref(), Some("Beispiel AG"));
+        assert_eq!(b.email.as_deref(), Some("rechnung@beispiel.test"));
+    }
+
+    /// The bevorzugter address wins; otherwise the first e-mail does.
+    #[test]
+    fn the_preferred_email_is_the_one_documents_go_to() {
+        let ways = serde_json::json!([
+            { "kontaktart": "E_MAIL", "kontaktwert": "info@beispiel.test" },
+            { "kontaktart": "E_MAIL", "kontaktwert": "buchhaltung@beispiel.test",
+              "istBevorzugterKontaktweg": true }
+        ]);
+        assert_eq!(
+            email_from_kontaktwege(Some(&ways)).as_deref(),
+            Some("buchhaltung@beispiel.test")
+        );
+        let unranked = serde_json::json!([
+            { "kontaktart": "TELEFON", "kontaktwert": "+49 30 1" },
+            { "kontaktart": "E_MAIL", "kontaktwert": "info@beispiel.test" }
+        ]);
+        assert_eq!(
+            email_from_kontaktwege(Some(&unranked)).as_deref(),
+            Some("info@beispiel.test")
+        );
+        assert_eq!(email_from_kontaktwege(None), None);
+    }
+
+    /// A payload that does not deserialise yields empty terms, never an error:
+    /// the contract lookup § 40 Abs. 1 EnWG needs must not fail because the
+    /// master data is half-filled.
+    #[test]
+    fn an_unusable_payload_yields_empty_terms() {
+        let b = buyer_from_geschaeftspartner(Some(&serde_json::json!(42)), None, true);
+        assert!(b.name.is_none() && b.line1.is_none());
+        assert!(b.stromwiederverkaeufer, "the columns still travel");
+    }
 }

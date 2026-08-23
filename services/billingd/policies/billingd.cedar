@@ -15,6 +15,9 @@
 //   "correct-billing"    — POST /api/v1/billing/{id}/correction (§147 AO / GoBD Storno)
 //   "release-billing"    — POST /api/v1/billing/{id}/release — overrides the risk gate
 //   "submit-b2g"         — POST /api/v1/billing/{id}/submit-b2g
+//   "issue-billing"      — POST /api/v1/billing/{id}/versenden — records the
+//                          rendered document for 8 years and sends it to the
+//                          customer on their channels
 //
 // The MCP surface is authenticated separately by `[mcp]` (McpAuth) and is
 // read-only by construction, so it carries no Cedar action. The VPP dispatch
@@ -53,7 +56,8 @@ permit(
         Action::"settle-flexibility",
         Action::"correct-billing",
         Action::"release-billing",
-        Action::"submit-b2g"
+        Action::"submit-b2g",
+        Action::"issue-billing"
     ],
     resource
 ) when {

@@ -236,8 +236,8 @@ pub async fn post_template_preview(
 ///
 /// Served rather than only documented so an operator's starting point is the
 /// exact source the test suite compiles on every run, not a copy of it that has
-/// drifted. A kind with no reference yet (PREISANPASSUNG) is `404`, which is
-/// the honest answer rather than an invoice layout that would mislead.
+/// drifted. Every kind has one, and each passes its own publish gate — which is
+/// the property that makes it a starting point rather than a sketch.
 pub async fn get_reference_template(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -248,13 +248,7 @@ pub async fn get_reference_template(
     let source = match parse_kind(&kind)? {
         TemplateKind::Invoice => crate::document::REFERENCE_INVOICE_TEMPLATE,
         TemplateKind::Mahnung => crate::document::REFERENCE_MAHNUNG_TEMPLATE,
-        TemplateKind::Preisanpassung => {
-            return Err(OutputError::not_found(
-                "NO_REFERENCE_TEMPLATE",
-                "no reference PREISANPASSUNG template exists yet — its data contract lives \
-                 in vertragd and has not been projected into a view",
-            ));
-        }
+        TemplateKind::Preisanpassung => crate::document::REFERENCE_PREISANPASSUNG,
     };
     Ok((
         StatusCode::OK,
@@ -657,6 +651,42 @@ pub async fn post_render(
 ) -> OutputResult<impl IntoResponse> {
     authorize(&cedar, &claims, "render-document", &cfg.tenant)?;
     let kind = parse_kind(&kind)?;
+    let rendered = render_with_stored_template(&pool, &cfg, kind, &req).await?;
+    Ok((
+        StatusCode::OK,
+        [
+            ("Content-Type", rendered.media_type.to_owned()),
+            ("X-Mako-Template-Hash", rendered.template_hash.clone()),
+        ],
+        rendered.bytes,
+    ))
+}
+
+/// A finished document: the bytes and the template that produced them.
+pub struct RenderedDocument {
+    pub bytes: Vec<u8>,
+    pub template_hash: String,
+    pub media_type: &'static str,
+}
+
+/// Render `req` with the tenant's stored template — the body both
+/// `POST /render/{kind}` and `POST /documents/{kind}` run.
+///
+/// One implementation, because issuing a document is rendering one plus
+/// recording it: a second copy of the resolution, admission and stamping rules
+/// would give the two endpoints different behaviour for the same input.
+///
+/// # Errors
+///
+/// Every refusal `post_render` can answer with: an unresolvable template, a
+/// kind/subject mismatch, an unusable attachment, a template that does not
+/// compile.
+pub async fn render_with_stored_template(
+    pool: &PgPool,
+    cfg: &OutputdConfig,
+    kind: TemplateKind,
+    req: &RenderApiRequest,
+) -> OutputResult<RenderedDocument> {
     let date = time::Date::parse(
         &req.date,
         &time::format_description::well_known::Iso8601::DATE,
@@ -695,7 +725,7 @@ pub async fn post_render(
     };
 
     let template = match req.template_hash {
-        Some(ref hash) => template_store::by_hash(&pool, &cfg.tenant, hash)
+        Some(ref hash) => template_store::by_hash(pool, &cfg.tenant, hash)
             .await
             .map_err(OutputError::Internal)?
             .ok_or_else(|| {
@@ -704,7 +734,7 @@ pub async fn post_render(
                     format!("no template of this tenant has hash {hash}"),
                 )
             })?,
-        None => template_store::current(&pool, &cfg.tenant, kind)
+        None => template_store::current(pool, &cfg.tenant, kind)
             .await
             .map_err(OutputError::Internal)?
             .ok_or_else(|| {
@@ -727,9 +757,9 @@ pub async fn post_render(
     // does not declare.
     let (attachment, profile) = match req.attachment {
         None => (None, None),
-        Some(a) => {
+        Some(ref a) => {
             let profile = crate::document::facturx::Profile::parse(&a.specification_id);
-            let att = crate::document::facturx::attachment(profile, a.xml)
+            let att = crate::document::facturx::attachment(profile, a.xml.clone())
                 .map_err(|e| OutputError::unprocessable("ATTACHMENT_UNUSABLE", format!("{e:#}")))?;
             (Some(att), Some(profile))
         }
@@ -759,12 +789,339 @@ pub async fn post_render(
         None => rendered.pdf,
     };
 
+    Ok(RenderedDocument {
+        bytes: pdf,
+        template_hash: template.hash.clone(),
+        media_type: "application/pdf",
+    })
+}
+
+// ── The document API ──────────────────────────────────────────────────────────
+//
+// `POST /render/{kind}` produces bytes and forgets them — right for a preview,
+// a re-print, or a caller with its own archive. `POST /documents/{kind}` is the
+// same render, recorded and queued, which is what makes "did the customer get
+// this?" a question with an answer.
+
+/// `POST /api/v1/documents/{kind}` body — a render plus who it goes to.
+#[derive(Debug, Deserialize)]
+pub struct IssueDocumentRequest {
+    /// Everything `POST /render/{kind}` takes.
+    #[serde(flatten)]
+    pub render: RenderApiRequest,
+    /// What this document is *about*, in the issuing service's own terms: a
+    /// Rechnungsnummer, a dunning-case id, a Vertragsnummer.
+    ///
+    /// The idempotency key: a retrying issuer gets the document it already
+    /// issued rather than sending a second notice — and a second Mahnung starts
+    /// a second § 41f clock nobody can reconcile with the first.
+    pub subject_ref: String,
+    /// The Marktlokation this document concerns, for the portal's per-MaLo
+    /// scope and the operator's search.
+    #[serde(default)]
+    pub malo_id: Option<String>,
+    /// The business partner (`vertragd` `kunden_nr`), for a B2B customer whose
+    /// documents span several Marktlokationen.
+    #[serde(default)]
+    pub kunden_nr: Option<String>,
+    /// Where it goes, snapshotted at issue — the question afterwards is where
+    /// the notice *was sent*, which live master data cannot answer.
+    #[serde(default)]
+    pub recipient: crate::delivery::store::Recipient,
+    /// Channels to queue. Defaults to `["PORTAL"]` — the durable medium
+    /// § 126b BGB asks for, and the one that needs no external adapter.
+    #[serde(default)]
+    pub channels: Option<Vec<crate::delivery::Channel>>,
+}
+
+/// `POST /api/v1/documents/{kind}` — render, record, and queue for delivery.
+///
+/// `201` for a document that was issued now, `200` for one this
+/// `(kind, subject_ref)` already has. Both answer the same body, so a caller
+/// that retried does not have to distinguish them to proceed.
+pub async fn post_document(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Path(kind): Path<String>,
+    Json(req): Json<IssueDocumentRequest>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "issue-document", &cfg.tenant)?;
+    let kind = parse_kind(&kind)?;
+    if req.subject_ref.trim().is_empty() {
+        return Err(OutputError::bad_request(
+            "SUBJECT_REF_REQUIRED",
+            "subject_ref names what this document is about and is its idempotency key — \
+             a Rechnungsnummer, a dunning-case id, a Vertragsnummer",
+        ));
+    }
+    let channels = req
+        .channels
+        .clone()
+        .unwrap_or_else(|| vec![crate::delivery::Channel::Portal]);
+    if channels.is_empty() {
+        return Err(OutputError::bad_request(
+            "NO_CHANNEL",
+            "an empty channel list would store a document nobody is ever sent — \
+             omit the field for the portal inbox, or name the channels",
+        ));
+    }
+
+    // Before the render: discovering a retry afterwards costs twenty seconds of
+    // Typst and, if the template has moved since, produces bytes that differ
+    // from the ones actually sent.
+    if let Some(existing) =
+        crate::delivery::store::by_subject(&pool, &cfg.tenant, kind.as_str(), &req.subject_ref)
+            .await
+            .map_err(OutputError::Internal)?
+    {
+        return Ok((
+            StatusCode::OK,
+            [(
+                "X-Mako-Template-Hash",
+                existing.document.template_hash.clone(),
+            )],
+            Json(existing),
+        ));
+    }
+
+    let rendered = render_with_stored_template(&pool, &cfg, kind, &req.render).await?;
+    let (issued, created) = crate::delivery::store::issue(
+        &pool,
+        &crate::delivery::store::NewDocument {
+            tenant: &cfg.tenant,
+            kind: kind.as_str(),
+            template_hash: &rendered.template_hash,
+            subject_ref: &req.subject_ref,
+            malo_id: req.malo_id.as_deref(),
+            kunden_nr: req.kunden_nr.as_deref(),
+            content: &rendered.bytes,
+            media_type: rendered.media_type,
+            recipient: req.recipient.clone(),
+            issued_by: Some(claims.sub()),
+        },
+        &channels,
+    )
+    .await
+    .map_err(OutputError::Internal)?;
+
+    tracing::info!(
+        document_id = %issued.document.document_id,
+        kind = kind.as_str(),
+        subject = %req.subject_ref,
+        channels = channels.len(),
+        created,
+        "outputd: document issued"
+    );
     Ok((
-        StatusCode::OK,
-        [
-            ("Content-Type", "application/pdf".to_owned()),
-            ("X-Mako-Template-Hash", template.hash.clone()),
-        ],
-        pdf,
+        if created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        [("X-Mako-Template-Hash", rendered.template_hash)],
+        Json(issued),
     ))
+}
+
+/// `GET /api/v1/documents/{document_id}` — metadata plus every delivery track.
+pub async fn get_document(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Path(document_id): Path<uuid::Uuid>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
+    crate::delivery::store::by_id(&pool, &cfg.tenant, document_id)
+        .await
+        .map_err(OutputError::Internal)?
+        .map(Json)
+        .ok_or_else(|| {
+            OutputError::not_found("DOCUMENT_NOT_FOUND", format!("no document {document_id}"))
+        })
+}
+
+/// `GET /api/v1/documents/{document_id}/content` — the bytes that were sent.
+///
+/// A reproduction, not a re-render: § 147 Abs. 1 AO asks for the document as
+/// issued, and the template that produced it may have moved since.
+pub async fn get_document_content(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Path(document_id): Path<uuid::Uuid>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
+    let (bytes, media_type) = crate::delivery::store::content(&pool, &cfg.tenant, document_id)
+        .await
+        .map_err(OutputError::Internal)?
+        .ok_or_else(|| {
+            OutputError::not_found("DOCUMENT_NOT_FOUND", format!("no document {document_id}"))
+        })?;
+    Ok((StatusCode::OK, [("Content-Type", media_type)], bytes))
+}
+
+/// `GET /api/v1/documents?malo_id=…&kunden_nr=…&kind=…` — the portal inbox.
+///
+/// Scoped by construction: a request naming neither a MaLo nor a business
+/// partner is refused rather than answered with the whole portfolio. `portald`
+/// forwards a customer's scope into this query, and a filter that degrades to
+/// "everything" is one bug away from serving it to whoever asks.
+pub async fn list_documents(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Query(filter): Query<crate::delivery::store::DocumentFilter>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
+    if filter.malo_id.is_none() && filter.kunden_nr.is_none() {
+        return Err(OutputError::bad_request(
+            "UNSCOPED_QUERY",
+            "name a malo_id or a kunden_nr — an unscoped document list is not a query this \
+             API answers",
+        ));
+    }
+    crate::delivery::store::list(&pool, &cfg.tenant, &filter)
+        .await
+        .map(Json)
+        .map_err(OutputError::Internal)
+}
+
+/// `POST /api/v1/deliveries/{delivery_id}/read` — the customer opened it.
+///
+/// Called by `portald` when a customer views the document. More than Textform
+/// asks for, and exactly what a § 41f dispute asks about. Set once.
+pub async fn post_delivery_read(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Path(delivery_id): Path<uuid::Uuid>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
+    if crate::delivery::store::record_read(&pool, &cfg.tenant, delivery_id)
+        .await
+        .map_err(OutputError::Internal)?
+    {
+        Ok(StatusCode::NO_CONTENT)
+    } else {
+        Err(OutputError::not_found(
+            "PORTAL_DELIVERY_NOT_FOUND",
+            format!("no portal delivery {delivery_id} for this tenant"),
+        ))
+    }
+}
+
+/// `POST /api/v1/deliveries/{delivery_id}/status` body — what a channel
+/// reports back.
+#[derive(Debug, Deserialize)]
+pub struct DeliveryStatusReport {
+    /// `true` when the far end observed the document **arrive** — the
+    /// recipient's server accepted it, the letter was posted. Anything less is
+    /// the hand-off the send already recorded.
+    #[serde(default)]
+    pub delivered: bool,
+    /// A failure reported after the fact — a bounce, a rejected print job.
+    /// Present means the attempt failed however it looked at send time.
+    #[serde(default)]
+    pub error: Option<String>,
+    /// The channel's own receipt: message id, batch reference, carrier
+    /// tracking. Stored as the evidence.
+    #[serde(default)]
+    pub evidence: Option<serde_json::Value>,
+}
+
+/// `POST /api/v1/deliveries/{delivery_id}/status` — an asynchronous outcome.
+///
+/// The half of delivery that cannot be known at send time: a relay accepting a
+/// message is not the recipient's server accepting it, so `EMAIL` and `POST`
+/// reach `SENT` on the send and `DELIVERED` only here — and a bounce reported
+/// here turns an apparently-successful notice into the failure it was.
+pub async fn post_delivery_status(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Path(delivery_id): Path<uuid::Uuid>,
+    Json(report): Json<DeliveryStatusReport>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "report-delivery", &cfg.tenant)?;
+    match report.error {
+        Some(error) => {
+            // Terminal: the channel has told us it did not arrive, so retrying
+            // the same hand-off would only produce the same bounce.
+            crate::delivery::store::record_failure(
+                &pool,
+                &cfg.tenant,
+                delivery_id,
+                &error,
+                true,
+                time::Duration::ZERO,
+            )
+            .await
+            .map_err(OutputError::Internal)?;
+            tracing::error!(
+                %delivery_id, %error,
+                "outputd: a delivery channel reported the document did not arrive"
+            );
+        }
+        None => {
+            crate::delivery::store::record_success(
+                &pool,
+                &cfg.tenant,
+                delivery_id,
+                report.delivered,
+                report.evidence,
+            )
+            .await
+            .map_err(OutputError::Internal)?;
+        }
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `GET /api/v1/spool?limit=…` — what a print service collects.
+///
+/// The pull half of the `POST` channel, which is how most Druckdienstleister
+/// integrate: list what is waiting, fetch each document's bytes from
+/// `/documents/{id}/content`, and report back through
+/// `/deliveries/{id}/status` once the letters are in the post.
+pub async fn get_spool(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(cfg): Extension<Arc<OutputdConfig>>,
+    Query(q): Query<SpoolQuery>,
+) -> OutputResult<impl IntoResponse> {
+    authorize(&cedar, &claims, "read-document", &cfg.tenant)?;
+    let rows = crate::delivery::store::postal_spool(&pool, &cfg.tenant, q.limit.unwrap_or(100))
+        .await
+        .map_err(OutputError::Internal)?;
+    let out: Vec<serde_json::Value> = rows
+        .into_iter()
+        .map(|d| {
+            serde_json::json!({
+                "delivery_id":    d.delivery_id,
+                "document_id":    d.document_id,
+                "kind":           d.kind,
+                "subject_ref":    d.subject_ref,
+                "malo_id":        d.malo_id,
+                "kunden_nr":      d.kunden_nr,
+                "recipient_name": d.recipient_name,
+                "address":        d.target,
+                "media_type":     d.media_type,
+                "content_url":    format!("/api/v1/documents/{}/content", d.document_id),
+            })
+        })
+        .collect();
+    Ok(Json(out))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpoolQuery {
+    pub limit: Option<i64>,
 }

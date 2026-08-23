@@ -1009,6 +1009,12 @@ pub struct Rechnungsempfaenger {
     /// billingd derives reverse charge from this master-data flag.
     #[serde(default)]
     pub stromwiederverkaeufer: bool,
+    /// Where an electronic document reaches them. No EN 16931 BT carries it;
+    /// it is here because the party an invoice is addressed to is the party it
+    /// is sent to, and resolving those separately is how a document ends up
+    /// addressed to one person and delivered to another.
+    #[serde(default)]
+    pub email: Option<String>,
 }
 
 /// The contract facts billingd puts on the invoice (§40 Abs. 1 EnWG).
@@ -1176,6 +1182,72 @@ impl OutputdClient {
         let pdf = resp.bytes().await.context("outputd render body")?.to_vec();
         Ok(RenderedDocument { pdf, template_hash })
     }
+
+    /// `POST /api/v1/documents/INVOICE` — render, **record** and queue for
+    /// delivery.
+    ///
+    /// The difference from [`Self::render_invoice`] is not the bytes but that
+    /// they are kept and sent — which is what makes "reproduce exactly what was
+    /// issued" (§ 14 Abs. 1 UStG, § 147 AO) and "did the customer receive it"
+    /// answerable. Idempotent on the Rechnungsnummer.
+    ///
+    /// # Errors
+    ///
+    /// Propagates transport failures and outputd's own refusals.
+    pub async fn issue_invoice(&self, req: &IssueInvoiceRequest<'_>) -> Result<IssuedDocument> {
+        let body = serde_json::json!({
+            "model":       req.model,
+            "attachment":  { "xml": req.xml, "specification_id": req.specification_id },
+            "template_hash": req.template_hash,
+            "date":        req.date.to_string(),
+            "ident":       req.ident,
+            "subject_ref": req.rechnungsnummer,
+            "malo_id":     req.malo_id,
+            "kunden_nr":   req.kunden_nr,
+            "recipient":   req.recipient,
+            "channels":    req.channels,
+        });
+        self.up
+            .json(self.up.post("/api/v1/documents/INVOICE").json(&body))
+            .await
+            .context("outputd POST document INVOICE")?
+            .context("outputd answered 404 for the document endpoint — is it on this version?")
+    }
+}
+
+/// An invoice to issue and deliver.
+#[derive(Debug)]
+pub struct IssueInvoiceRequest<'a> {
+    pub model: &'a en16931::Invoice,
+    pub xml: String,
+    pub specification_id: &'a str,
+    /// The template the record already pins, so a re-issue reproduces it.
+    pub template_hash: Option<&'a str>,
+    pub date: time::Date,
+    pub ident: String,
+    /// The § 14 Abs. 4 Nr. 4 UStG Rechnungsnummer — outputd's idempotency key.
+    pub rechnungsnummer: &'a str,
+    pub malo_id: &'a str,
+    pub kunden_nr: Option<&'a str>,
+    pub recipient: serde_json::Value,
+    pub channels: Vec<String>,
+}
+
+/// What outputd recorded for an issued document.
+#[derive(Debug, serde::Deserialize)]
+pub struct IssuedDocument {
+    pub document_id: uuid::Uuid,
+    pub template_hash: String,
+}
+
+impl serde::Serialize for IssuedDocument {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+        let mut st = s.serialize_struct("IssuedDocument", 2)?;
+        st.serialize_field("document_id", &self.document_id)?;
+        st.serialize_field("template_hash", &self.template_hash)?;
+        st.end()
+    }
 }
 
 // ── BillingDeps ───────────────────────────────────────────────────────────────
@@ -1193,6 +1265,10 @@ pub struct BillingDeps {
     pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
     pub vertragd: Arc<VertragdClient>,
     pub outputd: Arc<OutputdClient>,
+    /// The Massenkontokorrent. `None` when no `accountingd_url` is configured —
+    /// a deployment that runs its own receivables elsewhere. The §40b sweep
+    /// then cannot settle advances and says so instead of guessing zero.
+    pub accountingd: Option<Arc<AccountingdClient>>,
 }
 
 impl BillingDeps {
@@ -1201,5 +1277,55 @@ impl BillingDeps {
     #[must_use]
     pub fn tenant(&self) -> &str {
         &self.cfg.tenant
+    }
+}
+
+// ── AccountingdClient ─────────────────────────────────────────────────────────
+
+/// Client for `accountingd`, the Massenkontokorrent.
+///
+/// One read, and it does not invert the service graph: `accountingd` is
+/// downstream of `billingd` for *events*, and billingd never asks it to compute
+/// anything. What it asks for is the advance-payment register — which Abschläge
+/// this Marktlokation paid and at which VAT rate, which only the ledger knows
+/// and which § 40 Abs. 1 EnWG / § 14 Abs. 5 Satz 2 UStG make part of a lawful
+/// settling invoice. The same read SAP IS-U billing makes against FI-CA.
+pub struct AccountingdClient {
+    up: Upstream,
+}
+
+impl AccountingdClient {
+    pub fn new(base_url: &str, api_key: Option<String>) -> Self {
+        Self {
+            up: upstream("accountingd", base_url, api_key),
+        }
+    }
+
+    /// `GET /api/v1/accounts/{malo_id}/abschlaege?from=&to=`
+    ///
+    /// The advances a settling invoice for `[from, to]` may deduct: received
+    /// (§ 14 Abs. 5 Satz 2 UStG „vereinnahmte Teilentgelte"), not already
+    /// absorbed by an earlier settlement, oldest first, each with its rate.
+    ///
+    /// # Errors
+    ///
+    /// Propagates transport and deserialisation failures. A `404` — the MaLo
+    /// has no Kundenkonto — is `Ok(None)`, which is a different fact from
+    /// accountingd being unreachable.
+    pub async fn get_abschlaege(
+        &self,
+        malo_id: &str,
+        from: time::Date,
+        to: time::Date,
+    ) -> Result<Option<Vec<energy_billing::AbschlagDeduction>>> {
+        let path = format!("/api/v1/accounts/{malo_id}/abschlaege");
+        let request = self
+            .up
+            .get(&path)
+            .query(&[("from", from.to_string()), ("to", to.to_string())]);
+        self.up
+            .json(request)
+            .await
+            .context("accountingd GET abschlaege")
     }
 }

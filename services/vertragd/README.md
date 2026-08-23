@@ -281,7 +281,7 @@ Buchungsbelege 8 Jahre), and `anonymization_log` records what was overwritten.
 |---|---|
 | **Outbound** | Drains `outbound_tasks` every 5 s, up to 64 per wake-up |
 | **Outbox** | Delivers `de.vertrag.*` to the ERP webhook (`mako_service::outbox`) |
-| **Preisanpassung** | Sends the § 41 Abs. 5 notice with the Sonderkündigungsrecht for every scheduled Tarifwechsel whose notice is still owed |
+| **Preisanpassung** | Sends the § 41 Abs. 5 notice with the Sonderkündigungsrecht for every scheduled Tarifwechsel whose notice is still owed, and — where `outputd_url` and `[absender]` are configured — renders and delivers it as a document. A Tarifwechsel scheduled without `preise` gets its CloudEvent and **no letter**: § 41 Abs. 5 Satz 1 wants the *Umfang* of the change, and a notice that states none is not a valid Preisänderungsanzeige |
 | **Auto-renewal** | Announces the extension once per term, then applies it: **unbefristet with ≤ 1 month notice for consumers** (§ 309 Nr. 9 lit. b BGB), a further fixed term only for business customers |
 | **Ablauf** | Ends supply whose Lieferende has passed and closes the contract behind it; announces a term or price guarantee running out — once per date, tracked in `ablauf_notif_fuer` |
 

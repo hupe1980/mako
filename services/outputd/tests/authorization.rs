@@ -11,6 +11,72 @@
 use mako_service::cedar::{CedarEnforcer, CedarPrincipal};
 
 const POLICY: &str = include_str!("../policies/outputd.cedar");
+/// The handlers, so the guard can compare the actions the *code* checks against
+/// the ones the policy grants. A hand-maintained list drifts silently in both
+/// directions: a handler wired to an action no policy mentions is `403` for
+/// every caller (Cedar is deny-by-default), and a granted action nobody checks
+/// is either a lost check or a dead rule.
+const HANDLERS: &str = include_str!("../src/handlers.rs");
+
+/// Every action literal passed to `authorize(&cedar, &claims, "…", …)`.
+///
+/// Anchored on the `&claims, ` argument rather than on the function name:
+/// `authorize(` also matches the definition, whose body contains string
+/// literals of its own.
+fn actions_used_in_code() -> std::collections::BTreeSet<String> {
+    const CALL: &str = "&claims, \"";
+    let mut found = std::collections::BTreeSet::new();
+    let mut rest = HANDLERS;
+    while let Some(idx) = rest.find(CALL) {
+        rest = &rest[idx + CALL.len()..];
+        let Some(close) = rest.find('"') else { break };
+        found.insert(rest[..close].to_owned());
+        rest = &rest[close..];
+    }
+    found
+}
+
+/// Every `Action::"…"` the policy names.
+fn actions_permitted_in_policy() -> std::collections::BTreeSet<String> {
+    let mut found = std::collections::BTreeSet::new();
+    let mut rest = POLICY;
+    while let Some(idx) = rest.find("Action::\"") {
+        rest = &rest[idx + "Action::\"".len()..];
+        let Some(close) = rest.find('"') else { break };
+        found.insert(rest[..close].to_owned());
+        rest = &rest[close..];
+    }
+    found
+}
+
+/// Every action a handler checks is granted somewhere, and every granted action
+/// is checked.
+#[test]
+fn the_policy_and_the_code_name_the_same_actions() {
+    let used = actions_used_in_code();
+    assert!(
+        !used.is_empty(),
+        "the extractor found no actions — it has drifted from the call shape"
+    );
+    let permitted = actions_permitted_in_policy();
+    let missing: Vec<_> = used.difference(&permitted).cloned().collect();
+    assert!(
+        missing.is_empty(),
+        "these actions are checked in code but appear in no policy, so Cedar's \
+         default-deny makes those routes 403 for every caller: {missing:?}"
+    );
+    let dead: Vec<_> = permitted.difference(&used).cloned().collect();
+    assert!(
+        dead.is_empty(),
+        "these actions are granted by policy but checked nowhere — either a route \
+         lost its check or the grant is dead: {dead:?}"
+    );
+    assert_eq!(
+        used,
+        ALL_ACTIONS.iter().map(|a| (*a).to_owned()).collect(),
+        "ALL_ACTIONS must list exactly what the code checks"
+    );
+}
 
 fn enforcer() -> CedarEnforcer {
     CedarEnforcer::from_policy_str(POLICY).expect("outputd.cedar parses")
@@ -29,12 +95,15 @@ const TENANT: &str = "9900357000004";
 /// Every action the router enforces must be decidable by the policy. A typo in
 /// either place — a renamed action, a handler wired to a string no policy
 /// mentions — turns into an endpoint nobody can reach.
-const ALL_ACTIONS: [&str; 5] = [
+const ALL_ACTIONS: [&str; 8] = [
     "read-template",
     "preview-template",
     "publish-template",
     "rollout-template",
     "render-document",
+    "issue-document",
+    "read-document",
+    "report-delivery",
 ];
 
 /// The service's own market roles reach every action.
@@ -77,10 +146,47 @@ fn a_foreign_market_role_looks_but_does_not_publish_or_render() {
         e.check(&nb, "preview-template", TENANT).is_ok(),
         "a preview renders the specimen and stores nothing"
     );
-    for action in ["publish-template", "rollout-template", "render-document"] {
+    for action in [
+        "publish-template",
+        "rollout-template",
+        "render-document",
+        "issue-document",
+        "report-delivery",
+    ] {
         assert!(
             e.check(&nb, action, TENANT).is_err(),
             "NB must not be able to {action}"
+        );
+    }
+    assert!(
+        e.check(&nb, "read-document", TENANT).is_ok(),
+        "reading issued documents is a tenant read — the scope that protects a customer is \
+         the query, which refuses to answer without a MaLo or a Kundennummer"
+    );
+}
+
+/// Issuing a document is gated exactly like rendering one.
+///
+/// `POST /render` produces bytes and forgets them; `POST /documents` writes a
+/// row kept for eight years and sends it to a named person. If anything, the
+/// second is the stronger act — so a caller who cannot render must not be able
+/// to issue, and this pins that the two never drift apart.
+#[test]
+fn issuing_is_gated_at_least_as_tightly_as_rendering() {
+    let e = enforcer();
+    for role in [
+        vec!["LF"],
+        vec!["MSB"],
+        vec!["ESA"],
+        vec!["NB"],
+        vec!["UENB"],
+        vec![],
+    ] {
+        let p = principal(TENANT, &role);
+        assert_eq!(
+            e.check(&p, "render-document", TENANT).is_ok(),
+            e.check(&p, "issue-document", TENANT).is_ok(),
+            "render and issue must be reachable by exactly the same callers ({role:?})"
         );
     }
 }

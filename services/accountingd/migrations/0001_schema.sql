@@ -60,6 +60,14 @@ CREATE TABLE accounts (
     abschlag_ct         BIGINT      NOT NULL DEFAULT 0,
     -- Day of month for automated Abschlag booking (1–28)
     billing_day         SMALLINT    NOT NULL DEFAULT 1,
+    -- The USt rate this account's Abschlagsforderungen are raised at, as a
+    -- fraction (0.19 = 19 %). § 14 Abs. 5 Satz 2 UStG: the settling invoice
+    -- deducts the advances *and the tax attributable to them*, and one raised
+    -- at 19 % takes a different amount of tax out of the same gross sum than
+    -- one at 7 %. Copied onto each demand, so a later rate change does not
+    -- rewrite what was already demanded.
+    abschlag_ust_satz   NUMERIC(5,4) NOT NULL DEFAULT 0.19
+                            CHECK (abschlag_ust_satz >= 0 AND abschlag_ust_satz < 1),
 
     -- Ledger-DERIVED balance projection (negative = credit, positive = debt),
     -- in EUR-cent. NOT the system of record: the authoritative balance is the
@@ -146,6 +154,59 @@ CREATE INDEX acct_bp           ON accounts (tenant, kunden_nr) WHERE kunden_nr I
 CREATE INDEX acct_overdue      ON accounts (tenant) WHERE balance_ct > 0;
 -- The §41f candidate scan: accounts actually in Verzug on the supply debt.
 CREATE INDEX acct_verzug       ON accounts (tenant) WHERE verzug_ct > 0;
+
+-- ── Abschlagsforderungen (advance-payment register) ──────────────────────────
+--
+-- One row per advance the operator has **demanded**. The ledger holds the money
+-- fact (a Kontokorrent debit against Erhaltene Anzahlungen); this table holds
+-- the two document facts it does not carry: the USt rate the advance was raised
+-- at (§ 14 Abs. 5 Satz 2 UStG makes it part of the deduction), and which
+-- settling invoice absorbed it, so the same advance cannot be deducted twice.
+--
+-- Not a second ledger. Whether an advance was **received** (§ 14 Abs. 5: „die
+-- vereinnahmten Teilentgelte") is never stored here — it is the residual of
+-- `entry_id` after FIFO clearing, so payment state has one home.
+
+CREATE TABLE abschlag_forderungen (
+    tenant          TEXT        NOT NULL,
+    -- `ABSCHLAG-{malo}-{YYYY}-{MM}`, and also the ledger idempotency key of the
+    -- debit — so a re-run of the Abschlagslauf is a no-op on both.
+    reference       TEXT        NOT NULL,
+    account_id      UUID        NOT NULL REFERENCES accounts (account_id) ON DELETE CASCADE,
+    malo_id         TEXT        NOT NULL,
+    lf_mp_id        TEXT        NOT NULL,
+    -- First day of the month the advance covers.
+    periode         DATE        NOT NULL,
+    -- When payment is owed. The SEPA collection and the Mahnwesen both read it.
+    faellig_am      DATE        NOT NULL,
+    -- Gross amount demanded, in EUR-cent. Always positive: a negative advance
+    -- is a Gutschrift and is booked as one.
+    betrag_ct       BIGINT      NOT NULL CHECK (betrag_ct > 0),
+    -- The rate contained in `betrag_ct`, copied from `accounts.abschlag_ust_satz`
+    -- when the demand was raised.
+    ust_satz        NUMERIC(5,4) NOT NULL CHECK (ust_satz >= 0 AND ust_satz < 1),
+    -- The Kontokorrent debit. The join key for "was it paid?".
+    entry_id        UUID        NOT NULL,
+    -- The Rechnungsnummer of the settling invoice that deducted this advance,
+    -- set when the ABSCHLAG_VERRECHNUNG for it is booked. NULL = still open
+    -- towards a future Jahres-/Schlussrechnung.
+    verrechnet_mit  TEXT,
+    verrechnet_at   TIMESTAMPTZ,
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (tenant, reference),
+    CHECK ((verrechnet_mit IS NULL) = (verrechnet_at IS NULL))
+);
+
+COMMENT ON TABLE abschlag_forderungen IS
+    'Register of demanded advance payments (Abschlagsforderungen). Carries the '
+    'USt rate each advance was raised at (§ 14 Abs. 5 Satz 2 UStG) and which '
+    'settling invoice absorbed it. Payment state is NOT stored here — it is the '
+    'residual of entry_id in the doubleentry ledger.';
+
+-- The billingd read path: advances of one MaLo in a period, oldest first.
+CREATE INDEX af_malo_periode ON abschlag_forderungen (tenant, malo_id, lf_mp_id, periode);
+-- Advances still awaiting a settling invoice.
+CREATE INDEX af_offen ON abschlag_forderungen (tenant, malo_id) WHERE verrechnet_mit IS NULL;
 
 -- ── The double-entry ledger lives in the `doubleentry` schema ─────────────────
 --
@@ -262,6 +323,17 @@ CREATE TABLE dunning_cases (
     -- once the grounds fell away. Restoration is *unverzüglich* and owed without
     -- being asked, so it follows automatically from the grounds ending.
     entsperrauftrag_ce_id   TEXT,
+    -- The `outputd` document that communicated this Mahnung, and when. NULL
+    -- means the customer has not been told: the escalation is in this table and
+    -- nothing left the building — which at Mahnstufe 3 is a §§ 41f/41g sequence
+    -- with no notice behind it.
+    --
+    -- A plain value, not a foreign key: outputd owns the document in its own
+    -- database, and its append-only store keeps the reference resolvable
+    -- (§ 147 AO).
+    dokument_id             UUID,
+    dokument_issued_at      TIMESTAMPTZ,
+    CHECK ((dokument_id IS NULL) = (dokument_issued_at IS NULL)),
     -- §41g Abs. 1 S. 2 — when the Grundversorger's Abwendungsvereinbarung offer
     -- went out. Due within one week of a demand made after the Androhung, and at
     -- the latest with the Ankündigung. Recorded separately from acceptance: a
@@ -281,6 +353,9 @@ COMMENT ON TABLE dunning_cases IS
     'forderungs_einwaende.';
 
 CREATE INDEX dc_account ON dunning_cases (account_id, stufe);
+-- The document sweep: open cases nobody has been told about.
+CREATE INDEX dc_undocumented ON dunning_cases (tenant, issued_at)
+    WHERE resolved_at IS NULL AND dokument_id IS NULL;
 CREATE INDEX dc_overdue ON dunning_cases (tenant, due_date)
     WHERE resolved_at IS NULL;
 -- §41f Abs. 7 candidate scan: disconnected cases awaiting restoration.

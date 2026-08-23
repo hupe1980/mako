@@ -34,6 +34,8 @@ All paths are prefixed `/api/v1/portal/{malo_id}`.
 | `GET` | `/lastgang?from=&to=` | `edmd` |
 | `GET` | `/invoices?limit=&outcome=` | `billingd` |
 | `GET` | `/invoices/{record_id}/download` | `billingd` — XRechnung 3.0 CII XML (EN 16931) |
+| `GET` | `/dokumente?kind=&limit=` | `outputd` — the document inbox: what was issued and sent |
+| `GET` | `/dokumente/{document_id}` | `outputd` — the bytes as issued; opening it records the portal read receipt |
 | `GET` | `/balance` · `/kontoauszug` · `/vorauszahlung` | `accountingd` |
 | `GET` | `/eeg` | `einsd` |
 | `GET` | `/versorgung` | `marktd` |

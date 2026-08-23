@@ -111,6 +111,38 @@ pub struct TarifwechselInput {
     /// logged to `preisgarantie_override_log`.
     #[serde(default)]
     pub override_preisgarantie: bool,
+    /// § 41 Abs. 5 Satz 1 EnWG — the **Umfang** of the change, line by line, as
+    /// the notice will state it.
+    ///
+    /// Supplied here because the caller chose the new tariff and therefore
+    /// holds both price sheets, and because what the notice said is a fact
+    /// about the notice: a catalogue lookup years later answers what the price
+    /// *is*, not what the customer was *told*. `vertragd` never asks `tarifbd`
+    /// (BILLING.md § 3), and this is why it does not have to.
+    ///
+    /// Empty schedules the change and still emits the CloudEvent, but **no
+    /// § 41 Abs. 5 notice document is issued**: a Preisänderungsanzeige that
+    /// states no Umfang is not a valid one, and issuing it would make an
+    /// invalid notice indistinguishable from a sent one.
+    #[serde(default)]
+    pub preise: Vec<AngekuendigterPreis>,
+}
+
+/// One price line as the § 41 Abs. 5 notice states it changing.
+///
+/// Amounts are decimal strings — the same convention the document views use, so
+/// the value travels from the API to the page without ever becoming a float.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AngekuendigterPreis {
+    /// What is priced, as the customer's tariff names it — `"Arbeitspreis"`,
+    /// `"Grundpreis"`, `"Arbeitspreis HT"`.
+    pub bezeichnung: String,
+    /// The unit both amounts are in — `"ct/kWh"`, `"EUR/Jahr"`.
+    pub einheit: String,
+    /// What it costs today.
+    pub bisher: String,
+    /// What it will cost from `wirksamkeit`.
+    pub neu: String,
 }
 
 // ── Insert results ────────────────────────────────────────────────────────────

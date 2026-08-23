@@ -212,6 +212,61 @@ pub struct AccountingdConfig {
     #[serde(default)]
     pub creditor_address: crate::sepa::AddressParts,
 
+    /// `outputd` base URL — the customer-communications daemon that renders
+    /// and delivers the Mahnung.
+    ///
+    /// Absent → dunning cases escalate as before and **no document is
+    /// produced**. That is the state this platform shipped in: a deployment
+    /// without an ERP webhook walked customers to Mahnstufe 3 and on into the
+    /// §§ 41f/41g disconnection sequence with nothing ever having been sent to
+    /// them. Configure it, or configure `erp_webhook_url` and let the ERP send
+    /// the letters off the CloudEvent.
+    pub outputd_url: Option<String>,
+
+    /// Bearer key for `outputd`. Use `"env:VAR_NAME"`.
+    pub outputd_api_key: Option<SecretString>,
+
+    /// `vertragd` base URL — the contract registry that knows **who** a
+    /// Marktlokation's customer is.
+    ///
+    /// `accountingd` keys everything on a MaLo and deliberately holds no
+    /// customer master: no name, no postal address, no e-mail (`vertragd` is
+    /// the platform's one OIDC-to-MaLo boundary). Required alongside
+    /// `outputd_url`: a Mahnung with no addressee is not Textform
+    /// (§ 126b BGB), so without this no document is issued.
+    pub vertragd_url: Option<String>,
+
+    /// Bearer key for `vertragd`. Use `"env:VAR_NAME"`.
+    pub vertragd_api_key: Option<SecretString>,
+
+    /// Run the annual **Jahresabschluss** automatically (§ 40b Abs. 1 EnWG).
+    ///
+    /// Default: `false`. When on, a daily worker settles every account whose
+    /// previous year has no `jahresabschluss_runs` row, starting on
+    /// [`AccountingdConfig::jahresabschluss_start_day`] — the same settlement an
+    /// operator's `POST /api/v1/jahresabschluss/{malo}` performs, through the
+    /// same code, so the two cannot disagree about the postings, the refund or
+    /// the event.
+    ///
+    /// Opt-in because the settlement **moves money**: a year that overpaid is
+    /// refunded by pain.001 the moment it is settled, and an operator who has
+    /// not yet finished billing that year would be refunding against invoices
+    /// they have not issued. Turn it on once the year's billing is complete —
+    /// which is what `jahresabschluss_start_day` is for.
+    #[serde(default)]
+    pub jahresabschluss_auto_enabled: bool,
+
+    /// Day of the year from which the previous year may be settled, as
+    /// `MM-DD`. Default `"02-01"`.
+    ///
+    /// § 40c Abs. 2 EnWG gives the supplier six weeks after the end of the
+    /// abzurechnender Zeitraum to render the bill, so settling on 1 January
+    /// would settle a year whose December invoices do not exist yet — and pay
+    /// out a refund the December bill would have consumed. February is the
+    /// earliest defensible default; an operator whose billing runs later moves
+    /// it later.
+    pub jahresabschluss_start_day: Option<String>,
+
     /// Enable automatic Mahnwesen escalation.
     ///
     /// When `true`, the background dunning worker runs daily and automatically:

@@ -38,6 +38,12 @@ fn routes() -> Vec<(Method, &'static str, Option<&'static str>)> {
             "/api/v1/portal/51238696012/invoices/0195f6c2-0000-7000-8000-000000000001/download",
             None,
         ),
+        (Method::GET, "/api/v1/portal/51238696012/dokumente", None),
+        (
+            Method::GET,
+            "/api/v1/portal/51238696012/dokumente/0195f6c2-0000-7000-8000-000000000002",
+            None,
+        ),
         (Method::GET, "/api/v1/portal/51238696012/balance", None),
         (Method::GET, "/api/v1/portal/51238696012/kontoauszug", None),
         (

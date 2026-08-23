@@ -1,32 +1,39 @@
 +++
 title = "outputd Operator Guide"
-description = "outputd operator guide: customer-communications daemon. Operator-owned Typst templates (content-addressed, append-only, publish gated by proof), the ZUGFeRD PDF/A-3 carrier around a caller's EN 16931 CII payload, Textform documents (Mahnung § 126b BGB), and the containerized external validation panel (veraPDF + Mustang)."
+description = "outputd operator guide: customer-communications daemon. Operator-owned Typst templates (content-addressed, append-only, publish gated by proof), the ZUGFeRD PDF/A-3 carrier around a caller's EN 16931 CII payload, Textform documents (Mahnung and Preisanpassung, § 126b BGB), the append-only store of issued documents, delivery over portal, e-mail and print spool with per-channel evidence, and the containerized external validation panel (veraPDF + Mustang)."
 weight = 33
 [extra]
 mermaid = true
 +++
 # `outputd` — Customer Communications
 
-`outputd` renders the documents a customer receives. It owns **how documents
-look** — the operator's Typst templates, the render engine, the ZUGFeRD PDF/A-3
-carrier, the publish gates and the append-only template store. What a document
-**says** — amounts, VAT, legal basis — stays with the issuing service: billingd
-for invoices, accountingd for the Mahnwesen figures. outputd never recomputes a
-number; it renders what it is handed and proves the rendering.
+`outputd` renders the documents a customer receives and delivers them. It owns
+**how documents look** — the operator's Typst templates, the render engine, the
+ZUGFeRD PDF/A-3 carrier, the publish gates and the append-only template store —
+and **whether they arrived**: the store of issued documents and the per-channel
+delivery evidence. What a document **says** — amounts, VAT, legal basis — stays
+with the issuing service: billingd for invoices, accountingd for the Mahnwesen
+figures, vertragd for a price change. outputd never recomputes a number.
 
 The template system is deliberately not invoice-specific: one brand has one
 template store, and a logo change must reach the invoice *and* the Mahnung.
-outputd renders and proves documents; delivering them is the caller's concern.
 
 Port: `:9880`
 
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/api/v1/render/{kind}` | Render a view with the current or a pinned template; `X-Mako-Template-Hash` names the layout used |
+| `POST` | `/api/v1/render/{kind}` | Render a view with the current or a pinned template; `X-Mako-Template-Hash` names the layout used. Stores nothing |
+| `POST` | `/api/v1/documents/{kind}` | Render, **record** and queue for delivery; idempotent on `subject_ref` |
+| `GET` | `/api/v1/documents` | A customer's documents (`?malo_id=` or `?kunden_nr=`, `&kind=`) — the portal inbox |
+| `GET` | `/api/v1/documents/{id}` | One document with every delivery track |
+| `GET` | `/api/v1/documents/{id}/content` | The bytes as issued — a reproduction, never a re-render |
+| `POST` | `/api/v1/deliveries/{id}/read` | The customer opened it in the portal |
+| `POST` | `/api/v1/deliveries/{id}/status` | A channel reports arrival or a bounce |
+| `GET` | `/api/v1/spool` | What a print service collects |
 | `GET` | `/api/v1/templates` | Every template this tenant published (`?kind=&limit=`) |
 | `POST` | `/api/v1/templates` | Prove a template, then store it forever |
 | `POST` | `/api/v1/templates/preview` | Render a candidate against the kind's specimen; stores nothing |
-| `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships (`INVOICE`, `MAHNUNG`) |
+| `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships, one per kind |
 | `GET`/`PUT` | `/api/v1/templates/{kind}/current` | Which template is rolled out |
 | `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve the layout an issued document used |
 
@@ -45,6 +52,9 @@ What "about" means depends on the kind:
 |---|---|---|
 | `INVOICE` | `model` — the EN 16931 semantic model | outputd projects the page view from it, so the projection the publish gate proves templates against is the one production feeds them |
 | `MAHNUNG`, `PREISANPASSUNG` | `view` — the kind's own view | their producer has no EN 16931 model, and the view *is* the contract |
+
+`POST /api/v1/documents/{kind}` takes the same body plus a `subject_ref`, a
+`recipient` and the `channels` to queue. See *Issuing and delivery* below.
 
 A caller projecting `en16931::Invoice → DocumentView` itself and sending the
 result would be two implementations of one contract with nothing tying them
@@ -76,6 +86,9 @@ what they may do, and every route checks it before touching the database.
 | `publish-template` | `POST /templates` | `LF`, `MSB`, `ESA` |
 | `rollout-template` | `PUT /templates/{kind}/current` | `LF`, `MSB`, `ESA` |
 | `render-document` | `POST /render/{kind}` | `LF`, `MSB`, `ESA` |
+| `issue-document` | `POST /documents/{kind}` | `LF`, `MSB`, `ESA` |
+| `report-delivery` | `POST /deliveries/{id}/status` | `LF`, `MSB`, `ESA` |
+| `read-document` | `GET /documents…`, `/spool`, `POST /deliveries/{id}/read` | any authenticated caller in the tenant |
 
 Authentication alone is not enough here: without a policy, any token the OIDC
 verifier accepts could roll out the layout every invoice and Mahnung of the
@@ -84,6 +97,80 @@ Briefkopf. A template is not one document — it is the shape of all of them.
 
 A preview is a read on purpose: it renders mako's own specimen, stores nothing,
 moves nothing and reaches no customer.
+
+Reading issued documents is a tenant read rather than a role-gated act, because
+the scope that protects a customer here is the **query**:
+`GET /api/v1/documents` refuses to answer without a `malo_id` or a `kunden_nr`,
+so no token can ask for the portfolio. `portald` is the caller that turns a
+customer's OIDC identity into that scope, and it resolves the scope from
+`vertragd`.
+
+## Issuing and delivery
+
+`POST /render/{kind}` produces bytes and keeps none — the right endpoint for a
+preview, a re-print, or a caller with its own archive. `POST /documents/{kind}`
+is the same render **recorded and queued**, which is what makes two regulated
+questions answerable:
+
+- **reproduce what was issued.** § 14 Abs. 1 Satz 2 UStG and
+  § 147 Abs. 1 Nr. 2–3 AO keep the Rechnungsdoppel for eight years *in the form
+  in which it was issued*. A pinned template hash makes the layout resolvable;
+  it does not make the document resolvable, because the data behind it moves.
+  `GET /documents/{id}/content` returns the stored bytes, never a re-render.
+- **did the customer receive it.** § 126b BGB and § 41f Abs. 1/Abs. 5 EnWG rest
+  on notices that must have *reached* the customer, four weeks and eight
+  Werktage before a disconnection.
+
+Both stores are append-only, like `document_templates` and for the same statute.
+A corrected document is a new row.
+
+### Idempotency
+
+`subject_ref` names what the document is about, in the issuing service's own
+terms — a Rechnungsnummer for an `INVOICE`, a dunning-case id for a `MAHNUNG`, a
+product-slice id for a `PREISANPASSUNG`. It is unique per `(tenant, kind)`, so a
+service that retries after a timeout gets back the document it already issued.
+That matters most where a duplicate is not untidy but unlawful: a second Mahnung
+is a second statutory demand with its own payment deadline and a second § 41f
+clock nobody can reconcile with the first.
+
+### Channels
+
+| Channel | How outputd delivers | Evidence | `DELIVERED` when |
+|---|---|---|---|
+| `PORTAL` | the document is in the store; `portald` serves it | published, then `read_at` when the customer opens it | on publish — it is then in the recipient's sphere, which is what § 126b BGB asks of a durable medium |
+| `EMAIL` | `POST` to a configured mail relay | the relay's message id | the relay reports the recipient's server accepted it |
+| `POST` | a spool a print service pulls (`GET /api/v1/spool`), or an optional push | the batch reference it reports back | the service reports it posted |
+| `ERP` | `POST` to the operator's own webhook | its response | the ERP reports it |
+
+outputd embeds **no SMTP client and no print driver**. Both are adapters an
+operator already runs, and embedding them turns a document daemon into a mail
+server. Each outbound channel is an HTTP relay — a URL, a bearer token, JSON
+with the document base64-encoded — the same contract `accountingd` uses for its
+bank adapter. A deployment that configures none still has the portal channel,
+which is what § 41 Abs. 5 EnWG and § 126b BGB actually ask for: Textform on a
+durable medium, not registered post.
+
+A channel with nothing to send to — `EMAIL` with no address on file — is stored
+`SUPPRESSED` **with its reason**, never omitted, so *why did this never go out*
+is answerable from the row rather than from its absence.
+
+`SENT` and `DELIVERED` are deliberately different states. A relay accepting a
+message is not the recipient's server accepting it, and a spool being collected
+is not a letter being posted; those become `DELIVERED` only when the far end
+reports it through `POST /deliveries/{id}/status`. A bounce reported there turns
+an apparently-successful notice into the failure it was.
+
+### The worker
+
+One loop drains what is `PENDING`, with doubling backoff from 60 s to 6 h and a
+configurable attempt ceiling (default 8, about half a day). Replicas are safe:
+the claim is `FOR UPDATE SKIP LOCKED` with an immediate `next_attempt_at` push,
+so a replica that dies mid-send releases its claim when the backoff elapses.
+
+At the ceiling a delivery becomes `FAILED` and is logged at `error`. That is the
+one outcome an operator must not have to go looking for: the platform believes
+it communicated something and the customer never received it.
 
 ## Errors
 
@@ -277,12 +364,9 @@ compiler's diagnostics, each formatted `path:line:col` and pointing into the
 operator's own file.
 
 `document_templates.proof` records *which* proof was obtained —
-`RENDERED_PDFA` or `PARSED` — and a `CHECK` constraint refuses an `INVOICE` row
-carrying anything less than the full one. The Textform kinds get the weaker
-proof today: their data contracts live in `accountingd` (Mahnwesen) and
-`vertragd` (§ 41 Abs. 5 EnWG notice), so there is no view to render them
-against, and a column that says so is better than a comment that implies
-otherwise.
+`RENDERED_PDFA` for a carrier, `RENDERED_TEXTFORM` for a Textform kind — and a
+`CHECK` constraint ties each kind to the one its contract requires, so a
+Textform template can never be stored as a proven carrier or the reverse.
 
 `POST /api/v1/templates/preview` runs the same render and returns the PDF
 without storing anything — the loop an operator actually works in, so iterating
@@ -336,18 +420,32 @@ document it ever rendered.
 |---|---|---|---|
 | `INVOICE` | ZUGFeRD PDF/A-3 carrier | `a-3b` | `RENDERED_PDFA` |
 | `MAHNUNG` | Textform (§ 126b BGB) | — | `RENDERED_TEXTFORM` |
-| `PREISANPASSUNG` | § 41 Abs. 5 EnWG notice, Textform | — | `PARSED` |
+| `PREISANPASSUNG` | § 41 Abs. 5 EnWG notice, Textform | — | `RENDERED_TEXTFORM` |
 
-A **Mahnung has a full rendering contract** since 2026-08: `document::mahnung::MahnungView`
-projects what `accountingd`'s Mahnwesen computes (Stufe 1–3, Posten, § 288 BGB
-Verzugszinsen with their basis, Mahngebühr, and the Stufe-3 § 41f EnWG
-Sperrandrohung with Sperrtermin), and the gate renders the **Stufe-3 specimen**
-— the most legally loaded variant — then requires the § 126b declarant, the
-Gesamtforderung, the Zahlungsfrist and the Sperrtermin on the page. The schema
-refuses a `MAHNUNG` row on any weaker proof. The view lives with the renderer
-rather than with the data — `accountingd` conforms to it the way a browser
-conforms to HTML; that is what made this daemon extractable. `PARSED` remains
-only for `PREISANPASSUNG`, whose data contract lives in `vertragd`.
+There is no weaker level: every kind has a specimen and a page-content check, so
+every template is proven against one, and the schema refuses a row on anything
+else.
+
+A **Mahnung** is proven against the **Stufe-3 specimen** — the most legally
+loaded variant — which requires the § 126b declarant, the Gesamtforderung, the
+Zahlungsfrist and the § 41f Sperrtermin on the page.
+`document::mahnung::MahnungView` projects what `accountingd`'s Mahnwesen
+computes: Stufe 1–3, the open Posten, § 288 BGB Verzugszinsen with their basis,
+the Mahngebühr, and the Stufe-3 § 41f EnWG Sperrandrohung.
+
+A **Preisanpassung** is the kind whose *content* the statute fixes rather than
+its form. § 41 Abs. 5 Satz 1 EnWG wants the change, its Anlass and its
+**Umfang**; Satz 4 gives the customer a termination right without notice to the
+day the change takes effect, and Satz 1 obliges the supplier to state that right
+**in the same notice**. A letter that announces the price and omits the right is
+not a valid Preisänderungsanzeige, so the gate renders a **mixed** specimen —
+one price up, one down — and requires the declarant, the Wirksamkeit, *both*
+changed prices and the Sonderkündigungsrecht date on the page. A template that
+prints one position, or assumes every price rises, is refused.
+
+The views live with the renderer rather than with the data — `accountingd` and
+`vertragd` conform to them the way a browser conforms to HTML. That is what made
+this daemon extractable.
 
 The Textform kinds share the store and the engine deliberately: two template
 systems for one brand is how a logo change reaches the invoice and not the
@@ -358,7 +456,7 @@ Mahnung.
 | `GET` | `/api/v1/templates` | Every template this tenant published (`?kind=&limit=`), newest first, `is_current` marking the one in use — how a rollback finds its hash |
 | `POST` | `/api/v1/templates` | Prove a template and publish it; returns its hash, proof, page count and any Typst warnings. Idempotent — identical source stores nothing new |
 | `POST` | `/api/v1/templates/preview` | Render a candidate against the gate specimen and return the PDF. Stores nothing |
-| `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships (`INVOICE`, `MAHNUNG`; `404` for a kind without one) |
+| `GET` | `/api/v1/templates/reference/{kind}` | The reference layout mako ships — one per kind, each passing its own gate |
 | `PUT` | `/api/v1/templates/{kind}/current` | Roll a published template out. `422` when the hash was never published |
 | `GET` | `/api/v1/templates/{kind}/current` | What this tenant renders with now |
 | `GET` | `/api/v1/templates/by-hash/{hash}` | Resolve any template by hash — how an audit answers *why did the 2027 invoice look like that* |
@@ -459,9 +557,29 @@ url = "postgresql://outputd:secret@db:5432/outputd"
 [oidc]
 issuer   = "https://idp.example/realms/mako"
 audience = "outputd"
+
+# How issued documents reach the customer. Every outbound channel is an HTTP
+# relay pointed at whatever the operator already runs; with none configured,
+# documents are still stored and served and the portal channel still delivers.
+[delivery]
+enabled             = true          # default
+max_attempts        = 8             # default; with the doubling backoff, ~half a day
+from_address        = "rechnung@stadtwerke-musterstadt.example"
+email_relay_url     = "https://mail-relay.internal/api/v1/send"
+email_relay_api_key = "env:OUTPUTD_MAIL_RELAY_KEY"
+# Optional: most print services pull from GET /api/v1/spool instead.
+postal_relay_url    = "https://druckdienstleister.example/api/v1/jobs"
+postal_relay_api_key = "env:OUTPUTD_PRINT_KEY"
+
+# Subject lines per kind; a kind with no entry falls back to a built-in.
+[delivery.subjects]
+INVOICE        = "Ihre Rechnung"
+MAHNUNG        = "Zahlungserinnerung"
+PREISANPASSUNG = "Änderung Ihrer Preise"
 ```
 
-Callers configure the counterpart: billingd's `outputd_url` (default
-`http://localhost:9880`) and optional `outputd_api_key` bearer. Without a
-reachable outputd, billingd's PDF endpoint answers `502`; the XML endpoints
-need no renderer.
+Callers configure the counterpart: `outputd_url` plus an optional
+`outputd_api_key` bearer in billingd, accountingd, vertragd and portald. Without
+a reachable outputd, billingd's PDF endpoint answers `502` (the XML endpoints
+need no renderer), and accountingd and vertragd record their dunning and
+price-change facts without producing a document — visibly, in the log.

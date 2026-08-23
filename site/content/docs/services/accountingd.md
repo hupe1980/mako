@@ -39,6 +39,8 @@ graph TB
     erp["ERP webhook"]
     sperrd["sperrd :8780"]
     portald["portald :9480"]
+    outputd["outputd :9880"]
+    vertragd["vertragd :9780"]
     bank["Bank adapter<br/>(pain.001 SCT/Inst)"]
 
     billingd -->|"de.billing.rechnung.erstellt → RECHNUNG debit<br/>(is_correction=true → STORNO credit; a Gutschrift is a negated Rechnung)"| accountingd
@@ -47,7 +49,11 @@ graph TB
     invoicd -->|"de.invoic.receipt.settled → ZAHLUNG credit"| accountingd
 
     accountingd -->|"de.accounting.mahnung.issued (Mahnstufe 1–3)"| erp
-    accountingd -->|"de.accounting.abschlag.posted (Abschlagslauf)"| erp
+    accountingd -->|"de.accounting.abschlag.posted (Abschlagsforderung raised)"| erp
+    accountingd -->|"de.accounting.jahresabschluss.abgeschlossen (§40b Abs. 1)"| erp
+    vertragd -->|"who the customer is"| accountingd
+    accountingd -->|"MAHNUNG document + delivery"| outputd
+    accountingd -->|"paid Abschläge (§14 Abs. 5 UStG)"| billingd
     accountingd -->|"de.accounting.payment.imported / .bankruecklast (camt.053/054)"| erp
     accountingd -->|"de.accounting.sepa.collection-rejected (pain.002 RJCT)<br/>de.accounting.sepa.reversal-issued (pain.007)<br/>de.accounting.payee.verification-mismatch (VoP)"| erp
     accountingd -->|"de.accounting.interest.charged (§288 BGB)"| erp
@@ -71,10 +77,50 @@ graph TB
 | `EEG_GUTSCHRIFT` | -credit | `de.eeg.verguetung.berechnet` — §21 EEG Einspeisevergütung |
 | `EEG_MARKTPRAEMIE` | -credit | `de.eeg.marktpraemie.berechnet` — §20 EEG Direktvermarktung |
 | `BANKRUECKLAST` | +debit | Returned SEPA direct debit |
+| `SEPA_STORNO` | +debit | pain.007 creditor reversal of a settled collection |
 | `MAHNGEBUEHR` | +debit | Dunning fee per Mahnstufe (configurable) |
-| `ABSCHLAG` | −credit | Monthly advance payment — reduces the balance (Abschlagslauf scheduler) |
-| `JAHRESABSCHLUSS` | ±signed | Annual Mehr-/Mindermengenabrechnung (§40 EnWG) |
+| `VERZUGSZINSEN` | +debit | § 288 BGB default interest |
+| `ABSCHLAG` | **+debit** | Monthly Abschlagsforderung raised by the Abschlagslauf — a demand, not a receipt |
+| `ABSCHLAG_VERRECHNUNG` | −credit | The settling invoice discharges the advances it deducted |
+| `JAHRESABSCHLUSS` | ±signed | Annual settlement refund (§40 EnWG) |
 | `KORREKTUR` | ±signed | Manual operator correction via `POST /buchen` |
+
+`ledger::ENTRY_TYPES` is the single list: `Chart::contra` maps each kind to a GL
+account and `POST /buchen` refuses anything outside it, so a kind cannot be
+bookable by an automated path and rejected by the operator interface.
+
+### The Abschlag pair
+
+An Abschlag is neither revenue nor cash — it is a demand for a part-payment on a
+supply not yet billed (§ 40 Abs. 1 EnWG, § 14 Abs. 5 UStG). Both halves book
+against SKR 03 1718 / SKR 04 3272 **Erhaltene Anzahlungen**, never against Bank:
+
+```
+Abschlagslauf   ABSCHLAG              Dr Kontokorrent  / Cr Erhaltene Anzahlungen
+money arrives   ZAHLUNG               Cr Kontokorrent  / Dr Bank
+Endrechnung     RECHNUNG (gross)      Dr Kontokorrent  / Cr Erlöse
+   …the same    ABSCHLAG_VERRECHNUNG  Cr Kontokorrent  / Dr Erhaltene Anzahlungen
+```
+
+Between the demand and the invoice, Erhaltene Anzahlungen carries the operator's
+open advance obligation — the § 266 Abs. 3 C.3 HGB line. Three consequences
+follow, none of which holds if the demand is booked as a credit against Bank:
+
+- an **unpaid advance is an open receivable**, so it reaches
+  `accounts.verzug_ct` and the Mahnwesen — the most common arrears case there
+  is;
+- the **payment is booked once**. Crediting on the scheduled day *and* on the
+  camt.054 receipt credits one payment twice, and the Jahresabschluss reads the
+  doubled credit as an overpayment;
+- the **Endrechnung is booked gross**, and the deduction it states
+  (`gesamtbrutto − zuZahlen`) is booked as the matching credit — never a figure
+  recomputed here.
+
+`abschlag_forderungen` is the register beside the ledger, carrying the two
+document facts a posting does not: the **USt rate** each advance was raised at
+(§ 14 Abs. 5 Satz 2 UStG) and **which invoice absorbed it**. Whether it was
+*received* is never stored there — it is the residual of its ledger entry after
+FIFO clearing.
 
 **Balance** = the signed net of the customer's Kontokorrent leg in the ledger — negative = credit balance (customer overpaid); positive = outstanding debt. (`accounts.balance_ct` mirrors this net as a derived read cache.)
 
@@ -110,7 +156,7 @@ graph LR
     m1 -->|"payment received"| resolved
 ```
 
-**Automatic escalation** (P1-5 fix): set `dunning_auto_enabled = true` in config.
+**Automatic escalation**: set `dunning_auto_enabled = true` in config.
 The worker runs daily and is idempotent (`auto_dunning_runs` UNIQUE guard). After
 escalation it runs the [§§41f/41g Sperr-Sequenz](#sperr-sequenz-ssss41f-41g-enwg) —
 Sperrandrohung → Sperrankündigung → Sperrauftrag — for every qualifying
@@ -118,6 +164,31 @@ Mahnstufe-3 case.
 
 **Manual escalation**: `POST /api/v1/dunning/{account_id}/escalate` remains available
 for operator override (e.g. grace extensions, special B2B arrangements).
+
+### The customer is told
+
+Every open case without a document is rendered as a `MAHNUNG` through `outputd`
+and queued on the customer's channels — portal always, e-mail and post where
+master data allows — and the document id is stamped on `dunning_cases`. The
+sweep runs beside the escalation rather than inside it: escalating is arithmetic
+on the ledger, while issuing a document depends on a rolled-out template, a
+customer on file and a reachable channel, and folding them together would let
+one missing e-mail address roll back a Mahnstufe.
+
+Configure `outputd_url` **and** `vertragd_url` together. `accountingd` keys
+everything on a Marktlokation and holds no customer master, so the recipient
+comes from `vertragd`; a case whose recipient cannot be resolved is **not**
+documented and says so, because an unaddressed Mahnung is not Textform
+(§ 126b BGB names the recipient) and issuing one would make an undeliverable
+notice indistinguishable from a sent one.
+
+The page contract is `outputd::document::mahnung::MahnungView`. The Posten come
+from the ledger's **live open receivables** after FIFO clearing rather than from
+`dunning_cases.amount_due_ct`, which is the total at the moment the case opened;
+Verzugsschaden is demanded on its own lines, so a reader can see what is supply
+debt and what the dunning itself added. The § 41f Abs. 1 threat block prints
+only once the case carries a `sperrandrohung_at` — never merely because the
+Stufe is 3.
 
 ---
 
@@ -178,6 +249,7 @@ for operator override (e.g. grace extensions, special B2B arrangements).
 | `POST` | `/api/v1/eeg/payouts/run` | **Batch-generate** pain.001 for all unbatched `EEG_GUTSCHRIFT` entries |
 | `PUT` | `/api/v1/eeg/payouts/{id}/status` | Process pain.002 `ACCP`/`RJCT`/`CANC` |
 | `POST` | `/api/v1/jahresabschluss/{malo_id}` | **Annual settlement** (§40 EnWG, idempotent per year; refund on Erstattung) |
+| `GET` | `/api/v1/accounts/{malo_id}/abschlaege` | The advances a settling invoice may deduct — received, unabsorbed, oldest first, each with its § 14 Abs. 5 Satz 2 UStG rate (`?from=&to=`) |
 | `PUT` | `/api/v1/accounts/{malo_id}/business-partner` | Link account to a `kunden_nr` |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/accounts` | All accounts of a business partner |
 | `GET` | `/api/v1/business-partners/{kunden_nr}/balance` | Consolidated balance |
@@ -201,8 +273,10 @@ curl -X POST "http://accountingd:9380/api/v1/accounts/51238696012/buchen" \
   }'
 ```
 
-Allowed `entry_type` values: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `EEG_GUTSCHRIFT`,
-`EEG_MARKTPRAEMIE`, `BANKRUECKLAST`, `MAHNGEBUEHR`, `ABSCHLAG`, `JAHRESABSCHLUSS`, `KORREKTUR`, `STORNO`.
+Allowed `entry_type` values are `ledger::ENTRY_TYPES`: `RECHNUNG`, `STORNO`,
+`KORREKTUR`, `GUTSCHRIFT`, `ABSCHLAG`, `ABSCHLAG_VERRECHNUNG`, `ZAHLUNG`,
+`BANKRUECKLAST`, `SEPA_STORNO`, `MAHNGEBUEHR`, `VERZUGSZINSEN`,
+`EEG_GUTSCHRIFT`, `EEG_MARKTPRAEMIE`, `JAHRESABSCHLUSS`.
 
 `amount_ct`: positive = debit (increases outstanding debt); negative = credit (reduces debt).
 
@@ -226,25 +300,37 @@ Response:
   "malo_id":                  "51238696012",
   "year":                     2025,
   "rechnung_sum_ct":          120000,
-  "abschlag_paid_ct":         -108000,
+  "abschlag_net_ct":          0,
+  "zahlung_net_ct":           -108000,
+  "verzugsschaden_ct":        0,
+  "sonstige_ct":              0,
   "settlement_ct":            12000,
   "settlement_eur":           "120.00",
   "new_monthly_abschlag_ct":  10000,
   "action":                   "NACHZAHLUNG",
   "committed":                true,
-  "ce_id":                    "3fa85f64-..."
+  "ce_id":                    "jahresabschluss:51238696012:2025"
 }
 ```
 
 ### Model
 
-ABSCHLAG entries are advance-payment **credits** (negative) and the annual
-Jahresrechnung is booked as a **full-cost debit** (`gesamtbrutto`), so the
-running balance already equals the settlement:
+`settlement_ct` is the signed net of the year's **whole** Kontokorrent
+movement — never a hand-picked subset of Buchungsarten, because an omitted kind
+is how a settlement quietly disagrees with the balance it settles and pays out a
+refund nobody owed. The four buckets partition the total and a fifth,
+`sonstige_ct`, carries whatever they do not name, so adding a Buchungsart cannot
+silently drop it.
+
+For a customer on a monthly advance plan who paid every one:
 
 ```
-settlement_ct = rechnung_sum + abschlag_sum   (abschlag_sum is negative)
-              = 1300.00 − 1200.00 = 100.00     → Nachzahlung
+RECHNUNG              +1300.00   the year, gross
+ABSCHLAG              +1200.00   12 demands raised
+ABSCHLAG_VERRECHNUNG  −1200.00   the invoice discharges them
+ZAHLUNG               −1200.00   12 payments received
+                      ────────
+settlement_ct           +100.00  → Nachzahlung
 ```
 
 - **Nachzahlung** (settlement > 0): **no** settlement entry is written — the
@@ -256,8 +342,28 @@ settlement_ct = rechnung_sum + abschlag_sum   (abschlag_sum is negative)
   Rechnung.
 
 The run is idempotent per `(tenant, malo_id, year)` via `jahresabschluss_runs`
-and recalibrates the monthly `abschlag_ct` to `actual_annual ÷ 12`.
-The annual sum includes `RECHNUNG` + `STORNO` + `MAHNGEBUEHR`.
+and recalibrates the monthly `abschlag_ct` to the year's supply billing ÷ 12 —
+Verzugsschaden excluded, because § 40 Abs. 1 ties the advance to expected
+consumption and raising it because a customer was dunned would make next year's
+advances a second penalty.
+
+Every committed settlement announces
+`de.accounting.jahresabschluss.abgeschlossen`, whatever the outcome, in the same
+transaction as the settlement it reports.
+
+### The annual worker (§ 40b Abs. 1 EnWG)
+
+`jahresabschluss_auto_enabled = true` settles the previous year for every
+account that has no `jahresabschluss_runs` row for it, through the same function
+the endpoint drives — so a scheduled settlement and an operator's click produce
+the same postings, the same refund and the same event. It is bounded at 500
+accounts per daily pass; the rest are picked up tomorrow.
+
+Opt-in, and no earlier than `jahresabschluss_start_day` (default `"02-01"`),
+because the settlement **moves money**: an overpaid year is refunded by pain.001
+the moment it is settled, and § 40c Abs. 2 gives a supplier six weeks after the
+period to render the bill — so settling on 1 January would refund against
+December invoices nobody has issued yet.
 
 ---
 
@@ -957,10 +1063,13 @@ balance ([`ledger::Chart`](https://github.com/hupe1980/mako/blob/main/services/a
 | `entry_type` | Customer leg (Kontokorrent) | GL contra |
 |---|---|---|
 | `RECHNUNG` | Debit | Erlöse (SKR 4000) |
-| `ABSCHLAG`, `ZAHLUNG` | Credit | Bank (SKR 1200) |
-| `BANKRUECKLAST` | Debit | Bank (SKR 1200) |
+| `ABSCHLAG` | Debit | Erhaltene Anzahlungen (SKR 03 1718 / SKR 04 3272) |
+| `ABSCHLAG_VERRECHNUNG` | Credit | Erhaltene Anzahlungen |
+| `ZAHLUNG` | Credit | Bank (SKR 1200) |
+| `BANKRUECKLAST`, `SEPA_STORNO` | Debit | Bank (SKR 1200) |
 | `GUTSCHRIFT` | Credit | Erlöse (SKR 4000) |
 | `MAHNGEBUEHR` | Debit | Mahnerlöse (SKR 4003) |
+| `VERZUGSZINSEN` | Debit | Zinserträge (SKR 2650) |
 | `EEG_GUTSCHRIFT`, `EEG_MARKTPRAEMIE` | Credit | EEG-Aufwand (Expense) |
 | `JAHRESABSCHLUSS` (Erstattung) | Debit | Erstattungen (Liability) |
 | `STORNO`, `KORREKTUR` | by sign | Erlöse (SKR 4000) |
@@ -1664,7 +1773,10 @@ run without a database and cover:
 the doubleentry-backed ledger end-to-end against real PostgreSQL:
 
 - CloudEvent replay books exactly once (idempotency key)
-- ABSCHLAG credit nets against RECHNUNG in the account balance
+- The advance lifecycle over a year: twelve demands raised, twelve payments
+  received, one annual invoice that bills the gross and discharges what it
+  deducted, leaving the Nachzahlung — and an unpaid advance stays an open
+  receivable that reaches the § 41f Abs. 3 Verzug
 - A conflicting idempotency key is refused
 - A payment clears its invoice and the trial balance still balances to zero
 - Sealing a period freezes it (Festschreibung / §146 AO), and closes every earlier

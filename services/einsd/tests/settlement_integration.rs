@@ -1593,9 +1593,9 @@ async fn the_sect51_regime_follows_the_commissioning_date() {
             sqlx::query(
                 "INSERT INTO eeg_anlagen
                    (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-                    erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum)
+                    erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum, einspeiser_id)
                  VALUES ($1, $2, '51238696781', 2023, $3::date, 200,
-                         'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2045-12-31')",
+                         'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2045-12-31', 'EB-1')",
             )
             .bind(tr_id)
             .bind(TENANT)
@@ -1671,9 +1671,9 @@ async fn a_correction_without_sect51_figures_keeps_the_accrual() {
     sqlx::query(
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum)
+            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum, einspeiser_id)
          VALUES ('TR-KORR', $1, '51238696781', 2023, '2025-06-01', 500,
-                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2045-12-31')",
+                 'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2045-12-31', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -1818,6 +1818,10 @@ async fn an_hour_capped_kwkg_plant_gets_the_kwkg_backstop() {
         return;
     };
     let app = test_router(pool.clone());
+    // Every plant names its Anlagenbetreiber (§ 7 Abs. 1 EEG 2023: the claim is
+    // the operator's, not the installation's), so the register refuses one
+    // without an `einspeiser_id`.
+    seed_operator(&pool, "EB-1", "REGELBESTEUERUNG").await;
 
     let (status, body) = post_json(
         &app,
@@ -1825,6 +1829,7 @@ async fn an_hour_capped_kwkg_plant_gets_the_kwkg_backstop() {
         serde_json::json!({
             "tr_id": "TR-KWK-H",
             "malo_id": "51238696781",
+            "einspeiser_id": "EB-1",
             "eeg_gesetz": 0,
             "inbetriebnahme": "2024-06-01",
             "leistung_kwp": "5000",
@@ -1859,9 +1864,9 @@ async fn the_foerderende_alert_is_emitted_once_per_plant() {
     sqlx::query(
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
-            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum)
+            erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum, einspeiser_id)
          VALUES ('TR-ALERT', $1, '51238696781', 2023, '2005-06-01', 9.5,
-                 'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', CURRENT_DATE + 30)",
+                 'SOLAR_AUFDACH', 8.11, 'VERGUETUNG', CURRENT_DATE + 30, 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -1912,10 +1917,10 @@ async fn the_sect100_optin_starts_running_after_the_imsys_year() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            imesys_rollout_datum, sect51_optin_erklaert_am)
+            imesys_rollout_datum, sect51_optin_erklaert_am, einspeiser_id)
          VALUES ('TR-OPTIN', $1, '51238696781', 2017, '2019-06-01', 300,
                  'SOLAR_FREIFLAECHE', 8.00, 'VERGUETUNG', '2039-12-31',
-                 '2026-09-01', '2026-03-01')",
+                 '2026-09-01', '2026-03-01', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2004,9 +2009,9 @@ async fn the_sixty_percent_cap_is_not_a_sect52_violation() {
                 "INSERT INTO eeg_anlagen
                    (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
                     erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-                    sect9_erfuellung)
+                    sect9_erfuellung, einspeiser_id)
                  VALUES ($1, $2, '51238696781', 2023, '2024-06-01', $3::numeric,
-                         'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31', $4)",
+                         'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31', $4, 'EB-1')",
             )
             .bind(tr_id)
             .bind(TENANT)
@@ -2099,10 +2104,10 @@ async fn the_ausfallverguetung_is_reduced_and_time_limited() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung)
+            sect9_erfuellung, einspeiser_id)
          VALUES ('TR-AV', $1, '51238696781', 2023, '2024-06-01', 500,
                  'SOLAR_FREIFLAECHE', 10.00, 'AUSFALLVERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT')",
+                 'FERNSTEUERBARKEIT', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2195,10 +2200,10 @@ async fn an_unnotified_veraeusserungsform_switch_is_charged() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung, last_veraeusserungsform_switch)
+            sect9_erfuellung, last_veraeusserungsform_switch, einspeiser_id)
          VALUES ('TR-21C', $1, '51238696781', 2023, '2024-06-01', 50,
                  'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT', '2026-05-01')",
+                 'FERNSTEUERBARKEIT', '2026-05-01', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2259,10 +2264,10 @@ async fn the_direktvermarktungspflicht_breach_reaches_the_settlement() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung)
+            sect9_erfuellung, einspeiser_id)
          VALUES ('TR-10B', $1, '51238696781', 2023, '2024-06-01', 250,
                  'SOLAR_FREIFLAECHE', 8.11, 'VERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT')",
+                 'FERNSTEUERBARKEIT', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2320,11 +2325,11 @@ async fn a_lapsed_zuschlag_stops_the_settlement_on_its_date() {
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
             sect9_erfuellung, ausschreibungs_zuschlag_id, direktverm_aw_ct,
-            zuschlag_erloeschen_datum)
+            zuschlag_erloeschen_datum, einspeiser_id)
          VALUES ('TR-ZUSCHLAG', $1, '51238696781', 2023, '2024-06-01', 2000,
                  'SOLAR_FREIFLAECHE', 0, 'AUSSCHREIBUNG', '2044-12-31',
                  'FERNSTEUERBARKEIT', 'BNETZA-2024-0815', 7.00,
-                 '2026-07-01')",
+                 '2026-07-01', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2389,10 +2394,10 @@ async fn an_unreported_negative_period_cuts_the_ausfallverguetung() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung)
+            sect9_erfuellung, einspeiser_id)
          VALUES ('TR-513', $1, '51238696781', 2023, '2024-06-01', 500,
                  'SOLAR_FREIFLAECHE', 10.00, 'AUSFALLVERGUETUNG', '2044-12-31',
-                 'FERNSTEUERBARKEIT')",
+                 'FERNSTEUERBARKEIT', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)
@@ -2542,9 +2547,9 @@ async fn the_annual_statement_follows_the_corrections() {
         "INSERT INTO eeg_anlagen
            (tr_id, tenant, malo_id, eeg_gesetz, inbetriebnahme, leistung_kwp,
             erzeugungsart, verguetungssatz_ct, settlement_model, foerderendedatum,
-            sect9_erfuellung)
+            sect9_erfuellung, einspeiser_id)
          VALUES ('TR-JA', $1, '51238696781', 2023, '2026-11-01', 9.5,
-                 'SOLAR_AUFDACH', 10.00, 'VERGUETUNG', '2046-12-31', 'FERNSTEUERBARKEIT')",
+                 'SOLAR_AUFDACH', 10.00, 'VERGUETUNG', '2046-12-31', 'FERNSTEUERBARKEIT', 'EB-1')",
     )
     .bind(TENANT)
     .execute(&pool)

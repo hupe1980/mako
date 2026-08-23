@@ -814,3 +814,147 @@ mod tests {
         assert_eq!(clamp(Some(10_000)), MAX_INVOICE_PAGE);
     }
 }
+
+// ── Document inbox ────────────────────────────────────────────────────────────
+
+/// `GET /api/v1/portal/{malo_id}/dokumente`
+///
+/// The customer's document inbox: what was actually issued to them — invoices,
+/// Mahnungen, price-change notices — as `outputd` recorded it.
+///
+/// **Not the same list as `/invoices`.** That one is billing *records* —
+/// what was calculated, drafts included. This is what the customer received.
+///
+/// Scoped by the authorised MaLo; `outputd` refuses an unscoped document query
+/// outright, so the scope is enforced on both sides of the hop.
+pub async fn get_dokumente(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path(malo_id): Path<String>,
+    Query(q): Query<DokumenteQuery>,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let limit = q.limit.unwrap_or(50).clamp(1, 200);
+    let mut path = format!("/api/v1/documents?malo_id={}&limit={limit}", ctx.malo_id);
+    if let Some(kind) = q.kind.as_deref().filter(|k| {
+        // An allowlist, not a passthrough — the value reaches outputd.
+        matches!(*k, "INVOICE" | "MAHNUNG" | "PREISANPASSUNG")
+    }) {
+        path.push_str(&format!("&kind={kind}"));
+    }
+    proxy_opt(clients.outputd.as_ref(), &path, "outputd").await
+}
+
+/// Filters for the document inbox.
+#[derive(Debug, serde::Deserialize)]
+pub struct DokumenteQuery {
+    /// `INVOICE`, `MAHNUNG` or `PREISANPASSUNG`. Anything else is ignored.
+    pub kind: Option<String>,
+    pub limit: Option<u32>,
+}
+
+/// `GET /api/v1/portal/{malo_id}/dokumente/{document_id}`
+///
+/// The document itself — the bytes that were issued, not a re-render.
+///
+/// The document is read back and its `malo_id` compared to the authorised one
+/// before anything is streamed, as the invoice download does: a UUID is
+/// obscurity, not authorization.
+///
+/// Fetching it also marks the portal delivery **read** — the evidence a
+/// § 41f EnWG dispute asks about.
+pub async fn get_dokument(
+    Extension(cfg): Cfg,
+    Extension(clients): Clients,
+    headers: HeaderMap,
+    Path((malo_id, document_id)): Path<(String, String)>,
+) -> Response {
+    let ctx = match authorize(&cfg, &clients, &headers, &malo_id).await {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+    let outputd = match require(clients.outputd.as_ref(), "outputd") {
+        Ok(c) => c,
+        Err(resp) => return resp,
+    };
+
+    let document = match outputd
+        .get_json(&format!("/api/v1/documents/{document_id}"))
+        .await
+    {
+        Ok(Some(d)) => d,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => {
+            tracing::warn!(document_id, error = %e, "portald: outputd document lookup failed");
+            return (StatusCode::BAD_GATEWAY, e.to_string()).into_response();
+        }
+    };
+    if document["malo_id"].as_str().unwrap_or_default() != ctx.malo_id {
+        tracing::warn!(
+            document_id,
+            requested_malo = %ctx.malo_id,
+            "portald: document refused — it belongs to another Marktlokation"
+        );
+        // 404, not 403: confirming the document exists would turn the id space
+        // into an oracle for what the tenant has issued.
+        return StatusCode::NOT_FOUND.into_response();
+    }
+
+    // Best-effort, before the bytes: a failed receipt must not withhold the
+    // customer's own document.
+    if let Some(delivery_id) = document["deliveries"]
+        .as_array()
+        .and_then(|ds| ds.iter().find(|d| d["channel"] == "PORTAL"))
+        .and_then(|d| d["delivery_id"].as_str())
+        && let Err(e) = outputd
+            .post_json(
+                &format!("/api/v1/deliveries/{delivery_id}/read"),
+                &serde_json::Value::Null,
+            )
+            .await
+    {
+        tracing::warn!(document_id, error = %e, "portald: could not record the portal read receipt");
+    }
+
+    match outputd
+        .get_bytes(&format!("/api/v1/documents/{document_id}/content"))
+        .await
+    {
+        Ok(Some((bytes, media_type))) => {
+            let kind = document["kind"].as_str().unwrap_or("dokument");
+            let name: String = document["subject_ref"]
+                .as_str()
+                .unwrap_or(&document_id)
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '-' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            (
+                StatusCode::OK,
+                [
+                    (axum::http::header::CONTENT_TYPE, media_type),
+                    (
+                        axum::http::header::CONTENT_DISPOSITION,
+                        format!(
+                            "inline; filename=\"{}-{name}.pdf\"",
+                            kind.to_ascii_lowercase()
+                        ),
+                    ),
+                ],
+                bytes,
+            )
+                .into_response()
+        }
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(e) => (StatusCode::BAD_GATEWAY, e.to_string()).into_response(),
+    }
+}

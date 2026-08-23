@@ -221,6 +221,122 @@ pub async fn get_kontoauszug(
     .into_response()
 }
 
+#[derive(Debug, Deserialize)]
+pub struct AbschlaegeQuery {
+    pub lf_mp_id: Option<String>,
+    /// Inclusive lower bound on the advance's `periode` (ISO 8601 date).
+    pub from: Option<String>,
+    /// Inclusive upper bound on the advance's `periode` (ISO 8601 date).
+    pub to: Option<String>,
+    /// Include advances that were demanded but not received, and ones a
+    /// previous settling invoice already absorbed. Default `false`.
+    ///
+    /// Off by default because the caller is a settling invoice, and
+    /// § 14 Abs. 5 Satz 2 UStG lets one deduct „die **vereinnahmten**
+    /// Teilentgelte" — the advances actually received. Deducting a demanded but
+    /// unpaid advance would hand the customer a settlement that credits money
+    /// nobody paid.
+    pub include_open: Option<bool>,
+}
+
+/// `GET /api/v1/accounts/{malo_id}/abschlaege`
+///
+/// The advances of one Marktlokation in a period, in exactly the shape a
+/// settling invoice deducts them: date, gross amount, and **the VAT rate the
+/// advance was raised at** (§ 14 Abs. 5 Satz 2 UStG — an Endrechnung deducts
+/// the part-payments *and the tax attributable to them*, and a gross figure
+/// alone cannot express that when a rate changed mid-year).
+///
+/// This is the read `billingd`'s § 40b sweep needs to issue a lawful
+/// Jahresrechnung unattended. Without it the sweep refused every annual
+/// settlement, because it could not itemise or deduct the advances § 40 Abs. 1
+/// EnWG requires it to show — the correct refusal, but it left automated annual
+/// billing switched off.
+///
+/// **On the service graph.** `accountingd` sits downstream of `billingd` for
+/// *events* (`de.billing.rechnung.erstellt` → the receivable). This is a read
+/// in the other direction, at billing time, and it does not invert anything:
+/// the advance register is customer-account state that only the ledger holds,
+/// exactly as SAP IS-U billing reads FI-CA advances. What would invert the
+/// graph is `accountingd` computing an invoice, and it does not.
+///
+/// Response: `[{ "datum", "betrag_eur", "ust_satz", "beschreibung" }]` —
+/// `energy_billing::AbschlagDeduction` verbatim, oldest first, plus
+/// `reference`, `offen_ct` and `verrechnet_mit` for reconciliation.
+pub async fn get_abschlaege(
+    claims: Claims,
+    Extension(cedar): Extension<Arc<CedarEnforcer>>,
+    Extension(pool): Extension<PgPool>,
+    Extension(ledger): Extension<Arc<crate::ledger::PgLedger>>,
+    Extension(cfg): Extension<Arc<AccountingdConfig>>,
+    Path(malo_id): Path<String>,
+    Query(q): Query<AbschlaegeQuery>,
+) -> impl IntoResponse {
+    if let Err(e) = cedar.check(&claims.principal(), "read-account", &cfg.tenant) {
+        return forbidden(&e);
+    }
+    let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
+    let parse = |label: &str, raw: Option<&str>, fallback: time::Date| match raw {
+        None => Ok(fallback),
+        Some(s) => time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT)
+            .map_err(|e| format!("{label}: {e} (expected ISO 8601, e.g. 2026-01-01)")),
+    };
+    let epoch = time::Date::from_calendar_date(1970, time::Month::January, 1)
+        .unwrap_or(time::OffsetDateTime::UNIX_EPOCH.date());
+    let from = match parse("from", q.from.as_deref(), epoch) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    let to = match parse("to", q.to.as_deref(), OffsetDateTime::now_utc().date()) {
+        Ok(d) => d,
+        Err(e) => return (StatusCode::BAD_REQUEST, e).into_response(),
+    };
+    if from > to {
+        return (StatusCode::BAD_REQUEST, "from must not be after to").into_response();
+    }
+    if let Ok(None) = fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let all = match crate::pg::list_abschlag_forderungen(
+        &ledger,
+        &pool,
+        &cfg.tenant,
+        &malo_id,
+        lf_mp_id,
+        from,
+        to,
+    )
+    .await
+    {
+        Ok(v) => v,
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+    let include_open = q.include_open.unwrap_or(false);
+    let out: Vec<serde_json::Value> = all
+        .into_iter()
+        .filter(|a| include_open || a.deductible())
+        .map(|a| {
+            serde_json::json!({
+                // `AbschlagDeduction` field names, so the caller deserialises
+                // straight into the engine's type.
+                "datum":          a.faellig_am.to_string(),
+                "betrag_eur":     format_ct_as_eur(a.betrag_ct),
+                "ust_satz":       a.ust_satz.to_string(),
+                "beschreibung":   format!(
+                    "Abschlag {:04}-{:02}",
+                    a.periode.year(),
+                    a.periode.month() as u8
+                ),
+                // Reconciliation, ignored by the engine.
+                "reference":      a.reference,
+                "offen_ct":       a.offen_ct,
+                "verrechnet_mit": a.verrechnet_mit,
+            })
+        })
+        .collect();
+    Json(out).into_response()
+}
+
 /// `PUT /api/v1/accounts/{malo_id}/abschlag`  — update monthly advance payment
 pub async fn put_abschlag(
     claims: Claims,
@@ -350,23 +466,38 @@ pub async fn ingest_webhook(
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             // Parse as Decimal to avoid f64 rounding errors on money amounts.
-            let amount_ct: i64 = data
-                .and_then(|d| d.get("rechnung"))
-                .and_then(|r| r.get("gesamtbrutto"))
-                .and_then(|g| g.get("wert"))
-                .and_then(|v| v.as_str())
-                .and_then(|s| {
-                    use rust_decimal::Decimal;
-                    use std::str::FromStr;
-                    Decimal::from_str(s).ok().map(|d| {
+            let betrag_ct = |field: &str| -> Option<i64> {
+                use rust_decimal::Decimal;
+                use std::str::FromStr;
+                data.and_then(|d| d.get("rechnung"))
+                    .and_then(|r| r.get(field))
+                    .and_then(|g| g.get("wert"))
+                    .and_then(|v| v.as_str())
+                    .and_then(|s| Decimal::from_str(s).ok())
+                    .map(|d| {
                         (d * Decimal::from(100))
                             .round()
                             .to_string()
                             .parse::<i64>()
                             .unwrap_or(0)
                     })
-                })
-                .unwrap_or(0);
+            };
+            // The receivable is the invoice's **gross**: that is what it charges
+            // for the supply. Advances already demanded were debited when they
+            // were raised, so booking the gross alone would have the customer
+            // owe the period twice — the deduction the document itself states
+            // (`gesamtbrutto − zuZahlen`, § 14 Abs. 5 Satz 2 UStG) is booked
+            // separately as an `ABSCHLAG_VERRECHNUNG` credit below.
+            let amount_ct: i64 = betrag_ct("gesamtbrutto").unwrap_or(0);
+            let verrechnete_abschlaege_ct: i64 = betrag_ct("zuZahlen")
+                .map_or(0, |zu_zahlen| amount_ct - zu_zahlen)
+                .max(0);
+            let rechnungsnummer = data
+                .and_then(|d| d.get("rechnung"))
+                .and_then(|r| r.get("rechnungsnummer"))
+                .and_then(|v| v.as_str())
+                .unwrap_or(&ce_id)
+                .to_owned();
             let account_id = upsert_account(&pool, malo_id, lf_mp_id, &cfg.tenant)
                 .await
                 .ok();
@@ -425,6 +556,34 @@ pub async fn ingest_webhook(
                     tracing::error!(
                         error = %e,
                         "accountingd: ledger write FAILED — returning 500 so the sender redelivers"
+                    );
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+
+                // The advances this invoice settled stop being advances. A
+                // Storno reverses its original's gross, and the original's
+                // Verrechnung is reversed by re-billing the released period —
+                // so only an ordinary invoice books one.
+                if !is_correction
+                    && verrechnete_abschlaege_ct > 0
+                    && let Err(e) = crate::pg::verrechne_abschlaege(
+                        &ledger,
+                        &pool,
+                        &cfg.tenant,
+                        malo_id,
+                        lf_mp_id,
+                        verrechnete_abschlaege_ct,
+                        &rechnungsnummer,
+                        &format!("{ce_id}:abschlag-verrechnung"),
+                        today,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        error = %e,
+                        malo_id,
+                        "accountingd: Abschlag-Verrechnung FAILED — returning 500 so the sender \
+                         redelivers; without it the customer owes the period twice"
                     );
                     return StatusCode::INTERNAL_SERVER_ERROR.into_response();
                 }
@@ -2749,8 +2908,13 @@ pub struct VorauszahlungQuery {
 #[derive(Debug, serde::Deserialize)]
 pub struct BuchenRequest {
     /// Buchungsart. Must be a valid `entry_type` value.
-    /// Allowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `BANKRUECKLAST`,
-    /// `MAHNGEBUEHR`, `ABSCHLAG`, `KORREKTUR`, `STORNO`.
+    /// Allowed: `RECHNUNG`, `ZAHLUNG`, `GUTSCHRIFT`, `EEG_GUTSCHRIFT`,
+    /// `EEG_MARKTPRAEMIE`, `BANKRUECKLAST`, `MAHNGEBUEHR`, `VERZUGSZINSEN`,
+    /// `ABSCHLAG`, `ABSCHLAG_VERRECHNUNG`, `SEPA_STORNO`, `JAHRESABSCHLUSS`,
+    /// `KORREKTUR`, `STORNO`.
+    ///
+    /// The same list [`crate::ledger::ENTRY_TYPES`] holds, so an automated path
+    /// and the operator interface accept exactly the same kinds.
     pub entry_type: String,
     /// Amount in ct (× 10⁻² EUR). Positive = debit; negative = credit.
     pub amount_ct: i64,
@@ -2791,22 +2955,9 @@ pub async fn post_buchen(
     if let Err(e) = cedar.check(&claims.principal(), "post-entry", &cfg.tenant) {
         return forbidden(&e);
     }
-    use time::format_description::well_known::Iso8601;
 
     // Validate entry_type against the allowed set.
-    const ALLOWED: &[&str] = &[
-        "RECHNUNG",
-        "ZAHLUNG",
-        "GUTSCHRIFT",
-        "EEG_GUTSCHRIFT",
-        "EEG_MARKTPRAEMIE",
-        "BANKRUECKLAST",
-        "MAHNGEBUEHR",
-        "ABSCHLAG",
-        "JAHRESABSCHLUSS",
-        "KORREKTUR",
-        "STORNO",
-    ];
+    const ALLOWED: &[&str] = crate::ledger::ENTRY_TYPES;
     if !ALLOWED.contains(&req.entry_type.as_str()) {
         return (
             StatusCode::UNPROCESSABLE_ENTITY,
@@ -2835,12 +2986,16 @@ pub async fn post_buchen(
     let booking_date = req
         .booking_date
         .as_deref()
-        .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())
+        .and_then(|s| {
+            time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+        })
         .unwrap_or(today);
     let value_date = req
         .value_date
         .as_deref()
-        .and_then(|s| time::Date::parse(s, &Iso8601::DEFAULT).ok())
+        .and_then(|s| {
+            time::Date::parse(s, &time::format_description::well_known::Iso8601::DEFAULT).ok()
+        })
         .unwrap_or(booking_date);
 
     // Idempotency: the operator's reference_id when given (repost = no-op), else a
@@ -2918,49 +3073,151 @@ pub struct JahresabschlussQuery {
 /// Returns `{ settlement_ct, settlement_eur, new_monthly_abschlag_ct, committed }`.
 /// Use `?dry_run=true` for a preview without committing.
 ///
-/// Emits **no** completion CloudEvent. The only event on this path is
-/// [`mako_events::accounting::ERSTATTUNG_FAELLIG`]
-/// (`de.accounting.erstattung.faellig`), enqueued in step 5 and only when the
-/// settlement produced a refund *and* an ERP webhook is configured — so a
-/// Nachzahlung, or a refund on a deployment without an ERP webhook, announces
-/// nothing. Anything that needs to react to every Jahresabschluss must poll
-/// `jahresabschluss_runs`; there is no `de.accounting.jahresabschluss.*` type in
-/// the `mako-events` catalog.
+/// Announces the settlement on
+/// [`mako_events::accounting::JAHRESABSCHLUSS_ABGESCHLOSSEN`]
+/// (`de.accounting.jahresabschluss.abgeschlossen`) — **every** time, whatever
+/// the year came to — in the same transaction as the settlement it reports.
+/// [`mako_events::accounting::ERSTATTUNG_FAELLIG`] rides alongside it when the
+/// year produced a refund *and* an ERP webhook is configured, because that one
+/// carries a pain.001 for a bank to execute rather than a fact to react to.
 /// The year's Kontokorrent movements folded into the Jahresabschluss figures.
 ///
 /// Every field is a signed Kontokorrent net (debit +, credit −) as produced by
-/// [`crate::ledger::PgLedger::year_kind_sums`], so the parts simply add up.
+/// [`crate::ledger::PgLedger::year_kind_sums`], so the parts simply add up —
+/// and [`JahresabschlussSums::settlement_ct`] is the total of **every** kind
+/// booked in the year, not of an enumerated subset. The buckets below only
+/// decide how the total is *presented*; a Buchungsart nobody thought of lands
+/// in [`JahresabschlussSums::sonstige_sum`] and still moves the settlement.
+///
+/// That is deliberate. While the total was assembled from a hand-written list
+/// of kinds, adding one meant remembering to add it here too, and forgetting
+/// meant a settlement that quietly disagreed with the balance it settles — the
+/// failure mode that pays a refund out by pain.001.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct JahresabschlussSums {
-    /// Billed debits: `RECHNUNG` + `STORNO` + `MAHNGEBUEHR` (§ 40 Abs. 1 EnWG —
-    /// the Jahresabrechnung reflects actual billed amounts, corrections included).
+    /// What was billed for the supply: `RECHNUNG` + `STORNO` + `KORREKTUR` +
+    /// `GUTSCHRIFT`. § 40 Abs. 1 EnWG — the Jahresabrechnung reflects the
+    /// actual billed amounts, corrections included. Verzugsschaden is **not**
+    /// here: a Mahngebühr is not consumption and must not recalibrate an
+    /// Abschlag.
     pub rechnung_sum: i64,
-    /// `ABSCHLAG` advance payments (credits, so negative).
+    /// The Abschlag pair: `ABSCHLAG` demands (debits, +) net of
+    /// `ABSCHLAG_VERRECHNUNG` (credits, −). In a year that both raised twelve
+    /// advances and settled them on a Jahresrechnung this nets to zero — the
+    /// advances were demanded and then absorbed — and what remains is whatever
+    /// was demanded but not yet billed for.
     pub abschlag_sum: i64,
-    /// Cash settled outside the Abschlag plan: `ZAHLUNG` (credit) net of
-    /// `BANKRUECKLAST` chargebacks (debit). Omitting these treated a customer who
-    /// paid an invoice directly as unpaid, and refunded a bounced Abschlag.
+    /// Cash: `ZAHLUNG` (credit) net of `BANKRUECKLAST` and `SEPA_STORNO`
+    /// chargebacks (debits).
     pub zahlung_sum: i64,
-    /// `> 0` Nachzahlung, `< 0` Erstattung, `0` ausgeglichen.
+    /// Verzugsschaden: `MAHNGEBUEHR` + `VERZUGSZINSEN`. Owed by the customer
+    /// and part of the settlement, but never part of the consumption figure
+    /// that resets the Abschlag.
+    pub verzugsschaden_sum: i64,
+    /// Everything else booked in the year — a prior `JAHRESABSCHLUSS`
+    /// Erstattung, an `EEG_GUTSCHRIFT`, a Buchungsart added later. Present so
+    /// that the buckets always re-sum to `settlement_ct`.
+    pub sonstige_sum: i64,
+    /// `> 0` Nachzahlung, `< 0` Erstattung, `0` ausgeglichen. The signed net of
+    /// the year's whole Kontokorrent movement.
     pub settlement_ct: i64,
 }
 
 impl JahresabschlussSums {
+    /// The kinds that make up [`Self::rechnung_sum`] — the supply billing that
+    /// also recalibrates the Abschlag (§ 40 Abs. 1 EnWG).
+    const BILLED: &'static [&'static str] = &["RECHNUNG", "STORNO", "KORREKTUR", "GUTSCHRIFT"];
+    /// The kinds that make up [`Self::abschlag_sum`].
+    const ADVANCE: &'static [&'static str] = &["ABSCHLAG", "ABSCHLAG_VERRECHNUNG"];
+    /// The kinds that make up [`Self::zahlung_sum`].
+    const CASH: &'static [&'static str] = &["ZAHLUNG", "BANKRUECKLAST", "SEPA_STORNO"];
+
     #[must_use]
     pub fn from_kind_sums(sums: &std::collections::HashMap<String, i64>) -> Self {
-        let kind = |k: &str| sums.get(k).copied().unwrap_or(0);
-        let rechnung_sum = kind("RECHNUNG") + kind("STORNO") + kind("MAHNGEBUEHR");
-        let abschlag_sum = kind("ABSCHLAG");
-        let zahlung_sum = kind("ZAHLUNG") + kind("BANKRUECKLAST");
+        let bucket = |kinds: &[&str]| -> i64 {
+            kinds
+                .iter()
+                .map(|k| sums.get(*k).copied().unwrap_or(0))
+                .sum()
+        };
+        let rechnung_sum = bucket(Self::BILLED);
+        let abschlag_sum = bucket(Self::ADVANCE);
+        let zahlung_sum = bucket(Self::CASH);
+        let verzugsschaden_sum = bucket(crate::pg::VERZUGSSCHADEN_KINDS);
+        // The settlement is the whole year, so the residue is derived rather
+        // than enumerated: whatever the four named buckets did not claim.
+        let settlement_ct: i64 = sums.values().sum();
         Self {
             rechnung_sum,
             abschlag_sum,
             zahlung_sum,
-            settlement_ct: rechnung_sum + abschlag_sum + zahlung_sum,
+            verzugsschaden_sum,
+            sonstige_sum: settlement_ct
+                - rechnung_sum
+                - abschlag_sum
+                - zahlung_sum
+                - verzugsschaden_sum,
+            settlement_ct,
         }
     }
 }
 
+/// A refusal from [`settle_jahresabschluss`], with the status it answers.
+///
+/// The settlement is driven by two callers — an operator's POST and the annual
+/// worker — so it cannot answer in `axum` terms. This is the thin thing that
+/// lets it keep saying *what* went wrong: a missing account is a `404`, an
+/// unbuildable refund a `422`, an unconfigured creditor IBAN a `503`, and the
+/// worker logs each with the same distinction rather than collapsing them into
+/// "settlement failed".
+#[derive(Debug)]
+pub struct SettleError {
+    pub status: StatusCode,
+    pub body: serde_json::Value,
+}
+
+impl SettleError {
+    fn new(status: StatusCode, message: impl Into<String>) -> Self {
+        Self {
+            status,
+            body: serde_json::json!({ "error": message.into() }),
+        }
+    }
+    fn json(status: StatusCode, body: serde_json::Value) -> Self {
+        Self { status, body }
+    }
+    /// Whether retrying later could succeed.
+    ///
+    /// A `5xx` is a database or a bank adapter having a bad moment; a `4xx` is
+    /// this account's own state and will look the same tomorrow. The worker
+    /// uses the distinction to decide between a warning and an error.
+    #[must_use]
+    pub fn is_transient(&self) -> bool {
+        self.status.is_server_error()
+    }
+}
+
+impl std::fmt::Display for SettleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}: {}",
+            self.status,
+            self.body
+                .get("error")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("settlement refused")
+        )
+    }
+}
+
+/// `POST /api/v1/jahresabschluss/{malo_id}` — the operator-driven settlement.
+///
+/// A thin shell over [`settle_jahresabschluss`], which the annual worker also
+/// drives. One implementation, because a settlement an operator triggers and
+/// one a schedule triggers must produce the same postings, the same refund and
+/// the same event — and a second copy of two hundred lines of money handling is
+/// how they stop doing that.
 pub async fn post_jahresabschluss(
     claims: Claims,
     Extension(cedar): Extension<Arc<CedarEnforcer>>,
@@ -2973,38 +3230,65 @@ pub async fn post_jahresabschluss(
     if let Err(e) = cedar.check(&claims.principal(), "close-period", &cfg.tenant) {
         return forbidden(&e);
     }
+    match settle_jahresabschluss(&pool, &ledger, &cfg, &malo_id, &q).await {
+        Ok(body) => Json(body).into_response(),
+        Err(e) => (e.status, Json(e.body)).into_response(),
+    }
+}
+
+pub async fn settle_jahresabschluss(
+    pool: &PgPool,
+    ledger: &Arc<crate::ledger::PgLedger>,
+    cfg: &Arc<AccountingdConfig>,
+    malo_id: &str,
+    q: &JahresabschlussQuery,
+) -> Result<serde_json::Value, SettleError> {
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
     let year = q.year.unwrap_or_else(|| OffsetDateTime::now_utc().year());
     let dry_run = q.dry_run.unwrap_or(false);
 
     // 1. Resolve account.
-    let acct = match fetch_account(&pool, &malo_id, lf_mp_id, &cfg.tenant).await {
+    let acct = match fetch_account(pool, malo_id, lf_mp_id, &cfg.tenant).await {
         Ok(Some(a)) => a,
         Ok(None) => {
-            return (
+            return Err(SettleError::new(
                 StatusCode::NOT_FOUND,
                 format!("account for {malo_id} not found"),
-            )
-                .into_response();
+            ));
         }
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return Err(SettleError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ));
+        }
     };
 
     // 2. Sum the year's movements by kind from the doubleentry ledger.
     // Values are signed Kontokorrent contributions (debit +, credit −).
-    let sums = match ledger.year_kind_sums(lf_mp_id, &malo_id, year).await {
+    let sums = match ledger.year_kind_sums(lf_mp_id, malo_id, year).await {
         Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return Err(SettleError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ));
+        }
     };
     let JahresabschlussSums {
         rechnung_sum,
         abschlag_sum,
         zahlung_sum,
+        verzugsschaden_sum,
+        sonstige_sum,
         settlement_ct,
     } = JahresabschlussSums::from_kind_sums(&sums);
     // New monthly Abschlag = actual annual billed ÷ 12 (§40 Abs. 1 EnWG).
     // Only update when there were actual Rechnungen this year; keep unchanged
     // for years with no billed amounts to avoid zeroing the Abschlag on empty years.
+    // Mahngebühren and Verzugszinsen stay out of the base: § 40 Abs. 1 ties the
+    // Abschlag to the expected *consumption*, and raising it because a customer
+    // was dunned would make the next year's advances a second penalty.
     let new_abschlag_ct = if rechnung_sum.abs() > 0 {
         rechnung_sum.abs() / 12
     } else {
@@ -3020,40 +3304,45 @@ pub async fn post_jahresabschluss(
     };
 
     if dry_run {
-        return Json(serde_json::json!({
+        return Ok(serde_json::json!({
             "malo_id": malo_id,
             "year": year,
             "rechnung_sum_ct": rechnung_sum,
-            "abschlag_paid_ct": abschlag_sum,
+            "abschlag_net_ct": abschlag_sum,
             "zahlung_net_ct": zahlung_sum,
+            "verzugsschaden_ct": verzugsschaden_sum,
+            "sonstige_ct": sonstige_sum,
             "settlement_ct": settlement_ct,
             "settlement_eur": format_ct_as_eur(settlement_ct),
             "new_monthly_abschlag_ct": new_abschlag_ct,
             "action": action,
             "dry_run": true,
             "committed": false,
-        }))
-        .into_response();
+        }));
     }
 
     // Idempotency: a Jahresabschluss for (tenant, malo, year) runs exactly once.
     // Re-invocation (retry, double-click, concurrent) returns the prior result
     // instead of writing a second settlement entry and re-recalibrating Abschlag.
     let billing_year_i16 = i16::try_from(year).unwrap_or(0);
-    match jahresabschluss_already_settled(&pool, &cfg.tenant, &malo_id, billing_year_i16).await {
+    match jahresabschluss_already_settled(pool, &cfg.tenant, malo_id, billing_year_i16).await {
         Ok(Some(prior_ct)) => {
-            return Json(serde_json::json!({
+            return Ok(serde_json::json!({
                 "malo_id": malo_id,
                 "year": year,
                 "settlement_ct": prior_ct,
                 "settlement_eur": format_ct_as_eur(prior_ct),
                 "committed": true,
                 "already_settled": true,
-            }))
-            .into_response();
+            }));
         }
         Ok(None) => {}
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return Err(SettleError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ));
+        }
     }
 
     let today = OffsetDateTime::now_utc().date();
@@ -3063,10 +3352,11 @@ pub async fn post_jahresabschluss(
 
     // 3. Realise the settlement.
     //
-    // The running balance already equals `settlement_ct` (full-cost RECHNUNG
-    // debits + ABSCHLAG advance-payment credits), so a **Nachzahlung** needs NO
-    // ledger entry — it is the open receivable, collected by the SEPA/dunning
-    // path. An **Erstattung** (customer overpaid) is realised here: we book a
+    // The year's Kontokorrent movement already equals `settlement_ct` — the
+    // gross RECHNUNG debits, less the ABSCHLAG_VERRECHNUNG the settling invoice
+    // booked, plus the advances demanded, less the cash received — so a
+    // **Nachzahlung** needs NO ledger entry: it is the open receivable,
+    // collected by the SEPA/dunning path. An **Erstattung** (customer overpaid) is realised here: we book a
     // debit that clears the credit balance to zero and pay the money out via
     // pain.001 — but only when the account carries an IBAN. Without one the
     // credit is carried forward and offset against the next Rechnung
@@ -3081,13 +3371,12 @@ pub async fn post_jahresabschluss(
                 let creditor_iban = match cfg.creditor_iban.as_deref().filter(|s| !s.is_empty()) {
                     Some(i) => i,
                     None => {
-                        return (
+                        return Err(SettleError::json(
                             StatusCode::SERVICE_UNAVAILABLE,
-                            Json(serde_json::json!({
+                            serde_json::json!({
                                 "error": "Erstattung due but creditor_iban (payer account) not configured"
-                            })),
-                        )
-                            .into_response();
+                            }),
+                        ));
                     }
                 };
                 let e2e = format!("REFUND-{malo_id}-{year}");
@@ -3098,11 +3387,10 @@ pub async fn post_jahresabschluss(
                     match crate::sepa::resolve_pain001_schema(cfg.pain001_schema.as_deref()) {
                         Ok(s) => s,
                         Err(e) => {
-                            return (
+                            return Err(SettleError::json(
                                 StatusCode::SERVICE_UNAVAILABLE,
-                                Json(serde_json::json!({ "error": e.to_string() })),
-                            )
-                                .into_response();
+                                serde_json::json!({ "error": e.to_string() }),
+                            ));
                         }
                     };
                 // A refund leaves today: §40 EnWG gives no grace period for
@@ -3126,11 +3414,10 @@ pub async fn post_jahresabschluss(
                 ) {
                     Ok(xml) => refund_pain001 = Some(xml),
                     Err(e) => {
-                        return (
+                        return Err(SettleError::json(
                             StatusCode::UNPROCESSABLE_ENTITY,
-                            Json(serde_json::json!({ "error": format!("refund pain.001 build failed: {e}") })),
-                        )
-                            .into_response();
+                            serde_json::json!({ "error": format!("refund pain.001 build failed: {e}") }),
+                        ));
                     }
                 }
                 // Clearing debit: zeroes the credit balance the refund pays out.
@@ -3138,10 +3425,10 @@ pub async fn post_jahresabschluss(
                 // operator retry replays this as a no-op and completes the run.
                 let desc = format!("Erstattung Jahresabschluss {year} (Auszahlung an Kunde)");
                 match crate::pg::post_entry(
-                    &ledger,
-                    &pool,
+                    ledger,
+                    pool,
                     &cfg.tenant,
-                    &malo_id,
+                    malo_id,
                     lf_mp_id,
                     "JAHRESABSCHLUSS",
                     refund_ct,
@@ -3157,7 +3444,10 @@ pub async fn post_jahresabschluss(
                 {
                     Ok(id) => settlement_entry_id = Some(id),
                     Err(e) => {
-                        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+                        return Err(SettleError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            e.to_string(),
+                        ));
                     }
                 }
             }
@@ -3177,33 +3467,44 @@ pub async fn post_jahresabschluss(
     // from the state it represents.
     let mut tx = match pool.begin().await {
         Ok(t) => t,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+        Err(e) => {
+            return Err(SettleError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ));
+        }
     };
 
     // Record the run so a re-call is a no-op (audit + idempotency guard).
     if let Err(e) = record_jahresabschluss(
         &mut *tx,
         &cfg.tenant,
-        &malo_id,
+        malo_id,
         billing_year_i16,
         rechnung_sum,
-        // All credits received, so annual_bill + sum_abschlage == zahlbetrag holds
-        // in the persisted run.
-        abschlag_sum + zahlung_sum,
+        // What the customer contributed against the year's billing: the advances
+        // still standing plus the cash actually received, plus whatever else
+        // moved. `annual_bill + sum_abschlage == zahlbetrag` then holds in the
+        // persisted run by construction rather than by hoping the buckets were
+        // exhaustive.
+        settlement_ct - rechnung_sum,
         settlement_ct,
         settlement_entry_id,
     )
     .await
     {
         tracing::error!(malo_id, error = %e, "accountingd: record_jahresabschluss failed");
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return Err(SettleError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ));
     }
 
     // 4. Update monthly Abschlag (§40 Abs. 1 EnWG: Abschlag must match actual consumption).
     if new_abschlag_ct != acct.abschlag_ct
         && let Err(e) = update_account_tenanted(
             &mut *tx,
-            &malo_id,
+            malo_id,
             lf_mp_id,
             &cfg.tenant,
             None,
@@ -3223,7 +3524,10 @@ pub async fn post_jahresabschluss(
             error = %e,
             "accountingd: Jahresabschluss Abschlag update failed"
         );
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+        return Err(SettleError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ));
     }
 
     // 5. Enqueue the refund CloudEvent for the ERP/bank (persist-before-dispatch);
@@ -3247,20 +3551,66 @@ pub async fn post_jahresabschluss(
         .without_subject();
         if let Err(e) = mako_service::outbox::enqueue(&mut tx, &ce).await {
             tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (erstattung) failed");
-            return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+            return Err(SettleError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.to_string(),
+            ));
         }
     }
 
-    if let Err(e) = tx.commit().await {
-        return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
+    // 6. Announce the settlement — **unconditionally**, on every outcome.
+    //
+    // The refund event above fires only when the year produced a refund *and*
+    // an ERP webhook is configured, so a Nachzahlung, a balanced year, and
+    // every deployment without a webhook announced nothing at all: anything
+    // downstream of the annual cycle had to poll `jahresabschluss_runs` to
+    // notice it had happened. This is the completion signal, in the same
+    // transaction as the settlement it reports, keyed on (MaLo, year) so the
+    // idempotent re-run drops at the outbox.
+    let done = mako_service::CloudEvent::new(
+        mako_service::source("accountingd", &cfg.tenant),
+        mako_events::accounting::JAHRESABSCHLUSS_ABGESCHLOSSEN,
+        malo_id,
+        serde_json::json!({
+            "malo_id":                 malo_id,
+            "lf_mp_id":                lf_mp_id,
+            "year":                    year,
+            "action":                  action,
+            "settlement_ct":           settlement_ct,
+            "settlement_eur":          format_ct_as_eur(settlement_ct),
+            "rechnung_sum_ct":         rechnung_sum,
+            "abschlag_net_ct":         abschlag_sum,
+            "zahlung_net_ct":          zahlung_sum,
+            "verzugsschaden_ct":       verzugsschaden_sum,
+            "sonstige_ct":             sonstige_sum,
+            "new_monthly_abschlag_ct": new_abschlag_ct,
+            "refund_issued":           refund_pain001.is_some(),
+        }),
+    )
+    .with_id(ce_id.clone());
+    if let Err(e) = mako_service::outbox::enqueue(&mut tx, &done).await {
+        tracing::error!(malo_id, error = %e, "accountingd: outbox enqueue (jahresabschluss) failed");
+        return Err(SettleError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ));
     }
 
-    Json(serde_json::json!({
+    if let Err(e) = tx.commit().await {
+        return Err(SettleError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            e.to_string(),
+        ));
+    }
+
+    Ok(serde_json::json!({
         "malo_id": malo_id,
         "year": year,
         "rechnung_sum_ct": rechnung_sum,
-        "abschlag_paid_ct": abschlag_sum,
+        "abschlag_net_ct": abschlag_sum,
         "zahlung_net_ct": zahlung_sum,
+        "verzugsschaden_ct": verzugsschaden_sum,
+        "sonstige_ct": sonstige_sum,
         "settlement_ct": settlement_ct,
         "settlement_eur": format_ct_as_eur(settlement_ct),
         "new_monthly_abschlag_ct": new_abschlag_ct,
@@ -3270,7 +3620,6 @@ pub async fn post_jahresabschluss(
         "committed": true,
         "ce_id": ce_id,
     }))
-    .into_response()
 }
 
 // ── Zahlungsinformation (BO4E typed payment info — IBAN + BIC + SEPA) ────────

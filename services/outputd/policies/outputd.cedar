@@ -15,7 +15,15 @@
 //   "rollout-template"  — PUT  /api/v1/templates/{kind}/current — decides what
 //                         *every* document issued from now on looks like
 //   "render-document"   — POST /api/v1/render/{kind} — produces a PDF under the
-//                         operator's Briefkopf
+//                         operator's Briefkopf, and stores nothing
+//   "issue-document"    — POST /api/v1/documents/{kind} — the same render,
+//                         recorded for 8 years and queued for delivery to a
+//                         named recipient
+//   "read-document"     — GET  /api/v1/documents, /{id}, /{id}/content,
+//                         /api/v1/spool, and POST /deliveries/{id}/read —
+//                         reads an issued document and its delivery evidence
+//   "report-delivery"   — POST /api/v1/deliveries/{id}/status — a channel
+//                         reporting whether a document arrived
 //
 // outputd shipped with the `cedar` feature enabled and **no policy file at
 // all**. Authentication established who was calling and nothing established
@@ -63,7 +71,9 @@ permit(
     action in [
         Action::"publish-template",
         Action::"rollout-template",
-        Action::"render-document"
+        Action::"render-document",
+        Action::"issue-document",
+        Action::"report-delivery"
     ],
     resource
 ) when {
@@ -71,6 +81,25 @@ permit(
     (context.principal_roles.contains("LF") ||
      context.principal_roles.contains("MSB") ||
      context.principal_roles.contains("ESA"))
+};
+
+// ── Reading issued documents ──────────────────────────────────────────────────
+// A read within the tenant, on the same footing as `read-template`. The scope
+// that matters here is not the role but the *query*: `GET /api/v1/documents`
+// refuses to answer without a `malo_id` or a `kunden_nr`, so a token cannot ask
+// for the portfolio. `portald` is the caller that turns a customer's OIDC
+// identity into that scope, and it resolves the scope from `vertragd` — the one
+// service in the platform that maps identities to Marktlokationen.
+//
+// Deliberately not restricted to LF/MSB/ESA: a Netzbetreiber deployment issues
+// no retail documents at all, so the rule would never fire, while an operator's
+// own back-office tooling legitimately reads them.
+permit(
+    principal,
+    action == Action::"read-document",
+    resource
+) when {
+    context.principal_tenant == context.resource_tenant
 };
 
 // ── On separating rollout from publish, and why it is not here ────────────────

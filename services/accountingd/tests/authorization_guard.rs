@@ -16,6 +16,17 @@ use std::collections::BTreeSet;
 
 const POLICY: &str = include_str!("../policies/accountingd.cedar");
 const HANDLERS: &str = include_str!("../src/handlers.rs");
+/// The router, so the guards can tell a **routed** handler from a function that
+/// merely lives in `handlers.rs`.
+///
+/// Without it, every `pub async fn` there was treated as reachable over HTTP —
+/// which was true until the Jahresabschluss settlement was extracted so the
+/// annual worker and the operator's POST could share one implementation. That
+/// function takes a `&PgPool`, is reachable from no route, and being told it
+/// "is served to any caller without a token" is the guard misreading its own
+/// input. Cross-checking the router is also strictly stronger: it is the thing
+/// that actually decides what is exposed.
+const MAIN: &str = include_str!("../src/main.rs");
 
 /// Every `"…"` literal passed as the action argument of `cedar.check(..)`.
 fn actions_used_in_code() -> BTreeSet<String> {
@@ -90,7 +101,15 @@ fn unauthenticated_by_design(handler: &str) -> Option<&'static str> {
     }
 }
 
-/// Every `pub async fn` in `handlers.rs` paired with its parameter list.
+/// Every **routed** `pub async fn` in `handlers.rs`, paired with its parameter
+/// list.
+///
+/// Routed means `main.rs` passes it to a method filter as
+/// `get(handlers::<name>)` / `post(handlers::<name>)` — the only definition of
+/// "reachable over HTTP" that cannot drift, since it reads the router itself.
+/// Matched with the closing parenthesis on purpose: a worker *calling* a
+/// function (`handlers::settle_jahresabschluss(pool, …)`) is not routing it,
+/// and a bare-name match cannot tell the two apart.
 fn handler_signatures() -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut rest = HANDLERS;
@@ -99,8 +118,11 @@ fn handler_signatures() -> Vec<(String, String)> {
         let Some(paren) = rest.find('(') else { break };
         let name = rest[..paren].trim().to_owned();
         let Some(end) = rest.find(") ->") else { break };
-        out.push((name, rest[paren..end].to_owned()));
+        let sig = rest[paren..end].to_owned();
         rest = &rest[end..];
+        if MAIN.contains(&format!("(handlers::{name})")) {
+            out.push((name, sig));
+        }
     }
     out
 }
@@ -149,8 +171,9 @@ fn every_authenticated_handler_authorizes() {
 #[test]
 fn the_handler_count_has_not_silently_shrunk() {
     // A guard that finds no handlers passes vacuously. accountingd had 55 when
-    // this suite was written; the exact number matters less than the parser still
-    // finding roughly that many.
+    // this suite was written; the exact number matters less than the parser
+    // still finding roughly that many — and, since it now cross-checks the
+    // router, that the router is still being read at all.
     let n = handler_signatures().len();
     assert!(
         n >= 50,

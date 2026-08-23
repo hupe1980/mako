@@ -52,7 +52,7 @@ graph TB
     subgraph lf_billing ["Retail Billing (LF)"]
         tarifbd[":9080 tarifbd<br/>14 categories · §42d feed<br/>EPEX §41a · B2B Angebote"]
         billingd[":9280 billingd<br/>13 categories · XRechnung 3.0<br/>RLM demand · §54 exemption"]
-        outputd[":9880 outputd<br/>Typst templates · ZUGFeRD carrier<br/>publish gates · append-only store"]
+        outputd[":9880 outputd<br/>Typst templates · ZUGFeRD carrier<br/>issued documents · delivery evidence"]
         accountingd[":9380 accountingd<br/>Massenkontokorrent<br/>SEPA FRST/RCUR · GLN ID · Aging · §288 BGB"]
     end
 
@@ -107,15 +107,15 @@ graph TB
 |---|---|---|---|
 | [tarifbd](@/docs/services/tarifbd.md) | `:9080` | LF | Product & Tariff Catalog — user-defined energy products, EPEX Spot for §41a, B2B Angebote/quotations |
 | [billingd](@/docs/services/billingd.md) | `:9280` | LF | Energy Billing Engine — 13 categories, §41a dynamic, §42b EnWG GGV community solar, EN 16931 e-invoicing (XRechnung 3.0 CII / PEPPOL UBL); the ZUGFeRD PDF renders via outputd |
-| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates (content-addressed, append-only, publish gated by proof), ZUGFeRD PDF/A-3 carrier around the caller's CII, Textform kinds (Mahnung § 126b BGB); external validation panel (veraPDF + Mustang) |
-| [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (the `doubleentry` crate: Merkle proofs + period seals for GoBD/§146 AO Festschreibung); per-MaLo Kontokorrent + GL contras; FIFO open-item clearing; Summen- und Saldenliste §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-dunning; GDPR Art. 17 |
+| [outputd](@/docs/services/outputd.md) | `:9880` | — | Customer Communications — operator Typst templates (content-addressed, append-only, publish gated by proof), ZUGFeRD PDF/A-3 carrier around the caller's CII, Textform kinds (Mahnung § 126b BGB, Preisanpassung § 41 Abs. 5 EnWG), the append-only store of issued documents, and delivery over portal, e-mail, print spool and ERP with per-channel evidence |
+| [accountingd](@/docs/services/accountingd.md) | `:9380` | LF | Customer Account Ledger — tamper-evident double-entry ledger (the `doubleentry` crate: Merkle proofs + period seals for GoBD/§146 AO Festschreibung); per-MaLo Kontokorrent + GL contras; Abschläge as receivables against Erhaltene Anzahlungen; FIFO open-item clearing; Summen- und Saldenliste §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung; SEPA pain.008 (FRST/RCUR separated, Gläubiger-ID EPC AT-02); CAMT.054 dedup; keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-dunning that renders and delivers each Mahnung through outputd; §40b Abs. 1 Jahresabschluss worker; GDPR Art. 17 |
 
 ## B2C & AI
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [vertragd](@/docs/services/vertragd.md) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel, Kündigung, OIDC→MaLo auth gateway for portald |
-| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16); every route resolves customer ownership through `vertragd`; 8-tool operator MCP server |
+| [vertragd](@/docs/services/vertragd.md) | `:9780` | LF | Contract & Customer Management — Kunden (B2C+B2B), Rahmenverträge, Versorgungsverträge, kunden_identitaeten (N portal users per company), Tarifwechsel with its § 41 Abs. 5 EnWG Preisänderungsanzeige (rendered and delivered through outputd), Kündigung, OIDC→MaLo auth gateway for portald |
+| [portald](@/docs/services/portald.md) | `:9480` | LF | Customer Portal gateway — stateless aggregation over all LF services plus the §41 EnWG self-service writes (Tarifwechsel, Kündigung, SEPA, GDPR Art. 16) and the document inbox served out of outputd; every route resolves customer ownership through `vertragd`; 8-tool operator MCP server |
 | [agentd](@/docs/services/agentd.md) | `:9580` | All | Multi-agent LLM orchestration — **28 declarative manifests** run on the agentplane durable runtime, activated via `[bundled_agents]`; one journaled run per subscribing specialist (no first-wins); human approval on mutating tools; OIDC auth on `/api/v1/run`; inbound HMAC; A2A agent cards; MCP tools across the production services |
 
 ---

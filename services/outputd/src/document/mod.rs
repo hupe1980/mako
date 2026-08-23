@@ -44,6 +44,7 @@
 pub mod facturx;
 pub mod gate;
 pub mod mahnung;
+pub mod preisanpassung;
 pub mod render;
 pub mod view;
 pub mod world;
@@ -61,3 +62,12 @@ pub const REFERENCE_INVOICE_TEMPLATE: &str = include_str!("templates/invoice.typ
 
 /// The reference Mahnung layout — same rationale, same gate (Textform proof).
 pub const REFERENCE_MAHNUNG_TEMPLATE: &str = include_str!("templates/mahnung.typ");
+
+/// The reference Preisanpassung layout — same rationale, same gate.
+///
+/// The one whose *content* is regulated rather than its form:
+/// § 41 Abs. 5 EnWG fixes what a price-change notice must say, and the gate
+/// checks the rendered page says it. Most of all the Satz 4
+/// Sonderkündigungsrecht, which Satz 1 obliges the supplier to state in the
+/// same notice and without which the Anzeige is invalid.
+pub const REFERENCE_PREISANPASSUNG: &str = include_str!("templates/preisanpassung.typ");

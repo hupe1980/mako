@@ -222,26 +222,25 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
     for cand in &candidates {
         let counters = per_lf.entry(cand.lf_mp_id.clone()).or_default();
 
-        // §40 Abs. 1 EnWG: a Jahresrechnung must itemise the paid Abschläge and
-        // deduct them. Nothing reaching this worker carries them — the vertragd
-        // candidate has no Abschlag data and the postings live in accountingd,
-        // downstream of billingd — so an automated annual run would bill the
-        // whole year's gross with zero Vorauszahlungen. Refuse rather than emit
-        // a non-compliant document; the manual `/calculate` path supplies
-        // `abschlaege` and is unaffected.
-        let refuse_settlement =
-            settles_advances(&cand.abrechnungszyklus) && !cfg.billing_runs.jahresrechnung;
+        // §40 Abs. 1 EnWG: a Jahresrechnung itemises and deducts the paid
+        // Abschläge, and §14 Abs. 5 Satz 2 UStG makes each one's rate part of
+        // the deduction. `bill_one` reads both from the accountingd register.
+        // Without one there is no source, so the run would state the whole
+        // year's gross as `zuZahlen` — refused rather than emitted; the manual
+        // `/calculate` path supplies `abschlaege` and is unaffected.
+        let refuse_settlement = settles_advances(&cand.abrechnungszyklus)
+            && deps.accountingd.is_none()
+            && !cfg.billing_runs.jahresrechnung;
         if refuse_settlement {
-            // A deliberate skip, not a fault. Counting these as errors marked
-            // every month `failed` for any operator with annual contracts and
-            // the default `jahresrechnung = false` — the audit signal buried
-            // under the configuration's own intended behaviour.
+            // A deliberate skip, not a fault: counted as errors, it would mark
+            // every month `failed` for an operator with annual contracts.
             tracing::info!(
                 malo_id = %cand.malo_id,
                 zyklus = %cand.abrechnungszyklus,
-                "billing-run: skipping annual settlement — the sweep cannot supply the paid \
-                 Abschläge (§40 Abs. 1 EnWG); bill via POST /api/v1/billing/{{malo_id}}/calculate \
-                 or set [billing_runs] jahresrechnung=true to emit anyway"
+                "billing-run: skipping annual settlement — no accountingd_url is configured, \
+                 so the sweep has no source for the paid Abschläge (§40 Abs. 1 EnWG). Configure \
+                 accountingd_url, bill via POST /api/v1/billing/{{malo_id}}/calculate, or set \
+                 [billing_runs] jahresrechnung=true to emit without the deduction anyway"
             );
             counters.skipped += 1;
         }
@@ -331,6 +330,30 @@ async fn bill_one(
     run_id: &str,
 ) -> anyhow::Result<()> {
     let cfg = &deps.cfg;
+    // A settling cadence bills the period *and* discharges the advances
+    // collected against it (§ 40 Abs. 1 EnWG). They come from the accountingd
+    // register, already filtered to the ones § 14 Abs. 5 Satz 2 UStG allows a
+    // settlement to deduct.
+    //
+    // An unreachable accountingd is an error, not an empty list: the year's
+    // gross with no Vorauszahlungen looks like an ordinary invoice and demands
+    // money the customer already paid.
+    let settles = settles_advances(&cand.abrechnungszyklus);
+    let abschlaege = match (settles, deps.accountingd.as_ref()) {
+        (true, Some(accounting)) => accounting
+            .get_abschlaege(&cand.malo_id, from, to)
+            .await
+            .map_err(|e| anyhow::anyhow!("accountingd abschlaege: {e}"))?
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    };
+    if settles && !abschlaege.is_empty() {
+        tracing::info!(
+            malo_id = %cand.malo_id,
+            count = abschlaege.len(),
+            "billing-run: settling advances on the annual invoice"
+        );
+    }
     let req = CalculateRequest {
         lf_mp_id: cand.lf_mp_id.clone(),
         nb_mp_id: cand.nb_mp_id.clone(),
@@ -339,6 +362,7 @@ async fn bill_one(
         // §40b Abs. 1 monthly billing shortens the §40c deadline to three weeks.
         // The cadence comes from the contract, not from this period's length.
         monatliche_abrechnung: cand.abrechnungszyklus.eq_ignore_ascii_case("MONATLICH"),
+        abschlaege,
         ..Default::default()
     };
     // The product assignments covering this period, from vertragd — the mapping
@@ -487,6 +511,39 @@ async fn bill_one(
     tx.commit().await?;
 
     tracing::info!(malo_id = %cand.malo_id, %from, %to, %record_id, "billing-run: invoice created");
+
+    // ── Send it ──────────────────────────────────────────────────────────────
+    //
+    // Outside the transaction: the invoice exists, its receivable is booked and
+    // its ERP event is enqueued. Rendering and delivery fail on their own terms
+    // — no template rolled out, outputd down — and rolling back a billed period
+    // for that would re-bill it under a second Rechnungsnummer.
+    //
+    // A held invoice is never sent: the risk gate withheld its issuance, so no
+    // receivable stands behind it.
+    if cfg.billing_runs.versand && !held {
+        match handlers::record_with_model(pool, &cfg.tenant, record_id).await {
+            Ok((row, model)) => {
+                if let Err(e) =
+                    handlers::issue_and_deliver(pool, deps, record_id, &row, &model).await
+                {
+                    // Not an error for the run: the invoice is billed and will
+                    // not be re-issued. What has not happened is the sending,
+                    // which `POST /api/v1/billing/{id}/versenden` repeats
+                    // idempotently.
+                    tracing::error!(
+                        malo_id = %cand.malo_id, %record_id, error = %e,
+                        "billing-run: the invoice was billed but NOT sent to the customer — \
+                         POST /api/v1/billing/{{id}}/versenden retries it (§ 40c Abs. 2 EnWG \
+                         puts it in their hands within three or six weeks)"
+                    );
+                }
+            }
+            Err(e) => {
+                tracing::error!(%record_id, error = %e, "billing-run: could not re-read the record to send it");
+            }
+        }
+    }
     Ok(())
 }
 

@@ -80,6 +80,11 @@ impl Daemon for Portald {
                 cfg.vertragd_url.as_ref(),
                 cfg.vertragd_api_key.as_ref(),
             ),
+            outputd: up(
+                "outputd",
+                cfg.outputd_url.as_ref(),
+                cfg.outputd_api_key.as_ref(),
+            ),
             auth_client: ctx.http.clone(),
         });
 
@@ -114,6 +119,14 @@ pub fn router() -> Router {
         .route(
             "/api/v1/portal/{malo_id}/invoices",
             get(handlers::get_invoices),
+        )
+        .route(
+            "/api/v1/portal/{malo_id}/dokumente",
+            get(handlers::get_dokumente),
+        )
+        .route(
+            "/api/v1/portal/{malo_id}/dokumente/{document_id}",
+            get(handlers::get_dokument),
         )
         .route(
             "/api/v1/portal/{malo_id}/invoices/{record_id}/download",

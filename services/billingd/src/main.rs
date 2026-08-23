@@ -54,6 +54,7 @@
 //! | `GET` | `/api/v1/billing/{id}` | Fetch single record |
 //! | `GET` | `/api/v1/billing/{id}/xrechnung` | ZUGFeRD 2.3 / XRechnung 3.0 CII XML |
 //! | `GET` | `/api/v1/billing/{id}/pdf` | ZUGFeRD PDF/A-3: the page with the CII XML embedded |
+//! | `POST` | `/api/v1/billing/{id}/versenden` | Issue it to the customer — recorded in `outputd` for 8 years and queued for delivery |
 //! | `POST` | `/api/v1/billing/{malo_id}/tarifwechsel` | Combined invoice across a mid-period price change |
 //! | `GET` | `/api/v1/billing/review-queue` | Analyst work list (REVIEW + HELD) |
 //! | `POST` | `/api/v1/billing/{id}/release` | Release a HELD record for dispatch |
@@ -173,6 +174,18 @@ impl Daemon for Billingd {
                 .unwrap_or("http://localhost:9880"),
             cfg.outputd_api_key.clone(),
         ));
+        // Deliberately not defaulted to a localhost URL. Every other client
+        // here answers a question billingd can also be told the answer to in
+        // the request; this one supplies the § 40 Abs. 1 EnWG advance
+        // itemisation, and an unreachable default would let the §40b sweep
+        // treat "accountingd is not deployed" and "this customer paid no
+        // advances" as the same fact.
+        let accountingd = cfg.accountingd_url.as_deref().map(|url| {
+            Arc::new(clients::AccountingdClient::new(
+                url,
+                cfg.accountingd_api_key.clone(),
+            ))
+        });
 
         // One bundle instead of six extensions. Every handler needs some subset
         // of these, and threading them individually is what pushed nearly every
@@ -184,6 +197,7 @@ impl Daemon for Billingd {
             marktd,
             vertragd,
             outputd,
+            accountingd,
         });
 
         // ── Outbox drain worker (config-gated on the ERP webhook) ────────────────
@@ -239,6 +253,13 @@ impl Daemon for Billingd {
             // proves the payload; outputd renders the page and the PDF/A-3
             // carrier with the operator's template (templates live there).
             .route("/api/v1/billing/{id}/pdf", get(handlers::get_invoice_pdf))
+            // Issue the document to the customer: render, record for 8 years,
+            // and queue it on their channels. `GET /pdf` shows an invoice;
+            // this one sends it.
+            .route(
+                "/api/v1/billing/{id}/versenden",
+                post(handlers::post_invoice_versenden),
+            )
             .route(
                 "/api/v1/billing/{malo_id}/preview",
                 post(handlers::post_preview),
