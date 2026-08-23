@@ -88,6 +88,7 @@ fn faulty_plane(
         timers: Arc::clone(&store) as _,
         events: Arc::clone(&store) as _,
         push: Arc::clone(&store) as _,
+        quotas: Arc::clone(&store) as _,
         memory: store as _,
     };
     let policy = agentd::plane::policy::engine(agentd::plane::policy::DEFAULT_POLICY)
@@ -101,6 +102,12 @@ fn faulty_plane(
         stores,
         PlaneConfig {
             outbox: None,
+            // Unattested and unbounded, which is what a test wants: signing is
+            // a deployment's key and a quota is a deployment's number, and
+            // inventing either here would test this file's choices rather than
+            // the plane's behaviour.
+            signer: None,
+            quota: agentplane::quota::TenantQuota::default(),
             owner: "agentd-durability-test",
             tenant: &tenant,
             activated: &Activation::named(vec![AGENT.to_owned()]),

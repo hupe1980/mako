@@ -10,6 +10,7 @@
 //! CloudEvent  →  Router          one run per subscribing specialist
 //!             →  plane::label    re-validated identifiers trusted, the rest not
 //!             →  admission key   (source, id, specialist) — at most once, in the store
+//!             →  202 Accepted    returned here: admission has committed
 //!             →  Runtime         journaled effects, strict replay, Cedar gate
 //!                  ├─ tools      MCP calls to mako's own services
 //!                  ├─ tasks      a mutating call waits for a named approver
@@ -21,7 +22,6 @@
 //! |---|---|
 //! | `POST /webhook` | CloudEvent ingest (Standard Webhooks-verified) |
 //! | `POST /api/v1/run` | Run a specialist by hand (OIDC; honours `Idempotency-Key`) |
-//! | `GET /api/v1/decisions` | The last 100 decisions |
 //! | `GET /api/v1/agents` | What this deployment activated |
 //! | `GET /api/v1/agents/catalog` | Everything compiled in |
 //! | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
@@ -46,7 +46,7 @@ use tracing::{info, warn};
 
 use agentd::{
     config::{AgentdConfig, JournalConfig},
-    handlers::{self, AppState, DecisionLog},
+    handlers::{self, AppState},
     plane::{Activation, Plane, PlaneConfig, Stores},
 };
 
@@ -83,17 +83,47 @@ impl Daemon for Agentd {
             anyhow::anyhow!("tenant `{}` is not a usable key scope: {e}", cfg.tenant)
         })?;
 
+        // ── Attestation ──────────────────────────────────────────────────
+        //
+        // Built before the store, because the store is what applies it to
+        // *records*: a signer handed to `RuntimeBuilder` alone covers only the
+        // plane's outward claims, and the two settings are one method name
+        // apart.
+        let signer =
+            agentd::plane::attest::build(cfg.attestation.as_ref(), secrets.signing_seed.as_ref())
+                .map_err(|e| anyhow::anyhow!(e))?;
+        match signer.as_ref() {
+            None => warn!("agentd: {}", agentd::plane::attest::UNATTESTED_WARNING),
+            Some(s) => info!(
+                key_id = %agentplane::core::Signer::key_id(s.as_ref()).as_str(),
+                origin = agentd::plane::attest::ORIGIN,
+                "journal records are attested"
+            ),
+        }
+        let record_signer = signer
+            .as_ref()
+            .map(|s| Arc::clone(s) as Arc<dyn agentplane::core::Signer>);
+
         // ── Durable state ────────────────────────────────────────────────
         //
         // The journal is the § 147 AO / GoBD record for the agent layer, and the
         // case layer beside it holds the matters, the obligations and the human
         // tasks. One backend supplies both.
+        //
+        // `origin` names this plane's Merkle log and the store appends the
+        // tenant, so checkpoints read `mako/agentd/<tenant>`. It is the one
+        // artifact that has to leave the operator's control, so it says whose
+        // log it is.
         let stores = match &cfg.journal {
-            JournalConfig::Redb { path } => Stores::redb(
-                agentplane::store::RedbStore::open(path)
-                    .with_context(|| format!("open the agent journal at {path}"))?,
-                &tenant,
-            ),
+            JournalConfig::Redb { path } => {
+                let mut store = agentplane::store::RedbStore::open(path)
+                    .with_context(|| format!("open the agent journal at {path}"))?
+                    .origin(agentd::plane::attest::ORIGIN);
+                if let Some(s) = record_signer.clone() {
+                    store = store.signing_as(s);
+                }
+                Stores::redb(store, &tenant)
+            }
             // The DSN comes from `secrets`, where its `env:VAR` indirection was
             // resolved: connecting with the literal placeholder would fail as a
             // hostname nobody can find.
@@ -102,12 +132,14 @@ impl Daemon for Agentd {
                     .journal_url
                     .as_deref()
                     .context("journal.url is required for the postgres backend")?;
-                Stores::postgres(
-                    agentplane::store::PostgresStore::connect(url)
-                        .await
-                        .context("connect the agent journal to Postgres")?,
-                    &tenant,
-                )
+                let mut store = agentplane::store::PostgresStore::connect(url)
+                    .await
+                    .context("connect the agent journal to Postgres")?
+                    .origin(agentd::plane::attest::ORIGIN);
+                if let Some(s) = record_signer.clone() {
+                    store = store.signing_as(s);
+                }
+                Stores::postgres(store, &tenant)
             }
         };
 
@@ -154,6 +186,7 @@ impl Daemon for Agentd {
         // down for a deploy is caught up rather than having missed everything.
         let journal_for_delivery = std::sync::Arc::clone(&stores.journal);
         let journal_for_retention = std::sync::Arc::clone(&stores.journal);
+        let stores_journal = std::sync::Arc::clone(&stores.journal);
         let push_store_for_delivery = std::sync::Arc::clone(&stores.push);
         // Built once and handed to BOTH the outbox (which registers them at
         // admission) and the sender (which signs deliveries). The sender takes
@@ -184,28 +217,34 @@ impl Daemon for Agentd {
                     destination = destination
                         .try_signed_with(&secret(current))
                         .context("audit_hmac_secret is not a usable signing key")?;
-                    // The retiring key, presented beside the current one so a
-                    // receiver holding either verifies. Rotation is then the
-                    // receiver's pace rather than a flag day where every
-                    // delivery fails until both sides are restarted together.
-                    //
-                    // This one has no `try_` form yet, so it still aborts on a
-                    // malformed key — reported upstream. What we *can* keep
-                    // unreachable is its other panic, "also with no primary
-                    // key", which the branch below refuses properly.
-                    if let Some(previous) = secrets.audit_hmac_secret_previous.as_ref() {
-                        destination = destination.also_signed_with(&secret(previous));
-                        info!(
-                            "agent decisions are signed with both audit_hmac_secret and \
-                             audit_hmac_secret_previous — remove the latter once every \
-                             receiver has the new key"
-                        );
-                    }
-                } else if secrets.audit_hmac_secret_previous.is_some() {
-                    anyhow::bail!(
-                        "audit_hmac_secret_previous is set without audit_hmac_secret — \
-                         \"also\" with no primary key signs nothing, and the deliveries \
-                         would go out unsigned"
+                }
+                // The retiring key, presented beside the current one so a
+                // receiver holding either verifies. Rotation is then the
+                // receiver's pace rather than a flag day where every delivery
+                // fails until both sides are restarted together.
+                //
+                // Outside the branch above, and that is the point. This used to
+                // sit inside it beside a hand-written "previous without primary"
+                // refusal, because `also_signed_with` *panicked* on that
+                // precondition — so the check the panic exists to make was
+                // written twice, once here and once upstream. 0.22's
+                // `try_also_signed_with` reports it as
+                // `SigningKeyError::NoPrimary`, so the precondition is checked
+                // once, by the builder that owns it, and a malformed rotation
+                // key is a diagnostic naming the destination rather than an
+                // abort that arrives before the exit code.
+                if let Some(previous) = secrets.audit_hmac_secret_previous.as_ref() {
+                    destination = destination
+                        .try_also_signed_with(&secret(previous))
+                        .context(
+                            "audit_hmac_secret_previous is not usable as a rotation key — \
+                             note that \"also\" with no primary key signs nothing, so the \
+                             deliveries would go out unsigned",
+                        )?;
+                    info!(
+                        "agent decisions are signed with both audit_hmac_secret and \
+                         audit_hmac_secret_previous — remove the latter once every \
+                         receiver has the new key"
                     );
                 }
                 vec![destination]
@@ -229,6 +268,17 @@ impl Daemon for Agentd {
                 policy,
                 keyring,
                 outbox,
+                signer: record_signer,
+                quota: agentplane::quota::TenantQuota {
+                    max_concurrent_runs: cfg.quota.max_concurrent_runs,
+                    max_tokens_per_period: cfg.quota.max_tokens_per_month,
+                    // Money is metered by the provider, not by us: agentd has no
+                    // price list, and a ceiling computed from one it does not
+                    // hold would be a number that reads as a spend limit and is
+                    // an estimate. Tokens are what this plane can count.
+                    max_minor_units_per_period: None,
+                    period: agentplane::quota::Period::Monthly,
+                },
             },
         )
         .map_err(|e| anyhow::anyhow!("build agent plane: {e}"))?;
@@ -237,6 +287,27 @@ impl Daemon for Agentd {
             tenant = %cfg.tenant,
             "agent plane ready"
         );
+
+        // ── Back-pressure ────────────────────────────────────────────────
+        //
+        // No default ceiling: the right number is the model concurrency a
+        // deployment has bought, and a figure invented here would read as
+        // considered. What is never unbounded is a single run — every
+        // manifest's `budgets` block is mandatory.
+        match cfg.quota.max_concurrent_runs {
+            None => info!(
+                "agentd: no [quota] max_concurrent_runs — a caller that can start runs can \
+                 start as many as it likes, each perfectly within its own manifest budget. \
+                 Set a ceiling sized to your model concurrency; it is reserved in the store, \
+                 so it holds across instances and a run parked on an approval does not \
+                 occupy a slot"
+            ),
+            Some(n) => info!(
+                max_concurrent_runs = n,
+                max_tokens_per_month = cfg.quota.max_tokens_per_month,
+                "per-tenant ceilings are accounted in the store"
+            ),
+        }
 
         // ── The tick that makes a deadline mean something ────────────────
         agentd::plane::sweep::spawn(
@@ -271,6 +342,40 @@ impl Daemon for Agentd {
                 );
                 info!(days, "agent admission keys are retired on a daily tick");
             }
+        }
+
+        // ── The tick that makes the record somebody else's problem too ──
+        //
+        // A checkpoint that never leaves this store is exactly as trustworthy as
+        // whoever runs this store. Submitting it to a party that would refuse to
+        // cosign a rewritten history is the only control here that mako cannot
+        // satisfy by itself — which is why it is configuration and not a
+        // default, and why the module says plainly that a witness you host
+        // yourself proves nothing about you.
+        let submitter =
+            agentd::plane::witness::build(cfg.witness.as_ref(), &stores_journal, signer.as_ref())
+                .map_err(|e| anyhow::anyhow!(e))?;
+        match (submitter, cfg.witness.as_ref()) {
+            (Some(submitter), Some(witness)) => {
+                agentd::plane::witness::spawn(
+                    submitter,
+                    std::time::Duration::from_secs(witness.interval_secs),
+                    ctx.shutdown.clone(),
+                );
+                info!(
+                    witnesses = witness.witnesses.len(),
+                    quorum = witness.quorum,
+                    interval_secs = witness.interval_secs,
+                    "checkpoints are submitted for cosignature — the evidence is what the \
+                     witnesses hold, not this line"
+                );
+            }
+            // `build` returns a submitter only when it was given a config, so
+            // the other two shapes are the same fact: nobody is watching.
+            _ => info!(
+                "agentd: no [witness] configured — the journal is tamper-evident to anyone \
+                 holding a prior checkpoint and nothing at all to a regulator holding none"
+            ),
         }
 
         // ── The tick that makes a registration mean something ────────────
@@ -343,13 +448,10 @@ impl Daemon for Agentd {
             )
         };
 
-        let max_sessions = cfg.max_sessions;
         let state = Arc::new(AppState {
             cfg: Arc::clone(&cfg),
             secrets,
             plane,
-            decisions: DecisionLog::new(100),
-            session_sem: Arc::new(tokio::sync::Semaphore::new(max_sessions as usize)),
         });
 
         let mut app = Router::new()
@@ -357,8 +459,6 @@ impl Daemon for Agentd {
             .route("/webhook", post(handlers::webhook))
             // Manual trigger (OIDC-protected)
             .route("/api/v1/run", post(handlers::manual_run))
-            // What just happened
-            .route("/api/v1/decisions", get(handlers::get_decisions))
             // What this deployment runs, and what it could run
             .route("/api/v1/agents", get(handlers::list_agents))
             .route("/api/v1/agents/catalog", get(handlers::agents_catalog))

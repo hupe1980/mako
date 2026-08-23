@@ -10,6 +10,19 @@
 //! subscription table, and `plane::Router::accepts` is the only admission
 //! filter: a second event-type list in config that nothing reconciles with the
 //! manifests is a mute switch.
+//!
+//! ## The three blocks that decide what the record is worth
+//!
+//! | Block | Absent | Present |
+//! |---|---|---|
+//! | `[keyring]` | personal data written into an append-only chain no key can erase | crypto-shredding reaches every copy at once |
+//! | `[attestation]` | the chain says *what happened* and nothing says *which workload wrote it* | every record carries a signature an auditor can check |
+//! | `[witness]` | tamper-*evident* to whoever holds a prior checkpoint, nothing to a regulator holding none | an independent party refuses to cosign a rewritten history |
+//!
+//! Each is optional, each starts the plane with a warning naming what is lost,
+//! and each can declare itself `required`. They compose in that order:
+//! `[witness]` without `[attestation]` is refused at startup, because a witness
+//! recognises a log by the signature on its checkpoint.
 
 use secrecy::SecretString;
 use serde::Deserialize;
@@ -32,9 +45,11 @@ pub struct AgentdConfig {
     /// property of the agent, which is why it is here and not in a manifest.
     #[serde(default = "default_public_base_url")]
     pub public_base_url: String,
-    /// Maximum concurrent agent runs (default: 20).
-    #[serde(default = "default_max_sessions")]
-    pub max_sessions: u32,
+    /// Per-tenant ceilings on the plane, accounted in the store rather than in
+    /// this process — a counter held here would fail *open* the moment a second
+    /// instance started, which is the topology the Postgres backend exists for.
+    #[serde(default)]
+    pub quota: QuotaConfig,
 
     /// Named LLM provider configurations.
     ///
@@ -120,12 +135,16 @@ pub struct AgentdConfig {
     /// When absent, all inbound webhooks are accepted (dev mode only — logs a WARNING).
     pub inbound_hmac_secret: Option<SecretString>,
 
-    /// Wall-clock ceiling in seconds for one event's whole fan-out (default: 300).
+    /// Wall-clock ceiling in seconds for a **manual** run's fan-out (default: 300).
     ///
-    /// A single run is already bounded by its manifest's `budgets`; this bounds
-    /// the *set* of runs one event triggers, so a slow specialist cannot hold a
-    /// concurrency permit indefinitely. Exceeding it abandons the wait, not the
-    /// work — each run's effects stay journaled and resumable.
+    /// `POST /api/v1/run` is the one door that waits for an answer, so it is the
+    /// one that needs a ceiling on the wait. Exceeding it abandons the wait, not
+    /// the work: each run's effects stay journaled, and a run this process stops
+    /// executing is taken over and resumed by the sweeper's recovery pass once
+    /// its lease lapses.
+    ///
+    /// `POST /webhook` does not use it. That door admits durably and returns
+    /// `202` without waiting for anything, so there is no wait to bound.
     #[serde(default = "default_session_timeout_secs")]
     pub session_timeout_secs: u64,
 
@@ -153,6 +172,22 @@ pub struct AgentdConfig {
 
     /// Envelope encryption for everything the plane writes down.
     pub keyring: Option<KeyringConfig>,
+
+    /// The workload identity every journal record is signed as.
+    ///
+    /// Omit and records are written unsigned, with a startup warning that names
+    /// the consequence: the chain still says *what happened* and nothing says
+    /// *which workload wrote it*, and no checkpoint can be submitted to a
+    /// witness — a witness recognises a log by its signature.
+    pub attestation: Option<AttestationConfig>,
+
+    /// Independent parties that cosign this plane's checkpoints.
+    ///
+    /// Requires `[attestation]`. Omit and the journal is tamper-*evident* to
+    /// anyone holding a prior checkpoint, and nothing at all to a regulator
+    /// holding none — because a checkpoint that never leaves the operator's
+    /// store is exactly as trustworthy as the operator.
+    pub witness: Option<WitnessConfig>,
 }
 
 impl mako_service::service::ServiceConfig for AgentdConfig {
@@ -275,6 +310,136 @@ pub struct BundledAgentsConfig {
     pub enable: Vec<String>,
 }
 
+// ── Quota ──────────────────────────────────────────────────────────────────
+
+/// Per-tenant ceilings, accounted in the store rather than in this process.
+///
+/// Every field is optional and every absent field is *unbounded*. There is
+/// deliberately no default: the right number is the model concurrency a
+/// deployment has actually bought, and a ceiling believed to bound something it
+/// does not is worse than none.
+///
+/// What is *not* unbounded absent this block: every run is still held to its
+/// manifest's mandatory `budgets`. This bounds how many of them run at once.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QuotaConfig {
+    /// Runs this tenant may have **executing** at once.
+    ///
+    /// A slot is taken at admission and given back when the run seals, fails or
+    /// **suspends** — a run parked on a four-eyes approval costs a database row,
+    /// not a slot, so a tenant waiting on a hundred reviews can still start
+    /// work. A resume is not gated either: refusing to resume would strand a run
+    /// waiting on something that has now happened.
+    ///
+    /// Exceeding it refuses the admission as back-pressure, which `POST
+    /// /webhook` answers `429` — so an at-least-once emitter retries rather than
+    /// treating the message as impossible.
+    pub max_concurrent_runs: Option<u32>,
+
+    /// Model tokens this tenant may spend in one calendar month (UTC).
+    ///
+    /// Checked at admission, not mid-run, so a run already executing when the
+    /// ceiling is crossed finishes. The overshoot is therefore bounded and
+    /// computable — at most `max_concurrent_runs` times the largest per-run
+    /// budget — rather than unknown.
+    pub max_tokens_per_month: Option<u64>,
+}
+
+// ── Attestation ────────────────────────────────────────────────────────────
+
+/// Who wrote each journal record.
+///
+/// The key comes from the deployment and cannot be minted here: a plane that
+/// generated its own identity would produce records that look attested and
+/// prove nothing, because the party being audited chose the key.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttestationConfig {
+    /// Refuse to start unless a signer is configured.
+    ///
+    /// For any deployment whose agent decisions feed a booking or a dispatched
+    /// market message: unsigned records cannot be attributed after the fact, and
+    /// a chain written unattested for a week cannot be signed retroactively.
+    #[serde(default)]
+    pub required: bool,
+
+    /// The identity that lands on every record.
+    ///
+    /// Give it the workload's real name — a SPIFFE ID if there is one. *"Some
+    /// key signed this"* is a much weaker statement than *"this workload signed
+    /// this"*, and the second is what an audit is asking.
+    pub key_id: String,
+
+    /// A 32-byte Ed25519 seed in standard base64. Prefer `"env:VAR"`.
+    ///
+    /// `openssl rand -base64 32` produces one. Publish the matching public key
+    /// to whoever verifies these records — without it an auditor can check that
+    /// the history is internally consistent but not who produced it.
+    pub seed: Option<SecretString>,
+}
+
+/// Hand-written: this type holds a signing seed, and a derived `Debug` would put
+/// it in whatever line printed the config.
+impl std::fmt::Debug for AttestationConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AttestationConfig")
+            .field("required", &self.required)
+            .field("key_id", &self.key_id)
+            .field("seed", &self.seed.as_ref().map(|_| "[REDACTED]"))
+            .finish()
+    }
+}
+
+// ── Witness ────────────────────────────────────────────────────────────────
+
+/// Independent parties that cosign this plane's checkpoints.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessConfig {
+    /// How many cosignatures a checkpoint must gather.
+    ///
+    /// A trust decision only a deployment can make: one independent witness
+    /// rules out a silent rewrite by mako alone, three rule out collusion with
+    /// any single witness. Zero is refused — a quorum of nothing is witnessing
+    /// that is off, spelled as if it were on — and a quorum above the number of
+    /// witnesses configured is refused too, because a bar that can never be met
+    /// is a permanent alarm about the configuration rather than about the log.
+    pub quorum: usize,
+
+    /// How often a checkpoint is submitted, in seconds (default: 3600).
+    ///
+    /// Slow on purpose. This bounds how *stale* the witnessed checkpoint is, not
+    /// whether the log is sound — one witnessed an hour late proves the same
+    /// extension — and a witness is somebody else's server.
+    #[serde(default = "default_witness_interval_secs")]
+    pub interval_secs: u64,
+
+    /// Where to submit, and whose cosignature to believe.
+    pub witnesses: Vec<WitnessPeer>,
+}
+
+/// One witness.
+///
+/// The public key is not optional and not derived from the URL. Without it a
+/// client could only record that *something* answered `200`, and the whole
+/// argument for witnessing — that an independent party observed this log —
+/// would rest on a status code.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WitnessPeer {
+    /// The witness's key name, as it appears on the signature line.
+    ///
+    /// No spaces or control characters: the line is space-delimited, so a name
+    /// containing one serialises fine and reads back as a different name or an
+    /// extra signature nobody wrote.
+    pub name: String,
+    /// The submission prefix, without `/add-checkpoint`.
+    pub url: String,
+    /// The witness's 32-byte Ed25519 public key, in standard base64.
+    pub public_key: String,
+}
+
 // ── Provider config ────────────────────────────────────────────────────────
 
 /// LLM provider configuration.
@@ -327,9 +492,6 @@ fn default_port() -> u16 {
 fn default_public_base_url() -> String {
     "http://localhost:9580".to_owned()
 }
-fn default_max_sessions() -> u32 {
-    20
-}
 fn default_session_timeout_secs() -> u64 {
     300
 }
@@ -338,6 +500,9 @@ fn default_sweep_interval_secs() -> u64 {
 }
 fn default_vault_mount() -> String {
     "transit".to_owned()
+}
+fn default_witness_interval_secs() -> u64 {
+    3600
 }
 /// Every credential the config points at, with its `env:VAR` indirection
 /// resolved.
@@ -360,6 +525,9 @@ pub struct Secrets {
     pub inbound_hmac_secret: Option<SecretString>,
     /// The Vault token, when a key ring is configured.
     pub vault_token: Option<SecretString>,
+    /// The Ed25519 seed every journal record is signed with, when attestation
+    /// is configured.
+    pub signing_seed: Option<SecretString>,
     /// The journal DSN, when the backend is Postgres.
     pub journal_url: Option<String>,
 }
@@ -414,6 +582,12 @@ impl AgentdConfig {
                 .as_ref()
                 .and_then(|k| k.vault.as_ref())
                 .map(|v| secret("keyring.vault.token", &v.token))
+                .transpose()?,
+            signing_seed: self
+                .attestation
+                .as_ref()
+                .and_then(|a| a.seed.as_ref())
+                .map(|seed| secret("attestation.seed", seed))
                 .transpose()?,
             journal_url: match &self.journal {
                 JournalConfig::Postgres { url } => {
@@ -538,7 +712,10 @@ url = "postgres://localhost/agentd"
         // Spot-check the keys most likely to be swallowed by a table above
         // them — the ones that were.
         assert_eq!(cfg.tenant, "9900357000004");
-        assert_eq!(cfg.max_sessions, 20);
+        assert!(
+            cfg.quota.max_concurrent_runs.is_none(),
+            "the documented example states no ceiling, and absent means unbounded"
+        );
         assert!(cfg.inbound_hmac_secret.is_some(), "inbound_hmac_secret");
         assert!(cfg.audit_hmac_secret.is_some(), "audit_hmac_secret");
         assert!(

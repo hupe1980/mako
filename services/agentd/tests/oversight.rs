@@ -103,6 +103,12 @@ fn plane(provider: &Arc<FakeProvider>, tools: &Arc<CountingTools>) -> Plane {
             // No outbox: this suite asserts on the plane's own state, not on
             // what a receiver was told.
             outbox: None,
+            // Unattested and unbounded, which is what a test wants: signing is
+            // a deployment's key and a quota is a deployment's number, and
+            // inventing either here would test this file's choices rather than
+            // the plane's behaviour.
+            signer: None,
+            quota: agentplane::quota::TenantQuota::default(),
             owner: "agentd-test",
             tenant: &tenant,
             activated: &Activation::named(vec![AGENT.to_owned()]),
@@ -475,16 +481,15 @@ async fn runs_about_one_malo_share_a_case() {
 /// 2xx, and a dead-lettered delivery can be replayed by hand days later — so
 /// the same message arriving twice is ordinary, not exceptional.
 ///
-/// What used to stop a second fan-out was an in-process TTL map, which
-/// deduplicated neither across instances nor across a restart: exactly the two
-/// topologies the shared journal exists to serve. The blast radius looked small
-/// — no effect is duplicated *inside* a run, and no market message is dispatched
-/// twice, because the one dispatching grant needs a human and the deterministic
-/// engine sends the message — but this is the case that is not merely wasted
-/// tokens. A second identical Freigabe for one Sperrauftrag turns a four-eyes
-/// control into a guess: the reviewer cannot tell two proposals from one
-/// proposal shown twice, and approving both is indistinguishable from approving
-/// once.
+/// The blast radius of a duplicate looks small — no effect is duplicated *inside*
+/// a run, and no market message is dispatched twice, because the one dispatching
+/// grant needs a human and the deterministic engine sends the message — but this
+/// is the case that is not merely wasted tokens. A second identical Freigabe for
+/// one Sperrauftrag turns a four-eyes control into a guess: the reviewer cannot
+/// tell two proposals from one proposal shown twice, and approving both is
+/// indistinguishable from approving once. Deduplicating in this process would
+/// hold across neither instances nor restarts — the two topologies the shared
+/// journal exists to serve — so the key is claimed in the store.
 ///
 /// `run_correlated_once` claims `(tenant, key)` in the transaction that appends
 /// the run's first record, so this holds without a ledger of its own. The

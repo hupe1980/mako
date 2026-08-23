@@ -18,6 +18,7 @@
 //! The boundary this keeps: an agent may prepare and may wait, the
 //! deterministic engine still dispatches.
 
+pub mod attest;
 pub mod calendar;
 pub mod keys;
 pub mod label;
@@ -27,8 +28,10 @@ pub mod providers;
 pub mod runtime;
 pub mod sweep;
 pub mod tools;
+pub mod witness;
 pub use runtime::{
-    Activation, Admitted, AgentDecision, Envelope, Plane, PlaneConfig, Route, Router, Stores,
+    Accepted, Activation, Admitted, AgentDecision, Envelope, Plane, PlaneConfig, Reception, Route,
+    Router, Stores,
 };
 
 use std::collections::BTreeMap;

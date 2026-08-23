@@ -96,6 +96,12 @@ fn plane(provider: &Arc<FakeProvider>, tools: &Arc<FlakyTools>) -> Plane {
         Stores::redb(store, &tenant),
         PlaneConfig {
             outbox: None,
+            // Unattested and unbounded, which is what a test wants: signing is
+            // a deployment's key and a quota is a deployment's number, and
+            // inventing either here would test this file's choices rather than
+            // the plane's behaviour.
+            signer: None,
+            quota: agentplane::quota::TenantQuota::default(),
             owner: "agentd-regulatory-test",
             tenant: &tenant,
             activated: &Activation::named(vec![AGENT.to_owned()]),

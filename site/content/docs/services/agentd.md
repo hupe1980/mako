@@ -20,9 +20,8 @@ Port: **`:9580`**
 
 | Endpoint | Description |
 |---|---|
-| `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified; at-most-once admission) |
-| `POST /api/v1/run` | Manual agent invocation (OIDC JWT required; honours `Idempotency-Key`) |
-| `GET /api/v1/decisions` | Last 100 agent decisions (in-memory ring buffer). **OIDC** — a decision summary names a real Marktlokation |
+| `POST /webhook` | Inbound CloudEvent trigger (Standard Webhooks-verified). Admits durably, then answers `202` with the run ids |
+| `POST /api/v1/run` | Manual agent invocation (OIDC JWT required; honours `Idempotency-Key`). Waits for the answer |
 | `GET /api/v1/agents` | Activated specialists and their subscriptions. **OIDC** — in a combined-role deployment the activated set is § 9 EnWG-relevant |
 | `GET /api/v1/agents/catalog` | Every specialist compiled into this binary. **OIDC** |
 | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
@@ -85,6 +84,61 @@ The deterministic boundary is unchanged: an agent may prepare and may wait,
 through the command API, so what goes on the wire is still a pure function of a
 recorded command.
 
+### What the record is worth to somebody who is not us
+
+The journal is hash-chained, so a rewritten record is detectable and a removed
+run breaks the Merkle root. That is a real property and it is not the whole
+claim, because each mechanism answers a different question and only the last one
+involves anybody but the operator.
+
+| Mechanism | Answers | Configured by |
+|---|---|---|
+| Hash chain + Merkle root | Was *this* history edited? | always on |
+| Per-record attestation | Which workload wrote each record? | `[attestation]` |
+| Checkpoint cosignature | Does a *second* history exist? | `[witness]` |
+
+Only the third breaks the symmetry. The first two are checks whose every input
+comes from the party being checked: two divergent histories can both be
+internally perfect, and whoever controls the store controls the evidence. A
+witness remembers the last checkpoint it saw for this log and cosigns a new one
+only when it **provably extends** it, so a split view stops being invisible and
+becomes either a witness that refuses or two cosignatures that contradict each
+other and can be shown to anyone.
+
+`plane::attest` supplies attestation on both seams from one key — the **store**
+signs records, the runtime signs outward claims — so an auditor reading a record
+and a tool server reading a provenance block see one workload. `tests/evidence.rs`
+verifies a real run's records with a public key and `require_signature` on, checks
+that a different key rejects them, and checks that an unattested plane fails
+honestly rather than passing quietly.
+
+Three properties follow from how the key is handled, and each is a refusal:
+
+- **The key comes from the deployment and cannot be minted here.** A plane that
+  generated its own identity would produce records that look attested and prove
+  nothing, because the party being audited chose the key.
+- **An unattested plane starts, loudly.** It warns and names the consequence, the
+  same shape an unsealed plane takes; `required = true` turns it into a refusal.
+  History written unattested stays unattested — it cannot be signed later.
+- **A witness you host yourself proves nothing about you.** The configuration
+  makes it easy to point this at a URL in the same cluster and read the green log
+  line as evidence. The counterparty has to be one that would not cooperate in a
+  rewrite.
+
+Witnessing sits **off the run path**. It is retrospective evidence gathered after
+sealing, so a run whose witnesses are unreachable finished long ago; making the
+plane's availability depend on a third party would be the wrong trade for
+evidence that is read after the fact. A shortfall is reported as a finding rather
+than a log line, and an integrity refusal — a witness that remembers a different
+history — is reported *even when the quorum was met*, because the other
+cosigners may simply never have seen the history the refusing one remembers.
+
+The cosignatures are kept at the witness and not beside the log. Storing a copy
+here would put the evidence back under the control of the party it is evidence
+about, which is the symmetry the mechanism exists to break: an auditor asks the
+witness what it last cosigned for `mako/agentd/<tenant>` and compares that with
+what mako hands them.
+
 ### Durability instead of a dead-letter queue
 
 A failed run is not a message with nowhere to go. Its effects are journaled, so
@@ -102,6 +156,37 @@ one. What travels with it, and what deliberately does not, is set out under
 
 Inbound delivery is at-least-once: mako's fan-out retries until it sees a 2xx,
 and a dead-lettered delivery can be replayed by an operator days later.
+
+**A `202` therefore has to mean *this message will be acted on*, not *this
+message was received*** — the emitter advances its outbox cursor past whatever
+that answer promised. So admission completes *inside the request*: the policy
+gate, the quota reservation, the case binding and the claim on the admission key
+all commit before `POST /webhook` returns, and the response carries the run ids.
+The work continues afterwards and is durable by its own mechanism — a run holds
+a lease, and a lease that lapses without release is taken over and resumed by the
+sweeper's recovery pass.
+
+Every CloudEvent ingest door in mako completes its work before it answers, for
+the same reason: an acknowledgement that returns before anything durable is
+written turns a deploy, a SIGTERM or a crash into a lost event. `tests/ingest.rs`
+pins it by its observable consequence rather than by crashing a process — a
+second delivery is answered with the first one's run *the instant the first call
+returns*, which can only be true if the key was claimed before the return.
+
+**The status code is a retry instruction**, because mako's emitter treats 429 and
+5xx as transient and every other 4xx as permanent:
+
+| Answer | When | What the emitter does |
+|---|---|---|
+| `202` | at least one specialist admitted — the run ids are in the body | done; a retry meets the runs already holding its keys |
+| `204` | nothing subscribes to this event type | done |
+| `429` | nothing admitted, something transient — a `[quota]` ceiling reached | resends |
+| `422` | nothing admitted and resending cannot help — no subscribing specialist can act on this payload | dead-letters **now**, where an operator sees it |
+
+Unknown refusals count as transient, and the asymmetry is deliberate:
+`RuntimeError` is `#[non_exhaustive]`, so a variant added upstream lands in the
+default — and losing a market message is not recoverable, while spending five
+attempts on one that was never going to succeed is.
 
 Each run is admitted under a key built from the CloudEvent's `(source, id)` —
 the standard's own uniqueness pair, which mako's sender also puts in
@@ -677,8 +762,10 @@ its first model call.
 | **Tool transport** | one MCP client per server, routed by the server component of a `tool://` grant, so a call cannot reach a different server offering the same tool name |
 | **Personal data at rest** | Key ring seals journal, cases, events and task proposals; erasure destroys the case's wrapping key |
 | **Egress ceiling** | `max_sensitivity_egress` and `max_sensitivity_journaled` per agent |
-| **Max concurrent sessions** | `max_sessions` semaphore; 429 when exhausted |
-| **Fan-out timeout** | `session_timeout_secs` bounds one event's whole fan-out; each run stays journaled and resumable |
+| **Record attribution** | `[attestation]` signs every journal record under the workload identity; unset is a startup warning, `required = true` a refusal |
+| **Split-view detection** | `[witness]` submits checkpoints for cosignature over C2SP `tlog-witness`; a witness refuses a history that does not extend the one it saw |
+| **Back-pressure** | `[quota] max_concurrent_runs`, reserved in the store at admission — durable, cross-instance, and released when a run suspends. 429 when exhausted |
+| **Manual-run timeout** | `session_timeout_secs` bounds a *manual* run's wait; `POST /webhook` waits for nothing. Each run stays journaled and resumable either way |
 | **API keys** | `api_key`, `mcp_api_key`, `keyring.vault.token`, `audit_hmac_secret` are `SecretString` — never in logs or debug output. Bedrock credentials come from the AWS chain, not from config |
 | **Route syntax** | `cargo xtask check-routes` refuses axum 0.7 `/:param` literals, which panic while the router is assembled — i.e. at startup, where no test looks |
 | **Grant truth** | `cargo xtask check-tool-grants` checks every `tool://` grant against the server's own `read_only_hint`, and refuses a mutating grant on a `tool-calling` agent |
@@ -700,9 +787,8 @@ its first model call.
 tenant          = "9900357000004"
 public_base_url = "https://agentd.internal:9580"
 
-max_sessions         = 20
-session_timeout_secs = 300   # bounds one event's whole fan-out
-sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes
+session_timeout_secs = 300   # bounds a *manual* run's wait; /webhook waits for nothing
+sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes, recovers
 
 mcp_api_key         = "env:AGENTD_MCP_API_KEY"
 inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
@@ -716,6 +802,40 @@ audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 # the door it closed. 30 days is sized for an operator replaying a
 # dead-lettered delivery, not for the emitter's retry schedule. `0` is refused.
 # admission_retention_days = 30
+
+# ── Back-pressure ─────────────────────────────────────────────────────────────
+# Per-tenant, reserved in the store at admission — so it holds across instances
+# and survives a restart — a per-process counter fails open on scale-out.
+# A slot is released when a run seals, fails or *suspends*, so runs parked on
+# approvals do not stop new work. Absent means unbounded; every run is still
+# held to its manifest's mandatory `budgets`. Exceeding it answers /webhook 429,
+# which an at-least-once emitter retries.
+[quota]
+# max_concurrent_runs  = 64
+# max_tokens_per_month = 200_000_000
+
+# ── Who wrote each record ─────────────────────────────────────────────────────
+# Without this the chain says *what happened* and nothing says *which workload
+# wrote it*, and no checkpoint can be submitted to a witness. The key comes from
+# you and cannot be minted here: a plane that generated its own identity would
+# produce records that look attested and prove nothing.
+# `openssl rand -base64 32` produces a seed. Publish the public half.
+# [attestation]
+# required = true
+# key_id   = "spiffe://mako/agentd"
+# seed     = "env:AGENTD_SIGNING_SEED"
+
+# ── Somebody else who saw the log grow ────────────────────────────────────────
+# Requires [attestation]. A witness cosigns a checkpoint only when it provably
+# extends the last one it saw, so two histories cannot both be cosigned.
+# A witness you host yourself proves nothing about you.
+# [witness]
+# quorum        = 1     # zero is refused; above the witness count is refused
+# interval_secs = 3600
+# [[witness.witnesses]]
+# name       = "witness.example.org"
+# url        = "https://witness.example.org"
+# public_key = "..."    # 32 bytes, standard base64
 
 # ── Durable state ─────────────────────────────────────────────────────────────
 # One backend holds the journal, the cases, the tasks, the timers and the
@@ -872,18 +992,27 @@ failure — it waits for a human decision or an inbound event — and a
 **quarantined** one means the durable record is untrustworthy, which is why it
 is its own outcome rather than `failed`.
 
-`GET /api/v1/decisions` is a different, richer shape: agent name, summary,
-`waiting_for`, `tokens`, and whether this dispatch admitted the run or met one
-already admitted (`running`, `not-admitted`). It is in-memory, best-effort and
-delivered nowhere — a dashboard, not a record.
+A failed run also carries **`reason`** — the refusal in the runtime's own words,
+which is the only actionable part of a failure. It is **absent** on a success
+rather than `null`, because a null there reads as a failure with no explanation.
+Both halves are asserted in `tests/evidence.rs`: the failure mode is silence, and
+a delivery with no reason is a well-formed CloudEvent that parses cleanly and
+tells an operator nothing.
+
+There is deliberately no second, in-memory view of the same fact. The journal
+owns it, and a per-process ring buffer would be the weaker copy — lost on a
+restart, and holding only what one instance handled on a service whose Postgres
+backend exists for several. `/api/v1/oversight/runs/{run}` answers the reasoning
+behind one run, `/api/v1/oversight/runs?outcome=…` the runs that ended a given
+way, `/api/v1/oversight/tasks` what is waiting on a person, and this delivery
+feeds a dashboard.
 
 ---
 
 ## Decision delivery
 
-Every decision lands in the in-memory ring buffer that `GET /api/v1/decisions`
-serves. When a destination is configured it is *also* delivered durably, and
-that path is the one to depend on: **the journal is the outbox.**
+When a destination is configured, every conclusion is delivered durably —
+**the journal is the outbox.**
 
 ```mermaid
 graph LR

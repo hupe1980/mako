@@ -158,6 +158,12 @@ async fn every_specialist_completes_a_run() {
         Stores::redb(RedbStore::open_in_memory().expect("store"), &tenant),
         PlaneConfig {
             outbox: None,
+            // Unattested and unbounded, which is what a test wants: signing is
+            // a deployment's key and a quota is a deployment's number, and
+            // inventing either here would test this file's choices rather than
+            // the plane's behaviour.
+            signer: None,
+            quota: agentplane::quota::TenantQuota::default(),
             owner: "agentd-smoke",
             tenant: &tenant,
             activated: &Activation::all(),

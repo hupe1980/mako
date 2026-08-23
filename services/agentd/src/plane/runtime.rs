@@ -253,6 +253,15 @@ impl Envelope<'_> {
     }
 }
 
+/// Why a `planned` specialist was not started.
+///
+/// One sentence, used by both doors. A planned agent compiles its plan — and
+/// therefore its authorization graph — from trusted input alone, so a payload
+/// with nothing this plane could re-validate leaves it nothing honest to plan
+/// from; running it anyway would build a plan out of the prompt.
+const NO_TRUSTED_INPUT: &str = "The event carried no identifier this plane could re-validate, so a planned specialist \
+     had no trusted input to compile a plan from.";
+
 /// Whether this dispatch is the one that admitted the run.
 ///
 /// Recorded rather than inferred: "the same decision twice in the log" and "a
@@ -309,6 +318,71 @@ pub struct AgentDecision {
     pub tokens: u64,
 }
 
+/// What `POST /webhook` durably admitted for one specialist.
+///
+/// Deliberately not an [`AgentDecision`]: this door returns **before the work
+/// happens**, so it has no outcome to report and must not carry a field shaped
+/// like one. A `summary` here would be a sentence about a run that has not
+/// concluded, and the first consumer to read it as a conclusion would be right
+/// to.
+///
+/// What it does carry is the thing a caller needs and could not get from a bare
+/// `202`: the run id, which is the journal key and what
+/// `GET /api/v1/oversight/runs/{id}` takes.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Accepted {
+    pub agent_name: String,
+    /// The run holding this event's admission key. Empty only when nothing was
+    /// admitted — see `refused`.
+    pub run_id: String,
+    /// Whether this delivery is the one that started the run.
+    ///
+    /// `false` means the key was already held, so this is a redelivery answered
+    /// with the original run rather than a second fan-out. Recorded rather than
+    /// inferred: "the same event twice in the log" and "a retry answered with
+    /// the original" look identical without it, and only the first is a fault.
+    pub fresh: bool,
+    /// Why nothing was admitted, when nothing was.
+    ///
+    /// A refusal spends no admission key, so a corrected redelivery is admitted
+    /// rather than answered with this.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub refused: Option<String>,
+    /// Whether resending the identical message could succeed.
+    ///
+    /// Only meaningful beside `refused`, and it decides the status code the
+    /// webhook answers — which decides whether mako's emitter retries or
+    /// dead-letters, because `post_ce_with_retry` treats **429 and 5xx as
+    /// transient and every other 4xx as permanent**. Getting it backwards is
+    /// costly in both directions: a permanent failure answered `429` is retried
+    /// until the emitter gives up and then dead-lettered anyway, five attempts
+    /// later; a transient one answered `422` is dead-lettered at once.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub retryable: bool,
+}
+
+/// What the door should tell an at-least-once emitter.
+///
+/// Derived from a whole fan-out rather than one specialist, because that is the
+/// unit the emitter retries: one message, however many independent opinions it
+/// started.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Reception {
+    /// At least one specialist was admitted. The message is accounted for, and
+    /// a retry would be answered with the runs already holding its keys.
+    Admitted,
+    /// Nothing was admitted and resending could work — a quota ceiling reached,
+    /// a store that was briefly unreachable. Back-pressure, not a fault.
+    Retry,
+    /// Nothing was admitted and resending the identical bytes cannot help.
+    ///
+    /// A payload no subscribing specialist can act on. Answering this
+    /// permanently is what puts it in the emitter's dead-letter list *now*,
+    /// where an operator sees it, rather than after a retry schedule that was
+    /// never going to change the outcome.
+    Unprocessable,
+}
+
 /// Everything the plane persists to.
 ///
 /// One backend supplies all five: the journal is the run's record, and the case
@@ -324,6 +398,13 @@ pub struct Stores {
     pub events: Arc<dyn EventStore>,
     /// Where an outbox registration and its cursor live.
     pub push: Arc<dyn agentplane::push::PushStore>,
+    /// Where a tenant's concurrency and spend are accounted.
+    ///
+    /// In the store, not in this process. Several agentd instances on one
+    /// Postgres is a supported topology, and an in-process counter does not
+    /// merely stop working there — it fails *open*, doubling the limit on
+    /// scale-out, which is exactly when it was needed.
+    pub quotas: Arc<dyn agentplane::quota::QuotaStore>,
     /// Where `memory_formation` writes and `Recall` reads.
     ///
     /// Not optional: seven specialists declare `memory_formation`, and a
@@ -365,7 +446,7 @@ impl Stores {
         Self::from_arc(Arc::new(store.for_tenant(tenant.clone())))
     }
 
-    /// One backend, seven seams.
+    /// One backend, eight seams.
     fn from_arc<S>(store: Arc<S>) -> Self
     where
         S: JournalStore
@@ -375,6 +456,7 @@ impl Stores {
             + EventStore
             + agentplane::push::PushStore
             + agentplane::memory::MemoryStore
+            + agentplane::quota::QuotaStore
             + 'static,
     {
         Self {
@@ -384,6 +466,7 @@ impl Stores {
             timers: Arc::clone(&store) as Arc<dyn TimerStore>,
             events: Arc::clone(&store) as Arc<dyn EventStore>,
             push: Arc::clone(&store) as Arc<dyn agentplane::push::PushStore>,
+            quotas: Arc::clone(&store) as Arc<dyn agentplane::quota::QuotaStore>,
             memory: store as Arc<dyn agentplane::memory::MemoryStore>,
         }
     }
@@ -419,6 +502,23 @@ pub struct PlaneConfig<'a> {
     /// nothing announces it. Configuring `audit_webhook_url` is what turns this
     /// on.
     pub outbox: Option<Arc<agentplane::push::Outbox>>,
+    /// The workload identity this plane's outward claims are signed with.
+    ///
+    /// The *store* is given the same signer for records; this one covers what
+    /// the plane asserts to a tool server or a peer. They are separate settings
+    /// upstream because a plane can legitimately have one without the other, and
+    /// mako gives it both from one key so an auditor reading a record and a
+    /// server reading a provenance block see one identity.
+    ///
+    /// `None` leaves both unsigned, which is a startup warning rather than a
+    /// refusal — see [`keys`](super::keys) for the same shape.
+    pub signer: Option<Arc<dyn agentplane::core::Signer>>,
+    /// What one tenant may have running, and spend, at once.
+    ///
+    /// Every field absent means unbounded, which is the default. What is never
+    /// unbounded is a single run: its manifest's `budgets` block is mandatory
+    /// and refuses to parse without a ceiling.
+    pub quota: agentplane::quota::TenantQuota,
 }
 
 /// The runtime and its routing table.
@@ -506,6 +606,20 @@ impl Plane {
             // `build`, so registration order cannot lose the guarantee.
             builder = builder.keyring(keys);
         }
+        // The identity on this plane's outward claims. The *store* was given the
+        // same signer for records; this covers what the plane asserts to a tool
+        // server. Both from one key, so an auditor reading a record and a server
+        // reading a provenance block see one workload rather than two.
+        if let Some(signer) = cfg.signer {
+            builder = builder.signing_as(signer);
+        }
+        // Per-tenant ceilings, accounted in the store. Wired unconditionally: an
+        // unlimited quota is the shape agentplane already defaults to, and
+        // passing the seam anyway means turning a ceiling on later is a config
+        // edit rather than a code change — and, more to the point, that the
+        // ceiling is *durable* the day it is set rather than an in-process
+        // counter somebody has to notice is per-instance.
+        builder = builder.quota(stores.quotas, cfg.quota);
         // Only *compiled and activated* specialists are registered. An agent the
         // operator did not enable is not merely unrouted — it has no declaration
         // in the runtime, so a run cannot address its capability by any other
@@ -568,7 +682,162 @@ impl Plane {
     // blindly would buffer messages nobody waits for until the sweeper
     // dead-letters them, turning a healthy signal into noise.
 
-    /// Run every specialist subscribing to this event.
+    /// Admit every specialist subscribing to this event, and let them proceed.
+    ///
+    /// **The door a webhook wants**, and the difference from
+    /// [`dispatch`](Self::dispatch) is a durability property rather than a
+    /// convenience. Admission — the policy gate, the quota reservation, the
+    /// lease, the case binding and the claim on the admission key, all inside
+    /// the transaction that appends the run's first record — completes before
+    /// this returns. So a `202` means *this message will be acted on*, not
+    /// *this message was received*.
+    ///
+    /// That distinction is the whole point: `marktd`'s fan-out advances its
+    /// outbox cursor on the `2xx`, so an acknowledgement that returns before
+    /// anything durable is written turns a deploy, a SIGTERM or a crash into an
+    /// event nothing has any record of.
+    ///
+    /// What continues in the background is the *work*, and that is durable by a
+    /// different mechanism: the run holds a lease, and a lease that lapses
+    /// without release is taken over and resumed by the sweeper's recovery pass.
+    ///
+    /// Returns one entry per subscribing specialist, in routing order; an empty
+    /// result means nothing subscribed.
+    ///
+    /// # Errors
+    ///
+    /// The store refusing an admission — a quota ceiling reached, a halted
+    /// tenant, an unreachable database — is reported per specialist in
+    /// [`Accepted::refused`] rather than as a failure of the whole call, because
+    /// one specialist's refusal must not discard the ones that were admitted.
+    pub async fn accept(&self, event: Envelope<'_>, payload: Value) -> Vec<Accepted> {
+        let matched = self.router.matching(event.event_type);
+        if matched.is_empty() {
+            info!(
+                event_type = event.event_type,
+                "no specialist subscribes to this event"
+            );
+            return Vec::new();
+        }
+
+        let mut accepted = Vec::with_capacity(matched.len());
+        for route in matched {
+            accepted.push(self.accept_one(route, event, payload.clone()).await);
+        }
+        accepted
+    }
+
+    /// What to tell the emitter about a whole fan-out.
+    ///
+    /// Partial success is success: if any specialist was admitted, a retry is
+    /// answered with the runs already holding those keys, so nothing is
+    /// duplicated and nothing is lost. An empty fan-out — nothing subscribes —
+    /// is also [`Admitted`](Reception::Admitted), because a message nobody wants
+    /// must not be retried forever; the door answers it `204` before ever
+    /// reaching here.
+    ///
+    /// When *nothing* was admitted, **any** retryable refusal makes the whole
+    /// message retryable: a resend would re-attempt that specialist, and the
+    /// permanent ones cost nothing but a second identical refusal.
+    #[must_use]
+    pub fn reception(accepted: &[Accepted]) -> Reception {
+        if accepted.iter().any(|a| a.refused.is_none()) || accepted.is_empty() {
+            return Reception::Admitted;
+        }
+        if accepted.iter().any(|a| a.retryable) {
+            Reception::Retry
+        } else {
+            Reception::Unprocessable
+        }
+    }
+
+    async fn accept_one(&self, route: &Route, event: Envelope<'_>, payload: Value) -> Accepted {
+        let refused = |why: String, retryable: bool| Accepted {
+            agent_name: route.name.to_owned(),
+            run_id: String::new(),
+            fresh: false,
+            refused: Some(why),
+            retryable,
+        };
+
+        let (correlation, input) = match Self::prepare(route, event, payload) {
+            Ok(prepared) => prepared,
+            // Permanent by construction: the payload carried no identifier this
+            // plane could re-validate, and it will carry none on the next
+            // delivery of the same bytes either.
+            Err(why) => return refused(why.to_owned(), false),
+        };
+
+        match self
+            .runtime
+            .spawn_correlated_once(
+                &route.capability,
+                input,
+                correlation.kind,
+                &correlation.keys,
+                &event.admission_key(route.name),
+            )
+            .await
+        {
+            Ok(spawned) => {
+                if spawned.fresh {
+                    info!(
+                        agent = route.name,
+                        event_id = event.id,
+                        run_id = %spawned.run,
+                        "admitted"
+                    );
+                } else {
+                    info!(
+                        agent = route.name,
+                        event_id = event.id,
+                        run_id = %spawned.run,
+                        "this event was already admitted — answering with the original run"
+                    );
+                }
+                Accepted {
+                    agent_name: route.name.to_owned(),
+                    run_id: spawned.run.to_string(),
+                    fresh: spawned.fresh,
+                    refused: None,
+                    retryable: false,
+                }
+            }
+            Err(e) => {
+                // **Unknown means retryable**, and the asymmetry is deliberate.
+                // `RuntimeError` is `#[non_exhaustive]`, so a variant added
+                // upstream lands here; treating it as permanent would
+                // dead-letter a market message on a failure mode nobody has
+                // classified yet, while treating it as transient costs the
+                // emitter's retry schedule and then dead-letters it anyway.
+                // Losing a message is not recoverable; spending five attempts is.
+                let retryable = !matches!(
+                    e,
+                    agentplane::core::RuntimeError::PolicyDenied(_)
+                        | agentplane::core::RuntimeError::NoProvider { .. }
+                        | agentplane::core::RuntimeError::PlanContract(_)
+                        | agentplane::core::RuntimeError::UnknownTenant(_)
+                );
+                // `warn` rather than `error`: the commonest refusal here is a
+                // quota ceiling, which is back-pressure and not a fault.
+                warn!(
+                    agent = route.name,
+                    event_id = event.id,
+                    retryable,
+                    error = %e,
+                    "admission refused"
+                );
+                refused(e.to_string(), retryable)
+            }
+        }
+    }
+
+    /// Run every specialist subscribing to this event, and **wait** for them.
+    ///
+    /// The door a person uses: `POST /api/v1/run` is an operator asking for an
+    /// answer, so it blocks until every run concludes or suspends. Event ingest
+    /// takes [`accept`](Self::accept) instead — waiting there would hold a
+    /// webhook open for the length of a model call and time the emitter out.
     ///
     /// Each match is its own run on its own journal — independent opinions, not
     /// one run's internal concurrency. Returns one decision per specialist, in
@@ -629,12 +898,26 @@ impl Plane {
         }
     }
 
-    async fn run_one(&self, route: &Route, event: Envelope<'_>, payload: Value) -> AgentDecision {
-        let (event_id, event_type) = (event.id, event.event_type);
+    /// The business keys and the labelled input one specialist is admitted with.
+    ///
+    /// Shared by both doors so the trust boundary is drawn in one place: the
+    /// blocking [`dispatch`](Self::dispatch) a manual run uses, and the
+    /// admit-and-continue [`accept`](Self::accept) the webhook uses. Two copies
+    /// of this would be two opinions about what a `planned` specialist may see.
+    ///
+    /// `Err` is the sentence explaining why nothing ran. A sentence rather than
+    /// a decision, because the two doors report a refusal in different shapes —
+    /// an [`AgentDecision`] with `outcome: not-admitted`, or an [`Accepted`]
+    /// with `refused` — and the *reason* is the only part they share.
+    fn prepare(
+        route: &Route,
+        event: Envelope<'_>,
+        payload: Value,
+    ) -> Result<(super::label::Correlation, agentplane::core::Tainted<Value>), &'static str> {
         // Read the business keys before the payload is consumed by labelling:
         // which case this run joins is a question of fact about the message,
         // decided the same way for every specialist that receives it.
-        let correlation = super::label::correlation(event_id, &payload);
+        let correlation = super::label::correlation(event.id, &payload);
 
         // Admission is where mako's trust boundary is drawn, and 0.10 made the
         // label part of the value rather than part of the method name: every
@@ -650,19 +933,23 @@ impl Plane {
                 None => {
                     warn!(
                         agent = route.name,
-                        event_type,
+                        event_type = event.event_type,
                         "no re-validated identifier in the payload — a planned specialist \
                          has nothing to plan from"
                     );
-                    return Self::did_not_run(
-                        route,
-                        event,
-                        "The event carried no identifier this plane could re-validate, so a \
-                         planned specialist had no trusted input to compile a plan from.",
-                    );
+                    return Err(NO_TRUSTED_INPUT);
                 }
             },
-            false => super::label::admit(event_type, payload),
+            false => super::label::admit(event.event_type, payload),
+        };
+        Ok((correlation, input))
+    }
+
+    async fn run_one(&self, route: &Route, event: Envelope<'_>, payload: Value) -> AgentDecision {
+        let (event_id, event_type) = (event.id, event.event_type);
+        let (correlation, input) = match Self::prepare(route, event, payload) {
+            Ok(prepared) => prepared,
+            Err(why) => return Self::did_not_run(route, event, why),
         };
 
         // Correlated **and keyed**, neither alone.
@@ -836,6 +1123,91 @@ impl Plane {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn refused(name: &str, retryable: bool) -> Accepted {
+        Accepted {
+            agent_name: name.to_owned(),
+            run_id: String::new(),
+            fresh: false,
+            refused: Some("nope".to_owned()),
+            retryable,
+        }
+    }
+
+    fn admitted(name: &str) -> Accepted {
+        Accepted {
+            agent_name: name.to_owned(),
+            run_id: "run_1".to_owned(),
+            fresh: true,
+            refused: None,
+            retryable: false,
+        }
+    }
+
+    /// **Partial success is success.**
+    ///
+    /// One specialist refused while another was admitted must not ask the
+    /// emitter to resend: a resend is answered with the run already holding the
+    /// admitted specialist's key, so the retry buys a second refusal for the
+    /// one that failed and nothing else.
+    #[test]
+    fn a_fan_out_with_any_admission_is_accepted() {
+        assert_eq!(
+            Plane::reception(&[refused("a", true), admitted("b")]),
+            Reception::Admitted
+        );
+        assert_eq!(
+            Plane::reception(&[refused("a", false), admitted("b")]),
+            Reception::Admitted
+        );
+    }
+
+    /// Nothing subscribing is not a retry.
+    ///
+    /// The door answers `204` before reaching here, but a classifier that
+    /// called an empty fan-out retryable would resend every unsubscribed event
+    /// until the emitter gave up — a dead-letter list filled with messages
+    /// nothing was ever going to want.
+    #[test]
+    fn an_empty_fan_out_is_not_retryable() {
+        assert_eq!(Plane::reception(&[]), Reception::Admitted);
+    }
+
+    /// All refused, something transient: resend.
+    #[test]
+    fn a_transient_refusal_asks_for_a_resend() {
+        assert_eq!(
+            Plane::reception(&[refused("a", true), refused("b", true)]),
+            Reception::Retry
+        );
+    }
+
+    /// All refused, nothing transient: dead-letter now.
+    ///
+    /// mako's emitter treats every 4xx except 429 as permanent, so this is what
+    /// puts the message in front of an operator today instead of after five
+    /// attempts that could not have changed the answer.
+    #[test]
+    fn an_entirely_permanent_refusal_is_unprocessable() {
+        assert_eq!(
+            Plane::reception(&[refused("a", false), refused("b", false)]),
+            Reception::Unprocessable
+        );
+    }
+
+    /// **One transient refusal makes the message worth resending.**
+    ///
+    /// The safe direction: a resend re-attempts the specialist that hit a quota
+    /// ceiling, and costs the permanently-refusing one a second identical
+    /// refusal. Requiring *all* refusals to be transient would dead-letter a
+    /// message that one specialist was merely too busy to take.
+    #[test]
+    fn a_mix_of_refusals_follows_the_retryable_one() {
+        assert_eq!(
+            Plane::reception(&[refused("a", false), refused("b", true)]),
+            Reception::Retry
+        );
+    }
 
     /// Every specialist that subscribes to an event has a manifest to run.
     ///

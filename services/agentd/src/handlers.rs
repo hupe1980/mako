@@ -1,16 +1,30 @@
 //! HTTP handlers — CloudEvent ingest, manual runs, and inventory.
 //!
-//! The oversight surface (worklist, run views, case history, event delivery) is
-//! **not** here: it is agentplane's own, mounted by [`plane::oversight`] under
-//! `/api/v1/oversight`. Re-implementing it would put a second copy of an
-//! authorization rule in this file, and the copy that drifts is the one people
-//! read.
+//! ## Two doors, and the difference is durability
+//!
+//! `POST /webhook` **admits and returns**: the policy gate, the quota
+//! reservation, the case binding and the claim on the admission key all commit
+//! inside the transaction that writes the run's first record, and only then does
+//! this answer `202`. So a `202` means *this message will be acted on*.
+//!
+//! `POST /api/v1/run` **waits**: an operator asked for an answer, so the request
+//! is held until every run concludes or suspends, under a wall-clock ceiling.
+//!
+//! Nothing is here that agentplane's operator surface already answers. The
+//! worklist, run views, case history and event delivery are its own, mounted by
+//! [`plane::oversight`] under `/api/v1/oversight`: re-implementing them would put
+//! a second copy of an authorization rule in this file, and the copy that drifts
+//! is the one people read.
+//!
+//! The same argument is why there is no in-memory decision log here. It would be
+//! a second copy of a fact the journal owns, and the weaker one: lost on a
+//! restart, and holding only what *this instance* handled on a service whose
+//! Postgres backend exists for several sharing one store.
 //!
 //! [`plane::oversight`]: crate::plane::oversight
 
-use crate::plane::{AgentDecision, Envelope, Plane};
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
+use crate::plane::{AgentDecision, Envelope, Plane, Reception};
+use std::sync::Arc;
 
 use axum::{
     Json,
@@ -22,55 +36,8 @@ use axum::{
 use mako_service::oidc::Claims;
 use secrecy::ExposeSecret;
 use serde_json::Value;
-use tokio::sync::Semaphore;
 
 use crate::config::{AgentdConfig, Secrets};
-
-// ── Decision log ───────────────────────────────────────────────────────────
-
-/// In-memory ring buffer of the last `capacity` [`AgentDecision`] results.
-///
-/// Best-effort and deliberately not the record: the record is the journal, and
-/// `GET /api/v1/oversight/runs/{run_id}` is how an operator reads it. This is
-/// the "what just happened" view a dashboard polls, and losing it on restart
-/// costs nothing that matters.
-///
-/// Thread-safe via `std::sync::Mutex` — the lock is held only for the duration
-/// of a `VecDeque` push or clone, making `parking_lot` unnecessary.
-pub struct DecisionLog {
-    inner: Mutex<VecDeque<AgentDecision>>,
-    capacity: usize,
-}
-
-impl DecisionLog {
-    #[must_use]
-    pub fn new(capacity: usize) -> Self {
-        Self {
-            inner: Mutex::new(VecDeque::with_capacity(capacity)),
-            capacity,
-        }
-    }
-
-    /// Append a decision; silently evicts the oldest entry when at capacity.
-    pub fn push(&self, decision: AgentDecision) {
-        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
-        if guard.len() >= self.capacity {
-            guard.pop_front();
-        }
-        guard.push_back(decision);
-    }
-
-    /// Snapshot of all stored decisions, oldest first.
-    #[must_use]
-    pub fn list(&self) -> Vec<AgentDecision> {
-        self.inner
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .iter()
-            .cloned()
-            .collect()
-    }
-}
 
 // ── AppState ──────────────────────────────────────────────────────────────────
 
@@ -86,11 +53,12 @@ pub struct AppState {
     /// Replaces the orchestrator, registry, session loop, MCP pool and
     /// dead-letter queue: routing is the only part agentplane does not do, and
     /// a failed run resumes from its journal rather than landing in a queue.
+    ///
+    /// Back-pressure lives with it rather than here: `[quota]
+    /// max_concurrent_runs` is reserved in the store at admission, so it holds
+    /// across instances and counts *runs* rather than one permit for a fan-out
+    /// that starts six of them.
     pub plane: Plane,
-    /// The last 100 agent decisions (best-effort; not persisted).
-    pub decisions: DecisionLog,
-    /// Bounds concurrent agent runs to `cfg.max_sessions`.
-    pub session_sem: Arc<Semaphore>,
 }
 
 /// The three CloudEvents attributes this door cannot work without.
@@ -214,50 +182,69 @@ pub async fn webhook(
         return StatusCode::NO_CONTENT.into_response();
     }
 
-    // ── Concurrency cap ──────────────────────────────────────────────────
-    let permit = match Arc::clone(&state.session_sem).try_acquire_owned() {
-        Ok(p) => p,
-        Err(_) => {
-            tracing::warn!(
-                max_sessions = state.cfg.max_sessions,
-                "agentd: max_sessions reached — dropping webhook event"
-            );
-            return StatusCode::TOO_MANY_REQUESTS.into_response();
-        }
-    };
-
     tracing::info!(event_type, event_id, "agentd: trigger received");
-    let state2 = Arc::clone(&state);
-    let timeout_secs = state.cfg.session_timeout_secs;
-    tokio::spawn(async move {
-        let _permit = permit; // released when the task completes
 
-        // One run per subscribing specialist. There is no dead-letter queue:
-        // a run that fails is durable, and resumes from its last completed
-        // effect rather than being replayed from the top by a retry loop.
-        let envelope = Envelope {
-            id: &event_id,
-            source: &event_source,
-            event_type: &event_type,
-        };
-        let decisions = match tokio::time::timeout(
-            std::time::Duration::from_secs(timeout_secs),
-            state2.plane.dispatch(envelope, data),
-        )
-        .await
-        {
-            Ok(d) => d,
-            Err(_) => {
-                tracing::warn!(timeout_secs, "agentd: dispatch timed out");
-                vec![timed_out(&event_id, &event_type, timeout_secs)]
-            }
-        };
+    // ── Admit, durably, before anything is acknowledged ──────────────────
+    //
+    // The emitter advances its outbox cursor on the 2xx, so an acknowledgement
+    // that returns before anything durable is written is a promise about nothing:
+    // a process that stops before the admission key is claimed — a deploy, a
+    // SIGTERM, a crash — loses the event with no record that it arrived.
+    //
+    // `Plane::accept` returns once admission has committed. The *work* continues
+    // in the background and is durable by its own mechanism: the run holds a
+    // lease, and a lease that lapses without release is taken over and resumed by
+    // the sweeper's recovery pass.
+    let envelope = Envelope {
+        id: &event_id,
+        source: &event_source,
+        event_type: &event_type,
+    };
+    let accepted = state.plane.accept(envelope, data).await;
 
-        for decision in &decisions {
-            record_decision(&state2, decision);
+    // ── The status code is a retry instruction ───────────────────────────
+    //
+    // mako's own emitter treats **429 and 5xx as transient and every other 4xx
+    // as permanent** (`post_ce_with_retry`), so the code chosen here decides
+    // whether a message is resent or dead-lettered — and both mistakes cost.
+    // A permanent refusal answered `429` burns the retry schedule and lands in
+    // the dead-letter list anyway, five attempts later; a transient one
+    // answered `422` is dead-lettered at once, on a market message.
+    //
+    // Partial success is success: a retry is answered with the runs already
+    // holding those keys, so nothing is duplicated and nothing is lost.
+    match Plane::reception(&accepted) {
+        Reception::Admitted => {
+            // The run ids, in the body. A bare `202` tells a caller the message
+            // was taken and gives them nothing to follow; these are the journal
+            // keys `/api/v1/oversight/runs/{id}` takes.
+            (StatusCode::ACCEPTED, Json(accepted)).into_response()
         }
-    });
-    StatusCode::ACCEPTED.into_response()
+        Reception::Retry => {
+            tracing::warn!(
+                event_id,
+                event_type,
+                specialists = accepted.len(),
+                "agentd: no specialist could be admitted — asking the emitter to resend"
+            );
+            (StatusCode::TOO_MANY_REQUESTS, Json(accepted)).into_response()
+        }
+        Reception::Unprocessable => {
+            // Loud, because this one does not come back. The message is going
+            // to the emitter's dead-letter list now, which is where an operator
+            // will see it — and that is the point: a payload no subscribing
+            // specialist can act on should surface today, not after a retry
+            // schedule that was never going to change the answer.
+            tracing::error!(
+                event_id,
+                event_type,
+                specialists = accepted.len(),
+                "agentd: no specialist can act on this event and resending cannot help — \
+                 it will be dead-lettered by the emitter"
+            );
+            (StatusCode::UNPROCESSABLE_ENTITY, Json(accepted)).into_response()
+        }
+    }
 }
 
 pub async fn manual_run(
@@ -266,18 +253,11 @@ pub async fn manual_run(
     headers: HeaderMap,
     Json(req): Json<Value>,
 ) -> impl IntoResponse {
-    // ── Concurrency cap ──────────────────────────────────────────────────
-    let _permit = match Arc::clone(&state.session_sem).try_acquire_owned() {
-        Ok(p) => p,
-        Err(_) => {
-            return (
-                StatusCode::TOO_MANY_REQUESTS,
-                Json(serde_json::json!({"error": "max_sessions reached"})),
-            )
-                .into_response();
-        }
-    };
-
+    // No concurrency cap here. It was an in-process semaphore, and the ceiling
+    // that replaced it is `[quota] max_concurrent_runs` — reserved in the store
+    // at admission, so it holds across instances and a refusal names the tenant
+    // that reached it rather than the process that happened to receive the
+    // request.
     let agent_name = req["agent"].as_str().map(str::to_owned);
     let event_type = req["event_type"].as_str().unwrap_or("manual").to_owned();
     let data = req.get("input").cloned().unwrap_or_default();
@@ -342,45 +322,7 @@ pub async fn manual_run(
             Err(_) => vec![timed_out(&event_id, &event_type, timeout_secs)],
         };
 
-    for decision in &decisions {
-        record_decision(&state, decision);
-    }
     (StatusCode::OK, Json(decisions)).into_response()
-}
-
-/// Record what just happened in the in-memory view.
-///
-/// **This delivers nothing.** The decision reaches the ERP through the
-/// journal-backed outbox — a destination registered at admission, with a cursor
-/// that advances only on HTTP 2xx — so a receiver that is down for a deploy is
-/// caught up afterwards instead of having missed everything. Posting from here
-/// at request time would make `de.agent.decision.made` the one mako event that
-/// can be silently lost.
-fn record_decision(state: &AppState, decision: &AgentDecision) {
-    state.decisions.push(decision.clone());
-}
-
-// ── GET /api/v1/decisions ─────────────────────────────────────────────────────
-
-/// `GET /api/v1/decisions` — the last 100 agent decisions, oldest first.
-///
-/// A convenience view over what just happened. The record is the journal:
-/// `GET /api/v1/oversight/runs/{run_id}` answers *why* a run ended that way,
-/// and `GET /api/v1/oversight/tasks` answers what is waiting for a human.
-///
-/// **Authenticated**, and it was not. A decision's `summary` is the specialist's
-/// answer about a real Marktlokation — MaLo-IDs, counterparty MP-IDs, the
-/// reasoning behind a Sperrung recommendation — and this route served the last
-/// hundred of them to anyone who could reach the port. Every other route that
-/// returns business data on this plane takes a `Claims`; a handler that does not
-/// is not a laxer policy, it is no policy, and nothing in the type system says
-/// so. (This is `marktd`'s pinned failure class: *a handler without `Claims` is
-/// unauthenticated.*)
-pub async fn get_decisions(
-    _claims: Claims,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    Json(state.decisions.list()).into_response()
 }
 
 // ── GET /api/v1/agents ────────────────────────────────────────────────────────

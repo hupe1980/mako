@@ -15,10 +15,16 @@
 //!
 //! A quiet tick logs nothing: a plane holding five hundred open cases with
 //! nothing due is working, and a line per tick trains operators to ignore the
-//! log. What is reported is what `SweepReport::needs_attention` flags —
-//! a breached window, an expired approval, an event that correlated to nothing,
-//! or a **saturated** sweep, which is the one that reads like a normal result
-//! and is not: the batch came back full, so more was waiting than was handled.
+//! log. What is reported is what `SweepReport::needs_attention` flags — a
+//! breached window, an expired approval, an event that correlated to nothing, a
+//! recovery or a wake that failed, a census that could not be read, or a
+//! **saturated** sweep, which is the one that reads like a normal result and is
+//! not: the batch came back full, so more was waiting than was handled.
+//!
+//! The rule: **a line names every field the predicate above it reads**, or a
+//! tick tripped by a stuck run reports "work a human should see" and then prints
+//! zeros. `runs_recovered` and `events_redelivered` are on the quiet line
+//! instead — neither is a fault, and an instance dying is still worth seeing.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -73,12 +79,25 @@ pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken
                         );
                     }
                     if report.needs_attention() {
+                        // **Every field `needs_attention` reads is named here.**
+                        // A warning that does not name its own reason prints
+                        // "work a human should see" beside a row of zeros, and
+                        // one people cannot act on is one they learn to close.
                         warn!(
                             warned = report.warned,
                             breached = report.breached,
                             tasks_expired = report.tasks_expired,
                             tasks_escalated = report.tasks_escalated,
                             dead_lettered = report.dead_lettered,
+                            // A run nothing else will unstick. Retried next tick,
+                            // so a steady count is one stuck run and not many.
+                            recovery_failures = report.recovery_failures,
+                            // A timer whose wake was recorded and whose resume
+                            // died: the run is arriving late, not lost.
+                            wake_failures = report.wake_failures,
+                            // Gauges that could not be read. A blind spot wearing
+                            // a default — the two below are missing, not zero.
+                            census_unavailable = report.census_unavailable,
                             saturated = report.saturated.any(),
                             open_cases = report.census.open_cases,
                             open_tasks = report.census.open_tasks,
@@ -88,6 +107,16 @@ pub fn spawn(runtime: Arc<Runtime>, every: Duration, shutdown: CancellationToken
                         info!(
                             timers_fired = report.timers_fired,
                             warned = report.warned,
+                            // An instance died holding these and the plane
+                            // healed it. The healing is routine, which is why it
+                            // is not on `needs_attention`; the dying is not, and
+                            // a steady rate beside healthy instances is a
+                            // contradiction somebody should be able to see.
+                            runs_recovered = report.runs_recovered,
+                            // A message whose delivery died between the claim and
+                            // the resume, redelivered. Persistent counts mean
+                            // deliveries keep dying, which is worth asking why.
+                            events_redelivered = report.events_redelivered,
                             open_cases = report.census.open_cases,
                             open_tasks = report.census.open_tasks,
                             "agent sweep"

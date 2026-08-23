@@ -25,7 +25,7 @@
 //! The server's annotation is the authority: it sits beside the code that does
 //! or does not write. This check makes the manifests agree with it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// Tools that no server exposes *yet*, and why that is known rather than a typo.
@@ -48,6 +48,9 @@ pub fn run(workspace_root: &Path) -> bool {
     let tools = mcp_tools(workspace_root);
     if tools.is_empty() {
         eprintln!("check-tool-grants: found no MCP tool declarations — has the layout changed?");
+        return false;
+    }
+    if !inventory_matches_the_docs(workspace_root, &tools) {
         return false;
     }
 
@@ -217,6 +220,149 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
         }
     }
     out
+}
+
+/// The documented size of the agent surface, checked against the source.
+///
+/// `README.md`, the landing page and `concepts/MARKET_LANDSCAPE.md` each state
+/// how many services expose an MCP server and how many tools they add up to.
+/// Those are the numbers a reader uses to decide whether the platform is worth
+/// looking at, and nothing regenerates them — the previous figure ("14 of 17")
+/// was wrong by one service and had been for a while, which is what a count with
+/// no guard does.
+///
+/// Checked here rather than in a command of its own because this file already
+/// walks every `#[tool(...)]` in the workspace; a second walker would be a
+/// second definition of "an MCP tool" waiting to disagree with this one.
+fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bool>) -> bool {
+    let services: BTreeSet<&str> = tools.keys().filter_map(|id| id.split('/').next()).collect();
+    let total = tools.len();
+    let serving = services.len();
+    let all_services = std::fs::read_dir(workspace_root.join("services"))
+        .map(|e| e.flatten().filter(|e| e.path().is_dir()).count())
+        .unwrap_or(0);
+    let agents = specialist_count(workspace_root);
+
+    // One phrase per place, spelled as it is written there, so a mismatch names
+    // the file and the sentence rather than a number to hunt for. The list is
+    // long because the number genuinely appears in that many places, and that is
+    // the argument for the check rather than against it.
+    //
+    // **Totals only.** `26 advisory specialists`, `14 specialists` with triage
+    // rules and `21 specialists` are real numbers about parts of the set; they
+    // move for different reasons and are not covered here.
+    let claims: Vec<(&str, String)> = vec![
+        // ── How many MCP tools the platform exposes ──
+        (
+            "README.md",
+            format!(
+                "{serving} of the {all_services} services expose an MCP server — **{total} tools**"
+            ),
+        ),
+        (
+            "site/templates/index.html",
+            format!("agent plane over the {total} MCP tools the platform exposes"),
+        ),
+        (
+            "concepts/MARKET_LANDSCAPE.md",
+            format!(
+                "over the {total} MCP tools the other services expose ({serving} of {all_services})"
+            ),
+        ),
+        // ── How many specialists agentd ships ──
+        //
+        // `agentd`'s own suite asserts this count too, which fails when a
+        // manifest is added — but that only forces somebody to edit the assert.
+        // Nothing made them edit the twelve sentences that also state it.
+        (
+            "README.md",
+            format!("governed consumer: {agents} declarative specialists"),
+        ),
+        ("README.md", format!("agentd<br/>{agents} LLM specialists")),
+        (
+            "README.md",
+            format!("**{agents} declarative specialist manifests**"),
+        ),
+        ("README.md", format!("agent plane — {agents} specialists")),
+        (
+            "site/templates/index.html",
+            format!("exposes — {agents} declarative specialists"),
+        ),
+        (
+            "site/content/docs/services/agentd.md",
+            format!("operator guide: {agents} specialist manifests"),
+        ),
+        (
+            "site/content/docs/services/agentd.md",
+            format!("All {agents} specialists declare"),
+        ),
+        (
+            "site/content/docs/services/agentd.md",
+            format!("MANIFEST[\"{agents} manifests"),
+        ),
+        (
+            "site/content/docs/services/agentd.md",
+            format!("one of the {agents} manifests"),
+        ),
+        (
+            "services/agentd/README.md",
+            format!("| {agents} manifests in"),
+        ),
+        (
+            "services/agentd/README.md",
+            format!("All {agents} specialists declare"),
+        ),
+        (
+            ".github/copilot-instructions.md",
+            format!("**{agents} declarative manifests**"),
+        ),
+    ];
+
+    let mut stale = Vec::new();
+    for (file, expected) in &claims {
+        let path = workspace_root.join(file);
+        match std::fs::read_to_string(&path) {
+            // `concepts/` is not in git, so a checkout without it is normal and
+            // must not fail the build — only a file that *exists* and disagrees
+            // is a finding.
+            Err(_) => continue,
+            Ok(src) if src.contains(expected.as_str()) => {}
+            Ok(_) => stale.push(format!("{file}: expected to contain \"{expected}\"")),
+        }
+    }
+
+    if stale.is_empty() {
+        println!(
+            "check-tool-grants: {total} MCP tools across {serving} of {all_services} services \
+             and {agents} specialists, as documented"
+        );
+        return true;
+    }
+    eprintln!(
+        "check-tool-grants: the documented size of the agent surface no longer matches the \
+         source. {total} tools across {serving} of {all_services} services, and {agents} \
+         specialists, are declared.\n  {}",
+        stale.join("\n  ")
+    );
+    false
+}
+
+/// How many specialists this workspace ships, counted from the manifests.
+///
+/// The directory rather than the embedded `manifests![]` list, because an
+/// `agentd` test already pins those two to each other — so counting either one
+/// here answers the same question, and the directory needs no Rust to read.
+/// Role-scoped builds compile fewer, but the manifests on disk are not
+/// role-gated and the docs describe the default build.
+fn specialist_count(workspace_root: &Path) -> usize {
+    std::fs::read_dir(workspace_root.join("services/agentd/agents"))
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|ext| ext == "yaml"))
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 /// Every `#[tool(..)] async fn name` in one file, with its read-only hint.

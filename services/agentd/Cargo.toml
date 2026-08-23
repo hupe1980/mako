@@ -34,14 +34,24 @@ anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }
 secrecy      = { version = "0.10", features = ["serde"] }
-agentplane = { version = "0.21", features = [
+# Ed25519 seeds and witness public keys arrive as standard base64, the encoding
+# `openssl rand -base64 32` produces and the one C2SP `signed-note` uses on the
+# wire. Same version `mako-service` verifies Standard Webhooks signatures with.
+base64       = { version = "0.22" }
+agentplane = { version = "0.22", features = [
     # The declaration, and the wires that reach a model and a tool server.
     "manifest", "mcp", "providers",
     # Both journal backends: an embedded file, or one database several
     # instances share.
     "redb", "postgres",
-    # The gate every effect passes, and the signature on every record.
+    # The gate every effect passes, and the signature on every record —
+    # `plane::attest` is what applies the second, on both the store (records)
+    # and the runtime (outward claims). The feature alone signs nothing.
     "cedar", "signing",
+    # Submitting checkpoints to a party that is not us, over C2SP
+    # `tlog-witness`. What closes the split-view gap: a hash chain proves
+    # nobody edited *this* history and says nothing about a second one.
+    "witness-http",
     # Envelope encryption, with the wrapping key held by Vault rather than us.
     "keyring", "keyring-vault",
     # The operator surface: worklist, run views, case history, event delivery.
@@ -61,9 +71,9 @@ async-trait = "0.1.91"
 [dev-dependencies]
 # testkit brings FakeProvider, Faulty and the replay assertions. It carries no
 # reqwest dependency, so it resolves independently of the provider drivers.
-agentplane = { version = "0.21", features = [
+agentplane = { version = "0.22", features = [
     "manifest", "mcp", "providers", "redb", "postgres", "cedar", "signing",
-    "keyring", "keyring-vault", "http", "push", "testkit",
+    "keyring", "keyring-vault", "http", "push", "witness-http", "testkit",
 ] }
 tokio = { version = "1", features = ["full"] }
 toml  = "0.9"

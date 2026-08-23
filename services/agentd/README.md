@@ -16,7 +16,8 @@ human before it changes anything.
 | **Runtime** | agentplane — journaled effects, strict replay, Cedar gate, sealed at rest |
 | **Model providers** | Anthropic · OpenAI · Gemini · any OpenAI-compatible endpoint (TGI, vLLM, Ollama, llama.cpp) · AWS Bedrock behind `--features bedrock` |
 | **Tool transport** | one MCP client per `[mcp_servers]` entry, routed by the server component of each `tool://` grant |
-| **Journal** | redb *or* Postgres — the § 147 AO / GoBD record, sealed by a Vault-held key |
+| **Journal** | redb *or* Postgres — the § 147 AO / GoBD record, sealed by a Vault-held key, signed under the workload identity |
+| **Witnessing** | checkpoints cosigned over C2SP `tlog-witness` — the one control that is not a check on ourselves |
 | **Case layer** | every run joins a case keyed on its MaLo/MeLo/process — the unit of approval, obligation and **erasure** |
 | **Oversight** | `/api/v1/oversight/*` — worklist, run views, case history, four-eyes decisions |
 | **Role scoping** | `role-lf` · `role-nb` · `role-msb` — a role build contains no other arm's specialists (§ 9 EnWG) |
@@ -221,7 +222,7 @@ improvises, and the step silently does not happen.
 
 ## Tests
 
-Six suites run on real stores with `FakeProvider`, so the agent layer is tested
+Eight suites run on real stores with `FakeProvider`, so the agent layer is tested
 the way the engine workflows are — deterministically, and for free.
 
 | Suite | What it pins |
@@ -231,6 +232,8 @@ the way the engine workflows are — deterministically, and for free.
 | `regulatory.rs` | Provenance refusal (a counterparty-shaped MaLo never reaches `submit_command`, even after approval) and in-doubt discipline (a `TimedOut` mutating call is attempted exactly once) |
 | `durability.rs` | A journal append that commits while the caller sees an error duplicates no effect — model not re-asked, tool not re-dispatched, no second attempt recorded |
 | `specialist_smoke.rs` | **Every** specialist completes a run, answered from its own `output.schema` |
+| `evidence.rs` | Records verify under the workload's public key with `require_signature` **on**, a different key rejects them, an unattested plane fails honestly, the checkpoint carries mako's own origin, and a failed run's delivery carries its `reason` while a successful one omits the field |
+| `ingest.rs` | A redelivery is answered with the first call's run **the instant that call returns** — the observable consequence of admitting before acknowledging — and a refusal leaves the key free for a corrected retry |
 | `plane::` unit tests | Routing, labelling, policy, manifest invariants |
 
 ## Configuration
@@ -244,9 +247,8 @@ the way the engine workflows are — deterministically, and for free.
 # `deny_unknown_fields`.
 tenant           = "9900357000004"
 public_base_url  = "https://agentd.internal:9580"   # what an A2A card advertises
-max_sessions         = 20
-session_timeout_secs = 300   # bounds one event's whole fan-out
-sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes
+session_timeout_secs = 300   # bounds a *manual* run's wait; /webhook waits for nothing
+sweep_interval_secs  = 60    # warns, breaches, escalates, expires, wakes, recovers
 
 mcp_api_key         = "env:AGENTD_MCP_API_KEY"            # SecretString — never logged
 inbound_hmac_secret = "env:AGENTD_INBOUND_HMAC_SECRET"
@@ -265,6 +267,43 @@ audit_hmac_secret = "env:AGENTD_AUDIT_HMAC"
 # setting that cannot admit a duplicate on a timer. 30 days is sized for an
 # operator replaying a dead-lettered delivery, not for the retry schedule.
 # admission_retention_days = 30
+
+# ── Back-pressure ─────────────────────────────────────────────────────────────
+# Per-tenant, reserved in the store at admission — so it holds across instances
+# and survives a restart — a per-process counter fails open on scale-out.
+# A slot is released when a run seals, fails or *suspends*, so a hundred runs
+# parked on approvals do not stop new work. Absent means unbounded; every run is
+# still held to its manifest's mandatory `budgets`.
+# Exceeding it answers /webhook with 429, which an at-least-once emitter retries.
+[quota]
+# max_concurrent_runs  = 64
+# max_tokens_per_month = 200_000_000
+
+# ── Who wrote each record ─────────────────────────────────────────────────────
+# Without this the chain says *what happened* and nothing says *which workload
+# wrote it*, and no checkpoint can be submitted to a witness. The key comes from
+# you and cannot be minted here: a plane that generated its own identity would
+# produce records that look attested and prove nothing.
+# `openssl rand -base64 32` produces a seed. Publish the public half.
+# [attestation]
+# required = true
+# key_id   = "spiffe://mako/agentd"
+# seed     = "env:AGENTD_SIGNING_SEED"
+
+# ── Somebody else who saw the log grow ────────────────────────────────────────
+# A hash chain proves nobody edited *this* history. It cannot show that a second
+# history does not exist, because both can be internally perfect and you control
+# every input to that check. A witness cosigns a checkpoint only when it
+# provably extends the last one it saw, so two histories cannot both be cosigned.
+# Requires [attestation]. A witness you host yourself proves nothing about you.
+# [witness]
+# quorum        = 1     # zero is refused; above the witness count is refused
+# interval_secs = 3600
+# [[witness.witnesses]]
+# name       = "witness.example.org"
+# url        = "https://witness.example.org"
+# public_key = "..."    # 32 bytes, standard base64 — without it a cosignature
+#                       # is a 200 with a base64 string in it
 
 # The journal, the cases, the tasks, the timers and the events — one backend.
 [journal]
@@ -326,6 +365,33 @@ mabis_syncd = "http://mabis-syncd:8880/mcp"
 go: its effects are journaled, so it resumes from the last completed effect
 rather than being replayed from the top. There is no dead-letter queue.
 
+**A `202` means the message will be acted on.** Admission commits *inside the
+request* — the policy gate, the quota reservation, the case binding and the claim
+on the admission key — and only then does `POST /webhook` answer, with the run
+ids in the body. The work continues afterwards and is durable by a different
+mechanism: a run holds a lease, and one that lapses without release is taken over
+and resumed by the sweeper's recovery pass. Every CloudEvent ingest door in mako
+completes its work before it answers, for the same reason: an acknowledgement
+that returns before anything durable is written turns a deploy into a lost event.
+
+`POST /api/v1/run` is the door that *waits*, because an operator asked for an
+answer. `session_timeout_secs` bounds that wait and nothing else.
+
+**The status code is a retry instruction.** mako's emitter treats 429 and 5xx as
+transient and every other 4xx as permanent, so the code chosen here decides
+whether a message is resent or dead-lettered:
+
+| Answer | When | What the emitter does |
+|---|---|---|
+| `202` | at least one specialist admitted | done — a retry meets the runs already holding its keys |
+| `204` | nothing subscribes to this type | done |
+| `429` | nothing admitted, something transient (a quota ceiling) | resends |
+| `422` | nothing admitted and resending cannot help — no subscribing specialist can act on this payload | dead-letters **now**, where an operator sees it |
+
+Unknown refusals count as transient. `RuntimeError` is `#[non_exhaustive]`, and
+the asymmetry is deliberate: losing a market message is not recoverable, while
+spending five attempts on one that was never going to succeed is.
+
 **Admission is at-most-once, in the store.** Inbound delivery is at-least-once,
 so `POST /webhook` admits each run under a key built from the CloudEvent's
 `(source, id)` and the specialist's name, claimed **inside the transaction that
@@ -347,8 +413,11 @@ operator replaying a dead letter, not for the emitter's retry schedule.
 sealed record: `{run, case, outcome, chain_head}` under a `tenantid` extension.
 The answer is deliberately not in it — a run's output is domain data with a
 label on it, and shipping it by default would be an egress decision made by a
-default. `GET /api/v1/oversight/runs/{run}` is where an operator reads why.
-`GET /api/v1/decisions` is a richer in-memory view, delivered nowhere.
+default. A **failed** run additionally carries `reason` — the refusal in the runtime's own
+words, absent rather than `null` on a success. `GET /api/v1/oversight/runs/{run}`
+is where an operator reads the reasoning behind either, and there is deliberately
+no second in-memory view beside it: a per-process ring buffer is lost on a restart
+and holds only what one instance handled.
 
 **Fan-out.** Several specialists may subscribe to one event; they are
 independent opinions, so each gets its own run and its own journal. There is
@@ -364,15 +433,32 @@ destroying one key — live store, replicas and backups at once — while the ha
 chain still verifies. Without a key ring the plane starts and says so loudly;
 `[keyring] required = true` turns that into a refusal to start.
 
-**Verifying the journal offline.** The chains, signatures and Merkle
-checkpoints are only *checkable* — and the checker must not be the plane itself,
-or the party under examination is the party running the examination. So it is an
-operational procedure, not a route: copy the journal, run agentplane's verifier
-against the copy with a **prior checkpoint** held outside the operator's
-infrastructure (and optionally a public key, which additionally answers who
-wrote each record), and keep that checkpoint somewhere the operator cannot
-rewrite. The same offline path re-executes a run against its journal in strict
-replay mode.
+**Who wrote each record.** `[attestation]` signs every journal record under the
+workload identity, on the store and on the runtime from one key — so an auditor
+holding the public half can tell mako's plane from anything else that reached the
+same database. The key comes from the deployment and cannot be minted here: a
+plane that generated its own identity would produce records that look attested
+and prove nothing. Unset, the plane starts and warns; `required = true` refuses.
+History written unattested stays unattested.
+
+**Somebody else who saw the log grow.** Everything above protects the record from
+*edits*. None of it detects showing a different history to each auditor, because
+both can be internally perfect and we control every input to that check.
+`[witness]` submits each checkpoint over C2SP `tlog-witness` to parties that
+cosign only a history that provably extends the one they last saw. It runs off
+the run path — evidence gathered after sealing, never a dependency of
+availability — and reports an integrity refusal *even when the quorum was met*,
+because the other cosigners may never have seen the history the refusing one
+remembers. A witness you host yourself proves nothing about you.
+
+**Verifying the journal offline.** The chains, signatures and Merkle checkpoints
+are only *checkable* — and the checker must not be the plane itself, or the party
+under examination is the party running the examination. So it is an operational
+procedure, not a route: copy the journal, run agentplane's verifier against the
+copy with a **prior checkpoint** held outside the operator's infrastructure and
+the public key from `[attestation]`, and keep that checkpoint somewhere the
+operator cannot rewrite. The same offline path re-executes a run against its
+journal in strict replay mode.
 
 ## Specialists
 

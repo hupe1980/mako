@@ -129,6 +129,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "base64 0.22.1",
  "mako-events",
  "mako-fristen",
  "mako-service",
@@ -147,9 +148,9 @@ dependencies = [
 
 [[package]]
 name = "agentplane"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bc0fd47709e444d04fae46b21c3f5b52f435f897f4d87863515242bb2b1eaf30"
+checksum = "790b803962682d8b408585c0f9a902329d7c1e092dd637340dab0a7c3ddb8b4f"
 dependencies = [
  "async-trait",
  "aws-config",
