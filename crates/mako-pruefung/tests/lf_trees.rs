@@ -15,9 +15,9 @@ use mako_pruefung::codes::{
     E_0609_CODES, E_0614_CODES, E_0624_CODES, E_3001_CODES, E_3002_CODES, E_3020_CODES, lookup,
 };
 use mako_pruefung::{
-    Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage, Lokationsart, Vollmacht, pruefe_abmeldung,
-    pruefe_abmeldung_gas, pruefe_abmeldungsanfrage_gas, pruefe_beendigung_zuordnung,
-    pruefe_kuendigung, pruefe_kuendigung_gas,
+    Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage, Lokationsart, Terminart, Vollmacht,
+    pruefe_abmeldung, pruefe_abmeldung_gas, pruefe_abmeldungsanfrage_gas,
+    pruefe_beendigung_zuordnung, pruefe_kuendigung, pruefe_kuendigung_gas,
 };
 
 const TERMIN: Date = date!(2026 - 09 - 01);
@@ -31,9 +31,10 @@ fn anfrage(pid: u32, grund: Option<&str>) -> LfAnfrage {
         vorgangsnummer: Some("VORGANG-0001".to_owned()),
         absender_mp_id: "9900357000004".to_owned(),
         empfaenger_mp_id: "9900000000001".to_owned(),
-        lokationsart: Lokationsart::VerbrauchendeMalo,
+        lokationsart: Some(Lokationsart::VerbrauchendeMalo),
         transaktionsgrund: grund.map(ToOwned::to_owned),
         termin: Some(TERMIN),
+        terminart: Terminart::Fix,
         uet_lieferanmeldung: None,
         eingang: EINGANG,
     }
@@ -69,7 +70,7 @@ fn code_of(e: &LfEntscheidung) -> &str {
 /// Prüfschritt 130 → `A10` „Lieferende wird zugestimmt".
 #[test]
 fn e0609_ordinary_abmeldung_is_a10() {
-    let e = pruefe_abmeldung(&anfrage(55_007, Some("E03")), &lage());
+    let e = pruefe_abmeldung(&anfrage(55_007, Some("Z33")), &lage());
     assert_eq!(code_of(&e), "A10");
     assert!(e.ist_zustimmung());
     assert_eq!(e.as_antwort().unwrap().ebd.as_deref(), Some("E_0609"));
@@ -80,7 +81,7 @@ fn e0609_ordinary_abmeldung_is_a10() {
 fn e0609_already_confirmed_end_is_a02() {
     let mut l = lage();
     l.bestaetigtes_zuordnungsende = Some(TERMIN);
-    let e = pruefe_abmeldung(&anfrage(55_007, Some("E03")), &l);
+    let e = pruefe_abmeldung(&anfrage(55_007, Some("Z33")), &l);
     assert_eq!(code_of(&e), "A02");
     assert!(!e.ist_zustimmung());
 }
@@ -91,7 +92,7 @@ fn e0609_missed_vorlauffrist_is_a03() {
     let mut l = lage();
     l.vorlauffrist_eingehalten = Bekannt::Nein;
     assert_eq!(
-        code_of(&pruefe_abmeldung(&anfrage(55_007, None), &l)),
+        code_of(&pruefe_abmeldung(&anfrage(55_007, Some("Z33")), &l)),
         "A03"
     );
 }
@@ -101,7 +102,7 @@ fn e0609_missed_vorlauffrist_is_a03() {
 fn e0609_unknown_vorlauffrist_escalates() {
     let mut l = lage();
     l.vorlauffrist_eingehalten = Bekannt::Unbekannt;
-    let e = pruefe_abmeldung(&anfrage(55_007, None), &l);
+    let e = pruefe_abmeldung(&anfrage(55_007, Some("Z33")), &l);
     assert!(e.ist_eskalation(), "{e:?}");
 }
 
@@ -124,7 +125,7 @@ fn e0609_contested_stilllegung_is_a04_with_a_bemerkung() {
 /// Monatserster.
 #[test]
 fn e0609_bkv_deactivation_off_month_start_is_a05() {
-    let mut a = anfrage(55_007, Some("ZC6"));
+    let mut a = anfrage(55_007, Some("ZQ7"));
     a.termin = Some(date!(2026 - 09 - 15));
     assert_eq!(code_of(&pruefe_abmeldung(&a, &lage())), "A05");
 }
@@ -136,7 +137,7 @@ fn e0609_ermaechtigung_not_deactivated_is_a07() {
     let mut l = lage();
     l.zuordnungsermaechtigung_deaktiviert = Bekannt::Nein;
     assert_eq!(
-        code_of(&pruefe_abmeldung(&anfrage(55_007, Some("ZC6")), &l)),
+        code_of(&pruefe_abmeldung(&anfrage(55_007, Some("ZQ7")), &l)),
         "A07"
     );
 }
@@ -144,8 +145,8 @@ fn e0609_ermaechtigung_not_deactivated_is_a07() {
 /// A Tranche walks the same questions and lands in the `A21`–`A29` range.
 #[test]
 fn e0609_tranche_uses_the_second_code_range() {
-    let mut a = anfrage(55_007, Some("E03"));
-    a.lokationsart = Lokationsart::Tranche;
+    let mut a = anfrage(55_007, Some("Z33"));
+    a.lokationsart = Some(Lokationsart::Tranche);
     assert_eq!(code_of(&pruefe_abmeldung(&a, &lage())), "A29");
 
     let mut l = lage();
@@ -162,8 +163,8 @@ fn e0609_never_produces_an_e0624_code() {
         Some("E01"),
         Some("E03"),
         Some("Z33"),
-        Some("ZC6"),
-        Some("ZC7"),
+        Some("ZQ7"),
+        Some("ZT0"),
     ];
     let arten = [
         Lokationsart::VerbrauchendeMalo,
@@ -174,7 +175,7 @@ fn e0609_never_produces_an_e0624_code() {
         for art in arten {
             for bindung in [Bekannt::Ja, Bekannt::Nein, Bekannt::Unbekannt] {
                 let mut a = anfrage(55_007, grund);
-                a.lokationsart = art;
+                a.lokationsart = Some(art);
                 let mut l = lage();
                 l.vertragsbindung_am_folgetag = bindung;
                 if let Some(code) = pruefe_abmeldung(&a, &l).as_antwort() {
@@ -344,10 +345,71 @@ fn e0614_already_terminated_to_that_date_is_a_zustimmung() {
 fn e0614_running_contract_is_a06() {
     let mut l = lage();
     l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    // `A06`'s 55018 carries `SG4 DTM+157` — „der Zeitpunkt, zu welchem der
+    // Vertrag am Tag des Versandes der Antwort noch kündbar ist".
+    l.naechstmoeglicher_kuendigungstermin = Some(date!(2026 - 12 - 31));
+    let e = pruefe_kuendigung(&anfrage(55_016, None), &l);
+    assert_eq!(code_of(&e), "A06");
+    assert_eq!(
+        e.as_antwort().unwrap().termin,
+        Some(date!(2026 - 12 - 31)),
+        "the Ablehnung must name the date the contract is still terminable to"
+    );
+}
+
+/// Prüfschritt 60 is the split that decides whether `A05`/`A06` are reachable
+/// at all. A Kündigung „zum nächstmöglichen Termin" (`SG4 DTM+471`) is the
+/// ordinary LFW24 case, and the EBD sends it straight past the Kündbarkeits-
+/// frage to the Zustimmung — refusing it for Vertragsbindung would block every
+/// switch of a customer who is still inside a Laufzeitvertrag.
+#[test]
+fn e0614_kuendigung_zum_naechstmoeglichen_termin_is_confirmed() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    l.naechstmoeglicher_kuendigungstermin = Some(date!(2026 - 12 - 31));
+
+    let mut a = anfrage(55_016, None);
+    a.terminart = Terminart::Naechstmoeglich;
+
+    let e = pruefe_kuendigung(&a, &l);
+    assert_eq!(code_of(&e), "A09");
+    assert!(e.ist_zustimmung());
+    assert_eq!(
+        e.as_antwort().unwrap().termin,
+        Some(date!(2026 - 12 - 31)),
+        "the Bestätigung states the date the LFA determined (DTM+471, [513])"
+    );
+}
+
+/// The same message with a fixed date is the one that may be refused.
+#[test]
+fn e0614_a_fixed_date_inside_the_binding_is_still_a06() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    l.naechstmoeglicher_kuendigungstermin = Some(date!(2026 - 12 - 31));
+    let e = pruefe_kuendigung(&anfrage(55_016, None), &l);
+    assert!(!e.ist_zustimmung());
+    assert_eq!(code_of(&e), "A06");
+}
+
+/// `A05` is „Vertragsbindung bei bereits in der Zukunft **beendetem** Vertrag"
+/// and its 55018 carries the already confirmed Kündigungsdatum. A contract
+/// nobody has terminated is `A06`, whatever its next admissible date.
+#[test]
+fn e0614_a05_needs_an_actual_future_termination() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    l.naechstmoeglicher_kuendigungstermin = Some(date!(2027 - 06 - 30));
     assert_eq!(
         code_of(&pruefe_kuendigung(&anfrage(55_016, None), &l)),
-        "A06"
+        "A06",
+        "a merely bound contract is not one that was terminated to a later date"
     );
+
+    l.vertragsende = Some(date!(2027 - 06 - 30));
+    let e = pruefe_kuendigung(&anfrage(55_016, None), &l);
+    assert_eq!(code_of(&e), "A05");
+    assert_eq!(e.as_antwort().unwrap().termin, Some(date!(2027 - 06 - 30)));
 }
 
 /// Prüfschritt 100: the EBD parks the process while an requested Vollmacht is
@@ -442,17 +504,84 @@ fn e3001_contract_already_gone_is_z29() {
     );
 }
 
-/// `E_3001` — a Vertragsbindung answers `Z12` and, per the Codeliste's
-/// Anmerkung, must state the next possible Kündigungszeitpunkt.
+/// `E_3001` — a Vertragsbindung against a **fixed** date answers `Z12` and, per
+/// the Codeliste's Anmerkung, must state the next possible Kündigungszeitpunkt.
 #[test]
 fn e3001_vertragsbindung_states_the_next_possible_date() {
     let mut l = lage();
     l.vertragsbindung_am_folgetag = Bekannt::Ja;
-    l.vertragsende = Some(date!(2026 - 12 - 31));
+    // The date `Z12` must carry is the next *admissible* termination date, not
+    // a Vertragsende: a bound contract has not been terminated at all.
+    l.naechstmoeglicher_kuendigungstermin = Some(date!(2026 - 12 - 31));
     let e = pruefe_kuendigung_gas(&anfrage(44_016, None), &l);
     let a = e.as_antwort().expect("answer");
     assert_eq!(a.code, "Z12");
     assert_eq!(a.termin, Some(date!(2026 - 12 - 31)));
+}
+
+/// `E_3001` publishes no code for a Kündigungstermin in the past — the Strom
+/// `A01`/`A10` has no Gas counterpart — and GeLi Gas 3.0 § 3.1 admits only „ein
+/// beliebiges in der Zukunft liegendes … Kündigungsdatum". Falling through would
+/// confirm it with `E15`.
+#[test]
+fn e3001_a_kuendigung_dated_in_the_past_escalates() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Nein;
+    let mut a = anfrage(44_016, None);
+    a.termin = Some(a.eingang.date().previous_day().expect("a day before"));
+    assert!(pruefe_kuendigung_gas(&a, &l).ist_eskalation());
+
+    // A Kündigung without any date has nothing to check at all.
+    let mut a = anfrage(44_016, None);
+    a.termin = None;
+    assert!(pruefe_kuendigung_gas(&a, &l).ist_eskalation());
+}
+
+/// `E_3001` gates its two Vertragsbindungs-answers on the **date qualifier**,
+/// exactly as `E_0614` Prüfschritt 60 does on the Strom side — and here the
+/// gate is an AHB Bedingung, so getting it wrong fails validation rather than
+/// merely stating the wrong thing:
+///
+/// - `Z12` „Ablehnung Vertragsbindung" is **[43] Wenn SG4 DTM+93 vorhanden**;
+/// - `Z01` „Zustimmung mit Terminänderung" is **[41] Wenn SG4 DTM+471 vorhanden**.
+///
+/// So a Gas Kündigung „zum nächstmöglichen Termin" is *confirmed* at the date
+/// the LFA determined. Refusing it with `Z12` would block every Gas switch of a
+/// customer inside a Laufzeitvertrag.
+#[test]
+fn e3001_a_naechstmoeglich_kuendigung_is_confirmed_with_z01_not_refused() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    l.naechstmoeglicher_kuendigungstermin = Some(date!(2026 - 12 - 31));
+
+    let mut a = anfrage(44_016, None);
+    a.terminart = Terminart::Naechstmoeglich;
+
+    let antwort = pruefe_kuendigung_gas(&a, &l);
+    let antwort = antwort.as_antwort().expect("answer");
+    assert_eq!(antwort.code, "Z01");
+    assert!(
+        antwort.zustimmung,
+        "Z01 sits in the Zustimmungs-Cluster and rides 44017"
+    );
+    assert_eq!(antwort.termin, Some(date!(2026 - 12 - 31)));
+}
+
+/// Both codes have to name a date, so a deployment that cannot determine the
+/// next admissible one escalates rather than sending an empty DTM segment.
+#[test]
+fn e3001_vertragsbindung_without_a_next_date_escalates() {
+    let mut l = lage();
+    l.vertragsbindung_am_folgetag = Bekannt::Ja;
+    l.naechstmoeglicher_kuendigungstermin = None;
+    for terminart in [Terminart::Fix, Terminart::Naechstmoeglich] {
+        let mut a = anfrage(44_016, None);
+        a.terminart = terminart;
+        assert!(
+            pruefe_kuendigung_gas(&a, &l).ist_eskalation(),
+            "{terminart:?} without a next possible date must escalate"
+        );
+    }
 }
 
 // ── Cross-cutting invariants ──────────────────────────────────────────────────
@@ -507,7 +636,7 @@ fn every_landing_resolves_to_a_published_code() {
                 for b in werte {
                     for vm in vollmachten {
                         let mut a = anfrage(55_007, grund);
-                        a.lokationsart = art;
+                        a.lokationsart = Some(art);
                         let mut l = lage();
                         l.vertragsbindung_am_folgetag = b;
                         l.kunde_identisch = b;

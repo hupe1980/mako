@@ -39,7 +39,7 @@ one arriving Tuesday evening has under sixteen hours.
 | 55004 | Abmeldung                                             | LF → NB     | ✅ Implemented |
 | 55005 | Bestätigung Abmeldung                                 | NB → LF     | ↩ Derived from 55004 accept |
 | 55006 | Ablehnung Abmeldung                                   | NB → LF     | ↩ Derived from 55004 reject |
-| 55007 | Ankündigung NB-seitiges Lieferende                    | NB → LFN    | ✅ Implemented (`gpke-lf-abmeldung`) |
+| 55007 | Abmeldung / Beendigung der Zuordnung                  | NB → LF     | ✅ Implemented (`gpke-lf-abmeldung`) |
 | 55010 | Anfrage zur Beendigung der Zuordnung (NB Abmeldeanfrage) | NB → LFA | ✅ Implemented (`gpke-beendigung-zuordnung`) |
 | 55011/55012 | Bestätigung / Ablehnung Beendigung der Zuordnung     | LFA → NB    | ↩ Derived from 55010 accept/reject |
 | 55013 | Anmeldung / Zuordnung EOG (§36/§38 EnWG)              | NB → LF     | ✅ Implemented (`gpke-eog`, both roles) |
@@ -146,19 +146,26 @@ exist in the grid operator's system.
 | 55604 | Ablehnung Anmeldung neue verb. MaLo (NB → LF)   | NB → LF    | ↩ Derived from 55600 reject |
 | 55605 | Ablehnung Anmeldung neue erz. MaLo (NB → LF)    | NB → LF    | ↩ Derived from 55601 reject |
 
-> APERAK Frist: 24 h wall-clock (GPKE). PIDs 55602–55605 are derived response
+> Antwortfrist: 00:00 Uhr des 61. WT nach dem ÜT (GPKE Teil 2 § 2.2.2 — `E_0608`
+> re-identifies daily for up to 60 Werktage). PIDs 55602–55605 are derived response
 > PIDs; they are never routed inbound — the NB emits them outbound.
 
-### UTILMD Abmeldung LF (GPKE Teil 1)
+### UTILMD Lieferende von NB an LF (GPKE Teil 2 § 2.5.2)
 
-Workflow `gpke-lf-abmeldung` handles LF-side tracking of an Abmeldung/Kündigung
-initiated by the NB that the LF must acknowledge.
+Workflow `gpke-lf-abmeldung`: the NB announces that the supplier's assignment to
+the Marktlokation ends, and the LF answers by 05:00 Uhr des 1. WT nach dem ÜT.
+Not a Kündigung — the Kündigung is 55016, sent LFN → LFA without the NB.
 
 | PID   | Process name (AHB)                                    | Direction  | Status         |
 |-------|-------------------------------------------------------|------------|----------------|
-| 55007 | Kündigung Lieferung durch NB (NB → LF)                | NB → LF    | ✅ Implemented |
-| 55008 | Bestätigung Kündigung durch NB (LF → NB)              | LF → NB    | ↩ Derived accept |
-| 55009 | Ablehnung Kündigung durch NB (LF → NB)                | LF → NB    | ↩ Derived reject |
+| 55007 | Abmeldung / Beendigung der Zuordnung (NB an LF)       | NB → LF    | ✅ Implemented |
+| 55008 | Bestätigung Abmeldung (LF an NB)                      | LF → NB    | ↩ Derived from the Antwortcode's Zustimmungs-Cluster |
+| 55009 | Ablehnung Abmeldung (LF an NB)                        | LF → NB    | ↩ Derived from the Antwortcode's Ablehnungs-Cluster |
+
+`E_0609` decides which. The three Transaktionsgründe a 55007 may carry are `Z33`
+(Auszug wegen Stilllegung), `ZQ7` (fehlende Zuordnungsermächtigung nach
+BKV-Deaktivierung) and `ZT0` (fehlende Zuordnungsermächtigung nach Änderung des
+Zeitreihentyps); anything else has no path through the tree and escalates.
 
 ### MSCONS Messwerte Strom — Lieferant (GPKE Teil 2/4)
 
@@ -238,7 +245,7 @@ Allokationsliste, exchanged between LF and NB via ORDERS and answered with MSCON
 | `eog`                       | `gpke-eog`                       | PID 55013 (Anmeldung/Zuordnung EOG §36/§38 EnWG) + 55014/55015 derived |
 | `comdis`                    | `gpke-comdis`                    | PIDs 29001/29002 (COMDIS Kaufmännisch-Bilanzielle Ausgleichsprozesse) |
 | `lf_anmeldung`              | `gpke-lf-anmeldung`              | PIDs 55001/55004/55016/55077 (LF outbound) + 55002-55003/55005-55006/55017-55018/55078/55080 (LF-role receive NB ANTWORT) |
-| `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (NB → LF Kündigung) + 55008/55009 derived           |
+| `lf_abmeldung`              | `gpke-lf-abmeldung`              | PID 55007 (Lieferende von NB an LF) + 55008/55009 derived     |
 | `stammdatenaenderung`       | `gpke-stammdatenaenderung`       | GPKE Teil 4 Stammdatenänderung 55615–55694, 55109/55110 — inbound MaLo change → apply to marktd + Rückmeldung A01/A02 (quality feedback, tacit acceptance after 2 WT) |
 | `neuanlage`                 | `gpke-neuanlage`                 | PIDs 55600/55601 (Neuanlage MaLo, LF → NB) + 55602–55605 derived   |
 | `messwerte`                 | `gpke-messwerte`                 | MSCONS PIDs 13005/13006/13015–13019/13025/13027 (Messwerte NB/MSB → LF) |

@@ -1,36 +1,70 @@
-//! GPKE Ankündigung Zuordnung LF — NB notifies the new supplier of assignment.
+//! GPKE **Ankündigung Zuordnung LF** — the NB assigns a supplier to an
+//! *erzeugende* Marktlokation or Tranche.
 //!
-//! Covers GPKE Teil 2 §2.2 post-assignment notification: after a Lieferantenwechsel
-//! or Neuanlage has been processed, the Netzbetreiber (NB) sends a UTILMD 55607
-//! "Ankündigung Zuordnung LF" to the new Lieferant (LFN). The LFN must respond
-//! with either Bestätigung (55608) or
-//! Ablehnung (55609).
+//! Not a post-switch notification. Every erzeugende Marktlokation and every
+//! Tranche must be assigned to exactly one Bilanzkreis at every instant; when
+//! it is not, the NB restores the 100 % assignment by assigning a supplier and
+//! announcing it with a UTILMD **55607**. The LFN answers **55608**
+//! (Bestätigung) or **55609** (Ablehnung), and the Zustimmung names the
+//! Bilanzkreis the generation will be balanced in.
 //!
-//! This module implements the **receiving-party perspective** (Lieferant / LFN):
-//! the system receives an inbound Ankündigung (55607) from the NB and responds with
-//! Bestätigung or Ablehnung.
+//! This module implements the **receiving-party perspective** (LFN). In Fälle 1
+//! and 2 the LFN is the „LF des Unternehmens Netzbetreiber"; in Fälle 3 and 4
+//! it is a supplier the NB identified in bilateral clarification.
 //!
-//! # Prüfidentifikatoren (UTILMD AHB Strom 2.1/2.2, FV2025-10-01)
+//! # Prüfidentifikatoren
 //!
-//! ## Inbound (NB → LF)
+//! ## Inbound (NB → LFN)
 //!
-//! | PID   | Process name (AHB)                               | Direction |
-//! |-------|--------------------------------------------------|-----------|
-//! | 55607 | Ankündigung Zuordnung LF (NB → LFN)              | NB → LF   |
+//! | PID   | Process name (AHB)                                       | Direction |
+//! |-------|----------------------------------------------------------|-----------|
+//! | 55607 | Ankündigung Zuordnung / Zuordnung des LF zur MaLo/Tranche | NB → LFN  |
 //!
-//! ## Outbound (LF → NB)
+//! ## Outbound (LFN → NB)
 //!
-//! | PID   | Process name (AHB)                               | Derived from    |
-//! |-------|--------------------------------------------------|-----------------|
-//! | 55608 | Bestätigung Zuordnung LF (LFN → NB)              | 55607 accepted  |
-//! | 55609 | Ablehnung Zuordnung LF (LFN → NB)                | 55607 rejected  |
+//! | PID   | Process name (AHB)                                | Derived from   |
+//! |-------|---------------------------------------------------|----------------|
+//! | 55608 | Bestätigung Zuordnung des LF zur MaLo/Tranche      | 55607 accepted |
+//! | 55609 | Ablehnung Zuordnung des LF zur MaLo/Tranche        | 55607 rejected |
+//!
+//! # Four Anwendungsfälle, four EBDs
+//!
+//! | Fall | Anwendungsfall | EBD |
+//! |---|---|---|
+//! | 1 | EEG-MaLo **ohne** DV-Pflicht bzw. KWKG-MaLo ohne DV-Pflicht | `E_0603` |
+//! | 2 | EEG-MaLo **mit** DV-Pflicht | `E_0604` |
+//! | 3 | KWKG-MaLo mit DV-Pflicht bzw. Nicht-EEG-/Nicht-KWKG-MaLo, nicht-tranchiert | `E_0605` |
+//! | 4 | dieselben Fälle, tranchiert abgebildet (einmal je Tranche) | `E_0606` |
+//!
+//! All four are single-Prüfschritt trees — `A01` Zustimmung, `A99` Ablehnung
+//! („Sonstiges", Erläuterung mandatory). [`mako_pruefung::lf::zuordnung`] walks
+//! them; the substance of the answer is the Bilanzkreis, not the code.
+//!
+//! # Silence is consent
+//!
+//! Prozessschritt 3 of all four Sequenzdiagramme is „Zuordnung des LFN zur
+//! Marktlokation bzw. Tranche **aufgrund fehlender Antwort**": past the window
+//! the NB assigns the supplier anyway, using whichever Bilanzkreis the supplier
+//! last communicated over the SD „Übermittlung von Informationen" (GPKE Teil 4).
+//! An unanswered 55607 therefore does not lapse — it lands generation in the
+//! supplier's own balancing circle unexamined.
+//!
+//! The window is **15:00 Uhr am Übertragungstag** when the Zuordnungsbeginn is
+//! in the future, and 15:00 Uhr des 1. WT nach dem ÜT when it is not;
+//! [`mako_fristen::antwort`] publishes the tighter of the two for PID 55607,
+//! because a queue sized by the looser one reports a lapsed Frist as still
+//! running.
+//!
+//! [`mako_pruefung::lf::zuordnung`]: https://docs.rs/mako-pruefung
 //!
 //! # Regulatory basis
 //!
-//! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 §2.2 Ankündigung Zuordnung LF
-//! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK 2.x** — Application error acknowledgement (**24h** wall-clock Frist,
-//!   per BK6-22-024 §4)
+//! - **BNetzA BK6-24-174** — GPKE Teil 2 § 2.4 „Herstellung einer 100 %
+//!   LF-Zuordnung zu einer erzeugenden Marktlokation", SD Fälle 1–4
+//! - **EDI@Energy EBD 4.3** Kap. 6.50–6.53 — `E_0603`–`E_0606`
+//! - **UTILMD AHB Strom 2.1/2.2** — message layout
+//! - **APERAK AHB 1.0 § 2.4.1** — the separate technical acknowledgement,
+//!   45 minutes on a Werktag (Sonntag 12:00 for a Saturday arrival)
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -47,31 +81,21 @@ use mako_engine::{
 /// Inbound PID for Ankündigung Zuordnung LF handled by
 /// [`GpkeAnkuendigungZuordnungLfWorkflow`].
 ///
-/// | PID   | Process (AHB name)                          | AHB profile                    |
-/// |-------|---------------------------------------------|--------------------------------|
-/// | 55607 | Ankündigung Zuordnung LF (NB → LFN)         | S2.1–S2.2 — import pending ⚠  |
-///
-/// **Action required:** Run `cargo xtask import-xml-ahb --message-type UTILMD --pid 55607`
-/// to populate AHB rules. Until then, the adapter applies a vacuous-validation guard
-/// that forces `validation_passed = false` for all inbound 55607 messages.
-///
-/// Response PIDs (55608/55609) are derived internally and never routed as inbound.
+/// Response PIDs (55608/55609) are derived internally and never routed as
+/// inbound.
 pub const ANKUENDIGUNG_ZUORDNUNG_PIDS: &[u32] = &[55607];
 
 /// Stable workflow name for process routing.
 pub const WORKFLOW_NAME: &str = "gpke-ankuendigung-zuordnung-lf";
 
-/// Deadline label for the 24h APERAK response window (BK6-22-024 §4).
+/// Deadline label for the **business answer window** — 15:00 Uhr am ÜT
+/// (GPKE Teil 2 § 2.4.2.2 Nr. 2), resolved by [`mako_fristen::antwort`].
 ///
-/// Register immediately after `ValidationPassed`:
-/// ```rust,ignore
-/// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
-///     .expect("a PID with a published Antwortfrist");
-/// let dl = Deadline::new(stream_id, ..., ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL, due);
-/// deadline_store.register(&dl).await?;
-/// ```
-pub const ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL: &str =
-    "gpke-ankuendigung-zuordnung-lf-aperak-window";
+/// Distinct from the APERAK clock, which is 45 minutes and belongs to `makod`'s
+/// outbox. Missing this one is not a lapsed obligation: the NB then assigns the
+/// supplier without an answer (Prozessschritt 3).
+pub const ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL: &str =
+    "gpke-ankuendigung-zuordnung-lf-antwortfrist";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -95,6 +119,8 @@ pub enum AnkuendigungZuordnungLfEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator (55607).
         pruefidentifikator: Pruefidentifikator,
+        /// `SG4 IDE+24` DE 7402 — carried into the answer's `SG4 RFF+TN`.
+        vorgangsnummer: Option<String>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
@@ -168,6 +194,12 @@ pub struct AnkuendigungZuordnungLfData {
     pub process_date: String,
     /// BDEW Prüfidentifikator (55607).
     pub pruefidentifikator: Pruefidentifikator,
+    /// `SG4 IDE+24` DE 7402 of the **request**.
+    ///
+    /// Retained because the answer must carry it back in `SG4 RFF+TN`
+    /// („Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on every
+    /// Antwortnachricht). It is never reused as the answer's own `IDE+24`.
+    pub vorgangsnummer: Option<String>,
 }
 
 /// State of a GPKE Ankündigung Zuordnung LF process.
@@ -252,6 +284,9 @@ pub enum AnkuendigungZuordnungLfCommand {
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The `SG4` facts the trees branch on, forwarded to `processd` on
+        /// the `de.mako.process.initiated` notification.
+        vorgang: crate::lf_antwort::LfVorgangsdaten,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings.
@@ -259,8 +294,8 @@ pub enum AnkuendigungZuordnungLfCommand {
     },
     /// Send the outbound UTILMD response (55608 = Bestätigung, 55609 = Ablehnung).
     ///
-    /// `mako_fristen::antwort` states no published window for 55607; the
-    /// caller's fallback applies and is reported as non-regulatory.
+    /// Due by **15:00 Uhr am ÜT** (GPKE Teil 2 § 2.4.2.2 Nr. 2), resolved by
+    /// `mako_fristen::antwort` from trigger PID 55607.
     SendAntwort {
         /// The resolved answer: Antwortcode, its EBD, and the Cluster that
         /// selects the response PID.
@@ -312,11 +347,11 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
                 AnkuendigungZuordnungLfState::Eingegangen(_),
             )
             | (
-                ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
                 AnkuendigungZuordnungLfState::ValidationPassed(_),
             ) => Some(AnkuendigungZuordnungLfCommand::TimeoutExpired {
                 deadline_id: deadline.deadline_id(),
@@ -335,6 +370,7 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 document_date,
                 process_date,
                 pruefidentifikator,
+                vorgangsnummer,
                 ..
             } => AnkuendigungZuordnungLfState::Eingegangen(AnkuendigungZuordnungLfData {
                 location_id: location_id.clone(),
@@ -343,6 +379,7 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
+                vorgangsnummer: vorgangsnummer.clone(),
             }),
             AnkuendigungZuordnungLfEvent::ValidationPassed { .. } => match state {
                 AnkuendigungZuordnungLfState::Eingegangen(data) => {
@@ -410,6 +447,7 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 document_date,
                 process_date,
                 message_ref,
+                vorgang,
                 validation_passed,
                 validation_errors,
             } => {
@@ -424,6 +462,8 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                 // Clone before move for APERAK emission in the validation-failed path.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
+                let notify_malo = location_id.clone();
+                let notify_termin = process_date.clone();
 
                 let mut events = vec![AnkuendigungZuordnungLfEvent::AnkuendigungErhalten {
                     location_id,
@@ -433,12 +473,27 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                     process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
+                    vorgangsnummer: vorgang.vorgangsnummer.clone(),
                 }];
                 if validation_passed {
                     events.push(AnkuendigungZuordnungLfEvent::ValidationPassed { message_ref });
                     // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
                     // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
                     let outbox = vec![
+                        // The business notification. `processd`'s LF module
+                        // decides this process, and it only ever sees a message
+                        // that reaches the ERP fan-out — an APERAK is a
+                        // technical acknowledgement, not one.
+                        vorgang
+                            .process_initiated(
+                                pid,
+                                &notify_malo,
+                                &sender_mp_id,
+                                &receiver_gln,
+                                &notify_termin,
+                                &serde_json::Value::Null,
+                            )
+                            .caused_by(1),
                         PendingOutbox::new(
                             "APERAK",
                             sender_mp_id.as_str(),
@@ -506,6 +561,7 @@ impl Workflow for GpkeAnkuendigungZuordnungLfWorkflow {
                         &data.sender,
                         &data.receiver,
                         &data.process_date,
+                        data.vorgangsnummer.as_deref(),
                     )
                     .caused_by(0),
                 ];
@@ -595,6 +651,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("ZUORD-001"),
+            vorgang: crate::LfVorgangsdaten::default(),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -746,6 +803,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("WRONG-001"),
+            vorgang: crate::LfVorgangsdaten::default(),
             validation_passed: true,
             validation_errors: vec![],
         };
@@ -812,12 +870,13 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55607),
+            vorgangsnummer: Some("NNV1234".to_owned()),
         });
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &eingegangen,
             AnkuendigungZuordnungLfCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL.into(),
+                label: ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -837,7 +896,7 @@ mod tests {
             &terminal,
             AnkuendigungZuordnungLfCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL.into(),
+                label: ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -865,7 +924,7 @@ mod tests {
             &state,
             AnkuendigungZuordnungLfCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL.into(),
+                label: ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -885,12 +944,13 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55607),
+            vorgangsnummer: Some("NNV1234".to_owned()),
         });
         let out = GpkeAnkuendigungZuordnungLfWorkflow::handle(
             &terminal,
             AnkuendigungZuordnungLfCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL.into(),
+                label: ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

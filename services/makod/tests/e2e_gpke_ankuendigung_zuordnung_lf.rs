@@ -166,6 +166,7 @@ impl MockLfn {
                     document_date,
                     process_date,
                     message_ref,
+                    vorgang: mako_gpke::LfVorgangsdaten::default(),
                     validation_passed: true,
                     validation_errors: vec![],
                 }
@@ -314,6 +315,7 @@ async fn e2e_ankuendigung_zuordnung_lf_validation_failure_rejects() {
         document_date: "20250115".to_owned(),
         process_date: "20250401".to_owned(),
         message_ref: MessageRef::new("MSG-BAD-55607"),
+        vorgang: mako_gpke::LfVorgangsdaten::default(),
         validation_passed: false,
         validation_errors: vec!["NAD+MR missing party qualifier".to_owned()],
     };
@@ -337,7 +339,7 @@ async fn e2e_ankuendigung_zuordnung_lf_validation_failure_rejects() {
 #[tokio::test]
 async fn e2e_ankuendigung_zuordnung_lf_timeout_closes_process() {
     use mako_engine::ids::DeadlineId;
-    use mako_gpke::ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL;
+    use mako_gpke::ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL;
 
     let lfn = MockLfn::new();
 
@@ -354,7 +356,7 @@ async fn e2e_ankuendigung_zuordnung_lf_timeout_closes_process() {
     lfn.process
         .execute(AnkuendigungZuordnungLfCommand::TimeoutExpired {
             deadline_id: DeadlineId::new(),
-            label: ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL.into(),
+            label: ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL.into(),
         })
         .await
         .expect("execute TimeoutExpired");

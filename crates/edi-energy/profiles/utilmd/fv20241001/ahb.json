@@ -565,7 +565,7 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E0F"
+              "E02"
             ]
           },
           "field_rules": []
@@ -770,7 +770,7 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E01"
+              "E02"
             ]
           },
           "field_rules": []
@@ -975,7 +975,7 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E0F"
+              "E02"
             ]
           },
           "field_rules": []

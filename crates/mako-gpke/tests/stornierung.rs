@@ -49,7 +49,7 @@ fn nb_mp_id() -> MarktpartnerCode {
 }
 
 fn vorgang() -> MaLo {
-    // Vorgangsnummer from IDE+Z19 (identifies the original process being cancelled)
+    // Vorgangsnummer from SG4 IDE+24 DE 7402 (the process being cancelled)
     MaLo::new("DE00123456789012345678901234567890")
 }
 
@@ -69,7 +69,7 @@ fn receive_stornierung_cmd(validation_passed: bool) -> GpkeStornierungCommand {
         validation_errors: if validation_passed {
             vec![]
         } else {
-            vec!["UTILMD Strom segment IDE+Z19 missing mandatory Vorgangsnummer".to_owned()]
+            vec!["UTILMD Strom segment IDE+24 missing mandatory Vorgangsnummer".to_owned()]
         },
     }
 }

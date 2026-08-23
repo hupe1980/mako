@@ -325,7 +325,7 @@ impl EdifactIngestDispatcher {
             // ── GeLi Gas Datenabruf (PIDs 17103/17104 inbound, 19103/19104 ORDRSP) ─
             // 17103/17104: NB/MSB receives ORDERS Anfrage from LF — spawn.
             // 19103/19104: LF receives ORDRSP rejection from NB — resume.
-            // ERP-initiated outbound (LF sends 17103) uses geli.gas.datenabruf.anfragen command.
+            // ERP-initiated outbound (LF sends 17103) uses geli.datenabruf.anfragen command.
             "geli-gas-datenabruf" => match pid {
                 17103 | 17104 => {
                     let cmd =

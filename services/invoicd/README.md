@@ -44,10 +44,10 @@ One pipeline; the differences are a table in `src/routing.rs`.
 | 31004 | Stornorechnung — Sparte-neutral, any process | arithmetic only | `invoic.stornorechnung.*` |
 | 31005 | MMM-Rechnung Strom | + MMM Strom prices | `gpke.abrechnung.*` |
 | 31006 | MMM Mehrmenge, selbst ausgestellt | + MMM Strom prices | `gpke.abrechnung.*` |
-| 31007 | GaBi Gas MMM-Rechnung | + MMM Gas prices (THE) | `gabi.gas.mmm.rechnung.*` |
-| 31008 | GaBi Gas MMM, selbst ausgestellt | + MMM Gas prices (THE) | `gabi.gas.mmm.rechnung.*` |
+| 31007 | GaBi Gas MMM-Rechnung | + MMM Gas prices (THE) | `gabi.mmm.rechnung.*` |
+| 31008 | GaBi Gas MMM, selbst ausgestellt | + MMM Gas prices (THE) | `gabi.mmm.rechnung.*` |
 | 31009 | WiM MSB-Rechnung | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
-| 31011 | GeLi Gas Rechnung sonstige Leistung (AWH) | `PreisblattNetznutzung` | `geli.gas.rechnung.*` |
+| 31011 | Rechnung sonstige Leistung — Sparte-neutral (GPKE Teil 2 · AWH Sperrprozesse Gas) | `PreisblattNetznutzung` | `invoic.sonstige-leistung.*` |
 
 A PID with no route is ignored, never answered with a default command. The
 subscription PID filter is derived from the same table.

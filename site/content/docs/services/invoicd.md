@@ -149,7 +149,7 @@ German MGV.
 
 **Gas tariff (31009 / Gas PIDs):** Energy (kWh) = Volume (m³) × `brennwert_kwh_per_m3`
 × `zustandszahl`. Both values are populated in `edmd` `MeterBillingPeriod` via
-PID 13007 (Gas Datenabruf / `geli.gas.datenabruf.anfragen`).
+PID 13007 (Gas Datenabruf / `geli.datenabruf.anfragen`).
 
 ---
 

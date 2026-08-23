@@ -58,7 +58,7 @@ pub const VERPFLICHTUNGSANFRAGE_PIDS: &[u32] = &[
 pub enum WimGasVerpflichtungsanfrageEvent {
     /// Process initiated by a valid UTILMD G Verpflichtungsanfrage message.
     Initiated {
-        /// Marktlokation EIC code from IDE+Z19.
+        /// Marktlokation EIC code from `SG5 LOC+Z16`.
         malo_id: MaLo,
         /// GLN of the NB sender.
         sender: MarktpartnerCode,
@@ -189,7 +189,7 @@ pub enum WimGasVerpflichtungsanfrageCommand {
         sender: MarktpartnerCode,
         /// GLN of the gMSB receiver.
         receiver: MarktpartnerCode,
-        /// Marktlokation EIC code from IDE+Z19.
+        /// Marktlokation EIC code from `SG5 LOC+Z16`.
         malo_id: MaLo,
         /// EDIFACT document date string from DTM+137.
         document_date: String,

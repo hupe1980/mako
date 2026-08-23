@@ -52,6 +52,27 @@ impl Lokationsart {
     }
 }
 
+/// Which date qualifier the Vorgang carries for its Termin.
+///
+/// `E_0614` Prüfschritt 60 branches on it, and the two branches disagree about
+/// the *outcome*: a Kündigung to a fixed date may be refused for
+/// Vertragsbindung (`A05`/`A06`), one „zum nächstmöglichen Termin" may not —
+/// the tree skips the Kündbarkeit question entirely and the LFA answers with
+/// the date it computes.
+///
+/// The UTILMD AHB carries the two as mutually exclusive segments: `SG4 DTM+93`
+/// „Ende zum" is Muss when `DTM+471` is absent, and vice versa.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Terminart {
+    /// `DTM+93` „Ende zum" — the sender names the date.
+    #[default]
+    Fix,
+    /// `DTM+471` „Ende zum nächstmöglichen Termin" — the sender asks the
+    /// receiver to determine it; the date carried is the floor to search from.
+    Naechstmoeglich,
+}
+
 /// An NB- or LFN-initiated request the supplier must answer.
 ///
 /// Parsed at the transport boundary; no CloudEvent JSON reaches the decision
@@ -72,11 +93,22 @@ pub struct LfAnfrage {
     /// MP-ID the message is addressed to; must be one of our own.
     pub empfaenger_mp_id: String,
     /// `STS+7` DE 9013 element 3 — which object the Vorgang is about.
-    pub lokationsart: Lokationsart,
+    ///
+    /// `None` when the message omitted it. The AHB marks the element Muss on
+    /// every LF-answered Vorgang precisely because the trees split on it, and
+    /// the two halves answer from **different code ranges** — so a missing
+    /// Ergänzung is an escalation, not a default. Reading it as „verbrauchende
+    /// Marktlokation" would send `A10` where the counterparty expects `A29`.
+    pub lokationsart: Option<Lokationsart>,
     /// `STS+7` DE 9013 element 2 — the Transaktionsgrund (`E01`, `E03`, `Z33`, …).
     pub transaktionsgrund: Option<String>,
-    /// `DTM+93` — the Zuordnungsende / Kündigungstermin the sender proposes.
+    /// `DTM+93` / `DTM+471` — the Zuordnungsende / Kündigungstermin the sender
+    /// proposes, or the floor to search from when [`Self::terminart`] is
+    /// [`Terminart::Naechstmoeglich`].
     pub termin: Option<Date>,
+    /// Which qualifier carried [`Self::termin`]. Only `55016` / `44016` vary;
+    /// every other LF-answered Vorgang states a fixed date.
+    pub terminart: Terminart,
     /// `DTM+154` — ÜT der Lieferanmeldung des LFN.
     ///
     /// Only `55010` carries it, and `E_0624` Prüfschritt 5 measures its own
@@ -92,6 +124,26 @@ impl LfAnfrage {
     #[must_use]
     pub fn grund_ist(&self, code: &str) -> bool {
         self.transaktionsgrund.as_deref() == Some(code)
+    }
+
+    /// The Lokationsart, or the Prüfschritt-10 escalation a message without one
+    /// earns.
+    pub(crate) fn lokationsart_oder_eskalation(
+        &self,
+        ebd: &str,
+    ) -> Result<Lokationsart, LfEntscheidung> {
+        self.lokationsart.ok_or_else(|| {
+            LfEntscheidung::eskalation(
+                10,
+                format!(
+                    "MaLo {}: die Nachricht nennt keine Transaktionsgrundergänzung \
+                     (SG4 STS+7 DE 9013, Element 3 — ZW3/ZW4/ZW5/ZAP). {ebd} verzweigt an \
+                     Prüfschritt 10 darauf, und die beiden Äste antworten aus \
+                     verschiedenen Coderäumen.",
+                    self.malo_id
+                ),
+            )
+        })
     }
 }
 
@@ -163,8 +215,26 @@ pub struct LfVertragslage {
     pub zuordnung_am_folgetag: Bekannt,
     /// A Zuordnungsende the NB has already confirmed, if any.
     pub bestaetigtes_zuordnungsende: Option<Date>,
-    /// The date the supply contract ends, if it is already terminated.
+    /// The date the supply contract ends, **if it is already terminated**.
+    ///
+    /// Strictly a record of an existing termination — `E_0614` Prüfschritte
+    /// 40/50/80 all read it that way, and 80 („Wurde der Vertrag bereits zu
+    /// einem späteren Zeitpunkt beendet?") produces `A05`, whose 55018 carries
+    /// `DTM+Z05`/`Z06` „bereits bestätigtes Kündigungsdatum". Writing the next
+    /// *admissible* date here would answer `A05` for a contract nobody has
+    /// terminated; that date belongs in
+    /// [`Self::naechstmoeglicher_kuendigungstermin`].
     pub vertragsende: Option<Date>,
+    /// The next date the contract may be terminated to, per its Vertragsart,
+    /// Kündigungsfrist and § 41b EnWG.
+    ///
+    /// Two Prüfschritte need it and neither is about `vertragsende`: `E_0614`
+    /// 70 („kündbar zum übermittelten Termin?") compares against it, and the
+    /// „nächstmöglicher Termin" branch answers *with* it — the AHB requires
+    /// `SG4 DTM+471` on the 55017 Bestätigung and `DTM+157` on an `A05`/`A06`
+    /// Ablehnung („der Zeitpunkt, zu welchem der Vertrag am Tag des Versandes
+    /// der Antwort noch kündbar ist").
+    pub naechstmoeglicher_kuendigungstermin: Option<Date>,
     /// `true` when the Vertragsverhältnis still stands on the day after the
     /// requested Termin (`E_0624` Prüfschritte 90 / 220, `E_0614` 70 / 580).
     pub vertragsbindung_am_folgetag: Bekannt,
@@ -209,6 +279,7 @@ impl Default for LfVertragslage {
             zuordnung_am_folgetag: Bekannt::Unbekannt,
             bestaetigtes_zuordnungsende: None,
             vertragsende: None,
+            naechstmoeglicher_kuendigungstermin: None,
             vertragsbindung_am_folgetag: Bekannt::Unbekannt,
             kunde_identisch: Bekannt::Unbekannt,
             kunde_nicht_ausgezogen: Bekannt::Unbekannt,

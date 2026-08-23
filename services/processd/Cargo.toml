@@ -108,6 +108,10 @@ sqlx               = { version = "0.8", features = ["runtime-tokio-rustls", "pos
 
 [dev-dependencies]
 mako-markt   = { workspace = true }
+# The LF answer path is a contract between two producers (`mako-gpke`,
+# `mako-geli-gas`) and one consumer. The round-trip tests build the event with
+# the real builder rather than by hand — which is how the two drifted.
+mako-engine  = { workspace = true }
 mako-pruefung = { path = "../../crates/mako-pruefung" }
 # The PID-contract guard compares processd's trigger PIDs against the canonical
 # workflow constants that drive makod's spawn table.

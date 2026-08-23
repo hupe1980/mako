@@ -40,6 +40,36 @@ struct AhbProfile {
 #[derive(Deserialize)]
 struct PidEntry {
     code: u32,
+    /// The AHB rules for this PID, so a fixture can honour the ones that decide
+    /// whether it parses as the Anwendungsfall it claims to be.
+    #[serde(default)]
+    segment_rules: Vec<SegmentRule>,
+}
+
+#[derive(Deserialize)]
+struct SegmentRule {
+    tag: String,
+    #[serde(default)]
+    qualifier_restrictions: BTreeMap<String, Vec<String>>,
+}
+
+impl PidEntry {
+    /// `BGM` DE 1001 — the Nachrichtenfunktion the AHB admits for this
+    /// Anwendungsfall.
+    ///
+    /// A synthetic fixture is not an acceptance test, but it must not
+    /// *contradict* the profile it was generated from: `BGM+E01` on a 55007
+    /// declares an Anmeldung where the AHB requires an Abmeldung, and anyone
+    /// reading the fixture to learn the message shape learns the wrong one.
+    fn bgm_qualifier(&self) -> Option<&str> {
+        self.segment_rules
+            .iter()
+            .find(|r| r.tag == "BGM")?
+            .qualifier_restrictions
+            .get("1001")?
+            .first()
+            .map(String::as_str)
+    }
 }
 
 // ── Per-message-type template metadata ──────────────────────────────────────
@@ -50,7 +80,11 @@ struct TypeMeta {
     /// The EDI@Energy release is appended at render time.
     unh_prefix: &'static str,
     /// Returns a BGM line (with trailing `'`) for the given PID code.
-    bgm: fn(u32) -> String,
+    ///
+    /// The second argument is the DE 1001 qualifier the profile restricts this
+    /// PID to, where it states one; templates that do not carry a DE 1001
+    /// ignore it.
+    bgm: fn(u32, Option<&str>) -> String,
     /// Extra lines between NAD+MR and UNT.  Empty for most types.
     extra: &'static [&'static str],
     /// Segment count inside the message (UNH … UNT inclusive).
@@ -70,93 +104,93 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
     match msg_type {
         "aperak" => Some(TypeMeta {
             unh_prefix: "APERAK:D:07B:UN",
-            bgm: |pid| bgm_8digit("312+", pid, "+9"),
+            bgm: |pid, _| bgm_8digit("312+", pid, "+9"),
             extra: &[],
             seg_count_base: 7,
         }),
         "comdis" => Some(TypeMeta {
             unh_prefix: "COMDIS:D:17A:UN",
             // ABL prefix used in practice; RFF+Z13 carries the pure PID for coverage.
-            bgm: |pid| bgm_alphanum("739+ABL", pid, "001", ""),
+            bgm: |pid, _| bgm_alphanum("739+ABL", pid, "001", ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "iftsta" => Some(TypeMeta {
             unh_prefix: "IFTSTA:D:18A:UN",
-            bgm: |pid| bgm_8digit("Z03+", pid, ""),
+            bgm: |pid, _| bgm_8digit("Z03+", pid, ""),
             extra: &[],
             seg_count_base: 6,
         }),
         "insrpt" => Some(TypeMeta {
             unh_prefix: "INSRPT:D:96A:UN",
-            bgm: |pid| bgm_8digit("4+", pid, ""),
+            bgm: |pid, _| bgm_8digit("4+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "invoic" => Some(TypeMeta {
             unh_prefix: "INVOIC:D:06A:UN",
-            bgm: |pid| bgm_8digit("380+", pid, ""),
+            bgm: |pid, _| bgm_8digit("380+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "mscons" => Some(TypeMeta {
             unh_prefix: "MSCONS:D:04B:UN",
-            bgm: |pid| format!("BGM+7:::+{pid:08}::+9'"),
+            bgm: |pid, _| format!("BGM+7:::+{pid:08}::+9'"),
             extra: &["UNS+D'", "LOC+172+51238696781'", "QTY+220:1500.000:KWH'"],
             seg_count_base: 10,
         }),
         "ordchg" => Some(TypeMeta {
             unh_prefix: "ORDCHG:D:20B:UN",
-            bgm: |pid| bgm_8digit("Z51+", pid, ""),
+            bgm: |pid, _| bgm_8digit("Z51+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "orders" => Some(TypeMeta {
             unh_prefix: "ORDERS:D:09B:UN",
-            bgm: |pid| bgm_8digit("Z55+", pid, "+9"),
+            bgm: |pid, _| bgm_8digit("Z55+", pid, "+9"),
             extra: &[],
             seg_count_base: 7,
         }),
         "ordrsp" => Some(TypeMeta {
             unh_prefix: "ORDRSP:D:10A:UN",
-            bgm: |pid| bgm_8digit("7+", pid, ""),
+            bgm: |pid, _| bgm_8digit("7+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "partin" => Some(TypeMeta {
             unh_prefix: "PARTIN:D:20B:UN",
-            bgm: |pid| bgm_8digit("35+", pid, ""),
+            bgm: |pid, _| bgm_8digit("35+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "pricat" => Some(TypeMeta {
             unh_prefix: "PRICAT:D:20B:UN",
             // PRIC prefix used in practice; RFF+Z13 carries the pure PID.
-            bgm: |pid| bgm_alphanum("Z32+PRIC", pid, "001", ""),
+            bgm: |pid, _| bgm_alphanum("Z32+PRIC", pid, "001", ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "quotes" => Some(TypeMeta {
             unh_prefix: "QUOTES:D:10A:UN",
-            bgm: |pid| bgm_8digit("310+", pid, ""),
+            bgm: |pid, _| bgm_8digit("310+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "remadv" => Some(TypeMeta {
             unh_prefix: "REMADV:D:05A:UN",
-            bgm: |pid| bgm_8digit("239+", pid, ""),
+            bgm: |pid, _| bgm_8digit("239+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "reqote" => Some(TypeMeta {
             unh_prefix: "REQOTE:D:10A:UN",
-            bgm: |pid| bgm_8digit("311+", pid, ""),
+            bgm: |pid, _| bgm_8digit("311+", pid, ""),
             extra: &[],
             seg_count_base: 7,
         }),
         "utilmd" => Some(TypeMeta {
             unh_prefix: "UTILMD:D:11A:UN",
-            bgm: |pid| format!("BGM+E01:::+{pid:08}::+9'"),
+            bgm: |pid, de1001| format!("BGM+{}:::+{pid:08}::+9'", de1001.unwrap_or("E01")),
             // `IDE+24` is the only Vorgangs-Qualifier UTILMD defines (DE 7495);
             // DE 7402 carries a Vorgangsnummer. The Marktlokation follows in
             // `SG5 LOC+Z16`.
@@ -167,7 +201,7 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
         "utilts" => Some(TypeMeta {
             unh_prefix: "UTILTS:D:18A:UN",
             // UTILTS prefix in practice; RFF+Z13 carries the pure PID.
-            bgm: |pid| bgm_alphanum("Z36+UTILTS", pid, "001", ""),
+            bgm: |pid, _| bgm_alphanum("Z36+UTILTS", pid, "001", ""),
             extra: &[],
             seg_count_base: 7,
         }),
@@ -177,8 +211,8 @@ fn type_meta(msg_type: &str) -> Option<TypeMeta> {
 
 // ── Fixture rendering ────────────────────────────────────────────────────────
 
-fn render_fixture(meta: &TypeMeta, pid: u32, release: &str) -> String {
-    let bgm_line = (meta.bgm)(pid);
+fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>) -> String {
+    let bgm_line = (meta.bgm)(pid, de1001);
     let seg_count = meta.seg_count_base + meta.extra.len() as u32;
 
     let mut lines = vec![
@@ -201,8 +235,8 @@ fn render_fixture(meta: &TypeMeta, pid: u32, release: &str) -> String {
 // ── Active profiles collection ───────────────────────────────────────────────
 
 /// `(message_type_lower, pid_code)` → latest `release` string.
-fn collect_active_pids(profiles_dir: &str) -> BTreeMap<(String, u32), String> {
-    let mut map: BTreeMap<(String, u32), String> = BTreeMap::new();
+fn collect_active_pids(profiles_dir: &str) -> BTreeMap<(String, u32), ActivePid> {
+    let mut map: BTreeMap<(String, u32), ActivePid> = BTreeMap::new();
     let base = Path::new(profiles_dir);
     let msg_type_dirs = match std::fs::read_dir(base) {
         Ok(d) => d,
@@ -264,15 +298,27 @@ fn collect_active_pids(profiles_dir: &str) -> BTreeMap<(String, u32), String> {
             for p in ahb.pruefidentifikatoren {
                 // Keep only the latest release per PID (sorted release name).
                 let key = (msg_type.clone(), p.code);
-                let existing = map.entry(key).or_insert_with(|| mig.release.clone());
+                let candidate = ActivePid {
+                    release: mig.release.clone(),
+                    bgm_qualifier: p.bgm_qualifier().map(ToOwned::to_owned),
+                };
+                let existing = map.entry(key).or_insert_with(|| candidate.clone());
                 // Use lexicographically larger release (most recent).
-                if mig.release > *existing {
-                    *existing = mig.release.clone();
+                if mig.release > existing.release {
+                    *existing = candidate;
                 }
             }
         }
     }
     map
+}
+
+/// One PID's latest active release and the AHB facts a fixture must honour.
+#[derive(Clone)]
+struct ActivePid {
+    release: String,
+    /// `BGM` DE 1001, where the profile restricts it.
+    bgm_qualifier: Option<String>,
 }
 
 // ── Covered PIDs (mirrors validate_pruefids logic) ───────────────────────────
@@ -364,17 +410,14 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     let mut unknown_type = 0usize;
 
     // Group work by message type for cleaner output.
-    let mut by_type: BTreeMap<&str, Vec<(u32, &str)>> = BTreeMap::new();
-    for ((mt, pid), release) in &active_pids {
+    let mut by_type: BTreeMap<&str, Vec<(u32, &ActivePid)>> = BTreeMap::new();
+    for ((mt, pid), active) in &active_pids {
         if let Some(ref f) = msg_type_filter
             && mt != f
         {
             continue;
         }
-        by_type
-            .entry(mt.as_str())
-            .or_default()
-            .push((*pid, release.as_str()));
+        by_type.entry(mt.as_str()).or_default().push((*pid, active));
     }
 
     for (msg_type, mut pid_list) in by_type {
@@ -395,13 +438,14 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
             return false;
         }
 
-        for (pid, release) in pid_list {
+        for (pid, active) in pid_list {
             if covered.contains(&pid) {
                 skipped += 1;
                 continue;
             }
 
-            let content = render_fixture(&meta, pid, release);
+            let content =
+                render_fixture(&meta, pid, &active.release, active.bgm_qualifier.as_deref());
             let path = format!("{gen_dir}/pid_{pid}.gen.edi");
 
             if dry_run {

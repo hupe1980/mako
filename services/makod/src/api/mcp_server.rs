@@ -1658,10 +1658,10 @@ fn next_steps_hint(command: &str) -> &'static str {
         "geli.lieferbeginn.anmelden" | "geli.lieferende.anmelden" => {
             "GNB has 10 Werktage to respond with a Bestätigung/Ablehnung (BK7-24-01-009)."
         }
-        "geli.gas.stornierung.initiieren" => {
+        "geli.stornierung.initiieren" => {
             "GNB has 10 Werktage to respond with a positive (44023) or negative (44024) APERAK (BK7-24-01-009)."
         }
-        "geli.gas.datenabruf.anfragen" => {
+        "geli.datenabruf.anfragen" => {
             "GNB has 10 Werktage to respond with the requested meter data (BK7-24-01-009)."
         }
         "geli.gas.sperrung.bestaetigen" | "gpke.sperrung.bestaetigen" => {

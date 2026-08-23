@@ -15,7 +15,7 @@ from its own Codeliste. This crate is those rules, executable.
 | Module | Prüfende Rolle | Processes |
 |---|---|---|
 | `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage (`E_0608`) |
-| `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`) |
+| `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`), Zuordnung LF (`E_0603`–`E_0606`, Strom only) |
 | `msb` | Messstellenbetreiber **und** Netzbetreiber | Anmeldung MSB (`E_0201`), Ende MSB (`E_0202`), Kündigung MSB (`E_0200`), Weiterverpflichtung (`E_0203`) |
 
 The `msb` module is named for the process family, not one Marktrolle: WiM Teil 1
@@ -91,6 +91,27 @@ that Prüfschritt — never a plausible code. `Bekannt::Unbekannt` is what carri
 "we have no record either way" into the walk; collapsing it to `false` is how a
 supplier ends up silently agreeing to release a customer it still has under
 contract.
+
+The rule extends past the *facts* to the **message**. A walk reaches its
+Zustimmung by traversing edges, so a Vorgang that fits no edge must not arrive
+there by falling past every branch:
+
+- **No Transaktionsgrundergänzung** (`SG4 STS+7` DE 9013 element 3). `E_0609`
+  and `E_0624` split on it at Prüfschritt 10 and the two halves answer from
+  different code ranges — `A10` where the counterparty expects `A29`. The AHB
+  marks the element Muss precisely because there is no default.
+- **A Transaktionsgrund outside the AHB's set.** `E_0609` branches on it at 50
+  and 80; the three grounds a 55007 may carry are `Z33`, `ZQ7` and `ZT0`. A
+  fourth value has no path, and reaching the terminal would *confirm* an
+  Abmeldung the walk never examined.
+- **The wrong date qualifier.** `DTM+93` „Ende zum" and `DTM+471` „Ende zum
+  nächstmöglichen Termin" are mutually exclusive on a Kündigung, and both
+  Sparten branch on which arrived. Only a **fixed** date may be refused for
+  Vertragsbindung — `E_0614` Prüfschritt 60 on the Strom side, and on the Gas
+  side an AHB Bedingung: `Z12` is gated on `[43] Wenn SG4 DTM+93 vorhanden`,
+  `Z01` „Zustimmung mit Terminänderung" on `[41] Wenn SG4 DTM+471 vorhanden`.
+  Answering `Z12` to a `DTM+471` Kündigung is not merely the wrong business
+  answer; it fails AHB validation at the counterparty.
 
 ## Design constraints
 

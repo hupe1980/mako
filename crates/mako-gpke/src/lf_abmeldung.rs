@@ -59,8 +59,12 @@ pub const WORKFLOW_NAME: &str = "gpke-lf-abmeldung";
 /// | 55007 | Ankündigung NB-seitiges Lieferende (NB→LFN) | S2.1–S2.2 ✅ |
 pub const LF_ABMELDUNG_PIDS: &[u32] = &[55007];
 
-/// Deadline label for the 24h APERAK Frist (BK6-22-024 §4).
-pub const LF_ABMELDUNG_APERAK_WINDOW_LABEL: &str = "gpke-lf-abmeldung-aperak-window";
+/// Deadline label for the **business** answer window — 05:00 Uhr des 1. WT nach
+/// dem ÜT (GPKE Teil 2 § 2.5.2.2), resolved by `mako_fristen::antwort`.
+///
+/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.0
+/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
+pub const LF_ABMELDUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-lf-abmeldung-antwortfrist";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -84,6 +88,8 @@ pub enum LfAbmeldungEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator (55007).
         pruefidentifikator: Pruefidentifikator,
+        /// `SG4 IDE+24` DE 7402 — carried into the answer's `SG4 RFF+TN`.
+        vorgangsnummer: Option<String>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
@@ -157,6 +163,12 @@ pub struct LfAbmeldungData {
     pub process_date: String,
     /// BDEW Prüfidentifikator (55007).
     pub pruefidentifikator: Pruefidentifikator,
+    /// `SG4 IDE+24` DE 7402 of the **request**.
+    ///
+    /// Retained because the answer must carry it back in `SG4 RFF+TN`
+    /// („Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on every
+    /// Antwortnachricht). It is never reused as the answer's own `IDE+24`.
+    pub vorgangsnummer: Option<String>,
 }
 
 /// State of a GPKE LF Abmeldung process.
@@ -241,6 +253,9 @@ pub enum LfAbmeldungCommand {
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The `SG4` facts the trees branch on, forwarded to `processd` on
+        /// the `de.mako.process.initiated` notification.
+        vorgang: crate::lf_antwort::LfVorgangsdaten,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings.
@@ -296,8 +311,8 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            (LF_ABMELDUNG_APERAK_WINDOW_LABEL, LfAbmeldungState::Eingegangen(_))
-            | (LF_ABMELDUNG_APERAK_WINDOW_LABEL, LfAbmeldungState::ValidationPassed(_)) => {
+            (LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, LfAbmeldungState::Eingegangen(_))
+            | (LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, LfAbmeldungState::ValidationPassed(_)) => {
                 Some(LfAbmeldungCommand::TimeoutExpired {
                     deadline_id: deadline.deadline_id(),
                     label: deadline.label().into(),
@@ -316,6 +331,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 document_date,
                 process_date,
                 pruefidentifikator,
+                vorgangsnummer,
                 ..
             } => LfAbmeldungState::Eingegangen(LfAbmeldungData {
                 location_id: location_id.clone(),
@@ -324,6 +340,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
+                vorgangsnummer: vorgangsnummer.clone(),
             }),
             LfAbmeldungEvent::ValidationPassed { .. } => match state {
                 LfAbmeldungState::Eingegangen(data) => LfAbmeldungState::ValidationPassed(data),
@@ -382,6 +399,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 document_date,
                 process_date,
                 message_ref,
+                vorgang,
                 validation_passed,
                 validation_errors,
             } => {
@@ -396,6 +414,8 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                 // Clone before move for APERAK emission in the validation-failed path.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
+                let notify_malo = location_id.clone();
+                let notify_termin = process_date.clone();
 
                 let mut events = vec![LfAbmeldungEvent::AnkuendigungErhalten {
                     location_id,
@@ -405,12 +425,27 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                     process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
+                    vorgangsnummer: vorgang.vorgangsnummer.clone(),
                 }];
                 if validation_passed {
                     events.push(LfAbmeldungEvent::ValidationPassed { message_ref });
                     // F-038: APERAK BGM+312 (Anerkennungsmeldung) — mandatory per APERAK AHB 1.0 §2.4.
                     // Strom UTILMD (weekday): 45 Min; Saturday: Sonntag 12 Uhr (APERAK AHB 1.0 §2.4.1).
                     let outbox = vec![
+                        // The business notification. `processd`'s LF module
+                        // decides this process, and it only ever sees a message
+                        // that reaches the ERP fan-out — an APERAK is a
+                        // technical acknowledgement, not one.
+                        vorgang
+                            .process_initiated(
+                                pid,
+                                &notify_malo,
+                                &sender_mp_id,
+                                &receiver_gln,
+                                &notify_termin,
+                                &serde_json::Value::Null,
+                            )
+                            .caused_by(1),
                         PendingOutbox::new(
                             "APERAK",
                             sender_mp_id.as_str(),
@@ -478,6 +513,7 @@ impl Workflow for GpkeLfAbmeldungWorkflow {
                         &data.sender,
                         &data.receiver,
                         &data.process_date,
+                        data.vorgangsnummer.as_deref(),
                     )
                     .caused_by(0),
                 ];
@@ -564,6 +600,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("ABMELD-001"),
+            vorgang: crate::LfVorgangsdaten::default(),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -652,6 +689,7 @@ mod tests {
                 document_date: "20251001".to_owned(),
                 process_date: "20260101".to_owned(),
                 message_ref: mref("X"),
+                vorgang: crate::LfVorgangsdaten::default(),
                 validation_passed: true,
                 validation_errors: vec![],
             },
@@ -668,6 +706,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             pruefidentifikator: pid(55007),
+            vorgangsnummer: Some("NNV1234".to_owned()),
         };
         let state = LfAbmeldungState::Beendet(data);
         let dl_id = DeadlineId::new();
@@ -675,7 +714,7 @@ mod tests {
             &state,
             LfAbmeldungCommand::TimeoutExpired {
                 deadline_id: dl_id,
-                label: LF_ABMELDUNG_APERAK_WINDOW_LABEL.into(),
+                label: LF_ABMELDUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

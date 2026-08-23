@@ -20,10 +20,11 @@ What it cannot decide it puts in front of an operator with the deadline attached
 | **NB** | 55051 | WiM Ende MSB (MSBA → NB) | 7 WT | operator queue |
 | **NB** | 55600, 55601 | GPKE Neuanlage (verb. / erz. MaLo) | **00:00 Uhr des 61. WT nach dem ÜT** | `mako_pruefung::nb::neuanlage` (`E_0608`), daily Prüflauf |
 | **NB** | *(event)* | EoG gap closure → 55013 (§ 36/§ 38 EnWG) | unverzüglich; 3-month timer | `grundversorger` from `marktd` |
-| **LF** | 55007 | Ankündigung NB-seitiges Lieferende (EBD `E_0609`) | **05:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
+| **LF** | 55007 | Abmeldung / Beendigung der Zuordnung vom NB (EBD `E_0609`) | **05:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` + `mako_fristen::abmeldung` |
 | **LFA** | 55010 | Anfrage zur Beendigung der Zuordnung (EBD `E_0624`) | **09:00 Uhr des 1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
 | **LFA** | 55016 | GPKE Kündigung (LFN → LFA, EBD `E_0614`) | **1. WT nach dem ÜT** | `VersorgungsStatus` from `marktd` |
-| **LFA** | 44007, 44010, 44016 | GeLi Gas Abmeldung NB / Abmeldungsanfrage / Kündigung | 3 Werktage | `VersorgungsStatus` from `marktd` |
+| **LFN** | 55607 | Ankündigung Zuordnung LF, erz. MaLo / Tranche (EBDs `E_0603`–`E_0606`) | **15:00 Uhr am ÜT** | `malo.bilanzierungsgebiet` from `marktd` + `[[lf.bilanzkreise]]` |
+| **LFA** | 44007, 44010, 44016 | GeLi Gas Lieferende von NB / Beendigung der Zuordnung / Kündigung | 3 Werktage | `VersorgungsStatus` from `marktd` |
 | **MSB** | 55039 | WiM Kündigung MSB (MSBN → MSBA) | 3 WT | MeLo / partner checks |
 | **MSB** | 55168 | WiM Verpflichtungsanfrage (NB → gMSB) | 1 WT | operator queue |
 | **MSB** | 35001, 35002, 35004, 35005 | REQOTE Preisanfrage | 5 WT | `PreisblattMessung` from `marktd` |
@@ -40,6 +41,12 @@ Four properties of that table, each of which fails silently when broken:
   process, so a module keyed on 55008 (the LF's answer to 55007) waits forever.
   `tests/pid_contract.rs` pins every trigger against the canonical `mako-gpke` /
   `mako-wim` constants.
+- **The trigger has to be published at all.** `makod` delivers a CloudEvent only
+  for an outbox entry, and the APERAK an inbound UTILMD produces is a *technical*
+  acknowledgement addressed to the counterparty. Each LF-answered workflow
+  therefore emits its own `de.mako.process.initiated` carrying the `SG4` facts
+  the trees branch on. A workflow that emits only the APERAK is invisible here,
+  and every one of its Fristen expires unanswered.
 - **The GPKE Frist is a wall-clock instant, not a duration.** A Friday-afternoon
   Anmeldung is answerable until Monday 11:00; a Tuesday-evening one until
   Wednesday 11:00 — fifteen hours. A flat window is therefore both too tight and
@@ -219,7 +226,7 @@ third party.
 ## LF decision pipeline
 
 ```text
-de.mako.process.initiated (55007 | 55010 | 55016 | 44007 | 44010 | 44016)
+de.mako.process.initiated (55007 | 55010 | 55016 | 55607 | 44007 | 44010 | 44016)
   → GET marktd /api/v1/versorgung/{malo_id}
   → evaluate against own_mp_id
       supplying + scenario "standard"          → Bestätigung   (55008 / 55011)
@@ -231,11 +238,19 @@ de.mako.process.initiated (55007 | 55010 | 55016 | 44007 | 44010 | 44016)
 
 "supplying" is `Beliefert`, `Grundversorgung` or `Ersatzversorgung` — all three
 are a supply this LF may be asked to end. Six processes share this evaluation and
-differ only in the command pair, the EBD and the Frist: Strom 55007
-(`gpke.nb-lieferende.*`, `E_0609`), 55010 (`gpke.beendigung-zuordnung.*`,
-`E_0624`) and 55016 (`gpke.kuendigung.*`, `E_0614`); Gas 44007
-(`geli.abmeldung-nb.*`), 44010 (`geli.abmeldungsanfrage.*`) and 44016
-(`geli.kuendigung.*`).
+differ only in the command pair, the EBD and the Frist. The same business process
+carries the same command name in both Sparten: 55007 / 44007
+(`{gpke,geli}.nb-lieferende.*`, `E_0609` / `E_3002`), 55010 / 44010
+(`{gpke,geli}.beendigung-zuordnung.*`, `E_0624` / `E_3020`) and 55016 / 44016
+(`{gpke,geli}.kuendigung.*`, `E_0614` / `E_3001`).
+
+**55607 is the seventh, and its shape is different.** It is not about ending a
+supply but about the NB assigning this LF to an *erzeugende* Marktlokation or
+Tranche, and the substance of the answer is the **Bilanzkreis**, not the code
+(`A01` / `A99` are the only two the trees publish). Missing the 15:00 window does
+not lapse the obligation — GPKE Teil 2 § 2.4.2.2 Nr. 3 has the NB assign the LF
+anyway, using whichever BK it has on file. The admissible set is the
+`[[lf.bilanzkreise]]` table, keyed on the Bilanzierungsgebiet.
 
 ---
 
@@ -326,6 +341,16 @@ einsd_api_key            = ""
 
 [lf]
 auto_respond = true             # false → every inbound LF process goes to the queue
+
+# The Bilanzkreise a 55607 Zustimmung may name (MaBiS § 10.2.1 grants the
+# Zuordnungsermächtigung je ZRT, BG, BK und LF). One BK per regime answers
+# automatically; several is an operator choice. A row without a
+# `bilanzierungsgebiet` is the fallback.
+[[lf.bilanzkreise]]
+bilanzierungsgebiet = "11YN-BG-EON---X"
+eeg      = ["11XBK-EEG-----1"]
+kwkg     = ["11XBK-KWKG----5"]
+standard = ["11XBK-STD-----9"]
 
 [msb]
 auto_accept       = false       # false → MSB-Wechsel Accepts go to the queue

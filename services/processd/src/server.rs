@@ -102,6 +102,9 @@ pub struct RunConfig {
     pub nb_einsd_url: Option<String>,
     pub nb_einsd_api_key: Option<SecretString>,
     pub lf_auto_respond: bool,
+    /// This supplier's Bilanzkreise, by Regelzone and regime — a 55607
+    /// Zustimmung must name one (GPKE Teil 2 § 2.4.2.2 Nr. 2).
+    pub lf_bilanzkreise: Vec<crate::config::BilanzkreisEintrag>,
     /// `vertragd`, when this deployment runs the contract layer.
     ///
     /// Read by the LF and the MSB module alike: the split is by kind of fact,
@@ -314,6 +317,7 @@ pub async fn build_router(cfg: RunConfig, ctx: ServiceContext) -> anyhow::Result
             own_mp_id: cfg.own_mp_id.clone(),
             tenant: cfg.tenant.clone(),
             auto_respond: cfg.lf_auto_respond,
+            bilanzkreise: cfg.lf_bilanzkreise.clone(),
         };
         Some(Arc::new(LfState {
             config: lf_config,
@@ -1139,7 +1143,7 @@ mod rest {
                     StatusCode::UNPROCESSABLE_ENTITY,
                     axum::Json(serde_json::json!({
                         "error": "MISSING_MALO_ID",
-                        "message": "\"malo_id\" is required (11-digit Gas-MaLo-ID, IDE+Z19)"
+                        "message": "\"malo_id\" is required (11-digit Gas-MaLo-ID)"
                     })),
                 )
                     .into_response();

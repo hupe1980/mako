@@ -23,6 +23,21 @@ pub(super) fn cmd_geli_lieferende_anmelden<'a>(
     Box::pin(dispatch_geli_lf_anmeldung(s, p, 44004))
 }
 
+/// **44016** Kündigung beim Altlieferanten, LFN → LFA.
+///
+/// The Gas twin of `gpke.kuendigung.anmelden`. GeLi Gas 3.0 § 3.1 makes the
+/// electronic Kündigung the Neulieferant's own message to the Altlieferant —
+/// the grid operator is not in it — and forbids the Altlieferant from refusing
+/// it for want of a contractually agreed form.
+pub(super) fn cmd_geli_kuendigung_anmelden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_geli_lf_anmeldung(s, p, 44016))
+}
+
 pub(super) fn cmd_geli_lieferbeginn_bestaetigen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
@@ -114,7 +129,7 @@ pub(super) fn cmd_geli_eog_anmelden<'a>(
     Box::pin(dispatch_geli_eog_anmelden(s, p))
 }
 
-/// Dispatch `geli.gas.datenabruf.anfragen` — LF requests Gas quality data from NB.
+/// Dispatch `geli.datenabruf.anfragen` — LF requests Gas quality data from NB.
 ///
 /// Spawns a new [`GeliGasDatanabrufWorkflow`] and sends ORDERS 17103 outbound
 /// to the GNB requesting Abrechnungsbrennwert and Zustandszahl.
@@ -326,7 +341,7 @@ pub(super) async fn dispatch_geli_eog_anmelden(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
-/// Dispatch `geli.gas.stornierung.initiieren` — LFN/LFA initiates a Gas
+/// Dispatch `geli.stornierung.initiieren` — LFN/LFA initiates a Gas
 /// supply-change cancellation (UTILMD G 44022 outbound to GNB).
 ///
 /// ## Required payload fields
@@ -393,7 +408,7 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
         tracing::warn!(
             malo_id = %malo_id,
             process_id = %dup_id,
-            "geli.gas.stornierung.initiieren refused: active stornierung already exists for this MaLo",
+            "geli.stornierung.initiieren refused: active stornierung already exists for this MaLo",
         );
         return Err(DispatchError::DuplicateProcess {
             process_id: dup_id,
@@ -439,18 +454,21 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
-/// Dispatch a GeLi Gas LFN-side Lieferbeginn (PID 44001) or Lieferende (PID 44002).
+/// Dispatch a GeLi Gas LFN-side Anmeldung (44001), Abmeldung (44004) or
+/// Kündigung beim Altlieferanten (44016).
 ///
-/// Spawns a new [`GeliGasLfAnmeldungWorkflow`] and atomically registers a
-/// 10-Werktage GNB-response deadline (BK7-24-01-009).
+/// Spawns a new [`GeliGasLfAnmeldungWorkflow`] and atomically registers the
+/// **published** answer deadline for that PID from `mako_fristen::antwort` —
+/// 4 Werktage for the Anmeldung, 3 for the Abmeldung and the Kündigung
+/// (GeLi Gas 3.0 Kap. 3.1 / 3.2.3 / 3.2.2).
 ///
 /// ## Required payload fields
 ///
 /// | Field             | Type   | Notes |
 /// |-------------------|--------|-------|
-/// | `malo_id`         | string | Gas Marktlokations-ID (11-digit EIC, IDE+Z19) |
-/// | `zaehlpunkt`      | string | Zählpunktbezeichnung (RFF+Z13) — mandatory per AHB |
-/// | `process_date`    | string | Lieferbeginn/Lieferende date (YYYYMMDD, German local) |
+/// | `malo_id`         | string | Gas Marktlokations-ID → `SG5 LOC+Z16` |
+/// | `zaehlpunkt`      | string | Zählpunktbezeichnung |
+/// | `process_date`    | string | Lieferbeginn / Lieferende / Kündigungstermin (YYYYMMDD) |
 pub(super) async fn dispatch_geli_lf_anmeldung(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -555,22 +573,26 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
     );
     let process_id = process.process_id();
 
-    // 10-Werktage GNB response deadline (BK7-24-01-009).
-    let due_at = mako_fristen::deadline_at_werktage(
-        time::OffsetDateTime::now_utc(),
-        10,
-        mako_fristen::HolidayCalendar::BdewMaKo,
-    );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
-        state.tenant_id,
-        workflow_id,
-        mako_geli_gas::LF_ANMELDUNG_RESPONSE_WINDOW_LABEL,
-        due_at,
-    );
+    // The counterparty's published answer window, from the one table four
+    // services share. It is **not** 10 Werktage: that is the LFN's own
+    // Vorlauffrist before Lieferbeginn, and sizing the answer queue by it
+    // reports a lapsed Frist as still running for six Werktage.
+    let deadlines: Vec<Deadline> =
+        mako_fristen::antwort::antwort_deadline(pid_code, time::OffsetDateTime::now_utc())
+            .map(|due_at| {
+                Deadline::new(
+                    process.stream_id().clone(),
+                    process_id,
+                    state.tenant_id,
+                    workflow_id,
+                    mako_geli_gas::LF_ANMELDUNG_RESPONSE_WINDOW_LABEL,
+                    due_at,
+                )
+            })
+            .into_iter()
+            .collect();
     process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .execute_and_enqueue_with_deadlines(domain_cmd, &deadlines)
         .await?;
 
     let identity = process.identity();
@@ -756,7 +778,7 @@ async fn dispatch_geli_gas_awh_send_invoic(
     .await
 }
 
-pub(super) fn cmd_geli_gas_awh_rechnung_stellen<'a>(
+pub(super) fn cmd_sonstige_leistung_rechnung_stellen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<
@@ -765,7 +787,7 @@ pub(super) fn cmd_geli_gas_awh_rechnung_stellen<'a>(
     Box::pin(dispatch_geli_gas_awh_send_invoic(s, p))
 }
 
-pub(super) fn cmd_geli_gas_rechnung_annehmen<'a>(
+pub(super) fn cmd_sonstige_leistung_rechnung_annehmen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<
@@ -774,7 +796,7 @@ pub(super) fn cmd_geli_gas_rechnung_annehmen<'a>(
     Box::pin(dispatch_geli_gas_invoic(s, p, true))
 }
 
-pub(super) fn cmd_geli_gas_rechnung_ablehnen<'a>(
+pub(super) fn cmd_sonstige_leistung_rechnung_ablehnen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<

@@ -16,7 +16,7 @@
 //!  2.                                    parse & validate UTILMD 55001 bytes
 //!                                        ReceiveUtilmd command
 //!                                        → ValidationPassed state
-//!                                        register 24h APERAK deadline
+//!                                        register the Antwortfrist
 //!        │
 //!        │  SendAntwort(accepted=true)
 //!        │  → AntwortGesendet state
@@ -30,7 +30,7 @@
 //!     → Active state
 //! ```
 //!
-//! This test covers fristen wiring (24h APERAK deadline).
+//! This test covers fristen wiring (the business Antwortfrist).
 //!
 //! # Design note
 //!
@@ -295,7 +295,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
         nb_state.label()
     );
 
-    // ── 4. NB registers 24h APERAK deadline (BK6-22-024) ─────────────────────
+    // ── 4. NB registers the Antwortfrist (GPKE Teil 2) ───────────────────────
 
     let aperak_due = fristen::add_hours(OffsetDateTime::now_utc(), 24);
     let aperak_dl = Deadline::new(
@@ -565,7 +565,7 @@ async fn bilateral_lieferbeginn_rejection_path() {
 
 // ── Deadline expiry path ──────────────────────────────────────────────────────
 
-/// The 24h APERAK deadline fires when the NB does not respond in time.
+/// The Antwortfrist fires when the NB does not respond in time.
 /// Both sides must reach `Rejected` state after the timeout is dispatched.
 #[tokio::test]
 async fn bilateral_24h_aperak_deadline_fires_on_timeout() {

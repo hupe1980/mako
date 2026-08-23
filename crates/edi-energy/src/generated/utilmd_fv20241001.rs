@@ -794,7 +794,7 @@ static AHB_55004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55004-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55004", "55004", issues);
             })
             .with_named_stateless_rule_fn("AHB-55004-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-55004-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E0F']", |q| matches!(q, "E0F"), "55004", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-55004-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E02']", |q| matches!(q, "E02"), "55004", issues);
             })
             .with_named_stateless_rule_fn("AHB-55004-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-55004-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55004", "55004", issues);
@@ -885,7 +885,7 @@ static AHB_55005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55005-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55005", "55005", issues);
             })
             .with_named_stateless_rule_fn("AHB-55005-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-55005-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E01']", |q| matches!(q, "E01"), "55005", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-55005-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E02']", |q| matches!(q, "E02"), "55005", issues);
             })
             .with_named_stateless_rule_fn("AHB-55005-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-55005-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55005", "55005", issues);
@@ -976,7 +976,7 @@ static AHB_55006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
                 ahb_check_mandatory(segs, "BGM", "AHB-55006-BGM-M", "mandatory segment BGM is missing for Pruefidentifikator 55006", "55006", issues);
             })
             .with_named_stateless_rule_fn("AHB-55006-BGM-1001-Q", |segs, issues| {
-                ahb_check_qualifier(segs, "BGM", "AHB-55006-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E0F']", |q| matches!(q, "E0F"), "55006", issues);
+                ahb_check_qualifier(segs, "BGM", "AHB-55006-BGM-1001-Q", "segment BGM DE 1001 (element 0, component 0): qualifier is not one of the allowed values ['E02']", |q| matches!(q, "E02"), "55006", issues);
             })
             .with_named_stateless_rule_fn("AHB-55006-DTM-M", |segs, issues| {
                 ahb_check_mandatory(segs, "DTM", "AHB-55006-DTM-M", "mandatory segment DTM is missing for Pruefidentifikator 55006", "55006", issues);

@@ -35,6 +35,7 @@
 //! - EDI@Energy Anwendungsübersicht der Prüfidentifikatoren 4.0 — roles, EBDs
 
 use time::{Duration, OffsetDateTime, Time};
+use time_tz::{OffsetDateTimeExt, timezones};
 
 use crate::HolidayCalendar;
 
@@ -113,6 +114,13 @@ pub enum FristShape {
     /// „…spätester ÜT ist der `n`. WT nach dem ÜT", resolved to the 17:00
     /// Europe/Berlin MaKo cut-off on that Werktag.
     WerktageAtCutoff(u32),
+    /// „Spätester ÜZ ist `HH:MM` Uhr **am ÜT**" — a wall-clock instant on the
+    /// arrival day itself, not on a Werktag after it.
+    ///
+    /// GPKE Teil 2 uses it where the answer has to be back before the NB's own
+    /// same-day cut-off; the Beginn der Ersatz-/Grundversorgung is the case
+    /// that matters to a supplier.
+    SameDayAt(Time),
 }
 
 impl FristShape {
@@ -123,6 +131,10 @@ impl FristShape {
             Self::WerktagAt { werktage, at } => crate::nth_werktag_at(received, werktage, at, cal),
             Self::EndOfWerktag(n) => crate::end_of_werktag_after(received, n, cal),
             Self::WerktageAtCutoff(n) => crate::deadline_at_werktage(received, n, cal),
+            Self::SameDayAt(at) => {
+                let berlin = received.to_timezone(timezones::db::europe::BERLIN);
+                crate::berlin_at(berlin.date(), at)
+            }
         }
     }
 }
@@ -181,6 +193,16 @@ pub const STAMMDATEN_RUECKMELDUNG_WERKTAGE: u32 = 2;
 /// (GPKE Teil 4 § 1.5.2 Prozessschritte 2 / 4 / 6).
 pub const STAMMDATEN_BESTELLUNG_WERKTAGE: u32 = 10;
 
+/// Antwort auf eine **Gas** Stammdatenänderung, in Werktage.
+///
+/// „Unverzüglich, spätestens jedoch bis zum Ablauf des 10. WT nach Eingang der
+/// Änderung" — AWH GeLi Gas § 4.3.2 Nr. 2 / Nr. 4, and likewise for the LF- and
+/// MSB-initiated directions. Five times the Strom window
+/// ([`STAMMDATEN_RUECKMELDUNG_WERKTAGE`]), and genuinely so: GeLi Gas gives the
+/// Berechtigter a real Zustimmung/Ablehnung rather than Strom's asynchronous
+/// quality feedback.
+pub const STAMMDATEN_ANTWORT_WERKTAGE_GAS: u32 = 10;
+
 const fn at(hour: u8) -> Time {
     match Time::from_hms(hour, 0, 0) {
         Ok(t) => t,
@@ -198,6 +220,7 @@ const fn at(hour: u8) -> Time {
 /// | 55007 | Ankündigung der Beendigung der Zuordnung | LF | 05:00 des 1. WT nach dem ÜT |
 /// | 55010 | Anfrage zur Beendigung der Zuordnung | LFA | 09:00 des 1. WT nach dem ÜT |
 /// | 55016 | Kündigung | LFA | Ablauf des 1. WT nach dem ÜT |
+/// | 55607 | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | LFN | 15:00 Uhr am ÜT |
 /// | 55600 | Anmeldung neuer verb. MaLo (Neuanlage) | NB | 00:00 des 61. WT nach dem ÜT |
 /// | 55601 | Anmeldung neuer erz. MaLo (Neuanlage) | NB | 00:00 des 61. WT nach dem ÜT |
 /// | 17115 | Sperrauftrag | NB | spätester ÜT ist der 1. WT nach dem ÜT |
@@ -284,6 +307,52 @@ pub const GPKE: &[AntwortObligation] = &[
         },
         family: Family::Gpke,
         source: "BK6-24-174 GPKE Teil 2, SD Lieferbeginn Prozessschritt 4",
+    },
+    AntwortObligation {
+        trigger_pid: 55_013,
+        name: "Zuordnung Ersatz-/Grundversorgung",
+        answered_by: "E/G",
+        antwort_pids: (55_014, 55_015),
+        ebd: Some("E_0615"),
+        // GPKE Teil 2 states two windows for this step, selected by a date in
+        // the payload: „spätester ÜZ ist 15:00 Uhr **am ÜT**" when the
+        // Zuordnungsbeginn is in the future, and 15:00 Uhr des 1. WT nach dem
+        // ÜT when it is not. Only the tighter one is safe to publish from a
+        // table keyed on the PID alone — a queue sized by the looser window
+        // reports a lapsed Frist as still running, which is the failure mode
+        // this module exists to prevent. The Gas twin (44013) is a plain
+        // 2-Werktage window and is listed separately.
+        frist: FristShape::SameDayAt(at(15)),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 2.3.2.2 SD „Beginn der Ersatz-/Grundversorgung\" \
+                 Nr. 2 Fall I — „Unverzüglich, jedoch spätester ÜZ ist 15:00 Uhr am ÜT von \
+                 Nr. 1\" (Fall II, Zuordnungsbeginn nicht in der Zukunft: 15:00 Uhr des \
+                 1. WT nach dem ÜT)",
+    },
+    AntwortObligation {
+        trigger_pid: 55_607,
+        name: "Ankündigung der Zuordnung des LF zur Marktlokation bzw. Tranche",
+        answered_by: "LFN",
+        antwort_pids: (55_608, 55_609),
+        // Four Anwendungsfälle, four EBDs (`E_0603`–`E_0606`), one window. The
+        // table names the first; `mako_pruefung::codes::EBD_ZUORDNUNG_LF` holds
+        // all four, and the inbound message names the one it wants answered.
+        ebd: Some("E_0603"),
+        // Same two-window shape as the Ersatz-/Grundversorgung above, and the
+        // same reason to publish the tighter one: keyed on the PID alone this
+        // table cannot see whether the Zuordnungsbeginn is in the future.
+        //
+        // Missing it is not a lapsed obligation but a **balancing-circle
+        // assignment**: Prozessschritt 3 has the NB assign the LFN to the
+        // Marktlokation „aufgrund fehlender Antwort" anyway, using whatever BK
+        // the LFN once communicated. Silence is consent here.
+        frist: FristShape::SameDayAt(at(15)),
+        family: Family::Gpke,
+        source: "BK6-24-174 GPKE Teil 2 § 2.4.2.2–2.4.2.5 SD „Herstellung einer 100% \
+                 LF-Zuordnung zu einer erzeugenden Marktlokation\" Nr. 2 — „Unverzüglich, \
+                 jedoch spätester ÜZ ist 15:00 Uhr am ÜT von Nr. 1\" (Fall II, \
+                 Zuordnungsbeginn nicht in der Zukunft: 15:00 Uhr des 1. WT nach dem ÜT); \
+                 Nr. 3 ordnet den LFN bei fehlender Antwort ohne weitere Rückfrage zu",
     },
     AntwortObligation {
         trigger_pid: 55_016,

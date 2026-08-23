@@ -199,7 +199,7 @@ impl EdifactIngestDispatcher {
                         cmd,
                         &fv,
                         &[
-                            (mako_gpke::LF_ABMELDUNG_APERAK_WINDOW_LABEL, process_due_at),
+                            (mako_gpke::LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, process_due_at),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
                         ],
                     )
@@ -229,7 +229,7 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[
                             (
-                                mako_gpke::BEENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                                mako_gpke::BEENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
                                 process_due_at,
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
@@ -263,7 +263,7 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[
                             (
-                                mako_gpke::kuendigung::KUENDIGUNG_APERAK_WINDOW_LABEL,
+                                mako_gpke::kuendigung::KUENDIGUNG_ANTWORT_WINDOW_LABEL,
                                 process_due_at,
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
@@ -547,8 +547,10 @@ impl EdifactIngestDispatcher {
                     let cmd =
                         adapters::gpke_ankuendigung_zuordnung_lf_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // 55607 has no window in `mako_fristen::antwort` yet, so
-                    // this resolves to the operating-convention fallback.
+                    // Business answer Frist: „spätester ÜZ ist 15:00 Uhr am ÜT"
+                    // (GPKE Teil 2 § 2.4.2.2 Nr. 2). Missing it is not a lapsed
+                    // obligation — Prozessschritt 3 has the NB assign the LFN
+                    // without an answer.
                     // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
                     let received = OffsetDateTime::now_utc();
                     let process_due_at =
@@ -561,7 +563,7 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[
                             (
-                                mako_gpke::ANKUENDIGUNG_ZUORDNUNG_APERAK_WINDOW_LABEL,
+                                mako_gpke::ANKUENDIGUNG_ZUORDNUNG_ANTWORT_WINDOW_LABEL,
                                 process_due_at,
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
@@ -595,7 +597,7 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[
                             (
-                                mako_gpke::neuanlage::NEUANLAGE_APERAK_WINDOW_LABEL,
+                                mako_gpke::neuanlage::NEUANLAGE_ANTWORT_WINDOW_LABEL,
                                 process_due_at,
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),

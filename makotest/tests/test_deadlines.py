@@ -94,16 +94,18 @@ class TestTheTable:
         assert families == {"gpke", "geli-gas", "wim", "wim-gas"}
 
     def test_every_obligation_cites_its_fundstelle(self):
-        """Every window is measured in Werktage; only `werktag_at` adds a time.
+        """Every window is measured in Werktage; the wall-clock shapes add a time.
 
         So a consumer can format the window from the shape alone, without a
-        fallback branch.
+        fallback branch. `same_day_at` reports ``werktage == 0`` — the deadline
+        falls on the Übertragungstag itself rather than a Werktag after it.
         """
+        wall_clock = {"werktag_at", "same_day_at"}
         for o in antwort_obligations():
             assert o.source, f"{o.trigger_pid} has no citation"
             assert o.werktage is not None, f"{o.trigger_pid} names no Werktage"
-            assert (o.clock_time is not None) == (o.shape == "werktag_at"), (
-                f"{o.trigger_pid}: only werktag_at carries a clock time"
+            assert (o.clock_time is not None) == (o.shape in wall_clock), (
+                f"{o.trigger_pid}: only the wall-clock shapes carry a clock time"
             )
 
     def test_the_wim_msb_wechsel_windows_are_not_one_value(self):

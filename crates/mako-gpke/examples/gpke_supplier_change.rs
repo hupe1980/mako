@@ -212,7 +212,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let utilmd_conversation_id = envs[0].conversation_id;
     let utilmd_event_id = envs[0].event_id;
 
-    // Register 24h APERAK deadline (GPKE BK6-22-024: wall-clock, not Werktage)
+    // Register the Antwortfrist — 11:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2)
     let aperak_deadline = Deadline::new(
         process.stream_id().clone(),
         process.process_id(),

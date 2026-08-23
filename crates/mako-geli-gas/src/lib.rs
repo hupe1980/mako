@@ -52,7 +52,7 @@
 //! | Market | Electricity | **Gas** |
 //! | Location object | Messlokation (MeLo) | **Marktlokation (MaLo)** |
 //! | Grid operator | Netzbetreiber (NB) | **Gasnetzbetreiber (GNB)** |
-//! | APERAK Frist | 24 h (GPKE) / 5 Werktage (WiM) | **10 Werktage** |
+//! | Antwortfrist | clock time des 1. WT (GPKE) / 3–7 WT (WiM) | **4 / 3 / 2 Werktage** |
 //! | Frist helper | `add_hours(24)` / `add_werktage(5, …)` | **`add_werktage(10, BdewMaKo)`** |
 //!
 //! ## Command construction example

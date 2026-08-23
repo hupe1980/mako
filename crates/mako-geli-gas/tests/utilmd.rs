@@ -160,7 +160,7 @@ async fn end_to_end_lieferbeginn_gas_pipeline() {
         validation_errors,
         received_at: time::OffsetDateTime::now_utc(),
         bilanzierungsmethode: None,
-        transaktionsgrund: None,
+        vorgang: Default::default(),
         fallgruppe: None,
         gasqualitaet: None,
     };
@@ -235,7 +235,7 @@ async fn wrong_pid_returns_workflow_error() {
             validation_errors: vec![],
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
-            transaktionsgrund: None,
+            vorgang: Default::default(),
             fallgruppe: None,
             gasqualitaet: None,
         })

@@ -19,7 +19,7 @@ use mako_fristen::{HolidayCalendar, berlin_at, next_werktag};
 use crate::codes::{
     E_0624_CODES, E_3020_CODES, EBD_ABMELDUNGSANFRAGE_GAS, EBD_BEENDIGUNG_ZUORDNUNG,
 };
-use crate::lf::types::{Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage};
+use crate::lf::types::{Bekannt, LfAnfrage, LfEntscheidung, LfVertragslage, Lokationsart};
 
 /// Resolve a code from its Codeliste. A miss is a bug in this module, not a
 /// runtime condition — the walk only ever names codes the catalogue publishes.
@@ -82,7 +82,15 @@ pub fn pruefe_beendigung_zuordnung(anfrage: &LfAnfrage, lage: &LfVertragslage) -
         code!("A43", 5);
     }
 
-    let verbrauchend = anfrage.lokationsart.ist_verbrauchend();
+    // Prüfschritt 10 — „Wurde der Anwendungsfall für eine verbrauchende
+    // Marktlokation verwendet?" `E_0624` asks this *without* the „oder ruhende
+    // Marktlokation" that `E_0609` Prüfschritt 10 adds, and 55010 does carry
+    // `ZAP`: a ruhende Marktlokation therefore takes the 200 branch and its
+    // `A39`–`A42` codes, not the verbrauchend `A30`–`A36` ones.
+    let verbrauchend = match anfrage.lokationsart_oder_eskalation(ebd) {
+        Ok(l) => l == Lokationsart::VerbrauchendeMalo,
+        Err(e) => return e,
+    };
 
     // Prüfschritt 20/200 — besteht zum Folgetag des genannten Termins noch eine
     // Zuordnung? Ersatz-/Grundversorgung zählt laut EBD-Hinweis als ja.

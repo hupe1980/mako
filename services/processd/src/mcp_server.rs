@@ -333,7 +333,7 @@ Any entry with decision=Accept indicates a §20 EnWG violation — report to BNe
     #[tool(
         description = "Approve a pending LF E_0624 Einwilligung queue entry. \
 Dispatches `gpke.nb-lieferende.bestaetigen` (PID 55008 Strom) or \
-`geli.gas.stornierung.initiieren` (Gas 44022/44023) to makod, then marks the entry Approved. \
+`geli.stornierung.initiieren` (Gas 44022/44023) to makod, then marks the entry Approved. \
 ⚠ Regulatory: the 45-min APERAK window applies from the original process.initiated event. \
 Use `list_pending_approvals` first to check `expires_at` before approving.",
         annotations(

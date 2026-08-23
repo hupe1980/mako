@@ -17,6 +17,7 @@ use super::*;
 /// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`) |
 /// | `malo` / `melo` | yes*     | Lokations-ID → `SG5 LOC+Z16` / `LOC+Z17`      |
 /// | `vorgangsnummer`| no       | `IDE+24` DE 7402 (defaults to the message ref) |
+/// | `referenz_vorgangsnummer` | on answers | `SG4 SG6 RFF+TN` — the **request's** `IDE+24` |
 /// | `process_date`  | yes      | Process date (`YYYYMMDD` or `YYYY-MM-DD`)     |
 /// | `document_date` | no       | Document date (defaults to today at dispatch time) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent  |
@@ -34,6 +35,11 @@ use super::*;
 /// carries a **Vorgangsnummer** — the Lokations-ID belongs in `SG5 LOC`. The SG4
 /// date qualifiers are `92`/`93`/`157`/`76`, never the Messperioden-Qualifier
 /// `163`/`164`.
+///
+/// The Prüfidentifikator travels in `SG4 SG6 RFF+Z13`, „genau einmal je SG4 IDE
+/// (Vorgang) anzugeben"; the builder emits it. An answer additionally carries
+/// `SG4 SG6 RFF+TN` with the request's Vorgangsnummer, because DE 7402 must be
+/// globally unique and so the answer cannot reuse the requester's.
 pub(super) fn render_utilmd(
     p: &serde_json::Value,
     msg: &OutboxMessage,
@@ -86,13 +92,13 @@ pub(super) fn render_utilmd(
     let dtm_qualifier = utilmd_dtm_qualifier(pid);
     let process_date_yyyymmdd = normalise_date(process_date);
 
+    // `SG4 SG6 RFF+Z13` carries the Prüfidentifikator and the builder emits it
+    // per Vorgang from `pruefidentifikator` — DE 1154 is `R n5`, so nothing but
+    // the five-digit code belongs there.
     let mut builder = builders::UtilmdBuilder::new(release)
         .sender(sender)
         .receiver(receiver)
         .pruefidentifikator(edifact_pid)
-        // AHB: RFF+Z13 is mandatory on every UTILMD Anwendungsfall — it
-        // carries the process reference the counterparty echoes back.
-        .rff("Z13", message_ref.clone())
         .message_ref(message_ref.clone());
 
     if let Some(dd) = doc_date_owned.as_deref() {
@@ -110,6 +116,18 @@ pub(super) fn render_utilmd(
     let mut tx = builder
         .transaction(vorgangsnummer)
         .date(dtm_qualifier, &process_date_yyyymmdd);
+
+    // `SG4 SG6 RFF+TN` — „Referenz Vorgangsnummer (aus Anfragenachricht)",
+    // Muss on every Antwortnachricht (UTILMD AHB Strom 2.2 / Gas 1.2). The
+    // answer's own `IDE+24` must be a fresh number, so this is the only thing
+    // that ties it to the request.
+    if let Some(referenz) = p
+        .get("referenz_vorgangsnummer")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+    {
+        tx = tx.referenz_vorgangsnummer(referenz);
+    }
 
     // `SG4 STS+7` — Transaktionsgrund plus its Ergänzung. The AHB marks the
     // Ergänzung Muss wherever the Grund is, and `ZW4` (verbrauchende

@@ -50,8 +50,13 @@ pub const WORKFLOW_NAME: &str = "gpke-kuendigung";
 /// | 55016 | Kündigung (LFN→LFA) | S2.1–S2.2 ✅ |
 pub const KUENDIGUNG_PIDS: &[u32] = &[55016];
 
-/// Deadline label for the 24h APERAK Frist (BK6-22-024 §4).
-pub const KUENDIGUNG_APERAK_WINDOW_LABEL: &str = "gpke-kuendigung-aperak-window";
+/// Deadline label for the **business** answer window — Ablauf des 1. WT nach dem
+/// ÜT (GPKE Teil 2 SD Kündigung Prozessschritt 2), resolved by
+/// `mako_fristen::antwort`.
+///
+/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.0
+/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
+pub const KUENDIGUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-kuendigung-antwortfrist";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -75,6 +80,8 @@ pub enum KuendigungEvent {
         message_ref: MessageRef,
         /// BDEW Prüfidentifikator (55016).
         pruefidentifikator: Pruefidentifikator,
+        /// `SG4 IDE+24` DE 7402 — carried into the answer's `SG4 RFF+TN`.
+        vorgangsnummer: Option<String>,
     },
     /// EDIFACT message passed profile validation.
     ValidationPassed {
@@ -148,6 +155,12 @@ pub struct KuendigungData {
     pub process_date: String,
     /// BDEW Prüfidentifikator (55016).
     pub pruefidentifikator: Pruefidentifikator,
+    /// `SG4 IDE+24` DE 7402 of the **request**.
+    ///
+    /// Retained because the answer must carry it back in `SG4 RFF+TN`
+    /// („Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on every
+    /// Antwortnachricht). It is never reused as the answer's own `IDE+24`.
+    pub vorgangsnummer: Option<String>,
 }
 
 /// State of a GPKE Beendigung-der-Zuordnung process.
@@ -230,6 +243,9 @@ pub enum KuendigungCommand {
         process_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The `SG4` facts the trees branch on, forwarded to `processd` on
+        /// the `de.mako.process.initiated` notification.
+        vorgang: crate::lf_antwort::LfVorgangsdaten,
         /// `true` if validation returned no errors.
         validation_passed: bool,
         /// Validation error strings.
@@ -279,7 +295,7 @@ impl Workflow for GpkeKuendigungWorkflow {
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                KUENDIGUNG_APERAK_WINDOW_LABEL,
+                KUENDIGUNG_ANTWORT_WINDOW_LABEL,
                 KuendigungState::Eingegangen(_) | KuendigungState::ValidationPassed(_),
             ) => Some(KuendigungCommand::TimeoutExpired {
                 deadline_id: deadline.deadline_id(),
@@ -298,6 +314,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                 document_date,
                 process_date,
                 pruefidentifikator,
+                vorgangsnummer,
                 ..
             } => KuendigungState::Eingegangen(KuendigungData {
                 location_id: location_id.clone(),
@@ -306,6 +323,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                 document_date: document_date.clone(),
                 process_date: process_date.clone(),
                 pruefidentifikator: *pruefidentifikator,
+                vorgangsnummer: vorgangsnummer.clone(),
             }),
             KuendigungEvent::ValidationPassed { .. } => match state {
                 KuendigungState::Eingegangen(data) => KuendigungState::ValidationPassed(data),
@@ -364,6 +382,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                 document_date,
                 process_date,
                 message_ref,
+                vorgang,
                 validation_passed,
                 validation_errors,
             } => {
@@ -377,6 +396,8 @@ impl Workflow for GpkeKuendigungWorkflow {
                 }
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
+                let notify_malo = location_id.clone();
+                let notify_termin = process_date.clone();
 
                 let mut events = vec![KuendigungEvent::KuendigungErhalten {
                     location_id,
@@ -386,11 +407,26 @@ impl Workflow for GpkeKuendigungWorkflow {
                     process_date,
                     message_ref: message_ref.clone(),
                     pruefidentifikator: pid,
+                    vorgangsnummer: vorgang.vorgangsnummer.clone(),
                 }];
                 if validation_passed {
                     events.push(KuendigungEvent::ValidationPassed { message_ref });
                     // F-038: APERAK BGM+312 (Anerkennungsmeldung) — APERAK AHB 1.0 §2.4.
                     let outbox = vec![
+                        // The business notification. `processd`'s LF module
+                        // decides this process, and it only ever sees a message
+                        // that reaches the ERP fan-out — an APERAK is a
+                        // technical acknowledgement, not one.
+                        vorgang
+                            .process_initiated(
+                                pid,
+                                &notify_malo,
+                                &sender_mp_id,
+                                &receiver_gln,
+                                &notify_termin,
+                                &serde_json::Value::Null,
+                            )
+                            .caused_by(1),
                         PendingOutbox::new(
                             "APERAK",
                             sender_mp_id.as_str(),
@@ -457,6 +493,7 @@ impl Workflow for GpkeKuendigungWorkflow {
                         &data.sender,
                         &data.receiver,
                         &data.process_date,
+                        data.vorgangsnummer.as_deref(),
                     )
                     .caused_by(0),
                 ];
@@ -541,6 +578,7 @@ mod tests {
             document_date: "20251001".to_owned(),
             process_date: "20260101".to_owned(),
             message_ref: mref("BEEND-001"),
+            vorgang: crate::LfVorgangsdaten::default(),
             validation_passed: ok,
             validation_errors: if ok {
                 vec![]
@@ -557,10 +595,14 @@ mod tests {
     #[test]
     fn happy_path_bestaetigung() {
         let out = GpkeKuendigungWorkflow::handle(&KuendigungState::New, anfrage_cmd(true)).unwrap();
-        // KuendigungErhalten + ValidationPassed events; APERAK 312 outbox.
+        // KuendigungErhalten + ValidationPassed events; ProcessInitiated + APERAK 312
+        // outbox. Both are load-bearing: the APERAK discharges the 45-minute
+        // technical clock, the ProcessInitiated is what puts the Vorgang in
+        // front of `processd` (or the ERP) at all.
         assert_eq!(out.events.len(), 2);
-        assert_eq!(out.outbox.len(), 1);
-        assert_eq!(out.outbox[0].payload["document_code"], "312");
+        assert_eq!(out.outbox.len(), 2);
+        assert_eq!(out.outbox[0].message_type.as_ref(), "ProcessInitiated");
+        assert_eq!(out.outbox[1].payload["document_code"], "312");
         let state = apply_all(KuendigungState::New, &out.events);
         assert!(matches!(state, KuendigungState::ValidationPassed(_)));
 

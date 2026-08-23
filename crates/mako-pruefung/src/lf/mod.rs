@@ -6,6 +6,7 @@
 //! | [`beendigung_zuordnung`] | Abmeldeanfrage im Lieferbeginn | 55010 → `E_0624` | 44010 → `E_3020` |
 //! | [`kuendigung`] | Kündigung beim Altlieferanten | 55016 → `E_0614` | 44016 → `E_3001` |
 //! | [`eog`] | Anmeldung E/G (§ 36 / § 38 EnWG) | 55013 → `E_0615` | 44013 → `E_3008` |
+//! | [`zuordnung`] | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | 55607 → `E_0603`–`E_0606` | — |
 //!
 //! Split by **process**, not by Sparte, matching [`crate::nb`]: the Strom tree
 //! and the Gas Codeliste for one business process are counterparts.
@@ -33,11 +34,14 @@ pub mod beendigung_zuordnung;
 pub mod eog;
 pub mod kuendigung;
 pub mod types;
+pub mod zuordnung;
 
 pub use abmeldung::{pruefe_abmeldung, pruefe_abmeldung_gas};
 pub use beendigung_zuordnung::{pruefe_abmeldungsanfrage_gas, pruefe_beendigung_zuordnung};
 pub use eog::{EogZustaendigkeit, pruefe_anmeldung_eog, pruefe_anmeldung_eog_gas};
 pub use kuendigung::{pruefe_kuendigung, pruefe_kuendigung_gas};
 pub use types::{
-    Bekannt, LfAnfrage, LfAntwort, LfEntscheidung, LfVertragslage, Lokationsart, Vollmacht,
+    Bekannt, LfAnfrage, LfAntwort, LfEntscheidung, LfVertragslage, Lokationsart, Terminart,
+    Vollmacht,
 };
+pub use zuordnung::{Bilanzkreisart, ZuordnungsFall, ZuordnungsLage, pruefe_zuordnung};

@@ -4,7 +4,7 @@
 //!
 //! - Happy path: receive 55007 Ankündigung → ValidationPassed → SendAntwort →
 //!   Bestätigung/Ablehnung → Beendet
-//! - Deadline expiry: 24h APERAK window fires when LF has not responded
+//! - Deadline expiry: the Antwortfrist fires when the LF has not responded
 //! - PID guard: reject unexpected PIDs at `ReceiveAnkuendigung` time
 //! - Idempotency: second `ReceiveAnkuendigung` on existing process errors
 //!
@@ -19,7 +19,8 @@ use mako_engine::{
     workflow::Workflow as _,
 };
 use mako_gpke::{
-    GpkeLfAbmeldungWorkflow, LF_ABMELDUNG_APERAK_WINDOW_LABEL, LfAbmeldungCommand, LfAbmeldungState,
+    GpkeLfAbmeldungWorkflow, LF_ABMELDUNG_ANTWORT_WINDOW_LABEL, LfAbmeldungCommand,
+    LfAbmeldungState,
 };
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -41,6 +42,7 @@ fn receive_cmd(validation_passed: bool) -> LfAbmeldungCommand {
         document_date: "20250815".to_owned(),
         process_date: "20251001".to_owned(),
         message_ref: MessageRef::new("MSG-55007-001"),
+        vorgang: mako_gpke::LfVorgangsdaten::default(),
         validation_passed,
         validation_errors: if validation_passed {
             vec![]
@@ -161,7 +163,7 @@ async fn beenden_bestaetigen_transitions_to_beendet() {
 
 /// Deadline expiry in `ValidationPassed` state → `Rejected`.
 ///
-/// This simulates the 24h APERAK window expiry: the LF did not send its
+/// This simulates the Antwortfrist expiring: the LF did not send its
 /// response in time (BK6-22-024 §4). The workflow must auto-close.
 #[tokio::test]
 async fn deadline_expiry_in_validation_passed_transitions_to_rejected() {
@@ -174,7 +176,7 @@ async fn deadline_expiry_in_validation_passed_transitions_to_rejected() {
     let deadline_id = DeadlineId::new();
     p.execute(LfAbmeldungCommand::TimeoutExpired {
         deadline_id,
-        label: LF_ABMELDUNG_APERAK_WINDOW_LABEL.into(),
+        label: LF_ABMELDUNG_ANTWORT_WINDOW_LABEL.into(),
     })
     .await
     .expect("TimeoutExpired must succeed");
@@ -205,7 +207,7 @@ async fn deadline_expiry_in_eingegangen_transitions_to_rejected() {
         p.process_id(),
         TenantId::new(),
         WorkflowId::new("gpke-lf-abmeldung", "FV2025-10-01"),
-        LF_ABMELDUNG_APERAK_WINDOW_LABEL,
+        LF_ABMELDUNG_ANTWORT_WINDOW_LABEL,
         time::OffsetDateTime::now_utc() + time::Duration::hours(1),
     );
 
@@ -254,6 +256,7 @@ async fn wrong_pid_at_receive_returns_error() {
             document_date: "20250815".to_owned(),
             process_date: "20251001".to_owned(),
             message_ref: MessageRef::new("MSG-001"),
+            vorgang: mako_gpke::LfVorgangsdaten::default(),
             validation_passed: true,
             validation_errors: vec![],
         })

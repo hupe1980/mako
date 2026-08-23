@@ -60,16 +60,22 @@ pub const WORKFLOW_NAME: &str = "gpke-neuanlage";
 /// Response PIDs (55602–55605) are derived internally and never routed.
 pub const NEUANLAGE_PIDS: &[u32] = &[55600, 55601];
 
-/// Deadline label for the 24h APERAK response window (BK6-22-024).
+/// Deadline label for the **business** answer window — „spätester ÜZ ist 00:00
+/// Uhr des 61. WT nach dem ÜT" (GPKE Teil 2 § 2.2.2), resolved by
+/// `mako_fristen::antwort`: `E_0608` Prüfschritte 110/590 make identifying a
+/// newly commissioned Marktlokation a daily re-check for up to 60 Werktage.
+///
+/// Not the APERAK clock: that is 45 Minuten for a UTILMD (APERAK AHB 1.0
+/// § 2.4.1) and rides `mako_fristen::APERAK_STROM_WINDOW_LABEL`.
 ///
 /// Register immediately after `ValidationPassed`:
 /// ```rust,ignore
 /// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
 ///     .expect("a PID with a published Antwortfrist");
-/// let dl = Deadline::new(stream_id, ..., NEUANLAGE_APERAK_WINDOW_LABEL, due);
+/// let dl = Deadline::new(stream_id, ..., NEUANLAGE_ANTWORT_WINDOW_LABEL, due);
 /// deadline_store.register(&dl).await?;
 /// ```
-pub const NEUANLAGE_APERAK_WINDOW_LABEL: &str = "gpke-neuanlage-aperak-window";
+pub const NEUANLAGE_ANTWORT_WINDOW_LABEL: &str = "gpke-neuanlage-antwortfrist";
 
 // ── Response PID derivation ───────────────────────────────────────────────────
 
@@ -344,8 +350,8 @@ impl Workflow for GpkeNeuanlageWorkflow {
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            (NEUANLAGE_APERAK_WINDOW_LABEL, NeuanlageState::Eingegangen(_))
-            | (NEUANLAGE_APERAK_WINDOW_LABEL, NeuanlageState::ValidationPassed(_)) => {
+            (NEUANLAGE_ANTWORT_WINDOW_LABEL, NeuanlageState::Eingegangen(_))
+            | (NEUANLAGE_ANTWORT_WINDOW_LABEL, NeuanlageState::ValidationPassed(_)) => {
                 Some(NeuanlageCommand::TimeoutExpired {
                     deadline_id: deadline.deadline_id(),
                     label: deadline.label().into(),
@@ -754,7 +760,7 @@ mod tests {
             &state,
             NeuanlageCommand::TimeoutExpired {
                 deadline_id: dl_id,
-                label: NEUANLAGE_APERAK_WINDOW_LABEL.into(),
+                label: NEUANLAGE_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

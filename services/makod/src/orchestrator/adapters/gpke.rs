@@ -775,14 +775,19 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
+                // 55007 announces a Zuordnungs**ende**: `DTM+93` „Ende zum",
+                // the qualifier the UTILMD AHB marks Muss on this
+                // Anwendungsfall. `DTM+92` is the Beginn of an Anmeldung and is
+                // absent here, so reading it left every `E_0609` walk without
+                // the date its Prüfschritte 30, 40, 85 and 120 compare against.
                 process_date: u
                     .transactions()
                     .first()
-                    .and_then(|t| t.dtm.iter().find(|d| d.qualifier == "92"))
-                    .and_then(|d| d.value_str())
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::ENDE_ZUM))
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                vorgang: super::lf_vorgangsdaten(u),
                 validation_passed,
                 validation_errors,
             })
@@ -862,6 +867,7 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                vorgang: super::lf_vorgangsdaten(u),
                 validation_passed,
                 validation_errors,
             })
@@ -939,6 +945,7 @@ pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWo
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                vorgang: super::lf_vorgangsdaten(u),
                 validation_passed,
                 validation_errors,
             })
@@ -1039,14 +1046,15 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                     .and_then(|d| d.value_str())
                     .unwrap_or("")
                     .to_owned(),
+                // 55607 announces a Zuordnungs**beginn**: `DTM+92` „Beginn zum".
                 process_date: u
                     .transactions()
                     .first()
-                    .and_then(|t| t.dtm.iter().find(|d| d.qualifier == "92"))
-                    .and_then(|d| d.value_str())
+                    .and_then(|t| t.date(edi_energy::utilmd_codes::dtm::BEGINN_ZUM))
                     .unwrap_or("")
                     .to_owned(),
                 message_ref: MessageRef::new(msg.message_ref()),
+                vorgang: super::lf_vorgangsdaten(u),
                 validation_passed,
                 validation_errors,
             })
@@ -1375,7 +1383,7 @@ pub fn gpke_datenabruf_registry() -> AdapterRegistry<GpkeDatanabrufWorkflow> {
 /// - 55023 — Bestätigung Stornierung  (NB response — accepted)
 /// - 55024 — Ablehnung Stornierung    (NB response — rejected)
 ///
-/// **APERAK Frist:** 24 Stunden wall-clock (BK6-22-024 §5).
+/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.0 § 2.4.1).
 #[must_use]
 pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -1466,12 +1474,12 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
 /// Routes UTILMD Strom messages with PID 55555 (GPKE Teil 4, BK6-24-174):
 ///
 /// **Message format**: UTILMD Strom S2.x (`AnyMessage::Utilmd`).
-/// **APERAK Frist:** 24 Stunden wall-clock (BK6-22-024 §5).
+/// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.0 § 2.4.1).
 ///
 /// The key fields extracted from the UTILMD message are:
 /// - `pid` — must be 55555
 /// - `sender` / `receiver` — from NAD+MS / NAD+MR party identifiers
-/// - `vorgang_id` — from `IDE+Z19` object ID (identifies the queried order)
+/// - `vorgang_id` — from `SG4 IDE+24` DE 7402 (the queried order)
 /// - `bearbeitungsstatus` — from `STS` DE 9015 qualifier (`"E07"` or `"E08"`)
 /// - `document_date` — from `DTM+137`
 #[must_use]

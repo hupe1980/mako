@@ -24,14 +24,14 @@
 //! | `E07`    | Anfrage bezieht sich auf einen aktiven / bestätigten Vorgang |
 //! | `E08`    | Anfrage bezieht sich auf einen noch nicht bestätigten Vorgang |
 //!
-//! The `IDE+Z19` object ID identifies the Vorgangsnummer whose data is
+//! The `SG4 IDE+24` DE 7402 Vorgangsnummer identifies the order whose data is
 //! being requested.  The `RFF+Z13` provides a correlating reference.
 //!
 //! # Regulatory basis
 //!
 //! - **BDEW UTILMD AHB Strom S2.1 / S2.2** (profiles `fv20251001`, `fv20261001`)
 //! - **BNetzA BK6-24-174** — GPKE Teil 4 (eff. 2025-06-06)
-//! - **APERAK Frist: 24 Stunden** wall-clock (BK6-22-024 §5, same as all GPKE
+//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1, same as all GPKE
 //!   processes)
 
 use mako_engine::{
@@ -78,7 +78,7 @@ pub enum AnfrageBestellungEvent {
         sender: MarktpartnerCode,
         /// GLN of the Netzbetreiber receiving the query.
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from `IDE+Z19` — identifies which order is being queried.
+        /// Vorgangsnummer from `SG4 IDE+24` DE 7402 — which order is being queried.
         vorgang_id: MaLo,
         /// `STS` DE 9015 qualifier from the message (`"E07"` or `"E08"`).
         bearbeitungsstatus: String,
@@ -137,7 +137,7 @@ pub struct AnfrageData {
     pub sender: MarktpartnerCode,
     /// GLN of the receiver (NB).
     pub receiver: MarktpartnerCode,
-    /// Vorgangsnummer from `IDE+Z19` identifying the queried order.
+    /// Vorgangsnummer from `SG4 IDE+24` DE 7402 identifying the queried order.
     pub vorgang_id: MaLo,
     /// STS DE 9015 Bearbeitungsstatus qualifier (`"E07"` or `"E08"`).
     pub bearbeitungsstatus: String,
@@ -211,7 +211,7 @@ pub enum AnfrageBestellungCommand {
         sender: MarktpartnerCode,
         /// GLN of the receiver (NB).
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from `IDE+Z19` — identifies the queried order.
+        /// Vorgangsnummer from `SG4 IDE+24` DE 7402 — the queried order.
         vorgang_id: MaLo,
         /// STS DE 9015 Bearbeitungsstatus qualifier from the message.
         bearbeitungsstatus: String,

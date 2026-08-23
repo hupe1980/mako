@@ -103,8 +103,14 @@ fn the_descriptors_agree_with_the_shared_gpke_table() {
             "{} disagrees with the shared table about its EBD",
             process.name
         );
+        // The table names the *refinement* the Festlegung uses — `LFA` for the
+        // incumbent in a switch, `LFN` for the incoming supplier, plain `LF`
+        // where the process does not distinguish. All three are this role
+        // (`mako_engine::marktrolle::Marktrolle::Lf` with its `Lfn`/`Lfa`
+        // refinements); `NB`, `MSB` and `ÜNB` are not.
+        const LF_ROLLEN: &[&str] = &["LF", "LFA", "LFN", "E/G"];
         assert!(
-            o.answered_by == "LF" || o.answered_by == "LFA",
+            LF_ROLLEN.contains(&o.answered_by),
             "{} is answered by {} — not a process the LF module may claim",
             process.name,
             o.answered_by

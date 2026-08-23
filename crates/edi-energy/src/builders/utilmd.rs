@@ -28,6 +28,8 @@ struct UtilmdTransactionSpec {
     /// `SG5 LOC` — one entry per Lokation the Vorgang names.
     locations: Vec<(String, String)>,
     references: Vec<(String, String)>,
+    /// `SG6 RFF+TN` — the Vorgangsnummer of the message being answered.
+    referenz_vorgangsnummer: Option<String>,
     customer_nad: Option<(String, String)>,
 }
 
@@ -229,6 +231,34 @@ impl<S, R> UtilmdBuilder<S, R> {
     }
 }
 
+/// Emit the `SG6` references of one Vorgang, in AHB order.
+///
+/// `RFF+Z13` carries the **Prüfidentifikator** — DE 1154 format `R n5`, „genau
+/// einmal je SG4 IDE (Vorgang) anzugeben". It belongs here and not in `BGM`
+/// DE 1004, which every row of UTILMD AHB Strom 2.2 and Gas 1.2 names the
+/// *Dokumentennummer*.
+///
+/// `RFF+TN` carries „Referenz Vorgangsnummer (aus Anfragenachricht)", Muss on
+/// every Antwortnachricht. It is what ties an answer to its request, because
+/// `IDE+24` DE 7402 must be a fresh number: the MIG's „Hinweis zu DE7402" makes
+/// a Vorgangsnummer unusable once it has been sent.
+fn emit_sg6<W: std::io::Write>(
+    w: &mut Writer<W>,
+    pid_str: &str,
+    tx: &UtilmdTransactionSpec,
+) -> Result<(), Error> {
+    if !pid_str.is_empty() {
+        emit_comp!(w, "RFF", ["Z13", pid_str]);
+    }
+    if let Some(referenz) = &tx.referenz_vorgangsnummer {
+        emit_comp!(w, "RFF", ["TN", referenz]);
+    }
+    for (rff_q, rff_ref) in &tx.references {
+        emit_comp!(w, "RFF", [rff_q, rff_ref]);
+    }
+    Ok(())
+}
+
 impl<S, R> UtilmdBuilder<S, R> {
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
         let pid_str = self
@@ -334,9 +364,7 @@ impl<S, R> UtilmdBuilder<S, R> {
             for (loc_q, loc_id) in &tx.locations {
                 emit_comp!(w, "LOC", [loc_q], [loc_id]);
             }
-            for (rff_q, rff_ref) in &tx.references {
-                emit_comp!(w, "RFF", [rff_q, rff_ref]);
-            }
+            emit_sg6(&mut w, &pid_str, tx)?;
             if let Some((nad_q, nad_id)) = &tx.customer_nad {
                 emit_comp!(w, "NAD", [nad_q], [nad_id, "", "293"]);
             }
@@ -487,6 +515,40 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     /// Add `SG5 LOC+Z17` — the Messlokation this Vorgang is about.
     pub fn messlokation(self, melo_id: impl Into<String>) -> Self {
         self.location(Lokationstyp::Messlokation, melo_id)
+    }
+
+    /// Add a SG6/RFF reference segment.
+    /// Set `SG6 RFF+TN` — „Referenz Vorgangsnummer (aus Anfragenachricht)".
+    ///
+    /// Pass the **request's** `IDE+24` DE 7402. The AHB marks the segment Muss
+    /// on every Antwortnachricht, and it is the only correlation the answer
+    /// carries: DE 7402 must be globally unique across every `IDE+24` and
+    /// `IDE+Z01` ever sent (MIG S2.2, Hinweis zu DE7402), so an answer may not
+    /// echo the request's number as its own.
+    ///
+    /// ```rust
+    /// # use edi_energy::{Release, Pruefidentifikator};
+    /// # use edi_energy::builders::UtilmdBuilder;
+    /// # use edi_energy::utilmd_codes::dtm;
+    /// let edi = UtilmdBuilder::new(Release::new("S2.2"))
+    ///     .pruefidentifikator(Pruefidentifikator::new(55017).unwrap())
+    ///     .sender("9900987654321")
+    ///     .receiver("9900123456789")
+    ///     .transaction("ANTWORT-0001")
+    ///     .date(dtm::ENDE_ZUM, "20261101")
+    ///     .referenz_vorgangsnummer("NNV1234")
+    ///     .marktlokation("51238696012")
+    ///     .done()
+    ///     .serialize()?;
+    /// let text = String::from_utf8(edi).unwrap();
+    /// assert!(text.contains("IDE+24+ANTWORT-0001"));
+    /// assert!(text.contains("RFF+Z13:55017"));
+    /// assert!(text.contains("RFF+TN:NNV1234"));
+    /// # Ok::<(), edi_energy::Error>(())
+    /// ```
+    pub fn referenz_vorgangsnummer(mut self, vorgangsnummer: impl Into<String>) -> Self {
+        self.spec.referenz_vorgangsnummer = Some(vorgangsnummer.into());
+        self
     }
 
     /// Add a SG6/RFF reference segment.

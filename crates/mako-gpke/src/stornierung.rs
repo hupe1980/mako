@@ -29,7 +29,7 @@
 //!
 //! - **BDEW UTILMD AHB Strom 2.1 / 2.2** — AHB rules for PIDs 55022–55024 (GPKE Teil 4)
 //! - **BNetzA BK6-24-174** — Geschäftsprozesse Kundenlieferantenwechsel Strom (LFW24)
-//! - **APERAK Frist: 24 Stunden** (wall-clock, same as all GPKE processes — BK6-22-024 §5)
+//! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1)
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -75,7 +75,7 @@ pub enum GpkeStornierungEvent {
         sender: MarktpartnerCode,
         /// GLN of the NB receiving the request.
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from IDE+Z19 (identifies the original process being cancelled).
+        /// Vorgangsnummer from `SG4 IDE+24` DE 7402 (the process being cancelled).
         vorgang_id: MaLo,
         /// EDIFACT document date string (YYYYMMDDHHMMZZZ from DTM+137+303).
         document_date: String,
@@ -102,7 +102,7 @@ pub enum GpkeStornierungEvent {
         /// Rejection reason code or text (only meaningful when `positive = false`).
         reason: Option<String>,
     },
-    /// Process terminated because the 24-hour APERAK deadline expired.
+    /// Process terminated because the Antwortfrist expired.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -135,7 +135,7 @@ pub struct GpkeStornierungData {
     pub sender: MarktpartnerCode,
     /// GLN of the NB receiving the request.
     pub receiver: MarktpartnerCode,
-    /// Vorgangsnummer (IDE+Z19) identifying the original process to be cancelled.
+    /// Vorgangsnummer (`SG4 IDE+24` DE 7402) of the process to be cancelled.
     pub vorgang_id: MaLo,
     /// EDIFACT document date from DTM+137.
     pub document_date: String,
@@ -207,7 +207,7 @@ pub enum GpkeStornierungCommand {
         sender: MarktpartnerCode,
         /// GLN of the receiver (NB).
         receiver: MarktpartnerCode,
-        /// Vorgangsnummer from IDE+Z19.
+        /// Vorgangsnummer from `SG4 IDE+24` DE 7402.
         vorgang_id: MaLo,
         /// EDIFACT document date from DTM+137.
         document_date: String,
@@ -227,7 +227,7 @@ pub enum GpkeStornierungCommand {
         /// Rejection reason — required when `positive = false`.
         reason: Option<String>,
     },
-    /// The 24-hour APERAK deadline fired.
+    /// The Antwortfrist fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,

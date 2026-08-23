@@ -794,7 +794,7 @@ impl<W: Workflow, S: EventStore> Process<W, S> {
     /// **not** persisted here and must be registered separately.
     ///
     /// Use this method for commands that must register a regulatory deadline
-    /// (GPKE 24h APERAK, WiM 5 WT, GeLi Gas / WiM Gas 10 WT, MABIS 1 WT).
+    /// (the per-PID business Antwortfrist from `mako_fristen::antwort`).
     ///
     /// [`execute_and_enqueue`]: Process::execute_and_enqueue
     ///

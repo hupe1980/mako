@@ -29,6 +29,9 @@ pub const GPKE_EOG_ANMELDEN: &str = "gpke.eog.anmelden";
 pub const GPKE_LIEFERBEGINN_ABLEHNEN: &str = "gpke.lieferbeginn.ablehnen";
 /// LF: initiate a Lieferende Abmeldung (UTILMD 55004).
 pub const GPKE_LIEFERENDE_ANMELDEN: &str = "gpke.lieferende.anmelden";
+/// LFN: send the Kündigung to the Altlieferant — UTILMD 55016, answered
+/// 55017 / 55018 (`E_0614`). The Gas twin is [`GELI_KUENDIGUNG_ANMELDEN`].
+pub const GPKE_KUENDIGUNG_ANMELDEN: &str = "gpke.kuendigung.anmelden";
 /// NB: confirm an inbound Abmeldung (inbound 55004 → UTILMD 55005, EBD `E_0607`).
 pub const GPKE_LIEFERENDE_BESTAETIGEN: &str = "gpke.lieferende.bestaetigen";
 /// NB: reject an inbound Abmeldung (inbound 55004 → UTILMD 55006, EBD `E_0607`).
@@ -58,12 +61,16 @@ pub const GELI_LIEFERBEGINN_BESTAETIGEN: &str = "geli.lieferbeginn.bestaetigen";
 pub const GELI_LIEFERBEGINN_ABLEHNEN: &str = "geli.lieferbeginn.ablehnen";
 /// LF: initiate a gas Lieferende Abmeldung (UTILMD 44004).
 pub const GELI_LIEFERENDE_ANMELDEN: &str = "geli.lieferende.anmelden";
+/// LFG: send the Kündigung to the Altlieferant — UTILMD G 44016, answered
+/// 44017 / 44018 (`E_3001`). BK7-24-01-009 § 3.1; the Strom twin is
+/// [`GPKE_KUENDIGUNG_ANMELDEN`].
+pub const GELI_KUENDIGUNG_ANMELDEN: &str = "geli.kuendigung.anmelden";
 /// GNB: confirm an inbound gas Abmeldung (inbound 44004 → UTILMD 44005).
 pub const GELI_LIEFERENDE_BESTAETIGEN: &str = "geli.lieferende.bestaetigen";
 /// GNB: reject an inbound gas Abmeldung (inbound 44004 → UTILMD 44006).
 pub const GELI_LIEFERENDE_ABLEHNEN: &str = "geli.lieferende.ablehnen";
 /// LF: initiate a `GeLi` Gas Stornierung (UTILMD 44022/44023).
-pub const GELI_GAS_STORNIERUNG_INITIIEREN: &str = "geli.gas.stornierung.initiieren";
+pub const GELI_STORNIERUNG_INITIIEREN: &str = "geli.stornierung.initiieren";
 
 // ── WiM Strom ─────────────────────────────────────────────────────────────────
 
@@ -95,19 +102,28 @@ pub const WIM_PREISANFRAGE_ANGEBOT_SENDEN: &str = "wim.preisanfrage.angebot-send
 ///
 /// `makod` has a registry test asserting each of these is registered; adding a
 /// constant above without registering the command in `makod` fails that test.
+/// LFN: agree to an announced Zuordnung to an erzeugende Marktlokation or
+/// Tranche — inbound 55607, answered UTILMD 55608 (EBDs `E_0603`–`E_0606`).
+///
+/// The Zustimmung names the Bilanzkreis; without an answer by 15:00 Uhr am ÜT
+/// the NB assigns the LFN anyway (GPKE Teil 2 § 2.4.2.2 Nr. 3).
+pub const GPKE_ZUORDNUNG_LF_BESTAETIGEN: &str = "gpke.zuordnung-lf.bestaetigen";
+/// LFN: refuse an announced Zuordnung — inbound 55607, answered UTILMD 55609.
+pub const GPKE_ZUORDNUNG_LF_ABLEHNEN: &str = "gpke.zuordnung-lf.ablehnen";
+
 /// UTILMD 55017 — the LFA agrees to an inbound Kündigung (EBD `E_0614`).
 pub const GPKE_KUENDIGUNG_BESTAETIGEN: &str = "gpke.kuendigung.bestaetigen";
 /// UTILMD 55018 — the LFA refuses an inbound Kündigung (EBD `E_0614`).
 pub const GPKE_KUENDIGUNG_ABLEHNEN: &str = "gpke.kuendigung.ablehnen";
 
 /// UTILMD G 44008 — the LF agrees to an Abmeldung NN vom NB (`E_3002`).
-pub const GELI_ABMELDUNG_NB_BESTAETIGEN: &str = "geli.abmeldung-nb.bestaetigen";
+pub const GELI_NB_LIEFERENDE_BESTAETIGEN: &str = "geli.nb-lieferende.bestaetigen";
 /// UTILMD G 44009 — the LF refuses an Abmeldung NN vom NB (`E_3002`).
-pub const GELI_ABMELDUNG_NB_ABLEHNEN: &str = "geli.abmeldung-nb.ablehnen";
+pub const GELI_NB_LIEFERENDE_ABLEHNEN: &str = "geli.nb-lieferende.ablehnen";
 /// UTILMD G 44011 — the LFA agrees to an Abmeldeanfrage des NB (`E_3020`).
-pub const GELI_ABMELDUNGSANFRAGE_BESTAETIGEN: &str = "geli.abmeldungsanfrage.bestaetigen";
+pub const GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN: &str = "geli.beendigung-zuordnung.bestaetigen";
 /// UTILMD G 44012 — the LFA refuses an Abmeldeanfrage des NB (`E_3020`).
-pub const GELI_ABMELDUNGSANFRAGE_ABLEHNEN: &str = "geli.abmeldungsanfrage.ablehnen";
+pub const GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN: &str = "geli.beendigung-zuordnung.ablehnen";
 /// UTILMD G 44017 — the LFA agrees to a Gas Kündigung (`E_3001`).
 pub const GELI_KUENDIGUNG_BESTAETIGEN: &str = "geli.kuendigung.bestaetigen";
 /// UTILMD G 44018 — the LFA refuses a Gas Kündigung (`E_3001`).
@@ -125,18 +141,21 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_NEUANLAGE_BESTAETIGEN,
     GPKE_NEUANLAGE_ABLEHNEN,
     GPKE_LIEFERENDE_ANMELDEN,
+    GPKE_KUENDIGUNG_ANMELDEN,
     GPKE_LIEFERENDE_BESTAETIGEN,
     GPKE_LIEFERENDE_ABLEHNEN,
     GPKE_NB_LIEFERENDE_BESTAETIGEN,
     GPKE_NB_LIEFERENDE_ABLEHNEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
     GPKE_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
+    GPKE_ZUORDNUNG_LF_BESTAETIGEN,
+    GPKE_ZUORDNUNG_LF_ABLEHNEN,
     GPKE_KUENDIGUNG_BESTAETIGEN,
     GPKE_KUENDIGUNG_ABLEHNEN,
-    GELI_ABMELDUNG_NB_BESTAETIGEN,
-    GELI_ABMELDUNG_NB_ABLEHNEN,
-    GELI_ABMELDUNGSANFRAGE_BESTAETIGEN,
-    GELI_ABMELDUNGSANFRAGE_ABLEHNEN,
+    GELI_NB_LIEFERENDE_BESTAETIGEN,
+    GELI_NB_LIEFERENDE_ABLEHNEN,
+    GELI_BEENDIGUNG_ZUORDNUNG_BESTAETIGEN,
+    GELI_BEENDIGUNG_ZUORDNUNG_ABLEHNEN,
     GELI_KUENDIGUNG_BESTAETIGEN,
     GELI_KUENDIGUNG_ABLEHNEN,
     GELI_EOG_BESTAETIGEN,
@@ -145,9 +164,10 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GELI_LIEFERBEGINN_BESTAETIGEN,
     GELI_LIEFERBEGINN_ABLEHNEN,
     GELI_LIEFERENDE_ANMELDEN,
+    GELI_KUENDIGUNG_ANMELDEN,
     GELI_LIEFERENDE_BESTAETIGEN,
     GELI_LIEFERENDE_ABLEHNEN,
-    GELI_GAS_STORNIERUNG_INITIIEREN,
+    GELI_STORNIERUNG_INITIIEREN,
     WIM_GERAETEWECHSEL_BESTAETIGEN,
     WIM_GERAETEWECHSEL_ABLEHNEN,
     WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,

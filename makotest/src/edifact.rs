@@ -928,7 +928,7 @@ pub fn build_aperak_for(
 #[pyfunction]
 #[pyo3(signature = (
     received, answer_pid, *, on=None, release=None, message_ref="1",
-    document_date=None, document_code="E01", antwort_code=None, antwort_ebd=None,
+    document_date=None, document_code=None, antwort_code=None, antwort_ebd=None,
     process_dates=None, references=None, message_index=0
 ))]
 #[allow(clippy::too_many_arguments)]
@@ -939,7 +939,7 @@ pub fn build_answer(
     release: Option<&str>,
     message_ref: &str,
     document_date: Option<&str>,
-    document_code: &str,
+    document_code: Option<&str>,
     antwort_code: Option<&str>,
     antwort_ebd: Option<&str>,
     process_dates: Option<Vec<(String, String)>>,
@@ -976,7 +976,17 @@ pub fn build_answer(
         .sender(envelope.header.receiver_id.to_string())
         .receiver(envelope.header.sender_id.to_string())
         .message_ref(message_ref)
-        .document_code(document_code);
+        // `BGM` DE 1001 is the Nachrichtenfunktion of the *process*, not of the
+        // direction: the UTILMD AHB gives an Anwendungsfall one code across all
+        // three of its PIDs, so a 55005 Bestätigung Abmeldung is `E02` just like
+        // the 55004 it answers, and a 55017 is `E35` like its 55016. Echoing the
+        // request is right by construction; hard-coding `E01` made the simulator
+        // answer 55004 and 55016 with messages our own AHB layer rejects.
+        .document_code(
+            document_code
+                .or_else(|| request.bgm().map(|b| b.document_code.as_str()))
+                .unwrap_or("E01"),
+        );
     if let Some(d) = document_date_for(document_date, on)? {
         b = b.document_date(d);
     }
@@ -1372,7 +1382,8 @@ mod tests {
                 None,
                 "ANS-1",
                 Some("20251102"),
-                "E01",
+                // Left unset so the answer echoes the request's DE 1001.
+                None,
                 Some("A10"),
                 Some("E_0609"),
                 Some(vec![("92".into(), "20261101".into())]),

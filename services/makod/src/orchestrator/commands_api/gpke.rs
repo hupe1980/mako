@@ -772,15 +772,20 @@ pub(super) async fn dispatch_gpke_beendigung_zuordnung_antwort(
 /// `gpke.zuordnung-lf.ablehnen` (→ 55609 Ablehnung).
 ///
 /// The LFN receives PID 55607 Ankündigung via AS4 (auto-spawned by the ingest
-/// dispatcher). After review, the ERP operator calls this command to send the
-/// formal response. APERAK Frist: 24h wall-clock (BK6-22-024 §4).
+/// dispatcher); `processd`'s LF module or an operator answers it. The business
+/// Frist is **15:00 Uhr am ÜT** (GPKE Teil 2 § 2.4.2.2 Nr. 2) — and missing it
+/// is not a lapsed obligation: Prozessschritt 3 has the NB assign the LFN to the
+/// Marktlokation anyway, using whichever Bilanzkreis the LFN last communicated.
+/// The separate APERAK clock is 45 minutes (APERAK AHB 1.0 § 2.4.1).
 ///
-/// ## Required payload fields
+/// ## Payload fields
 ///
-/// | Field | Type | Notes |
+/// | Field | Required | Wire slot |
 /// |---|---|---|
-/// | `malo_id` | string | Marktlokations-ID identifying the process |
-/// | `reason` | string (opt.) | Rejection reason — mandatory when `accepted = false` |
+/// | `malo_id` | ✓ | Marktlokations-ID identifying the process |
+/// | `antwort_code` | ✓ | `SG4 STS+E01` DE 9013 — `A01` or `A99` |
+/// | `antwort_ebd` | — | `SG4 STS+E01` DE 1131 — the Anwendungsfall's EBD; defaults to `E_0603` |
+/// | `bemerkung` | ✓ on `A01` and `A99` | the Bilanzkreis on a Zustimmung, the Erläuterung on an Ablehnung |
 pub(super) async fn dispatch_gpke_zuordnung_lf_antwort(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -1318,20 +1323,28 @@ pub(super) async fn dispatch_gpke_eog_anmelden(
     );
     let process_id = process.process_id();
 
-    // E/G answer window (GPKE Teil 2 Kap. 2.3 SD Schritt 2): 15:00 windows,
-    // outer envelope = next Werktag. On expiry the workflow assigns anyway
-    // with the pre-deposited default Bilanzkreis (SD Schritt 3).
-    let due_at = mako_gpke::eog_antwort_due_at(time::OffsetDateTime::now_utc());
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
-        state.tenant_id,
-        workflow_id,
-        mako_gpke::EOG_RESPONSE_WINDOW_LABEL,
-        due_at,
-    );
+    // The E/G's published answer window (GPKE Teil 2 § 2.3.2.2 Nr. 2): 15:00 Uhr
+    // am ÜT, the tighter of the two the Festlegung states. On expiry the NB
+    // assigns anyway with the pre-deposited default Bilanzkreis (Nr. 3) — which
+    // is a reason to answer in time, not to track a looser clock.
+    let deadlines: Vec<Deadline> = mako_gpke::eog_antwort_due_at(
+        mako_gpke::EOG_ANMELDUNG_PID,
+        time::OffsetDateTime::now_utc(),
+    )
+    .map(|due_at| {
+        Deadline::new(
+            process.stream_id().clone(),
+            process_id,
+            state.tenant_id,
+            workflow_id,
+            mako_gpke::EOG_RESPONSE_WINDOW_LABEL,
+            due_at,
+        )
+    })
+    .into_iter()
+    .collect();
     process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
+        .execute_and_enqueue_with_deadlines(domain_cmd, &deadlines)
         .await?;
 
     let identity = process.identity();

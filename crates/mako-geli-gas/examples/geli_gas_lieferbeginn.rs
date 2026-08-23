@@ -14,7 +14,7 @@
 //!
 //! | Process | Frist | Helper |
 //! |---|---|---|
-//! | GPKE Lieferbeginn Strom | 24 h wall-clock | `fristen::add_hours(24)` |
+//! | GPKE Lieferbeginn Strom | 11:00 Uhr des 1. WT nach dem ÜT | `mako_fristen::antwort` |
 //! | WiM Gerätewechsel | 5 Werktage | `fristen::add_werktage(5, BdewMaKo)` |
 //! | GeLi Gas Lieferbeginn | **10 Werktage** | `fristen::add_werktage(10, BdewMaKo)` |
 //!
@@ -50,7 +50,7 @@ use mako_geli_gas::{
 // BGM+E01 is used for GeLi Gas Anmeldung in UTILMD G.
 // NAD+MS = neuer Gaslieferant (sender)
 // NAD+MR = Gasnetzbetreiber (receiver)
-// IDE+Z19 = Marktlokation identifier (MaLo, not MeLo — key gas/electricity difference)
+// SG5 LOC+Z16 = Marktlokation identifier (MaLo, not MeLo — key gas/electricity difference)
 // - MaLo ID: 52695662076 (11-char format, [A-Z0-9]{11})
 const UTILMD_LIEFERBEGINN_GAS: &[u8] = b"\
 UNB+UNOC:3+4012345000023:14+9900357000004:14+250115:0800+GELI-2025-001'\
@@ -194,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validation_errors: validation_errors.clone(),
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
-            transaktionsgrund: None,
+            vorgang: Default::default(),
             fallgruppe: None,
             gasqualitaet: None,
         })
@@ -390,7 +390,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             validation_errors: vec![],
             received_at: time::OffsetDateTime::now_utc(),
             bilanzierungsmethode: None,
-            transaktionsgrund: None,
+            vorgang: Default::default(),
             fallgruppe: None,
             gasqualitaet: None,
         })

@@ -312,6 +312,7 @@ impl AntwortObligation {
 
     fn __repr__(&self) -> String {
         let window = match (&self.clock_time, self.werktage) {
+            (Some(t), Some(0)) => format!("{t} on the ÜT"),
             (Some(t), Some(n)) => format!("{t} on the {n}. WT"),
             (Some(t), None) => format!("{t} on the 1. WT"),
             (None, Some(n)) => format!("{n} WT"),
@@ -333,6 +334,14 @@ fn convert(o: &antwort::AntwortObligation) -> AntwortObligation {
         ),
         antwort::FristShape::EndOfWerktag(n) => ("end_of_werktag", Some(n), None),
         antwort::FristShape::WerktageAtCutoff(n) => ("werktage_at_cutoff", Some(n), None),
+        // „Spätester ÜZ ist HH:MM Uhr **am ÜT**" — the same wall clock as
+        // `werktag_at`, but on the arrival day itself, so `werktage` is 0
+        // rather than absent.
+        antwort::FristShape::SameDayAt(at) => (
+            "same_day_at",
+            Some(0),
+            Some(format!("{:02}:{:02}", at.hour(), at.minute())),
+        ),
     };
     AntwortObligation {
         trigger_pid: o.trigger_pid,
@@ -527,10 +536,12 @@ mod tests {
                 "{}: every window is measured in Werktage",
                 o.trigger_pid
             );
+            // The two wall-clock shapes carry a time; the day-granular ones
+            // must not, or a queue would expire hours before the Frist does.
             assert_eq!(
                 o.clock_time.is_some(),
-                o.shape == "werktag_at",
-                "{}: only `werktag_at` carries a clock time",
+                matches!(o.shape.as_str(), "werktag_at" | "same_day_at"),
+                "{}: only the wall-clock shapes carry a clock time",
                 o.trigger_pid
             );
             assert!(!o.source.is_empty(), "{} has no Fundstelle", o.trigger_pid);

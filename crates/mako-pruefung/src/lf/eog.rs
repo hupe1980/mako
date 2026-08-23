@@ -205,9 +205,10 @@ mod tests {
             vorgangsnummer: None,
             absender_mp_id: "9900357000004".to_owned(),
             empfaenger_mp_id: "9900000000001".to_owned(),
-            lokationsart: Lokationsart::VerbrauchendeMalo,
+            lokationsart: Some(Lokationsart::VerbrauchendeMalo),
             transaktionsgrund: Some("Z36".to_owned()),
             termin: Some(date!(2026 - 09 - 01)),
+            terminart: crate::lf::types::Terminart::Fix,
             uet_lieferanmeldung: None,
             eingang: datetime!(2026-08-20 09:00 UTC),
         }

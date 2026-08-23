@@ -34,6 +34,7 @@
 
 use std::collections::HashMap;
 
+use mako_engine::lf_vorgang::LfVorgangsdaten;
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     deadline::Deadline,
@@ -46,8 +47,8 @@ use mako_engine::{
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 use mako_fristen::{
-    APERAK_GAS_FOLGEPROZESS_LABEL, APERAK_GAS_INITIALPROZESS_LABEL, HolidayCalendar,
-    aperak_gas_folgeprozess_due_at, aperak_gas_initialprozess_due_at, deadline_at_werktage,
+    APERAK_GAS_FOLGEPROZESS_LABEL, APERAK_GAS_INITIALPROZESS_LABEL, aperak_gas_folgeprozess_due_at,
+    aperak_gas_initialprozess_due_at,
 };
 use time::OffsetDateTime;
 
@@ -451,6 +452,8 @@ impl GasSupplierChangeState {
 
 /// Commands for the GeLi Gas supplier-change workflow.
 #[derive(Clone)]
+#[allow(clippy::large_enum_variant)] // ReceiveUtilmd carries the whole inbound Vorgang;
+// boxing it would only move the allocation, and the command is built once per message.
 pub enum GasSupplierChangeCommand {
     /// Inbound UTILMD G Anfrage received (responder role — GNB or LFA).
     ///
@@ -484,11 +487,16 @@ pub enum GasSupplierChangeCommand {
         /// `"SLP"` | `"RLM"` | `"IMS"` — propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.bilanzierungsmethode`.
         bilanzierungsmethode: Option<String>,
-        /// SG4 STS Transaktionsgrund (DE9013, category 7) — e.g. `E01`
-        /// Ein-/Auszug, `E03` Lieferantenwechsel, `E06` Ersatzbelieferung.
-        /// Drives the `mako-pruefung` date-plausibility rules and is propagated
-        /// into the `ProcessInitiated` outbox payload.
-        transaktionsgrund: Option<String>,
+        /// The `SG4` facts an LF-answered Vorgang carries — Transaktionsgrund
+        /// and its Ergänzung, Vorgangsnummer, `DTM+154`, `DTM+471`.
+        ///
+        /// The **same** contract GPKE Strom publishes
+        /// ([`mako_engine::lf_vorgang::LfVorgangsdaten`]), because `processd`
+        /// answers 44007 / 44010 / 44016 with the same walk it answers
+        /// 55007 / 55010 / 55016 with. A Gas-only payload shape left every Gas
+        /// walk escalating at Prüfschritt 10 for want of the
+        /// Transaktionsgrundergänzung.
+        vorgang: LfVorgangsdaten,
         /// Gas GaBi RLM Fallgruppe from UTILMD G `TM+Z10` segment (L1/N1).
         /// Only set for Gas RLM MaLos. Propagated to `ProcessInitiated` outbox
         /// so `marktd` can update `malo.fallgruppe`.
@@ -747,7 +755,7 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                 validation_errors,
                 received_at,
                 bilanzierungsmethode,
-                transaktionsgrund,
+                vorgang,
                 fallgruppe,
                 gasqualitaet,
             } => {
@@ -799,10 +807,18 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                             aperak_gas_folgeprozess_due_at(received_at),
                         )
                     };
-                    let process_dl = PendingDeadline::new(
-                        RESPONSE_WINDOW_LABEL,
-                        deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo),
-                    );
+                    // The business answer window, from the one table four
+                    // services share. It is **not** 10 Werktage: that is the
+                    // LFN's *Vorlauffrist* before Lieferbeginn
+                    // (`mako_fristen::antwort::TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`),
+                    // and using it here sized every Gas answer queue at three
+                    // times its real window — an already-lapsed Frist reported
+                    // as still running. GeLi Gas 3.0 states 4 / 3 / 2 / 3 WT per
+                    // Prozessschritt; a PID the Festlegung does not quantify
+                    // gets no deadline rather than an invented one.
+                    let process_dl =
+                        mako_fristen::antwort::antwort_deadline(pid.as_u32(), received_at)
+                            .map(|due| PendingDeadline::new(RESPONSE_WINDOW_LABEL, due));
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events,
                         // Notify the GNB ERP via de.mako.process.initiated so it can
@@ -810,26 +826,26 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                         // Also carries bilanzierungsmethode + fallgruppe so marktd
                         // can update malo.bilanzierungsmethode / malo.fallgruppe (L1/N1).
                         vec![
-                            PendingOutbox::new(
-                                "ProcessInitiated",
-                                receiver_gln.as_str(),
-                                serde_json::json!({
-                                    "pid":                  pid.as_u32(),
-                                    "malo_id":              malo_id_str,
-                                    "new_supplier":         sender_mp_id.as_str(),
-                                    "grid_operator":        receiver_gln.as_str(),
-                                    "process_date":         process_date_clone,
-                                    "bilanzierungsmethode": bilanzierungsmethode,
-                                    "fallgruppe":           fallgruppe,
-                                    "gasqualitaet":         gasqualitaet,
-                                    // SG4 STS Transaktionsgrund — consumed by processd
-                                    // `mako-pruefung` (date-plausibility rules).
-                                    "transaktionsgrund":    transaktionsgrund,
-                                }),
-                            )
-                            .caused_by(1),
+                            vorgang
+                                .process_initiated(
+                                    pid,
+                                    &MaLo::new(malo_id_str.clone()),
+                                    &sender_mp_id,
+                                    &receiver_gln,
+                                    &process_date_clone,
+                                    // Gas-only facts `marktd` folds into the
+                                    // Marktlokation; they never displace a fact
+                                    // a tree branches on.
+                                    &serde_json::json!({
+                                        "new_supplier":         sender_mp_id.as_str(),
+                                        "bilanzierungsmethode": bilanzierungsmethode,
+                                        "fallgruppe":           fallgruppe,
+                                        "gasqualitaet":         gasqualitaet,
+                                    }),
+                                )
+                                .caused_by(1),
                         ],
-                        vec![aperak_send_dl, process_dl],
+                        core::iter::once(aperak_send_dl).chain(process_dl).collect(),
                     ))
                 } else {
                     let reason = if validation_errors.is_empty() {
@@ -1287,6 +1303,9 @@ mod tests {
         MarktpartnerCode::new("9900357000004")
     }
 
+    /// A fixed receipt instant, so the published-deadline comparison is exact.
+    const RECEIVED_AT: time::OffsetDateTime = time::macros::datetime!(2025-01-15 08:00 UTC);
+
     fn receive_cmd(p: u32, valid: bool) -> GasSupplierChangeCommand {
         GasSupplierChangeCommand::ReceiveUtilmd {
             pid: pid(p),
@@ -1302,9 +1321,9 @@ mod tests {
             } else {
                 vec!["AHB violation".to_owned()]
             },
-            received_at: time::OffsetDateTime::now_utc(),
+            received_at: RECEIVED_AT,
             bilanzierungsmethode: None,
-            transaktionsgrund: None,
+            vorgang: LfVorgangsdaten::default(),
             fallgruppe: None,
             gasqualitaet: None,
         }
@@ -1725,6 +1744,62 @@ mod tests {
     }
 
     // ── Deadline handling ─────────────────────────────────────────────────────
+
+    /// The business answer window comes from `mako_fristen::antwort`, not from
+    /// a literal in this workflow. GeLi Gas 3.0 states 4 / 3 / 2 / 3 Werktage
+    /// per Prozessschritt; the 10 Werktage that used to sit here are the
+    /// **LFN's Vorlauffrist** before Lieferbeginn, and a queue sized by them
+    /// reports a lapsed Frist as still running.
+    #[test]
+    fn the_answer_deadline_is_the_published_one_not_ten_werktage() {
+        for &anfrage_pid in ANFRAGE_PIDS {
+            let out = GeliGasSupplierChangeWorkflow::handle(
+                &GasSupplierChangeState::default(),
+                receive_cmd(anfrage_pid, true),
+            )
+            .unwrap_or_else(|e| panic!("PID {anfrage_pid}: {e}"));
+
+            let registered = out
+                .deadlines
+                .iter()
+                .find(|d| &*d.label == RESPONSE_WINDOW_LABEL)
+                .map(|d| d.due_at);
+            let published = mako_fristen::antwort::antwort_deadline(anfrage_pid, RECEIVED_AT);
+            assert_eq!(
+                registered, published,
+                "PID {anfrage_pid}: the registered answer deadline must be the published one"
+            );
+        }
+    }
+
+    /// A PID the Festlegung does not quantify gets **no** answer deadline —
+    /// never an invented one. `mako_fristen` returns `None` for „unknown", and
+    /// a fabricated window is worse than none: it manufactures a breach.
+    #[test]
+    fn an_unquantified_pid_registers_no_answer_deadline() {
+        let unquantified: Vec<u32> = ANFRAGE_PIDS
+            .iter()
+            .copied()
+            .filter(|p| mako_fristen::antwort::antwortfrist(*p, RECEIVED_AT).is_none())
+            .collect();
+        assert!(
+            !unquantified.is_empty(),
+            "44019/44020 have no published Antwortfrist — if that changed, retire this test"
+        );
+        for pid in unquantified {
+            let out = GeliGasSupplierChangeWorkflow::handle(
+                &GasSupplierChangeState::default(),
+                receive_cmd(pid, true),
+            )
+            .unwrap_or_else(|e| panic!("PID {pid}: {e}"));
+            assert!(
+                !out.deadlines
+                    .iter()
+                    .any(|d| &*d.label == RESPONSE_WINDOW_LABEL),
+                "PID {pid}: no published window, so no answer deadline"
+            );
+        }
+    }
 
     #[test]
     fn deadline_rejects_validation_passed_state() {

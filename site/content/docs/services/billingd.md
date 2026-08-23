@@ -555,18 +555,17 @@ verifiable market prices, or it is not billed:
 | intervals with consumption but no EPEX price | `422 VALIDATION_BLOCKED` / `SECT41A_MISSING_EPEX_PRICES` |
 | the meter is not an iMSys | `422 VALIDATION_BLOCKED` / `SECT41A_IMSYS_REQUIRED` |
 
-Billing the static `arbeitspreis_ct_per_kwh` instead would charge a price the
-dynamic contract does not contain. The earlier behaviour was worse than that
-description suggested: a failed Lastgang fetch degraded to an empty interval
-list, and an empty list makes the dynamic provider price *nothing* — the invoice
-came back with the Grundpreis and no Arbeitspreis, no Stromsteuer and no
-NNE-Arbeitspreis, and looked entirely ordinary.
+Every one of these is an error rather than a fallback. Billing the static
+`arbeitspreis_ct_per_kwh` instead would charge a price the dynamic contract does
+not contain, and degrading to an empty interval list is worse still: the dynamic
+provider then prices *nothing*, and the invoice goes out with the Grundpreis
+alone — no Arbeitspreis, no Stromsteuer, no NNE-Arbeitspreis — looking entirely
+ordinary.
 
-The §41a Abs. 1 iMSys guard reads the meter's `metering_mode`, which the dynamic
-path never resolved, so the guard had never refused a production invoice. The
-meter reading is now resolved for dynamic products too (it also carries the §40
-Abs. 2 Nr. 6 register readings and the §40a estimation flag); pricing still comes
-from the Lastgang alone.
+The §41a Abs. 1 iMSys guard reads the meter's `metering_mode`, so the dynamic
+path resolves a meter reading even though pricing comes from the Lastgang alone;
+that reading also carries the §40 Abs. 2 Nr. 6 register readings and the §40a
+estimation flag.
 
 ```http
 POST /api/v1/billing/51238696012/calculate

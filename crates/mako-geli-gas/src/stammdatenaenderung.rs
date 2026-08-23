@@ -12,8 +12,10 @@
 //!   (GeLiGas AWH V1.2 §4.3.2: bila.rel. changes only zum Monatserster with a
 //!   one-month lead). Non-bila.rel. changes may take effect unverzüglich.
 //!
-//! Frist for the Antwort: **≤ 10. Werktag** after receipt (GeLiGas AWH §5.3–5.4)
-//! — the GeLi Gas 10-WT regime, not the LFW24 24-hour one.
+//! Frist for the Antwort: „unverzüglich, spätestens jedoch bis zum Ablauf des
+//! **10. WT** nach Eingang der Änderung" (AWH GeLi Gas § 4.3.2 Nr. 2 / Nr. 4),
+//! published as `mako_fristen::antwort::STAMMDATEN_ANTWORT_WERKTAGE_GAS`. Five
+//! times the Strom window, and genuinely so — not the LFW24 regime.
 //!
 //! ## Scope
 //!
@@ -30,7 +32,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **GeLiGas AWH V1.2 (26.03.2026)** §4.3 (Stammdatenänderung), §5.3–5.4
+//! - **GeLiGas AWH V1.2 (26.03.2026)** § 4.3 (Stammdatenänderung), § 4.3.2 Nr. 2/4 (Frist)
 //! - **UTILMD AHB Gas 1.1** — object → PID map
 //! - **EBD 4.2** §13.10–13.13 (E_3010–E_3013, codes E15/E13/E17/…)
 //! - **APERAK AHB 1.0** — Gas Folgeprozess APERAK (nächster Werktag 12:00)
@@ -692,7 +694,11 @@ impl Workflow for GeliGasStammdatenaenderungWorkflow {
                     ),
                     PendingDeadline::new(
                         ANTWORT_WINDOW_LABEL,
-                        deadline_at_werktage(received_at, 10, HolidayCalendar::BdewMaKo),
+                        deadline_at_werktage(
+                            received_at,
+                            mako_fristen::antwort::STAMMDATEN_ANTWORT_WERKTAGE_GAS,
+                            HolidayCalendar::BdewMaKo,
+                        ),
                     ),
                 ];
                 Ok(WorkflowOutput::with_outbox_and_deadlines(

@@ -162,9 +162,9 @@ The extractor keeps the strongest, which over-marks; keeping the weakest instead
 under-marks (measured: 443 → 305 excess, but 21 PIDs then *lose* segments the AHB
 requires).
 
-Drafts do now emit `group_rules`, so the `(group, tag)` scoping no longer has to
-be re-derived by hand — but that relocates marks rather than correcting them, and
-the totals are unchanged. `validate-extraction` compares the mandatory set across
+Drafts emit `group_rules`, so the `(group, tag)` scoping need not be re-derived by
+hand — but that relocates marks rather than correcting them, and leaves the totals
+unchanged. `validate-extraction` compares the mandatory set across
 **both** `segment_rules` and `group_rules` for exactly that reason: a draft must
 not be able to score clean by moving its marks between the two lists. A draft is
 a starting point for review, never a drop-in profile.

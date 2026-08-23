@@ -1351,14 +1351,16 @@ pub fn extract_receiver_mp_id(msg: &AnyMessage) -> MarktpartnerCode {
     )
 }
 
-/// Extract the Messlokations-ID from the first UTILMD transaction's IDE segment.
+/// Extract the Lokations-ID the first UTILMD transaction names.
 ///
-/// WiM UTILMD messages (55039, 55042, 55051, 55168) identify the Messlokation in
-/// the transaction header via `IDE+24+<melo_id>:::Z19` rather than the LOC segment
-/// convention used by GPKE messages.  The `wim_registry()` adapter extracts the
-/// MeLo from the same `transactions()[0].ide.object_id` path.
+/// `SG5 LOC+Z17` for a Messlokation, falling back to `LOC+Z16` for a
+/// Marktlokation — the WiM MSB processes (55039, 55042, 55051, 55168) name a
+/// MeLo, the GPKE and GeLi Gas ones a MaLo. It is never read from `IDE`, whose
+/// DE 7402 is the sender's **Vorgangsnummer** (UTILMD AHB Strom 2.2 marks
+/// `SG4 IDE 7495 = 24` and `7402 = Vorgangsnummer` on all three 55039 columns,
+/// with the MeLo in `SG5 LOC 3227 = Z17`).
 ///
-/// Returns an empty string when the message is not a UTILMD or the IDE is absent.
+/// Returns an empty string when the message is not a UTILMD or names no Lokation.
 pub fn extract_melo_from_utilmd(msg: &AnyMessage) -> String {
     let AnyMessage::Utilmd(u) = msg else {
         return String::new();

@@ -23,7 +23,7 @@
 //!
 //! | Process | Frist | Helper |
 //! |---|---|---|
-//! | GPKE Lieferbeginn | 24 h wall-clock | `fristen::add_hours(24)` |
+//! | GPKE Lieferbeginn | 11:00 Uhr des 1. WT nach dem ÜT | `mako_fristen::antwort` |
 //! | WiM Gerätewechsel | **5 Werktage** | `fristen::add_werktage(5, BdewMaKo)` |
 //! | GeLi Gas Anmeldung | 10 Werktage | `fristen::add_werktage(10, BdewMaKo)` |
 //!

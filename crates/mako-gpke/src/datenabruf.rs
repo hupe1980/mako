@@ -17,7 +17,7 @@
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE Teil 2 / Teil 4** — BK6-22-024
-//! - APERAK Frist: 24 wall-clock hours (GPKE Teil 2)
+//! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.0 § 2.4.1)
 
 use mako_engine::{
     error::WorkflowError,

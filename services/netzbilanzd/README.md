@@ -234,7 +234,7 @@ curl -X PUT http://localhost:8680/api/v1/billing/drafts/550e8400-…/dispatch
 ```
 
 Both the command and the asserted `marktrolle` follow the PID **and** the Sparte: 31002 Gas goes to
-`gpke.nne-gas.rechnung.stellen` as `GNB`, PID 31009 as `MSB`, everything else as `NB`. `makod`
+`invoic.nne.stellen` as `GNB`, PID 31009 as `MSB`, everything else as `NB`. `makod`
 checks the assertion against the deployment's licensed roles, so a gas invoice asserting `NB` is
 refused on a `--marktrollen GNB` instance. The payload carries `invoice_ref` (the invoice number —
 the business key the inbound REMADV correlates on), both party MP-IDs, the PID, the Sparte and the

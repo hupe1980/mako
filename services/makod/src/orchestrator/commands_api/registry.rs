@@ -286,28 +286,29 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // later by the Abschlussrechnung that deducts it (INVOIC AHB `SG50 MOA+113`
     // + `SG51 RFF+AFL`).
     CommandDescriptor {
-        name: "gpke.nne-abschlag.rechnung.stellen",
+        name: "invoic.nne-abschlag.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31001),
-        dispatch: cmd_gpke_nne_abschlag_rechnung_stellen,
+        dispatch: cmd_invoic_nne_abschlag_stellen,
     },
+    // PID 31002 is the NN-Rechnung in **both** Sparten (INVOIC AHB), so it is
+    // one command permitted to both roles — not two identical ones split by a
+    // name. The Strom and Gas variants used to differ only in `permitted_roles`,
+    // which meant a `GNB` deployment was refused the Strom-named command on role
+    // grounds while dispatching the exact same PID through the same function.
     CommandDescriptor {
-        name: "gpke.nne.rechnung.stellen",
-        permitted_roles: &[Marktrolle::Nb],
-        primary_pid: pid(31002),
-        dispatch: cmd_gpke_nne_rechnung_stellen,
-    },
-    CommandDescriptor {
-        name: "gpke.mmm.rechnung.stellen",
-        permitted_roles: &[Marktrolle::Nb],
-        primary_pid: pid(31005),
-        dispatch: cmd_gpke_mmm_rechnung_stellen,
-    },
-    CommandDescriptor {
-        name: "gpke.nne-gas.rechnung.stellen",
+        name: "invoic.nne.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31002),
-        dispatch: cmd_gpke_nne_gas_rechnung_stellen,
+        dispatch: cmd_invoic_nne_stellen,
+    },
+    // PID 31005 is likewise Sparte-neutral: NB → LF Gas MMM shares it with
+    // Strom. The aggregierte Gas MMM to the MGV is 31007/31008 (`gabi.mmm.*`).
+    CommandDescriptor {
+        name: "invoic.mmm.stellen",
+        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
+        primary_pid: pid(31005),
+        dispatch: cmd_invoic_mmm_stellen,
     },
     // PID 31009 is issued **by** the Messstellenbetreiber in all seven of its
     // Anwendungsfälle (PID overview 4.0), so `MSB` is a permitted role here.
@@ -352,6 +353,15 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(44004),
         dispatch: cmd_geli_lieferende_anmelden,
     },
+    // GeLi Gas 3.0 § 3.1 — the Neulieferant's Kündigung goes straight to the
+    // Altlieferant, without the grid operator. The Strom twin is
+    // `gpke.kuendigung.anmelden`.
+    CommandDescriptor {
+        name: "geli.kuendigung.anmelden",
+        permitted_roles: &[Marktrolle::Lfg],
+        primary_pid: pid(44016),
+        dispatch: cmd_geli_kuendigung_anmelden,
+    },
     CommandDescriptor {
         name: "geli.lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Gnb],
@@ -371,26 +381,26 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // Strom/Gas split is enforced at the role level.
     CommandDescriptor {
         // 44007 Abmeldung NN vom NB → 44008 / 44009 (Codeliste `E_3002`).
-        name: "geli.abmeldung-nb.bestaetigen",
+        name: "geli.nb-lieferende.bestaetigen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44008),
         dispatch: cmd_geli_abmeldung_nb_bestaetigen,
     },
     CommandDescriptor {
-        name: "geli.abmeldung-nb.ablehnen",
+        name: "geli.nb-lieferende.ablehnen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44009),
         dispatch: cmd_geli_abmeldung_nb_ablehnen,
     },
     CommandDescriptor {
         // 44010 Abmeldungsanfrage des NB → 44011 / 44012 (Codeliste `E_3020`).
-        name: "geli.abmeldungsanfrage.bestaetigen",
+        name: "geli.beendigung-zuordnung.bestaetigen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44011),
         dispatch: cmd_geli_abmeldungsanfrage_bestaetigen,
     },
     CommandDescriptor {
-        name: "geli.abmeldungsanfrage.ablehnen",
+        name: "geli.beendigung-zuordnung.ablehnen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44012),
         dispatch: cmd_geli_abmeldungsanfrage_ablehnen,
@@ -427,7 +437,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // LFN/LFA initiates a supply-change cancellation; ERP supplies `malo_id`
     // and optional `bgm_qualifier` (E01=Kündigung, E02=Rücktritt, E35=Sperrung).
     CommandDescriptor {
-        name: "geli.gas.stornierung.initiieren",
+        name: "geli.stornierung.initiieren",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(44022),
         dispatch: cmd_geli_gas_stornierung_initiieren,
@@ -436,7 +446,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // LF sends ORDERS 17103 outbound to NB/MSB requesting Gas quality data.
     // Spawns a GeliGasDatanabrufWorkflow that tracks the 10-Werktage response.
     CommandDescriptor {
-        name: "geli.gas.datenabruf.anfragen",
+        name: "geli.datenabruf.anfragen",
         permitted_roles: &[Marktrolle::Lfg],
         primary_pid: pid(17103),
         dispatch: cmd_geli_gas_datenabruf_anfragen,
@@ -771,40 +781,57 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(31004),
         dispatch: cmd_invoic_stornorechnung_ablehnen,
     },
-    // GeLi Gas AWH Sperrprozesse INVOIC (PID 31011): VNB bills LFN/LFA for services
-    // rendered during the gas disconnection/reconnection process.
+    // PID 31011 „Rechnung sonstige Leistung": the NB bills the LF for an
+    // abrechnungswürdige Handlung — in practice the Sperrung/Entsperrung.
+    //
+    // **Sparte-neutral**, like the 31004 Storno above: the Anwendungsübersicht
+    // Prüfidentifikatoren 4.0 lists 31011 twice, once under GPKE Teil 2
+    // („Abrechnung einer sonstigen Leistung", Strom) and once under AWH
+    // Sperrprozesse Gas. A Sparte-named command would lock one of the two out on
+    // role grounds; the workflow behind it is keyed on `invoice_ref` and carries
+    // no Gas semantics.
     //
     // Payload (issuer side): { "invoice_ref": "<rechnungsnummer>",
-    //   "sender_mp_id": "<GNB GLN>", "recipient_mp_id": "<LFG GLN>",
-    //   "pid": 31011, "sparte": "GAS", "rechnung": <BO4E Rechnung JSON> }
+    //   "sender_mp_id": "<NB GLN>", "recipient_mp_id": "<LF GLN>",
+    //   "pid": 31011, "sparte": "STROM" | "GAS", "rechnung": <BO4E Rechnung JSON> }
     CommandDescriptor {
-        name: "geli.gas.awh-rechnung.stellen",
+        name: "invoic.sonstige-leistung.stellen",
         permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
         primary_pid: pid(31011),
-        dispatch: cmd_geli_gas_awh_rechnung_stellen,
+        dispatch: cmd_sonstige_leistung_rechnung_stellen,
     },
     CommandDescriptor {
-        name: "geli.gas.rechnung.annehmen",
-        permitted_roles: &[Marktrolle::Lf, Marktrolle::Lfg],
+        name: "invoic.sonstige-leistung.annehmen",
+        permitted_roles: &[
+            Marktrolle::Lf,
+            Marktrolle::Lfg,
+            Marktrolle::Lfn,
+            Marktrolle::Lfa,
+        ],
         primary_pid: pid(31011),
-        dispatch: cmd_geli_gas_rechnung_annehmen,
+        dispatch: cmd_sonstige_leistung_rechnung_annehmen,
     },
     CommandDescriptor {
-        name: "geli.gas.rechnung.ablehnen",
-        permitted_roles: &[Marktrolle::Lf, Marktrolle::Lfg],
+        name: "invoic.sonstige-leistung.ablehnen",
+        permitted_roles: &[
+            Marktrolle::Lf,
+            Marktrolle::Lfg,
+            Marktrolle::Lfn,
+            Marktrolle::Lfa,
+        ],
         primary_pid: pid(31011),
-        dispatch: cmd_geli_gas_rechnung_ablehnen,
+        dispatch: cmd_sonstige_leistung_rechnung_ablehnen,
     },
     // GaBi Gas MMM-Rechnung (PIDs 31007/31008): NB bills MGV for
     // Mehr-/Mindermengen Gas settlement. BKV/MGV receives and settles/disputes.
     CommandDescriptor {
-        name: "gabi.gas.mmm.rechnung.annehmen",
+        name: "gabi.mmm.rechnung.annehmen",
         permitted_roles: &[Marktrolle::Bkv],
         primary_pid: pid(31007),
         dispatch: cmd_gabi_gas_mmm_rechnung_annehmen,
     },
     CommandDescriptor {
-        name: "gabi.gas.mmm.rechnung.ablehnen",
+        name: "gabi.mmm.rechnung.ablehnen",
         permitted_roles: &[Marktrolle::Bkv],
         primary_pid: pid(31007),
         dispatch: cmd_gabi_gas_mmm_rechnung_ablehnen,
@@ -948,9 +975,8 @@ mod tests {
     /// Every command name a service dispatches over `POST /api/v1/commands`
     /// (the shared list in `mako_markt::commands`) must be registered here.
     ///
-    /// This is the drift guard for the `processd` → `makod` boundary: `processd`
-    /// once posted `wim.msb-wechsel.*` / `geli.gas.lieferbeginn.*` names that no
-    /// registry entry matched, so every auto-STP answer died with HTTP 422.
+    /// The drift guard for the `processd` → `makod` boundary: a name no registry
+    /// entry matches is an HTTP 422 on every auto-STP answer it carries.
     #[test]
     fn all_service_dispatched_commands_are_registered() {
         for name in mako_markt::commands::DISPATCHED_BY_SERVICES {
@@ -1024,9 +1050,9 @@ mod tests {
 
         // The gas invoices: a gas network operator is licensed as GNB.
         for name in [
-            "gpke.nne-abschlag.rechnung.stellen",
-            "gpke.nne-gas.rechnung.stellen",
-            "geli.gas.awh-rechnung.stellen",
+            "invoic.nne-abschlag.stellen",
+            "invoic.nne.stellen",
+            "invoic.sonstige-leistung.stellen",
         ] {
             assert!(
                 roles(name).contains(&Marktrolle::Gnb),

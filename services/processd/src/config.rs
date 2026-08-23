@@ -355,6 +355,52 @@ impl Default for EogConfig {
 
 // ── LF module ─────────────────────────────────────────────────────────────────
 
+/// The Bilanzkreise this supplier may assign generation to in one
+/// Bilanzierungsgebiet.
+///
+/// A Lieferant is never in a single Bilanzkreis, and which ones it may use is
+/// not its own decision alone: MaBiS (BK6-24-174 § 10.2.1) has the BKV grant
+/// the Zuordnungsermächtigung „je **ZRT, BG, BK und LF**", so the admissible
+/// set is keyed on the **Bilanzierungsgebiet** — finer than the Regelzone, and
+/// the key `marktd` records on the Marktlokation.
+///
+/// Each regime is a list rather than a single value because the BKV may
+/// authorise several BKs for the same (ZRT, BG, LF): the supplier then genuinely
+/// chooses. One entry is an unambiguous deployment policy; several is a choice,
+/// and a choice is an operator's to make.
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BilanzkreisEintrag {
+    /// Bilanzierungsgebiet-EIC this row applies to, matched against `marktd`'s
+    /// `malo.bilanzierungsgebiet`. Omit for the fallback row.
+    #[serde(default)]
+    pub bilanzierungsgebiet: Option<String>,
+    /// EEG-Bilanzkreise (`LOC+237` EIC) authorised for this Bilanzierungsgebiet.
+    #[serde(default)]
+    pub eeg: Vec<String>,
+    /// KWKG-Bilanzkreise.
+    #[serde(default)]
+    pub kwkg: Vec<String>,
+    /// Ordinary Bilanzkreise — directly marketed generation and
+    /// Nicht-EEG-/Nicht-KWKG-Marktlokationen carry no regime BK.
+    #[serde(default)]
+    pub standard: Vec<String>,
+}
+
+// The lookup is LF logic on a config type: `[[lf.bilanzkreise]]` is parsed in
+// every build so the file shape stays role-independent, but only an LF build
+// resolves a Bilanzkreis from it (§ 7 EnWG).
+#[cfg(any(feature = "role-lf-strom", feature = "role-lf-gas"))]
+impl BilanzkreisEintrag {
+    pub(crate) fn candidates(&self, art: mako_pruefung::Bilanzkreisart) -> &[String] {
+        match art {
+            mako_pruefung::Bilanzkreisart::Eeg => &self.eeg,
+            mako_pruefung::Bilanzkreisart::Kwkg => &self.kwkg,
+            mako_pruefung::Bilanzkreisart::Standard => &self.standard,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct LfConfig {
@@ -364,6 +410,31 @@ pub struct LfConfig {
     /// its outcome is queued for an operator with the Antwortfrist attached.
     #[serde(default = "default_lf_auto_respond")]
     pub auto_respond: bool,
+    /// The Bilanzkreise this supplier may assign generation to, by
+    /// Bilanzierungsgebiet and regime.
+    ///
+    /// A UTILMD 55607 Zustimmung must name one (GPKE Teil 2 § 2.4.2.2 Nr. 2),
+    /// and which ones are admissible is the BKV's grant, not the supplier's
+    /// choice alone: MaBiS § 10.2.1 issues the Zuordnungsermächtigung „je ZRT,
+    /// BG, BK und LF".
+    ///
+    /// ```toml
+    /// [[lf.bilanzkreise]]
+    /// bilanzierungsgebiet = "11YN-BG-EON---X"
+    /// eeg      = ["11XBK-EEG-----1"]
+    /// kwkg     = ["11XBK-KWKG----5"]
+    /// standard = ["11XBK-STD-----9"]
+    /// ```
+    ///
+    /// A row without a `bilanzierungsgebiet` is the fallback. Listing **one** BK
+    /// for a regime is a deployment policy and answers automatically; listing
+    /// several is a choice the supplier has to make, and escalates. Empty, every
+    /// 55607 escalates with its 15:00-Uhr Frist attached — which is not the same
+    /// as ignoring the message: the NB assigns the supplier either way
+    /// (Prozessschritt 3), so the choice is between naming the Bilanzkreis and
+    /// letting the NB use whichever one it has on file.
+    #[serde(default)]
+    pub bilanzkreise: Vec<BilanzkreisEintrag>,
 }
 
 fn default_lf_auto_respond() -> bool {
@@ -374,6 +445,7 @@ impl Default for LfConfig {
     fn default() -> Self {
         Self {
             auto_respond: default_lf_auto_respond(),
+            bilanzkreise: Vec::new(),
         }
     }
 }

@@ -21,7 +21,7 @@ families. Saturdays, Sundays and public holidays are not Werktage.
 | Market          | Electricity       | Electricity       | **Gas**           |
 | Location object | MeLo (Messlok.)   | MeLo (Messlok.)   | **MaLo (Marktlok.)** |
 | Grid operator   | Netzbetreiber     | Netzbetreiber     | **Gasnetzbetreiber (GNB)** |
-| APERAK Frist    | 24 h wall-clock   | 5 Werktage        | **10 Werktage**   |
+| Antwortfrist    | clock time, 1. WT | 3 / 5 / 7 / 1 WT  | **4 / 3 / 2 WT**  |
 | EDIFACT format  | UTILMD Strom S2.x | UTILMD Strom S2.x | **UTILMD Gas G2.x** |
 
 ## PID Inventory
@@ -41,7 +41,7 @@ families. Saturdays, Sundays and public holidays are not Werktage.
 | 44013   | Anmeldung / Zuordnung EOG (§36/§38 EnWG) — GNB → LF | UTILMD G1/G2  | ✅ Implemented (`EogAnmeldung` variant) |
 | 44014   | Bestätigung EOG Anmeldung — LF → GNB                | UTILMD G1/G2  | ↩ Derived from 44013 accept |
 | 44015   | Ablehnung EOG Anmeldung — LF → GNB                  | UTILMD G1/G2  | ↩ Derived from 44013 reject |
-| 44016   | Kündigung Lieferbeginn Gas — LFN → LFA              | UTILMD G1/G2  | ⚠️ Registered — partial handling |
+| 44016   | Kündigung Lieferbeginn Gas — LFN → LFA              | UTILMD G1/G2  | ✅ Sent (`geli.kuendigung.anmelden`) and answered |
 | 44017   | Bestätigung Kündigung Lieferbeginn Gas — LFA → LFN  | UTILMD G1/G2  | ↩ Derived from 44016 accept |
 | 44018   | Ablehnung Kündigung Lieferbeginn Gas — LFA → LFN    | UTILMD G1/G2  | ↩ Derived from 44016 reject |
 | 17103   | Anfrage Abrechnungsbrennwert / Zustandszahl         | ORDERS 1.4b   | ✅ Implemented                    |

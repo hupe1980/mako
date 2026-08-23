@@ -167,8 +167,9 @@ class TestMultiMessageInterchange:
     """
 
     #: `(PID, BGM DE 1001)` — the AHB fixes the document code per process, and
-    #: 55004 Abmeldung is `E0F` where 55001 Anmeldung is `E01`.
-    VORGAENGE = ((55001, "E01"), (55004, "E0F"))
+    #: 55004 Abmeldung is `E02` „Abmeldungen" where 55001 Anmeldung is `E01`
+    #: (UTILMD AHB Strom 2.2 §§ 8.6/8.9).
+    VORGAENGE = ((55001, "E01"), (55004, "E02"))
 
     def two_vorgaenge(self) -> bytes:
         return build_interchange(

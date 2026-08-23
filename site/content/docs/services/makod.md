@@ -506,7 +506,7 @@ the `esa-wertebestellung` workflow, driven by these commands:
 | `esa.abbestellung.beauftragen` | ORDERS 17008 Abbestellung | **none** — the stop action |
 
 **Werteanfrage MSB resolution.** `esa.werteanfrage.stellen` addresses the MSB
-responsible for the Messlokation. `msb_mp_id` in the payload is now **optional**:
+responsible for the Messlokation. `msb_mp_id` in the payload is **optional**:
 supply it to address an MSB directly, or omit it and let makod resolve the
 responsible MSB from marktd's per-MeLo dated MSB timeline
 (`GET /melos/{id}/msb?at=`). This is the WiM Teil 2 UC 4.1.1 **historical**
@@ -1485,13 +1485,13 @@ Writing that entry after the events left a window where a crash produced a live
 process that was unreachable for the rest of its life — with the business key
 itself blocked against a fresh spawn.
 
-**One business key, one process.** Spawning is a check-then-act: the lookup finds
-no live process, so one is created. Two initiating messages for the same key
-arriving together could both pass the check and both spawn. Nothing failed at
-that moment; every later message resolved the key to two processes and returned
-`AmbiguousProcess`, while the duplicate ran its own Fristen to expiry and
-reported them as missed. The lookup→spawn section is now serialised per business
-key.
+**One business key, one process.** Spawning is a check-then-act — the lookup
+finds no live process, so one is created — so the lookup→spawn section is
+serialised per business key. Without that, two initiating messages for the same
+key arriving together both pass the check and both spawn, and nothing fails at
+that moment: every *later* message resolves the key to two processes and returns
+`AmbiguousProcess`, while the duplicate runs its own Fristen to expiry and
+reports them as missed.
 
 > The lock is in-process, which is sufficient because `makod` is a single writer
 > by construction — the exclusive data-directory lock refuses a second instance.
@@ -1643,11 +1643,12 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.sperrung.stornieren` | `LF` | GPKE | 39000 | LF cancels a pending Sperrauftrag (ORDCHG) |
 | `gpke.sperrung.bestaetigen` | `NB` | GPKE | 17115/17117 | NB reports successful execution → IFTSTA 21039 |
 | `gpke.sperrung.fehlgeschlagen` | `NB` | GPKE | 17115/17117 | NB reports failed execution + reason → IFTSTA 21039 |
-| `gpke.abrechnung.annehmen` | `NB` | GPKE | 31001/31002 | DSO settles a Netznutzungsabrechnung |
-| `gpke.abrechnung.ablehnen` | `NB` | GPKE | 31001/31002 | DSO disputes a Netznutzungsabrechnung |
+| `gpke.abrechnung.annehmen` | `LF` | GPKE | 31001/31002 | The LF settles an inbound Netznutzungsabrechnung → REMADV 33001 |
+| `gpke.abrechnung.ablehnen` | `LF` | GPKE | 31001/31002 | The LF disputes it → REMADV 33002, `AJT` code from `E_0406` |
 | `geli.lieferbeginn.anmelden` | `LFG` | GeLi Gas | 44001 | Gas supplier registers supply start |
 | `geli.lieferbeginn.bestaetigen` | `GNB` | GeLi Gas | 44002/44003 | Gas DSO accepts/rejects supply start |
 | `geli.lieferende.anmelden` | `LFG` | GeLi Gas | 44004 | Gas supplier registers supply end (Abmeldung NN) |
+| `geli.kuendigung.anmelden` | `LFG` | GeLi Gas | 44016 | LFN sends the Kündigung to the Altlieferant (GeLi Gas 3.0 § 3.1) |
 | `geli.lieferende.bestaetigen` | `GNB` | GeLi Gas | 44005/44006 | Gas DSO accepts/rejects supply end |
 | `wim.geraetewechsel.beauftragen` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Commission a meter-device change |
 | `wim.geraetewechsel.bestaetigen` | `NB` or `MSB` | WiM | 55040/55043/55052/55169 | Business **Bestätigung** — UTILMD with `SG4 STS+E01` from the process's EBD |
@@ -1687,18 +1688,17 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `gpke.zuordnung-lf.ablehnen` | `LF` | GPKE | 55609 | LFN rejects the Ankündigung Zuordnung LF |
 | `maloid.lieferbeginn.fortsetzen` | `LF` | GPKE | 55001 | Resume an Anmeldung once the MaLo-ID arrived from the MaLo-ID-Vergabe |
 | `gpke.abrechnung.selbstausstellen` | `LF` | GPKE | 31006 | LF issues the MMM invoice itself (Gutschriftverfahren) |
-| `gpke.nne-abschlag.rechnung.stellen` | `NB` or `GNB` | GPKE | 31001 | Abschlagsrechnung Netznutzung |
-| `gpke.nne.rechnung.stellen` | `NB` | GPKE | 31002 | Netznutzungsabrechnung Strom |
-| `gpke.mmm.rechnung.stellen` | `NB` | GPKE | 31005 | Mehr-/Mindermengenrechnung |
-| `gpke.nne-gas.rechnung.stellen` | `NB` or `GNB` | GeLi Gas | 31002 | Netznutzungsabrechnung Gas |
+| `invoic.nne-abschlag.stellen` | `NB` or `GNB` | Sparte-neutral | 31001 | Abschlagsrechnung Netznutzung |
+| `invoic.nne.stellen` | `NB` or `GNB` | Sparte-neutral | 31002 | Netznutzungsabrechnung — one PID in both Sparten |
+| `invoic.mmm.stellen` | `NB` or `GNB` | Sparte-neutral | 31005 | Mehr-/Mindermengenrechnung — one PID in both Sparten |
 | `wim.msb-rechnung.stellen` | `NB` or `MSB` | WiM | 31009 | MSB invoices the NB/LF/ESA for Messstellenbetrieb |
 | `geli.lieferende.ablehnen` | `GNB` | GeLi Gas | 44006 | GNB rejects the Abmeldung (`G_0007`) |
-| `geli.abmeldung-nb.ablehnen` | `LFG` | GeLi Gas | 44009 | LFG rejects the GNB-initiated Lieferende |
-| `geli.abmeldungsanfrage.ablehnen` | `LFG` | GeLi Gas | 44012 | LFA rejects the Abmeldungsanfrage |
+| `geli.nb-lieferende.ablehnen` | `LFG` | GeLi Gas | 44009 | LFG rejects the GNB-initiated Lieferende |
+| `geli.beendigung-zuordnung.ablehnen` | `LFG` | GeLi Gas | 44012 | LFA rejects the Abmeldungsanfrage |
 | `geli.kuendigung.ablehnen` | `LFG` | GeLi Gas | 44018 | LFA rejects the Kündigung (`G_0001`) |
 | `geli.eog.ablehnen` | `LFG` | GeLi Gas | 44015 | E/G rejects the EoG Zuordnung |
-| `geli.gas.stornierung.initiieren` | `LFG` | GeLi Gas | 44022 | LF cancels a running Gas Zuordnungsprozess |
-| `geli.gas.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Gas Netzzustandsdaten (ORDERS) |
+| `geli.stornierung.initiieren` | `LFG` | GeLi Gas | 44022 | LF cancels a running Gas Zuordnungsprozess |
+| `geli.datenabruf.anfragen` | `LFG` | GeLi Gas | 17103 | LF requests Gas Netzzustandsdaten (ORDERS) |
 | `wim.geraetewechsel.ablehnen` | `NB` or `MSB` | WiM | 55041/55044/55053/55170 | Business **Ablehnung** — requires an `antwortcode` from the process's EBD |
 | `wim.geraetewechsel.aperak` | `NB` or `MSB` | WiM | 55039/55042/55051/55168 | Technical APERAK (45 min, APERAK AHB 1.0 §2.4.1) — **not** the business answer |
 | `wim.gesamtvorgang.melden` | `MSB` or `nMSB` | WiM | 21010/21009 | MSBN reports the Gesamtvorgang outcome; the date it names becomes the Zuordnungsbeginn |
@@ -1711,14 +1711,14 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.gas.rechnung.ablehnen` | `NB` or `GNB` | WiM Gas | 31003 | GNB disputes the GMSB invoice (REMADV) |
 | `invoic.stornorechnung.annehmen` | any invoice party | INVOIC | 31004 | Accept a Sparte-neutral Stornorechnung (REMADV) |
 | `invoic.stornorechnung.ablehnen` | any invoice party | INVOIC | 31004 | Dispute a Stornorechnung by the invoice's Zahlungsziel |
-| `geli.gas.awh-rechnung.stellen` | `NB` or `GNB` | GeLi Gas | 31011 | Rechnung sonstige Leistung (AWH Sperrprozesse Gas) |
-| `geli.gas.rechnung.annehmen` | `LF` or `LFG` | GeLi Gas | 31011 | LF accepts the AWH invoice (REMADV) |
-| `geli.gas.rechnung.ablehnen` | `LF` or `LFG` | GeLi Gas | 31011 | LF disputes the AWH invoice (REMADV) |
-| `gabi.gas.mmm.rechnung.annehmen` | `BKV` | GaBi Gas | 31007 | BKV accepts the Gas Mehr-/Mindermengenrechnung |
-| `gabi.gas.mmm.rechnung.ablehnen` | `BKV` | GaBi Gas | 31007 | BKV disputes the Gas Mehr-/Mindermengenrechnung |
+| `invoic.sonstige-leistung.stellen` | `NB` or `GNB` | Sparte-neutral | 31011 | Rechnung sonstige Leistung (GPKE Teil 2 · AWH Sperrprozesse Gas) |
+| `invoic.sonstige-leistung.annehmen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF accepts the invoice (REMADV) |
+| `invoic.sonstige-leistung.ablehnen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF disputes the invoice (REMADV) |
+| `gabi.mmm.rechnung.annehmen` | `BKV` | GaBi Gas | 31007 | BKV accepts the Gas Mehr-/Mindermengenrechnung |
+| `gabi.mmm.rechnung.ablehnen` | `BKV` | GaBi Gas | 31007 | BKV disputes the Gas Mehr-/Mindermengenrechnung |
 | `geli.lieferbeginn.ablehnen` | `GNB` | GeLi Gas | 44003 | GNB rejects the Anmeldung Netznutzung (`G_0011`) |
-| `geli.abmeldung-nb.bestaetigen` | `LFG` | GeLi Gas | 44008 | LFG confirms the GNB-initiated Lieferende |
-| `geli.abmeldungsanfrage.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |
+| `geli.nb-lieferende.bestaetigen` | `LFG` | GeLi Gas | 44008 | LFG confirms the GNB-initiated Lieferende |
+| `geli.beendigung-zuordnung.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |
 | `geli.kuendigung.bestaetigen` | `LFG` | GeLi Gas | 44017 | LFA confirms the Kündigung (`G_0001`) |
 | `geli.eog.bestaetigen` | `LFG` | GeLi Gas | 44014 | E/G confirms the EoG Zuordnung |
 Commands with a single Marktrolle never need a `marktrolle` field.
@@ -1747,6 +1747,7 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
 | `gpke.abrechnung.ablehnen` | `rechnung` (BO4E `RECHNUNG` object), `ablehnungsgrund` |
 | `geli.lieferbeginn.anmelden` | `malo_id` (gas MaLo), `lieferbeginn_datum` |
 | `geli.lieferende.anmelden` | `malo_id` (gas MaLo), `lieferende_datum` |
+| `geli.kuendigung.anmelden` | `malo_id` (gas MaLo), `zaehlpunkt`, `process_date` |
 | `wim.geraetewechsel.beauftragen` | `melo_id`², `process_date` (YYYYMMDD), `receiver_mp_id`, optional `pid` (default 55042) |
 | `wim.geraetewechsel.bestaetigen` | `melo_id`², optional `antwortcode` (defaults to the tree's unconditional Zustimmung), optional `bemerkung`, `abweichender_termin` (required with `Z01`) |
 | `wim.geraetewechsel.ablehnen` | `melo_id`², **`antwortcode`** (from `E_0200`/`E_0201`/`E_0202`/`E_0240`), optional `bemerkung`, `abweichender_termin` (required with `Z12`) |

@@ -67,7 +67,7 @@
 //!   before it; otherwise **unverzüglich** (retroactive allowed).
 //! - Antwort: **15:00 at the ÜT** (future case) or 15:00 of the first
 //!   Werktag after the ÜT. Modeled here as a deadline at 15:00
-//!   Europe/Berlin of the next Werktag ([`eog_antwort_due_at`]).
+//!   the published window per PID ([`eog_antwort_due_at`]).
 //! - No answer → NB assigns anyway (15:00–16:00 window, default BK).
 //!
 //! # Regulatory basis
@@ -86,9 +86,7 @@ use mako_engine::{
     types::{MaLo, MarktpartnerCode, MessageRef},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
-use mako_fristen::{
-    APERAK_STROM_WINDOW_LABEL, HolidayCalendar, aperak_strom_due_at, deadline_at_werktage,
-};
+use mako_fristen::{APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at};
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -114,17 +112,26 @@ pub fn eog_response_pid(accepted: bool) -> u32 {
     if accepted { 55014 } else { 55015 }
 }
 
-/// Antwort deadline: 15:00 Europe/Berlin of the first Werktag after receipt.
+/// The published answer window for an inbound Anmeldung E/G.
 ///
-/// GPKE distinguishes a same-day 15:00 window (future Zuordnungsbeginn)
-/// from 15:00 of the first Werktag after the ÜT. The next-Werktag bound is
-/// the outer envelope of both and is used uniformly here; missing it never
-/// blocks the Zuordnung (the NB assigns with the default Bilanzkreis).
+/// Strom **55013** states two windows selected by a date in the payload — 15:00
+/// Uhr *am ÜT* when the Zuordnungsbeginn lies in the future, and 15:00 Uhr des
+/// ersten Werktags when it does not (GPKE Teil 2 § 2.3.2.2 Nr. 2). Gas **44013**
+/// is a plain 2-Werktage window (BK7-24-01-009 Kap. 3.3.2).
+///
+/// Both come from [`mako_fristen::antwort`], which publishes the **tighter** of
+/// the two Strom windows: a queue sized by the outer envelope reports a lapsed
+/// Frist as still running, and that the NB eventually assigns the E/G anyway
+/// (Nr. 3, „aufgrund fehlender Antwort") is a reason to answer in time, not a
+/// reason to track a looser clock.
+///
+/// `None` for a PID that is not an Anmeldung E/G.
 #[must_use]
-pub fn eog_antwort_due_at(received_at: time::OffsetDateTime) -> time::OffsetDateTime {
-    // deadline_at_werktage anchors Berlin-local end-of-Werktag semantics;
-    // one Werktag out is the outer envelope of the 15:00 windows.
-    deadline_at_werktage(received_at, 1, HolidayCalendar::BdewMaKo)
+pub fn eog_antwort_due_at(
+    pid: u32,
+    received_at: time::OffsetDateTime,
+) -> Option<time::OffsetDateTime> {
+    mako_fristen::antwort::antwort_deadline(pid, received_at)
 }
 
 // ── EoG classification ────────────────────────────────────────────────────────
@@ -847,16 +854,15 @@ impl Workflow for GpkeEogWorkflow {
                         )
                         .caused_by(1),
                     ];
-                    let deadlines = vec![
-                        PendingDeadline::new(
-                            APERAK_STROM_WINDOW_LABEL,
-                            aperak_strom_due_at(received_at),
-                        ),
-                        PendingDeadline::new(
-                            EOG_RESPONSE_WINDOW_LABEL,
-                            eog_antwort_due_at(received_at),
-                        ),
-                    ];
+                    let deadlines: Vec<PendingDeadline> = core::iter::once(PendingDeadline::new(
+                        APERAK_STROM_WINDOW_LABEL,
+                        aperak_strom_due_at(received_at),
+                    ))
+                    .chain(
+                        eog_antwort_due_at(pid.as_u32(), received_at)
+                            .map(|due| PendingDeadline::new(EOG_RESPONSE_WINDOW_LABEL, due)),
+                    )
+                    .collect();
                     Ok(WorkflowOutput::with_outbox_and_deadlines(
                         events, outbox, deadlines,
                     ))

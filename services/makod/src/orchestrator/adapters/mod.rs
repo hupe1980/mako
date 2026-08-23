@@ -41,6 +41,38 @@ use mako_engine::{
 use rubo4e::current as bo4e;
 use rust_decimal::Decimal;
 
+/// The `SG4` facts every LF-answered Vorgang carries beyond its dates.
+///
+/// One extractor for **both** Festlegungen. `mako_pruefung` branches on all of
+/// these, `processd` only ever sees what the `de.mako.process.initiated`
+/// notification carries, and the notification contract
+/// ([`mako_engine::lf_vorgang::LfVorgangsdaten`]) is Sparte-neutral — so an
+/// adapter that drops a field turns every decision into an escalation.
+pub(crate) fn lf_vorgangsdaten(
+    u: &edi_energy::messages::utilmd::UtilmdMessage,
+) -> mako_engine::lf_vorgang::LfVorgangsdaten {
+    use edi_energy::utilmd_codes::dtm;
+
+    let first = u.transactions().first();
+    let grund = first.and_then(|t| t.transaktionsgrund());
+    mako_engine::lf_vorgang::LfVorgangsdaten {
+        transaktionsgrund: grund.as_ref().map(|g| g.grund.clone()),
+        transaktionsgrund_ergaenzung: grund.and_then(|g| g.ergaenzung),
+        vorgangsnummer: first
+            .and_then(|t| t.vorgangsnummer())
+            .map(ToOwned::to_owned),
+        uet_lieferanmeldung: first
+            .and_then(|t| t.date(dtm::UET_LIEFERANMELDUNG))
+            .map(ToOwned::to_owned),
+        // `DTM+471` and `DTM+93` are mutually exclusive on a Kündigung. Its
+        // presence *is* the answer to `E_0614` Prüfschritt 60, so it is carried
+        // as its own field rather than folded into `process_date`.
+        naechstmoeglicher_termin: first
+            .and_then(|t| t.date(dtm::ENDE_NAECHSTMOEGLICH))
+            .map(ToOwned::to_owned),
+    }
+}
+
 /// Convert an `edi_energy::Pruefidentifikator` to the domain `Pruefidentifikator`.
 ///
 /// This is the only permitted crossing point between the two crates for PID values.

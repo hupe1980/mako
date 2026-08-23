@@ -251,14 +251,11 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                 // L1/N1: extract Bilanzierungsmethode (TM+EM) and Fallgruppe (TM+Z10)
                 bilanzierungsmethode: extract_bilanzierungsmethode(u.segments()),
                 fallgruppe: extract_fallgruppe(u.segments()),
-                // SG4 STS Transaktionsgrund (category 7) — drives the
-                // `mako-pruefung` date-plausibility rules (retroactive Einzug).
-                transaktionsgrund: u.transactions().first().and_then(|t| {
-                    t.sts
-                        .iter()
-                        .find(|s| s.category.as_deref() == Some("7"))
-                        .and_then(|s| s.status_code.clone())
-                }),
+                // The Sparte-neutral `SG4` contract `processd` walks: the
+                // Transaktionsgrund *and* its Ergänzung, the Vorgangsnummer,
+                // `DTM+154` and `DTM+471`. Reading the Grund alone escalated
+                // every Gas answer at Prüfschritt 10.
+                vorgang: super::lf_vorgangsdaten(u),
                 // No gas-quality characteristic exists in UTILMD G; see
                 // `extract_gasqualitaet`. Always `None` until an AHB defines one.
                 gasqualitaet: extract_gasqualitaet(u.segments()).map(str::to_owned),

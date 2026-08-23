@@ -82,7 +82,7 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GPKE Lieferantenwechsel (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-lf-anmeldung` | UTILMD 55001/55002/55016/55077 (out) · 55003–55006 (in) | — (the NB answers) | BK6-24-174 Teil 2 |
 | **GPKE Neuanlage MaLo** | ⚡ | `mako-gpke` `gpke-neuanlage` | UTILMD 55600/55601 → 55602–55605 | **00:00 Uhr des 61. WT nach dem ÜT** (60 WT täglicher Prüflauf, `E_0608`) | BK6-24-174 Teil 2 § 2.2.2 |
 | **GPKE Abmeldung LF** | ⚡ | `mako-gpke` `gpke-lf-abmeldung` | UTILMD 55007 → 55008/55009 | 05:00 Uhr des 1. WT nach dem ÜT | BK6-24-174 Teil 2 § 2.5.2.2 |
-| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | nicht quantifiziert | BK6-24-174 Teil 2 |
+| **GPKE Ankündigung Zuordnung LF** | ⚡ | `mako-gpke` `gpke-ankuendigung-zuordnung-lf` | UTILMD 55607 → 55608/55609 | **15:00 Uhr am ÜT** (Zuordnungsbeginn in der Zukunft), sonst 15:00 Uhr des 1. WT | BK6-24-174 Teil 2 § 2.4.2 |
 | **GPKE Sperrung/Entsperrung (NB)** | ⚡ | `mako-gpke` `gpke-sperrung` | ORDERS 17115/17117 → ORDRSP 19116/19117 | ORDRSP 1. WT nach dem ÜT · Ausführung 6 WT · IFTSTA 1 WT nach Abschluss | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Sperrung/Entsperrung (LF-Sicht)** | ⚡ | `mako-gpke` `gpke-sperrung-lf` | ORDERS 17115/17117 (out) · ORDCHG 39000 (out) · ORDRSP 19116/19117 · 19128/19129 · IFTSTA 21039 | Vorlauf 6 WT (nicht termingebunden) / 12 WT (termingebunden) | BK6-24-174 Teil 2 § 3.5 |
 | **GPKE Abrechnung (INVOIC)** | ⚡ | `mako-gpke` `gpke-abrechnung` | INVOIC 31001/31002/31005/31006; REMADV; COMDIS | zum Zahlungsziel (`SG8 DTM+265`) | BK6-24-174 Teil 2 § 3.3 |
@@ -314,7 +314,9 @@ sequenceDiagram
 ### INVOIC Strom Abrechnung
 
 Network billing messages from the NB to the LF. The LF is the passive receiver;
-acknowledgement is via APERAK within 24 h.
+the technical acknowledgement is an APERAK by the next Werktag 12:00 (APERAK AHB
+1.0 § 2.4.1 — an INVOIC is not a UTILMD, so the 45-minute window does not apply),
+and the business answer is the REMADV, due zum Zahlungsziel (`SG8 DTM+265`).
 
 #### INVOIC — Netznutzungs- und Mehr-/Mindermengenabrechnung
 
@@ -427,7 +429,8 @@ on the computation and the §42b Abs. 5 `Pos()` cap.
 
 MSCONS messages carry meter readings, load profiles, and interval metered values.
 The NB sends MSCONS to the LF at defined reporting intervals and at Lieferbeginn/
-Lieferende. The LF acknowledges with APERAK within 24 h.
+Lieferende. The LF acknowledges with an APERAK by the next Werktag 12:00 (APERAK
+AHB 1.0 § 2.4.1); the 45-minute window is UTILMD/ORDERS only.
 
 | Context | Sender → Empfänger | Trigger |
 |---|---|---|
@@ -1051,7 +1054,7 @@ with APERAK within **10 Werktage** (BK7-24-01-009).
 | INVOIC NNE Strom — 31002 | **INVOIC 31002** — NNE Gas (NB → LF, GasNEV §14) | ✅ Same NN-Rechnung PID for both Sparten. `netzbilanzd` `billing_type: "nne_gas"` generates PID 31002 via `SettlementType::NneGas`; same calculation as Strom, legal refs switch to `GasNEV §14` |
 | INVOIC MMM Strom — 31005 (NB → LF) | **INVOIC 31005** — MMM Gas (NB → LF); aggregierte Gas MMM (NB → MGV) uses **31007/31008** (`mako-gabi-gas`) | ⚠️ NB → LF Gas MMM shares PID 31005 with Strom; the aggregierte MMM-Rechnung flows **NB → MGV** (Marktgebietsverantwortlicher) as 31007/31008, which `invoicd` checks against MMMA Gas (THE) prices |
 | **Neuanlage MaLo** — UTILMD 55600–55605 | Embedded in UTILMD G 44001 (Lieferbeginn) | ⚠️ Gas has no separate "Neuanlage" PID set; new connections use the same 44001 PID as supplier changes |
-| **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | Strom-only balancing group notification (§14a EnWG / iMSys demand response) |
+| **Ankündigung Zuordnung LF** — UTILMD 55607–55609 | ❌ No equivalent | The NB restores the 100 % LF-Zuordnung of an **erzeugende** Marktlokation or Tranche (GPKE Teil 2 § 2.4). Gas has no Veräußerungsform/Direktvermarktung split, so no counterpart |
 | **UTILTS** — 25001/25004–25010 | ❌ No equivalent | UTILTS carries Zählzeitdefinitionen (HT/NT tariff clocks) and Berechnungsformeln — concepts that don't exist in Gas regulation |
 | **Allokationsliste Strom** — ORDERS 17110 · MSCONS 13014 | **GaBi Gas** Allokationsliste — MSCONS 13013 (`mako-gabi-gas`) | Different crate/domain: Gas allocation belongs to GaBi Gas (BK7-24-01-008), not GeLi Gas |
 | **Konfiguration / iMSys** — ORDERS 17134/17135 | **WiM Gas** — UTILMD G 44039–44044 / 44051–44053 / 44168–44170 | Handled by `mako-wim-gas`; MSB gateway configuration is a WiM concern in both Strom and Gas |

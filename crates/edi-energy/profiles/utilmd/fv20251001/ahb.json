@@ -523,7 +523,7 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E0F"
+              "E02"
             ]
           },
           "field_rules": []
@@ -713,7 +713,7 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E01"
+              "E02"
             ]
           },
           "field_rules": []
@@ -903,7 +903,7 @@
           "requirement": "M",
           "qualifier_restrictions": {
             "1001": [
-              "E0F"
+              "E02"
             ]
           },
           "field_rules": []
@@ -1081,6 +1081,496 @@
               "then_requirement": "M"
             }
           ]
+        }
+      ]
+    },
+    {
+      "code": 55007,
+      "name": "Abmeldung / Beendigung der Zuordnung (NB an LF)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02",
+              "Z90"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z22",
+              "Z21"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z22",
+              "Z21"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55008,
+      "name": "Bestätigung Abmeldung (LF an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55009,
+      "name": "Ablehnung Abmeldung (LF an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
         }
       ]
     },
@@ -4824,6 +5314,499 @@
             "3035": [
               "MS",
               "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55607,
+      "name": "Ankündigung Zuordnung LF (NB an LFN)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "field_rules": [],
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          }
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z21"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CCI",
+          "requirement": "M",
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        },
+        {
+          "group_id": "SG5",
+          "tag": "LOC",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3227": [
+              "Z16",
+              "Z21"
+            ]
+          }
+        },
+        {
+          "group_id": "SG10",
+          "tag": "CCI",
+          "requirement": "M"
+        }
+      ]
+    },
+    {
+      "code": 55608,
+      "name": "Bestätigung Zuordnung LF (LFN an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "code": 55609,
+      "name": "Ablehnung Zuordnung LF (LFN an NB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ],
+          "conditional_rules": []
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "AGR",
+          "requirement": "O"
+        },
+        {
+          "tag": "CCI",
+          "requirement": "O"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O"
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O"
+        },
+        {
+          "tag": "FTX",
+          "requirement": "O"
+        },
+        {
+          "tag": "LOC",
+          "requirement": "O"
+        },
+        {
+          "tag": "QTY",
+          "requirement": "O"
+        },
+        {
+          "tag": "SEQ",
+          "requirement": "O"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          }
+        },
+        {
+          "group_id": "SG4",
+          "tag": "STS",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
             ]
           }
         },

@@ -62,7 +62,13 @@ mod tests {
             .chain(crate::LF_ABMELDUNG_PIDS.iter().copied())
             .chain(crate::BEENDIGUNG_ZUORDNUNG_PIDS.iter().copied())
             .chain(crate::kuendigung::KUENDIGUNG_PIDS.iter().copied())
+            .chain(crate::eog::EOG_PIDS.iter().copied())
             .chain(crate::neuanlage::NEUANLAGE_PIDS.iter().copied())
+            .chain(
+                crate::ankuendigung_zuordnung_lf::ANKUENDIGUNG_ZUORDNUNG_PIDS
+                    .iter()
+                    .copied(),
+            )
             .chain(
                 crate::abrechnungsdaten::ABRECHNUNGSDATEN_PIDS
                     .iter()

@@ -452,7 +452,7 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
         malo_id: cmd_malo,
         document_date: String::new(),
         process_date: String::new(),
-        transaktionsgrund: None,
+        vorgang: Default::default(),
         message_ref: cmd_ref,
         bilanzierungsmethode: None,
         fallgruppe: None,

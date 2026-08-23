@@ -74,6 +74,7 @@
 #![warn(clippy::pedantic, clippy::must_use_candidate)]
 #![allow(clippy::doc_markdown)] // German MaKo terms produce many false positives
 
+pub mod abmeldung;
 pub mod antwort;
 pub mod vorlauf;
 

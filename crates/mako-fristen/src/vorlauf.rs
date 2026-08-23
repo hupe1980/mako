@@ -62,6 +62,20 @@ pub enum VorlaufShape {
     /// „… muss in einem Zeitraum vom `n`. WT vor bis zum `n`. WT nach dem …
     /// liegen" — the WiM Realisierungskorridor.
     Korridor(u32),
+    /// „Spätester ÜT ist der **Tag vor dem letzten Werktag vor** dem …"
+    ///
+    /// GPKE Teil 2 states the Beendigung der Zuordnung this way rather than in
+    /// Werktagen, and the two differ: the anchor is the last Werktag strictly
+    /// before the date, and the deadline is the calendar day before *that* —
+    /// which may itself be a Sunday.
+    TagVorDemLetztenWerktagVor,
+    /// „Spätester ÜT liegt `n` Monat(e) vor dem …"
+    ///
+    /// A calendar interval, not a Werktag count: GPKE Teil 2 § 2.5.2 Nr. 1
+    /// uses it for EEG-Marktlokationen and Tranchen of EEG-Marktlokationen.
+    /// Clamped to the last day of the month when the anchor day does not exist
+    /// there (§ 188 Abs. 3 BGB).
+    LatestMonateBefore(u32),
 }
 
 /// What a date was checked against, so a rejection can name it.
@@ -205,6 +219,33 @@ impl VorlaufShape {
                     }
                 }
             }
+            Self::TagVorDemLetztenWerktagVor => {
+                let letzter_wt = crate::sub_werktage(anchor, 1, cal);
+                let latest_uet = letzter_wt.previous_day().unwrap_or(letzter_wt);
+                if uebertragungstag <= latest_uet {
+                    VorlaufVerdict::Ok
+                } else {
+                    VorlaufVerdict::TooLate {
+                        shortfall_wt: crate::werktage_between(latest_uet, uebertragungstag, cal),
+                        // The earliest Zuordnungsende this ÜT can still reach:
+                        // the day after the next Werktag.
+                        earliest_possible: crate::next_werktag(uebertragungstag, cal)
+                            .next_day()
+                            .unwrap_or(uebertragungstag),
+                    }
+                }
+            }
+            Self::LatestMonateBefore(n) => {
+                let latest_uet = subtract_months(anchor, n);
+                if uebertragungstag <= latest_uet {
+                    VorlaufVerdict::Ok
+                } else {
+                    VorlaufVerdict::TooLate {
+                        shortfall_wt: crate::werktage_between(latest_uet, uebertragungstag, cal),
+                        earliest_possible: add_months(uebertragungstag, n),
+                    }
+                }
+            }
             Self::Korridor(n) => {
                 // `anchor` is the confirmed Zuordnungstermin, `uebertragungstag`
                 // the requested Übernahme-/Wechselzeitpunkt.
@@ -225,6 +266,26 @@ impl VorlaufShape {
             }
         }
     }
+}
+
+/// Shift a date `n` calendar months back, clamping to the month's last day.
+fn subtract_months(date: Date, n: u32) -> Date {
+    shift_months(date, -i32::try_from(n).unwrap_or(i32::MAX))
+}
+
+/// Shift a date `n` calendar months forward, clamping to the month's last day.
+fn add_months(date: Date, n: u32) -> Date {
+    shift_months(date, i32::try_from(n).unwrap_or(i32::MAX))
+}
+
+fn shift_months(date: Date, delta: i32) -> Date {
+    let total = i32::from(u8::from(date.month())) - 1 + delta;
+    let year = date.year() + total.div_euclid(12);
+    let month = time::Month::try_from(u8::try_from(total.rem_euclid(12) + 1).unwrap_or(1))
+        .unwrap_or(time::Month::January);
+    // § 188 Abs. 3 BGB: a day the target month does not have becomes its last.
+    let last = time::util::days_in_month(month, year);
+    Date::from_calendar_date(year, month, date.day().min(last)).unwrap_or(date)
 }
 
 /// One Prozessschritt's Vorlauffrist, with its Fundstelle.

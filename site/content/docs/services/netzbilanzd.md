@@ -459,7 +459,7 @@ Dispatch does three things in order, inside one transaction:
 
    | Field | Value |
    |---|---|
-   | `command` | `gpke.nne-abschlag.rechnung.stellen` · `gpke.nne.rechnung.stellen` · `gpke.nne-gas.rechnung.stellen` · `gpke.mmm.rechnung.stellen` · `wim.msb-rechnung.stellen` · `geli.gas.awh-rechnung.stellen` |
+   | `command` | `invoic.nne-abschlag.stellen` · `invoic.nne.stellen` · `invoic.nne.stellen` · `invoic.mmm.stellen` · `wim.msb-rechnung.stellen` · `invoic.sonstige-leistung.stellen` |
    | `marktrolle` | `MSB` for PID 31009, `GNB` for a gas invoice, `NB` otherwise |
    | `invoice_ref` | the **invoice number** — the business key the inbound REMADV correlates on |
    | `sender_mp_id` / `recipient_mp_id` | as the settlement resolved them |

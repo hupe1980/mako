@@ -1104,7 +1104,7 @@ arrives for PID 13007, `edmd` automatically extracts `brennwert_kwh_per_m3` (fro
 `QTY+Z08`) and `zustandszahl` (from `QTY+Z10`) and populates `meter_billing_periods`.
 This makes Gas NNE billing possible without manual data entry.
 
-To request Gas quality data on-demand, use `makod` command `geli.gas.datenabruf.anfragen`
+To request Gas quality data on-demand, use `makod` command `geli.datenabruf.anfragen`
 (dispatches ORDERS 17103 to the GNB, 10-Werktage response deadline).
 
 ---

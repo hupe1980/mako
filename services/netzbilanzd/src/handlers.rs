@@ -632,24 +632,24 @@ async fn dispatch_one(
     })
 }
 
-/// The `makod` command that carries a given Prüfidentifikator and Sparte.
+/// The `makod` command that carries a given Prüfidentifikator.
 ///
-/// NN-Rechnung Strom and Gas share PID 31002 but not the command: the Gas one is
-/// permitted for the `GNB` role, so a gas network operator's deployment would be
-/// refused the Strom command on role grounds alone.
-fn makod_command(pid: u32, sparte: &str) -> ApiResult<&'static str> {
-    match (pid, sparte) {
-        // A payment on account. One command for both Sparten: the Abschlag
-        // prices no energy, so nothing about it is Sparte-specific.
-        (31001, _) => Ok("gpke.nne-abschlag.rechnung.stellen"),
-        (31002, "GAS") => Ok("gpke.nne-gas.rechnung.stellen"),
-        (31002, _) => Ok("gpke.nne.rechnung.stellen"),
-        (31005, _) => Ok("gpke.mmm.rechnung.stellen"),
-        (31009, _) => Ok("wim.msb-rechnung.stellen"),
+/// The INVOIC commands are Sparte-neutral, like the PIDs they carry: 31001,
+/// 31002 and 31005 are the same Prüfidentifikatoren in Strom and Gas, and the
+/// command is permitted to `NB` and `GNB` alike. `sparte` still selects the
+/// asserted **role** — see [`makod_marktrolle`].
+fn makod_command(pid: u32, _sparte: &str) -> ApiResult<&'static str> {
+    match (pid, ()) {
+        // A payment on account. The Abschlag prices no energy, so nothing about
+        // it is Sparte-specific.
+        (31001, ()) => Ok("invoic.nne-abschlag.stellen"),
+        (31002, ()) => Ok("invoic.nne.stellen"),
+        (31005, ()) => Ok("invoic.mmm.stellen"),
+        (31009, ()) => Ok("wim.msb-rechnung.stellen"),
         // BK7-24-01-009 §5.4 — the GNB bills the LFG for abrechnungswürdige
         // Handlungen performed during the Sperrprozess.
-        (31011, _) => Ok("geli.gas.awh-rechnung.stellen"),
-        (other, _) => Err(ApiError::Internal(anyhow::anyhow!(
+        (31011, ()) => Ok("invoic.sonstige-leistung.stellen"),
+        (other, ()) => Err(ApiError::Internal(anyhow::anyhow!(
             "no makod command for Prüfidentifikator {other}"
         ))),
     }
@@ -1826,15 +1826,15 @@ mod tests {
     fn the_makod_command_follows_the_pid_and_the_sparte() {
         assert_eq!(
             makod_command(31002, "STROM").expect("strom NNE"),
-            "gpke.nne.rechnung.stellen"
+            "invoic.nne.stellen"
         );
         assert_eq!(
             makod_command(31002, "GAS").expect("gas NNE"),
-            "gpke.nne-gas.rechnung.stellen"
+            "invoic.nne.stellen"
         );
         assert_eq!(
             makod_command(31005, "STROM").expect("MMM"),
-            "gpke.mmm.rechnung.stellen"
+            "invoic.mmm.stellen"
         );
         assert_eq!(
             makod_command(31009, "STROM").expect("MSB"),
@@ -1842,13 +1842,13 @@ mod tests {
         );
         assert_eq!(
             makod_command(31011, "GAS").expect("AWH"),
-            "geli.gas.awh-rechnung.stellen"
+            "invoic.sonstige-leistung.stellen"
         );
         // An Abschlag prices no energy, so one command serves both Sparten.
         for sparte in ["STROM", "GAS"] {
             assert_eq!(
                 makod_command(31001, sparte).expect("Abschlag"),
-                "gpke.nne-abschlag.rechnung.stellen"
+                "invoic.nne-abschlag.stellen"
             );
         }
     }

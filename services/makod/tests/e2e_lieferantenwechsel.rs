@@ -531,6 +531,7 @@ impl MockLfa {
                     document_date,
                     process_date,
                     message_ref,
+                    vorgang: mako_gpke::LfVorgangsdaten::default(),
                     validation_passed: true,
                     validation_errors: vec![],
                 }

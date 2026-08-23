@@ -711,7 +711,11 @@ impl Workflow for GpkeStammdatenaenderungWorkflow {
                     ),
                     PendingDeadline::new(
                         RUECKMELDUNG_WINDOW_LABEL,
-                        deadline_at_werktage(received_at, 2, HolidayCalendar::BdewMaKo),
+                        deadline_at_werktage(
+                            received_at,
+                            mako_fristen::antwort::STAMMDATEN_RUECKMELDUNG_WERKTAGE,
+                            HolidayCalendar::BdewMaKo,
+                        ),
                     ),
                 ];
                 Ok(WorkflowOutput::with_outbox_and_deadlines(

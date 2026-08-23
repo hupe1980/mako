@@ -25,10 +25,10 @@
 //! | 31004 | Stornorechnung — **Sparte-neutral, any process** | arithmetic only | `invoic.stornorechnung.*` |
 //! | 31005 | MMM-Rechnung Strom | NNE sheet + MMM Strom prices | `gpke.abrechnung.*` |
 //! | 31006 | MMM Mehrmenge, selbst ausgestellt | NNE sheet + MMM Strom prices | `gpke.abrechnung.*` |
-//! | 31007 | GaBi Gas MMM-Rechnung | NNE sheet + MMM Gas prices | `gabi.gas.mmm.rechnung.*` |
-//! | 31008 | GaBi Gas MMM, selbst ausgestellt | NNE sheet + MMM Gas prices | `gabi.gas.mmm.rechnung.*` |
+//! | 31007 | GaBi Gas MMM-Rechnung | NNE sheet + MMM Gas prices | `gabi.mmm.rechnung.*` |
+//! | 31008 | GaBi Gas MMM, selbst ausgestellt | NNE sheet + MMM Gas prices | `gabi.mmm.rechnung.*` |
 //! | 31009 | WiM MSB-Rechnung | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
-//! | 31011 | GeLi Gas Rechnung sonstige Leistung (AWH) | NNE price sheet | `geli.gas.rechnung.*` |
+//! | 31011 | Rechnung sonstige Leistung — **Sparte-neutral** (GPKE Teil 2 · AWH Sperrprozesse Gas) | NNE price sheet | `invoic.sonstige-leistung.*` |
 //!
 //! Sources: BDEW INVOIC AHB (Anwendungsübersicht Prüfidentifikatoren 4.0),
 //! BK6-24-174; WiM Teil 1; GaBi Gas 2.1 (BK7-24-01-008); GeLi Gas 3.0
@@ -133,15 +133,15 @@ pub const ROUTES: &[PidRoute] = &[
     PidRoute {
         pid: 31007,
         check: CheckKind::NetznutzungMitMmmGas,
-        accept: "gabi.gas.mmm.rechnung.annehmen",
-        reject: "gabi.gas.mmm.rechnung.ablehnen",
+        accept: "gabi.mmm.rechnung.annehmen",
+        reject: "gabi.mmm.rechnung.ablehnen",
         salt: b"gabi-gas",
     },
     PidRoute {
         pid: 31008,
         check: CheckKind::NetznutzungMitMmmGas,
-        accept: "gabi.gas.mmm.rechnung.annehmen",
-        reject: "gabi.gas.mmm.rechnung.ablehnen",
+        accept: "gabi.mmm.rechnung.annehmen",
+        reject: "gabi.mmm.rechnung.ablehnen",
         salt: b"gabi-gas",
     },
     PidRoute {
@@ -154,8 +154,8 @@ pub const ROUTES: &[PidRoute] = &[
     PidRoute {
         pid: 31011,
         check: CheckKind::Netznutzung,
-        accept: "geli.gas.rechnung.annehmen",
-        reject: "geli.gas.rechnung.ablehnen",
+        accept: "invoic.sonstige-leistung.annehmen",
+        reject: "invoic.sonstige-leistung.ablehnen",
         salt: b"geli-gas",
     },
 ];
@@ -194,9 +194,9 @@ mod tests {
                 31001 | 31002 | 31005 | 31006 => "gpke.abrechnung.",
                 31003 => "wim.gas.rechnung.",
                 31004 => "invoic.stornorechnung.",
-                31007 | 31008 => "gabi.gas.mmm.rechnung.",
+                31007 | 31008 => "gabi.mmm.rechnung.",
                 31009 => "wim.rechnung.",
-                31011 => "geli.gas.rechnung.",
+                31011 => "invoic.sonstige-leistung.",
                 other => panic!("PID {other} has no expected command family"),
             };
             assert!(

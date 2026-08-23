@@ -18,11 +18,12 @@
 //! ## Regulatory basis
 //!
 //! **BK7-24-01-009** (GeLi Gas 3.0, effective 2026-04-01).
-//! GNB response deadline: **10 Werktage** per APERAK AHB 1.0 §2.3.1.
+//! Counterparty answer deadline: the published window per PID from
+//! `mako_fristen::antwort` — 4 Werktage for 44001, 3 for 44004 and 44016.
 //!
 //! ## Key Gas-specific requirement (R3)
 //!
-//! **Both `malo_id` (IDE+Z19) and `zaehlpunkt` (RFF+Z13) are mandatory** in
+//! **Both `malo_id` (`SG5 LOC+Z16`) and `zaehlpunkt` are mandatory** in
 //! UTILMD G 44001 per AHB rules `AHB-44001-IDE-M` and `AHB-44001-RFF-M`.
 //! The LFN must supply both fields from the ERP command; there is no
 //! NB-side resolution of a missing Gas-MaLo-ID.
@@ -33,7 +34,7 @@
 //! |---------------------|--------------------------------|----------------------------------------|
 //! | Request PID         | 55001                          | 44001                                  |
 //! | Response PIDs       | 55002 (✓) / 55003 (✗)          | 44002 (✓) / 44003 (✗)                 |
-//! | Deadline            | 24 h wall-clock (BK6-22-024)   | 10 Werktage (BK7-24-01-009)            |
+//! | Antwortfrist        | clock time des 1. WT (GPKE Teil 2) | 4 / 3 Werktage (BK7-24-01-009 Kap. 3.1–3.2.3) |
 //! | MaLo source         | API-Webdienste Strom optional  | ERP must supply `malo_id` + `zaehlpunkt` |
 //! | Activation step     | explicit `Activate` command    | explicit `Activate` command            |
 //! | ProcessInitiated CE | ✅ emitted on spawn            | ✅ emitted on spawn                    |
@@ -55,13 +56,18 @@ pub const WORKFLOW_NAME: &str = "geli-gas-lf-anmeldung";
 
 /// Outbound request PIDs initiated by the LFN (ERP-driven).
 ///
-/// | PID   | Process variant                          |
-/// |-------|------------------------------------------|
-/// | 44001 | Anmeldung NN — Lieferbeginn (supply start)|
-/// | 44004 | Abmeldung NN — Lieferende (supply end)   |
-pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004];
+/// | PID   | Process variant                             | Answered by | Frist |
+/// |-------|---------------------------------------------|---|---|
+/// | 44001 | Anmeldung NN — Lieferbeginn (supply start)   | GNB | 4 WT |
+/// | 44004 | Abmeldung NN — Lieferende (supply end)      | GNB | 3 WT |
+/// | 44016 | Kündigung beim Altlieferanten (LFN → LFA)   | LFA | 3 WT |
+///
+/// 44016 does not go to the grid operator: GeLi Gas 3.0 § 3.1 has the
+/// Neulieferant send the Kündigung straight to the Altlieferant, who must
+/// answer „unverzüglich, spätestens jedoch bis zum Ablauf des 3. Werktages".
+pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004, 44016];
 
-/// Inbound GNB response PIDs that resume this workflow.
+/// Inbound response PIDs that resume this workflow.
 ///
 /// | PID   | Meaning                          |
 /// |-------|----------------------------------|
@@ -69,10 +75,16 @@ pub const ANFRAGE_PIDS_LF: &[u32] = &[44001, 44004];
 /// | 44003 | Ablehnung Anmeldung NN (✗)       |
 /// | 44005 | Bestätigung Abmeldung NN (✓)     |
 /// | 44006 | Ablehnung Abmeldung NN (✗)       |
-pub const ANTWORT_PIDS_LF: &[u32] = &[44002, 44003, 44005, 44006];
+/// | 44017 | Bestätigung Kündigung (✓)        |
+/// | 44018 | Ablehnung Kündigung (✗)          |
+pub const ANTWORT_PIDS_LF: &[u32] = &[44002, 44003, 44005, 44006, 44017, 44018];
 
-/// Deadline label for the 10-Werktage GNB response window (BK7-24-01-009).
-pub const GNB_RESPONSE_WINDOW_LABEL: &str = "geli-gas-lf-anmeldung-response-10-werktage";
+/// Deadline label for the counterparty's published answer window.
+///
+/// The window itself comes from `mako_fristen::antwort` — 4 / 3 / 3 Werktage by
+/// PID, never a flat number. The 10 Werktage this label used to name are the
+/// **LFN's own Vorlauffrist** before Lieferbeginn, a different clock entirely.
+pub const GNB_RESPONSE_WINDOW_LABEL: &str = "geli-gas-lf-anmeldung-antwortfrist";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -82,22 +94,23 @@ pub const GNB_RESPONSE_WINDOW_LABEL: &str = "geli-gas-lf-anmeldung-response-10-w
 pub enum GeliGasLfAnmeldungEvent {
     /// LFN-side Anmeldung initiated — outbound UTILMD G queued for AS4 delivery.
     Initiated {
-        /// PID of the outbound Anfrage (44001 = Lieferbeginn, 44002 = Lieferende).
+        /// PID of the outbound Anfrage (44001 Lieferbeginn, 44004 Lieferende,
+        /// 44016 Kündigung).
         pruefidentifikator: Pruefidentifikator,
-        /// Gas Marktlokations-ID (IDE+Z19, 11-digit EIC).
+        /// Gas Marktlokations-ID — rendered into `SG5 LOC+Z16`, never `IDE`.
         malo_id: MaLo,
-        /// Zählpunktbezeichnung (RFF+Z13) — mandatory in UTILMD G 44001/44002.
+        /// Zählpunktbezeichnung.
         zaehlpunkt: String,
         /// Our own GLN (the Lieferant / LFN).
         sender: MarktpartnerCode,
         /// GNB GLN (receiver).
         receiver: MarktpartnerCode,
-        /// Requested Lieferbeginn or Lieferende date (YYYYMMDD).
+        /// Requested Lieferbeginn, Lieferende or Kündigungstermin (YYYYMMDD).
         process_date: String,
     },
     /// GNB responded — accepted or rejected.
     AntwortReceived {
-        /// PID of the inbound response (44002/44003, 44005/44006).
+        /// PID of the inbound response (44002/44003, 44005/44006, 44017/44018).
         response_pid: Pruefidentifikator,
         /// `true` = Bestätigung (accepted), `false` = Ablehnung (rejected).
         accepted: bool,
@@ -170,7 +183,7 @@ pub enum GeliGasLfAnmeldungState {
 impl mako_engine::workflow::OccupiesBusinessKey for GeliGasLfAnmeldungState {
     fn occupies_business_key(&self) -> bool {
         match self {
-            // Awaiting the GNB inside the 10-Werktage window, or supply
+            // Awaiting the counterparty inside its published window, or supply
             // confirmed and running.
             Self::Pending(_) | Self::Active(_) => true,
             // `Rejected` (GNB refusal or deadline) and `Completed` are terminal;
@@ -217,7 +230,7 @@ pub enum GeliGasLfAnmeldungCommand {
         sender: MarktpartnerCode,
         /// GNB GLN (resolved from MaLo cache).
         receiver: MarktpartnerCode,
-        /// Gas Marktlokations-ID (IDE+Z19).
+        /// Gas Marktlokations-ID → `SG5 LOC+Z16`.
         malo_id: MaLo,
         /// Zählpunktbezeichnung (RFF+Z13) — mandatory for Gas.
         zaehlpunkt: String,

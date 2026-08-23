@@ -218,7 +218,7 @@ async fn cross_fv_response_accepted_on_fv_start_process() {
         "NB must be ValidationPassed after ReceiveUtilmd; got {nb_state:?}",
     );
 
-    // Register the 24h APERAK deadline (mirrors what the engine dispatcher does).
+    // Register the Antwortfrist (mirrors what the engine dispatcher does).
     let now = OffsetDateTime::now_utc();
     let aperak_due = fristen::add_hours(now, 24);
     let aperak_deadline = Deadline::new(

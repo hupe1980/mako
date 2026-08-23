@@ -19,7 +19,7 @@
 //! | Module | Prüfende Rolle | Trees |
 //! |---|---|---|
 //! | [`nb`] | Netzbetreiber | `E_0622` Anmeldung, `E_0607` Abmeldung |
-//! | [`lf`] | Lieferant | `E_0609`, `E_0624`, `E_0614`, `E_0615`; Gas `E_3001`, `E_3002`, `E_3020`, `E_3008` |
+//! | [`lf`] | Lieferant | `E_0609`, `E_0624`, `E_0614`, `E_0615`, `E_0603`–`E_0606`; Gas `E_3001`, `E_3002`, `E_3020`, `E_3008` |
 //!
 //! The document defines around sixty trees with the LF as prüfende Rolle;
 //! these are its **process** answers, the messages that move a Marktlokation
@@ -84,10 +84,11 @@ pub use mako_fristen::HolidayCalendar;
 
 #[cfg(feature = "role-lf")]
 pub use lf::{
-    Bekannt, EogZustaendigkeit, LfAnfrage, LfAntwort, LfEntscheidung, LfVertragslage, Lokationsart,
-    Vollmacht, pruefe_abmeldung, pruefe_abmeldung_gas, pruefe_abmeldungsanfrage_gas,
-    pruefe_anmeldung_eog, pruefe_anmeldung_eog_gas, pruefe_beendigung_zuordnung, pruefe_kuendigung,
-    pruefe_kuendigung_gas,
+    Bekannt, Bilanzkreisart, EogZustaendigkeit, LfAnfrage, LfAntwort, LfEntscheidung,
+    LfVertragslage, Lokationsart, Terminart, Vollmacht, ZuordnungsFall, ZuordnungsLage,
+    pruefe_abmeldung, pruefe_abmeldung_gas, pruefe_abmeldungsanfrage_gas, pruefe_anmeldung_eog,
+    pruefe_anmeldung_eog_gas, pruefe_beendigung_zuordnung, pruefe_kuendigung,
+    pruefe_kuendigung_gas, pruefe_zuordnung,
 };
 #[cfg(feature = "role-msb")]
 pub use msb::{
@@ -114,8 +115,22 @@ pub const EIN_AUSZUG: &str = "E01";
 pub const WECHSEL: &str = "E03";
 /// `Z33` — Auszug wegen Stilllegung.
 pub const STILLLEGUNG: &str = "Z33";
-/// `ZC7` — Abmeldung wegen fehlender Zuordnungsermächtigung aufgrund Änderung ZRT.
-pub const ZRT_AENDERUNG: &str = "ZC7";
-/// `ZC6` — Abmeldung wegen fehlender Zuordnungsermächtigung aufgrund
+/// `ZT0` — Abmeldung wegen fehlender Zuordnungsermächtigung aufgrund Änderung ZRT.
+pub const ZRT_AENDERUNG: &str = "ZT0";
+/// `ZQ7` — Abmeldung wegen fehlender Zuordnungsermächtigung, aufgrund
 /// Deaktivierung durch den BKV beim NB.
-pub const BKV_DEAKTIVIERUNG: &str = "ZC6";
+pub const BKV_DEAKTIVIERUNG: &str = "ZQ7";
+
+/// Every Transaktionsgrund the UTILMD AHB admits on a **55007** Abmeldung.
+///
+/// `E_0609` reaches Prüfschritt 80 only from 50-nein, and its Hinweis states
+/// that the remaining ground is necessarily one of the two
+/// Zuordnungsermächtigungs-Codes. A message carrying anything else — or
+/// nothing — cannot be walked, so the tree escalates instead of falling
+/// through to the Zustimmung.
+///
+/// `ZC6`/`ZC7` are **not** in this set: those are 55013 Ersatz-/Grundversorgung
+/// grounds („EoG aus Bilanzkreisschließung", „EoG aufgrund Erlöschen der
+/// Zuordnungsermächtigung"), and reading them here silently confirmed every
+/// Abmeldung wegen fehlender Zuordnungsermächtigung.
+pub const ABMELDUNG_GRUENDE: &[&str] = &[STILLLEGUNG, BKV_DEAKTIVIERUNG, ZRT_AENDERUNG];

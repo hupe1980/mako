@@ -7,19 +7,36 @@ weight = 12
 
 ## Problem
 
-MaKo regulatory processes have hard SLA windows enforced by BNetzA rulings:
+MaKo regulatory processes have hard SLA windows enforced by BNetzA rulings, and
+an inbound message starts **two independent clocks**:
 
-| Domain        | Window          | Helper                               | Ruling       |
-|---------------|-----------------|--------------------------------------|--------------|
-| GPKE (Strom)  | **24 h wall-clock** | `fristen::add_hours(t, 24)`      | BK6-24-174   |
-| WiM (Strom)   | **3 / 5 / 7 / 1 WT**, per PID | `antwort_frist_werktage(pid)` | BK6-24-174 Teil 1 |
-| GeLi Gas      | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
-| WiM Gas       | **10 Werktage** | `fristen::add_werktage(d, 10, BdewMaKo)` | BK7-24-01-009 |
-| MABIS         | **1 Werktag** (Prüfmitteilung) | `fristen::add_werktage(d, 1, BdewMaKo)` | BK6-24-174 |
+| Clock | Window | Source |
+|---|---|---|
+| **Technical acknowledgement** (APERAK) | **45 Minuten** for a UTILMD or ORDERS; Sonntag 12:00 for a Saturday arrival; nächster Werktag 12:00 for every other message type | APERAK AHB 1.0 § 2.4.1 |
+| **Business answer** | per Prüfidentifikator — a clock time, an end-of-Werktag, or a Werktag count | the Festlegung for that process |
 
-When a process does not receive an APERAK within the window, the engine fires a
-`DeadlineExpired` event and must automatically enqueue an `AperakTimeout` ERP
-outbox message so the ERP/operator can act on the missed SLA.
+The two are routinely conflated, and the failure is asymmetric: a queue sized by
+the *looser* of them reports a lapsed Frist as still running.
+
+The business windows are data, not literals — one table keyed by inbound PID, so
+`makod`, `processd`, `obsd` and `agentd` cannot disagree about the same deadline:
+
+| Family | Shape | Examples |
+|---|---|---|
+| GPKE Strom | wall-clock time on the *n*-th Werktag after the ÜT | 11:00 (55001), 06:00 (55004), 05:00 (55007), 09:00 (55010), 15:00 **am ÜT** (55013, 55607) |
+| WiM Strom | Werktage per PID | 3 / 5 / 7 / 1 |
+| GeLi Gas | Ablauf des *n*-ten Werktags | 4 (44001), 3 (44004/44007/44010/44016), 2 (44013) |
+| MaBiS | Werktage | 1 (Prüfmitteilung) |
+
+`mako_fristen::antwort::antwortfrist` resolves them and returns `None` for a PID
+the Festlegungen do not quantify — **unknown**, never *unbounded*. The
+GeLi Gas "10 Werktage" is not an answer window at all: it is the supplier's
+Vorlauffrist before Lieferbeginn, recorded as
+`TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST` because it is easy to re-introduce.
+
+When a deadline lapses undischarged, the engine fires a `DeadlineExpired` event
+and enqueues an `AperakTimeout` ERP outbox message so the ERP/operator can act on
+the missed SLA.
 
 ## Architecture
 

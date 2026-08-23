@@ -354,7 +354,7 @@ notify_webhook_url       = "https://erp.example/hooks/eog"
 
 ## LF module — answering what the market asks a supplier
 
-Six inbound processes, each with its own Entscheidungsbaum, its own Codeliste
+Seven inbound processes, each with its own Entscheidungsbaum, its own Codeliste
 and its own Antwortfrist:
 
 | Sparte | Inbound | Process | EBD | Answers | Frist |
@@ -362,9 +362,38 @@ and its own Antwortfrist:
 | Strom | 55007 | Lieferende von NB an LF | `E_0609` | 55008 / 55009 | 05:00 Uhr des 1. WT nach dem ÜT |
 | Strom | 55010 | Beendigung der Zuordnung | `E_0624` | 55011 / 55012 | 09:00 Uhr des 1. WT nach dem ÜT |
 | Strom | 55016 | Kündigung (LFN → LFA) | `E_0614` | 55017 / 55018 | Ablauf des 1. WT nach dem ÜT |
-| Gas | 44007 | Abmeldung NN vom NB | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
-| Gas | 44010 | Abmeldeanfrage des NB | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
+| Strom | 55607 | Ankündigung Zuordnung LF (erz. MaLo / Tranche) | `E_0603`–`E_0606` | 55608 / 55609 | **15:00 Uhr am ÜT** |
+| Gas | 44007 | Lieferende von NB an LF | `E_3002` | 44008 / 44009 | Ablauf des 3. WT |
+| Gas | 44010 | Beendigung der Zuordnung | `E_3020` | 44011 / 44012 | Ablauf des 3. WT |
 | Gas | 44016 | Kündigung beim Altlieferanten | `E_3001` | 44017 / 44018 | Ablauf des 3. WT |
+
+The same business process carries the same command name in both Sparten —
+`{gpke,geli}.nb-lieferende.*`, `{gpke,geli}.beendigung-zuordnung.*`,
+`{gpke,geli}.kuendigung.*` — and one walk decides both, from one
+`de.mako.process.initiated` contract.
+
+**55607 is the one where silence is not a lapsed Frist.** GPKE Teil 2 § 2.4.2.2
+Nr. 3 has the NB assign the supplier to the erzeugende Marktlokation „aufgrund
+fehlender Antwort" anyway, using whichever Bilanzkreis it has on file. The
+substance of the answer is that **Bilanzkreis**, not the code: `A01` and `A99`
+are the only two the four trees publish. Which BK is admissible is the BKV's
+grant — MaBiS § 10.2.1 issues the Zuordnungsermächtigung „je ZRT, BG, BK und
+LF" — so `[[lf.bilanzkreise]]` is keyed on the Bilanzierungsgebiet, and a regime
+with several authorised BKs is a choice the supplier makes, not a default.
+
+Two of the questions the trees ask decide the answer before any contract data is
+consulted, and both come from the message itself:
+
+- **Which object is the Vorgang about?** `SG4 STS+7` DE 9013 element 3 —
+  `ZW3` erzeugende, `ZW4` verbrauchende, `ZW5` Tranche, `ZAP` ruhende
+  Marktlokation. The two halves of `E_0609` and `E_0624` answer from *different
+  code ranges*, so a missing Ergänzung is an escalation rather than a default.
+- **Was the Vorlauffrist kept?** (`E_0609` Prüfschritt 40, `E_3002` `E17`.)
+  Arithmetic on the Übertragungstag and the Zuordnungsende, resolved by
+  `mako_fristen::abmeldung` against GPKE Teil 2 § 2.5.2 Nr. 1. The window is a
+  calendar month for EEG-Marktlokationen and the day before the last Werktag for
+  everything else, so an erzeugende Marktlokation escalates unless the deployment
+  can say which it is.
 
 ### How a decision is made
 
@@ -531,7 +560,7 @@ The GNB responds with PID 44002 (Bestätigung) or 44003 (Ablehnung) by the
 > **No API-Webdienste equivalent for Gas.** The ERP must supply the Gas-MaLo-ID
 > (`malo_id`) upfront from the customer contract, MaStR, or DVGW Codevergabe.
 
-### Gas Datenabruf: `geli.gas.datenabruf.anfragen`
+### Gas Datenabruf: `geli.datenabruf.anfragen`
 
 Request Abrechnungsbrennwert and Zustandszahl on-demand (ORDERS 17103):
 
@@ -539,7 +568,7 @@ Request Abrechnungsbrennwert and Zustandszahl on-demand (ORDERS 17103):
 curl -X POST http://makod:8080/api/v1/commands \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
-  -d '{"command": "geli.gas.datenabruf.anfragen", "payload": {"malo_id": "10001234558"}}'
+  -d '{"command": "geli.datenabruf.anfragen", "payload": {"malo_id": "10001234558"}}'
 ```
 
 The GNB responds with MSCONS 13007 (data delivery) or ORDRSP 19103 (rejection).
@@ -625,6 +654,17 @@ einsd_api_key            = ""
 
 [lf]
 auto_respond = true   # false → every inbound LF process routed to approval_queue
+
+# The Bilanzkreise a 55607 Zustimmung may name, by Bilanzierungsgebiet and
+# regime. MaBiS § 10.2.1 grants the Zuordnungsermächtigung „je ZRT, BG, BK und
+# LF", so one BK per regime answers automatically and several is an operator
+# choice. Omit `bilanzierungsgebiet` for the fallback row; omit the table
+# entirely and every 55607 escalates with its 15:00-Uhr Frist attached.
+[[lf.bilanzkreise]]
+bilanzierungsgebiet = "11YN-BG-EON---X"
+eeg      = ["11XBK-EEG-----1"]
+kwkg     = ["11XBK-KWKG----5"]
+standard = ["11XBK-STD-----9"]
 
 [msb]
 auto_accept       = false   # true → dispatch the MSB-Wechsel Bestätigung

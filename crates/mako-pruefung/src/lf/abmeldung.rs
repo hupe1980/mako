@@ -63,7 +63,13 @@ macro_rules! gas_code {
 /// `every_landing_resolves_to_a_published_code` test walks all of them.
 #[must_use]
 pub fn pruefe_abmeldung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntscheidung {
-    let verbrauchend = anfrage.lokationsart.ist_verbrauchend();
+    // Prüfschritt 10 — „verbrauchende Marktlokation **oder ruhende
+    // Marktlokation**?" `E_0609` names both, unlike `E_0624`.
+    let lokationsart = match anfrage.lokationsart_oder_eskalation(EBD_ABMELDUNG) {
+        Ok(l) => l,
+        Err(e) => return e,
+    };
+    let verbrauchend = lokationsart.ist_verbrauchend();
     // (verbrauchend, Tranche/erzeugend) code pairs, in Prüfschritt order.
     let c = |a: &'static str, b: &'static str| if verbrauchend { a } else { b };
     let ebd = EBD_ABMELDUNG;
@@ -81,10 +87,14 @@ pub fn pruefe_abmeldung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsche
         }};
     }
 
+    if let Some(e) = unroutbarer_grund(anfrage) {
+        return e;
+    }
+
     // Prüfschritt 20/25 — a Vorgang marked `ZAP` claims the MaLo is a ruhende
     // Marktlokation of a Kundenanlage. Only the supplier can say whether that is
     // true, and only for the verbrauchend branch.
-    if verbrauchend && anfrage.lokationsart == Lokationsart::RuhendeMalo {
+    if verbrauchend && lokationsart == Lokationsart::RuhendeMalo {
         // The EBD asks whether it really *is* a ruhende MaLo under § 20 Abs. 1d
         // EnWG / § 10c EEG. mako has no field for that today, so the honest
         // outcome is an operator decision rather than a fabricated `A01`.
@@ -125,7 +135,7 @@ pub fn pruefe_abmeldung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsche
             // 60/540 — the LF holds information that the MaLo is *not* being
             // decommissioned.
             Bekannt::Ja => antwort!(list, ebd, c("A04", "A23"), 60, termin),
-            Bekannt::Nein => sonstiges_oder_zustimmung(verbrauchend, termin),
+            Bekannt::Nein => zustimmung(verbrauchend, termin),
             Bekannt::Unbekannt => LfEntscheidung::eskalation(
                 60,
                 format!(
@@ -138,60 +148,123 @@ pub fn pruefe_abmeldung(anfrage: &LfAnfrage, lage: &LfVertragslage) -> LfEntsche
         };
     }
 
-    // Prüfschritt 80/560 — Transaktionsgrund „fehlende Zuordnungsermächtigung
-    // aufgrund Änderung ZRT"? The alternative branch (85/565) is the
-    // Deaktivierung durch den BKV.
-    if anfrage.grund_ist(crate::ZRT_AENDERUNG) {
-        // 90/570 — ZRT auf einen Typ geändert, für den eine
-        // Zuordnungsermächtigung bestehen müsste?
-        match lage.zrt_wechsel_mit_ermaechtigung {
-            Bekannt::Ja => code!(c("A06", "A25"), 90),
-            Bekannt::Nein => return sonstiges_oder_zustimmung(verbrauchend, termin),
-            Bekannt::Unbekannt => {
-                return LfEntscheidung::eskalation(
-                    90,
-                    "Zeitreihentyp-Wechsel nicht bewertet — liegt keine Änderung des \
-                     Zeitreihentyps zum übermittelten Lieferende vor, ist die Frage laut EBD \
-                     mit ja zu beantworten (E_0609 Prüfschritt 90 → A06).",
-                );
-            }
-        }
-    }
-
-    if anfrage.grund_ist(crate::BKV_DEAKTIVIERUNG) {
-        // 85/565 — Lieferende muss der nächste Monatserste 00:00 Uhr sein.
-        if let Some(termin) = anfrage.termin
-            && termin.day() != 1
-        {
-            code!(c("A05", "A24"), 85);
-        }
-        // 100/580 — hat der BKV die Deaktivierung vorgenommen?
-        match lage.zuordnungsermaechtigung_deaktiviert {
-            Bekannt::Nein => code!(c("A07", "A26"), 100),
-            Bekannt::Unbekannt => {
-                return LfEntscheidung::eskalation(
-                    100,
-                    "Deaktivierung der Zuordnungsermächtigung durch den BKV nicht bekannt — \
-                     der LF klärt den Sachverhalt mit dem BKV (E_0609 Prüfschritt 100 → A07).",
-                );
-            }
-            Bekannt::Ja => {}
-        }
-        // 120/600 — Eingang nach dem 5. WT des Monats, in dem die
-        // Zuordnungsermächtigung endet?
-        if let Some(termin) = anfrage.termin
-            && eingang_nach_fuenftem_werktag(anfrage, termin)
-        {
-            code!(c("A09", "A28"), 120);
-        }
+    // Prüfschritte 80–120 / 560–600 — the two Zuordnungsermächtigungs-Gründe.
+    if let Some(e) = pruefe_zuordnungsermaechtigung(anfrage, lage, verbrauchend) {
+        return e;
     }
 
     // 130/610 — kein zuvor unspezifizierter Fehler: Zustimmung.
-    sonstiges_oder_zustimmung(verbrauchend, termin)
+    zustimmung(verbrauchend, termin)
 }
 
-/// The `E_0609` terminal: `A10` (verbrauchend) or `A29` (Tranche/erzeugend).
-fn sonstiges_oder_zustimmung(verbrauchend: bool, termin: Option<Date>) -> LfEntscheidung {
+/// `E_0609` Prüfschritte 80–120 / 560–600 — the Zuordnungsermächtigungs-Zweig.
+///
+/// Reached from 50-nein, where the only remaining grounds are `ZT0` (Änderung
+/// des Zeitreihentyps) and `ZQ7` (Deaktivierung durch den BKV). `None` means
+/// the branch found nothing to object to and the walk continues to 130/610.
+fn pruefe_zuordnungsermaechtigung(
+    anfrage: &LfAnfrage,
+    lage: &LfVertragslage,
+    verbrauchend: bool,
+) -> Option<LfEntscheidung> {
+    let c = |a: &'static str, b: &'static str| if verbrauchend { a } else { b };
+    let termin = anfrage.termin;
+    let code = |want: &str, schritt: u16| {
+        let entry = E_0609_CODES
+            .iter()
+            .find(|c| c.code == want)
+            .unwrap_or_else(|| panic!("{EBD_ABMELDUNG} does not publish {want}"));
+        Some(LfEntscheidung::antwort(entry, schritt, termin, None))
+    };
+
+    // 80/560 — Transaktionsgrund „fehlende Zuordnungsermächtigung aufgrund
+    // Änderung ZRT"? The alternative edge (85/565) is the BKV-Deaktivierung.
+    if anfrage.grund_ist(crate::ZRT_AENDERUNG) {
+        // 90/570 — ZRT auf einen Typ geändert, für den eine
+        // Zuordnungsermächtigung bestehen müsste?
+        return match lage.zrt_wechsel_mit_ermaechtigung {
+            Bekannt::Ja => code(c("A06", "A25"), 90),
+            Bekannt::Nein => None,
+            Bekannt::Unbekannt => Some(LfEntscheidung::eskalation(
+                90,
+                "Zeitreihentyp-Wechsel nicht bewertet — liegt keine Änderung des \
+                 Zeitreihentyps zum übermittelten Lieferende vor, ist die Frage laut EBD \
+                 mit ja zu beantworten (E_0609 Prüfschritt 90 → A06).",
+            )),
+        };
+    }
+
+    // 85/565 — Lieferende muss der nächste Monatserste 00:00 Uhr sein.
+    let Some(termin) = anfrage.termin else {
+        return Some(LfEntscheidung::eskalation(
+            85,
+            "Abmeldung wegen Deaktivierung der Zuordnungsermächtigung ohne Lieferende \
+             (SG4 DTM+93) — Prüfschritt 85 vergleicht es mit dem nächsten Monatsersten.",
+        ));
+    };
+    if termin.day() != 1 {
+        return code(c("A05", "A24"), 85);
+    }
+    // 100/580 — hat der BKV die Deaktivierung vorgenommen?
+    match lage.zuordnungsermaechtigung_deaktiviert {
+        Bekannt::Nein => return code(c("A07", "A26"), 100),
+        Bekannt::Unbekannt => {
+            return Some(LfEntscheidung::eskalation(
+                100,
+                "Deaktivierung der Zuordnungsermächtigung durch den BKV nicht bekannt — \
+                 der LF klärt den Sachverhalt mit dem BKV (E_0609 Prüfschritt 100 → A07).",
+            ));
+        }
+        Bekannt::Ja => {}
+    }
+    // 120/600 — Eingang nach dem 5. WT des Monats, in dem die
+    // Zuordnungsermächtigung endet?
+    if eingang_nach_fuenftem_werktag(anfrage, termin) {
+        return code(c("A09", "A28"), 120);
+    }
+    None
+}
+
+/// The escalation a Vorgang earns when its Transaktionsgrund has no path.
+///
+/// `E_0609` branches on the Grund at 50 and 80, and every edge out of 80 leads
+/// somewhere — but only for the three grounds the UTILMD AHB admits on a 55007.
+/// A message carrying anything else, or nothing, would fall past both branches
+/// to the terminal and be **confirmed** without the walk ever examining it.
+fn unroutbarer_grund(anfrage: &LfAnfrage) -> Option<LfEntscheidung> {
+    let Some(grund) = anfrage.transaktionsgrund.as_deref() else {
+        return Some(LfEntscheidung::eskalation(
+            50,
+            format!(
+                "Abmeldung für MaLo {}: die Nachricht nennt keinen Transaktionsgrund \
+                 (SG4 STS+7 DE 9013), obwohl die UTILMD AHB ihn für 55007 als Muss führt — \
+                 E_0609 verzweigt ab Prüfschritt 50 darauf.",
+                anfrage.malo_id
+            ),
+        ));
+    };
+    if crate::ABMELDUNG_GRUENDE.contains(&grund) {
+        return None;
+    }
+    Some(LfEntscheidung::eskalation(
+        50,
+        format!(
+            "Abmeldung für MaLo {}: Transaktionsgrund `{grund}` ist für 55007 nicht \
+             zugelassen (erlaubt sind {}). E_0609 kennt für ihn keinen Pfad.",
+            anfrage.malo_id,
+            crate::ABMELDUNG_GRUENDE.join(", ")
+        ),
+    ))
+}
+
+/// The `E_0609` terminal at Prüfschritt 130/610: `A10` (verbrauchend) or `A29`
+/// (Tranche/erzeugend).
+///
+/// The step's „ja" edge is `A99` Sonstiges — „ein zuvor nicht spezifizierter
+/// Fehler". A walk cannot detect an unspecified error about itself, so the
+/// automated path always takes the „nein" edge and an operator who *does* see
+/// one dispatches `A99` from the queue.
+fn zustimmung(verbrauchend: bool, termin: Option<Date>) -> LfEntscheidung {
     let code = if verbrauchend { "A10" } else { "A29" };
     let entry = E_0609_CODES
         .iter()

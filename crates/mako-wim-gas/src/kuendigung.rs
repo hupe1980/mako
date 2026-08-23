@@ -55,7 +55,7 @@ pub const KUENDIGUNG_PIDS: &[u32] = &[
 pub enum WimGasKuendigungEvent {
     /// Process initiated by a valid UTILMD G Kündigung message.
     Initiated {
-        /// Marktlokation EIC code from IDE+Z19.
+        /// Marktlokation EIC code from `SG5 LOC+Z16`.
         malo_id: MaLo,
         /// GLN of the MSBN sender.
         sender: MarktpartnerCode,
@@ -186,7 +186,7 @@ pub enum WimGasKuendigungCommand {
         sender: MarktpartnerCode,
         /// GLN of the NB receiver.
         receiver: MarktpartnerCode,
-        /// Marktlokation EIC code from IDE+Z19.
+        /// Marktlokation EIC code from `SG5 LOC+Z16`.
         malo_id: MaLo,
         /// EDIFACT document date string from DTM+137.
         document_date: String,

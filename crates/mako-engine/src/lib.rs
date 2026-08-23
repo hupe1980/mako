@@ -92,6 +92,7 @@ pub mod error;
 pub mod event_store;
 pub mod ids;
 pub mod inbox;
+pub mod lf_vorgang;
 pub mod marktrolle;
 pub mod message_adapter;
 pub mod metrics;
