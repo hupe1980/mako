@@ -82,17 +82,10 @@ use mako_redispatch::{
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, INSRPT_WORKFLOW_NAME as WIM_INSRPT_WORKFLOW,
     PreisanfrageCommand, PreislisteCommand, StammdatenCommand, SteuerungsauftragCommand,
-    StorungsmeldungCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
+    StoerungsmeldungCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand,
     WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
     WimSteuerungsauftragWorkflow, WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
-};
-use mako_wim_gas::{
-    GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
-    WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
-    WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
-    WimGasStornierungCommand, WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageCommand,
-    WimGasVerpflichtungsanfrageWorkflow, insrpt::GasStorungsmeldungCommand,
 };
 
 use mako_engine::metrics::EngineMetrics;
@@ -221,12 +214,6 @@ deadline_dispatch! {
     "wim-preisanfrage" => WimPreisanfrageWorkflow : PreisanfrageCommand::TimeoutExpired,
     "wim-preisliste" => WimPreislisteWorkflow : PreislisteCommand::TimeoutExpired,
     "wim-invoic" => WimInvoicWorkflow : WimInvoicCommand::TimeoutExpired,
-    "wim-gas-geraeteubernahme" => WimGasGeraeteubernahmeWorkflow : GasGeraeteubernahmeCommand::TimeoutExpired,
-    "wim-gas-anmeldung" => WimGasAnmeldungWorkflow : WimGasAnmeldungCommand::TimeoutExpired,
-    "wim-gas-kuendigung" => WimGasKuendigungWorkflow : WimGasKuendigungCommand::TimeoutExpired,
-    "wim-gas-verpflichtungsanfrage" => WimGasVerpflichtungsanfrageWorkflow : WimGasVerpflichtungsanfrageCommand::TimeoutExpired,
-    "wim-gas-invoic" => WimGasInvoicWorkflow : WimGasInvoicCommand::TimeoutExpired,
-    "wim-gas-stornierung" => WimGasStornierungWorkflow : WimGasStornierungCommand::TimeoutExpired,
     "gabi-gas-invoic" => GaBiGasInvoicWorkflow : GaBiGasInvoicCommand::TimeoutExpired,
     "geli-gas-sperrprozesse-invoic" => GeliGasSperrprozesseInvoicWorkflow : GeliGasSperrprozesseInvoicCommand::TimeoutExpired,
     STAMMDATEN_WORKFLOW => RedispatchStammdatenWorkflow : RedispatchStammdatenCommand::TimeoutExpired,
@@ -238,7 +225,7 @@ deadline_dispatch! {
     STATUSANFRAGE => StatusanfrageWorkflow : AckForwardCommand::TimeoutExpired,
     KOSTENBLATT => KostenblattWorkflow : AckForwardCommand::TimeoutExpired,
     SPERRUNG_LF_WORKFLOW => GpkeSperrungLfWorkflow : SperrungLfCommand::TimeoutExpired,
-    WIM_INSRPT_WORKFLOW => WimInsrptWorkflow : StorungsmeldungCommand::TimeoutExpired,
+    WIM_INSRPT_WORKFLOW => WimInsrptWorkflow : StoerungsmeldungCommand::TimeoutExpired,
     "gpke-konfiguration-aenderung" => GpkeKonfigurationAenderungWorkflow : KonfigurationAenderungCommand::TimeoutExpired,
     "gpke-datenabruf" => GpkeDatanabrufWorkflow : DatanabrufCommand::TimeoutExpired,
     "gpke-allokationsliste" => GpkeAllokationslisteWorkflow : AllokationslisteCommand::TimeoutExpired,
@@ -268,7 +255,6 @@ deadline_dispatch! {
     custom: [
         // Commands with extra fields, or arms that consult state before
         // alerting. Written out in `dispatch_deadline` below.
-        "wim-gas-insrpt",
         "gabi-gas-nomination",
         "gabi-gas-delivery-order",
         "gabi-gas-allocation",
@@ -362,24 +348,6 @@ pub async fn dispatch_deadline(
             deadline.workflow_id().clone(),
         );
         match wf_name {
-            "wim-gas-insrpt" => {
-                let p = Process::<WimGasInsrptWorkflow, _>::from_identity(
-                    Arc::clone(&event_store),
-                    identity,
-                );
-                p.execute_and_enqueue_with_retry(
-                    GasStorungsmeldungCommand::TimeoutExpired {
-                        deadline_id,
-                        label,
-                        outbox: None,
-                    },
-                    3,
-                )
-                .await?;
-                p.take_snapshot(&snap_store, snapshot_interval)
-                    .await
-                    .map(|_| ())
-            }
             "gabi-gas-nomination" => {
                 // NOMRES response deadline — no response from FNB/MGV before D-1 15:00.
                 let p = Process::<GaBiGasNominationWorkflow, _>::from_identity(

@@ -30,7 +30,7 @@ graph LR
     BNetzA["BNetzA<br/>Rulings"]
 
     subgraph strom ["Strom frameworks"]
-        BK6_24["BK6-24-174<br/>GPKE + WiM + MaBiS"]
+        BK6_24["BK6-24-174<br/>GPKE + MaBiS"]
         BK6_22["BK6-22-024<br/>LFW24 · GPKE Teil 2+4"]
         BK6_20["BK6-20-059/060/061<br/>Redispatch 2.0"]
     end
@@ -57,7 +57,7 @@ graph LR
     BNetzA --> gas
 
     BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["346 PIDs covered<br/>(100%)"]
-    BK7_24 -->|"mako-geli-gas<br/>mako-wim-gas"| GAS_impl["GeLi Gas 3.0<br/>WiM Gas"]
+    BK7_24 -->|"mako-geli-gas<br/>mako-wim"| GAS_impl["GeLi Gas 3.0<br/>WiM Gas"]
     BK7_14 -->|"mako-gabi-gas<br/>dvgw-edi"| DVGW_impl["8 DVGW messages<br/>GaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts<br/>GDPR Art. 15/17/20"]
     EEG -->|"eeg-billing<br/>einsd"| EEG_impl["10 settlement schemes<br/>§14 UStG Gutschrift"]
@@ -72,9 +72,10 @@ graph LR
 
 | Regulation | Domain | Implementation |
 |---|---|---|
-| **BK6-24-174** (GPKE + WiM + MaBiS, in force 06.06.2025) | Strom | `mako-gpke`, `mako-wim`, `mako-mabis` |
+| **BK6-24-174** (GPKE Teil 1–3 + MaBiS, in force 06.06.2025) | Strom | `mako-gpke`, `mako-mabis` |
+| **BK6-22-024** (GPKE Teil 4, WiM Teil 1/2) | Strom | `mako-gpke`, `mako-wim` |
 | **BK6-22-024** (LFW24 — 24h-Lieferantenwechsel, §20a EnWG; re-issued GPKE Teil 2 + Teil 4, MPES absorbed into GPKE, in force 06.06.2025) | Strom | `mako-gpke` |
-| **BK7-24-01-009** (GeLi Gas 3.0, BK7 Beschluss 12.09.2025) | Gas | `mako-geli-gas`, `mako-wim-gas` |
+| **BK7-24-01-009** (GeLi Gas 3.0, BK7 Beschluss 12.09.2025) | Gas | `mako-geli-gas`, `mako-wim` |
 | **BK7-24-01-008** (GaBi Gas 2.1 — Kapazitätsabrechnung, DVGW) | Gas | `mako-gabi-gas`, `dvgw-edi` |
 | **PARTIN AHB 1.0f** (Kommunikationsdaten Strom + Gas) | Both | `mako-gpke` (37000–37006), `mako-geli-gas` (37008–37014) |
 | **§42b Abs. 5 EnWG** (Solarpaket I — GGV Gemeinschaftliche Gebäudeversorgung) | Strom | `metering` crate (`GgvConstantAllocation`, `GgvProportionalAllocation`), `edmd` |
@@ -84,7 +85,7 @@ graph LR
 | **§ 60 Abs. 2 MsbG** (Ersatzwertbildung, Jahresprognose, Substitution) | Both | `metering` crate (V01–V10 validation, `fill_gaps`, `project_annual_consumption`), `edmd` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
-| **§14a EnWG** (Steuerbare Verbrauchseinrichtungen — Modul 1/2/3) | Strom | `grid-billing` (`Sect14aModule`), `processd` (produktcode check BK6-24-174) |
+| **§14a EnWG** (Steuerbare Verbrauchseinrichtungen — Modul 1/2/3) | Strom | `grid-billing` (`Sect14aModule`), `processd` (produktcode check, GPKE Teil 3 Kap. 1.3) |
 | **§41 EnWG** (Vertragsinhalte, Abs. 5 Preisänderungs-Unterrichtung + Sonderkündigungsrecht) / **§5 Abs. 2 StromGVV/GasGVV** (6-Wochen-Frist) | Both | `vertragd` |
 | **§41a EnWG** (Dynamic tariffs — EPEX Spot day-ahead) | Strom | `tarifbd` (EPEX prices), `billingd` (§41a iMSys guard) |
 | **GDPR Art. 15/17/20** (data export, pseudonymization, portability) | — | `vertragd` (`/export`, `/anonymize`), `accountingd` (`/anonymize`) |

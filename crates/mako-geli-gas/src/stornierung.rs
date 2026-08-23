@@ -5,10 +5,14 @@
 //! (supply-change cancellation, LFN/LFA role) and **"WiM Gas"** (MSB-change cancellation,
 //! MSB role).
 //!
-//! **Routing is role-conditional** (implemented in `GeliGasModule::register_pids_with_roles`):
-//! - `Nb`-only: PID 44022 (inbound Anfrage) → this workflow (`geli-gas-stornierung`)
-//! - `Lf`: PIDs 44023/44024 (inbound GNB responses) → `geli-gas-stornierung-lf` (see `lf_stornierung`)
-//! - `Msb`/`Nmsb`/`all()`: `WimGasModule` routes all three to `wim-gas-stornierung`
+//! **One owner, both Use-Cases.** The recipient of a 44022 is „der Empfänger
+//! einer Stornierungsanfrage" — the party that received the Ursprungsnachricht —
+//! and the workflow resolves which process is meant from `RFF+ACW`, not from the
+//! deployment's Marktrolle. So the GNB side registers 44022 whenever the
+//! deployment holds the `Nb` role, whether or not it is also an MSB; the LF side
+//! registers 44023/44024, which are disjoint. A combined `Nb + Msb` deployment
+//! — the common shape, since §41 MsbG puts the gMSB inside the NB's own legal
+//! entity in most grids — therefore receives the Anfrage exactly once.
 //!
 //! **This module is the GNB-side perspective.** For the LFN/LFA perspective (LF initiates
 //! outbound 44022, awaits 44023/44024), see [`crate::lf_stornierung`].
@@ -16,7 +20,8 @@
 //! A market participant (LFN / LFA / GNB) may request cancellation of a previously
 //! submitted Anmeldung, Abmeldung, or Kündigung by sending a UTILMD G message with
 //! PID 44022 (Anfrage nach Stornierung) to the GNB. The GNB must respond within
-//! **10 Werktage** with either:
+//! an answer (no Festlegung states a window — see
+//! [`STORNIERUNG_RESPONSE_WINDOW_LABEL`]) of either:
 //! - PID 44023 (Bestätigung Stornierung) — cancellation accepted; original process cancelled.
 //! - PID 44024 (Ablehnung Stornierung) — cancellation rejected; original process continues.
 //!
@@ -24,8 +29,8 @@
 //!
 //! ```text
 //! LFN/LFA ──── 44022 Anfrage nach Stornierung ────►
-//!         ◄─── 44023 Bestätigung                  ── GNB (within 10 Werktage)
-//!          or ◄─ 44024 Ablehnung                  ──
+//!         ◄─── 44023 Bestätigung (EBD G_0004)     ── GNB
+//!          or ◄─ 44024 Ablehnung   (EBD G_0003)   ── GNB
 //! ```
 //!
 //! # BGM qualifier semantics
@@ -42,7 +47,9 @@
 //!
 //! - **BDEW UTILMD AHB Gas 1.1 / 1.2** — AHB rules for PIDs 44022–44024
 //! - **BNetzA BK7-24-01-009** — Geschäftsprozesse Lieferantenwechsel Gas 3.0 (eff. 2025-09-24)
-//! - **APERAK Frist: 10 Werktage** (same as all GeLi Gas processes)
+//! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
+//!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
+//!   (APERAK AHB 1.1 §2.3.1). 44022 is `ZG-T26`, hence a Folgeprozess.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -56,18 +63,17 @@ use mako_engine::{
 /// Stable workflow name used as the `WorkflowId.name` in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "geli-gas-stornierung";
 
-/// APERAK deadline label — 10-Werktage window per BK7-24-01-009.
+/// Deadline label for the answer to a Stornierungsanfrage.
 ///
-/// Register a `Deadline` with this label immediately after `ValidationPassed`:
+/// **No Festlegung quantifies this window.** GeLi Gas 2.0 Kap. 1.8 — which AWH
+/// WiM Gas 2.0 Kap. 2.6 defers to in full — describes the Stornierung as
+/// „elektronisch beantwortet" and states no Frist, referring the reader on to
+/// the EDI@Energy *Allgemeine Festlegungen*, which quantify nothing either.
 ///
-/// ```text
-/// let due = mako_fristen::deadline_at_werktage(
-///     received_at, 10, HolidayCalendar::BdewMaKo,
-/// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_RESPONSE_WINDOW_LABEL, due);
-/// deadline_store.register(&deadline).await?;
-/// ```
-pub const STORNIERUNG_RESPONSE_WINDOW_LABEL: &str = "geli-gas-stornierung-response-10-werktage";
+/// The window this label carries is therefore an **operating convention**, not
+/// a regulatory deadline, and the label is deliberately free of a Werktage
+/// count so that nothing reports it as one.
+pub const STORNIERUNG_RESPONSE_WINDOW_LABEL: &str = "geli-gas-stornierung-response";
 
 /// PIDs handled by the GeLi Gas Stornierung workflow (UTILMD G).
 ///
@@ -124,7 +130,7 @@ pub enum GeliGasStornierungEvent {
         /// Rejection reason code or text (only meaningful when `positive = false`).
         reason: Option<String>,
     },
-    /// Process terminated because the 10-Werktage APERAK deadline expired.
+    /// Process terminated because the answer window expired.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -185,13 +191,13 @@ pub enum GeliGasStornierungState {
     New,
     /// 44022 received; awaiting validation result.
     Initiated(GeliGasStornierungData),
-    /// AHB validation passed; GNB must respond within 10 Werktage.
+    /// AHB validation passed; the GNB owes an answer.
     ValidationPassed(GeliGasStornierungData),
     /// Positive APERAK (44023) dispatched; cancellation accepted.
     AperakSent(GeliGasStornierungData),
     /// Cancellation fully completed (positive APERAK sent, original process cancelled).
     Completed(GeliGasStornierungData),
-    /// Process rejected — validation failure, negative APERAK, or deadline expiry.
+    /// Process rejected — validation failure, Ablehnung, or deadline expiry.
     Rejected {
         /// Human-readable reason for the rejection.
         reason: String,
@@ -242,14 +248,15 @@ pub enum GeliGasStornierungCommand {
     },
     /// GNB dispatches a positive (44023) or negative (44024) APERAK response.
     ///
-    /// Must be called within 10 Werktage of receiving the 44022 message.
+    /// Answers the 44022; the codes come from `G_0004` (Bestätigung) resp.
+    /// `G_0003` (Ablehnung).
     DispatchAperak {
         /// `true` for Bestätigung (44023), `false` for Ablehnung (44024).
         positive: bool,
         /// Rejection reason — required when `positive = false`.
         reason: Option<String>,
     },
-    /// The 10-Werktage APERAK deadline fired.
+    /// The answer window expired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -266,7 +273,7 @@ impl CommandPayload for GeliGasStornierungCommand {}
 ///
 /// The GNB (Gasnetzbetreiber) is the process owner. The inbound message is PID 44022
 /// (Anfrage nach Stornierung). The GNB responds with PID 44023 (Bestätigung) or
-/// PID 44024 (Ablehnung) within 10 Werktage.
+/// PID 44024 (Ablehnung).
 pub struct GeliGasStornierungWorkflow;
 
 impl Workflow for GeliGasStornierungWorkflow {
@@ -393,7 +400,9 @@ impl Workflow for GeliGasStornierungWorkflow {
                     });
                     // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
                     // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
-                    // Note: 10 Werktage is the process stornierung window (BK7-24-01-009), NOT the APERAK sending deadline.
+                    // Note: this is the process answer window (an operating
+                    // convention — see STORNIERUNG_RESPONSE_WINDOW_LABEL), not
+                    // the APERAK sending deadline, which is a separate clock.
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",

@@ -627,7 +627,8 @@ at startup:
 makod (binary)
 ├── registers mako-gpke    → PIDs 55001–55024, 55555, 55607–55609, 17115–17117 (Strom NB),
 │                            17134/17135, 19001/19002, 31001–31002, 31005–31006, 37000–37006
-├── registers mako-wim     → PIDs 55039, 55042, 55051, 55168, 31009, 23001/23003/23004/23008,
+├── registers mako-wim     → PIDs 55039/55042/55051/55168 + Gas 44039/44042/44051/44168/44183,
+│                            31009/31003/31004, 23001–23012,
 │                            17001/17002/17009, 19001/19002 (nMSB role), 35001/35002/35004/35005, 15001/15002/15004/15005,
 │                            27001–27003, 17011/17118/17121 (Technik-Änderung),
 │                            ESA Wertebestellung (Msb role): 35003, 15003, 17007/17008,
@@ -635,8 +636,6 @@ makod (binary)
 ├── registers mako-geli-gas → PIDs 44001–44021, 44022* (Nb role), 44023–44024* (Lf role),
 │                             37008–37014, 31011, 17115–17117 (Gas NB)
 ├── registers mako-mabis   → PIDs 13003, 13010–13012, 55065/55069/55070 (Clearingliste)
-├── registers mako-wim-gas → PIDs 44022–44024* (Msb/Nmsb role), 44039–44053, 44168–44170,
-│                            31003, 31004, 23005, 23009
 ├── registers mako-gabi-gas → PIDs 31007, 31008, 31010, ORDERS 17110, ORDRSP 19110,
 │                             MSCONS 13013, synthetic PIDs 90001–90062 (DVGW gas transport)
 ├── registers mako-redispatch → Redispatch 2.0 XML workflows
@@ -646,10 +645,12 @@ makod (binary)
          └── called by: AS4 sender loopback (BdewAs4Sender, recipient == own GLN)
 ```
 
-`*` PIDs 44022–44024 use role-conditional routing:
-- `mako-wim-gas` `wim-gas-stornierung`: Msb/Nmsb/all-role deployments
-- `mako-geli-gas` `geli-gas-stornierung`: Nb-only (44022 inbound as GNB)
-- `mako-geli-gas` `geli-gas-stornierung-lf`: Lf-only (44023/44024 inbound as LFN/LFA)
+`*` PIDs 44022–44024 route by **which side of the exchange** the deployment is
+on, not by Use-Case: one Stornierung workflow serves the GeLi Gas
+Lieferbeginn/-ende and the WiM Gas Kündigung Messstellenbetrieb alike, because
+it resolves the Ursprungsprozess from `RFF+ACW`.
+- `mako-geli-gas` `geli-gas-stornierung`: any `Nb` role (44022 inbound as GNB)
+- `mako-geli-gas` `geli-gas-stornierung-lf`: any `Lf` role (44023/44024 inbound as LFN/LFA)
 
 See [PID Reference](@/docs/regulatory/pid-reference.md) for the complete table.
 

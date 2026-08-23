@@ -120,8 +120,8 @@ pub async fn find_auto_renewal_overdue(
 /// consumer contract (§ 309 Nr. 9 lit. b BGB): the term is dropped, the notice
 /// period is capped at one month, and `auto_renewal` is cleared because an
 /// open-ended contract has nothing left to renew. Extending such a contract by
-/// another twelve months — what this used to do for every customer — is an
-/// unenforceable clause, and it is the customer who finds out.
+/// another twelve months is an unenforceable clause, and it is the customer who
+/// finds out.
 ///
 /// # Errors
 ///

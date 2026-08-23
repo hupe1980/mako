@@ -16,8 +16,11 @@
 //!
 //! # Regulatory context
 //!
-//! APERAK Frist: **5 Werktage** (WiM Strom, BK6-22-024). Saturdays, Sundays and
-//! federal holidays are not Werktage.
+//! Two clocks, and they are not the same message. The **APERAK** is the
+//! technical acknowledgement — 45 Minuten for a Strom UTILMD on a Werktag
+//! (APERAK AHB 1.1 §2.4.1). The **Antwort** is the business Bestätigung or
+//! Ablehnung, due in 3 / 5 / 7 / 1 Werktagen per Prüfidentifikator.
+//! Saturdays, Sundays and federal holidays are not Werktage.
 
 use mako_engine::{
     event_store::InMemoryEventStore,
@@ -44,6 +47,7 @@ fn make_process() -> Process<WimDeviceChangeWorkflow, InMemoryEventStore> {
 
 fn receive_utilmd_cmd(validation_passed: bool) -> DeviceChangeCommand {
     DeviceChangeCommand::ReceiveUtilmd {
+        transaktionsgrund: Some("E03".to_owned()),
         pid: Pruefidentifikator::new(55_042).unwrap(),
         sender: MarktpartnerCode::new("4012345000023"),
         receiver: MarktpartnerCode::new("9900357000004"),
@@ -135,9 +139,8 @@ async fn happy_path_full_lifecycle() {
 /// When the UTILMD fails EDIFACT profile validation, the workflow must
 /// transition to `Rejected` (not `ValidationPassed`).
 ///
-/// Regulatory context: NB is obliged to send a negative CONTRL within the
-/// WiM acceptance window (5 Werktage) — it must never silently proceed with a
-/// syntactically invalid message.
+/// The receiver owes a negative APERAK (`BGM+313`) on an unprocessable message
+/// and must never silently proceed with it.
 #[tokio::test]
 async fn validation_failure_rejects_process() {
     let p = make_process();
@@ -184,11 +187,9 @@ async fn negative_aperak_rejects_process() {
 
 // ── Deadline wiring ────────────────────────────────────────────────────────────
 
-/// When the 5-Werktage APERAK deadline fires on a `ValidationPassed` process,
-/// the workflow must transition to `Rejected`.
-///
-/// This validates the core regulatory path: if the NB does not dispatch an
-/// APERAK within 5 Werktage of the UTILMD receipt, the process self-closes.
+/// When the answer deadline fires on a `ValidationPassed` process, the workflow
+/// must transition to `Rejected`: an order that was never answered self-closes
+/// rather than sitting open past its Frist.
 #[tokio::test]
 async fn aperak_deadline_timeout_rejects_process() {
     let p = make_process();
@@ -206,7 +207,7 @@ async fn aperak_deadline_timeout_rejects_process() {
     let deadline_id = DeadlineId::new();
     p.execute(DeviceChangeCommand::TimeoutExpired {
         deadline_id,
-        label: "wim-aperak-5-werktage".into(),
+        label: mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL.into(),
     })
     .await
     .expect("TimeoutExpired on ValidationPassed must succeed");
@@ -236,7 +237,7 @@ async fn deadline_on_rejected_is_absorbed() {
     let deadline_id = DeadlineId::new();
     p.execute(DeviceChangeCommand::TimeoutExpired {
         deadline_id,
-        label: "wim-aperak-5-werktage".into(),
+        label: mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL.into(),
     })
     .await
     .expect("TimeoutExpired on already-Rejected must be absorbed");
@@ -281,7 +282,7 @@ async fn deadline_on_completed_is_absorbed() {
     let deadline_id = DeadlineId::new();
     p.execute(DeviceChangeCommand::TimeoutExpired {
         deadline_id,
-        label: "wim-aperak-5-werktage".into(),
+        label: mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL.into(),
     })
     .await
     .expect("TimeoutExpired on Completed must be absorbed");
@@ -716,18 +717,117 @@ fn antwort_pid_table_is_complete_and_consistent() {
             .filter(|(_, r, c)| r == req && !*c)
             .count();
         assert_eq!(ja, 1, "request {req} needs exactly one Bestätigung");
-        assert_eq!(nein, 1, "request {req} needs exactly one Ablehnung");
+        // 44168 is the one request with **no Ablehnungs-Prüfidentifikator**.
+        // PID-Übersicht 4.0 publishes 44168 and 44169 and nothing else; the
+        // 44170 of PID 3.3 was withdrawn with FV2026-10-01. Its Codeliste
+        // `G_0071` still exists, so the codes have no carrier and the workflow
+        // escalates instead of inventing one.
+        let erwartet = usize::from(*req != 44_168);
+        assert_eq!(
+            nein, erwartet,
+            "request {req} needs exactly {erwartet} Ablehnung(en)"
+        );
+    }
+    assert_eq!(
+        mako_wim::geraetewechsel::antwort_pid_for(44_168, false),
+        None,
+        "there is no Ablehnung PID for the Gas Verpflichtungsanfrage"
+    );
+}
+
+/// Every WiM MSB-Wechsel PID resolves to a Sparte, an Entscheidungsbaum and a
+/// published Antwortfrist — and the two Sparten agree on the Frist.
+///
+/// AWH WiM Gas 2.0 restates WiM Strom Teil 1 window for window: 3 WT on the
+/// Kündigung, 5 on der Anmeldung, 7 on dem Ende MSB, 1 auf der
+/// Verpflichtungsanfrage.
+#[test]
+fn the_two_sparten_state_the_same_wim_fristen() {
+    use mako_engine::types::Sparte;
+    for (strom, gas, wt) in [
+        (55_039_u32, 44_039_u32, 3_u32),
+        (55_042, 44_042, 5),
+        (55_051, 44_051, 7),
+        (55_168, 44_168, 1),
+    ] {
+        assert_eq!(
+            mako_wim::geraetewechsel::wim_sparte(strom),
+            Some(Sparte::Strom)
+        );
+        assert_eq!(mako_wim::geraetewechsel::wim_sparte(gas), Some(Sparte::Gas));
+        assert_eq!(
+            mako_wim::antwort_frist_werktage(strom),
+            Some(wt),
+            "Strom {strom}"
+        );
+        assert_eq!(mako_wim::antwort_frist_werktage(gas), Some(wt), "Gas {gas}");
+        // The trees are disjoint: a Gas answer never resolves against a Strom
+        // Codeliste and the other way round.
+        let s_ebd = mako_wim::geraetewechsel::wim_ebd(strom).expect("Strom EBD");
+        let g_ebd = mako_wim::geraetewechsel::wim_ebd(gas).expect("Gas EBD");
+        assert_ne!(s_ebd, g_ebd);
+        assert!(
+            s_ebd.starts_with("E_02") || s_ebd.starts_with("E_00"),
+            "{s_ebd}"
+        );
+        assert!(g_ebd.starts_with("E_20"), "{g_ebd}");
     }
 }
 
-/// The **inbound** answer deadline must be sized per PID, like the outbound one.
+/// The wire value of `SG4 STS+E01` DE 1131 is the **Codeliste**, not the EBD.
 ///
-/// The outbound path (`makod` commands API) always sized this correctly via
-/// `antwort_frist_werktage`. The inbound path registered a flat 5 WT for all
-/// four PIDs, so an Abmeldung (7 WT) escalated two Werktage before the
-/// counterparty's window closed, and a missed Verpflichtungsanfrage (1 WT) went
-/// unnoticed for four extra Werktage. Both errors read as plausible because 5 WT
-/// is the correct figure — for exactly one of the four processes.
+/// UTILMD AHB Strom 2.2 Kap. 10.1 prints „Codeliste Strom Nr. S_0090" in that
+/// column, not „EBD Nr. E_0200"; Gas 1.2 Kap. 6.1 prints `G_0052`. mako sent
+/// the EBD number for every WiM answer, which no counterparty's Codeliste
+/// contains.
+#[test]
+fn the_wim_answer_names_a_codeliste_not_an_ebd() {
+    use mako_pruefung::codes;
+    for (request, zustimmung, ablehnung) in [
+        (55_039_u32, "S_0090", "S_0054"),
+        (55_042, "S_0055", "S_0056"),
+        (55_051, "S_0059", "S_0060"),
+        (55_168, "S_0063", "S_0064"),
+        (44_039, "G_0052", "G_0051"),
+        (44_042, "G_0054", "G_0053"),
+        (44_051, "G_0058", "G_0057"),
+        (44_168, "G_0070", "G_0071"),
+    ] {
+        let ebd = mako_wim::geraetewechsel::wim_ebd(request).expect("EBD");
+        let ja = codes::CODELISTEN
+            .iter()
+            .find(|(id, _)| *id == ebd)
+            .expect("Codeliste")
+            .1
+            .iter()
+            .find(|c| c.ist_zustimmung() == Some(true))
+            .expect("a Zustimmungscode");
+        let nein = codes::CODELISTEN
+            .iter()
+            .find(|(id, _)| *id == ebd)
+            .expect("Codeliste")
+            .1
+            .iter()
+            .find(|c| c.ist_zustimmung() == Some(false))
+            .expect("an Ablehnungscode");
+        assert_eq!(
+            ja.wire_codeliste(),
+            Some(zustimmung),
+            "{request} Zustimmung"
+        );
+        assert_eq!(
+            nein.wire_codeliste(),
+            Some(ablehnung),
+            "{request} Ablehnung"
+        );
+        assert_ne!(ja.wire_codeliste(), Some(ebd));
+    }
+}
+
+/// The **inbound** answer deadline is sized per PID, like the outbound one.
+///
+/// A flat window is wrong in both directions: it escalates an Abmeldung (7 WT)
+/// two Werktage early and hides a missed Verpflichtungsanfrage (1 WT) for four.
 #[test]
 fn the_inbound_antwort_deadline_is_sized_per_pid() {
     for (pid, expected_wt) in [(55_039_u32, 3_u32), (55_042, 5), (55_051, 7), (55_168, 1)] {
@@ -735,6 +835,7 @@ fn the_inbound_antwort_deadline_is_sized_per_pid() {
         let out = WimDeviceChangeWorkflow::handle(
             &DeviceChangeState::New,
             DeviceChangeCommand::ReceiveUtilmd {
+                transaktionsgrund: Some("E03".to_owned()),
                 pid: Pruefidentifikator::new(pid).expect("valid PID"),
                 sender: MarktpartnerCode::new("4012345000023"),
                 receiver: MarktpartnerCode::new("9900357000004"),

@@ -1,10 +1,26 @@
 # mako-wim
 
-**WiM — Wechselprozesse im Messwesen Strom**
+**WiM — Wechselprozesse im Messwesen, Strom und Gas**
 
-Process engine workflows for the German electricity metering system change
-processes. Implements **BK6-22-024 Anlage 2a/2b** (WiM Strom Teil 1 and Teil 2)
-and the EDI@Energy AHBs that carry them.
+Process engine workflows for the German metering-point-operator change
+processes in **both Sparten**: **BK6-22-024 Anlagen 2a/2b** (WiM Strom Teil 1
+and Teil 2) and the **AWH WiM Gas 2.0** (gültig ab 01.10.2026), plus the
+EDI@Energy AHBs that carry them.
+
+## One engine, two Sparten
+
+AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case, Frist for
+Frist. Only the UTILMD PID namespace splits (55xxx / 44xxx); ORDERS, ORDRSP,
+REQOTE, QUOTES, IFTSTA and INSRPT are Sparte-neutral AHBs carrying both. The
+Sparte comes from the **recipient MP-ID** (BDEW Allgemeine Festlegungen §2.13)
+and decides four things:
+
+| | Strom | Gas |
+|---|---|---|
+| Antwort-Codeliste | `S_00xx` | `G_00xx` |
+| Zuordnungszeitpunkt | 00:00 Uhr | **06:00 Uhr** (Gastag) |
+| APERAK | positiv **und** negativ, 45 min für UTILMD/ORDERS | **nur negativ**; nächster WT 12:00 (Folgeprozess) / 3 WT (Initialprozess) |
+| Störungs-Fristen | nach Messtechnik | flach |
 
 ## Fristen
 
@@ -13,8 +29,8 @@ messages with separate commands:
 
 | Clock | Window | Message | Source |
 |---|---|---|---|
-| **APERAK** — technical acknowledgement | **45 minutes** (Strom UTILMD) | APERAK BGM+312/313 | APERAK AHB 1.0 §2.4.1 |
-| **Antwort** — business Bestätigung/Ablehnung | **per PID**: 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT | UTILMD 55040/55043/55052/55169 or 55041/55044/55053/55170 | WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 Nr. 2 · 2.4.2 Nr. 4 |
+| **APERAK** — technical acknowledgement | Strom **45 Minuten** (UTILMD/ORDERS am Werktag); Gas nächster WT 12:00 bzw. **3 WT** auf einem Initialprozess | APERAK BGM+312/313 (Gas: nur 313) | APERAK AHB 1.1 §2.3.1/§2.4.1 |
+| **Antwort** — business Bestätigung/Ablehnung | **per PID**, in beiden Sparten gleich: 55039·44039 → 3 WT, 55042·44042 → 5 WT, 55051·44051 → 7 WT, 55168·44168 → 1 WT | the Antwort-PID's UTILMD | WiM Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 · AWH WiM Gas 2.0 Kap. 3.3.2 / 3.5.2 / 3.6.2 |
 | **Vorlauffrist** — was the requested date admissible? | 15 / 7 WT (Anmeldung), 20 WT (Abmeldung), ±9 WT Realisierungskorridor | the date inside the message | WiM Teil 1 Kap. 2.3.2 Nr. 1 / 2.4.2 Nr. 1 |
 
 Only the second discharges the Antwortfrist. The business window comes from
@@ -25,25 +41,31 @@ count as holidays.
 
 ## Antwortcodes
 
-Every answer carries `SG4 STS+E01` (UTILMD) or `AJT` (ORDRSP) with a code from
-the process's own Entscheidungsbaum. The catalogue and the executable
+Every answer carries `SG4 STS+E01` (UTILMD) or `SG2 AJT` (ORDRSP) with a code
+from the process's own Entscheidungsbaum. The catalogue and the executable
 Prüfschritte are `mako-pruefung` (`role-msb`); this crate resolves against it
 before anything reaches the outbox, so a code from the wrong tree is refused at
 the command rather than sent.
 
-| Process | EBD | Bestätigung / Ablehnung |
-|---|---|---|
-| Kündigung MSB | `E_0200` | `E15` `Z01` `Z44` / `E11` `Z12` `Z29` `Z34` `ZC9` |
-| Anmeldung MSB | `E_0201` | `E15` `Z01` `Z44` / `E11` `E17` `Z09` `Z29` `ZB6` `ZC9` |
-| Ende MSB | `E_0202` | `E15` `Z01` / `E17` `Z09` |
-| Verpflichtungsanfrage | `E_0240` | `E15` `Z01` `Z44` / `E17` `Z07` `Z09` `ZB6` |
-| Weiterverpflichtung | `E_0203` | `Z13` `Z14` / `Z22` |
-| Gerätewechselabsicht | `E_0204` | `ZB4` / `ZB5` `E17` `Z07` |
-| Bestellung Geräteübernahme | `E_0247` | `Z13` / `5` `Z32` |
-| Messlokationsänderung | `E_0249` (NB) / `E_0250` (LF) | `A02` / `A01` (+ `A03` `A04`) |
+**DE 1131 / DE 1082 names the Codeliste, not the Entscheidungsbaum.** The AHB
+column reads „Codeliste Strom Nr. `S_0090`" for every WiM MSB-Wechsel answer,
+and the *cluster* picks which of the pair. `AntwortCode::wire_codeliste()`
+returns the wire value.
+
+| Process | EBD Strom / Gas | Bestätigung / Ablehnung | Codeliste Strom | Gas |
+|---|---|---|---|---|
+| Kündigung MSB | `E_0200` / `E_2000` | `E15` `Z01` `Z44` / `E11` `Z12` `Z29` `Z34` (+`ZC9` Strom) | `S_0090` / `S_0054` | `G_0052` / `G_0051` |
+| Anmeldung MSB | `E_0201` / `E_2002` | `E15` `Z01` `Z44` / `E11` `E17` `Z09` `Z29` `ZB6` (+`ZC9` Strom) | `S_0055` / `S_0056` | `G_0054` / `G_0053` |
+| Ende MSB | `E_0202` / `E_2005` | `E15` `Z01` / `E17` `Z09` | `S_0059` / `S_0060` | `G_0058` / `G_0057` |
+| Verpflichtungsanfrage | `E_0240` / `E_2006` | `E15` `Z01` `Z44` / `E17` `Z07` `Z09` `ZB6` | `S_0063` / `S_0064` | `G_0070` / `G_0071` |
+| Gesamtvorgang | `E_0232` / `E_2003` | — / `Z66` | `S_0057` | `G_0055` |
+| Weiterverpflichtung | `E_0203` / `E_2004` | `Z13` `Z14` / `Z22` | `S_0061` / `S_0062` | `G_0072` / `G_0073` |
+| Gerätewechselabsicht | `E_0204` / `E_2007` | `ZB4` / `ZB5`; `E17` `Z07` in beiden | `S_0065` / `S_0066` | `G_0059` / `G_0060` |
+| Bestellung Geräteübernahme | `E_0247` / `E_2011` | `Z13` / `5` `Z32` | `S_0067` / `S_0068` | `G_0061` / `G_0074` |
+| Messlokationsänderung | `E_0249` (NB) / `E_0250` (LF) | `A02` / `A01` (+ `A03` `A04`) | `E_0249` / `E_0250` | — |
 
 None of these alphabets is a GPKE one — `A02` and `A05` appear in no
-MSB-Wechsel tree.
+MSB-Wechsel tree — and the Gas lists are not the Strom lists.
 
 ## PID Inventory
 
@@ -60,13 +82,19 @@ MSB-Wechsel tree.
 | 55039 | Kündigung MSB (MSBN → **MSBA**)                 | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented · Antwort 55040/55041, **3 WT** |
 | 55051 | Ende MSB / Abmeldung (**MSBA → NB**)            | UTILMD S2.x   | `geraetewechsel` | ✅ Implemented · Antwort 55052/55053, **7 WT** |
 | 55168 | Verpflichtungsanfrage / Aufforderung (NB → **gMSB**) | UTILMD S2.x | `geraetewechsel` | ✅ Implemented · Antwort 55169/55170, **1 WT** |
+| 44039 | Kündigung MSB Gas (MSBN → **MSBA**)             | UTILMD G1.x   | `geraetewechsel` | ✅ Implemented · Antwort 44040/44041, **3 WT** |
+| 44042 | Anmeldung MSB Gas (MSBN → NB)                   | UTILMD G1.x   | `geraetewechsel` | ✅ Implemented · Antwort 44043/44044, **5 WT** (*vorläufig*) |
+| 44051 | Ende MSB Gas (**MSBA → NB**)                    | UTILMD G1.x   | `geraetewechsel` | ✅ Implemented · Antwort 44052/44053, **7 WT** |
+| 44168 | Verpflichtungsanfrage Gas (NB → **gMSB**)       | UTILMD G1.x   | `geraetewechsel` | ✅ Implemented · Antwort **44169 only** — no Ablehnungs-PID exists, **1 WT** |
+| 44183 | Ende MSB von NB (Stilllegung, NB → MSB)         | UTILMD G1.x   | `geraetewechsel` | ✅ Implemented · informational, no answer |
 
 ### Mitteilung über Gesamtvorgang — IFTSTA
 
 The Anmeldebestätigung 55043 is *vorläufig*. WiM Teil 1 Kap. 2.1.1: the NB assigns
 the MSBN „zu dem Tag des vom MSBN mitgeteilten Termins des erfolgreichen Abschlusses
 des Gesamtvorgangs … mit dem Zeitpunkt 00:00 Uhr", and the MSBA's assignment ends at
-the same instant. This leg is what makes the Wechsel constitutive.
+the same instant. AWH WiM Gas 2.0 Kap. 3.1.1 says the same with **06:00 Uhr** —
+the Gastag boundary. This leg is what makes the Wechsel constitutive.
 
 | PID   | Process name                                        | Von → An            | Frist |
 |-------|-----------------------------------------------------|---------------------|-------|
@@ -101,6 +129,9 @@ the same instant. This leg is what makes the Wechsel constitutive.
 
 > PIDs 19001/19002/19015/19016 are only registered when `DeploymentRoles` includes `Marktrolle::Nmsb`.
 > On NB instances these PIDs belong to `mako-gpke` (GPKE Konfiguration). Never register both simultaneously.
+>
+> All six ORDERS/ORDRSP PIDs carry the Strom **and** the Gas Use-Case; the
+> recipient MP-ID's Sparte picks `E_0247`/`E_0204` against `E_2011`/`E_2007`.
 
 ### Stammdaten — ORDERS
 
@@ -114,21 +145,21 @@ the same instant. This leg is what makes the Wechsel constitutive.
 | PID(s)                 | Process name                          | EDIFACT         | Module             | Status         |
 |------------------------|---------------------------------------|-----------------|--------------------|----------------|
 | 39002                  | ESA Stornierung der Bestellung von Werten (ORDCHG) | ORDCHG 1.1 | `wertebestellung`  | ✅ Implemented |
-| 31009                  | MSB-Rechnung (MSB → NB/LF/ESA)        | INVOIC 2.8e     | `invoic`           | ✅ Implemented (send + receive) |
+| 31009                  | MSB-Rechnung (MSB → NB/LF/ESA)        | INVOIC 2.8e     | `invoic`           | ✅ Implemented (send + receive) · Antwort **zum Zahlungsziel**, an den NB **4. WT davor** |
 | 33001–33004 (REMADV)   | Zahlungsavis / itemized Abweisung     | REMADV 1.0a     | `invoic`           | ✅ Implemented (33003/34 = Strom Kopf+Summe / Position) |
-| 29001 (COMDIS)         | Ablehnung REMADV                      | COMDIS 1.0      | `invoic`           | ✅ Implemented |
+| 29001 (COMDIS)         | Ablehnung REMADV                      | COMDIS 1.0      | `invoic`           | ✅ Implemented · **2. WT vor dem Zahlungsziel** |
 | 35001 → 15001 (REQOTE/QUOTES) | Anforderung Geräteübernahmeangebot (MSBN → MSBA) | REQOTE 1.3c | `preisanfrage` | ✅ Implemented · **4 WT** |
 | 35002 → 15002 | Anfrage Rechnungsabwicklung über den LF (LF → MSB) | REQOTE 1.3c | `preisanfrage` | ✅ Implemented · **5 WT** |
 | 35004 → 15004 | Anfrage einer Konfiguration (GPKE Teil 3, NB/LF → MSB) | REQOTE 1.3c | `preisanfrage` | ✅ Implemented · **2 WT** |
 | 35005 → 15005 | Anfrage Angebot Änderung Technik (NB/LF → MSB) | REQOTE 1.3c | `preisanfrage` | ✅ Implemented · **10 WT** |
 | 17005/17006 → 19009/19010 | Rechnungsabwicklung MSB über LF | ORDERS/ORDRSP | `rechnungsabwicklung` | ✅ Implemented · **8 WT** |
-| 27001–27003            | Preisliste (PRICAT)                   | PRICAT 2.1      | `preisliste`       | ✅ Implemented |
-| 23001, 23003, 23004, 23008 | Störungsmeldung (INSRPT, gemeinsam) | INSRPT 1.1a  | `insrpt`           | ✅ Implemented · **3 WT** (kME ohne RLM, mME) / **1 WT** (kME mit RLM, iMS) |
-| 23011, 23012           | Ergebnisbericht Strom-Variante        | INSRPT 1.1a     | `insrpt`           | ✅ Implemented |
+| 27001–27003            | Preisliste (PRICAT)                   | PRICAT 2.1      | `preisliste`       | ✅ Implemented · Preisblatt an LF **3 Monate** vor Wirksamwerden, an NB initial **3 WT** / bei Änderung **20 WT** vor Inkrafttreten |
+| 23001, 23003, 23004, 23008 | Störungsmeldung / Antwort / Ergebnisbericht | INSRPT 1.1a | `insrpt`     | ✅ Implemented, **beide Seiten** · Antwort Strom **3 WT** (kME ohne RLM, mME) / **1 WT** (kME mit RLM, iMS), Gas flach **3 WT**; Ergebnis Strom **7/4/2 WT** nach Messtechnik und Spannungsebene, Gas flach **7 WT** |
+| 23005, 23009           | Informationsmeldungen an den NB (Gas) | INSRPT 1.1a     | `insrpt`           | ✅ Implemented |
+| 23011, 23012           | Weiterleitung an betroffene Marktlokationen (Strom) | INSRPT 1.1a | `insrpt`     | ✅ Implemented · **1 WT**, und das Fenster überlebt den Ergebnisbericht — die 23012 ist danach fällig |
+| 31003 → 33001/33002    | WiM-Rechnung (MSBA → NB / MSBN), beide Sparten | INVOIC 2.8e | `invoic`        | ✅ Implemented · Rechnung **20. WT** nach Leistungsende, Antwort **zum Zahlungsziel** |
+| 31004 → 33001/33002    | Stornorechnung, Sparte-neutral        | INVOIC 2.8e     | `invoic`           | ✅ Implemented |
 | 11021–11023            | iMS Bestellung (Universalbestellprozess) | REST/JSON    | `steuerungsauftrag`| ✅ Implemented (API-Webdienste channel) |
-
-> PIDs 23005 and 23009 (Gas-only INSRPT variants) always belong to `mako-wim-gas`
-> `wim-gas-insrpt` with a 10-Werktage deadline. Never register them in `mako-wim`.
 
 ## EDIFACT Format Versions
 
@@ -142,13 +173,13 @@ the same instant. This leg is what makes the Wechsel constitutive.
 
 | Rust module        | Contents                                                                  |
 |--------------------|---------------------------------------------------------------------------|
-| `geraetewechsel`   | PIDs 55039, 55042, 55051, 55168 + the IFTSTA Gesamtvorgang leg 21009–21013 — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
+| `geraetewechsel`   | PIDs 55039/55042/55051/55168 and their Gas twins 44039/44042/44051/44168, plus 44183 and the IFTSTA Gesamtvorgang leg 21009–21013 — MSB-Wechsel workflow + projection. Handles both directions: inbound UTILMD (`ReceiveUtilmd` → APERAK → `DispatchAntwort` → `ReceiveGesamtvorgang` → `DispatchZuordnung`) and ERP-initiated outbound orders (`InitiateDeviceChange` → `ReceiveAntwort` → `MeldeGesamtvorgang` → `ReceiveZuordnungsantwort`). Antwortfrist per process via `antwort_frist_werktage()`; the Realisierungskorridor is enforced on the Gesamtvorgang date. |
 | `geraeteubernahme` | ORDERS 17001 → ORDRSP 19001/19002 (Bestellbestätigung/Ablehnung) and ORDERS 17009 → 19015/19016 (Eigenausbau ja/nein) — WiM Teil 1 Kap. 3.1/3.2 |
 | `weiterverpflichtung` | ORDERS 17002 → ORDRSP 19003/19004 — the NB keeping the abgebender MSB on the Messlokation while the gMSB prepares to take over (Kap. 2.4.2 Nr. 5/6, `E_0203`) |
 | `technik_aenderung` | ORDERS 17011/17118 → ORDRSP 19005/19006 — Messlokationsänderung, **10 WT** Antwort against a **20 WT** Vorlauffrist (Kap. 3.3) |
 | `stammdaten`       | PIDs 17102–17133, 17132 — Stammdaten Anforderung / Übermittlung           |
 | `wertebestellung`  | PIDs 35003/15003/17007/17008, ORDCHG 39002 (Stornierung, answered by ORDRSP 19013/19014), ORDRSP 19011/19012, IFTSTA 21042 — **ESA Wertebestellung** (WiM Teil 2 Kap. 4): Anfrage → Angebot → Bestellung → Stornierung/Abbestellung, plus MSB-initiated termination. Fristen keyed on the positive AS4-Zustellquittung (ÜT); answers carry an `E_0254`/`E_0256`/`E_0257` Antwortcode. |
-| `invoic`           | PID 31009 — MSB-Rechnung INVOIC (WiM Strom Teil 1). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-invoic`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. |
+| `invoic`           | PIDs 31009 (MSB-Rechnung, Strom) · 31003 (Abrechnung von Dienstleistungen, beide Sparten) · 31004 (Stornorechnung, Sparte-neutral). Both sides: **MSB** sends via `SendInvoic` (invoicer, awaits REMADV); **NB/LF/ESA** ingests via `ReceiveInvoic` then settles/disputes. Inbound REMADV 33001–33004 (incl. the Strom itemized Abweisungen 33003/34) + COMDIS 29001. Routed via `wim-invoic`; replies use conversation-ID correlation (RFF+Z13 → 31009 ref) so they resume this family even when the shared REMADV PID statically resolves to GPKE. |
 | `preisanfrage`     | PIDs 35001/35002/35004/35005 (REQOTE), 15001/15002/15004/15005 (QUOTES) — Preisanfrage            |
 | `preisliste`       | PIDs 27001–27003 — Preisliste PRICAT                                      |
 | `steuerungsauftrag`| PIDs 11021–11023 — iMS Steuerungsauftrag (API-Webdienste REST channel)    |
@@ -282,8 +313,9 @@ one-shot order, and `E_0257` refuses a Stornierung of a started delivery with
 
 ## Regulatory references
 
-- BDEW WiM Wechselprozesse im Messwesen Strom
+- BDEW WiM Wechselprozesse im Messwesen
 - MsbG — Messstellenbetriebsgesetz
-- BNetzA **BK6-24-174** (Beschluss 24.10.2024, gültig seit 06.06.2025) — Frist 5 Werktage für APERAK
+- BNetzA **BK6-22-024** Anlagen 2a/2b (WiM Strom Teil 1 und Teil 2)
+- BDEW/VKU/GEODE/FNBGas **AWH WiM Gas 2.0** (gültig ab 01.10.2026)
 - EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
 - EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)

@@ -77,11 +77,6 @@ use mako_wim::{
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
     WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
 };
-use mako_wim_gas::{
-    WimGasAnmeldungWorkflow, WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow,
-    WimGasInvoicWorkflow, WimGasKuendigungWorkflow, WimGasStornierungWorkflow,
-    WimGasVerpflichtungsanfrageWorkflow,
-};
 use time::OffsetDateTime;
 
 use crate::adapters;
@@ -154,6 +149,21 @@ pub struct EdifactIngestDispatcher {
     /// `Arc`, not a plain field: the dispatcher is `Clone`, and a clone with its
     /// own lock map would serialise nothing between the two copies.
     key_locks: Arc<BusinessKeyLocks>,
+    /// Own MP-IDs and their Sparte — the authoritative Sparte signal for the
+    /// AHBs that are Sparte-neutral.
+    ///
+    /// ORDERS/ORDRSP/REQOTE/QUOTES/IFTSTA/INSRPT carry the same
+    /// Prüfidentifikator in both Sparten, and the message body says nothing
+    /// about which. What decides it is the **recipient MP-ID** — one of our own
+    /// parties, and each covers exactly one Sparte (BDEW Allgemeine
+    /// Festlegungen §2.13). The MP-ID's issuing agency is *not* the
+    /// discriminator: a BDEW `99…` code and a DVGW `98…` code both appear under
+    /// NAD DE 3055 = 9 or 332 depending on the party, so the registry is the
+    /// only sound source.
+    ///
+    /// `None` leaves the Sparte at [`Sparte::Strom`], which is what a
+    /// Strom-only deployment and every existing test are.
+    mp_id_registry: Option<Arc<crate::core::party_registry::MpIdRegistry>>,
 }
 
 /// Per-business-key mutexes guarding the lookup→spawn critical section.
@@ -259,13 +269,6 @@ impl EdifactIngestDispatcher {
         "mabis-zp-lifecycle",
         "redispatch-aktivierung",
         "wim-device-change",
-        "wim-gas-anmeldung",
-        "wim-gas-geraeteubernahme",
-        "wim-gas-insrpt",
-        "wim-gas-invoic",
-        "wim-gas-kuendigung",
-        "wim-gas-stornierung",
-        "wim-gas-verpflichtungsanfrage",
         "wim-geraeteubernahme",
         "wim-insrpt",
         "wim-invoic",
@@ -292,6 +295,70 @@ impl EdifactIngestDispatcher {
     ) -> Self {
         self.marktd_client = client;
         self
+    }
+
+    /// Wire the own-party registry that resolves an interchange's Sparte.
+    ///
+    /// Without it every interchange is treated as Strom — correct for a
+    /// Strom-only deployment, and wrong for a Gas one, which would answer a
+    /// WiM Gas ORDERS out of the Strom Entscheidungsbaum and name an `S_00xx`
+    /// Codeliste the Gas market does not publish.
+    #[must_use]
+    pub fn with_mp_id_registry(
+        mut self,
+        registry: Arc<crate::core::party_registry::MpIdRegistry>,
+    ) -> Self {
+        self.mp_id_registry = Some(registry);
+        self
+    }
+
+    /// The Sparte of an inbound interchange, from the recipient MP-ID.
+    ///
+    /// `NAD+MR` is guaranteed equal to `UNB` DE 0010 — `edi-energy` enforces
+    /// the §2.13 party-identity rule at parse — so reading the recipient off
+    /// the message is reading the interchange's own addressee.
+    pub(super) fn sparte_of(&self, msg: &AnyMessage) -> mako_engine::types::Sparte {
+        use crate::core::party_registry::RoleSparte;
+        use mako_engine::types::Sparte;
+        let Some(reg) = self.mp_id_registry.as_ref() else {
+            return Sparte::Strom;
+        };
+        match msg.nad_receiver().and_then(|mp| reg.sparte_of(mp)) {
+            Some(RoleSparte::Gas) => Sparte::Gas,
+            // `Both` is a Sparte-neutral own party (a Marktpartner registered
+            // for both commodities). Strom is the safe reading: it is the
+            // stricter Frist on every window the two share.
+            Some(RoleSparte::Strom | RoleSparte::Both) | None => Sparte::Strom,
+        }
+    }
+
+    /// Which Marktrolle of ours a message is addressed to, for the one WiM
+    /// window that branches on it.
+    ///
+    /// BDEW Allgemeine Festlegungen §2.13 gives every Marktrolle its own
+    /// MP-ID, so the interchange recipient identifies the role without the
+    /// message body saying anything. Anything that is not one of our
+    /// Netzbetreiber codes is treated as the LF/MSB side, which is the longer
+    /// window — a misread there answers late, never early.
+    pub(super) fn rechnung_empfaenger(
+        &self,
+        msg: &AnyMessage,
+    ) -> mako_fristen::vorlauf::RechnungEmpfaenger {
+        use mako_fristen::vorlauf::RechnungEmpfaenger;
+        let Some(reg) = self.mp_id_registry.as_ref() else {
+            return RechnungEmpfaenger::LieferantOderMsb;
+        };
+        let Some(empfaenger) = msg.nad_receiver() else {
+            return RechnungEmpfaenger::LieferantOderMsb;
+        };
+        if ["NB", "GNB"]
+            .iter()
+            .any(|role| reg.mp_id_for_role(role) == Some(empfaenger))
+        {
+            RechnungEmpfaenger::Netzbetreiber
+        } else {
+            RechnungEmpfaenger::LieferantOderMsb
+        }
     }
 
     /// Gate an inbound ESA `WertebestellungCommand` against the consent registry.
@@ -373,6 +440,7 @@ impl EdifactIngestDispatcher {
             tenant_id,
             marktd_client: None,
             key_locks: Arc::new(BusinessKeyLocks::default()),
+            mp_id_registry: None,
         }
     }
 
@@ -467,7 +535,7 @@ impl EdifactIngestDispatcher {
     /// Family router — pure routing by workflow-family name prefix.
     ///
     /// Each family's dispatch arms live in the correspondingly named submodule
-    /// (`gpke`, `geli_gas`, `wim`, `wim_gas`, `gabi_gas`, `mabis`,
+    /// (`gpke`, `geli_gas`, `wim`, `gabi_gas`, `mabis`,
     /// `redispatch`); the per-family method re-matches on `workflow_name`.
     async fn dispatch_inner(
         &self,
@@ -477,7 +545,6 @@ impl EdifactIngestDispatcher {
     ) -> Result<IngestOutcome, EngineError> {
         match workflow_name {
             n if n.starts_with("geli-gas-") => self.dispatch_geli_gas(msg, n, pid).await,
-            n if n.starts_with("wim-gas-") => self.dispatch_wim_gas(msg, n, pid).await,
             n if n.starts_with("gabi-gas-") => self.dispatch_gabi_gas(msg, n, pid).await,
             n if n.starts_with("gpke-") => self.dispatch_gpke(msg, n, pid).await,
             // ESA-side Wertebestellung is WiM Strom Teil 2 — its arm lives in
@@ -714,15 +781,11 @@ impl EdifactIngestDispatcher {
         let process_id = process.process_id();
 
         // Persist events, the APERAK/process Frist deadlines, *and* the
-        // correlation-index entries in one write.
-        //
-        // All three are what a spawn consists of. The correlation entry used to
-        // be written afterwards, warn-only on failure, and that ordering was the
-        // gap: a process whose events are durable but whose business key is not
-        // registered cannot be found by the counterparty's reply. Every reply
-        // resolves to `Skipped(process_not_found)`, and the next thing that
-        // happens to the process is its own Frist expiring as a false timeout —
-        // while the business key stays blocked against a fresh spawn.
+        // correlation-index entries in one write: all three are what a spawn
+        // consists of. A process whose events are durable but whose business key
+        // is not registered cannot be found by the counterparty's reply — every
+        // reply resolves to `Skipped(process_not_found)` and the Frist expires
+        // as a false timeout, while the key stays blocked against a fresh spawn.
         let identity = process.identity();
         let correlations: Vec<CorrelationEntry> = std::iter::once(key)
             .chain(extra_keys.iter().copied())
@@ -1372,6 +1435,23 @@ pub fn extract_melo_from_utilmd(msg: &AnyMessage) -> String {
         .to_owned()
 }
 
+/// Extract the Messlokation an INSRPT concerns, from its mandatory `LOC+172`.
+///
+/// The INSRPT is not a UTILMD and has no transactions: reading it with the
+/// UTILMD extractor returned the empty string, which keyed every
+/// Störungsmeldung of every Messlokation onto one business key.
+pub fn extract_melo_from_insrpt(msg: &AnyMessage) -> String {
+    let AnyMessage::Insrpt(i) = msg else {
+        return String::new();
+    };
+    i.segments()
+        .iter()
+        .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
+        .and_then(|s| s.component_str(1, 0))
+        .unwrap_or_default()
+        .to_owned()
+}
+
 /// Extract the original invoice message-reference from a REMADV for process correlation.
 ///
 /// BDEW convention: the REMADV carries `RFF+Z13:<original_message_ref>` where the
@@ -1507,7 +1587,6 @@ mod gpke;
 mod mabis;
 mod redispatch;
 mod wim;
-mod wim_gas;
 
 #[cfg(test)]
 mod faelligkeitsdatum_tests {

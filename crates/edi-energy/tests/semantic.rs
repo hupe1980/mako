@@ -142,8 +142,8 @@ fn utilmd_lowercase_malo_id_triggers_sem_rule() {
 
 /// A free-form Vorgangsnummer is not a malformed Marktlokations-ID.
 ///
-/// The old rule read `IDE` DE 7402 and rejected every conformant message on
-/// this exact shape.
+/// Reading the ID out of `IDE` DE 7402 rejects every conformant message of
+/// this shape.
 #[cfg(feature = "utilmd")]
 #[test]
 fn a_freeform_vorgangsnummer_is_not_a_location_id() {

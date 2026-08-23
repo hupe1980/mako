@@ -8,11 +8,21 @@ Implements the BDEW GeLi Gas specification:
 
 This supersedes BK7-19-001 and the original BK7-06-067 (2007).
 
-## APERAK Frist
+## APERAK
 
-GeLi Gas processes use **10 Werktage** (`fristen::add_werktage(10, BdewMaKo)`)
-for the APERAK response deadline. This is the longest Frist across all process
-families. Saturdays, Sundays and public holidays are not Werktage.
+Gas knows only the **Verarbeitbarkeitsfehlermeldung**: „Die APERAK informiert den
+Absender eines Geschäftsvorfalls ausschließlich darüber, dass … Fehler gefunden
+wurden" (APERAK AHB 1.1 §2.3). A processable message is acknowledged by the
+Frist lapsing in silence, and every APERAK is answered with a CONTRL.
+
+| Prozessart | Frist | Helper |
+|---|---|---|
+| Folgeprozess | nächster Werktag 12:00 Uhr | `fristen::aperak_gas_folgeprozess_due_at` |
+| Initialprozess (`ZO-F` in der PID-Übersicht: 44001, 44016) | **3 Werktage** | `fristen::aperak_gas_initialprozess_due_at` |
+
+This is the *technical* clock. The business Antwortfristen are per
+Prüfidentifikator in `mako_fristen::antwort`. Saturdays, Sundays and gesetzliche
+Feiertage are not Werktage.
 
 ## Key difference from electricity processes
 

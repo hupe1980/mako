@@ -82,8 +82,14 @@ impl Cluster {
 pub struct AntwortCode {
     /// DE 9013 — the code itself (`A10`, `A35`, `E15`, `Z12`, …).
     pub code: &'static str,
-    /// DE 1131 — the EBD that publishes it, or `None` for the Gas Codelisten,
-    /// which the MIG does not require to be named in DE 1131.
+    /// The **Entscheidungsbaum** that publishes it, or `None` where the answer
+    /// names no tree at all.
+    ///
+    /// This is the identity a code is resolved against — it is *not* necessarily
+    /// what goes on the wire. Several BDEW answer trees publish their codes
+    /// through separately numbered **Codelisten** (`S_00xx` Strom, `G_00xx`
+    /// Gas), and it is the Codeliste that DE 1131 / DE 1082 must name. Ask
+    /// [`AntwortCode::wire_codeliste`] for the wire value.
     pub ebd: Option<&'static str>,
     /// Zustimmung or Ablehnung.
     pub cluster: Cluster,
@@ -116,7 +122,83 @@ impl AntwortCode {
     pub const fn sendet_stammdatenaenderung(&self) -> Option<bool> {
         self.cluster.sendet_stammdatenaenderung()
     }
+
+    /// The value the answer must carry in **UTILMD `SG4 STS+E01` DE 1131** or
+    /// **ORDRSP `SG2 AJT` DE 1082** — the identifier of the *Codeliste*, which
+    /// is not always the EBD number.
+    ///
+    /// The BDEW prints two different things in that data element:
+    ///
+    /// | AHB wording | Example | Trees |
+    /// |---|---|---|
+    /// | „EBD Nr. `E_xxxx`" | `E_0622`, `E_0249` | every GPKE/GeLi Gas tree, and the Messlokationsänderung |
+    /// | „Codeliste Strom/Gas Nr. `S_xxxx`/`G_xxxx`" | `S_0090`, `G_0051` | every WiM MSB-Wechsel, Weiterverpflichtung, Gerätewechselabsicht and Geräteübernahme answer |
+    ///
+    /// Where a tree publishes through Codelisten, the **cluster** picks which
+    /// one — a Bestätigung and an Ablehnung name different lists. Sending the
+    /// EBD number instead is a rejected message, not a cosmetic difference.
+    ///
+    /// Source: UTILMD AHB Strom 2.2 Kap. 10, UTILMD AHB Gas 1.2 Kap. 6,
+    /// ORDRSP AHB 1.1b Kap. 4.
+    #[must_use]
+    pub fn wire_codeliste(&self) -> Option<&'static str> {
+        let ebd = self.ebd?;
+        Some(wire_codeliste(ebd, self.cluster).unwrap_or(ebd))
+    }
 }
+
+/// The Codeliste identifier DE 1131 / DE 1082 must carry for an answer drawn
+/// from `ebd` on `cluster`, or `None` when the EBD number itself is the wire
+/// value.
+///
+/// See [`AntwortCode::wire_codeliste`] for why the two differ.
+#[must_use]
+pub fn wire_codeliste(ebd: &str, cluster: Cluster) -> Option<&'static str> {
+    let (_, zustimmung, ablehnung) = WIRE_CODELISTEN.iter().find(|(id, _, _)| *id == ebd)?;
+    match cluster {
+        Cluster::Zustimmung => Some(zustimmung),
+        Cluster::Ablehnung => Some(ablehnung),
+        // The Datenänderung axis belongs to `E_0595`, which names its EBD.
+        Cluster::AenderungDerDaten | Cluster::KeineAenderungDerDaten => None,
+    }
+}
+
+/// Trees whose codes ride the wire under a **Codeliste** number rather than the
+/// EBD number, as `(ebd, Zustimmungs-Codeliste, Ablehnungs-Codeliste)`.
+///
+/// Every entry is read off the AHB column „SG4 STS 1131" resp. „SG2 AJT 1082"
+/// for the two answer Prüfidentifikatoren of that process. An EBD absent from
+/// this table names itself, which is what every GPKE and GeLi Gas tree does.
+///
+/// Sources: UTILMD AHB Strom 2.2 (01.04.2026) Kap. 10.1–10.4; UTILMD AHB Gas
+/// 1.2 (01.04.2026) Kap. 6.1–6.5; ORDRSP AHB 1.1b Kap. 4; and BDEW
+/// *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 8 (Strom) and 14 (Gas),
+/// which is where the `S_`/`G_` lists themselves are published.
+pub const WIRE_CODELISTEN: &[(&str, &str, &str)] = &[
+    // ── WiM Strom (EBD 4.3 Kap. 8) ────────────────────────────────────────────
+    (EBD_KUENDIGUNG_MSB, "S_0090", "S_0054"),
+    (EBD_ANMELDUNG_MSB, "S_0055", "S_0056"),
+    (EBD_ABMELDUNG_MSB, "S_0059", "S_0060"),
+    (EBD_VERPFLICHTUNGSANFRAGE, "S_0063", "S_0064"),
+    (EBD_WEITERVERPFLICHTUNG, "S_0061", "S_0062"),
+    (EBD_GERAETEWECHSELABSICHT, "S_0065", "S_0066"),
+    (EBD_BESTELLUNG_GERAETEUEBERNAHME, "S_0067", "S_0068"),
+    (EBD_GESAMTVORGANG, "S_0057", "S_0057"),
+    // ── WiM Gas (EBD 4.3 Kap. 14) ─────────────────────────────────────────────
+    (EBD_KUENDIGUNG_MSB_GAS, "G_0052", "G_0051"),
+    (EBD_ANMELDUNG_MSB_GAS, "G_0054", "G_0053"),
+    (EBD_ABMELDUNG_MSB_GAS, "G_0058", "G_0057"),
+    (EBD_VERPFLICHTUNGSANFRAGE_GAS, "G_0070", "G_0071"),
+    (EBD_WEITERVERPFLICHTUNG_GAS, "G_0072", "G_0073"),
+    (EBD_GERAETEWECHSELABSICHT_GAS, "G_0059", "G_0060"),
+    (EBD_BESTELLUNG_GERAETEUEBERNAHME_GAS, "G_0061", "G_0074"),
+    (EBD_GESAMTVORGANG_GAS, "G_0055", "G_0055"),
+    (EBD_WIM_RECHNUNG_NB_GAS, "G_0083", "G_0083"),
+    (EBD_WIM_RECHNUNG_MSBN_GAS, "G_0084", "G_0084"),
+    (EBD_WIM_RECHNUNG_MELO_GAS, "G_0083", "G_0083"),
+    (EBD_WIM_STORNO_GAS, "G_0085", "G_0085"),
+    (EBD_WIM_STORNO_MSBN_GAS, "G_0086", "G_0086"),
+];
 
 macro_rules! code {
     ($code:literal, $ebd:expr, $cluster:ident, $bedeutung:literal) => {
@@ -1683,6 +1765,496 @@ pub const E_0250_CODES: &[AntwortCode] = &[
     ),
 ];
 
+// ── E_0232 / E_2003 — Mitteilung über Gesamtvorgang prüfen ───────────────────
+//
+// The leg that makes a Zuordnung constitutive. The NB answers the MSBN's
+// IFTSTA 21010/21009 with 21012 (erfolgreich) or 21011 (Scheitermeldung liegt
+// vor), and only the *negative* side publishes a code: the AHB names an EBD on
+// 21011 and none on 21012. The Zustimmung is therefore the PID itself, and the
+// tree carries a single Ablehnungscode.
+
+/// `E_0232` — Mitteilung über Gesamtvorgang prüfen (Strom). Prüfende Rolle: **NB**.
+pub const EBD_GESAMTVORGANG: &str = "E_0232";
+const E_0232: Option<&'static str> = Some(EBD_GESAMTVORGANG);
+
+/// `E_0232` — the NB's answer to the MSBN's Gesamtvorgang report.
+///
+/// `Z66` is the only published code and it rides **21011**; the positive answer
+/// 21012 carries no `STS+E01` at all (PID-Übersicht 4.0 rows 30140/30150).
+/// The Zustimmung entry below is a `mako` construct so the „cluster picks the
+/// PID" rule still resolves 21012 — it is never rendered, because the answer
+/// has no Status-der-Antwort segment to put it in.
+pub const E_0232_CODES: &[AntwortCode] = &[code!(
+    "Z66",
+    E_0232,
+    Ablehnung,
+    "MSB-Scheitermeldung liegt vor — der MSBA bleibt der Messlokation zugeordnet"
+)];
+
+/// `E_2003` — Mitteilung über Gesamtvorgang prüfen (**Gas**). Prüfende Rolle: **NB**.
+pub const EBD_GESAMTVORGANG_GAS: &str = "E_2003";
+const E_2003: Option<&'static str> = Some(EBD_GESAMTVORGANG_GAS);
+
+/// `E_2003` — the Gas twin of [`E_0232_CODES`], published as Codeliste `G_0055`.
+pub const E_2003_CODES: &[AntwortCode] = &[code!(
+    "Z66",
+    E_2003,
+    Ablehnung,
+    "MSB-Scheitermeldung liegt vor — der MSBA bleibt der Messlokation zugeordnet"
+)];
+
+// ── WiM Gas — Messstellenbetrieb (EBD 4.3 Kap. 14) ───────────────────────────
+//
+// WiM Gas is a structural mirror of WiM Strom: the same Use-Cases, the same
+// Fristen and the same Prüfschritte, on the 44xxx UTILMD namespace and the
+// shared ORDERS/ORDRSP/IFTSTA/REQOTE/QUOTES PIDs. What is **not** shared is the
+// alphabet: every Gas answer resolves against an `E_20xx` tree and rides a
+// `G_00xx` Codeliste. `A02`/`A05`/`S_0054` are undefined on a 44041, and the
+// Gas lists are not always the Strom ones — `S_0056` publishes `ZC9` where
+// `G_0053` does not.
+//
+// Source: BDEW *Entscheidungsbaum-Diagramme und Codelisten* 4.3 Kap. 14,
+// AWH WiM Gas 2.0 (gültig ab 01.10.2026), UTILMD AHB Gas 1.2 Kap. 6.
+
+/// `E_2000` — Kündigung Messstellenbetrieb (Gas). Prüfende Rolle: **MSBA**.
+pub const EBD_KUENDIGUNG_MSB_GAS: &str = "E_2000";
+const E_2000: Option<&'static str> = Some(EBD_KUENDIGUNG_MSB_GAS);
+
+/// `E_2000` — the MSBA's answer to a Kündigung des Messstellenbetriebsvertrags
+/// (44039 → 44040 `G_0052` / 44041 `G_0051`).
+///
+/// Differs from the Strom twin `E_0200` in one code: Gas publishes no `ZC9`
+/// („keine Zuordnung möglich"). An unidentifiable Messlokation therefore has no
+/// Ablehnungscode in Gas and must escalate.
+pub const E_2000_CODES: &[AntwortCode] = &[
+    code!("E15", E_2000, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_2000,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — nur wenn SG4 DTM+471 (Ende zum nächstmöglichen Termin) vorhanden"
+    ),
+    code!(
+        "Z44",
+        E_2000,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!("E11", E_2000, Ablehnung, "Ablehnung (Messproblem)"),
+    code!(
+        "Z12",
+        E_2000,
+        Ablehnung,
+        "Ablehnung Vertragsbindung — der nächstmögliche Kündigungszeitpunkt gehört in SG4 DTM+157"
+    ),
+    code!(
+        "Z29",
+        E_2000,
+        Ablehnung,
+        "Ablehnung (kein Vertragsverhältnis mehr vorhanden)"
+    ),
+    code!("Z34", E_2000, Ablehnung, "Ablehnung (Mehrfachkündigung)"),
+];
+
+/// `E_2002` — Anmeldung Messstellenbetrieb prüfen (Gas). Prüfende Rolle: **NB**.
+pub const EBD_ANMELDUNG_MSB_GAS: &str = "E_2002";
+const E_2002: Option<&'static str> = Some(EBD_ANMELDUNG_MSB_GAS);
+
+/// `E_2002` — the NB's answer to an Anmeldung des Messstellenbetriebs
+/// (44042 → 44043 `G_0054` / 44044 `G_0053`).
+///
+/// The Bestätigung is *vorläufig*: the Zuordnung follows the Gesamtvorgang, at
+/// **06:00 Uhr** on the reported day (AWH WiM Gas 2.0 Kap. 3.1.1) — the Gastag
+/// boundary, where Strom assigns at 00:00.
+pub const E_2002_CODES: &[AntwortCode] = &[
+    code!("E15", E_2002, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_2002,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — nur wenn SG4 STS+7++E02 (Einzug in eine Neuanlage) vorhanden"
+    ),
+    code!(
+        "Z44",
+        E_2002,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!("E11", E_2002, Ablehnung, "Ablehnung (Messproblem)"),
+    code!(
+        "E17",
+        E_2002,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung"
+    ),
+    code!(
+        "Z09",
+        E_2002,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+    code!(
+        "Z29",
+        E_2002,
+        Ablehnung,
+        "Ablehnung (kein Vertragsverhältnis mehr vorhanden)"
+    ),
+    code!("ZB6", E_2002, Ablehnung, "Erforderliche Versicherung fehlt"),
+];
+
+/// `E_2005` — Abmeldung Messstellenbetrieb prüfen (Gas). Prüfende Rolle: **NB**.
+pub const EBD_ABMELDUNG_MSB_GAS: &str = "E_2005";
+const E_2005: Option<&'static str> = Some(EBD_ABMELDUNG_MSB_GAS);
+
+/// `E_2005` — the NB's answer to an Ende Messstellenbetrieb
+/// (44051 → 44052 `G_0058` / 44053 `G_0057`).
+///
+/// The 20-Werktage Mindestvorlauffrist is **not** an Ablehnungsgrund: AWH WiM
+/// Gas 2.0 Kap. 3.6.2 Nr. 2 has the NB move the Zuordnungsende to the
+/// nächstmögliches and confirm with `Z01`.
+pub const E_2005_CODES: &[AntwortCode] = &[
+    code!("E15", E_2005, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_2005,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — das vom NB festgesetzte nächstmögliche Zuordnungsende"
+    ),
+    code!(
+        "E17",
+        E_2005,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung — nur bei Transaktionsgrund ZG9/ZH1/ZH2 (Aufhebung einer zukünftigen Zuordnung)"
+    ),
+    code!(
+        "Z09",
+        E_2005,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+];
+
+/// `E_2006` — Verpflichtungsanfrage prüfen (Gas). Prüfende Rolle: **gMSB**.
+pub const EBD_VERPFLICHTUNGSANFRAGE_GAS: &str = "E_2006";
+const E_2006: Option<&'static str> = Some(EBD_VERPFLICHTUNGSANFRAGE_GAS);
+
+/// `E_2006` — the grundzuständiger MSB's answer to the NB's Verpflichtungsanfrage.
+///
+/// **The Gas Ablehnung has no Prüfidentifikator of its own.** PID-Übersicht 4.0
+/// publishes 44168 (Anfrage) and 44169 (Bestätigung) and nothing else — the
+/// 44170 of PID 3.3 was withdrawn. `G_0071` is still published, so an Ablehnung
+/// under FV2026-10-01 has a code and no carrier; mako escalates rather than
+/// inventing one.
+pub const E_2006_CODES: &[AntwortCode] = &[
+    code!("E15", E_2006, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z01",
+        E_2006,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — nur wenn SG4 STS+7++E02 (Einzug in eine Neuanlage) vorhanden"
+    ),
+    code!(
+        "Z44",
+        E_2006,
+        Zustimmung,
+        "Zustimmung mit Korrektur von nicht bilanzierungsrelevanten Daten"
+    ),
+    code!(
+        "E17",
+        E_2006,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung"
+    ),
+    code!("Z07", E_2006, Ablehnung, "Ablehnung (Keine Berechtigung)"),
+    code!(
+        "Z09",
+        E_2006,
+        Ablehnung,
+        "Ablehnung (Transaktionsgrund unplausibel)"
+    ),
+    code!("ZB6", E_2006, Ablehnung, "Erforderliche Versicherung fehlt"),
+];
+
+/// `E_2004` — Weiterverpflichtung prüfen (Gas). Prüfende Rolle: **MSBA** (ORDRSP).
+pub const EBD_WEITERVERPFLICHTUNG_GAS: &str = "E_2004";
+const E_2004: Option<&'static str> = Some(EBD_WEITERVERPFLICHTUNG_GAS);
+
+/// `E_2004` — the outgoing MSB's answer to the NB's Weiterverpflichtung
+/// (17002 → 19003 `G_0072` / 19004 `G_0073`).
+pub const E_2004_CODES: &[AntwortCode] = &[
+    code!("Z13", E_2004, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!(
+        "Z14",
+        E_2004,
+        Zustimmung,
+        "Zustimmung mit Terminänderung — der Termin lag außerhalb des maximalen Weiterverpflichtungszeitraums; der korrigierte Abmeldetermin gehört in DTM DE 2380"
+    ),
+    code!(
+        "Z22",
+        E_2004,
+        Ablehnung,
+        "Ablehnung wegen Überschreiten des Weiterverpflichtungszeitraums"
+    ),
+];
+
+/// `E_2007`/`E_2008` — Anzeige Gerätewechselabsicht prüfen (Gas). Rolle: **MSBA**.
+///
+/// The BDEW splits the decision in two („Anzeige prüfen" and „Prüfen, ob
+/// Eigenausbau gewünscht") but publishes one pair of Codelisten for both, so
+/// mako carries one tree. `E_2007` is the id the PID-Übersicht names on the
+/// Ablehnung 19016 and `E_2008` the one it names on 19015 — the same tree.
+pub const EBD_GERAETEWECHSELABSICHT_GAS: &str = "E_2007";
+const E_2007: Option<&'static str> = Some(EBD_GERAETEWECHSELABSICHT_GAS);
+
+/// `E_2007` — the Gas twin of [`E_0204_CODES`] (`G_0059` / `G_0060`).
+///
+/// As in Strom, **neither cluster refuses the Gerätewechsel**: `ZB4` says the
+/// MSBA removes its own devices and `ZB5` that the MSBN does.
+pub const E_2007_CODES: &[AntwortCode] = &[
+    code!("ZB4", E_2007, Zustimmung, "Eigenausbau wird erfolgen"),
+    code!("ZB5", E_2007, Ablehnung, "Kein Eigenausbau des MSBA"),
+    code!(
+        "E17",
+        E_2007,
+        Ablehnung,
+        "Ablehnung wg. Fristüberschreitung — die Antwort ist spätestens am 2. WT vor dem Gerätewechseltermin fällig"
+    ),
+    code!("Z07", E_2007, Ablehnung, "Ablehnung (Keine Berechtigung)"),
+];
+
+/// `E_2011` — Bestellung (Geräteübernahme) prüfen (Gas). Prüfende Rolle: **MSBA**.
+pub const EBD_BESTELLUNG_GERAETEUEBERNAHME_GAS: &str = "E_2011";
+const E_2011: Option<&'static str> = Some(EBD_BESTELLUNG_GERAETEUEBERNAHME_GAS);
+
+/// `E_2011` — the Gas twin of [`E_0247_CODES`] (19001 `G_0061` / 19002 `G_0074`).
+pub const E_2011_CODES: &[AntwortCode] = &[
+    code!("Z13", E_2011, Zustimmung, "Zustimmung ohne Korrekturen"),
+    code!("5", E_2011, Ablehnung, "Preis / Rechenregel falsch"),
+    code!(
+        "Z32",
+        E_2011,
+        Ablehnung,
+        "Ablehnung Bestellumfang übersteigt Angebotsumfang"
+    ),
+];
+
+// ── WiM Gas Abrechnung (EBD 4.3 Kap. 14.7) ───────────────────────────────────
+//
+// Five trees for one INVOIC family, separated by **who rejects whose invoice**
+// rather than by which invoice it is. Their codes travel in REMADV `AJT`
+// DE 4465 with the Gas Codeliste in DE 1082 — never the EBD id, so
+// `wire_codeliste` carries the `G_00xx` name beside each.
+//
+// Like `E_0406`, all five publish Ablehnungscodes only: the Gas Zahlungsavis
+// 33001 carries no `AJT`. `E_2017` („Nichtzahlungsavis prüfen") has no tree,
+// „da keine Antwort gegeben wird", so it is absent here.
+
+/// `E_2014` — Rechnung verarbeiten, NB → MSBA (Codeliste `G_0083`).
+pub const EBD_WIM_RECHNUNG_NB_GAS: &str = "E_2014";
+const E_2014: Option<&'static str> = Some(EBD_WIM_RECHNUNG_NB_GAS);
+
+/// `E_2014` — Ablehnungsgründe für eine WiM-Rechnung Gas (NB → MSBA).
+pub const E_2014_CODES: &[AntwortCode] = &[
+    code!("5", E_2014, Ablehnung, "Preis / Rechenregel falsch"),
+    code!(
+        "9",
+        E_2014,
+        Ablehnung,
+        "Falscher Abrechnungszeitraum (innerhalb gültiger Vertragsgrenzen)"
+    ),
+    code!(
+        "14",
+        E_2014,
+        Ablehnung,
+        "Unbekannte Marktlokation, Messlokation"
+    ),
+    code!("53", E_2014, Ablehnung, "Doppelte Rechnung"),
+    code!(
+        "Z01",
+        E_2014,
+        Ablehnung,
+        "Abrechnungsbeginn ungleich Vertragsbeginn"
+    ),
+    code!(
+        "Z02",
+        E_2014,
+        Ablehnung,
+        "Abrechnungsende ungleich Vertragsende"
+    ),
+    code!("Z06", E_2014, Ablehnung, "Artikel nicht vereinbart"),
+    code!(
+        "Z08",
+        E_2014,
+        Ablehnung,
+        "Rechnungsnummer bereits erhalten — zwei unterschiedliche Rechnungen tragen dieselbe \
+         Rechnungsnummer"
+    ),
+    code!(
+        "Z40",
+        E_2014,
+        Ablehnung,
+        "Reverse Charge Anwendung fehlt oder unzulässig"
+    ),
+    code!(
+        "Z43",
+        E_2014,
+        Ablehnung,
+        "Ungültiges Rechnungsdatum — DTM+137 liegt bei Eingang in der Zukunft"
+    ),
+];
+
+/// `E_2015` — Rechnung verarbeiten, MSBN → MSBA (Codeliste `G_0084`).
+pub const EBD_WIM_RECHNUNG_MSBN_GAS: &str = "E_2015";
+const E_2015: Option<&'static str> = Some(EBD_WIM_RECHNUNG_MSBN_GAS);
+
+/// `E_2015` — Ablehnungsgründe für eine WiM-Rechnung Gas (MSBN → MSBA).
+pub const E_2015_CODES: &[AntwortCode] = &[
+    code!("5", E_2015, Ablehnung, "Preis / Rechenregel falsch"),
+    code!(
+        "9",
+        E_2015,
+        Ablehnung,
+        "Falscher Abrechnungszeitraum (innerhalb gültiger Vertragsgrenzen)"
+    ),
+    code!(
+        "14",
+        E_2015,
+        Ablehnung,
+        "Unbekannte Marktlokation, Messlokation"
+    ),
+    code!("53", E_2015, Ablehnung, "Doppelte Rechnung"),
+    code!(
+        "Z01",
+        E_2015,
+        Ablehnung,
+        "Abrechnungsbeginn ungleich Vertragsbeginn"
+    ),
+    code!(
+        "Z02",
+        E_2015,
+        Ablehnung,
+        "Abrechnungsende ungleich Vertragsende"
+    ),
+    code!("Z06", E_2015, Ablehnung, "Artikel nicht vereinbart"),
+    code!(
+        "Z08",
+        E_2015,
+        Ablehnung,
+        "Rechnungsnummer bereits erhalten — zwei unterschiedliche Rechnungen tragen dieselbe \
+         Rechnungsnummer"
+    ),
+    code!(
+        "Z40",
+        E_2015,
+        Ablehnung,
+        "Reverse Charge Anwendung fehlt oder unzulässig"
+    ),
+    code!(
+        "Z43",
+        E_2015,
+        Ablehnung,
+        "Ungültiges Rechnungsdatum — DTM+137 liegt bei Eingang in der Zukunft"
+    ),
+];
+
+/// `E_2016` — Rechnung verarbeiten, NB → MSBA, Messlokations-Abrechnung
+/// (Codeliste `G_0083`).
+///
+/// Publishes the same alphabet as [`EBD_WIM_RECHNUNG_NB_GAS`] with one word
+/// changed: `14` names „Unbekannte Messlokation" alone, because this
+/// Abrechnung has no Marktlokation to be unknown.
+pub const EBD_WIM_RECHNUNG_MELO_GAS: &str = "E_2016";
+const E_2016: Option<&'static str> = Some(EBD_WIM_RECHNUNG_MELO_GAS);
+
+/// `E_2016` — Ablehnungsgründe für eine WiM-Rechnung Gas (NB → MSBA).
+pub const E_2016_CODES: &[AntwortCode] = &[
+    code!("5", E_2016, Ablehnung, "Preis / Rechenregel falsch"),
+    code!(
+        "9",
+        E_2016,
+        Ablehnung,
+        "Falscher Abrechnungszeitraum (innerhalb gültiger Vertragsgrenzen)"
+    ),
+    code!("14", E_2016, Ablehnung, "Unbekannte Messlokation"),
+    code!("53", E_2016, Ablehnung, "Doppelte Rechnung"),
+    code!(
+        "Z01",
+        E_2016,
+        Ablehnung,
+        "Abrechnungsbeginn ungleich Vertragsbeginn"
+    ),
+    code!(
+        "Z02",
+        E_2016,
+        Ablehnung,
+        "Abrechnungsende ungleich Vertragsende"
+    ),
+    code!("Z06", E_2016, Ablehnung, "Artikel nicht vereinbart"),
+    code!(
+        "Z08",
+        E_2016,
+        Ablehnung,
+        "Rechnungsnummer bereits erhalten — zwei unterschiedliche Rechnungen tragen dieselbe \
+         Rechnungsnummer"
+    ),
+    code!(
+        "Z40",
+        E_2016,
+        Ablehnung,
+        "Reverse Charge Anwendung fehlt oder unzulässig"
+    ),
+    code!(
+        "Z43",
+        E_2016,
+        Ablehnung,
+        "Ungültiges Rechnungsdatum — DTM+137 liegt bei Eingang in der Zukunft"
+    ),
+];
+
+/// `E_2018` — Storno verarbeiten (Codeliste `G_0085`).
+pub const EBD_WIM_STORNO_GAS: &str = "E_2018";
+const E_2018: Option<&'static str> = Some(EBD_WIM_STORNO_GAS);
+
+/// `E_2018` — Ablehnungsgründe für eine Stornorechnung Gas (G_0085).
+pub const E_2018_CODES: &[AntwortCode] = &[
+    code!(
+        "28",
+        E_2018,
+        Ablehnung,
+        "Sonstiges — etwa: Originalrechnungsnummer nicht gefunden",
+        bemerkung
+    ),
+    code!("Z08", E_2018, Ablehnung, "Rechnungsnummer bereits erhalten"),
+    code!(
+        "Z43",
+        E_2018,
+        Ablehnung,
+        "Ungültiges Rechnungsdatum — DTM+137 liegt bei Eingang in der Zukunft"
+    ),
+];
+
+/// `E_2019` — Storno verarbeiten (Codeliste `G_0086`).
+pub const EBD_WIM_STORNO_MSBN_GAS: &str = "E_2019";
+const E_2019: Option<&'static str> = Some(EBD_WIM_STORNO_MSBN_GAS);
+
+/// `E_2019` — Ablehnungsgründe für eine Stornorechnung Gas (G_0086).
+pub const E_2019_CODES: &[AntwortCode] = &[
+    code!(
+        "28",
+        E_2019,
+        Ablehnung,
+        "Sonstiges — etwa: Originalrechnungsnummer nicht gefunden",
+        bemerkung
+    ),
+    code!("Z08", E_2019, Ablehnung, "Rechnungsnummer bereits erhalten"),
+    code!(
+        "Z43",
+        E_2019,
+        Ablehnung,
+        "Ungültiges Rechnungsdatum — DTM+137 liegt bei Eingang in der Zukunft"
+    ),
+];
+
 // ── ESA Wertebestellung (WiM Strom Teil 2 Kap. 4) ────────────────────────────
 //
 // The three trees whose prüfende Rolle is the **MSB serving an ESA**. All
@@ -1860,6 +2432,22 @@ pub const CODELISTEN: &[(&str, &[AntwortCode])] = &[
     (EBD_BESTELLUNG_GERAETEUEBERNAHME, E_0247_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_NB, E_0249_CODES),
     (EBD_MESSLOKATIONSAENDERUNG_LF, E_0250_CODES),
+    (EBD_GESAMTVORGANG, E_0232_CODES),
+    // WiM Gas — Messstellenbetrieb (EBD 4.3 Kap. 14).
+    (EBD_KUENDIGUNG_MSB_GAS, E_2000_CODES),
+    (EBD_ANMELDUNG_MSB_GAS, E_2002_CODES),
+    (EBD_GESAMTVORGANG_GAS, E_2003_CODES),
+    (EBD_WEITERVERPFLICHTUNG_GAS, E_2004_CODES),
+    (EBD_ABMELDUNG_MSB_GAS, E_2005_CODES),
+    (EBD_VERPFLICHTUNGSANFRAGE_GAS, E_2006_CODES),
+    (EBD_GERAETEWECHSELABSICHT_GAS, E_2007_CODES),
+    (EBD_BESTELLUNG_GERAETEUEBERNAHME_GAS, E_2011_CODES),
+    // WiM Gas — Abrechnung (EBD 4.3 Kap. 14.7).
+    (EBD_WIM_RECHNUNG_NB_GAS, E_2014_CODES),
+    (EBD_WIM_RECHNUNG_MSBN_GAS, E_2015_CODES),
+    (EBD_WIM_RECHNUNG_MELO_GAS, E_2016_CODES),
+    (EBD_WIM_STORNO_GAS, E_2018_CODES),
+    (EBD_WIM_STORNO_MSBN_GAS, E_2019_CODES),
     // WiM Strom Teil 2 — ESA Wertebestellung.
     (EBD_ESA_BESTELLUNG, E_0256_CODES),
     (EBD_ESA_STORNIERUNG, E_0257_CODES),
@@ -1879,6 +2467,59 @@ pub const VORPRUEFUNG_TREES: &[(&str, &str)] = &[
     (EBD_ANMELDUNG_DIREKT_ABLEHNBAR, EBD_LIEFERBEGINN),
     (EBD_ANMELDUNG_DIREKT_ABLEHNBAR_GAS, EBD_LIEFERBEGINN_GAS),
 ];
+
+/// Trees that publish **Ablehnungscodes only**, because their positive answer
+/// carries no code at all — paired with the reason.
+///
+/// This is a different shape from [`VORPRUEFUNG_TREES`]: there the Zustimmung
+/// exists and lives in another tree; here the confirming Prüfidentifikator
+/// simply has no Status-der-Antwort segment for a code to sit in, so the PID
+/// alone is the agreement.
+///
+/// Adding a tree here is a claim about an AHB column. The test below holds it
+/// to the consequence: such a tree must publish no Zustimmungscode.
+pub const ABLEHNUNG_ONLY_TREES: &[(&str, &str)] = &[
+    (
+        EBD_NETZNUTZUNGSRECHNUNG,
+        "REMADV: the Bestätigung 33001 carries no AJT at all (REMADV AHB 1.0a)",
+    ),
+    (
+        EBD_GESAMTVORGANG,
+        "IFTSTA: 21012 carries no STS+E01; only the Scheitermeldung 21011 names \
+         E_0232 (PID-Übersicht 4.0 rows 30140/30150)",
+    ),
+    (
+        EBD_GESAMTVORGANG_GAS,
+        "IFTSTA: 21012 carries no STS+E01; only the Scheitermeldung 21011 names \
+         E_2003 (PID-Übersicht 4.0 rows 39150/39160)",
+    ),
+    (
+        EBD_WIM_RECHNUNG_NB_GAS,
+        "REMADV: the Gas Zahlungsavis 33001 carries no AJT at all",
+    ),
+    (
+        EBD_WIM_RECHNUNG_MSBN_GAS,
+        "REMADV: the Gas Zahlungsavis 33001 carries no AJT at all",
+    ),
+    (
+        EBD_WIM_RECHNUNG_MELO_GAS,
+        "REMADV: the Gas Zahlungsavis 33001 carries no AJT at all",
+    ),
+    (
+        EBD_WIM_STORNO_GAS,
+        "REMADV: the Gas Zahlungsavis 33001 carries no AJT at all",
+    ),
+    (
+        EBD_WIM_STORNO_MSBN_GAS,
+        "REMADV: the Gas Zahlungsavis 33001 carries no AJT at all",
+    ),
+];
+
+/// `true` when `ebd` publishes Ablehnungscodes only — see [`ABLEHNUNG_ONLY_TREES`].
+#[must_use]
+pub fn ist_ablehnung_only(ebd: &str) -> bool {
+    ABLEHNUNG_ONLY_TREES.iter().any(|(id, _)| *id == ebd)
+}
 
 /// The tree a Vorprüfung hands a surviving message to, if `ebd` is one.
 #[must_use]
@@ -1941,8 +2582,7 @@ mod tests {
                 continue;
             }
 
-            let ablehnung_only =
-                *ebd == EBD_NETZNUTZUNGSRECHNUNG || zustimmung_tree_of(ebd).is_some();
+            let ablehnung_only = ist_ablehnung_only(ebd) || zustimmung_tree_of(ebd).is_some();
             if ablehnung_only {
                 assert!(
                     codes.iter().all(|c| c.ist_zustimmung() != Some(true)),

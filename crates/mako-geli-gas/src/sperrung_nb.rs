@@ -22,10 +22,12 @@
 //!
 //! - **BK7-24-01-009** — GeLi Gas 3.0 (Gas Sperr-/Entsperrprozesse)
 //! - **AWH Sperrprozesse Gas** — published under BK7-24-01-009
-//! - **APERAK Frist**: **10 Werktage** (Saturday counts, Sunday and public
-//!   holidays do not; German local time CET/CEST)
-//! - Use `mako_fristen::add_werktage(date, 10, BdewMaKo)` for the
-//!   deadline computation
+//! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
+//!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
+//!   (APERAK AHB 1.1 §2.3.1). Separate from the **10-Werktage GNB execution
+//!   window** below, which is the business clock.
+//! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
+//!   (GPKE Teil 1 Kap. 1.7); arithmetic runs in gesetzlicher deutscher Zeit.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -310,8 +312,8 @@ impl CommandPayload for GasSperrungNbCommand {}
 
 /// GeLi Gas GNB-side Gas Sperrung / Entsperrung workflow (ORDERS PIDs 17115–17117).
 ///
-/// Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
-/// APERAK Frist: **10 Werktage** (BK7-24-01-009).
+/// Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas). The **10 Werktage**
+/// are the GNB execution window, not the APERAK sending deadline.
 pub struct GeliGasSperrungNbWorkflow;
 
 impl Workflow for GeliGasSperrungNbWorkflow {

@@ -38,7 +38,7 @@
 //!
 //! - **BDEW WiM** — Wechselprozesse im Messwesen Strom
 //! - **REQOTE AHB 1.2** / **QUOTES AHB 1.1a** — EDI@Energy message format
-//! - **APERAK 2.x** — **5 Werktage** Frist (BK6-24-174)
+//! - **APERAK AHB 1.1** — the technical acknowledgement, on its own clock
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -98,8 +98,9 @@ pub const QUOTES_PIDS: &[u32] = &[15001, 15002, 15004, 15005];
 /// | 35005 | Anfrage Angebot Änderung Technik | **10 WT** | Kap. 3.3.1.2 Nr. 2 |
 /// | 35004 | Anfrage einer Konfiguration (GPKE Teil 3) | *unquantified* | — |
 ///
-/// A flat 5 Werktage gives the Geräteübernahmeangebot a Werktag it does not
-/// have and lets a Technikänderung run five Werktage past its window unflagged.
+/// A flat window is wrong in both directions: it gives the
+/// Geräteübernahmeangebot a Werktag it does not have and lets a Technikänderung
+/// run past its window unflagged.
 ///
 /// `None` means the window is **unknown**, never unbounded: for 35004 because
 /// GPKE Teil 3 states it elsewhere, and for **35003** because that is the ESA
@@ -117,7 +118,8 @@ pub fn antwort_frist_werktage(request_pid: u32) -> Option<u32> {
     }
 }
 
-/// Deadline label for the response window (BK6-24-174).
+/// Deadline label for the response window — the per-PID window of
+/// [`antwort_frist_werktage`].
 pub const PREISANFRAGE_DEADLINE_LABEL: &str = "wim-preisanfrage-antwort";
 
 // ── Response PID derivation ───────────────────────────────────────────────────

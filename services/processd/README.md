@@ -461,7 +461,9 @@ just test-processd-db                    # SQL suite against a real PostgreSQL
 | GeLi Gas Anmeldung decision (44001) | Ablauf des 4. Werktags nach Eingang | BK7-24-01-009 Kap. 3.2.3 |
 | GeLi Gas Abmeldung decision (44004) | Ablauf des 3. Werktags nach Eingang | BK7-24-01-009 Kap. 3.2.2 |
 | WiM MSB-Wechsel answers | 3 / 5 / 7 / 1 WT per PID | BK6-22-024 WiM Strom Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2 |
-| WiM REQOTE Preisanfrage | 5 Werktage | BK6-24-174 (WiM Strom) |
+| WiM REQOTE Preisanfrage | 4 / 5 / 10 WT per PID (35001 / 35002 / 35005) | BK6-22-024 WiM Strom Teil 1, Kap. 3.2.2 / 3.6.3.6.2 / 3.3.1.2 Nr. 2 |
+| WiM Rechnungsabwicklung über den LF (15002 / 17006) | 8 Werktage | BK6-22-024 WiM Strom Teil 1, Kap. 3.6.3.4.2 / 3.6.3.5.2 Nr. 2 |
+| WiM-Rechnung Antwort (REMADV) | zum Zahlungsziel; NB bei 31009: 4. WT davor | BK6-22-024 WiM Strom Teil 1, Kap. 3.6.3.8.2 / 3.7.2 / 6.2 |
 | APERAK technical acknowledgement | 45 min (Strom UTILMD) | APERAK AHB 1.0 § 2.4.1 — answered by `makod` |
 | § 38 Abs. 4 Ersatzversorgung maximum | 3 months from Zuordnungsbeginn | EnWG |
 | § 20 EnWG parity audit | provable at BNetzA | `initiator_is_affiliate` |

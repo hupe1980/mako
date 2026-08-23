@@ -6,9 +6,9 @@
 //!
 //! ## Architecture
 //!
-//! The old flat `TariffInput` god-struct (50+ optional fields for all categories)
-//! has been replaced by per-category typed structs. Each struct carries only the
-//! fields relevant to its product category, preventing silent field confusion.
+//! One typed struct per product category, each carrying only the fields its
+//! category has. A flat input with every category's optional fields on it
+//! cannot distinguish "not applicable" from "not supplied".
 //!
 //! ```text
 //! Product::Strom(ElectricityProduct)           → ElectricityProvider / DynamicElectricityProvider

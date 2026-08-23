@@ -116,8 +116,8 @@ pub mod weiterverpflichtung;
 pub mod wertebestellung;
 
 pub use geraeteubernahme::{
-    ANFRAGE_PIDS, ANKUENDIGUNG_PIDS as GERAETEUBERNAHME_ANKUENDIGUNG_PIDS, BESTELLUNG_PIDS,
-    GeraeteubernahmeCommand, GeraeteubernahmeData, GeraeteubernahmeEvent,
+    ANKUENDIGUNG_PIDS as GERAETEUBERNAHME_ANKUENDIGUNG_PIDS, BESTELLUNG_PIDS,
+    GERAETEUBERNAHME_PIDS, GeraeteubernahmeCommand, GeraeteubernahmeData, GeraeteubernahmeEvent,
     GeraeteubernahmeProjection, GeraeteubernahmeRecord, GeraeteubernahmeRecordData,
     GeraeteubernahmeState, ORDRSP_DEADLINE_LABEL as GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
     WORKFLOW_NAME as GERAETEUBERNAHME_WORKFLOW_NAME, WimGeraeteubernahmeWorkflow,
@@ -130,14 +130,18 @@ pub use geraetewechsel::{
     antwort_frist_werktage, antwort_pid_meaning,
 };
 pub use insrpt::{
-    ANTWORT_WINDOW_LABEL as INSRPT_ANTWORT_WINDOW_LABEL, INSRPT_ANFRAGE_PIDS, INSRPT_ANTWORT_PIDS,
-    StorungsmeldungCommand, StorungsmeldungData, StorungsmeldungEvent, StorungsmeldungState,
+    ANTWORT_WINDOW_LABEL as INSRPT_ANTWORT_WINDOW_LABEL,
+    ERGEBNIS_WINDOW_LABEL as INSRPT_ERGEBNIS_WINDOW_LABEL, INSRPT_ANFRAGE_PIDS,
+    INSRPT_ANTWORT_PIDS, INSRPT_ERGEBNIS_PID, INSRPT_INFORMATIONS_PIDS, Seite as InsrptSeite,
+    StoerungsmeldungCommand, StoerungsmeldungData, StoerungsmeldungEvent, StoerungsmeldungState,
+    WEITERLEITUNG_WINDOW_LABEL as INSRPT_WEITERLEITUNG_WINDOW_LABEL,
     WORKFLOW_NAME as INSRPT_WORKFLOW_NAME, WimInsrptWorkflow,
 };
 pub use invoic::{
-    SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL, WIM_COMDIS_ABLEHNUNG_PID,
-    WIM_INVOIC_PIDS, WIM_REMADV_PIDS, WORKFLOW_NAME as INVOIC_WORKFLOW_NAME, WimInvoicCommand,
-    WimInvoicEvent, WimInvoicProjection, WimInvoicRecord, WimInvoicState, WimInvoicWorkflow,
+    GasAblehnung, SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
+    WIM_COMDIS_ABLEHNUNG_PID, WIM_INVOIC_PIDS, WIM_REMADV_PIDS,
+    WORKFLOW_NAME as INVOIC_WORKFLOW_NAME, WimInvoicCommand, WimInvoicEvent, WimInvoicProjection,
+    WimInvoicRecord, WimInvoicState, WimInvoicWorkflow, gas_ablehnungs_ebd,
 };
 pub use preisanfrage::{
     PREISANFRAGE_DEADLINE_LABEL, PreisanfrageCommand, PreisanfrageData, PreisanfrageEvent,
@@ -196,25 +200,20 @@ pub use weiterverpflichtung::{
 /// | 17102–17133 | `wim-stammdaten` | Stammdatenübermittlung responses (MSB → NB), NB role | **Nb only** |
 /// | 39002 | `wim-wertebestellung` | ESA Stornierung der Bestellung (ORDCHG) | **Msb only** |
 /// | 19001, 19002 | `wim-geraeteubernahme` | ORDRSP Bestellbestätigung/Ablehnung from NB | **nMSB only** |
-/// | 19015, 19016 | `wim-geraeteubernahme` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | **nMSB only** |
+/// | 19015, 19016 | `wim-geraeteubernahme` | ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung | any |
 ///
-/// ## Role-conditional PIDs (ORDRSP 19001/19002/19015/19016)
+/// ## Role-conditional PIDs (ORDRSP 19001/19002)
 ///
-/// When this `makod` instance serves the **nMSB** role it sends outbound ORDERS
-/// to the NB and receives inbound ORDRSP responses. These PIDs are only registered
-/// when [`DeploymentRoles`] contains [`Marktrolle::Nmsb`]:
+/// GPKE Konfiguration claims 19001/19002 on an NB instance — it receives them
+/// after sending ORDERS 17134/17135 — and WiM Geräteübernahme claims them on an
+/// nMSB instance, answering its own ORDERS 17001. Only one reading can win, so
+/// the WiM one is registered when [`DeploymentRoles`] contains
+/// [`Marktrolle::Nmsb`]. Use [`DeploymentRoles::nmsb()`] and
+/// [`DeploymentRoles::nb()`] rather than a catch-all role set on a deployment
+/// that is both.
 ///
-/// | ORDRSP PID | AHB process name | Responds to ORDERS |
-/// |---|---|---|
-/// | 19001 | Bestellbestätigung | 17001 (Bestellung Geräteübernahmeangebot) |
-/// | 19002 | Ablehnung der Bestellung | 17001 (Bestellung Geräteübernahmeangebot) |
-/// | 19015 | Bestätigung Gerätewechselabsicht | 17009 (Ankündigung Gerätewechselabsicht) |
-/// | 19016 | Ablehnung Gerätewechselabsicht | 17009 (Ankündigung Gerätewechselabsicht) |
-///
-/// **Conflict note:** PIDs 19001/19002 are also used by GPKE Konfiguration when
-/// the instance is NB (receiving ORDRSP from the MSB after sending ORDERS 17134/17135).
-/// Use [`DeploymentRoles::nmsb()`] for nMSB-only deployments and [`DeploymentRoles::nb()`]
-/// for NB-only deployments to prevent both modules from registering these PIDs simultaneously.
+/// 19015/19016 are **not** gated: nothing else claims them, and the deployment
+/// that receives them is the one that sent the 17009 they answer.
 ///
 /// [`DeploymentRoles`]: mako_engine::marktrolle::DeploymentRoles
 /// [`Marktrolle::Nmsb`]: mako_engine::marktrolle::Marktrolle::Nmsb
@@ -253,14 +252,20 @@ impl mako_engine::builder::EngineModule for WimModule {
         // UTILMD WiM MSB-Wechsel family (PIDs 55039, 55042, 55051, 55168).
         //
         // 55039 — Kündigung MSB (MSBN → MSBA): contract layer between the two MSB;
-        //         non-constitutive per BK6-24-174 Kap. 2.1.3 — the NB is not a party.
+        //         non-constitutive per BK6-22-024 WiM Teil 1 Kap. 2.1.3 — the NB is not a party.
         // 55042 — Anmeldung MSB (MSBN → NB): new MSB initiates change.
         // 55051 — Ende MSB / Abmeldung (MSBA → NB): NB terminates MSB relationship.
         // 55168 — Verpflichtungsanfrage / Aufforderung (NB → gMSB).
         //
-        // All four share WimDeviceChangeWorkflow; the PID is carried in the
+        // The Gas twins 44039 / 44042 / 44051 / 44168 (AWH WiM Gas 2.0) run the
+        // **same** Use-Cases with the same Fristen and are handled by the same
+        // workflow; `wim_sparte` reads the Sparte off the PID and it decides the
+        // Entscheidungsbaum, the Codeliste, the APERAK regime and the
+        // Zuordnungszeitpunkt (06:00 Uhr Gastag against 00:00).
+        //
+        // All eight share WimDeviceChangeWorkflow; the PID is carried in the
         // DeviceChangeData and available for business-logic branching.
-        for pid in [55_039_u32, 55_042, 55_051, 55_168] {
+        for &pid in geraetewechsel::DEVICE_CHANGE_PIDS {
             router.register(pid, "wim-device-change");
         }
 
@@ -290,45 +295,29 @@ impl mako_engine::builder::EngineModule for WimModule {
         // ORDERS 17001/17009 — Geräteübernahme Bestellung and Anzeige
         // Gerätewechselabsicht.
         //
-        // Shared with WiM Gas (`wim-gas-geraeteubernahme`). Registered with
-        // `Sparte::Strom` so `route_with_sparte(pid, Sparte::Strom)` resolves here
-        // even when a combined deployment's `WimGasModule` wins the unambiguous
-        // fallback table (last-write-wins). The unambiguous `register` entry is the
-        // Strom-standalone fallback.
-        for &pid in geraeteubernahme::ANFRAGE_PIDS
-            .iter()
-            .chain(geraeteubernahme::BESTELLUNG_PIDS)
-            .chain(geraeteubernahme::ANKUENDIGUNG_PIDS)
-        {
-            router.register(pid, "wim-geraeteubernahme");
-            router.register_with_sparte(
-                pid,
-                mako_engine::types::Sparte::Strom,
-                "wim-geraeteubernahme",
-            );
+        // **One workflow for both Sparten.** ORDERS and ORDRSP are Sparte-neutral
+        // AHBs, so these PIDs carry the Strom *and* the Gas Use-Case; the Sparte
+        // is the recipient MP-ID's and travels in the command, where it picks
+        // the Entscheidungsbaum and the Codeliste.
+        for &pid in geraeteubernahme::GERAETEUBERNAHME_PIDS {
+            router.register(pid, geraeteubernahme::WORKFLOW_NAME);
         }
 
-        // nMSB role: inbound ORDRSP responses from NB to nMSB ORDERS.
-        //
-        // ONLY registered when Nmsb is explicitly declared in DeploymentRoles
-        // (not triggered by DeploymentRoles::all(), which is the backward-compatible
-        // default where GPKE owns 19001/19002 unchanged).
-        //
-        // When makod acts as nMSB it sends ORDERS 17001/17009 outbound (via outbox)
-        // and receives inbound ORDRSP responses back from the NB. These PIDs are
-        // only registered when the nMSB role is active, preventing routing conflicts
-        // with GPKE Konfiguration on NB instances (which also uses 19001/19002).
-        //
-        // PID 19001/19002 (AHB fv20251001): ORDRSP Bestellbestätigung/Ablehnung
-        //   → response to ORDERS 17001 (Bestellung Geräteübernahmeangebot)
-        // PID 19015/19016 (AHB fv20251001): ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung
-        //   → response to ORDERS 17009 (Ankündigung Gerätewechselabsicht, §14a EnWG)
+        // ORDRSP 19015/19016 — Bestätigung/Ablehnung der Gerätewechselabsicht,
+        // the answer to the ORDERS 17009 the MSBN sends. No other module claims
+        // them, so they are registered unconditionally: gating them would
+        // dead-letter the answer to a message this deployment itself sent.
+        for pid in [19_015_u32, 19_016] {
+            router.register(pid, geraeteubernahme::WORKFLOW_NAME);
+        }
+
+        // ORDRSP 19001/19002 — Bestellbestätigung/Ablehnung, the answer to
+        // ORDERS 17001. GPKE Konfiguration claims the same two PIDs on an NB
+        // instance, so the MSBN reading is registered only when the Nmsb role is
+        // declared; `register_with_module` then panics at build() rather than
+        // silently letting one module overwrite the other.
         if !roles.is_all() && roles.contains(mako_engine::marktrolle::Marktrolle::Nmsb) {
-            for pid in [19_001_u32, 19_002, 19_015, 19_016] {
-                // register_with_module enforces the documented guarantee: if both NB
-                // (GPKE Konfiguration) and nMSB (WiM Geräteübernahme) roles are active
-                // simultaneously, build() panics instead of silently overwriting the
-                // conflicting registration.
+            for pid in [19_001_u32, 19_002] {
                 router.register_with_module(pid, "wim-geraeteubernahme", "wim");
             }
         }
@@ -340,8 +329,9 @@ impl mako_engine::builder::EngineModule for WimModule {
         // with one of the UEBERMITTLUNG_PIDS (17102–17133) which the NB then receives
         // inbound — those are registered below under the Nb role guard.
         //
-        // Note: 17101 (“Anfrage zur Übermittlung von Stammdaten Gas”) is the GAS counterpart
-        // and belongs to mako-wim-gas, not here.
+        // Note: 17101 („Anfrage zur Übermittlung von Stammdaten Gas") is the Gas
+        // counterpart. It is a GeLi Gas Geschäftsdatenanfrage, not a WiM
+        // Stammdatenanforderung, and is not routed here.
         router.register(stammdaten::ANFORDERUNG_PID.as_u32(), "wim-stammdaten");
 
         // Nb role: inbound Stammdatenübermittlung responses (MSB → NB).
@@ -473,8 +463,9 @@ impl mako_engine::builder::EngineModule for WimModule {
             }
         }
 
-        // INVOIC 31009 (MSB-Rechnung, MSB → NB/LF/ESA). The Gas WiM-Rechnung 31003
-        // lives in mako-wim-gas — duplicated per Sparte, not registered here.
+        // INVOIC — the WiM-Rechnung in both Sparten: 31009 (MSB → NB/LF/ESA,
+        // WiM Strom Teil 1 Kap. 3.6/4), 31003 (MSBA → NB und MSBA → MSBN, AWH
+        // WiM Gas 2.0 Kap. 4.7) and the Sparte-neutral Stornorechnung 31004.
         //
         // These PIDs are explicitly excluded from mako-gpke's GPKE_INVOIC_PIDS array.
         // Without registration here, all inbound WiM-domain INVOIC messages would
@@ -503,7 +494,7 @@ impl mako_engine::builder::EngineModule for WimModule {
         // the makod router disambiguates shared REMADV PIDs by conversation ID
         // (invoice correlation), not by PID alone.
         //
-        // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174.
+        // Source: REMADV AHB 1.0a §3, WiM Strom Teil 1 (BK6-22-024).
         for &pid in invoic::WIM_REMADV_PIDS {
             router.register(pid, "wim-invoic");
         }
@@ -513,8 +504,14 @@ impl mako_engine::builder::EngineModule for WimModule {
         // Shared PID with GPKE billing. The router dispatches to the correct
         // workflow instance via conversation ID correlation.
         //
-        // Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+        // Source: COMDIS AHB 1.0, WiM Strom Teil 1 (BK6-22-024).
         router.register(invoic::WIM_COMDIS_ABLEHNUNG_PID.as_u32(), "wim-invoic");
+
+        // UTILMD 44183 „Ende MSB von NB" — the Gas NB informing the MSB of a
+        // Stilllegung (AWH WiM Gas 2.0 Kap. 3.7). Informational: it carries no
+        // Status der Antwort and has no answer Prüfidentifikator, so it lands
+        // on the same `ReceiveInformation` path as the IFTSTA Statusmeldungen.
+        router.register(geraetewechsel::ENDE_MSB_VOM_NB_PID, "wim-device-change");
 
         // IFTSTA WiM PIDs 21009–21018 (MSB-Wechsel status messages).
         //
@@ -534,36 +531,24 @@ impl mako_engine::builder::EngineModule for WimModule {
         // The REST adapter (`energy-api`) creates process commands directly.
         // Do not add EDIFACT PID registrations for this workflow.
 
-        // INSRPT Störungsmeldungen (WiM Strom Teil 2).
+        // INSRPT Störungsbehebung in der Messlokation — WiM Strom Teil 2 Kap. 1
+        // and AWH WiM Gas 2.0 Kap. 4.3.
         //
-        // 23001: Störungsmeldung (LF → MSB) — APERAK Frist 5 Werktage (BK6-24-174).
-        // 23003–23012: Antwort/Ergebnisbericht/Informationsmeldung (MSB → LF).
+        // 23001 Störungsmeldung (LF/NB → MSB), 23003/23004 Antwort, 23008
+        // Ergebnisbericht, 23005/23009 the Gas Informationsmeldungen an den NB,
+        // 23011/23012 the Strom Weiterleitung an betroffene Marktlokationen.
         //
-        // PIDs 23001/23003/23004/23008 are shared with WiM Gas (10 WT).  In a combined
-        // Strom+Gas deployment both WimModule and WimGasModule register these PIDs — each
-        // with their respective Sparte so that `route_with_sparte` can select the correct
-        // workflow at ingest time:
-        //
-        //   route_with_sparte(23001, Sparte::Strom) → "wim-insrpt"        (5 WT)
-        //   route_with_sparte(23001, Sparte::Gas)   → "wim-gas-insrpt"    (10 WT)
-        //
-        // The unambiguous `register` entry (Strom default) is the fallback for callers
-        // that do not supply a Sparte (e.g. logging in the REST ingest endpoint).
-        for &pid in insrpt::INSRPT_ANFRAGE_PIDS {
+        // **One workflow for both Sparten.** The INSRPT AHB is Sparte-neutral;
+        // what differs is the Frist, and the Frist is not a function of the PID
+        // in either Sparte — Strom branches on the Messtechnik and the
+        // Spannungsebene, Gas states one flat number. Both live in
+        // `insrpt::antwort_werktage` / `insrpt::ergebnis_werktage`, which take
+        // the Sparte as an argument.
+        for &pid in insrpt::INSRPT_ANFRAGE_PIDS
+            .iter()
+            .chain(insrpt::INSRPT_ANTWORT_PIDS)
+        {
             router.register(pid, insrpt::WORKFLOW_NAME);
-            router.register_with_sparte(
-                pid,
-                mako_engine::types::Sparte::Strom,
-                insrpt::WORKFLOW_NAME,
-            );
-        }
-        for &pid in insrpt::INSRPT_ANTWORT_PIDS {
-            router.register(pid, insrpt::WORKFLOW_NAME);
-            router.register_with_sparte(
-                pid,
-                mako_engine::types::Sparte::Strom,
-                insrpt::WORKFLOW_NAME,
-            );
         }
 
         // WiM Technikänderung — device/config change requests (ORDERS/ORDRSP).

@@ -132,8 +132,8 @@ siehe unten.
 **Page:** <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/834_wim/BK6_WiM_node_neu.html>
 
 **Current ruling:**
-- **BK6-24-174** (24.10.2024); Mitteilung Nr. 4 vom 06.12.2024
-- **Gültig seit: 06.06.2025**
+- **BK6-22-024** — WiM was **not** reissued under BK6-24-174; that decision
+  covers GPKE and MaBiS. Cite BK6-22-024 for every WiM process.
 
 **Process documents:**
 
@@ -149,10 +149,10 @@ siehe unten.
 - Geräteübernahme ORDERS (PIDs 17001, 17002, 17009)
 - Stammdaten ORDERS (PIDs 17101–17135; 17101 inbound Anforderung, 17102–17135 outbound Übermittlung)
 - Stornierung ORDCHG (PID 39000; 39001–39002 outbound responses)
-- WiM-Rechnung (INVOIC, PID 31003) — MSB billing
-- MSB-Rechnung (INVOIC, PID 31009)
+- WiM-Rechnung (INVOIC, PID 31003) — Abrechnung von Dienstleistungen im Messwesen, beide Sparten
+- MSB-Rechnung (INVOIC, PID 31009) — Messstellenbetrieb an NB, LF oder ESA
 
-**Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-24-174 Teil 1 Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
+**Fristen (WiM Strom):** die fachliche Antwort ist **je Prozess** befristet — Kündigung (55039) **3 WT**, Anmeldung (55042) **5 WT**, Abmeldung (55051) **7 WT**, Verpflichtungsanfrage (55168) **1 WT** (BK6-22-024 Anlage 2a, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). Samstage, Sonntage und gesetzliche Feiertage sind keine Werktage.
 
 > Davon zu unterscheiden ist die **APERAK**-Eingangsbestätigung: für UTILMD Strom **45 Minuten** an Werktagen (APERAK AHB §2.4.1) — eine eigene, deutlich kürzere Frist.
 

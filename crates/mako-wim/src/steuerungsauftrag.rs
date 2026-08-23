@@ -24,9 +24,9 @@
 //!
 //! ## Frist
 //!
-//! | Frist | Value | Calculation |
-//! |-------|-------|-------------|
-//! | Response window | **5 Werktage** | `fristen::add_werktage(5, BdewMaKo)` |
+//! The API-Webdienste channel states no Frist for the Steuerungsauftrag; the
+//! window under [`STEUERUNGSAUFTRAG_DEADLINE_LABEL`] is an operating convention,
+//! not a regulatory deadline.
 //!
 //! ## State machine
 //!
@@ -75,7 +75,7 @@ pub const STEUERUNGSAUFTRAG_DEADLINE_LABEL: &str = "wim-steuerungsauftrag-deadli
 /// Typed target of a WiM Steuerungsauftrag command.
 ///
 /// A control command addresses either a NeLo (network element location) or
-/// a SteuerbareRessource (iMS controllable resource, BK6-24-174 §6).
+/// a SteuerbareRessource (iMS controllable resource, GPKE Teil 3 Kap. 2).
 /// Both identifiers are validated at construction time via rubo4e.
 ///
 /// | Prefix | Type | Example |
@@ -90,7 +90,7 @@ pub const STEUERUNGSAUFTRAG_DEADLINE_LABEL: &str = "wim-steuerungsauftrag-deadli
 pub enum LocationId {
     /// Netz-Element-Lokation (EIC code or BDEW Codenummer).
     Nelo(NeloId),
-    /// Steuerbare Ressource — iMS controllable resource (BK6-24-174 §6).
+    /// Steuerbare Ressource — iMS controllable resource (GPKE Teil 3 Kap. 2).
     Sr(SrId),
 }
 
@@ -351,7 +351,7 @@ impl Workflow for WimSteuerungsauftragWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-steuerungsauftrag-deadline"` | `Received` | `TimeoutExpired` | BK6-22-024 — 5 Werktage Frist |
+    /// | `"wim-steuerungsauftrag-deadline"` | `Received` | `TimeoutExpired` | operating convention — no Festlegung quantifies it |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

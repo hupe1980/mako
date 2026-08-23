@@ -1161,8 +1161,9 @@ impl MakodMcpHandler {
                     - command: \"gpke.lieferbeginn.anmelden\"\n\
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
                  3. Report the process_id and status.\n\
-                 4. Explain next steps: the NB has 24 wall-clock hours to respond \
-                    with a Bestätigung (PID 55002) or Ablehnung (PID 55003) per BK6-22-024."
+                 4. Explain next steps: the NB answers by 11:00 Uhr des 1. Werktags \
+                    nach dem Übertragungstag with a Bestätigung (PID 55002) or Ablehnung \
+                    (PID 55003) — GPKE Teil 2, SD Lieferbeginn Prozessschritte 5/6."
             ),
         )]
     }
@@ -1191,7 +1192,7 @@ impl MakodMcpHandler {
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
                  3. Report the process_id and status.\n\
                  4. Explain next steps: the GNB has 10 Werktage to respond per \
-                    BK7-24-01-009 (Saturday counts as Werktag; public holidays do not; German local time)."
+                    BK7-24-01-009 (Saturday is not a Werktag; nor Sunday or a gesetzlicher Feiertag; German local time)."
             ),
         )]
     }
@@ -1270,7 +1271,7 @@ impl MakodMcpHandler {
             PromptMessage::new_text(
                 Role::Assistant,
                 "**WiM Gas MSB-Wechsel Anmeldung (BK7-24-01-009)**\n\n\
-                 The GNB (Gasnetzbetreiber) must respond within **10 Werktage** (Saturday counts; public holidays do not; German local time CET/CEST).\n\n\
+                 The GNB (Gasnetzbetreiber) must respond within **10 Werktage** (Saturdays, Sundays and gesetzliche Feiertage are not Werktage; German local time CET/CEST).\n\n\
                  **Step 1 — Verify the process is active:**\n\
                  Call `get_process` with the gas `malo_id` from the inbound UTILMD G.\n\
                  - If `active: true` → process exists, proceed to step 2.\n\
@@ -1383,12 +1384,15 @@ impl ServerHandler for MakodMcpHandler {
              \n\
              | Process | Deadline | Source |\n\
              |---|---|---|\n\
-             | GPKE | 24 wall-clock hours | BK6-22-024 |\n\
-             | WiM | 5 Werktage | BK6-24-174 |\n\
-             | GeLi Gas | 10 Werktage | BK7-24-01-009 |\n\
-             | MABIS | 1 Werktag | BK6-24-174 § 13.8 |\n\
+             | GPKE Strom | a clock time on the 1. WT nach dem ÜT — 11:00 Anmeldung, 06:00 Abmeldung, 05:00 Lieferende NB→LF, 09:00 Beendigung der Zuordnung | BK6-24-174 GPKE Teil 2 |\n\
+             | WiM, both Sparten | 3 / 5 / 7 / 1 Werktage per PID | BK6-22-024 Anlage 2a · AWH WiM Gas 2.0 |\n\
+             | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags | BK7-24-01-009 |\n\
+             | MaBiS | 1 Werktag | BK6-24-174 Anlage 3 § 13.8 |\n\
+             | INVOIC | zum Zahlungsziel (`SG8 DTM+265`) | per Festlegung |\n\
              \n\
-             Werktag = Mon–Sat, excl. public holidays. All deadlines in German local time (CET/CEST).\n\
+             **Saturday is not a Werktag** (GPKE Teil 1 Kap. 1.7). A holiday observed in any single \
+             Bundesland counts nationwide; 24.12. and 31.12. count as holidays. All deadlines in \
+             gesetzlicher deutscher Zeit (CET/CEST).\n\
              \n\
              ## Error prefixes\n\
              \n\
@@ -1653,7 +1657,7 @@ pub fn router(state: Arc<MakodMcpState>, shutdown: CancellationToken) -> Router 
 fn next_steps_hint(command: &str) -> &'static str {
     match command {
         "gpke.lieferbeginn.anmelden" | "gpke.lieferende.anmelden" | "gpke.kuendigung.anmelden" => {
-            "NB has 24 wall-clock hours to respond with a Bestätigung/Ablehnung (BK6-22-024)."
+            "Der NB antwortet bis 11:00 Uhr des 1. Werktags nach dem Übertragungstag mit einer Bestätigung oder Ablehnung (GPKE Teil 2, SD Lieferbeginn)."
         }
         "geli.lieferbeginn.anmelden" | "geli.lieferende.anmelden" => {
             "GNB has 10 Werktage to respond with a Bestätigung/Ablehnung (BK7-24-01-009)."
@@ -1669,12 +1673,13 @@ fn next_steps_hint(command: &str) -> &'static str {
         }
         "gpke.sperrung.fehlgeschlagen" => {
             "Non-execution reported with reason. IFTSTA 21039 is queued to the Lieferant \
-             so it does not wait out the 24-hour deadline (BK6-22-024 §5)."
+             so it does not wait out the answer window (GPKE Teil 2)."
         }
         "gpke.sperrung.beauftragen" | "gpke.entsperrung.beauftragen" => {
-            "Sperrauftrag sent to the NB. The NB has 24 wall-clock hours to answer with \
-             ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung), then reports execution via \
-             IFTSTA 21039 (BK6-22-024)."
+            "Sperrauftrag sent to the NB. The NB answers by the 1. Werktag nach dem \
+             Übertragungstag with ORDRSP 19116 (Bestätigung) or 19117 (Ablehnung), executes \
+             within 6 Werktagen nach dem frühestmöglichen Sperrtermin and reports it via \
+             IFTSTA 21039 within 1 Werktag nach Abschluss (GPKE Teil 2 § 3.5)."
         }
         "gpke.sperrung.stornieren" => {
             "Stornierung (ORDCHG 39000) sent. The NB answers with ORDRSP 19128 (Bestätigung) \
@@ -1685,10 +1690,10 @@ fn next_steps_hint(command: &str) -> &'static str {
              Bestätigung/Ablehnung (BK6-24-174)."
         }
         "wim.gas.anmeldung.bestaetigen" | "wim.gas.anmeldung.ablehnen" => {
-            "WiM Gas Anmeldung APERAK dispatched. Process closes within 10 Werktage (BK7-24-01-009)."
+            "WiM Gas Anmeldung APERAK dispatched. Die fachliche Antwort des NB ist innerhalb von 5 Werktagen fällig (AWH WiM Gas 2.0)."
         }
         "wim.gas.kuendigung.bestaetigen" | "wim.gas.kuendigung.ablehnen" => {
-            "WiM Gas Kündigung APERAK dispatched. Process closes within 10 Werktage (BK7-24-01-009)."
+            "WiM Gas Kündigung APERAK dispatched. Die fachliche Antwort des MSBA ist innerhalb von 3 Werktagen fällig (AWH WiM Gas 2.0)."
         }
         "wim.gas.stornierung.bestaetigen" | "wim.gas.stornierung.ablehnen" => {
             "WiM Gas Stornierung APERAK dispatched (PID 44023 or 44024). Process closes (BK7-24-01-009)."

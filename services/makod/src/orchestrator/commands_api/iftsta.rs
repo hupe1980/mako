@@ -108,7 +108,7 @@ pub(super) async fn dispatch_gpke_iftsta(
 
 /// Dispatch a `wim.iftsta.empfangen` REST command.
 ///
-/// Constructs [`DeviceChangeCommand::ReceiveIftsta`] and executes it on the
+/// Constructs [`DeviceChangeCommand::ReceiveInformation`] and executes it on the
 /// existing `wim-device-change` process identified by `stream_id` in the payload.
 ///
 /// Expected payload fields: `stream_id`, `pid`, `sender_mp_id`, `receiver_mp_id`,
@@ -150,7 +150,7 @@ pub(super) async fn dispatch_wim_iftsta(
         state,
         &stream_id,
         "wim-device-change",
-        move || DeviceChangeCommand::ReceiveIftsta {
+        move || DeviceChangeCommand::ReceiveInformation {
             pid,
             sender,
             receiver,

@@ -144,6 +144,7 @@ impl MockNb {
 
         let cmd = match cmd {
             DeviceChangeCommand::ReceiveUtilmd {
+                transaktionsgrund,
                 pid,
                 sender,
                 receiver,
@@ -179,6 +180,7 @@ impl MockNb {
                 );
                 // Override validation_passed to bypass AHB profile check.
                 DeviceChangeCommand::ReceiveUtilmd {
+                    transaktionsgrund,
                     pid,
                     sender,
                     receiver,
@@ -437,6 +439,7 @@ async fn e2e_wim_geraetewechsel_ahb_validation_failure() {
     // to simulate a malformed UTILMD 55042 that failed AHB profile checks.
     nb.process
         .execute(DeviceChangeCommand::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
             pid: Pruefidentifikator::new(55042).unwrap(),
             sender: MarktpartnerCode::new(NMSB_ID),
             receiver: MarktpartnerCode::new(NB_ID),

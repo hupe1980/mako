@@ -30,7 +30,7 @@
 //!
 //! - BK6-24-174 GPKE Teil 2 — the SD Fristen per Prozessschritt
 //! - BK7-24-01-009 GeLi Gas 3.0, Kap. 2.6 / 3.1 / 3.2.2 / 3.2.3 / 3.3.2
-//! - BK6-24-174 WiM Strom Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2
+//! - BK6-22-024 Anlage 2a — WiM Strom Teil 1, Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2
 //! - BK7-24-01-009 / AWH WiM Gas V2.0
 //! - EDI@Energy Anwendungsübersicht der Prüfidentifikatoren 4.0 — roles, EBDs
 
@@ -52,7 +52,7 @@ use crate::HolidayCalendar;
 /// reports a lapsed Frist as still running, while the tight direction raises a
 /// breach against a counterparty still inside its window.
 pub const GPKE_IS_NOT_TWENTY_FOUR_HOURS: &str = "GPKE Strom answer windows are clock times on the 1. Werktag after the ÜT \
-     (11:00 / 06:00 / 05:00 / 09:00), never a 24-hour duration — BK6-24-174 Teil 2";
+     (11:00 / 06:00 / 05:00 / 09:00), never a 24-hour duration — GPKE Teil 2";
 
 /// Why a flat 10-Werktage GeLi Gas window is wrong.
 ///
@@ -71,7 +71,7 @@ pub enum Family {
     Gpke,
     /// GeLi Gas — BK7-24-01-009.
     GeliGas,
-    /// WiM Strom (Messstellenbetrieb) — BK6-24-174 Teil 1.
+    /// WiM Strom (Messstellenbetrieb) — BK6-22-024 Anlage 2a/2b.
     Wim,
     /// WiM Gas (Messstellenbetrieb Gas) — BK7-24-01-009 / AWH WiM Gas V2.0.
     WimGas,
@@ -835,6 +835,16 @@ pub const WIM: &[AntwortObligation] = &[
         source: "WiM Strom Teil 1 Kap. 3.6.3.5.2 Nr. 2 — 8 Werktage",
     },
     AntwortObligation {
+        trigger_pid: 17_132,
+        name: "Geschäftsdatenanfrage (Anfrage Stammdaten Strom)",
+        answered_by: "NB · MSB",
+        antwort_pids: (17_133, 19_132),
+        ebd: None,
+        frist: FristShape::WerktageAtCutoff(GESCHAEFTSDATENANFRAGE_WERKTAGE),
+        family: Family::Gpke,
+        source: "GPKE Teil 4 § 3.2 Nr. 2 — spätester ÜZ ist 1 WT nach dem ÜZ der Anfrage",
+    },
+    AntwortObligation {
         trigger_pid: 35_005,
         name: "Anfrage Angebot Änderung Technik (REQOTE)",
         answered_by: "MSB",
@@ -947,6 +957,13 @@ pub const RECHNUNGSABWICKLUNG_WERKTAGE: u32 = 8;
 /// Werktage (WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 2).
 pub const TECHNIKAENDERUNG_WERKTAGE: u32 = 10;
 
+/// Answer window on a Geschäftsdatenanfrage, in Werktage
+/// (GPKE Teil 4 § 3.2 Nr. 2/4).
+///
+/// One window for both legs: the Stammdaten anfrage an den NB and the Werte
+/// anfrage an den MSB are stated identically.
+pub const GESCHAEFTSDATENANFRAGE_WERKTAGE: u32 = 1;
+
 /// Answer window on an INSRPT Störungsmeldung for a **kME ohne RLM or an mME**,
 /// in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 2).
 pub const STOERUNGSMELDUNG_KME_WERKTAGE: u32 = 3;
@@ -971,6 +988,80 @@ pub const fn stoerungsmeldung_werktage(rlm_oder_ims: bool) -> u32 {
     }
 }
 
+/// How a Messlokation is metered — the discriminator both INSRPT windows branch
+/// on, and the only thing that decides them.
+///
+/// Neither the Störungsmeldung nor the Bestätigung carries it: WiM Strom Teil 2
+/// states the Frist per Messtechnik and the message says nothing about the
+/// device. The MSB's own registry is the source, which is why these are
+/// functions of a caller-supplied classification and not a PID lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Messtechnik {
+    /// kME ohne RLM, or an mME in Niederspannung — the slow branch.
+    KmeOhneRlm,
+    /// kME mit RLM, or an iMS bilanziert auf Basis von Viertelstundenwerten, in
+    /// **Niederspannung**.
+    RlmOderImsNs,
+    /// kME mit RLM or iMS in **Mittel- oder Hochspannung** — the fast branch.
+    RlmOderImsMsHs,
+}
+
+impl Messtechnik {
+    /// Werktage the MSB has to answer an INSRPT Störungsmeldung (23001 →
+    /// 23003/23004).
+    ///
+    /// WiM Strom Teil 2 Kap. 1.2 Nr. 2 splits only two ways here: everything
+    /// with RLM or an iMS answers in 1 WT regardless of Spannungsebene.
+    #[must_use]
+    pub const fn stoerungsmeldung_werktage(self) -> u32 {
+        match self {
+            Self::KmeOhneRlm => STOERUNGSMELDUNG_KME_WERKTAGE,
+            Self::RlmOderImsNs | Self::RlmOderImsMsHs => STOERUNGSMELDUNG_IMS_WERKTAGE,
+        }
+    }
+
+    /// Werktage the MSB has to send the Ergebnisbericht (INSRPT 23008), counted
+    /// from the ÜT of its own Bestätigung — **not** from the Störungsmeldung.
+    ///
+    /// WiM Strom Teil 2 Kap. 1.2 Nr. 7 splits three ways, and this is the one
+    /// WiM window whose branch is the Spannungsebene:
+    ///
+    /// | Messtechnik | Frist |
+    /// |---|---|
+    /// | kME ohne RLM, mME (NS), iMS ohne ¼-h-Bilanzierung (NS) | **7 WT** |
+    /// | kME mit RLM (NS), iMS mit ¼-h-Bilanzierung (NS) | **4 WT** |
+    /// | kME mit RLM (MS/HS), iMS (MS/HS) | **2 WT** |
+    #[must_use]
+    pub const fn ergebnisbericht_werktage(self) -> u32 {
+        match self {
+            Self::KmeOhneRlm => ERGEBNISBERICHT_KME_WERKTAGE,
+            Self::RlmOderImsNs => ERGEBNISBERICHT_RLM_NS_WERKTAGE,
+            Self::RlmOderImsMsHs => ERGEBNISBERICHT_RLM_MSHS_WERKTAGE,
+        }
+    }
+}
+
+/// Ergebnisbericht window for a kME ohne RLM, an mME (NS) or an iMS ohne
+/// ¼-h-Bilanzierung (NS), in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 7).
+pub const ERGEBNISBERICHT_KME_WERKTAGE: u32 = 7;
+
+/// Ergebnisbericht window for a kME mit RLM or an iMS mit ¼-h-Bilanzierung, in
+/// **Niederspannung**, in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 7).
+pub const ERGEBNISBERICHT_RLM_NS_WERKTAGE: u32 = 4;
+
+/// Ergebnisbericht window for a kME mit RLM or an iMS in **Mittel- oder
+/// Hochspannung**, in Werktage (WiM Strom Teil 2 Kap. 1.2 Nr. 7).
+pub const ERGEBNISBERICHT_RLM_MSHS_WERKTAGE: u32 = 2;
+
+/// Werktage the MSB has to send the Gas Ergebnisbericht, flat
+/// (AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 4).
+pub const ERGEBNISBERICHT_GAS_WERKTAGE: u32 = 7;
+
+/// Werktage within which the Störungsinformation must reach every affected
+/// Marktlokation, counted from the ÜT of the Information an die Messlokation
+/// (WiM Strom Teil 2 Kap. 1.2 Nr. 4–6 and 9–11).
+pub const STOERUNG_WEITERLEITUNG_WERKTAGE: u32 = 1;
+
 /// The PIDs that are an answer in one Use-Case and a trigger in another, with
 /// the Fundstelle that makes them one.
 ///
@@ -990,55 +1081,111 @@ pub const CHAINED_TRIGGERS: &[(u32, &str)] = &[(
      (LF-initiiert, Antwort auf die Anfrage)",
 )];
 
-/// WiM Gas — the 10-Werktage window, on the PIDs that start the clock.
+/// WiM Gas — the Antwortfristen of the Wechselprozesse im Messwesen, Sparte Gas.
 ///
-/// Answer PIDs are deliberately absent. This is the one family where a flat
-/// number is correct, which is how it came to cover GeLi Gas as well.
+/// **WiM Gas is a structural mirror of WiM Strom, Frist for Frist.** AWH WiM Gas
+/// 2.0 (gültig ab 01.10.2026) repeats the Strom Use-Cases on the 44xxx UTILMD
+/// namespace with the identical windows — 3 / 5 / 7 / 1 Werktage — and the
+/// identical Vorlauffristen (15 / 7 / 20 WT, Realisierungskorridor ±9 WT,
+/// Gesamtvorgang 10./11. WT). What differs is the Zuordnungszeitpunkt (**06:00
+/// Uhr**, the Gastag boundary, against 00:00 in Strom), the Codeliste namespace
+/// (`G_00xx` against `S_00xx`) and the APERAK regime.
+///
+/// The ORDERS/ORDRSP/REQOTE/QUOTES/IFTSTA/INSRPT legs of the Gas Use-Cases run
+/// on the **same Prüfidentifikatoren as Strom** (17001/17002/17009,
+/// 19001–19004/19015/19016, 35001/15001, 21007–21013/21036, 23001–23008), so
+/// they cannot be keyed by PID here — [`WIM`] carries them and the Sparte is
+/// decided at the interchange, from the recipient MP-ID. The two Fristen that
+/// genuinely differ are recorded in [`WIM_GAS_SPARTE_ABWEICHUNGEN`].
+///
+/// BK7-24-01-009 itself states no Antwortfrist; the AWH does, and it is the
+/// only source for these four.
 pub const WIM_GAS: &[AntwortObligation] = &[
     AntwortObligation {
         trigger_pid: 44_039,
         name: "Kündigung MSB Gas",
+        // MSBN → MSBA. The Kündigung runs on the contract layer between the two
+        // MSB and never reaches the NB (AWH WiM Gas 2.0 Kap. 3.1.2 c).
         answered_by: "MSBA",
         antwort_pids: (44_040, 44_041),
-        ebd: None,
-        frist: FristShape::WerktageAtCutoff(WIM_GAS_WERKTAGE),
+        ebd: Some("E_2000"),
+        frist: FristShape::WerktageAtCutoff(3),
         family: Family::WimGas,
-        source: "BK7-24-01-009 / AWH WiM Gas V2.0 — 10 Werktage",
+        source: "AWH WiM Gas 2.0 Kap. 3.3.2 Nr. 2 — 3 Werktage",
     },
     AntwortObligation {
         trigger_pid: 44_042,
-        name: "Anmeldung neuer MSB Gas",
+        name: "Anmeldung MSB Gas (Beginn Messstellenbetrieb)",
         answered_by: "NB",
         antwort_pids: (44_043, 44_044),
-        ebd: None,
-        frist: FristShape::WerktageAtCutoff(WIM_GAS_WERKTAGE),
+        ebd: Some("E_2002"),
+        frist: FristShape::WerktageAtCutoff(5),
         family: Family::WimGas,
-        source: "BK7-24-01-009 / AWH WiM Gas V2.0 — 10 Werktage",
+        source: "AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2 — 5 Werktage",
     },
     AntwortObligation {
         trigger_pid: 44_051,
-        name: "Ende MSB Gas / Vorläufige Abmeldung",
-        answered_by: "MSBA",
+        name: "Ende MSB Gas (Abmeldung vom MSB an NB)",
+        answered_by: "NB",
         antwort_pids: (44_052, 44_053),
-        ebd: None,
-        frist: FristShape::WerktageAtCutoff(WIM_GAS_WERKTAGE),
+        ebd: Some("E_2005"),
+        frist: FristShape::WerktageAtCutoff(7),
         family: Family::WimGas,
-        source: "BK7-24-01-009 / AWH WiM Gas V2.0 — 10 Werktage",
+        source: "AWH WiM Gas 2.0 Kap. 3.6.2 Nr. 2 — 7 Werktage",
     },
     AntwortObligation {
         trigger_pid: 44_168,
-        name: "Verpflichtungsanfrage Gas",
+        name: "Verpflichtungsanfrage an den gMSB (Gas)",
         answered_by: "gMSB",
-        antwort_pids: (44_169, 44_170),
-        ebd: None,
-        frist: FristShape::WerktageAtCutoff(WIM_GAS_WERKTAGE),
+        // **44170 does not exist.** PID-Übersicht 4.0 publishes 44168 and 44169
+        // and no Ablehnungs-PID; the 44170 of PID 3.3 was withdrawn with
+        // FV2026-10-01. `E_2006` still publishes `G_0071`, so an Ablehnung has
+        // a code and no carrier — `mako-wim` escalates instead of inventing one.
+        antwort_pids: (44_169, 44_169),
+        ebd: Some("E_2006"),
+        frist: FristShape::WerktageAtCutoff(1),
         family: Family::WimGas,
-        source: "BK7-24-01-009 / AWH WiM Gas V2.0 — 10 Werktage",
+        source: "AWH WiM Gas 2.0 Kap. 3.6.2 Nr. 4 — 1 Werktag",
     },
 ];
 
-/// The WiM Gas answer window, in Werktage.
-pub const WIM_GAS_WERKTAGE: u32 = 10;
+/// The Fristen where WiM Gas genuinely departs from WiM Strom, on a
+/// Prüfidentifikator the two Sparten share.
+///
+/// Everything else in the two families is the same number, so only the
+/// departures are listed: a full Gas mirror of [`WIM`] would be a second copy of
+/// the same table, with two places to keep right.
+///
+/// | PID | Strom | Gas | Fundstelle |
+/// |---|---|---|---|
+/// | 23001 Störungsmeldung | 3 WT (kME ohne RLM, mME) / 1 WT (kME mit RLM, iMS) | **3 WT**, flat | AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 2 |
+/// | 23008 Mitteilung Ergebnis | 7 / 4 / 2 WT nach Messtechnik | **7 WT**, flat | AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 4 |
+/// | 17001 Bestellung Geräteübernahme | 2 WT | 2 WT | WiM Teil 1 Kap. 3.2.2 Nr. 4 / AWH WiM Gas 2.0 Kap. 4.2.2 Nr. 4 |
+///
+/// Gas has no iMS rollout obligation, which is why its Störungs-Fristen carry
+/// no Messtechnik branch.
+pub const WIM_GAS_SPARTE_ABWEICHUNGEN: &[(u32, u32, &str)] = &[
+    (
+        23_001,
+        3,
+        "AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 2 — 3 Werktage, ohne Messtechnik-Verzweigung",
+    ),
+    (
+        23_008,
+        7,
+        "AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 4 — 7 Werktage, ohne Messtechnik-Verzweigung",
+    ),
+];
+
+/// The WiM Gas answer window for a Prüfidentifikator the two Sparten share, in
+/// Werktagen — `None` when Gas states the same number as Strom.
+#[must_use]
+pub fn wim_gas_abweichung(trigger_pid: u32) -> Option<(u32, &'static str)> {
+    WIM_GAS_SPARTE_ABWEICHUNGEN
+        .iter()
+        .find(|(pid, _, _)| *pid == trigger_pid)
+        .map(|(_, wt, src)| (*wt, *src))
+}
 
 /// Every published obligation, in consult order.
 const TABLES: &[&[AntwortObligation]] = &[GPKE, GELI_GAS, WIM, WIM_GAS];

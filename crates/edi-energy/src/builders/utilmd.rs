@@ -345,12 +345,13 @@ impl<S, R> UtilmdBuilder<S, R> {
                 }
             }
             if let Some(antwort) = &tx.antwort {
-                // `STS+E01++<code>:<ebd>` — the EBD Antwortcode in C556 DE 9013
-                // and the EBD id in DE 1131. The AHB marks this Muss on every
-                // Bestätigung and Ablehnung and constrains the code to that
-                // EBD's Zustimmungs- or Ablehnungs-Cluster.
-                if let Some(ebd) = antwort.ebd.as_deref() {
-                    emit_comp!(w, "STS", [STS_STATUS_ANTWORT], [""], [&antwort.code, ebd]);
+                // `STS+E01++<code>:<codeliste>` — the Prüfschritt code in C556
+                // DE 9013 and the Codeliste it comes from in DE 1131. The AHB
+                // marks this Muss on every Bestätigung and Ablehnung and
+                // constrains the code to that list's Zustimmungs- or
+                // Ablehnungs-Cluster.
+                if let Some(cl) = antwort.codeliste.as_deref() {
+                    emit_comp!(w, "STS", [STS_STATUS_ANTWORT], [""], [&antwort.code, cl]);
                 } else {
                     emit_seg!(w, "STS", STS_STATUS_ANTWORT, "", &antwort.code);
                 }
@@ -458,9 +459,13 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
 
     /// Set the SG4 **Status der Antwort** (`STS+E01`, MIG Nr. 00034).
     ///
-    /// Emits `STS+E01++<code>:<ebd>`. Every Bestätigung and Ablehnung needs
-    /// one — the AHB marks the segment Muss and restricts the code to the
-    /// named EBD's Zustimmungs- or Ablehnungs-Cluster.
+    /// Emits `STS+E01++<code>:<codeliste>`. Every Bestätigung and Ablehnung
+    /// needs one — the AHB marks the segment Muss and restricts the code to the
+    /// named Codeliste's Zustimmungs- or Ablehnungs-Cluster.
+    ///
+    /// DE 1131 is the **Codeliste**, which is the EBD number only where the AHB
+    /// says „EBD-Nummer". Every `WiM` MSB-Wechsel answer names an `S_00xx` (Strom) or
+    /// `G_00xx` (Gas) list instead — see [`AntwortStatus::codeliste`].
     ///
     /// ```rust
     /// # use edi_energy::{Release, Pruefidentifikator};
@@ -471,7 +476,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///     .sender("9900987654321")
     ///     .receiver("9900123456789")
     ///     .transaction("VORGANG-0001")
-    ///     .antwort(AntwortStatus::from_ebd("A36", "E_0624"))
+    ///     .antwort(AntwortStatus::from_codeliste("A36", "E_0624"))
     ///     .done()
     ///     .serialize()?;
     /// assert!(String::from_utf8(edi).unwrap().contains("STS+E01++A36:E_0624"));

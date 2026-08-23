@@ -53,13 +53,14 @@ const NOT_ROUTED_BY_DESIGN: &[(u32, &str)] = &[
     // ── Not yet wired: constants exist, nothing registers them.
     (17_134, "konfiguration::ORDERS_PIDS exists; not registered"),
     (17_135, "konfiguration::ORDERS_PIDS exists; not registered"),
+    // **44170 does not exist under FV2026-10-01.** PID-Übersicht 4.0 publishes
+    // the Gas Verpflichtungsanfrage as 44168 → 44169 and no Ablehnungs-PID; the
+    // 44170 of PID 3.3 was withdrawn. `E_2006` still publishes the Ablehnungs-
+    // Codeliste `G_0071`, so the codes exist with no carrier — mako escalates
+    // rather than emitting a Prüfidentifikator the market rejects.
     (
-        19_015,
-        "geraeteubernahme::GERAETEWECHSELABSICHT_PIDS; not registered",
-    ),
-    (
-        19_016,
-        "geraeteubernahme::GERAETEWECHSELABSICHT_PIDS; not registered",
+        44_170,
+        "withdrawn with FV2026-10-01; no Ablehnungs-PID exists for 44168",
     ),
     // ── Credited to `gpke-stammdatenaenderung`, but outside STAMMDATEN_PAIRS
     //    (55615–55694, 55109/55110). These are GDA-Antwort and individual-order
@@ -116,7 +117,6 @@ fn routed_pids() -> BTreeMap<u32, String> {
         Box::new(mako_gpke::GpkeModule),
         Box::new(mako_wim::WimModule),
         Box::new(mako_geli_gas::GeliGasModule),
-        Box::new(mako_wim_gas::WimGasModule),
         Box::new(mako_gabi_gas::GaBiGasModule),
         Box::new(mako_mabis::MabisModule),
         Box::new(mako_redispatch::RedispatchModule),

@@ -146,6 +146,7 @@ async fn end_to_end_geraetewechsel_pipeline() {
     // fall back to a well-known value from the fixture for this test.
     let device_id = DeviceId::new("ZHR-12345678");
     let command = DeviceChangeCommand::ReceiveUtilmd {
+        transaktionsgrund: Some("E03".to_owned()),
         pid,
         sender,
         receiver,
@@ -210,10 +211,10 @@ async fn end_to_end_geraetewechsel_pipeline() {
 /// AHB conformance — wrong BGM qualifier on PID 55042 must produce a
 /// validation error with rule `AHB-55042-BGM-1001-Q`.
 ///
-/// Regression guard: before the fix (PIDs 55039/55042/55051/55168 absent from
-/// ahb.json), `report.is_valid()` returned `true` for any WiM UTILMD message
-/// because `ahb_rule_pack(Some(55042))` hit the `Some(_unknown)` branch and
-/// emitted only a warning.  Now it returns a proper error.
+/// Guards the open-fail path: a PID absent from `ahb.json` sends
+/// `ahb_rule_pack` down the `Some(_unknown)` branch, which warns instead of
+/// rejecting, and `report.is_valid()` then returns `true` for any WiM UTILMD
+/// message. The four MSB-Wechsel PIDs must stay in the profile.
 #[test]
 fn negative_ahb_wrong_bgm_qualifier_pid_55042() {
     // Valid PID 55042 uses BGM+E01; inject BGM+E99 (never valid for any WiM PID).
@@ -323,6 +324,7 @@ async fn wrong_pid_returns_workflow_error() {
 
     let result = process
         .execute(DeviceChangeCommand::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
             pid: Pruefidentifikator::new(55001).unwrap(), // GPKE PID — wrong for WiM
             sender: "4012345000023".into(),
             receiver: "9900357000004".into(),

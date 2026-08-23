@@ -346,7 +346,7 @@ fn utilmd_s21_valid_from_is_2024_10_01() {
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    // The old S2.1 label on fv20241001 was a bug; correct code is S1.1a.
+    // fv20241001 is release code S1.1a, not S2.1.
     let p = reg
         .profile_on(
             MessageType::Utilmd,

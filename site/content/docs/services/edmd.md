@@ -956,9 +956,9 @@ one V07 exists for.
 
 ## Reading-order idempotency
 
-`ON CONFLICT DO NOTHING` needs a unique index to fire on. With only the surrogate
-`id` primary key every redelivered INSRPT minted a fresh UUID and created a
-duplicate order. Two partial unique indexes back it:
+`ON CONFLICT DO NOTHING` needs a unique index to fire on — the surrogate `id`
+primary key alone mints a fresh UUID per redelivered INSRPT. Two partial unique
+indexes back it:
 
 | Index | Covers |
 |---|---|

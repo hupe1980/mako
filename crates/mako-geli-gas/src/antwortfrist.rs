@@ -82,7 +82,8 @@ mod tests {
     }
 
     /// The GeLi Gas view is the GeLi Gas table and nothing else — in particular
-    /// not the WiM Gas PIDs, which sit in the same 44xxx space at 10 Werktage.
+    /// not the WiM Gas PIDs, which sit in the same 44xxx space and answer on
+    /// their own 3 / 5 / 7 / 1-Werktage windows.
     #[test]
     fn the_geli_gas_view_excludes_wim_gas() {
         for foreign in [44_039_u32, 44_042, 44_051, 44_168, 55_001] {

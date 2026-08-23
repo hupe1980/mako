@@ -22,11 +22,14 @@
 //!
 //! ## Deadline risk classification
 //!
+//! Windows come from `mako_fristen::antwort`, never from a literal beside a
+//! call site:
+//!
 //! | Process family | Regulatory deadline | Source |
 //! |---|---|---|
-//! | GPKE | 24 wall-clock hours | BK6-24-174 |
-//! | WiM Strom | 5 Werktage | BK6-24-174 |
-//! | GeLi Gas / WiM Gas | 10 Werktage | BK7-24-01-009 |
+//! | GPKE Strom | a clock time on the 1. WT nach dem ÜT (11:00 / 06:00 / 05:00 / 09:00) | BK6-24-174 GPKE Teil 2 |
+//! | WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage je PID | BK6-22-024 Anlage 2a · AWH WiM Gas 2.0 |
+//! | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags | BK7-24-01-009 |
 //!
 //! | Module | Content |
 //! |---|---|

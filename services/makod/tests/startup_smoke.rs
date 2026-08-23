@@ -22,7 +22,6 @@ use mako_gpke::GpkeModule;
 use mako_mabis::MabisModule;
 use mako_redispatch::RedispatchModule;
 use mako_wim::WimModule;
-use mako_wim_gas::WimGasModule;
 
 use makod::deadline_dispatch;
 
@@ -47,7 +46,6 @@ fn all_registered_workflows_covered_by_dispatch_table() {
         .register(Box::new(GpkeModule))
         .register(Box::new(WimModule))
         .register(Box::new(GeliGasModule))
-        .register(Box::new(WimGasModule))
         .register(Box::new(MabisModule))
         .register(Box::new(GaBiGasModule))
         .register(Box::new(RedispatchModule))
@@ -224,7 +222,6 @@ fn the_landing_page_figures_match_the_registered_engine() {
         .register(Box::new(GpkeModule))
         .register(Box::new(WimModule))
         .register(Box::new(GeliGasModule))
-        .register(Box::new(WimGasModule))
         .register(Box::new(MabisModule))
         .register(Box::new(GaBiGasModule))
         .register(Box::new(RedispatchModule))
@@ -241,8 +238,8 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // AHB profile coverage — the difference is the deliberate
     // `KNOWN_PROFILE_GAPS` set, routed but without AHB rules. Both numbers are
     // correct and appear in different places; do not "harmonise" them.
-    const LANDING_PAGE_PIDS: usize = 425;
-    const LANDING_PAGE_WORKFLOWS: usize = 71;
+    const LANDING_PAGE_PIDS: usize = 428;
+    const LANDING_PAGE_WORKFLOWS: usize = 64;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

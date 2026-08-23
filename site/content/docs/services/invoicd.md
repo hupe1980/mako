@@ -99,7 +99,7 @@ dispatched and `422` when it carries no message reference.
 |-----|-------------|-----------|--------|--------|
 | 31001 | Abschlagsrechnung Netznutzung (NB → LF) | Inbound | Strom | ✅ |
 | 31002 | Netznutzungsabrechnung (NB → LF) | Inbound | Strom | ✅ |
-| 31003 | WiM Gas Rechnung (NB → LF) | Inbound | Gas | ✅ |
+| 31003 | WiM-Rechnung — Abrechnung von Dienstleistungen im Messwesen (MSBA → NB · MSBA → MSBN) | Inbound | ⚡🔥 | ✅ |
 | 31004 | Stornorechnung — universal Storno (GPKE/MMM/WiM/Kapazität/AWH/GeLi) | Inbound | **Strom + Gas** | ✅ arithmetic-only (`check_storno`) |
 | 31005 | MMM-Rechnung Mehr-/Mindermengensaldo | Inbound | Strom | ✅ |
 | 31006 | MMM Mehrmenge, selbst ausgestellt (LF → NB) | Inbound + Outbound | Strom | ✅ |

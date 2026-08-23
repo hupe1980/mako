@@ -1,51 +1,41 @@
-//! WiM Rechnung — INVOIC-based billing processes for WiM Strom (BK6-24-174).
+//! WiM Rechnung — the INVOIC billing processes of WiM Strom and WiM Gas.
 //!
-//! Covers the WiM-Strom **MSB-Rechnung (PID 31009)**: the Messstellenbetreiber
-//! (MSB) invoices the Netzbetreiber, Lieferant or Einspeise-Abrechnung (ESA) for
-//! metering-point operation. The workflow hosts **both** sides of the exchange —
-//! the deployment's market role selects which commands it issues:
+//! Three Prüfidentifikatoren, listed in [`WIM_INVOIC_PIDS`]. The workflow hosts
+//! **both** sides of each exchange — the deployment's Marktrolle selects which
+//! commands it issues:
 //!
-//! - **MSB (invoicer / sender):** [`WimInvoicCommand::SendInvoic`] records the
-//!   outbound 31009, then awaits the payer's REMADV (33001–33004) / may reject it
+//! - **MSB (invoicer):** [`WimInvoicCommand::SendInvoic`] records the outbound
+//!   invoice, then awaits the payer's REMADV (33001–33004) and may refuse it
 //!   with a COMDIS.
-//! - **NB/LF/ESA (payer / recipient):** [`WimInvoicCommand::ReceiveInvoic`]
-//!   ingests the inbound 31009, then `SettleInvoice`/`DisputeInvoice` and returns a REMADV.
+//! - **Payer:** [`WimInvoicCommand::ReceiveInvoic`] ingests it, then
+//!   `SettleInvoice`/`DisputeInvoice` returns the REMADV.
 //!
-//! # Covered Prüfidentifikatoren (INVOIC AHB 1.0 / FV2025-10-01)
+//! **31009 belongs exclusively to the WiM domain** and must not be registered
+//! by `mako-gpke` — see `GPKE_INVOIC_PIDS` there for the explicit exclusion.
 //!
-//! | PID   | Process variant       | Party direction     |
-//! |-------|-----------------------|---------------------|
-//! | 31009 | MSB-Rechnung          | **MSB → NB/LF/ESA** |
+//! # Answer windows
 //!
-//! **PID 31009 belongs exclusively to the WiM domain.** It must not be registered
-//! by `mako-gpke` (see `crates/mako-gpke/src/abrechnung.rs` `GPKE_INVOIC_PIDS` for the
-//! explicit exclusion). The Gas twin — WiM-Rechnung 31003 (gMSB → NB) — lives in
-//! `mako-wim-gas` (`crates/mako-wim-gas/src/invoic.rs`), duplicated per Sparte.
+//! Every WiM invoice is answered against the **Zahlungsziel it carries**
+//! (`SG8 DTM+265`), never a flat Werktage count from arrival. Where the answer
+//! sits relative to that date depends on who pays:
+//!
+//! | Rechnung | Zahler | Spätester ÜT der Antwort | Fundstelle |
+//! |---|---|---|---|
+//! | MSB-Rechnung 31009 | NB | **4. WT vor** dem Zahlungsziel | WiM Teil 1 Kap. 6.2 Nr. 2 |
+//! | MSB-Rechnung 31009 | LF · ESA | zum Zahlungsziel | Kap. 3.6.3.8.2 Nr. 2/4 |
+//! | WiM-Rechnung 31003 | NB · MSBN | zum Zahlungsziel | Kap. 3.7.2 Nr. 2/4 |
+//!
+//! The MSB's Mitteilung that a refused invoice was correct after all (COMDIS
+//! 29001) is due by the **2. WT vor** dem Zahlungsziel (Kap. 6.2 Nr. 3), and
+//! the Zahlungsziel itself may not fall short of 10 Werktage after receipt.
+//! [`mako_fristen::vorlauf`] holds all four as one table; `makod` registers the
+//! process deadline from it.
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW WiM** — Wechselprozesse im Messwesen Strom (BDEW BK6-24-174)
-//! - **INVOIC AHB 1.0** — EDI@Energy invoice message format (valid FV2025-10-01)
-//! - **CONTRL / APERAK** — Acknowledgement (5 Werktage Frist per BK6-24-174)
-//!
-//! # Implementation status
-//!
-//! This module implements the full billing workflow state machine:
-//!
-//! 1. Registers PID 31009 in the PID router (preventing dead-letter routing).
-//! 2. Sends the outbound INVOIC (`SendInvoic`, MSB role) or accepts an inbound one
-//!    (`ReceiveInvoic`, payer role).
-//! 3. Transitions to `PendingSettlement`/`InvoicSent` and registers a 5-Werktage deadline.
-//! 4. Accepts `SettleInvoice` or `DisputeInvoice` commands to close the invoice lifecycle.
-//! 5. Accepts inbound REMADV (`ReceiveRemadv`, 33001–33004) and COMDIS (`ReceiveComdis`).
-//! 6. Transitions to terminal states: `Settled`, `Disputed`, `PaymentConfirmed`,
-//!    `PaymentDisputed`, or `ComdisRejected`.
-//!
-//! **Not implemented in the application layer (`deadline_dispatch.rs`):**
-//! automatic outbound REMADV generation when the 5-Werktage deadline fires without
-//! an explicit `SettleInvoice`/`DisputeInvoice` command. The workflow satisfies the AS4
-//! acknowledgement obligation (BDEW AS4-Profile §5) and records the deadline, but
-//! `DeadlineExpired` does not itself emit a REMADV.
+//! - **BNetzA BK6-22-024 Anlage 2a** — WiM Strom Teil 1, Kap. 3.6.3.8 / 3.7 / 6
+//! - **AWH WiM Gas 2.0** — Kap. 4.7 (Abrechnung von Dienstleistungen)
+//! - **INVOIC AHB 1.0b** — EDI@Energy invoice message format
 
 use std::collections::HashMap;
 
@@ -61,15 +51,58 @@ use mako_engine::{
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
-/// WiM billing Prüfidentifikatoren handled by this workflow (INVOIC AHB 1.0).
+/// WiM billing Prüfidentifikatoren handled by this workflow (INVOIC AHB 1.0b),
+/// in **both Sparten**.
 ///
-/// | PID   | Name                                          |
-/// |-------|-----------------------------------------------|
-/// | 31009 | MSB-Rechnung (MSB → NB/LF/ESA)                |
+/// | PID | Name | Empfänger | Sparte | Fundstelle |
+/// |---|---|---|---|---|
+/// | 31009 | MSB-Rechnung | NB · LF · ESA | Strom | GPKE Teil 3, WiM Strom Teil 1/2, AWH Änd. Technik |
+/// | 31003 | WiM-Rechnung (Abrechnung von Dienstleistungen im Messwesen) | NB · MSBN | **beide** | WiM Strom Teil 1 Kap. 3.7, AWH WiM Gas 2.0 Kap. 4.7 |
+/// | 31004 | Stornorechnung | wie die Ursprungsrechnung | **neutral** | INVOIC AHB §3.1.2 |
 ///
-/// **PID 31003** (WiM-Rechnung Gas) belongs to `mako-wim-gas` per
-/// `site/content/docs/regulatory/pid-reference.md`. It must not be registered here.
-pub const WIM_INVOIC_PIDS: &[u32] = &[31009];
+/// **31003 is not the Gas twin of 31009.** They are different Abrechnungen:
+/// 31009 bills the *Messstellenbetrieb* to the NB, LF or ESA and exists only in
+/// Strom; 31003 bills the *Dienstleistungen* between the abgebender and the
+/// aufnehmender MSB — the temporäre Fortführung, the Geräteübernahme and a
+/// Zwischen- oder Kontrollablesung — and exists in both Sparten.
+///
+/// The Gas Ablehnung splits by **who refuses whose invoice**, not by PID
+/// (EBD 4.3 Kap. 14.7) — [`gas_ablehnungs_ebd`] resolves it.
+pub const WIM_INVOIC_PIDS: &[u32] = &[31009, 31003, 31004];
+
+/// Who refused the Gas invoice, and what it invoiced — the pair that picks the
+/// Ablehnungs-Entscheidungsbaum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GasAblehnung {
+    /// The **NB** refuses a Rechnung that names a Marktlokation — `E_2014`.
+    NbRechnung,
+    /// The **MSBN** refuses a Rechnung — `E_2015`.
+    MsbnRechnung,
+    /// The **NB** refuses a Rechnung that names only a Messlokation — `E_2016`.
+    NbMesslokationsRechnung,
+    /// The **NB** refuses a Stornorechnung — `E_2018`.
+    NbStorno,
+    /// The **MSBN** refuses a Stornorechnung — `E_2019`.
+    MsbnStorno,
+}
+
+/// The Gas Ablehnungs-Entscheidungsbaum for a refusal.
+///
+/// EBD 4.3 Kap. 14.7 splits one INVOIC family across five trees, and the PID is
+/// not what tells them apart: `E_2014`/`E_2016` are the NB's, `E_2015` the
+/// MSBN's, and the two Storno trees repeat that split. `E_2017`
+/// („Nichtzahlungsavis prüfen") has no tree, „da keine Antwort gegeben wird",
+/// so a Zahlungsavis carries no `AJT`.
+#[must_use]
+pub const fn gas_ablehnungs_ebd(ablehnung: GasAblehnung) -> &'static str {
+    match ablehnung {
+        GasAblehnung::NbRechnung => mako_pruefung::codes::EBD_WIM_RECHNUNG_NB_GAS,
+        GasAblehnung::MsbnRechnung => mako_pruefung::codes::EBD_WIM_RECHNUNG_MSBN_GAS,
+        GasAblehnung::NbMesslokationsRechnung => mako_pruefung::codes::EBD_WIM_RECHNUNG_MELO_GAS,
+        GasAblehnung::NbStorno => mako_pruefung::codes::EBD_WIM_STORNO_GAS,
+        GasAblehnung::MsbnStorno => mako_pruefung::codes::EBD_WIM_STORNO_MSBN_GAS,
+    }
+}
 
 /// REMADV PIDs for WiM Strom billing (inbound payment advice, MSB invoicer role).
 ///
@@ -86,16 +119,17 @@ pub const WIM_INVOIC_PIDS: &[u32] = &[31009];
 /// | 33003 | Strom Abweisung Kopf und Summe (itemized header+total)       |
 /// | 33004 | Strom Abweisung Position (itemized line item)                |
 ///
-/// 33003/33004 are **Strom-only**; the Gas twin (`mako-wim-gas`) keeps 33001/33002.
+/// 33003/33004 are **Strom-only**: the Gas WiM-Rechnung 31003 is rejected with
+/// 33002 alone (REMADV AHB 1.0a; PID-Übersicht 4.0 rows 39780–39910).
 /// Inbound REMADV routing is by correlation (RFF+Z13 → original 31009 message
 /// reference), so this set governs which PIDs the workflow *accepts*, not routing.
 ///
-/// Source: REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174.
+/// Source: REMADV AHB 1.0a §3, WiM Strom Teil 1 (BK6-22-024).
 pub const WIM_REMADV_PIDS: &[u32] = &[33001, 33002, 33003, 33004];
 
 /// COMDIS PID for inbound Ablehnung REMADV in WiM (payer role).
 ///
-/// Source: COMDIS AHB 1.0, WiM Strom Teil 1, BK6-24-174.
+/// Source: COMDIS AHB 1.0, WiM Strom Teil 1 (BK6-22-024).
 pub const WIM_COMDIS_ABLEHNUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(29001);
 
 /// Workflow key for WiM billing processes.
@@ -103,7 +137,10 @@ pub const WORKFLOW_NAME: &str = "wim-invoic";
 
 /// Deadline label for the INVOIC settlement response window.
 ///
-/// Per BDEW WiM BK6-22-024, the NB must respond within **5 Werktage** of receipt.
+/// The window itself is
+/// [`mako_fristen::vorlauf::rechnung_antwort_spaetester_uet`] — it is anchored
+/// on the Zahlungsziel the invoice carries and on the payer's Marktrolle, so
+/// the workflow labels the deadline and `makod` dates it.
 pub const SETTLEMENT_WINDOW_LABEL: &str = "wim-invoic-settlement-deadline";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -124,7 +161,7 @@ pub enum WimInvoicEvent {
         document_date: String,
         /// BDEW Prüfidentifikator (31009 — MSB-Rechnung).
         ///
-        /// PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; it is not handled here.
+        /// One of [`WIM_INVOIC_PIDS`] — 31009 (Strom), 31003 (Gas) or 31004.
         pruefidentifikator: Pruefidentifikator,
         /// BO4E `Rechnung` object (`rubo4e::current`, schema v202607).
         ///
@@ -231,7 +268,7 @@ pub enum WimInvoicCommand {
         document_date: String,
         /// BDEW Prüfidentifikator (31009 — MSB-Rechnung).
         ///
-        /// PID 31003 (WiM-Rechnung) belongs to `mako-wim-gas`; it is not handled here.
+        /// One of [`WIM_INVOIC_PIDS`] — 31009 (Strom), 31003 (Gas) or 31004.
         pruefidentifikator: Pruefidentifikator,
         /// `true` if AHB profile validation found no errors.
         validation_passed: bool,
@@ -284,7 +321,7 @@ pub enum WimInvoicCommand {
     },
     /// MSB invoicer role: inbound REMADV received from the payer.
     ///
-    /// PIDs 33001–33004 (REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-24-174);
+    /// PIDs 33001–33004 (REMADV AHB 1.0a §3, WiM Strom Teil 1, BK6-22-024);
     /// 33003/33004 are the itemized Strom Abweisungen.
     ReceiveRemadv {
         /// REMADV Prüfidentifikator (33001–33004).
@@ -766,12 +803,39 @@ mod tests {
         assert!(matches!(state, WimInvoicState::InvoicSent { .. }));
     }
 
+    /// The WiM-Rechnung in both Sparten, and the Sparte-neutral Storno, all run
+    /// this workflow: 31009 (Strom, WiM Teil 1 Kap. 3.6/4), 31003 (Gas, AWH WiM
+    /// Gas 2.0 Kap. 4.7) and 31004 (Stornorechnung, INVOIC AHB §3.1.2).
     #[test]
-    fn send_invoic_rejects_non_31009_pid() {
-        // 31003 is the Gas twin (mako-wim-gas), not a Strom WiM INVOIC PID.
-        let err = WimInvoicWorkflow::handle(&WimInvoicState::New, send_cmd(31003))
-            .expect_err("31003 must be rejected by the Strom WiM workflow");
-        assert!(format!("{err}").contains("31009"));
+    fn send_invoic_accepts_every_wim_rechnung_pid() {
+        for pid in [31_009_u32, 31_003, 31_004] {
+            let out = WimInvoicWorkflow::handle(&WimInvoicState::New, send_cmd(pid))
+                .unwrap_or_else(|e| panic!("PID {pid} must be accepted: {e}"));
+            assert!(matches!(out.events[0], WimInvoicEvent::InvoicSent { .. }));
+        }
+    }
+
+    /// A PID from another family never opens a WiM billing process. 31001 is
+    /// the Abschlagsrechnung and 31002 the NN-Rechnung — both GPKE.
+    #[test]
+    fn send_invoic_rejects_a_foreign_invoice_pid() {
+        for pid in [31_001_u32, 31_002] {
+            let err = WimInvoicWorkflow::handle(&WimInvoicState::New, send_cmd(pid))
+                .unwrap_err_or_else_msg(pid);
+            assert!(err.contains("31009"), "PID {pid}: {err}");
+        }
+    }
+
+    trait UnwrapErrMsg {
+        fn unwrap_err_or_else_msg(self, pid: u32) -> String;
+    }
+    impl<T: std::fmt::Debug> UnwrapErrMsg for Result<T, mako_engine::error::WorkflowError> {
+        fn unwrap_err_or_else_msg(self, pid: u32) -> String {
+            match self {
+                Err(e) => e.to_string(),
+                Ok(v) => panic!("PID {pid} must be rejected, got {v:?}"),
+            }
+        }
     }
 
     #[test]
@@ -947,5 +1011,67 @@ mod tests {
             assert_eq!(record.event_count, 1);
             assert_eq!(proj.last_sequence(), Some(seq));
         }
+    }
+}
+
+#[cfg(test)]
+mod gas_ablehnung_tests {
+    use super::*;
+
+    /// Each of the five Gas refusal trees is reachable and publishes codes.
+    #[test]
+    fn every_gas_ablehnungsbaum_resolves_to_a_published_tree() {
+        for a in [
+            GasAblehnung::NbRechnung,
+            GasAblehnung::MsbnRechnung,
+            GasAblehnung::NbMesslokationsRechnung,
+            GasAblehnung::NbStorno,
+            GasAblehnung::MsbnStorno,
+        ] {
+            let ebd = gas_ablehnungs_ebd(a);
+            let codes = mako_pruefung::codes::CODELISTEN
+                .iter()
+                .find(|(id, _)| *id == ebd)
+                .map(|(_, codes)| *codes)
+                .unwrap_or_else(|| panic!("{ebd} is registered in CODELISTEN"));
+            assert!(!codes.is_empty(), "{ebd} publishes no codes");
+            assert!(
+                codes
+                    .iter()
+                    .all(|c| c.cluster == mako_pruefung::Cluster::Ablehnung),
+                "{ebd} must publish Ablehnungscodes only — the Gas Zahlungsavis carries no AJT"
+            );
+            assert!(
+                mako_pruefung::codes::wire_codeliste(ebd, mako_pruefung::Cluster::Ablehnung)
+                    .is_some_and(|c| c.starts_with("G_")),
+                "{ebd} must name a Gas Codeliste in DE 1082"
+            );
+        }
+    }
+
+    /// The NB's and the MSBN's trees are different trees, even though they
+    /// spell the same alphabet.
+    #[test]
+    fn the_nb_and_the_msbn_refuse_from_different_trees() {
+        assert_ne!(
+            gas_ablehnungs_ebd(GasAblehnung::NbRechnung),
+            gas_ablehnungs_ebd(GasAblehnung::MsbnRechnung)
+        );
+        assert_ne!(
+            gas_ablehnungs_ebd(GasAblehnung::NbStorno),
+            gas_ablehnungs_ebd(GasAblehnung::MsbnStorno)
+        );
+    }
+
+    /// Only the Messlokations-Abrechnung names a Messlokation alone in code 14.
+    #[test]
+    fn code_14_names_the_marktlokation_except_on_the_melo_abrechnung() {
+        let name_of = |a| {
+            mako_pruefung::codes::lookup(gas_ablehnungs_ebd(a), "14")
+                .expect("code 14 is published")
+                .bedeutung
+        };
+        assert!(name_of(GasAblehnung::NbRechnung).contains("Marktlokation"));
+        assert!(!name_of(GasAblehnung::NbMesslokationsRechnung).contains("Marktlokation"));
     }
 }

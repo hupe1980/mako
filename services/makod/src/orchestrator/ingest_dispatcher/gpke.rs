@@ -425,7 +425,11 @@ impl EdifactIngestDispatcher {
                     // the invoice omits the date; 24 hours was neither.
                     let received = OffsetDateTime::now_utc();
                     let due_at = faelligkeitsdatum_from_invoic(msg).unwrap_or_else(|| {
-                        fristen::deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo)
+                        fristen::deadline_at_werktage(
+                            received,
+                            fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT,
+                            HolidayCalendar::BdewMaKo,
+                        )
                     });
                     self.spawn_or_resume::<GpkeAbrechnungWorkflow>(
                         &invoice_ref,

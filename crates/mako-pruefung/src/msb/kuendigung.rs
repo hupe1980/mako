@@ -53,7 +53,7 @@
 use time::Date;
 
 use crate::antwort::RejectReason;
-use crate::codes::{EBD_KUENDIGUNG_MSB, lookup};
+use crate::codes::lookup;
 
 use super::types::{KuendigungMsb, Kuendigungstermin, MsbEntscheidung, Vertragslage};
 
@@ -65,8 +65,8 @@ use super::types::{KuendigungMsb, Kuendigungstermin, MsbEntscheidung, Vertragsla
 /// a test in this module rules out.
 #[must_use]
 pub fn pruefe_kuendigung(anfrage: &KuendigungMsb) -> MsbEntscheidung {
-    let tree = EBD_KUENDIGUNG_MSB;
-    let code = |c: &str| lookup(tree, c).expect("code is published in E_0200");
+    let tree = super::baum::kuendigung(anfrage.sparte);
+    let code = |c: &str| lookup(tree, c).expect("code is published in the Kündigung tree");
 
     match anfrage.vertragslage {
         Vertragslage::Unbekannt => MsbEntscheidung::Escalate {
@@ -137,8 +137,8 @@ fn bereits_gekuendigt(
     vertragsende: Date,
     frueher_moeglich: Option<Date>,
 ) -> MsbEntscheidung {
-    let tree = EBD_KUENDIGUNG_MSB;
-    let code = |c: &str| lookup(tree, c).expect("code is published in E_0200");
+    let tree = super::baum::kuendigung(anfrage.sparte);
+    let code = |c: &str| lookup(tree, c).expect("code is published in the Kündigung tree");
 
     let mehrfach = |termin: Date| {
         MsbEntscheidung::Reject(
@@ -185,6 +185,7 @@ fn bereits_gekuendigt(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::msb::types::Sparte;
     use time::Month;
 
     fn d(y: i32, m: Month, day: u8) -> Date {
@@ -193,6 +194,7 @@ mod tests {
 
     fn k(termin: Kuendigungstermin, lage: Vertragslage) -> KuendigungMsb {
         KuendigungMsb {
+            sparte: Sparte::Strom,
             melo_id: "DE0000000001234567890000000000001".to_owned(),
             msbn_mp_id: "9900000000003".to_owned(),
             kuendigungstermin: termin,

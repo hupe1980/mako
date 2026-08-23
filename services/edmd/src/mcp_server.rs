@@ -1324,7 +1324,7 @@ impl EdmdMcpHandler {
                  ### Triggers (automatic)\n\
                  | Event | Reading order created |\n\
                  |---|---|\n\
-                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung, 5 Werktage) |\n\
+                 | INSRPT 23001 Störungsmeldung | `INSRPT_STOERUNG` (WiM Störungsmeldung; die MSB-Antwort ist 3 bzw. 1 Werktag je Messtechnik, WiM Teil 2 Kap. 1.2 Nr. 2) |\n\
                  | INSRPT 23003/23008 Technische Änderung | `SONDERABLESUNG` at handover date |\n\
                  | GPKE 55001 Lieferbeginn | `LIEFERBEGINN` at Lieferbeginndatum |\n\
                  | GPKE 55004/55007 Abmeldung/Beendigung der Zuordnung | `LIEFERENDE` at Lieferendedatum |\n\

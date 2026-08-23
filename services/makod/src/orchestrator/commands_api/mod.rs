@@ -261,14 +261,6 @@ use mako_wim::invoic::{WimInvoicCommand, WimInvoicWorkflow};
 use mako_wim::steuerungsauftrag::{SteuerungsauftragCommand, WimSteuerungsauftragWorkflow};
 use mako_wim::{DeviceChangeCommand, WimDeviceChangeWorkflow};
 use mako_wim::{PreisanfrageCommand, WimPreisanfrageWorkflow};
-use mako_wim_gas::{
-    ANMELDUNG_WORKFLOW_NAME as WIM_GAS_ANMELDUNG_WORKFLOW_NAME,
-    INVOIC_WORKFLOW_NAME as WIM_GAS_INVOIC_WORKFLOW_NAME,
-    KUENDIGUNG_WORKFLOW_NAME as WIM_GAS_KUENDIGUNG_WORKFLOW_NAME,
-    STORNIERUNG_WORKFLOW_NAME as WIM_GAS_STORNIERUNG_WORKFLOW_NAME, WimGasAnmeldungCommand,
-    WimGasAnmeldungWorkflow, WimGasInvoicCommand, WimGasInvoicWorkflow, WimGasKuendigungCommand,
-    WimGasKuendigungWorkflow, WimGasStornierungCommand, WimGasStornierungWorkflow,
-};
 use rubo4e::identifiers::{MaloId, MeloId};
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -359,7 +351,6 @@ mod netzzugang;
 mod registry;
 mod types;
 mod wim;
-mod wim_gas;
 
 pub use handler::*;
 pub use registry::*;
@@ -374,7 +365,6 @@ use mabis::*;
 use netzbilanz::*;
 use netzzugang::*;
 use wim::*;
-use wim_gas::*;
 
 /// Return the current BDEW format-version `WorkflowId` for `gpke-lf-anmeldung`.
 ///

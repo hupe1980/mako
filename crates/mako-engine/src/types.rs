@@ -232,19 +232,32 @@ domain_id!(
 ///
 /// Energy commodity — used for commodity-aware PID routing.
 ///
-/// INSRPT PIDs 23001/23003/23004/23008 are shared between WiM Strom (5 Werktage
-/// APERAK Frist) and WiM Gas (10 Werktage APERAK Frist). When the ingest layer
-/// can determine the commodity of an incoming message — for example from the
-/// MaLo cache — it supplies a `Sparte` to [`PidRouter::route_with_sparte`] so
-/// that the correct workflow is selected.
+/// Several AHBs are Sparte-neutral, so the same Prüfidentifikator carries a
+/// Strom and a Gas process: INSRPT 23001/23003/23004/23008, the WiM ORDERS
+/// 17001/17002/17009 and their ORDRSP answers, REQOTE 35001 / QUOTES 15001, and
+/// the IFTSTA Statusmeldungen. The Sparte is not in the message body — it is
+/// the Sparte of the **interchange recipient's MP-ID** (BDEW Allgemeine
+/// Festlegungen §2.13: every MP-ID covers exactly one Sparte). The ingest layer
+/// resolves it there and supplies it to [`PidRouter::route_with_sparte`].
+///
+/// The two Sparten differ in more than routing:
+///
+/// | | Strom | Gas |
+/// |---|---|---|
+/// | APERAK | positive **and** negative; 45 min for UTILMD/ORDERS, sonst nächster Werktag 12:00 | **negative only**; nächster Werktag 12:00 (Folgeprozess) / 3 WT (Initialprozess) |
+/// | CONTRL | only on a syntactically broken APERAK | on **every** APERAK |
+/// | WiM Zuordnungszeitpunkt | 00:00 Uhr | **06:00 Uhr** (Gastag) |
+/// | WiM Antwort-Codeliste | `S_00xx` | `G_00xx` |
+///
+/// The WiM *Antwortfristen* are identical in both (3 / 5 / 7 / 1 Werktage).
 ///
 /// [`PidRouter::route_with_sparte`]: crate::pid_router::PidRouter::route_with_sparte
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Sparte {
-    /// Electricity (Strom) — APERAK Frist 5 Werktage (WiM Strom, BK6-24-174).
+    /// Electricity (Strom) — BK6-24-174 GPKE, BK6-22-024 WiM Strom.
     Strom,
-    /// Natural gas (Gas) — APERAK Frist 10 Werktage (WiM Gas, BK7-24-01-009).
+    /// Natural gas (Gas) — BK7-24-01-009 GeLi Gas 3.0 / AWH WiM Gas 2.0.
     Gas,
 }
 

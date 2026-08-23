@@ -210,7 +210,7 @@ pub use gas_quality::normalize_gasqualitaet;
 /// | `Nb`-only | 44022, 44023, 44024 | `geli-gas-stornierung` (GNB-side) |
 /// | `Lf`-only (no `Msb`/`Nmsb`) | 44023, 44024 (inbound responses) | `geli-gas-stornierung-lf` (LF-side) |
 /// | `Nb + Lf` | 44022 → GNB-side; 44023/44024 → LF-side | both workflows |
-/// | `Msb`/`Nmsb` / `all()` | handled by `WimGasModule` | `wim-gas-stornierung` |
+/// | `Msb`/`Nmsb` alone | nothing — neither side of the exchange | — |
 pub struct GeliGasModule;
 
 impl mako_engine::builder::EngineModule for GeliGasModule {
@@ -384,24 +384,27 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         //   outbound and does not need PID-router registration.
         //   Combined Nb+Lf deployments work without conflict: different PIDs, different workflows.
         //
-        // NOT registered when `Msb`/`Nmsb` or `all()`: WimGasModule owns 44022–44024 in those cases.
+        // The Stornierung workflow itself is Use-Case-agnostic: it resolves the
+        // Ursprungsprozess from `RFF+ACW`, so one owner serves the GeLi Gas
+        // Lieferbeginn/-ende *and* the WiM Gas MSB-Wechsel.
         use mako_engine::marktrolle::Marktrolle;
 
-        let has_nb_only = !roles.is_all()
-            && roles.contains(Marktrolle::Nb)
-            && !roles.contains(Marktrolle::Msb)
-            && !roles.contains(Marktrolle::Nmsb);
+        // 44022 is inbound wherever this deployment can be the *recipient* of a
+        // Stornierungsanfrage, which is every NB: GeLi Gas and WiM Gas both send
+        // it to the same party („Beteiligte wie bei der Ursprungsnachricht",
+        // PID-Übersicht 4.0 rows 37030/39000). The `Msb` role adds nothing —
+        // §41 MsbG puts the gMSB inside the NB's own legal entity in most grids,
+        // and a combined GNB/gMSB receives the Anfrage exactly once.
+        let has_nb = roles.is_all() || roles.contains(Marktrolle::Nb);
         // LF role (lf-only OR integrated): register LFN-side response PIDs.
         // On integrated deployments, the LF *receives* 44002/44003 and 44005/44006 from GNB;
         // the NB only ever *sends* them, so routing to lf-anmeldung is correct.
         let has_lf_role = roles.contains(Marktrolle::Lf) || roles.is_all();
-        // LF stornierung: lf-only only (not all()), to avoid conflict with WimGas.
-        let has_lf = !roles.is_all()
-            && roles.contains(Marktrolle::Lf)
-            && !roles.contains(Marktrolle::Msb)
-            && !roles.contains(Marktrolle::Nmsb);
+        // LF stornierung: the LF side receives 44023/44024 as answers to a 44022
+        // it sent. Disjoint from the NB side's 44022, so no exclusion is needed.
+        let has_lf = roles.contains(Marktrolle::Lf);
 
-        if has_nb_only {
+        if has_nb {
             // Only 44022 is inbound on the GNB side — 44023/44024 are outbound responses
             // dispatched via the outbox and do not need PID-router registration.
             router.register_with_module(

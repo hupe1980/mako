@@ -76,6 +76,18 @@ pub enum VorlaufShape {
     /// Clamped to the last day of the month when the anchor day does not exist
     /// there (§ 188 Abs. 3 BGB).
     LatestMonateBefore(u32),
+    /// „Spätester ÜT liegt `monate` Monate **und** `werktage` WT vor dem …"
+    ///
+    /// The two units compose in that order — the calendar interval first, then
+    /// the Werktage back from the day it lands on. WiM Strom Teil 1 Kap. 3.5.2
+    /// Nr. 1 states the Vorabinformation zum Ersteinbau eines iMS this way, and
+    /// collapsing it to either unit alone moves the deadline by up to a week.
+    LatestMonateUndWerktageBefore {
+        /// Calendar months before the anchor.
+        monate: u32,
+        /// Werktage before the date the months land on.
+        werktage: u32,
+    },
 }
 
 /// What a date was checked against, so a rejection can name it.
@@ -96,6 +108,16 @@ pub enum Anchor {
     Aenderungstermin,
     /// The Gerätewechseltermin announced in the Gerätewechselabsicht.
     Gerätewechseltermin,
+    /// The Zahlungsziel the Rechnung itself carries (`DTM+265`).
+    Zahlungsziel,
+    /// The day a Preisblatt takes effect.
+    Inkrafttreten,
+    /// The day the Messlokation is planned to be re-equipped.
+    Umstellungszeitpunkt,
+    /// The day the invoiced service ended — the Beendigung der temporären
+    /// Fortführung, the Überlassung der Einrichtung, the Ende des
+    /// Abrechnungszeitraums or the Versand der Zusatz-/Kontrollablesung.
+    Leistungsende,
 }
 
 impl Anchor {
@@ -110,6 +132,10 @@ impl Anchor {
             Self::Uebertragungstag => "Übertragungstag",
             Self::Aenderungstermin => "Änderungstermin",
             Self::Gerätewechseltermin => "Gerätewechseltermin",
+            Self::Zahlungsziel => "Zahlungsziel",
+            Self::Inkrafttreten => "Inkrafttreten",
+            Self::Umstellungszeitpunkt => "Umstellungszeitpunkt",
+            Self::Leistungsende => "Leistungsende",
         }
     }
 }
@@ -235,17 +261,18 @@ impl VorlaufShape {
                     }
                 }
             }
-            Self::LatestMonateBefore(n) => {
-                let latest_uet = subtract_months(anchor, n);
-                if uebertragungstag <= latest_uet {
-                    VorlaufVerdict::Ok
-                } else {
-                    VorlaufVerdict::TooLate {
-                        shortfall_wt: crate::werktage_between(latest_uet, uebertragungstag, cal),
-                        earliest_possible: add_months(uebertragungstag, n),
-                    }
-                }
-            }
+            Self::LatestMonateUndWerktageBefore { monate, werktage } => not_after(
+                uebertragungstag,
+                crate::sub_werktage(subtract_months(anchor, monate), werktage, cal),
+                add_months(crate::add_werktage(uebertragungstag, werktage, cal), monate),
+                cal,
+            ),
+            Self::LatestMonateBefore(n) => not_after(
+                uebertragungstag,
+                subtract_months(anchor, n),
+                add_months(uebertragungstag, n),
+                cal,
+            ),
             Self::Korridor(n) => {
                 // `anchor` is the confirmed Zuordnungstermin, `uebertragungstag`
                 // the requested Übernahme-/Wechselzeitpunkt.
@@ -264,6 +291,24 @@ impl VorlaufShape {
                     VorlaufVerdict::Ok
                 }
             }
+        }
+    }
+}
+
+/// `Ok` while `uebertragungstag` is at or before `latest_uet`, else `TooLate`
+/// naming `earliest_possible` as the first anchor date it could still reach.
+fn not_after(
+    uebertragungstag: Date,
+    latest_uet: Date,
+    earliest_possible: Date,
+    cal: HolidayCalendar,
+) -> VorlaufVerdict {
+    if uebertragungstag <= latest_uet {
+        VorlaufVerdict::Ok
+    } else {
+        VorlaufVerdict::TooLate {
+            shortfall_wt: crate::werktage_between(latest_uet, uebertragungstag, cal),
+            earliest_possible,
         }
     }
 }
@@ -293,8 +338,17 @@ fn shift_months(date: Date, delta: i32) -> Date {
 pub struct VorlaufObligation {
     /// Stable slug, used as the lookup key and in operator-facing reasons.
     pub key: &'static str,
-    /// The Prüfidentifikator carrying the message, where the step has one.
+    /// The **Strom** Prüfidentifikator carrying the message, where the step has
+    /// one.
     pub pid: Option<u32>,
+    /// The **Gas** Prüfidentifikator, where it differs from [`Self::pid`].
+    ///
+    /// `None` means one of two things and the difference matters: either the
+    /// step has no PID at all (`pid` is `None` too), or Gas runs it on the very
+    /// same Prüfidentifikator as Strom — every ORDERS/ORDRSP/IFTSTA leg of WiM
+    /// does, because those AHBs are Sparte-neutral. Only the UTILMD legs split,
+    /// 55xxx against 44xxx.
+    pub pid_gas: Option<u32>,
     /// Human-readable Prozessschritt name.
     pub name: &'static str,
     /// What the window is measured against.
@@ -326,18 +380,88 @@ pub const ABMELDUNG_WT: u32 = 20;
 /// Zuordnungstermin (WiM Teil 1 Kap. 2.3.2 Nr. 5/6 and 2.5.2 Nr. 1/2).
 pub const REALISIERUNGSKORRIDOR_WT: u32 = 9;
 
-/// WiM Strom Teil 1 — every Prozessschritt whose window is anchored on a date
-/// in the payload rather than on the arrival instant.
+/// Werktage before the Zahlungsziel by which the **NB** must answer the
+/// Rechnung „Messstellenbetrieb mit iMS gegenüber dem NB"
+/// (WiM Teil 1 Kap. 6.2 Nr. 2).
+pub const ANTWORT_IMS_RECHNUNG_NB_WT: u32 = 4;
+
+/// Werktage before the Zahlungsziel by which the MSB must state that the
+/// invoice the NB refused was correct after all (WiM Teil 1 Kap. 6.2 Nr. 3).
+pub const MITTEILUNG_RECHNUNG_KORREKT_WT: u32 = 2;
+
+/// Werktage the Zahlungsziel of a WiM-Rechnung may not fall short of, counted
+/// from the day the invoice is received (WiM Teil 1 Kap. 3.6.3.8.2 / 3.7.2 /
+/// 6.2 Nr. 1, AWH WiM Gas 2.0 Kap. 4.7.2 Nr. 1).
+///
+/// A floor on the *sender*, not a window on the receiver: it constrains the
+/// date the invoice may carry in `DTM+265`, and the answer window is then
+/// measured against that date.
+pub const ZAHLUNGSZIEL_MINDEST_WT: u32 = 10;
+
+/// Who received a WiM-Rechnung — the only thing that decides its answer window.
+///
+/// WiM Strom Teil 1 states the same INVOIC twice with different numbers:
+/// Kap. 3.6.3.8.2 has the LF answer *zum* Zahlungsziel, Kap. 6.2 has the NB
+/// answer by the **4. WT davor**. Both arrive as PID 31009 and the message body
+/// does not say which Use-Case it belongs to — the recipient's Marktrolle does
+/// (BDEW Allgemeine Festlegungen §2.13: one MP-ID per Marktrolle).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RechnungEmpfaenger {
+    /// Netzbetreiber — Rechnung „Messstellenbetrieb mit iMS gegenüber dem NB",
+    /// WiM Teil 1 Kap. 6.
+    Netzbetreiber,
+    /// Lieferant or ESA — Abrechnung Messstellenbetrieb gegenüber dem LF,
+    /// WiM Teil 1 Kap. 3.6.3.8, and the Sparte-neutral Abrechnung von
+    /// Dienstleistungen, Kap. 3.7.
+    LieferantOderMsb,
+}
+
+/// PID of the MSB-Rechnung — the only WiM invoice with a recipient-dependent
+/// answer window (INVOIC AHB 1.0b; WiM Teil 1 Kap. 3.6.3.8 and Kap. 6).
+pub const MSB_RECHNUNG_PID: u32 = 31_009;
+
+/// The latest Übertragungstag for the REMADV answering a WiM-Rechnung.
+///
+/// The 4-Werktage lead applies to one combination — 31009 received by a
+/// Netzbetreiber. Everything else is answered *zum* Zahlungsziel.
+///
+/// # Panics
+///
+/// Panics only if date arithmetic overflows the Gregorian calendar.
+#[must_use]
+pub fn rechnung_antwort_spaetester_uet(
+    pid: u32,
+    empfaenger: RechnungEmpfaenger,
+    zahlungsziel: Date,
+    cal: HolidayCalendar,
+) -> Date {
+    if pid == MSB_RECHNUNG_PID && empfaenger == RechnungEmpfaenger::Netzbetreiber {
+        crate::sub_werktage(zahlungsziel, ANTWORT_IMS_RECHNUNG_NB_WT, cal)
+    } else {
+        zahlungsziel
+    }
+}
+
+/// WiM — every Prozessschritt whose window is anchored on a date in the payload
+/// rather than on the arrival instant, **in both Sparten**.
+///
+/// AWH WiM Gas 2.0 restates WiM Strom Teil 1 Vorlauffrist for Vorlauffrist:
+/// 15 / 7 WT on the Anmeldung, 20 WT on der Abmeldung, the 8.–5. WT window on
+/// the Verpflichtungsanfrage, ±9 WT Realisierungskorridor, the 10./11. WT
+/// Gesamtvorgang pair, 4 WT to the Gerätewechseltermin and 2 WT before it for
+/// the answer. One table therefore serves both, with the Gas UTILMD PID beside
+/// the Strom one.
 ///
 /// Deliberately keyed by slug rather than by PID: three of these steps share a
 /// PID with a differently-anchored one (55168 is both the Verpflichtungsanfrage
 /// and the Aufforderung; 17011 covers the NB and the LF variant), and one —
 /// the Anmeldung — has two windows selected by a payload flag rather than by
 /// its PID. A PID alone cannot pick the right row.
-pub const WIM_STROM: &[VorlaufObligation] = &[
+pub const WIM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.anmeldung-msb",
         pid: Some(55_042),
+        pid_gas: Some(44_042),
         name: "Anmeldung MSB",
         anchor: Anchor::GewuenschterZuordnungsbeginn,
         shape: VorlaufShape::LatestWerktageBefore(ANMELDUNG_WT),
@@ -347,6 +471,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.anmeldung-msb.erstmalige-einrichtung",
         pid: Some(55_042),
+        pid_gas: Some(44_042),
         name: "Anmeldung MSB (erstmalige Einrichtung des Messstellenbetriebes)",
         anchor: Anchor::GewuenschterZuordnungsbeginn,
         shape: VorlaufShape::LatestWerktageBefore(ANMELDUNG_ERSTMALIG_WT),
@@ -356,6 +481,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.ende-msb",
         pid: Some(55_051),
+        pid_gas: Some(44_051),
         name: "Ende MSB (Abmeldung)",
         anchor: Anchor::GewuenschtesZuordnungsende,
         shape: VorlaufShape::LatestWerktageBefore(ABMELDUNG_WT),
@@ -365,6 +491,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.verpflichtungsanfrage",
         pid: Some(55_168),
+        pid_gas: Some(44_168),
         name: "Verpflichtungsanfrage an den gMSB",
         anchor: Anchor::BestaetigtesZuordnungsende,
         shape: VorlaufShape::WindowWerktageBefore {
@@ -377,6 +504,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.gmsb-uebernahme-anstoss",
         pid: None,
+        pid_gas: None,
         name: "Anstoß Gerätewechsel/Geräteübernahme durch den gMSB",
         anchor: Anchor::BestaetigtesZuordnungsende,
         shape: VorlaufShape::LatestWerktageBefore(4),
@@ -386,6 +514,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.realisierungskorridor",
         pid: None,
+        pid_gas: None,
         name: "Realisierungskorridor Übernahme-/Wechselzeitpunkt",
         anchor: Anchor::BestaetigterZuordnungsbeginn,
         shape: VorlaufShape::Korridor(REALISIERUNGSKORRIDOR_WT),
@@ -395,6 +524,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.mitteilung-gesamtvorgang",
         pid: Some(21_009),
+        pid_gas: Some(21_009),
         name: "Mitteilung über Gesamtvorgang (MSBN → NB)",
         anchor: Anchor::BestaetigterZuordnungsbeginn,
         shape: VorlaufShape::LatestWerktageAfter(10),
@@ -404,6 +534,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.scheitern-gesamtvorgang",
         pid: Some(21_013),
+        pid_gas: Some(21_013),
         name: "Mitteilung über das Scheitern des Gesamtvorgangs (NB → MSBN)",
         anchor: Anchor::BestaetigterZuordnungsbeginn,
         shape: VorlaufShape::LatestWerktageAfter(11),
@@ -413,6 +544,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.geraetewechsel-termin",
         pid: Some(17_009),
+        pid_gas: Some(17_009),
         name: "Gerätewechseltermin nach Anzeige der Gerätewechselabsicht",
         anchor: Anchor::Gerätewechseltermin,
         shape: VorlaufShape::EarliestWerktageAfter(4),
@@ -422,6 +554,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.antwort-geraetewechselabsicht",
         pid: Some(19_015),
+        pid_gas: Some(19_015),
         name: "Antwort auf die Gerätewechselabsicht (Eigenausbau ja/nein)",
         anchor: Anchor::Gerätewechseltermin,
         shape: VorlaufShape::LatestWerktageBefore(2),
@@ -431,6 +564,7 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.beauftragung-aenderung-technik",
         pid: Some(17_011),
+        pid_gas: None,
         name: "Beauftragung Änderung der Technik an der Messlokation",
         anchor: Anchor::Aenderungstermin,
         shape: VorlaufShape::LatestWerktageBefore(20),
@@ -440,18 +574,132 @@ pub const WIM_STROM: &[VorlaufObligation] = &[
     VorlaufObligation {
         key: "wim.scheitern-aenderung-technik",
         pid: None,
+        pid_gas: None,
         name: "Scheitern der Änderung der Technik",
         anchor: Anchor::Aenderungstermin,
         shape: VorlaufShape::LatestWerktageAfter(3),
         source: "WiM Strom Teil 1 Kap. 3.3.1.2 / 3.3.2.2 Nr. 5 — spätester ÜT ist der 3. WT \
                  nach dem ursprünglich bestätigten Änderungstermin",
     },
+    VorlaufObligation {
+        key: "wim.vorabinformation-ersteinbau-ims",
+        pid: None,
+        pid_gas: None,
+        name: "Vorabinformation zum Gerätewechsel (Ersteinbau iMS, gMSB → wMSB)",
+        anchor: Anchor::Umstellungszeitpunkt,
+        shape: VorlaufShape::LatestMonateUndWerktageBefore {
+            monate: 3,
+            werktage: 3,
+        },
+        source: "WiM Strom Teil 1 Kap. 3.5.2 Nr. 1 — spätester ÜT liegt 3 Monate und 3 WT vor \
+                 dem geplanten Zeitpunkt der Ausstattung der Messlokation",
+    },
+    VorlaufObligation {
+        key: "wim.information-bestandsschutz-eigenausbau",
+        pid: None,
+        pid_gas: None,
+        name: "Information Bestandsschutz / Eigenausbau iMS (wMSB → gMSB)",
+        anchor: Anchor::Uebertragungstag,
+        shape: VorlaufShape::LatestWerktageAfter(3),
+        source: "WiM Strom Teil 1 Kap. 3.5.2 Nr. 2 — spätester ÜT ist der 3. WT nach dem ÜT \
+                 der Vorabinformation",
+    },
+    VorlaufObligation {
+        key: "wim.vorabinformation-ersteinbau-ims.an-lf-und-nb",
+        pid: None,
+        pid_gas: None,
+        name: "Vorabinformation zum Gerätewechsel an LF und NB (Ersteinbau iMS)",
+        anchor: Anchor::Umstellungszeitpunkt,
+        shape: VorlaufShape::LatestMonateBefore(3),
+        source: "WiM Strom Teil 1 Kap. 3.5.2 Nr. 3/4 — spätester ÜT liegt 3 Monate vor dem \
+                 geplanten Zeitpunkt der Ausstattung der Messlokation",
+    },
+    VorlaufObligation {
+        key: "wim.angebot-rechnungsabwicklung",
+        pid: Some(15_002),
+        pid_gas: None,
+        name: "Angebot zur Rechnungsabwicklung des Messstellenbetriebes über den LF",
+        anchor: Anchor::Uebertragungstag,
+        shape: VorlaufShape::LatestWerktageAfter(3),
+        source: "WiM Strom Teil 1 Kap. 3.6.3.4.2 Nr. 1 — spätester ÜT ist der 3. WT nach dem \
+                 ÜT der Mitteilung einer neuen LF-Zuordnung vom NB an den MSB",
+    },
+    VorlaufObligation {
+        key: "wim.preisblatt-lf",
+        pid: Some(27_002),
+        pid_gas: None,
+        name: "Übermittlung Preisblatt MSB an LF (Änderung bestehender Preisschlüsselstämme)",
+        anchor: Anchor::Inkrafttreten,
+        shape: VorlaufShape::LatestMonateBefore(3),
+        source: "WiM Strom Teil 1 Kap. 3.6.2.3.2 Nr. 1 — spätester ÜT liegt 3 Monate vor dem \
+                 Wirksamwerden der geänderten Preise zu bestehenden Preisschlüsselstämmen",
+    },
+    VorlaufObligation {
+        key: "wim.preisblatt-nb.initial",
+        pid: Some(27_002),
+        pid_gas: None,
+        name: "Preisblatt „Messstellenbetrieb mit iMS gegenüber dem NB\" (initial)",
+        anchor: Anchor::Uebertragungstag,
+        shape: VorlaufShape::LatestWerktageAfter(3),
+        source: "WiM Strom Teil 1 Kap. 5.2 Nr. 1 — spätester ÜT ist der 3. WT, nachdem die \
+                 EDIFACT-Kommunikation aufgebaut wurde",
+    },
+    VorlaufObligation {
+        key: "wim.preisblatt-nb.aenderung",
+        pid: Some(27_002),
+        pid_gas: None,
+        name: "Preisblatt „Messstellenbetrieb mit iMS gegenüber dem NB\" (Änderung)",
+        anchor: Anchor::Inkrafttreten,
+        shape: VorlaufShape::LatestWerktageBefore(20),
+        source: "WiM Strom Teil 1 Kap. 5.2 Nr. 1 — spätester ÜT ist der 20. WT vor \
+                 Inkrafttreten des geänderten Preisblatts",
+    },
+    VorlaufObligation {
+        key: "wim.rechnung-dienstleistungen",
+        pid: Some(31_003),
+        pid_gas: Some(31_003),
+        name: "Rechnung über Dienstleistungen im Messwesen",
+        anchor: Anchor::Leistungsende,
+        shape: VorlaufShape::LatestWerktageAfter(20),
+        source: "WiM Strom Teil 1 Kap. 3.7.2 Nr. 1 — spätester ÜT ist der 20. WT nach \
+                 Beendigung der Leistung",
+    },
+    VorlaufObligation {
+        key: "wim.antwort-rechnung",
+        pid: Some(33_001),
+        pid_gas: Some(33_001),
+        name: "Antwort auf eine WiM-Rechnung (REMADV)",
+        anchor: Anchor::Zahlungsziel,
+        shape: VorlaufShape::LatestWerktageBefore(0),
+        source: "WiM Strom Teil 1 Kap. 3.6.3.8.2 Nr. 2/4 und Kap. 3.7.2 Nr. 2/4 — spätester \
+                 ÜT ist zum Zahlungsziel in der Rechnung",
+    },
+    VorlaufObligation {
+        key: "wim.antwort-rechnung-ims-nb",
+        pid: Some(33_001),
+        pid_gas: None,
+        name: "Antwort des NB auf die iMS-Rechnung (REMADV)",
+        anchor: Anchor::Zahlungsziel,
+        shape: VorlaufShape::LatestWerktageBefore(ANTWORT_IMS_RECHNUNG_NB_WT),
+        source: "WiM Strom Teil 1 Kap. 6.2 Nr. 2 — spätester ÜT ist der 4. WT vor dem \
+                 Zahlungsziel in der Rechnung",
+    },
+    VorlaufObligation {
+        key: "wim.mitteilung-rechnung-korrekt",
+        pid: Some(29_001),
+        pid_gas: None,
+        name: "Mitteilung, dass die ursprüngliche Rechnung korrekt war (COMDIS)",
+        anchor: Anchor::Zahlungsziel,
+        shape: VorlaufShape::LatestWerktageBefore(MITTEILUNG_RECHNUNG_KORREKT_WT),
+        source: "WiM Strom Teil 1 Kap. 6.2 Nr. 3 — spätester ÜT ist der 2. WT vor dem \
+                 Zahlungsziel in der Rechnung",
+    },
 ];
 
 /// Look up a Vorlauffrist by its slug.
 #[must_use]
 pub fn vorlauf(key: &str) -> Option<&'static VorlaufObligation> {
-    WIM_STROM.iter().find(|o| o.key == key)
+    WIM.iter().find(|o| o.key == key)
 }
 
 /// The Mindestvorlaufzeit an Anmeldung MSB must respect.
@@ -494,6 +742,79 @@ mod tests {
 
     fn d(y: i32, m: Month, day: u8) -> Date {
         Date::from_calendar_date(y, m, day).expect("valid date")
+    }
+
+    /// „3 Monate und 3 WT vor" is not „3 Monate vor": the Werktage move the
+    /// deadline further back, and over a weekend they move it by five days.
+    #[test]
+    fn monate_und_werktage_compose_in_that_order() {
+        // Umstellung Mon 2026-06-01 → 3 Monate back is Sun 2026-03-01,
+        // 3 WT before that is Wed 2026-02-25.
+        let umstellung = d(2026, Month::June, 1);
+        let shape = VorlaufShape::LatestMonateUndWerktageBefore {
+            monate: 3,
+            werktage: 3,
+        };
+        assert!(
+            shape
+                .check(d(2026, Month::February, 25), umstellung, CAL)
+                .is_ok()
+        );
+        assert!(
+            !shape
+                .check(d(2026, Month::February, 26), umstellung, CAL)
+                .is_ok()
+        );
+        // The months-only shape would still accept 2026-03-01.
+        assert!(
+            VorlaufShape::LatestMonateBefore(3)
+                .check(d(2026, Month::March, 1), umstellung, CAL)
+                .is_ok()
+        );
+    }
+
+    /// Only 31009 to a Netzbetreiber gets the 4-Werktage lead; the same PID to
+    /// an LF, and 31003 to anyone, is answered zum Zahlungsziel.
+    #[test]
+    fn only_the_ims_rechnung_to_the_nb_leads_the_zahlungsziel() {
+        // Zahlungsziel Fri 2026-06-19; 4 WT before is Mon 2026-06-15.
+        let ziel = d(2026, Month::June, 19);
+        assert_eq!(
+            rechnung_antwort_spaetester_uet(
+                MSB_RECHNUNG_PID,
+                RechnungEmpfaenger::Netzbetreiber,
+                ziel,
+                CAL
+            ),
+            d(2026, Month::June, 15)
+        );
+        assert_eq!(
+            rechnung_antwort_spaetester_uet(
+                MSB_RECHNUNG_PID,
+                RechnungEmpfaenger::LieferantOderMsb,
+                ziel,
+                CAL
+            ),
+            ziel
+        );
+        assert_eq!(
+            rechnung_antwort_spaetester_uet(31_003, RechnungEmpfaenger::Netzbetreiber, ziel, CAL),
+            ziel
+        );
+    }
+
+    /// Every row is reachable by its own key, and no key is claimed twice —
+    /// `vorlauf()` returns the first match, so a duplicate silently shadows.
+    #[test]
+    fn every_key_is_unique_and_resolvable() {
+        for o in WIM {
+            assert_eq!(vorlauf(o.key).map(|f| f.name), Some(o.name), "{}", o.key);
+        }
+        let mut keys: Vec<_> = WIM.iter().map(|o| o.key).collect();
+        keys.sort_unstable();
+        let n = keys.len();
+        keys.dedup();
+        assert_eq!(keys.len(), n, "duplicate Vorlauffrist key");
     }
 
     #[test]
@@ -592,12 +913,12 @@ mod tests {
 
     #[test]
     fn every_entry_cites_a_chapter_and_has_a_unique_key() {
-        let mut keys: Vec<_> = WIM_STROM.iter().map(|o| o.key).collect();
+        let mut keys: Vec<_> = WIM.iter().map(|o| o.key).collect();
         keys.sort_unstable();
         let before = keys.len();
         keys.dedup();
         assert_eq!(keys.len(), before, "duplicate Vorlauffrist key");
-        for o in WIM_STROM {
+        for o in WIM {
             assert!(
                 o.source.contains("Kap."),
                 "{} cites no chapter: {}",

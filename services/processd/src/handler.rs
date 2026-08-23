@@ -330,7 +330,7 @@ pub async fn handle_webhook(
     // auto-confirm if SteuerbareRessource.istFernschaltbar=true AND the
     // dispatched produktcode is in the contracted konfigurationsprodukte.
     //
-    // BK6-24-174 §4.3: MSB MUST only confirm a Steuerungsauftrag for
+    // GPKE Teil 3 Kap. 1.3: MSB MUST only confirm a Steuerungsauftrag for
     // products that are under contract.  Uncontracted produktcode → ablehnen.
     #[cfg(feature = "role-msb-strom")]
     if event
@@ -490,19 +490,19 @@ pub async fn handle_webhook(
             }
             (Some(true), false) => {
                 // SR is remote-switchable but produktcode is NOT contracted — must ablehnen.
-                // BK6-24-174 §4.3: dispatch only for contracted products.
+                // GPKE Teil 3 Kap. 1.3: dispatch only for contracted products.
                 warn!(
                     sr_id,
                     process_id,
                     produktcode = dispatched_produktcode,
-                    "processd: Steuerungsauftrag ablehnen — produktcode not in contracted konfigurationsprodukte (BK6-24-174 §4.3)"
+                    "processd: Steuerungsauftrag ablehnen — produktcode not in contracted konfigurationsprodukte (GPKE Teil 3 Kap. 1.3)"
                 );
                 dispatch(
                     mako_markt::commands::WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
                     "steuerungsauftrag-ablehnen",
                     serde_json::json!({
                         "process_id": process_id,
-                        "reason": "produktcode not in contracted konfigurationsprodukte (BK6-24-174 §4.3)",
+                        "reason": "produktcode not in contracted konfigurationsprodukte (GPKE Teil 3 Kap. 1.3)",
                         "produktcode": dispatched_produktcode,
                     }),
                 )

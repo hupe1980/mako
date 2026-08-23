@@ -630,6 +630,43 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
         primary_pid: pid(21011),
         dispatch: cmd_wim_zuordnung_ablehnen,
     },
+    // ── WiM Weiterverpflichtung (ORDERS 17002 → ORDRSP 19003/19004) ───────
+    //
+    // The MSBA's only answer to a Weiterverpflichtungsauftrag. One command,
+    // not a bestätigen/ablehnen pair: which of Z13 / Z14 / Z22 applies is a
+    // measurement against the cap of Kap. 2.4.2 Nr. 4, and the Cluster the code
+    // sits in — not the caller — picks 19003 or 19004.
+    CommandDescriptor {
+        name: "wim.weiterverpflichtung.beantworten",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(19003),
+        dispatch: cmd_wim_weiterverpflichtung_beantworten,
+    },
+    // ── WiM INSRPT Störungsbehebung (23001 → 23003/23004 → 23008) ─────────
+    //
+    // The MSB's side of the Use-Case: it answers the inbound Störungsmeldung
+    // and, having confirmed it, owes the Ergebnisbericht within a window that
+    // depends on the Messtechnik at the Messlokation (WiM Teil 2 Kap. 1.2
+    // Nr. 2/7) — which only the MSB's own device registry knows, so the caller
+    // supplies it.
+    CommandDescriptor {
+        name: "wim.stoerung.bestaetigen",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(23004),
+        dispatch: cmd_wim_stoerung_bestaetigen,
+    },
+    CommandDescriptor {
+        name: "wim.stoerung.ablehnen",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(23003),
+        dispatch: cmd_wim_stoerung_ablehnen,
+    },
+    CommandDescriptor {
+        name: "wim.stoerung.ergebnis-melden",
+        permitted_roles: &[Marktrolle::Msb],
+        primary_pid: pid(23008),
+        dispatch: cmd_wim_stoerung_ergebnis_melden,
+    },
     // ── WiM Preisanfrage (REQOTE 35001/35002/35004/35005 → QUOTES 15001/15002/15004/15005) ────────────
     // aMSB answers an inbound REQOTE with the QUOTES Angebot. `processd` M3
     // auto-dispatches this when a current PreisblattMessung exists.
@@ -658,92 +695,60 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     //
     // The command namespace is German business vocabulary (`rechnung`), while the
     // workflow behind it is named after its EDIFACT message (`wim-invoic`, module
-    // `mako_wim::invoic`). That split is deliberate and mirrored on the Gas side
-    // (`wim.gas.rechnung.*` → `wim-gas-invoic`): ERP-facing command names are not
-    // renamed when an internal module is. Dispatch fns follow the command name,
-    // adapter registries follow the workflow name.
+    // `mako_wim::invoic`). That split is deliberate: ERP-facing command names are
+    // not renamed when an internal module is. Dispatch fns follow the command
+    // name, adapter registries follow the workflow name.
+    //
+    // **One command per business process.** The same pair settles the
+    // MSB-Rechnung 31009, the WiM-Rechnung 31003 and the Sparte-neutral
+    // Stornorechnung 31004 — `invoicd` supplies the `invoice_ref`, and the
+    // process it resumes already knows its PID.
+    //
+    // `permitted_roles` is the set of **payers**, read off the PID-Übersicht 4.0
+    // „An"-Spalte:
+    //
+    // | PID | Empfänger | Fundstelle |
+    // |---|---|---|
+    // | 31009 | NB · LF · ESA | GPKE Teil 3, WiM Strom Teil 1/2, AWH Änd. Technik |
+    // | 31003 | NB · MSBN | WiM Strom Teil 1 Kap. 3.7, AWH WiM Gas 2.0 Kap. 4.7 |
+    //
+    // **`Lfg` is deliberately absent** where `Lf` is present: no WiM-Rechnung
+    // ever addresses a Gas-Lieferant. 31009 is a Strom-only Anwendungsfall in
+    // every one of its four Festlegungen, and the Gas 31003 goes to the NB and
+    // to the incoming MSB — never to the LFG. `Gnb` *is* present, because the
+    // Gas NB is a payer of 31003.
     CommandDescriptor {
         name: "wim.rechnung.annehmen",
-        permitted_roles: &[Marktrolle::Lf],
+        permitted_roles: &[
+            Marktrolle::Lf,
+            Marktrolle::Nb,
+            Marktrolle::Gnb,
+            Marktrolle::Msb,
+            Marktrolle::Nmsb,
+            Marktrolle::Esa,
+        ],
         primary_pid: pid(31009),
         dispatch: cmd_wim_rechnung_annehmen,
     },
     CommandDescriptor {
         name: "wim.rechnung.ablehnen",
-        permitted_roles: &[Marktrolle::Lf],
+        permitted_roles: &[
+            Marktrolle::Lf,
+            Marktrolle::Nb,
+            Marktrolle::Gnb,
+            Marktrolle::Msb,
+            Marktrolle::Nmsb,
+            Marktrolle::Esa,
+        ],
         primary_pid: pid(31009),
         dispatch: cmd_wim_rechnung_ablehnen,
     },
-    // ── WiM Gas MSB-Wechsel (UTILMD G, GNB side) ─────────────────────────────
-    // The GNB receives inbound UTILMD G messages from the nMSBG via AS4 and
-    // must respond with an APERAK within 10 Werktage (BK7-24-01-009).
-    // These commands let the ERP (or processd auto-STP) dispatch the response.
-    //
-    // Payload: { "malo_id": "<11-digit gas MaLo>" }
-    // Optional: { "reason": "<rejection reason>" } for ablehnen variants.
-    CommandDescriptor {
-        name: "wim.gas.anmeldung.bestaetigen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(44042),
-        dispatch: cmd_wim_gas_anmeldung_bestaetigen,
-    },
-    CommandDescriptor {
-        name: "wim.gas.anmeldung.ablehnen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(44042),
-        dispatch: cmd_wim_gas_anmeldung_ablehnen,
-    },
-    // WiM Gas Kündigung: nMSBG sends UTILMD G Kündigung (PIDs 44039–44041) to GNB.
-    // Payload: { "malo_id": "<gas MaLo>" }
-    CommandDescriptor {
-        name: "wim.gas.kuendigung.bestaetigen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(44039),
-        dispatch: cmd_wim_gas_kuendigung_bestaetigen,
-    },
-    CommandDescriptor {
-        name: "wim.gas.kuendigung.ablehnen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(44039),
-        dispatch: cmd_wim_gas_kuendigung_ablehnen,
-    },
-    // WiM Gas Stornierung: LFN/LFA sends PID 44022 to GNB; GNB responds with
-    // 44023 (positive) or 44024 (negative). Business key = vorgang_id from IDE+24.
-    // Payload: { "vorgang_id": "<Vorgangsnummer from PID 44022>" }
-    CommandDescriptor {
-        name: "wim.gas.stornierung.bestaetigen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(44022),
-        dispatch: cmd_wim_gas_stornierung_bestaetigen,
-    },
-    CommandDescriptor {
-        name: "wim.gas.stornierung.ablehnen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(44022),
-        dispatch: cmd_wim_gas_stornierung_ablehnen,
-    },
-    // ── Gas INVOIC settlement / dispute ────────────────────────────────────────
-    // These commands are dispatched by `invoicd` after the automated plausibility
-    // check (invoic-checker 6-check pipeline) completes. The business key is the
-    // EDIFACT message-reference (`invoice_ref`) from the original INVOIC message.
-    //
-    // They must exist in the registry so that Cedar ABAC permission checks and
-    // `list_commands` correctly reflect what `invoicd` dispatches to `makod`.
-    //
-    // Payload: { "invoice_ref": "<EDIFACT UNH message reference>" }
-    // Optional: { "ablehnungsgrund": "<reason>" } for ablehnen variants.
-    CommandDescriptor {
-        name: "wim.gas.rechnung.annehmen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(31003),
-        dispatch: cmd_wim_gas_rechnung_annehmen,
-    },
-    CommandDescriptor {
-        name: "wim.gas.rechnung.ablehnen",
-        permitted_roles: &[Marktrolle::Nb, Marktrolle::Gnb],
-        primary_pid: pid(31003),
-        dispatch: cmd_wim_gas_rechnung_ablehnen,
-    },
+    // The WiM MSB-Wechsel has **no Sparte-specific commands.** AWH WiM Gas 2.0
+    // restates WiM Strom Teil 1 use-case for use-case, so `wim.geraetewechsel.*`
+    // answers both: the Sparte travels with the process (`wim_sparte(pid)`) and
+    // picks the Entscheidungsbaum and the Codeliste without the caller stating
+    // anything. Likewise `wim.rechnung.*` settles 31009, 31003 and 31004, and
+    // `geli.stornierung.*` owns 44022–44024 for both Use-Cases.
     // PID 31004 Stornorechnung: a single **Sparte-neutral, cross-process** universal
     // Storno (INVOIC AHB §3.1.2 — GPKE/MMM/WiM Strom+Gas/Kapazität/AWH/GeLi). invoicd
     // runs the arithmetic-only check (AcceptedPartial) and dispatches settle/dispute.
@@ -763,7 +768,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Esa,
         ],
         primary_pid: pid(31004),
-        dispatch: cmd_invoic_stornorechnung_annehmen,
+        dispatch: cmd_wim_rechnung_annehmen,
     },
     CommandDescriptor {
         name: "invoic.stornorechnung.ablehnen",
@@ -779,7 +784,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Esa,
         ],
         primary_pid: pid(31004),
-        dispatch: cmd_invoic_stornorechnung_ablehnen,
+        dispatch: cmd_wim_rechnung_ablehnen,
     },
     // PID 31011 „Rechnung sonstige Leistung": the NB bills the LF for an
     // abrechnungswürdige Handlung — in practice the Sperrung/Entsperrung.

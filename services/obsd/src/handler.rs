@@ -168,9 +168,8 @@ pub async fn handle_webhook(
     // Which PIDs count is read off the Antwortfrist table rather than hard-coded:
     // an initiating Lieferant is named in `new_supplier` on exactly the PIDs that
     // start a supply relationship, and those are the ones the Festlegung gives an
-    // answer window. The previous literal list carried 55016 — a Kündigung, whose
-    // payload names no new supplier — and omitted 55077 (erzeugende MaLo), so one
-    // PID could never match and another was never counted.
+    // answer window. A literal list drifts from it — 55016 is a Kündigung whose
+    // payload names no new supplier, and 55077 (erzeugende MaLo) is easy to omit.
     let initiator_is_affiliate = counterparty_is_affiliate(
         pid,
         data["new_supplier"].as_str(),
@@ -272,6 +271,21 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
     if let Some(f) = mako_fristen::antwort::antwort_obligation(pid) {
         return f.family.as_str().to_owned();
     }
+    // The Gas-only Prüfidentifikatoren outrank the workflow name.
+    //
+    // WiM runs one workflow for both Sparten — `wim-device-change` carries the
+    // Strom 55039/55042/55051/55168 and the Gas 44039/44042/44051/44168 alike —
+    // so the name says „wim" for a process the BNetzA reports under Gas. The
+    // PID is what carries the Sparte, and where it does it is the better
+    // source. (Both Sparten' MSB-Wechsel PIDs have an Antwortfrist, so they are
+    // already answered above; this covers the two INSRPT PIDs that have none.)
+    //
+    // 31003 is **not** in this set: the WiM-Rechnung über Dienstleistungen im
+    // Messwesen exists in both Sparten (WiM Strom Teil 1 Kap. 3.7, AWH WiM Gas
+    // 2.0 Kap. 4.7), so bucketing it as Gas mislabels every Strom invoice.
+    if matches!(pid, 23_005 | 23_009) {
+        return "wim-gas".to_owned();
+    }
     if !workflow_name.is_empty() {
         // Longest prefix first: `wim-gas` must not be swallowed by `wim`.
         for prefix in ["gpke", "geli-gas", "wim-gas", "wim", "gabi-gas", "mabis"] {
@@ -291,18 +305,18 @@ fn derive_family(workflow_name: &str, pid: u32) -> String {
         // ── WiM — Messstellenbetrieb Strom (BK6-24-174) ───────────────────────
         55039..=55044 | 55051..=55053 | 55168..=55170 => "wim",
         17001..=17011 => "wim", // ORDERS Geräteübernahme (nMSB)
-        23001 | 23003 | 23004 | 23008 => "wim", // INSRPT Strom
+        23001 | 23003 | 23004 | 23008 | 23011 | 23012 => "wim", // INSRPT, beide Sparten
         27001..=27003 => "wim", // PRICAT Preisliste
-        31009 => "wim",         // INVOIC MSB-Rechnung
+        31009 => "wim",         // INVOIC MSB-Rechnung (Strom)
+        31003 => "wim",         // INVOIC WiM-Rechnung Dienstleistungen, beide Sparten
         35001..=35005 | 15001..=15005 => "wim", // REQOTE/QUOTES Preisanfrage
         // ── GeLi Gas — Lieferbeginn/-ende Gas (BK7-24-01-009) ─────────────────
         44001..=44024 => "geli-gas", // UTILMD G incl. 44022-44024 role-conditional
         37008..=37014 => "geli-gas", // PARTIN Gas Kommunikationsdaten
         31011 => "geli-gas",         // INVOIC AWH Sperrprozesse Gas (GNB→LFG)
-        // ── WiM Gas — Messstellenbetrieb Gas (BK7-24-01-009) ──────────────────
-        44039..=44053 | 44168..=44170 => "wim-gas",
+        // ── WiM Gas — Messstellenbetrieb Gas (AWH WiM Gas 2.0) ───────────────
+        44039..=44053 | 44168 | 44169 | 44183 => "wim-gas",
         23005 | 23009 => "wim-gas", // INSRPT Gas-only variants
-        31003 => "wim-gas",         // INVOIC WiM Gas Rechnung
         31004 => "invoic-storno", // INVOIC Stornorechnung — Sparte-neutral, cross-process (AHB §3.1.2)
         // ── GaBi Gas — Bilanzierung Gas (BK7-24-01-008) ──────────────────────────
         31007 | 31008 | 31010 => "gabi-gas", // INVOIC MMM-Rechnung / Kapazitätsrechnung
@@ -377,6 +391,8 @@ mod tests {
     #[test]
     fn the_longer_workflow_prefix_wins() {
         assert_eq!(derive_family("wim-gas-anmeldung", 23_005), "wim-gas");
+        // 31003 exists in both Sparten and must not be bucketed as Gas.
+        assert_eq!(derive_family("", 31_003), "wim");
         assert_eq!(derive_family("wim-insrpt", 23_001), "wim");
     }
 

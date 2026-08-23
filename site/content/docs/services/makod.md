@@ -636,7 +636,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 | `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
 | `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
-| `role-msb-gas` | `mako-wim-gas`: all WiM Gas workflows |
+| `role-msb-gas` | `mako-wim`: the WiM workflows on the Gas Prüfidentifikatoren |
 
 ### Composite flags
 
@@ -1310,7 +1310,7 @@ context and step-by-step instructions:
 | `geli-lieferbeginn` | `malo_id`, `lieferbeginn_datum` | Guided GeLi Gas Lieferbeginn workflow (gas supplier change) |
 | `wim-geraetewechsel` | `melo_id`, `process_date`, `receiver_mp_id`, `marktrolle` | Guided WiM Gerätewechsel workflow (meter device change) |
 | `msb-preisanfrage` | *(none)* | Step-by-step MSB Preisanfrage (REQOTE/QUOTES, PRICAT 27003 dispatch) |
-| `wim-gas-anmeldung` | *(none)* | Guided WiM Gas MSB-Wechsel Anmeldung (GNB approve/reject within 10 WT) |
+| `wim-device-change` | *(none)* | Guided WiM MSB-Wechsel, beide Sparten (approve/reject within 3 / 5 / 7 / 1 WT) |
 | `gpke-sperrung` | *(none)* | Guided GPKE Sperrung Strom (LF confirms disconnection to NB) |
 
 Each prompt returns a `User` message that instructs the LLM to call the right tools
@@ -1705,10 +1705,12 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.zuordnung.bestaetigen` | `NB` | WiM | 21012 | NB makes the Zuordnung from the reported date, 00:00 Uhr |
 | `wim.zuordnung.ablehnen` | `NB` | WiM | 21011 | NB records the MSB-Scheitermeldung; the MSBA stays assigned |
 | `wim.preisanfrage.angebot-senden` | `MSB` | WiM | 15001 | MSB answers a Preisanfrage with a QUOTES Angebot |
-| `wim.rechnung.annehmen` | `LF` | WiM | 31009 | LF accepts the MSB invoice (REMADV) |
-| `wim.rechnung.ablehnen` | `LF` | WiM | 31009 | LF disputes the MSB invoice (REMADV with `E_0406` codes) |
-| `wim.gas.rechnung.annehmen` | `NB` or `GNB` | WiM Gas | 31003 | GNB accepts the GMSB invoice (REMADV) |
-| `wim.gas.rechnung.ablehnen` | `NB` or `GNB` | WiM Gas | 31003 | GNB disputes the GMSB invoice (REMADV) |
+| `wim.weiterverpflichtung.beantworten` | `MSB` | WiM | 19003/19004 | MSBA answers the Weiterverpflichtungsauftrag; `Z13`/`Z14`/`Z22` is computed against the 3-Monats- resp. 1-Monats-Kappung |
+| `wim.stoerung.bestaetigen` | `MSB` | WiM | 23004 | MSB confirms an inbound Störungsmeldung; opens the Ergebnisfrist |
+| `wim.stoerung.ablehnen` | `MSB` | WiM | 23003 | MSB rejects the Störungsmeldung; the Use-Case ends |
+| `wim.stoerung.ergebnis-melden` | `MSB` | WiM | 23008 | MSB sends the Ergebnisbericht and closes the Use-Case |
+| `wim.rechnung.annehmen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer accepts the invoice (REMADV) |
+| `wim.rechnung.ablehnen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer disputes the invoice (REMADV with `E_0406` codes) |
 | `invoic.stornorechnung.annehmen` | any invoice party | INVOIC | 31004 | Accept a Sparte-neutral Stornorechnung (REMADV) |
 | `invoic.stornorechnung.ablehnen` | any invoice party | INVOIC | 31004 | Dispute a Stornorechnung by the invoice's Zahlungsziel |
 | `invoic.sonstige-leistung.stellen` | `NB` or `GNB` | Sparte-neutral | 31011 | Rechnung sonstige Leistung (GPKE Teil 2 · AWH Sperrprozesse Gas) |

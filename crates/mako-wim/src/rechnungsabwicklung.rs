@@ -26,10 +26,6 @@
 //!   *receives* the Beendigung answers with ORDRSP 19009/19010. The answer is
 //!   a decision, not an echo — it arrives through the ERP command API, exactly
 //!   like a Sperrung confirmation.
-//!
-//! Before this workflow existed, all four PIDs dead-lettered as `UnknownPid`:
-//! a counterparty ending the arrangement got no response, and the LF kept
-//! collecting on the MSB's behalf with no wire record of the termination.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -58,10 +54,13 @@ pub fn antwort_pid(zustimmung: bool) -> u32 {
     if zustimmung { 19009 } else { 19010 }
 }
 
-/// Deadline label for the Beendigung answer window.
+/// Deadline label for the Beendigung answer window —
+/// [`mako_fristen::antwort::RECHNUNGSABWICKLUNG_WERKTAGE`] (8 Werktage, WiM
+/// Strom Teil 1 Kap. 3.6.3.5.2 / 3.6.3.7.2 Nr. 2). The decision itself is EBD
+/// `E_0206` (MSB beendet) or `E_0209` (LF beendet).
 ///
-/// The process window follows the sibling WiM Teil 1 workflows (5 Werktage,
-/// BK6-24-174); the decision logic itself is EBD `E_0206`/`E_0209`.
+/// 17005 gets no deadline: it is the answer to the Angebot, and nothing
+/// answers it in turn.
 pub const RECHNUNGSABWICKLUNG_DEADLINE_LABEL: &str = "wim-rechnungsabwicklung-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────

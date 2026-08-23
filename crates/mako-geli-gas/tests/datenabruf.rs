@@ -17,7 +17,8 @@
 //!
 //! # Regulatory basis
 //!
-//! BK7-24-01-009 — GeLi Gas 3.0. APERAK Frist: **10 Werktage**.
+//! BK7-24-01-009 — GeLi Gas 3.0. The 10 Werktage below are the NB's response
+//! window, not the APERAK sending deadline.
 
 use mako_engine::{
     event_store::InMemoryEventStore,

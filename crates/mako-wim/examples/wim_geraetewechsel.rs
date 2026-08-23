@@ -24,8 +24,9 @@
 //! | Process | Frist | Helper |
 //! |---|---|---|
 //! | GPKE Lieferbeginn | 11:00 Uhr des 1. WT nach dem ÜT | `mako_fristen::antwort` |
-//! | WiM Gerätewechsel | **5 Werktage** | `fristen::add_werktage(5, BdewMaKo)` |
-//! | GeLi Gas Anmeldung | 10 Werktage | `fristen::add_werktage(10, BdewMaKo)` |
+//! | WiM MSB-Wechsel (Antwort) | 3 / 5 / 7 / 1 WT je PID | `mako_wim::antwort_frist_werktage` |
+//! | APERAK Strom | 45 Minuten (UTILMD/ORDERS am Werktag) | `fristen::aperak_strom_due_at` |
+//! | APERAK Gas | nächster WT 12:00, bzw. 3 WT auf einem Initialprozess | `fristen::aperak_gas_due_at` |
 //!
 //! ## Run
 //!
@@ -48,7 +49,7 @@ use mako_engine::{
     version::WorkflowId,
     workflow::CommandContext,
 };
-use mako_fristen::{self as fristen, HolidayCalendar};
+use mako_fristen::{self as fristen};
 use mako_wim::{DeviceChangeCommand, DeviceChangeProjection, WimDeviceChangeWorkflow};
 
 // ── EDIFACT fixture ───────────────────────────────────────────────────────────
@@ -196,6 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let envs = process
         .execute(DeviceChangeCommand::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
             pid,
             sender: sender.clone(),
             receiver: receiver.clone(),
@@ -221,31 +223,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let utilmd_conversation_id = envs[0].conversation_id;
     let utilmd_event_id = envs[0].event_id;
 
-    // ── 5-Werktage APERAK deadline (WiM / BNetzA BK6-22-024) ─────────────────
+    // ── APERAK sending window (APERAK AHB 1.1 §2.4.1) ────────────────────────
     //
-    // WiM differs from GPKE here: the APERAK Frist is 5 BUSINESS DAYS,
-    // not 24 wall-clock hours. Public holidays are excluded.
-    //
-    // Contrast:
-    //   GPKE:  fristen::add_hours(now, 24)             — wall-clock
-    //   WiM:   fristen::add_werktage(now.date(), 5, BdewMaKo)  — business days
-    //   GeLi:  fristen::add_werktage(now.date(), 10, BdewMaKo) — business days
-    let received_date = time::OffsetDateTime::now_utc().date();
-    let aperak_due_date = fristen::add_werktage(received_date, 5, HolidayCalendar::BdewMaKo);
-    let aperak_due_at = aperak_due_date.midnight().assume_utc();
+    // The technical acknowledgement, on its own clock: **45 minutes** for a
+    // Strom UTILMD received on a Werktag, Sonntag 12:00 after a Saturday. It is
+    // not the business Antwortfrist, which is 3 / 5 / 7 / 1 Werktage per PID.
+    let received_at = time::OffsetDateTime::now_utc();
+    let aperak_due_at = fristen::aperak_strom_due_at(received_at);
 
     let aperak_deadline = Deadline::new(
         process.stream_id().clone(),
         process.process_id(),
         process.tenant_id(),
         process.workflow_id().clone(),
-        "aperak-response-window",
+        fristen::APERAK_STROM_WINDOW_LABEL,
         aperak_due_at,
     );
     let aperak_deadline_id = aperak_deadline.deadline_id();
     ctx.deadline_store().register(&aperak_deadline).await?;
     println!(
-        "  [deadline] APERAK window registered (5 Werktage — due {aperak_due_date}, id: {}…)",
+        "  [deadline] APERAK window registered (45 min — due {aperak_due_at}, id: {}…)",
         &aperak_deadline_id.to_string()[..8]
     );
 
@@ -393,6 +390,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("[+] Guard: stale ReceiveUtilmd on completed process is rejected...");
     let guard_err = process
         .execute(DeviceChangeCommand::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
             pid,
             sender: sender.clone(),
             receiver: receiver.clone(),

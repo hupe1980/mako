@@ -69,15 +69,10 @@ use mako_gpke::{
     AbrechnungCommand, AbrechnungState, GpkeAbrechnungWorkflow, GpkeSupplierChangeWorkflow,
     SupplierChangeCommand,
 };
-use mako_wim_gas::{
-    WimGasAnmeldungCommand, WimGasAnmeldungState, WimGasAnmeldungWorkflow, WimGasKuendigungCommand,
-    WimGasKuendigungState, WimGasKuendigungWorkflow, WimGasVerpflichtungsanfrageCommand,
-    WimGasVerpflichtungsanfrageState, WimGasVerpflichtungsanfrageWorkflow,
-};
+use mako_wim::{DeviceChangeCommand, DeviceChangeState, WimDeviceChangeWorkflow};
 use makod::adapters::{
     geli_gas_registry, geli_gas_stornierung_registry, gpke_abrechnung_registry, gpke_registry,
-    wim_gas_anmeldung_registry, wim_gas_kuendigung_registry,
-    wim_gas_verpflichtungsanfrage_registry,
+    wim_registry,
 };
 use time::macros::date;
 
@@ -112,8 +107,6 @@ const GAS_FV_2025: &str = "FV2025-10-01";
 const WIM_GAS_MSBA_ID: &str = "4012345000023";
 /// GLN of the NB (Netzbetreiber / Recipient) — NAD+MR in the WiM Gas fixture.
 const WIM_GAS_NB_ID: &str = "9907317000007";
-/// Vorgangsnummer (11-char [A-Z0-9]{11}) from IDE+24 in the WiM Gas Kündigung fixture.
-const WIM_GAS_VORGANG_ID: &str = "WIMGAS00001";
 
 /// Date on which G1.1 is the valid release for UTILMD Gas (first day of FV2025-10-01).
 const GAS_VALIDATION_DATE: time::Date = date!(2025 - 10 - 01);
@@ -494,13 +487,10 @@ async fn ahb_44001_lieferbeginn_gas_validates_and_dispatches() {
 #[tokio::test]
 async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
     // Step 1: Parse and assert AHB valid — no bypass!
-    // G1.1 UTILMD Gas AHB profiles now include WiM Gas PIDs 44039–44053, 44168–44170
-    // (added as Phase 1 profiles derived from UTILMD AHB Gas 1.1, BK7-24-01-009).
     // PID 44039 has mandatory rules: BGM(E35), DTM(137), NAD(MS+MR), IDE(24),
     // STS, LOC(172), RFF(Z13). RFF appears in SG6 (inside SG4), not SG1.
     let (msg, report) = parse_and_assert_ahb_valid(UTILMD_44039_WIM_GAS_VALID, GAS_VALIDATION_DATE);
 
-    // Step 2: Verify key fields from the AHB-conformant fixture.
     let pid = msg
         .detect_pruefidentifikator()
         .expect("PID must be detectable");
@@ -509,23 +499,41 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
     let release = msg.detect_release().expect("release must be detectable");
     assert_eq!(release.as_str(), "G1.1", "fixture must encode G1.1 release");
 
-    // Step 3: Adapt to domain command using wim_gas_kuendigung_registry.
-    let fv = FormatVersion::new(GAS_FV_2025);
-    let adapter_cmd = wim_gas_kuendigung_registry()
-        .dispatch(&msg as &dyn Any, &fv)
-        .expect("wim_gas_kuendigung_registry must adapt PID 44039 UTILMD Gas to WimGasKuendigungCommand");
+    // Step 2: The **same** adapter and the **same** workflow serve both Sparten.
+    // AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case, so 44039
+    // is the Kündigung Messstellenbetrieb that 55039 is, and `wim_sparte` reads
+    // the Sparte off the PID.
+    assert_eq!(
+        mako_wim::geraetewechsel::wim_sparte(44_039),
+        Some(mako_engine::types::Sparte::Gas),
+    );
+    assert_eq!(
+        mako_wim::geraetewechsel::wim_ebd(44_039),
+        Some("E_2000"),
+        "the Gas Kündigung resolves against E_2000, not the Strom E_0200",
+    );
 
-    // Step 4: Assert command fields match fixture content.
-    let WimGasKuendigungCommand::ReceiveUtilmd {
+    let fv = FormatVersion::new(GAS_FV_2025);
+    let adapter_cmd = wim_registry()
+        .dispatch(&msg as &dyn Any, &fv)
+        .expect("wim_registry must adapt PID 44039 UTILMD Gas to DeviceChangeCommand");
+
+    let DeviceChangeCommand::ReceiveUtilmd {
+        transaktionsgrund,
         pid: cmd_pid,
         sender: cmd_sender,
         receiver: cmd_receiver,
-        malo_id: cmd_malo,
+        melo_id: cmd_melo,
+        device_id: cmd_device,
+        document_date: cmd_doc_date,
         message_ref: cmd_ref,
+        vorgangsnummer,
+        process_date,
+        received_at,
         ..
     } = adapter_cmd
     else {
-        panic!("expected WimGasKuendigungCommand::ReceiveUtilmd");
+        panic!("expected DeviceChangeCommand::ReceiveUtilmd");
     };
 
     assert_eq!(cmd_pid.as_u32(), 44039);
@@ -540,34 +548,32 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
         "receiver GLN must match NAD+MR (NB) in fixture"
     );
     assert_eq!(
-        cmd_malo.as_str(),
-        WIM_GAS_VORGANG_ID,
-        "malo_id must match IDE+24 Vorgangsnummer in fixture"
-    );
-    assert_eq!(
         cmd_ref.as_str(),
         "00001",
         "message_ref must match UNH ref in fixture"
     );
 
-    // Step 5: Build execute command with authoritative AHB result (no bypass).
-    let exec_cmd = WimGasKuendigungCommand::ReceiveUtilmd {
+    // Step 3: Execute with the authoritative AHB result (no bypass).
+    let exec_cmd = DeviceChangeCommand::ReceiveUtilmd {
+        transaktionsgrund,
         pid: cmd_pid,
         sender: cmd_sender,
         receiver: cmd_receiver,
-        malo_id: cmd_malo,
-        document_date: String::new(),
+        melo_id: cmd_melo,
+        device_id: cmd_device,
+        document_date: cmd_doc_date,
         message_ref: cmd_ref,
-        validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
+        vorgangsnummer,
+        process_date,
+        validation_passed: report.is_valid(),
         validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
+        received_at,
     };
 
-    // Step 6: Execute the command against an in-memory NB process.
-    // The NB receives the MSBA's Kündigung MSB Gas Anfrage.
-    let nb_process: Process<WimGasKuendigungWorkflow, InMemoryEventStore> = Process::new(
+    let nb_process: Process<WimDeviceChangeWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
         TenantId::from_party_id(WIM_GAS_NB_ID),
-        WorkflowId::new("wim-gas-kuendigung", GAS_FV_2025),
+        WorkflowId::new("wim-device-change", GAS_FV_2025),
     );
 
     nb_process
@@ -575,13 +581,13 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
         .await
         .expect("NB process must accept AHB-validated 44039 without error");
 
-    let state: WimGasKuendigungState = nb_process
+    let state: DeviceChangeState = nb_process
         .state()
         .await
         .expect("must be able to load state");
 
     assert!(
-        matches!(state, WimGasKuendigungState::ValidationPassed(_)),
+        matches!(state, DeviceChangeState::ValidationPassed(_)),
         "after AHB-validated 44039 ReceiveUtilmd, state must be ValidationPassed; got: {state:?}",
     );
 }
@@ -893,98 +899,106 @@ const UTILMD_44044_ANMELDUNG_ABLEHNUNG_VALID: &[u8] = include_bytes!(
 const ANMELDUNG_MSBA_ID: &str = "4012345000023";
 /// GLN of the NB receiver in the WiM Gas Anmeldung 44042 fixture.
 const ANMELDUNG_NB_ID: &str = "9907317000007";
-/// Vorgangsnummer (IDE+24) in the WiM Gas Anmeldung 44042 fixture.
-const ANMELDUNG_VORGANG_ID: &str = "WIMGAS00002";
 
-/// End-to-end AHB conformance test for WiM Gas Anmeldung MSB Gas Anfrage (PID 44042).
+/// Drive a WiM MSB-Wechsel fixture through the shared adapter and workflow.
 ///
-/// Confirms:
-/// 1. UTILMD G G1.1 PID 44042 fixture parses and passes AHB validation.
-/// 2. `wim_gas_anmeldung_registry()` correctly extracts sender, receiver, and malo_id.
-/// 3. `WimGasAnmeldungWorkflow` transitions to `ValidationPassed` after dispatch.
-///
-/// PID 44042 is the MSBA → NB Anmeldung Anfrage; the NB receives it and owns the
-/// WiM Gas Anmeldung process (PIDs 44042–44053, BK7-24-01-009).
-#[tokio::test]
-async fn ahb_44042_wim_gas_anmeldung_validates_and_dispatches() {
-    let (msg, report) =
-        parse_and_assert_ahb_valid(UTILMD_44042_ANMELDUNG_VALID, GAS_VALIDATION_DATE);
-
-    let pid = msg
-        .detect_pruefidentifikator()
-        .expect("PID must be detectable");
-    assert_eq!(pid.as_u32(), 44042, "fixture must encode PID 44042");
-    let release = msg.detect_release().expect("release must be detectable");
-    assert_eq!(release.as_str(), "G1.1", "fixture must encode G1.1 release");
+/// One helper for both Sparten, because there is one workflow for both: the
+/// Strom 55039/55042/55051/55168 and the Gas 44039/44042/44051/44168 run the
+/// same Use-Cases with the same Fristen, and `wim_sparte` reads which off the
+/// Prüfidentifikator.
+async fn assert_wim_device_change_dispatches(
+    wire: &[u8],
+    expected_pid: u32,
+    expected_sender: &str,
+    expected_receiver: &str,
+    expected_ebd: &str,
+) {
+    let (msg, report) = parse_and_assert_ahb_valid(wire, GAS_VALIDATION_DATE);
+    assert_eq!(
+        msg.detect_pruefidentifikator().expect("PID").as_u32(),
+        expected_pid,
+    );
+    assert_eq!(
+        mako_wim::geraetewechsel::wim_ebd(expected_pid),
+        Some(expected_ebd),
+    );
 
     let fv = FormatVersion::new(GAS_FV_2025);
-    let adapter_cmd = wim_gas_anmeldung_registry()
+    let adapter_cmd = wim_registry()
         .dispatch(&msg as &dyn Any, &fv)
-        .expect("wim_gas_anmeldung_registry must adapt PID 44042 to WimGasAnmeldungCommand");
+        .expect("wim_registry must adapt the WiM MSB-Wechsel UTILMD");
 
-    let WimGasAnmeldungCommand::ReceiveUtilmd {
-        pid: cmd_pid,
-        sender: cmd_sender,
-        receiver: cmd_receiver,
-        malo_id: cmd_malo,
-        message_ref: cmd_ref,
+    let DeviceChangeCommand::ReceiveUtilmd {
+        transaktionsgrund,
+        pid,
+        sender,
+        receiver,
+        melo_id,
+        device_id,
+        document_date,
+        message_ref,
+        vorgangsnummer,
+        process_date,
+        received_at,
         ..
     } = adapter_cmd
     else {
-        panic!("expected WimGasAnmeldungCommand::ReceiveUtilmd");
+        panic!("expected DeviceChangeCommand::ReceiveUtilmd");
     };
+    assert_eq!(pid.as_u32(), expected_pid);
+    assert_eq!(sender.as_str(), expected_sender, "NAD+MS");
+    assert_eq!(receiver.as_str(), expected_receiver, "NAD+MR");
+    assert_eq!(message_ref.as_str(), "00001", "UNH ref");
 
-    assert_eq!(cmd_pid.as_u32(), 44042);
-    assert_eq!(
-        cmd_sender.as_str(),
-        ANMELDUNG_MSBA_ID,
-        "sender GLN must match NAD+MS (MSBA) in fixture"
-    );
-    assert_eq!(
-        cmd_receiver.as_str(),
-        ANMELDUNG_NB_ID,
-        "receiver GLN must match NAD+MR (NB) in fixture"
-    );
-    assert_eq!(
-        cmd_malo.as_str(),
-        ANMELDUNG_VORGANG_ID,
-        "malo_id must match IDE+24 Vorgangsnummer in fixture"
-    );
-    assert_eq!(
-        cmd_ref.as_str(),
-        "00001",
-        "message_ref must match UNH ref in fixture"
-    );
-
-    let exec_cmd = WimGasAnmeldungCommand::ReceiveUtilmd {
-        pid: cmd_pid,
-        sender: cmd_sender,
-        receiver: cmd_receiver,
-        malo_id: cmd_malo,
-        document_date: String::new(),
-        message_ref: cmd_ref,
-        validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
-        validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
-        received_at: time::OffsetDateTime::now_utc(),
-    };
-
-    // NB (Netzbetreiber) owns the WiM Gas Anmeldung process; receives MSBA's 44042.
-    let nb_process: Process<WimGasAnmeldungWorkflow, InMemoryEventStore> = Process::new(
+    let process: Process<WimDeviceChangeWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
-        TenantId::from_party_id(ANMELDUNG_NB_ID),
-        WorkflowId::new("wim-gas-anmeldung", GAS_FV_2025),
+        TenantId::from_party_id(expected_receiver),
+        WorkflowId::new("wim-device-change", GAS_FV_2025),
     );
-
-    nb_process
-        .execute(exec_cmd)
+    process
+        .execute(DeviceChangeCommand::ReceiveUtilmd {
+            // `SG4 STS+7` is Muss on every WiM MSB-Wechsel PID; the fixture
+            // carries one and the answer will echo it.
+            transaktionsgrund,
+            pid,
+            sender,
+            receiver,
+            melo_id,
+            device_id,
+            document_date,
+            message_ref,
+            vorgangsnummer,
+            process_date,
+            validation_passed: report.is_valid(),
+            validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
+            received_at,
+        })
         .await
-        .expect("NB process must accept AHB-validated 44042 without error");
+        .expect("the receiving party must accept an AHB-valid WiM MSB-Wechsel");
 
-    let state: WimGasAnmeldungState = nb_process.state().await.expect("must load state");
+    let state: DeviceChangeState = process.state().await.expect("must load state");
     assert!(
-        matches!(state, WimGasAnmeldungState::ValidationPassed(_)),
-        "after AHB-validated 44042 ReceiveUtilmd, state must be ValidationPassed; got: {state:?}",
+        matches!(state, DeviceChangeState::ValidationPassed(_)),
+        "after an AHB-valid ReceiveUtilmd, state must be ValidationPassed; got: {state:?}",
     );
+}
+
+/// End-to-end AHB conformance for the WiM **Gas** Anmeldung Messstellenbetrieb.
+///
+/// PID 44042 is MSBN → NB and answered by 44043/44044 out of `E_2002` — the Gas
+/// tree, whose codes ride `G_0054`/`G_0053`. The Antwortfrist is 5 Werktage
+/// (AWH WiM Gas 2.0 Kap. 3.5.2 Nr. 2), the same as its Strom twin 55042.
+#[tokio::test]
+async fn ahb_44042_wim_gas_anmeldung_validates_and_dispatches() {
+    assert_wim_device_change_dispatches(
+        UTILMD_44042_ANMELDUNG_VALID,
+        44_042,
+        ANMELDUNG_MSBA_ID,
+        ANMELDUNG_NB_ID,
+        "E_2002",
+    )
+    .await;
+    assert_eq!(mako_wim::antwort_frist_werktage(44_042), Some(5));
 }
 
 #[test]
@@ -1057,100 +1071,34 @@ const UTILMD_44170_VERPFLICHTUNGSANFRAGE_ABLEHNUNG_VALID: &[u8] = include_bytes!
 const VERPFL_NB_ID: &str = "9907317000007";
 /// GLN of the gMSB receiver in the Verpflichtungsanfrage 44168 fixture.
 const VERPFL_GMSB_ID: &str = "4012345000023";
-/// Vorgangsnummer (IDE+24) in the Verpflichtungsanfrage 44168 fixture.
-const VERPFL_VORGANG_ID: &str = "WIMGAS00004";
 
-/// End-to-end AHB conformance test for WiM Gas Verpflichtungsanfrage (PID 44168).
+/// End-to-end AHB conformance for the WiM **Gas** Verpflichtungsanfrage.
 ///
-/// Confirms:
-/// 1. UTILMD G G1.1 PID 44168 fixture parses and passes AHB validation.
-/// 2. `wim_gas_verpflichtungsanfrage_registry()` correctly extracts sender, receiver, malo_id.
-/// 3. `WimGasVerpflichtungsanfrageWorkflow` transitions to `ValidationPassed` after dispatch.
+/// PID 44168 is NB → gMSB, answered out of `E_2006` within **1 Werktag**
+/// (AWH WiM Gas 2.0 Kap. 3.6.2 Nr. 4) — the same window as its Strom twin 55168.
 ///
-/// PID 44168 is NB → gMSB direction; the gMSB owns the Verpflichtungsanfrage process
-/// (PIDs 44168–44170, BK7-24-01-009).
+/// The Bestätigung is 44169. **There is no Ablehnungs-PID**: PID-Übersicht 4.0
+/// publishes only those two, and the 44170 of PID 3.3 was withdrawn with
+/// FV2026-10-01, so `antwort_pid_for(44168, false)` is `None` by design.
 #[tokio::test]
 async fn ahb_44168_wim_gas_verpflichtungsanfrage_validates_and_dispatches() {
-    let (msg, report) = parse_and_assert_ahb_valid(
+    assert_wim_device_change_dispatches(
         UTILMD_44168_VERPFLICHTUNGSANFRAGE_VALID,
-        GAS_VALIDATION_DATE,
-    );
-
-    let pid = msg
-        .detect_pruefidentifikator()
-        .expect("PID must be detectable");
-    assert_eq!(pid.as_u32(), 44168, "fixture must encode PID 44168");
-    let release = msg.detect_release().expect("release must be detectable");
-    assert_eq!(release.as_str(), "G1.1", "fixture must encode G1.1 release");
-
-    let fv = FormatVersion::new(GAS_FV_2025);
-    let adapter_cmd = wim_gas_verpflichtungsanfrage_registry()
-        .dispatch(&msg as &dyn Any, &fv)
-        .expect("wim_gas_verpflichtungsanfrage_registry must adapt PID 44168 to WimGasVerpflichtungsanfrageCommand");
-
-    let WimGasVerpflichtungsanfrageCommand::ReceiveUtilmd {
-        pid: cmd_pid,
-        sender: cmd_sender,
-        receiver: cmd_receiver,
-        malo_id: cmd_malo,
-        message_ref: cmd_ref,
-        ..
-    } = adapter_cmd
-    else {
-        panic!("expected WimGasVerpflichtungsanfrageCommand::ReceiveUtilmd");
-    };
-
-    assert_eq!(cmd_pid.as_u32(), 44168);
-    assert_eq!(
-        cmd_sender.as_str(),
+        44_168,
         VERPFL_NB_ID,
-        "sender GLN must match NAD+MS (NB) in fixture"
-    );
-    assert_eq!(
-        cmd_receiver.as_str(),
         VERPFL_GMSB_ID,
-        "receiver GLN must match NAD+MR (gMSB) in fixture"
+        "E_2006",
+    )
+    .await;
+    assert_eq!(mako_wim::antwort_frist_werktage(44_168), Some(1));
+    assert_eq!(
+        mako_wim::geraetewechsel::antwort_pid_for(44_168, true),
+        Some(44_169),
     );
     assert_eq!(
-        cmd_malo.as_str(),
-        VERPFL_VORGANG_ID,
-        "malo_id must match IDE+24 Vorgangsnummer in fixture"
-    );
-    assert_eq!(
-        cmd_ref.as_str(),
-        "00001",
-        "message_ref must match UNH ref in fixture"
-    );
-
-    let exec_cmd = WimGasVerpflichtungsanfrageCommand::ReceiveUtilmd {
-        pid: cmd_pid,
-        sender: cmd_sender,
-        receiver: cmd_receiver,
-        malo_id: cmd_malo,
-        document_date: String::new(),
-        message_ref: cmd_ref,
-        validation_passed: report.is_valid(), // ← authoritative AHB result, no bypass
-        validation_errors: report.errors().iter().map(|e| format!("{e}")).collect(),
-    };
-
-    // The gMSB (grundzuständiger MSB) owns the Verpflichtungsanfrage process.
-    let gmsb_process: Process<WimGasVerpflichtungsanfrageWorkflow, InMemoryEventStore> =
-        Process::new(
-            InMemoryEventStore::new(),
-            TenantId::from_party_id(VERPFL_GMSB_ID),
-            WorkflowId::new("wim-gas-verpflichtungsanfrage", GAS_FV_2025),
-        );
-
-    gmsb_process
-        .execute(exec_cmd)
-        .await
-        .expect("gMSB process must accept AHB-validated 44168 without error");
-
-    let state: WimGasVerpflichtungsanfrageState =
-        gmsb_process.state().await.expect("must load state");
-    assert!(
-        matches!(state, WimGasVerpflichtungsanfrageState::ValidationPassed(_)),
-        "after AHB-validated 44168 ReceiveUtilmd, state must be ValidationPassed; got: {state:?}",
+        mako_wim::geraetewechsel::antwort_pid_for(44_168, false),
+        None,
+        "the Gas Verpflichtungsanfrage publishes no Ablehnungs-Prüfidentifikator",
     );
 }
 

@@ -1,12 +1,16 @@
 //! MSB process decision module — the WiM Messstellenbetrieb answers.
 //!
-//! | Inbound PID | Process | Direction | Answered by | Frist | EBD |
-//! |---|---|---|---|---|---|
-//! | **55042** | Anmeldung MSB | MSBN → NB | the **NB** | 5 WT | `E_0201` |
-//! | **55051** | Ende MSB | MSBA → NB | the **NB** | 7 WT | `E_0202` |
-//! | **55039** | Kündigung MSB | MSBN → **MSBA** | the **MSB** | 3 WT | `E_0200` |
-//! | **55168** | Verpflichtungsanfrage | NB → **gMSB** | the **MSB** | 1 WT | `E_0240` |
-//! | **35001/35002/35005** | REQOTE | → MSB | the **MSB** | 4/5/10 WT | — |
+//! Both Sparten, on the same Prüfschritte: AWH WiM Gas 2.0 restates WiM Strom
+//! Teil 1 use-case for use-case with the same Fristen, and only the alphabet
+//! differs.
+//!
+//! | Strom | Gas | Process | Direction | Answered by | Frist | EBD Strom / Gas |
+//! |---|---|---|---|---|---|---|
+//! | **55042** | **44042** | Anmeldung MSB | MSBN → NB | the **NB** | 5 WT | `E_0201` / `E_2002` |
+//! | **55051** | **44051** | Ende MSB | MSBA → NB | the **NB** | 7 WT | `E_0202` / `E_2005` |
+//! | **55039** | **44039** | Kündigung MSB | MSBN → **MSBA** | the **MSB** | 3 WT | `E_0200` / `E_2000` |
+//! | **55168** | **44168** | Verpflichtungsanfrage | NB → **gMSB** | the **MSB** | 1 WT | `E_0240` / `E_2006` |
+//! | **35001/35002/35005** | — | REQOTE | → MSB | the **MSB** | 4/5/10 WT | — |
 //!
 //! The directions are not uniform, which is why the PID sets are two constants
 //! gated by separate Cargo features: a Kündigung MSB never reaches the NB at
@@ -39,6 +43,7 @@
 //! # Regulatory basis
 //!
 //! - **BK6-22-024 Anlage 2a** (WiM Strom Teil 1) — Kap. 2.2–2.4
+//! - **AWH WiM Gas 2.0** (gültig ab 01.10.2026) — Kap. 3.3, 3.5, 3.6
 //! - **Entscheidungsbaum-Diagramme und Codelisten 4.3** — Kap. 8
 //! - **§ 5 MsbG** — freie Wahl des Messstellenbetreibers
 //! - **§ 9 Abs. 1 Nr. 3 MsbG** — the Rahmenvertrag the NB checks
@@ -84,14 +89,29 @@ pub struct MsbModuleConfig {
 /// Per `mako_wim::geraetewechsel`, directions are not uniform: 55042
 /// (Anmeldung) is MSBN → NB and 55051 (Ende MSB) is MSBA → NB, so the NB owes
 /// both answers. 55039 and 55168 never reach the NB.
-pub const NB_ANSWERED_PIDS: &[u32] = &[55_042, 55_051];
+pub const NB_ANSWERED_PIDS: &[u32] = &[55_042, 55_051, 44_042, 44_051];
 
 /// The WiM MSB-Wechsel PIDs **this deployment's MSB role** answers.
 ///
-/// 55039 (Kündigung MSB) is MSBN → MSBA — it never reaches the NB at all, so
-/// routing it into an NB-role handler answers a message the NB cannot receive.
-/// 55168 (Verpflichtungsanfrage) is NB → gMSB.
-pub const MSB_ANSWERED_PIDS: &[u32] = &[55_039, 55_168];
+/// 55039/44039 (Kündigung MSB) is MSBN → MSBA — it never reaches the NB at all,
+/// so routing it into an NB-role handler answers a message the NB cannot
+/// receive. 55168/44168 (Verpflichtungsanfrage) is NB → gMSB.
+pub const MSB_ANSWERED_PIDS: &[u32] = &[55_039, 55_168, 44_039, 44_168];
+
+/// The Sparte a WiM MSB-Wechsel Prüfidentifikator belongs to.
+///
+/// The Prüfschritte are identical in both — AWH WiM Gas 2.0 restates WiM Strom
+/// Teil 1 — but the alphabets are not, so the tree the answer resolves against
+/// follows the PID: `E_0200`/`E_0201`/`E_0202` in Strom, `E_2000`/`E_2002`/
+/// `E_2005` in Gas.
+fn sparte_of(pid: u32) -> mako_pruefung::msb::types::Sparte {
+    use mako_pruefung::msb::types::Sparte;
+    if (44_000..45_000).contains(&pid) {
+        Sparte::Gas
+    } else {
+        Sparte::Strom
+    }
+}
 
 /// Fields extracted from `de.mako.process.initiated` for a WiM MSB-Wechsel PID.
 #[derive(Debug, Clone)]
@@ -358,7 +378,7 @@ async fn evaluate(
     // Ermessen"), so inventing a rule here would put an unfounded Zustimmung
     // or Ablehnung on the market. It goes to the operator with its 1-Werktag
     // window attached.
-    if payload.pid == 55_168 {
+    if matches!(payload.pid, 55_168 | 44_168) {
         return Ok(MsbDecisionOutcome::Escalate {
             reason: format!(
                 "Verpflichtungsanfrage zur Messlokation {}: der gMSB entscheidet nach eigenem \
@@ -398,7 +418,7 @@ async fn evaluate(
 
     match payload.pid {
         // ── Anmeldung MSB (55042) — the NB answers, E_0201 ────────────────
-        55_042 => {
+        55_042 | 44_042 => {
             // `?` propagates a *transport* failure so the caller answers 5xx
             // and the fan-out redelivers; only a genuine 404 becomes `false`.
             let melo_bekannt = marktd.melo_known(&payload.melo_id).await?;
@@ -416,6 +436,7 @@ async fn evaluate(
             // publishes no code for a missing Rahmenvertrag.
             let rahmenvertrag = marktd.partner_known(&payload.msb_mp_id).await?;
             let anfrage = msb::AnmeldungMsb {
+                sparte: sparte_of(payload.pid),
                 melo_id: payload.melo_id.clone(),
                 msbn_mp_id: payload.msb_mp_id.clone(),
                 gewuenschter_zuordnungsbeginn: prozessdatum,
@@ -428,7 +449,7 @@ async fn evaluate(
         }
 
         // ── Ende MSB (55051) — the NB answers, E_0202 ─────────────────────
-        55_051 => {
+        55_051 | 44_051 => {
             // „Die Messlokation war dem MSB nicht zugeordnet" is the Fehlerfall
             // of Kap. 2.4.1, so the question is which MSB holds the
             // Messlokation on the requested Zuordnungsende — not merely whether
@@ -439,6 +460,7 @@ async fn evaluate(
                 .await?;
             let zuordnung = zugeordneter_msb.map(|msb| msb == payload.msb_mp_id);
             let anfrage = msb::AbmeldungMsb {
+                sparte: sparte_of(payload.pid),
                 melo_id: payload.melo_id.clone(),
                 msba_mp_id: payload.msb_mp_id.clone(),
                 gewuenschtes_zuordnungsende: prozessdatum,
@@ -453,9 +475,10 @@ async fn evaluate(
         // No grid registry is consulted: the Kündigung runs on the contract
         // layer between the two MSB (Kap. 2.1.3) and every Prüfschritt is a
         // question about this MSB's own Messstellenbetriebsvertrag.
-        55_039 => {
+        55_039 | 44_039 => {
             let vertrag = fetch_messstellenvertrag(cfg, &payload.melo_id).await;
             let anfrage = msb::KuendigungMsb {
+                sparte: sparte_of(payload.pid),
                 melo_id: payload.melo_id.clone(),
                 msbn_mp_id: payload.msb_mp_id.clone(),
                 kuendigungstermin: kuendigungstermin(payload, prozessdatum),
@@ -467,7 +490,7 @@ async fn evaluate(
         pid => Ok(MsbDecisionOutcome::Escalate {
             reason: format!(
                 "PID {pid} ({}) hat keine automatisierbare Entscheidungsregel — die Antwort ist \
-                 innerhalb von {} Werktagen fällig (WiM Strom Teil 1)",
+                 innerhalb von {} Werktagen fällig",
                 msb_wechsel_process_name(pid),
                 mako_wim::antwort_frist_werktage(pid).unwrap_or(0),
             ),
@@ -788,10 +811,10 @@ async fn enqueue(
 /// Human-readable name for a WiM MSB-Wechsel PID, for operator-facing reasons.
 fn msb_wechsel_process_name(pid: u32) -> &'static str {
     match pid {
-        55_039 => "Kündigung MSB",
-        55_042 => "Anmeldung MSB",
-        55_051 => "Ende MSB",
-        55_168 => "Verpflichtungsanfrage",
+        55_039 | 44_039 => "Kündigung MSB",
+        55_042 | 44_042 => "Anmeldung MSB",
+        55_051 | 44_051 => "Ende MSB",
+        55_168 | 44_168 => "Verpflichtungsanfrage",
         _ => "unknown MSB-Wechsel process",
     }
 }
@@ -1182,6 +1205,7 @@ mod tests {
     fn a_kuendigung_inside_the_binding_is_z12_naming_the_next_date() {
         use mako_pruefung::msb;
         let anfrage = msb::KuendigungMsb {
+            sparte: mako_pruefung::msb::types::Sparte::Strom,
             melo_id: "DE000…1".to_owned(),
             msbn_mp_id: "9900000000003".to_owned(),
             kuendigungstermin: msb::Kuendigungstermin::Fix(
@@ -1244,6 +1268,7 @@ mod tests {
             ),
         ] {
             let anfrage = msb::AnmeldungMsb {
+                sparte: mako_pruefung::msb::types::Sparte::Strom,
                 melo_id: "DE000…1".to_owned(),
                 msbn_mp_id: "9900000000003".to_owned(),
                 gewuenschter_zuordnungsbeginn: beginn,
@@ -1282,6 +1307,7 @@ mod tests {
         let uet = mako_fristen::sub_werktage(beginn, 3, cal);
         let outcome: MsbDecisionOutcome = msb::pruefe_anmeldung(
             &msb::AnmeldungMsb {
+                sparte: mako_pruefung::msb::types::Sparte::Strom,
                 melo_id: "DE000…1".to_owned(),
                 msbn_mp_id: "9900000000003".to_owned(),
                 gewuenschter_zuordnungsbeginn: beginn,

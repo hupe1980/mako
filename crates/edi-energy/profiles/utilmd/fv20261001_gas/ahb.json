@@ -3295,7 +3295,7 @@
     },
     {
       "code": 44039,
-      "name": "Kündigung MSB Gas (Anfrage MSBN an NB)",
+      "name": "Kündigung MSB Gas (MSBN an MSBA)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -3353,7 +3353,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.1"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E03', 'ZR9'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -3409,7 +3415,7 @@
     },
     {
       "code": 44040,
-      "name": "Bestätigung Kündigung MSB Gas (NB an MSBN)",
+      "name": "Bestätigung Kündigung MSB Gas (MSBA an MSBN)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -3467,7 +3473,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.1"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E03', 'ZR9'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -3523,7 +3535,7 @@
     },
     {
       "code": 44041,
-      "name": "Ablehnung Kündigung MSB Gas (NB an MSBN)",
+      "name": "Ablehnung Kündigung MSB Gas (MSBA an MSBN)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -3581,7 +3593,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.1"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E03', 'ZR9'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -3637,7 +3655,7 @@
     },
     {
       "code": 44042,
-      "name": "Anmeldung neuer MSB Gas (Anfrage MSBN an NB)",
+      "name": "Anmeldung MSB Gas (MSBN an NB)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -3695,7 +3713,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.2"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E02', 'E03'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -3751,7 +3775,7 @@
     },
     {
       "code": 44043,
-      "name": "Bestätigung Anmeldung neuer MSB Gas (NB an MSBN)",
+      "name": "Bestätigung Anmeldung MSB Gas (NB an MSBN)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -3809,7 +3833,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.2"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E02', 'E03'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -3865,7 +3895,7 @@
     },
     {
       "code": 44044,
-      "name": "Ablehnung Anmeldung neuer MSB Gas (NB an MSBN)",
+      "name": "Ablehnung Anmeldung MSB Gas (NB an MSBN)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -3923,7 +3953,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.2"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E02', 'E03'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -3979,7 +4015,7 @@
     },
     {
       "code": 44051,
-      "name": "Ende MSB Gas / Vorläufige Abmeldung (NB an MSBA)",
+      "name": "Ende MSB Gas (MSB an NB)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -4037,7 +4073,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.4"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E03', 'Z33', 'ZG9', 'ZH1', 'ZH2'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -4093,7 +4135,7 @@
     },
     {
       "code": 44052,
-      "name": "Bestätigung Ende MSB Gas (MSBA an NB)",
+      "name": "Bestätigung Ende MSB Gas (NB an MSB)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -4151,7 +4193,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.4"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E03', 'Z33', 'ZG9', 'ZH1', 'ZH2'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -4207,7 +4255,7 @@
     },
     {
       "code": 44053,
-      "name": "Ablehnung Ende MSB Gas (MSBA an NB)",
+      "name": "Ablehnung Ende MSB Gas (NB an MSB)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -4265,7 +4313,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.4"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E03', 'Z33', 'ZG9', 'ZH1', 'ZH2'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -6181,7 +6235,7 @@
     },
     {
       "code": 44168,
-      "name": "Verpflichtungsanfrage (NB an gMSB)",
+      "name": "Verpflichtungsanfrage / Aufforderung (NB an gMSB)",
       "segment_rules": [
         {
           "tag": "BGM",
@@ -6240,7 +6294,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.5"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E02', 'E03'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -6355,7 +6415,13 @@
         {
           "tag": "STS",
           "requirement": "M",
-          "_description": "STS (Transaktionsgrund + Status Antwort) — mandatory per AHB Gas 1.1 §6.5"
+          "_description": "SG4 STS — `STS+7` Transaktionsgrund (Muss, genau einmal je SG4 IDE) und, auf den Antwort-PIDs, `STS+E01` Status der Antwort. DE 9013 auf `STS+7` ist auf ['E01', 'E02', 'E03'] beschränkt; DE 1131 auf `STS+E01` nennt die Codeliste (G_00xx), nicht die EBD-Nummer. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7",
+              "E01"
+            ]
+          }
         },
         {
           "tag": "LOC",
@@ -6654,6 +6720,125 @@
               "Z13"
             ]
           }
+        }
+      ]
+    },
+    {
+      "code": 44183,
+      "name": "Ende MSB von NB — Information über Stilllegung (NB an MSB)",
+      "segment_rules": [
+        {
+          "tag": "BGM",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1001": [
+              "E02"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "DTM",
+          "requirement": "M",
+          "required_qualifiers": {
+            "2005": [
+              "137"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "2005",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "IDE",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "7495": [
+              "24"
+            ]
+          },
+          "field_rules": [
+            {
+              "element": "7402",
+              "requirement": "M",
+              "element_index": 0
+            }
+          ]
+        },
+        {
+          "tag": "STS",
+          "requirement": "M",
+          "_description": "SG4 STS — nur `STS+7` Transaktionsgrund. 44183 ist eine Information ohne Antwort, führt also kein `STS+E01`. DE 9013 ist auf `Z33` (Auszug wegen Stilllegung) beschränkt. Quelle: UTILMD AHB Gas 1.2 Kap. 6.",
+          "qualifier_restrictions": {
+            "9015": [
+              "7"
+            ]
+          }
+        },
+        {
+          "tag": "LOC",
+          "requirement": "M",
+          "_description": "SG5 LOC 3227=172 (Meldepunkt) — mandatory per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "field_rules": []
+        },
+        {
+          "tag": "CTA",
+          "requirement": "O",
+          "_description": "SG3 CTA — Kann per AHB Gas 1.1 §6.4"
+        },
+        {
+          "tag": "COM",
+          "requirement": "O",
+          "_description": "SG3 COM — Kann per AHB Gas 1.1 §6.4"
+        }
+      ],
+      "group_rules": [
+        {
+          "group_id": "SG2",
+          "tag": "NAD",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "3035": [
+              "MS",
+              "MR"
+            ]
+          },
+          "_description": "UTILMD SG2 NAD (Marktteilnehmer): sender NAD+MS and receiver NAD+MR must appear in every SG2 occurrence. Qualifier 3035 must be one of ['MS', 'MR']. Source: UTILMD MIG, §2 Segment group SG2."
+        },
+        {
+          "group_id": "SG6",
+          "tag": "RFF",
+          "requirement": "M",
+          "qualifier_restrictions": {
+            "1153": [
+              "Z13"
+            ]
+          },
+          "_description": "UTILMD SG6 RFF (Referenz in IDE-Gruppe): Vorgangsnummer Z13 mandatory in every SG6 occurrence within SG4. Qualifier 1153 must be one of ['Z13']. Source: UTILMD MIG, §2 Segment group SG6."
         }
       ]
     }

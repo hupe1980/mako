@@ -388,10 +388,13 @@ impl ServerHandler for SperrdMcpHandler {
              - `execute-sperrung` — confirming an execution and its IFTSTA\n\
              - `iftsta-sweep` — finding and clearing unreported outcomes\n\n\
              ## Timing\n\
-             GPKE fixes **no** execution deadline in Werktagen for the physical act. \
-             The date is the Lieferant's own DTM+203 Ausführungsdatum (fixed) or \
-             DTM+469 frühestes Startdatum (earliest). BK6-22-024 §5's 24 wall-clock \
-             hours is the deadline for the NB's **ORDRSP**, which makod tracks.",
+             GPKE Teil 2 § 3.5: the NB answers with an **ORDRSP am 1. Werktag nach \
+             dem Übertragungstag** (makod tracks that one) and executes within \
+             **6 Werktagen nach dem frühestmöglichen Sperrtermin**, then reports \
+             via IFTSTA **am 1. Werktag nach Abschluss**. The Sperrtermin itself \
+             comes from the Lieferant's DTM+203 Ausführungsdatum (fixed) or \
+             DTM+469 frühestes Startdatum (earliest), and each Auftrag allows \
+             **two Sperrversuche**.",
         )
     }
 }

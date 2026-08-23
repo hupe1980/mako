@@ -113,7 +113,6 @@ async fn every_routed_pid_has_ahb_rules() {
         Box::new(mako_gpke::GpkeModule),
         Box::new(mako_wim::WimModule),
         Box::new(mako_geli_gas::GeliGasModule),
-        Box::new(mako_wim_gas::WimGasModule),
         Box::new(mako_gabi_gas::GaBiGasModule),
         Box::new(mako_mabis::MabisModule),
         Box::new(mako_redispatch::RedispatchModule),

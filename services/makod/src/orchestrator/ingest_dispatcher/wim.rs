@@ -35,45 +35,51 @@ impl EdifactIngestDispatcher {
             // MeLo ID is extracted from the first UTILMD transaction IDE segment
             // (object_id component) — the same field the wim_registry adapter uses.
             "wim-device-change" => match pid {
-                55042 | 55039 | 55051 | 55168 => {
+                // The MSB-Wechsel Anfragen, in **both Sparten**: 55039/55042/
+                // 55051/55168 (WiM Strom Teil 1) and 44039/44042/44051/44168
+                // (AWH WiM Gas 2.0). Same Use-Cases, same Fristen, one workflow.
+                55_042 | 55_039 | 55_051 | 55_168 | 44_042 | 44_039 | 44_051 | 44_168 => {
                     let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
-                    // Business-answer Frist, per PID — 55039 → 3 WT, 55042 → 5 WT,
-                    // 55051 → 7 WT, 55168 → 1 WT (BK6-24-174 WiM Strom Teil 1,
-                    // Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2). A flat 5 WT here
-                    // escalated the Abmeldung two days early and hid a missed
-                    // Verpflichtungsanfrage for four.
-                    //
-                    // Distinct from the APERAK acknowledgement below, which is
-                    // 45 min on weekdays (APERAK AHB 1.0 §2.4.1).
-                    let frist_wt = mako_wim::antwort_frist_werktage(pid)
-                        .expect("the match arm restricts this to the MSB-Wechsel family");
-                    let process_due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        frist_wt,
-                        HolidayCalendar::BdewMaKo,
-                    );
-                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    // **No deadlines passed here.** Both windows depend on the
+                    // PID and the Sparte, and the workflow returns them with the
+                    // `ValidationPassed` event so they land on the same
+                    // transaction: the business answer is 3 / 5 / 7 / 1 Werktage
+                    // per Anwendungsfall, and the APERAK is 45 min in Strom
+                    // against the Initial-/Folgeprozess split in Gas
+                    // (APERAK AHB 1.1 §2.3.1/§2.4.1). Registering a Strom
+                    // APERAK window on a Gas message would report a breach
+                    // 45 minutes into a window that runs to noon the next
+                    // Werktag.
                     self.spawn_or_resume_guarded::<WimDeviceChangeWorkflow>(
                         &melo_id,
                         "wim-device-change",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_wim::GERAETEWECHSEL_ANTWORT_FRIST_WINDOW_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[],
                         mako_engine::workflow::OccupiesBusinessKey::occupies_business_key,
                     )
                     .await
                 }
-                // Antwort PIDs (55040/55041, 55043/55044, 55052/55053, 55169/55170)
-                // close an order **we** sent — resume, never spawn. An answer with
-                // no open order is Skipped rather than creating an orphan stream.
-                55040 | 55041 | 55043 | 55044 | 55052 | 55053 | 55169 | 55170 => {
+                // UTILMD 44183 „Ende MSB von NB" — the Gas NB informing the MSB
+                // of a Stilllegung. It asks nothing and is recorded against the
+                // Messlokation's open process, or skipped when there is none.
+                mako_wim::geraetewechsel::ENDE_MSB_VOM_NB_PID => {
+                    let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_utilmd(msg);
+                    self.resume_by_key::<WimDeviceChangeWorkflow>(
+                        &melo_id,
+                        "wim-device-change",
+                        cmd,
+                    )
+                    .await
+                }
+                // Antwort PIDs close an order **we** sent — resume, never spawn.
+                // An answer with no open order is Skipped rather than creating
+                // an orphan stream. 44170 is absent: it does not exist under
+                // FV2026-10-01 (PID-Übersicht 4.0 publishes 44168 → 44169 only).
+                55_040 | 55_041 | 55_043 | 55_044 | 55_052 | 55_053 | 55_169 | 55_170 | 44_040
+                | 44_041 | 44_043 | 44_044 | 44_052 | 44_053 | 44_169 => {
                     let cmd = adapters::wim_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_utilmd(msg);
                     self.resume_by_key::<WimDeviceChangeWorkflow>(
@@ -118,35 +124,31 @@ impl EdifactIngestDispatcher {
             // routing in the PidRouter ensures only one workflow is registered per
             // role (both cannot be active simultaneously — build() panics if both are).
             "wim-geraeteubernahme" => match pid {
-                17001 | 17002 | 17009 => {
-                    let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                17001 | 17009 => {
+                    let cmd = adapters::wim_geraeteubernahme_registry(self.sparte_of(msg))
+                        .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
-                    // Process Frist: 5 Werktage (BK6-24-174 WiM Strom Teil 1).
-                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
-                    let process_due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        5,
-                        HolidayCalendar::BdewMaKo,
-                    );
-                    let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
+                    // **No deadlines passed here.** Both windows depend on the
+                    // Use-Case and the Sparte, and only the workflow knows both:
+                    // 17001 answers 2 WT after the arrival ÜT, 17009 by the
+                    // 2. WT *before* the Gerätewechseltermin the message
+                    // carries, and the APERAK window is 45 min in Strom against
+                    // the Initial-/Folgeprozess split in Gas. The workflow
+                    // returns them with the `ValidationPassed` event, so they
+                    // are registered on the same transaction.
                     self.spawn_or_resume_guarded::<WimGeraeteubernahmeWorkflow>(
                         &melo_id,
                         "wim-geraeteubernahme",
                         cmd,
                         &fv,
-                        &[
-                            (
-                                mako_wim::GERAETEUBERNAHME_ORDRSP_DEADLINE_LABEL,
-                                process_due_at,
-                            ),
-                            (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
-                        ],
+                        &[],
                         |s| !s.is_terminal(),
                     )
                     .await
                 }
-                19001 | 19002 => {
-                    let cmd = adapters::wim_geraeteubernahme_registry().dispatch(raw, &fv)?;
+                19001 | 19002 | 19015 | 19016 => {
+                    let cmd = adapters::wim_geraeteubernahme_registry(self.sparte_of(msg))
+                        .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     self.resume_by_key::<WimGeraeteubernahmeWorkflow>(
                         &melo_id,
@@ -163,15 +165,33 @@ impl EdifactIngestDispatcher {
             // ── WiM Rechnung (Strom) — PID 31009 ─────────────────────────────
             // PID 31009: MSB-Rechnung (MSB → NB, multi-domain GPKE/WiM) — spawn.
             "wim-invoic" => match pid {
-                31009 => {
+                31009 | 31003 | 31004 => {
                     let cmd = adapters::wim_invoic_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_invoic(msg);
-                    // Settlement deadline: 5 Werktage (BK6-24-174 WiM Strom).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        5,
+                    // The window is anchored on the Zahlungsziel the invoice
+                    // carries in `DTM+265`, not on a fixed Werktage count, and
+                    // where it sits relative to that date depends on who is
+                    // paying: the NB answers the iMS-Rechnung by the 4. WT
+                    // *before* it (WiM Strom Teil 1 Kap. 6.2 Nr. 2), everyone
+                    // else *zum* Zahlungsziel (Kap. 3.6.3.8.2 Nr. 2/4,
+                    // Kap. 3.7.2 Nr. 2/4, AWH WiM Gas 2.0 Kap. 4.7.2 Nr. 2/4/6).
+                    // The 10 Werktage stated beside it is a sender-side floor on
+                    // the Zahlungsziel itself, already baked into that date.
+                    let zahlungsziel = faelligkeitsdatum_from_invoic(msg).unwrap_or_else(|| {
+                        fristen::deadline_at_werktage(
+                            OffsetDateTime::now_utc(),
+                            fristen::vorlauf::ZAHLUNGSZIEL_MINDEST_WT,
+                            HolidayCalendar::BdewMaKo,
+                        )
+                    });
+                    let due_at = fristen::vorlauf::rechnung_antwort_spaetester_uet(
+                        pid,
+                        self.rechnung_empfaenger(msg),
+                        zahlungsziel.date(),
                         HolidayCalendar::BdewMaKo,
-                    );
+                    )
+                    .with_time(zahlungsziel.time())
+                    .assume_offset(zahlungsziel.offset());
                     self.spawn_or_resume::<WimInvoicWorkflow>(
                         malo_id.as_str(),
                         "wim-invoic",
@@ -209,32 +229,47 @@ impl EdifactIngestDispatcher {
             // PIDs 23003/23004/23008/23011/23012: INSRPT Antwort — resume.
             "wim-insrpt" => match pid {
                 23001 => {
-                    let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_utilmd(msg);
-                    // WiM Strom Teil 2 Kap. 1.2 Nr. 2 states two windows for
-                    // this PID — 3 Werktage for a kME ohne RLM or an mME, 1 for
-                    // a kME mit RLM or an iMS — and the Störungsmeldung does
-                    // not say which applies. Until the MSB's device registry is
-                    // consulted at ingest, the shorter one is registered: an
-                    // early alert is visible, a late one is not.
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        mako_fristen::antwort::STOERUNGSMELDUNG_IMS_WERKTAGE,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    // Neither Frist is a function of the PID. Strom states
+                    // 3 Werktage for a kME ohne RLM or an mME and 1 for a kME
+                    // mit RLM or an iMS (WiM Strom Teil 2 Kap. 1.2 Nr. 2); Gas
+                    // states a flat 3, because it has no iMS rollout to branch
+                    // on (AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 2). Neither number is
+                    // in the message — the MSB's own device registry decides
+                    // it. Until that lookup happens at ingest, the **shortest**
+                    // window the Sparte can state is registered: an alert that
+                    // fires early is visible, one that fires late is not.
+                    // `Messtechnik::RlmOderImsMsHs` is that shortest branch in
+                    // Strom, and in Gas every branch is the same 3 WT.
+                    //
+                    // The workflow returns the deadline with the event, so it
+                    // is registered on the same transaction as the receipt.
+                    let cmd = adapters::wim_insrpt_registry(
+                        self.sparte_of(msg),
+                        mako_fristen::antwort::Messtechnik::RlmOderImsMsHs,
+                    )
+                    .dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_insrpt(msg);
                     self.spawn_or_resume_guarded::<WimInsrptWorkflow>(
                         &melo_id,
                         "wim-insrpt",
                         cmd,
                         &fv,
-                        &[(mako_wim::insrpt::ANTWORT_WINDOW_LABEL, due_at)],
+                        &[],
                         |s| !s.is_terminal(),
                     )
                     .await
                 }
-                23003 | 23004 | 23008 | 23011 | 23012 => {
-                    let cmd = adapters::wim_insrpt_registry().dispatch(raw, &fv)?;
-                    let melo_id = extract_melo_from_utilmd(msg);
+                // 23005/23009 are the Gas Informationsmeldungen an den NB and
+                // 23011/23012 the Strom Weiterleitung an betroffene
+                // Marktlokationen. All four accompany an answer rather than
+                // being one, so they resume without closing the process.
+                23003 | 23004 | 23005 | 23008 | 23009 | 23011 | 23012 => {
+                    let cmd = adapters::wim_insrpt_registry(
+                        self.sparte_of(msg),
+                        mako_fristen::antwort::Messtechnik::RlmOderImsMsHs,
+                    )
+                    .dispatch(raw, &fv)?;
+                    let melo_id = extract_melo_from_insrpt(msg);
                     self.resume_by_key::<WimInsrptWorkflow>(&melo_id, "wim-insrpt", cmd)
                         .await
                 }
@@ -248,11 +283,12 @@ impl EdifactIngestDispatcher {
                 17132 => {
                     let cmd = adapters::wim_stammdaten_registry().dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
-                    // Process Frist: 5 Werktage (BK6-24-174).
-                    // APERAK AHB 1.0 §2.4.1: Strom ORDERS — 45 min on weekdays.
+                    // The Geschäftsdatenanfrage is answered „spätester ÜZ ist
+                    // 1 WT nach dem ÜZ" (GPKE Teil 4 § 3.2 Nr. 2). The APERAK
+                    // runs beside it on 45 minutes (APERAK AHB 1.0 §2.4.1).
                     let process_due_at = fristen::deadline_at_werktage(
                         OffsetDateTime::now_utc(),
-                        5,
+                        fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE,
                         HolidayCalendar::BdewMaKo,
                     );
                     let aperak_due_at = fristen::aperak_strom_due_at(OffsetDateTime::now_utc());
@@ -497,19 +533,28 @@ impl EdifactIngestDispatcher {
                 if mako_wim::RECHNUNGSABWICKLUNG_ORDERS_PIDS.contains(&pid) {
                     let cmd = adapters::wim_rechnungsabwicklung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
-                    // Beendigung answer window: 5 Werktage, the WiM Teil 1
-                    // process window the sibling workflows use (BK6-24-174).
-                    let due_at = fristen::deadline_at_werktage(
-                        OffsetDateTime::now_utc(),
-                        5,
-                        HolidayCalendar::BdewMaKo,
-                    );
+                    // Only the Beendigung 17006 opens a window. 17005 is
+                    // itself the answer to the Angebot — receiving it is the
+                    // arrangement taking effect and nothing replies to it, so a
+                    // deadline there would expire on a settled process.
+                    let deadlines = if pid == 17006 {
+                        vec![(
+                            mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL,
+                            fristen::deadline_at_werktage(
+                                OffsetDateTime::now_utc(),
+                                fristen::antwort::RECHNUNGSABWICKLUNG_WERKTAGE,
+                                HolidayCalendar::BdewMaKo,
+                            ),
+                        )]
+                    } else {
+                        Vec::new()
+                    };
                     self.spawn_or_resume::<mako_wim::WimRechnungsabwicklungWorkflow>(
                         malo_id.as_str(),
                         "wim-rechnungsabwicklung",
                         cmd,
                         &fv,
-                        &[(mako_wim::RECHNUNGSABWICKLUNG_DEADLINE_LABEL, due_at)],
+                        &deadlines,
                     )
                     .await
                 } else if mako_wim::RECHNUNGSABWICKLUNG_ORDRSP_PIDS.contains(&pid) {
@@ -583,7 +628,8 @@ impl EdifactIngestDispatcher {
             // within **one** Werktag out of `E_0203`.
             mako_wim::weiterverpflichtung::WORKFLOW_NAME => match pid {
                 mako_wim::weiterverpflichtung::AUFTRAG_PID => {
-                    let cmd = adapters::wim_weiterverpflichtung_registry().dispatch(raw, &fv)?;
+                    let cmd = adapters::wim_weiterverpflichtung_registry(self.sparte_of(msg))
+                        .dispatch(raw, &fv)?;
                     let melo_id = extract_melo_from_orders(msg);
                     // One Werktag, from the same table `processd` sizes its
                     // operator queue by and `obsd` raises the breach against.

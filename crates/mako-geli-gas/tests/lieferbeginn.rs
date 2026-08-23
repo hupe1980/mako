@@ -16,7 +16,8 @@
 //!
 //! # Regulatory context
 //!
-//! APERAK Frist: **10 Werktage** (GeLi Gas BNetzA BK7-24-01-009).
+//! Gas APERAK: negative only — nächster Werktag 12:00 for a Folgeprozess,
+//! 3 Werktage for an Initialprozess (APERAK AHB 1.1 §2.3.1).
 //! Saturdays, Sundays and federal holidays are not Werktage.
 
 use mako_engine::{

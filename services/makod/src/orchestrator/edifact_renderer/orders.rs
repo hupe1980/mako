@@ -411,33 +411,55 @@ pub(super) fn render_ordrsp(
         builder = builder.document_date(d);
     }
 
-    // ── ESA answer (19011-19014) full conformance ────────────────────────────
+    // ── `SG2 AJT` — the Antwortcode, on every ORDRSP that carries a decision ──
     //
-    // ORDRSP AHB 1.1b §4.15. Muss: `BGM+Z57`, `SG1 RFF+Z13`, and `SG2 AJT`
-    // carrying the Prüfschritt code (DE 4465) **with** the EBD that publishes
-    // it (DE 1082). Conditions [17]/[18] require the code to sit in that tree's
-    // Zustimmungs- resp. Ablehnungs-Cluster, so the code comes from
-    // `mako-pruefung` via the workflow and is never synthesised here.
+    // ORDRSP AHB 1.1b Kap. 4 marks `SG2 AJT` **Muss** on all of them: DE 4465
+    // the Prüfschritt code, DE 1082 the **Codeliste** it comes from. Conditions
+    // [17]/[18] require the code to sit in that list's Zustimmungs- resp.
+    // Ablehnungs-Cluster, so it comes from `mako-pruefung` via the workflow and
+    // is never synthesised here.
     //
-    // 19011/19012 additionally carry `IMD++<7081>`, which is what tells an
-    // answer to a Bestellung (`E_0256`) from one to a Beendigung (`E_0254`) —
-    // the two share these PIDs.
-    if matches!(pid, Some(19011..=19014)) {
-        builder = builder.document_code("Z57");
-        if let Some(abo) = p.get("abonnement").and_then(serde_json::Value::as_str)
-            && matches!(pid, Some(19011 | 19012))
-        {
-            builder = builder.abonnement(abo);
+    // DE 1082 is the EBD number only where the AHB says „EBD Nr." — the ESA
+    // answers (`E_0254`/`E_0256`/`E_0257`) and the Messlokationsänderung
+    // (`E_0249`/`E_0250`) do; every WiM MSB-Wechsel ORDRSP names an `S_00xx`
+    // (Strom) or `G_00xx` (Gas) Codeliste instead. The workflow supplies the
+    // wire value in `antwort_codeliste`.
+    //
+    // Which PIDs: 19001/19002 (Bestellung Geräteübernahme), 19003/19004
+    // (Weiterverpflichtung), 19005/19006 (Messlokationsänderung), 19009/19010
+    // (Beendigung Rechnungsabwicklung), 19011–19014 (ESA Wertebestellung) and
+    // 19015/19016 (Gerätewechselabsicht).
+    const ANTWORTCODE_PIDS: &[u32] = &[
+        19_001, 19_002, 19_003, 19_004, 19_005, 19_006, 19_009, 19_010, 19_011, 19_012, 19_013,
+        19_014, 19_015, 19_016,
+    ];
+    if pid.is_some_and(|p| ANTWORTCODE_PIDS.contains(&p)) {
+        // 19011–19014 additionally carry `BGM+Z57` and, on the Bestellung pair,
+        // `IMD++<7081>` — which is what tells an answer to a Bestellung
+        // (`E_0256`) from one to a Beendigung (`E_0254`), since the two share
+        // these Prüfidentifikatoren.
+        if matches!(pid, Some(19011..=19014)) {
+            builder = builder.document_code("Z57");
+            if let Some(abo) = p.get("abonnement").and_then(serde_json::Value::as_str)
+                && matches!(pid, Some(19011 | 19012))
+            {
+                builder = builder.abonnement(abo);
+            }
         }
-        if let (Some(code), Some(ebd)) = (
-            p.get("antwort_code").and_then(serde_json::Value::as_str),
-            p.get("antwort_ebd").and_then(serde_json::Value::as_str),
-        ) {
-            builder = builder.adjustment(code, ebd);
+        let code = p.get("antwort_code").and_then(serde_json::Value::as_str);
+        let codeliste = p
+            .get("antwort_codeliste")
+            .or_else(|| p.get("antwort_ebd"))
+            .and_then(serde_json::Value::as_str);
+        if let (Some(code), Some(codeliste)) = (code, codeliste) {
+            builder = builder.adjustment(code, codeliste);
         } else {
             return Err(RenderError::MissingField {
                 message_type: mt.into(),
-                field: "antwort_code/antwort_ebd (SG2 AJT is Muss on 19011-19014)".into(),
+                field: format!(
+                    "antwort_code/antwort_codeliste (SG2 AJT is Muss on {ANTWORTCODE_PIDS:?})"
+                )
+                .into(),
             });
         }
     }

@@ -6924,22 +6924,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mako-wim-gas"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "edi-energy",
- "mako-engine",
- "mako-fristen",
- "mako-wim",
- "serde",
- "serde_json",
- "thiserror 2.0.20",
- "time",
- "tokio",
-]
-
-[[package]]
 name = "makod"
 version = "0.16.0"
 dependencies = [
@@ -6969,7 +6953,6 @@ dependencies = [
  "mako-redispatch",
  "mako-service",
  "mako-wim",
- "mako-wim-gas",
  "object_store 0.14.1",
  "redispatch-xml",
  "reqwest 0.13.4",

@@ -447,14 +447,20 @@ fn parse_transaktionsgrund(
     })
 }
 
-/// `STS+E01++<code>:<ebd>` — the Antwortcode in DE 9013 and the EBD id in
-/// DE 1131, both inside the single `C556` at element 3 (zero-based 2).
+/// `STS+E01++<code>:<codeliste>` — the Prüfschritt code in DE 9013 and the
+/// **Codeliste** it comes from in DE 1131, both inside the single `C556` at
+/// element 3 (zero-based 2).
+///
+/// The Codeliste is the EBD number for the GPKE and `GeLi` Gas trees
+/// (`E_0622`) and an `S_00xx`/`G_00xx` identifier for the `WiM` MSB-Wechsel
+/// answers (`S_0090`). Both are valid values of the same
+/// element; the AHB says which per Anwendungsfall.
 fn parse_antwort(seg: &edifact_rs::Segment<'_>) -> Option<crate::utilmd_codes::AntwortStatus> {
     let c556 = seg.get_element(2)?;
     let code = c556.get_component(0).filter(|c| !c.is_empty())?;
     Some(crate::utilmd_codes::AntwortStatus {
         code: code.to_owned(),
-        ebd: c556
+        codeliste: c556
             .get_component(1)
             .filter(|c| !c.is_empty())
             .map(ToOwned::to_owned),

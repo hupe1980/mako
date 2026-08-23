@@ -24,7 +24,7 @@ use super::*;
 /// | `transaktionsgrund` | no   | `SG4 STS+7` DE 9013 element 2                  |
 /// | `transaktionsgrund_ergaenzung` | no | `STS+7` DE 9013 element 3 (`ZW3`…`ZAP`); defaults to `ZW4` when a Grund is present |
 /// | `antwort_code`  | no       | `SG4 STS+E01` DE 9013 — **required on every Antwort-PID** |
-/// | `antwort_ebd`   | no       | `STS+E01` DE 1131, the EBD the code comes from |
+/// | `antwort_codeliste` | no   | `STS+E01` DE 1131, the **Codeliste** the code comes from (`E_0622`, `S_0090`, `G_0051`, …) |
 /// | `bemerkung`     | no       | `FTX+ACB` free text (mandatory alongside a catch-all Ablehnungscode) |
 ///
 /// \* Exactly one of `malo` / `melo` is required, depending on the PID range.
@@ -55,8 +55,14 @@ pub(super) fn render_utilmd(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    // WiM Messlokations-PIDs name a MeLo; everything else names a MaLo.
-    let names_messlokation = matches!(pid, 55_039 | 55_042 | 55_051 | 55_168);
+    // The MSB is assigned to the **Messlokation**, never to the Marktlokation
+    // („Der MSB ist ausschließlich dem Objekt Messlokation zugeordnet" — WiM
+    // Strom Teil 1 Kap. 2.1.2 d, AWH WiM Gas 2.0 Kap. 3.1.2 d), so every WiM
+    // MSB-Wechsel message names a MeLo in `SG5 LOC` — the Anfrage and both
+    // answers, in both Sparten. Everything else names a MaLo.
+    let names_messlokation = mako_wim::geraetewechsel::wim_sparte(pid).is_some()
+        || mako_wim::antwort_pid_meaning(pid)
+            .is_some_and(|(request, _)| mako_wim::geraetewechsel::wim_sparte(request).is_some());
     let location_id_key = if names_messlokation { "melo" } else { "malo" };
     let location_id = require_str(p, mt, location_id_key)?;
 
@@ -129,24 +135,38 @@ pub(super) fn render_utilmd(
         tx = tx.referenz_vorgangsnummer(referenz);
     }
 
-    // `SG4 STS+7` — Transaktionsgrund plus its Ergänzung. The AHB marks the
-    // Ergänzung Muss wherever the Grund is, and `ZW4` (verbrauchende
-    // Marktlokation) is the case every GPKE/GeLi Gas core process describes
-    // unless the workflow says otherwise.
+    // `SG4 STS+7` — Transaktionsgrund, and in the GPKE/GeLi Gas processes its
+    // Ergänzung. The AHB marks the Ergänzung Muss wherever the Grund is there,
+    // and `ZW4` (verbrauchende Marktlokation) is the case every core process
+    // describes unless the workflow says otherwise.
+    //
+    // **The WiM MSB-Wechsel has no Ergänzung.** Its Anwendungsübersichten list
+    // `SG4 STS 9015 = 7` and `SG4 STS 9013 = E01|E02|E03|…` and nothing else
+    // (UTILMD AHB Strom 2.2 Kap. 10, Gas 1.2 Kap. 6). Defaulting `ZW4` onto a
+    // Messlokations-Vorgang states „verbrauchende Marktlokation" in an element
+    // the Anwendungsfall does not define.
     if let Some(grund) = p.get("transaktionsgrund").and_then(|v| v.as_str()) {
-        let erg = p
-            .get("transaktionsgrund_ergaenzung")
-            .and_then(|v| v.as_str())
-            .unwrap_or(ergaenzung::VERBRAUCHENDE_MALO);
-        tx = tx.transaktionsgrund(Transaktionsgrund::new(grund, erg));
+        let t = if names_messlokation {
+            Transaktionsgrund::bare(grund)
+        } else {
+            let erg = p
+                .get("transaktionsgrund_ergaenzung")
+                .and_then(|v| v.as_str())
+                .unwrap_or(ergaenzung::VERBRAUCHENDE_MALO);
+            Transaktionsgrund::new(grund, erg)
+        };
+        tx = tx.transaktionsgrund(t);
     }
 
-    // `SG4 STS+E01` — the EBD Antwortcode. Without it a Bestätigung or
-    // Ablehnung is not a well-formed answer: the AHB marks the segment Muss and
-    // constrains the code to the named EBD's cluster.
+    // `SG4 STS+E01` — the Prüfschritt code and the Codeliste it comes from.
+    // Without it a Bestätigung or Ablehnung is not a well-formed answer: the
+    // AHB marks the segment Muss and constrains the code to that Codeliste's
+    // cluster. DE 1131 is the Codeliste identifier, which is the EBD number
+    // only where the AHB says „EBD Nr." — every WiM MSB-Wechsel answer names an
+    // `S_00xx` or `G_00xx` list instead.
     if let Some(code) = p.get("antwort_code").and_then(|v| v.as_str()) {
-        let antwort = match p.get("antwort_ebd").and_then(|v| v.as_str()) {
-            Some(ebd) => AntwortStatus::from_ebd(code, ebd),
+        let antwort = match p.get("antwort_codeliste").and_then(|v| v.as_str()) {
+            Some(cl) => AntwortStatus::from_codeliste(code, cl),
             None => AntwortStatus::bare(code),
         };
         tx = tx.antwort(antwort);
@@ -189,11 +209,31 @@ pub(super) fn utilmd_dtm_qualifier(pid: u32) -> &'static str {
         // Zuordnung, Kündigung — every one of them names a Vertragsende.
         55_004..=55_012 | 55_016..=55_018 => dtm::ENDE_ZUM,
         44_004..=44_012 | 44_016..=44_018 => dtm::ENDE_ZUM,
+        // ── WiM Messstellenbetrieb ────────────────────────────────────────
+        //
+        // **Three different qualifiers, not one.** A Kündigung rendered with
+        // `DTM+76` names a Leistungsbeginn where the AHB requires a
+        // Vertragsende, and the receiver rejects it.
+        //
+        // | Anwendungsfall | Qualifier | AHB |
+        // |---|---|---|
+        // | Kündigung Messstellenbetrieb | `93` Datum Vertragsende ¹ | Strom 2.2 Kap. 10.1 / Gas 1.2 Kap. 6.1 |
+        // | Anmeldung Messstellenbetrieb | `76` Lieferdatum/-zeit, geplant | Strom 2.2 Kap. 10.2 / Gas 1.2 Kap. 6.2 |
+        // | Ende Messstellenbetrieb | `93` Datum Vertragsende ² | Strom 2.2 Kap. 10.4 / Gas 1.2 Kap. 6.4 |
+        // | Verpflichtungsanfrage | `76` Lieferdatum/-zeit, geplant | Strom 2.2 Kap. 10.3 / Gas 1.2 Kap. 6.5 |
+        //
+        // ¹ XOR `DTM+471` „Ende zum nächstmöglichem Termin", which the workflow
+        //   sets explicitly when the Kündigung names no fixed date; the
+        //   Ablehnung additionally carries `157`/`Z01`/`Z10` under `Z12`.
+        // ² alongside `DTM+92` Datum Vertragsbeginn, which the Abmeldung also
+        //   carries.
+        55_039..=55_041 | 44_039..=44_041 => dtm::ENDE_ZUM,
+        55_051..=55_053 | 44_051..=44_053 | 44_183 => dtm::ENDE_ZUM,
+        55_042..=55_044 | 44_042..=44_044 => dtm::LEISTUNGSBEGINN_GEPLANT,
+        55_168..=55_170 | 44_168 | 44_169 => dtm::LEISTUNGSBEGINN_GEPLANT,
         // Stammdatenänderung (GPKE Teil 4 / GeLi Gas): Änderung zum.
         55_109 | 55_110 | 55_136 | 55_137 | 55_600..=55_699 => dtm::AENDERUNG_ZUM,
         44_109..=44_199 => dtm::AENDERUNG_ZUM,
-        // WiM Messstellenbetrieb: the planned execution date.
-        55_039..=55_053 | 55_168..=55_170 => dtm::LEISTUNGSBEGINN_GEPLANT,
         // A PID with no entry here would otherwise get a silently wrong
         // qualifier; `Beginn zum` is the least surprising default and the
         // `utilmd_dtm_qualifier_covers_every_rendered_pid` test keeps the list

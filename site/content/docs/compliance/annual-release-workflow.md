@@ -343,11 +343,10 @@ data, etc.) — investigate each failure before retiring the old FV.
 
 `workflows` names every family the run covered. It is reported rather than
 merely counted because a count alone reads as complete whatever the migration
-happens to include: the arm list once held 33 of the 71 workflows the
-dispatcher knows, with nothing to say which were missing. A build-time guard
-now requires every dispatchable workflow to have either a migration arm or a
-recorded reason it needs none, and `workflows_not_migrated` reports those reasons
-so the sign-off covers them too. They are pure receive-and-record families:
+happens to include, with nothing to say which families were missing. A
+build-time guard requires every dispatchable workflow to have either a
+migration arm or a recorded reason it needs none, and `workflows_not_migrated`
+reports those reasons so the sign-off covers them too. They are pure receive-and-record families:
 they record an inbound message and finish, so no process survives a cutover for
 a migration to repoint.
 

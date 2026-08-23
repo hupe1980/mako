@@ -130,9 +130,9 @@ Every business answer window comes from **one** table,
 |---|---|
 | GPKE | a clock time on the *n*-th Werktag after the ÜT (11:00 / 06:00 / 05:00 / 09:00 on the 1., 00:00 on the 61. for a Neuanlage) |
 | GPKE Sperrung / Teil 4 | „spätester ÜT ist der *n*. WT nach dem ÜT" — 1 WT, 2 WT, 10 WT |
-| WiM Strom | 3 / 5 / 7 / 1 Werktage, per PID |
+| WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage, per PID |
 | GeLi Gas | „Ablauf des *n*. Werktags nach Eingang" — 4 / 3 / 2 WT |
-| WiM Gas | 10 Werktage |
+| INVOIC | zum Zahlungsziel der Rechnung (`SG8 DTM+265`) |
 
 The **APERAK** deadline is a separate clock: 45 minutes on a Werktag
 (`fristen::aperak_strom_due_at`). A PID with no published window returns `None` —

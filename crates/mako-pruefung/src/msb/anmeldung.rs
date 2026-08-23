@@ -28,7 +28,7 @@ use mako_fristen::vorlauf::{VorlaufVerdict, anmeldung_vorlauf};
 use time::Date;
 
 use crate::antwort::RejectReason;
-use crate::codes::{EBD_ANMELDUNG_MSB, lookup};
+use crate::codes::lookup;
 
 use super::types::{AnmeldungMsb, MsbEntscheidung};
 
@@ -48,8 +48,8 @@ pub fn pruefe_anmeldung(
     eingangsdatum: Date,
     cal: HolidayCalendar,
 ) -> MsbEntscheidung {
-    let tree = EBD_ANMELDUNG_MSB;
-    let code = |c: &str| lookup(tree, c).expect("code is published in E_0201");
+    let tree = super::baum::anmeldung(anfrage.sparte);
+    let code = |c: &str| lookup(tree, c).expect("code is published in the Anmeldung tree");
 
     // A lookup that could not be performed is not a finding. `ZC9` on a
     // Messlokation that exists refuses a lawful § 5 MsbG registration, and the
@@ -150,7 +150,9 @@ pub fn pruefe_anmeldung(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codes::EBD_ANMELDUNG_MSB;
     use crate::msb::types::Einrichtungsart;
+    use crate::msb::types::Sparte;
     use time::Month;
 
     const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
@@ -161,6 +163,7 @@ mod tests {
 
     fn anfrage(art: Einrichtungsart, beginn: Date) -> AnmeldungMsb {
         AnmeldungMsb {
+            sparte: Sparte::Strom,
             melo_id: "DE0000000001234567890000000000001".to_owned(),
             msbn_mp_id: "9900000000003".to_owned(),
             gewuenschter_zuordnungsbeginn: beginn,
@@ -184,9 +187,9 @@ mod tests {
         assert_eq!(e.ebd(), Some("E_0201"));
     }
 
-    /// The check that was missing entirely: a Zuordnungsbeginn inside the
-    /// 15-Werktage lead time is refused with `E17`, and the answer names the
-    /// earliest date the MSBN could still reach.
+    /// A Zuordnungsbeginn inside the 15-Werktage lead time is refused with
+    /// `E17`, and the answer names the earliest date the MSBN could still
+    /// reach.
     #[test]
     fn a_short_vorlauffrist_is_e17_and_names_the_next_possible_date() {
         let beginn = d(2026, Month::June, 1);

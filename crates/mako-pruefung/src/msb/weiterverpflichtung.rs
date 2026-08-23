@@ -33,7 +33,7 @@
 use time::{Date, Duration};
 
 use crate::antwort::{AntwortDetail, RejectReason};
-use crate::codes::{EBD_WEITERVERPFLICHTUNG, lookup};
+use crate::codes::lookup;
 
 use super::types::{MsbEntscheidung, WeiterverpflichtungAuftrag};
 
@@ -45,8 +45,9 @@ use super::types::{MsbEntscheidung, WeiterverpflichtungAuftrag};
 /// a test in this module rules out.
 #[must_use]
 pub fn pruefe_weiterverpflichtung(auftrag: &WeiterverpflichtungAuftrag) -> MsbEntscheidung {
-    let tree = EBD_WEITERVERPFLICHTUNG;
-    let code = |c: &str| lookup(tree, c).expect("code is published in E_0203");
+    let tree = super::baum::weiterverpflichtung(auftrag.sparte);
+    let code =
+        |c: &str| lookup(tree, c).expect("code is published in the Weiterverpflichtung tree");
 
     let cap = max_termin(
         auftrag.bestaetigtes_zuordnungsende,
@@ -109,6 +110,7 @@ fn max_termin(von: Date, monate: i64) -> Date {
 mod tests {
     use super::*;
     use crate::msb::types::Abmeldegrund;
+    use crate::msb::types::Sparte;
     use time::Month;
 
     fn d(y: i32, m: Month, day: u8) -> Date {
@@ -117,6 +119,7 @@ mod tests {
 
     fn auftrag(grund: Abmeldegrund, bis: Date, ausgeschoepft: bool) -> WeiterverpflichtungAuftrag {
         WeiterverpflichtungAuftrag {
+            sparte: Sparte::Strom,
             melo_id: "DE0000000001234567890000000000001".to_owned(),
             bestaetigtes_zuordnungsende: d(2026, Month::April, 1),
             verschobenes_zuordnungsende: bis,

@@ -24,7 +24,7 @@
 //! # Regulatory basis
 //!
 //! - **MsbG** — Messstellenbetriebsgesetz (Smart-Meter-Rollout)
-//! - **BNetzA BK6-24-174**, Anlage 2a — WiM Strom Teil 1 (Lesefassung)
+//! - **BNetzA BK6-22-024**, Anlage 2a — WiM Strom Teil 1 (Lesefassung)
 //! - **UTILMD S2.x** — EDI@Energy message format for metering processes
 //! - **APERAK 2.x** — application error acknowledgement
 
@@ -37,7 +37,7 @@ use mako_engine::{
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
-    types::{DeviceId, MarktpartnerCode, MeLo, MessageRef},
+    types::{DeviceId, MarktpartnerCode, MeLo, MessageRef, Sparte},
     workflow::{CommandPayload, EventPayload, PendingDeadline, Workflow, WorkflowOutput},
 };
 use mako_fristen::{
@@ -70,32 +70,151 @@ pub const WORKFLOW_NAME: &str = "wim-device-change";
 /// ```
 pub const ANTWORT_FRIST_WINDOW_LABEL: &str = "wim-device-change-antwort-frist";
 
-/// Prüfidentifikatoren that carry a WiM MSB-Wechsel UTILMD.
+/// Prüfidentifikatoren that carry a WiM MSB-Wechsel UTILMD, **in both Sparten**.
 ///
-/// Directions are per *Anwendungsübersicht der Prüfidentifikatoren* 4.0 and the
-/// BK6-22-024 WiM Teil 1 Lesefassung. Note that they are **not** uniformly
-/// "MSB → NB" — 55039 never reaches the NB at all, and 55168 addresses the gMSB:
+/// Directions are per *Anwendungsübersicht der Prüfidentifikatoren* 4.0, the
+/// BK6-22-024 WiM Strom Teil 1 Lesefassung and the BDEW *AWH Wechselprozesse im
+/// Messwesen Gas 2.0* (gültig ab 01.10.2026). Note that they are **not**
+/// uniformly „MSB → NB" — the Kündigung never reaches the NB at all, and the
+/// Verpflichtungsanfrage addresses the gMSB:
 ///
-/// | PID   | Process                            | Von  | An   | Kap.  |
-/// |-------|------------------------------------|------|------|-------|
-/// | 55039 | Kündigung MSB                      | MSBN | MSBA | 2.2   |
-/// | 55042 | Anmeldung MSB                      | MSBN | NB   | 2.3   |
-/// | 55051 | Ende MSB (Abmeldung)               | MSBA | NB   | 2.4   |
-/// | 55168 | Verpflichtungsanfrage / Aufforderung | NB | gMSB | 2.5   |
+/// | Strom | Gas   | Process                              | Von  | An   |
+/// |-------|-------|--------------------------------------|------|------|
+/// | 55039 | 44039 | Kündigung MSB                        | MSBN | MSBA |
+/// | 55042 | 44042 | Anmeldung MSB (Beginn Messstellenbetrieb) | MSBN | NB |
+/// | 55051 | 44051 | Ende MSB (Abmeldung)                 | MSBA | NB   |
+/// | 55168 | 44168 | Verpflichtungsanfrage / Aufforderung | NB   | gMSB |
 ///
-/// The Kündigung (55039) runs on the **contract layer** between the two MSB and
-/// is explicitly *non-constitutive*: BK6-24-174 Kap. 2.1.3 states that a switch
-/// is effected solely by the successful Anmeldung MSBN → NB. Never gate 55042 on
-/// a 55040 Bestätigung — they are independent channels.
+/// **One process family, two Sparten.** AWH WiM Gas 2.0 restates WiM Strom
+/// Teil 1 use-case for use-case, Frist for Frist and Prüfschritt for
+/// Prüfschritt; only the UTILMD PID namespace, the Antwort-Codeliste
+/// (`G_00xx` against `S_00xx`), the APERAK regime and the Zuordnungszeitpunkt
+/// (06:00 Uhr Gastag against 00:00) differ. They are therefore one workflow
+/// parameterised by [`Sparte`], not two.
+///
+/// The Kündigung is on the **contract layer** between the two MSB and is
+/// explicitly *non-constitutive*: WiM Strom Teil 1 Kap. 2.1.3 and AWH WiM Gas
+/// 2.0 Kap. 3.1.2 c both state that a switch is effected solely by the
+/// successful Anmeldung MSBN → NB. Never gate 55042/44042 on a 55040/44040
+/// Bestätigung — they are independent channels.
 ///
 /// Used both to validate inbound UTILMD and to constrain the outbound
 /// [`DeviceChangeCommand::InitiateDeviceChange`] order.
-pub const DEVICE_CHANGE_PIDS: &[u32] = &[55_039, 55_042, 55_051, 55_168];
+pub const DEVICE_CHANGE_PIDS: &[u32] = &[
+    55_039, 55_042, 55_051, 55_168, // WiM Strom Teil 1
+    44_039, 44_042, 44_051, 44_168, // AWH WiM Gas 2.0
+];
+
+/// The Sparte a WiM MSB-Wechsel Prüfidentifikator belongs to.
+///
+/// The UTILMD legs split by namespace — 55xxx Strom, 44xxx Gas — and that is
+/// the only place the Sparte is legible from the PID alone. Every other leg of
+/// the same Use-Cases (ORDERS 17001/17002/17009, ORDRSP 19001–19004/19015/19016,
+/// REQOTE 35001, QUOTES 15001, IFTSTA 21007–21013/21036, INSRPT 23001–23008)
+/// runs on a Sparte-neutral AHB and the same PID in both, so there the Sparte
+/// comes from the interchange recipient's MP-ID and travels in the command —
+/// see [`crate::geraeteubernahme::GeraeteubernahmeData::sparte`].
+///
+/// Returns `None` for a PID outside the family — including the answer PIDs,
+/// which [`antwort_pid_meaning`] resolves to their request first.
+#[must_use]
+pub fn wim_sparte(pid: u32) -> Option<Sparte> {
+    match pid {
+        55_039 | 55_042 | 55_051 | 55_168 => Some(Sparte::Strom),
+        44_039 | 44_042 | 44_051 | 44_168 => Some(Sparte::Gas),
+        _ => None,
+    }
+}
+
+/// The Transaktionsgründe an inbound WiM MSB-Wechsel message may state, per
+/// Prüfidentifikator.
+///
+/// `SG4 STS+7` DE 9013 is **Muss on every one of the twelve PIDs** — the
+/// Anfrage *and* both answers, in both Sparten (UTILMD AHB Strom 2.2 Kap. 10,
+/// Gas 1.2 Kap. 6). The answer echoes the Grund the request stated; a WiM
+/// answer that omits the segment is rejected before any Antwortcode is read.
+///
+/// | Anwendungsfall | Strom | Gas |
+/// |---|---|---|
+/// | Kündigung | `E03` `ZR9` | `E03` `ZR9` |
+/// | Anmeldung | `E01` `E02` `E03` `ZJ4` | `E01` `E02` `E03` |
+/// | Ende MSB | `E01` `E03` `Z33` `ZZB` | `E01` `E03` `Z33` |
+/// | Verpflichtungsanfrage | `E01` `E02` `E03` | `E01` `E02` `E03` |
+///
+/// Two Strom-only codes: `ZJ4` „Übernahme aufgrund nicht erfolgtem
+/// iMS-Einbau" and `ZZB` „Stilllegung inkl. Ausbau" — both name a Sachverhalt
+/// the Gas rollout has no equivalent of.
+///
+/// **The WiM `STS+7` carries no Ergänzung.** GPKE's `STS+7++<Grund>+<ZW4…>`
+/// third element is absent from every WiM Anwendungsübersicht; emitting a
+/// default `ZW4` („verbrauchende Marktlokation") on a Messlokations-Vorgang
+/// states something the AHB has no element for.
+#[must_use]
+pub fn transaktionsgruende(pid: u32) -> &'static [&'static str] {
+    // Resolve an answer PID to the request whose Grund it echoes.
+    let request = if wim_sparte(pid).is_some() {
+        pid
+    } else {
+        match antwort_pid_meaning(pid) {
+            Some((r, _)) => r,
+            None => return &[],
+        }
+    };
+    match request {
+        55_039 => &["E03", "ZR9"],
+        44_039 => &["E03", "ZR9"],
+        55_042 => &["E01", "E02", "E03", "ZJ4"],
+        44_042 => &["E01", "E02", "E03"],
+        55_051 => &["E01", "E03", "Z33", "ZZB"],
+        44_051 => &["E01", "E03", "Z33"],
+        55_168 | 44_168 => &["E01", "E02", "E03"],
+        _ => &[],
+    }
+}
+
+/// The Transaktionsgrund a WiM message defaults to when the caller states none.
+///
+/// `E03` „Wechsel" is published by all four Anwendungsfälle in both Sparten and
+/// is the case every one of them describes — a Kündigung, an Anmeldung, an
+/// Abmeldung and a Verpflichtungsanfrage all arise from a Wechsel des
+/// Messstellenbetreibers unless the caller says otherwise. It is the only code
+/// that can be defaulted without asserting a Sachverhalt (`E02` Neuanlage,
+/// `Z33` Auszug, `ZR9` Vertrag mit Anschlussnehmer) the process did not report.
+pub const TRANSAKTIONSGRUND_WECHSEL: &str = "E03";
+
+/// UTILMD 44183 — „Ende MSB von NB", the Gas NB informing the MSB that the
+/// Messlokation is being stilllegt (AWH WiM Gas 2.0 Kap. 3.7).
+///
+/// An **information without an answer**: UTILMD AHB Gas 1.2 Kap. 6.4 gives it a
+/// `STS+7` with the single Transaktionsgrund `Z33` („Auszug wegen
+/// Stilllegung"), `DTM+93`, a Meldepunkt and a Prüfidentifikator — and no
+/// `STS+E01`, no `RFF+TN` and no answer Prüfidentifikator. Handled by
+/// [`DeviceChangeCommand::ReceiveInformation`], which records it and leaves the
+/// state alone.
+///
+/// It has no Strom twin: the equivalent notice there is an IFTSTA.
+pub const ENDE_MSB_VOM_NB_PID: u32 = 44_183;
+
+/// The hour of day at which a WiM Zuordnung takes effect.
+///
+/// Strom assigns at **00:00 Uhr** (WiM Strom Teil 1 Kap. 2.1.1), Gas at
+/// **06:00 Uhr** — the Gastag boundary (AWH WiM Gas 2.0 Kap. 3.1.1: „… mit dem
+/// Zeitpunkt 06:00 Uhr zu. Die Zuordnung des MSBA endet entsprechend zu diesem
+/// Zeitpunkt"). Assigning a Gas Messlokation from midnight hands the MSBN six
+/// hours of a Gastag that still belongs to the MSBA, and every value in that
+/// window is then attributed to the wrong party.
+#[must_use]
+pub const fn zuordnungs_stunde(sparte: Sparte) -> u8 {
+    match sparte {
+        Sparte::Strom => 0,
+        Sparte::Gas => 6,
+    }
+}
 
 /// Antwortfrist in Werktagen for the counterparty's business response.
 ///
 /// **These differ per process** — a single flat window would fire early for the
-/// Kündigung and late for the Abmeldung. From BK6-24-174 WiM Teil 1
+/// Kündigung and late for the Abmeldung. From BK6-22-024 WiM Teil 1
 /// ("Unverzüglich, jedoch spätester ÜT ist der *n*. WT nach dem ÜT von Nr. 1"):
 ///
 /// | Request | Antwort | Frist | Fundstelle |
@@ -147,20 +266,26 @@ pub const AUFTRAG_ANTWORT_WINDOW_LABEL: &str = "wim-device-change-auftrag-antwor
 ///
 /// These close an order opened with [`DeviceChangeCommand::InitiateDeviceChange`].
 ///
-/// The UTILMD AHB Strom **does** define all twelve as full Anwendungsfälle —
-/// Kap. 10.1 (Kündigung), 10.2 (Anmeldung), 10.3 (Verpflichtungsanfrage),
-/// 10.4 (Beendigung), each as one table with a column per Prüfidentifikator.
-/// The response PIDs additionally carry `SG4 STS+E01` (Status der Antwort) and
-/// resolve their Ablehnungsgründe through EBD codes (55040→`E_0200`,
-/// 55043/55044→`E_0201`, 55052/55053→`E_0202`, 55169/55170→`E_0240`).
+/// The UTILMD AHB defines every one of these as a full Anwendungsfall — Strom
+/// 2.2 Kap. 10.1–10.4, Gas 1.2 Kap. 6.1–6.5 — each as one table with a column
+/// per Prüfidentifikator. Every answer carries `SG4 STS+E01` (Status der
+/// Antwort) with the Prüfschritt code in DE 9013.
 ///
-/// `crates/edi-energy/src/generated/` emits rule packs for all twelve PIDs —
-/// the eight Antwort packs enforce BGM (mirrors the request's Dokumentencode),
-/// DTM+137, NAD MS/MR, IDE+24 and the `SG4 STS+E01` Status der Antwort (the
-/// Prüfschritt code in DE 9013 resolves through the EBD lists above; the MIG
-/// dialect carries no DE 1131). Inbound responses are therefore fully
-/// schema-validated; the Bestätigung/Ablehnung decision still rides on the PID.
+/// **DE 1131 names a Codeliste, not the Entscheidungsbaum.** The AHB column
+/// reads „Codeliste Strom Nr. `S_0090`", not „EBD Nr. `E_0200`", and the
+/// **cluster** picks which of the pair: `S_0090` on the Bestätigung, `S_0054`
+/// on the Ablehnung. Ask [`mako_pruefung::codes::AntwortCode::wire_codeliste`]
+/// for the wire value — `wim_ebd` returns the tree a code is *resolved* against,
+/// which is a different thing and never goes on the wire for this family.
+///
+/// | Request | Bestätigung DE 1131 | Ablehnung DE 1131 |
+/// |---|---|---|
+/// | 55039 / 44039 | `S_0090` / `G_0052` | `S_0054` / `G_0051` |
+/// | 55042 / 44042 | `S_0055` / `G_0054` | `S_0056` / `G_0053` |
+/// | 55051 / 44051 | `S_0059` / `G_0058` | `S_0060` / `G_0057` |
+/// | 55168 / 44168 | `S_0063` / `G_0070` | `S_0064` / `G_0071` |
 pub const DEVICE_CHANGE_ANTWORT_PIDS: &[(u32, u32, bool)] = &[
+    // WiM Strom Teil 1 — UTILMD AHB Strom 2.2 Kap. 10.1–10.4.
     (55_040, 55_039, true),
     (55_041, 55_039, false),
     (55_043, 55_042, true),
@@ -169,6 +294,20 @@ pub const DEVICE_CHANGE_ANTWORT_PIDS: &[(u32, u32, bool)] = &[
     (55_053, 55_051, false),
     (55_169, 55_168, true),
     (55_170, 55_168, false),
+    // AWH WiM Gas 2.0 — UTILMD AHB Gas 1.2 Kap. 6.1–6.5.
+    (44_040, 44_039, true),
+    (44_041, 44_039, false),
+    (44_043, 44_042, true),
+    (44_044, 44_042, false),
+    (44_052, 44_051, true),
+    (44_053, 44_051, false),
+    (44_169, 44_168, true),
+    // **44170 does not exist.** The Gas Verpflichtungsanfrage publishes a
+    // Bestätigung and no Ablehnungs-PID (PID-Übersicht 4.0 rows 39240/39250);
+    // the 44170 of PID 3.3 was withdrawn with FV2026-10-01. `E_2006` still
+    // publishes the Ablehnungs-Codeliste `G_0071`, so the codes exist with no
+    // carrier — [`antwort_pid_for`] returns `None` and the caller escalates
+    // rather than inventing a Prüfidentifikator the market does not accept.
 ];
 
 /// Resolve a response PID to `(request_pid, is_confirmed)`.
@@ -192,10 +331,17 @@ pub fn antwort_pid_meaning(pid: u32) -> Option<(u32, bool)> {
 pub fn wim_ebd(request_pid: u32) -> Option<&'static str> {
     use mako_pruefung::codes as c;
     match request_pid {
+        // WiM Strom (EBD 4.3 Kap. 8) — codes ride the `S_00xx` Codelisten.
         55_039 => Some(c::EBD_KUENDIGUNG_MSB),
         55_042 => Some(c::EBD_ANMELDUNG_MSB),
         55_051 => Some(c::EBD_ABMELDUNG_MSB),
         55_168 => Some(c::EBD_VERPFLICHTUNGSANFRAGE),
+        // WiM Gas (EBD 4.3 Kap. 14) — codes ride the `G_00xx` Codelisten and
+        // share nothing with the Strom trees beyond the spelling of `E15`.
+        44_039 => Some(c::EBD_KUENDIGUNG_MSB_GAS),
+        44_042 => Some(c::EBD_ANMELDUNG_MSB_GAS),
+        44_051 => Some(c::EBD_ABMELDUNG_MSB_GAS),
+        44_168 => Some(c::EBD_VERPFLICHTUNGSANFRAGE_GAS),
         _ => None,
     }
 }
@@ -235,8 +381,10 @@ pub fn antwort_pid_for(request_pid: u32, bestaetigt: bool) -> Option<u32> {
 /// | 21030 | iMS-Ersteinbauzustand | wMSB → gMSB |
 /// | 21031 | Bestandssituation / Eigenausbau iMS | wMSB → gMSB |
 /// | 21032 | Antwort auf das Angebot | LF → MSB |
+/// | 21036 | Zeitpunkt des Geräteausbaus | MSBN → MSBA |
 pub const IFTSTA_PIDS: &[u32] = &[
     21_007, 21_009, 21_010, 21_011, 21_012, 21_013, 21_015, 21_018, 21_029, 21_030, 21_031, 21_032,
+    21_036,
 ];
 
 /// The five IFTSTA PIDs of the **Mitteilung über Gesamtvorgang** — the leg that
@@ -315,6 +463,30 @@ fn parse_yyyymmdd(raw: &str) -> Option<time::Date> {
     time::Date::from_calendar_date(year, month, day).ok()
 }
 
+/// The APERAK *sending* deadline for an inbound WiM order, per Sparte.
+///
+/// Two different regimes, and the numbers do not overlap:
+///
+/// | Sparte | Window | Fundstelle |
+/// |---|---|---|
+/// | Strom | **45 Minuten** on a Werktag for UTILMD/ORDERS; Saturday → Sonntag 12:00 | APERAK AHB 1.1 §2.4.1 |
+/// | Gas | nächster Werktag **12:00** (Folgeprozess) / **3 Werktage** (Initialprozess) | APERAK AHB 1.1 §2.3.1 |
+///
+/// The Gas branch picks its window from the Prüfidentifikator, because that is
+/// what the BDEW made the discriminator — see
+/// [`mako_fristen::GAS_INITIALPROZESS_PIDS`].
+fn aperak_deadline(sparte: Sparte, pid: u32, received_at: OffsetDateTime) -> PendingDeadline {
+    match sparte {
+        Sparte::Strom => {
+            PendingDeadline::new(APERAK_STROM_WINDOW_LABEL, aperak_strom_due_at(received_at))
+        }
+        Sparte::Gas => {
+            let (label, due) = mako_fristen::aperak_gas_due_at(pid, received_at);
+            PendingDeadline::new(label, due)
+        }
+    }
+}
+
 /// A calendar date as the 17:00 Europe/Berlin MaKo cut-off instant on it.
 fn berlin_cutoff(date: time::Date) -> OffsetDateTime {
     mako_fristen::berlin_at(
@@ -348,9 +520,15 @@ pub enum DeviceChangeEvent {
         /// `IDE+24` DE 7402 — the Vorgangsnummer the answer must echo.
         #[serde(default)]
         vorgangsnummer: Option<String>,
-        /// `SG4 DTM+76` — the date the order asks for (YYYYMMDD).
+        /// `SG4 DTM` — the date the order asks for (YYYYMMDD).
         #[serde(default)]
         process_date: Option<String>,
+        /// `SG4 STS+7` DE 9013 — the Transaktionsgrund the order stated.
+        ///
+        /// Muss on the Anfrage and on both answers, so the answer echoes it —
+        /// see [`transaktionsgruende`].
+        #[serde(default)]
+        transaktionsgrund: Option<String>,
     },
     /// EDIFACT message passed profile validation (no rule violations).
     ValidationPassed {
@@ -440,13 +618,20 @@ pub enum DeviceChangeEvent {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received an IFTSTA WiM status message (PIDs 21009–21018).
+    /// Received a WiM message that informs without asking for anything.
     ///
-    /// WiM IFTSTA messages are informational: they notify the parties of
-    /// process-status updates and Vollzugsmeldungen without driving a state
-    /// transition. Recorded in the event log for audit purposes.
-    IftstaStatusReceived {
-        /// IFTSTA Prüfidentifikator (21009–21018).
+    /// Two kinds, and neither drives a state transition:
+    ///
+    /// * the **IFTSTA Statusmeldungen** (21007, 21013, 21018, 21025–21036) that
+    ///   notify the parties of process status and Vollzugsmeldungen;
+    /// * **UTILMD 44183** „Ende MSB von NB" — the Gas NB informing the MSB that
+    ///   the Messlokation is being stilllegt (AWH WiM Gas 2.0 Kap. 3.7). It
+    ///   carries a Transaktionsgrund of `Z33` and no answer at all: the AHB Gas
+    ///   1.2 column has no `STS+E01` and no `RFF+TN`.
+    ///
+    /// Both are recorded in the event log for audit purposes.
+    InformationEmpfangen {
+        /// Prüfidentifikator of the informational message.
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
@@ -511,7 +696,7 @@ impl EventPayload for DeviceChangeEvent {
             Self::Completed { .. } => "WimDeviceChangeCompleted",
             Self::Rejected { .. } => "WimDeviceChangeRejected",
             Self::DeadlineExpired { .. } => "WimDeviceChangeDeadlineExpired",
-            Self::IftstaStatusReceived { .. } => "WimDeviceChangeIftstaStatusReceived",
+            Self::InformationEmpfangen { .. } => "WimDeviceChangeInformationEmpfangen",
         }
     }
     // schema_version defaults to 1; increment and add an upcast arm on next
@@ -565,6 +750,15 @@ pub struct DeviceChangeData {
     /// windows, and the date `marktd` records — measures against this one.
     #[serde(default)]
     pub bestaetigter_zuordnungsbeginn: Option<String>,
+    /// `SG4 STS+7` DE 9013 — the Transaktionsgrund the order stated.
+    ///
+    /// Muss on the Anfrage **and** on both answers, so the answer has to echo
+    /// what arrived rather than restate a default. `None` on a stream opened
+    /// before the field existed, and on the REST channel, which carries no
+    /// EDIFACT Transaktionsgrund; both fall back to
+    /// [`TRANSAKTIONSGRUND_WECHSEL`] at render time.
+    #[serde(default)]
+    pub transaktionsgrund: Option<String>,
 }
 
 /// Current state of a WiM Gerätewechsel process stream.
@@ -726,18 +920,28 @@ pub enum DeviceChangeCommand {
         /// Vorgänge, so echoing `UNH` would correlate the answer to the wrong
         /// one whenever a counterparty batches.
         vorgangsnummer: Option<String>,
-        /// `SG4 DTM+76` — the date the order asks for (YYYYMMDD).
+        /// `SG4 DTM` — the date the order asks for (YYYYMMDD).
+        ///
+        /// Which qualifier carries it depends on the Anwendungsfall: `DTM+93`
+        /// (Datum Vertragsende, XOR `DTM+471`) on a Kündigung and an Ende MSB,
+        /// `DTM+76` (Lieferdatum/-zeit, geplant) on an Anmeldung and a
+        /// Verpflichtungsanfrage.
         process_date: Option<String>,
+        /// `SG4 STS+7` DE 9013 — the Transaktionsgrund the order stated.
+        ///
+        /// Muss on every WiM MSB-Wechsel Prüfidentifikator, and the answer
+        /// echoes it. `None` from a source that has no such field (the REST
+        /// channel), where the render-time default applies.
+        transaktionsgrund: Option<String>,
         /// `true` if `msg.validate()` returned a report with no errors.
         validation_passed: bool,
         /// Human-readable validation issue strings for the `Rejected` event.
         validation_errors: Vec<String>,
         /// UTC wall-clock time when the inbound UTILMD was received.
         ///
-        /// Used to compute the APERAK 45-minute sending deadline
-        /// (APERAK AHB 1.0 §2.4.1) and the 5-Werktage process deadline
-        /// (WiM BK6-22-024 §2a) that are registered atomically with
-        /// the `Initiated` event.
+        /// Sizes both clocks the arrival starts: the APERAK sending window
+        /// (45 min in Strom, the Initial-/Folgeprozess split in Gas) and the
+        /// business Antwortfrist (3 / 5 / 7 / 1 Werktage per PID).
         received_at: OffsetDateTime,
     },
     /// Inbound iMS Universalbestellprozess order received via REST
@@ -758,12 +962,12 @@ pub enum DeviceChangeCommand {
         /// Requested installation / process date (ISO 8601 date string).
         process_date: String,
     },
-    /// Dispatch a positive or negative APERAK.
+    /// Dispatch the APERAK — the technical acknowledgement, on its own clock.
     ///
-    /// **BDEW WiM / BNetzA BK6-22-024**: APERAK must be sent within
-    /// **5 Werktage** of receiving the UTILMD (not wall-clock hours).
-    /// Use `fristen::add_werktage(5, HolidayCalendar::BdewMaKo)` to compute
-    /// the deadline.
+    /// Strom: **45 Minuten** for a UTILMD received on a Werktag, both
+    /// polarities. Gas: **only** the Verarbeitbarkeitsfehlermeldung, by the
+    /// next Werktag 12:00 or, on an Initialprozess, within 3 Werktagen
+    /// (APERAK AHB 1.1 §2.3.1/§2.4.1). A `positive: true` in Gas is refused.
     DispatchAperak {
         /// `true` for positive APERAK, `false` for negative.
         positive: bool,
@@ -854,13 +1058,13 @@ pub enum DeviceChangeCommand {
         /// Label identifying the deadline type.
         label: Box<str>,
     },
-    /// Received an IFTSTA WiM status message (PIDs 21009–21018).
+    /// Received a WiM message that informs without asking for anything.
     ///
-    /// Constructed by the IFTSTA adapter in `makod` when an inbound AS4
-    /// IFTSTA message with a WiM PID arrives, or via the
-    /// `"wim.iftsta.empfangen"` REST command.
-    ReceiveIftsta {
-        /// IFTSTA Prüfidentifikator (21009–21018).
+    /// Covers the IFTSTA Statusmeldungen and the Gas UTILMD
+    /// [`ENDE_MSB_VOM_NB_PID`]. Constructed by the `makod` adapters on an
+    /// inbound AS4 message, or via the `"wim.iftsta.empfangen"` REST command.
+    ReceiveInformation {
+        /// Prüfidentifikator of the informational message.
         pid: Pruefidentifikator,
         /// Sender party code (GLN).
         sender: MarktpartnerCode,
@@ -868,7 +1072,7 @@ pub enum DeviceChangeCommand {
         receiver: MarktpartnerCode,
         /// EDIFACT message reference.
         message_ref: MessageRef,
-        /// Whether the IFTSTA message passed AHB validation.
+        /// Whether the message passed AHB validation.
         validation_passed: bool,
         /// Validation errors collected by the AHB validator.
         validation_errors: Vec<String>,
@@ -900,11 +1104,15 @@ impl Workflow for WimDeviceChangeWorkflow {
     type Event = DeviceChangeEvent;
     type Command = DeviceChangeCommand;
 
-    /// Deadline compensation for the WiM Gerätewechsel 5-Werktage APERAK window.
+    /// Deadline compensation for the windows this workflow arms.
     ///
-    /// | Label | State guard | Command emitted | BNetzA rule |
-    /// |---|---|---|---|
-    /// | `"wim-aperak-5-werktage"` | `Initiated` or `ValidationPassed` | `TimeoutExpired` | BK6-22-024 — 5 Werktage APERAK Frist |
+    /// | Label | State guard | Frist |
+    /// |---|---|---|
+    /// | [`ANTWORT_FRIST_WINDOW_LABEL`] | `Initiated` / `ValidationPassed` | 3 / 5 / 7 / 1 WT per PID |
+    /// | [`AUFTRAG_ANTWORT_WINDOW_LABEL`] | `AuftragGesendet` | the counterparty's, same numbers |
+    /// | [`GESAMTVORGANG_MELDUNG_WINDOW_LABEL`] | `AuftragBestaetigt` | 10 WT nach dem bestätigten Zuordnungsbeginn |
+    /// | [`GESAMTVORGANG_AUSBLEIBEN_WINDOW_LABEL`] | `AntwortGesendet` | 11 WT |
+    /// | [`ZUORDNUNG_ANTWORT_WINDOW_LABEL`] | `GesamtvorgangGemeldet` | 1 WT |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
@@ -964,6 +1172,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                 message_ref,
                 pruefidentifikator,
             } => DeviceChangeState::AuftragGesendet(DeviceChangeData {
+                // An outbound order states its own Grund; the workflow carries
+                // the default until the caller supplies one.
+                transaktionsgrund: None,
                 melo_id: melo_id.clone(),
                 // On an outbound order this party is the sender; `incoming_msb`
                 // and `grid_operator` are populated by PID direction so the
@@ -1013,7 +1224,9 @@ impl Workflow for WimDeviceChangeWorkflow {
                 pruefidentifikator,
                 vorgangsnummer,
                 process_date,
+                transaktionsgrund,
             } => DeviceChangeState::Initiated(DeviceChangeData {
+                transaktionsgrund: transaktionsgrund.clone(),
                 melo_id: melo_id.clone(),
                 incoming_msb: incoming_msb.clone(),
                 grid_operator: grid_operator.clone(),
@@ -1131,7 +1344,7 @@ impl Workflow for WimDeviceChangeWorkflow {
             },
 
             // Informational WiM IFTSTA status messages do not change state.
-            DeviceChangeEvent::IftstaStatusReceived { .. } => state,
+            DeviceChangeEvent::InformationEmpfangen { .. } => state,
         }
     }
 
@@ -1288,6 +1501,10 @@ impl Workflow for WimDeviceChangeWorkflow {
                         document_date: format!("{process_date}|category={device_category}"),
                         message_ref: message_ref.clone(),
                         pruefidentifikator: pid,
+                        // Nor a Transaktionsgrund: the API-Webdienste payload
+                        // has no field for `SG4 STS+7`, so the render-time
+                        // default applies.
+                        transaktionsgrund: None,
                         // The REST channel carries no EDIFACT Vorgangsnummer;
                         // the transaction id is what the counterparty echoes.
                         vorgangsnummer: Some(tx_id.clone()),
@@ -1303,6 +1520,7 @@ impl Workflow for WimDeviceChangeWorkflow {
 
             DeviceChangeCommand::ReceiveUtilmd {
                 pid,
+                transaktionsgrund,
                 sender,
                 receiver,
                 melo_id,
@@ -1319,15 +1537,14 @@ impl Workflow for WimDeviceChangeWorkflow {
                     return Err(WorkflowError::invalid_state("New", state.status_str()));
                 }
                 // PID guard: reject any PID not in the WiM MSB-Wechsel family.
-                // Only PIDs 55039, 55042, 55051, 55168 are registered by WimModule;
-                // this guard is defence-in-depth for direct callers.
-                let valid_pids = [55_039_u32, 55_042, 55_051, 55_168];
-                if !valid_pids.contains(&pid.as_u32()) {
+                // `WimModule` registers exactly `DEVICE_CHANGE_PIDS`; this guard
+                // is defence-in-depth for direct callers.
+                let Some(sparte) = wim_sparte(pid.as_u32()) else {
                     return Err(WorkflowError::rejected(format!(
-                        "PID {} is not a WiM Messstellenbetrieb PID (expected 55039, 55042, 55051, or 55168)",
+                        "PID {} is not a WiM Messstellenbetrieb PID (expected one of {DEVICE_CHANGE_PIDS:?})",
                         pid.as_u32()
                     )));
-                }
+                };
                 // Clone before move for APERAK emission in the validation-failed path.
                 let sender_mp_id = sender.clone();
                 let receiver_gln = receiver.clone();
@@ -1342,12 +1559,13 @@ impl Workflow for WimDeviceChangeWorkflow {
                     pruefidentifikator: pid,
                     vorgangsnummer,
                     process_date,
+                    transaktionsgrund,
                 }];
                 if validation_passed {
                     events.push(DeviceChangeEvent::ValidationPassed { message_ref });
-                    // WiM Ger\u00e4tewechsel: the APERAK is dispatched by the ERP within 5 Werktage
-                    // (BK6-24-174 \u00a72a) \u2014 NOT auto-emitted here. DispatchAperak is the single
-                    // APERAK decision point for both positive (BGM+312) and negative (BGM+313).
+                    // The APERAK is dispatched by the ERP, never auto-emitted here:
+                    // DispatchAperak is the single decision point for both the
+                    // positive (BGM+312) and the negative (BGM+313) one.
                     //
                     // Register TWO deadlines atomically with the events:
                     //   1. APERAK Strom *sending* deadline (APERAK AHB 1.0 \u00a72.4.1):
@@ -1357,10 +1575,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     //      `antwort_frist_werktage`. The PID guard above already
                     //      rejected anything outside the family, so the lookup
                     //      cannot fail here.
-                    let aperak_send_dl = PendingDeadline::new(
-                        APERAK_STROM_WINDOW_LABEL,
-                        aperak_strom_due_at(received_at),
-                    );
+                    let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
                     let frist_wt = antwort_frist_werktage(pid.as_u32())
                         .expect("PID guard above restricts this to the MSB-Wechsel family");
                     let process_dl = PendingDeadline::new(
@@ -1380,10 +1595,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                     // F-035: APERAK BGM+313 \u2014 mandatory per APERAK AHB 1.0 \u00a72.1.1.
                     // Validation failed \u2192 APERAK sent immediately: register the 45-min
                     // *sending* deadline so the OutboxWorker is monitored (APERAK AHB 1.0 \u00a72.4.1).
-                    let aperak_send_dl = PendingDeadline::new(
-                        APERAK_STROM_WINDOW_LABEL,
-                        aperak_strom_due_at(received_at),
-                    );
+                    let aperak_send_dl = aperak_deadline(sparte, pid.as_u32(), received_at);
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",
@@ -1392,6 +1604,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                                 "sender":     receiver_gln.as_str(),
                                 "receiver":   sender_mp_id.as_str(),
                                 "pid":        29001_u32,
+                                "positive":   false,
                                 "error_code": mako_engine::erc::codes::Z29,
                                 "reason":     reason,
                             }),
@@ -1416,20 +1629,37 @@ impl Workflow for WimDeviceChangeWorkflow {
                         ));
                     }
                 };
-                // Always enqueue an APERAK outbox entry so the ERP layer sees the
-                // business decision.  The renderer/outbox worker translates the
-                // domain payload into the wire APERAK:
-                //   positive = true  → BGM+312 (Bestätigung Gerätewechsel, within 5 WT)
-                //   positive = false → BGM+313 (Ablehnung, within 5 WT)
-                // Both polarities share the same domain payload schema so the ERP
-                // can record the outcome uniformly (APERAK AHB 1.0 §2.4).
-                // `sender` = grid_operator: the NB sends the APERAK to the incoming MSB.
+                // The APERAK is the **technical** acknowledgement and decides
+                // nothing about the business case; the Bestätigung/Ablehnung is
+                // `DispatchAntwort`, on its own 3/5/7/1-Werktage clock.
+                //
+                //   positive = true  → BGM+312 Anerkennungsmeldung
+                //   positive = false → BGM+313 Verarbeitbarkeitsfehlermeldung
+                //
+                // **Only Strom has both.** In Gas the APERAK reports
+                // „ausschließlich" errors (APERAK AHB 1.1 §2.3): a processable
+                // message is acknowledged by the Frist lapsing in silence. The
+                // decision is still recorded — the ERP made one — but the entry
+                // carries `suppress_wire` so nothing reaches the wire.
+                let sparte = wim_sparte(data.pruefidentifikator.as_u32()).ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "PID {} is not a WiM Messstellenbetrieb PID",
+                        data.pruefidentifikator
+                    ))
+                })?;
+                let suppress_wire = positive
+                    && !mako_fristen::aperak_hat_anerkennungsmeldung(sparte == Sparte::Gas);
+                // `sender` = grid_operator: the answering party sends the APERAK
+                // back to the party that sent the order.
                 let mut aperak_payload = serde_json::json!({
                     "sender":   data.grid_operator.as_str(),
                     "pid":      data.pruefidentifikator.as_u32(),
                     "melo":     data.melo_id.as_str(),
                     "positive": positive,
                 });
+                if suppress_wire {
+                    aperak_payload["suppress_wire"] = serde_json::Value::Bool(true);
+                }
                 if let Some(ref mr) = data.message_ref {
                     aperak_payload["orig_message_ref"] =
                         serde_json::Value::String(mr.as_str().to_owned());
@@ -1507,16 +1737,45 @@ impl Workflow for WimDeviceChangeWorkflow {
                     .or_else(|| data.process_date.clone())
                     .unwrap_or_else(|| data.document_date.clone());
 
+                // `SG4 STS+E01`: DE 9013 the Prüfschritt code, DE 1131 the
+                // **Codeliste** it comes from — `S_0090`/`G_0052` and friends,
+                // not the EBD number. The tree stays in the event for the audit
+                // trail; only the Codeliste goes on the wire.
+                let codeliste = code.wire_codeliste().ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "{ebd} {} names no Codeliste for DE 1131",
+                        code.code
+                    ))
+                })?;
+                // `SG4 STS+7` is Muss on the answer too, and it echoes the
+                // Grund the request stated — the AHB marks the same code list
+                // on all three Prüfidentifikatoren of every Anwendungsfall.
+                // Where the source carried none (the REST channel), `E03`
+                // „Wechsel" is the only code all four Use-Cases publish and
+                // the only one that asserts nothing extra.
+                let grund = data
+                    .transaktionsgrund
+                    .clone()
+                    .unwrap_or_else(|| TRANSAKTIONSGRUND_WECHSEL.to_owned());
+                if !transaktionsgruende(request_pid).contains(&grund.as_str()) {
+                    return Err(WorkflowError::rejected(format!(
+                        "Transaktionsgrund {grund:?} is not published for PID {request_pid} \
+                         (expected one of {:?})",
+                        transaktionsgruende(request_pid)
+                    )));
+                }
                 let mut payload = serde_json::json!({
-                    "pid":          antwort_pid,
+                    "pid":               antwort_pid,
                     // We answer, so the roles invert: the party that received
                     // the order is the sender of its answer.
-                    "sender":       data.grid_operator.as_str(),
-                    "receiver":     data.incoming_msb.as_str(),
-                    "melo":         data.melo_id.as_str(),
-                    "process_date": process_date,
-                    "antwort_code": code.code,
-                    "antwort_ebd":  ebd,
+                    "sender":            data.grid_operator.as_str(),
+                    "receiver":          data.incoming_msb.as_str(),
+                    "melo":              data.melo_id.as_str(),
+                    "process_date":      process_date,
+                    "transaktionsgrund": grund,
+                    "antwort_code":      code.code,
+                    "antwort_codeliste": codeliste,
+                    "antwort_ebd":       ebd,
                 });
                 if let Some(ref vn) = data.vorgangsnummer {
                     payload["vorgangsnummer"] = serde_json::Value::String(vn.clone());
@@ -1532,7 +1791,7 @@ impl Workflow for WimDeviceChangeWorkflow {
                 // MSBN's Gesamtvorgang report, and if none arrives by the 11. WT
                 // after the confirmed Zuordnungsbeginn the NB reports the
                 // Scheitern itself (Kap. 2.3.2 Nr. 16).
-                let deadlines = if bestaetigt && request_pid == 55_042 {
+                let deadlines = if bestaetigt && matches!(request_pid, 55_042 | 44_042) {
                     parse_yyyymmdd(&process_date)
                         .map(|d| {
                             vec![PendingDeadline::new(
@@ -1575,10 +1834,10 @@ impl Workflow for WimDeviceChangeWorkflow {
                         state.status_str(),
                     ));
                 };
-                if data.pruefidentifikator.as_u32() != 55_042 {
+                if !matches!(data.pruefidentifikator.as_u32(), 55_042 | 44_042) {
                     return Err(WorkflowError::rejected(format!(
-                        "the Gesamtvorgang belongs to the Beginn Messstellenbetrieb (55042); \
-                         this process is {}",
+                        "the Gesamtvorgang belongs to the Beginn Messstellenbetrieb \
+                         (55042 Strom / 44042 Gas); this process is {}",
                         data.pruefidentifikator
                     )));
                 }
@@ -1705,6 +1964,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                         state.status_str(),
                     ));
                 };
+                let sparte = wim_sparte(data.pruefidentifikator.as_u32()).ok_or_else(|| {
+                    WorkflowError::rejected(format!(
+                        "PID {} is not a WiM Messstellenbetrieb PID",
+                        data.pruefidentifikator
+                    ))
+                })?;
                 let pid = if zugeordnet {
                     ZUORDNUNG_ERFOLG_PID
                 } else {
@@ -1769,6 +2034,12 @@ impl Workflow for WimDeviceChangeWorkflow {
                                 "melo_id":          data.melo_id.as_str(),
                                 "msb_mp_id":        data.incoming_msb.as_str(),
                                 "zuordnungsbeginn": data.bestaetigter_zuordnungsbeginn,
+                                // 00:00 in Strom, 06:00 in Gas — the Gastag
+                                // boundary. `marktd` keys the timeline on the
+                                // date; the hour is what tells a consumer which
+                                // instant that date starts at.
+                                "zuordnung_stunde": zuordnungs_stunde(sparte),
+                                "sparte":           sparte,
                                 "outcome":          "zugeordnet",
                             }),
                         )
@@ -1847,17 +2118,18 @@ impl Workflow for WimDeviceChangeWorkflow {
                 Ok(vec![DeviceChangeEvent::DeadlineExpired { deadline_id, label }].into())
             }
 
-            DeviceChangeCommand::ReceiveIftsta {
+            DeviceChangeCommand::ReceiveInformation {
                 pid,
                 sender,
                 receiver,
                 message_ref,
                 ..
             } => {
-                // WiM IFTSTA messages are informational. Accept them in any
-                // state (the process may already be completed when a late
-                // Vollzugsmeldung arrives) and record for audit purposes.
-                Ok(vec![DeviceChangeEvent::IftstaStatusReceived {
+                // Informational messages are accepted in any state — the
+                // process may already be completed when a late Vollzugsmeldung
+                // or a Stilllegungsinformation arrives — and recorded for
+                // audit purposes without a transition.
+                Ok(vec![DeviceChangeEvent::InformationEmpfangen {
                     pid,
                     sender,
                     receiver,
@@ -2098,7 +2370,7 @@ impl Projection for DeviceChangeProjection {
                     *status = "Rejected";
                 }
             }
-            DeviceChangeEvent::IftstaStatusReceived { .. } => {
+            DeviceChangeEvent::InformationEmpfangen { .. } => {
                 // Informational — does not change the status label.
             }
         }
@@ -2113,6 +2385,7 @@ mod tests {
 
     fn make_receive_cmd(pid: u32, validation_passed: bool) -> DeviceChangeCommand {
         DeviceChangeCommand::ReceiveUtilmd {
+            transaktionsgrund: Some("E03".to_owned()),
             pid: Pruefidentifikator::new(pid).expect("test pid must be in range"),
             sender: MarktpartnerCode::new("4012345000023"),
             receiver: MarktpartnerCode::new("9900357000004"),

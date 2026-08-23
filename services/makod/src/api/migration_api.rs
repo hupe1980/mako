@@ -83,10 +83,6 @@ use mako_wim::{
     WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
     WimSteuerungsauftragWorkflow, WimWeiterverpflichtungWorkflow,
 };
-use mako_wim_gas::{
-    WimGasAnmeldungWorkflow, WimGasInvoicWorkflow, WimGasKuendigungWorkflow,
-    WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageWorkflow,
-};
 use serde::{Deserialize, Serialize};
 
 use crate::cedar_authz::CedarAuthorizer;
@@ -419,53 +415,6 @@ pub async fn dispatch_migrations(
                 to
             );
 
-            // ── WiM Gas ───────────────────────────────────────────────────────
-            identity!(
-                report,
-                count,
-                store,
-                WimGasAnmeldungWorkflow,
-                "wim-gas-anmeldung",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
-                WimGasKuendigungWorkflow,
-                "wim-gas-kuendigung",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
-                WimGasVerpflichtungsanfrageWorkflow,
-                "wim-gas-verpflichtungsanfrage",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
-                WimGasInvoicWorkflow,
-                "wim-gas-invoic",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
-                WimGasStornierungWorkflow,
-                "wim-gas-stornierung",
-                from,
-                to
-            );
-
             // ── GaBi Gas ──────────────────────────────────────────────────────
             identity!(
                 report,
@@ -734,24 +683,6 @@ pub async fn dispatch_migrations(
                 report,
                 count,
                 store,
-                mako_wim_gas::WimGasGeraeteubernahmeWorkflow,
-                "wim-gas-geraeteubernahme",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
-                mako_wim_gas::WimGasInsrptWorkflow,
-                "wim-gas-insrpt",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
                 mako_gabi_gas::GaBiGasNominationWorkflow,
                 "gabi-gas-nomination",
                 from,
@@ -978,12 +909,10 @@ mod coverage_tests {
     /// Every dispatchable workflow must either have a migration arm or an
     /// explicit reason for not needing one.
     ///
-    /// The migration covered 33 of the 71 names the dispatcher knows, and
-    /// nothing said which 38 were missing or why. That is harmless while every
-    /// migration is an identity repoint and every workflow is
-    /// `ForwardCompatible` — and stops being harmless the first release a
-    /// workflow's state schema actually changes, at which point the omission is
-    /// data loss discovered under cutover time pressure.
+    /// An unlisted workflow is harmless while every migration is an identity
+    /// repoint and every workflow is `ForwardCompatible`, and stops being
+    /// harmless the first release a workflow's state schema changes — at which
+    /// point the omission is data loss discovered under cutover time pressure.
     ///
     /// This test does not demand a migration for everything. It demands a
     /// decision for everything.

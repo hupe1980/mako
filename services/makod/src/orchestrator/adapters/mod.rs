@@ -132,15 +132,8 @@ use mako_wim::{
     WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand,
     WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
     WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
-    esa_wertebestellung::EsaWertebestellungWorkflow, insrpt::StorungsmeldungCommand,
+    esa_wertebestellung::EsaWertebestellungWorkflow, insrpt::StoerungsmeldungCommand,
     wertebestellung::WimWertebestellungWorkflow,
-};
-use mako_wim_gas::{
-    GasGeraeteubernahmeCommand, WimGasAnmeldungCommand, WimGasAnmeldungWorkflow,
-    WimGasGeraeteubernahmeWorkflow, WimGasInsrptWorkflow, WimGasInvoicCommand,
-    WimGasInvoicWorkflow, WimGasKuendigungCommand, WimGasKuendigungWorkflow,
-    WimGasStornierungCommand, WimGasStornierungWorkflow, WimGasVerpflichtungsanfrageCommand,
-    WimGasVerpflichtungsanfrageWorkflow, insrpt::GasStorungsmeldungCommand,
 };
 
 // ── Per-domain registry submodules ───────────────────────────────────────────
@@ -153,14 +146,12 @@ mod geli_gas;
 mod gpke;
 mod mabis;
 mod wim;
-mod wim_gas;
 
 pub use gabi_gas::*;
 pub use geli_gas::*;
 pub use gpke::*;
 pub use mabis::*;
 pub use wim::*;
-pub use wim_gas::*;
 // ── Known format versions ─────────────────────────────────────────────────────
 
 // The set of BDEW format versions for which all active domain workflows must
@@ -206,7 +197,7 @@ fn build_gpke_iftsta_command(msg: &AnyMessage) -> Result<SupplierChangeCommand, 
     })
 }
 
-/// Extract a [`DeviceChangeCommand::ReceiveIftsta`] from an IFTSTA message
+/// Extract a [`DeviceChangeCommand::ReceiveInformation`] from an IFTSTA message
 /// routed to the WiM device-change workflow (PIDs 21009–21018).
 ///
 /// Called from `wim_registry()` when `msg` is `AnyMessage::Iftsta`.
@@ -253,7 +244,7 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
         });
     }
 
-    Ok(DeviceChangeCommand::ReceiveIftsta {
+    Ok(DeviceChangeCommand::ReceiveInformation {
         pid,
         sender: MarktpartnerCode::new(i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or("")),
         receiver: MarktpartnerCode::new(
@@ -409,7 +400,7 @@ pub struct RegistryCoverage {
 /// exactly how twenty of them silently escaped the previous hand-maintained
 /// list in `startup.rs`.
 macro_rules! coverage_table {
-    ($($name:ident),+ $(,)?) => {
+    ($($name:ident $(( $($arg:expr),* ))? ),+ $(,)?) => {
         /// Report adapter coverage for every registry in this module.
         ///
         /// A registry is covered when some adapter in it accepts every format
@@ -419,7 +410,7 @@ macro_rules! coverage_table {
         pub fn coverage() -> Vec<RegistryCoverage> {
             let known = known_fvs();
             vec![$({
-                let registry = $name();
+                let registry = $name($($($arg),*)?);
                 RegistryCoverage {
                     registry: stringify!($name),
                     adapters: registry.len(),
@@ -489,17 +480,8 @@ coverage_table! {
     mabis_listenabgleich_registry,
     mabis_registry,
     mabis_zp_lifecycle_registry,
-    wim_gas_anmeldung_registry,
-    wim_gas_geraeteubernahme_registry,
-    wim_gas_insrpt_registry,
-    wim_gas_invoic_comdis_registry,
-    wim_gas_invoic_registry,
-    wim_gas_invoic_remadv_registry,
-    wim_gas_kuendigung_registry,
-    wim_gas_stornierung_registry,
-    wim_gas_verpflichtungsanfrage_registry,
-    wim_geraeteubernahme_registry,
-    wim_insrpt_registry,
+    wim_geraeteubernahme_registry(mako_engine::types::Sparte::Strom),
+    wim_insrpt_registry(mako_engine::types::Sparte::Strom, mako_fristen::antwort::Messtechnik::RlmOderImsMsHs),
     wim_invoic_comdis_registry,
     wim_invoic_registry,
     wim_invoic_remadv_registry,
@@ -510,7 +492,7 @@ coverage_table! {
     wim_stammdaten_registry,
     wim_stammdaten_uebermittlung_registry,
     wim_technik_aenderung_registry,
-    wim_weiterverpflichtung_registry,
+    wim_weiterverpflichtung_registry(mako_engine::types::Sparte::Strom),
     wim_wertebestellung_registry,
 }
 
@@ -1665,7 +1647,6 @@ mod coverage_table_tests {
             ("gpke.rs", include_str!("gpke.rs")),
             ("mabis.rs", include_str!("mabis.rs")),
             ("wim.rs", include_str!("wim.rs")),
-            ("wim_gas.rs", include_str!("wim_gas.rs")),
         ];
         let table: std::collections::HashSet<&str> =
             super::coverage().iter().map(|c| c.registry).collect();

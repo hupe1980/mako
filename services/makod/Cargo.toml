@@ -27,7 +27,6 @@ mako-gpke        = { path = "../../crates/mako-gpke" }
 mako-pruefung      = { path = "../../crates/mako-pruefung", default-features = false }
 mako-wim         = { path = "../../crates/mako-wim" }
 mako-geli-gas    = { path = "../../crates/mako-geli-gas" }
-mako-wim-gas     = { path = "../../crates/mako-wim-gas" }
 dvgw-edi         = { path = "../../crates/dvgw-edi" }
 mako-gabi-gas    = { path = "../../crates/mako-gabi-gas" }
 mako-mabis       = { path = "../../crates/mako-mabis" }
@@ -126,13 +125,13 @@ role-lf-strom  = []  # LF Strom: gpke-* LF-side, wim LF-affected
 role-nb-strom  = []  # NB/DSO Strom: gpke-* NB-side, Sperrung, Konfiguration,
                      #   UTILTS, MSCONS, WiM NB-side, PARTIN 37000-37006,
                      #   INVOIC 31001/31002/31005/31006, MaBiS, Redispatch 2.0
-role-msb-strom = []  # MSB Strom: wim-* Messstellenbetrieb
+role-msb-strom = []  # MSB Strom: wim-* auf den 55xxx-Prüfidentifikatoren
 role-esa-strom = []  # ESA Strom: wim-wertebestellung ESA-side (WiM Teil 2 Kap. 4)
 # Gas roles
 role-lf-gas    = []  # LF Gas (LFG): geli-gas-* LF-side
 role-nb-gas    = []  # GNB: geli-gas-* NB-side, Sperrung Gas, PARTIN 37008-37014,
                      #   INVOIC 31007/31008/31011, gabi-gas-mmma (13013)
-role-msb-gas   = []  # gMSB: wim-gas-* Messstellenbetrieb Gas
+role-msb-gas   = []  # gMSB: dieselben wim-* Workflows auf den 44xxx-PIDs
 # ── Composite convenience flags ───────────────────────────────────────────────
 role-lf  = ["role-lf-strom",  "role-lf-gas"]    # dual-fuel LF (most common)
 role-nb  = ["role-nb-strom",  "role-nb-gas"]    # combined DSO+GNB

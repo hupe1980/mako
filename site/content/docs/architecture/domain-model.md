@@ -112,7 +112,7 @@ required for each role per commodity (Strom / Gas).
 | WiM Stammdaten | NB | LF / MSB | `mako-wim` |
 | GeLi Gas Lieferbeginn / Lieferende | LF | GNB (gas DSO) | `mako-geli-gas` |
 | GeLi Gas Sperrung / Entsperrung (LF-initiated, Gas) | LF | GNB | `mako-geli-gas` |
-| WiM Gas Anmeldung / Kündigung gMSB | MSB (gas) | NB (gas) | `mako-wim-gas` |
+| WiM Gas Anmeldung / Kündigung gMSB | MSB (gas) | NB (gas) | `mako-wim` |
 | MABIS Summenzeitreihe | ÜNB | BKV | `mako-mabis` |
 | INVOIC Abrechnung | NB | LF | `mako-gpke` |
 

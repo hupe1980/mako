@@ -2445,13 +2445,11 @@ struct DlEntry {
 /// A [`DeadLetterSink`] that buffers rejections in a bounded in-memory queue
 /// and persists them to SlateDB via a paired [`SlateDbDeadLetterWorker`] task.
 ///
-/// ## Key improvement over the previous `rt.spawn()` approach
+/// ## Why a channel rather than `rt.spawn()`
 ///
-/// The previous implementation called `rt.spawn()` inside the synchronous
-/// `reject()` method. If the Tokio runtime was shutting down at the exact
-/// moment a dead-letter was recorded, `spawn()` would silently drop the future
-/// and the DLQ entry would be permanently lost — violating BNetzA traceability
-/// requirements.
+/// `reject()` is synchronous. Spawning the write from it loses the DLQ entry
+/// whenever the Tokio runtime is shutting down at that moment — `spawn()`
+/// silently drops the future, and BNetzA traceability requires the record.
 ///
 /// This implementation uses a bounded `tokio::sync::mpsc` channel. `reject()`
 /// is a non-blocking `try_send` into the buffer; the background

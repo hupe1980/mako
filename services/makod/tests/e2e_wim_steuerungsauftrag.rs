@@ -11,8 +11,8 @@
 //! # Regulatory basis
 //!
 //! - **BDEW API-Guideline 1.0a** — API-Webdienste Strom, `controlMeasuresV1.yaml`
-//! - **BK6-22-024** — WiM timeline: **5 Werktage** (Saturday counts as Werktag;
-//!   Sunday and public holidays do not)
+//! - **BK6-22-024** — WiM Strom Teil 1. Saturdays, Sundays and gesetzliche
+//!   Feiertage are **not** Werktage (GPKE Teil 1 Kap. 1.7).
 //!
 //! # Lifecycle trace (Konfiguration — positive)
 //!

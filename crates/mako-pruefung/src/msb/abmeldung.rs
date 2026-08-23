@@ -55,8 +55,8 @@ pub fn pruefe_abmeldung(
     eingangsdatum: Date,
     cal: HolidayCalendar,
 ) -> MsbEntscheidung {
-    let tree = EBD_ABMELDUNG_MSB;
-    let code = |c: &str| lookup(tree, c).expect("code is published in E_0202");
+    let tree = super::baum::abmeldung(anfrage.sparte);
+    let code = |c: &str| lookup(tree, c).expect("code is published in the Abmeldung tree");
 
     let Some(zuordnung_besteht) = anfrage.zuordnung_besteht else {
         return MsbEntscheidung::Escalate {
@@ -125,6 +125,7 @@ pub fn transaktionsgrund_unplausibel(detail: impl Into<String>) -> MsbEntscheidu
 mod tests {
     use super::*;
     use crate::msb::types::Abmeldegrund;
+    use crate::msb::types::Sparte;
     use time::Month;
 
     const CAL: HolidayCalendar = HolidayCalendar::BdewMaKo;
@@ -135,6 +136,7 @@ mod tests {
 
     fn a(grund: Abmeldegrund, ende: Date) -> AbmeldungMsb {
         AbmeldungMsb {
+            sparte: Sparte::Strom,
             melo_id: "DE0000000001234567890000000000001".to_owned(),
             msba_mp_id: "9900000000003".to_owned(),
             gewuenschtes_zuordnungsende: ende,

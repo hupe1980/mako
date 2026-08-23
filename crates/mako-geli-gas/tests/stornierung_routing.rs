@@ -2,13 +2,22 @@
 //!
 //! ## Regulatory background
 //!
-//! PIDs 44022–44024 (GeLi Gas / WiM Gas Stornierung) are multi-domain per BDEW PID 3.3/4.0.
-//! `GeliGasModule` registers them role-conditionally:
+//! PIDs 44022–44024 (GeLi Gas / WiM Gas Stornierung) are multi-domain per BDEW
+//! PID 3.3/4.0 — the same three Prüfidentifikatoren carry the Stornierung of a
+//! GeLi Gas Lieferbeginn/-ende and of a WiM Gas Kündigung Messstellenbetrieb.
 //!
-//!   - `Nb`-only: 44022/44023/44024 → `geli-gas-stornierung` (GNB receives Anfrage)
-//!   - `Lf`-only: 44023/44024 → `geli-gas-stornierung-lf` (LF receives GNB response)
-//!   - `Nb+Lf`: both workflows active (no conflict — different PIDs)
-//!   - `Msb`/`Nmsb`/`all()`: NOT registered here; `WimGasModule` owns them (`wim-gas-stornierung`)
+//! **One owner, keyed on direction, not on Sparte or Use-Case.** The recipient
+//! of a 44022 is „der Empfänger einer Stornierungsanfrage" — the party that
+//! received the Ursprungsnachricht — and the workflow resolves which process is
+//! meant from `RFF+ACW`. So:
+//!
+//!   - any deployment holding `Nb`: 44022 → `geli-gas-stornierung` (it receives the Anfrage)
+//!   - any deployment holding `Lf`: 44023/44024 → `geli-gas-stornierung-lf` (it receives the answer)
+//!   - the two sets are disjoint, so a combined deployment registers both
+//!
+//! The `Msb` role adds nothing: a combined `Nb + Msb` deployment — the common
+//! shape, since §41 MsbG puts the gMSB inside the NB's own legal entity —
+//! receives the Anfrage exactly once, as the NB.
 //!
 //!   - PID 44022 (Anfrage nach Stornierung): LFN/LFA → GNB
 //!   - PID 44023 (Bestätigung Stornierung): GNB → LFN/LFA
@@ -47,25 +56,29 @@ fn nb_only_registers_stornierung_anfrage_as_geli_gas() {
     }
 }
 
-/// `all()` — backward-compatible default: GeliGasModule must NOT register 44022–44024.
-/// In combined deployments, `WimGasModule` owns these PIDs (`wim-gas-stornierung`).
+/// `all()` — every direction is present, so both sides register their own leg.
 #[test]
-fn all_roles_does_not_register_stornierung() {
+fn all_roles_registers_both_sides_of_the_stornierung() {
     let all = DeploymentRoles::all();
     let mut router = PidRouter::new();
     GeliGasModule.register_pids_with_roles(&mut router, &all);
 
-    for pid in [44022_u32, 44023, 44024] {
-        assert!(
-            router.route(pid).is_none(),
-            "PID {pid}: GeliGasModule must NOT register 44022–44024 for all() roles \
-             (WimGasModule owns them in backward-compat mode)",
+    assert_eq!(
+        router.route(44022),
+        Some("geli-gas-stornierung"),
+        "an all-roles deployment holds Nb, so it receives the Anfrage",
+    );
+    for pid in [44023_u32, 44024] {
+        assert_eq!(
+            router.route(pid),
+            Some("geli-gas-stornierung-lf"),
+            "PID {pid}: an all-roles deployment holds Lf, so it receives the answers",
         );
     }
 }
 
-/// `Msb`-only — GeliGasModule must NOT register 44022–44024.
-/// gMSB deployments use WimGasModule's `wim-gas-stornierung`.
+/// `Msb`-only — a pure gMSB is neither the NB that receives an Anfrage nor the
+/// LF that receives the answer, so it registers nothing.
 #[test]
 fn msb_role_does_not_register_stornierung() {
     let msb = DeploymentRoles::msb();
@@ -80,7 +93,7 @@ fn msb_role_does_not_register_stornierung() {
     }
 }
 
-/// `Nmsb`-only — same as Msb: GeliGasModule must NOT register 44022–44024.
+/// `Nmsb`-only — same as `Msb`: neither side of the exchange.
 #[test]
 fn nmsb_role_does_not_register_stornierung() {
     let nmsb = DeploymentRoles::nmsb();
@@ -95,22 +108,22 @@ fn nmsb_role_does_not_register_stornierung() {
     }
 }
 
-/// `Nb + Msb` combined — GeliGasModule must NOT register 44022–44024.
-/// WimGasModule's `Msb` condition fires, so the GNB+gMSB combined deployment
-/// uses `wim-gas-stornierung`. This avoids a routing conflict.
+/// **`Nb + Msb` is a supported deployment.** §41 MsbG makes the gMSB the NB's
+/// own legal entity in most grids, so this is the common shape rather than an
+/// exotic one — and it receives the Stornierungsanfrage for both Use-Cases on
+/// the same Prüfidentifikator, because the sender addresses the party that
+/// received the Ursprungsnachricht.
 #[test]
-fn nb_msb_combined_does_not_register_stornierung_in_geli_gas() {
+fn nb_msb_combined_receives_the_stornierungsanfrage() {
     let nb_msb = DeploymentRoles::nb_msb();
     let mut router = PidRouter::new();
     GeliGasModule.register_pids_with_roles(&mut router, &nb_msb);
 
-    for pid in [44022_u32, 44023, 44024] {
-        assert!(
-            router.route(pid).is_none(),
-            "PID {pid}: GeliGasModule must NOT register 44022–44024 for Nb+Msb combined \
-             deployment (WimGasModule handles them via Msb condition)",
-        );
-    }
+    assert_eq!(
+        router.route(44022),
+        Some("geli-gas-stornierung"),
+        "a combined GNB/gMSB receives the Anfrage nach Stornierung",
+    );
 }
 
 /// Unconditional GeLi Gas PIDs (44001–44021) are always registered regardless of role.
@@ -142,20 +155,15 @@ fn unconditional_pids_always_registered() {
     }
 }
 
-/// `Nb`-only routing isolation: PID 44022 routes to `geli-gas-stornierung`,
-/// confirming no cross-contamination from WimGasModule.
+/// PID 44022 routes to the single Stornierung workflow, whatever Use-Case the
+/// Ursprungsnachricht belonged to.
 #[test]
-fn nb_stornierung_routing_is_geli_gas_not_wim_gas() {
+fn nb_stornierung_routing_has_one_owner() {
     let nb = DeploymentRoles::nb();
     let mut router = PidRouter::new();
     GeliGasModule.register_pids_with_roles(&mut router, &nb);
 
-    // 44022 is the inbound Anfrage on GNB side
-    assert_ne!(
-        router.route(44022),
-        Some("wim-gas-stornierung"),
-        "PID 44022: Nb-only deployment must NOT route to wim-gas-stornierung via GeliGasModule",
-    );
+    // 44022 is the inbound Anfrage on the GNB side, and there is one owner.
     assert_eq!(
         router.route(44022),
         Some("geli-gas-stornierung"),
@@ -215,10 +223,11 @@ fn nb_lf_combined_registers_both_workflows_without_conflict() {
     }
 }
 
-/// `Lf` with `Msb` — GeliGasModule must NOT register any Stornierung PIDs.
-/// WimGasModule's `Msb` condition fires instead.
+/// `Lf + Msb` — the `Msb` role adds nothing to the Stornierung routing, because
+/// the Stornierung is keyed on which side of the exchange the deployment is on,
+/// not on which Use-Case the Ursprungsnachricht belonged to.
 #[test]
-fn lf_msb_combined_does_not_register_stornierung_in_geli_gas() {
+fn lf_msb_combined_registers_the_lf_side_only() {
     let lf_msb = DeploymentRoles::from_roles([
         mako_engine::marktrolle::Marktrolle::Lf,
         mako_engine::marktrolle::Marktrolle::Msb,
@@ -226,11 +235,15 @@ fn lf_msb_combined_does_not_register_stornierung_in_geli_gas() {
     let mut router = PidRouter::new();
     GeliGasModule.register_pids_with_roles(&mut router, &lf_msb);
 
-    for pid in [44022_u32, 44023, 44024] {
-        assert!(
-            router.route(pid).is_none(),
-            "PID {pid}: GeliGasModule must NOT register Stornierung PIDs when Msb is present \
-             (WimGasModule owns them)",
+    for pid in [44023_u32, 44024] {
+        assert_eq!(
+            router.route(pid),
+            Some("geli-gas-stornierung-lf"),
+            "PID {pid}: the Lf side receives the GNB's answer",
         );
     }
+    assert!(
+        router.route(44022).is_none(),
+        "without the Nb role nothing receives an Anfrage nach Stornierung",
+    );
 }

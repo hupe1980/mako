@@ -351,6 +351,65 @@ pub fn aperak_gas_initialprozess_due_at(received: OffsetDateTime) -> OffsetDateT
     noon_berlin(due_date)
 }
 
+/// The Gas Prüfidentifikatoren that open a business process — the
+/// **Initialprozessschritte**, which carry the 3-Werktage APERAK window instead
+/// of the next-Werktag-noon one.
+///
+/// The BDEW makes this decidable rather than a matter of judgement. APERAK AHB
+/// 1.1 §2.1.3.6: the Initialprozessschritte of GeLi Gas, GPKE und WiM „sind im
+/// EDI@Energy-Dokument ‚Anwendungsübersicht der Prüfidentifikatoren' daran zu
+/// erkennen, dass in der Spalte ‚Zuordnung zu einem Objekt' die
+/// Tupel-Kennzeichnung den (Teil-)String ‚ZO-F' enthält". Everything else is a
+/// Folgeprozess and identifies purely by Markt-/Messlokations-ID.
+///
+/// The four Gas rows carrying `ZO-F` in *Anwendungsübersicht der
+/// Prüfidentifikatoren* 4.0:
+///
+/// | PID | Anwendungsfall | Festlegung |
+/// |---|---|---|
+/// | 44001 | Anmeldung NN (Lieferbeginn) | GeLi Gas 2.0 |
+/// | 44016 | Kündigung beim alten Lieferanten | GeLi Gas 2.0 |
+/// | 44039 | Kündigung MSB | AWH WiM Gas 2.0 |
+/// | 44042 | Anmeldung MSB (Beginn Messstellenbetrieb) | AWH WiM Gas 2.0 |
+///
+/// Note what is *not* here: the Ende MSB 44051 and the Verpflichtungsanfrage
+/// 44168 are `ZO-T1`, so they are Folgeprozesse despite opening a Use-Case —
+/// they identify an object that already exists.
+pub const GAS_INITIALPROZESS_PIDS: &[u32] = &[44_001, 44_016, 44_039, 44_042];
+
+/// The Gas APERAK sending deadline for an inbound Geschäftsvorfall, chosen by
+/// its Prüfidentifikator.
+///
+/// Returns the instant **and** the deadline label to register it under, so the
+/// two cannot drift apart. See [`GAS_INITIALPROZESS_PIDS`] for the rule.
+#[must_use]
+pub fn aperak_gas_due_at(pid: u32, received: OffsetDateTime) -> (&'static str, OffsetDateTime) {
+    if GAS_INITIALPROZESS_PIDS.contains(&pid) {
+        (
+            APERAK_GAS_INITIALPROZESS_LABEL,
+            aperak_gas_initialprozess_due_at(received),
+        )
+    } else {
+        (
+            APERAK_GAS_FOLGEPROZESS_LABEL,
+            aperak_gas_folgeprozess_due_at(received),
+        )
+    }
+}
+
+/// Whether the Sparte's APERAK regime has a **positive** acknowledgement at all.
+///
+/// * **Strom** (APERAK AHB 1.1 §2.4): both polarities — `BGM+312`
+///   Anerkennungsmeldung when the Geschäftsvorfall is processable, `BGM+313`
+///   Verarbeitbarkeitsfehlermeldung when it is not.
+/// * **Gas** (APERAK AHB 1.1 §2.3): the APERAK reports „ausschließlich" errors.
+///   There is no Anerkennungsmeldung — silence past the Frist *is* the
+///   acknowledgement — and every APERAK is answered with a CONTRL.
+#[must_use]
+pub const fn aperak_hat_anerkennungsmeldung(sparte_ist_gas: bool) -> bool {
+    !sparte_ist_gas
+}
+
 /// Construct an [`OffsetDateTime`] at `at` Europe/Berlin on `date`, in UTC.
 ///
 /// Every Frist in the BDEW MaKo rulebook is stated in German local time, so a

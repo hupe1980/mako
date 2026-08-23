@@ -198,11 +198,9 @@ pub(crate) fn build_engine(
     //   role-nb-strom / role-nb  → GpkeModule (NB-side GPKE + Sperrung)
     //   role-lf-strom / role-lf  → GpkeModule (LF-side GPKE; GpkeModule handles
     //                              both sides via PidRouter role dispatch)
-    //   role-msb-strom / role-msb → WimModule (MSB Strom)
-    //   role-nb-strom / role-nb  → WimModule (NB-side WiM coordination)
+    //   role-msb-* / role-nb-*   → WimModule (WiM in beiden Sparten)
     //   role-nb-gas / role-nb    → GeliGasModule + GaBiGasModule
     //   role-lf-gas  / role-lf   → GeliGasModule (LF-side GeLi Gas)
-    //   role-nb-gas / role-msb-gas → WimGasModule
     //   role-nb-strom / role-nb  → MabisModule (MABIS PID 13003)
     //
     // Clippy's vec_init_then_push fires here because the pushes are
@@ -219,26 +217,25 @@ pub(crate) fn build_engine(
         #[cfg(any(feature = "role-lf-strom", feature = "role-nb-strom"))]
         m.push(Box::new(mako_gpke::GpkeModule));
 
-        // WimModule — Messstellenbetrieb Strom 55039/55042/55051/55168 +
-        //   ORDERS Geräteübernahme 17001–17011 + INSRPT 23001–23012 + the
-        //   ESA-side Wertebestellung of WiM Teil 2 Kap. 4.
+        // WimModule — Messstellenbetrieb in **beiden Sparten**: 55039/55042/
+        //   55051/55168 and the Gas twins 44039/44042/44051/44168/44183, ORDERS
+        //   Geräteübernahme 17001–17011, INSRPT 23001–23012, INVOIC
+        //   31009/31003/31004, and the ESA-side Wertebestellung of WiM Teil 2
+        //   Kap. 4. One crate for both, so every WiM role loads it.
         #[cfg(any(
             feature = "role-msb-strom",
+            feature = "role-msb-gas",
             feature = "role-nb-strom",
+            feature = "role-nb-gas",
             feature = "role-esa-strom",
         ))]
         m.push(Box::new(mako_wim::WimModule));
 
-        // GeliGasModule — GeLi Gas 3.0 44001–44021 + ORDERS Sperrung Gas
-        //   17115–17117 + PARTIN Gas 37008–37014 + INVOIC 31011 (AWH Rechnung).
+        // GeliGasModule — GeLi Gas 3.0 44001–44024 (incl. the Stornierung it
+        //   shares with WiM Gas) + ORDERS Sperrung Gas 17115–17117 + PARTIN Gas
+        //   37008–37014 + INVOIC 31011 (AWH Rechnung).
         #[cfg(any(feature = "role-lf-gas", feature = "role-nb-gas"))]
         m.push(Box::new(mako_geli_gas::GeliGasModule));
-
-        // WimGasModule — WiM Gas 44022–44024/44039–44053/44168–44170 +
-        //   INVOIC 31003 and the Sparte-neutral universal Storno 31004 +
-        //   INSRPT Gas 23005/23009.
-        #[cfg(any(feature = "role-msb-gas", feature = "role-nb-gas"))]
-        m.push(Box::new(mako_wim_gas::WimGasModule));
 
         // GaBiGasModule — INVOIC 31007/31008/31010 + REMADV 33001 +
         //   COMDIS 29001 + MSCONS 13013 Allokationsliste. BKV/MGV interactions

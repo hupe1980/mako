@@ -1,15 +1,13 @@
-//! WiM Stammdaten — master data request and transmission (PIDs 17132, 17102–17133).
-//!
-//! Models the BDEW WiM process for requesting and transmitting metering-point
-//! master data between MSB and NB in the **Strom** domain.
+//! Geschäftsdatenanfrage — master data request and transmission
+//! (ORDERS 17132, answered by 17102–17133).
 //!
 //! # Process flow
 //!
 //! ```text
-//! NB → ORDERS 17132 (Anfrage zur Übermittlung von Stammdaten Strom) ── MSB
-//!                                                                         │
-//! NB ← ORDERS 17102–17133 (Stammdatenübermittlung) ←── 5 Werktage ───────┘
-//!    or ORDRSP (rejection if data unavailable)
+//! Anfragender (LF/MSB) → ORDERS 17132 (Anfrage Stammdaten Strom) ── NB
+//!                                                                    │
+//!                     ← ORDERS 17102–17133 (Übermittlung) ←─ 1 WT ───┘
+//!    or ORDRSP (rejection if the requester is not berechtigt or the data is absent)
 //! ```
 //!
 //! Unlike the Geräteübernahme process, the response to a Stammdaten request is
@@ -20,12 +18,12 @@
 //!
 //! | PID   | AHB description                                         | Direction |
 //! |-------|---------------------------------------------------------|-----------|
-//! | 17132 | Anfrage zur Übermittlung von Stammdaten **Strom**        | NB → MSB  |
-//! | 17102–17133 | Stammdatenübermittlung (various data categories)  | MSB → NB  |
+//! | 17132 | Anfrage zur Übermittlung von Stammdaten **Strom**        | LF · MSB → NB |
+//! | 17102–17133 | Stammdatenübermittlung (various data categories)  | NB · MSB → Anfragender |
 //!
 //! **Note on 17101**: PID 17101 is "Anfrage zur Übermittlung von Stammdaten **Gas**"
 //! per the ORDERS AHB — it belongs to the GeLi Gas / WiM Gas domain, **not** WiM Strom.
-//! See [`ANFORDERUNG_PID_GAS`] and `mako-wim-gas`.
+//! See [`ANFORDERUNG_PID_GAS`].
 //!
 //! **Note on 17134/17135**: These PIDs are GPKE Konfiguration processes
 //! ("Einrichtung Konfiguration aufgrund Zuordnung LF") and are explicitly excluded
@@ -33,8 +31,11 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW WiM AHB** — Stammdaten Anfrage/Übermittlung
-//! - **BNetzA BK6-22-024** — 5 Werktage Frist
+//! - **GPKE Teil 4 § 3** (Anlage 1d zu BK6-22-024) — Use-Case
+//!   Geschäftsdatenanfrage, Antwort „spätester ÜZ ist 1 WT nach dem ÜZ" der
+//!   Anfrage. The window is
+//!   [`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`].
+//! - **ORDERS AHB 1.4b** — segment rules
 
 use std::collections::HashMap;
 
@@ -62,7 +63,7 @@ pub const WORKFLOW_NAME: &str = "wim-stammdaten";
 /// # WiM Strom only
 ///
 /// This crate (`mako-wim`) handles **Strom** stammdaten only. The Gas counterpart
-/// (PID 17101) belongs to `mako-wim-gas`; see [`ANFORDERUNG_PID_GAS`].
+/// (PID 17101) is a GeLi Gas Geschäftsdatenanfrage; see [`ANFORDERUNG_PID_GAS`].
 pub const ANFORDERUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(17132);
 
 /// ORDERS PID for Stammdaten Anforderung **Gas** (NB → MSB, Gas domain).
@@ -70,7 +71,8 @@ pub const ANFORDERUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(17
 /// Per ORDERS AHB fv20251001: 17101 = "Anfrage zur Übermittlung von Stammdaten Gas".
 ///
 /// This constant is provided here for documentation and cross-reference only.
-/// The Gas workflow is implemented in `mako-wim-gas`, not in this crate.
+/// Not routed here: it is a GeLi Gas Geschäftsdatenanfrage, not a WiM
+/// Stammdatenanforderung.
 pub const ANFORDERUNG_PID_GAS: Pruefidentifikator = Pruefidentifikator::const_new(17101);
 
 /// ORDERS PIDs for Stammdatenübermittlung responses (17102–17133, MSB → NB).
@@ -88,17 +90,9 @@ pub const ANFORDERUNG_PID_GAS: Pruefidentifikator = Pruefidentifikator::const_ne
 /// cause a PID routing conflict on any instance running both WiM and GPKE modules.
 pub const UEBERMITTLUNG_PIDS: std::ops::RangeInclusive<u32> = 17102..=17133;
 
-/// Deadline label for the 5-Werktage data-transmittal window (WiM BK6-22-024).
-///
-/// Register a `Deadline` with this label immediately after `ValidationPassed`:
-///
-/// ```rust,ignore
-/// let due = mako_fristen::deadline_at_werktage(
-///     received_at, 5, HolidayCalendar::BdewMaKo,
-/// );
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., STAMMDATEN_DEADLINE_LABEL, due);
-/// deadline_store.register(&deadline).await?;
-/// ```
+/// Deadline label for the data-transmittal window —
+/// [`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`] (1 Werktag,
+/// GPKE Teil 4 § 3.2 Nr. 2).
 pub const STAMMDATEN_DEADLINE_LABEL: &str = "wim-stammdaten-deadline";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -274,8 +268,7 @@ pub enum StammdatenCommand {
     },
     /// Transmit master data as an ORDERS response (PIDs 17102–17133).
     ///
-    /// **BNetzA BK6-22-024**: Data must be transmitted within **5 Werktage**
-    /// of receiving the Anforderung.
+    /// Due 1 Werktag after the Anfrage (GPKE Teil 4 § 3.2 Nr. 2).
     TransmitStammdaten {
         /// ORDERS PID of the response (17102–17133).
         response_pid: Pruefidentifikator,
@@ -325,7 +318,7 @@ impl Workflow for WimStammdatenWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"wim-stammdaten-deadline"` | `AnforderungReceived` or `ValidationPassed` | `TimeoutExpired` | BK6-22-024 — 5 Werktage Frist |
+    /// | `"wim-stammdaten-deadline"` | `AnforderungReceived` or `ValidationPassed` | `TimeoutExpired` | GPKE Teil 4 § 3.2 Nr. 2 — 1 Werktag |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

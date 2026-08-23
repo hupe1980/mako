@@ -68,9 +68,9 @@ fn the_orders_pid_sets_of_the_wim_workflows_are_disjoint() {
     }
 }
 
-/// The ORDRSP answers split the same way, and this is where they were wrong:
-/// 19003/19004 answer the Weiterverpflichtung (`E_0203`), not the
-/// Technikänderung (`E_0249`/`E_0250`, which answers on 19005/19006).
+/// The ORDRSP answers split the same way: 19003/19004 answer the
+/// Weiterverpflichtung (`E_0203`), not the Technikänderung (`E_0249`/`E_0250`,
+/// which answers on 19005/19006).
 ///
 /// Source: ORDRSP AHB 1.1b §§ 4.9.2, 4.10, 4.11, 4.12.
 #[test]

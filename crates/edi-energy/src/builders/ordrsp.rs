@@ -242,8 +242,7 @@ impl<S, R> OrdrespBuilder<S, R> {
             ["ORDRSP", "D", "10A", "UN", self.inner.release.as_str()]
         );
         // ORDRSP BGM: DE 1001 = 7 (the only value the MIG permits), DE 1004 =
-        // the Prüfidentifikator. (An earlier draft emitted an invalid `231` and
-        // a spurious third element.)
+        // the Prüfidentifikator, and no third element.
         emit_seg!(
             w,
             "BGM",

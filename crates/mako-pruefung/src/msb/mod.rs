@@ -73,3 +73,52 @@ pub use types::{
     MsbEntscheidung, Vertragslage, WeiterverpflichtungAuftrag,
 };
 pub use weiterverpflichtung::pruefe_weiterverpflichtung;
+
+// ── Sparte → Entscheidungsbaum ───────────────────────────────────────────────
+
+/// The Entscheidungsbaum a WiM MSB-Wechsel answer resolves against, per
+/// Prozessschritt and Sparte.
+///
+/// The Prüfschritte are the same in both Sparten; the published alphabets are
+/// not. `mako_wim::geraetewechsel::wim_ebd` gives the same answer keyed on the
+/// Prüfidentifikator, for callers that have one.
+pub mod baum {
+    use super::types::Sparte;
+    use crate::codes as c;
+
+    /// Kündigung Messstellenbetrieb — `E_0200` / `E_2000`.
+    #[must_use]
+    pub const fn kuendigung(sparte: Sparte) -> &'static str {
+        match sparte {
+            Sparte::Strom => c::EBD_KUENDIGUNG_MSB,
+            Sparte::Gas => c::EBD_KUENDIGUNG_MSB_GAS,
+        }
+    }
+
+    /// Anmeldung Messstellenbetrieb — `E_0201` / `E_2002`.
+    #[must_use]
+    pub const fn anmeldung(sparte: Sparte) -> &'static str {
+        match sparte {
+            Sparte::Strom => c::EBD_ANMELDUNG_MSB,
+            Sparte::Gas => c::EBD_ANMELDUNG_MSB_GAS,
+        }
+    }
+
+    /// Abmeldung (Ende Messstellenbetrieb) — `E_0202` / `E_2005`.
+    #[must_use]
+    pub const fn abmeldung(sparte: Sparte) -> &'static str {
+        match sparte {
+            Sparte::Strom => c::EBD_ABMELDUNG_MSB,
+            Sparte::Gas => c::EBD_ABMELDUNG_MSB_GAS,
+        }
+    }
+
+    /// Weiterverpflichtung des MSB — `E_0203` / `E_2004`.
+    #[must_use]
+    pub const fn weiterverpflichtung(sparte: Sparte) -> &'static str {
+        match sparte {
+            Sparte::Strom => c::EBD_WEITERVERPFLICHTUNG,
+            Sparte::Gas => c::EBD_WEITERVERPFLICHTUNG_GAS,
+        }
+    }
+}

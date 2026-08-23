@@ -107,6 +107,26 @@ impl Einrichtungsart {
     }
 }
 
+/// Which Sparte a WiM MSB-Wechsel Anfrage arrived in.
+///
+/// The Prüfschritte are identical — AWH WiM Gas 2.0 restates WiM Strom Teil 1
+/// verbatim — but the alphabets are not: a Strom answer resolves against
+/// `E_0200`/`E_0201`/`E_0202`/`E_0203` and a Gas one against
+/// `E_2000`/`E_2002`/`E_2005`/`E_2004`. Naming the wrong tree yields a code the
+/// counterparty's Codeliste does not contain.
+///
+/// Local to this crate: `mako-pruefung` is a pure library and takes no
+/// dependency on the engine's type catalogue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Sparte {
+    /// WiM Strom Teil 1 (BK6-22-024 Anlage 2a) — UTILMD 55xxx.
+    #[default]
+    Strom,
+    /// AWH WiM Gas 2.0 — UTILMD 44xxx.
+    Gas,
+}
+
 /// An inbound Anmeldung MSB (UTILMD 55042), as the NB reads it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnmeldungMsb {
@@ -116,6 +136,8 @@ pub struct AnmeldungMsb {
     pub msbn_mp_id: String,
     /// `SG4 DTM+76` — the requested Zuordnungsbeginn.
     pub gewuenschter_zuordnungsbeginn: Date,
+    /// Sparte of the interchange — it picks the Entscheidungsbaum.
+    pub sparte: Sparte,
     /// Which of the three cases the message declares.
     pub einrichtungsart: Einrichtungsart,
     /// Whether the message carries the Versicherung über die Beauftragung
@@ -149,6 +171,8 @@ pub struct KuendigungMsb {
     pub melo_id: String,
     /// MP-ID of the kündigender MSB, acting for the Anschlussnutzer.
     pub msbn_mp_id: String,
+    /// Sparte of the interchange — it picks the Entscheidungsbaum.
+    pub sparte: Sparte,
     /// What the Kündigung asks for.
     pub kuendigungstermin: Kuendigungstermin,
     /// The MSBA's own contract position at that Messlokation.
@@ -213,6 +237,8 @@ pub struct AbmeldungMsb {
     pub msba_mp_id: String,
     /// `SG4 DTM+76` — the requested Zuordnungsende.
     pub gewuenschtes_zuordnungsende: Date,
+    /// Sparte of the interchange — it picks the Entscheidungsbaum.
+    pub sparte: Sparte,
     /// Why the MSB is deregistering.
     pub grund: Abmeldegrund,
     /// Whether the NB's records show this MSB assigned to the Messlokation.
@@ -270,6 +296,8 @@ pub struct WeiterverpflichtungAuftrag {
     pub bestaetigtes_zuordnungsende: Date,
     /// The date up to which the NB now wants the MSBA to continue.
     pub verschobenes_zuordnungsende: Date,
+    /// Sparte of the interchange — it picks the Entscheidungsbaum.
+    pub sparte: Sparte,
     /// The Abmeldegrund of the Ende Messstellenbetrieb this follows — it caps
     /// the Weiterverpflichtungszeitraum at three months or one.
     pub grund: Abmeldegrund,

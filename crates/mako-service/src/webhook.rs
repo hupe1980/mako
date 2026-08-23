@@ -375,7 +375,6 @@ mod tests {
 
     /// **Key rotation.** The header is a list, so a sender may present the old
     /// and the new signature at once and either side of the rollover verifies.
-    /// The previous scheme could not express this at all.
     #[test]
     fn either_key_verifies_during_a_rotation() {
         let (old, new, body, ts) = (

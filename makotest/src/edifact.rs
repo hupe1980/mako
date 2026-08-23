@@ -664,7 +664,7 @@ pub fn build_utilmd(
         }
         if let Some(code) = &tx.antwort_code {
             t = t.antwort(match tx.antwort_ebd.as_deref() {
-                Some(ebd) => AntwortStatus::from_ebd(code.as_str(), ebd),
+                Some(codeliste) => AntwortStatus::from_codeliste(code.as_str(), codeliste),
                 None => AntwortStatus::bare(code.as_str()),
             });
         }
@@ -1013,7 +1013,7 @@ pub fn build_answer(
         }
         if let Some(code) = antwort_code {
             a = a.antwort(match antwort_ebd {
-                Some(ebd) => AntwortStatus::from_ebd(code, ebd),
+                Some(codeliste) => AntwortStatus::from_codeliste(code, codeliste),
                 None => AntwortStatus::bare(code),
             });
         }

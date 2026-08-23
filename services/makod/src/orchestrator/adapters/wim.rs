@@ -2,6 +2,9 @@
 //!
 //! Split out of the flat `adapters` module; shared helpers live in `super`.
 
+use mako_engine::types::Sparte;
+use time::OffsetDateTime;
+
 use super::*;
 // ── WiM INVOIC billing (PID 31009 MSB-Rechnung) ───────────────────────────────
 
@@ -233,6 +236,28 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                 });
             }
 
+            // UTILMD 44183 „Ende MSB von NB" informs and asks nothing: no
+            // Status der Antwort, no answer PID (AWH WiM Gas 2.0 Kap. 3.7,
+            // UTILMD AHB Gas 1.2 Kap. 6.4). It takes the same path as the
+            // IFTSTA Statusmeldungen rather than the MSB-Wechsel one, which
+            // would look for an Antwortfrist the Anwendungsfall does not state.
+            if pid.as_u32() == mako_wim::geraetewechsel::ENDE_MSB_VOM_NB_PID {
+                return Ok(DeviceChangeCommand::ReceiveInformation {
+                    pid,
+                    sender: MarktpartnerCode::new(
+                        u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
+                    ),
+                    receiver: MarktpartnerCode::new(
+                        u.receiver()
+                            .and_then(|n| n.party_id.as_deref())
+                            .unwrap_or(""),
+                    ),
+                    message_ref: MessageRef::new(msg.message_ref()),
+                    validation_passed,
+                    validation_errors,
+                });
+            }
+
             // WiM uses MeLo (Messlokation) as the object ID.
             let melo_id = MeLo::new(
                 u.transactions()
@@ -278,22 +303,41 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                     .first()
                     .and_then(|t| t.vorgangsnummer())
                     .map(ToOwned::to_owned),
-                // `SG4 DTM+76` — the requested Zuordnungsbeginn/-ende. The
-                // answer states a date and every WiM Vorlauffrist is measured
-                // against this one.
+                // The requested Zuordnungsbeginn resp. -ende. Which `SG4 DTM`
+                // qualifier carries it depends on the Anwendungsfall: `76`
+                // (Lieferdatum/-zeit, geplant) on an Anmeldung and a
+                // Verpflichtungsanfrage, `93` (Datum Vertragsende) XOR `471`
+                // (Ende zum nächstmöglichem Termin) on a Kündigung and an Ende
+                // MSB. Looking only for `76` left every Kündigung and every
+                // Abmeldung with no process date, and with it no
+                // Vorlauffrist-Prüfung and no date for the answer to confirm.
                 process_date: u
                     .transactions()
                     .first()
                     .and_then(|t| {
-                        t.dtm
-                            .iter()
-                            .find(|d| {
-                                d.qualifier
-                                    == edi_energy::utilmd_codes::dtm::LEISTUNGSBEGINN_GEPLANT
-                            })
-                            .and_then(|d| d.value_str())
+                        use edi_energy::utilmd_codes::dtm;
+                        [
+                            dtm::LEISTUNGSBEGINN_GEPLANT,
+                            dtm::ENDE_ZUM,
+                            "471",
+                            dtm::BEGINN_ZUM,
+                        ]
+                        .into_iter()
+                        .find_map(|q| {
+                            t.dtm
+                                .iter()
+                                .find(|d| d.qualifier == q)
+                                .and_then(|d| d.value_str())
+                        })
                     })
                     .map(ToOwned::to_owned),
+                // `SG4 STS+7` DE 9013 — Muss on every WiM MSB-Wechsel PID, and
+                // the answer echoes it.
+                transaktionsgrund: u
+                    .transactions()
+                    .first()
+                    .and_then(|t| t.transaktionsgrund())
+                    .map(|g| g.grund),
                 validation_passed,
                 validation_errors,
                 received_at: time::OffsetDateTime::now_utc(),
@@ -315,21 +359,27 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
 
 /// Build an [`AdapterRegistry`] for [`WimGeraeteubernahmeWorkflow`].
 ///
-/// Handles the three ORDERS PIDs of the Geräteübernahme family:
-/// - `17001` (Bestellung Geräteübernahmeangebot, MSBN → MSBA) and `17002`
-///   (Weiterverpflichtung, NB → MSBA) → [`GeraeteubernahmeCommand::ReceiveAnfrage`]
-/// - `17009` (Anzeige Gerätewechselabsicht, MSBN → MSBA) →
-///   [`GeraeteubernahmeCommand::ReceiveGeraetewechselabsicht`]
+/// Handles the two ORDERS PIDs this workflow answers, in both Sparten:
+/// `17001` (Bestellung Geräteübernahme) and `17009` (Anzeige
+/// Gerätewechselabsicht), both MSBN → MSBA.
 ///
-/// The MeLo ID is extracted from the `IDE` segment (element 1, component 0).
-/// The `DeviceId` (Anfrage only) is extracted from the first `RFF` segment's
-/// reference value (element 0, component 1).
+/// **17002 is not one of them.** „Weiterverpflichtung" is NB → MSBA with its
+/// own Frist and Entscheidungsbaum — [`wim_weiterverpflichtung_registry`].
+///
+/// `sparte` comes from the interchange recipient's MP-ID: ORDERS and ORDRSP are
+/// Sparte-neutral AHBs, so it is the only thing that tells `E_0247` from
+/// `E_2011` and `S_0067` from `G_0061`.
+///
+/// The MeLo ID is extracted from the `IDE` segment (element 1, component 0),
+/// the Gerätenummer from the first `RFF` segment's reference value.
 #[must_use]
-pub fn wim_geraeteubernahme_registry() -> AdapterRegistry<WimGeraeteubernahmeWorkflow> {
+pub fn wim_geraeteubernahme_registry(
+    sparte: mako_engine::types::Sparte,
+) -> AdapterRegistry<WimGeraeteubernahmeWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for WiM Geräteübernahme adapter".into(),
@@ -386,33 +436,40 @@ pub fn wim_geraeteubernahme_registry() -> AdapterRegistry<WimGeraeteubernahmeWor
                     .unwrap_or(""),
             );
 
-            let pid_u32 = pid.as_u32();
-            if matches!(pid_u32, 17001 | 17002) {
-                // Phase 1: Anfrage Geräteübernahmeangebot — extract DeviceId from
-                // the first RFF reference value (element 0, component 1).
-                let device_id = DeviceId::new(
-                    o.segments()
-                        .iter()
-                        .find(|s| s.tag == "RFF")
-                        .and_then(|s| s.component_str(0, 1))
-                        .unwrap_or(""),
-                );
-                Ok(GeraeteubernahmeCommand::ReceiveAnfrage {
-                    pid,
-                    sender,
-                    receiver,
-                    melo_id,
-                    device_id,
-                    document_date,
-                    message_ref,
-                    validation_passed,
-                    validation_errors,
-                })
-            } else {
-                // 17009 — Anzeige Gerätewechselabsicht (MSBN → MSBA). Answered by
-                // ORDRSP 19015/19016, not by a Bestellbestätigung.
-                Ok(GeraeteubernahmeCommand::ReceiveGeraetewechselabsicht { pid, message_ref })
-            }
+            // `SG10 CAV+Z30` carries the Gerätenummer; the first `RFF` value
+            // is the fallback the ORDERS AHB allows where the order names the
+            // device by reference instead.
+            let device_id = DeviceId::new(
+                o.segments()
+                    .iter()
+                    .find(|s| s.tag == "RFF")
+                    .and_then(|s| s.component_str(0, 1))
+                    .unwrap_or(""),
+            );
+            // The date the order turns on: the Übernahmezeitpunkt on a 17001,
+            // the Gerätewechseltermin on a 17009. Both ride `DTM+76`
+            // („Lieferdatum/-zeit, geplant"); `DTM+137` is the document date and
+            // is never the process date.
+            let termin = o
+                .dtm()
+                .iter()
+                .find(|d| !d.is_document_date())
+                .and_then(|d| d.value_str())
+                .map(str::to_owned);
+            Ok(GeraeteubernahmeCommand::ReceiveOrders {
+                pid,
+                sender,
+                receiver,
+                melo_id,
+                device_id,
+                document_date,
+                termin,
+                message_ref,
+                validation_passed,
+                validation_errors,
+                sparte,
+                received_at: time::OffsetDateTime::now_utc(),
+            })
         },
     ));
     registry
@@ -1227,26 +1284,27 @@ pub fn wim_preisliste_registry() -> AdapterRegistry<WimPreislisteWorkflow> {
     registry
 }
 
-// ── WiM Strom INSRPT (PIDs 23001/23003/23004/23008/23011/23012) ──────────────
+// ── WiM INSRPT (PIDs 23001/23003/23004/23005/23008/23009/23011/23012) ────────
 
-/// Build an [`AdapterRegistry`] for [`WimInsrptWorkflow`] (WiM Strom, 5 WT).
+/// Build an [`AdapterRegistry`] for [`WimInsrptWorkflow`], **in both Sparten**.
 ///
-/// Handles inbound INSRPT messages for fault/inspection reporting between LF
-/// and MSB in the WiM Strom Teil 2 process.  Covers both the outbound
-/// Störungsmeldung (23001) and all inbound MSB responses
-/// (23003/23004/23008/23011/23012).
+/// Handles every inbound INSRPT of the Störungsbehebung in der Messlokation,
+/// on both sides of it: 23001 opens the process at the **MSB**, the rest are
+/// the MSB's answers arriving at the **Störungsmelder**.
 ///
-/// In combined Strom+Gas deployments the ingest layer must supply
-/// `Sparte::Strom` when calling [`PidRouter::route_with_sparte`] to reach this
-/// workflow instead of [`wim_gas_insrpt_registry`].
-///
-/// [`PidRouter::route_with_sparte`]: mako_engine::pid_router::PidRouter::route_with_sparte
+/// The INSRPT AHB is Sparte-neutral, so `sparte` comes from the recipient
+/// MP-ID. `messtechnik` sizes the Antwort- and the Ergebnisfrist; neither is in
+/// the message, and the MSB's own device registry is the only source. Passing
+/// the fastest branch keeps an alert early rather than late.
 #[must_use]
-pub fn wim_insrpt_registry() -> AdapterRegistry<WimInsrptWorkflow> {
+pub fn wim_insrpt_registry(
+    sparte: Sparte,
+    messtechnik: mako_fristen::antwort::Messtechnik,
+) -> AdapterRegistry<WimInsrptWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for WiM Strom INSRPT adapter".into(),
@@ -1279,12 +1337,44 @@ pub fn wim_insrpt_registry() -> AdapterRegistry<WimInsrptWorkflow> {
                     .unwrap_or(msg.message_ref()),
             );
             match pid.as_u32() {
-                23011 | 23012 => Ok(StorungsmeldungCommand::ReceiveInformationsmeldung {
+                // 23001 arrives at the MSB and opens the process there. The
+                // Melder side never ingests it — it sent it.
+                23_001 => Ok(StoerungsmeldungCommand::ReceiveStoerungsmeldung {
                     pid,
-                    sender,
+                    melder_mp_id: sender,
+                    msb_mp_id: MarktpartnerCode::new(
+                        insrpt
+                            .receiver()
+                            .and_then(|n| n.party_id.as_deref())
+                            .unwrap_or(""),
+                    ),
+                    melo_id: MeLo::new(
+                        insrpt
+                            .segments()
+                            .iter()
+                            .find(|s| s.tag == "LOC" && s.component_str(0, 0) == Some("172"))
+                            .and_then(|s| s.component_str(1, 0))
+                            .unwrap_or_default(),
+                    ),
+                    sparte,
+                    document_date: insrpt
+                        .dtm()
+                        .iter()
+                        .find(|d| d.qualifier == "137")
+                        .and_then(|d| d.value.clone())
+                        .unwrap_or_default(),
                     message_ref,
+                    received_at: OffsetDateTime::now_utc(),
+                    messtechnik,
                 }),
-                _ => Ok(StorungsmeldungCommand::ReceiveAntwort {
+                23_005 | 23_009 | 23_011 | 23_012 => {
+                    Ok(StoerungsmeldungCommand::ReceiveInformationsmeldung {
+                        pid,
+                        sender,
+                        message_ref,
+                    })
+                }
+                _ => Ok(StoerungsmeldungCommand::ReceiveAntwort {
                     pid,
                     sender,
                     message_ref,
@@ -1384,11 +1474,13 @@ pub fn wim_technik_aenderung_registry() -> AdapterRegistry<WimTechnikAenderungWo
 /// date the whole decision turns on, because the Weiterverpflichtungszeitraum
 /// is capped at three months or one from the confirmed Zuordnungsende.
 #[must_use]
-pub fn wim_weiterverpflichtung_registry() -> AdapterRegistry<WimWeiterverpflichtungWorkflow> {
+pub fn wim_weiterverpflichtung_registry(
+    sparte: mako_engine::types::Sparte,
+) -> AdapterRegistry<WimWeiterverpflichtungWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
-        |raw: &dyn Any, _fv: &FormatVersion| {
+        move |raw: &dyn Any, _fv: &FormatVersion| {
             let msg = raw.downcast_ref::<AnyMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
                     "expected AnyMessage for WiM Weiterverpflichtung adapter".into(),
@@ -1419,6 +1511,7 @@ pub fn wim_weiterverpflichtung_registry() -> AdapterRegistry<WimWeiterverpflicht
 
             Ok(WeiterverpflichtungCommand::ReceiveAuftrag {
                 pid,
+                sparte,
                 nb: MarktpartnerCode::new(
                     o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),

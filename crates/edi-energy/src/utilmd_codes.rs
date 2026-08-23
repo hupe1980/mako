@@ -194,6 +194,23 @@ impl Transaktionsgrund {
         }
     }
 
+    /// A Transaktionsgrund with **no Ergänzung** — the `WiM` MSB-Wechsel shape.
+    ///
+    /// The `WiM` Anwendungsübersichten list `SG4 STS 9015 = 7` with DE 9013 and
+    /// nothing after it (UTILMD AHB Strom 2.2 Kap. 10, Gas 1.2 Kap. 6). The
+    /// GPKE Ergänzung (`ZW4` verbrauchende Marktlokation and friends) names a
+    /// property of a *Marktlokation*, and a `WiM` Vorgang is keyed on the
+    /// Messlokation — emitting one asserts something the Anwendungsfall has no
+    /// element for.
+    #[must_use]
+    pub fn bare(grund: impl Into<String>) -> Self {
+        Self {
+            grund: grund.into(),
+            ergaenzung: None,
+            befristet: None,
+        }
+    }
+
     /// Attach the DE 9013 element 4 (befristete Anmeldung) code.
     #[must_use]
     pub fn befristet(mut self, code: impl Into<String>) -> Self {
@@ -210,31 +227,46 @@ impl Transaktionsgrund {
 /// answer without it is not a well-formed answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AntwortStatus {
-    /// DE 9013 — the EBD Antwortcode (`A10`, `A35`, `E15`, `Z12`, …).
+    /// DE 9013 — „Code des Prüfschritts" (`A10`, `A35`, `E15`, `Z12`, …).
     pub code: String,
-    /// DE 1131 — the EBD the code is drawn from (`E_0609`, `E_0624`, …).
+    /// DE 1131 — the **Codeliste** the code is drawn from.
     ///
-    /// `None` for the Gas track, whose Antwortcodes come from a plain
-    /// `G_xxxx` Codeliste that the MIG does not require in DE 1131.
-    pub ebd: Option<String>,
+    /// The AHB prints one of two things in this column, and they are not
+    /// interchangeable:
+    ///
+    /// | AHB wording | Example | Where |
+    /// |---|---|---|
+    /// | „EBD Nr. `E_xxxx`" | `E_0622`, `E_3005` | GPKE and `GeLi` Gas answers |
+    /// | „Codeliste Strom/Gas Nr. `S_xxxx`/`G_xxxx`" | `S_0090`, `G_0051` | every `WiM` MSB-Wechsel answer |
+    ///
+    /// **Both Sparten require it.** UTILMD AHB Gas 1.2 Kap. 6.1 marks
+    /// `SG4 STS 1131` with an `X` on 44040/44041 and names `G_0052`/`G_0051`.
+    ///
+    /// `None` only for an answer whose AHB column really is empty.
+    pub codeliste: Option<String>,
 }
 
 impl AntwortStatus {
-    /// An Antwortcode drawn from a named EBD (Strom).
+    /// An Antwortcode together with the Codeliste DE 1131 must name.
+    ///
+    /// Ask [`mako_pruefung::codes::AntwortCode::wire_codeliste`] for the second
+    /// argument — it is the EBD number only where the AHB says „EBD-Nummer".
+    ///
+    /// [`mako_pruefung::codes::AntwortCode::wire_codeliste`]: https://docs.rs/mako-pruefung
     #[must_use]
-    pub fn from_ebd(code: impl Into<String>, ebd: impl Into<String>) -> Self {
+    pub fn from_codeliste(code: impl Into<String>, codeliste: impl Into<String>) -> Self {
         Self {
             code: code.into(),
-            ebd: Some(ebd.into()),
+            codeliste: Some(codeliste.into()),
         }
     }
 
-    /// A bare Antwortcode without a DE 1131 Codeliste reference (Gas).
+    /// A bare Antwortcode, for the few answers whose DE 1131 column is empty.
     #[must_use]
     pub fn bare(code: impl Into<String>) -> Self {
         Self {
             code: code.into(),
-            ebd: None,
+            codeliste: None,
         }
     }
 }

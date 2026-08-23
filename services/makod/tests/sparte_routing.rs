@@ -1,10 +1,18 @@
-//! Commodity-aware ingest routing.
+//! Commodity-aware ingest routing, and the Sparte the ingest layer resolves.
 //!
-//! A Sparte-split shared PID (INSRPT 23001 — registered by both `mako-wim` and
-//! `mako-wim-gas`) must resolve to the Strom or Gas workflow based on the
-//! interchange recipient's Sparte (UNB DE0010), not by the last-write-wins
-//! unambiguous table. Guards `EdifactApiState::resolve_workflow` /
-//! `edifact_api::resolve_workflow`, which the AS4 + REST ingest paths call.
+//! Two distinct jobs, both keyed on the **interchange recipient's MP-ID**
+//! (`UNB` DE 0010, which `edi-energy` pins equal to `NAD+MR` at parse):
+//!
+//! 1. A Prüfidentifikator that two *different process families* share — ORDERS
+//!    17115 Sperrauftrag, answered by GPKE in Strom and GeLi Gas in Gas — must
+//!    reach the right workflow, not whichever module registered last.
+//! 2. A PID that one family carries in both Sparten — the WiM ORDERS/ORDRSP,
+//!    INSRPT and IFTSTA legs — reaches **one** workflow either way, and the
+//!    Sparte travels in the command so the workflow can pick the
+//!    Entscheidungsbaum and the Codeliste.
+//!
+//! Guards `EdifactApiState::resolve_workflow` / `edifact_api::resolve_workflow`,
+//! which the AS4 and REST ingest paths call.
 
 use mako_engine::pid_router::PidRouter;
 use mako_engine::types::Sparte;
@@ -35,35 +43,47 @@ fn combined_registry() -> MpIdRegistry {
     .expect("valid registry")
 }
 
-/// Mirror a combined Strom+Gas deployment: both WiM modules register INSRPT
-/// 23001 — Gas last, so the unambiguous `route()` fallback resolves to Gas.
+/// Mirror a combined Strom+Gas deployment on the Sperrprozess ORDERS: both
+/// modules register 17115 — Gas last, so the unambiguous `route()` fallback
+/// resolves to Gas.
 fn combined_router() -> PidRouter {
     let mut r = PidRouter::new();
-    r.register(23001, "wim-insrpt");
-    r.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
-    r.register(23001, "wim-gas-insrpt"); // WimGasModule registered after WimModule
-    r.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+    r.register(17115, "gpke-sperrung");
+    r.register_with_sparte(17115, Sparte::Strom, "gpke-sperrung");
+    r.register(17115, "geli-gas-sperrung-lf"); // GeliGasModule registered after GpkeModule
+    r.register_with_sparte(17115, Sparte::Gas, "geli-gas-sperrung-lf");
     r.register(55001, "gpke-supplier-change"); // non-Sparte-split control PID
+    // The WiM legs are one workflow in both Sparten, registered unqualified.
+    for pid in [17001_u32, 17009, 23001] {
+        r.register(
+            pid,
+            if pid == 23001 {
+                "wim-insrpt"
+            } else {
+                "wim-geraeteubernahme"
+            },
+        );
+    }
     r
 }
 
 #[test]
-fn strom_recipient_routes_shared_pid_to_strom_workflow() {
+fn strom_recipient_routes_a_split_pid_to_the_strom_workflow() {
     let (router, reg) = (combined_router(), combined_registry());
-    // The fix: without commodity-aware routing, `route(23001)` is the last-write
-    // "wim-gas-insrpt" — wrong for a Strom interchange.
+    // Without commodity-aware routing, `route(17115)` is the last-write
+    // "geli-gas-sperrung-lf" — wrong for a Strom interchange.
     assert_eq!(
-        resolve_workflow(&router, &reg, 23001, STROM_NB),
-        Some("wim-insrpt"),
+        resolve_workflow(&router, &reg, 17115, STROM_NB),
+        Some("gpke-sperrung"),
     );
 }
 
 #[test]
-fn gas_recipient_routes_shared_pid_to_gas_workflow() {
+fn gas_recipient_routes_a_split_pid_to_the_gas_workflow() {
     let (router, reg) = (combined_router(), combined_registry());
     assert_eq!(
-        resolve_workflow(&router, &reg, 23001, GAS_GNB),
-        Some("wim-gas-insrpt"),
+        resolve_workflow(&router, &reg, 17115, GAS_GNB),
+        Some("geli-gas-sperrung-lf"),
     );
 }
 
@@ -72,36 +92,37 @@ fn neutral_or_unknown_recipient_falls_back_to_unambiguous_table() {
     let (router, reg) = (combined_router(), combined_registry());
     // Both (RB) and non-own recipients use the unambiguous fallback (Gas, last write).
     assert_eq!(
-        resolve_workflow(&router, &reg, 23001, NEUTRAL_RB),
-        Some("wim-gas-insrpt"),
+        resolve_workflow(&router, &reg, 17115, NEUTRAL_RB),
+        Some("geli-gas-sperrung-lf"),
     );
     assert_eq!(
-        resolve_workflow(&router, &reg, 23001, "9999999999999"),
-        Some("wim-gas-insrpt"),
+        resolve_workflow(&router, &reg, 17115, "9999999999999"),
+        Some("geli-gas-sperrung-lf"),
     );
 }
 
+/// The WiM legs that share a Prüfidentifikator across the Sparten reach **one**
+/// workflow from either recipient.
+///
+/// AWH WiM Gas 2.0 restates WiM Strom Teil 1 use-case for use-case, so a second
+/// workflow would differ only in the Codeliste it names — which the workflow
+/// derives from the Sparte the ingest layer passes it.
 #[test]
-fn geraeteubernahme_shared_pid_splits_by_sparte() {
-    // ORDERS 17001 (Geräteübernahme Anfrage) is shared Strom/Gas. Mirror the
-    // module registrations: WimModule (Strom) then WimGasModule (Gas, last write).
-    let mut r = PidRouter::new();
-    r.register(17001, "wim-geraeteubernahme");
-    r.register_with_sparte(17001, Sparte::Strom, "wim-geraeteubernahme");
-    r.register(17001, "wim-gas-geraeteubernahme"); // Gas wins the unambiguous fallback
-    r.register_with_sparte(17001, Sparte::Gas, "wim-gas-geraeteubernahme");
-    let reg = combined_registry();
-
-    assert_eq!(
-        resolve_workflow(&r, &reg, 17001, STROM_NB),
-        Some("wim-geraeteubernahme"),
-        "Strom recipient must reach the Strom Geräteübernahme workflow"
-    );
-    assert_eq!(
-        resolve_workflow(&r, &reg, 17001, GAS_GNB),
-        Some("wim-gas-geraeteubernahme"),
-        "Gas recipient must reach the Gas Geräteübernahme workflow"
-    );
+fn the_wim_legs_are_one_workflow_in_both_sparten() {
+    let (router, reg) = (combined_router(), combined_registry());
+    for (pid, workflow) in [
+        (17_001_u32, "wim-geraeteubernahme"),
+        (17_009, "wim-geraeteubernahme"),
+        (23_001, "wim-insrpt"),
+    ] {
+        for recipient in [STROM_NB, GAS_GNB, NEUTRAL_RB] {
+            assert_eq!(
+                resolve_workflow(&router, &reg, pid, recipient),
+                Some(workflow),
+                "PID {pid} from {recipient}"
+            );
+        }
+    }
 }
 
 #[test]

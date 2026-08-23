@@ -1673,7 +1673,7 @@ WHERE geraet_konfigurationen @> '[{"parameter":"SMGW_CERT_ABLAUFDATUM"}]'
 | `CLS_FAEHIG` | bool string | §14a EnWG BK6-22-300 | CLS channel capable (`"true"` / `"false"`) — checked by `processd` §14a auto-acknowledge |
 | `SMGW_TLS_CERT_FINGERPRINT` | hex string | BSI TR-03109-3 | SHA-256 fingerprint (64 hex chars) of the SMGW TLS cert |
 | `SMGW_CERT_ABLAUFDATUM` | ISO date | BSI TR-03109-4 §6.3 | TLS cert expiry date — monitored by `edmd` cert-expiry worker |
-| `CLS_KANAL_ID` | string | BK6-24-174 §4.3 | CLS channel ID for §14a Steuerungsauftrag routing |
+| `CLS_KANAL_ID` | string | GPKE Teil 3 Kap. 2 | CLS channel ID for §14a Steuerungsauftrag routing |
 | `GWA_CODENUMMER` | 13-digit | BDEW | GWA (Gateway-Administrator) BDEW-Codenummer |
 | `HERSTELLER` | string | MsbG §23 | Manufacturer name |
 | `INBETRIEBNAHMEDATUM` | ISO date | § 13 StromNZV | Commissioning date |
@@ -1730,8 +1730,8 @@ curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567/geraete/SMGW-2026-0
 ### Integration with `processd` (§14a Steuerungsauftrag)
 
 When `CLS_FAEHIG = "true"` is stored, `processd` **auto-acknowledges** §14a
-`WimSteuerungsauftrag` requests for this device (BK6-24-174 §4.3 rules).
-When `CLS_FAEHIG = "false"` or absent, `processd` rejects the Steuerungsauftrag (BK6-24-174 §4.3 — device not remotely controllable).
+`WimSteuerungsauftrag` requests for this device (GPKE Teil 3 Kap. 2).
+When `CLS_FAEHIG = "false"` or absent, `processd` rejects the Steuerungsauftrag (GPKE Teil 3 Kap. 2 — device not remotely controllable).
 
 ### Integration with `edmd` (SMGW cert-expiry monitoring)
 
@@ -1932,7 +1932,7 @@ sequenceDiagram
 ## SteuerbareRessource Registry
 
 `marktd` stores **steuerbare Ressourcen** (SR) — iMS controllable resources per
-BK6-24-174 §6. An SR-ID has the format `C[A-Z0-9]{9}[0-9]` (Codetyp `C` +
+GPKE Teil 3 Kap. 2. An SR-ID has the format `C[A-Z0-9]{9}[0-9]` (Codetyp `C` +
 9 alphanumeric chars + ASCII-Verfahren check digit).
 
 Populated by WiM iMS Steuerungsauftrag processes (PID 55168) and by operator
@@ -1944,7 +1944,7 @@ The value is preserved across PUT calls unless explicitly replaced via the sub-r
 
 ### Konfigurationsprodukte — typed API
 
-The `konfigurationsprodukte` sub-resource has its own endpoints with **full BO4E validation** per BK6-24-174 §4.3:
+The `konfigurationsprodukte` sub-resource has its own endpoints with **full BO4E validation** per GPKE Teil 3 Kap. 1.3:
 
 ```bash
 # Retrieve typed Konfigurationsprodukte (returns Vec<ZeitvariablePreisposition> deserialized)
@@ -1972,7 +1972,7 @@ curl -s -X DELETE "http://marktd:8180/api/v1/steuerbare-ressourcen/C000123456789
 # → 204 No Content
 ```
 
-**Validation rules (BK6-24-174 §4.3):**
+**Validation rules (GPKE Teil 3 Kap. 1.3):**
 
 - Each element must deserialize as `rubo4e::current::Konfigurationsprodukt`
 - `produktcode` **must not be empty** — every contracted product requires a unique code

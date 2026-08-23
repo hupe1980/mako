@@ -117,3 +117,53 @@ fn every_fixture_sits_under_a_message_type_that_declares_its_pid() {
         misfiled.join("\n")
     );
 }
+
+/// `SG6 RFF+Z13` DE 1154 carries the **Prüfidentifikator**, not a Vorgangsnummer.
+///
+/// The UTILMD AHB gives the element one value per Anwendungsfall — Strom 2.2
+/// Kap. 10.1 prints „`SG6 RFF 1154  55039 WiM Strom / Kündigung MSB`" against
+/// the Kündigung column and `55040`/`55041` against the two answers; Gas 1.2
+/// Kap. 6 does the same for 44039–44041. DE 1154 is `R n5` there, so nothing
+/// but the five-digit code belongs in it. The Vorgangsnummer lives in `IDE+24`
+/// DE 7402 and comes back in `SG6 RFF+TN`.
+///
+/// Checked on the WiM MSB-Wechsel fixtures, whose AHB columns are quoted above.
+/// Other families state DE 1154 differently and are out of this test's scope.
+#[test]
+fn wim_fixtures_put_the_pruefidentifikator_in_rff_z13() {
+    const WIM_MSB_WECHSEL: &[u32] = &[
+        55_039, 55_040, 55_041, 55_042, 55_043, 55_044, 55_051, 55_052, 55_053, 55_168, 55_169,
+        55_170, 44_039, 44_040, 44_041, 44_042, 44_043, 44_044, 44_051, 44_052, 44_053, 44_168,
+        44_169, 44_170, 44_183,
+    ];
+    let dir = fixtures_root().join("utilmd/valid");
+    let mut checked = 0_usize;
+    for entry in std::fs::read_dir(&dir).expect("utilmd/valid").flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("edi") {
+            continue;
+        }
+        let raw = std::fs::read_to_string(&path).expect("fixture is readable");
+        let Some(pid) = WIM_MSB_WECHSEL
+            .iter()
+            .find(|p| raw.contains(&format!("+000{p}::")))
+        else {
+            continue;
+        };
+        let rff = raw
+            .split('\'')
+            .find_map(|s| s.trim_start_matches('\n').strip_prefix("RFF+Z13:"))
+            .unwrap_or_else(|| panic!("{}: no SG6 RFF+Z13", path.display()));
+        assert_eq!(
+            rff,
+            pid.to_string(),
+            "{}: RFF+Z13 DE 1154 must carry the Prüfidentifikator",
+            path.display(),
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 20,
+        "expected the WiM MSB-Wechsel fixtures to be found; checked {checked}"
+    );
+}

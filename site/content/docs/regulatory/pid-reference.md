@@ -26,16 +26,22 @@ workflow by PID.
 | **3.3 / 4.0** | ✅ = present in BDEW PID overview for that format version; ⚠️ = absent (sunset or not-yet-added). |
 | **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter`. `—` = not yet implemented. ⁽ᴺᴮ⁾ = NB-role conditional registration only. Multiple entries separated by ` · ` = same PID registered independently in different crates (commodity-isolated; each crate is loaded only in the relevant Strom or Gas deployment). |
 
-**Commodity isolation:** Strom crates (`mako-gpke`, `mako-wim`, `mako-mabis`)
-and Gas crates (`mako-geli-gas`, `mako-wim-gas`, `mako-gabi-gas`) are fully
-independent. A Strom-only makod instance loads only Strom crates; a Gas-only
-instance loads only Gas crates. Running separate instances per commodity is
-a standard and supported deployment topology.
+**Commodity isolation is per *process family*, not per Sparte.** The Lieferanten­
+wechsel is genuinely two different Festlegungen — GPKE (`mako-gpke`) against GeLi
+Gas (`mako-geli-gas`) — and those crates stay independent. **WiM is not.** AWH WiM
+Gas 2.0 restates WiM Strom Teil 1 use-case for use-case with the same Fristen, so
+`mako-wim` runs both Sparten and `wim_sparte(pid)` reads which off the
+Prüfidentifikator. What differs is recorded rather than duplicated: the
+Antwort-Codeliste (`S_00xx` against `G_00xx`), the APERAK regime, and the
+Zuordnungszeitpunkt (00:00 against **06:00 Uhr**, the Gastag boundary).
 
-**Multi-commodity PIDs:** Where the same BDEW PID number is used in both Strom
-and Gas contexts (e.g. ORDERS 17115/17117, ORDRSP 19116/19117), each commodity
-crate handles it independently. In a combined Strom+Gas instance the `PidRouter`
-dispatches by `DeploymentRoles` / `Marktrolle`.
+**Multi-commodity PIDs:** several AHBs are Sparte-neutral, so the same PID carries
+both — INSRPT 23001/23003/23004/23008 (23005/23009 are Gas-only, 23011/23012
+Strom-only), the WiM ORDERS 17001/17002/17009 and their ORDRSP answers,
+REQOTE 35001 / QUOTES 15001, the IFTSTA Statusmeldungen, and INVOIC 31003. The Sparte is
+not in the message body: it is the Sparte of the **interchange recipient's MP-ID**
+(BDEW Allgemeine Festlegungen §2.13), which the ingest layer resolves and passes
+to the workflow.
 
 Source: BDEW PID 3.3 xlsx (Fehlerkorrektur 27.03.2026) and PID 4.0 xlsx (01.04.2026).
 
@@ -104,7 +110,7 @@ a workflow whose registered band does not yet include them.
 | Situation | PIDs |
 |---|---|
 | **Outbound-only** — generated or dispatched by mako, never received | 55011, 55012 · 17134, 17135 (ORDERS dispatched via the outbox by `GpkeKonfigurationWorkflow`) |
-| **Role-conditional** — registered only under an explicit `NMSB` role build | 19015, 19016 (ORDRSP Gerätewechselabsicht Bestätigung/Ablehnung, answering ORDERS 17009) |
+| **Role-conditional** — registered only under an explicit `NMSB` role build | 19001, 19002 (ORDRSP Bestellbestätigung/Ablehnung, answering ORDERS 17001) — GPKE Konfiguration claims the same two on an NB instance |
 | **Named but not routed** — constants exist or the band is narrower than the credit implies | 55035, 55060, 55095, 55173, 55175, 55177, 55180, 55194, 55225, 55227, 55230, 55232, 55553, 55559 |
 
 An inbound message carrying one of the last group is dead-lettered as
@@ -351,22 +357,22 @@ reference to the published set.
 | 44019 | Bestandsliste zugeordnete Marktlokationen | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44020 | Änderungsmeldung zur Bestandsliste | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
 | 44021 | Antwort auf Änderungsmeldung zur Bestandsliste | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-supplier-change` |
-| 44022 | Anfrage nach Stornierung | WiM Gas / GeLi Gas 2.0 | Sender → Empf. · orig. → orig. | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-stornierung` |
-| 44023 | Bestätigung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-stornierung` |
-| 44024 | Ablehnung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-stornierung` |
+| 44022 | Anfrage nach Stornierung | WiM Gas / GeLi Gas 2.0 | Sender → Empf. · orig. → orig. | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
+| 44023 | Bestätigung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
+| 44024 | Ablehnung Anfrage Stornierung | WiM Gas / GeLi Gas 2.0 | Empf. → Sender | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-stornierung` |
 | 44035 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → LF | 17101 | — | ✅ | ✅ | ✅ | — |
 | 44036 | Informationsmeldung über existierende Zuordnung | GeLi Gas 2.0 | NB → LFN | — | — | ✅ | ✅ | ✅ | — |
 | 44037 | Informationsmeldung zur Beendigung der Zuordnung | GeLi Gas 2.0 | NB → LFA | — | — | ✅ | ✅ | ✅ | — |
 | 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | — |
-| 44039 | Kündigung MSB | WiM Gas | MSBN → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-kuendigung` |
-| 44040 | Bestätigung Kündigung MSB | WiM Gas | MSBA → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-kuendigung` |
-| 44041 | Ablehnung Kündigung MSB | WiM Gas | MSBA → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-kuendigung` |
-| 44042 | Anmeldung MSB | WiM Gas | MSBN → NB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-anmeldung` |
-| 44043 | Bestätigung Anmeldung MSB | WiM Gas | NB → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-anmeldung` |
-| 44044 | Ablehnung Anmeldung MSB | WiM Gas | NB → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-anmeldung` |
-| 44051 | Ende MSB | WiM Gas | MSBA → NB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-anmeldung` |
-| 44052 | Bestätigung Ende MSB | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-anmeldung` |
-| 44053 | Ablehnung Ende MSB | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-anmeldung` |
+| 44039 | Kündigung MSB | WiM Gas | MSBN → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44040 | Bestätigung Kündigung MSB | WiM Gas | MSBA → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44041 | Ablehnung Kündigung MSB | WiM Gas | MSBA → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44042 | Anmeldung MSB | WiM Gas | MSBN → NB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44043 | Bestätigung Anmeldung MSB | WiM Gas | NB → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44044 | Ablehnung Anmeldung MSB | WiM Gas | NB → MSBN | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44051 | Ende MSB | WiM Gas | MSBA → NB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44052 | Bestätigung Ende MSB | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44053 | Ablehnung Ende MSB | WiM Gas | NB → MSBA | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 44060 | Antwort auf die Geschäftsdatenanfrage | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | — |
 | 44101 | Stammdaten zur Messlokation | NBW Leitfaden | NBN → MSB | — | — | ✅ | ✅ | ✅ | — |
 | 44102 | Aktualisierte Stammdaten zur Messlokation | NBW Leitfaden | NBN → MSB | — | — | ✅ | ✅ | ✅ | — |
@@ -410,9 +416,10 @@ reference to the published set.
 | 44165 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44166 | Nicht bila. rel Anfrage an MSB ohne Abhängigkeiten | GeLi Gas 2.0 | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44167 | Antwort auf Anfrage | GeLi Gas 2.0 | MSB → NB | 44165, 44166 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
-| 44168 | Verpflichtungsanfrage / Aufforderung | WiM Gas | NB → gMSB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` |
-| 44169 | Bestätigung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` |
-| 44170 | Ablehnung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ⚠️ | `mako-wim-gas` `wim-gas-verpflichtungsanfrage` |
+| 44183 | Ende MSB von NB (Information über Stilllegung) | WiM Gas | NB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44168 | Verpflichtungsanfrage / Aufforderung | WiM Gas | NB → gMSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44169 | Bestätigung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
+| 44170 | Ablehnung Verpflichtungsanfrage | WiM Gas | gMSB → NB | — | — | ✅ | ✅ | ⚠️ | — (**withdrawn**: PID 4.0 publishes 44168 → 44169 only, so the Gas Verpflichtungsanfrage has no Ablehnungs-PID) |
 | 44175 | Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44176 | Antwort auf Änderung der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | 44175 | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
 | 44180 | Anfrage der Marktlokationsstruktur | GeLi Gas 2.0 | LF → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` / `geli-gas-stammdatenaenderung` |
@@ -487,8 +494,8 @@ reference to the published set.
 | 19012 | Ablehnung der Ab-/Bestellung von Werten für ESA | WiM Strom Teil 2 Kap. 4 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 19013 | Bestätigung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
 | 19014 | Ablehnung der Stornierung einer Bestellung | WiM Strom Teil 2 | MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-wim` `esa-wertebestellung` |
-| 19015 | Bestätigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` (nMSB-role conditional) |
-| 19016 | Ablehnung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` (nMSB-role conditional) |
+| 19015 | Bestätigung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
+| 19016 | Ablehnung Gerätewechselabsicht | WiM Gas / WiM Strom Teil 1 | MSBA → MSBN | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-geraeteubernahme` |
 | 19101 | Ablehnung der Anfrage  Stammdaten | GPKE Teil 4 / GeLi Gas 2.0 | NB → MSB · NB → LF | 17101 | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
 | 19102 | Ablehnung der Anfrage Werte | GPKE Teil 4 / GeLi Gas 2.0 | MSB → LF · NB → LF | 17102 | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-datenabruf` |
 | 19103 | Ablehnung der Anfrage Brennwert / Zustandszahl | GeLi Gas 2.0 | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-datenabruf` |
@@ -552,7 +559,7 @@ reference to the published set.
 | 21032 | Antwort auf das Angebot | WiM Strom Teil 1 | LF → MSB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 21033 | Ablehnung der Anfrage | GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
 | 21035 | Rückmeld. a. Liefers. | GPKE Teil 2 | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-supplier-change` |
-| 21036 | Statusmeldung | WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | — | ✅ | ✅ | — |
+| 21036 | Zeitpunkt des Geräteausbaus | WiM Gas / WiM Strom Teil 1 | MSBN → MSBA | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-device-change` |
 | 21037 | Ansicht NB | Redispatch 2.0 | NB → BTR | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 21038 | Ansicht BTR | Redispatch 2.0 | BTR → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 21039 | Auftragsstatus (Sperren) | AWH Sperrprozesse Gas / GPKE Teil 2 | NB → LF · NB → MSB · NB → ÜNB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-sperrung-lf` |
@@ -599,8 +606,8 @@ reference to the published set.
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
 | 31001 | Abschlagsrechnung | GPKE Teil 2 / GeLi Gas 2.0 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31002 | NN-Rechnung | GPKE Teil 2 / GeLi Gas 2.0 | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
-| 31003 | WiM-Rechnung | WiM Gas / WiM Strom Teil 1 | MSBA → NB · MSBA → MSBN · MSBA → MSBN/gMSB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-invoic` |
-| 31004 | Stornorechnung (**Sparte-neutral, universal**) | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | MSBA → NB · MSBA → MSBN · NB → TK/KN · NB → LF · NB → MGV · MSB → NB · MSB → LF · MSBA → MSBN/gMSB · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `invoic-checker` `check_storno` (hosted by `wim-gas-invoic`) |
+| 31003 | WiM-Rechnung (Abrechnung von Dienstleistungen im Messwesen) | WiM Strom Teil 1 / WiM Gas | MSBA → NB · MSBA → MSBN · MSBA → MSBN/gMSB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-invoic` |
+| 31004 | Stornorechnung (**Sparte-neutral, universal**) | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | MSBA → NB · MSBA → MSBN · NB → TK/KN · NB → LF · NB → MGV · MSB → NB · MSB → LF · MSBA → MSBN/gMSB · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `invoic-checker` `check_storno` (hosted by `wim-invoic`) |
 | 31005 | MMM-Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31006 | MMM-selbst ausgest. Rechnung | MMM Strom/Gas | NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 31007 | Aggreg. MMM-Rechnung | MMM Strom/Gas | NB → MGV | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-invoic` |
@@ -613,8 +620,8 @@ reference to the published set.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 33001 | Bestätigung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim-gas` `wim-gas-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
-| 33002 | Abweisung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim-gas` `wim-gas-invoic` |
+| 33001 | Bestätigung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim` `wim-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
+| 33002 | Abweisung | WiM Gas / Kapazitätsabrechnung / MMM Strom/Gas / AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → MSBA · MSBN → MSBA · KN → NB · LF → NB · MGV → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim` `wim-invoic` |
 | 33003 | Strom Abweisung Kopf und Summe | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 | 33004 | Strom Abweisung Position | GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik | LF → NB · NB → MSB · LF → MSB · MSBN/gMSB → MSBA · ESA → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` |
 
@@ -669,12 +676,12 @@ reference to the published set.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 23001 | Störungsmeldung | WiM Gas / WiM Strom Teil 2 | LF → MSB · NB → MSB · Melder → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (Strom 5WT · combined) · `mako-wim-gas` `wim-gas-insrpt` (Gas-only 10WT) |
-| 23003 | Ablehnung | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (Strom 5WT · combined) · `mako-wim-gas` `wim-gas-insrpt` (Gas-only 10WT) |
-| 23004 | Bestätigung | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (Strom 5WT · combined) · `mako-wim-gas` `wim-gas-insrpt` (Gas-only 10WT) |
-| 23005 | Ablehnung Gas-Variante | WiM Gas | MSB → NB · MSB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-insrpt` (Gas-only + combined) |
-| 23008 | Ergebnisbericht | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (Strom 5WT · combined) · `mako-wim-gas` `wim-gas-insrpt` (Gas-only 10WT) |
-| 23009 | Ergebnisbericht Gas-Variante | WiM Gas | MSB → NB · MSB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim-gas` `wim-gas-insrpt` (Gas-only + combined) |
+| 23001 | Störungsmeldung | WiM Gas / WiM Strom Teil 2 | LF → MSB · NB → MSB · Melder → MSB | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
+| 23003 | Ablehnung | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
+| 23004 | Bestätigung | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
+| 23005 | Ablehnung Gas-Variante | WiM Gas | MSB → NB · MSB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` |
+| 23008 | Ergebnisbericht | WiM Gas / WiM Strom Teil 2 | MSB → LF · MSB → NB · MSB → Melder | — | ✅ | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` (beide Sparten) |
+| 23009 | Ergebnisbericht Gas-Variante | WiM Gas | MSB → NB · MSB → MSB | — | — | ✅ | ✅ | ✅ | `mako-wim` `wim-insrpt` |
 | 23011 | Informationsmeldung | WiM Strom Teil 2 | MSB → NB · MSB → LF · MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-insrpt` |
 | 23012 | Informationsmeldung | WiM Strom Teil 2 | MSB → NB · MSB → LF · MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-wim` `wim-insrpt` |
 
@@ -695,7 +702,7 @@ reference to the published set.
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|
-| 29001 | Ablehnung REMADV | AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → LF · MSB → NB · MSB → LF · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim-gas` `wim-gas-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
+| 29001 | Ablehnung REMADV | AWH Sperrprozesse Gas / GPKE Teil 2 / GPKE Teil 3 / WiM Strom Teil 1 / WiM Strom Teil 2 / AWH Änd. Technik / GeLi Gas 2.0 | NB → LF · MSB → NB · MSB → LF · MSB → ESA | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-abrechnung` · `mako-wim` `wim-invoic` · `mako-wim` `wim-invoic` · `mako-gabi-gas` `gabi-gas-invoic` |
 | 29002 | Ablehnung IFTSTA | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | — |
 
 ## SSQNOT AHB

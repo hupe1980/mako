@@ -435,8 +435,8 @@ mod tests {
     }
 
     /// §9 Abs. 2 Nr. 2 — the 25–100 kW band may satisfy §9 with the 60 %
-    /// Leistungsbegrenzung. The old flat "≥ 25 kW needs Fernsteuerbarkeit" rule
-    /// put every such plant into `Reduced` and charged it 10 €/kW/month.
+    /// Leistungsbegrenzung, so a flat "≥ 25 kW needs Fernsteuerbarkeit" rule
+    /// would put such a plant into `Reduced` and charge it 10 €/kW/month.
     #[test]
     fn the_sixty_percent_cap_keeps_a_50kw_plant_active() {
         let facts = SettlementStateFacts {

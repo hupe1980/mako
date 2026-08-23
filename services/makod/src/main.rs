@@ -1316,7 +1316,8 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
             cli.snapshot_interval,
             mako_engine::ids::TenantId::from_party_id(mp_id_registry.primary_mp_id()),
         )
-        .with_marktd_client(marktd_client.clone()),
+        .with_marktd_client(marktd_client.clone())
+        .with_mp_id_registry(Arc::clone(&mp_id_registry)),
     );
 
     // ── Shared health state ───────────────────────────────────────────────────

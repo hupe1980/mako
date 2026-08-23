@@ -40,7 +40,7 @@ use mako_engine::{
     ids::DeadlineId,
     outbox::PendingOutbox,
     projection::Projection,
-    types::{MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
+    types::{MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator, Sparte},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -83,6 +83,15 @@ pub enum WeiterverpflichtungEvent {
         verschobenes_zuordnungsende: String,
         /// EDIFACT message reference of the ORDERS.
         message_ref: MessageRef,
+        /// Which Sparte the Use-Case runs in.
+        ///
+        /// ORDERS 17002 and its ORDRSP answers are Sparte-neutral AHBs — the
+        /// same Prüfidentifikatoren carry the Strom and the Gas
+        /// Weiterverpflichtung. The Sparte comes from the interchange
+        /// recipient's MP-ID and decides the Entscheidungsbaum (`E_0203`
+        /// against `E_2004`) and therefore the Codeliste DE 1082 must name
+        /// (`S_0061`/`S_0062` against `G_0072`/`G_0073`).
+        sparte: Sparte,
     },
     /// The ORDRSP answer went out.
     AntwortGesendet {
@@ -134,6 +143,22 @@ pub struct WeiterverpflichtungData {
     pub verschobenes_zuordnungsende: String,
     /// Reference of the inbound ORDERS, echoed in `RFF+ACW` of the answer.
     pub message_ref: MessageRef,
+    /// The Sparte the Use-Case runs in — it picks the Entscheidungsbaum.
+    pub sparte: Sparte,
+}
+
+/// The Weiterverpflichtung Entscheidungsbaum for a Sparte.
+///
+/// One Prozessschritt, two alphabets: `E_0203` publishes `Z13`/`Z14`/`Z22`
+/// through the Strom Codelisten `S_0061`/`S_0062`, `E_2004` the same three
+/// codes through the Gas lists `G_0072`/`G_0073`. The codes happen to spell the
+/// same, the Codelisten do not — and DE 1082 names the Codeliste.
+#[must_use]
+pub const fn weiterverpflichtung_ebd(sparte: Sparte) -> &'static str {
+    match sparte {
+        Sparte::Strom => mako_pruefung::codes::EBD_WEITERVERPFLICHTUNG,
+        Sparte::Gas => mako_pruefung::codes::EBD_WEITERVERPFLICHTUNG_GAS,
+    }
 }
 
 /// State of a Weiterverpflichtung process.
@@ -201,10 +226,16 @@ pub enum WeiterverpflichtungCommand {
         validation_passed: bool,
         /// Validation issues, for the `Rejected` event.
         validation_errors: Vec<String>,
+        /// The Sparte of the interchange — the Sparte of **our own** MP-ID in
+        /// `UNB` DE 0010, since every MP-ID covers exactly one (BDEW Allgemeine
+        /// Festlegungen §2.13). ORDERS 17002 is a Sparte-neutral AHB, so this
+        /// is the only thing that tells `E_0203` from `E_2004`.
+        sparte: Sparte,
     },
     /// Send the ORDRSP answer.
     ///
-    /// `antwort_code` must be published by `E_0203`: `Z13` (plain agreement),
+    /// `antwort_code` must be published by the Sparte's tree — `E_0203` in
+    /// Strom, `E_2004` in Gas: `Z13` (plain agreement),
     /// `Z14` (agreement to a corrected Abmeldetermin) or `Z22` (refusal, and
     /// only on a further order after the maximum was already reached). The
     /// cluster the code sits in — not a boolean — picks 19003 or 19004.
@@ -259,7 +290,9 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                 msba,
                 verschobenes_zuordnungsende,
                 message_ref,
+                sparte,
             } => WeiterverpflichtungState::AuftragEmpfangen(WeiterverpflichtungData {
+                sparte: *sparte,
                 melo_id: melo_id.clone(),
                 nb: nb.clone(),
                 msba: msba.clone(),
@@ -299,6 +332,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                 message_ref,
                 validation_passed,
                 validation_errors,
+                sparte,
             } => {
                 if !matches!(state, WeiterverpflichtungState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
@@ -321,6 +355,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                     msba,
                     verschobenes_zuordnungsende,
                     message_ref,
+                    sparte,
                 }]
                 .into())
             }
@@ -335,7 +370,7 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                         state.label(),
                     ));
                 };
-                let tree = mako_pruefung::codes::EBD_WEITERVERPFLICHTUNG;
+                let tree = weiterverpflichtung_ebd(data.sparte);
                 let code = mako_pruefung::codes::lookup(tree, &antwort_code).ok_or_else(|| {
                     WorkflowError::rejected(format!(
                         "Antwortcode {antwort_code:?} is not published in {tree}"
@@ -364,6 +399,9 @@ impl Workflow for WimWeiterverpflichtungWorkflow {
                     "receiver":     data.nb.as_str(),
                     "melo":         data.melo_id.as_str(),
                     "antwort_code": code.code,
+                    "antwort_codeliste": code.wire_codeliste().ok_or_else(|| {
+                        WorkflowError::rejected(format!("{tree} {} names no Codeliste", code.code))
+                    })?,
                     "antwort_ebd":  tree,
                     "orig_message_ref": data.message_ref.as_str(),
                 });
@@ -450,7 +488,7 @@ impl Projection for WeiterverpflichtungProjection {
 mod tests {
     use super::*;
 
-    fn auftrag() -> WeiterverpflichtungCommand {
+    fn auftrag_in(sparte: Sparte) -> WeiterverpflichtungCommand {
         WeiterverpflichtungCommand::ReceiveAuftrag {
             pid: Pruefidentifikator::new(AUFTRAG_PID).expect("17002 is a valid PID"),
             nb: MarktpartnerCode::new("9900357000004"),
@@ -460,13 +498,42 @@ mod tests {
             message_ref: MessageRef::new("ORD-17002-1"),
             validation_passed: true,
             validation_errors: vec![],
+            sparte,
         }
     }
 
-    fn empfangen() -> WeiterverpflichtungState {
+    fn empfangen_in(sparte: Sparte) -> WeiterverpflichtungState {
         let s = WeiterverpflichtungState::default();
-        let ev = WimWeiterverpflichtungWorkflow::handle(&s, auftrag()).expect("valid");
+        let ev = WimWeiterverpflichtungWorkflow::handle(&s, auftrag_in(sparte)).expect("valid");
         ev.iter().fold(s, WimWeiterverpflichtungWorkflow::apply)
+    }
+
+    fn empfangen() -> WeiterverpflichtungState {
+        empfangen_in(Sparte::Strom)
+    }
+
+    /// One Prüfidentifikator, two Sparten, two Codelisten. ORDERS 17002 and its
+    /// ORDRSP answers are Sparte-neutral AHBs, so nothing in the message says
+    /// whether `Z13` comes from `S_0061` or `G_0072` — only the recipient
+    /// MP-ID does. Naming the wrong list is a rejected ORDRSP.
+    #[test]
+    fn the_sparte_picks_the_codeliste_on_a_shared_pid() {
+        for (sparte, ebd, codeliste) in [
+            (Sparte::Strom, "E_0203", "S_0061"),
+            (Sparte::Gas, "E_2004", "G_0072"),
+        ] {
+            let out = WimWeiterverpflichtungWorkflow::handle(
+                &empfangen_in(sparte),
+                WeiterverpflichtungCommand::DispatchAntwort {
+                    antwort_code: "Z13".to_owned(),
+                    abweichender_termin: None,
+                },
+            )
+            .expect("Z13");
+            assert_eq!(out.outbox[0].payload["pid"], 19_003, "{sparte}");
+            assert_eq!(out.outbox[0].payload["antwort_ebd"], ebd);
+            assert_eq!(out.outbox[0].payload["antwort_codeliste"], codeliste);
+        }
     }
 
     #[test]
@@ -482,6 +549,8 @@ mod tests {
         assert_eq!(&*out.outbox[0].message_type, "ORDRSP");
         assert_eq!(out.outbox[0].payload["pid"], 19_003);
         assert_eq!(out.outbox[0].payload["antwort_ebd"], "E_0203");
+        // DE 1082 names the **Codeliste**, not the Entscheidungsbaum.
+        assert_eq!(out.outbox[0].payload["antwort_codeliste"], "S_0061");
     }
 
     /// `Z22` is the refusal and rides 19004 — the cluster picks the PID, not a
@@ -534,7 +603,7 @@ mod tests {
     /// entirely — the confusion that had 17002 spawning a Geräteübernahme.
     #[test]
     fn the_geraeteubernahme_bestellung_is_not_a_weiterverpflichtung() {
-        let mut cmd = auftrag();
+        let mut cmd = auftrag_in(Sparte::Strom);
         if let WeiterverpflichtungCommand::ReceiveAuftrag { ref mut pid, .. } = cmd {
             *pid = Pruefidentifikator::new(17_001).expect("valid");
         }

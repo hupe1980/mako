@@ -113,15 +113,10 @@ pub struct PidRouter {
     /// Checked first by [`route_with_sparte`]; falls back to the unambiguous
     /// [`table`] when no commodity-specific entry exists.
     ///
-    /// Use this for PIDs shared between Strom and Gas process families where
-    /// the APERAK Frist differs:
-    ///
-    /// | PID   | Strom workflow  | Gas workflow      |
-    /// |-------|-----------------|-------------------|
-    /// | 23001 | `wim-insrpt`    | `wim-gas-insrpt`  |
-    /// | 23003 | `wim-insrpt`    | `wim-gas-insrpt`  |
-    /// | 23004 | `wim-insrpt`    | `wim-gas-insrpt`  |
-    /// | 23008 | `wim-insrpt`    | `wim-gas-insrpt`  |
+    /// Use this for a Prüfidentifikator that two *different process families*
+    /// share across the Sparten. A PID that only differs in Frist or Codeliste
+    /// between Strom and Gas does not belong here: one workflow takes the
+    /// Sparte as an argument instead, which is what the WiM family does.
     ///
     /// [`route_with_sparte`]: PidRouter::route_with_sparte
     /// [`table`]: PidRouter::table
@@ -219,16 +214,12 @@ impl PidRouter {
     /// [`route_with_sparte`] to prefer the commodity-specific entry over the
     /// unambiguous fallback registered via [`register`].
     ///
-    /// # INSRPT shared PIDs (23001/23003/23004/23008)
-    ///
-    /// These PIDs appear in both WiM Strom (5 WT) and WiM Gas (10 WT) AHBs:
-    ///
     /// ```rust,ignore
-    /// // In WimModule (Strom):
-    /// router.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
+    /// // In GpkeModule (Strom):
+    /// router.register_with_sparte(17115, Sparte::Strom, "gpke-sperrung");
     ///
-    /// // In WimGasModule (Gas):
-    /// router.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+    /// // In GeliGasModule (Gas):
+    /// router.register_with_sparte(17115, Sparte::Gas, "geli-gas-sperrung-lf");
     /// ```
     ///
     /// [`route_with_sparte`]: PidRouter::route_with_sparte
@@ -252,20 +243,20 @@ impl PidRouter {
     ///
     /// Returns `None` when neither table has an entry for `pid`.
     ///
-    /// # INSRPT routing example
+    /// # Example
     ///
     /// ```rust
     /// use mako_engine::pid_router::PidRouter;
     /// use mako_engine::types::Sparte;
     ///
     /// let mut r = PidRouter::new();
-    /// r.register(23001, "wim-insrpt");                            // Strom fallback
-    /// r.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
-    /// r.register_with_sparte(23001, Sparte::Gas,   "wim-gas-insrpt");
+    /// r.register(17115, "gpke-sperrung");                            // Strom fallback
+    /// r.register_with_sparte(17115, Sparte::Strom, "gpke-sperrung");
+    /// r.register_with_sparte(17115, Sparte::Gas,   "geli-gas-sperrung-lf");
     ///
-    /// assert_eq!(r.route_with_sparte(23001, Sparte::Strom), Some("wim-insrpt"));
-    /// assert_eq!(r.route_with_sparte(23001, Sparte::Gas),   Some("wim-gas-insrpt"));
-    /// assert_eq!(r.route(23001),                             Some("wim-insrpt"));
+    /// assert_eq!(r.route_with_sparte(17115, Sparte::Strom), Some("gpke-sperrung"));
+    /// assert_eq!(r.route_with_sparte(17115, Sparte::Gas),   Some("geli-gas-sperrung-lf"));
+    /// assert_eq!(r.route(17115),                             Some("gpke-sperrung"));
     /// ```
     ///
     /// [`register_with_sparte`]: PidRouter::register_with_sparte
@@ -404,25 +395,30 @@ mod tests {
     }
 
     // ── Commodity-aware routing ───────────────────────────────────────────────
+    //
+    // The mechanism is exercised on ORDERS 17115 (Sperrauftrag), which GPKE and
+    // GeLi Gas answer with genuinely different processes. A PID whose two
+    // Sparten differ only in Frist or Codeliste does not belong here: one
+    // workflow takes the Sparte as an argument instead.
 
     #[test]
     fn route_with_sparte_prefers_commodity_entry() {
         use crate::types::Sparte;
         let mut r = PidRouter::new();
-        r.register(23001, "wim-insrpt"); // unambiguous fallback
-        r.register_with_sparte(23001, Sparte::Strom, "wim-insrpt");
-        r.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+        r.register(17115, "gpke-sperrung"); // unambiguous fallback
+        r.register_with_sparte(17115, Sparte::Strom, "gpke-sperrung");
+        r.register_with_sparte(17115, Sparte::Gas, "geli-gas-sperrung-lf");
 
         assert_eq!(
-            r.route_with_sparte(23001, Sparte::Strom),
-            Some("wim-insrpt")
+            r.route_with_sparte(17115, Sparte::Strom),
+            Some("gpke-sperrung")
         );
         assert_eq!(
-            r.route_with_sparte(23001, Sparte::Gas),
-            Some("wim-gas-insrpt")
+            r.route_with_sparte(17115, Sparte::Gas),
+            Some("geli-gas-sperrung-lf")
         );
         // Unambiguous route() is unaffected by commodity table.
-        assert_eq!(r.route(23001), Some("wim-insrpt"));
+        assert_eq!(r.route(17115), Some("gpke-sperrung"));
     }
 
     #[test]
@@ -446,53 +442,53 @@ mod tests {
     fn route_with_sparte_returns_none_for_unregistered() {
         use crate::types::Sparte;
         let r = PidRouter::new();
-        assert_eq!(r.route_with_sparte(23001, Sparte::Strom), None);
+        assert_eq!(r.route_with_sparte(17115, Sparte::Strom), None);
         assert_eq!(r.route_with_sparte(23001, Sparte::Gas), None);
     }
 
     #[test]
     fn route_with_sparte_gas_only_deployment() {
         use crate::types::Sparte;
-        // Gas-standalone: only Gas entries; no WimModule Strom fallback.
+        // Gas-standalone: only Gas entries; no Strom fallback registered.
         let mut r = PidRouter::new();
-        r.register(23001, "wim-gas-insrpt"); // unambiguous (Gas-standalone)
-        r.register_with_sparte(23001, Sparte::Gas, "wim-gas-insrpt");
+        r.register(17115, "geli-gas-sperrung-lf"); // unambiguous (Gas-standalone)
+        r.register_with_sparte(17115, Sparte::Gas, "geli-gas-sperrung-lf");
 
         assert_eq!(
-            r.route_with_sparte(23001, Sparte::Gas),
-            Some("wim-gas-insrpt")
+            r.route_with_sparte(17115, Sparte::Gas),
+            Some("geli-gas-sperrung-lf")
         );
         // Strom falls back to unambiguous (no Strom-specific entry exists).
         assert_eq!(
-            r.route_with_sparte(23001, Sparte::Strom),
-            Some("wim-gas-insrpt")
+            r.route_with_sparte(17115, Sparte::Strom),
+            Some("geli-gas-sperrung-lf")
         );
     }
 
     #[test]
-    fn route_with_sparte_combined_deployment_all_shared_insrpt_pids() {
+    fn route_with_sparte_combined_deployment_keeps_both_families() {
         use crate::types::Sparte;
         let mut r = PidRouter::new();
-        // WimModule registers shared PIDs as Strom:
-        for pid in [23001_u32, 23003, 23004, 23008] {
-            r.register(pid, "wim-insrpt");
-            r.register_with_sparte(pid, Sparte::Strom, "wim-insrpt");
+        // GpkeModule registers the Sperrprozess ORDERS as Strom:
+        for pid in [17115_u32, 17116, 17117] {
+            r.register(pid, "gpke-sperrung");
+            r.register_with_sparte(pid, Sparte::Strom, "gpke-sperrung");
         }
-        // WimGasModule registers shared PIDs as Gas:
-        for pid in [23001_u32, 23003, 23004, 23008] {
-            r.register_with_sparte(pid, Sparte::Gas, "wim-gas-insrpt");
+        // GeliGasModule registers the same PIDs as Gas:
+        for pid in [17115_u32, 17116, 17117] {
+            r.register_with_sparte(pid, Sparte::Gas, "geli-gas-sperrung-lf");
         }
 
-        for pid in [23001_u32, 23003, 23004, 23008] {
+        for pid in [17115_u32, 17116, 17117] {
             assert_eq!(
                 r.route_with_sparte(pid, Sparte::Strom),
-                Some("wim-insrpt"),
-                "PID {pid} Strom should route to wim-insrpt"
+                Some("gpke-sperrung"),
+                "PID {pid} Strom"
             );
             assert_eq!(
                 r.route_with_sparte(pid, Sparte::Gas),
-                Some("wim-gas-insrpt"),
-                "PID {pid} Gas should route to wim-gas-insrpt"
+                Some("geli-gas-sperrung-lf"),
+                "PID {pid} Gas"
             );
         }
     }

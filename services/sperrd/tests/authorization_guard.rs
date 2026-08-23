@@ -173,6 +173,10 @@ fn no_fabricated_regulatory_citations_remain() {
         .collect();
 
     for (path, src) in &sources {
+        // Match against the text with Markdown emphasis stripped: a `**no**`
+        // inside a phrase would otherwise slip past a literal `contains`.
+        let src = &src.replace('*', "");
+
         for phrase in ["BK6-22-024 §3.4", "BK6-22-024 §9", "older_than_werktage"] {
             assert!(
                 !src.contains(phrase),

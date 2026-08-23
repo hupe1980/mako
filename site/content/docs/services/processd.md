@@ -943,7 +943,7 @@ Ablehnung denies a §34-mandated Zusatzleistung.
 When an MSB receives a WiM Steuerungsauftrag (iMS ORDERS, `makoworkflow = wim-steuerungsauftrag`), `processd` auto-confirms if:
 
 1. The `SteuerbareRessource.istFernschaltbar = true` (remote-switchable), **and**
-2. The dispatched `produktcode` is in the contracted `konfigurationsprodukte` list (BK6-24-174 §4.3).
+2. The dispatched `produktcode` is in the contracted `konfigurationsprodukte` list (GPKE Teil 3 Kap. 1.3).
 
 If the `produktcode` is not contracted, `processd` dispatches `wim.steuerungsauftrag.ablehnen` immediately — preventing unauthorized control of customer assets.
 
@@ -955,7 +955,7 @@ de.mako.process.initiated (wim-steuerungsauftrag)
       GET marktd /api/v1/steuerbare-ressourcen/{sr_id}                 ← istFernschaltbar?
       GET marktd /api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte  ← contracted?
   → istFernschaltbar=true + produktcode contracted  → bestaetigen
-  → istFernschaltbar=true + produktcode NOT contracted  → ablehnen (BK6-24-174 §4.3)
+  → istFernschaltbar=true + produktcode NOT contracted  → ablehnen (GPKE Teil 3 Kap. 1.3)
   → istFernschaltbar=false  → Escalate (manual ORDRSP required)
   → SR not found  → Escalate
 ```

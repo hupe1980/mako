@@ -3,6 +3,9 @@
 //! Split out of the flat `commands_api` module; shared state, types, and
 //! process-dispatch helpers live in `super`.
 
+use mako_fristen::antwort::Messtechnik;
+use mako_wim::{StoerungsmeldungCommand, WimInsrptWorkflow};
+
 use super::*;
 
 pub(super) fn cmd_wim_geraetewechsel_beauftragen<'a>(
@@ -71,6 +74,42 @@ pub(super) fn cmd_wim_zuordnung_ablehnen<'a>(
     Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
 > {
     Box::pin(dispatch_wim_zuordnung(s, p, false))
+}
+
+pub(super) fn cmd_wim_weiterverpflichtung_beantworten<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_weiterverpflichtung_beantworten(s, p))
+}
+
+pub(super) fn cmd_wim_stoerung_bestaetigen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_stoerung_antwort(s, p, true))
+}
+
+pub(super) fn cmd_wim_stoerung_ablehnen<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_stoerung_antwort(s, p, false))
+}
+
+pub(super) fn cmd_wim_stoerung_ergebnis_melden<'a>(
+    s: &'a CommandsApiState,
+    p: &'a serde_json::Value,
+) -> std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DispatchOutcome, DispatchError>> + Send + 'a>,
+> {
+    Box::pin(dispatch_wim_stoerung_ergebnisbericht(s, p))
 }
 
 pub(super) fn cmd_wim_preisanfrage_angebot_senden<'a>(
@@ -470,6 +509,251 @@ pub(super) async fn dispatch_wim_aperak(
 /// REQOTE Preisanfrage (35001/35002/35004/35005) with the QUOTES Angebot (15001/15002/15004/15005).
 /// The response PID is derived inside the workflow from the stored REQOTE PID;
 /// the price content comes from the aMSB's current PreisblattMessung.
+/// Dispatch the MSBA's ORDRSP answer to an inbound Weiterverpflichtungsauftrag
+/// (ORDERS 17002).
+///
+/// | Payload field | Required | Meaning |
+/// |---|---|---|
+/// | `melo_id` | yes | Business key of the process being answered |
+/// | `bestaetigtes_zuordnungsende` | for the cap check | The Zuordnungsende the NB confirmed on the Abmeldung |
+/// | `abmeldegrund` | for the cap check | `anschlussnutzerwechsel` (3 Monate) · `vertragsende` · `ausserbetriebnahme` (1 Monat) |
+/// | `bereits_ausgeschoepft` | no | `true` on a *further* order after the maximum was reached |
+/// | `antwortcode` | when the cap check cannot run | `Z13` · `Z14` · `Z22` from the Sparte's tree |
+/// | `abweichender_termin` | with `Z14`/`Z22` | The corrected date the answer names |
+///
+/// The Antwortcode is a computation, not a choice:
+/// [`mako_pruefung::msb::pruefe_weiterverpflichtung`] measures the requested
+/// date against „längstens drei Monate" resp. „längstens einen Monat" from the
+/// confirmed Zuordnungsende (WiM Teil 1 Kap. 2.4.2 Nr. 4). `Z13` asserts the
+/// request is inside that cap, so the command refuses to answer without either
+/// the cap inputs or an explicit code.
+pub(super) async fn dispatch_wim_weiterverpflichtung_beantworten(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+    let explicit = payload
+        .get("antwortcode")
+        .or_else(|| payload.get("antwort_code"))
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let explicit_termin = payload
+        .get("abweichender_termin")
+        .and_then(|v| v.as_str())
+        .map(normalise_process_date);
+    let bestaetigtes_ende = payload
+        .get("bestaetigtes_zuordnungsende")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let grund = abmeldegrund_from(payload)?;
+    let bereits_ausgeschoepft = payload
+        .get("bereits_ausgeschoepft")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+
+    dispatch_to_process_with_state::<mako_wim::WimWeiterverpflichtungWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::weiterverpflichtung::WORKFLOW_NAME,
+        move |st| {
+            let mako_wim::weiterverpflichtung::WeiterverpflichtungState::AuftragEmpfangen(data) =
+                st
+            else {
+                return Err(DispatchError::InvalidPayload(format!(
+                    "the Weiterverpflichtung process is in state {} and owes no answer",
+                    st.label()
+                )));
+            };
+            match (bestaetigtes_ende.as_deref(), grund) {
+                (Some(ende), Some(grund)) => {
+                    let auftrag = mako_pruefung::msb::types::WeiterverpflichtungAuftrag {
+                        melo_id: data.melo_id.as_str().to_owned(),
+                        bestaetigtes_zuordnungsende: parse_process_date(ende)?,
+                        verschobenes_zuordnungsende: parse_process_date(
+                            &data.verschobenes_zuordnungsende,
+                        )?,
+                        sparte: match data.sparte {
+                            mako_engine::types::Sparte::Gas => {
+                                mako_pruefung::msb::types::Sparte::Gas
+                            }
+                            mako_engine::types::Sparte::Strom => {
+                                mako_pruefung::msb::types::Sparte::Strom
+                            }
+                        },
+                        grund,
+                        bereits_ausgeschoepft,
+                    };
+                    let entscheidung = mako_pruefung::msb::pruefe_weiterverpflichtung(&auftrag);
+                    let (code, termin) = weiterverpflichtung_antwort(&entscheidung);
+                    Ok(
+                        mako_wim::weiterverpflichtung::WeiterverpflichtungCommand::DispatchAntwort {
+                            antwort_code: code,
+                            abweichender_termin: termin,
+                        },
+                    )
+                }
+                _ => {
+                    let code = explicit.clone().ok_or_else(|| {
+                        DispatchError::InvalidPayload(
+                            "supply \"bestaetigtes_zuordnungsende\" and \"abmeldegrund\" so the \
+                             Weiterverpflichtungszeitraum can be measured, or name the \
+                             \"antwortcode\" (Z13 / Z14 / Z22) explicitly — Z13 is a claim that \
+                             the request is inside the cap"
+                                .to_owned(),
+                        )
+                    })?;
+                    Ok(
+                        mako_wim::weiterverpflichtung::WeiterverpflichtungCommand::DispatchAntwort {
+                            antwort_code: code,
+                            abweichender_termin: explicit_termin.clone(),
+                        },
+                    )
+                }
+            }
+        },
+    )
+    .await
+}
+
+/// The Antwortcode and the corrected date a Weiterverpflichtung decision names.
+fn weiterverpflichtung_antwort(
+    entscheidung: &mako_pruefung::MsbEntscheidung,
+) -> (String, Option<String>) {
+    let antwort = match entscheidung {
+        mako_pruefung::MsbEntscheidung::Accept(d) => Some(d),
+        mako_pruefung::MsbEntscheidung::Reject(r) => Some(&r.antwort),
+        // The cap is arithmetic on two dates that are both present here, so the
+        // tree has no Klärfall to escalate into.
+        mako_pruefung::MsbEntscheidung::Escalate { .. } => None,
+    };
+    antwort.map_or_else(
+        || ("Z14".to_owned(), None),
+        |a| {
+            (
+                a.antwortcode.clone(),
+                a.abweichender_termin
+                    .map(|d| format!("{:04}{:02}{:02}", d.year(), u8::from(d.month()), d.day())),
+            )
+        },
+    )
+}
+
+/// Read the Abmeldegrund of the Ende Messstellenbetrieb this Weiterverpflichtung
+/// follows — it is what caps the period at three months or one.
+fn abmeldegrund_from(
+    payload: &serde_json::Value,
+) -> Result<Option<mako_pruefung::msb::types::Abmeldegrund>, DispatchError> {
+    use mako_pruefung::msb::types::Abmeldegrund;
+    match payload.get("abmeldegrund").and_then(|v| v.as_str()) {
+        None => Ok(None),
+        Some("anschlussnutzerwechsel") => Ok(Some(Abmeldegrund::AnschlussnutzerWechsel)),
+        Some("vertragsende") => Ok(Some(Abmeldegrund::VertragsEnde)),
+        Some("ausserbetriebnahme") => Ok(Some(Abmeldegrund::Ausserbetriebnahme)),
+        Some(other) => Err(DispatchError::InvalidPayload(format!(
+            "\"abmeldegrund\" must be one of anschlussnutzerwechsel, vertragsende, \
+             ausserbetriebnahme; got {other:?}"
+        ))),
+    }
+}
+
+/// `YYYY-MM-DD` or `YYYYMMDD` in, a `Date` out.
+fn parse_process_date(raw: &str) -> Result<time::Date, DispatchError> {
+    let compact = normalise_process_date(raw);
+    let bytes = compact.as_bytes();
+    if bytes.len() != 8 {
+        return Err(DispatchError::InvalidPayload(format!(
+            "expected a date as YYYY-MM-DD or YYYYMMDD, got {raw:?}"
+        )));
+    }
+    let num = |from: usize, to: usize| compact[from..to].parse::<u32>().ok();
+    let (Some(y), Some(m), Some(d)) = (num(0, 4), num(4, 6), num(6, 8)) else {
+        return Err(DispatchError::InvalidPayload(format!(
+            "expected a date as YYYY-MM-DD or YYYYMMDD, got {raw:?}"
+        )));
+    };
+    let month = u8::try_from(m)
+        .ok()
+        .and_then(|m| time::Month::try_from(m).ok())
+        .ok_or_else(|| DispatchError::InvalidPayload(format!("{raw:?} names no month")))?;
+    i32::try_from(y)
+        .ok()
+        .and_then(|y| u8::try_from(d).ok().map(|d| (y, d)))
+        .and_then(|(y, d)| time::Date::from_calendar_date(y, month, d).ok())
+        .ok_or_else(|| DispatchError::InvalidPayload(format!("{raw:?} is not a calendar date")))
+}
+
+/// Dispatch the MSB's answer to an inbound INSRPT Störungsmeldung.
+///
+/// `messtechnik` is the caller's, because it is the MSB's own device registry
+/// that knows it and it is what sizes the Ergebnisfrist the Bestätigung opens
+/// (WiM Strom Teil 2 Kap. 1.2 Nr. 7). Absent, the fastest branch applies: a
+/// window that closes early is visible, one that closes late is not.
+pub(super) async fn dispatch_wim_stoerung_antwort(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+    bestaetigung: bool,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+    let status_code = payload
+        .get("status_code")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    let messtechnik = messtechnik_from(payload)?;
+    let pid = Pruefidentifikator::new(if bestaetigung { 23_004 } else { 23_003 })
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+    dispatch_to_process::<WimInsrptWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::insrpt::WORKFLOW_NAME,
+        move || StoerungsmeldungCommand::DispatchAntwort {
+            pid,
+            status_code,
+            message_ref: MessageRef::new(format!("WIM-INSRPT-{}", uuid::Uuid::new_v4())),
+            sent_at: time::OffsetDateTime::now_utc(),
+            messtechnik,
+        },
+    )
+    .await
+}
+
+/// Dispatch the MSB's INSRPT 23008 Ergebnisbericht, which closes the Use-Case.
+pub(super) async fn dispatch_wim_stoerung_ergebnisbericht(
+    state: &CommandsApiState,
+    payload: &serde_json::Value,
+) -> Result<DispatchOutcome, DispatchError> {
+    let melo_id = extract_melo_id(payload)?;
+    let status_code = payload
+        .get("status_code")
+        .and_then(|v| v.as_str())
+        .map(str::to_owned);
+    dispatch_to_process::<WimInsrptWorkflow, _>(
+        state,
+        melo_id.as_str(),
+        mako_wim::insrpt::WORKFLOW_NAME,
+        move || StoerungsmeldungCommand::DispatchErgebnisbericht {
+            message_ref: MessageRef::new(format!("WIM-INSRPT-{}", uuid::Uuid::new_v4())),
+            status_code,
+        },
+    )
+    .await
+}
+
+/// Read the Messtechnik at the Messlokation from the payload.
+///
+/// Accepted values are the three WiM Teil 2 branches; anything else is refused
+/// rather than defaulted, because guessing picks a Frist.
+fn messtechnik_from(payload: &serde_json::Value) -> Result<Messtechnik, DispatchError> {
+    match payload.get("messtechnik").and_then(|v| v.as_str()) {
+        None | Some("rlm-oder-ims-ms-hs") => Ok(Messtechnik::RlmOderImsMsHs),
+        Some("kme-ohne-rlm") => Ok(Messtechnik::KmeOhneRlm),
+        Some("rlm-oder-ims-ns") => Ok(Messtechnik::RlmOderImsNs),
+        Some(other) => Err(DispatchError::InvalidPayload(format!(
+            "\"messtechnik\" must be one of kme-ohne-rlm, rlm-oder-ims-ns, \
+             rlm-oder-ims-ms-hs; got {other:?}"
+        ))),
+    }
+}
+
 pub(super) async fn dispatch_wim_preisanfrage_angebot_senden(
     state: &CommandsApiState,
     payload: &serde_json::Value,
