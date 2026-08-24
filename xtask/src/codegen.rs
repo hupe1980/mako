@@ -61,8 +61,8 @@ struct MigProfile {
     /// Festlegungen 6.1d §2.5.1/§2.5.2 put a six-month Umsetzungsphase between
     /// the two: a document published on 01.04. applies from 01.10. of the same
     /// year, one published on 01.10. from 01.04. of the next. The profile
-    /// directory is named after this date, and [`Profile::valid_from`] returns
-    /// it.
+    /// directory is named after this date, and it is what `Profile::valid_from`
+    /// returns at runtime.
     #[serde(default)]
     valid_from: Option<String>,
     /// The date BDEW published the source document — *source metadata only*,
