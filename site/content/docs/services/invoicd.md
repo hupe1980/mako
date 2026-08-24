@@ -565,7 +565,7 @@ SELECT
   sender_mp_id,  -- NB/MSB MP-ID
   outcome,       -- 'Ok' | 'AcceptedPartial' | 'Warn' | 'Dispute'
                  -- | 'Resolved' | 'Dispatched' | 'Paid'
-  pay_by,        -- Zahlungsziel from INVOIC DTM+92
+  pay_by,        -- Zahlungsziel from INVOIC SG8 DTM+265
   received_at,   -- first ingest timestamp
   dispatched_at, -- when the answer went out
   payment_confirmed_at  -- set by POST /confirm-payment

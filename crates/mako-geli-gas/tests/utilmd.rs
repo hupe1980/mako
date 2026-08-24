@@ -275,7 +275,9 @@ UNZ+1+GAS-NEG-001'";
         .parse(invalid_bytes)
         .expect("parse must succeed even for an AHB-invalid message");
 
-    let ref_date = time::Date::from_calendar_date(2026, time::Month::January, 15).unwrap();
+    // UTILMD AHB Gas 1.1 (G1.1) was published 01.10.2025 and applies from
+    // 01.04.2026 (Allgemeine Festlegungen 6.1d §2.5.2).
+    let ref_date = time::Date::from_calendar_date(2026, time::Month::June, 15).unwrap();
     let report = msg
         .validate_on_date(ref_date)
         .expect("validate_on_date must not error");

@@ -218,19 +218,19 @@ fn process_context_selects_active_mscons_release() {
         assert_eq!(prof_fv20240401.valid_from(), Some(date!(2024 - 04 - 01)));
     }
 
-    // Era fv20251001 (2025-10-01 to 2026-09-30) → 2.4c, valid_from 2025-10-01
-    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 06 - 07));
-    let rel_fv20251001 = era_fv20251001
+    // Era fv20260401 (2026-04-01 to 2026-09-30) → 2.4c, AHB 3.1g.
+    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 06 - 07));
+    let rel_fv20260401 = era_fv20260401
         .active_release(MessageType::Mscons)
-        .expect("MSCONS 2.4c fv20251001 must be active on 2026-06-07");
-    assert_eq!(rel_fv20251001.as_str(), "2.4c");
-    let prof_fv20251001 = era_fv20251001
+        .expect("MSCONS 2.4c fv20260401 must be active on 2026-06-07");
+    assert_eq!(rel_fv20260401.as_str(), "2.4c");
+    let prof_fv20260401 = era_fv20260401
         .active_profile(MessageType::Mscons)
-        .expect("fv20251001 profile must be returned");
-    assert_eq!(prof_fv20251001.valid_from(), Some(date!(2025 - 10 - 01)));
+        .expect("fv20260401 profile must be returned");
+    assert_eq!(prof_fv20260401.valid_from(), Some(date!(2026 - 04 - 01)));
 
     // Era fv20261001 (from 2026-10-01) → 2.5
-    let era_fv20261001 = ProcessContext::for_date(date!(2026 - 10 - 01));
+    let era_fv20261001 = ProcessContext::for_date(date!(2027 - 04 - 01));
     let rel_fv20261001 = era_fv20261001
         .active_release(MessageType::Mscons)
         .expect("MSCONS 2.5 must be active on 2026-10-01");
@@ -239,17 +239,6 @@ fn process_context_selects_active_mscons_release() {
         .active_profile(MessageType::Mscons)
         .expect("fv20261001 profile must be returned");
     assert_eq!(prof_fv20261001.valid_from(), Some(date!(2026 - 10 - 01)));
-
-    // Far future still returns latest registered profile
-    let future = ProcessContext::for_date(date!(2030 - 01 - 01));
-    let future_release = future
-        .active_release(MessageType::Mscons)
-        .expect("some MSCONS profile must be active");
-    assert_eq!(
-        future_release.as_str(),
-        "2.5",
-        "latest registered is still 2.5"
-    );
 }
 
 /// Profiles with no `valid_from` (legacy folder names) are never returned
@@ -290,24 +279,24 @@ fn profile_valid_from_matches_fv_date() {
     assert_eq!(p.release().as_str(), "2.4c");
 }
 
-/// valid_from on MSCONS fv20251001 is 2025-10-01 (AHB 3.1g, MIG 2.4c).
+/// valid_from on MSCONS fv20260401 is 2025-10-01 (AHB 3.1g, MIG 2.4c).
 #[cfg(feature = "mscons")]
 #[test]
-fn mscons_fv20251001_valid_from_is_2025_10_01() {
+fn mscons_fv20260401_valid_from_is_2026_04_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 10 - 01);
+    let target_date = date!(2026 - 04 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Mscons)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("MSCONS fv20251001 must be registered with valid_from = 2025-10-01");
+        .expect("MSCONS fv20260401 must be registered with valid_from = 2025-10-01");
 
     assert_eq!(profile.release().as_str(), "2.4c");
-    assert_eq!(releases::mscons_fv20251001().as_str(), "2.4c");
+    assert_eq!(releases::mscons_fv20260401().as_str(), "2.4c");
 }
 
 /// valid_from on MSCONS fv20261001 is 2026-10-01.
@@ -492,11 +481,21 @@ fn process_context_selects_active_utilmd_gas_release() {
         .expect("G1.0a must be active on 2025-06-01");
     assert_eq!(g10a_rel.as_str(), "G1.0a");
 
-    // From 2025-10-01 → G1.1
-    let g11_era = ProcessContext::for_date(date!(2025 - 10 - 01));
+    // From 2026-04-01 → G1.1. AHB Gas 1.1 was published 01.10.2025; the six
+    // months to the April changeover are its Umsetzungsphase, during which
+    // G1.0a is still the binding format.
+    let g10a_still = ProcessContext::for_date(date!(2026 - 03 - 31));
+    assert_eq!(
+        g10a_still
+            .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
+            .expect("a Gas profile must be active on 2026-03-31")
+            .as_str(),
+        "G1.0a",
+    );
+    let g11_era = ProcessContext::for_date(date!(2026 - 04 - 01));
     let g11_rel = g11_era
         .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
-        .expect("G1.1 must be active on 2025-10-01");
+        .expect("G1.1 must be active on 2026-04-01");
     assert_eq!(g11_rel.as_str(), "G1.1");
 
     // From 2026-10-01 → G1.2
@@ -903,28 +902,7 @@ fn process_context_selects_active_insrpt_release() {
 
 // ── INVOIC profile tests ──────────────────────────────────────────────────────
 
-/// INVOIC fv20251001 (MIG 2.8e / AHB 1.0a) — valid from 2025-10-01, wire code "2.8e".
-#[cfg(feature = "invoic")]
-#[test]
-fn invoic_fv20251001_valid_from_is_2025_10_01() {
-    use edi_energy::registry::ReleaseRegistry;
-    use edi_energy::releases;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 10 - 01);
-
-    let profile = reg
-        .profiles_for(MessageType::Invoic)
-        .find(|p| p.valid_from() == Some(target_date))
-        .expect("INVOIC fv20251001 must be registered with valid_from = 2025-10-01");
-
-    assert_eq!(profile.release().as_str(), "2.8e");
-    assert_eq!(releases::invoic_fv20251001().as_str(), "2.8e");
-}
-
-/// INVOIC fv20260401 (MIG 2.8e / AHB 1.0b, Konsultationsfassung)
-/// — valid from 2026-04-01, wire code "2.8e" (same-release-multiple-fv-date pattern).
+/// INVOIC fv20260401 (MIG 2.8e / AHB 1.0a) — valid from 2025-10-01, wire code "2.8e".
 #[cfg(feature = "invoic")]
 #[test]
 fn invoic_fv20260401_valid_from_is_2026_04_01() {
@@ -938,10 +916,31 @@ fn invoic_fv20260401_valid_from_is_2026_04_01() {
     let profile = reg
         .profiles_for(MessageType::Invoic)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("INVOIC fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("INVOIC fv20260401 must be registered with valid_from = 2025-10-01");
 
     assert_eq!(profile.release().as_str(), "2.8e");
     assert_eq!(releases::invoic_fv20260401().as_str(), "2.8e");
+}
+
+/// INVOIC fv20261001 (MIG 2.8e / AHB 1.0b, Konsultationsfassung)
+/// — valid from 2026-04-01, wire code "2.8e" (same-release-multiple-fv-date pattern).
+#[cfg(feature = "invoic")]
+#[test]
+fn invoic_fv20261001_valid_from_is_2026_10_01() {
+    use edi_energy::registry::ReleaseRegistry;
+    use edi_energy::releases;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let target_date = date!(2026 - 10 - 01);
+
+    let profile = reg
+        .profiles_for(MessageType::Invoic)
+        .find(|p| p.valid_from() == Some(target_date))
+        .expect("INVOIC fv20261001 must be registered with valid_from = 2026-04-01");
+
+    assert_eq!(profile.release().as_str(), "2.8e");
+    assert_eq!(releases::invoic_fv20261001().as_str(), "2.8e");
 }
 
 /// ProcessContext selects the correct INVOIC profile by date.
@@ -954,68 +953,47 @@ fn process_context_selects_active_invoic_release() {
     use time::macros::date;
 
     // Before 2025-10-01 — no fv-dated INVOIC profile active (legacy 2.8e has no valid_from).
-    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2026 - 03 - 31));
     assert!(
         before.active_release(MessageType::Invoic).is_none(),
         "no fv-dated INVOIC profile active before 2025-10-01"
     );
 
-    // From 2025-10-01 → fv20251001 (wire: 2.8e, AHB 1.0a).
-    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 01 - 01));
+    // From 2025-10-01 → fv20260401 (wire: 2.8e, AHB 1.0a).
+    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 07 - 01));
     let rel_fv20251001 = era_fv20251001
         .active_release(MessageType::Invoic)
-        .expect("INVOIC 2.8e fv20251001 must be active on 2026-01-01");
+        .expect("INVOIC 2.8e fv20260401 must be active on 2026-01-01");
     assert_eq!(rel_fv20251001.as_str(), "2.8e");
     let profile_251001 = era_fv20251001
         .active_profile(MessageType::Invoic)
         .expect("profile must be returned");
-    assert_eq!(profile_251001.valid_from(), Some(date!(2025 - 10 - 01)));
+    assert_eq!(profile_251001.valid_from(), Some(date!(2026 - 04 - 01)));
 
-    // From 2026-04-01 → fv20260401 (wire: 2.8e, AHB 1.0b).
-    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 04 - 01));
+    // From 2026-04-01 → fv20261001 (wire: 2.8e, AHB 1.0b).
+    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 10 - 01));
     let rel_fv20260401 = era_fv20260401
         .active_release(MessageType::Invoic)
-        .expect("INVOIC 2.8e fv20260401 must be active on 2026-04-01");
+        .expect("INVOIC 2.8e fv20261001 must be active on 2026-04-01");
     assert_eq!(rel_fv20260401.as_str(), "2.8e");
     let profile_260401 = era_fv20260401
         .active_profile(MessageType::Invoic)
         .expect("profile must be returned");
-    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 10 - 01)));
 
-    // Far future — still fv20260401.
-    let future = ProcessContext::for_date(date!(2030 - 01 - 01));
+    // Far future — still fv20261001.
+    let future = ProcessContext::for_date(date!(2030 - 07 - 01));
     let future_profile = future
         .active_profile(MessageType::Invoic)
         .expect("some INVOIC profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 10 - 01)));
 }
 
 // ── ORDERS profile tests ──────────────────────────────────────────────────────
 
-/// ORDERS fv20251001 (MIG 1.4b / AHB 1.1a, Publikationsdatum 01.10.2025)
+/// ORDERS fv20260401 (MIG 1.4b / AHB 1.1a, Publikationsdatum 01.10.2025)
 /// — valid from 2025-10-01, wire code "1.4b".
 /// ORDERS uses the different-release-per-fv-date pattern (unlike INVOIC/MSCONS).
-#[cfg(feature = "orders")]
-#[test]
-fn orders_fv20251001_valid_from_is_2025_10_01() {
-    use edi_energy::registry::ReleaseRegistry;
-    use edi_energy::releases;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 10 - 01);
-
-    let profile = reg
-        .profiles_for(MessageType::Orders)
-        .find(|p| p.valid_from() == Some(target_date))
-        .expect("ORDERS fv20251001 must be registered with valid_from = 2025-10-01");
-
-    assert_eq!(profile.release().as_str(), "1.4b");
-    assert_eq!(releases::orders_fv20251001().as_str(), "1.4b");
-}
-
-/// ORDERS fv20260401 (MIG 1.4c / AHB 1.1b)
-/// — valid from 2026-04-01, wire code "1.4c" (different release than fv20251001).
 #[cfg(feature = "orders")]
 #[test]
 fn orders_fv20260401_valid_from_is_2026_04_01() {
@@ -1029,10 +1007,31 @@ fn orders_fv20260401_valid_from_is_2026_04_01() {
     let profile = reg
         .profiles_for(MessageType::Orders)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("ORDERS fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("ORDERS fv20260401 must be registered with valid_from = 2025-10-01");
+
+    assert_eq!(profile.release().as_str(), "1.4b");
+    assert_eq!(releases::orders_fv20260401().as_str(), "1.4b");
+}
+
+/// ORDERS fv20261001 (MIG 1.4c / AHB 1.1b)
+/// — valid from 2026-04-01, wire code "1.4c" (different release than fv20251001).
+#[cfg(feature = "orders")]
+#[test]
+fn orders_fv20261001_valid_from_is_2026_10_01() {
+    use edi_energy::registry::ReleaseRegistry;
+    use edi_energy::releases;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let target_date = date!(2026 - 10 - 01);
+
+    let profile = reg
+        .profiles_for(MessageType::Orders)
+        .find(|p| p.valid_from() == Some(target_date))
+        .expect("ORDERS fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.4c");
-    assert_eq!(releases::orders_fv20260401().as_str(), "1.4c");
+    assert_eq!(releases::orders_fv20261001().as_str(), "1.4c");
 }
 
 /// ProcessContext selects the correct ORDERS profile by date.
@@ -1046,71 +1045,49 @@ fn process_context_selects_active_orders_release() {
     use time::macros::date;
 
     // Before 2025-10-01 — no fv-dated ORDERS profile active.
-    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2026 - 03 - 31));
     assert!(
         before.active_release(MessageType::Orders).is_none(),
         "no fv-dated ORDERS profile active before 2025-10-01"
     );
 
-    // From 2025-10-01 → fv20251001 (wire: 1.4b, AHB 1.1a).
-    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 01 - 01));
+    // From 2025-10-01 → fv20260401 (wire: 1.4b, AHB 1.1a).
+    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 07 - 01));
     let rel_fv20251001 = era_fv20251001
         .active_release(MessageType::Orders)
-        .expect("ORDERS 1.4b fv20251001 must be active on 2026-01-01");
+        .expect("ORDERS 1.4b fv20260401 must be active on 2026-01-01");
     assert_eq!(rel_fv20251001.as_str(), "1.4b");
     let profile_251001 = era_fv20251001
         .active_profile(MessageType::Orders)
         .expect("profile must be returned");
-    assert_eq!(profile_251001.valid_from(), Some(date!(2025 - 10 - 01)));
+    assert_eq!(profile_251001.valid_from(), Some(date!(2026 - 04 - 01)));
 
-    // From 2026-04-01 → fv20260401 (wire: 1.4c, AHB 1.1b).
-    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 04 - 01));
+    // From 2026-04-01 → fv20261001 (wire: 1.4c, AHB 1.1b).
+    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 10 - 01));
     let rel_fv20260401 = era_fv20260401
         .active_release(MessageType::Orders)
-        .expect("ORDERS 1.4c fv20260401 must be active on 2026-04-01");
+        .expect("ORDERS 1.4c fv20261001 must be active on 2026-04-01");
     assert_eq!(rel_fv20260401.as_str(), "1.4c");
     let profile_260401 = era_fv20260401
         .active_profile(MessageType::Orders)
         .expect("profile must be returned");
-    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 10 - 01)));
 
-    // Far future — still fv20260401 (wire: 1.4c).
-    let future = ProcessContext::for_date(date!(2030 - 01 - 01));
+    // Far future — still fv20261001 (wire: 1.4c).
+    let future = ProcessContext::for_date(date!(2030 - 07 - 01));
     let future_profile = future
         .active_profile(MessageType::Orders)
         .expect("some ORDERS profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 10 - 01)));
     assert_eq!(future_profile.release().as_str(), "1.4c");
 }
 
 // ── PARTIN profile tests ──────────────────────────────────────────────────────
 
-/// PARTIN fv20251001 (MIG 1.0f / AHB 1.0f, Publikationsdatum 01.10.2025)
+/// PARTIN fv20260401 (MIG 1.0f / AHB 1.0f, Publikationsdatum 01.10.2025)
 /// — valid from 2025-10-01, wire code "1.0f".
 /// PARTIN uses the different-release-per-fv-date pattern (same as ORDERS).
 /// Key feature in 1.0f: NAD+MS has CTA+COM contact segments in the header.
-#[cfg(feature = "partin")]
-#[test]
-fn partin_fv20251001_valid_from_is_2025_10_01() {
-    use edi_energy::registry::ReleaseRegistry;
-    use edi_energy::releases;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 10 - 01);
-
-    let profile = reg
-        .profiles_for(MessageType::Partin)
-        .find(|p| p.valid_from() == Some(target_date))
-        .expect("PARTIN fv20251001 must be registered with valid_from = 2025-10-01");
-
-    assert_eq!(profile.release().as_str(), "1.0f");
-    assert_eq!(releases::partin_fv20251001().as_str(), "1.0f");
-}
-
-/// PARTIN fv20260401 (MIG 1.1 / AHB 1.1, Publikationsdatum 01.04.2026)
-/// — valid from 2026-04-01, wire code "1.1" (different release than fv20251001).
-/// Key change in 1.1: CTA+COM removed from NAD+MS header (2 segments fewer).
 #[cfg(feature = "partin")]
 #[test]
 fn partin_fv20260401_valid_from_is_2026_04_01() {
@@ -1124,10 +1101,32 @@ fn partin_fv20260401_valid_from_is_2026_04_01() {
     let profile = reg
         .profiles_for(MessageType::Partin)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("PARTIN fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("PARTIN fv20260401 must be registered with valid_from = 2025-10-01");
+
+    assert_eq!(profile.release().as_str(), "1.0f");
+    assert_eq!(releases::partin_fv20260401().as_str(), "1.0f");
+}
+
+/// PARTIN fv20261001 (MIG 1.1 / AHB 1.1, Publikationsdatum 01.04.2026)
+/// — valid from 2026-04-01, wire code "1.1" (different release than fv20251001).
+/// Key change in 1.1: CTA+COM removed from NAD+MS header (2 segments fewer).
+#[cfg(feature = "partin")]
+#[test]
+fn partin_fv20261001_valid_from_is_2026_10_01() {
+    use edi_energy::registry::ReleaseRegistry;
+    use edi_energy::releases;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let target_date = date!(2026 - 10 - 01);
+
+    let profile = reg
+        .profiles_for(MessageType::Partin)
+        .find(|p| p.valid_from() == Some(target_date))
+        .expect("PARTIN fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.1");
-    assert_eq!(releases::partin_fv20260401().as_str(), "1.1");
+    assert_eq!(releases::partin_fv20261001().as_str(), "1.1");
 }
 
 /// ProcessContext selects the correct PARTIN profile by date.
@@ -1141,89 +1140,89 @@ fn process_context_selects_active_partin_release() {
     use time::macros::date;
 
     // Before 2025-10-01 — no fv-dated PARTIN profile active.
-    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2026 - 03 - 31));
     assert!(
         before.active_release(MessageType::Partin).is_none(),
         "no fv-dated PARTIN profile active before 2025-10-01"
     );
 
-    // From 2025-10-01 → fv20251001 (wire: 1.0f, AHB 1.0f).
-    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 01 - 01));
+    // From 2025-10-01 → fv20260401 (wire: 1.0f, AHB 1.0f).
+    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 07 - 01));
     let rel_fv20251001 = era_fv20251001
         .active_release(MessageType::Partin)
-        .expect("PARTIN 1.0f fv20251001 must be active on 2026-01-01");
+        .expect("PARTIN 1.0f fv20260401 must be active on 2026-01-01");
     assert_eq!(rel_fv20251001.as_str(), "1.0f");
     let profile_251001 = era_fv20251001
         .active_profile(MessageType::Partin)
         .expect("profile must be returned");
-    assert_eq!(profile_251001.valid_from(), Some(date!(2025 - 10 - 01)));
+    assert_eq!(profile_251001.valid_from(), Some(date!(2026 - 04 - 01)));
 
-    // From 2026-04-01 → fv20260401 (wire: 1.1, AHB 1.1).
-    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 04 - 01));
+    // From 2026-04-01 → fv20261001 (wire: 1.1, AHB 1.1).
+    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 10 - 01));
     let rel_fv20260401 = era_fv20260401
         .active_release(MessageType::Partin)
-        .expect("PARTIN 1.1 fv20260401 must be active on 2026-04-01");
+        .expect("PARTIN 1.1 fv20261001 must be active on 2026-04-01");
     assert_eq!(rel_fv20260401.as_str(), "1.1");
     let profile_260401 = era_fv20260401
         .active_profile(MessageType::Partin)
         .expect("profile must be returned");
-    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 10 - 01)));
 
-    // Far future — still fv20260401 (wire: 1.1).
-    let future = ProcessContext::for_date(date!(2030 - 01 - 01));
+    // Far future — still fv20261001 (wire: 1.1).
+    let future = ProcessContext::for_date(date!(2030 - 07 - 01));
     let future_profile = future
         .active_profile(MessageType::Partin)
         .expect("some PARTIN profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 10 - 01)));
     assert_eq!(future_profile.release().as_str(), "1.1");
 }
 
 // ── REQOTE profile tests ──────────────────────────────────────────────────────
 
-/// REQOTE fv20250401 (MIG 1.3c / AHB 1.1, Publikationsdatum 01.04.2025)
+/// REQOTE fv20251001 (MIG 1.3c / AHB 1.1, Publikationsdatum 01.04.2025)
 /// — valid from 2025-04-01, wire code "1.3c".
 /// REQOTE uses the same-release-multiple-fv-date pattern (same as INVOIC):
 /// both fv20250401 and fv20260401 share wire release "1.3c".
 #[cfg(feature = "reqote")]
 #[test]
-fn reqote_fv20250401_valid_from_is_2025_04_01() {
+fn reqote_fv20251001_valid_from_is_2025_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 04 - 01);
+    let target_date = date!(2025 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Reqote)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("REQOTE fv20250401 must be registered with valid_from = 2025-04-01");
+        .expect("REQOTE fv20251001 must be registered with valid_from = 2025-04-01");
 
     assert_eq!(profile.release().as_str(), "1.3c");
-    assert_eq!(releases::reqote_fv20250401().as_str(), "1.3c");
+    assert_eq!(releases::reqote_fv20251001().as_str(), "1.3c");
 }
 
-/// REQOTE fv20260401 (MIG 1.3c / AHB 1.2, Publikationsdatum 01.04.2026)
+/// REQOTE fv20261001 (MIG 1.3c / AHB 1.2, Publikationsdatum 01.04.2026)
 /// — valid from 2026-04-01, wire code "1.3c" (same as fv20250401).
 /// AHB 1.2 lists "Stand MIG: 1.4b" which references the ORDERS MIG used in
 /// the response workflow — the REQOTE wire code itself remains "1.3c".
 #[cfg(feature = "reqote")]
 #[test]
-fn reqote_fv20260401_valid_from_is_2026_04_01() {
+fn reqote_fv20261001_valid_from_is_2026_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2026 - 04 - 01);
+    let target_date = date!(2026 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Reqote)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("REQOTE fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("REQOTE fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.3c");
-    assert_eq!(releases::reqote_fv20260401().as_str(), "1.3c");
+    assert_eq!(releases::reqote_fv20261001().as_str(), "1.3c");
 }
 
 /// ProcessContext selects the correct REQOTE profile by date.
@@ -1236,66 +1235,66 @@ fn process_context_selects_active_reqote_release() {
     use time::macros::date;
 
     // Before 2025-04-01 — no fv-dated REQOTE profile active.
-    let before = ProcessContext::for_date(date!(2025 - 03 - 31));
+    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
     assert!(
         before.active_release(MessageType::Reqote).is_none(),
         "no fv-dated REQOTE profile active before 2025-04-01"
     );
 
-    // From 2025-04-01 → fv20250401 (wire: 1.3c, AHB 1.1).
-    let era_fv20250401 = ProcessContext::for_date(date!(2025 - 06 - 01));
+    // From 2025-04-01 → fv20251001 (wire: 1.3c, AHB 1.1).
+    let era_fv20250401 = ProcessContext::for_date(date!(2025 - 12 - 01));
     let rel_fv20250401 = era_fv20250401
         .active_release(MessageType::Reqote)
-        .expect("REQOTE 1.3c fv20250401 must be active on 2025-06-01");
+        .expect("REQOTE 1.3c fv20251001 must be active on 2025-06-01");
     assert_eq!(rel_fv20250401.as_str(), "1.3c");
     let profile_250401 = era_fv20250401
         .active_profile(MessageType::Reqote)
         .expect("profile must be returned");
-    assert_eq!(profile_250401.valid_from(), Some(date!(2025 - 04 - 01)));
+    assert_eq!(profile_250401.valid_from(), Some(date!(2025 - 10 - 01)));
 
-    // From 2026-04-01 → fv20260401 (wire: 1.3c, AHB 1.2).
-    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 04 - 01));
+    // From 2026-04-01 → fv20261001 (wire: 1.3c, AHB 1.2).
+    let era_fv20260401 = ProcessContext::for_date(date!(2026 - 10 - 01));
     let rel_fv20260401 = era_fv20260401
         .active_release(MessageType::Reqote)
-        .expect("REQOTE 1.3c fv20260401 must be active on 2026-04-01");
+        .expect("REQOTE 1.3c fv20261001 must be active on 2026-04-01");
     assert_eq!(rel_fv20260401.as_str(), "1.3c");
     let profile_260401 = era_fv20260401
         .active_profile(MessageType::Reqote)
         .expect("profile must be returned");
-    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(profile_260401.valid_from(), Some(date!(2026 - 10 - 01)));
 
-    // Far future — still fv20260401 (wire: 1.3c).
-    let future = ProcessContext::for_date(date!(2030 - 01 - 01));
+    // Far future — still fv20261001 (wire: 1.3c).
+    let future = ProcessContext::for_date(date!(2030 - 07 - 01));
     let future_profile = future
         .active_profile(MessageType::Reqote)
         .expect("some REQOTE profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 10 - 01)));
     assert_eq!(future_profile.release().as_str(), "1.3c");
 }
 
 // ── REMADV profile tests ──────────────────────────────────────────────────────
 
-/// REMADV fv20251001 (MIG 2.9e / AHB 1.0a, Publikationsdatum 01.10.2025)
+/// REMADV fv20260401 (MIG 2.9e / AHB 1.0a, Publikationsdatum 01.10.2025)
 /// — valid from 2025-10-01, wire code "2.9e".
 /// This is the only fv-dated REMADV profile available (no next-version AHB
 /// has been published as of June 2026). See REFACTOR.md.
 #[cfg(feature = "remadv")]
 #[test]
-fn remadv_fv20251001_valid_from_is_2025_10_01() {
+fn remadv_fv20260401_valid_from_is_2026_04_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 10 - 01);
+    let target_date = date!(2026 - 04 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Remadv)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("REMADV fv20251001 must be registered with valid_from = 2025-10-01");
+        .expect("REMADV fv20260401 must be registered with valid_from = 2025-10-01");
 
     assert_eq!(profile.release().as_str(), "2.9e");
-    assert_eq!(releases::remadv_fv20251001().as_str(), "2.9e");
+    assert_eq!(releases::remadv_fv20260401().as_str(), "2.9e");
 }
 
 /// ProcessContext selects the correct REMADV profile by date.
@@ -1308,76 +1307,76 @@ fn process_context_selects_active_remadv_release() {
     use time::macros::date;
 
     // Before 2025-10-01 — no fv-dated REMADV profile active.
-    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2026 - 03 - 31));
     assert!(
         before.active_release(MessageType::Remadv).is_none(),
         "no fv-dated REMADV profile active before 2025-10-01"
     );
 
-    // From 2025-10-01 → fv20251001 (wire: 2.9e, AHB 1.0a).
-    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 01 - 01));
+    // From 2025-10-01 → fv20260401 (wire: 2.9e, AHB 1.0a).
+    let era_fv20251001 = ProcessContext::for_date(date!(2026 - 07 - 01));
     let rel = era_fv20251001
         .active_release(MessageType::Remadv)
-        .expect("REMADV 2.9e fv20251001 must be active on 2026-01-01");
+        .expect("REMADV 2.9e fv20260401 must be active on 2026-01-01");
     assert_eq!(rel.as_str(), "2.9e");
     let profile = era_fv20251001
         .active_profile(MessageType::Remadv)
         .expect("profile must be returned");
-    assert_eq!(profile.valid_from(), Some(date!(2025 - 10 - 01)));
+    assert_eq!(profile.valid_from(), Some(date!(2026 - 04 - 01)));
 
-    // Far future — fv20260401 (wire: 2.9f) is the latest published REMADV profile.
-    let future = ProcessContext::for_date(date!(2030 - 01 - 01));
+    // Far future — fv20261001 (wire: 2.9f) is the latest published REMADV profile.
+    let future = ProcessContext::for_date(date!(2030 - 07 - 01));
     let future_profile = future
         .active_profile(MessageType::Remadv)
         .expect("some REMADV profile must be active");
-    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 04 - 01)));
+    assert_eq!(future_profile.valid_from(), Some(date!(2026 - 10 - 01)));
     assert_eq!(future_profile.release().as_str(), "2.9f");
 }
 
 // ── ORDCHG profile tests ──────────────────────────────────────────────────────
 
-/// ORDCHG fv20241001 (MIG 1.1 / AHB 1.0a, Publikationsdatum 01.10.2024)
+/// ORDCHG fv20250401 (MIG 1.1 / AHB 1.0a, Publikationsdatum 01.10.2024)
 /// — valid from 2024-10-01, wire code "1.1".
 /// Contains SG6 (CTA + COM) inside SG3 (NAD), which was removed in MIG 1.2.
 #[cfg(feature = "ordchg")]
 #[test]
-fn ordchg_fv20241001_valid_from_is_2024_10_01() {
+fn ordchg_fv20250401_valid_from_is_2025_04_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2024 - 10 - 01);
+    let target_date = date!(2025 - 04 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Ordchg)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("ORDCHG fv20241001 must be registered with valid_from = 2024-10-01");
+        .expect("ORDCHG fv20250401 must be registered with valid_from = 2024-10-01");
 
     assert_eq!(profile.release().as_str(), "1.1");
-    assert_eq!(releases::ordchg_fv20241001().as_str(), "1.1");
+    assert_eq!(releases::ordchg_fv20250401().as_str(), "1.1");
 }
 
-/// ORDCHG fv20260401 (MIG 1.2 / AHB 1.1, Publikationsdatum 01.04.2026)
+/// ORDCHG fv20261001 (MIG 1.2 / AHB 1.1, Publikationsdatum 01.04.2026)
 /// — valid from 2026-04-01, wire code "1.2".
 /// Key change vs fv20241001: SG6 (CTA+COM) removed from MIG.
 #[cfg(feature = "ordchg")]
 #[test]
-fn ordchg_fv20260401_valid_from_is_2026_04_01() {
+fn ordchg_fv20261001_valid_from_is_2026_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2026 - 04 - 01);
+    let target_date = date!(2026 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Ordchg)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("ORDCHG fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("ORDCHG fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.2");
-    assert_eq!(releases::ordchg_fv20260401().as_str(), "1.2");
+    assert_eq!(releases::ordchg_fv20261001().as_str(), "1.2");
 }
 
 /// ProcessContext selects the correct ORDCHG profile by date:
@@ -1394,17 +1393,17 @@ fn process_context_selects_active_ordchg_release() {
     use time::macros::date;
 
     // Before 2024-10-01 — no fv-dated ORDCHG profile active.
-    let before = ProcessContext::for_date(date!(2024 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2025 - 03 - 31));
     assert!(
         before.active_release(MessageType::Ordchg).is_none(),
         "no fv-dated ORDCHG profile before 2024-10-01"
     );
 
-    // From 2024-10-01 to 2026-03-31 → fv20241001 (wire "1.1").
+    // From 2024-10-01 to 2026-03-31 → fv20250401 (wire "1.1").
     for &d in &[
-        date!(2024 - 10 - 01),
-        date!(2025 - 06 - 01),
-        date!(2026 - 03 - 31),
+        date!(2025 - 04 - 01),
+        date!(2025 - 12 - 01),
+        date!(2026 - 09 - 30),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1415,15 +1414,15 @@ fn process_context_selects_active_ordchg_release() {
             ctx.active_profile(MessageType::Ordchg)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2024 - 10 - 01))
+            Some(date!(2025 - 04 - 01))
         );
     }
 
-    // From 2026-04-01 → fv20260401 (wire "1.2", SG6 removed).
+    // From 2026-04-01 → fv20261001 (wire "1.2", SG6 removed).
     for &d in &[
-        date!(2026 - 04 - 01),
-        date!(2026 - 07 - 01),
-        date!(2030 - 01 - 01),
+        date!(2026 - 10 - 01),
+        date!(2027 - 01 - 01),
+        date!(2030 - 07 - 01),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1434,38 +1433,16 @@ fn process_context_selects_active_ordchg_release() {
             ctx.active_profile(MessageType::Ordchg)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2026 - 04 - 01))
+            Some(date!(2026 - 10 - 01))
         );
     }
 }
 
 // ── ORDRSP profile tests ──────────────────────────────────────────────────────
 
-/// ORDRSP fv20251001 (MIG 1.4b / AHB 1.1a, Publikationsdatum 01.10.2025)
+/// ORDRSP fv20260401 (MIG 1.4b / AHB 1.1a, Publikationsdatum 01.10.2025)
 /// — valid from 2025-10-01, wire code "1.4b".
 /// Contains 40 Prüfidentifikatoren. SG27 supports FTX+ABO/Z27/Z28.
-#[cfg(feature = "ordrsp")]
-#[test]
-fn ordrsp_fv20251001_valid_from_is_2025_10_01() {
-    use edi_energy::registry::ReleaseRegistry;
-    use edi_energy::releases;
-    use time::macros::date;
-
-    let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 10 - 01);
-
-    let profile = reg
-        .profiles_for(MessageType::Ordrsp)
-        .find(|p| p.valid_from() == Some(target_date))
-        .expect("ORDRSP fv20251001 must be registered with valid_from = 2025-10-01");
-
-    assert_eq!(profile.release().as_str(), "1.4b");
-    assert_eq!(releases::ordrsp_fv20251001().as_str(), "1.4b");
-}
-
-/// ORDRSP fv20260401 (MIG 1.4c / AHB 1.1b, Publikationsdatum 01.04.2026)
-/// — valid from 2026-04-01, wire code "1.4c".
-/// Key change vs fv20251001: FTX+Z33 (APN-Kommunikationsdaten) added to SG27.
 #[cfg(feature = "ordrsp")]
 #[test]
 fn ordrsp_fv20260401_valid_from_is_2026_04_01() {
@@ -1479,10 +1456,32 @@ fn ordrsp_fv20260401_valid_from_is_2026_04_01() {
     let profile = reg
         .profiles_for(MessageType::Ordrsp)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("ORDRSP fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("ORDRSP fv20260401 must be registered with valid_from = 2025-10-01");
+
+    assert_eq!(profile.release().as_str(), "1.4b");
+    assert_eq!(releases::ordrsp_fv20260401().as_str(), "1.4b");
+}
+
+/// ORDRSP fv20261001 (MIG 1.4c / AHB 1.1b, Publikationsdatum 01.04.2026)
+/// — valid from 2026-04-01, wire code "1.4c".
+/// Key change vs fv20251001: FTX+Z33 (APN-Kommunikationsdaten) added to SG27.
+#[cfg(feature = "ordrsp")]
+#[test]
+fn ordrsp_fv20261001_valid_from_is_2026_10_01() {
+    use edi_energy::registry::ReleaseRegistry;
+    use edi_energy::releases;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+    let target_date = date!(2026 - 10 - 01);
+
+    let profile = reg
+        .profiles_for(MessageType::Ordrsp)
+        .find(|p| p.valid_from() == Some(target_date))
+        .expect("ORDRSP fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.4c");
-    assert_eq!(releases::ordrsp_fv20260401().as_str(), "1.4c");
+    assert_eq!(releases::ordrsp_fv20261001().as_str(), "1.4c");
 }
 
 /// ProcessContext selects the correct ORDRSP profile by date:
@@ -1499,17 +1498,17 @@ fn process_context_selects_active_ordrsp_release() {
     use time::macros::date;
 
     // Before 2025-10-01 — no fv-dated ORDRSP profile active.
-    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2026 - 03 - 31));
     assert!(
         before.active_release(MessageType::Ordrsp).is_none(),
         "no fv-dated ORDRSP profile before 2025-10-01"
     );
 
-    // From 2025-10-01 to 2026-03-31 → fv20251001 (wire "1.4b").
+    // From 2025-10-01 to 2026-03-31 → fv20260401 (wire "1.4b").
     for &d in &[
-        date!(2025 - 10 - 01),
-        date!(2026 - 01 - 01),
-        date!(2026 - 03 - 31),
+        date!(2026 - 04 - 01),
+        date!(2026 - 07 - 01),
+        date!(2026 - 09 - 30),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1520,15 +1519,15 @@ fn process_context_selects_active_ordrsp_release() {
             ctx.active_profile(MessageType::Ordrsp)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2025 - 10 - 01))
+            Some(date!(2026 - 04 - 01))
         );
     }
 
-    // From 2026-04-01 → fv20260401 (wire "1.4c", FTX+Z33 added).
+    // From 2026-04-01 → fv20261001 (wire "1.4c", FTX+Z33 added).
     for &d in &[
-        date!(2026 - 04 - 01),
-        date!(2026 - 07 - 01),
-        date!(2030 - 01 - 01),
+        date!(2026 - 10 - 01),
+        date!(2027 - 01 - 01),
+        date!(2030 - 07 - 01),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1539,53 +1538,53 @@ fn process_context_selects_active_ordrsp_release() {
             ctx.active_profile(MessageType::Ordrsp)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2026 - 04 - 01))
+            Some(date!(2026 - 10 - 01))
         );
     }
 }
 
 // ── QUOTES profile types ──────────────────────────────────────────────────────
 
-/// QUOTES fv20250401 (MIG 1.3b / AHB 1.1, Publikationsdatum 01.04.2025)
+/// QUOTES fv20251001 (MIG 1.3b / AHB 1.1, Publikationsdatum 01.04.2025)
 /// — valid from 2025-04-01, wire code "1.3b".
 #[cfg(feature = "quotes")]
 #[test]
-fn quotes_fv20250401_valid_from_is_2025_04_01() {
+fn quotes_fv20251001_valid_from_is_2025_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 04 - 01);
+    let target_date = date!(2025 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Quotes)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("QUOTES fv20250401 must be registered with valid_from = 2025-04-01");
+        .expect("QUOTES fv20251001 must be registered with valid_from = 2025-04-01");
 
     assert_eq!(profile.release().as_str(), "1.3b");
-    assert_eq!(releases::quotes_fv20250401().as_str(), "1.3b");
+    assert_eq!(releases::quotes_fv20251001().as_str(), "1.3b");
 }
 
-/// QUOTES fv20260401 (MIG 1.3c / AHB 1.1a, Publikationsdatum 01.04.2026)
+/// QUOTES fv20261001 (MIG 1.3c / AHB 1.1a, Publikationsdatum 01.04.2026)
 /// — valid from 2026-04-01, wire code "1.3c".
 #[cfg(feature = "quotes")]
 #[test]
-fn quotes_fv20260401_valid_from_is_2026_04_01() {
+fn quotes_fv20261001_valid_from_is_2026_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2026 - 04 - 01);
+    let target_date = date!(2026 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Quotes)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("QUOTES fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("QUOTES fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.3c");
-    assert_eq!(releases::quotes_fv20260401().as_str(), "1.3c");
+    assert_eq!(releases::quotes_fv20261001().as_str(), "1.3c");
 }
 
 /// ProcessContext selects the correct QUOTES profile by date:
@@ -1601,17 +1600,17 @@ fn process_context_selects_active_quotes_release() {
     use time::macros::date;
 
     // Before 2025-04-01 — no fv-dated QUOTES profile active.
-    let before = ProcessContext::for_date(date!(2025 - 03 - 31));
+    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
     assert!(
         before.active_release(MessageType::Quotes).is_none(),
         "no fv-dated QUOTES profile before 2025-04-01"
     );
 
-    // From 2025-04-01 to 2026-03-31 → fv20250401 (wire "1.3b").
+    // From 2025-04-01 to 2026-03-31 → fv20251001 (wire "1.3b").
     for &d in &[
-        date!(2025 - 04 - 01),
-        date!(2025 - 07 - 01),
-        date!(2026 - 03 - 31),
+        date!(2025 - 10 - 01),
+        date!(2026 - 01 - 01),
+        date!(2026 - 09 - 30),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1622,15 +1621,15 @@ fn process_context_selects_active_quotes_release() {
             ctx.active_profile(MessageType::Quotes)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2025 - 04 - 01))
+            Some(date!(2025 - 10 - 01))
         );
     }
 
-    // From 2026-04-01 → fv20260401 (wire "1.3c").
+    // From 2026-04-01 → fv20261001 (wire "1.3c").
     for &d in &[
-        date!(2026 - 04 - 01),
-        date!(2026 - 07 - 01),
-        date!(2030 - 01 - 01),
+        date!(2026 - 10 - 01),
+        date!(2027 - 01 - 01),
+        date!(2030 - 07 - 01),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1641,7 +1640,7 @@ fn process_context_selects_active_quotes_release() {
             ctx.active_profile(MessageType::Quotes)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2026 - 04 - 01))
+            Some(date!(2026 - 10 - 01))
         );
     }
 }
@@ -1671,21 +1670,21 @@ fn comdis_fv20251001_valid_from_is_2025_10_01() {
 /// fv20261001 profile must be registered with valid_from = 2026-10-01 and release "1.0g".
 #[cfg(feature = "comdis")]
 #[test]
-fn comdis_fv20261001_valid_from_is_2026_10_01() {
+fn comdis_fv20260401_valid_from_is_2026_04_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2026 - 10 - 01);
+    let target_date = date!(2026 - 04 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Comdis)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("COMDIS fv20261001 must be registered with valid_from = 2026-10-01");
+        .expect("COMDIS fv20260401 must be registered with valid_from = 2026-10-01");
 
     assert_eq!(profile.release().as_str(), "1.0g");
-    assert_eq!(releases::comdis_fv20261001().as_str(), "1.0g");
+    assert_eq!(releases::comdis_fv20260401().as_str(), "1.0g");
 }
 
 /// ProcessContext selects the correct COMDIS profile by date:
@@ -1707,11 +1706,11 @@ fn process_context_selects_active_comdis_release() {
         "no fv-dated COMDIS profile before 2025-10-01"
     );
 
-    // From 2025-10-01 to 2026-09-30 → fv20251001 (wire "1.0g").
+    // From 2025-10-01 to 2026-03-31 → fv20251001 (wire "1.0g").
     for &d in &[
         date!(2025 - 10 - 01),
         date!(2026 - 01 - 01),
-        date!(2026 - 09 - 30),
+        date!(2026 - 03 - 31),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1726,9 +1725,10 @@ fn process_context_selects_active_comdis_release() {
         );
     }
 
-    // From 2026-10-01 → fv20261001 (wire "1.0g", same release — placeholder).
+    // From 2026-04-01 → fv20260401: AHB 1.0h, published 01.10.2025, so its
+    // Anwendungszeitpunkt is the April changeover, not the October one.
     for &d in &[
-        date!(2026 - 10 - 01),
+        date!(2026 - 04 - 01),
         date!(2027 - 01 - 01),
         date!(2030 - 01 - 01),
     ] {
@@ -1741,7 +1741,7 @@ fn process_context_selects_active_comdis_release() {
             ctx.active_profile(MessageType::Comdis)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2026 - 10 - 01))
+            Some(date!(2026 - 04 - 01))
         );
     }
 }
@@ -1751,41 +1751,41 @@ fn process_context_selects_active_comdis_release() {
 /// fv20250401 profile must be registered with valid_from = 2025-04-01 and release "2.0e".
 #[cfg(feature = "pricat")]
 #[test]
-fn pricat_fv20250401_valid_from_is_2025_04_01() {
+fn pricat_fv20251001_valid_from_is_2025_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2025 - 04 - 01);
+    let target_date = date!(2025 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Pricat)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("PRICAT fv20250401 must be registered with valid_from = 2025-04-01");
+        .expect("PRICAT fv20251001 must be registered with valid_from = 2025-04-01");
 
     assert_eq!(profile.release().as_str(), "2.0e");
-    assert_eq!(releases::pricat_fv20250401().as_str(), "2.0e");
+    assert_eq!(releases::pricat_fv20251001().as_str(), "2.0e");
 }
 
 /// fv20260401 profile must be registered with valid_from = 2026-04-01 and release "2.1".
 #[cfg(feature = "pricat")]
 #[test]
-fn pricat_fv20260401_valid_from_is_2026_04_01() {
+fn pricat_fv20261001_valid_from_is_2026_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2026 - 04 - 01);
+    let target_date = date!(2026 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Pricat)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("PRICAT fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("PRICAT fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "2.1");
-    assert_eq!(releases::pricat_fv20260401().as_str(), "2.1");
+    assert_eq!(releases::pricat_fv20261001().as_str(), "2.1");
 }
 
 /// ProcessContext selects the correct PRICAT profile by date:
@@ -1802,17 +1802,17 @@ fn process_context_selects_active_pricat_release() {
     use time::macros::date;
 
     // Before 2025-04-01 — no fv-dated PRICAT profile active.
-    let before = ProcessContext::for_date(date!(2025 - 03 - 31));
+    let before = ProcessContext::for_date(date!(2025 - 09 - 30));
     assert!(
         before.active_release(MessageType::Pricat).is_none(),
         "no fv-dated PRICAT profile before 2025-04-01"
     );
 
-    // From 2025-04-01 to 2026-03-31 → fv20250401 (wire "2.0e").
+    // From 2025-04-01 to 2026-03-31 → fv20251001 (wire "2.0e").
     for &d in &[
-        date!(2025 - 04 - 01),
-        date!(2025 - 07 - 01),
-        date!(2026 - 03 - 31),
+        date!(2025 - 10 - 01),
+        date!(2026 - 01 - 01),
+        date!(2026 - 09 - 30),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1823,15 +1823,15 @@ fn process_context_selects_active_pricat_release() {
             ctx.active_profile(MessageType::Pricat)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2025 - 04 - 01))
+            Some(date!(2025 - 10 - 01))
         );
     }
 
-    // From 2026-04-01 → fv20260401 (wire "2.1").
+    // From 2026-04-01 → fv20261001 (wire "2.1").
     for &d in &[
-        date!(2026 - 04 - 01),
-        date!(2027 - 01 - 01),
-        date!(2030 - 01 - 01),
+        date!(2026 - 10 - 01),
+        date!(2027 - 07 - 01),
+        date!(2030 - 07 - 01),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1842,7 +1842,7 @@ fn process_context_selects_active_pricat_release() {
             ctx.active_profile(MessageType::Pricat)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2026 - 04 - 01))
+            Some(date!(2026 - 10 - 01))
         );
     }
 }
@@ -1855,21 +1855,21 @@ fn process_context_selects_active_pricat_release() {
 /// (different package conditions and roles), not structural (same wire format).
 #[cfg(feature = "utilts")]
 #[test]
-fn utilts_fv20241001_valid_from_is_2024_10_01() {
+fn utilts_fv20250401_valid_from_is_2025_04_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2024 - 10 - 01);
+    let target_date = date!(2025 - 04 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Utilts)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("UTILTS fv20241001 must be registered with valid_from = 2024-10-01");
+        .expect("UTILTS fv20250401 must be registered with valid_from = 2024-10-01");
 
     assert_eq!(profile.release().as_str(), "1.1e");
-    assert_eq!(releases::utilts_fv20241001().as_str(), "1.1e");
+    assert_eq!(releases::utilts_fv20250401().as_str(), "1.1e");
 }
 
 /// fv20260401 profile must be registered with valid_from = 2026-04-01 and release "1.1e".
@@ -1878,21 +1878,21 @@ fn utilts_fv20241001_valid_from_is_2024_10_01() {
 /// Only the AHB version changes (conditions, package roles).
 #[cfg(feature = "utilts")]
 #[test]
-fn utilts_fv20260401_valid_from_is_2026_04_01() {
+fn utilts_fv20261001_valid_from_is_2026_10_01() {
     use edi_energy::registry::ReleaseRegistry;
     use edi_energy::releases;
     use time::macros::date;
 
     let reg = ReleaseRegistry::global();
-    let target_date = date!(2026 - 04 - 01);
+    let target_date = date!(2026 - 10 - 01);
 
     let profile = reg
         .profiles_for(MessageType::Utilts)
         .find(|p| p.valid_from() == Some(target_date))
-        .expect("UTILTS fv20260401 must be registered with valid_from = 2026-04-01");
+        .expect("UTILTS fv20261001 must be registered with valid_from = 2026-04-01");
 
     assert_eq!(profile.release().as_str(), "1.1e");
-    assert_eq!(releases::utilts_fv20260401().as_str(), "1.1e");
+    assert_eq!(releases::utilts_fv20261001().as_str(), "1.1e");
 }
 
 /// ProcessContext selects the correct UTILTS profile by date:
@@ -1910,17 +1910,17 @@ fn process_context_selects_active_utilts_release() {
     use time::macros::date;
 
     // Before 2024-10-01 — no fv-dated UTILTS profile active.
-    let before = ProcessContext::for_date(date!(2024 - 09 - 30));
+    let before = ProcessContext::for_date(date!(2025 - 03 - 31));
     assert!(
         before.active_release(MessageType::Utilts).is_none(),
         "no fv-dated UTILTS profile before 2024-10-01"
     );
 
-    // From 2024-10-01 to 2026-03-31 → fv20241001 (AHB 1.0, wire "1.1e").
+    // From 2024-10-01 to 2026-03-31 → fv20250401 (AHB 1.0, wire "1.1e").
     for &d in &[
-        date!(2024 - 10 - 01),
         date!(2025 - 04 - 01),
-        date!(2026 - 03 - 31),
+        date!(2025 - 10 - 01),
+        date!(2026 - 09 - 30),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1931,17 +1931,17 @@ fn process_context_selects_active_utilts_release() {
             ctx.active_profile(MessageType::Utilts)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2024 - 10 - 01)),
-            "expected fv20241001 profile on {d}"
+            Some(date!(2025 - 04 - 01)),
+            "expected fv20250401 profile on {d}"
         );
     }
 
-    // From 2026-04-01 → fv20260401 (AHB 1.1, wire still "1.1e").
+    // From 2026-04-01 → fv20261001 (AHB 1.1, wire still "1.1e").
     // Both release strings are identical ("1.1e") — difference is only AHB-level.
     for &d in &[
-        date!(2026 - 04 - 01),
-        date!(2027 - 01 - 01),
-        date!(2030 - 01 - 01),
+        date!(2026 - 10 - 01),
+        date!(2027 - 07 - 01),
+        date!(2030 - 07 - 01),
     ] {
         let ctx = ProcessContext::for_date(d);
         let rel = ctx
@@ -1952,8 +1952,8 @@ fn process_context_selects_active_utilts_release() {
             ctx.active_profile(MessageType::Utilts)
                 .unwrap()
                 .valid_from(),
-            Some(date!(2026 - 04 - 01)),
-            "expected fv20260401 profile on {d}"
+            Some(date!(2026 - 10 - 01)),
+            "expected fv20261001 profile on {d}"
         );
     }
 }

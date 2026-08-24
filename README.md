@@ -94,10 +94,10 @@ flowchart LR
 | `mako-wim` | WiM workflows, **Strom und Gas** — MSB-Wechsel UTILMD (55039/55042/55051/55168 und die Gas-Zwillinge 44039/44042/44051/44168, beantwortet mit `SG4 STS+E01` aus `E_0200`…`E_0240` bzw. `E_2000`…`E_2006`, DE 1131 nennt die Codeliste `S_00xx`/`G_00xx`) + die IFTSTA-Gesamtvorgangsstrecke 21009–21013, die die Zuordnung konstitutiv macht (00:00 Uhr Strom, **06:00 Uhr** Gastag) + Geräteübernahme ORDERS 17001 → ORDRSP 19001/19002 und Gerätewechselabsicht 17009 → 19015/19016 + Weiterverpflichtung 17002 → 19003/19004 + Stammdaten + Preisanfrage REQOTE/QUOTES (35001/35002/35004/35005 → 15001/15002/15004/15005, vier verschiedene Fristen) + Preisliste PRICAT (27001–27003) + Technik-Änderung (17011/17118 → 19005/19006) + Rechnungsabwicklung über den LF (17005/17006 → 19009/19010) + INSRPT (23001–23012) + iMS Steuerungsauftrag + INVOIC (31009 MSB-Rechnung Strom, 31003 Abrechnung von Dienstleistungen in beiden Sparten, 31004 Storno). **WiM Teil 2 ESA Wertebestellung** (§34 MsbG) — ein `wim-wertebestellung`/`esa-wertebestellung`-Prozess spannt REQOTE **35003** → QUOTES 15003 → ORDERS 17007/17008 → ORDRSP 19011/19012 → ORDCHG 39002 Storno → ORDRSP 19013/19014, dazu MSCONS 13027 Werte-nach-Typ-2 |
 | `mako-geli-gas` | GeLi Gas 3.0 workflows — UTILMD G supplier-switch Gas (44001–44021) + **Stammdatenänderung** (44109–44182 — change families: Zustimmung/Ablehnung E15/E13/E17, Monatserster rule for bilanzierungsrelevante changes; Anfrage families G8–G10 auto-answer with a data-return of the requested MaLo master data) + INVOIC 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) |
 | `mako-mabis` | MABIS workflows — PID 13003 (Bilanzkreisabrechnung Strom, BKV↔ÜNB) + PIDs 55065/55069/55070 (Clearingliste) |
-| `mako-gabi-gas` | GaBi Gas 2.1 (BK7-24-01-008) — INVOIC 31010/31007/31008 + MSCONS 13013 MMMA + DVGW ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES (8 workflows); typed domain: `GasDay` (DST-aware 06:00 CET), `GasQuantity` (Decimal kWh_Hs), `GasBeschaffenheit` (Hs + Zustandszahl, DVGW G 685), `AllocationVersion` (Initial/Correction/Final), `GasMarketRole`, `GasPortfolioBalance` |
+| `mako-gabi-gas` | GaBi Gas 2.1 (BK7-24-01-008) — INVOIC 31010/31007/31008 + MSCONS 13013 MMMA + DVGW ALOCAT/NOMINT/NOMRES (3 workflows); typed domain: `GasDay` (DST-aware 06:00 CET), `GasQuantity` (Decimal kWh_Hs), `GasBeschaffenheit` (Hs + Zustandszahl, DVGW G 685), `AllocationVersion` (Initial/Correction/Final), `GasMarketRole`, `GasPortfolioBalance` |
 | `mako-nbw` | Netzbetreiberwechsel — PARTIN bulk DSO concession handover (PIDs 37000–37014) — placeholder |
 | `mako-as4` | BDEW AS4-Profil v1.2 — `BdewAs4Profile`, `bdew_pmode()` (sign+encrypt, X509PKIPathv1, BrainpoolP256r1), `bdew_push_policy()` (require_encrypted_inbound), `BdewTestPki` + `MockAs4Endpoint::builder().with_decryption_key_pem(key)` (full encrypt round-trip, testing feature), per-partner encryption cert registry; asx-rs **v0.13** — SwA payload packaging with an empty SOAP Body (BDEW §2.2.3.2), synchronous receipt verification (`verify_sync_response` / `send_and_verify`: signature-bound, NRI-digest-verified Non-Repudiation of Receipt), `regulated_with_decryption_key()`, `with_signing_material()`, `As4HttpTransport::new_for_localhost_testing()`, partial `As4SendCredentials` fallback |
-| `dvgw-edi` | DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES parsing for GaBi Gas 2.1 (BK7-24-01-008) |
+| `dvgw-edi` | DVGW EDIFACT formats — ALOCAT, NOMINT and NOMRES parsing for GaBi Gas 2.1 (BK7-24-01-008) |
 | `mako-redispatch` | Redispatch 2.0 workflows — XML document types (`ActivationDocument`, `Stammdaten`, `NetworkConstraintDocument`, …) + IFTSTA PIDs 21037/21038 |
 | `redispatch-xml` | Redispatch 2.0 XML/XSD format parsing — all 9 document types |
 | `energy-api` | BDEW API-Webdienste Strom — REST/WebSocket client + Axum server for iMS processes |
@@ -127,12 +127,12 @@ flowchart LR
 | `mabis-syncd` | `:8880` | ÜNB/NB | MaBiS Summenzeitreihen (MSCONS 13003) — aggregates per-MaLo Lastgang from edmd (Strom only, Bezugsregister only) into **one filing per Bilanzierungsgebiet**, each tracked in `submission_series` so a retry never re-files what the BIKO already acked; refuses rather than under-reporting a territory; Erstaufschlag 1.–10. WT / Clearing 11.–30. WT / KBKA windows per BK6-24-174 Anlage 3 §3.10; duplicate-filing guard on both entry points; emits `de.mabis.*` through the transactional outbox; read-only MCP surface |
 | `einsd` | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes, §52 sanctions, §51 neg-price, 18 MCP tools + 6 prompts |
 | `obsd` | `:8480` | All | Business-process observability — KPI reports, §20 EnWG parity, automated deadline computation, `GET /api/v1/audit/bnetza-report` |
-| `productd` | `:9080` | LF | Product & Tariff Catalog — **14 categories** (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **14-tool MCP server + 3 prompts** |
+| `productd` | `:9080` | LF | Product & Tariff Catalog — **14 categories** (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING §42c); OIDC/JWT auth; `product_status` DRAFT/PUBLISHED workflow; §42d comparison portal feed (ETag-cached, BO4E `Tarifinfo`); EPEX Spot for §41a; B2B Angebote ANGELEGT→ANGENOMMEN; **13-tool MCP server + 3 prompts** |
 | `billingd` | `:9280` | LF | Energy Billing Engine — **all commercial prices user-defined in `productd`**; pure calculation via `energy-billing` crate; `STROM` (SLP/RLM Eintarif/HT/NT; `leistungspreis_strom_ct_per_kw_month` demand charge; §14a Modul 1/3 via `ControllableLoadProvider`; §41a Abs. 1 iMSys guard); `GAS` (§25 Nr. 4 MessEV Brennwertkorrektur, Energiesteuer, **§54 KWK exemption**, BEHG CO₂, RLM Leistungspreis, indexed TTF/NCG); `WAERME`; `SOLAR` §42b/§42a; `EEG`/`EINSPEISUNG`; §41a EPEX dynamic; **§41a Abs. 1 iMSys enforcement**; `StromsteuerBefreiung` typed enum (§9 Nr. 1-5); `EnergieQuellen` CO₂ label; `Invoice.warnings`; **historic levy lookups** (`stromsteuer_for_year`, `energiesteuer_gas_for_year`; commodity-aware VAT history incl. the 7 % gas/Fernwärme window 10/2022–03/2024); **VPP auto-billing** (`de.vpp.dispatch.confirmed` → `Rechnung`, § 41e EnWG / Art. 17 RL (EU) 2019/944); **EN 16931 e-invoicing** (semantic model in `en16931_json`, CII + PEPPOL UBL via `en16931-formats`; BG-7 buyer from `vertragd.kunden`; BT-24 declares plain EN 16931 for retail and upgrades to XRechnung 3.0 only on the B2G path, which is profile-validated before writing); **ZUGFeRD PDF/A-3 documents via `outputd`** (billingd proves the payload against the profile it declares before it leaves, projects the template view, and pins the answered template hash per issued invoice for § 147 AO); **deterministic risk gate** (banded 0–100 scoring, HELD dispatch block + analyst release); **§40b billing-run worker** (cadence from vertragd, monthly iMSys Abrechnungsinformation); **12 MCP tools** |
 | `outputd` | `:9880` | — | Customer Communications — renders what other services computed and **delivers it**, never recomputes a number; operator-owned **Typst templates** in a no-I/O sandbox (content-addressed, append-only store; publishing gated by proof: payload validated, PDF/A enforced, finished file read back with `en16931-formats::zugferd::extract`, § 14 Abs. 4 UStG terms on the page); **ZUGFeRD PDF/A-3 carrier** (Factur-X XMP by incremental update) around the caller's CII payload; Textform kinds (`MAHNUNG` § 126b BGB with a Stufe-3 gate, `PREISANPASSUNG` § 41 Abs. 5 EnWG with a mixed-change gate that requires the Sonderkündigungsrecht on the page) share the store so one brand has one template system; **issued documents are stored byte-for-byte** (§ 14 Abs. 1 UStG / § 147 AO — a reproduction, never a re-render) and **delivered** over portal inbox, e-mail relay, print spool or ERP with per-channel evidence and a retry ceiling; external validation panel containerized (veraPDF + Mustang, `just zugferd-verify`) |
 | `accountingd` | `:9380` | LF | Massenkontokorrent / Customer Account Ledger — **tamper-evident double-entry ledger** on the `doubleentry` crate (append-only BLAKE3 Merkle log, `O(log n)` inclusion proofs, period seals for GoBD/§146 AO **Festschreibung**, store-level idempotent CE ingest); per-MaLo Kontokorrent + GL contras; **Abschläge as receivables** (`ABSCHLAG` debit against Erhaltene Anzahlungen, discharged by an `ABSCHLAG_VERRECHNUNG` when the settling invoice deducts them, with a register carrying each advance's § 14 Abs. 5 Satz 2 UStG rate); **FIFO open-item clearing**; **Summen- und Saldenliste** §238 HGB; aging analysis; Verzugszinsen §288 BGB; Zahlungsvereinbarung (payment plans); pain.008 single-message multi-group (mandatory Gläubiger-ID EPC AT-02) with per-mandate collection tracking; **pain.007 creditor reversals**; **pain.002 ingestion incl. Verification of Payee**; camt.052/053/054 XML and flat-export dedup import (booked entries only) with an IBAN → EndToEndId → remittance-token payment-resolution ladder; ISO 20022 structured postal addresses (EPC cut-over 2026-11-15); keyed-BLAKE3 IBAN hash; OIDC/JWT + inbound HMAC; auto-Mahnwesen that **renders and delivers each case as a MAHNUNG through `outputd`**; §40b Abs. 1 EnWG Jahresabschluss on demand or from the annual worker |
 | `portald` | `:9480` | LF | Customer Portal read-model gateway — stateless aggregation of Lastgang/invoices/ledger/VersorgungsStatus/EEG plus the §41 EnWG self-service writes and the **document inbox** (what was actually issued and sent, served out of `outputd`, with the portal read receipt recorded on open); **every route resolves customer ownership through `vertragd`** and object ownership is re-checked on every download; notice periods and IBAN validation stay in the services that own them; 8-tool operator MCP server |
-| `vertragd` | `:9780` | LF + MSB | Contract & Customer Management — every contract with a Kunde on one side: Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge, §§ 9/10 MsbG Messstellenverträge (read by `processd` to answer a WiM Kündigung out of `E_0200`), §41e Aggregatorverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); **§ 41 Abs. 5 Preisänderungsanzeige** rendered and delivered through `outputd`, refused when the Tarifwechsel states no Umfang; `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **16-tool MCP server + 4 prompts** |
+| `vertragd` | `:9780` | LF + MSB | Contract & Customer Management — every contract with a Kunde on one side: Kunden (B2C + B2B), Rahmenverträge (cascade Kündigung, `angebot_id` CPQ traceability), Versorgungsverträge, §§ 9/10 MsbG Messstellenverträge (read by `processd` to answer a WiM Kündigung out of `E_0200`), §41e Aggregatorverträge; OIDC/JWT auth; Preisgarantie guard (§41 EnWG); **§ 41 Abs. 5 Preisänderungsanzeige** rendered and delivered through `outputd`, refused when the Tarifwechsel states no Umfang; `widerruf-kuendigung`; dispatch retry (3×); proactive expiry notifications; GDPR Art. 15/17/20; OIDC→MaLo authorization gateway; **17-tool MCP server + 4 prompts** |
 | `agentd` | `:9580` | All | Multi-agent LLM orchestration — **28 declarative specialist manifests** run on the [agentplane](https://github.com/hupe1980/agentplane) durable runtime; every model and tool call is a journaled effect; four-eyes worklist for mutating calls; per-MaLo cases as the erasure unit; A2A agent cards derived from the manifests; Anthropic, OpenAI, Gemini, self-hosted (TGI/vLLM/Ollama), AWS Bedrock |
 
 
@@ -159,8 +159,8 @@ flowchart LR
 
 | Category | Detail |
 |---|---|
-| 📦 **8 DVGW message types** | ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES |
-| 🔗 **Correlation helpers** | `nomination_ref` links NOMINT → NOMRES; `order_ref` links DELORD → DELRES |
+| 📦 **3 DVGW message types** | ALOCAT, NOMINT, NOMRES — the three GaBi Gas 2.1 needs |
+| 🔗 **Correlation helpers** | `nomination_ref` links NOMINT → NOMRES |
 | 🔀 **Synthetic PID routing** | `detect_pid(role_qualifier)` maps each direction to unique PIDs in range 90001–90062 for `mako-engine` integration |
 | 🧪 **Independent of edi-energy** | Separate `DvgwPlatform`; shares no parser state with the BDEW EDIFACT stack |
 | 📜 **Regulatory basis** | BNetzA BK7-24-01-008 · DVGW G 685 · Kooperationsvereinbarung Gas |
@@ -359,32 +359,31 @@ let repo = InMemoryMaloRepository::default();
 | MSCONS | `MSCONS` | 2.5 (`fv20261001`) | Metered services consumption reports |
 | APERAK | `APERAK` | 2.2 (`fv20261001`) | Application error acknowledgements |
 | CONTRL | `CONTRL` | 2.0b (`fv20260101`) | Interchange control acknowledgements |
-| INVOIC | `INVOIC` | 2.8e (`fv20260401`) | Invoices |
-| REMADV | `REMADV` | 2.9f (`fv20260401`) | Remittance advice |
-| ORDERS | `ORDERS` | 1.4b (`fv20260401`) | Purchase orders |
+| INVOIC | `INVOIC` | 2.8e (`fv20261001`) | Invoices |
+| REMADV | `REMADV` | 2.9f (`fv20261001`) | Remittance advice |
+| ORDERS | `ORDERS` | 1.4c (`fv20261001`) | Purchase orders |
 | IFTSTA | `IFTSTA` | 2.1 (`fv20261001`) | Multimodal status reports |
 | INSRPT | `INSRPT` | 1.1a (`fv20260101`) | Inspection reports |
-| REQOTE | `REQOTE` | 1.3c (`fv20260401`) | Requests for quotation |
-| PARTIN | `PARTIN` | 1.1 (`fv20260401`) | Party information |
-| ORDCHG | `ORDCHG` | 1.2 (`fv20260401`) | Purchase order changes |
-| ORDRSP | `ORDRSP` | 1.4c (`fv20260401`) | Purchase order responses |
-| QUOTES | `QUOTES` | 1.3c (`fv20260401`) | Quotations |
-| COMDIS | `COMDIS` | 1.0h (`fv20261001`) | Commercial dispute (Handelsunstimmigkeit) |
-| PRICAT | `PRICAT` | 2.1 (`fv20260401`) | Price/sales catalogue |
-| UTILTS | `UTILTS` | 1.1e (`fv20260401`) | Technical master data |
+| REQOTE | `REQOTE` | 1.3c (`fv20261001`) | Requests for quotation |
+| PARTIN | `PARTIN` | 1.1 (`fv20261001`) | Party information |
+| ORDCHG | `ORDCHG` | 1.2 (`fv20261001`) | Purchase order changes |
+| ORDRSP | `ORDRSP` | 1.4c (`fv20261001`) | Purchase order responses |
+| QUOTES | `QUOTES` | 1.3c (`fv20261001`) | Quotations |
+| COMDIS | `COMDIS` | 1.0h (`fv20260401`) | Commercial dispute (Handelsunstimmigkeit) |
+| PRICAT | `PRICAT` | 2.1 (`fv20261001`) | Price/sales catalogue |
+| UTILTS | `UTILTS` | 1.1e (`fv20261001`) | Technical master data |
 
-### DVGW gas transport (`dvgw-edi`) — 8 message types
+### DVGW gas transport (`dvgw-edi`) — 3 message types
 
 | Message | Version | Direction | Use case |
 |---|---|---|---|
 | ALOCAT | 5.11a | FNB/MGV/VNB → BKV | Gas quantity allocation list |
 | NOMINT | 4.6 FK | BKV → FNB/MGV | Nomination submission |
 | NOMRES | 4.7 FK | FNB/MGV → BKV | Nomination response / matching result |
-| SCHEDL | G685/G2000 | FNB → BKV | Transport schedule |
-| IMBNOT | G685/G2000 | FNB/MGV → BKV | Intraday imbalance notification |
-| TRANOT | G685/G2000 | FNB/VNB → BKV/GH/MGV | Transport restriction / event notification |
-| DELORD | G685/G2000 | BKV → FNB | Delivery order (quantity nomination) |
-| DELRES | G685/G2000 | FNB → BKV | Delivery order confirmation / rejection |
+
+The other DVGW transport formats (SCHEDL, IMBNOT, TRANOT, DELORD/DELRES, SSQNOT,
+CHACAP, NUEVOR, SLPASP, TSIMSG) are out of scope: GaBi Gas 2.1 does not need
+them, and a workflow for a format nothing parses would be unreachable.
 
 ### Redispatch 2.0 XML (`redispatch-xml`) — 9 document types
 
@@ -523,16 +522,17 @@ mako/
 │   ├── mako-wim/            # WiM domain, Strom + Gas (55039/55042/55051/55168 + 44039/44042/44051/44168/44183, INVOIC 31009/31003/31004, INSRPT 23001–23012)
 │   ├── mako-geli-gas/       # GeLi Gas 3.0 domain (44001–44024 incl. Stornierung; PARTIN Gas 37008–37014; INVOIC 31011)
 │   ├── mako-mabis/          # MABIS domain (13003 — Bilanzkreisabrechnung Strom)
-│   ├── mako-gabi-gas/       # GaBi Gas 2.1 — INVOIC 31007/31008/31010 + MSCONS 13013 + DVGW ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES; typed domain: GasDay/GasQuantity/GasBeschaffenheit/AllocationVersion/GasMarketRole/GasPortfolioBalance
+│   ├── mako-gabi-gas/       # GaBi Gas 2.1 — INVOIC 31007/31008/31010 + MSCONS 13013 + DVGW ALOCAT/NOMINT/NOMRES; typed domain: GasDay/GasQuantity/GasBeschaffenheit/AllocationVersion/GasMarketRole/GasPortfolioBalance
 │   ├── mako-nbw/            # Netzbetreiberwechsel — PARTIN DSO handover (placeholder)
 │   ├── mako-as4/            # BDEW AS4-Profil v1.2: BdewAs4Profile, bdew_pmode (ECDSA+ECDH-ES, BrainpoolP256r1)
 │   │                        # bdew_push_policy (require_encrypted_inbound), BdewTestPki, MockAs4Endpoint
-│   ├── dvgw-edi/            # DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES (GaBi Gas 2.1)
+│   ├── dvgw-edi/            # DVGW EDIFACT formats — ALOCAT, NOMINT, NOMRES (GaBi Gas 2.1)
 │   ├── energy-api/          # BDEW REST/WebSocket API client + Axum server (iMS)
 │   ├── mako-redispatch/     # Redispatch 2.0 process engine — 8 XML-document-driven workflows
 │   ├── redispatch-xml/      # Redispatch 2.0 XML/XSD parsing — all 9 document types
 │   ├── invoic-checker/      # INVOIC plausibility-check pipeline (LF side)
 │   ├── mako-pruefung/       # Antwortnachricht decisions (NB + LF + MSB Entscheidungsbäume)
+│   ├── mako-fristen/        # BDEW Werktag calendar — CONTRL/APERAK clocks + per-PID Antwortfristen
 │   ├── energy-billing/      # LF consumption billing engine (§§40–41a EnWG)
 │   ├── grid-billing/        # NB grid-fee billing — NNE/KA/MMM, §14a, Entgeltregime
 │   ├── eeg-billing/         # EEG feed-in remuneration + Marktprämie
@@ -638,29 +638,19 @@ cargo add edi-energy --features invoic,remadv,orders
 | `pricat` | | PRICAT price catalogue |
 | `utilts` | | UTILTS technical master data |
 | `archive` | | All archived profiles (expired release windows) |
+| `<type>-archive` | | Just that message type's archived profiles — e.g. `mscons-archive` |
 | `serde` | | `Serialize` on `EdiEnergyReport` |
 | `diagnostics` | | `miette::Diagnostic` on reports |
 | `tracing` | | Structured tracing spans |
 
 ## ⚙️ Feature Flags — `dvgw-edi`
 
-All 8 format parsers are compiled in by default. Disable unused formats to reduce binary size:
-
 ```bash
-cargo add dvgw-edi --no-default-features --features nomint,nomres
+cargo add dvgw-edi --features serde
 ```
 
 | Flag | Default | Enables |
 |---|---|---|
-| `alocat` | ✅ | `AlocatMessage` and ALOCAT parsing |
-| `nomint` | ✅ | `NomintMessage` and NOMINT parsing |
-| `nomres` | ✅ | `NomresMessage` and NOMRES parsing |
-| `schedl` | ✅ | `SchedlMessage` and SCHEDL parsing |
-| `imbnot` | ✅ | `ImbalanceMessage` and IMBNOT parsing |
-| `tranot` | ✅ | `TransportNotificationMessage` and TRANOT parsing |
-| `delord` | ✅ | `DeliveryOrderMessage` and DELORD parsing |
-| `delres` | ✅ | `DeliveryResponseMessage` and DELRES parsing |
-| `decimal` | ✅ | `Decimal`-based `quantity_decimal()` on `AlocatQuantity` (preferred for billing) |
 | `serde` | | `Serialize`/`Deserialize` on all public types |
 | `tracing` | | Structured tracing spans during parse dispatch |
 
@@ -669,6 +659,8 @@ cargo add dvgw-edi --no-default-features --features nomint,nomres
 | Flag | Default | Enables |
 |---|---|---|
 | *(default)* | ✅ | All domain types, all repository traits, CloudEvents, `InboundMakoEvent` |
+| `marktd-client` | | HTTP client for marktd's REST surface |
+| `makod-client` | | HTTP client for makod's command API |
 | `testing` | | `InMemory*` test doubles for every repository trait — **never enable in production** |
 
 ## ⚙️ Feature Flags — `mako-engine` / `makod`

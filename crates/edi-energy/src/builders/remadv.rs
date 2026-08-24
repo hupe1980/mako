@@ -7,7 +7,7 @@ use edifact_rs::Writer;
 use crate::AgencyCode;
 use crate::{Error, Release};
 
-use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
+use super::{Set, Unset, bytes_to_segments};
 
 #[derive(Debug, Clone)]
 struct RemadvBuilderInner {
@@ -191,7 +191,7 @@ impl<S, R> RemadvBuilder<S, R> {
             .inner
             .document_date
             .as_deref()
-            .map_or_else(today_ccyymmdd, str::to_owned);
+            .map_or_else(super::now_ccyymmddhhmm, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
@@ -205,7 +205,11 @@ impl<S, R> RemadvBuilder<S, R> {
             ["REMADV", "D", "05A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", code, doc_id);
-        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
+        // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
+        // `+00`; `[494]` requires the stamp to be the creation moment or
+        // earlier. There is no Anwendungsfall in any AHB that takes `102`.
+        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         for grund in &self.inner.abweichungsgruende {
             // `SG7 AJT` — Abweichungsgrund auf Kopfebene.
             if let Some(ebd) = grund.ebd.as_deref() {

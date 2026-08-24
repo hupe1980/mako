@@ -3476,18 +3476,28 @@
         },
         {
           "tag": "LIN",
-          "requirement": "O",
-          "_description": "LIN is optional per MIG 2.5 (no AHB constraint for PID 13027)"
+          "requirement": "M",
+          "_description": "AHB 3.1g §11.2: SG9 LIN is Muss, DE 1082 Positionsnummer (hint [908], 1..n). The profile previously said \"optional per MIG 2.5 (no AHB constraint for PID 13027)\", which is not what the AHB says."
         },
         {
           "tag": "PIA",
-          "requirement": "O",
-          "_description": "PIA is optional per MIG 2.5 (no AHB constraint for PID 13027)"
+          "requirement": "M",
+          "_description": "AHB 3.1g §11.2: SG9 PIA is Muss — DE 4347 = 5 (Produktidentifikation), DE 7140 the Medium/OBIS-Kennzahl (hint [501]). Without PIA a reading carries no register and the value cannot be interpreted. Only the segment and DE 4347 are asserted: a field rule carries weight only through allowed_values, and neither DE 7140 (any OBIS code from the Codeliste) nor DE 7143 has a set this profile may enumerate without risking a false reject.",
+          "qualifier_restrictions": {
+            "4347": [
+              "5"
+            ]
+          }
         },
         {
           "tag": "RFF",
-          "requirement": "O",
-          "_description": "RFF is optional per MIG 2.5 (no AHB constraint for PID 13027)"
+          "requirement": "M",
+          "_description": "AHB 3.1g §11.2: both SG1 RFF groups are Muss — AGI (Beantragungsnummer, hint [574]: the Belegnummer of the ORDERS that ordered the values) and Z13 (Prüfidentifikator). Only AGI is asserted here: a message missing Z13 never reaches these rules, because PID detection reads it to select them, whereas a missing AGI is silent — it is the key the ESA correlates the delivery to its subscription by.",
+          "required_qualifiers": {
+            "1153": [
+              "AGI"
+            ]
+          }
         },
         {
           "tag": "STS",

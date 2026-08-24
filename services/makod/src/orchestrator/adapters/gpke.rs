@@ -40,15 +40,7 @@ pub fn gpke_registry() -> AdapterRegistry<GpkeSupplierChangeWorkflow> {
                     EngineError::Deserialization(format!("GPKE adapter: PID detection failed: {e}"))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(SupplierChangeCommand::ReceiveUtilmd {
                 pid,
@@ -171,15 +163,7 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // Marktlokation from the LOC segment (element 1, component 0).
             // LOC+7+<MaLo>::Z13 — element 0 = qualifier, element 1 = location composite.
@@ -252,15 +236,7 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
                     )
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             let invoice_ref = inv
                 .bgm()
                 .and_then(|b| b.document_id.as_deref())
@@ -539,15 +515,7 @@ pub fn gpke_neuanlage_registry() -> AdapterRegistry<GpkeNeuanlageWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(NeuanlageCommand::ReceiveAnmeldung {
                 pid,
@@ -620,12 +588,7 @@ pub fn gpke_abrechnungsdaten_registry() -> AdapterRegistry<GpkeAbrechnungsdatenW
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result.as_ref().is_some_and(|r| r.is_valid());
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (mut validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // 55156/55220/55673 have no imported AHB rules yet, so a pass here
             // means nothing was checked. Fail closed rather than answer a
@@ -715,15 +678,7 @@ pub fn gpke_lf_abmeldung_registry() -> AdapterRegistry<GpkeLfAbmeldungWorkflow> 
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (mut validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // ── PID 55007 — vacuous-validation guard ──────────────────────
             // PID 55007 (Ankündigung NB-seitiges Lieferende, NB → LFN) is
@@ -825,15 +780,7 @@ pub fn gpke_beendigung_zuordnung_registry() -> AdapterRegistry<GpkeBeendigungZuo
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(BeendigungZuordnungCommand::ReceiveAnfrage {
                 pid,
@@ -904,15 +851,7 @@ pub fn gpke_kuendigung_registry() -> AdapterRegistry<mako_gpke::GpkeKuendigungWo
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(mako_gpke::KuendigungCommand::ReceiveKuendigung {
                 pid,
@@ -989,15 +928,7 @@ pub fn gpke_ankuendigung_zuordnung_lf_registry()
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (mut validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // ── PID 55607 — vacuous-validation guard ──────────────────────
             // PID 55607 (Ankündigung Zuordnung LF, NB → LFN) requires AHB
@@ -1091,15 +1022,7 @@ pub fn gpke_partin_registry() -> AdapterRegistry<GpkePartinWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             Ok(KommunikationsdatenCommand::ReceivePartin {
                 pid,
                 sender: MarktpartnerCode::new(
@@ -1153,28 +1076,44 @@ pub fn gpke_messwerte_registry() -> AdapterRegistry<GpkeMesswerteLieferungWorkfl
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
-            // First SG5 NAD (qualifier 172 = metering location) carries the MaLo.
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
+            // `SG6 LOC+172` is where the AHB puts the location — MSCONS AHB
+            // 3.1g §11.2 gives `SG5 NAD` only DE 3035 = `DP`, with the
+            // identifier in `LOC` DE 3225. Reading `NAD` first worked only
+            // because mako's own renderer fills both; a conformant message
+            // from a third party carries the MaLo in `LOC` alone, and the
+            // empty location that produced is the field `edmd` refuses the
+            // whole event on. `NAD` remains the fallback for the older use
+            // cases that do carry it there.
             let location_id = mako_engine::types::MaLo::new(
                 m.delivery_points()
                     .first()
-                    .map(|dp| dp.nad.party_id.as_deref().unwrap_or(""))
+                    .and_then(|dp| {
+                        dp.time_series
+                            .iter()
+                            .find(|ts| ts.loc.qualifier == "172")
+                            .and_then(|ts| ts.loc.location_id.as_deref())
+                            .or(dp.nad.party_id.as_deref())
+                    })
                     .unwrap_or(""),
             );
+            // The readings, not just the fact that a delivery arrived. They
+            // used to be decoded into `m` and dropped here.
+            let (reads, undated) = super::mscons_intervals(m);
+            if undated > 0 {
+                tracing::warn!(
+                    pid = pid.as_u32(),
+                    undated,
+                    "MSCONS: readings skipped — no SG10 DTM+163/164 in format 303",
+                );
+            }
             Ok(MesswerteLieferungCommand::ReceiveMscons {
                 pid,
                 sender: MarktpartnerCode::new(
                     m.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                 ),
                 location_id,
+                reads,
                 document_date: m
                     .dtm()
                     .iter()
@@ -1219,15 +1158,7 @@ pub fn gpke_utilts_registry() -> AdapterRegistry<GpkeUtiltsWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             Ok(UtiltsKonfigCommand::ReceiveUtilts {
                 pid,
                 sender: MarktpartnerCode::new(
@@ -1408,15 +1339,7 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (mut validation_passed, validation_errors) = super::ahb_verdict(msg);
             // Vacuous-validation guard: warn if AHB profile not yet imported.
             if validation_passed {
                 let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
@@ -1506,15 +1429,7 @@ pub fn gpke_anfrage_bestellung_registry() -> AdapterRegistry<GpkeAnfrageBestellu
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // Vorgangsnummer from `IDE+24` DE 7402 — this one really is a
             // Vorgang reference, not a Lokations-ID.
@@ -1576,7 +1491,7 @@ pub fn gpke_anfrage_bestellung_registry() -> AdapterRegistry<GpkeAnfrageBestellu
 /// Sperrung (PID 17116).  It is distinct from [`gpke_sperrung_registry`] which
 /// handles the inbound Sperrauftrag (PIDs 17115/17117).
 ///
-/// **Loopback use**: in an integrated NB+MSB deployment (same GLN), the
+/// **Loopback use**: in an integrated NB+MSB deployment (same MP-ID), the
 /// outbox ORDRSP 19118/19119 emitted by the MSB side loops back via the
 /// [`crate::ingest_dispatcher`] to complete the NB process.
 #[must_use]
@@ -1678,7 +1593,7 @@ pub fn gpke_sperrung_stornierung_registry() -> AdapterRegistry<GpkeSperrungWorkf
 /// This is a **response adapter** used by the ingest dispatcher to continue
 /// the LF-side process once the NB responds to the Sperrauftrag.
 ///
-/// **Loopback use**: in an integrated NB+LF deployment (same GLN), the
+/// **Loopback use**: in an integrated NB+LF deployment (same MP-ID), the
 /// outbox ORDRSP 19116/19117 emitted by the NB side loops back via the
 /// [`crate::ingest_dispatcher`] to complete the LF process.
 #[must_use]
@@ -1894,15 +1809,7 @@ pub fn gpke_eog_registry() -> AdapterRegistry<mako_gpke::GpkeEogWorkflow> {
 
             match pid.as_u32() {
                 55013 => {
-                    let validation_result = msg.validate().ok();
-                    let validation_passed = validation_result
-                        .as_ref()
-                        .map(|r| r.is_valid())
-                        .unwrap_or(false);
-                    let validation_errors: Vec<String> = validation_result
-                        .as_ref()
-                        .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                        .unwrap_or_default();
+                    let (validation_passed, validation_errors) = super::ahb_verdict(msg);
                     // 55013 now has an authored AHB rulepack (UTILMD AHB Strom 2.2
                     // Kap. 2 — BGM+E01, SG4 IDE 7495=24, STS 9013=E06
                     // Ersatzbelieferung), so `validate()` is a real MIG/AHB check.
@@ -2049,15 +1956,7 @@ pub fn gpke_stammdaten_registry() -> AdapterRegistry<mako_gpke::GpkeStammdatenae
                 });
             }
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // Build the MaLo attribute patch. `TM`-carried attributes
             // (Bilanzierungsmethode, Fallgruppe) plus the SG8 `SEQ`/SG10

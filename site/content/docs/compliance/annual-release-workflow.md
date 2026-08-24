@@ -108,20 +108,30 @@ mv profiles/utilmd/fv20271001/mig.draft.json profiles/utilmd/fv20271001/mig.json
 mv profiles/utilmd/fv20271001/ahb.draft.json profiles/utilmd/fv20271001/ahb.json
 ```
 
-Set the `valid_from` date in `mig.json`.  If the previous release now has a
-known expiry date, set `valid_until` on **that** file as well:
+Set `valid_from` and `publikationsdatum` in `mig.json`, and close the previous
+release with a `valid_until`:
 
 ```json
 // profiles/utilmd/fv20261001/mig.json — add or confirm:
 "valid_until": "2027-09-30"
 
 // profiles/utilmd/fv20271001/mig.json:
-"valid_from": "2027-10-01"
+"publikationsdatum": "2027-04-01",   // the title page's Publikationsdatum
+"valid_from":        "2027-10-01"    // the Anwendungszeitpunkt — six months later
 ```
 
+> **Rule:** `valid_from` is the **Anwendungszeitpunkt**, never the date on the
+> title page. A document published on 01.04. applies from 01.10. of the same
+> year, one published on 01.10. from 01.04. of the next (Allgemeine Festlegungen
+> 6.1d §2.5.1/§2.5.2). Name the directory after that date. Codegen refuses a
+> `valid_from` that does not follow from a stated `publikationsdatum`. Omit
+> `publikationsdatum` only for an ausserordentliche Veröffentlichung, whose
+> Anwendungszeitpunkt the BNetzA Mitteilung names directly.
+
 > **Rule:** every profile that is superseded by a new one **must** have a
-> `valid_until` date.  Open-ended profiles (`valid_until` absent) are treated
-> as permanently valid by the registry.
+> `valid_until` date, and it must be the day before its successor's
+> `valid_from` — `validate-profiles` errors on an overlap and warns on a gap.
+> Open-ended profiles (`valid_until` absent) are treated as permanently valid.
 
 ---
 
@@ -233,7 +243,7 @@ Before merging:
 
 - [ ] All `_WARNING` fields removed from profile JSON files
 - [ ] `valid_until` set on previous release profile
-- [ ] `valid_from` set on new profile
+- [ ] `valid_from` (Anwendungszeitpunkt) and `publikationsdatum` set on new profile
 - [ ] `cargo xtask codegen --prune-expired` run; expired profiles archived
 - [ ] `cargo xtask validate-profiles` exits 0
 - [ ] `cargo xtask codegen --check` exits 0
@@ -332,7 +342,7 @@ Expected response (success):
   "workflows": ["esa-wertebestellung", "gabi-gas-allocation", "…"],
   "workflows_not_migrated": [
     ["gpke-messwerte", "records inbound MSCONS Messwerte and completes"],
-    ["gabi-gas-schedl", "DVGW SCHEDL notification, no response obligation"]
+    ["gabi-gas-mmma", "delegates delivery to gpke-allokationsliste"]
   ]
 }
 ```
@@ -415,56 +425,61 @@ trailing edge only. That is a local receiving policy and defaults to zero. See
 
 ---
 
-## Appendix C — FV2026 profile effective dates and pairing rules
+## Appendix C — Formatversion effective dates
 
-Different message types take effect on **different dates** within the 2026
-release cycle.  This is the BDEW-mandated staggered rollout schedule.  When an
-engine processes a message after a partial cutover (e.g., INVOIC effective from
-2026-04-01 but UTILMD not until 2026-10-01), it must apply the correct profile
-for each message type independently.
+### Publikationsdatum is not the Anwendungszeitpunkt
 
-`FormatVersion` is chosen per-message-type at parse time based on the
-`UNH DE 0057` wire release code.  The engine never infers a profile from the
-calendar date; the sender declares which profile version to use in the wire
-format itself.  **Profile pairing is therefore a routing concern, not a clock
-concern** — concurrent processes can run under different FVs without conflict
-(see `WorkflowVersionPolicy::ForwardCompatible`).
+Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2 give the cycle three instants. For the
+October changeover: consultation documents 01.02., **Veröffentlichung der
+konsultierten Dokumente 01.04.**, **Anwendungszeitpunkt 01.10.** The April
+changeover mirrors it — published 01.10., applies 01.04. of the next year. The
+six months between are the *Umsetzungsphase*, and throughout them the previous
+format is the binding one.
 
-### FV2026 profile inventory
+Every EDI@Energy document prints its `Publikationsdatum` on the title page. It
+goes in the profile's `publikationsdatum` field; `valid_from` and the directory
+name carry the Anwendungszeitpunkt six months later. `cargo xtask codegen`
+refuses a `valid_from` that does not follow §2.5 from a stated
+`publikationsdatum`, and `validate-profiles` errors on two profiles claiming the
+same day.
 
-| Message type | FV2025 baseline | FV2026 release | Effective from |
-|---|---|---|---|
-| `aperak` | `fv20251001` | `fv20261001` | 2026-10-01 |
-| `comdis` | `fv20251001` | `fv20261001` | 2026-10-01 |
-| `contrl` | `fv20251001` | `fv20260101` | 2026-01-01 |
-| `iftsta` | `fv20251001` | `fv20261001` | 2026-10-01 |
-| `insrpt` | `fv20211001` | `fv20260101` | 2026-01-01 |
-| `invoic` | `fv20251001` | `fv20260401` | 2026-04-01 |
-| `mscons` | `fv20251001` | `fv20261001` | 2026-10-01 |
-| `ordchg` | `fv20241001` | `fv20260401` | 2026-04-01 |
-| `orders` | `fv20251001` | `fv20260401` | 2026-04-01 |
-| `ordrsp` | `fv20251001` | `fv20260401` | 2026-04-01 |
-| `partin` | `fv20251001` | `fv20260401` | 2026-04-01 |
-| `pricat` | `fv20250401` | `fv20260401` | 2026-04-01 |
-| `quotes` | `fv20250401` | `fv20260401` | 2026-04-01 |
-| `remadv` | `fv20251001` | `fv20260401` | 2026-04-01 |
-| `reqote` | `fv20250401` | `fv20260401` | 2026-04-01 |
-| `utilmd` (Strom) | `fv20251001` | `fv20261001` | 2026-10-01 |
-| `utilmd` (Gas) | `fv20251001_gas` | `fv20261001_gas` | 2026-10-01 |
-| `utilts` | `fv20241001` | `fv20260401` | 2026-04-01 |
+Corrections issued in between ("Konsolidierte Lesefassung mit Fehlerkorrektur")
+take effect without a further BNetzA Mitteilung and do not move the
+Anwendungszeitpunkt; the latest consolidated version is the one to implement.
 
-### Transition windows
+### Which profile applies when
 
-There are two distinct cutover dates in the 2026 cycle:
+`profiles/<type>/<fv>/mig.json` is authoritative — `publikationsdatum`,
+`valid_from`, `valid_until`. To list them:
 
-- **2026-01-01** — `contrl`, `insrpt` (limited scope; verify with BDEW release notes)
-- **2026-04-01** — billing and operational message types (INVOIC, ORDERS, ORDRSP, ORDCHG, PARTIN, REMADV, PRICAT, REQOTE, QUOTES, UTILTS)
-- **2026-10-01** — core supply-chain message types (UTILMD, MSCONS, APERAK, COMDIS, IFTSTA)
+```bash
+cargo xtask validate-profiles          # prints gaps and overlaps
+```
 
-During any transition window, the engine serves **both** FVs concurrently.
-Old processes continue to run under the FV they were spawned with
-(`WorkflowVersionPolicy::ForwardCompatible`).  New inbound messages select
-the profile using the wire release code in `UNH DE 0057`.
+Two exceptions to the six-month rule, both by regulation rather than cycle:
+`contrl`/`insrpt` run on the ausserordentliche Veröffentlichung of 11.12.2025
+(applies 2026-01-01), and UTILMD Strom on BK6-22-024's LFW24 date, which
+`fv20250606` carries. Those profiles state no `publikationsdatum`.
+
+MSCONS has a gap between `fv20240401` and `fv20260401`: AHB 3.1, applying
+2025-10-01, was never authored. `validate-profiles` warns about it on every run.
+A gap is a coverage statement; an overlap is an error.
+
+### Date or wire code?
+
+`UNH DE 0057` identifies the MIG, not the Formatversion — REQOTE AHB 1.1 and 1.2
+both carry wire release `1.3c`, so only the date distinguishes them.
+`ReleaseRegistry::profile_on` selects the greatest `valid_from ≤ date`, and
+`ProcessContext::current()` does the same for today.
+
+Running processes continue under the FV they were spawned with
+(`WorkflowVersionPolicy::ForwardCompatible`), so a partial cutover needs no
+coordination.
+
+EDIFACT has no overlap at the changeover: before the Anwendungszeitpunkt the old
+format applies, from it the new one.
+`ReleaseRegistry::with_receive_tolerance_days` widens only the trailing edge, as
+a local inbound policy for a late-arriving message.
 
 ### xtask coverage check
 

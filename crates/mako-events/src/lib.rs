@@ -424,10 +424,9 @@ pub mod agent {
 /// final-allocation window closes unsettled, and `OutboxErpWorker` delivers it
 /// as a CloudEvent like every other ERP notification.
 ///
-/// ⚠ The remaining eleven are phantom: subscribed by agentd (`gabi-gas-agent`
+/// ⚠ The remaining ten are phantom: subscribed by agentd (`gabi-gas-agent`
 /// globs `de.gabi.imbalance.*`, `de.gabi.nomination.*`), but no service emits
-/// them yet — the ingest arms for IMBNOT/SCHEDL/TRANOT/DELORD still return
-/// `Skipped`, so there is no domain fact to raise an event about (ROADMAP).
+/// them yet (ROADMAP).
 pub mod gabi {
     /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
     pub const MEASUREMENT_RECEIVED: &str = "de.gabi.measurement.received";
@@ -454,8 +453,6 @@ pub mod gabi {
     /// `synthetic_pid`. The operator's action is to open a Clearingfall with
     /// the FNB/MGV.
     pub const ALOCAT_MISSING: &str = "de.gabi.alocat.missing";
-    /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
-    pub const IMBNOT_RECEIVED: &str = "de.gabi.imbnot.received";
     /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
     pub const GAS_QUALITY_VIOLATION: &str = "de.gabi.quality.violation";
     /// ⚠ phantom: no emitter yet (tracked in ROADMAP).
@@ -649,7 +646,6 @@ pub fn all() -> &'static [&'static str] {
         gabi::INVOIC_MMM_RECEIVED,
         gabi::INVOIC_KAPAZITAET_RECEIVED,
         gabi::ALOCAT_MISSING,
-        gabi::IMBNOT_RECEIVED,
         gabi::GAS_QUALITY_VIOLATION,
         gabi::FINAL_ALOCAT_DEADLINE,
         // de.obs.*

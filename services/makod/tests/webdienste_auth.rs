@@ -282,3 +282,90 @@ async fn a_control_order_with_a_caller_mp_id_passes_the_identity_gate() {
          (status {status}): {body}"
     );
 }
+
+// ── WiM Order attribution ────────────────────────────────────────────────────
+
+/// A WiM Anmeldung whose body names a different Netzbetreiber than the client
+/// certificate must be refused.
+///
+/// # Why this is a test
+///
+/// `WimAnmeldungRequest` carries `netzbetreiber_id`, and the handler used to
+/// take it at face value on the grounds that "the ordering party is known from
+/// the payload". It is not: the body is an assertion by whoever holds a client
+/// certificate, and `sender_mp_id` is what the MSB's Bestätigung and APERAK are
+/// addressed to. Any authenticated participant could therefore place an iMSys
+/// installation order in another Netzbetreiber's name and have the answer
+/// delivered to them. This is the same rule `edi-energy` enforces between `UNB`
+/// and `NAD+MS` (Allgemeine Festlegungen §2.13).
+const WIM_ANMELDUNG_URI: &str = "/wimBestellung/v1/anmeldung/?anmeldung=%7B%22meloId%22%3A%22DE0001234567890000000000000000001%22%2C%22netzbetreiberId%22%3A9900001000002%2C%22processDate%22%3A%222026-09-01%22%2C%22deviceCategory%22%3A%22iMSys%22%7D";
+
+fn wim_anmeldung(caller: Option<&str>, tx: &str) -> Request<Body> {
+    let mut req = Request::builder()
+        .method("POST")
+        .uri(WIM_ANMELDUNG_URI)
+        .header("authorization", "Bearer s3cret")
+        .header("transactionId", tx)
+        .header("creationDateTime", "2026-08-18T10:00:00Z");
+    if let Some(c) = caller {
+        req = req.header(webdienste::CLIENT_MP_ID_HEADER, c);
+    }
+    req.body(Body::empty()).expect("request")
+}
+
+async fn wim_app() -> axum::Router {
+    webdienste::build_app(
+        handler().await,
+        Some(WebdiensteAuthState {
+            cedar: authorizer(None, DefaultPolicy::PermitAll),
+            tenant: Arc::from(TENANT),
+        }),
+        1024 * 1024,
+    )
+}
+
+#[tokio::test]
+async fn a_wim_anmeldung_naming_another_netzbetreiber_is_refused() {
+    let res = wim_app()
+        .await
+        .oneshot(wim_anmeldung(Some("9900009000009"), "tx-wim-spoof"))
+        .await
+        .expect("service call");
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "a caller must not place a WiM order in another Netzbetreiber's name"
+    );
+}
+
+/// The same order with no client certificate at all is refused too — the
+/// answer would otherwise be addressed to an unauthenticated claim.
+#[tokio::test]
+async fn a_wim_anmeldung_without_a_caller_mp_id_is_refused() {
+    let res = wim_app()
+        .await
+        .oneshot(wim_anmeldung(None, "tx-wim-anon"))
+        .await
+        .expect("service call");
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let body = axum::body::to_bytes(res.into_body(), 64 * 1024)
+        .await
+        .map(|b| String::from_utf8_lossy(&b).into_owned())
+        .expect("body");
+    assert!(
+        body.contains(webdienste::CLIENT_MP_ID_HEADER),
+        "the refusal must name the header that fixes it: {body}"
+    );
+}
+
+/// A matching pair is accepted, so the two refusals above are about the
+/// mismatch and not about the payload being rejected for another reason.
+#[tokio::test]
+async fn a_wim_anmeldung_from_the_named_netzbetreiber_is_accepted() {
+    let res = wim_app()
+        .await
+        .oneshot(wim_anmeldung(Some("9900001000002"), "tx-wim-ok"))
+        .await
+        .expect("service call");
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+}

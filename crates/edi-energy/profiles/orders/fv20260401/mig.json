@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "message_type": "ORDERS",
-  "release": "1.4c",
+  "release": "1.4b",
   "valid_from": "2026-04-01",
   "ordering_hint": [
     "UNH",
@@ -524,7 +524,9 @@
       ]
     }
   ],
-  "ahb_revision": "1.4c",
-  "source_document": "ORDERS MIG 1.4c, Stand 01.04.2026",
-  "pid_source": "rff_z13"
+  "valid_until": "2026-09-30",
+  "ahb_revision": "1.4b",
+  "source_document": "ORDERS MIG 1.4b, Publikationsdatum 01.10.2025",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2025-10-01"
 }

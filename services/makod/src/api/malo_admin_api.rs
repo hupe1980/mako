@@ -69,7 +69,7 @@ pub struct MaloAdminState {
     /// Cedar-based authorization engine — authenticates callers and evaluates
     /// ABAC policies for each MaLo admin operation.
     pub cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant ID (GLN). All cache operations are scoped to this tenant.
+    /// Operator tenant ID (MP-ID). All cache operations are scoped to this tenant.
     ///
     /// When a caller provides `X-Tenant-Id`, it must match this value exactly;
     /// mismatches are rejected with `403 Forbidden` to prevent cross-tenant data access.
@@ -80,7 +80,7 @@ pub struct MaloAdminState {
 
 /// Request body for `PUT /admin/malo/{malo_id}`.
 ///
-/// The server scopes all operations to its configured operator GLN;
+/// The server scopes all operations to its configured operator MP-ID;
 /// the request body must not include a `tenant_id` — the tenant is
 /// always the operator that holds the bearer token.
 #[derive(Debug, Deserialize, ToSchema)]

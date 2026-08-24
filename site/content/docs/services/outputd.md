@@ -240,7 +240,7 @@ value to the precision it wants and never truncate one. This view is the
 **normative** contract — the publish gate proves templates against it; a caller
 (billingd) serialises its own copy of the same shape at the HTTP boundary.
 
-`GET /api/v1/templates/reference` serves the layout mako ships — a complete §14
+`GET /api/v1/templates/reference/{kind}` serves the layout mako ships — a complete §14
 Abs. 4-conformant invoice with DIN 5008 margins and German number formatting.
 It is compiled by the test suite on every run against the same specimen an
 operator's template will face, so the starting point is never stale.
@@ -402,7 +402,7 @@ append-only policy is the whole guarantee that it stays resolvable. `document_te
 `(tenant, kind)` — the pointer moves, the templates it references do not.
 
 The identity is scoped to the **tenant**, not global. outputd ships a reference
-layout (`GET /api/v1/templates/reference`) that operators are told to start
+layout (`GET /api/v1/templates/reference/{kind}`) that operators are told to start
 from, so a globally unique hash would make the first tenant to publish it
 unchanged its owner for everyone: every other tenant is refused and told to add
 a cosmetic comment — which makes the audit identity of an eight-year document

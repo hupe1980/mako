@@ -239,9 +239,12 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // `KNOWN_PROFILE_GAPS` set, routed but without AHB rules. Both numbers are
     // correct and appear in different places; do not "harmonise" them.
     // Rose from 428 when the DVGW gas-transport PIDs stopped being a synthetic
-    // set of twelve and became the 33 codes DVGW actually publishes in RFF+Z13.
-    const LANDING_PAGE_PIDS: usize = 454;
-    const LANDING_PAGE_WORKFLOWS: usize = 64;
+    // set of twelve and became the 33 codes DVGW actually publishes in RFF+Z13;
+    // fell by five when the SCHEDL/IMBNOT/TRANOT/DELORD/DELRES placeholders were
+    // dropped — `dvgw-edi` parses none of those formats, so their synthetic
+    // 900xx codes counted messages the daemon could never receive.
+    const LANDING_PAGE_PIDS: usize = 449;
+    const LANDING_PAGE_WORKFLOWS: usize = 60;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

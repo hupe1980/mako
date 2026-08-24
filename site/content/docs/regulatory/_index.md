@@ -56,7 +56,7 @@ graph LR
     BNetzA --> strom
     BNetzA --> gas
 
-    BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["346 PIDs covered<br/>(100%)"]
+    BK6_24 -->|"mako-gpke<br/>mako-wim<br/>mako-mabis"| GPKE_impl["363 PIDs covered<br/>(100%)"]
     BK7_24 -->|"mako-geli-gas<br/>mako-wim"| GAS_impl["GeLi Gas 3.0<br/>WiM Gas"]
     BK7_14 -->|"mako-gabi-gas<br/>dvgw-edi"| DVGW_impl["8 DVGW messages<br/>GaBi Gas 2.1"]
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts<br/>GDPR Art. 15/17/20"]
@@ -99,11 +99,14 @@ graph LR
 | **MsbG §29 Abs. 3 / BSI TR-03109-4 §6.3** (SMGW certificate expiry monitoring) | Strom | `edmd` daily cert-expiry worker — tiered 90/30/7-day `de.messwert.smgw.cert.expiry-warning` (dedup per tier); `agentd` `smgw-diagnostics-agent` escalates renewal |
 
 > **Format version coexistence.** Format releases ship on a semi-annual cadence
-> (April + October) with per-message, fv-dated profiles — e.g. `fv20260401`
-> (binding since 01.04.2026, Mitteilung Nr. 54) and `fv20261001` (binding
-> 01.10.2026, Mitteilung Nr. 56). Multiple format versions coexist in the same
-> running instance. A process started under an older format version continues
-> under those rules until it completes — no data migration required.
+> with per-message, fv-dated profiles — e.g. `fv20260401` (binding from
+> 01.04.2026) and `fv20261001` (binding from 01.10.2026). The directory is named
+> after the **Anwendungszeitpunkt**, which Allgemeine Festlegungen 6.1d §2.5 puts
+> six months after the Publikationsdatum printed on the document: published
+> 01.04., applies 01.10.; published 01.10., applies 01.04. of the next year.
+> Multiple format versions coexist in the same running instance. A process
+> started under an older format version continues under those rules until it
+> completes — no data migration required.
 >
-> **PID coverage.** `cargo xtask validate-pruefids` verifies all 346 Prüfidentifikatoren
+> **PID coverage.** `cargo xtask validate-pruefids` verifies all 363 Prüfidentifikatoren
 > in the workspace are correctly registered. CI enforces 100% coverage.

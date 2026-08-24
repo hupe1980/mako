@@ -522,7 +522,11 @@ mis-addressing part of it.
 Kapitel-4.6 Messprodukt-Code, spaced or bare), `wunschtermin` (or `zeitraum_von`,
 `YYYY-MM-DD`), an optional `abonnement` (`Z01` default / `Z03`), and for a
 Kapitel-4.6.2 product an `smgw` object with the IPv4 and IPv6 target URIs, the
-certificate issuer and subject, and any Schwellwerte.
+certificate issuer and subject, and any Schwellwerte. `messprodukt` is
+**mandatory** and uncatalogued codes are refused — a REQOTE that named a
+placeholder product would be an order the ESA never placed. The optional
+`contact` and `contact_comm` fill the `SG14 CTA+IC`/`COM` Ansprechpartner and
+reach the wire verbatim.
 
 A `werteanfrage`/`bestellung` is refused (`422`) unless the strict `esa_outbound`
 consent check passes — the ESA is the consent holder and must not request values
@@ -562,6 +566,31 @@ fulfil nor deliver without one; `ProcessNotFound` (`404`) means no active
 subscription. Each delivery leaves an auditable `WerteUebermittelt` event. The
 values are non-authoritative and land in the ESA deployment's separate Typ-2
 store (`edmd.esa_typ2_reads`), never a billing path.
+
+On the receiving side the readings travel the same key set in reverse. The
+inbound MSCONS adapter decodes every `SG9`/`SG10` group and the workflow puts
+them on the `ProcessCompleted` event as `reads`, alongside the `malo_id` `edmd`
+keys on:
+
+```json
+{ "pid": 13027, "malo_id": "51238696781", "sender": "9900357000004",
+  "sparte": "STROM",
+  "reads": [ { "dtm_from": "2026-06-01T00:00:00+00:00",
+               "dtm_to":   "2026-06-01T00:15:00+00:00",
+               "quantity_kwh": "0.250", "quality": "MEASURED",
+               "obis_code": "1-0:1.29.0", "melo_id": null } ] }
+```
+
+`quality` is `SG10 QTY` DE 6063 in the vocabulary `edmd` maps: `220` Wahrer Wert
+→ `MEASURED`, `67` Ersatzwert → `SUBSTITUTED`, `Z18` Vorläufiger Wert →
+`PRELIMINARY`. Periods are converted from `DTM+163`/`+164` in format `303`
+(`CCYYMMDDHHMMZZZ`) to RFC 3339. A reading in any other format is **skipped and
+counted**, not dated by guesswork — `102` and `203` carry no UTC offset, and
+reading one as UTC is a silent one-hour error for half the year.
+
+`malo_id` is present whether or not the message carried decodable readings,
+because `edmd` refuses an event without one before it looks at anything else; a
+delivery whose intervals could not be decoded still leaves a receipt.
 
 #### MSB-side answer commands (the loopback half)
 
@@ -959,7 +988,7 @@ principal entity ID in your policies.
 | TOML key | Env var | CLI flag | Description |
 |---|---|---|---|
 | `addr` | `MAKOD_AS4_ADDR` | `--as4-addr` | TCP listen address |
-| `party_id` | `MAKOD_AS4_PARTY_ID` | `--as4-party-id` | Operator GLN (defaults to the primary `[[party]]` MP-ID) |
+| `party_id` | `MAKOD_AS4_PARTY_ID` | `--as4-party-id` | Operator MP-ID (defaults to the primary `[[party]]` MP-ID) |
 | `signing_key_pem` | `MAKOD_AS4_SIGNING_KEY_PEM` | `--as4-signing-key-pem` | PEM key (inline) |
 | `signing_key_pem_file` | — | — | Path to PEM key file *(preferred)* |
 | `signing_cert_pem` | `MAKOD_AS4_SIGNING_CERT_PEM` | `--as4-signing-cert-pem` | PEM cert (inline) |
@@ -973,6 +1002,7 @@ principal entity ID in your policies.
 | `partner_cert_files` | — | — | Trading-partner encryption certificates as `MP-ID=/path/to/cert.pem` pairs *(preferred)* |
 | `allow_unencrypted` | `MAKOD_ALLOW_UNENCRYPTED_AS4` | `--allow-unencrypted-as4` | **Dev/test only:** downgrade missing-encryption-material startup refusals to warnings |
 | `allow_no_signing` | `MAKOD_ALLOW_NO_AS4_SIGNING` | `--allow-no-as4-signing` | **Dev/test only:** start without signing material and without an EDIFACT outbox webhook; outbound EDIFACT is logged instead of sent |
+| `allow_no_trust_anchor` | `MAKOD_ALLOW_NO_AS4_TRUST_ANCHOR` | `--allow-no-as4-trust-anchor` | **Dev/test only:** run the AS4 listener with no counterparty trust anchor, accepting that every partner's signature is rejected |
 | `lenient_receipts` | `MAKOD_AS4_LENIENT_RECEIPTS` | `--as4-lenient-receipts` | Interop debugging: treat a missing or unverifiable synchronous `eb:Receipt` as a warning |
 
 The `--as4-partner` flag is repeatable. Using the env var, provide a
@@ -985,6 +1015,16 @@ MAKOD_AS4_PARTNER="9900000000001=https://a.example/as4,9900000000002=https://b.e
 Partners are bootstrapped into the durable `PartnerStore` on startup. Changes
 made at runtime via the REST API (`PUT /admin/partners/{mp_id}`) survive restarts
 without requiring a redeploy.
+
+**The trust anchor is fail-closed.** Counterparty signing certificates are
+issued by the BDEW/BNetzA PKI, so verifying them needs that CA certificate in
+`trust_anchor_pem` / `trust_anchor_pem_file`. With none configured the session
+falls back to the operator's own signing certificate as its only anchor, which
+trusts exactly one signer — itself — and rejects **every** inbound message from
+every partner. The daemon would bind `:4080`, report healthy and receive
+nothing, so this is a startup refusal.
+`--allow-no-as4-trust-anchor` is the explicit opt-out for a loopback or
+single-operator test where both ends share one certificate.
 
 **Encryption is fail-closed.** BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every
 production AS4 message to be encrypted. `makod` refuses to start when AS4 is
@@ -1004,35 +1044,31 @@ signing session from the supplied PEM material: a malformed key, a certificate
 that does not match it, a partner endpoint on plain `http://`, or a partner with
 no encryption certificate all fail the check rather than the boot.
 
-Declaring the floor is what makes this strict enough. The generic AS4 invariant
-only rejects disabling signing *and* encryption — "at least one", the sensible
-baseline for AS4 in general, but weaker than §2.2.6.2.2, which mandates both.
-Because `ProfileStack::overrides` and `partner_overrides` are public, a single
-partner overlay keeping signatures and turning encryption off is reachable by
-configuration; without the floor it would validate cleanly while every message to
-that partner went out in the clear. This is a startup check, so a downgraded
-profile never serves traffic.
+The floor is what makes this strict enough: the generic AS4 invariant only
+rejects disabling signing *and* encryption, which is weaker than §2.2.6.2.2's
+mandate of both. `ProfileStack::overrides` and `partner_overrides` are public, so
+a partner overlay turning encryption off is reachable by configuration. Being a
+startup check, a downgraded profile never serves traffic.
 
-**Signed receipts and receipt-verified delivery.** Inbound messages are
-answered with a **signed** `eb:Receipt` echoing the inbound signature digests
-as NonRepudiationInformation. Outbound deliveries are acknowledged only after
-asx-rs's `verify_sync_response` (0.11) verifies the counterparty's synchronous
-signal: it parses the SOAP namespace-correctly, checks the receipt signature
-**covers** the acted-on `eb:SignalMessage`, confirms `RefToMessageId`, verifies
-every NonRepudiationInformation digest against what the sent message was signed
-over, and enforces a replay window — the Non-Repudiation-of-Receipt guarantee,
-proven rather than assumed. A returned `eb:Error` is surfaced as a typed
-rejection (with its ebMS3 code); like an unverifiable receipt, it backs off and
-retries — deliberately, because the ebMS MessageId is the stable outbox id and
-the AS4-Profil mandates receiver duplicate elimination, so a resend cannot
-double-process, while the P-Mode, partner certificate and rendering are resolved
-per attempt, so a configuration fix heals delivery without re-enqueueing. The
-retry budget is the profile's duty stated as *time*: 72 hours from creation
-(`max_retry_window`), with an attempt belt only against runaway loops. The
-`outbox_delivery_attempted` metric separates `counterparty_error`,
-`receipt_unverified` and `transport_error`. `--as4-lenient-receipts` drops to
-asx-rs's `relaxed()` policy (accepts unsigned / non-NRR receipts) for interop
-bring-up.
+**Signed receipts and receipt-verified delivery.** Inbound messages are answered
+with a **signed** `eb:Receipt` echoing the inbound signature digests as
+NonRepudiationInformation. Outbound deliveries are acknowledged only after
+asx-rs's `verify_sync_response` proves the Non-Repudiation-of-Receipt guarantee
+rather than assuming it — the receipt signature must **cover** the acted-on
+`eb:SignalMessage`, `RefToMessageId` must match, every NonRepudiationInformation
+digest must match what the sent message was signed over, and the whole thing must
+fall inside a replay window.
+
+A returned `eb:Error` is surfaced as a typed rejection with its ebMS3 code and,
+like an unverifiable receipt, backs off and retries. That is safe because the
+ebMS MessageId is the stable outbox id and the AS4-Profil mandates receiver
+duplicate elimination; P-Mode, partner certificate and rendering are resolved per
+attempt, so a configuration fix heals delivery without re-enqueueing. The retry
+budget is stated as *time* — 72 hours from creation (`max_retry_window`) — with
+an attempt belt only against runaway loops. `outbox_delivery_attempted` separates
+`counterparty_error`, `receipt_unverified` and `transport_error`.
+`--as4-lenient-receipts` drops to asx-rs's `relaxed()` policy (unsigned / non-NRR
+receipts) for interop bring-up.
 
 **Per-sender rate limiting.** The AS4 port applies two independent GCRA
 limits: per peer IP (100 req/s, burst 50) and per sender MP-ID (50 req/s,
@@ -1129,15 +1165,18 @@ forward the certificate's Marktpartner-ID:
 proxy_set_header X-Mako-Client-MP-ID $ssl_client_s_dn_cn;
 ```
 
-A Control Measures request without it is refused with `400`. That is
-deliberate: the Endantwort to a §14a EnWG Steuerungsauftrag is addressed to
-whoever sent it, so an order whose originator cannot be established has nowhere
-to be answered. The value must be a 13-digit Marktpartner-ID or a 16-character
-EIC; anything else is treated as absent.
+A request without it is refused with `400`: the Endantwort to a §14a EnWG
+Steuerungsauftrag and the Bestätigung to a WiM Anmeldung are addressed to
+whoever sent them, so an order whose originator cannot be established has
+nowhere to be answered. The value must be a 13-digit Marktpartner-ID or a
+16-character EIC; anything else is treated as absent.
 
-The WiM Order API is the exception — `WimAnmeldungRequest` carries
-`netzbetreiber_id` in the body, so the ordering party is known from the payload
-and the header is not consulted.
+The WiM Order API also carries `netzbetreiber_id` in its request body. That is
+an assertion, not an authentication, so the two must agree — a body naming a
+different participant is refused with `403`. Same rule `edi-energy` enforces
+between `UNB` and `NAD+MS` (Allgemeine Festlegungen §2.13). The check runs
+**before** the `transactionId` idempotency guard, so a spoofed request cannot
+consume the key and turn the legitimate order into a swallowed duplicate.
 
 ### §20b EnWG Netzzugangsplattform adapter
 
@@ -1283,7 +1322,7 @@ started with.
 | `command` | string | ✓ | Dotted command name: `<domain>.<prozess>.<aktion>` — e.g. `gpke.lieferbeginn.anmelden` |
 | `payload` | object | ✓ | Command-specific payload, e.g. `{"malo_id": "10001234558", "lieferbeginn_datum": "2026-10-01"}` |
 | `marktrolle` | string | – | Marktrolle override (`LF`, `NB`, `MSB`, …); required for multi-role commands |
-| `idempotency_key` | string | – | Stable UUID for retry safety; a random UUID is generated when omitted |
+| `idempotency_key` | string | – | Stable key for this business request. Supplied: a repeat replays the recorded response (24 h) and reuse for a different request is refused. Omitted: a random UUID is echoed back and no replay record is kept |
 
 #### `get_malo` / `get_partner` parameters
 
@@ -1457,18 +1496,33 @@ UNH+...
 | `unknown_pid` | PID found, no workflow registered — dead-lettered | accepted |
 | `no_pid` | The message type carries none by design (**CONTRL** only) | accepted |
 | `missing_pid` | A PID-bearing type arrived without one — dead-lettered | **rejected** |
+| `missing_party` | `NAD+MS` or `NAD+MR` absent — dead-lettered | **rejected** |
 | `parse_error` | Not parseable at all | **rejected** |
 
-`missing_pid` is a rejection because nothing can be routed without a PID and no
-APERAK can name the process — a silent `accepted: 1` would leave the sender no
-signal at all. CONTRL is the one message type whose AHB publishes no
-Prüfidentifikator, so it keeps `no_pid`.
+Both rejections are for the same reason one step apart: nothing can be routed
+without a PID, and Allgemeine Festlegungen V6.1d §2.13 identifies the *fachliche*
+sender and receiver in `NAD+MS`/`NAD+MR` DE 3035 "für alle EDI@Energy EDIFACT
+Nachrichten und -dateien einheitlich". The sender is the address of the answer
+and the APERAK; the receiver decides which of the operator's own MP-IDs — hence
+which Sparte and Marktrolle — was addressed. Substituting a blank produces a
+process that runs a real Frist and answers nobody.
+
+CONTRL is exempt from both: a UN/EDIFACT syntax acknowledgement carries neither
+a Prüfidentifikator nor a `NAD`, so it keeps `no_pid`. The AS4 door and
+`POST /edifact` classify with one shared function and cannot drift apart.
+
+A `routed` message can still fail to reach a process — the peer answered a closed
+process, or sent one with nothing to correlate on. That is normal traffic, logged
+but not recorded. The recorded case is a PID the router resolved with no dispatch
+arm behind it: the transport already acknowledged the message, so it is
+dead-lettered with `reason = "not_dispatchable"` — always a coverage bug on this
+side.
 
 The PID is read from `SG1 RFF+Z13` and `BGM` DE 1004, in the order the profile's
 `pid_source` declares. The AHBs put it in `RFF+Z13` and give DE 1004 as a
 *Dokumentennummer*, so reading only one location makes a conformant partner's
-message undetectable. Only a plausible 5-digit code is accepted from either, so
-a numeric Belegnummer cannot outrank the real PID.
+message undetectable. Only a plausible 5-digit code is accepted from either, so a
+numeric Belegnummer cannot outrank the real PID.
 
 #### DVGW gas transport
 
@@ -1532,7 +1586,7 @@ reports them as missed.
 > AS4 inbox deduplication already requires.
 
 **Self-addressed messages are held to the network's standard.** In a combined-role
-deployment (NB + MSB on one GLN) a large share of traffic never leaves the
+deployment (NB + MSB on one MP-ID) a large share of traffic never leaves the
 process. That path runs the same pre-send AHB conformance gate as the network
 path, refuses to skip a message of its own interchange that will not parse back,
 and visits every message rather than stopping at the first PID with no workflow
@@ -1551,7 +1605,7 @@ Complete the exchange through the ERP command API.
 
 This endpoint is the integration point between your ERP system and the MaKo
 process engine.  The ERP names the exact process command to trigger; the engine
-resolves all EDI-layer details (sender/receiver GLNs, PID, message reference)
+resolves all EDI-layer details (sender/receiver MP-IDs, PID, message reference)
 from internal state.
 
 ### Why not just send EDIFACT?
@@ -1592,12 +1646,14 @@ For multi-role commands, include `"marktrolle"` to disambiguate:
 **Required:** every command must carry an `Idempotency-Key` header. A missing or
 empty value is rejected with `422 missing_idempotency_key`.
 
-The key is echoed back on the response for correlation; it is not compared
-against earlier keys. Double-execution is prevented by a business-level guard
-that refuses a second `anmelden` while a process for the same business key is
-still active, answering `409 duplicate_process` with that process's id — treat
-that as success. See
-[ERP integration](@/docs/architecture/erp-integration.md#what-idempotency-key-does-and-what-it-does-not)
+The accepted response is stored under the key for 24 hours and replayed verbatim
+on a retry — same `202`, same `process_id`, no second dispatch. Reusing one key
+for a different command or payload is refused with `422
+idempotency_key_reuse`. Underneath it, a business-level guard refuses a second
+`anmelden` while a process for the same business key is still active — even
+under a fresh key — answering `409 duplicate_process` with that process's id;
+treat that as success. See
+[ERP integration](@/docs/architecture/erp-integration.md#what-idempotency-key-does)
 for the full contract, including how it differs from `409 invalid_state`.
 
 ### Marktrolle resolution
@@ -1647,7 +1703,7 @@ LF-licensed deployment from accidentally issuing NB commands, and vice versa.
 
 | Field | Source |
 |---|---|
-| `sender_mp_id` | Always our operator GLN — the primary `[[party]]` MP-ID (role-specific entries override per command) |
+| `sender_mp_id` | Always our operator MP-ID — the primary `[[party]]` MP-ID (role-specific entries override per command) |
 | `receiver_mp_id` | Resolved from the MaLo cache (`data_market_location_network_operators`) |
 | `pruefidentifikator` | Derived from command name (e.g. `gpke.lieferbeginn.anmelden` → 55001) |
 | `message_ref` | Generated by the engine (UUID); replay-stable across retries |
@@ -1762,7 +1818,7 @@ Commands listing two Marktrollen (`NB`/`MSB`, `BKV`/`ÜNB`) **always** require i
 ### ERP payload fields per command
 
 Only fields the ERP genuinely owns are listed here.
-GLNs resolved by the engine (sender, receiver) are intentionally absent.
+MP-IDs resolved by the engine (sender, receiver) are intentionally absent.
 
 | Command | Required ERP payload fields |
 |---------|-----------------------------|
@@ -1801,11 +1857,11 @@ GLNs resolved by the engine (sender, receiver) are intentionally absent.
   The ERP derives it from contract data; the engine does not know the previous LF.
 
 ² For WiM Gerätewechsel the primary key is the `melo_id` (Messlokation), not the MaLo.
-  The NB and MSB GLNs are resolved from the MeLo cache entry.
+  The NB and MSB MP-IDs are resolved from the MeLo cache entry.
 
-### Integrated operators (NB + MSB, same GLN)
+### Integrated operators (NB + MSB, same MP-ID)
 
-A Stadtwerke operating as both NB and MSB has **one GLN** in the
+A Stadtwerke operating as both NB and MSB has **one MP-ID** in the
 BDEW Marktstammdatenregister.  Start makod with `--marktrollen NB,MSB`.
 For multi-role commands, `marktrolle` selects the EDIFACT qualifier
 (`DDM` for NB, `MS` for MSB) and the correct workflow variant — it is a
@@ -1813,7 +1869,7 @@ For multi-role commands, `marktrolle` selects the EDIFACT qualifier
 
 #### In-process loopback for self-addressed outbox messages
 
-Several workflows emit outbox messages addressed to a co-located role's GLN
+Several workflows emit outbox messages addressed to a co-located role's MP-ID
 as part of their normal process flow:
 
 | Message | Workflow | Sender → Recipient |
@@ -1917,7 +1973,10 @@ curl -X POST http://localhost:8080/api/v1/commands \
 | `DELETE` | `/admin/partners/{mp_id}` | Remove a partner record |
 | `POST` | `/admin/partners/import` | Import from a raw PARTIN EDIFACT interchange |
 
-**`PUT /admin/partners/{mp_id}` request body:**
+**`PUT /admin/partners/{mp_id}` request body** — a flattened `PartnerRecord`.
+Only `mp_id` is required, and it must equal the path parameter; everything else
+defaults. `updated_at` is server-owned and ignored if sent.
+
 ```json
 {
   "mp_id": "9900000000001",
@@ -1935,11 +1994,30 @@ curl -X POST http://localhost:8080/api/v1/commands \
 **Response `200 OK`:**
 ```json
 {
-  "gln": "9900000000001",
+  "mp_id": "9900000000001",
   "display_name": "Stadtwerke Beispiel GmbH",
   "updated_at": "2026-06-17T10:00:00Z"
 }
 ```
+
+#### Delivery channels must be HTTPS
+
+Four different paths can set a partner's delivery address — the `--as4-partner`
+and `--maloid-partner` flags, this endpoint, a record discovered from the BDEW
+Verzeichnisdienst, and the `COM` segments of an inbound PARTIN. All four are
+held to the same rule: a channel `makod` **delivers to** (`AK`/`AS4` for the AS4
+inbox, `AW` for the API-Webdienste callback) must be an `https://` URL, with
+`localhost` exempt for development.
+
+An `AW` channel is where a `MaLoIdentResultPositive` is posted — the
+Marktlokation, its postal address and its NB/MSB assignment, all personal data
+of the Anschlussnutzer (DSGVO Art. 32).
+
+`PUT` and the flags **refuse** an offending record. A PARTIN import **drops the
+offending channel** and keeps the rest — a counterparty telling us where to send
+their messages is exactly what PARTIN is for, and discarding a whole record over
+one bad channel would lose legitimate contact updates. Every drop is logged with
+the MP-ID and the address.
 
 ### MaLo cache (`/admin/malo/`)
 
@@ -1974,6 +2052,22 @@ MSB → ESA status message. The renderer drives PID **21042**
 the SG15 `STS` 9015=Z21 / 4405=105 („beendet"), the SG15 `RFF+Z13`
 Prüfidentifikator, the SG15 `RFF+AGI` back-reference to the Bestellung and the
 SG15 `DTM+93` Vertragsende.
+
+### Dates on the wire
+
+`DTM+137` Dokumentendatum is DE 2379 **`303`** (`CCYYMMDDHHMMZZZ`) in every
+EDI@Energy AHB, with `[931]` fixing the zone to `+00` and `[494]` requiring the
+stamp to be the creation moment or earlier. Inside UTILMD `SG4` the
+Vorgangsdaten `92`, `93`, `76` and `157` are `303` too; only `154`
+(Annahmedatum) is `102` and `Z10` (Kündigungstermin) `106`.
+
+A command may hand the renderer a plain `YYYYMMDD` date: the builders normalise
+it to `CCYYMMDD0000+00`, and a value that already carries a zone passes through
+untouched. Two `edi-energy` guards hold the line — no `DTM+137` in `102`, and no
+`303` value without its zone.
+
+Inbound is deliberately more forgiving: a counterparty's `102` document date is
+parsed rather than rejected over a format code whose value is unambiguous.
 
 ### MSCONS use cases
 
@@ -2022,10 +2116,9 @@ segment substrings. A substring assertion confirms a segment the author thought
 of is present; profile validation confirms the message satisfies the rules the
 receiver applies.
 
-Messages with more than one `LIN`/`QTY` cycle are covered by `#[ignore]`d cases:
-the MSCONS profile models the AHB's SG5 (`NAD+DP`) and SG6 (`LOC`) as one group
-triggered by `LOC`, so a repeated cycle reads as out of order even when it
-conforms. Run them with `--include-ignored` to see it.
+Messages with more than one `LIN`/`QTY` cycle are checked on the same terms:
+the generated `DETAIL_GROUP_TRIGGERS` table rewinds the cursor on any nested
+group trigger, not just the outermost one.
 
 ---
 
@@ -2284,6 +2377,26 @@ that the process is up and its HTTP stack answers.
 Pointing both probes at a single endpoint that reports dependency state — the
 previous behaviour — turns a transient object-store outage into a restart loop.
 
+### The one failure readiness cannot fix
+
+A readiness failure removes the pod from the Service; it never restarts it. That
+is the right answer for a dependency outage and the wrong one for a **fenced
+writer**.
+
+SlateDB fences writers: a second process opening the same object-store path
+bumps the writer epoch and closes the older handle underneath its owner. On a
+local `--data-dir` an exclusive directory lock refuses the second start, but the
+cloud-backed deployment — `--object-store=s3|gcs|azure`, the production shape —
+has no such lock, and a rolling update overlaps two replicas by construction.
+A fenced instance keeps its listeners and fails every write.
+
+`makod` watches for that and treats it as a shutdown: it drains listeners,
+workers and the dead-letter buffer as it would on `SIGTERM`, logs `event store
+closed underneath the daemon`, and **exits non-zero** so the orchestrator
+recycles the container instead of leaving it Running and inert. If a genuine
+second writer holds the lease, the restart loop is loud and visible; if the
+fence was a transient double-start, the restart is the recovery.
+
 ### Worker liveness
 
 Readiness covers more than the store. Every background worker publishes a
@@ -2297,7 +2410,7 @@ heartbeat, and a watch that goes stale flips `/health/ready` to 503:
 | `erp-log-worker` | 120 s | Registered instead of the above when `--erp-webhook-url` is unset; ERP-targeted outbox entries accumulate |
 | `projection-worker:gpke-konfiguration` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
 | `projection-worker:gpke-supplier-change` | 5 × checkpoint interval (min 300 s) | Read models serve stale data |
-| `inbox-purge-worker` | 26 h | AS4 dedup entries accumulate — storage grows without bound |
+| `retention-purge-worker` | 26 h | AS4 dedup entries and `Idempotency-Key` records accumulate — storage grows without bound |
 
 The purge window is deliberately loose: the loop ticks daily, so a tighter
 threshold would flap on a slow purge over a large store. A stalled purge is the
@@ -2364,6 +2477,27 @@ error. The obligation is a property of the *interchange*, keyed purely on Sparte
 it is independent of which message types (UTILMD, INVOIC, MSCONS, ORDERS …) it
 contains.
 
+### Which of our MP-IDs signs an outbound ORDERS
+
+`NAD+MS` on an outbound message must be the MP-ID of the Marktrolle that owns
+the process — in the VIU configuration §2.13 mandates, that is a different code
+per role. The sender is resolved in three steps:
+
+1. `payload["sender"]`, when the emitting workflow names it outright.
+2. The Prüfidentifikator's sending Marktrolle, taken from the Kommunikation
+   columns of the BDEW *Anwendungsübersicht Prüfidentifikatoren* 4.0, narrowed
+   by `payload["sparte"]` where the PID is shared between Strom and Gas
+   (`17115`/`17116`/`17117` name the LF/NB in GPKE and the LFG/GNB in the AWH
+   Sperrprozesse Gas).
+3. The primary MP-ID — which is correct in a single-code deployment and a
+   **wrong sender identity** in any other, so it logs a warning naming the PID.
+
+`orders_sender_coverage` pins step 2 against the routed PID set: every ORDERS
+Prüfidentifikator makod routes either resolves a Marktrolle or is listed as
+exempt with a reason. Two exemptions stand — `17118`, whose sender is the
+*weiterer MSB* of GPKE Teil 3 rather than one of the Marktrollen `[[party]]`
+accepts, and `17301`, which the RB HKN-R sends and makod only receives.
+
 makod determines the interchange Sparte from the **recipient MP-ID** (UNB DE0010 —
 the own party the interchange is addressed to). Every `[[party]]` entry covers
 exactly one Sparte (BDEW §2.13), so `MpIdRegistry::sparte_of(recipient)` is
@@ -2374,17 +2508,18 @@ across both sectors — so a Gas NN-Rechnung (31002), MMM (31005) or MSB-Rechnun
 (31009) is only recognised as Gas via the recipient MP-ID.
 
 When the recipient is a sparte-neutral party or not one of our own MP-IDs, makod
-falls back to a conservative message-level heuristic (an unambiguous Gas-only PID
-such as UTILMD G 44xxx / INVOIC 31003/31007/31008/31010/31011, or a Gas
-UTILMD release track). INVOIC **31004** is deliberately absent from that list: the
-Stornorechnung is the Sparte-neutral universal Storno of any INVOIC (INVOIC AHB
-§3.1.2) and is resolved by recipient MP-ID like the other Sparte-agnostic PIDs,
-never forced to Gas. The CONTRL and its 6h escalation deadline are written in one
-transaction (`enqueue_outbox_with_deadlines`), so a crash can never queue the
-acknowledgement without its deadline. The outbox worker **discharges** that
-deadline once the CONTRL is delivered, so it only ever escalates when the
-acknowledgement genuinely did not go out. The CONTRL sender is the recipient
-MP-ID — the Sparte-correct own GLN, even in a combined Strom+Gas deployment.
+falls back to a conservative message-level heuristic: an unambiguous Gas-only PID
+(UTILMD G 44xxx, INVOIC 31003/31007/31008/31010/31011) or a Gas UTILMD release
+track. INVOIC **31004** is deliberately absent — the Stornorechnung is the
+Sparte-neutral universal Storno of any INVOIC (INVOIC AHB §3.1.2), so it resolves
+by recipient MP-ID and is never forced to Gas.
+
+The CONTRL and its 6 h escalation deadline are written in one transaction
+(`enqueue_outbox_with_deadlines`), so a crash cannot queue the acknowledgement
+without its deadline, and the outbox worker **discharges** the deadline on
+delivery — it escalates only when the CONTRL genuinely did not go out. Its sender
+is the recipient MP-ID, so a combined Strom+Gas deployment answers from the
+Sparte-correct own MP-ID.
 
 ---
 
@@ -2481,7 +2616,7 @@ curl -X PUT http://localhost:8080/admin/partners/9900000000001 \
   -H "Authorization: Bearer ${TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{
-    "gln": "9900000000001",
+    "mp_id": "9900000000001",
     "channels": [{"qualifier":"AK","address":"https://partner.example/as4/inbox"}]
   }'
 ```
@@ -2533,22 +2668,29 @@ Every significant operation carries a trace context:
 |---|---|---|
 | `makod_process_initiated_total` | `family` | Baseline for process volume |
 | `makod_process_completed_total` | `family`, `result` | `result != "accepted"` for NB-STP compliance |
-
-`family` is the domain prefix — `gpke`, `wim`, `geli-gas`, `wim-gas`,
-`gabi-gas`, `mabis`, `redispatch` — and carries the same value on both counters,
-so initiation and completion join on one label. `result` is `accepted`
-(process reached its terminal success state), `rejected` (negative APERAK),
-`timeout` (a regulatory window expired unanswered), or `cancelled` (permanent
-failure). Completions are counted as the ERP outbox drains each terminal event,
-which is the one point that sees every process ending regardless of family.
-An accepted APERAK is deliberately **not** a completion — it acknowledges that
-the interchange parsed, not that the process finished.
-
 | `makod_outbox_delivery_attempts_total` | `result` | `result = "transport_error"` spikes |
 | `makod_deadline_fired_total` | `family` | Baseline for deadline volume |
-| `makod_dead_letter_recorded_total` | `reason` | Any dead-letter = regulatory risk |
+| `makod_dead_letter_recorded_total` | `reason` | Any dead-letter = regulatory risk. `reason = "not_dispatchable"` is specifically a mako coverage bug: the router claimed the PID and no arm consumed it; `reason = "missing_interchange_party"` is a defect in the sender's message |
 | `makod_inbound_messages_total` | `pid`, `result` | `result = "error"` for unknown PIDs |
+| `makod_validation_failed_total` | `message_type`, `release` | A counterparty is sending messages that do not conform to the AHB |
 | **`makod_aperak_missed_total`** | `label` | **Alert when > 0** — an undelivered APERAK is a regulatory violation (APERAK AHB 1.0 §2.4.1 Strom / §2.3.1 Gas) |
+
+`family` is the domain prefix — `gpke`, `wim`, `geli-gas`, `wim-gas`,
+`gabi-gas`, `mabis`, `redispatch` — and carries the same value on the initiated
+and completed counters, so the two join on one label. `result` is `accepted`
+(terminal success), `rejected` (negative APERAK), `timeout` (a regulatory window
+expired unanswered) or `cancelled` (permanent failure). Completions are counted
+as the ERP outbox drains each terminal event, the one point that sees every
+process ending regardless of family. An accepted APERAK is **not** a completion —
+it acknowledges that the interchange parsed, not that the process finished.
+
+`makod_validation_failed_total` counts **inbound messages**, once each, at the
+ingest boundary — not adapter invocations, and not parse failures. Only about
+half the adapter families act on an AHB verdict; the rest are answer-PID adapters
+whose messages publish no Anwendungsfall, so counting inside the adapters would
+report nothing for whole families. A release with no registered profile is not
+counted either — there was no rule to break. A message that fails to *parse*
+becomes a dead letter, having neither a message type nor a release to label.
 
 `makod_aperak_missed_total` counts APERAK delivery windows that were **still
 registered when they came due**. The outbox worker discharges a window the
@@ -2558,14 +2700,29 @@ counter meaningful — the deadline scheduler selects on `due_at <= now`, so
 "fired after its due time" is true of every deadline it ever hands out and is
 not, on its own, evidence of anything.
 
-### AS4 inbound rate limiting
+### Inbound rate limiting
 
-The AS4 inbound endpoint (`/as4/inbox`) is protected by a **GCRA token-bucket rate limiter**:
-- Sustained: 100 requests/second
-- Burst: 50 requests  
-- Response on exhaustion: `HTTP 429 Too Many Requests` + `Retry-After: 1`
+Every port carries a **GCRA token-bucket rate limiter** keyed on the peer
+address: 100 requests/second sustained, burst 50, answering `HTTP 429 Too Many
+Requests` with `Retry-After: 1` when a peer's bucket is empty. Health routes are
+exempt — a throttled probe reads as a dead container.
 
-Protects the event store from capacity exhaustion by misconfigured or malicious counterparties (OWASP A05).
+The AS4 port (`:4080`) has its **own** bucket, separate from the one the REST
+API (`:8080`) and the API-Webdienste port (`:8090`) share. Behind a proxy every
+client arrives from the ingress address, so a single shared bucket would let an
+ERP batch on `:8080` throttle a trading partner's AS4 delivery — and that
+partner's retry schedule is what stands between the operator and a missed Frist.
+
+On top of the per-IP limit, the AS4 port applies a **per-sender** limit of
+50 req/s (burst 25), keyed on the `eb:PartyId` inside `eb:From`. That value is
+read before signature verification and is therefore spoofable; both limits
+always apply, so a spoofing sender still burns their own per-IP budget and a
+spoofed partner can at worst see extra `429`s, never extra capacity.
+
+Together these protect the event store from capacity exhaustion by a
+misconfigured or malicious counterparty (OWASP A05). The keys are socket peer
+addresses; `X-Forwarded-For` is deliberately not trusted, so a fronting load
+balancer must enforce its own per-client limits.
 
 ### Configuration
 

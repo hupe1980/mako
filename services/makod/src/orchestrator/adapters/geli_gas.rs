@@ -39,15 +39,7 @@ pub fn geli_gas_sperrung_nb_registry() -> AdapterRegistry<GeliGasSperrungNbWorkf
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // Marktlokation from the LOC segment (element 1, component 0).
             let location_id = mako_engine::types::MaLo::new(
@@ -204,15 +196,7 @@ pub fn geli_gas_registry() -> AdapterRegistry<GeliGasSupplierChangeWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(GasSupplierChangeCommand::ReceiveUtilmd {
                 pid,
@@ -296,15 +280,7 @@ pub fn geli_gas_partin_registry() -> AdapterRegistry<GeliGasPartinWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             Ok(GasKommunikationsdatenCommand::ReceivePartin {
                 pid,
                 sender: MarktpartnerCode::new(
@@ -570,15 +546,7 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let mut validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (mut validation_passed, validation_errors) = super::ahb_verdict(msg);
             // Vacuous-validation guard: warn if AHB profile not yet imported.
             if validation_passed {
                 let has_ahb_rules = edi_energy::Pruefidentifikator::new(pid.as_u32())
@@ -666,15 +634,7 @@ pub fn geli_gas_sperrprozesse_invoic_registry()
                     )
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             let invoice_ref = inv
                 .bgm()
                 .and_then(|b| b.document_id.as_deref())
@@ -718,7 +678,7 @@ pub fn geli_gas_sperrprozesse_invoic_registry()
 /// This is a **response adapter** used by the ingest dispatcher to continue
 /// the LFG-side process once the GNB responds to the Gas-Sperrauftrag.
 ///
-/// **Loopback use**: in an integrated GNB+LFG deployment (same GLN), the
+/// **Loopback use**: in an integrated GNB+LFG deployment (same MP-ID), the
 /// outbox ORDRSP 19116/19117 emitted by the GNB side loops back via the
 /// [`crate::ingest_dispatcher`] to complete the LFG process.
 #[must_use]
@@ -817,25 +777,43 @@ pub fn geli_gas_mscons_registry() -> AdapterRegistry<GeliGasMsconsWorkflow> {
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             let sender = mako_engine::types::MarktpartnerCode::new(
                 m.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
             );
             let message_ref = mako_engine::types::MessageRef::new(msg.message_ref());
+            // `SG5 NAD` carries the MaLo. Without it `edmd` refuses the event
+            // before it reaches either the interval parser or the PID 13007
+            // Brennwert branch, so the Gasbeschaffenheit this adapter already
+            // extracted never arrived either.
+            let location_id = mako_engine::types::MaLo::new(
+                m.delivery_points()
+                    .first()
+                    .and_then(|dp| {
+                        dp.time_series
+                            .iter()
+                            .find(|ts| ts.loc.qualifier == "172")
+                            .and_then(|ts| ts.loc.location_id.as_deref())
+                            .or(dp.nad.party_id.as_deref())
+                    })
+                    .unwrap_or(""),
+            );
+            let (reads, undated) = super::mscons_intervals(m);
+            if undated > 0 {
+                tracing::warn!(
+                    pid = pid.as_u32(),
+                    undated,
+                    "Gas MSCONS: readings skipped — no SG10 DTM+163/164 in format 303",
+                );
+            }
 
             Ok(GasMsconsDatenCommand::ReceiveMscons {
                 pid,
                 sender,
+                location_id,
                 message_ref,
+                reads,
                 validation_passed,
                 validation_errors,
                 brennwert_kwh_per_m3: extract_qty_z08(m),
@@ -925,15 +903,7 @@ pub fn geli_gas_stammdaten_registry()
                 });
             }
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // A Stammdatenanfrage **data-return** is an answer, not a change.
             // mako implements only the answering side of the G8–G10 round-trip,

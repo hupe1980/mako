@@ -87,7 +87,7 @@ impl ContrlAckService {
     ///   registers its 6h deadline (CONTRL AHB 1.0 §2.3.1) atomically.
     /// - `tenant_id`: the active tenant identifier.
     /// - `mp_id_registry`: the own-party registry, used to resolve the recipient
-    ///   MP-ID to its Sparte and to pick the CONTRL sender GLN.
+    ///   MP-ID to its Sparte and to pick the CONTRL sender MP-ID.
     #[must_use]
     pub fn new(
         outbox: Arc<SlateDbStore>,
@@ -120,7 +120,7 @@ impl ContrlAckService {
     /// bare UNH…UNT messages without a UNB envelope).  The CONTRL renderer treats
     /// an empty `interchange_ref` as absent.
     ///
-    /// `recipient_mp_id` is the UNB DE0010 receiver GLN — the own MP-ID the
+    /// `recipient_mp_id` is the UNB DE0010 receiver MP-ID — the own MP-ID the
     /// interchange was addressed to. It determines the Sparte (each own party is
     /// exactly one Sparte) and becomes the CONTRL sender. Pass
     /// `pi.header.receiver_id.as_ref()`.
@@ -129,7 +129,7 @@ impl ContrlAckService {
     /// - The interchange is not Gas (recipient MP-ID resolves to Strom, or — for a
     ///   sparte-neutral / unknown recipient — no message carries a Gas signal).
     /// - All messages are CONTRL (§2.2.2.2 exception: no CONTRL-on-CONTRL).
-    /// - No sender GLN can be extracted from any acknowledgeable message.
+    /// - No sender MP-ID can be extracted from any acknowledgeable message.
     ///
     /// `messages` should contain every successfully-parsed message from one
     /// UNB…UNZ interchange.  Syntax-error messages (parse failures) are not
@@ -182,11 +182,11 @@ impl ContrlAckService {
             return Ok(());
         }
 
-        // Extract sender GLN (the CONTRL recipient) from the first message with one.
+        // Extract sender MP-ID (the CONTRL recipient) from the first message with one.
         let Some(sender_mp_id) = ackable.iter().find_map(|m| sender_mp_id(m)) else {
             tracing::warn!(
                 message_count = ackable.len(),
-                "CONTRL ack: Gas interchange received but no sender GLN found \
+                "CONTRL ack: Gas interchange received but no sender MP-ID found \
                  in any message — Empfangsbestätigung NOT enqueued (regulatory gap)"
             );
             return Ok(());
@@ -236,7 +236,7 @@ impl ContrlAckService {
         recipient_mp_id: &str,
     ) -> Result<(), EngineError> {
         // CONTRL sender = the own MP-ID the interchange was addressed to (the
-        // Sparte-correct GLN, even in a multi-Sparte deployment). Fall back to the
+        // Sparte-correct MP-ID, even in a multi-Sparte deployment). Fall back to the
         // primary MP-ID when the recipient was resolved only by the heuristic.
         let contrl_sender: &str = if self.mp_id_registry.is_own_mp_id(recipient_mp_id) {
             recipient_mp_id
@@ -426,7 +426,7 @@ fn is_strom_only_pid(pid: u32) -> bool {
     )
 }
 
-/// Extract the NAD+MS sender GLN from a parsed EDIFACT message.
+/// Extract the NAD+MS sender MP-ID from a parsed EDIFACT message.
 ///
 /// Returns `None` when the message has no NAD section (e.g. CONTRL) or when
 /// the party_id field is absent or empty.

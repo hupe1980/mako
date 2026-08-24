@@ -812,12 +812,13 @@ fn the_configured_reference_date_reaches_validation() {
     use edi_energy::{EdiEnergyMessage, ParseConfig, Parser};
     use time::macros::date;
 
-    // MSCONS 2.4c: valid_from 2025-10-01, valid_until 2026-09-30.
+    // MSCONS 2.4c as carried by AHB 3.1g: published 01.10.2025, so its
+    // Anwendungszeitpunkt is 2026-04-01 and it runs to 2026-09-30.
     let wire = b"UNH+1+MSCONS:D:04B:UN:2.4c'BGM+7+13002+9'UNT+3+1'";
 
     // Inside the profile's window: the profile resolves and validation runs.
     let inside =
-        Parser::with_config(ParseConfig::default().with_reference_date(date!(2026 - 01 - 15)))
+        Parser::with_config(ParseConfig::default().with_reference_date(date!(2026 - 06 - 15)))
             .parse(wire)
             .expect("parse");
     assert!(

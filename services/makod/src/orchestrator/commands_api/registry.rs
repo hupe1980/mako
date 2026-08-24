@@ -275,8 +275,8 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // via these commands.  `GpkeAbrechnungWorkflow` spawns in invoicer role so
     // the inbound REMADV from the LF can be routed back to the correct process.
     //
-    // Payload: { "invoice_ref": "<rechnungsnummer>", "sender_mp_id": "<GLN>",
-    //            "recipient_mp_id": "<GLN>", "pid": <PID>, "sparte": "STROM"|"GAS",
+    // Payload: { "invoice_ref": "<rechnungsnummer>", "sender_mp_id": "<MP-ID>",
+    //            "recipient_mp_id": "<MP-ID>", "pid": <PID>, "sparte": "STROM"|"GAS",
     //            "rechnung": <BO4E Rechnung JSON> }
     //
     // `invoice_ref` is the invoice number, not a UUID: it is the business key the
@@ -797,7 +797,7 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // no Gas semantics.
     //
     // Payload (issuer side): { "invoice_ref": "<rechnungsnummer>",
-    //   "sender_mp_id": "<NB GLN>", "recipient_mp_id": "<LF GLN>",
+    //   "sender_mp_id": "<NB MP-ID>", "recipient_mp_id": "<LF MP-ID>",
     //   "pid": 31011, "sparte": "STROM" | "GAS", "rechnung": <BO4E Rechnung JSON> }
     CommandDescriptor {
         name: "invoic.sonstige-leistung.stellen",

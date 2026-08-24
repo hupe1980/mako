@@ -25,9 +25,15 @@
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
-    types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
+    types::{MaLo, MarktpartnerCode, MessageRef, MeteredInterval, Pruefidentifikator},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
+
+/// The empty MaLo, for replaying a stream recorded before the location was
+/// carried.
+fn no_location() -> MaLo {
+    MaLo::new("")
+}
 
 // ── PID set ───────────────────────────────────────────────────────────────────
 
@@ -58,8 +64,17 @@ pub struct GasMsconsDatenData {
     pub pruefidentifikator: Pruefidentifikator,
     /// GLN of the NB or MSB sender.
     pub sender: MarktpartnerCode,
+    /// MaLo the delivery is for.
+    ///
+    /// Defaulted to an empty MaLo so a stream written before the location was
+    /// carried still replays — such a process genuinely recorded none.
+    #[serde(default = "no_location")]
+    pub location_id: MaLo,
     /// EDIFACT message reference.
     pub message_ref: MessageRef,
+    /// The readings the delivery carried.
+    #[serde(default)]
+    pub reads: Vec<MeteredInterval>,
     /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only).
     ///
     /// Extracted from `QTY+Z08` in the EDIFACT MSCONS interchange.
@@ -96,8 +111,14 @@ pub enum GasMsconsDatenEvent {
         pruefidentifikator: Pruefidentifikator,
         /// GLN of the sending NB or MSB.
         sender: MarktpartnerCode,
+        /// MaLo the delivery is for.
+        #[serde(default = "no_location")]
+        location_id: MaLo,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The readings the delivery carried.
+        #[serde(default)]
+        reads: Vec<MeteredInterval>,
         /// Abrechnungsbrennwert in kWh/m³ (PID 13007 only, from `QTY+Z08`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         brennwert_kwh_per_m3: Option<String>,
@@ -185,8 +206,12 @@ pub enum GasMsconsDatenCommand {
         pid: Pruefidentifikator,
         /// GLN of the NB or MSB sender.
         sender: MarktpartnerCode,
+        /// MaLo the delivery is for, from `SG5 NAD`.
+        location_id: MaLo,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The decoded `SG9`/`SG10` readings the message carried.
+        reads: Vec<MeteredInterval>,
         /// `true` if AHB validation passed.
         validation_passed: bool,
         /// Human-readable validation errors (if any).
@@ -208,6 +233,46 @@ pub enum GasMsconsDatenCommand {
 
 impl CommandPayload for GasMsconsDatenCommand {}
 
+/// Build the `ProcessCompleted` payload `edmd` consumes.
+///
+/// Same key set as the Strom half in `mako_gpke::messwerte`, plus the
+/// Gasbeschaffenheit factors PID 13007 carries. `malo_id` is unconditional:
+/// `edmd` refuses an event without one before it reaches either the interval
+/// parser or the Brennwert branch, so both depend on it.
+#[allow(clippy::too_many_arguments)]
+fn erp_payload(
+    pid: Pruefidentifikator,
+    sender: &MarktpartnerCode,
+    location_id: &MaLo,
+    message_ref: &MessageRef,
+    reads: &[MeteredInterval],
+    brennwert_kwh_per_m3: Option<&str>,
+    zustandszahl: Option<&str>,
+    gasqualitaet: Option<&str>,
+) -> serde_json::Value {
+    serde_json::json!({
+        "pid": pid.as_u32(),
+        "malo_id": location_id.as_str(),
+        "sender": sender.as_str(),
+        "message_ref": message_ref.as_str(),
+        "sparte": "GAS",
+        "brennwert_kwh_per_m3": brennwert_kwh_per_m3,
+        "zustandszahl": zustandszahl,
+        "gasqualitaet": gasqualitaet,
+        "reads": reads
+            .iter()
+            .map(|r| serde_json::json!({
+                "dtm_from": r.dtm_from,
+                "dtm_to": r.dtm_to,
+                "quantity_kwh": r.quantity,
+                "quality": r.quality(),
+                "obis_code": r.obis_code,
+                "melo_id": r.melo_id,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
+
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GeLi Gas MSCONS data delivery workflow.
@@ -227,6 +292,8 @@ impl Workflow for GeliGasMsconsWorkflow {
             GasMsconsDatenEvent::MsconsDatenErhalten {
                 pruefidentifikator,
                 sender,
+                location_id,
+                reads,
                 message_ref,
                 brennwert_kwh_per_m3,
                 zustandszahl,
@@ -236,6 +303,8 @@ impl Workflow for GeliGasMsconsWorkflow {
                     GasMsconsDatenState::DatenErhalten(GasMsconsDatenData {
                         pruefidentifikator: *pruefidentifikator,
                         sender: sender.clone(),
+                        location_id: location_id.clone(),
+                        reads: reads.clone(),
                         message_ref: message_ref.clone(),
                         brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
                         zustandszahl: zustandszahl.clone(),
@@ -268,7 +337,9 @@ impl Workflow for GeliGasMsconsWorkflow {
             GasMsconsDatenCommand::ReceiveMscons {
                 pid,
                 sender,
+                location_id,
                 message_ref,
+                reads,
                 validation_passed,
                 validation_errors,
                 brennwert_kwh_per_m3,
@@ -283,9 +354,21 @@ impl Workflow for GeliGasMsconsWorkflow {
                 if !matches!(state, GasMsconsDatenState::New) {
                     return Ok(WorkflowOutput::events(vec![]));
                 }
+                let erp_payload = erp_payload(
+                    pid,
+                    &sender,
+                    &location_id,
+                    &message_ref,
+                    &reads,
+                    brennwert_kwh_per_m3.as_deref(),
+                    zustandszahl.as_deref(),
+                    gasqualitaet.as_deref(),
+                );
                 let erhalten_event = GasMsconsDatenEvent::MsconsDatenErhalten {
                     pruefidentifikator: pid,
                     sender,
+                    location_id,
+                    reads,
                     message_ref: message_ref.clone(),
                     brennwert_kwh_per_m3: brennwert_kwh_per_m3.clone(),
                     zustandszahl: zustandszahl.clone(),
@@ -295,21 +378,12 @@ impl Workflow for GeliGasMsconsWorkflow {
                 let outbox = if validation_passed {
                     events.push(GasMsconsDatenEvent::ValidationPassed { message_ref });
                     // Notify `edmd` that validated Gas MSCONS data is ready.
-                    // For PID 13007 the payload carries Brennwert and Zustandszahl
-                    // so `edmd` can update `meter_billing_periods` directly.
-                    vec![
-                        PendingOutbox::new(
-                            "ProcessCompleted",
-                            "",
-                            serde_json::json!({
-                                "pid": pid.as_u32(),
-                                "brennwert_kwh_per_m3": brennwert_kwh_per_m3,
-                                "zustandszahl": zustandszahl,
-                                "gasqualitaet": gasqualitaet,
-                            }),
-                        )
-                        .caused_by(1),
-                    ]
+                    // The payload carries the MaLo, the readings, and — for PID
+                    // 13007 — Brennwert and Zustandszahl. The MaLo is what
+                    // makes the rest reachable: `edmd` refuses an event without
+                    // one before it looks at either, so the Brennwert this
+                    // workflow already extracted never arrived either.
+                    vec![PendingOutbox::new("ProcessCompleted", "", erp_payload).caused_by(1)]
                 } else {
                     events.push(GasMsconsDatenEvent::ValidationFailed {
                         reason: validation_errors.join("; "),

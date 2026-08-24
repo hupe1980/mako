@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "message_type": "REMADV",
-  "release": "2.9f",
-  "source_document": "REMADV AHB 2.9f vom 01.04.2026 — SCAFFOLD: verify against BDEW publication before production use",
+  "release": "2.9e",
+  "source_document": "REMADV AHB, wire release 2.9e (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 33001,
@@ -64,7 +64,7 @@
           "group_id": "SG5",
           "tag": "MOA",
           "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5 per MIG; AHB requirement unverified — O for safety"
+          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
         }
       ]
     },
@@ -128,7 +128,7 @@
           "group_id": "SG5",
           "tag": "MOA",
           "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5; AHB requirement unverified — O for safety"
+          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
         }
       ]
     },
@@ -191,7 +191,7 @@
           "group_id": "SG5",
           "tag": "MOA",
           "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5; AHB requirement unverified — O for safety"
+          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
         }
       ]
     },
@@ -254,11 +254,9 @@
           "group_id": "SG5",
           "tag": "MOA",
           "requirement": "O",
-          "_description": "MIG: MOA is mandatory in SG5; AHB requirement unverified — O for safety"
+          "_description": "MIG: MOA is mandatory in SG5 per MIG 1.0b; AHB requirement unverified - O for safety"
         }
       ]
     }
-  ],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  ]
 }

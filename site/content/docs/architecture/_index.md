@@ -589,7 +589,7 @@ sequenceDiagram
 transport entirely.  `BdewAs4Sender` renders the EDIFACT bytes, re-parses
 them via `Platform::parse_interchange`, and passes each message to
 `EdifactIngestDispatcher::dispatch` for in-process delivery to the correct
-workflow.  See [Integrated operators](@/docs/services/makod.md#integrated-operators-nb-msb-same-gln)
+workflow.  See [Integrated operators](@/docs/services/makod.md#integrated-operators-nb-msb-same-mp-id)
 for the full dispatch table and configuration notes.
 
 ### ERP CloudEvents delivery
@@ -645,7 +645,7 @@ makod (binary)
 │
 └── wires EdifactIngestDispatcher
          ├── called by: AS4 inbound (as4_ingest), REST ingest (edifact_api)
-         └── called by: AS4 sender loopback (BdewAs4Sender, recipient == own GLN)
+         └── called by: AS4 sender loopback (BdewAs4Sender, recipient == own MP-ID)
 ```
 
 `*` PIDs 44022–44024 route by **which side of the exchange** the deployment is

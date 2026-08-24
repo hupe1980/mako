@@ -33,8 +33,8 @@
 //! [`EngineModule::profile_requirements`] method.  For each requirement it checks that the
 //! caller-supplied validation function (see
 //! [`EngineBuilder::with_profile_validator`]) confirms at least one active
-//! profile exists.  If not, `build` panics with an actionable error message —
-//! exactly like `configure()` used to, but without the `edi-energy` import.
+//! profile exists.  If not, `build` panics with an actionable error message.
+//! The check carries no `edi-energy` import: the caller supplies the validator.
 //!
 //! [`EngineModule::profile_requirements`]: crate::builder::EngineModule::profile_requirements
 //! [`EngineBuilder::build`]: crate::builder::EngineBuilder::build

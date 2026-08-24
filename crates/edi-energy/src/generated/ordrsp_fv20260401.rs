@@ -131,7 +131,7 @@ static CODES_1082: &[&str] = &["E_0254", "E_0256", "E_0257"];
 static CODES_1153: &[&str] = &["ACW", "ON", "TN", "Z13"];
 static CODES_2005: &[&str] = &["137", "163", "164", "203", "469", "472"];
 static CODES_3035: &[&str] = &["MR", "MS", "VY", "Z22"];
-static CODES_4451: &[&str] = &["AAP", "ABO", "Z27", "Z28", "Z33"];
+static CODES_4451: &[&str] = &["AAP", "ABO", "Z27", "Z28"];
 static CODES_6343: &[&str] = &["11"];
 static CODES_7081: &[&str] = &["Z01", "Z02", "Z03"];
 
@@ -172,9 +172,9 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
 // Cached in a LazyLock so construction happens once per profile.
-static DIRECTORY_VALIDATOR_ORDRSP_1_4C: LazyLock<DirectoryValidator> = LazyLock::new(|| {
+static DIRECTORY_VALIDATOR_ORDRSP_1_4B: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
-        "EDI@Energy-ORDRSP-1.4c",
+        "EDI@Energy-ORDRSP-1.4b",
         segment_lookup,
         is_code_valid,
         suggest_code,
@@ -184,7 +184,7 @@ static DIRECTORY_VALIDATOR_ORDRSP_1_4C: LazyLock<DirectoryValidator> = LazyLock:
 });
 
 pub(crate) fn directory_validator() -> &'static DirectoryValidator {
-    &DIRECTORY_VALIDATOR_ORDRSP_1_4C
+    &DIRECTORY_VALIDATOR_ORDRSP_1_4B
 }
 
 fn rule_unh_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
@@ -359,7 +359,7 @@ fn rule_group_sg1_rff_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by RFF occurs {count} times; maximum is 9_999"),
             )
-            .with_rule_id("MIG-ORDRSP-MIG-1.4c-GROUP-SG1-RFF-CARD-MAX")
+            .with_rule_id("MIG-ORDRSP-MIG-1.4b-GROUP-SG1-RFF-CARD-MAX")
             .with_segment("RFF".to_owned()),
         );
     }
@@ -380,7 +380,7 @@ fn rule_group_sg3_nad_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by NAD occurs {count} times; maximum is 99"),
             )
-            .with_rule_id("MIG-ORDRSP-MIG-1.4c-GROUP-SG3-NAD-CARD-MAX")
+            .with_rule_id("MIG-ORDRSP-MIG-1.4b-GROUP-SG3-NAD-CARD-MAX")
             .with_segment("NAD".to_owned()),
         );
     }
@@ -401,7 +401,7 @@ fn rule_group_sg27_lin_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by LIN occurs {count} times; maximum is 200_000"),
             )
-            .with_rule_id("MIG-ORDRSP-MIG-1.4c-GROUP-SG27-LIN-CARD-MAX")
+            .with_rule_id("MIG-ORDRSP-MIG-1.4b-GROUP-SG27-LIN-CARD-MAX")
             .with_segment("LIN".to_owned()),
         );
     }
@@ -421,7 +421,7 @@ fn rule_group_sg1_rff_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by RFF occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-ORDRSP-MIG-1.4c-GROUP-SG1-RFF-CARD-MIN")
+            .with_rule_id("MIG-ORDRSP-MIG-1.4b-GROUP-SG1-RFF-CARD-MIN")
             .with_segment("RFF".to_owned()),
         );
     }
@@ -441,7 +441,7 @@ fn rule_group_sg3_nad_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by NAD occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-ORDRSP-MIG-1.4c-GROUP-SG3-NAD-CARD-MIN")
+            .with_rule_id("MIG-ORDRSP-MIG-1.4b-GROUP-SG3-NAD-CARD-MIN")
             .with_segment("NAD".to_owned()),
         );
     }
@@ -458,6 +458,8 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     ];
     /// Detail segment ordering (after UNS+D).
     const EXPECTED_DETAIL_ORDER: &[&str] = &["MOA", "UNT"];
+    /// Tags that trigger a repeatable segment group in the detail section.
+    const DETAIL_GROUP_TRIGGERS: &[&str] = &["RFF", "AJT", "NAD", "CTA", "CUX", "LIN"];
 
     /// Strict order check for the header section (no group repetition expected).
     fn check_header_section(
@@ -486,22 +488,27 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
     /// Group-trigger-aware order check for the detail section (post-UNS).
     ///
-    /// When the first tag in `expected` is seen again after the cursor has
-    /// already advanced, this indicates a new group-repetition occurrence
-    /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset
-    /// to that position instead of reporting an ordering violation.
+    /// Any tag that triggers a segment group may legitimately step the cursor
+    /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`
+    /// inside SG9, so the second reading of a line item returns from DTM to
+    /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —
+    /// rejected every multi-interval MSCONS, which is every Lastgang there is.
     fn check_detail_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],
         rule_id: &str,
         issues: &mut Vec<ValidationIssue>,
     ) {
-        let group_trigger = expected.first().copied().unwrap_or("");
         let mut cursor: usize = 0;
         for seg in segs {
-            // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.
-            if cursor > 0 && seg.tag == group_trigger {
-                cursor = 0;
+            // A group trigger seen at or before the cursor opens a new
+            // occurrence of that group; rewind to it.
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+                if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
+                    if pos <= cursor {
+                        cursor = pos;
+                    }
+                }
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
@@ -527,22 +534,22 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     check_header_section(
         header_segs,
         EXPECTED_HEADER_ORDER,
-        "MIG-ORDRSP-MIG-1.4c-ORDER",
+        "MIG-ORDRSP-MIG-1.4b-ORDER",
         issues,
     );
     check_detail_section(
         detail_segs,
         EXPECTED_DETAIL_ORDER,
-        "MIG-ORDRSP-MIG-1.4c-ORDER",
+        "MIG-ORDRSP-MIG-1.4b-ORDER",
         issues,
     );
 }
 
 static MIG_ORDRSP_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-MIG-1.4c")
+        ProfileRulePack::new("ORDRSP-MIG-1.4b")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_stateless_rule_fn(rule_unh_mandatory)
             .with_stateless_rule_fn(rule_bgm_mandatory)
             .with_stateless_rule_fn(rule_dtm_mandatory)
@@ -687,9 +694,9 @@ fn rule_ahb_19006_dtm_cond_1(
 
 static AHB_19001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19001")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19001")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19001-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -790,9 +797,9 @@ fn ahb_19001_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19002")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19002")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19002-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -873,9 +880,9 @@ fn ahb_19002_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19003")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19003")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19003-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -936,9 +943,9 @@ fn ahb_19003_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19004")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19004")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19004-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -999,9 +1006,9 @@ fn ahb_19004_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19005")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19005")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19005-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1094,9 +1101,9 @@ fn ahb_19005_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19006")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19006")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19006-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1179,9 +1186,9 @@ fn ahb_19006_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19007_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19007")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19007")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19007-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1252,9 +1259,9 @@ fn ahb_19007_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19009")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19009")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19009-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1325,9 +1332,9 @@ fn ahb_19009_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19010_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19010")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19010")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19010-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1398,9 +1405,9 @@ fn ahb_19010_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19011")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19011")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19011-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1481,9 +1488,9 @@ fn ahb_19011_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19012_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19012")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19012")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19012-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1554,9 +1561,9 @@ fn ahb_19012_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19013_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19013")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19013")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19013-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1617,9 +1624,9 @@ fn ahb_19013_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19014_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19014")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19014")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19014-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1680,9 +1687,9 @@ fn ahb_19014_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19015_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19015")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19015")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19015-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1743,9 +1750,9 @@ fn ahb_19015_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19016_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19016")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19016")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19016-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1806,9 +1813,9 @@ fn ahb_19016_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19101_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19101")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19101")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19101-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1869,9 +1876,9 @@ fn ahb_19101_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19102_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19102")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19102")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19102-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1942,9 +1949,9 @@ fn ahb_19102_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19103_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19103")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19103")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19103-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2015,9 +2022,9 @@ fn ahb_19103_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19104_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19104")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19104")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19104-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2098,9 +2105,9 @@ fn ahb_19104_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19110_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19110")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19110")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19110-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2171,9 +2178,9 @@ fn ahb_19110_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19114_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19114")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19114")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19114-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2264,9 +2271,9 @@ fn ahb_19114_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19115_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19115")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19115")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19115-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2347,9 +2354,9 @@ fn ahb_19115_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19116_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19116")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19116")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19116-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2450,9 +2457,9 @@ fn ahb_19116_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19117_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19117")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19117")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19117-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2513,9 +2520,9 @@ fn ahb_19117_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19118_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19118")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19118")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19118-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2576,9 +2583,9 @@ fn ahb_19118_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19119_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19119")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19119")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19119-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2639,9 +2646,9 @@ fn ahb_19119_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19120_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19120")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19120")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19120-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2712,9 +2719,9 @@ fn ahb_19120_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19121_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19121")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19121")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19121-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2785,9 +2792,9 @@ fn ahb_19121_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19123_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19123")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19123")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19123-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2858,9 +2865,9 @@ fn ahb_19123_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19124_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19124")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19124")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19124-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2931,9 +2938,9 @@ fn ahb_19124_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19127_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19127")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19127")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19127-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3004,9 +3011,9 @@ fn ahb_19127_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19128_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19128")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19128")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19128-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3067,9 +3074,9 @@ fn ahb_19128_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19129_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19129")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19129")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19129-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3130,9 +3137,9 @@ fn ahb_19129_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19130_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19130")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19130")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19130-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3203,9 +3210,9 @@ fn ahb_19130_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19131_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19131")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19131")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19131-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3276,9 +3283,9 @@ fn ahb_19131_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19132_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19132")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19132")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19132-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3349,9 +3356,9 @@ fn ahb_19132_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19133_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19133")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19133")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19133-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3422,9 +3429,9 @@ fn ahb_19133_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19204_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19204")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19204")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19204-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3485,9 +3492,9 @@ fn ahb_19204_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19301_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19301")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19301")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19301-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3578,9 +3585,9 @@ fn ahb_19301_pack() -> Arc<ProfileRulePack> {
 
 static AHB_19302_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("ORDRSP-AHB-1.4c-19302")
+        ProfileRulePack::new("ORDRSP-AHB-1.4b-19302")
             .for_message_type("ORDRSP")
-            .for_release("1.4c")
+            .for_release("1.4b")
             .with_named_stateless_rule_fn("AHB-19302-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -3669,10 +3676,10 @@ fn ahb_19302_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_19302_PACK)
 }
 
-static AHB_ALL_PACK_ORDRSP_1_4C: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    let pack = ProfileRulePack::new("ORDRSP-AHB-1.4c-ALL")
+static AHB_ALL_PACK_ORDRSP_1_4B: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    let pack = ProfileRulePack::new("ORDRSP-AHB-1.4b-ALL")
         .for_message_type("ORDRSP")
-        .for_release("1.4c");
+        .for_release("1.4b");
     let pack = pack
         .merge_with_override(ahb_19001_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
@@ -3838,7 +3845,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(19204) => ahb_19204_pack(),
             Some(19301) => ahb_19301_pack(),
             Some(19302) => ahb_19302_pack(),
-            None => Arc::clone(&AHB_ALL_PACK_ORDRSP_1_4C),
+            None => Arc::clone(&AHB_ALL_PACK_ORDRSP_1_4B),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("ORDRSP")
                 .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
@@ -3850,7 +3857,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
         }
 }
 
-static RELEASE_ORDRSP_FV20260401: LazyLock<Release> = LazyLock::new(|| Release::new("1.4c"));
+static RELEASE_ORDRSP_FV20260401: LazyLock<Release> = LazyLock::new(|| Release::new("1.4b"));
 
 pub(crate) struct OrdrspFv20260401Profile;
 
@@ -3865,13 +3872,13 @@ impl Profile for OrdrspFv20260401Profile {
         Some(::time::macros::date!(2026 - 04 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        None
+        Some(::time::macros::date!(2026 - 09 - 30))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("1.4c")
+        Some("1.4b")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("ORDRSP MIG 1.4c, Stand 01.04.2026")
+        Some("ORDRSP MIG 1.4b, Publikationsdatum 01.10.2025")
     }
     fn pid_source(&self) -> crate::registry::PidSource {
         crate::registry::PidSource::RffZ13

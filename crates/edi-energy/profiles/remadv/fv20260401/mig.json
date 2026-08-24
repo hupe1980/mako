@@ -1,8 +1,9 @@
 {
   "schema_version": 1,
   "message_type": "REMADV",
-  "release": "2.9f",
+  "release": "2.9e",
   "valid_from": "2026-04-01",
+  "valid_until": "2026-09-30",
   "ordering_hint": [
     "UNH",
     "BGM",
@@ -573,6 +574,7 @@
       ]
     }
   ],
-  "ahb_revision": "1.0",
-  "source_document": "REMADV MIG 2.9e / AHB 2.9f, Stand 01.04.2026 — SCAFFOLD: verify against BDEW publication before production use"
+  "ahb_revision": "2.9e",
+  "source_document": "REMADV MIG 2.9e, Publikationsdatum 01.10.2025",
+  "publikationsdatum": "2025-10-01"
 }

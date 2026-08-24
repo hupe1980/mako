@@ -83,20 +83,8 @@ pub mod nomination;
 /// GaBi Gas Allocation workflow — ALOCAT receive-and-record (PIDs 70001–70023).
 pub mod allocation;
 
-/// GaBi Gas SCHEDL workflow — day-ahead transport schedule receive-and-record (PID 90031).
-pub mod schedl;
-
-/// GaBi Gas IMBNOT workflow — imbalance notification receive-and-record (PID 90041).
-pub mod imbnot;
-
 /// GaBi Gas MMM Allokationsliste Gas — Mehr-/Mindermengen data delivery (MSCONS 13013).
 pub mod mmma;
-
-/// GaBi Gas TRANOT workflow — transport notification receive-and-record (PID 90051).
-pub mod tranot;
-
-/// GaBi Gas DELORD/DELRES workflow — delivery order and response (PIDs 90061/90062).
-pub mod delord;
 
 // ── Domain re-exports ─────────────────────────────────────────────────────────
 
@@ -104,8 +92,6 @@ pub use domain::{
     Bilanzkreis,
     DeliveryPoint,
     DeliveryPointDirection,
-    DvgwFormatVersion,
-    DvgwMessageType,
     GasBeschaffenheit,
     GasBeschaffenheitValidationError,
     GasDay,
@@ -117,8 +103,6 @@ pub use domain::{
     NominationQuantity,
     // CloudEvent type constants (de.gabi.*)
     cloud_events as gabi_cloud_events,
-    // DVGW format versions
-    dvgw_versions,
 };
 pub use portfolio::{ConservationViolation, GasMarketRole, GasPortfolioBalance, PortfolioPosition};
 
@@ -126,15 +110,6 @@ pub use allocation::{
     ALLOCATION_PIDS, AllocationCommand, AllocationData, AllocationEvent, AllocationState,
     AllocationType, AllocationVersion, FINAL_ALOCAT_DEADLINE_LABEL, GaBiGasAllocationWorkflow,
     WORKFLOW_NAME as ALLOCATION_WORKFLOW_NAME,
-};
-pub use delord::{
-    DELIVERY_ORDER_PIDS, DELORD_PID, DELRES_DEADLINE_LABEL, DELRES_PID, DeliveryOrderCommand,
-    DeliveryOrderData, DeliveryOrderEvent, DeliveryOrderState, DelresStatus,
-    GaBiGasDeliveryOrderWorkflow, WORKFLOW_NAME as DELIVERY_ORDER_WORKFLOW_NAME,
-};
-pub use imbnot::{
-    GaBiGasImbalanceWorkflow, IMBNOT_PID, IMBNOT_PIDS, ImbalanceCommand, ImbalanceData,
-    ImbalanceDirection, ImbalanceEvent, ImbalanceState, WORKFLOW_NAME as IMBNOT_WORKFLOW_NAME,
 };
 pub use invoic::{
     COMDIS_RESUME_PATH as INVOIC_COMDIS_RESUME_PATH, GABI_GAS_COMDIS_ABLEHNUNG_PID,
@@ -152,15 +127,6 @@ pub use nomination::{
     GaBiGasNominationWorkflow, NOMINATION_PIDS, NOMINT_PIDS, NOMRES_DEADLINE_LABEL, NOMRES_PIDS,
     NominationCommand, NominationCounterparty, NominationData, NominationEvent, NominationState,
     NomresAcceptance, WORKFLOW_NAME as NOMINATION_WORKFLOW_NAME,
-};
-pub use schedl::{
-    GaBiGasSchedlWorkflow, SCHEDL_PID, SCHEDL_PIDS, SchedlCommand, SchedlData, SchedlEvent,
-    SchedlState, WORKFLOW_NAME as SCHEDL_WORKFLOW_NAME,
-};
-pub use tranot::{
-    GaBiGasTransportNotificationWorkflow, TRANOT_PID, TRANOT_PIDS, TransportNotificationCommand,
-    TransportNotificationData, TransportNotificationEvent, TransportNotificationState,
-    TransportNotificationType, WORKFLOW_NAME as TRANOT_WORKFLOW_NAME,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
@@ -184,9 +150,11 @@ pub use tranot::{
 /// - PIDs 70001–70023 → `"gabi-gas-allocation"` (ALOCAT)
 /// - PIDs 70030–70039 → `"gabi-gas-nomination"` (NOMINT / NOMRES)
 ///
-/// The SCHEDL, IMBNOT, TRANOT and DELORD/DELRES workflows are placeholders:
-/// `dvgw-edi` does not parse those formats, so nothing routes to them and their
-/// ingest arm returns `Skipped`. See `ROADMAP.md`.
+/// The DVGW formats this crate does **not** cover — SCHEDL, IMBNOT, TRANOT,
+/// DELORD/DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and TSIMSG — have no workflow
+/// and no Prüfidentifikator here. `dvgw-edi` cannot parse them, so a workflow
+/// for one would be unreachable and its registration would overstate what the
+/// router handles.
 ///
 /// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas) is
 /// handled by `mako-geli-gas` (`geli-gas-sperrprozesse-invoic`), not here.
@@ -202,10 +170,6 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
             "gabi-gas-invoic",
             "gabi-gas-nomination",
             "gabi-gas-allocation",
-            "gabi-gas-schedl",
-            "gabi-gas-imbnot",
-            "gabi-gas-tranot",
-            "gabi-gas-delivery-order",
             "gabi-gas-mmma",
         ]
     }
@@ -245,20 +209,6 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
         // ALOCAT Prüfidentifikatoren (DVGW, 70001–70023).
         for &pid in allocation::ALLOCATION_PIDS {
             router.register(pid, "gabi-gas-allocation");
-        }
-
-        // SCHEDL transport schedule (DVGW, 90031).
-        router.register(schedl::SCHEDL_PID.as_u32(), "gabi-gas-schedl");
-
-        // IMBNOT imbalance notification (DVGW, 90041).
-        router.register(imbnot::IMBNOT_PID.as_u32(), "gabi-gas-imbnot");
-
-        // TRANOT transport notification (DVGW, 90051).
-        router.register(tranot::TRANOT_PID.as_u32(), "gabi-gas-tranot");
-
-        // DELORD / DELRES delivery order cycle (DVGW, 90061/90062).
-        for &pid in delord::DELIVERY_ORDER_PIDS {
-            router.register(pid.as_u32(), "gabi-gas-delivery-order");
         }
 
         // MMM Allokationsliste Gas — MSCONS 13013 (NB → LF, Gas-only).

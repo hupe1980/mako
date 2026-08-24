@@ -22,7 +22,7 @@
 //! # Bootstrap flow
 //!
 //! On startup `main.rs` calls [`seed_from_config`] to populate the store from
-//! the `[as4] partners = ["GLN=URL", …]` config list.  Individual records can
+//! the `[as4] partners = ["MP-ID=URL", …]` config list.  Individual records can
 //! then be updated at runtime via `PUT` or via inbound PARTIN messages that
 //! trigger the `POST /admin/partners/import` endpoint.
 //!
@@ -76,8 +76,9 @@ pub struct PartnerAdminState {
 
 /// Request body for `PUT /admin/partners/{mp_id}`.
 ///
-/// Accepts a full [`PartnerRecord`] as JSON. The `gln` field in the body
-/// must match the `{mp_id}` path parameter; a mismatch is rejected with `400`.
+/// Accepts a full [`PartnerRecord`] as JSON, flattened — the body's own
+/// `mp_id` field must match the `{mp_id}` path parameter, and a mismatch is
+/// rejected with `400`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertRequest {
     #[schema(value_type = Object)]
@@ -112,10 +113,10 @@ pub(crate) struct ImportResponse {
     /// Number of PARTIN records successfully upserted.
     #[schema(example = 3)]
     upserted: usize,
-    /// Number of PARTIN messages that had no extractable GLN.
+    /// Number of PARTIN messages that had no extractable MP-ID.
     #[schema(example = 0)]
     skipped: usize,
-    /// GLNs that were upserted.
+    /// MP-IDs that were upserted.
     glns: Vec<String>,
 }
 
@@ -206,7 +207,7 @@ pub(crate) async fn handle_list(
     get,
     path = "/admin/partners/{mp_id}",
     tag = "admin",
-    params(("mp_id" = String, Path, description = "13-digit GLN")),
+    params(("mp_id" = String, Path, description = "Marktpartner-ID")),
     responses(
         (status = 200, description = "Partner record", body = PartnerResponse),
         (status = 401, description = "Missing or invalid bearer token"),
@@ -244,6 +245,28 @@ pub(crate) async fn handle_get(
     }
 }
 
+/// Reject a record whose delivery channels are not on a secure transport.
+///
+/// # Why this is here
+///
+/// The AS4 endpoint (`AK`/`AS4`) and the API-Webdienste callback (`AW`) are
+/// the two channels `makod` *sends to*. The preflight refuses a configured
+/// `--as4-partner` on plain `http://`, and the Verzeichnisdienst worker refuses
+/// a discovered one — but this endpoint wrote whatever it was given straight to
+/// the store, so the runtime path bypassed the rule the configuration path
+/// enforces. What travels an `AW` channel is a `MaloIdentResultPositive`: the
+/// Marktlokation, its postal address and its NB/MSB assignment.
+///
+/// Non-delivery channels (`EM` e-mail, `TE` telephone, `FX`) are contact data
+/// from PARTIN and are left alone — they are not URLs.
+fn insecure_delivery_channel(record: &PartnerRecord) -> Option<(&str, &str)> {
+    record
+        .channels
+        .iter()
+        .find(|c| crate::preflight::is_insecure_delivery_channel(&c.qualifier, &c.address))
+        .map(|c| (c.qualifier.as_ref(), c.address.as_ref()))
+}
+
 /// `PUT /admin/partners/{mp_id}` — create or update a partner record.
 ///
 /// The `gln` in the path must match `record.mp_id` in the body; a mismatch is
@@ -252,11 +275,11 @@ pub(crate) async fn handle_get(
     put,
     path = "/admin/partners/{mp_id}",
     tag = "admin",
-    params(("mp_id" = String, Path, description = "13-digit GLN")),
+    params(("mp_id" = String, Path, description = "Marktpartner-ID")),
     request_body(content = UpsertRequest, content_type = "application/json"),
     responses(
         (status = 200, description = "Upserted", body = PartnerResponse),
-        (status = 400, description = "GLN mismatch"),
+        (status = 400, description = "MP-ID mismatch"),
         (status = 401, description = "Missing or invalid bearer token"),
     ),
     security((), ("bearer_token" = []))
@@ -287,25 +310,37 @@ pub(crate) async fn handle_put(
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse {
                 error: format!(
-                    "GLN in path ({path_gln}) does not match GLN in body ({})",
+                    "MP-ID in path ({path_gln}) does not match MP-ID in body ({})",
                     body.record.mp_id
                 ),
             }),
         )
             .into_response();
     }
-    match state.store.upsert(state.tenant_id, &body.record).await {
+    if let Some((qualifier, address)) = insecure_delivery_channel(&body.record) {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: format!(
+                    "channel {qualifier:?} address {address:?} must be an https:// URL. \
+                     makod delivers regulated messages and MaLo-ID callbacks over this \
+                     channel; the configuration path already refuses a plaintext \
+                     endpoint and this one does too."
+                ),
+            }),
+        )
+            .into_response();
+    }
+    // `updated_at` is when *we* wrote the record, so the server stamps it. A
+    // client-supplied value would also be read back by `merge_from_partin`,
+    // which carries it forward on every PARTIN merge.
+    let mut record = body.record;
+    record.updated_at = time::OffsetDateTime::now_utc();
+    match state.store.upsert(state.tenant_id, &record).await {
         Ok(()) => {
             info!(mp_id = %path_gln, tenant = %state.tenant_id, "partner upserted via admin API");
-            let updated_at = body.record.updated_at.to_string();
-            (
-                StatusCode::OK,
-                Json(PartnerResponse {
-                    record: body.record,
-                    updated_at,
-                }),
-            )
-                .into_response()
+            let updated_at = record.updated_at.to_string();
+            (StatusCode::OK, Json(PartnerResponse { record, updated_at })).into_response()
         }
         Err(e) => internal_error(e),
     }
@@ -316,7 +351,7 @@ pub(crate) async fn handle_put(
     delete,
     path = "/admin/partners/{mp_id}",
     tag = "admin",
-    params(("mp_id" = String, Path, description = "13-digit GLN")),
+    params(("mp_id" = String, Path, description = "Marktpartner-ID")),
     responses(
         (status = 200, description = "Deletion result", body = DeleteResponse),
         (status = 401, description = "Missing or invalid bearer token"),
@@ -361,7 +396,7 @@ pub(crate) async fn handle_delete(
 ///
 /// Accepts a raw EDIFACT interchange (`Content-Type: text/plain; charset=utf-8`
 /// or `application/edifact`). Each PARTIN message in the interchange is parsed,
-/// the sender's communication data (GLN, AS4 endpoint, email, phone) is
+/// the sender's communication data (MP-ID, AS4 endpoint, email, phone) is
 /// extracted, and the result is upserted into the [`PartnerStore`].
 ///
 /// This endpoint is idempotent — reimporting the same interchange is safe and
@@ -445,7 +480,7 @@ pub(crate) async fn handle_import(
                     }
                 }
                 None => {
-                    tracing::debug!("PARTIN import: no sender GLN — skipping");
+                    tracing::debug!("PARTIN import: no sender MP-ID — skipping");
                     skipped += 1;
                 }
             }
@@ -468,10 +503,10 @@ pub(crate) async fn handle_import(
 
 // ── Bootstrap helper ──────────────────────────────────────────────────────────
 
-/// Seed the partner store from `[as4] partners = ["GLN=URL", …]` config pairs.
+/// Seed the partner store from `[as4] partners = ["MP-ID=URL", …]` config pairs.
 ///
 /// Called once at daemon startup before the HTTP server begins serving.
-/// Records created here carry only a GLN and an AS4 endpoint URL; they are
+/// Records created here carry only a MP-ID and an AS4 endpoint URL; they are
 /// upgraded in-place when the partner later sends a PARTIN message.
 ///
 /// # Errors
@@ -502,4 +537,125 @@ pub async fn seed_from_config(
         );
     }
     Ok(())
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod channel_security_tests {
+    use super::insecure_delivery_channel;
+    use mako_engine::partner::{CommunicationChannel, PartnerRecord};
+    use mako_engine::types::MarktpartnerCode;
+
+    fn record(channels: Vec<CommunicationChannel>) -> PartnerRecord {
+        PartnerRecord {
+            mp_id: MarktpartnerCode::new("9900001000002"),
+            display_name: None,
+            channels,
+            roles: Vec::new(),
+            valid_from: None,
+            contacts: Vec::new(),
+            country_code: None,
+            updated_at: time::OffsetDateTime::now_utc(),
+        }
+    }
+
+    /// The preflight refuses a configured `--as4-partner` on plain `http://`.
+    /// This endpoint wrote whatever it was handed, so the rule held on the
+    /// configuration path and not on the runtime one.
+    #[test]
+    fn a_plaintext_as4_endpoint_is_refused() {
+        let r = record(vec![CommunicationChannel::new(
+            "AK",
+            "http://partner.example/as4/inbox",
+        )]);
+        assert_eq!(
+            insecure_delivery_channel(&r),
+            Some(("AK", "http://partner.example/as4/inbox"))
+        );
+    }
+
+    /// The `AW` channel is where a `MaLoIdentResultPositive` goes — the
+    /// Marktlokation, its postal address and its NB/MSB assignment.
+    #[test]
+    fn a_plaintext_api_webdienste_callback_is_refused() {
+        let r = record(vec![CommunicationChannel::api_webdienste(
+            "http://lf.example/maloId/",
+        )]);
+        assert!(insecure_delivery_channel(&r).is_some());
+    }
+
+    #[test]
+    fn https_delivery_channels_pass() {
+        let r = record(vec![
+            CommunicationChannel::new("AK", "https://partner.example/as4/inbox"),
+            CommunicationChannel::api_webdienste("https://lf.example/maloId/"),
+        ]);
+        assert_eq!(insecure_delivery_channel(&r), None);
+    }
+
+    /// Contact data from PARTIN is not a delivery destination and must not be
+    /// held to a URL rule — refusing it would make every imported partner
+    /// record unstorable.
+    #[test]
+    fn contact_channels_are_not_delivery_channels() {
+        let r = record(vec![
+            CommunicationChannel::new("EM", "mako@partner.example"),
+            CommunicationChannel::new("TE", "+49 30 123456"),
+        ]);
+        assert_eq!(insecure_delivery_channel(&r), None);
+    }
+
+    /// An address that is not a URL at all on a delivery channel is refused
+    /// rather than stored and discovered at the first delivery.
+    #[test]
+    fn an_unparseable_delivery_address_is_refused() {
+        let r = record(vec![CommunicationChannel::new("AW", "not a url")]);
+        assert!(insecure_delivery_channel(&r).is_some());
+    }
+}
+
+#[cfg(test)]
+mod documented_body_tests {
+    use super::UpsertRequest;
+
+    /// The `PUT /admin/partners/{mp_id}` bodies in the operator guide must
+    /// parse.
+    ///
+    /// # Why this is a test
+    ///
+    /// The quick-start `curl` used `"gln"` as the identifier field. `UpsertRequest`
+    /// flattens a `PartnerRecord`, whose field is `mp_id`, so the documented
+    /// call could not have worked — the same shape as the `[[party]] gln =`
+    /// examples that `deny_unknown_fields` rejected. Paste every documented body
+    /// into the parser rather than reading it.
+    #[test]
+    fn the_documented_upsert_bodies_parse() {
+        for body in [
+            r#"{"mp_id":"9900000000001",
+                "channels":[{"qualifier":"AK","address":"https://partner.example/as4/inbox"}]}"#,
+            r#"{"mp_id":"9900000000001",
+                "display_name":"Stadtwerke Beispiel GmbH",
+                "channels":[
+                    {"qualifier":"AK","address":"https://partner.example/as4/inbox"},
+                    {"qualifier":"EM","address":"edifact@partner.example"}],
+                "roles":["NB"],
+                "valid_from":"2025-10-01T00:00:00Z",
+                "country_code":"DE"}"#,
+        ] {
+            let parsed: UpsertRequest = serde_json::from_str(body)
+                .unwrap_or_else(|e| panic!("documented body does not parse: {e}\n{body}"));
+            assert_eq!(parsed.record.mp_id.as_str(), "9900000000001");
+        }
+    }
+
+    /// The field the old example used is not a field at all.
+    #[test]
+    fn the_old_gln_spelling_is_rejected() {
+        let body = r#"{"gln":"9900000000001","channels":[]}"#;
+        assert!(
+            serde_json::from_str::<UpsertRequest>(body).is_err(),
+            "\"gln\" is not the identifier field; the example that used it was wrong"
+        );
+    }
 }

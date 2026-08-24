@@ -20,8 +20,8 @@ use super::*;
 ///
 /// | Field           | Required | Description                                   |
 /// |-----------------|----------|-----------------------------------------------|
-/// | `sender`        | no       | Sender GLN (falls back to `tenant_party_id`)  |
-/// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`)  |
+/// | `sender`        | no       | Sender MP-ID (falls back to `tenant_party_id`)  |
+/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
 /// | `document_id`   | no       | BGM document identifier (Rechnungsnummer)     |
 /// | `document_code` | no       | BGM type code (default `"380"`)               |
 /// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
@@ -96,8 +96,8 @@ pub(super) fn render_invoic(
 ///
 /// | Field           | Required | Description                                   |
 /// |-----------------|----------|-----------------------------------------------|
-/// | `sender`        | no       | Sender GLN (falls back to `registry.primary_mp_id()`)|
-/// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`)  |
+/// | `sender`        | no       | Sender MP-ID (falls back to `registry.primary_mp_id()`)|
+/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
 /// | `document_id`   | no       | BGM document identifier (Avisnummer)          |
 /// | `document_code` | no       | BGM type code (default `"239"`)               |
 /// | `document_date` | no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |

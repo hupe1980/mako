@@ -373,7 +373,7 @@ pub struct MaloIdentResolved {
     pub tx_id: String,
     /// The resolved Marktlokations-ID (11-digit).
     pub malo_id: String,
-    /// The NB's GLN (13-digit), resolved from the MaLo record at callback
+    /// The NB's MP-ID (13-digit), resolved from the MaLo record at callback
     /// delivery time.
     pub nb_mp_id: String,
     /// When the positive callback was successfully delivered.

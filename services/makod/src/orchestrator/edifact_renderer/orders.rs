@@ -51,8 +51,9 @@ fn esa_dtm303(date: &str) -> String {
 ///
 /// **Sender resolution** (in priority order):
 /// 1. `payload["sender"]` — set this in the workflow for deterministic
-///    multi-GLN deployments.
-/// 2. [`MpIdRegistry::sender_mp_id_for_orders_pid`] — static PID → role lookup.
+///    multi-MP-ID deployments.
+/// 2. [`MpIdRegistry::sender_mp_id_for_orders_pid`], narrowed by the payload's
+///    `sparte` where the PID is shared between Strom and Gas.
 /// 3. [`MpIdRegistry::primary_mp_id`] — final fallback.
 ///
 /// The receiver comes from `msg.recipient`.
@@ -61,7 +62,7 @@ fn esa_dtm303(date: &str) -> String {
 ///
 /// | Field        | Required | Description                                  |
 /// |--------------|----------|----------------------------------------------|
-/// | `sender`     | no       | Sender GLN (overrides registry lookup)       |
+/// | `sender`     | no       | Sender MP-ID (overrides registry lookup)       |
 /// | `pid`        | no       | ORDERS Prüfidentifikator (e.g. 17134)        |
 /// | `orders_ref` | no       | UUID reference → 14-char UNH message ref     |
 /// | `malo`       | no       | Supply point MaLo for BGM context            |
@@ -185,9 +186,21 @@ pub(super) fn render_orders(
 
     let pid = p.get("pid").and_then(|v| v.as_u64()).map(|n| n as u32);
 
+    // The Sparte a handful of shared PIDs need to pick between two Marktrollen.
+    // The emitting workflow states it; a payload without one leaves the lookup
+    // to weigh the two roles and warn.
+    let sparte = p
+        .get("sparte")
+        .and_then(|v| v.as_str())
+        .and_then(|s| match s {
+            "Gas" => Some(mako_engine::types::Sparte::Gas),
+            "Strom" => Some(mako_engine::types::Sparte::Strom),
+            _ => None,
+        });
+
     // Sender: explicit in payload first, then registry lookup by PID, then primary.
     let sender = p.get("sender").and_then(|v| v.as_str()).unwrap_or_else(|| {
-        pid.map(|p| registry.sender_mp_id_for_orders_pid(p))
+        pid.map(|p| registry.sender_mp_id_for_orders_pid(p, sparte))
             .unwrap_or_else(|| registry.primary_mp_id())
     });
 
@@ -341,8 +354,8 @@ pub(super) fn render_ordchg(
 ///
 /// | Field          | Required | Description                                   |
 /// |----------------|----------|-----------------------------------------------|
-/// | `sender`       | no       | Sender GLN (falls back to `registry.primary_mp_id()`)|
-/// | `receiver`     | no       | Receiver GLN (falls back to `msg.recipient`)  |
+/// | `sender`       | no       | Sender MP-ID (falls back to `registry.primary_mp_id()`)|
+/// | `receiver`     | no       | Receiver MP-ID (falls back to `msg.recipient`)  |
 /// | `document_id`  | no       | BGM document identifier (Auftragsnummer)      |
 /// | `document_date`| no       | Document date (`YYYYMMDD` or `YYYY-MM-DD`)    |
 /// | `message_ref`  | no       | Derived from `causation_event_id` when absent |

@@ -250,9 +250,9 @@ async fn process_invoic(
             sender_mp_id: &incoming.sender_mp_id,
             outcome: verdict.label,
             // The event carries the Zahlungsziel as a calendar date: BDEW
-            // INVOIC transmits it as DTM+92 qualifier 102, a bare YYYYMMDD, and
-            // a consumer comparing it against a Frist wants the date, not an
-            // offset it has to normalise first.
+            // INVOIC transmits it in `SG8 DTM+265` as DE 2379 `303`
+            // (`CCYYMMDDHHMMZZZ`), and a consumer comparing it against a Frist
+            // wants the date, not an offset it has to normalise first.
             pay_by: incoming.rechnung.faelligkeitsdatum_date(),
             findings_count: report.findings.len(),
             dispatched,

@@ -222,6 +222,74 @@ domain_id!(
     "Abrechnungszeitraum — billing period identifier string"
 );
 
+// ── MeteredInterval ───────────────────────────────────────────────────────────
+
+/// One decoded metered value from an MSCONS `SG9`/`SG10` group.
+///
+/// # Why this lives here
+///
+/// Both MSCONS-receiving workflows — `mako-gpke`'s Strom Messwerte and
+/// `mako-geli-gas`'s Gas Messdaten — need to carry the values they received to
+/// the ERP, and `makod` decodes them from one `MsconsMessage` shape for both.
+/// A type per crate would be two decoders that drift; this is the one both
+/// depend on already.
+///
+/// # What is kept raw
+///
+/// `qualifier` is `SG10 QTY` DE 6063 exactly as it arrived — `220` Wahrer Wert,
+/// `67` Ersatzwert, `Z18` Vorläufiger Wert (MSCONS AHB 3.1g §11.2). The
+/// translation into the quality vocabulary the ERP and `edmd` share is
+/// [`MeteredInterval::quality`], applied when the payload is built. An inbound
+/// value stays representable so a message carrying an unexpected qualifier can
+/// still be recorded and refused, rather than being coerced at the boundary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeteredInterval {
+    /// `SG9 PIA` DE 7140 — the OBIS register the value belongs to.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obis_code: Option<String>,
+    /// `SG6 LOC+172` DE 3225 — the Messlokation, when the series names one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub melo_id: Option<String>,
+    /// `SG10 DTM+163` — interval start, RFC 3339.
+    pub dtm_from: String,
+    /// `SG10 DTM+164` — interval end, RFC 3339.
+    pub dtm_to: String,
+    /// `SG10 QTY` DE 6060 — the quantity, as written on the wire.
+    ///
+    /// A string, not a float: `[906]` allows three decimal places and a
+    /// settlement quantity must not acquire a binary rounding error in transit.
+    pub quantity: String,
+    /// `SG10 QTY` DE 6411 — the unit, normally `KWH`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// `SG10 QTY` DE 6063, verbatim.
+    pub qualifier: String,
+}
+
+impl MeteredInterval {
+    /// The MSCONS DE 6063 qualifier in the quality vocabulary the ERP event
+    /// and `edmd` share.
+    ///
+    /// | DE 6063 | MSCONS AHB 3.1g | Quality |
+    /// |---|---|---|
+    /// | `220` | Wahrer Wert | `MEASURED` |
+    /// | `67` | Ersatzwert | `SUBSTITUTED` |
+    /// | `Z18` | Vorläufiger Wert | `PRELIMINARY` |
+    ///
+    /// Anything else is `UNKNOWN`, which downstream treats as not billable —
+    /// the safe reading for a qualifier this release does not know.
+    #[must_use]
+    pub fn quality(&self) -> &'static str {
+        match self.qualifier.as_str() {
+            "220" => "MEASURED",
+            "67" => "SUBSTITUTED",
+            "Z18" => "PRELIMINARY",
+            _ => "UNKNOWN",
+        }
+    }
+}
+
 // ── Pruefidentifikator ────────────────────────────────────────────────────────
 
 /// A validated BDEW process-type code (Prüfidentifikator, PID).

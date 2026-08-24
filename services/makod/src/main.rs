@@ -32,7 +32,7 @@
 //!    ── `--check` exits here: everything above only reads ──
 //! 5. reconcile     rebuild missing ProcessRegistry routing entries (writes)
 //! 6. transports    HTTP :8080, AS4 :4080, API-Webdienste :8090
-//! 7. workers       outbox, ERP webhook, deadlines, projections, inbox purge
+//! 7. workers       outbox, ERP webhook, deadlines, projections, retention purge
 //! ```
 //!
 //! ## Shutdown
@@ -499,13 +499,13 @@ struct Cli {
     #[arg(long, value_name = "PEM", env = "MAKOD_AS4_TRUST_ANCHOR_PEM")]
     as4_trust_anchor_pem: Option<String>,
 
-    /// BDEW party ID (13-digit GLN) of this operator's AS4 Message Service Handler.
+    /// BDEW party ID (Marktpartner-ID) of this operator's AS4 Message Service Handler.
     ///
     /// Used as the `<eb:PartyId>` in generated AS4 signal messages (receipts,
     /// errors). Defaults to the primary `[[party]]` MP-ID when omitted.
     ///
     /// Can also be set via the `MAKOD_AS4_PARTY_ID` environment variable.
-    #[arg(long, value_name = "GLN", env = "MAKOD_AS4_PARTY_ID")]
+    #[arg(long, value_name = "MP_ID", env = "MAKOD_AS4_PARTY_ID")]
     as4_party_id: Option<String>,
 
     /// PEM-encoded ECDSA private key for AS4 inbound **decryption** (own encryption identity).
@@ -530,7 +530,7 @@ struct Cli {
 
     /// Register a trading-partner encryption certificate for outbound AS4 encryption.
     ///
-    /// Format: `<GLN>=<PEM>` where PEM is the partner's X.509 encryption certificate
+    /// Format: `<MP-ID>=<PEM>` where PEM is the partner's X.509 encryption certificate
     /// (not their signing certificate — BDEW uses separate keypairs for each).
     ///
     /// Repeat the flag to register multiple partners. Required for every partner
@@ -543,7 +543,7 @@ struct Cli {
     /// (comma-separated for multiple entries).
     #[arg(
         long,
-        value_name = "GLN=PEM",
+        value_name = "MP_ID=PEM",
         env = "MAKOD_AS4_PARTNER_CERT",
         value_delimiter = ','
     )]
@@ -561,6 +561,21 @@ struct Cli {
     /// against the regulated market — messages would flow unencrypted.
     #[arg(long, env = "MAKOD_ALLOW_UNENCRYPTED_AS4")]
     allow_unencrypted_as4: bool,
+
+    /// DEV/TEST ONLY: run the AS4 listener without a counterparty trust anchor.
+    ///
+    /// Counterparty signing certificates are issued by the BDEW/BNetzA PKI, so
+    /// verifying them needs that CA certificate in
+    /// `--as4-trust-anchor-pem`. Without one the session falls back to the
+    /// operator's own signing certificate as its only trust anchor, which
+    /// accepts exactly one signer — ourselves — and rejects **every** inbound
+    /// message from every partner.
+    ///
+    /// That is a total inbound outage that looks like a healthy daemon, so it
+    /// is a startup refusal rather than a log line. Set this flag for a
+    /// loopback or single-operator test where both ends share one certificate.
+    #[arg(long, env = "MAKOD_ALLOW_NO_AS4_TRUST_ANCHOR")]
+    allow_no_as4_trust_anchor: bool,
 
     /// INTEROP DEBUGGING ONLY: treat a missing or mismatched synchronous
     /// `eb:Receipt` as a warning instead of a delivery failure.
@@ -584,11 +599,11 @@ struct Cli {
 
     /// Register a trading-partner AS4 endpoint for outbound EDIFACT delivery.
     ///
-    /// Format: `<GLN>=<HTTPS-URL>` (e.g.
+    /// Format: `<MP-ID>=<HTTPS-URL>` (e.g.
     /// `9900000000001=https://partner.example/as4/inbox`).
     ///
     /// Repeat the flag to register multiple partners.  Messages destined for
-    /// an unregistered GLN are rescheduled with exponential backoff until a
+    /// an unregistered MP-ID are rescheduled with exponential backoff until a
     /// matching entry is added and the process is restarted.
     ///
     /// Required to deliver APERAK, CONTRL, and other EDIFACT messages via AS4.
@@ -599,7 +614,7 @@ struct Cli {
     /// (comma-separated pairs for multiple entries).
     #[arg(
         long,
-        value_name = "GLN=URL",
+        value_name = "MP_ID=URL",
         env = "MAKOD_AS4_PARTNER",
         value_delimiter = ','
     )]
@@ -607,7 +622,7 @@ struct Cli {
 
     /// Register a trading-partner callback URL for the MaLo Identification API.
     ///
-    /// Format: `<GLN>=<HTTPS-URL>` (e.g.
+    /// Format: `<MP-ID>=<HTTPS-URL>` (e.g.
     /// `9900000000001=https://lf.example/api-webdienste`).
     ///
     /// The URL is the base URL of the LF's API-Webdienste Strom server.
@@ -624,7 +639,7 @@ struct Cli {
     /// (comma-separated pairs for multiple entries).
     #[arg(
         long,
-        value_name = "GLN=URL",
+        value_name = "MP_ID=URL",
         env = "MAKOD_MALOID_PARTNER",
         value_delimiter = ','
     )]
@@ -875,7 +890,7 @@ struct Cli {
     ///
     /// Not settable via CLI flags.  Populated by `apply_config_file` when the
     /// TOML config file contains `[[party]]` entries.  When non-empty, takes
-    /// precedence over the primary `[[party]]` MP-ID for GLN routing.
+    /// precedence over the primary `[[party]]` MP-ID for MP-ID routing.
     #[arg(skip)]
     parties: Vec<config::PartyConfig>,
 
@@ -1019,9 +1034,9 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
 
     use party_registry::MpIdRegistry;
 
-    // ── GLN registry ─────────────────────────────────────────────────────────
+    // ── MP-ID registry ─────────────────────────────────────────────────────────
     //
-    // `[[party]]` entries are the single source of truth for all GLN identity.
+    // `[[party]]` entries are the single source of truth for all MP-ID identity.
     // There is no `--tenant-id` fallback — a config file with at least one
     // `[[party]]` entry is required.
     anyhow::ensure!(
@@ -1030,7 +1045,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
          Create a config file (--config / MAKOD_CONFIG) with:\n\
          \n\
          [[party]]\n\
-         mp_id   = \"<13-digit-GLN>\"\n\
+         mp_id   = \"<13-digit BDEW/DVGW code>\"\n\
          roles = [\"NB\", \"LF\", \"MSB\"]  # adjust to operator's Marktrollen\n\
          \n\
          See site/content/docs/services/makod.md for the full configuration reference."
@@ -1049,7 +1064,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         primary_agency = %mp_id_registry.primary_agency(),
         own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
         party_count  = cli.parties.len(),
-        "GLN registry built from [[party]] entries",
+        "MP-ID registry built from [[party]] entries",
     );
 
     // ── Auto-derive engine roles from [[party]] ───────────────────────────────
@@ -1205,6 +1220,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         as4_decryption_key_pem: cli.as4_decryption_key_pem.as_ref(),
         as4_party_id: cli.as4_party_id.as_deref(),
         allow_unencrypted_as4: cli.allow_unencrypted_as4,
+        allow_no_as4_trust_anchor: cli.allow_no_as4_trust_anchor,
         allow_no_as4_signing: cli.allow_no_as4_signing,
         edifact_outbox_webhook_url: cli.edifact_outbox_webhook_url.as_deref(),
         erp_webhook_url: cli.erp_webhook_url.as_deref(),
@@ -1460,7 +1476,7 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     // ── Background workers ────────────────────────────────────────────────────
     //
     // Outbox delivery, ERP webhook, deadline scheduler, projection checkpoint,
-    // inbox purge — all spawned as Tokio tasks that exit on shutdown_token.
+    // retention purge — all spawned as Tokio tasks that exit on shutdown_token.
     // See `startup::spawn_workers` and `startup::WorkersConfig` for details.
     let mut workers = startup::spawn_workers(startup::WorkersConfig {
         ctx,
@@ -1512,11 +1528,20 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
     //
     // A step that times out does not abort the shutdown — the remaining steps
     // still run, and the process reports the unclean exit at the end.
-    wait_for_shutdown().await;
-    info!(
-        timeout_secs = cli.shutdown_timeout_secs,
-        "Mako engine shutting down — cancelling listeners and workers",
-    );
+    let cause = wait_for_shutdown(&store).await;
+    match cause {
+        ShutdownCause::Signal => info!(
+            timeout_secs = cli.shutdown_timeout_secs,
+            "Mako engine shutting down — cancelling listeners and workers",
+        ),
+        ShutdownCause::Store(reason) => tracing::error!(
+            reason = %reason,
+            timeout_secs = cli.shutdown_timeout_secs,
+            "event store closed underneath the daemon — no message can be \
+             persisted from here on. Shutting down so the orchestrator restarts \
+             this instance rather than leaving it running and inert.",
+        ),
+    }
     shutdown_token.cancel();
 
     // The whole drain shares one budget. A worker that hangs must not be able
@@ -1566,9 +1591,16 @@ async fn async_main(cli: Cli) -> anyhow::Result<()> {
         }
     };
 
-    if workers_stopped && dl_drained && store_closed {
+    // A store that closed under us also exits non-zero, even when the drain
+    // itself went cleanly: the orchestrator's restart is the recovery, and an
+    // exit 0 reads as "asked to stop, stopped" — which would leave a fenced
+    // replica silently out of service under a `restartPolicy` that only acts on
+    // failure.
+    if workers_stopped && dl_drained && store_closed && cause == ShutdownCause::Signal {
         info!("shutdown complete");
         Ok(())
+    } else if let ShutdownCause::Store(reason) = cause {
+        anyhow::bail!("event store closed underneath the daemon: {reason}")
     } else {
         // A non-zero exit is the only signal an orchestrator or an init system
         // gets that the drain was incomplete. Reporting success here would make
@@ -1926,6 +1958,9 @@ fn apply_config_file(
         }
         if as4.allow_no_signing {
             cli.allow_no_as4_signing = true;
+        }
+        if as4.allow_no_trust_anchor {
+            cli.allow_no_as4_trust_anchor = true;
         }
         if as4.lenient_receipts {
             cli.as4_lenient_receipts = true;
@@ -2320,24 +2355,52 @@ fn init_tracing(cli: &Cli) -> Option<mako_service::telemetry::OtelGuard> {
 
 // ── Graceful shutdown ─────────────────────────────────────────────────────────
 
-/// Await an OS shutdown signal (SIGTERM on Unix, Ctrl-C everywhere).
-/// Returns after the first signal is received.
-async fn wait_for_shutdown() {
+/// Why the daemon left its run loop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ShutdownCause {
+    /// SIGTERM or Ctrl-C. The normal path; the process exits 0 once the drain
+    /// completes.
+    Signal,
+    /// The event store closed underneath us — fenced by another writer, or a
+    /// SlateDB background task panicked. Nothing can be persisted from here on,
+    /// so the process exits non-zero and lets the orchestrator restart it.
+    Store(mako_engine::store_slatedb::StoreShutdown),
+}
+
+/// Await whichever comes first: an OS shutdown signal, or the event store
+/// becoming unusable.
+///
+/// The second half is the one that is easy to leave out. SlateDB fences
+/// writers, so a second replica against the same object-store path closes this
+/// handle — and a fenced daemon keeps its listeners, keeps its rate limiters,
+/// and fails every write. Readiness turns red, which removes it from the
+/// Service; nothing restarts it, so without this it would sit there Running and
+/// inert. The local-filesystem deployment is protected by the exclusive
+/// data-directory lock; the cloud-backed one, which is the production shape, has
+/// no such lock and a rolling update overlaps two replicas by construction.
+async fn wait_for_shutdown(store: &SlateDbStore) -> ShutdownCause {
     use tokio::signal;
 
-    #[cfg(unix)]
-    {
-        use signal::unix::{SignalKind, signal};
-        let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM");
-        tokio::select! {
-            _ = signal::ctrl_c() => {},
-            _ = sigterm.recv()   => {},
+    let signalled = async {
+        #[cfg(unix)]
+        {
+            use signal::unix::{SignalKind, signal};
+            let mut sigterm = signal(SignalKind::terminate()).expect("failed to register SIGTERM");
+            tokio::select! {
+                _ = signal::ctrl_c() => {},
+                _ = sigterm.recv()   => {},
+            }
         }
-    }
 
-    #[cfg(not(unix))]
-    {
-        let _ = signal::ctrl_c().await;
+        #[cfg(not(unix))]
+        {
+            let _ = signal::ctrl_c().await;
+        }
+    };
+
+    tokio::select! {
+        () = signalled => ShutdownCause::Signal,
+        Some(reason) = store.closed_unrecoverably() => ShutdownCause::Store(reason),
     }
 }
 

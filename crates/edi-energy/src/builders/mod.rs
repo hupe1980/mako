@@ -99,6 +99,13 @@ pub(super) fn bytes_to_segments(
         .map_err(crate::Error::Parse)
 }
 
+/// Normalise a date or timestamp into the `CCYYMMDDHHMM+00` shape DE 2379
+/// format `303` asks for, with the offset the `[931]` condition fixes to UTC.
+///
+/// Callers hand in either a `CCYYMMDD` date (midnight is assumed) or an
+/// already-minute-precise `CCYYMMDDHHMM`; a value that already carries a zone
+/// is passed through untouched. The `+` is escaped by the writer, which treats
+/// it as the EDIFACT release character.
 #[cfg(any(
     feature = "utilmd",
     feature = "mscons",
@@ -108,6 +115,7 @@ pub(super) fn bytes_to_segments(
     feature = "invoic",
     feature = "orders",
     feature = "partin",
+    feature = "pricat",
     feature = "reqote",
     feature = "remadv",
     feature = "ordchg",
@@ -116,10 +124,43 @@ pub(super) fn bytes_to_segments(
     feature = "comdis",
     feature = "utilts",
 ))]
-pub(super) fn today_ccyymmdd() -> String {
-    let today = time::OffsetDateTime::now_utc().date();
-    let (y, m, d) = (today.year(), today.month() as u8, today.day());
-    format!("{y:04}{m:02}{d:02}")
+pub(super) fn ccyymmddhhmm_utc(value: &str) -> String {
+    if value.contains('+') || value.contains('-') {
+        return value.to_owned();
+    }
+    match value.len() {
+        8 => format!("{value}0000+00"),
+        _ => format!("{value}+00"),
+    }
+}
+
+/// The current UTC minute as `CCYYMMDDHHMM`.
+///
+/// `DTM+137` condition `[494]` requires the document date to be the moment the
+/// document was created or earlier, so the default is stamped at render time.
+#[cfg(any(
+    feature = "utilmd",
+    feature = "mscons",
+    feature = "aperak",
+    feature = "iftsta",
+    feature = "insrpt",
+    feature = "invoic",
+    feature = "orders",
+    feature = "partin",
+    feature = "pricat",
+    feature = "reqote",
+    feature = "remadv",
+    feature = "ordchg",
+    feature = "ordrsp",
+    feature = "quotes",
+    feature = "comdis",
+    feature = "utilts",
+))]
+pub(super) fn now_ccyymmddhhmm() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    let (y, m, d) = (now.year(), now.month() as u8, now.day());
+    let (hh, mm) = (now.hour(), now.minute());
+    format!("{y:04}{m:02}{d:02}{hh:02}{mm:02}")
 }
 
 // ── Writer macros ─────────────────────────────────────────────────────────────

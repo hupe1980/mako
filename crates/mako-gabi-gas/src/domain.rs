@@ -12,7 +12,6 @@
 //! - [`GasImbalanceSaldo`] — nomination vs. allocation deviation with Ausgleichsenergie price
 //! - [`NominationQuantity`] — submitted / accepted / curtailed breakdown
 //! - [`GasQualityClass`] — H-Gas / L-Gas designation per DVGW G 260
-//! - [`DvgwFormatVersion`] — DVGW biannual release version management
 //! - `cloud_events` — typed `de.gabi.*` CloudEvent type constants
 //!
 //! ## No float money rule
@@ -321,111 +320,6 @@ impl GasQualityFlag {
 /// subscription table, which together decide what wakes it on GaBi Gas
 /// events.
 pub use mako_events::gabi as cloud_events;
-
-// ── DVGW format version management ───────────────────────────────────────────
-
-/// DVGW message type discriminant for format version tables.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum DvgwMessageType {
-    /// Allokationsnachricht.
-    Alocat,
-    /// Nominierungsintegration.
-    Nomint,
-    /// Nominierungsantwort.
-    Nomres,
-    /// Schedulingnachricht.
-    Schedl,
-    /// Imbalance Notification.
-    Imbnot,
-    /// Transport Notification.
-    Tranot,
-    /// Delivery Order.
-    Delord,
-    /// Delivery Response.
-    Delres,
-}
-
-/// A DVGW EDIFACT format version with its biannual validity window.
-///
-/// DVGW formats follow a biannual release schedule (April 1 + October 1 at
-/// 06:00 CET = start of a gas day). During the 3-month overlap window before
-/// a new version becomes mandatory, both versions must be accepted by the
-/// `dvgw-edi` parser.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DvgwFormatVersion {
-    /// Short version identifier (e.g. `"5.11a"`, `"4.6 FK"`).
-    pub version: &'static str,
-    /// First gas day from which this version is valid (06:00 CET on this date).
-    pub valid_from: Date,
-    /// Last gas day this version is supported (None = current/open).
-    pub valid_to: Option<Date>,
-    /// Which DVGW message type this version applies to.
-    pub message_type: DvgwMessageType,
-}
-
-/// Current DVGW format versions (as of 2026-07-18 — update each April/October).
-pub mod dvgw_versions {
-    use super::{DvgwFormatVersion, DvgwMessageType};
-    use time::macros::date;
-
-    /// ALOCAT 5.11a — valid from 2024-10-01 (current).
-    pub const ALOCAT: DvgwFormatVersion = DvgwFormatVersion {
-        version: "5.11a",
-        valid_from: date!(2024 - 10 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Alocat,
-    };
-    /// NOMINT 4.6 FK — valid from 2026-02-01 (current).
-    pub const NOMINT: DvgwFormatVersion = DvgwFormatVersion {
-        version: "4.6 FK",
-        valid_from: date!(2026 - 02 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Nomint,
-    };
-    /// NOMRES 4.7 FK — valid from 2026-02-01 (current).
-    pub const NOMRES: DvgwFormatVersion = DvgwFormatVersion {
-        version: "4.7 FK",
-        valid_from: date!(2026 - 02 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Nomres,
-    };
-    /// SCHEDL 4.4 FK — valid from 2026-02-01 (current).
-    pub const SCHEDL: DvgwFormatVersion = DvgwFormatVersion {
-        version: "4.4 FK",
-        valid_from: date!(2026 - 02 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Schedl,
-    };
-    /// IMBNOT 5.7a — valid from 2023-10-01 (current).
-    pub const IMBNOT: DvgwFormatVersion = DvgwFormatVersion {
-        version: "5.7a",
-        valid_from: date!(2023 - 10 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Imbnot,
-    };
-    /// TRANOT 5.8b — valid from 2023-10-01 (current).
-    pub const TRANOT: DvgwFormatVersion = DvgwFormatVersion {
-        version: "5.8b",
-        valid_from: date!(2023 - 10 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Tranot,
-    };
-    /// DELORD 4.5 FK — valid from 2026-02-01 (current).
-    pub const DELORD: DvgwFormatVersion = DvgwFormatVersion {
-        version: "4.5 FK",
-        valid_from: date!(2026 - 02 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Delord,
-    };
-    /// DELRES 4.6 FK — valid from 2026-02-01 (current).
-    pub const DELRES: DvgwFormatVersion = DvgwFormatVersion {
-        version: "4.6 FK",
-        valid_from: date!(2026 - 02 - 01),
-        valid_to: None,
-        message_type: DvgwMessageType::Delres,
-    };
-}
 
 // ── GasQuantity ───────────────────────────────────────────────────────────────
 
@@ -1403,18 +1297,6 @@ mod tests {
         assert!(cloud_events::NOMINATION_CREATED.starts_with("de.gabi."));
         assert!(cloud_events::IMBALANCE_CALCULATED.starts_with("de.gabi."));
         assert!(cloud_events::INVOIC_MMM_RECEIVED.starts_with("de.gabi."));
-    }
-
-    // ── DVGW version constants ─────────────────────────────────────────────────
-
-    #[test]
-    fn dvgw_alocat_version_is_5_11a() {
-        assert_eq!(dvgw_versions::ALOCAT.version, "5.11a");
-    }
-
-    #[test]
-    fn dvgw_nomint_version_is_4_6_fk() {
-        assert_eq!(dvgw_versions::NOMINT.version, "4.6 FK");
     }
 
     // ── GasImbalanceSaldo with Ausgleichsenergie ───────────────────────────────

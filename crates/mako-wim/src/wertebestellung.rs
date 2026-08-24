@@ -69,9 +69,8 @@ pub const WORKFLOW_NAME: &str = "wim-wertebestellung";
 ///
 /// Do not confuse it with **35002**, which is §4.2 "Anfrage zur Rechnungsabwicklung
 /// des Messstellenbetriebs über den LF" — a different process, LF → MSB, in WiM
-/// Teil 1. mako used to send 35002 here, which put the wrong Prüfidentifikator on
-/// the wire and motivated a sender-role classifier for a collision that does not
-/// exist.
+/// Teil 1. The two never collide: each belongs to one process, so nothing needs
+/// a sender-role classifier to tell them apart.
 pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(35003);
 
 /// QUOTES — "Angebot zur Anfrage von Werten für ESA" (MSB → ESA), UC 4.1 Nr. 2.

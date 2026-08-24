@@ -481,7 +481,7 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                 // Collect parsed messages so they can be passed to ContrlAckService
                 // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).
                 // The recipient MP-ID (UNB DE0010) drives Sparte detection and the
-                // CONTRL sender GLN.
+                // CONTRL sender MP-ID.
                 let (interchange_ref, recipient_mp_id): (String, String) =
                     if let Ok(pi) = self.ingest.platform.parse_interchange_full(&edifact[..]) {
                         (
@@ -502,8 +502,16 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                     match result {
                         Err(e) => {
                             rejected += 1;
-                            // Count parse/validation failures for Prometheus alerting.
-                            EngineMetrics::global().validation_failed("edifact", "parse_error");
+                            // Deliberately *not* counted as a validation failure.
+                            // `makod_validation_failed_total` carries a message type
+                            // and a release, and a message that did not parse has
+                            // neither — it used to be counted under the fixed labels
+                            // `("edifact", "parse_error")`, which made the metric
+                            // report a message type that does not exist and hid that
+                            // AHB failures were never counted at all. The dead letter
+                            // below is the record, and it alerts as
+                            // `makod_dead_letter_recorded_total{reason="processing_error"}`.
+                            //
                             // § 147 AO / GoBD: a message that fails to parse inside an
                             // otherwise-accepted interchange must leave a durable
                             // trace — the AS4 receipt confirms receipt of the whole
@@ -538,27 +546,36 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                 })
                                 .map(str::to_owned);
 
-                            let status = match (pid, workflow.as_deref()) {
-                                (None, _) => MessageStatus::NoPid,
-                                (Some(_), Some(_)) => MessageStatus::Routed,
-                                (Some(_), None) => MessageStatus::UnknownPid,
-                            };
+                            // Same classifier as the REST door — the two used
+                            // to decide independently, and a PID-less non-CONTRL
+                            // message was `NoPid` (accepted, unrecorded) here
+                            // and `MissingPid` (dead-lettered) there.
+                            let status = MessageStatus::classify(&msg, pid, workflow.as_deref());
+
+                            // Conformance is recorded for every routed message,
+                            // not only the ones whose adapter happens to ask.
+                            if status == MessageStatus::Routed {
+                                crate::edifact_api::record_ahb_conformance(&msg);
+                            }
 
                             // Dead-letter unroutable messages (§ 147 AO / GoBD).
-                            if matches!(status, MessageStatus::UnknownPid) {
-                                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                            if status.is_unroutable() {
+                                use mako_engine::dead_letter::AuditContext;
                                 let ctx = AuditContext::now()
-                                    .with_message_type(message_type.as_deref().unwrap_or(""));
+                                    .with_message_type(message_type.as_deref().unwrap_or(""))
+                                    .with_message_ref(msg_id.as_str())
+                                    .with_receiver_eic(recipient_mp_id.as_str());
                                 let ctx = if let Some(p) = pid {
                                     ctx.with_pid(p)
                                 } else {
                                     ctx
                                 };
                                 let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
-                                self.ingest.dl_sink.reject(&DeadLetterReason::UnknownPid {
-                                    pid: dead_pid,
-                                    context: ctx,
-                                });
+                                let (reason, result) = crate::edifact_api::unroutable_rejection(
+                                    status, &msg, dead_pid, ctx,
+                                );
+                                EngineMetrics::global().inbound_received(dead_pid.as_u32(), result);
+                                self.ingest.dl_sink.reject(&reason);
                             }
 
                             tracing::info!(
@@ -575,12 +592,38 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                                 && let Some(dispatcher) = self.ingest.dispatcher.as_deref()
                             {
                                 match dispatcher.dispatch(&msg, wf_name, pid_val.as_u32()).await {
-                                    Ok(outcome) => tracing::debug!(
-                                        as4_message_id = %msg_id,
-                                        workflow       = %wf_name,
-                                        outcome        = ?outcome,
-                                        "AS4 ingest: Phase 2 command dispatched",
-                                    ),
+                                    Ok(outcome) => {
+                                        // The receipt has already gone out, so a
+                                        // message the router claimed and no arm
+                                        // consumed is acknowledged and lost —
+                                        // recorded, not merely logged
+                                        // (§ 147 AO / GoBD).
+                                        if let Some((wf, reason)) = outcome.coverage_gap() {
+                                            use mako_engine::dead_letter::{
+                                                AuditContext, DeadLetterReason,
+                                            };
+                                            self.ingest.dl_sink.reject(
+                                                &DeadLetterReason::NotDispatchable {
+                                                    workflow_name: wf.to_owned(),
+                                                    pid: pid_val,
+                                                    reason: reason.to_owned(),
+                                                    context: AuditContext::now()
+                                                        .with_message_type(
+                                                            message_type.as_deref().unwrap_or(""),
+                                                        )
+                                                        .with_message_ref(msg_id.as_str())
+                                                        .with_receiver_eic(recipient_mp_id.as_str())
+                                                        .with_pid(pid_val),
+                                                },
+                                            );
+                                        }
+                                        tracing::debug!(
+                                            as4_message_id = %msg_id,
+                                            workflow       = %wf_name,
+                                            outcome        = ?outcome,
+                                            "AS4 ingest: Phase 2 command dispatched",
+                                        );
+                                    }
                                     Err(e) => {
                                         dead_letter_dispatch_failure(
                                             self.ingest.dl_sink.as_ref(),
@@ -841,12 +884,37 @@ fn too_many_requests_status(status: axum::http::StatusCode) -> axum::response::R
         })
 }
 
+/// Per-peer-IP GCRA rate limiter for the operator-facing ports.
+///
+/// **Deliberately not [`AS4_RATE_LIMITER`].** The REST API and the
+/// API-Webdienste port used to share the AS4 bucket, on the reasoning that a
+/// rate limit is a property of the peer rather than of the endpoint. That holds
+/// for a direct connection and breaks behind a proxy, which is the documented
+/// deployment: every client of every port arrives from the ingress address, so
+/// all three collapsed into one 100 req/s bucket. An ERP batch on `:8080` could
+/// then `429` a trading partner's AS4 delivery — and that partner's retry
+/// schedule is the thing standing between us and a missed Frist. The AS4 budget
+/// is now reserved for counterparties.
+static OPERATOR_RATE_LIMITER: std::sync::LazyLock<
+    governor::RateLimiter<
+        std::net::IpAddr,
+        governor::state::keyed::DefaultKeyedStateStore<std::net::IpAddr>,
+        governor::clock::DefaultClock,
+    >,
+> = std::sync::LazyLock::new(|| {
+    use std::num::NonZeroU32;
+    let quota = governor::Quota::per_second(NonZeroU32::new(100).unwrap())
+        .allow_burst(NonZeroU32::new(50).unwrap());
+    governor::RateLimiter::keyed(quota)
+});
+
 /// Axum middleware enforcing the per-peer inbound rate limit alone.
 ///
-/// Used by the API-Webdienste Strom port, which shares the per-IP budget with
-/// the AS4 port — the limit is a property of the peer, not of the endpoint —
-/// but has no ebMS envelope to read a sender identity from, so the per-sender
-/// limiter does not apply.
+/// Used by the REST API (`:8080`) and the API-Webdienste Strom port (`:8090`).
+/// Neither carries an ebMS envelope to read a sender identity from, so the
+/// per-sender limiter does not apply. Both draw on the operator-facing
+/// bucket rather than the AS4 port's, so an ERP batch cannot spend a trading
+/// partner's delivery budget.
 ///
 /// Returns `429 Too Many Requests` with a `Retry-After: 1` header when the
 /// peer's GCRA token bucket is exhausted, and logs each rejection so operators
@@ -860,7 +928,7 @@ pub async fn rate_limit_middleware(
     if crate::health::is_health_path(req.uri().path()) {
         return next.run(req).await;
     }
-    if AS4_RATE_LIMITER.check_key(&peer.ip()).is_err() {
+    if OPERATOR_RATE_LIMITER.check_key(&peer.ip()).is_err() {
         tracing::warn!(
             method = %req.method(),
             uri    = %req.uri(),

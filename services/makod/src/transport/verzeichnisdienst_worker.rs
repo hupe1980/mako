@@ -10,10 +10,10 @@
 //!
 //! This worker:
 //!
-//! 1. Accepts a list of partner GLNs to track (from the `PartnerStore` or from
+//! 1. Accepts a list of partner MP-IDs to track (from the `PartnerStore` or from
 //!    static `--maloid-partner` seeds).
 //! 2. At startup and then on a configurable refresh interval, queries
-//!    [`DirectoryServiceClient::get_record`] for each GLN with
+//!    [`DirectoryServiceClient::get_record`] for each MP-ID with
 //!    `api_id = "maloIdV1"` and `major_version = 1`.
 //! 3. On success, upserts the discovered base URL into the [`SlateDbPartnerStore`]
 //!    as a `CommunicationChannel` with qualifier `"AW"` (API-Webdienste).
@@ -43,6 +43,8 @@ use mako_engine::store_slatedb::SlateDbPartnerStore;
 use mako_engine::types::MarktpartnerCode;
 use reqwest::Url;
 use tracing::{debug, info, warn};
+
+use crate::preflight::is_secure_endpoint;
 
 /// The BDEW API-Identifier for the MaLo-ID callback service.
 ///
@@ -85,7 +87,7 @@ impl VerzeichnisdienstLookup {
         }
     }
 
-    /// Resolve the MaLo-ID base URL for the given LF GLN.
+    /// Resolve the MaLo-ID base URL for the given LF MP-ID.
     ///
     /// Checks the partner store first.  On a miss, queries the Verzeichnisdienst
     /// and caches the result.  Returns `None` when the partner is not registered
@@ -105,9 +107,20 @@ impl VerzeichnisdienstLookup {
             && let Some(url_str) = record.api_webdienste_endpoint()
         {
             match Url::parse(url_str) {
-                Ok(url) => {
+                Ok(url) if is_secure_endpoint(&url) => {
                     debug!(mp_id, url = %url, "Verzeichnisdienst: cache hit in partner store");
                     return Ok(Some(url));
+                }
+                // A record written before the scheme guard existed, or seeded
+                // by an operator through `PUT /admin/partners/{mp_id}`, is held
+                // to the same rule as a freshly discovered one.
+                Ok(url) => {
+                    warn!(
+                        mp_id,
+                        url = %url,
+                        "Verzeichnisdienst: stored API-Webdienste endpoint is not HTTPS — \
+                         ignoring it and re-fetching",
+                    );
                 }
                 Err(e) => {
                     warn!(mp_id, url = url_str, error = %e, "Verzeichnisdienst: stored URL is invalid — re-fetching");
@@ -169,13 +182,34 @@ impl VerzeichnisdienstLookup {
         }
     }
 
-    /// Upsert the `"AW"` channel into the partner store for the given GLN.
+    /// Upsert the `"AW"` channel into the partner store for the given MP-ID.
     async fn persist_api_webdienste_url(
         &self,
         mp_id: &str,
         mp_id_code: &MarktpartnerCode,
         url: &str,
     ) {
+        // Both the direct answer and the followed redirect land here, so this
+        // is the one place the transport requirement has to hold.
+        match Url::parse(url) {
+            Ok(parsed) if is_secure_endpoint(&parsed) => {}
+            Ok(parsed) => {
+                warn!(
+                    mp_id,
+                    url = %parsed,
+                    scheme = parsed.scheme(),
+                    "Verzeichnisdienst: refusing a non-HTTPS API-Webdienste endpoint. \
+                     A MaLo-ID callback carries the Marktlokation's postal address and \
+                     its NB/MSB assignment; it is not sent in the clear. Ask the \
+                     partner to publish an https:// URL.",
+                );
+                return;
+            }
+            Err(e) => {
+                warn!(mp_id, url, error = %e, "Verzeichnisdienst: discovered URL is unparseable");
+                return;
+            }
+        }
         let record = match self.partner_store.get(self.tenant_id, mp_id_code).await {
             Ok(Some(mut existing)) => {
                 // Update or insert the AW channel.
@@ -220,7 +254,7 @@ impl VerzeichnisdienstLookup {
 
 /// Periodic background refresh task.
 ///
-/// Iterates all partner GLNs registered in the store and re-fetches their
+/// Iterates all partner MP-IDs registered in the store and re-fetches their
 /// Verzeichnisdienst entries on a configurable interval. This keeps the cache
 /// warm even if the on-demand path has not been exercised for a while.
 ///
@@ -273,5 +307,49 @@ pub async fn verzeichnisdienst_refresh_task(
         }
 
         debug!("Verzeichnisdienst refresh: cycle complete");
+    }
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod endpoint_scheme_tests {
+    use crate::preflight::is_secure_endpoint;
+    use reqwest::Url;
+
+    fn ok(u: &str) -> bool {
+        is_secure_endpoint(&Url::parse(u).expect("test URL parses"))
+    }
+
+    /// A MaLo-ID callback carries the Marktlokation's postal address and its
+    /// NB/MSB assignment. `preflight` already refuses a configured partner on
+    /// plain `http://`; a URL discovered from the Verzeichnisdienst is held to
+    /// the same rule, because the directory says who a partner is, not how
+    /// their data may travel.
+    #[test]
+    fn a_plaintext_endpoint_is_refused() {
+        assert!(!ok("http://lf.example/maloId/"));
+        assert!(!ok("http://10.0.0.5:8080/maloId/"));
+    }
+
+    #[test]
+    fn an_https_endpoint_is_accepted() {
+        assert!(ok("https://lf.example/maloId/"));
+        assert!(ok("https://lf.example:8443/maloId/v1/"));
+    }
+
+    /// The same development exemption `preflight` makes for the OIDC issuer, so
+    /// a local stub is still reachable without an operator disabling the rule.
+    #[test]
+    fn localhost_is_exempt() {
+        assert!(ok("http://localhost:8090/maloId/"));
+    }
+
+    /// Anything that is neither — a `file://` or a directory entry pointing at
+    /// something exotic — is refused rather than quietly persisted.
+    #[test]
+    fn a_non_http_scheme_is_refused() {
+        assert!(!ok("file:///etc/passwd"));
+        assert!(!ok("ftp://lf.example/maloId/"));
     }
 }

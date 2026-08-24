@@ -2,7 +2,7 @@
   "schema_version": 1,
   "message_type": "INVOIC",
   "release": "2.8e",
-  "source_document": "INVOIC AHB, wire release 2.8e (Stand 01.04.2026)",
+  "source_document": "INVOIC AHB, wire release 2.8e (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 31001,
@@ -966,7 +966,5 @@
       ],
       "group_rules": []
     }
-  ],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  ]
 }

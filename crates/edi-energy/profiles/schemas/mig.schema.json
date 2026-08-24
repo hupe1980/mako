@@ -41,7 +41,7 @@
       "type": "string",
       "format": "date",
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
-      "description": "First date on which this profile is normatively valid (BDEW 'Gültig ab'). Should match the fvYYYYMMDD component of the profile directory name. Added in F-020 to make the date self-describing and independently verifiable.",
+      "description": "The Anwendungszeitpunkt: first date on which this profile is normatively valid. This is NOT the Publikationsdatum — Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2 put a six-month Umsetzungsphase between them. The profile directory is named after this date.",
       "examples": [
         "2025-10-01"
       ]
@@ -53,6 +53,15 @@
       "description": "Last date on which this profile is normatively valid (BDEW 'Gültig bis'). Absent means open-ended.",
       "examples": [
         "2026-09-30"
+      ]
+    },
+    "publikationsdatum": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Date BDEW published the source document — source metadata only, never the validity date. When present, codegen checks valid_from against it per Allgemeine Festlegungen 6.1d §2.5 (published 01.04. -> applies 01.10. same year; published 01.10. -> applies 01.04. next year). Omit for ausserordentliche Veröffentlichungen.",
+      "examples": [
+        "2025-04-01"
       ]
     },
     "ahb_revision": {

@@ -222,7 +222,7 @@ pub struct MessageResult {
     pub error: Option<String>,
 }
 
-#[derive(Serialize, Debug, ToSchema)]
+#[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageStatus {
     /// Parsed and matched to a registered workflow.
@@ -233,6 +233,16 @@ pub enum MessageStatus {
     /// design. CONTRL is the only one — it is the EDIFACT syntax
     /// acknowledgement, and its AHB publishes no PID at all.
     NoPid,
+    /// Parsed successfully, but `NAD+MS` or `NAD+MR` is absent.
+    ///
+    /// Allgemeine Festlegungen V6.1d §2.13 identifies the *fachliche* sender
+    /// and receiver on message level in those two segments and applies that
+    /// "für alle EDI@Energy EDIFACT Nachrichten und -dateien einheitlich".
+    /// Both are load-bearing: the sender is the address of the answer and the
+    /// APERAK, the receiver decides which of the operator's own MP-IDs — hence
+    /// which Sparte and which Marktrolle — was addressed. A message missing
+    /// either is refused rather than processed against substituted blanks.
+    MissingParty,
     /// Parsed successfully, but the Prüfidentifikator is **missing** from a
     /// message type that must carry one.
     ///
@@ -243,6 +253,139 @@ pub enum MessageStatus {
     MissingPid,
     /// Could not be parsed at all.
     ParseError,
+}
+
+impl MessageStatus {
+    /// Classify one parsed message from its Prüfidentifikator and the workflow
+    /// the router resolved for it.
+    ///
+    /// Shared by both ingest doors. They used to classify independently and had
+    /// already drifted: the REST path distinguished [`MessageStatus::NoPid`]
+    /// from [`MessageStatus::MissingPid`] and dead-lettered the second, while
+    /// the AS4 path — the production door — called every PID-less message
+    /// `NoPid` and counted it as accepted, so a UTILMD whose `RFF+Z13` never
+    /// parsed was acknowledged and dropped with no § 147 AO record.
+    #[must_use]
+    pub(crate) fn classify(
+        msg: &AnyMessage,
+        pid: Option<mako_engine::ids::Pid>,
+        workflow: Option<&str>,
+    ) -> Self {
+        // CONTRL is the EDIFACT syntax acknowledgement, and the one message type
+        // that carries neither a Prüfidentifikator nor a `NAD` — it is a
+        // UN/EDIFACT service message rather than an EDI@Energy business one.
+        // For every other type, a missing PID or a missing party is a defect
+        // rather than a shape.
+        let is_contrl = matches!(
+            msg.try_message_type(),
+            Some(edi_energy::MessageType::Contrl)
+        );
+        if !is_contrl && Self::missing_party(msg).is_some() {
+            return Self::MissingParty;
+        }
+        match (pid, workflow) {
+            (None, _) if is_contrl => Self::NoPid,
+            (None, _) => Self::MissingPid,
+            (Some(_), Some(_)) => Self::Routed,
+            (Some(_), None) => Self::UnknownPid,
+        }
+    }
+
+    /// Which `NAD` qualifier is absent or blank, if either is.
+    ///
+    /// `"MS"` is reported before `"MR"` when both are missing: the sender is
+    /// the one an operator has to chase, because without it there is nobody to
+    /// answer.
+    #[must_use]
+    pub(crate) fn missing_party(msg: &AnyMessage) -> Option<&'static str> {
+        if msg.nad_sender().is_none_or(str::is_empty) {
+            return Some("MS");
+        }
+        if msg.nad_receiver().is_none_or(str::is_empty) {
+            return Some("MR");
+        }
+        None
+    }
+
+    /// `true` when this status means the message was accepted at the transport
+    /// and then lost — the set the ingest doors dead-letter and do not
+    /// dispatch.
+    #[must_use]
+    pub(crate) fn is_unroutable(self) -> bool {
+        matches!(
+            self,
+            Self::UnknownPid | Self::MissingPid | Self::MissingParty
+        )
+    }
+}
+
+/// Validate one routed message against its own release profile and record the
+/// outcome; returns `true` when it conforms.
+///
+/// # Why this is at the boundary
+///
+/// 36 of the 66 adapter registries ask `adapters::ahb_verdict` and put the
+/// answer on their command; the other 30 — mostly the answer-PID adapters,
+/// whose messages publish no AHB Anwendungsfall — never validate at all.
+/// Emitting `makod_validation_failed_total` from inside the adapters would
+/// therefore count adapter invocations rather than messages, and would report
+/// nothing for whole families. Here it is exactly once per inbound message,
+/// with the message's real type and release as labels.
+///
+/// A message whose release has no registered profile is **not** counted: that
+/// is "there was no rule to break", not "the message broke a rule", and it is
+/// the normal shape for an answer PID. `ahb_verdict` reports that case as not
+/// passed with an empty error list, which is the discriminator used below.
+///
+/// The verdict is recorded, not enforced: a non-conforming message still
+/// reaches its workflow, because whether to answer it with an Ablehnung, a
+/// negative APERAK, or nothing at all is a per-process decision the families
+/// that model `validation_passed` already make.
+pub(crate) fn record_ahb_conformance(msg: &AnyMessage) -> bool {
+    let (passed, errors) = crate::adapters::ahb_verdict(msg);
+    if passed || errors.is_empty() {
+        return passed;
+    }
+    let message_type = msg
+        .try_message_type()
+        .map_or("unknown", edi_energy::MessageType::as_str);
+    let release = msg
+        .detect_release()
+        .map_or("unknown", edi_energy::Release::as_str);
+    mako_engine::metrics::EngineMetrics::global().validation_failed(message_type, release);
+    tracing::warn!(
+        message_type,
+        release,
+        message_ref = %msg.message_ref(),
+        errors = %errors.join("; "),
+        "inbound message does not conform to its AHB profile",
+    );
+    false
+}
+
+/// The dead-letter record for a message [`MessageStatus::is_unroutable`]
+/// refused, and the `result` label its metric carries.
+///
+/// Shared by both ingest doors so a new unroutable status cannot be recorded
+/// under one reason on `POST /edifact` and another over AS4 — the drift that
+/// made the AS4 door accept PID-less messages the REST door dead-lettered.
+pub(crate) fn unroutable_rejection(
+    status: MessageStatus,
+    msg: &AnyMessage,
+    pid: mako_engine::ids::Pid,
+    context: AuditContext,
+) -> (DeadLetterReason, &'static str) {
+    match status {
+        MessageStatus::MissingParty => (
+            DeadLetterReason::MissingInterchangeParty {
+                // `classify` only returns this status when one is missing.
+                qualifier: MessageStatus::missing_party(msg).unwrap_or("MS"),
+                context,
+            },
+            "missing_interchange_party",
+        ),
+        _ => (DeadLetterReason::UnknownPid { pid, context }, "unknown_pid"),
+    }
 }
 
 // ── Auth middleware ───────────────────────────────────────────────────────────
@@ -312,11 +455,11 @@ pub fn router(state: Arc<EdifactApiState>) -> Router {
 
 /// Build a [`PartnerRecord`] from a parsed `PartinMessage`.
 ///
-/// Extracts the sender's GLN from `NAD+MS` and maps all `COM` segments to
+/// Extracts the sender's MP-ID from `NAD+MS` and maps all `COM` segments to
 /// [`CommunicationChannel`] entries.  The market role is derived from the
 /// BDEW Prüfidentifikator using [`Marktrolle::from_partin_pid`].
 ///
-/// Returns `None` when the message has no sender GLN (malformed PARTIN).
+/// Returns `None` when the message has no sender MP-ID (malformed PARTIN).
 pub(crate) fn partin_to_partner_record(
     msg: &edi_energy::messages::partin::PartinMessage,
     pid: Option<u32>,
@@ -324,12 +467,30 @@ pub(crate) fn partin_to_partner_record(
     let sender = msg.sender()?;
     let mp_id_str = sender.party_id.as_deref().filter(|s| !s.is_empty())?;
 
+    // A `COM` segment on an inbound PARTIN is the counterparty telling us where
+    // to send their messages — which is what PARTIN is for, and also the most
+    // exposed of the three paths that can set a delivery endpoint. Contact data
+    // is stored as given; a delivery channel that is not on a secure transport
+    // is dropped, because accepting it would let a counterparty's own message
+    // direct their regulated traffic, and a MaLo-ID callback, over plaintext.
+    // The rest of the record still lands: refusing it wholesale would discard
+    // legitimate contact updates over one bad channel.
     let channels: Vec<CommunicationChannel> = msg
         .com_segments()
         .iter()
         .filter_map(|c| {
             let number = c.number.as_deref()?.to_owned();
             let qualifier = c.channel.as_deref()?.to_owned();
+            if crate::preflight::is_insecure_delivery_channel(&qualifier, &number) {
+                tracing::warn!(
+                    mp_id = mp_id_str,
+                    qualifier,
+                    address = number,
+                    "PARTIN import: dropping a delivery channel that is not an \
+                     https:// URL",
+                );
+                return None;
+            }
             Some(CommunicationChannel::new(qualifier, number))
         })
         .collect();
@@ -608,28 +769,19 @@ pub(crate) async fn ingest_edifact(
             .and_then(|p| state.resolve_workflow(p.as_u32(), &recipient_mp_id))
             .map(str::to_owned);
 
-        // CONTRL is the EDIFACT syntax acknowledgement and the one message
-        // type whose AHB publishes no Prüfidentifikator; every other type has
-        // them, so a missing PID there is a defect rather than a shape.
-        let carries_no_pid_by_design = matches!(
-            msg.try_message_type(),
-            Some(edi_energy::MessageType::Contrl)
-        );
-        let status = match (pid, workflow.as_deref()) {
-            (None, _) if carries_no_pid_by_design => MessageStatus::NoPid,
-            (None, _) => MessageStatus::MissingPid,
-            (Some(_), Some(_)) => MessageStatus::Routed,
-            (Some(_), None) => MessageStatus::UnknownPid,
-        };
+        let status = MessageStatus::classify(&msg, pid, workflow.as_deref());
+
+        // Conformance is recorded for every routed message, not only the ones
+        // whose adapter happens to ask — see `record_ahb_conformance`.
+        if status == MessageStatus::Routed {
+            record_ahb_conformance(&msg);
+        }
 
         // Dead-letter unroutable messages (§ 147 AO / GoBD). A missing PID is
         // dead-lettered on the same path: the message is just as lost, and a
         // silent `accepted: 1` is worse than a rejection because nothing
         // signals it.
-        if matches!(
-            status,
-            MessageStatus::UnknownPid | MessageStatus::MissingPid
-        ) {
+        if status.is_unroutable() {
             let ctx = AuditContext::from_interchange(
                 &env.header.sender_id,
                 &env.header.receiver_id,
@@ -643,14 +795,12 @@ pub(crate) async fn ingest_edifact(
             };
             let ctx = ctx.with_tenant_id(state.tenant_id.to_string());
             let dead_pid = pid.unwrap_or(mako_engine::ids::Pid::new(1));
-            // Track per-PID unroutable count in the inbound_received metric so
-            // Alertmanager can alert on `makod_inbound_messages_total{result="unknown_pid"}`.
+            let (reason, result) = unroutable_rejection(status, &msg, dead_pid, ctx);
+            // Track the per-PID refusal in the inbound_received metric so
+            // Alertmanager can alert on `makod_inbound_messages_total{result=…}`.
             mako_engine::metrics::EngineMetrics::global()
-                .inbound_received(dead_pid.as_u32(), "unknown_pid");
-            state.dl_sink.reject(&DeadLetterReason::UnknownPid {
-                pid: dead_pid,
-                context: ctx,
-            });
+                .inbound_received(dead_pid.as_u32(), result);
+            state.dl_sink.reject(&reason);
         }
 
         // Auto-upsert PARTIN: when we receive a PARTIN message and a
@@ -676,7 +826,7 @@ pub(crate) async fn ingest_edifact(
                 None => {
                     tracing::warn!(
                         pid = pid.map(|p| p.as_u32()),
-                        "PARTIN received but sender GLN missing — skipping auto-upsert",
+                        "PARTIN received but sender MP-ID missing — skipping auto-upsert",
                     );
                 }
             }
@@ -706,6 +856,26 @@ pub(crate) async fn ingest_edifact(
                             dispatch_process_id = Some(process_id.to_string());
                         }
                         IngestOutcome::Skipped { .. } => {}
+                    }
+                    // The router resolved this PID, so the interchange was
+                    // accepted — but no arm consumed it. An acknowledged
+                    // inbound message with no process behind it is exactly the
+                    // trace § 147 AO / GoBD require, so it is recorded rather
+                    // than only logged.
+                    if let Some((wf, reason)) = outcome.coverage_gap() {
+                        state.dl_sink.reject(&DeadLetterReason::NotDispatchable {
+                            workflow_name: wf.to_owned(),
+                            pid: pid_val,
+                            reason: reason.to_owned(),
+                            context: AuditContext::from_interchange(
+                                &env.header.sender_id,
+                                &env.header.receiver_id,
+                                &env.header.control_ref,
+                            )
+                            .with_message_type(message_type.as_deref().unwrap_or(""))
+                            .with_pid(pid_val)
+                            .with_tenant_id(state.tenant_id.to_string()),
+                        });
                     }
                     // Extract MaLo from the raw message for the response.
                     dispatch_malo_id = Some(String::from(
@@ -791,4 +961,149 @@ pub(crate) async fn ingest_edifact(
             messages,
         }),
     )
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod classify_tests {
+    use super::MessageStatus;
+    use edi_energy::AnyMessage;
+
+    const LF: &str = "9900204000002";
+    const NB: &str = "9900357000004";
+
+    /// A GPKE Anmeldung, with `NAD+MS` / `NAD+MR` under the caller's control.
+    fn utilmd(nad: &str) -> AnyMessage {
+        let wire = format!(
+            "UNB+UNOC:3+{LF}:500+{NB}:500+260804:1045+R1'\
+UNH+1+UTILMD:D:11A:UN:S2.1'BGM+E01+55001+9'DTM+137:20260804:102'\
+{nad}UNT+6+1'UNZ+1+R1'"
+        );
+        edi_energy::parse(wire.as_bytes()).expect("the fixture parses")
+    }
+
+    fn pid() -> Option<mako_engine::ids::Pid> {
+        mako_engine::ids::Pid::from_u32(55001)
+    }
+
+    /// The control: with both parties present the message routes.
+    #[test]
+    fn a_message_carrying_both_parties_is_routed() {
+        let msg = utilmd(&format!("NAD+MS+{LF}::293'NAD+MR+{NB}::293'"));
+        assert_eq!(
+            MessageStatus::classify(&msg, pid(), Some("gpke-lf-anmeldung")),
+            MessageStatus::Routed
+        );
+        assert_eq!(MessageStatus::missing_party(&msg), None);
+    }
+
+    /// # Why this is a test
+    ///
+    /// Every adapter reads the sender as
+    /// `sender().and_then(|n| n.party_id.as_deref()).unwrap_or("")` — 47 sites.
+    /// That empty string becomes the workflow's counterparty, and the
+    /// counterparty is what the answer's outbox entry is addressed to. A
+    /// message with no `NAD+MS` therefore used to spawn a real process, run a
+    /// real Frist, and produce an answer addressed to nobody — surfacing much
+    /// later as an `OutboxExhausted` dead letter for partner `""` rather than
+    /// as the defective message it was.
+    #[test]
+    fn a_message_without_a_sender_party_is_refused() {
+        let msg = utilmd(&format!("NAD+MR+{NB}::293'"));
+        assert_eq!(MessageStatus::missing_party(&msg), Some("MS"));
+        assert_eq!(
+            MessageStatus::classify(&msg, pid(), Some("gpke-lf-anmeldung")),
+            MessageStatus::MissingParty
+        );
+        assert!(MessageStatus::MissingParty.is_unroutable());
+    }
+
+    /// `NAD+MR` decides which of the operator's own MP-IDs was addressed, and
+    /// therefore the Sparte and the Marktrolle. Without it every Gas message
+    /// silently reads as Strom and is answered out of the wrong
+    /// Entscheidungsbaum.
+    #[test]
+    fn a_message_without_a_receiver_party_is_refused() {
+        let msg = utilmd(&format!("NAD+MS+{LF}::293'"));
+        assert_eq!(MessageStatus::missing_party(&msg), Some("MR"));
+        assert_eq!(
+            MessageStatus::classify(&msg, pid(), Some("gpke-lf-anmeldung")),
+            MessageStatus::MissingParty
+        );
+    }
+
+    /// `makod_validation_failed_total` has exactly one emitter, and it is the
+    /// boundary recorder.
+    ///
+    /// # Why this is a test
+    ///
+    /// The metric is documented as carrying `message_type` and `release`. Its
+    /// only emitter used to be the AS4 parse-error branch, with both labels
+    /// hard-coded to `("edifact", "parse_error")` — so it reported a message
+    /// type that does not exist, never reported a release, and never counted a
+    /// single AHB validation failure. Moving it into the adapters would have
+    /// counted adapter invocations instead of messages, and reported nothing
+    /// for the 30 registries that never validate. One emitter, at the
+    /// boundary, is the only shape that counts each inbound message once.
+    #[test]
+    fn the_conformance_counter_has_one_emitter() {
+        const SOURCES: &[(&str, &str)] = &[
+            ("edifact_api.rs", include_str!("edifact_api.rs")),
+            ("as4_ingest.rs", include_str!("../transport/as4_ingest.rs")),
+            (
+                "adapters/mod.rs",
+                include_str!("../orchestrator/adapters/mod.rs"),
+            ),
+            (
+                "adapters/gpke.rs",
+                include_str!("../orchestrator/adapters/gpke.rs"),
+            ),
+            (
+                "adapters/wim.rs",
+                include_str!("../orchestrator/adapters/wim.rs"),
+            ),
+            (
+                "adapters/geli_gas.rs",
+                include_str!("../orchestrator/adapters/geli_gas.rs"),
+            ),
+            (
+                "adapters/gabi_gas.rs",
+                include_str!("../orchestrator/adapters/gabi_gas.rs"),
+            ),
+            (
+                "adapters/mabis.rs",
+                include_str!("../orchestrator/adapters/mabis.rs"),
+            ),
+        ];
+        // Split so the needle does not appear verbatim in this file, which is
+        // one of the sources being scanned.
+        let needle = concat!(".validation", "_failed(");
+        for (file, src) in SOURCES {
+            let calls = src.matches(needle).count();
+            let expected = usize::from(*file == "edifact_api.rs");
+            assert_eq!(
+                calls, expected,
+                "{file} emits makod_validation_failed_total {calls} time(s), expected \
+                 {expected}. The single emitter is record_ahb_conformance."
+            );
+        }
+    }
+
+    /// CONTRL is a UN/EDIFACT service message, not an EDI@Energy business one:
+    /// it carries no `NAD` and no Prüfidentifikator by construction, so the
+    /// party rule must not turn every acknowledgement into a dead letter.
+    #[test]
+    fn a_contrl_is_exempt_from_both_rules() {
+        let wire = format!(
+            "UNB+UNOC:3+{NB}:500+{LF}:500+260804:1045+R2'\
+UNH+1+CONTRL:D:3:UN:2.0b'UCI+R1+{NB}:500+{LF}:500+7'UNT+3+1'UNZ+1+R2'"
+        );
+        let msg = edi_energy::parse(wire.as_bytes()).expect("the CONTRL fixture parses");
+        assert_eq!(
+            MessageStatus::classify(&msg, None, None),
+            MessageStatus::NoPid
+        );
+        assert!(!MessageStatus::NoPid.is_unroutable());
+    }
 }

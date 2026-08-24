@@ -712,7 +712,7 @@ impl Profile for ComdisFv20251001Profile {
         Some(::time::macros::date!(2025 - 10 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        Some(::time::macros::date!(2026 - 09 - 30))
+        Some(::time::macros::date!(2026 - 03 - 31))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
         Some("1.0g")

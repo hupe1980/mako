@@ -12,8 +12,8 @@ use super::*;
 ///
 /// | Field           | Required | Description                                  |
 /// |-----------------|----------|----------------------------------------------|
-/// | `sender`        | yes      | Sender GLN                                   |
-/// | `receiver`      | no       | Receiver GLN (falls back to `msg.recipient`) |
+/// | `sender`        | yes      | Sender MP-ID                                   |
+/// | `receiver`      | no       | Receiver MP-ID (falls back to `msg.recipient`) |
 /// | `interchange_ref`| no      | UCI interchange control reference            |
 /// | `accepted`      | no       | `true` = accepted (code 4), `false` = rejected (code 8) |
 /// | `message_ref`   | no       | Derived from `causation_event_id` when absent              |

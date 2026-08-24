@@ -1051,7 +1051,7 @@ Response:
 |---|---|
 | `calculated` | Amount computed successfully |
 | `no_data` | `einspeisemenge_kwh` not supplied |
-| `price_missing` | EPEX price needed; import via `PUT /api/v1/epex-monthly` |
+| `price_missing` | EPEX price needed; import via `PUT /api/v1/epex-monthly/{year}/{month}` |
 | `foerderung_beendet` | Förderdauer ended; this period was prorated |
 | `sanctioned` | §52 Abs. 1 EEG ≤2021 — Vergütung = 0 (`SanktionAlt::VerguetungAufNull`) |
 

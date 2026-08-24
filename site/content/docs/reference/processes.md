@@ -32,11 +32,13 @@ Multiple format versions coexist in the same engine instance simultaneously.
 
 | Release | Binding | Message types with changed formats |
 |---|---|---|
-| `fv20260401` | since 2026-04-01 (Mitteilung Nr. 54) | INVOIC, ORDERS, ORDRSP, ORDCHG, PARTIN, PRICAT, QUOTES, REMADV, REQOTE, UTILTS |
-| `fv20261001` | from 2026-10-01 (Mitteilung Nr. 56) | UTILMD (Strom 2.2 / Gas 1.2), MSCONS 3.2, APERAK, COMDIS, IFTSTA |
+| `fv20260401` | since 2026-04-01 | COMDIS, INVOIC, MSCONS, ORDERS, ORDRSP, PARTIN, REMADV, UTILMD Gas |
+| `fv20261001` | from 2026-10-01 | APERAK, IFTSTA, INVOIC, MSCONS, ORDCHG, ORDERS, ORDRSP, PARTIN, PRICAT, QUOTES, REMADV, REQOTE, UTILMD (Strom 2.2 / Gas 1.2), UTILTS |
 
-Message types untouched by a release keep their previous profile (e.g. CONTRL and
-INSRPT last changed with `fv20260101`).
+The `fv` date is the **Anwendungszeitpunkt**, six months after the document's
+Publikationsdatum (Allgemeine Festlegungen 6.1d §2.5). Message types untouched by
+a release keep their previous profile — CONTRL and INSRPT last changed with
+`fv20260101`.
 
 **Status legend:**
 
@@ -121,10 +123,6 @@ Quick reference across all process families. Each row is a top-level domain.
 | **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
 | **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | PIDs 70001–70023 | — | DVGW ALOCAT 5.11a |
 | **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | PIDs 70030–70039 | — | DVGW NOMINT 4.6 / NOMRES 4.7 |
-| **GaBi Gas SCHEDL** | 🔥 | `mako-gabi-gas` `gabi-gas-schedl` | not implemented | — | DVGW G685/G2000 |
-| **GaBi Gas IMBNOT** | 🔥 | `mako-gabi-gas` `gabi-gas-imbnot` | not implemented | — | DVGW IMBNOT 5.7a |
-| **GaBi Gas TRANOT** | 🔥 | `mako-gabi-gas` `gabi-gas-tranot` | not implemented | — | DVGW TRANOT 5.8b |
-| **GaBi Gas DELORD/DELRES** | 🔥 | `mako-gabi-gas` `gabi-gas-delivery-order` | not implemented | — | DVGW DELORD 4.5 FK |
 | **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-059/060/061 |
 
 ---
@@ -1218,7 +1216,7 @@ Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 § 2.3.1). Not
 |---|---|
 | MSCONS 13007 (Gasbeschaffenheit: Brennwert, Zustandszahl) | Gas physical properties required for billing conversion (m³ → kWh_Hs per DVGW G 685); no Strom analogue |
 | INVOIC 31011 (AWH Sperrprozesse) | Gas Sperrung involves separate gMSB layer; GNB bills LF for AWH. Strom Sperrung costs are handled via INVOIC 31001/31002 |
-| GaBi Gas ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES (DVGW) | Gas balancing and transport nomination — no Strom equivalent (Strom uses redispatch and BKV processes) |
+| GaBi Gas ALOCAT/NOMINT/NOMRES (DVGW) | Gas balancing and transport nomination — no Strom equivalent (Strom uses redispatch and BKV processes) |
 | Datenabruf 17103/17104 (Brennwert/Zustandszahl) | Gas-specific physical data required for settlement |
 
 ---
@@ -1310,10 +1308,13 @@ Ergebnis (AWH WiM Gas 2.0 Kap. 4.3.2 Nr. 2/4).
 
 **Regulatory basis:** BK7 (Kapazitätsabrechnung Gas / AWH Sperrprozesse Gas) + DVGW G685/G2000
 
-**Implementation status:** `mako-gabi-gas` ✅ for all processes — BK7 billing (INVOIC 31010), DVGW nomination cycle (NOMINT/NOMRES), allocation (ALOCAT), and the full DVGW transport suite (SCHEDL, IMBNOT, TRANOT, DELORD/DELRES).
+**Implementation status:** BK7 billing (INVOIC 31007/31008/31010), the DVGW
+nomination cycle (NOMINT/NOMRES) and allocation (ALOCAT) are implemented. The
+remaining DVGW transport formats — SCHEDL, IMBNOT, TRANOT, DELORD/DELRES,
+SSQNOT, CHACAP, NUEVOR, SLPASP, TSIMSG — are not parsed and have no workflow.
 
-> **Crate layering:** `dvgw-edi` is the **format library** (parses NOMINT, NOMRES,
-> ALOCAT, SCHEDL, …) — analogous to `edi-energy` for EDI@Energy messages.
+> **Crate layering:** `dvgw-edi` is the **format library** (parses NOMINT, NOMRES
+> and ALOCAT) — analogous to `edi-energy` for EDI@Energy messages.
 > `mako-gabi-gas` is the **process layer** built on top of it, handling both
 > DVGW transport workflows (nominations, allocations) and BK7 billing (INVOIC
 > 31010) — analogous to `mako-gpke` sitting on top of `edi-energy`.
@@ -1328,24 +1329,28 @@ sequenceDiagram
     participant VNB as VNB
 
     Note over BKV,FNB: D-1 (deadline 13:00 CET per KoV §3.2)
-    BKV->>FNB: NOMINT 90011/90012
-    FNB-->>BKV: NOMRES 90021/90022
+    BKV->>FNB: NOMINT 70030-70034
+    FNB-->>BKV: NOMRES 70035-70039
 
     Note over BKV,FNB: Day D intraday
-    BKV->>FNB: DELORD 90061
-    FNB-->>BKV: DELRES 90062
-    FNB->>BKV: SCHEDL 90031
+    BKV->>FNB: DELORD (format not parsed)
+    FNB-->>BKV: DELRES (format not parsed)
+    FNB->>BKV: SCHEDL (format not parsed)
 
     Note over FNB,BKV: After day D (KoV §6.4)
-    FNB->>BKV: ALOCAT 90001 (Initial)
-    FNB->>BKV: ALOCAT 90001 (Correction 1..n)
-    FNB->>BKV: ALOCAT 90001 (Final — binding)
-    FNB->>BKV: IMBNOT 90041
+    FNB->>BKV: ALOCAT 70013-70020 (Initial)
+    FNB->>BKV: ALOCAT 70013-70020 (Correction 1..n)
+    FNB->>BKV: ALOCAT 70013-70020 (Final — binding)
+    FNB->>BKV: IMBNOT (format not parsed)
 
     Note over VNB,FNB: Sub-daily
-    VNB->>FNB: ALOCAT 90003
-    FNB->>BKV: TRANOT 90051
+    VNB->>FNB: ALOCAT 70011-70012
+    FNB->>BKV: TRANOT (format not parsed)
 ```
+
+The Prüfidentifikatoren are the codes DVGW publishes in `SG1 RFF+Z13`. Steps
+marked *format not parsed* are part of the KoV process but not of `dvgw-edi`'s
+coverage, so `makod` neither routes nor answers them.
 
 ### Domain model
 
@@ -1369,10 +1374,6 @@ All energy quantities use `Decimal` — no float arithmetic.
 |---|---|---|---|---|
 | Nomination / Renomination | BKV → FNB/MGV | NOMINT / NOMRES | `gabi-gas-nomination` | `mako-gabi-gas` ✅ |
 | Allocation (Initial/Correction/Final) | FNB/MGV/VNB → BKV | ALOCAT | `gabi-gas-allocation` | `mako-gabi-gas` ✅ |
-| Day-ahead schedule | sender → receiver | SCHEDL | `gabi-gas-schedl` | `mako-gabi-gas` ✅ |
-| Imbalance notification | FNB/MGV → BKV | IMBNOT | `gabi-gas-imbnot` | `mako-gabi-gas` ✅ |
-| Transport notification | FNB/VNB → BKV/GH/MGV | TRANOT | `gabi-gas-tranot` | `mako-gabi-gas` ✅ |
-| Delivery order / response | BKV/GH ↔ FNB/MGV | DELORD / DELRES | `gabi-gas-delivery-order` | `mako-gabi-gas` ✅ |
 
 **BK7 billing processes:**
 
@@ -1489,9 +1490,9 @@ full Anwendungsfall table.
 | 70030–70034 | NOMINT | Transportkunde → NB/MGV | `gabi-gas-nomination` ✅ |
 | 70035–70039 | NOMRES | NB/MGV → Transportkunde | `gabi-gas-nomination` ✅ |
 
-SCHEDL, IMBNOT, TRANOT, DELORD/DELRES and SSQNOT are **not implemented** —
-`dvgw-edi` does not parse them, so nothing routes to their placeholder
-workflows.
+SCHEDL, IMBNOT, TRANOT, DELORD/DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and
+TSIMSG are **not implemented**: `dvgw-edi` does not parse them, so they have no
+workflow and no Prüfidentifikator here.
 
 ---
 

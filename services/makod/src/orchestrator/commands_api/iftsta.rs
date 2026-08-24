@@ -52,8 +52,8 @@ pub(super) fn cmd_mabis_datenstatus_empfangen<'a>(
 /// Expected payload fields:
 /// - `stream_id`     — Process stream ID (UUID)
 /// - `pid`           — IFTSTA Prüfidentifikator (21024–21033)
-/// - `sender_mp_id`    — Sender party GLN
-/// - `receiver_mp_id`  — Receiver party GLN
+/// - `sender_mp_id`    — Sender party MP-ID
+/// - `receiver_mp_id`  — Receiver party MP-ID
 /// - `message_ref`   — EDIFACT message reference string
 pub(super) async fn dispatch_gpke_iftsta(
     state: &CommandsApiState,

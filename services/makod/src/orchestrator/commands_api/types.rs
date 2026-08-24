@@ -8,9 +8,9 @@ use super::*;
 /// Shared state for the ERP commands API.
 #[derive(Clone)]
 pub struct CommandsApiState {
-    /// Operator tenant identifier (our GLN as a TenantId).
+    /// Operator tenant identifier (our MP-ID as a TenantId).
     pub tenant_id: TenantId,
-    /// Our operator GLN as a string (from `--tenant-id`).
+    /// Our operator MP-ID as a string (from `--tenant-id`).
     pub sender_party_id: String,
     /// Maximum request body size in bytes.
     ///
@@ -40,7 +40,7 @@ pub struct CommandsApiState {
     /// for long-lived processes is bounded to at most 100 tail events instead
     /// of a full O(n) event scan on every command dispatch.
     pub snapshot_store: mako_engine::store_slatedb::SlateDbSnapshotStore,
-    /// MaLo master-data cache — used to resolve NB/MSB GLNs from MaLo IDs.
+    /// MaLo master-data cache — used to resolve NB/MSB MP-IDs from MaLo IDs.
     pub malo_cache: Arc<SlateDbMaloCache>,
     /// MaLo-ID result cache — maps `tx_id → (malo_id, nb_mp_id)` for the
     /// `maloid.lieferbeginn.fortsetzen` continuation command.
@@ -97,7 +97,7 @@ pub struct ErpCommand {
     /// Each command defines its own required fields.  For most GPKE/GeLi
     /// commands the minimal payload is a `malo_id` string (the 11-digit
     /// Marktlokations-ID) plus the process-specific date.  The engine
-    /// resolves all partner GLNs (NB, MSB) and MeLo data from the MaLo cache.
+    /// resolves all partner MP-IDs (NB, MSB) and MeLo data from the MaLo cache.
     ///
     /// Example for `gpke.lieferbeginn.anmelden`:
     /// ```json
@@ -314,6 +314,37 @@ mod family_tests {
             unmapped.is_empty(),
             "these commands have no metric family: {unmapped:?}\n\
              Add the prefix to command_family()."
+        );
+    }
+
+    /// The initiation counter has exactly one call site.
+    ///
+    /// There are two command doors — `POST /api/v1/commands` and the MCP
+    /// `submit_command` tool — and the counter used to live in the REST
+    /// handler. Every process an MCP client started was therefore uncounted,
+    /// so the initiated-versus-completed dashboard showed completions with no
+    /// matching initiations. It now sits inside `dispatch_command`, which both
+    /// doors go through; a second call site anywhere would either double-count
+    /// or restore the split.
+    #[test]
+    fn the_initiation_counter_is_emitted_only_from_dispatch_command() {
+        const DOORS: &[(&str, &str)] = &[
+            ("handler.rs", include_str!("handler.rs")),
+            ("mcp_server.rs", include_str!("../../api/mcp_server.rs")),
+        ];
+        for (file, src) in DOORS {
+            let calls = src.matches(".process_initiated(").count();
+            let expected = usize::from(*file == "handler.rs");
+            assert_eq!(
+                calls, expected,
+                "{file} has {calls} process_initiated call(s), expected {expected}. \
+                 The counter belongs in dispatch_command so both command doors \
+                 are covered by one emission."
+            );
+        }
+        assert!(
+            include_str!("handler.rs").contains("pub async fn dispatch_command"),
+            "the single call site must be dispatch_command in handler.rs"
         );
     }
 

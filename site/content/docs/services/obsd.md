@@ -417,8 +417,6 @@ the window, because a window with no endings has no rate.
 
 ## See also
 
-- [`concepts/OBSD.md`](https://github.com/hupe1980/mako/blob/main/concepts/OBSD.md)
-  — the two clocks, the § 7a argument, and what obsd deliberately does not do.
 - [agentd Operator Guide](@/docs/services/agentd.md) — the specialists that
   consume `de.obs.*`.
 - [processd Operator Guide](@/docs/services/processd.md) — the operator queue

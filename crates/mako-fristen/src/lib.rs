@@ -28,9 +28,8 @@
 //! | **APERAK** | 45 min Strom weekday; Gas: next Werktag 12:00 (Folgeprozess) or 3 Werktage (Initialprozess) | the message was accepted for processing |
 //! | **Antwortfrist** | per PID — 11:00 of the 1. Werktag for a GPKE Anmeldung, 4 Werktage for a Gas Anmeldung, 3/5/7/1 WT for WiM Strom | the *business* answer is owed |
 //!
-//! **There is no 24-hour GPKE window.** This module's own header used to open
-//! with one, attributed to BK6-22-024, and `obsd` computed every GPKE breach
-//! alert from it. The technical acknowledgement is 45 minutes
+//! **There is no 24-hour GPKE window**, under BK6-22-024 or anything else.
+//! The technical acknowledgement is 45 minutes
 //! ([`aperak_strom_due_at`]) and the business answer is a wall-clock instant on
 //! the first Werktag after the Übertragungstag (`mako-pruefung`). A flat 24 h is
 //! neither, and it is wrong in the direction that does not announce itself: it

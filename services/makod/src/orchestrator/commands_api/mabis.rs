@@ -49,7 +49,7 @@ pub(super) fn cmd_mabis_abrechnung_begleichen<'a>(
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
 /// | `billing_period` | Yes | Billing period in `"YYYY-MM"` format (e.g. `"2025-09"`) |
-/// | `bkv_id` | Yes | BKV GLN (13-digit) |
+/// | `bkv_id` | Yes | BKV MP-ID (13-digit) |
 /// | `biko_id` | Yes | BIKO EIC code (16-char) |
 /// | `version` | Yes | `"vorlaeufig"` or `"endgueltig"` |
 /// | `message_ref` | Yes | MSCONS message reference |
@@ -77,7 +77,7 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             DispatchError::InvalidPayload(
-                "payload must contain \"bkv_id\" (BKV GLN, 13 digits)".into(),
+                "payload must contain \"bkv_id\" (BKV MP-ID, 13 digits)".into(),
             )
         })?
         .to_owned();
@@ -233,7 +233,7 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
 /// | `balancing_period` | Yes | Bilanzierungsmonat, `CCYYMM` |
 /// | `version` | Yes | Versionsangabe, `CCYYMMDDHHMMSSZZZ`, ascending per §3.8.2 |
 /// | `receiver_mp_id` | Yes | BIKO code |
-/// | `sender_mp_id` | No | defaults to this operator's GLN |
+/// | `sender_mp_id` | No | defaults to this operator's MP-ID |
 /// | `intervals` | Yes | one entry per settlement slot: `from`, `to`, `quantity_kwh` |
 pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
     state: &CommandsApiState,
@@ -335,7 +335,7 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
 ///
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
-/// | `bkv_id` | Yes | BKV GLN (same as used in `einleiten`) |
+/// | `bkv_id` | Yes | BKV MP-ID (same as used in `einleiten`) |
 /// | `billing_period` | Yes | Billing period `"YYYY-MM"` (same as used in `einleiten`) |
 /// | `message_ref` | No | Message reference for the outbound Prüfmitteilung |
 /// | `reject` | No | `true` to send a negative Prüfmitteilung (default: `false`) |
@@ -401,7 +401,7 @@ pub(super) async fn dispatch_mabis_billing_daten_einreichen(
 ///
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
-/// | `bkv_id` | Yes | BKV GLN (same as used in `einleiten`) |
+/// | `bkv_id` | Yes | BKV MP-ID (same as used in `einleiten`) |
 /// | `billing_period` | Yes | Billing period `"YYYY-MM"` (same as used in `einleiten`) |
 /// | `data_status` | Yes | `"abrechnungsdaten"`, `"abgerechnete_daten"`, or `"abgerechnete_daten_kbka"` |
 pub(super) async fn dispatch_mabis_billing_begleichen(

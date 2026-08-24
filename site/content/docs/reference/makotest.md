@@ -48,6 +48,32 @@ test ergonomics is Python.**
 | Answer Fristen per Prüfidentifikator | Rust — `mako-fristen::antwort` |
 | Counterparty behaviour, EPEX curves, fixtures | Python |
 
+```mermaid
+graph TB
+    subgraph py["Python — test ergonomics"]
+        FIX["fixtures · EPEX curves"]
+        SIM["counterparty simulators"]
+        PLUG["pytest plugin"]
+    end
+    subgraph pyo3["makotest — PyO3 abi3 extension"]
+        BIND["thin binding layer"]
+    end
+    subgraph rust["Rust — the same crates production runs"]
+        EDI["edi-energy<br/>build · MIG/AHB/semantic validate"]
+        FRIST["mako-fristen<br/>Werktag calendar · answer Fristen"]
+        BO["rubo4e::identifiers<br/>MaLo · MP-ID · EIC check digits"]
+    end
+
+    FIX --> BIND
+    SIM --> BIND
+    PLUG --> BIND
+    BIND --> EDI
+    BIND --> FRIST
+    BIND --> BO
+    EDI -.->|"same code path"| PROD["makod in production"]
+    FRIST -.->|"same code path"| PROD
+```
+
 Because validation runs the platform's own AHB engine, `makotest` proves
 *process and integration* behaviour. It is **not** an independent check of format
 conformance — the BDEW reference examples remain the authority there.
@@ -218,7 +244,7 @@ msg = build_utilmd(
     55001,
     sender="4012345000023",
     receiver="9900357000003",
-    on="2026-04-01",                     # → release S2.1, DTM+137:20260401
+    on="2026-04-01",                     # → release S2.1, DTM+137:202604010000+00
     transactions=[
         UtilmdTransaction(
             "VORGANG-1",                  # IDE+24 — never a location ID

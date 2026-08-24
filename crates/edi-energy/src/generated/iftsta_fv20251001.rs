@@ -3866,7 +3866,9 @@ impl Profile for IftstaFv20251001Profile {
         Some("2.0h")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("IFTSTA MIG 2.0h, konsolidierte Lesefassung mit Fehlerkorrekturen Stand 23.06.2025")
+        Some(
+            "IFTSTA MIG 2.0h, konsolidierte Lesefassung mit Fehlerkorrekturen Publikationsdatum 01.04.2025",
+        )
     }
     fn pid_source(&self) -> crate::registry::PidSource {
         crate::registry::PidSource::RffZ13

@@ -185,7 +185,7 @@ pub(super) fn cmd_wim_rechnung_ablehnen<'a>(
 /// | 55051 | Ende MSB (Abmeldung)                 | MSBA | NB   | 7 WT |
 /// | 55168 | Verpflichtungsanfrage / Aufforderung | NB   | gMSB | 1 WT |
 ///
-/// The caller supplies `melo_id`, `process_date`, and the counterparty GLN
+/// The caller supplies `melo_id`, `process_date`, and the counterparty MP-ID
 /// (`receiver_mp_id`). Business key = `melo_id`.
 ///
 /// Deadline: 5 Werktage for the counterparty's answer (WiM BK6-24-174).
@@ -218,14 +218,14 @@ pub(super) async fn dispatch_wim_geraetewechsel_beauftragen(
         })?
         .to_owned();
 
-    // The counterparty GLN cannot be derived from the MeLo alone: for 55039/55042
+    // The counterparty MP-ID cannot be derived from the MeLo alone: for 55039/55042
     // it is the NB, for 55051/55168 it is the nMSB. The ERP knows which.
     let receiver_mp_id = payload
         .get("receiver_mp_id")
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             DispatchError::InvalidPayload(
-                "payload must contain \"receiver_mp_id\" (13-digit GLN of the counterparty: \
+                "payload must contain \"receiver_mp_id\" (Marktpartner-ID of the counterparty: \
                  the MSBA for 55039, the NB for 55042 and 55051, the gMSB for 55168)"
                     .to_owned(),
             )
@@ -951,7 +951,7 @@ pub(super) fn cmd_wim_rechnungsabwicklung_ablehnen<'a>(
 ///
 /// Either side of the arrangement may end it (AWH Aktivitätsdiagramme WiM V1.3
 /// §§2.9/2.11), so the sending role is whatever this deployment is; the
-/// counterparty GLN comes from the ERP, which knows whom the arrangement is
+/// counterparty MP-ID comes from the ERP, which knows whom the arrangement is
 /// with. The counterparty answers with ORDRSP 19009/19010, which resumes this
 /// process by MaLo.
 pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
@@ -966,7 +966,7 @@ pub(super) async fn dispatch_wim_rechnungsabwicklung_beenden(
         .and_then(|v| v.as_str())
         .ok_or_else(|| {
             DispatchError::InvalidPayload(
-                "payload must contain \"counterparty_mp_id\" (13-digit GLN of the \
+                "payload must contain \"counterparty_mp_id\" (Marktpartner-ID of the \
                  other side of the arrangement — the MSB when the LF ends it, \
                  the LF when the MSB does)"
                     .to_owned(),

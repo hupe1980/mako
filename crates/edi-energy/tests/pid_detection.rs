@@ -19,7 +19,6 @@ fn mscons_13027(document_number: &str) -> Vec<u8> {
         .receiver("9905550000005")
         .document_code("Z83")
         .document_number(document_number)
-        .document_date_303()
         .header_reference("AGI", "ORDERDOC0001")
         .pruefidentifikator(edi_energy::Pruefidentifikator::new(13027).expect("valid PID"))
         .serialize()

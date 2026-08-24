@@ -54,13 +54,25 @@ struct MigProfile {
     /// `"rff_z13"`: extracted from the first top-level RFF segment with qualifier Z13.
     #[serde(default)]
     pid_source: PidSourceJson,
-    /// First date on which this profile is normatively valid (BDEW 'Gültig ab').
-    /// ISO 8601 date string e.g. "2025-10-01".  Should match the `fvYYYYMMDD`
-    /// component of the profile directory name.  When absent the codegen falls
-    /// back to parsing the date from the directory name for backward
-    /// compatibility; new profiles must set this field explicitly.
+    /// The **Anwendungszeitpunkt**: first date on which this profile is
+    /// normatively valid. ISO 8601, e.g. `"2025-10-01"`.
+    ///
+    /// This is *not* the date BDEW published the document. Allgemeine
+    /// Festlegungen 6.1d §2.5.1/§2.5.2 put a six-month Umsetzungsphase between
+    /// the two: a document published on 01.04. applies from 01.10. of the same
+    /// year, one published on 01.10. from 01.04. of the next. The profile
+    /// directory is named after this date, and [`Profile::valid_from`] returns
+    /// it.
     #[serde(default)]
     valid_from: Option<String>,
+    /// The date BDEW published the source document — *source metadata only*,
+    /// six months before `valid_from` for every regular release.
+    ///
+    /// When present, codegen checks `valid_from` against it per Allgemeine
+    /// Festlegungen §2.5. Absent for ausserordentliche Veröffentlichungen,
+    /// whose Anwendungszeitpunkt the BNetzA Mitteilung names directly.
+    #[serde(default)]
+    publikationsdatum: Option<String>,
     /// Last date on which this profile is normatively valid (BDEW 'Gültig bis').
     /// ISO 8601 date string e.g. "2026-09-30". Absent means open-ended.
     #[serde(default)]
@@ -996,16 +1008,17 @@ fn discover_profiles(profiles_dir: &Path) -> Vec<ProfileData> {
                 }
             }
 
-            // Prefer the explicit `valid_from` field in mig.json over the directory-name
-            // derivation.  The directory-name fallback exists only for legacy profiles
-            // created before the explicit field was added.
+            // `valid_from` in mig.json is the Anwendungszeitpunkt and is the only
+            // source of truth. The directory-name fallback exists for legacy
+            // profiles whose directory does not embed one.
             let valid_from = mig
                 .valid_from
                 .as_deref()
                 .and_then(parse_iso_date)
                 .or_else(|| parse_fv_date(&folder_name));
 
-            // Cross-check: if both sources are present they must agree.
+            // The directory is *named* after the Anwendungszeitpunkt, so the two
+            // must agree — a naming-convention check, not a source of validity.
             if let (Some(from_json), Some(from_dir)) = (
                 mig.valid_from.as_deref().and_then(parse_iso_date),
                 parse_fv_date(&folder_name),
@@ -1013,7 +1026,10 @@ fn discover_profiles(profiles_dir: &Path) -> Vec<ProfileData> {
             {
                 eprintln!(
                     "  error: {} {folder_name}: mig.json valid_from '{}' does not \
-                         match the date implied by the directory name ({}-{:02}-{:02})",
+                         match the date implied by the directory name ({}-{:02}-{:02}). \
+                         The directory is named after the Anwendungszeitpunkt, never \
+                         after the Publikationsdatum — that belongs in \
+                         `publikationsdatum`.",
                     message_type,
                     mig.valid_from.as_deref().unwrap_or(""),
                     from_dir.0,
@@ -1021,6 +1037,57 @@ fn discover_profiles(profiles_dir: &Path) -> Vec<ProfileData> {
                     from_dir.2,
                 );
                 std::process::exit(1);
+            }
+
+            // Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2: the Umsetzungsphase
+            // between the Veröffentlichungszeitpunkt of the konsultierte
+            // Dokumente and their Anwendungszeitpunkt is six months — a document
+            // published on 01.04. applies from 01.10. of the same year, one
+            // published on 01.10. from 01.04. of the next. Treating the
+            // Publikationsdatum as the Anwendungszeitpunkt selected each new
+            // Formatversion six months early, so the relation is enforced.
+            if let (Some(pub_date), Some(from)) = (
+                mig.publikationsdatum.as_deref().and_then(parse_iso_date),
+                mig.valid_from.as_deref().and_then(parse_iso_date),
+            ) {
+                let expected = match pub_date {
+                    (y, 4, 1) => Some((y, 10u8, 1u8)),
+                    (y, 10, 1) => Some((y + 1, 4u8, 1u8)),
+                    _ => None,
+                };
+                match expected {
+                    Some(exp) if exp != from => {
+                        eprintln!(
+                            "  error: {message_type} {folder_name}: Publikationsdatum \
+                             {}-{:02}-{:02} implies an Anwendungszeitpunkt of \
+                             {}-{:02}-{:02} (Allgemeine Festlegungen 6.1d §2.5), but \
+                             valid_from is {}-{:02}-{:02}",
+                            pub_date.0,
+                            pub_date.1,
+                            pub_date.2,
+                            exp.0,
+                            exp.1,
+                            exp.2,
+                            from.0,
+                            from.1,
+                            from.2,
+                        );
+                        std::process::exit(1);
+                    }
+                    None => {
+                        eprintln!(
+                            "  error: {message_type} {folder_name}: Publikationsdatum \
+                             {}-{:02}-{:02} is not a regular release date (01.04. or \
+                             01.10.). An ausserordentliche Veröffentlichung has no \
+                             derivable Anwendungszeitpunkt — omit `publikationsdatum` \
+                             and record the date the BNetzA Mitteilung names in \
+                             `source_document`.",
+                            pub_date.0, pub_date.1, pub_date.2,
+                        );
+                        std::process::exit(1);
+                    }
+                    Some(_) => {}
+                }
             }
 
             let valid_until = mig.valid_until.clone();
@@ -2793,6 +2860,24 @@ fn collect_group_orders(mig: &MigProfile) -> Vec<(String, Vec<String>)> {
     orders
 }
 
+/// Every tag that triggers a repeatable segment group, at any nesting depth.
+///
+/// The MIG declares the nesting — MSCONS has SG5(`LOC`) → SG9(`LIN`) →
+/// SG10(`QTY`) — and the order check needs all of them, not only the outermost.
+fn detail_group_triggers(mig: &MigProfile) -> Vec<String> {
+    fn walk(groups: &[MigGroup], out: &mut Vec<String>) {
+        for g in groups {
+            if !out.contains(&g.trigger_segment) {
+                out.push(g.trigger_segment.clone());
+            }
+            walk(&g.groups, out);
+        }
+    }
+    let mut out = Vec::new();
+    walk(&mig.segment_groups, &mut out);
+    out
+}
+
 fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &str) {
     let rule_id = format!("MIG-{pack_name}-ORDER");
 
@@ -2877,6 +2962,26 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
             "        const EXPECTED_DETAIL_ORDER: &[&str] = &[{detail_lit}];"
         )
         .unwrap();
+        // Every segment group the MIG declares, at any nesting depth, may
+        // repeat. Emitting the trigger tags is what lets the cursor return to
+        // an earlier position instead of reporting a violation: MSCONS SG10 is
+        // `QTY + DTM + STS` inside SG9, so a second reading in one line item
+        // legitimately steps back from DTM to QTY.
+        let trigger_lit: String = detail_group_triggers(mig)
+            .iter()
+            .map(|s| format!("{s:?}"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        writeln!(
+            out,
+            "        /// Tags that trigger a repeatable segment group in the detail section."
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        const DETAIL_GROUP_TRIGGERS: &[&str] = &[{trigger_lit}];"
+        )
+        .unwrap();
         writeln!(out).unwrap();
         writeln!(
             out,
@@ -2926,39 +3031,56 @@ fn emit_segment_order_rule_fn(out: &mut String, mig: &MigProfile, pack_name: &st
         writeln!(out, "        ///").unwrap();
         writeln!(
             out,
-            "        /// When the first tag in `expected` is seen again after the cursor has"
+            "        /// Any tag that triggers a segment group may legitimately step the cursor"
         )
         .unwrap();
         writeln!(
             out,
-            "        /// already advanced, this indicates a new group-repetition occurrence"
+            "        /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`"
         )
         .unwrap();
         writeln!(
             out,
-            "        /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset"
+            "        /// inside SG9, so the second reading of a line item returns from DTM to"
         )
         .unwrap();
         writeln!(
             out,
-            "        /// to that position instead of reporting an ordering violation."
+            "        /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        /// rejected every multi-interval MSCONS, which is every Lastgang there is."
         )
         .unwrap();
         writeln!(out, "        fn check_detail_section(segs: &[edifact_rs::Segment<'_>], expected: &[&str], rule_id: &str, issues: &mut Vec<ValidationIssue>) {{").unwrap();
-        writeln!(
-            out,
-            "            let group_trigger = expected.first().copied().unwrap_or(\"\");"
-        )
-        .unwrap();
         writeln!(out, "            let mut cursor: usize = 0;").unwrap();
         writeln!(out, "            for seg in segs {{").unwrap();
-        writeln!(out, "                // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.").unwrap();
         writeln!(
             out,
-            "                if cursor > 0 && seg.tag == group_trigger {{"
+            "                // A group trigger seen at or before the cursor opens a new"
         )
         .unwrap();
-        writeln!(out, "                    cursor = 0;").unwrap();
+        writeln!(
+            out,
+            "                // occurrence of that group; rewind to it."
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {{"
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "                    if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {{"
+        )
+        .unwrap();
+        writeln!(out, "                        if pos <= cursor {{").unwrap();
+        writeln!(out, "                            cursor = pos;").unwrap();
+        writeln!(out, "                        }}").unwrap();
+        writeln!(out, "                    }}").unwrap();
         writeln!(out, "                }}").unwrap();
         writeln!(out, "                if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {{").unwrap();
         writeln!(out, "                    cursor += pos;").unwrap();
@@ -5098,7 +5220,7 @@ mod tests {
     #[test]
     fn module_name_standard() {
         assert_eq!(module_name("UTILMD", "fv20241001"), "utilmd_fv20241001");
-        assert_eq!(module_name("MSCONS", "fv20251001"), "mscons_fv20251001");
+        assert_eq!(module_name("MSCONS", "fv20260401"), "mscons_fv20260401");
         assert_eq!(module_name("CONTRL", "fv20260101"), "contrl_fv20260101");
     }
 
@@ -5170,6 +5292,7 @@ mod tests {
             ordering_hint: vec!["UNH".into(), "BGM".into(), "UNS".into(), "UNT".into()],
             pid_source: PidSourceJson::BgmDe1004,
             valid_from: None,
+            publikationsdatum: None,
             valid_until: None,
             ahb_revision: None,
             source_document: None,
@@ -5217,6 +5340,7 @@ mod tests {
             ordering_hint: vec![],
             pid_source: PidSourceJson::BgmDe1004,
             valid_from: None,
+            publikationsdatum: None,
             valid_until: None,
             ahb_revision: None,
             source_document: None,
@@ -5275,6 +5399,7 @@ mod tests {
             ordering_hint: vec![],
             pid_source: PidSourceJson::BgmDe1004,
             valid_from: None,
+            publikationsdatum: None,
             valid_until: None,
             ahb_revision: None,
             source_document: None,
@@ -5343,6 +5468,7 @@ mod tests {
             ordering_hint: vec![],
             pid_source: PidSourceJson::BgmDe1004,
             valid_from: None,
+            publikationsdatum: None,
             valid_until: None,
             ahb_revision: None,
             source_document: None,

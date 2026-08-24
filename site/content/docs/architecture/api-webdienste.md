@@ -127,7 +127,7 @@ sequenceDiagram
     NB_AS4-->>MSB: AS4 Receipt + APERAK
 
     Note over MSB,dir: Channel 2 — REST/JSON (iMS Steuerbefehl)
-    MSB->>dir: GET /v1/organisations/NB-GLN<br/>(endpoint lookup)
+    MSB->>dir: GET /v1/organisations/NB-MP-ID<br/>(endpoint lookup)
     dir-->>MSB: endpoint URL + JWS cert
     MSB->>NB_WEB: POST /controlMeasures/v1/configure<br/>(iMS Konfigurationsbefehl)
     NB_WEB-->>MSB: 200 OK (receipt)

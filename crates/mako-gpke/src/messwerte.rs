@@ -39,7 +39,7 @@ use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
     error::WorkflowError,
     outbox::PendingOutbox,
-    types::{MaLo, MarktpartnerCode, MessageRef},
+    types::{MaLo, MarktpartnerCode, MessageRef, MeteredInterval},
     workflow::{CommandPayload, EventPayload, Workflow, WorkflowOutput},
 };
 
@@ -84,6 +84,13 @@ pub struct MesswerteLieferungData {
     pub document_date: String,
     /// EDIFACT message reference.
     pub message_ref: MessageRef,
+    /// The readings the delivery carried.
+    ///
+    /// Defaulted so a stream written before the values were carried still
+    /// replays; such a process has no readings to hand on, which is the
+    /// truthful reading of what was recorded.
+    #[serde(default)]
+    pub reads: Vec<MeteredInterval>,
 }
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -104,6 +111,9 @@ pub enum MesswerteLieferungEvent {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The readings the delivery carried.
+        #[serde(default)]
+        reads: Vec<MeteredInterval>,
     },
     /// AHB validation passed; data is available for downstream use.
     ValidationPassed {
@@ -185,6 +195,12 @@ pub enum MesswerteLieferungCommand {
         document_date: String,
         /// EDIFACT message reference.
         message_ref: MessageRef,
+        /// The decoded `SG9`/`SG10` readings the message carried.
+        ///
+        /// Empty when the message carries none, or when none could be dated —
+        /// the process still records the delivery, because an MSCONS that
+        /// arrived and could not be decoded is a fact an operator has to see.
+        reads: Vec<MeteredInterval>,
         /// `true` if AHB validation passed.
         validation_passed: bool,
         /// Human-readable validation errors (if any).
@@ -193,6 +209,48 @@ pub enum MesswerteLieferungCommand {
 }
 
 impl CommandPayload for MesswerteLieferungCommand {}
+
+/// Build the `ProcessCompleted` payload `edmd` consumes.
+///
+/// The key set mirrors the outbound MSB delivery in
+/// `mako_wim::wertebestellung` — `malo_id`, `sender`, `message_ref`, `sparte`
+/// and a `reads` array of `{dtm_from, dtm_to, quantity_kwh, quality,
+/// obis_code, melo_id}` — so the two directions of the same values are the
+/// same shape.
+///
+/// `malo_id` is present whether or not there are readings: `edmd` refuses an
+/// event without one before it looks at anything else, and a delivery whose
+/// intervals could not be decoded must still leave a receipt rather than
+/// vanish.
+///
+/// `sparte` is stated rather than left to `edmd`'s default because this crate
+/// is the Strom half of MSCONS ingest; the Gas PIDs are `mako-geli-gas`.
+fn erp_payload(
+    pid: Pruefidentifikator,
+    sender: &MarktpartnerCode,
+    location_id: &MaLo,
+    message_ref: &MessageRef,
+    reads: &[MeteredInterval],
+) -> serde_json::Value {
+    serde_json::json!({
+        "pid": pid.as_u32(),
+        "malo_id": location_id.as_str(),
+        "sender": sender.as_str(),
+        "message_ref": message_ref.as_str(),
+        "sparte": "STROM",
+        "reads": reads
+            .iter()
+            .map(|r| serde_json::json!({
+                "dtm_from": r.dtm_from,
+                "dtm_to": r.dtm_to,
+                "quantity_kwh": r.quantity,
+                "quality": r.quality(),
+                "obis_code": r.obis_code,
+                "melo_id": r.melo_id,
+            }))
+            .collect::<Vec<_>>(),
+    })
+}
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -216,12 +274,14 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 location_id,
                 document_date,
                 message_ref,
+                reads,
             } => MesswerteLieferungState::DatenErhalten(MesswerteLieferungData {
                 pruefidentifikator: *pruefidentifikator,
                 sender: sender.clone(),
                 location_id: location_id.clone(),
                 document_date: document_date.clone(),
                 message_ref: message_ref.clone(),
+                reads: reads.clone(),
             }),
             MesswerteLieferungEvent::ValidationPassed { .. } => match state {
                 MesswerteLieferungState::DatenErhalten(data) => {
@@ -248,6 +308,7 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                 location_id,
                 document_date,
                 message_ref,
+                reads,
                 validation_passed,
                 validation_errors,
             } => {
@@ -259,24 +320,22 @@ impl Workflow for GpkeMesswerteLieferungWorkflow {
                         "PID {pid} is not a handled MSCONS PID",
                     )));
                 }
+                let erp_payload = erp_payload(pid, &sender, &location_id, &message_ref, &reads);
                 let mut events = vec![MesswerteLieferungEvent::MsconsDatenErhalten {
                     pruefidentifikator: pid,
                     sender,
                     location_id,
                     document_date,
                     message_ref: message_ref.clone(),
+                    reads,
                 }];
                 let outbox = if validation_passed {
                     events.push(MesswerteLieferungEvent::ValidationPassed { message_ref });
-                    // Notify `edmd` that validated Strom MSCONS data is ready.
-                    vec![
-                        PendingOutbox::new(
-                            "ProcessCompleted",
-                            "",
-                            serde_json::json!({ "pid": pid.as_u32() }),
-                        )
-                        .caused_by(1),
-                    ]
+                    // Hand `edmd` the delivery *and its readings*. `edmd` drops
+                    // an event with no `malo_id` before it reaches the interval
+                    // parser, so a payload carrying only the PID would complete
+                    // the process and store nothing.
+                    vec![PendingOutbox::new("ProcessCompleted", "", erp_payload).caused_by(1)]
                 } else {
                     events.push(MesswerteLieferungEvent::ValidationFailed {
                         reason: validation_errors.join("; "),

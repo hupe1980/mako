@@ -85,6 +85,45 @@ fn convert_pid(p: edi_energy::Pruefidentifikator) -> Result<Pruefidentifikator, 
         .map_err(|e| EngineError::Deserialization(format!("PID out of range: {e}")))
 }
 
+/// Parse a `DTM` value into a UTC datetime, honouring the segment's own DE 2379.
+///
+/// `102` is `CCYYMMDD` (midnight UTC) and `303` is `CCYYMMDDHHMMZZZ` with the
+/// zone as a signed hour offset. A `DTM` whose DE 2379 says neither is not a
+/// point in time — `273` is a duration, `802` a month count — so it yields
+/// `None` rather than a guess.
+///
+/// The format element decides, never the caller's expectation: the AHBs put
+/// nearly every date in `303`, and reading one as `CCYYMMDD` yields nothing.
+pub(crate) fn parse_dtm_datetime(
+    value: &str,
+    format: Option<&str>,
+) -> Option<time::OffsetDateTime> {
+    match format {
+        Some("102") => parse_ccyymmdd(value),
+        Some("303") => {
+            let stamp: String = value
+                .chars()
+                .filter(char::is_ascii_digit)
+                .take(12)
+                .collect();
+            if stamp.len() != 12 {
+                return None;
+            }
+            let day = parse_ccyymmdd(&stamp[0..8])?;
+            let hour: u8 = stamp[8..10].parse().ok()?;
+            let minute: u8 = stamp[10..12].parse().ok()?;
+            let offset_hours: i8 = value
+                .rfind(['+', '-'])
+                .and_then(|i| value[i..].parse::<i8>().ok())
+                .unwrap_or(0);
+            day.replace_time(time::Time::from_hms(hour, minute, 0).ok()?)
+                .replace_offset(time::UtcOffset::from_hms(offset_hours, 0, 0).ok()?)
+                .checked_to_offset(time::UtcOffset::UTC)
+        }
+        _ => None,
+    }
+}
+
 /// Parse a `CCYYMMDD` DTM value (format 102) into a UTC datetime at midnight.
 pub(crate) fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
     if v.len() != 8 || !v.bytes().all(|b| b.is_ascii_digit()) {
@@ -157,6 +196,162 @@ pub use wim::*;
 
 // The set of BDEW format versions for which all active domain workflows must
 // have registered adapters.
+// ── AHB verdict ───────────────────────────────────────────────────────────────
+
+/// Run the message's own release profile over it and report the verdict.
+///
+/// Returns `(passed, errors)`. Adapters put both on the command so the workflow
+/// can answer an AHB violation with the Ablehnung or the negative APERAK its
+/// process prescribes, instead of acting on a message that does not conform.
+///
+/// # Why this is one function
+///
+/// Thirty-nine call sites across 36 of the 66 adapter registries open with the
+/// same nine lines; the other 30 registries — mostly answer-PID adapters, whose
+/// messages publish no AHB Anwendungsfall of their own — do not validate at
+/// all. Sharing the verdict keeps the two halves from disagreeing about what
+/// "passed" means.
+///
+/// The **metric** is not emitted here. `makod_validation_failed_total` must
+/// count messages, not adapter invocations, and only about half of them reach
+/// an adapter that asks. It is emitted once per inbound message at the ingest
+/// boundary instead — see `edifact_api::record_ahb_conformance`.
+///
+/// # A note on `Err`
+///
+/// `validate()` fails when no profile is registered for the message's release —
+/// which is the ordinary case for the answer PIDs that close an order we sent,
+/// since they carry no AHB Anwendungsfall of their own. That is reported as
+/// **not passed** with no errors listed, the conservative reading: nothing was
+/// checked, so nothing may be asserted. It is deliberately *not* counted as a
+/// validation failure, because a metric that conflates "the message broke a
+/// rule" with "there was no rule to break" alerts on normal traffic and is
+/// therefore ignored. Some adapters additionally refuse a *vacuous* pass — a
+/// profile that exists but carries no imported AHB rules for the PID — at their
+/// own call site, because whether an unchecked message may be acted on is a
+/// per-process decision.
+pub(crate) fn ahb_verdict(msg: &AnyMessage) -> (bool, Vec<String>) {
+    let Some(report) = msg.validate().ok() else {
+        return (false, Vec::new());
+    };
+    if report.is_valid() {
+        return (true, Vec::new());
+    }
+    (
+        false,
+        report.errors().iter().map(|e| format!("{e}")).collect(),
+    )
+}
+
+// ── MSCONS interval decoding ──────────────────────────────────────────────────
+
+/// `SG10 DTM` DE 2379 format `303` — `CCYYMMDDHHMMZZZ`.
+const DTM_FORMAT_CCYYMMDDHHMMZZZ: &str = "303";
+
+/// Convert a `SG10 DTM` value in format `303` to RFC 3339.
+///
+/// The interval PIDs all mandate `303` with `[931] Format: ZZZ = +00`, so the
+/// offset is on the wire and nothing has to be assumed. A value in any other
+/// format is **refused** rather than read as UTC: `102` (`CCYYMMDD`) and `203`
+/// (`CCYYMMDDHHMM`) carry no offset, and guessing one is a silent one-hour
+/// error for half the year — on a quarter-hour settlement value.
+fn dtm303_to_rfc3339(value: &str, format: Option<&str>) -> Option<String> {
+    if format != Some(DTM_FORMAT_CCYYMMDDHHMMZZZ) {
+        return None;
+    }
+    // `202606010000+00` — 12 digits, then a signed two-digit hour offset.
+    let (stamp, offset) = value.split_at(value.len().checked_sub(3)?);
+    if stamp.len() != 12 || !stamp.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let sign = offset.as_bytes().first()?;
+    if !matches!(sign, b'+' | b'-') || !offset[1..].bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    Some(format!(
+        "{}-{}-{}T{}:{}:00{}{}:00",
+        &stamp[0..4],
+        &stamp[4..6],
+        &stamp[6..8],
+        &stamp[8..10],
+        &stamp[10..12],
+        offset.get(0..1)?,
+        &offset[1..],
+    ))
+}
+
+/// Decode every `SG9`/`SG10` reading in an MSCONS into [`MeteredInterval`]s.
+///
+/// # Why this exists
+///
+/// The values were decoded and then dropped. Both MSCONS adapters used to take
+/// only the `SG5 NAD` party id off the message and discard the readings, so a
+/// delivery arrived, was acknowledged, completed its process — and reached the
+/// ERP as `{"pid": 13027}`. `edmd`'s interval store and its separate ESA Typ-2
+/// store both parse a `reads` array that nothing produced.
+///
+/// The OBIS code is inherited from the `SG9 PIA` of the line item the reading
+/// sits under and the Messlokation from the `SG6 LOC`, because a reading is
+/// only interpretable together with the register and the location it belongs
+/// to.
+///
+/// A reading whose period cannot be established is skipped rather than dated
+/// by guesswork; the count is returned so the caller can say how many.
+pub(crate) fn mscons_intervals(
+    msg: &edi_energy::messages::mscons::MsconsMessage,
+) -> (Vec<mako_engine::types::MeteredInterval>, usize) {
+    use mako_engine::types::MeteredInterval;
+
+    let mut out = Vec::new();
+    let mut skipped = 0usize;
+    for dp in msg.delivery_points() {
+        for series in &dp.time_series {
+            // `SG6 LOC+172` is the Meldepunkt; only a Messlokation belongs in
+            // `melo_id`, and `LOC+172` is polymorphic (it accepts a MaLo too),
+            // so the 33-character shape is what distinguishes them.
+            let melo_id = series
+                .loc
+                .location_id
+                .as_deref()
+                .filter(|id| id.len() == 33)
+                .map(str::to_owned);
+            for item in &series.items {
+                let obis_code = item
+                    .pia
+                    .as_ref()
+                    .and_then(|p| p.item_number.as_deref())
+                    .map(str::to_owned);
+                for q in &item.quantities {
+                    let find = |qualifier: &str| {
+                        q.dtm
+                            .iter()
+                            .find(|d| d.qualifier == qualifier)
+                            .and_then(|d| {
+                                dtm303_to_rfc3339(d.value.as_deref()?, d.format.as_deref())
+                            })
+                    };
+                    let (Some(dtm_from), Some(dtm_to), Some(quantity)) =
+                        (find("163"), find("164"), q.qty.value.clone())
+                    else {
+                        skipped += 1;
+                        continue;
+                    };
+                    out.push(MeteredInterval {
+                        obis_code: obis_code.clone(),
+                        melo_id: melo_id.clone(),
+                        dtm_from,
+                        dtm_to,
+                        quantity,
+                        unit: q.qty.unit.clone(),
+                        qualifier: q.qty.qualifier.clone(),
+                    });
+                }
+            }
+        }
+    }
+    (out, skipped)
+}
+
 // ── IFTSTA extraction helpers ─────────────────────────────────────────────────
 
 /// Extract a [`SupplierChangeCommand::ReceiveVollzugsmeldung`] from an IFTSTA
@@ -175,15 +370,7 @@ fn build_gpke_iftsta_command(msg: &AnyMessage) -> Result<SupplierChangeCommand, 
             EngineError::Deserialization(format!("GPKE IFTSTA adapter: PID detection failed: {e}"))
         })
         .and_then(convert_pid)?;
-    let validation_result = msg.validate().ok();
-    let validation_passed = validation_result
-        .as_ref()
-        .map(|r| r.is_valid())
-        .unwrap_or(false);
-    let validation_errors: Vec<String> = validation_result
-        .as_ref()
-        .map(|r| r.errors().iter().map(|e| format!("{e}")).collect())
-        .unwrap_or_default();
+    let (validation_passed, validation_errors) = ahb_verdict(msg);
     Ok(SupplierChangeCommand::ReceiveVollzugsmeldung {
         pid,
         sender: MarktpartnerCode::new(i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or("")),
@@ -214,15 +401,7 @@ fn build_wim_iftsta_command(msg: &AnyMessage) -> Result<DeviceChangeCommand, Eng
             EngineError::Deserialization(format!("WiM IFTSTA adapter: PID detection failed: {e}"))
         })
         .and_then(convert_pid)?;
-    let validation_result = msg.validate().ok();
-    let validation_passed = validation_result
-        .as_ref()
-        .map(|r| r.is_valid())
-        .unwrap_or(false);
-    let validation_errors: Vec<String> = validation_result
-        .as_ref()
-        .map(|r| r.errors().iter().map(|e| format!("{e}")).collect())
-        .unwrap_or_default();
+    let (validation_passed, validation_errors) = ahb_verdict(msg);
     // The Gesamtvorgang leg is not informational: it is what makes a Zuordnung
     // constitutive (WiM Teil 1 Kap. 2.1.1). 21009/21010 report the outcome and
     // 21011/21012/21013 answer it, and the date rides `SG15 DTM+2380`.
@@ -305,15 +484,7 @@ fn build_mabis_iftsta_command(msg: &AnyMessage) -> Result<BillingCommand, Engine
             EngineError::Deserialization(format!("MABIS IFTSTA adapter: PID detection failed: {e}"))
         })
         .and_then(convert_pid)?;
-    let validation_result = msg.validate().ok();
-    let validation_passed = validation_result
-        .as_ref()
-        .map(|r| r.is_valid())
-        .unwrap_or(false);
-    let validation_errors: Vec<String> = validation_result
-        .as_ref()
-        .map(|r| r.errors().iter().map(|e| format!("{e}")).collect())
-        .unwrap_or_default();
+    let (validation_passed, validation_errors) = ahb_verdict(msg);
 
     // For PID 21004 (Statusmeldung vom BIKO an BKV/NB), extract the Datenstatus
     // code from the first STS segment at element index 2 (DE 9013, status reason).

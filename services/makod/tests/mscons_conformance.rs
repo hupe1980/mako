@@ -12,12 +12,11 @@
 //!
 //! ## Coverage
 //!
-//! The single-line-item case is checked on every run. The repeated-group cases
-//! are `#[ignore]`d: the MSCONS profile models the AHB's SG5 (`NAD+DP`) and SG6
-//! (`LOC`) as one group triggered by `LOC`, so a message with more than one
-//! `LIN`/`QTY` cycle is reported out of order even when it conforms. Correcting
-//! that changes how all inbound MSCONS is validated, so it is deliberately not
-//! papered over here — run these with `--include-ignored` to see the gap.
+//! Every Anwendungsfall is checked on every run, single- and repeated-group
+//! alike. The repeated-group cases used to be `#[ignore]`d because the
+//! generated profile only rewound the cursor on the *outermost* group trigger,
+//! so a second `LIN`/`QTY` cycle read as out of order even when it conformed;
+//! `DETAIL_GROUP_TRIGGERS` now rewinds on any nested trigger.
 
 use edi_energy::{Platform, Pruefidentifikator, validate_and_check_pid};
 use makod::edifact_renderer::render_to_wire_bytes;
@@ -66,6 +65,7 @@ fn summed_series_payload(pid: u32) -> serde_json::Value {
         "sender_mp_id": "9900357000004",
         "receiver_mp_id": "9900077000006",
         "bilanzierungsgebiet_id": "DE0011YAPG4",
+        "mabis_zp_id": "DE0004030099000000000000000012345",
         "balancing_period": "202606",
         "version": "20260714050000+00",
         "intervals": [
@@ -76,7 +76,6 @@ fn summed_series_payload(pid: u32) -> serde_json::Value {
 }
 
 #[test]
-#[ignore = "profile models AHB SG5+SG6 as one LOC-triggered group; repeated LIN/QTY reads as out of order"]
 fn summenzeitreihe_conforms() {
     let wire = assert_conforms(13003, summed_series_payload(13003));
     // BGM DE 1001 `BK` — "Zeitreihen im Rahmen der Bilanzkreisabrechnung".
@@ -84,7 +83,6 @@ fn summenzeitreihe_conforms() {
 }
 
 #[test]
-#[ignore = "profile models AHB SG5+SG6 as one LOC-triggered group; repeated LIN/QTY reads as out of order"]
 fn redispatch_ausfallarbeit_summenzeitreihe_conforms() {
     let wire = assert_conforms(13023, summed_series_payload(13023));
     assert!(wire.contains("BGM+Z46"), "{wire}");
@@ -114,14 +112,12 @@ fn arbeit_payload(pid: u32, with_maxima: bool) -> serde_json::Value {
 }
 
 #[test]
-#[ignore = "profile models AHB SG5+SG6 as one LOC-triggered group; repeated LIN/QTY reads as out of order"]
 fn arbeit_leistungsmaximum_vor_lieferbeginn_conforms() {
     let wire = assert_conforms(13015, arbeit_payload(13015, true));
     assert!(wire.contains("BGM+Z27"), "{wire}");
 }
 
 #[test]
-#[ignore = "profile models AHB SG5+SG6 as one LOC-triggered group; repeated LIN/QTY reads as out of order"]
 fn energiemenge_und_leistungsmaximum_conforms() {
     let wire = assert_conforms(13016, arbeit_payload(13016, true));
     assert!(wire.contains("BGM+Z28"), "{wire}");

@@ -40,8 +40,8 @@ use mako_engine::{
     process::Process,
 };
 use mako_gabi_gas::{
-    DeliveryOrderCommand, GaBiGasAllocationWorkflow, GaBiGasDeliveryOrderWorkflow,
-    GaBiGasInvoicCommand, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow, NominationCommand,
+    GaBiGasAllocationWorkflow, GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
+    GaBiGasNominationWorkflow, NominationCommand,
 };
 use mako_geli_gas::{
     GasSperrungLfCommand, GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasDatanabrufCommand,
@@ -240,12 +240,8 @@ deadline_dispatch! {
         "mabis-listenabgleich",
         "mabis-anforderung",
         "mabis-zp-lifecycle",
-        // MMMA delegates delivery to gpke-allokationsliste; SCHEDL, IMBNOT and
-        // TRANOT are DVGW notifications with no response obligation.
+        // MMMA delegates delivery to gpke-allokationsliste.
         "gabi-gas-mmma",
-        "gabi-gas-schedl",
-        "gabi-gas-imbnot",
-        "gabi-gas-tranot",
         // Registered by an EngineModule but carrying no deadline of their own.
         mako_geli_gas::GAS_MSCONS_WORKFLOW_NAME,
         mako_gpke::messwerte::WORKFLOW_NAME,
@@ -256,7 +252,6 @@ deadline_dispatch! {
         // Commands with extra fields, or arms that consult state before
         // alerting. Written out in `dispatch_deadline` below.
         "gabi-gas-nomination",
-        "gabi-gas-delivery-order",
         "gabi-gas-allocation",
         // Delivery-window markers: no workflow, only a regulatory alert.
         "contrl-ack-obligation",
@@ -356,24 +351,6 @@ pub async fn dispatch_deadline(
                 );
                 p.execute_and_enqueue_with_retry(
                     NominationCommand::NomresDeadlineExpired {
-                        deadline_id,
-                        label: label.into(),
-                    },
-                    3,
-                )
-                .await?;
-                p.take_snapshot(&snap_store, snapshot_interval)
-                    .await
-                    .map(|_| ())
-            }
-            "gabi-gas-delivery-order" => {
-                // DELRES response deadline — no DELRES received from FNB/MGV before deadline.
-                let p = Process::<GaBiGasDeliveryOrderWorkflow, _>::from_identity(
-                    Arc::clone(&event_store),
-                    identity,
-                );
-                p.execute_and_enqueue_with_retry(
-                    DeliveryOrderCommand::DelresDeadlineExpired {
                         deadline_id,
                         label: label.into(),
                     },

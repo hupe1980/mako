@@ -159,9 +159,8 @@ impl KaKundengruppe {
     /// The KAV paragraph that fixes this group's Höchstbetrag.
     ///
     /// Cited on the position, so the invoice states the rule it was actually
-    /// billed under. Every position used to cite §2 Abs. 2 regardless — wrong
-    /// for a Sondervertragskunde, whose ceiling is Abs. 3, and wrong again for a
-    /// customer freigestellt under Abs. 7.
+    /// billed under: §2 Abs. 2 for a Tarifkunde, Abs. 3 for a
+    /// Sondervertragskunde, Abs. 7 for a freigestellter Kunde.
     #[must_use]
     pub const fn kav_paragraph(self) -> &'static str {
         match self {
@@ -1176,8 +1175,8 @@ impl Blindarbeit {
 
 /// An RLM demand charge — peak demand and its rate.
 ///
-/// A pair, because billing one without the other is meaningless. The two used to
-/// be independent `Option`s checked at runtime in two separate places.
+/// A pair, because billing one without the other is meaningless — which two
+/// independent `Option`s cannot express.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Leistungspreis {
     /// Peak demand in kW.
@@ -2212,8 +2211,8 @@ mod input_model_tests {
 
     /// The charged energy is the same figure whichever model priced it.
     ///
-    /// The Konzessionsabgabe and the three network levies are charged on it, and
-    /// each used to recompute the base with its own `if has_tou` branch.
+    /// The Konzessionsabgabe and the three network levies are all charged on it,
+    /// so they read one figure rather than each deriving its own.
     #[test]
     fn every_model_reports_the_energy_it_priced() {
         let flat = ArbeitspreisModell::Einheitlich(MengePreis {

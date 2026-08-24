@@ -141,7 +141,7 @@ pub(crate) struct HttpServerConfig<'a> {
     pub marktrollen: Vec<String>,
     pub malo_cache: Arc<malo_cache::SlateDbMaloCache>,
     pub marktd_client: Option<Arc<mako_markt::marktd_client::MarktdClient>>,
-    /// `--as4-partner GLN=URL` pairs, bootstrapped into the durable partner
+    /// `--as4-partner MP-ID=URL` pairs, bootstrapped into the durable partner
     /// store on first start.
     pub as4_partner: &'a [String],
     /// Surfaced by the metrics API so an operator can tell a volatile

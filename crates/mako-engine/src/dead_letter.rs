@@ -300,6 +300,52 @@ pub enum DeadLetterReason {
         context: AuditContext,
     },
 
+    /// A business message arrived without the `NAD` party the answer is
+    /// addressed with, or the one the Sparte is resolved from.
+    ///
+    /// BDEW Allgemeine Festlegungen V6.1d §2.13 identifies the *fachliche*
+    /// sender and receiver on message level in `NAD+MS` / `NAD+MR` DE 3035 and
+    /// states the approach applies "für alle EDI@Energy EDIFACT Nachrichten und
+    /// -dateien einheitlich". Both are load-bearing here: the sender is who the
+    /// answer and the APERAK go back to, and the receiver is which of the
+    /// operator's own MP-IDs — and therefore which Sparte and which Marktrolle —
+    /// the message is addressed to.
+    ///
+    /// Substituting an empty MP-ID produces a process whose answer is addressed
+    /// to nobody and whose Sparte silently defaults, so the message is refused
+    /// at the boundary instead. CONTRL carries no `NAD` at all — it is a
+    /// UN/EDIFACT syntax acknowledgement rather than an EDI@Energy business
+    /// message — and is exempt.
+    MissingInterchangeParty {
+        /// `"MS"` or `"MR"` — which of the two was absent or empty.
+        qualifier: &'static str,
+        /// § 147 AO / GoBD structured audit context.
+        context: AuditContext,
+    },
+
+    /// The PID resolved to a workflow, but the ingest dispatcher has no arm
+    /// for it — so `makod` claimed to route the message and then dropped it.
+    ///
+    /// Always a coverage bug on this side, never a defect in the sender's
+    /// message: [`PidRouter`] answered, the transport acknowledged, and the
+    /// business payload went nowhere. It is recorded rather than logged because
+    /// an acknowledged inbound message that produced no process is exactly what
+    /// § 147 AO / GoBD require a trace of.
+    ///
+    /// [`PidRouter`]: crate::pid_router::PidRouter
+    NotDispatchable {
+        /// The workflow name [`PidRouter`] resolved the PID to.
+        ///
+        /// [`PidRouter`]: crate::pid_router::PidRouter
+        workflow_name: String,
+        /// The Prüfidentifikator carried by the message.
+        pid: crate::ids::Pid,
+        /// Machine-readable skip reason from the dispatcher.
+        reason: String,
+        /// § 147 AO / GoBD structured audit context.
+        context: AuditContext,
+    },
+
     /// The outbox delivery worker gave up after exhausting all retry attempts.
     ///
     /// The message was re-queued `max_attempts` times and never successfully
@@ -332,6 +378,8 @@ impl DeadLetterReason {
             Self::DuplicateMessage { .. } => "duplicate_message",
             Self::ProcessingError { .. } => "processing_error",
             Self::TestMessage { .. } => "test_message",
+            Self::MissingInterchangeParty { .. } => "missing_interchange_party",
+            Self::NotDispatchable { .. } => "not_dispatchable",
             Self::OutboxExhausted { .. } => "outbox_exhausted",
         }
     }
@@ -348,7 +396,9 @@ impl DeadLetterReason {
             | Self::VersionMismatch { context, .. }
             | Self::DuplicateMessage { context, .. }
             | Self::ProcessingError { context, .. }
-            | Self::TestMessage { context, .. } => Some(context),
+            | Self::TestMessage { context, .. }
+            | Self::MissingInterchangeParty { context, .. }
+            | Self::NotDispatchable { context, .. } => Some(context),
             Self::OutboxExhausted { .. } => None,
         }
     }
@@ -377,6 +427,19 @@ impl std::fmt::Display for DeadLetterReason {
                 context.sender_eic.as_deref().unwrap_or(""),
                 context.receiver_eic.as_deref().unwrap_or(""),
                 context.message_ref.as_deref().unwrap_or(""),
+            ),
+            Self::MissingInterchangeParty { qualifier, .. } => write!(
+                f,
+                "message carries no NAD+{qualifier} party (Allgemeine Festlegungen §2.13)"
+            ),
+            Self::NotDispatchable {
+                workflow_name,
+                pid,
+                reason,
+                ..
+            } => write!(
+                f,
+                "PID {pid} routed to workflow {workflow_name} but no dispatch arm handled it ({reason})"
             ),
             Self::OutboxExhausted {
                 message_id,

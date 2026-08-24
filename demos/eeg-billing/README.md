@@ -14,16 +14,23 @@ End-to-end demonstration of **EEG feed-in settlement** using `einsd` (plant regi
 
 ## End-to-end flow
 
-```
-ERP → PUT /api/v1/anlagen/TR0000000001          Register 9.8 kWp solar plant
-ERP → POST /api/v1/meter-reads/rlm/17835382008   Push June 2026 Einspeisemenge to edmd
-ERP → POST /api/v1/anlagen/TR0000000001/settle/2026/6
-                                                  Trigger EEG settlement
-einsd → GET {edmd}/api/v1/billing-period/17835382008   Auto-fetch Einspeisemenge
-einsd → calculates Vergütung (8.11 ct/kWh × ~2880 kWh ≈ EUR 233.57)
-einsd → issues the §14 UStG Gutschrift (BO4E Rechnung + USt breakdown)
-                                                  stored in settlement_receipts.rechnung_json
-ERP ← de.eeg.verguetung.berechnet CloudEvent     Settlement result + Gutschrift (number, net, USt, brutto)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant ERP
+    participant einsd
+    participant edmd
+    participant hook as ERP webhook
+
+    ERP->>einsd: PUT /api/v1/anlagen/TR0000000001
+    Note over einsd: 9.8 kWp solar plant registered
+    ERP->>edmd: POST /api/v1/meter-reads/rlm/17835382008
+    Note over edmd: June 2026 Einspeisemenge
+    ERP->>einsd: POST /api/v1/anlagen/TR0000000001/settle/2026/6
+    einsd->>edmd: GET /api/v1/billing-period/17835382008
+    edmd-->>einsd: Einspeisemenge ≈ 2880 kWh
+    Note over einsd: Vergütung 8.11 ct/kWh ≈ EUR 233.57<br/>§14 UStG Gutschrift as a BO4E Rechnung<br/>stored in settlement_receipts.rechnung_json
+    einsd-->>hook: de.eeg.verguetung.berechnet
 ```
 
 The settlement *amount* alone is not a legal document. Under the **Gutschriftverfahren**

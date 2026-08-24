@@ -166,9 +166,9 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
 // Cached in a LazyLock so construction happens once per profile.
-static DIRECTORY_VALIDATOR_REMADV_2_9F: LazyLock<DirectoryValidator> = LazyLock::new(|| {
+static DIRECTORY_VALIDATOR_REMADV_2_9E: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
-        "EDI@Energy-REMADV-2.9f",
+        "EDI@Energy-REMADV-2.9e",
         segment_lookup,
         is_code_valid,
         suggest_code,
@@ -178,7 +178,7 @@ static DIRECTORY_VALIDATOR_REMADV_2_9F: LazyLock<DirectoryValidator> = LazyLock:
 });
 
 pub(crate) fn directory_validator() -> &'static DirectoryValidator {
-    &DIRECTORY_VALIDATOR_REMADV_2_9F
+    &DIRECTORY_VALIDATOR_REMADV_2_9E
 }
 
 fn rule_unh_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
@@ -337,7 +337,7 @@ fn rule_group_doc_window(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<
                             ValidationSeverity::Error,
                             format!("mandatory segment {required_tag} missing in DOC group at position {start}"),
                         )
-                        .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-DOC")
+                        .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-DOC")
                         .with_segment(required_tag.to_owned())
                     );
             }
@@ -360,7 +360,7 @@ fn rule_group_sg1_nad_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by NAD occurs {count} times; maximum is 99"),
             )
-            .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-SG1-NAD-CARD-MAX")
+            .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-SG1-NAD-CARD-MAX")
             .with_segment("NAD".to_owned()),
         );
     }
@@ -381,7 +381,7 @@ fn rule_group_sg4_cux_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by CUX occurs {count} times; maximum is 5"),
             )
-            .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-SG4-CUX-CARD-MAX")
+            .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-SG4-CUX-CARD-MAX")
             .with_segment("CUX".to_owned()),
         );
     }
@@ -402,7 +402,7 @@ fn rule_group_sg5_doc_max_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by DOC occurs {count} times; maximum is 999_999"),
             )
-            .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-SG5-DOC-CARD-MAX")
+            .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-SG5-DOC-CARD-MAX")
             .with_segment("DOC".to_owned()),
         );
     }
@@ -422,7 +422,7 @@ fn rule_group_sg1_nad_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by NAD occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-SG1-NAD-CARD-MIN")
+            .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-SG1-NAD-CARD-MIN")
             .with_segment("NAD".to_owned()),
         );
     }
@@ -442,7 +442,7 @@ fn rule_group_sg4_cux_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by CUX occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-SG4-CUX-CARD-MIN")
+            .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-SG4-CUX-CARD-MIN")
             .with_segment("CUX".to_owned()),
         );
     }
@@ -462,7 +462,7 @@ fn rule_group_sg5_doc_min_occurrences(
                 ValidationSeverity::Error,
                 format!("segment group triggered by DOC occurs {count} times; minimum is 1"),
             )
-            .with_rule_id("MIG-REMADV-MIG-2.9f-GROUP-SG5-DOC-CARD-MIN")
+            .with_rule_id("MIG-REMADV-MIG-2.9e-GROUP-SG5-DOC-CARD-MIN")
             .with_segment("DOC".to_owned()),
         );
     }
@@ -480,6 +480,8 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     ];
     /// Detail segment ordering (after UNS+D).
     const EXPECTED_DETAIL_ORDER: &[&str] = &["MOA", "UNT"];
+    /// Tags that trigger a repeatable segment group in the detail section.
+    const DETAIL_GROUP_TRIGGERS: &[&str] = &["NAD", "CTA", "CUX", "DOC", "AJT", "DLI"];
 
     /// Strict order check for the header section (no group repetition expected).
     fn check_header_section(
@@ -508,22 +510,27 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
     /// Group-trigger-aware order check for the detail section (post-UNS).
     ///
-    /// When the first tag in `expected` is seen again after the cursor has
-    /// already advanced, this indicates a new group-repetition occurrence
-    /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset
-    /// to that position instead of reporting an ordering violation.
+    /// Any tag that triggers a segment group may legitimately step the cursor
+    /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`
+    /// inside SG9, so the second reading of a line item returns from DTM to
+    /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —
+    /// rejected every multi-interval MSCONS, which is every Lastgang there is.
     fn check_detail_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],
         rule_id: &str,
         issues: &mut Vec<ValidationIssue>,
     ) {
-        let group_trigger = expected.first().copied().unwrap_or("");
         let mut cursor: usize = 0;
         for seg in segs {
-            // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.
-            if cursor > 0 && seg.tag == group_trigger {
-                cursor = 0;
+            // A group trigger seen at or before the cursor opens a new
+            // occurrence of that group; rewind to it.
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+                if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
+                    if pos <= cursor {
+                        cursor = pos;
+                    }
+                }
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
@@ -549,22 +556,22 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     check_header_section(
         header_segs,
         EXPECTED_HEADER_ORDER,
-        "MIG-REMADV-MIG-2.9f-ORDER",
+        "MIG-REMADV-MIG-2.9e-ORDER",
         issues,
     );
     check_detail_section(
         detail_segs,
         EXPECTED_DETAIL_ORDER,
-        "MIG-REMADV-MIG-2.9f-ORDER",
+        "MIG-REMADV-MIG-2.9e-ORDER",
         issues,
     );
 }
 
 static MIG_REMADV_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("REMADV-MIG-2.9f")
+        ProfileRulePack::new("REMADV-MIG-2.9e")
             .for_message_type("REMADV")
-            .for_release("2.9f")
+            .for_release("2.9e")
             .with_stateless_rule_fn(rule_unh_mandatory)
             .with_stateless_rule_fn(rule_bgm_mandatory)
             .with_stateless_rule_fn(rule_dtm_mandatory)
@@ -603,9 +610,9 @@ use super::ahb_helpers::{
 
 static AHB_33001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("REMADV-AHB-2.9f-33001")
+        ProfileRulePack::new("REMADV-AHB-2.9e-33001")
             .for_message_type("REMADV")
-            .for_release("2.9f")
+            .for_release("2.9e")
             .with_named_stateless_rule_fn("AHB-33001-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -716,9 +723,9 @@ fn ahb_33001_pack() -> Arc<ProfileRulePack> {
 
 static AHB_33002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("REMADV-AHB-2.9f-33002")
+        ProfileRulePack::new("REMADV-AHB-2.9e-33002")
             .for_message_type("REMADV")
-            .for_release("2.9f")
+            .for_release("2.9e")
             .with_named_stateless_rule_fn("AHB-33002-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -829,9 +836,9 @@ fn ahb_33002_pack() -> Arc<ProfileRulePack> {
 
 static AHB_33003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("REMADV-AHB-2.9f-33003")
+        ProfileRulePack::new("REMADV-AHB-2.9e-33003")
             .for_message_type("REMADV")
-            .for_release("2.9f")
+            .for_release("2.9e")
             .with_named_stateless_rule_fn("AHB-33003-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -952,9 +959,9 @@ fn ahb_33003_pack() -> Arc<ProfileRulePack> {
 
 static AHB_33004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("REMADV-AHB-2.9f-33004")
+        ProfileRulePack::new("REMADV-AHB-2.9e-33004")
             .for_message_type("REMADV")
-            .for_release("2.9f")
+            .for_release("2.9e")
             .with_named_stateless_rule_fn("AHB-33004-AJT-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1073,10 +1080,10 @@ fn ahb_33004_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_33004_PACK)
 }
 
-static AHB_ALL_PACK_REMADV_2_9F: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    let pack = ProfileRulePack::new("REMADV-AHB-2.9f-ALL")
+static AHB_ALL_PACK_REMADV_2_9E: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    let pack = ProfileRulePack::new("REMADV-AHB-2.9e-ALL")
         .for_message_type("REMADV")
-        .for_release("2.9f");
+        .for_release("2.9e");
     let pack = pack
         .merge_with_override(ahb_33001_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
@@ -1098,7 +1105,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(33002) => ahb_33002_pack(),
             Some(33003) => ahb_33003_pack(),
             Some(33004) => ahb_33004_pack(),
-            None => Arc::clone(&AHB_ALL_PACK_REMADV_2_9F),
+            None => Arc::clone(&AHB_ALL_PACK_REMADV_2_9E),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("REMADV")
                 .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
@@ -1110,7 +1117,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
         }
 }
 
-static RELEASE_REMADV_FV20260401: LazyLock<Release> = LazyLock::new(|| Release::new("2.9f"));
+static RELEASE_REMADV_FV20260401: LazyLock<Release> = LazyLock::new(|| Release::new("2.9e"));
 
 pub(crate) struct RemadvFv20260401Profile;
 
@@ -1125,15 +1132,13 @@ impl Profile for RemadvFv20260401Profile {
         Some(::time::macros::date!(2026 - 04 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        None
+        Some(::time::macros::date!(2026 - 09 - 30))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("1.0")
+        Some("2.9e")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some(
-            "REMADV MIG 2.9e / AHB 2.9f, Stand 01.04.2026 — SCAFFOLD: verify against BDEW publication before production use",
-        )
+        Some("REMADV MIG 2.9e, Publikationsdatum 01.10.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

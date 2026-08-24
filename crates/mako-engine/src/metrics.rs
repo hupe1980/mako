@@ -257,7 +257,13 @@ impl EngineMetrics {
 
     /// Increment `makod_validation_failed_total{message_type=<type>,release=<rel>}`.
     ///
-    /// Call when an inbound message fails `validate()` or `validate_against()`.
+    /// Call once per inbound message that has a registered profile and violates
+    /// it. Two things this must **not** count, because both once did and both
+    /// made the metric meaningless: a message that failed to *parse* — it has
+    /// neither a message type nor a release, so it was counted under the fixed
+    /// labels `("edifact", "parse_error")` — and a message whose release has no
+    /// registered profile, which is "there was no rule to break" rather than a
+    /// violation, and is the normal shape for an answer PID.
     pub fn validation_failed(&self, message_type: &str, release: &str) {
         let label = format!("{message_type},{release}");
         self.validation_failed.increment(&label);

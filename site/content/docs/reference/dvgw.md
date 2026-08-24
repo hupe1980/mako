@@ -87,11 +87,23 @@ hours) is keyed on Sparte, so it applies to a DVGW interchange unconditionally �
 the DVGW formats *are* the gas transport layer. `makod` discharges it from the
 DVGW ingest path; the AS4 `eb:Receipt` is a protocol acknowledgement and does not.
 
-### 2.4 Formats not implemented
+### 2.4 Test interchanges
 
-SCHEDL, IMBNOT, TRANOT, DELORD, DELRES, CHACAP and SSQNOT are not parsed. The
-matching `mako-gabi-gas` workflows are placeholders whose ingest arm returns
-`Skipped`, so nothing routes to them.
+`UNB` DE 0035 = `1` marks a test interchange. Allgemeine Festlegungen V6.1d §3
+forbids processing one as production, and DVGW rides the same `UNB` envelope, so
+`makod` refuses a flagged DVGW interchange at the ingest boundary and records a
+dead-letter entry — the same treatment both BDEW doors give it. Without that,
+a counterparty's test ALOCAT would allocate quantities against a real gas day.
+
+### 2.5 Formats not implemented
+
+SCHEDL, IMBNOT, TRANOT, DELORD, DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and
+TSIMSG are not parsed, and `mako-gabi-gas` carries no workflow and no
+Prüfidentifikator for them. Implementing one starts with its
+Nachrichtenbeschreibung: the shape is predictable — the three implemented
+formats share a header and a `LIN`/`LOC`/`QTY` body — but which `BGM` DE 1001
+codes and which Prüfidentifikatoren a format publishes is not derivable from the
+others.
 
 ---
 
@@ -216,6 +228,41 @@ Two neighbouring references are *not* the PID and are easy to confuse with it:
 |---|---|
 | `RFF+ANX` | Clearingnummer (ALOCAT) |
 | `RFF+AGO` | Referenz auf die Original-Nominierung (NOMINT) — the chain a re-nomination corrects |
+
+### 6.0 The cycle around one gas day
+
+The three implemented formats are one loop: the BKV nominates, the FNB/MGV
+matches and answers, and the allocation lands three times — preliminary, then
+corrected, then final — each with its own deadline out of the
+Kooperationsvereinbarung.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant BKV
+    participant FNB as FNB / MGV
+
+    Note over BKV,FNB: gas day D runs 06:00 → 06:00 CET
+    BKV->>FNB: NOMINT — nomination for D
+    FNB-->>BKV: NOMRES — matching result
+    Note right of FNB: due 15:00 CET on D-1<br/>GasDay::nomres_deadline_utc()
+    opt re-nomination
+        BKV->>FNB: NOMINT with RFF+AGO → the nomination it corrects
+        FNB-->>BKV: NOMRES
+    end
+    FNB->>BKV: ALOCAT — Initial (preliminary)
+    Note right of FNB: due D+3 12:00 CET<br/>GasDay::initial_alocat_deadline_utc()
+    opt corrections
+        FNB->>BKV: ALOCAT — Correction
+    end
+    FNB->>BKV: ALOCAT — Final (Bilanzierungsbrennwert)
+    Note right of FNB: due end of M+2<br/>GasDay::final_alocat_deadline_utc()
+```
+
+`AllocationVersion` (`Initial`/`Correction`/`Final`) is the typed form of the
+three landings, and each deadline is registered as a `mako_engine::deadline`
+when the preceding event is persisted — so a missed one surfaces as an alert
+rather than as a silent gap.
 
 ### 6.1 How a message finds its process
 

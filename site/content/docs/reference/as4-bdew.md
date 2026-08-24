@@ -369,6 +369,43 @@ sequenceDiagram
     makod-->>LF: synchronous eb:Receipt (signed)
 ```
 
+### Outbound — delivery is acknowledged only once the receipt is proven
+
+Inbound stops at the signed receipt. Outbound is the harder half: an
+acknowledgement that trusts an unverified signal would drop a message the
+counterparty never accepted.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant OB as Outbox
+    participant makod as makod AS4 sender
+    participant NB as NB counterparty
+    participant V as verify_sync_response
+
+    OB->>makod: pending message (ebMS MessageId = outbox id)
+    Note over makod: P-Mode, partner cert and rendering<br/>resolved per attempt
+    makod->>NB: sign · encrypt · gzip · SwA
+    alt receipt returned
+        NB-->>makod: eb:Receipt (signed, NonRepudiationInformation)
+        makod->>V: signature covers the eb:SignalMessage?
+        V->>V: RefToMessageId matches?
+        V->>V: every NRR digest matches what was signed?
+        V->>V: inside the replay window?
+        V-->>makod: proven
+        makod->>OB: acknowledge
+    else eb:Error, or a receipt that does not verify
+        NB-->>makod: eb:Error (ebMS3 code) / unverifiable receipt
+        makod->>OB: back off and retry
+        Note over OB,NB: safe to resend — the MessageId is stable and the<br/>AS4-Profil mandates receiver duplicate elimination
+    end
+```
+
+The retry budget is stated as time, not attempts: 72 hours from creation
+(`max_retry_window`), with an attempt ceiling only against runaway loops.
+Because everything but the message bytes is resolved per attempt, a
+configuration fix heals delivery without re-enqueueing.
+
 ---
 
 ## Testing without WIRK certificates

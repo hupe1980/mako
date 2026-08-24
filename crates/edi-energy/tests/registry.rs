@@ -320,12 +320,14 @@ fn an_overlap_exists_only_with_a_tolerance_and_only_after_the_boundary() {
 
 // ── Same-wire-code disambiguation ────────────────────────────────────────────
 
-/// When two profiles share the same wire release code (e.g. INVOIC `"2.8e"` in
-/// both `fv20251001` and `fv20260401`), `profile_on` must return the profile
-/// whose `valid_from` is the greatest value that is ≤ `date`.
+/// When two profiles share the same wire release code (INVOIC `"2.8e"` in both
+/// `fv20260401` and `fv20261001`), `profile_on` must return the profile whose
+/// `valid_from` is the greatest value that is ≤ `date`.
 ///
-/// INVOIC MIG 2.8e covers Oct 2025 onward; `fv20260401` supersedes `fv20251001`
-/// (AHB update only) but keeps the same wire code.
+/// The two are AHB 1.0a (published 01.10.2025, applies 01.04.2026) and AHB 1.0b
+/// (published 01.04.2026, applies 01.10.2026) — the same MIG under two
+/// Anwendungszeitpunkte, which is exactly why the wire code cannot disambiguate
+/// them and the date must.
 ///
 /// This guards against the previous H-2 bug where the index used
 /// `HashMap::insert` and silently discarded the earlier profile.
@@ -338,36 +340,37 @@ fn profile_on_disambiguates_same_wire_code_by_date() {
     let reg = ReleaseRegistry::global();
     let release = Release::new("2.8e");
 
-    // Both fv20251001 (valid_from 2025-10-01) and fv20260401 (valid_from 2026-04-01)
-    // carry the wire code "2.8e".  On a date before fv20260401 the earlier profile
-    // must be returned.
-    let profile_2025 = reg
-        .profile_on(MessageType::Invoic, &release, date!(2025 - 10 - 01))
-        .expect("profile_on must find an INVOIC 2.8e profile on 2025-10-01");
-    assert_eq!(
-        profile_2025.valid_from(),
-        Some(date!(2025 - 10 - 01)),
-        "on 2025-10-01 the fv20251001 profile must be selected"
-    );
-
-    // On or after fv20260401 the later profile must be returned.
-    let profile_2026 = reg
+    // Both fv20260401 (valid_from 2026-04-01) and fv20261001 (valid_from
+    // 2026-10-01) carry the wire code "2.8e".  Before the later
+    // Anwendungszeitpunkt the earlier profile must be returned.
+    let profile_2026_04 = reg
         .profile_on(MessageType::Invoic, &release, date!(2026 - 04 - 01))
         .expect("profile_on must find an INVOIC 2.8e profile on 2026-04-01");
     assert_eq!(
-        profile_2026.valid_from(),
+        profile_2026_04.valid_from(),
         Some(date!(2026 - 04 - 01)),
         "on 2026-04-01 the fv20260401 profile must be selected"
     );
 
-    // On a date between the two profiles only the earlier one is eligible.
-    let profile_between = reg
-        .profile_on(MessageType::Invoic, &release, date!(2026 - 01 - 15))
-        .expect("profile_on must find an INVOIC 2.8e profile on 2026-01-15");
+    // On or after the later Anwendungszeitpunkt the successor must be returned.
+    let profile_2026_10 = reg
+        .profile_on(MessageType::Invoic, &release, date!(2026 - 10 - 01))
+        .expect("profile_on must find an INVOIC 2.8e profile on 2026-10-01");
     assert_eq!(
-        profile_between.valid_from(),
-        Some(date!(2025 - 10 - 01)),
-        "between the two valid_from dates fv20251001 must be selected"
+        profile_2026_10.valid_from(),
+        Some(date!(2026 - 10 - 01)),
+        "on 2026-10-01 the fv20261001 profile must be selected"
+    );
+
+    // The day before the cutover still belongs to the predecessor — this is the
+    // boundary a Publikationsdatum in `valid_from` moves six months early.
+    let profile_before = reg
+        .profile_on(MessageType::Invoic, &release, date!(2026 - 09 - 30))
+        .expect("profile_on must find an INVOIC 2.8e profile on 2026-09-30");
+    assert_eq!(
+        profile_before.valid_from(),
+        Some(date!(2026 - 04 - 01)),
+        "on 2026-09-30 the fv20260401 profile must still be selected"
     );
 }
 
@@ -594,7 +597,8 @@ fn utilmd_strom_changes_format_on_a_single_day() {
     assert_eq!(p.valid_from(), Some(date!(2025 - 10 - 01)));
 }
 
-/// `fv20251001_gas` carries release "G1.1" (valid from 2025-10-01).
+/// `fv20260401_gas` carries release "G1.1" — UTILMD AHB Gas 1.1, published
+/// 01.10.2025 and therefore applying from 01.04.2026.
 /// Before that date, `profile_on` must return `Err`.
 /// This test guards the corrected profile release codes.
 #[cfg(feature = "utilmd")]
@@ -606,21 +610,22 @@ fn utilmd_gas_g1_1_boundary_selects_correct_profile() {
     let reg = ReleaseRegistry::global();
     let release = Release::new("G1.1");
 
-    // Before fv20251001_gas valid_from: G1.1 is not yet active — profile_on returns Err.
-    let result_before = reg.profile_on(MessageType::Utilmd, &release, date!(2025 - 09 - 30));
+    // Before fv20260401_gas valid_from: G1.1 is not yet active — profile_on returns Err.
+    // 2025-10-01 is when the document was *published*, which changes nothing.
+    let result_before = reg.profile_on(MessageType::Utilmd, &release, date!(2026 - 03 - 31));
     assert!(
         result_before.is_err(),
-        "on 2025-09-30 (before G1.1 validity) profile_on must return Err"
+        "on 2026-03-31 (before G1.1 applies) profile_on must return Err"
     );
 
-    // On the first day of fv20251001_gas validity: must select the newer profile.
+    // On the first day of fv20260401_gas validity: must select the newer profile.
     let profile_boundary = reg
-        .profile_on(MessageType::Utilmd, &release, date!(2025 - 10 - 01))
-        .expect("profile_on must find a UTILMD G1.1 profile on 2025-10-01");
+        .profile_on(MessageType::Utilmd, &release, date!(2026 - 04 - 01))
+        .expect("profile_on must find a UTILMD G1.1 profile on 2026-04-01");
     assert_eq!(
         profile_boundary.valid_from(),
-        Some(date!(2025 - 10 - 01)),
-        "on 2025-10-01 the fv20251001_gas (valid_from 2025-10-01) profile must be selected"
+        Some(date!(2026 - 04 - 01)),
+        "on 2026-04-01 the fv20260401_gas profile must be selected"
     );
 }
 
@@ -667,4 +672,78 @@ fn pid_has_ahb_rules_discriminates_known_from_unknown() {
         "the stand-in pack is non-empty — this is exactly why rule_count() is \
          not a usable known-PID predicate"
     );
+}
+
+// ── Anwendungszeitpunkt, not Publikationsdatum ───────────────────────────────
+
+/// A Formatversion applies six months after it is published.
+///
+/// Allgemeine Festlegungen 6.1d §2.5.1 („Änderungsmanagement zum 1. Oktober
+/// eines Jahres") puts the *Veröffentlichungszeitpunkt der konsultierten
+/// Dokumente* on 01.04. and their *Anwendungszeitpunkt* on 01.10. of the same
+/// year; §2.5.2 mirrors it for the April changeover. The six months between are
+/// the Umsetzungsphase, during which the **old** format is still the binding one.
+///
+/// REQOTE is the sharpest case: AHB 1.1 (published 01.04.2025) and AHB 1.2
+/// (published 01.04.2026) both carry wire release `1.3c`, so nothing on the wire
+/// distinguishes them and the date is the only input.
+#[cfg(feature = "reqote")]
+#[test]
+fn reqote_switches_on_the_anwendungszeitpunkt_not_the_publikationsdatum() {
+    use edi_energy::registry::ReleaseRegistry;
+    use time::macros::date;
+
+    let reg = ReleaseRegistry::global();
+
+    let on = |d: time::Date| {
+        reg.profile_for_date_and_track(MessageType::Reqote, d, ReleaseTrack::Short)
+            .unwrap_or_else(|| panic!("REQOTE must have an active profile on {d}"))
+            .valid_from()
+    };
+
+    // The Publikationsdatum of AHB 1.2 changes nothing: AHB 1.1 stays binding
+    // through its whole Umsetzungsphase.
+    assert_eq!(
+        on(date!(2026 - 04 - 01)),
+        Some(date!(2025 - 10 - 01)),
+        "01.04.2026 is when AHB 1.2 was published, not when it applies"
+    );
+    assert_eq!(
+        on(date!(2026 - 09 - 30)),
+        Some(date!(2025 - 10 - 01)),
+        "the last day before the Anwendungszeitpunkt still belongs to AHB 1.1"
+    );
+    // The changeover is a single instant with no overlap (§2.5).
+    assert_eq!(
+        on(date!(2026 - 10 - 01)),
+        Some(date!(2026 - 10 - 01)),
+        "AHB 1.2 applies from 01.10.2026"
+    );
+}
+
+/// Every profile that records a `publikationsdatum` must sit six months later.
+///
+/// The relation is enforced at codegen, but the generated tables are what the
+/// runtime actually selects on, so it is re-checked here against the compiled
+/// registry rather than against the JSON.
+#[test]
+fn no_profile_is_valid_from_its_publication_date() {
+    use edi_energy::registry::ReleaseRegistry;
+
+    for profile in ReleaseRegistry::global().all_profiles() {
+        let Some(from) = profile.valid_from() else {
+            continue;
+        };
+        assert!(
+            matches!(
+                (from.month() as u8, from.day()),
+                (4, 1) | (10, 1) | (1, 1) | (6, 6)
+            ),
+            "{:?} {}: valid_from {from} is not an Anwendungszeitpunkt — the regular \
+             changeovers are 01.04. and 01.10.; 01.01.2026 and 06.06.2025 are the two \
+             ausserordentliche ones mako carries",
+            profile.message_type(),
+            profile.release(),
+        );
+    }
 }

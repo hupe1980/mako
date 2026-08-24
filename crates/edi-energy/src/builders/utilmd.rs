@@ -10,7 +10,7 @@ use crate::utilmd_codes::{
 };
 use crate::{Error, Lokationstyp, Pruefidentifikator, Release};
 
-use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
+use super::{Set, Unset, bytes_to_segments};
 
 // ── Inner fields structs ──────────────────────────────────────────────────────
 
@@ -270,7 +270,7 @@ impl<S, R> UtilmdBuilder<S, R> {
             .inner
             .document_date
             .as_deref()
-            .map_or_else(today_ccyymmdd, str::to_owned);
+            .map_or_else(super::now_ccyymmddhhmm, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
@@ -282,7 +282,11 @@ impl<S, R> UtilmdBuilder<S, R> {
             ["UTILMD", "D", "11A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", &self.inner.document_code, &pid_str, "9");
-        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
+        // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
+        // `+00`; `[494]` requires the stamp to be the creation moment or
+        // earlier. There is no Anwendungsfall in any AHB that takes `102`.
+        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         for (qualifier, reference) in &self.inner.rff_entries {
             emit_comp!(w, "RFF", [qualifier, reference]);
         }
@@ -308,11 +312,13 @@ impl<S, R> UtilmdBuilder<S, R> {
             // SG12 NAD. Layer 3.5 checks it, on both sides of the wire.
             emit_seg!(w, "IDE", &tx.ide_qualifier, &tx.vorgangsnummer);
             for (qualifier, date_val) in &tx.process_dates {
-                // DE 2379 `102` = CCYYMMDD, `303` = CCYYMMDDHHMMZZZ. The
-                // format code follows the value's own length rather than being
-                // fixed, so a UTC-stamped Zuordnungsbeginn keeps its time.
-                let fmt = if date_val.len() > 8 { "303" } else { "102" };
-                emit_comp!(w, "DTM", [qualifier, date_val, fmt]);
+                let fmt = sg4_dtm_format(qualifier);
+                let value = if fmt == "303" {
+                    super::ccyymmddhhmm_utc(date_val)
+                } else {
+                    date_val.clone()
+                };
+                emit_comp!(w, "DTM", [qualifier, &value, fmt]);
             }
             if let Some(grund) = &tx.transaktionsgrund {
                 // `STS+7++<grund>+<ergaenzung>+<befristet>` — Statuskategorie 7
@@ -447,7 +453,7 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     ///     .serialize()?;
     /// let text = String::from_utf8(edi).unwrap();
     /// assert!(text.contains("IDE+24+VORGANG-0001"));
-    /// assert!(text.contains("DTM+92:20261101:102"));
+    /// assert!(text.contains("DTM+92:202611010000?+00:303"));
     /// assert!(text.contains("STS+7++E03+ZW4"));
     /// assert!(text.contains("LOC+Z16+51238696012"));
     /// # Ok::<(), edi_energy::Error>(())
@@ -593,5 +599,24 @@ impl<S, R> UtilmdTransactionBuilder<S, R> {
     pub fn done(mut self) -> UtilmdBuilder<S, R> {
         self.parent.inner.transactions.push(self.spec);
         self.parent
+    }
+}
+
+/// The DE 2379 format code an `SG4 DTM` qualifier takes.
+///
+/// Read off the Anwendungsfall tables of UTILMD AHB Strom 2.2 and Gas 1.2: in
+/// SG4 every date qualifier is `303` (`CCYYMMDDHHMMZZZ`, zone `+00` by
+/// condition `[931]`) except two — `154` „Annahmedatum eines Angebots" is
+/// `102` and `Z10` „Kündigungstermin" is `106`. The date-only qualifiers those
+/// AHBs do carry (`752`, `Z09`, `Z20`, `Z21`, `Z22`) all sit in **SG6**, which
+/// this builder writes through a different path.
+///
+/// The code follows the qualifier, never the value's length: a `YYYYMMDD`
+/// Vorgangsdatum is still `303`, padded and zoned on the way out.
+fn sg4_dtm_format(qualifier: &str) -> &'static str {
+    match qualifier {
+        "154" => "102",
+        "Z10" => "106",
+        _ => "303",
     }
 }

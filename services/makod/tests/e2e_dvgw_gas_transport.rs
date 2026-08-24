@@ -796,3 +796,61 @@ UNS+S'UNT+99+1'UNZ+1+IC8'"
         "this is the number the adapter must not use"
     );
 }
+
+// ── Test-indicator guard ─────────────────────────────────────────────────────
+
+/// A DVGW interchange flagged `UNB DE 0035 = 1` must be refused.
+///
+/// # Why this is a test
+///
+/// Allgemeine Festlegungen V6.1d §3 forbids processing a test interchange as
+/// production, and both BDEW doors — `POST /edifact` and the AS4 handler —
+/// already refuse one and record a `TestMessage` dead letter. The DVGW door did
+/// not read the field at all, and DVGW rides the same `UNB` envelope: a
+/// counterparty's test ALOCAT allocated real gas quantities against a real gas
+/// day, and a test NOMINT spawned a nomination process with a live NOMRES
+/// deadline.
+#[tokio::test]
+async fn a_dvgw_test_interchange_is_refused() {
+    let state = ingest_state().await;
+    let wire = alocat(70_001, GAS_DAY, "CLR-T");
+    // DE 0035 is element 10 of UNB and the fixture ends its UNB at DE 0020
+    // (element 4), so six separators carry the flag into position.
+    let test_wire = wire.replacen("+IC1'", "+IC1++++++1'", 1);
+    assert_ne!(
+        test_wire, wire,
+        "the fixture's UNB must have been rewritten"
+    );
+
+    let report = makod::dvgw_ingest::try_ingest(&state, test_wire.as_bytes())
+        .await
+        .expect("the sniff must still claim a DVGW interchange");
+
+    assert_eq!(
+        report.accepted(),
+        0,
+        "a test interchange must not be accepted"
+    );
+    assert_eq!(report.rejected(), 1);
+    assert!(
+        report.messages[0]
+            .error
+            .as_deref()
+            .is_some_and(|e| e.contains("DE0035")),
+        "the rejection must name the field: {:?}",
+        report.messages[0].error
+    );
+}
+
+/// The same interchange without the flag is processed, so the test above is
+/// about the flag and not about the rewritten `UNB` failing to parse.
+#[tokio::test]
+async fn the_same_interchange_without_the_test_flag_is_processed() {
+    let state = ingest_state().await;
+    let wire = alocat(70_001, GAS_DAY, "CLR-T");
+    let report = makod::dvgw_ingest::try_ingest(&state, wire.as_bytes())
+        .await
+        .expect("DVGW");
+    assert_eq!(report.accepted(), 1);
+    assert_eq!(report.rejected(), 0);
+}

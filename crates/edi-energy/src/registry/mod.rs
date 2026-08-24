@@ -42,10 +42,18 @@ pub trait Profile: Send + Sync {
     /// The EDI@Energy release this profile applies to (e.g. `"5.5.3a"`).
     fn release(&self) -> &Release;
 
-    /// First calendar date on which this profile is normatively valid.
+    /// First calendar date on which this profile is normatively valid — the
+    /// **Anwendungszeitpunkt**.
     ///
-    /// Derived from the profile directory name (`fv<YYYYMMDD>`).  Returns
-    /// `None` for legacy profiles whose directory does not embed a date.
+    /// Not the date BDEW published the document: Allgemeine Festlegungen 6.1d
+    /// §2.5.1/§2.5.2 put a six-month *Umsetzungsphase* between the two —
+    /// published 01.04., applies 01.10. of the same year; published 01.10.,
+    /// applies 01.04. of the next.
+    ///
+    /// Comes from `valid_from` in `mig.json`, which codegen cross-checks against
+    /// the directory name and, where a `publikationsdatum` is recorded, the
+    /// §2.5 relation. Returns `None` for legacy profiles whose directory does
+    /// not embed a date.
     fn valid_from(&self) -> Option<time::Date>;
 
     /// Last calendar date on which this profile is normatively valid.

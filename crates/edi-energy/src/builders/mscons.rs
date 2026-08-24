@@ -8,7 +8,7 @@ use rubo4e::identifiers::ObisCode;
 use crate::AgencyCode;
 use crate::{Error, Pruefidentifikator, Release};
 
-use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
+use super::{Set, Unset, bytes_to_segments};
 
 /// DE 7143 code marking a `PIA` value as an OBIS-Kennzahl (MSCONS AHB 3.2, SG9).
 ///
@@ -114,7 +114,6 @@ struct MsconsBuilderInner {
     document_number: String,
     document_date: Option<String>,
     /// Emit `DTM+137` as `303` (`CCYYMMDDHHMMZZZ`) instead of `102`.
-    document_date_303: bool,
     header_references: Vec<(String, String)>,
     metering_points: Vec<MeteringPointSpec>,
 }
@@ -171,7 +170,6 @@ impl MsconsBuilder<Unset, Unset> {
                 document_code: "7".to_owned(),
                 document_number: String::new(),
                 document_date: None,
-                document_date_303: false,
                 header_references: Vec::new(),
                 metering_points: Vec::new(),
             },
@@ -243,16 +241,6 @@ impl<S, R> MsconsBuilder<S, R> {
         self
     }
 
-    /// Emit `DTM+137` in format **303** (`CCYYMMDDHHMMZZZ`) rather than 102.
-    ///
-    /// MSCONS AHB 3.2 gives DE 2379 as `303` with condition `[931]` fixing the
-    /// offset to `+00` for the Werte-nach-Typ-2 use case; the older use cases
-    /// keep the date-only `102`.
-    pub fn document_date_303(mut self) -> Self {
-        self.inner.document_date_303 = true;
-        self
-    }
-
     /// Set the document date for DTM+137 (`YYYYMMDD`).
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
@@ -311,7 +299,7 @@ impl<S, R> MsconsBuilder<S, R> {
             .inner
             .document_date
             .as_deref()
-            .map_or_else(today_ccyymmdd, str::to_owned);
+            .map_or_else(super::now_ccyymmddhhmm, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
@@ -326,18 +314,13 @@ impl<S, R> MsconsBuilder<S, R> {
         // SG1 RFF+Z13 (MSCONS AHB 3.2), which is what the receiver routes on —
         // putting it in BGM leaves the message with no detectable PID.
         emit_seg!(w, "BGM", &self.inner.document_code, &document_number, "9");
-        if self.inner.document_date_303 {
-            // `[931]`: ZZZ = +00. The `?+` escapes the plus for the EDIFACT
-            // release character, which the writer applies.
-            let stamp = if dtm_val.len() >= 12 {
-                dtm_val.clone()
-            } else {
-                format!("{dtm_val}0000")
-            };
-            emit_comp!(w, "DTM", ["137", &format!("{stamp}+00"), "303"]);
-        } else {
-            emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
-        }
+        // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
+        // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
+        // `+00`; `[494]` requires the stamp to be the creation moment or
+        // earlier. There is no Anwendungsfall in any AHB that takes `102`.
+        // The `?+` escapes the plus for the EDIFACT release character, which
+        // the writer applies.
+        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         if !pid_str.is_empty() {
             emit_comp!(w, "RFF", ["Z13", &pid_str]);
         }
@@ -400,8 +383,12 @@ impl<S, R> MsconsBuilder<S, R> {
                             // immediately after the QTY they bound, which is what
                             // associates them with that quantity.
                             if let Some((start, end)) = &qty.period {
-                                emit_comp!(w, "DTM", ["163", start, "303"]);
-                                emit_comp!(w, "DTM", ["164", end, "303"]);
+                                emit_comp!(
+                                    w,
+                                    "DTM",
+                                    ["163", &super::ccyymmddhhmm_utc(start), "303"]
+                                );
+                                emit_comp!(w, "DTM", ["164", &super::ccyymmddhhmm_utc(end), "303"]);
                             }
                         }
                         // The Leistungsperiode belongs to the line item's

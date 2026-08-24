@@ -235,7 +235,7 @@ pub struct CheckSectionConfig {
     #[serde(default)]
     pub auto_dispute_threshold_eur: f64,
     /// Maximum Zahlungsziel (payment term) in days from `rechnungsdatum` to
-    /// `faelligkeitsdatum` (DTM+92). Set to `0` to disable this check.
+    /// `faelligkeitsdatum` (`SG8 DTM+265`). Set to `0` to disable this check.
     /// Default: `30` days per §7 Allgemeine Festlegungen V6.1d.
     #[serde(default = "default_max_zahlungsziel_days")]
     pub max_zahlungsziel_days: u16,

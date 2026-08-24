@@ -424,6 +424,33 @@ pub struct SlateDbStore {
     max_stream_events: Option<u64>,
 }
 
+/// Why the store stopped serving, when the reason is not this process's own
+/// shutdown.
+///
+/// Returned by [`SlateDbStore::closed_unrecoverably`]. Both variants are
+/// terminal for the handle: there is no reopen path that would be correct, so
+/// the only sound reaction is to stop the process and let the orchestrator
+/// start a fresh one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StoreShutdown {
+    /// Another writer took the lease. This handle's writes are refused from
+    /// here on; continuing to accept traffic would acknowledge messages that
+    /// can never be persisted.
+    Fenced,
+    /// A SlateDB background task panicked, so flush and compaction have
+    /// stopped even though the handle still answers reads.
+    Panic,
+}
+
+impl std::fmt::Display for StoreShutdown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fenced => f.write_str("fenced by another writer"),
+            Self::Panic => f.write_str("a SlateDB background task panicked"),
+        }
+    }
+}
+
 impl SlateDbStore {
     /// Open the store with an explicit `ObjectStore` backend.
     ///
@@ -585,6 +612,49 @@ impl SlateDbStore {
             return Ok(());
         }
         self.db.close().await.map_err(to_store_err)
+    }
+
+    /// Wait until the underlying database closes for a reason this process
+    /// cannot recover from.
+    ///
+    /// Resolves with [`StoreShutdown`] on a fence or a background-task panic,
+    /// and with `None` when the handle closes cleanly (our own shutdown) or is
+    /// dropped.
+    ///
+    /// # Why a service needs this
+    ///
+    /// SlateDB fences writers: a second process opening the same object-store
+    /// path bumps the writer epoch and the older handle is closed underneath
+    /// its owner. Nothing about the process changes — it keeps its sockets, it
+    /// keeps answering, and every write from that moment fails. On the local
+    /// filesystem an exclusive directory lock prevents the second start, but a
+    /// cloud-backed deployment has no such lock, and a rolling update overlaps
+    /// two replicas by construction.
+    ///
+    /// A readiness probe that reads will notice — the whole handle is closed,
+    /// so reads fail too — and Kubernetes will take the pod out of the Service.
+    /// It will not restart it: a failing readiness probe removes endpoints, it
+    /// does not recycle the container. The pod then sits Running and useless
+    /// until someone looks. Watching this signal and exiting turns that into a
+    /// restart, which is both louder and, when the fence was a transient
+    /// double-start, self-healing.
+    pub async fn closed_unrecoverably(&self) -> Option<StoreShutdown> {
+        let mut rx = self.db.subscribe();
+        loop {
+            match rx.borrow_and_update().close_reason {
+                Some(slatedb::CloseReason::Fenced) => return Some(StoreShutdown::Fenced),
+                Some(slatedb::CloseReason::Panic) => return Some(StoreShutdown::Panic),
+                // `Clean` is our own `close()`; anything else added upstream is
+                // not a reason to kill the process on its own.
+                Some(_) => return None,
+                None => {}
+            }
+            // The sender is the `Db`; it is dropped only when the last handle
+            // goes, which means the process is already tearing down.
+            if rx.changed().await.is_err() {
+                return None;
+            }
+        }
     }
 
     /// Consuming close: flush and close the database, preventing double-close

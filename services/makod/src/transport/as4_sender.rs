@@ -14,7 +14,7 @@
 //!       ├── message_type == "MaloIdentCallback"
 //!       │     → MaloIdentSender (existing cache-lookup path, unchanged)
 //!       └── EDIFACT type (APERAK, CONTRL, UTILMD, …)
-//!             1. resolve P-Mode from BdewAs4Profile (GLN + message type)
+//!             1. resolve P-Mode from BdewAs4Profile (MP-ID + message type)
 //!             2. extract endpoint URL from P-Mode
 //!             3. serialize payload to wire bytes
 //!             4. asx_rs::as4::send_async  →  As4SendOutput (signed SOAP)
@@ -29,7 +29,7 @@
 //! registered in the [`BdewAs4Profile`] at startup via
 //! `--as4-partner <MP-ID>=<HTTPS-URL>` (repeatable).  This registers one
 //! P-Mode per standard BDEW EDIFACT message type for the partner.  Messages
-//! destined for an unknown recipient GLN or with a missing endpoint URL are
+//! destined for an unknown recipient MP-ID or with a missing endpoint URL are
 //! dead-lettered immediately (permanent `PartnerUnknown` error).
 //!
 //! ## Payload encoding
@@ -275,19 +275,19 @@ pub struct BdewAs4Sender {
     transport: Arc<As4HttpTransport>,
     profile: Arc<BdewAs4Profile>,
     malo_sender: MaloIdentSender,
-    /// The operator's own GLN registry.
+    /// The operator's own MP-ID registry.
     ///
-    /// Used by the EDIFACT renderer to resolve the correct sender GLN per role
-    /// and by the loopback path to detect own-GLN recipients (combined-role
-    /// deployments where NB and MSB, or GNB and gMSB, have different GLNs on
+    /// Used by the EDIFACT renderer to resolve the correct sender MP-ID per role
+    /// and by the loopback path to detect own-MP-ID recipients (combined-role
+    /// deployments where NB and MSB, or GNB and gMSB, have different MP-IDs on
     /// the same instance).
     mp_id_registry: Arc<MpIdRegistry>,
     /// Optional in-process loopback handle for combined-role deployments.
     ///
-    /// When `Some`, outbox messages addressed to `tenant_party_id` (own GLN)
+    /// When `Some`, outbox messages addressed to `tenant_party_id` (own MP-ID)
     /// are delivered in-process via [`crate::edifact_api::EdifactApiState`]
     /// instead of being dead-lettered.  Required for NB+MSB, GNB+gMSB, and
-    /// NB+LF deployments sharing a single GLN.
+    /// NB+LF deployments sharing a single MP-ID.
     loopback: Option<Arc<crate::edifact_api::EdifactApiState>>,
     /// Parse/validation platform for the pre-send AHB conformance gate.
     platform: Arc<edi_energy::Platform>,
@@ -467,8 +467,8 @@ impl As4Sender for BdewAs4Sender {
             // Detect self-addressed messages (combined-role deployments).
             //
             // In integrated deployments (e.g. Stadtwerke operating as both NB and
-            // MSB, or GNB and gMSB under the same GLN), the NB-side workflow emits
-            // outbox messages addressed to the same GLN as the operator itself:
+            // MSB, or GNB and gMSB under the same MP-ID), the NB-side workflow emits
+            // outbox messages addressed to the same MP-ID as the operator itself:
             //
             //   • ORDERS 17116 (Anfrage Sperrung, NB → MSB / GNB → gMSB)
             //   • ORDERS 17134/17135 (Konfiguration, NB → MSB)
@@ -479,8 +479,8 @@ impl As4Sender for BdewAs4Sender {
             // EDIFACT wire bytes, re-parsed, and dispatched in-process — zero AS4
             // round-trip, zero network latency.
             //
-            // The registry is_own_mp_id check covers ALL own GLNs, so loopback works
-            // even when NB and MSB have DIFFERENT GLNs on the same makod instance.
+            // The registry is_own_mp_id check covers ALL own MP-IDs, so loopback works
+            // even when NB and MSB have DIFFERENT MP-IDs on the same makod instance.
             if mp_id_registry.is_own_mp_id(recipient.as_ref()) {
                 if let Some(ref loopback_state) = loopback {
                     // Runaway guard — see `loopback_hops`. Dead-letter rather
@@ -539,7 +539,7 @@ impl As4Sender for BdewAs4Sender {
                     // traffic, it produces the same § 147 AO records, and an
                     // invalid rendering that only ever loops back is a defect
                     // that would ship undetected until the day the counterparty
-                    // moves to a separate GLN. Skipping the gate here made the
+                    // moves to a separate MP-ID. Skipping the gate here made the
                     // loopback path the one place a non-conformant message could
                     // be accepted.
                     match loopback_state.platform.parse(&payload_bytes) {
@@ -707,15 +707,15 @@ impl As4Sender for BdewAs4Sender {
                     message_id   = %message_id_str,
                     message_type = %message_type,
                     own_mp_ids     = ?mp_id_registry.own_mp_ids().collect::<Vec<_>>(),
-                    "BdewAs4Sender: outbox message addressed to own GLN \
-                     (combined-role deployment — NB+MSB or GNB+gMSB sharing one GLN). \
+                    "BdewAs4Sender: outbox message addressed to own MP-ID \
+                     (combined-role deployment — NB+MSB or GNB+gMSB sharing one MP-ID). \
                      No loopback handle configured. \
                      See site/content/docs/services/makod.md §Integrated operators for details.",
                 );
                 return Err(EngineError::PartnerUnknown { recipient });
             }
 
-            // Resolve the P-Mode for the recipient GLN + message type.
+            // Resolve the P-Mode for the recipient MP-ID + message type.
             // P-Modes are registered at startup via
             // BdewAs4Profile::register_partner_all_actions.
             // Use PartnerUnknown (permanent error) so the outbox worker
@@ -726,7 +726,7 @@ impl As4Sender for BdewAs4Sender {
                     message_id   = %message_id_str,
                     message_type = %message_type,
                     recipient    = %recipient,
-                    "BdewAs4Sender: no P-Mode registered for this recipient GLN. \
+                    "BdewAs4Sender: no P-Mode registered for this recipient MP-ID. \
                      Add --as4-partner {}=<URL> to register it.",
                     recipient,
                 );

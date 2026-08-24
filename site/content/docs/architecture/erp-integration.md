@@ -263,23 +263,26 @@ even across a crash.
 
 ### Delivery pipeline
 
-```
-Workflow::handle()
-    └── WorkflowOutput { events, outbox_messages }
-                │
-                ▼ (single atomic WriteBatch — SSI-isolated)
-        EventStore  +  OutboxStore
-                │
-                ▼ (OutboxErpWorker polls every 5 s)
-        CloudEvents 1.0 envelope → WebhookErpAdapter::POST application/cloudevents+json
-                │
-                ▼ (OutboxWorker polls every 5 s, separate)
-        EDIFACT messages  → AS4 sender → BDEW counterparty
+```mermaid
+graph TB
+    H["Workflow::handle()"] --> WO["WorkflowOutput<br/>events + outbox_messages"]
+    WO --> WB{{"single atomic WriteBatch<br/>SSI-isolated"}}
+    WB --> ES[("EventStore")]
+    WB --> OS[("OutboxStore")]
+    OS --> EW["OutboxErpWorker<br/>polls every 5 s"]
+    OS --> AW["OutboxWorker<br/>polls every 5 s, separate"]
+    EW -->|"CloudEvents 1.0<br/>application/cloudevents+json"| ERP["ERP webhook"]
+    AW -->|"EDIFACT"| AS4["AS4 sender"]
+    AS4 --> CP["BDEW counterparty"]
 ```
 
 Events and outbox entries are written atomically. If `makod` crashes between
 the two writes, the event is replayed on restart and the outbox entry is
 re-enqueued — no lost APERAK.
+
+The two workers are independent on purpose: an ERP that is down cannot delay an
+APERAK to a market partner, and a counterparty that is unreachable cannot stall
+the ERP feed.
 
 ### Event types
 
@@ -356,7 +359,7 @@ structured-mode JSON** with `Content-Type: application/cloudevents+json`.
 |---|---|---|
 | `specversion` | `"1.0"` | Always |
 | `id` | `<idempotency_key>` | Stable dedup key — persist in ERP |
-| `source` | `"urn:mako:makod:tenant:<tenant_id>"` | Operator GLN |
+| `source` | `"urn:mako:makod:tenant:<tenant_id>"` | Operator MP-ID |
 | `type` | `"de.mako.<domain>.<action>"` | See event type table below |
 | `time` | RFC 3339 with timezone offset | Wall-clock time of domain event |
 | `subject` | `<process_id>` UUID | The mako process that fired the event |
@@ -536,18 +539,36 @@ Authorization: Bearer <token>
 }
 ```
 
-#### What `Idempotency-Key` does, and what it does not
+#### What `Idempotency-Key` does
 
 The header is **required** — a request without one is rejected with `422
-missing_idempotency_key`. It is echoed back on the response so you can correlate
-a reply with the request that produced it.
+missing_idempotency_key`. Use one stable value per business request (your ERP
+order or correlation ID), not one per attempt and not one per session.
 
-It is **not** compared against previously seen keys. `makod` keeps no
-key→response record, so sending the same key twice does not replay the first
-response. Replay protection comes from a business-level guard instead: a second
-`anmelden` while a process is still active for the same business key is refused
-with `409 duplicate_process`, and that response carries the existing
-`process_id`.
+`makod` stores the accepted response under the key for **24 hours** and replays
+it verbatim on a retry: the same `202`, the same `process_id`, and no second
+dispatch. A client that lost the reply to a timeout can simply send the request
+again.
+
+The key is bound to the request it was first used with. Sending the same key
+with a *different* command or payload is refused with `422
+idempotency_key_reuse` rather than answered with the first request's
+`process_id` — which is what catches an ERP that generates one key per session
+instead of one per order.
+
+```json
+// 422 — the key already belongs to a different request.
+{ "error": "idempotency_key_reuse", "detail": "…" }
+```
+
+A storage failure on the lookup answers `503 idempotency_unavailable`: "I could
+not tell whether this already ran" is not a licence to run it again. Retry.
+
+The record covers **exact retries**. The stronger guard is the business-level
+one underneath it, which no idempotency scheme can replace: a second `anmelden`
+while a process is still active for the same business key is refused with `409
+duplicate_process` even under a *fresh* key, and that response carries the
+existing `process_id`.
 
 The practical consequence for a client: **treat `409 duplicate_process` as
 success.** It means your earlier attempt took effect and names the process it

@@ -319,7 +319,7 @@ pub(super) fn cmd_gpke_abrechnung_selbstausstellen<'a>(
 /// Dispatch a GPKE LF-side Anmeldung (Lieferbeginn / Lieferende / Kündigung).
 ///
 /// 1. Extract `malo_id` and `process_date_field` from the ERP payload.
-/// 2. Resolve the NB GLN from the MaLo cache.
+/// 2. Resolve the NB MP-ID from the MaLo cache.
 /// 3. Spawn a new `GpkeLfAnmeldungWorkflow` process.
 /// 4. Execute `InitiateAnmeldung` — writes the `Initiated` event and enqueues
 ///    the outbound UTILMD outbox entry atomically.
@@ -353,7 +353,7 @@ pub(super) async fn dispatch_lf_anmeldung(
         .and_then(|v| v.as_str())
         .map(str::to_owned);
 
-    // ── Resolve NB GLN from MaLo cache ───────────────────────────────────────
+    // ── Resolve NB MP-ID from MaLo cache ───────────────────────────────────────
     //
     // `data_market_location_network_operators` is a time-sliced list of NBs.
     // We take the entry with the latest `execution_time_from` that has no
@@ -375,7 +375,7 @@ pub(super) async fn dispatch_lf_anmeldung(
         .ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
                 "MaLo {malo_id} in cache has no network_operator entry — \
-             the NB GLN cannot be resolved",
+             the NB MP-ID cannot be resolved",
             ))
         })?;
 
@@ -1113,7 +1113,7 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
 
     let malo_id = extract_malo_id(payload)?;
 
-    // Resolve the NB GLN from the MaLo cache — the LF addresses its own grid operator.
+    // Resolve the NB MP-ID from the MaLo cache — the LF addresses its own grid operator.
     let malo_record = state
         .malo_cache
         .get(&state.tenant_id.to_string(), malo_id.as_str())
@@ -1129,7 +1129,7 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
         .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
         .ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
-                "MaLo {malo_id} has no network_operator — NB GLN cannot be resolved",
+                "MaLo {malo_id} has no network_operator — NB MP-ID cannot be resolved",
             ))
         })?;
 

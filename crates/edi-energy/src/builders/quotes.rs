@@ -7,7 +7,7 @@ use edifact_rs::Writer;
 use crate::AgencyCode;
 use crate::{Error, Release};
 
-use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
+use super::{Set, Unset, bytes_to_segments};
 
 /// DE 2379 unit of a `DTM` that carries a **duration** rather than a date.
 ///
@@ -366,7 +366,7 @@ impl<S, R> QuotesBuilder<S, R> {
             .inner
             .document_date
             .as_deref()
-            .map_or_else(today_ccyymmdd, str::to_owned);
+            .map_or_else(super::now_ccyymmddhhmm, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
@@ -391,10 +391,14 @@ impl<S, R> QuotesBuilder<S, R> {
             self.inner.document_code.as_deref().unwrap_or("310"),
             bgm_1004
         );
-        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        // `DTM+137` Dokumentendatum. Every EDI@Energy AHB gives DE 2379 as
+        // `303` (`CCYYMMDDHHMMZZZ`) with condition `[931]` fixing the zone to
+        // `+00`; `[494]` requires the stamp to be the creation moment or
+        // earlier. There is no Anwendungsfall in any AHB that takes `102`.
+        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         // `DTM+469` — frühester Start der Übermittlung, format 303.
         if let Some(start) = &self.inner.fruehester_start {
-            emit_comp!(w, "DTM", ["469", start, "303"]);
+            emit_comp!(w, "DTM", ["469", &super::ccyymmddhhmm_utc(start), "303"]);
         }
         // `DTM+279` — Einrichtungszeitspanne (count + 802/803/804 unit).
         if let Some((count, unit)) = &self.inner.einrichtungszeit {

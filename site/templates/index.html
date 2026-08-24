@@ -16,8 +16,8 @@
 
 <section class="stats">
   <div class="stats-inner">
-    <div><strong>454</strong><span>Prüfidentifikatoren routed</span></div>
-    <div><strong>64</strong><span>MaKo workflows</span></div>
+    <div><strong>449</strong><span>Prüfidentifikatoren routed</span></div>
+    <div><strong>60</strong><span>MaKo workflows</span></div>
     <div><strong>17</strong><span>EDIFACT message types</span></div>
     <div><strong>17</strong><span>services</span></div>
     <div><strong>4</strong><span>market roles (NB·LF·MSB·ESA)</span></div>
@@ -56,14 +56,39 @@ graph LR
       receives typed commands and emits typed events.</p>
 
     <p>Two numbers describe the same catalogue from different sides:
-      <strong>454</strong> Prüfidentifikatoren are <em>routed</em> to a workflow, and
-      <strong>346</strong> additionally carry validated AHB segment rules. The gap is
+      <strong>449</strong> Prüfidentifikatoren are <em>routed</em> to a workflow, and
+      <strong>363</strong> additionally carry validated AHB segment rules. The gap is
       a declared set of routed-without-rules PIDs, not an accident — and a release
       that would shrink either number fails the build.</p>
   </div>
 </section>
 
 <section class="features section-pad alt">
+  <div class="wrap">
+    <h2>What it looks like</h2>
+    <p>The format layer stands alone. Add one crate and an interchange becomes a
+      typed message, validated against the AHB profile in force on its date.</p>
+
+<pre><code class="language-rust">use edi_energy::{EdiEnergyMessage, Platform};
+
+let msg = Platform::with_all_profiles().parse(wire)?;
+
+msg.try_message_type();            // Some(Utilmd)
+msg.detect_release()?.as_str();    // "S2.1"
+msg.detect_pruefidentifikator()?;  // 55001 — Anmeldung Lieferbeginn
+
+let report = msg.validate()?;      // MIG + AHB + semantic
+report.is_valid();                 // true
+</code></pre>
+
+    <p>An unregistered Prüfidentifikator is reported, never silently accepted —
+      and the profile is chosen by the message's own date, because two
+      Formatversionen can share one wire release code and only the date tells
+      them apart.</p>
+  </div>
+</section>
+
+<section class="features section-pad">
   <div class="wrap">
     <h2>The shape of the platform</h2>
     <p>Seventeen services along one path: transport and protocol at the edge, master
@@ -112,7 +137,7 @@ graph TB
   </div>
 </section>
 
-<section class="features section-pad">
+<section class="features section-pad alt">
   <div class="wrap">
     <h2>What you get</h2>
     <div class="card-grid">
@@ -150,7 +175,7 @@ graph TB
   </div>
 </section>
 
-<section class="why section-pad alt">
+<section class="why section-pad">
   <div class="wrap why-grid">
     <div>
       <h2>Built for the regulatory pace</h2>

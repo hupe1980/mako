@@ -337,7 +337,9 @@ mod utilmd_transaction_tests {
         assert_eq!(tx.ide.qualifier, "24", "UTILMD DE 7495 has only 24 and Z01");
         assert_eq!(tx.vorgangsnummer(), Some("VORGANG-0001"));
         assert_eq!(tx.marktlokation(), Some("51238696012"));
-        assert_eq!(tx.date(dtm::BEGINN_ZUM), Some("20241101"));
+        // `SG4 DTM+92` is DE 2379 `303` in both UTILMD AHBs, so the wire
+        // value is the UTC minute with the `[931]` zone.
+        assert_eq!(tx.date(dtm::BEGINN_ZUM), Some("202411010000+00"));
         assert!(
             tx.references.iter().any(|r| r.qualifier == "Z13"),
             "Z13 Pruefidentifikator reference must survive roundtrip"

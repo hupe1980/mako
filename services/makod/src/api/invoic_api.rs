@@ -41,7 +41,7 @@ pub struct InvoicApiState {
     /// Cedar-based authorization engine — the stored BO4E `Rechnung` carries
     /// customer billing data and must never be an unauthenticated read.
     pub cedar: Arc<crate::cedar_authz::CedarAuthorizer>,
-    /// Operator tenant (GLN) — the Cedar resource scope.
+    /// Operator tenant (MP-ID) — the Cedar resource scope.
     pub tenant: String,
 }
 

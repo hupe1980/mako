@@ -11,11 +11,11 @@ EDI@Energy specifications are updated on a recurring cycle. This document descri
 
 ## BDEW Release Cycle
 
-Cutovers are **staggered per message type**, not synchronised on one annual date. A given format version carries its own `valid_from`, and different message types move on different dates in the same year — `contrl` on January 1, `invoic`/`orders`/`ordrsp` on April 1, `utilmd`/`mscons`/`aperak` on October 1.
+Cutovers are **staggered per message type**, not synchronised on one annual date. A given format version carries its own `valid_from`, and different message types move on different dates in the same year.
 
 | Event | Timing |
 |---|---|
-| BDEW publishes a new specification | ~ 2–3 months before that message type's cutover |
+| BDEW publishes a new specification | **six months** before its Anwendungszeitpunkt — published 01.04., applies 01.10.; published 01.10., applies 01.04. (Allgemeine Festlegungen 6.1d §2.5.1/§2.5.2) |
 | The specification becomes **valid** | its own `valid_from` — **January 1**, **April 1** or **October 1** (e.g. `fv20260101`, `fv20260401`, `fv20261001`) |
 | The predecessor **expires** | the day before its successor's `valid_from` |
 | Transition window (both valid) | **none** — EDIFACT changes at a single Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 §2.5) |
@@ -37,11 +37,11 @@ crates/edi-energy/profiles/
     │   ├── mig.json       # Message structure rules
     │   ├── ahb.json       # AHB Pruefidentifikator rules
     │   └── codelists.json # Code list values
-    ├── fv20241001_gas/    # Gas variant, same window (archived)
+    ├── fv20241001_gas/    # Gas, valid Oct 2024 → Mar 2026
     │   └── ...
     ├── fv20251001/        # Strom, valid Oct 2025 → Sep 2026 (⭐ current production)
     │   └── ...
-    ├── fv20251001_gas/    # Gas variant, same window (⭐ current production)
+    ├── fv20260401_gas/    # Gas, valid Apr 2026 → Sep 2026 (⭐ current production)
     │   └── ...
     ├── fv20261001/        # Strom, valid Oct 2026 → Sep 2027 (🛠 next release)
     │   └── ...
@@ -49,7 +49,7 @@ crates/edi-energy/profiles/
         └── ...
 ```
 
-Every profile subdirectory follows the naming convention `fv<YYYYMMDD>` where the date is the first day of validity.
+Every profile subdirectory follows the naming convention `fv<YYYYMMDD>`, where the date is the **Anwendungszeitpunkt** — never the Publikationsdatum printed on the document.
 
 ---
 

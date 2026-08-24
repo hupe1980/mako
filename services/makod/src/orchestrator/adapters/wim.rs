@@ -39,15 +39,7 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                     )
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             let invoice_ref = inv
                 .bgm()
                 .and_then(|b| b.document_id.as_deref())
@@ -186,15 +178,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                     EngineError::Deserialization(format!("WiM adapter: PID detection failed: {e}"))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // Antwort PIDs close an order we sent. They carry no UTILMD AHB
             // Anwendungsfall, so `validate()` yields `ProfileNotFound` and the
@@ -207,16 +191,7 @@ pub fn wim_registry() -> AdapterRegistry<WimDeviceChangeWorkflow> {
                         u.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""),
                     ),
                     message_ref: MessageRef::new(msg.message_ref()),
-                    reason: validation_result
-                        .as_ref()
-                        .map(|r| {
-                            r.errors()
-                                .iter()
-                                .map(|i| format!("{i}"))
-                                .collect::<Vec<_>>()
-                                .join("; ")
-                        })
-                        .filter(|s| !s.is_empty()),
+                    reason: Some(validation_errors.join("; ")).filter(|s| !s.is_empty()),
                     // `SG4 DTM` on an answer that moves the date — `Z01` on a
                     // Bestätigung, `Z12` on a Kündigungsablehnung. It replaces
                     // the requested Zuordnungsbeginn for everything downstream.
@@ -401,15 +376,7 @@ pub fn wim_geraeteubernahme_registry(
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             let sender =
                 MarktpartnerCode::new(o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
@@ -765,15 +732,7 @@ pub fn wim_stammdaten_registry() -> AdapterRegistry<WimStammdatenWorkflow> {
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             let sender =
                 MarktpartnerCode::new(o.sender().and_then(|n| n.party_id.as_deref()).unwrap_or(""));
@@ -845,15 +804,7 @@ pub fn wim_preisanfrage_registry() -> AdapterRegistry<WimPreisanfrageWorkflow> {
                 .and_then(convert_pid)?;
             match msg {
                 AnyMessage::Reqote(r) => {
-                    let validation_result = msg.validate().ok();
-                    let validation_passed = validation_result
-                        .as_ref()
-                        .map(|r| r.is_valid())
-                        .unwrap_or(false);
-                    let validation_errors: Vec<String> = validation_result
-                        .as_ref()
-                        .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                        .unwrap_or_default();
+                    let (validation_passed, validation_errors) = super::ahb_verdict(msg);
                     Ok(PreisanfrageCommand::ReceiveReqote {
                         pid,
                         sender: MarktpartnerCode::new(
@@ -1256,15 +1207,7 @@ pub fn wim_preisliste_registry() -> AdapterRegistry<WimPreislisteWorkflow> {
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             Ok(PreislisteCommand::ReceivePricat {
                 pid,
                 sender: MarktpartnerCode::new(
@@ -1499,15 +1442,7 @@ pub fn wim_weiterverpflichtung_registry(
                     ))
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             Ok(WeiterverpflichtungCommand::ReceiveAuftrag {
                 pid,
@@ -1588,15 +1523,7 @@ pub fn wim_rechnungsabwicklung_registry()
                 .and_then(convert_pid)?;
             match msg {
                 AnyMessage::Orders(o) => {
-                    let validation_result = msg.validate().ok();
-                    let validation_passed = validation_result
-                        .as_ref()
-                        .map(|r| r.is_valid())
-                        .unwrap_or(false);
-                    let validation_errors: Vec<String> = validation_result
-                        .as_ref()
-                        .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                        .unwrap_or_default();
+                    let (validation_passed, validation_errors) = super::ahb_verdict(msg);
                     Ok(RechnungsabwicklungCommand::ReceiveOrders {
                         pid,
                         sender: MarktpartnerCode::new(

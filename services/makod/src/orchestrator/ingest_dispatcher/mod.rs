@@ -6,7 +6,7 @@
 //! - `edifact_api` — REST `POST /edifact` path
 //! - `as4_ingest`  — AS4 inbound delivery path
 //! - `as4_sender`  — in-process loopback for self-addressed messages
-//!   (combined-role deployments: NB+LF, NB+MSB, GNB+gMSB sharing one GLN)
+//!   (combined-role deployments: NB+LF, NB+MSB, GNB+gMSB sharing one MP-ID)
 //!
 //! ## Routing strategy
 //!
@@ -111,6 +111,44 @@ pub enum IngestOutcome {
     },
 }
 
+/// `Skipped { reason }` value used when a workflow name reaches the family
+/// router with no arm in its family module.
+pub const SKIP_WORKFLOW_NOT_DISPATCHED: &str = "workflow_not_in_dispatch_table";
+
+/// Prefix of every `Skipped { reason }` meaning "the PID reached its workflow
+/// but the `match pid` inside that arm has no branch for it".
+pub const SKIP_PID_NOT_DISPATCHED_PREFIX: &str = "pid_not_in_";
+
+impl IngestOutcome {
+    /// The skip reason when this outcome means **mako** dropped the message,
+    /// as opposed to the peer having sent an orphan.
+    ///
+    /// Two very different things share the `Skipped` variant. `process_not_found`
+    /// and `no_correlation_key` are normal traffic: a counterparty answered a
+    /// process that has already closed, or sent a message carrying nothing to
+    /// correlate on. Recording those would bury the audit trail in noise.
+    ///
+    /// A `pid_not_in_*` or [`SKIP_WORKFLOW_NOT_DISPATCHED`] reason is the
+    /// opposite: the `PidRouter` resolved the PID, so mako told the transport it
+    /// handles this message, acknowledged it, and then dropped it. That is a
+    /// coverage bug on this side and an acknowledged-but-unprocessed inbound
+    /// message under § 147 AO / GoBD — the callers dead-letter it.
+    #[must_use]
+    pub fn coverage_gap(&self) -> Option<(&'static str, &'static str)> {
+        match self {
+            Self::Skipped {
+                workflow_name,
+                reason,
+            } if *reason == SKIP_WORKFLOW_NOT_DISPATCHED
+                || reason.starts_with(SKIP_PID_NOT_DISPATCHED_PREFIX) =>
+            {
+                Some((workflow_name, reason))
+            }
+            _ => None,
+        }
+    }
+}
+
 /// Verdict on whether a process in the given state still occupies its business
 /// key — the ingest-side equivalent of
 /// [`mako_engine::workflow::OccupiesBusinessKey::occupies_business_key`].
@@ -136,7 +174,7 @@ pub struct EdifactIngestDispatcher {
     snap_store: SlateDbSnapshotStore,
     snapshot_interval: u64,
     tenant_id: TenantId,
-    /// GLNs of counterparties acting as an Energieserviceanbieter.
+    /// MP-IDs of counterparties acting as an Energieserviceanbieter.
     ///
     /// marktd client used to gate inbound ESA messages against the consent
     /// registry. `None` disables the gate (dev mode / marktd not configured).
@@ -222,13 +260,9 @@ impl EdifactIngestDispatcher {
     pub const KNOWN_WORKFLOW_NAMES: &'static [&'static str] = &[
         mako_wim::esa_wertebestellung::WORKFLOW_NAME,
         "gabi-gas-allocation",
-        "gabi-gas-delivery-order",
-        "gabi-gas-imbnot",
         "gabi-gas-invoic",
         "gabi-gas-mmma",
         "gabi-gas-nomination",
-        "gabi-gas-schedl",
-        "gabi-gas-tranot",
         "geli-gas-datenabruf",
         "geli-gas-lf-anmeldung",
         "geli-gas-mscons",
@@ -483,18 +517,15 @@ impl EdifactIngestDispatcher {
         // LOUD (distinct from expected orphans like `process_not_found` /
         // `no_correlation_key`, which stay quiet). This is the runtime safety net for the
         // registered-but-not-dispatched class; see the PID-coverage guard in ROADMAP.
-        if let Ok(IngestOutcome::Skipped {
-            workflow_name,
-            reason,
-        }) = &outcome
-            && reason.starts_with("pid_not_in_")
+        if let Ok(o) = &outcome
+            && let Some((workflow_name, reason)) = o.coverage_gap()
         {
             tracing::warn!(
                 pid,
                 workflow = %workflow_name,
                 reason,
                 "ingest: PID is registered to this workflow but has no dispatch arm — \
-                 inbound message dropped (coverage bug)"
+                 inbound message dropped (coverage bug); the caller dead-letters it"
             );
         }
         outcome
@@ -525,18 +556,15 @@ impl EdifactIngestDispatcher {
             Err(_) => "error",
         };
         mako_engine::metrics::EngineMetrics::global().inbound_received(pid, result);
-        if let Ok(IngestOutcome::Skipped {
-            workflow_name,
-            reason,
-        }) = &outcome
-            && reason.starts_with("pid_not_in_")
+        if let Ok(o) = &outcome
+            && let Some((workflow_name, reason)) = o.coverage_gap()
         {
             tracing::warn!(
                 pid,
                 workflow = %workflow_name,
                 reason,
                 "ingest: PID is registered to this workflow but has no dispatch arm — \
-                 inbound message dropped (coverage bug)"
+                 inbound message dropped (coverage bug); the caller dead-letters it"
             );
         }
         outcome
@@ -1256,8 +1284,16 @@ pub(crate) fn faelligkeitsdatum_from_invoic(msg: &AnyMessage) -> Option<time::Of
     m.segments()
         .iter()
         .filter(|s| s.tag == "DTM" && s.component_str(0, 0) == Some("265"))
-        .filter_map(|s| s.component_str(0, 1))
-        .filter_map(crate::orchestrator::adapters::parse_ccyymmdd)
+        .filter_map(|s| {
+            // DE 2379 is `303` on every INVOIC Anwendungsfall (AHB 1.0b), so
+            // the format element decides how the value is read; assuming
+            // `CCYYMMDD` here found nothing in a conformant invoice and every
+            // Zahlungsziel silently became the +10-Werktage fallback.
+            crate::orchestrator::adapters::parse_dtm_datetime(
+                s.component_str(0, 1)?,
+                s.component_str(0, 2),
+            )
+        })
         .max()
 }
 
@@ -1435,7 +1471,7 @@ pub fn extract_order_ref_from_msg(msg: &AnyMessage) -> String {
         .to_owned()
 }
 
-/// Extract the sender GLN from the message's `NAD+MS` segment.
+/// Extract the sender MP-ID from the message's `NAD+MS` segment.
 ///
 /// Empty when the message carries no sender NAD.
 pub fn extract_sender_mp_id(msg: &AnyMessage) -> MarktpartnerCode {
@@ -1454,7 +1490,7 @@ pub fn extract_sender_mp_id(msg: &AnyMessage) -> MarktpartnerCode {
     )
 }
 
-/// Extract the receiver GLN from the message's `NAD+MR` segment.
+/// Extract the receiver MP-ID from the message's `NAD+MR` segment.
 ///
 /// Empty when the message carries no receiver NAD.
 pub fn extract_receiver_mp_id(msg: &AnyMessage) -> MarktpartnerCode {
@@ -1629,12 +1665,12 @@ fn unknown_workflow_skip(wf_name: &str, pid: u32) -> Result<IngestOutcome, Engin
     tracing::warn!(
         workflow_name = %wf_name,
         pid,
-        "ingest dispatcher: no Phase 2 handler — message dead-lettered; \
-         add a dispatch arm in ingest_dispatcher to handle this workflow",
+        "ingest dispatcher: no Phase 2 handler — add a dispatch arm in \
+         ingest_dispatcher to handle this workflow",
     );
     Ok(IngestOutcome::Skipped {
         workflow_name: "unregistered",
-        reason: "workflow_not_in_dispatch_table",
+        reason: SKIP_WORKFLOW_NOT_DISPATCHED,
     })
 }
 
@@ -1675,6 +1711,27 @@ mod faelligkeitsdatum_tests {
     fn no_dtm_265_yields_none_so_caller_falls_back() {
         // Only the invoice date (DTM+137) is present — no Zahlungsziel.
         let msg = parse_invoic("");
+        assert!(faelligkeitsdatum_from_invoic(&msg).is_none());
+    }
+
+    /// INVOIC AHB 1.0b gives `SG8 DTM+265` as DE 2379 `303` in every
+    /// Anwendungsfall, so this is the shape a conformant invoice actually
+    /// carries. Reading it as `CCYYMMDD` returned `None`, and every Zahlungsziel
+    /// silently became the +10-Werktage fallback.
+    #[test]
+    fn extracts_faelligkeitsdatum_from_a_conformant_303_value() {
+        let msg = parse_invoic("DTM+265:202602151200?+00:303'");
+        let due = faelligkeitsdatum_from_invoic(&msg).expect("DTM+265 present");
+        assert_eq!(due.date(), time::macros::date!(2026 - 02 - 15));
+        assert_eq!(due.hour(), 12);
+    }
+
+    /// DE 2379 `273` is a *duration* (REQOTE Bindungsfrist), not a point in
+    /// time. A reader that ignores the format element would turn a count of
+    /// days into a year.
+    #[test]
+    fn a_non_date_format_yields_none_rather_than_a_guess() {
+        let msg = parse_invoic("DTM+265:5:273'");
         assert!(faelligkeitsdatum_from_invoic(&msg).is_none());
     }
 

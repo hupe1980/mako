@@ -84,7 +84,7 @@ fn build_utilmd() -> Result<(), Box<dyn std::error::Error>> {
 // ── MSCONS ────────────────────────────────────────────────────────────────────
 
 fn build_mscons() -> Result<(), Box<dyn std::error::Error>> {
-    println!("=== MSCONS (2.4c — fv20251001, valid Oct 2025 – Sep 2026) ===");
+    println!("=== MSCONS (2.4c — fv20260401, valid Apr 2026 – Sep 2026) ===");
 
     let pid = Pruefidentifikator::new(13003)?;
     let release = Release::new("2.4c");

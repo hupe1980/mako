@@ -14,7 +14,7 @@
 //! - It does not carry business logic.
 //! - It does not perform I/O.
 //! - It does not validate domain invariants beyond what the types already
-//!   guarantee (e.g. it does not check GLN check digits).
+//!   guarantee (e.g. it does not check MP-ID check digits).
 //!
 //! # Adding new bridges
 //!
@@ -47,7 +47,7 @@ pub fn location_id_to_domain(id: &ApiLocationId) -> DomainLocationId {
     }
 }
 
-/// Convert a raw party-ID string (GLN, BDEW code, or EIC) from a request
+/// Convert a raw party-ID string (MP-ID, BDEW code, or EIC) from a request
 /// context into a [`MarktpartnerCode`] domain value.
 ///
 /// `MarktpartnerCode::new` accepts any `&str`; this wrapper documents the

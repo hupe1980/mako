@@ -493,6 +493,12 @@ impl Workflow for GpkeSperrungLfWorkflow {
                     nb_mp_id.as_str(),
                     serde_json::json!({
                         "type":          "SperrungAuftrag",
+                        // ORDERS 17115/17117 are shared with the AWH Sperrprozesse
+                        // Gas, where the sender is the LFG rather than the LF.
+                        // Stating the Sparte is what lets the renderer pick the
+                        // right own MP-ID in a dual-fuel deployment instead of
+                        // weighing the two roles and falling back to the primary.
+                        "sparte":        "Strom",
                         "pid":           pid.as_u32(),
                         "location_id":   location_id.as_str(),
                         "message_ref":   message_ref.as_str(),

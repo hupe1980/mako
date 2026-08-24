@@ -36,10 +36,11 @@ sequenceDiagram
 | `gabi-gas-allocation` | ALOCAT (PIDs 70001–70023) | BK7-24-01-008 / DVGW ALOCAT 5.11a | ✅ |
 | `gabi-gas-nomination` | NOMINT (70030–70034) + NOMRES (70035–70039) | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
 | `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-24-01-008 | ✅ |
-| `gabi-gas-schedl` | SCHEDL — **not routed** | DVGW SCHEDL G685/G2000 | placeholder |
-| `gabi-gas-imbnot` | IMBNOT — **not routed** | DVGW IMBNOT 5.7a | placeholder |
-| `gabi-gas-tranot` | TRANOT — **not routed** | DVGW TRANOT 5.8b | placeholder |
-| `gabi-gas-delivery-order` | DELORD + DELRES — **not routed** | DVGW DELORD 4.5 / DELRES 4.6 | placeholder |
+
+The DVGW transport formats `dvgw-edi` does not parse — SCHEDL, IMBNOT, TRANOT,
+DELORD/DELRES, SSQNOT, CHACAP, NUEVOR, SLPASP and TSIMSG — have no workflow
+here. A workflow for a format nothing can parse is unreachable, and registering
+a Prüfidentifikator for it overstates what the router handles.
 
 ## Domain model (`domain.rs` + `portfolio.rs`)
 
@@ -216,24 +217,16 @@ assert_eq!(gabi_cloud_events::NOMINATION_CREATED, "de.gabi.nomination.created");
 assert_eq!(gabi_cloud_events::ALLOCATION_COMPLETED, "de.gabi.allocation.completed");
 assert_eq!(gabi_cloud_events::IMBALANCE_CALCULATED, "de.gabi.imbalance.calculated");
 assert_eq!(gabi_cloud_events::INVOIC_MMM_RECEIVED, "de.gabi.invoic.mmm.received");
-// … 12 typed constants total — use glob "de.gabi.*" to trigger gabi-gas-agent
+// … 11 typed constants total — use glob "de.gabi.*" to trigger gabi-gas-agent
 ```
 
-### DVGW format version management
+### DVGW format versions
 
-The `dvgw_versions` module tracks biannual DVGW release versions with validity dates:
-
-```rust
-use mako_gabi_gas::dvgw_versions;
-
-println!("ALOCAT:  {} (valid from {})", dvgw_versions::ALOCAT.version,
-         dvgw_versions::ALOCAT.valid_from); // "5.11a" / 2024-10-01
-println!("NOMINT:  {} (valid from {})", dvgw_versions::NOMINT.version,
-         dvgw_versions::NOMINT.valid_from); // "4.6 FK" / 2026-02-01
-// … NOMRES
-```
-
-DVGW releases take effect on **1 April** and **1 October at 06:00 CET** (= start of a gas day).
+DVGW releases take effect on **1 April** and **1 October at 06:00 CET** (= the
+start of a gas day). The version a counterparty claims is `UNH` S009 DE 0057 and
+is captured verbatim by `dvgw_edi::DvgwVersion` — DVGW puts either a package
+code (`DVGW17`) or the message version (`5.11a`) there, so it is not a uniform
+key and nothing selects behaviour from it.
 
 ## Domain background
 
@@ -321,10 +314,6 @@ message exchange:
 |---|---|---|---|
 | `gabi-gas-allocation` | 70001–70023 | ALOCAT 5.11a | Gas quantity allocation — supports `Initial`, `Correction(n)`, `Final` versions per KoV §6.4 |
 | `gabi-gas-nomination` | 70030–70034 (NOMINT) · 70035–70039 (NOMRES) | NOMINT 4.6 · NOMRES 4.7 | Transportkunde → NB/MGV nomination + the NB's Bestätigung or Matching-Benachrichtigung; `NominationQuantity` tracks submitted/accepted/curtailed |
-| `gabi-gas-schedl` | not routed | SCHEDL G685/G2000 | Transport schedule for a gas day (typed `GasDay`) |
-| `gabi-gas-imbnot` | not routed | IMBNOT 5.7a | Intraday imbalance notification (MGV/FNB → BKV); `GasImbalanceSaldo` computes Mehr/Minder direction |
-| `gabi-gas-tranot` | not routed | TRANOT 5.8b | Transport notification — capacity restriction or event (FNB/VNB → BKV/GH/MGV) |
-| `gabi-gas-delivery-order` | not routed | DELORD 4.5 FK · DELRES 4.6 FK | Delivery nomination (BKV → FNB) + FNB confirmation/rejection |
 
 The PID is read from `SG1 RFF+Z13`; `dvgw_edi::catalogue()` names each
 Anwendungsfall. The process key is the **published Zuordnungstupel** (ALOCAT

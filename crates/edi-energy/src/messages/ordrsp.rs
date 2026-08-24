@@ -25,8 +25,8 @@ use crate::{
 /// Wire type string: `ORDRSP:D:10A:UN:{release}`.
 ///
 /// Supported releases (fv-dated profiles):
-/// - `releases::ordrsp_fv20251001()` (wire: `"1.4b"`, AHB 1.1a, valid from 2025-10-01)
-/// - `releases::ordrsp_fv20260401()` (wire: `"1.4c"`, AHB 1.1b, valid from 2026-04-01)
+/// - `releases::ordrsp_fv20260401()` (wire: `"1.4b"`, AHB 1.1a, valid from 2025-10-01)
+/// - `releases::ordrsp_fv20261001()` (wire: `"1.4c"`, AHB 1.1b, valid from 2026-04-01)
 ///
 /// The key structural change between MIG 1.4b and MIG 1.4c is the **addition of
 /// FTX+Z33** (APN-Kommunikationsdaten-Zugriffsparameter) in SG27. Both releases

@@ -17,7 +17,7 @@
 //! | [`validate_adapter_coverage`] | Every adapter registry covers every active format version |
 //! | [`validate_dispatch_completeness`] | Every routed workflow has an ingest arm |
 //! | [`servers`] | Bind and spawn the HTTP, AS4 and API-Webdienste ports |
-//! | [`spawn_workers`] | Outbox, ERP webhook, deadlines, projections, inbox purge |
+//! | [`spawn_workers`] | Outbox, ERP webhook, deadlines, projections, retention purge |
 //!
 //! Everything above `spawn_workers` runs in `--check` mode too, which is why the
 //! validations panic or return errors rather than logging: `--check` promises
@@ -434,7 +434,7 @@ pub(crate) struct WorkersConfig {
     pub ctx: MakodCtx,
     /// Store shared across projection and ERP workers.
     pub store: SlateDbStore,
-    /// Inbox store used by the daily deduplication purge task.
+    /// Inbox store swept by the daily retention purge task.
     pub inbox_store_for_purge: SlateDbInboxStore,
     /// Shared Platform instance (used by the AS4 loopback path).
     pub platform: Arc<Platform>,
@@ -449,9 +449,9 @@ pub(crate) struct WorkersConfig {
     /// [`WorkerHandles`] before closing the event store.
     pub shutdown_token: CancellationToken,
     // ── Outbound AS4 config ──────────────────────────────────────────────
-    /// GLN registry — maps roles to GLNs and provides own-GLN detection.
+    /// MP-ID registry — maps roles to MP-IDs and provides own-MP-ID detection.
     ///
-    /// Built from `[[party]]` entries in `makod.toml`. The primary GLN is used
+    /// Built from `[[party]]` entries in `makod.toml`. The primary MP-ID is used
     /// as the storage partition key (`TenantId`) and AS4 `partyId` fallback.
     pub mp_id_registry: Arc<MpIdRegistry>,
     /// Configuration validated by `core::preflight` — the AS4 partner P-Mode
@@ -885,13 +885,17 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
         );
     }
 
-    // ── Inbox purge worker ────────────────────────────────────────────────
+    // ── Retention purge worker ────────────────────────────────────────────
+    //
+    // Sweeps the two time-bounded key spaces: the AS4 inbox dedup index and the
+    // `Idempotency-Key` records behind `POST /api/v1/commands`.
     //
     // The BDEW AS4 retry window is 72 hours; a dedup entry evicted at exactly
     // 72h could let a final retry at the window's edge re-process as a new
     // message. Retention adds a 24-hour safety margin on top of the window.
     const INBOX_DEDUP_RETENTION: time::Duration = time::Duration::hours(72 + 24);
     let inbox_store_for_purge = cfg.inbox_store_for_purge;
+    let idempotency_store = cfg.store.clone();
 
     // Heartbeat like every other worker. A stalled purge is not a compliance
     // failure — dedup keeps working, entries simply accumulate — but it leaks
@@ -900,7 +904,7 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
     //
     // The window is generous: the loop ticks daily, so anything under ~2 cycles
     // would flap on a slow purge over a large store.
-    let (purge_hb, purge_watch) = new_heartbeat("inbox-purge-worker", 26 * 3600);
+    let (purge_hb, purge_watch) = new_heartbeat("retention-purge-worker", 26 * 3600);
     cfg.health_state.register_worker(purge_watch);
 
     let purge_token = cfg.shutdown_token.clone();
@@ -910,21 +914,31 @@ pub(crate) async fn spawn_workers(cfg: WorkersConfig) -> anyhow::Result<WorkerHa
             tokio::select! {
                 _ = interval.tick() => {}
                 () = purge_token.cancelled() => {
-                    tracing::info!("inbox purge worker: shutdown signalled; stopping");
+                    tracing::info!("retention purge worker: shutdown signalled; stopping");
                     return;
                 }
             }
             // Tick before the work: the heartbeat proves the loop is alive, and
             // a purge that fails still logs its own error below.
             purge_hb.tick();
-            let cutoff = time::OffsetDateTime::now_utc() - INBOX_DEDUP_RETENTION;
-            match inbox_store_for_purge.purge_expired(cutoff).await {
+            let now = time::OffsetDateTime::now_utc();
+            match inbox_store_for_purge
+                .purge_expired(now - INBOX_DEDUP_RETENTION)
+                .await
+            {
                 Ok(n) => tracing::info!(removed = n, "inbox purge complete"),
                 Err(e) => tracing::error!(error = %e, "inbox purge failed"),
             }
+            match crate::commands_api::idempotency::purge_expired(&idempotency_store, now).await {
+                Ok(n) => tracing::info!(removed = n, "idempotency record purge complete"),
+                Err(e) => tracing::error!(error = %e, "idempotency record purge failed"),
+            }
         }
     }));
-    info!("inbox purge worker started (daily, 96h retention for the 72h AS4 retry window)");
+    info!(
+        "retention purge worker started (daily; 96h AS4 inbox dedup for the 72h \
+         retry window, 24h Idempotency-Key records)"
+    );
 
     Ok(WorkerHandles(handles))
 }
@@ -946,6 +960,120 @@ mod tests {
         // validate_adapter_coverage panics on missing coverage — the panic
         // itself is the assertion.
         validate_adapter_coverage();
+    }
+
+    /// Every name `KNOWN_WORKFLOW_NAMES` certifies must actually have a
+    /// dispatch arm.
+    ///
+    /// [`validate_dispatch_completeness`] compares the live `PidRouter` against
+    /// that constant and reports "dispatch completeness validated" when they
+    /// agree. That statement is only true if the constant itself is true — and
+    /// it is hand-maintained, so it can name a workflow whose arm was never
+    /// written. Such a message reaches `dispatch_inner`, falls through the
+    /// family match to `unknown_workflow_skip`, and is dropped while the
+    /// startup log claims full coverage. Four DVGW workflows were in exactly
+    /// that state.
+    ///
+    /// The arms are read out of the per-family submodule sources rather than
+    /// listed again here: a second hand-maintained list is the defect this
+    /// test exists to prevent.
+    #[test]
+    fn every_certified_workflow_has_a_dispatch_arm() {
+        use ingest_dispatcher::EdifactIngestDispatcher;
+
+        const SOURCES: &[(&str, &str)] = &[
+            (
+                "gabi_gas.rs",
+                include_str!("../orchestrator/ingest_dispatcher/gabi_gas.rs"),
+            ),
+            (
+                "geli_gas.rs",
+                include_str!("../orchestrator/ingest_dispatcher/geli_gas.rs"),
+            ),
+            (
+                "gpke.rs",
+                include_str!("../orchestrator/ingest_dispatcher/gpke.rs"),
+            ),
+            (
+                "mabis.rs",
+                include_str!("../orchestrator/ingest_dispatcher/mabis.rs"),
+            ),
+            (
+                "redispatch.rs",
+                include_str!("../orchestrator/ingest_dispatcher/redispatch.rs"),
+            ),
+            (
+                "wim.rs",
+                include_str!("../orchestrator/ingest_dispatcher/wim.rs"),
+            ),
+        ];
+
+        // A dispatch arm is either a string literal (`"gpke-sperrung" => {`) or
+        // a path to a crate constant (`… mako_wim::x::WORKFLOW_NAME => {`). The
+        // second form is resolved through this table, keyed by the path as it
+        // appears in the source and valued by the constant itself — so a
+        // renamed constant changes the value and the assertion below catches it.
+        const CONSTANT_ARMS: &[(&str, &str)] = &[
+            (
+                "mako_wim::esa_wertebestellung::WORKFLOW_NAME",
+                mako_wim::esa_wertebestellung::WORKFLOW_NAME,
+            ),
+            (
+                "mako_wim::weiterverpflichtung::WORKFLOW_NAME",
+                mako_wim::weiterverpflichtung::WORKFLOW_NAME,
+            ),
+            (
+                "mako_wim::wertebestellung::WORKFLOW_NAME",
+                mako_wim::wertebestellung::WORKFLOW_NAME,
+            ),
+        ];
+
+        let mut arms: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        for (_, src) in SOURCES {
+            for line in src.lines() {
+                let trimmed = line.trim();
+                if !trimmed.contains("=>") {
+                    continue;
+                }
+                if let Some(rest) = trimmed.strip_prefix('"')
+                    && let Some((name, tail)) = rest.split_once('"')
+                    && tail.trim_start().starts_with("=>")
+                {
+                    arms.insert(name);
+                }
+                for (path, value) in CONSTANT_ARMS {
+                    if trimmed.contains(path) {
+                        arms.insert(value);
+                    }
+                }
+            }
+        }
+
+        let missing: Vec<&str> = EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES
+            .iter()
+            .copied()
+            .filter(|n| !arms.contains(n))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these workflows are in KNOWN_WORKFLOW_NAMES — so \
+             validate_dispatch_completeness certifies them — but no dispatch arm \
+             exists in any ingest_dispatcher submodule. Inbound messages routed \
+             to them are dropped:\n  {}",
+            missing.join("\n  ")
+        );
+
+        let stale: Vec<&str> = arms
+            .iter()
+            .copied()
+            .filter(|n| !EdifactIngestDispatcher::KNOWN_WORKFLOW_NAMES.contains(n))
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "these dispatch arms exist but are absent from KNOWN_WORKFLOW_NAMES, \
+             so validate_dispatch_completeness would panic at startup if their \
+             PIDs were registered:\n  {stale:?}"
+        );
     }
 
     /// Verify that `KNOWN_WORKFLOW_NAMES` is sorted and deduplicated.

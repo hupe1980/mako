@@ -322,8 +322,8 @@ async fn store_batch(
             anyhow::bail!("malo {}: interval from >= to at {from}", batch.malo_id);
         }
         // An unrecognised flag is refused, exactly as the REST doors refuse it.
-        // The catch-all used to make it `MEASURED`, so a head-end typo turned a
-        // non-billable reading into a billable one — on the least supervised
+        // Defaulting it to `MEASURED` would let a head-end typo turn a
+        // non-billable reading into a billable one, on the least supervised
         // ingest door there is.
         let quality = match iv.quality.as_deref() {
             None => QualityFlag::Measured,

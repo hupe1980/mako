@@ -248,8 +248,8 @@ impl ClsChannel {
 /// network-charge reduction models the Anschlussnutzer elects — Modul 1 a flat
 /// reduction, Modul 2 a reduced Arbeitspreis, Modul 3 zeitvariable Netzentgelte
 /// (BK6-22-300) — and any SteuVE may be on any of them. Pinning "Wärmepumpe =
-/// Modul 1" and "Wallbox = Modul 2" onto the device type, as this enum\'s docs
-/// used to, is a category error that would mis-price a §14a bill.
+/// Modul 1" or "Wallbox = Modul 2" onto the device type is a category error
+/// that would mis-price a §14a bill.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum ClsDeviceType {

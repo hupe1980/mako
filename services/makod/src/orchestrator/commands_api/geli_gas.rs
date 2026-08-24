@@ -161,7 +161,7 @@ pub(super) async fn dispatch_geli_gas_datenabruf_anfragen(
         .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
         .ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
-                "MaLo {malo_id} has no network_operator — GNB GLN cannot be resolved",
+                "MaLo {malo_id} has no network_operator — GNB MP-ID cannot be resolved",
             ))
         })?;
 
@@ -383,7 +383,7 @@ pub(super) async fn dispatch_geli_gas_stornierung_initiieren(
         .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
         .ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
-                "MaLo {malo_id} has no network_operator entry — GNB GLN cannot be resolved",
+                "MaLo {malo_id} has no network_operator entry — GNB MP-ID cannot be resolved",
             ))
         })?;
 
@@ -504,7 +504,7 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
         })?
         .to_owned();
 
-    // Resolve GNB GLN from MaLo cache.
+    // Resolve GNB MP-ID from MaLo cache.
     let malo_record = state
         .malo_cache
         .get(&state.tenant_id.to_string(), malo_id.as_str())
@@ -520,7 +520,7 @@ pub(super) async fn dispatch_geli_lf_anmeldung(
         .map(|p| MarktpartnerCode::new(format!("{:013}", p.market_partner_id)))
         .ok_or_else(|| {
             DispatchError::InvalidPayload(format!(
-                "MaLo {malo_id} has no network_operator — GNB GLN cannot be resolved",
+                "MaLo {malo_id} has no network_operator — GNB MP-ID cannot be resolved",
             ))
         })?;
 

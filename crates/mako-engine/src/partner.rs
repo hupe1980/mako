@@ -167,10 +167,12 @@ pub struct ContactPerson {
 /// fields from a newer inbound PARTIN (respects validity dates).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PartnerRecord {
-    /// The partner's 13-digit Global Location Number.
+    /// The partner's Marktpartner-ID — a BDEW-Codenummer, a DVGW-Codenummer,
+    /// a GS1 GLN or an EIC (Allgemeine Festlegungen §2.13).
     pub mp_id: MarktpartnerCode,
 
     /// Company name from the PARTIN `NAD` segment.
+    #[serde(default)]
     pub display_name: Option<Box<str>>,
 
     /// All communication channels from PARTIN `COM` segments.
@@ -179,6 +181,7 @@ pub struct PartnerRecord {
     /// DE 3155 convention).  Use [`as4_endpoint`] for direct access.
     ///
     /// [`as4_endpoint`]: PartnerRecord::as4_endpoint
+    #[serde(default)]
     pub channels: Vec<CommunicationChannel>,
 
     /// Market roles this partner has declared via PARTIN.
@@ -186,6 +189,7 @@ pub struct PartnerRecord {
     /// Derived from the PARTIN Prüfidentifikator via
     /// [`Marktrolle::from_partin_pid`]. Serialises as BDEW role codes
     /// (`"LF"`, `"NB"`, `"MSB"`, …).
+    #[serde(default)]
     pub roles: Vec<Marktrolle>,
 
     /// Date from which this record version is valid (`DTM/137`).
@@ -199,13 +203,22 @@ pub struct PartnerRecord {
     pub valid_from: Option<OffsetDateTime>,
 
     /// Contact persons from the PARTIN *Ansprechpartner* group.
+    #[serde(default)]
     pub contacts: Vec<ContactPerson>,
 
     /// ISO 3166-1 alpha-2 country code from `NAD+MS+++...+DE` (usually `DE`).
+    #[serde(default)]
     pub country_code: Option<Box<str>>,
 
     /// Wall-clock time when this record was last written to the store.
-    #[serde(with = "time::serde::rfc3339")]
+    ///
+    /// Server-owned. It defaults on deserialisation because a client has no
+    /// business asserting when *we* last wrote a record — and because
+    /// [`merge_from_partin`] carries it forward, a caller who could set it
+    /// would be writing into a field the merge reads.
+    ///
+    /// [`merge_from_partin`]: PartnerRecord::merge_from_partin
+    #[serde(default = "OffsetDateTime::now_utc", with = "time::serde::rfc3339")]
     pub updated_at: OffsetDateTime,
 }
 

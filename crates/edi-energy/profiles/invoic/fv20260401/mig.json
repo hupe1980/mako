@@ -3,7 +3,6 @@
   "message_type": "INVOIC",
   "release": "2.8e",
   "valid_from": "2026-04-01",
-  "supersedes_directory": "fv20251001",
   "segments": [
     {
       "tag": "UNH",
@@ -792,6 +791,8 @@
       "groups": []
     }
   ],
+  "valid_until": "2026-09-30",
   "ahb_revision": "2.8e",
-  "source_document": "INVOIC MIG 2.8e, Stand 01.04.2026"
+  "source_document": "INVOIC MIG 2.8e, Publikationsdatum 01.10.2025",
+  "publikationsdatum": "2025-10-01"
 }

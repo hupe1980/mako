@@ -363,7 +363,7 @@ impl<S, R> PricatBuilder<S, R> {
         if let Some(pid) = self.inner.pruefidentifikator {
             emit_comp!(w, "RFF", ["Z13", &pid.to_string()]);
         }
-        emit_comp!(w, "DTM", ["137", &dtm_val, "303"]);
+        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -401,10 +401,10 @@ impl<S, R> PricatBuilder<S, R> {
                         emit_comp!(w, "RNG", ["10"], [low, high]);
                     }
                     if let Some(from) = &price.valid_from {
-                        emit_comp!(w, "DTM", ["163", from, "303"]);
+                        emit_comp!(w, "DTM", ["163", &super::ccyymmddhhmm_utc(from), "303"]);
                     }
                     if let Some(to) = &price.valid_to {
-                        emit_comp!(w, "DTM", ["164", to, "303"]);
+                        emit_comp!(w, "DTM", ["164", &super::ccyymmddhhmm_utc(to), "303"]);
                     }
                 }
             }

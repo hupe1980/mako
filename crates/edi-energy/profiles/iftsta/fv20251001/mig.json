@@ -491,6 +491,7 @@
   ],
   "valid_until": "2026-09-30",
   "ahb_revision": "2.0h",
-  "source_document": "IFTSTA MIG 2.0h, konsolidierte Lesefassung mit Fehlerkorrekturen Stand 23.06.2025",
-  "pid_source": "rff_z13"
+  "source_document": "IFTSTA MIG 2.0h, konsolidierte Lesefassung mit Fehlerkorrekturen Publikationsdatum 01.04.2025",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2025-04-01"
 }

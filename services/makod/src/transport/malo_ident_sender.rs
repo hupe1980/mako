@@ -9,7 +9,7 @@
 //! 1. Deserialises the payload `{ tx_id, tenant_id, sender_market_partner_id, params }`.
 //! 2. Looks up the MaLo record in [`SlateDbMaloCache`].
 //! 3. Resolves the LF's callback URL using one of two paths (in priority order):
-//!    a. The static `partner_urls` override map (keyed by GLN) — for testing and Verzeichnisdienst outages.
+//!    a. The static `partner_urls` override map (keyed by MP-ID) — for testing and Verzeichnisdienst outages.
 //!    b. A [`VerzeichnisdienstLookup`] that queries the BDEW Verzeichnisdienst and caches the result in the `SlateDbPartnerStore`.
 //! 4. Calls `MaloIdentClient::send_positive_response` or
 //!    `MaloIdentClient::send_negative_response` on the LF's callback endpoint.
@@ -22,7 +22,7 @@
 //!
 //! | Priority | Source |
 //! |---|---|
-//! | 1 | `--maloid-partner GLN=URL` CLI override (static map) |
+//! | 1 | `--maloid-partner MP-ID=URL` CLI override (static map) |
 //! | 2 | `PartnerStore` `"AW"` channel (previously cached Verzeichnisdienst entry) |
 //! | 3 | Live Verzeichnisdienst lookup via `DirectoryServiceClient` |
 //!
@@ -71,7 +71,7 @@ struct MaloIdentCallbackPayload {
 /// The LF's API-Webdienste Strom base URL is resolved in priority order:
 ///
 /// 1. **Static override** (`partner_urls`) — populated from `--maloid-partner
-///    GLN=URL` CLI flags. Takes precedence over all other sources.  Useful
+///    MP-ID=URL` CLI flags. Takes precedence over all other sources.  Useful
 ///    for testing and as a fallback when the Verzeichnisdienst is unreachable.
 /// 2. **Verzeichnisdienst** (`verzeichnisdienst`) — when configured, performs
 ///    a live BDEW Verzeichnisdienst lookup and caches the result in the partner
@@ -91,10 +91,10 @@ struct MaloIdentCallbackPayload {
 pub struct MaloIdentSender {
     cache: SlateDbMaloCache,
     http_client: Client,
-    /// Static overrides: GLN → callback base URL.
+    /// Static overrides: MP-ID → callback base URL.
     ///
     /// Takes priority over Verzeichnisdienst lookups.  Configure via
-    /// `--maloid-partner <GLN>=<URL>`.
+    /// `--maloid-partner <MP-ID>=<URL>`.
     partner_urls: Arc<HashMap<String, Url>>,
     /// Optional Verzeichnisdienst lookup for dynamic URL discovery.
     ///
@@ -111,7 +111,7 @@ pub struct MaloIdentSender {
 impl MaloIdentSender {
     /// Create a new sender.
     ///
-    /// - `partner_urls`: static GLN → URL overrides (`--maloid-partner`).
+    /// - `partner_urls`: static MP-ID → URL overrides (`--maloid-partner`).
     /// - `verzeichnisdienst`: optional live Verzeichnisdienst lookup.
     /// - `outbox_store`: store for `MaloIdentified` ERP events.
     #[must_use]
@@ -195,7 +195,7 @@ impl As4Sender for MaloIdentSender {
             // Resolve the LF's callback base URL.
             //
             // Priority:
-            //   1. Static CLI override (`--maloid-partner GLN=URL`)
+            //   1. Static CLI override (`--maloid-partner MP-ID=URL`)
             //   2. Verzeichnisdienst lookup (caches result in partner store)
             let lf_base_url: Url = if let Some(url) = partner_urls.get(&cb.sender_market_partner_id)
             {
@@ -252,7 +252,7 @@ impl As4Sender for MaloIdentSender {
                 Ok(Some(result)) => {
                     let malo_id_str = result.data_market_location.malo_id.as_ref().to_owned();
 
-                    // Resolve the NB GLN from the MaLo record — needed both for
+                    // Resolve the NB MP-ID from the MaLo record — needed both for
                     // the result cache and for the `maloid.lieferbeginn.fortsetzen`
                     // continuation path.
                     let nb_mp_id_str = result

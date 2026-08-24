@@ -108,9 +108,8 @@ pub struct HandlerState {
     ///
     /// `false` means meterstore is hot-only against an in-memory warehouse:
     /// nothing is ever archived and the settled history has nowhere to go.
-    /// `GET /api/v1/archive/status` used to answer `"enabled": true`
-    /// unconditionally, which reads as "archival is working" on exactly the
-    /// deployment where it is not.
+    /// `GET /api/v1/archive/status` reports this rather than a constant, so it
+    /// cannot read as "archival is working" on the deployment where it is not.
     pub cold_tier_enabled: bool,
 }
 

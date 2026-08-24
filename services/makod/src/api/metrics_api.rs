@@ -72,7 +72,7 @@ pub struct MetricsState {
     store: SlateDbStore,
     /// Cedar-based authorization engine.
     cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant identifier (GLN).
+    /// Operator tenant identifier (MP-ID).
     tenant_id: String,
     /// Whether the daemon started with volatile (in-memory) storage.
     ///

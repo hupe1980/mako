@@ -45,15 +45,7 @@ pub fn gabi_gas_invoic_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
                     )
                 })
                 .and_then(convert_pid)?;
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
             let invoice_ref = inv
                 .bgm()
                 .and_then(|b| b.document_id.as_deref())

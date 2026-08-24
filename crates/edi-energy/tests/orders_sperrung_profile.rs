@@ -38,7 +38,7 @@ fn segment_requirement(release: &str, pid: u32, tag: &str) -> Option<String> {
 fn sperrung_pids_have_rules_in_the_current_release() {
     for pid in [17007, 17008, 17115, 17116, 17117] {
         assert_eq!(
-            segment_requirement("fv20260401", pid, "BGM").as_deref(),
+            segment_requirement("fv20261001", pid, "BGM").as_deref(),
             Some("M"),
             "PID {pid} must carry AHB rules in fv20260401"
         );
@@ -52,7 +52,7 @@ fn sperrung_pids_have_rules_in_the_current_release() {
 /// unblocking order. Both profiles previously gave that mark to 17115.
 #[test]
 fn imd_is_mandatory_only_for_the_entsperrauftrag() {
-    for release in ["fv20251001", "fv20260401"] {
+    for release in ["fv20260401", "fv20261001"] {
         assert_eq!(
             segment_requirement(release, 17117, "IMD").as_deref(),
             Some("M"),

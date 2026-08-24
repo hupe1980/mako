@@ -24,10 +24,15 @@ pub fn router(state: Arc<CommandsApiState>) -> Router {
     tag = "commands",
     request_body(content = ErpCommand, description = "ERP command envelope", content_type = "application/json"),
     responses(
-        (status = 202, description = "Command accepted", body = CommandAccepted),
+        (status = 202, description = "Command accepted, or the recorded response for a repeated Idempotency-Key", body = CommandAccepted),
         (status = 400, description = "Malformed request body"),
         (status = 401, description = "Missing or invalid bearer token"),
-        (status = 422, description = "Unknown command or missing marktrolle"),
+        (status = 403, description = "Cedar policy denied this command"),
+        (status = 404, description = "No active process for the referenced business key"),
+        (status = 409, description = "duplicate_process (adopt the returned process_id) or invalid_state"),
+        (status = 422, description = "Unknown command, missing marktrolle, missing or reused Idempotency-Key, or an invalid payload"),
+        (status = 501, description = "Command registered but not dispatchable in this release"),
+        (status = 503, description = "The idempotency record could not be read; retry"),
     ),
     security(
         (),
@@ -134,25 +139,14 @@ pub(crate) async fn handle_command(
 
     // ── Idempotency key ───────────────────────────────────────────────────────
     //
-    // Required for all state-mutating commands, and echoed back on the response
-    // so a caller can correlate a reply with the request that produced it.
+    // Required for every command. The accepted response is stored under it for
+    // 24 hours and replayed verbatim on a retry, so a caller that lost the
+    // reply gets the same 202 and the same `process_id` rather than a second
+    // process or a 409 — see [`idempotency`].
     //
-    // What it does NOT do — stated explicitly because the name invites the
-    // opposite assumption: this key is not compared against previously seen
-    // keys, and no key→response record is kept. Replay protection comes from the
-    // per-family business guard below, which refuses a second `anmelden` while an
-    // active process exists for the same business key (`DuplicateProcess`, 409,
-    // carrying that process's id so the caller can adopt it).
-    //
-    // The practical difference: a retry whose response was lost gets 409 with the
-    // existing process id rather than a replay of the original 202. That is safe
-    // — no duplicate process is created — but it is not RFC-style idempotency,
-    // and the guard only covers processes that are still active. Callers must
-    // therefore treat `duplicate_process` as success, which `mako_markt`'s
-    // `classify_conflict` does.
-    //
-    // The key is still mandatory: without one, a retrying ERP leaves no trace
-    // tying its attempts together, so 422 rather than silently accepting.
+    // The per-family business guard below stays in place and is the stronger
+    // of the two: it refuses a second `anmelden` for the same business key even
+    // from a *different* key, which no idempotency scheme can see.
     let idempotency_key = match headers
         .get("idempotency-key")
         .or_else(|| headers.get("Idempotency-Key"))
@@ -166,13 +160,63 @@ pub(crate) async fn handle_command(
                 Json(serde_json::json!({
                     "error":  "missing_idempotency_key",
                     "detail": "The Idempotency-Key header is required for all commands. \
-                               Use a stable UUID (e.g. your ERP order or correlation ID) \
-                               to prevent duplicate process execution on retries.",
+                               Use one stable value per business request (e.g. your ERP \
+                               order ID): the accepted response is stored under it for \
+                               24 hours and replayed on a retry.",
                 })),
             )
                 .into_response();
         }
     };
+
+    // ── Replay a completed request ────────────────────────────────────────────
+    //
+    // Before dispatch, and fail-closed: a storage error answers 503 rather than
+    // re-dispatching, because "I could not tell whether this already ran" is
+    // not a licence to run it again.
+    let tenant = state.tenant_id.to_string();
+    let fingerprint = idempotency::fingerprint(&cmd_lower, &envelope.payload);
+    match idempotency::lookup(&state.store, &tenant, &idempotency_key, &fingerprint).await {
+        Ok(idempotency::Lookup::Replay(body)) => {
+            info!(
+                idempotency_key = %idempotency_key,
+                command         = %cmd_lower,
+                "ERP command replayed from the idempotency record",
+            );
+            return (StatusCode::ACCEPTED, Json(body)).into_response();
+        }
+        Ok(idempotency::Lookup::Conflict) => {
+            tracing::warn!(
+                idempotency_key = %idempotency_key,
+                command         = %cmd_lower,
+                "ERP command rejected — Idempotency-Key reused for a different request",
+            );
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error":  "idempotency_key_reuse",
+                    "detail": "This Idempotency-Key was already used for a different \
+                               command or payload. Use a fresh key per business \
+                               request; reusing one would make the replayed response \
+                               refer to another process.",
+                })),
+            )
+                .into_response();
+        }
+        Ok(idempotency::Lookup::Fresh) => {}
+        Err(e) => {
+            tracing::error!(error = %e, "idempotency lookup failed");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(serde_json::json!({
+                    "error":  "idempotency_unavailable",
+                    "detail": "The idempotency record could not be read, so this \
+                               request cannot be safely dispatched. Retry.",
+                })),
+            )
+                .into_response();
+        }
+    }
 
     info!(
         idempotency_key = %idempotency_key,
@@ -191,8 +235,6 @@ pub(crate) async fn handle_command(
                 process_id      = %process_id,
                 "ERP command dispatched — process spawned",
             );
-            // Track per-family process initiation for the Prometheus metrics endpoint.
-            EngineMetrics::global().process_initiated(command_family(&cmd_lower));
             process_id
         }
         Ok(DispatchOutcome::Dispatched { process_id }) => {
@@ -348,17 +390,30 @@ pub(crate) async fn handle_command(
         }
     };
 
-    (
-        StatusCode::ACCEPTED,
-        Json(CommandAccepted {
-            idempotency_key,
-            command: envelope.command,
-            marktrolle: effective_marktrolle,
-            status: "accepted",
-            process_id: resolved_process_id.to_string(),
-        }),
-    )
-        .into_response()
+    let accepted = CommandAccepted {
+        idempotency_key: idempotency_key.clone(),
+        command: envelope.command,
+        marktrolle: effective_marktrolle,
+        status: "accepted",
+        process_id: resolved_process_id.to_string(),
+    };
+    // Recorded after the dispatch succeeded, so a failed command leaves the key
+    // free for a corrected retry. A write failure is logged and not surfaced:
+    // the command *did* run, and turning a successful dispatch into an error
+    // would invite exactly the duplicate this record exists to prevent.
+    let body = serde_json::to_value(&accepted).unwrap_or_else(|_| serde_json::json!({}));
+    if let Err(e) =
+        idempotency::record(&state.store, &tenant, &idempotency_key, &fingerprint, &body).await
+    {
+        tracing::error!(
+            error = %e,
+            idempotency_key = %idempotency_key,
+            "idempotency record could not be written — a retry of this key will \
+             re-dispatch instead of replaying",
+        );
+    }
+
+    (StatusCode::ACCEPTED, Json(accepted)).into_response()
 }
 
 /// Map an ERP command to a workflow command and dispatch it.
@@ -367,13 +422,25 @@ pub(crate) async fn handle_command(
 /// `CommandDescriptor::dispatch` function.  If the command is unknown the
 /// caller should have already rejected it in [`validate_command`]; this path
 /// returns `NotImplemented` as a safety net.
+///
+/// `makod_process_initiated_total{family}` is counted **here**, not in the
+/// callers. There are two doors — `POST /api/v1/commands` and the MCP
+/// `submit_command` tool — and only the REST one used to count, so every
+/// process an MCP client started was invisible and the
+/// initiated-versus-completed dashboard showed completions with no matching
+/// initiations. A counter belongs at the single point the thing it counts
+/// actually happens.
 pub async fn dispatch_command(
     state: &CommandsApiState,
     command: &str,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    match COMMAND_REGISTRY.iter().find(|d| d.name == command) {
-        Some(desc) => (desc.dispatch)(state, payload).await,
-        None => Err(DispatchError::NotImplemented(command.to_owned())),
+    let Some(desc) = COMMAND_REGISTRY.iter().find(|d| d.name == command) else {
+        return Err(DispatchError::NotImplemented(command.to_owned()));
+    };
+    let outcome = (desc.dispatch)(state, payload).await;
+    if matches!(outcome, Ok(DispatchOutcome::Spawned { .. })) {
+        EngineMetrics::global().process_initiated(command_family(command));
     }
+    outcome
 }

@@ -408,6 +408,8 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     const EXPECTED_DETAIL_ORDER: &[&str] = &[
         "NAD", "LOC", "DTM", "CCI", "LIN", "PIA", "QTY", "DTM", "STS", "UNT",
     ];
+    /// Tags that trigger a repeatable segment group in the detail section.
+    const DETAIL_GROUP_TRIGGERS: &[&str] = &["RFF", "NAD", "CTA", "LOC", "LIN", "QTY"];
 
     /// Strict order check for the header section (no group repetition expected).
     fn check_header_section(
@@ -436,22 +438,27 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
     /// Group-trigger-aware order check for the detail section (post-UNS).
     ///
-    /// When the first tag in `expected` is seen again after the cursor has
-    /// already advanced, this indicates a new group-repetition occurrence
-    /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset
-    /// to that position instead of reporting an ordering violation.
+    /// Any tag that triggers a segment group may legitimately step the cursor
+    /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`
+    /// inside SG9, so the second reading of a line item returns from DTM to
+    /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —
+    /// rejected every multi-interval MSCONS, which is every Lastgang there is.
     fn check_detail_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],
         rule_id: &str,
         issues: &mut Vec<ValidationIssue>,
     ) {
-        let group_trigger = expected.first().copied().unwrap_or("");
         let mut cursor: usize = 0;
         for seg in segs {
-            // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.
-            if cursor > 0 && seg.tag == group_trigger {
-                cursor = 0;
+            // A group trigger seen at or before the cursor opens a new
+            // occurrence of that group; rewind to it.
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+                if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
+                    if pos <= cursor {
+                        cursor = pos;
+                    }
+                }
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
@@ -1699,6 +1706,21 @@ static AHB_13027_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
             .with_named_stateless_rule_fn("AHB-13027-QTY-6063-V", |segs, issues| {
                 ahb_check_field_value(segs, "QTY", 0, "AHB-13027-QTY-6063-V", "segment QTY DE 6063 (element 0, component 0): value is not one of the allowed values ['220', '67', 'Z18']", |v| matches!(v, "220" | "67" | "Z18"), "13027", issues);
             })
+            .with_named_stateless_rule_fn("AHB-13027-LIN-M", |segs, issues| {
+                ahb_check_mandatory(segs, "LIN", "AHB-13027-LIN-M", "mandatory segment LIN is missing for Pruefidentifikator 13027", "13027", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-13027-PIA-M", |segs, issues| {
+                ahb_check_mandatory(segs, "PIA", "AHB-13027-PIA-M", "mandatory segment PIA is missing for Pruefidentifikator 13027", "13027", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-13027-PIA-4347-Q", |segs, issues| {
+                ahb_check_qualifier(segs, "PIA", "AHB-13027-PIA-4347-Q", "segment PIA DE 4347 (element 0, component 0): qualifier is not one of the allowed values ['5']", |q| matches!(q, "5"), "13027", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-13027-RFF-M", |segs, issues| {
+                ahb_check_mandatory(segs, "RFF", "AHB-13027-RFF-M", "mandatory segment RFF is missing for Pruefidentifikator 13027", "13027", issues);
+            })
+            .with_named_stateless_rule_fn("AHB-13027-RFF-1153-RQ", |segs, issues| {
+                ahb_check_required_qualifier(segs, "RFF", "AHB-13027-RFF-1153-RQ", "mandatory segment RFF with DE 1153 qualifier 'AGI' is missing", |q| matches!(q, "AGI"), "13027", issues);
+            })
             .with_max_issues_per_rule(50)
         )
 });
@@ -1894,7 +1916,7 @@ impl Profile for MsconsFv20261001Profile {
         Some("2.5")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("MSCONS MIG 2.5, Stand 01.10.2026")
+        Some("MSCONS MIG 2.5, Publikationsdatum 01.04.2026")
     }
     fn pid_source(&self) -> crate::registry::PidSource {
         crate::registry::PidSource::RffZ13

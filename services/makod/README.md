@@ -27,7 +27,7 @@ All three ports are optional and independently enabled via CLI flags or environm
 | `GeliGasModule` | GeLi Gas 3.0 — 9 workflows: UTILMD G Lieferantenwechsel, Stornierung (LF+GNB), Sperrung (LF+GNB), MSCONS Messdaten, Datenabruf, INVOIC 31011 (AWH), PARTIN Gas | 44001–44024, 17103/17104, MSCONS 13002/13007–13009, ORDERS 17115–17117 (Gas), INVOIC 31011, PARTIN 37008–37014 |
 | `WimGasModule` | WiM Gas — MSB-Wechsel Gas, Stornierung WiM Gas, INVOIC Gas billing, INSRPT Gas | 44022–44024, 44039–44053, 44168–44170, INVOIC 31003/31004, INSRPT 23005/23009 |
 | `MabisModule` | MaBiS — 5 workflows: Bilanzkreisabrechnung Strom (BKV↔ÜNB), Clearingliste, ZP-Lifecycle (Aktivierung/Deaktivierung MaBiS-ZP, Zuordnungsermächtigung, AAÜZ/LF-AASZR), Anforderungen, Listenabgleich | MSCONS 13003/13010–13012, IFTSTA 21000–21005, UTILMD 55062–55064/55071–55072/55195–55196/55197–55214/55223–55224, 55065/55069/55070, ORDERS 17201–17208 |
-| `GaBiGasModule` | GaBi Gas — 8 workflows: INVOIC 31007/31008/31010, MSCONS 13013 (Allokationsliste MMMA), ALOCAT, NOMINT/NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD/DELRES | INVOIC 31007/31008/31010, ORDERS 17110, MSCONS 13013, synthetic PIDs 90001–90062 |
+| `GaBiGasModule` | GaBi Gas — 4 workflows: INVOIC 31007/31008/31010, MSCONS 13013 (Allokationsliste MMMA), ALOCAT, NOMINT/NOMRES | INVOIC 31007/31008/31010, REMADV 33001, COMDIS 29001, ORDERS 17110, MSCONS 13013, DVGW 70001–70023 (ALOCAT) / 70030–70039 (NOMINT/NOMRES) |
 | `RedispatchModule` | Redispatch 2.0 — congestion management (§§ 13/13a/14 EnWG) | 21037/21038 (NB/ÜNB/ANB roles only) |
 
 ---
@@ -309,7 +309,7 @@ it to inspect process state and submit commands without writing integration code
 | `submit_command` | Trigger a MaKo process command (GPKE, GeLi Gas, WiM, MABIS) |
 | `get_malo` | Read a cached MaLo record by 11-digit ID |
 | `list_partners` | List all registered trading partners |
-| `get_partner` | Get a trading partner by 13-digit GLN |
+| `get_partner` | Get a trading partner by Marktpartner-ID |
 | `get_health` | Daemon version, tenant ID, Marktrollen, MaLo cache stats |
 | `get_process` | Look up an active process by business key (MaLo/MeLo/Vorgang) — stream ID + pending deadlines |
 | `list_overdue_deadlines` | Processes with expired regulatory deadlines (compliance alert) |

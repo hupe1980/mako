@@ -223,16 +223,11 @@ impl Daemon for Agentd {
                 // receiver's pace rather than a flag day where every delivery
                 // fails until both sides are restarted together.
                 //
-                // Outside the branch above, and that is the point. This used to
-                // sit inside it beside a hand-written "previous without primary"
-                // refusal, because `also_signed_with` *panicked* on that
-                // precondition — so the check the panic exists to make was
-                // written twice, once here and once upstream. 0.22's
-                // `try_also_signed_with` reports it as
-                // `SigningKeyError::NoPrimary`, so the precondition is checked
-                // once, by the builder that owns it, and a malformed rotation
-                // key is a diagnostic naming the destination rather than an
-                // abort that arrives before the exit code.
+                // Deliberately outside the branch above: the "previous without
+                // primary" precondition is checked once, by the builder that
+                // owns it. `try_also_signed_with` reports it as
+                // `SigningKeyError::NoPrimary`, so a malformed rotation key is a
+                // diagnostic naming the destination rather than a panic.
                 if let Some(previous) = secrets.audit_hmac_secret_previous.as_ref() {
                     destination = destination
                         .try_also_signed_with(&secret(previous))

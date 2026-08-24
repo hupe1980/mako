@@ -94,7 +94,7 @@ pub struct MigrationApiState {
     pub store: Arc<SlateDbStore>,
     /// Cedar-based authorization engine.
     pub cedar: Arc<CedarAuthorizer>,
-    /// Operator tenant (GLN) — the Cedar resource scope.
+    /// Operator tenant (MP-ID) — the Cedar resource scope.
     pub tenant: String,
 }
 
@@ -692,15 +692,6 @@ pub async fn dispatch_migrations(
                 report,
                 count,
                 store,
-                mako_gabi_gas::GaBiGasDeliveryOrderWorkflow,
-                "gabi-gas-delivery-order",
-                from,
-                to
-            );
-            identity!(
-                report,
-                count,
-                store,
                 mako_gabi_gas::GaBiGasAllocationWorkflow,
                 "gabi-gas-allocation",
                 from,
@@ -866,18 +857,6 @@ const NO_MIGRATION_NEEDED: &[(&str, &str)] = &[
     (
         "gabi-gas-mmma",
         "delegates delivery to gpke-allokationsliste",
-    ),
-    (
-        "gabi-gas-schedl",
-        "DVGW SCHEDL notification, no response obligation",
-    ),
-    (
-        "gabi-gas-imbnot",
-        "DVGW IMBNOT notification, no response obligation",
-    ),
-    (
-        "gabi-gas-tranot",
-        "DVGW TRANOT notification, no response obligation",
     ),
     (
         "mabis-clearingliste",

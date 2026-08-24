@@ -581,7 +581,7 @@ impl<S, R> UtiltsBuilder<S, R> {
             ["UTILTS", "D", "18A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", &self.inner.document_code, doc_id);
-        emit_comp!(w, "DTM", ["137", &dtm_val, "303"]);
+        emit_comp!(w, "DTM", ["137", &super::ccyymmddhhmm_utc(&dtm_val), "303"]);
         if let Some(id) = &self.inner.sender_id {
             emit_comp!(
                 w,
@@ -608,7 +608,7 @@ impl<S, R> UtiltsBuilder<S, R> {
                 emit_seg!(w, "LOC", "Z09", code);
             }
             if let Some(vf) = &vorgang.valid_from {
-                emit_comp!(w, "DTM", ["157", vf, "303"]);
+                emit_comp!(w, "DTM", ["157", &super::ccyymmddhhmm_utc(vf), "303"]);
             }
             if let (Some(code), Some(pid)) =
                 (&vorgang.formula_status_code, &vorgang.formula_status_period)
@@ -625,9 +625,13 @@ impl<S, R> UtiltsBuilder<S, R> {
                     "RFF",
                     [&period.qualifier, "", &period.period_id.to_string()]
                 );
-                emit_comp!(w, "DTM", ["Z25", &period.usage_from, "303"]);
+                emit_comp!(
+                    w,
+                    "DTM",
+                    ["Z25", &super::ccyymmddhhmm_utc(&period.usage_from), "303"]
+                );
                 if let Some(to) = &period.usage_to {
-                    emit_comp!(w, "DTM", ["Z26", to, "303"]);
+                    emit_comp!(w, "DTM", ["Z26", &super::ccyymmddhhmm_utc(to), "303"]);
                 }
             }
             for er in &vorgang.energy_amount_refs {
@@ -675,7 +679,7 @@ impl<S, R> UtiltsBuilder<S, R> {
                         "Z70" | "Z74" => "Z45",
                         _ => "Z33",
                     };
-                    emit_comp!(w, "DTM", [dtm_q, ct, "303"]);
+                    emit_comp!(w, "DTM", [dtm_q, &super::ccyymmddhhmm_utc(ct), "303"]);
                 }
                 if let Some(rc) = &block.register_code {
                     emit_comp!(w, "RFF", ["Z28", rc]);

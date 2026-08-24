@@ -7,8 +7,8 @@
 //!
 //! Each domain workflow enqueues a [`PendingOutbox`] with:
 //! - `message_type`:  EDIFACT type code (e.g. `"UTILMD"`, `"APERAK"`)
-//! - `recipient`:     trading-partner GLN
-//! - `payload`:       domain-intent JSON (sender/receiver GLNs, process dates, …)
+//! - `recipient`:     trading-partner MP-ID
+//! - `payload`:       domain-intent JSON (sender/receiver MP-IDs, process dates, …)
 //!
 //! This module maps those JSON fields to the appropriate `edi-energy` builder
 //! and serialises the result to wire bytes. The active BDEW release (e.g. `"S2.2"`)
@@ -134,8 +134,8 @@ pub fn is_suppressed(err: &RenderError) -> bool {
 
 /// Render a domain-intent [`OutboxMessage`] to BDEW-conformant EDIFACT wire bytes.
 ///
-/// `registry` provides the operator's own GLN(s).  For ORDERS messages, the
-/// sender GLN is resolved from `payload["sender"]` when present; otherwise the
+/// `registry` provides the operator's own MP-ID(s).  For ORDERS messages, the
+/// sender MP-ID is resolved from `payload["sender"]` when present; otherwise the
 /// registry's static PID → role table is used.
 /// For all other fallbacks (ORDRSP, INVOIC, REMADV without explicit `sender`)
 /// [`MpIdRegistry::primary_mp_id`] is used.

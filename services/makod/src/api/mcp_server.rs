@@ -27,7 +27,7 @@
 //! | `submit_command` | Trigger a MaKo process command (same as `POST /api/v1/commands`) |
 //! | `get_malo` | Read a cached Marktlokation record |
 //! | `list_partners` | List all registered trading partners |
-//! | `get_partner` | Get a specific trading partner by GLN |
+//! | `get_partner` | Get a specific trading partner by MP-ID |
 //! | `get_health` | Query daemon health and uptime |
 //! | `get_process` | Look up an active process by business key (malo_id, melo_id, or vorgang_id) |
 //! | `list_overdue_deadlines` | List processes with expired regulatory deadlines |
@@ -101,7 +101,7 @@ use crate::malo_cache::SlateDbMaloCache;
 
 /// Shared state injected into each MCP handler instance.
 pub struct MakodMcpState {
-    /// Operator tenant — BDEW/DVGW Codenummer or GLN (data-isolation key).
+    /// Operator tenant — BDEW/DVGW Codenummer or MP-ID (data-isolation key).
     ///
     /// Single source of truth for tenant identity in this state struct.
     /// When `TenantId` (UUID) is needed for SlateDB operations, derive it
@@ -161,10 +161,12 @@ pub struct SubmitCommandParams {
     #[schemars(example = "{\"malo_id\": \"10001234558\", \"lieferbeginn_datum\": \"2026-10-01\"}")]
     pub payload: serde_json::Value,
 
-    /// Optional stable UUID for idempotency.
+    /// Optional stable key identifying this business request.
     ///
-    /// Provide the same key on retries to prevent double-execution on
-    /// transient network errors. A random UUID is generated when omitted.
+    /// Supply the same value on a retry and the recorded response is replayed
+    /// instead of the command running twice; the record lives for 24 hours.
+    /// Reusing one key for a different command or payload is refused. When
+    /// omitted a random UUID is echoed back and no replay record is kept.
     pub idempotency_key: Option<String>,
 }
 
@@ -179,7 +181,7 @@ pub struct GetMaloParams {
 /// Parameters for `get_partner`.
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct GetPartnerParams {
-    /// 13-digit GLN of the trading partner.
+    /// Marktpartner-ID of the trading partner.
     #[schemars(description = "13-digit Global Location Number of the trading partner")]
     pub mp_id: String,
 }
@@ -398,7 +400,7 @@ impl MakodMcpHandler {
     /// Submit a MaKo process command.
     ///
     /// Triggers a GPKE, GeLi Gas, WiM, or MABIS workflow command. The daemon
-    /// resolves trading-partner GLNs from the MaLo cache and generates the
+    /// resolves trading-partner MP-IDs from the MaLo cache and generates the
     /// outbound EDIFACT message automatically.
     ///
     /// On success returns `process_id`, effective `marktrolle`, and `status`
@@ -480,8 +482,41 @@ impl MakodMcpHandler {
             ));
         }
 
+        // Same idempotency contract as `POST /api/v1/commands`, so the two
+        // doors cannot answer a retry differently. The key stays *optional*
+        // here — an interactive agent has no ERP order ID to supply — but when
+        // one is given it is honoured: a repeat replays the recorded response,
+        // and reuse for a different request is refused rather than answered
+        // with the first command's `process_id`.
+        let tenant = self.state.commands.tenant_id.to_string();
+        let fingerprint = crate::commands_api::idempotency::fingerprint(&cmd_lower, &p.payload);
+        if let Some(key) = p.idempotency_key.as_deref() {
+            use crate::commands_api::idempotency::{Lookup, lookup};
+            match lookup(&self.state.commands.store, &tenant, key, &fingerprint).await {
+                Ok(Lookup::Replay(body)) => {
+                    return ContentBlock::json(body)
+                        .map(|block| CallToolResult::success(vec![block]))
+                        .map_err(|e| McpError::internal_error(e.message, None));
+                }
+                Ok(Lookup::Conflict) => {
+                    return Err(McpError::invalid_request(
+                        "idempotency_key_reuse: this key was already used for a                          different command or payload"
+                            .to_owned(),
+                        None,
+                    ));
+                }
+                Ok(Lookup::Fresh) => {}
+                Err(e) => {
+                    return Err(McpError::internal_error(
+                        format!("idempotency lookup failed: {e}"),
+                        None,
+                    ));
+                }
+            }
+        }
         let idempotency_key = p
             .idempotency_key
+            .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         tracing::info!(
@@ -510,16 +545,32 @@ impl MakodMcpHandler {
                         (process_id.to_string(), "dispatched")
                     }
                 };
-                ContentBlock::json(serde_json::json!({
+                let body = serde_json::json!({
                     "idempotency_key": idempotency_key,
                     "command": cmd_lower,
                     "marktrolle": effective_role,
                     "process_id": process_id,
                     "status": status,
                     "next_steps": next_steps_hint(&cmd_lower),
-                }))
-                .map(|block| CallToolResult::success(vec![block]))
-                .map_err(|e| McpError::internal_error(e.message, None))
+                });
+                if let Some(key) = p.idempotency_key.as_deref()
+                    && let Err(e) = crate::commands_api::idempotency::record(
+                        &self.state.commands.store,
+                        &tenant,
+                        key,
+                        &fingerprint,
+                        &body,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        error = %e,
+                        "MCP submit_command: idempotency record could not be written",
+                    );
+                }
+                ContentBlock::json(body)
+                    .map(|block| CallToolResult::success(vec![block]))
+                    .map_err(|e| McpError::internal_error(e.message, None))
             }
             Err(e) => {
                 let msg = dispatch_error_to_string(e);
@@ -569,7 +620,7 @@ impl MakodMcpHandler {
 
     /// List all registered trading partners for this tenant.
     ///
-    /// Returns a paginated array of partner records, each containing the GLN,
+    /// Returns a paginated array of partner records, each containing the MP-ID,
     /// AS4 endpoint URL, market roles, and communication channels. An empty
     /// array is returned when no partners have been registered yet.
     ///
@@ -626,13 +677,13 @@ impl MakodMcpHandler {
         }
     }
 
-    /// Get a specific trading partner by GLN.
+    /// Get a specific trading partner by MP-ID.
     ///
     /// Returns the full partner record including the AS4 inbox URL, market
     /// roles, and communication channel configuration. Returns an error if
     /// the partner is not registered.
     #[tool(
-        description = "Get a trading partner record by 13-digit GLN",
+        description = "Get a trading partner record by Marktpartner-ID",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
     #[instrument(skip(self), fields(mp_id = %p.mp_id))]
@@ -1127,7 +1178,7 @@ pub struct WimGeraetewechselArgs {
     pub melo_id: String,
     /// Requested execution date (YYYYMMDD, German local time).
     pub process_date: String,
-    /// 13-digit GLN of the counterparty: the NB for PIDs 55039/55042,
+    /// Marktpartner-ID of the counterparty: the NB for PIDs 55039/55042,
     /// the nMSB for 55051/55168.
     pub receiver_mp_id: String,
     /// Initiating Marktrolle: NB or MSB.
@@ -1156,7 +1207,7 @@ impl MakodMcpHandler {
                  \n\
                  Please:\n\
                  1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
-                    cached and show me the NB/MSB GLNs.\n\
+                    cached and show me the NB/MSB MP-IDs.\n\
                  2. If found, call `submit_command` with:\n\
                     - command: \"gpke.lieferbeginn.anmelden\"\n\
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
@@ -1186,7 +1237,7 @@ impl MakodMcpHandler {
                  \n\
                  Please:\n\
                  1. Call `get_malo` with malo_id=\"{malo_id}\" to verify the MaLo is \
-                    cached and show me the GNB GLN.\n\
+                    cached and show me the GNB MP-ID.\n\
                  2. If found, call `submit_command` with:\n\
                     - command: \"geli.lieferbeginn.anmelden\"\n\
                     - payload: {{\"malo_id\": \"{malo_id}\", \"lieferbeginn_datum\": \"{date}\"}}\n\
@@ -1246,7 +1297,7 @@ impl MakodMcpHandler {
                  is spawned by `makod` when the REQOTE arrives. No ERP command needed.\n\n\
                  **Step 2 — aMSB responds QUOTES (PID 15001) within 5 Werktage:**\n\
                  The Preisliste is stored in `marktd` as a `PreisblattMessung` record.\n\
-                 Check: `get_partner` for the aMSB GLN to verify AS4 connectivity.\n\n\
+                 Check: `get_partner` for the aMSB MP-ID to verify AS4 connectivity.\n\n\
                  **Step 3 — Verify process state:**\n\
                  Call `get_process` with the `melo_id` to check if the Preisanfrage process\n\
                  is active and what deadlines are pending.\n\n\
@@ -1448,13 +1499,13 @@ impl ServerHandler for MakodMcpHandler {
                 ResourceTemplate::new("malo://{malo_id}", "MaLo record")
                     .with_description(
                         "Marktlokation master-data record identified by its 11-digit ID. \
-                         Contains NB/MSB GLNs, MeLo IDs, and address data resolved from \
+                         Contains NB/MSB MP-IDs, MeLo IDs, and address data resolved from \
                          the BDEW API-Webdienste Strom.",
                     )
                     .with_mime_type("application/json"),
                 ResourceTemplate::new("partner://{mp_id}", "Trading partner")
                     .with_description(
-                        "Trading-partner record identified by its 13-digit GLN. \
+                        "Trading-partner record identified by its Marktpartner-ID. \
                          Contains the AS4 inbox URL, market roles, and communication \
                          channel configuration.",
                     )

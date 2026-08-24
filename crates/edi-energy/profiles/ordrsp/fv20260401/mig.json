@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "message_type": "ORDRSP",
-  "release": "1.4c",
+  "release": "1.4b",
   "valid_from": "2026-04-01",
   "ordering_hint": [
     "UNH",
@@ -339,7 +339,7 @@
         },
         {
           "tag": "FTX",
-          "name": "Besondere Sachverhalte / IP-Adresse / IP-Range / APN-Daten",
+          "name": "Besondere Sachverhalte / IP-Adresse / IP-Range",
           "mandatory": false,
           "max_occurrences": 99,
           "elements": [
@@ -356,8 +356,7 @@
             "4451": [
               "ABO",
               "Z27",
-              "Z28",
-              "Z33"
+              "Z28"
             ]
           }
         }
@@ -365,7 +364,9 @@
       "groups": []
     }
   ],
-  "ahb_revision": "1.4c",
-  "source_document": "ORDRSP MIG 1.4c, Stand 01.04.2026",
-  "pid_source": "rff_z13"
+  "valid_until": "2026-09-30",
+  "ahb_revision": "1.4b",
+  "source_document": "ORDRSP MIG 1.4b, Publikationsdatum 01.10.2025",
+  "pid_source": "rff_z13",
+  "publikationsdatum": "2025-10-01"
 }

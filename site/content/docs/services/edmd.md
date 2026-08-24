@@ -63,7 +63,7 @@ So the read endpoints that aggregate a period take the commodity:
 | Endpoint | Parameter |
 |---|---|
 | `GET /api/v1/billing-period/{malo_id}` | `?sparte=strom` (default) · `gas` · `wasser` · `waerme` |
-| `GET /api/v1/deliveries/{malo_id}/imbalance/{year}/{month}` | `?sparte=strom` (default) · `gas` |
+| `GET /api/v1/imbalance/{malo_id}/{year}/{month}` | `?sparte=strom` (default) · `gas` |
 
 Both boundaries resolve through `metering::calendar` against the Berlin zone
 rather than a fixed offset, so a period containing a DST transition is 23 or 25

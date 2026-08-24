@@ -445,6 +445,11 @@ pub struct As4Config {
     #[serde(default)]
     pub allow_no_signing: bool,
 
+    /// DEV/TEST ONLY. Start the AS4 listener without a counterparty trust
+    /// anchor, accepting that every partner's signature will be rejected.
+    #[serde(default)]
+    pub allow_no_trust_anchor: bool,
+
     /// Treat a missing or unverifiable synchronous `eb:Receipt` as a warning
     /// instead of a delivery failure. Interop debugging only.
     #[serde(default)]

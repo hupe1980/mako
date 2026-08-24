@@ -75,25 +75,40 @@ impl DvgwIngestReport {
     }
 }
 
-/// The UNB DE 0010 recipient MP-ID and DE 0020 control reference, read from the
-/// head of the interchange.
+/// What the DVGW door needs out of the `UNB` before it parses anything: the
+/// DE 0010 recipient MP-ID, the DE 0020 control reference, and the DE 0035 test
+/// indicator.
 ///
 /// Only reached once the sniff has claimed the bytes, so it is on the DVGW path
 /// alone — which is what keeps a BDEW interchange paying for the sniff and
 /// nothing else.
-fn interchange_envelope(body: &[u8]) -> (String, String) {
+struct DvgwEnvelope {
+    recipient_mp_id: String,
+    control_ref: String,
+    /// `UNB` DE 0035 = `"1"`. A test interchange must never be processed as
+    /// production; both BDEW doors already refuse one, and DVGW rides the same
+    /// `UNB` envelope, so this door refused nothing.
+    test_indicator: bool,
+}
+
+fn interchange_envelope(body: &[u8]) -> DvgwEnvelope {
     edifact_rs::from_bytes_owned_with_config(body, edifact_rs::ReaderConfig::default())
         .take_while(Result::is_ok)
         .map_while(Result::ok)
         .take(2)
         .find(|s| s.tag == "UNB")
-        .map(|unb| {
-            (
-                unb.component_str(2, 0).unwrap_or_default().to_owned(),
-                unb.element_str(4).unwrap_or_default().to_owned(),
-            )
+        .map(|unb| DvgwEnvelope {
+            recipient_mp_id: unb.component_str(2, 0).unwrap_or_default().to_owned(),
+            control_ref: unb.element_str(4).unwrap_or_default().to_owned(),
+            // Element 10 is DE 0035 in the UN/EDIFACT `UNB` layout; `edi-energy`
+            // reads it from the same position.
+            test_indicator: unb.element_str(10).is_some_and(|v| v.trim() == "1"),
         })
-        .unwrap_or_default()
+        .unwrap_or(DvgwEnvelope {
+            recipient_mp_id: String::new(),
+            control_ref: String::new(),
+            test_indicator: false,
+        })
 }
 
 /// Handle `body` if it is a DVGW interchange; return `None` if it is not.
@@ -109,7 +124,9 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
 
     // The recipient drives the same Sparte-aware workflow resolution the BDEW
     // path applies; the control reference is what a CONTRL acknowledges.
-    let (recipient_mp_id, interchange_ref) = interchange_envelope(body);
+    let envelope = interchange_envelope(body);
+    let recipient_mp_id = envelope.recipient_mp_id;
+    let interchange_ref = envelope.control_ref;
     let interchange_ref_for_audit = interchange_ref.clone();
 
     let platform = DvgwPlatform::default();
@@ -118,6 +135,35 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
         interchange_ref,
         ..DvgwIngestReport::default()
     };
+
+    // Test-indicator guard. DVGW rides the same `UNB` envelope as BDEW, and both
+    // BDEW doors already refuse a `DE 0035 = 1` interchange rather than let a
+    // counterparty's test traffic spawn production processes. This door did not,
+    // so a DVGW test ALOCAT allocated real gas quantities against a real gas day.
+    if envelope.test_indicator {
+        let ctx = AuditContext::now()
+            .with_message_ref(interchange_ref_for_audit.as_str())
+            .with_receiver_eic(recipient_mp_id.as_str())
+            .with_tenant_id(state.tenant_id.to_string());
+        state
+            .dl_sink
+            .reject(&DeadLetterReason::TestMessage { context: ctx });
+        tracing::warn!(
+            recipient_mp_id = %recipient_mp_id,
+            interchange_ref = %interchange_ref_for_audit,
+            "DVGW ingest: test interchange (UNB DE 0035 = 1) rejected — \
+             it must not reach production workflows",
+        );
+        report.messages.push(DvgwMessageResult {
+            document: None,
+            pruefidentifikator: None,
+            workflow: None,
+            process_id: None,
+            skipped: None,
+            error: Some("test interchange rejected: DE0035=1 on production endpoint".to_owned()),
+        });
+        return Some(report);
+    }
 
     for parsed in platform.parse_interchange(body) {
         let msg = match parsed {
@@ -237,13 +283,31 @@ pub async fn try_ingest(state: &EdifactApiState, body: &[u8]) -> Option<DvgwInge
         };
 
         match dispatcher.dispatch_dvgw(&msg, &workflow, pid).await {
-            Ok(
-                IngestOutcome::Spawned { process_id, .. }
-                | IngestOutcome::Dispatched { process_id, .. },
-            ) => {
-                result.process_id = Some(process_id.to_string());
+            Ok(outcome) => {
+                if let Some((workflow_name, reason)) = outcome.coverage_gap() {
+                    // The PID resolved, the AS4 receipt went out, and nothing
+                    // consumed the message — an acknowledged inbound message
+                    // with no process behind it (§ 147 AO / GoBD).
+                    state.dl_sink.reject(&DeadLetterReason::NotDispatchable {
+                        workflow_name: workflow_name.to_owned(),
+                        pid: mako_engine::ids::Pid::from_u32(pid)
+                            .unwrap_or(mako_engine::ids::Pid::new(1)),
+                        reason: reason.to_owned(),
+                        context: AuditContext::now()
+                            .with_message_type(msg.document.code())
+                            .with_message_ref(msg.message_ref.clone())
+                            .with_receiver_eic(recipient_mp_id.as_str())
+                            .with_tenant_id(state.tenant_id.to_string()),
+                    });
+                }
+                match outcome {
+                    IngestOutcome::Spawned { process_id, .. }
+                    | IngestOutcome::Dispatched { process_id, .. } => {
+                        result.process_id = Some(process_id.to_string());
+                    }
+                    IngestOutcome::Skipped { reason, .. } => result.skipped = Some(reason),
+                }
             }
-            Ok(IngestOutcome::Skipped { reason, .. }) => result.skipped = Some(reason),
             Err(e) => {
                 tracing::warn!(pid, workflow = %workflow, error = %e, "DVGW ingest: dispatch failed");
                 // A regulated message that did not land; the BDEW path

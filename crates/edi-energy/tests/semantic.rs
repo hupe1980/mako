@@ -722,12 +722,12 @@ fn validate_with_context_accepts_valid_release() {
     use edi_energy::ProcessContext;
     use time::macros::date;
 
-    // MSCONS 2.4c is valid from 2025-10-01, valid_until 2026-09-30.
-    // On 2026-01-15 (mid-cycle) it must be accepted.
+    // MSCONS 2.4c applies from 2026-04-01 (AHB 3.1g, published 01.10.2025) to
+    // 2026-09-30. On 2026-06-15 (mid-cycle) it must be accepted.
     let msg = Platform::with_all_profiles()
         .parse(MSCONS_VALID_MALO)
         .unwrap();
-    let ctx = ProcessContext::for_date(date!(2026 - 01 - 15));
+    let ctx = ProcessContext::for_date(date!(2026 - 06 - 15));
     let report = msg
         .validate_with_context(&ctx)
         .expect("validate_with_context must succeed for an in-window release");

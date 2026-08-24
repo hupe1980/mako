@@ -76,8 +76,8 @@ GeLi Gas 3.0's chapters are Kündigung, Lieferende, Lieferbeginn,
 Ersatz-/Grundversorgung and the Annexprozesse — **there is no Sperr- or
 Entsperrprozess in it**. The Gas Sperrprozesse live in the BDEW AWH
 „Unterbrechung / Wiederherstellung der Anschlussnutzung" (Gas-Entscheidungsbäume
-`E_1000` / `E_1004`, against Strom's `E_0470` / `E_0497`), which is not yet in
-`regulatories/`. Because 17115 / 17117 / 19116 are Sparte-neutral ORDERS
+`E_1000` / `E_1004`, against Strom's `E_0470` / `E_0497`). Because
+17115 / 17117 / 19116 are Sparte-neutral ORDERS
 Anwendungsfälle, `mako_fristen::antwort` resolves them from one row each — **1
 Werktag**, sourced from BK6-24-174 GPKE Teil 2 § 3.5, the only text on hand that
 quantifies them.

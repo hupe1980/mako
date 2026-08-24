@@ -54,9 +54,13 @@
 //! proxy_set_header X-Mako-Client-MP-ID $ssl_client_s_dn_cn;
 //! ```
 //!
-//! The WiM Order API is the exception: `WimAnmeldungRequest` carries
-//! `netzbetreiber_id` in the body, so the ordering party is known from the
-//! payload and the header is not consulted.
+//! The WiM Order API carries `netzbetreiber_id` in its request body as well.
+//! That is an *assertion*, not an authentication: whoever holds a client
+//! certificate can put any Netzbetreiber's Marktpartner-ID in it. The handler
+//! therefore requires the header like the others and refuses the request when
+//! the two disagree — the same rule `edi-energy` enforces between `UNB` and
+//! `NAD+MS` (Allgemeine Festlegungen §2.13), for the same reason: the transport
+//! authenticates the envelope while the business logic reads the body.
 
 use std::sync::Arc;
 
@@ -106,6 +110,32 @@ fn caller_mp_id() -> Option<String> {
     CLIENT_MP_ID.try_with(Clone::clone).ok().flatten()
 }
 
+/// Error returned when the authenticated caller and the party named in the
+/// request body are different market participants.
+///
+/// The certificate is the authenticated fact; the body field is a claim. A
+/// mismatch means one participant is placing an order in another's name, and
+/// the MSB's answer — the UTILMD Bestätigung and the APERAK — would be
+/// addressed to the party named in the body, who never ordered anything.
+fn caller_mismatch_error(caller: &str, claimed: &str) -> energy_api::Error {
+    tracing::warn!(
+        caller_mp_id = %caller,
+        claimed_mp_id = %claimed,
+        "API-Webdienste: request body names a different Marktpartner than the \
+         authenticated client certificate — refusing",
+    );
+    energy_api::Error::Http {
+        status: 403,
+        // Deliberately generic: the caller already proved possession of a
+        // client certificate, so naming which value we expected tells them
+        // nothing they do not know, and naming the other party would confirm
+        // an identifier they merely guessed.
+        body: "the Marktpartner-ID in the request body does not match the \
+               authenticated client certificate"
+            .to_owned(),
+    }
+}
+
 /// Error returned when a request that must be attributed carries no caller ID.
 ///
 /// Fail-closed on purpose. These endpoints receive **orders**: a §14a EnWG
@@ -133,7 +163,7 @@ fn missing_caller_error() -> energy_api::Error {
 /// - `store`          — shared SlateDB instance for inbox idempotency, outbox
 ///   persistence, and event-sourced workflow dispatch.
 /// - `tenant_id`      — the operator's [`TenantId`], derived from their BDEW
-///   code / GLN via [`TenantId::from_party_id`].
+///   code / MP-ID via [`TenantId::from_party_id`].
 ///
 /// The calling market participant's Marktpartner-ID is **not** state: it
 /// arrives per request in [`CLIENT_MP_ID_HEADER`], set by the mTLS-terminating
@@ -268,11 +298,12 @@ impl control_measures::ControlMeasuresHandler for MakodApiHandler {
                 execution_time_from: command.execution_time_from.clone(),
                 max_power_kw: command.maximum_power_value.0.clone(),
                 execution_time_until: command.execution_time_until.clone(),
-                // The `produkt_code` is not carried in the API-Webdienste Strom
-                // REST request body — it is part of the AS4 ORDERS message only.
-                // When present, it would be extracted by the EDIFACT adapter.
-                // Set to None here so the M1 guard is skipped for REST-originated
-                // commands (operators using the direct REST API are trusted).
+                // The BDEW Control Measures `CommandControl` body has three
+                // fields — maximum power, from, until — and no
+                // Konfigurationsprodukt. There is therefore nothing for the M1
+                // eligibility guard to check on this channel; it is not a
+                // trust decision, and the guard is not "skipped" so much as
+                // inapplicable. The AS4 ORDERS carries the code and is checked.
                 produkt_code: None,
             };
 
@@ -353,12 +384,14 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
     /// MSB receives an iMS Universalbestellprozess order from a NB via REST
     /// (PID 55042 — WiM MSB Anmeldung Strom, REST transport).
     ///
-    /// 1. Inbox idempotency guard — rejects duplicate `tx_id` values.
-    /// 2. Converts the REST payload to a `DeviceChangeCommand::ReceiveRestOrder`.
-    /// 3. Spawns a `WimDeviceChangeWorkflow` process.
-    /// 4. Registers the per-PID response deadline (BDEW WiM / BK6-22-024).
-    /// 5. Registers a correlated index under `tx_id` for later ERP lookup.
-    /// 6. Returns `Ok(())` → axum sends `202 Accepted`.
+    /// 1. Attribution — the client certificate's Marktpartner-ID must be
+    ///    present and equal to `netzbetreiber_id` in the body.
+    /// 2. Inbox idempotency guard — rejects duplicate `tx_id` values.
+    /// 3. Converts the REST payload to a `DeviceChangeCommand::ReceiveRestOrder`.
+    /// 4. Spawns a `WimDeviceChangeWorkflow` process.
+    /// 5. Registers the per-PID response deadline (BDEW WiM / BK6-22-024).
+    /// 6. Registers a correlated index under `tx_id` for later ERP lookup.
+    /// 7. Returns `Ok(())` → axum sends `202 Accepted`.
     fn on_anmeldung(
         &self,
         tx_id: String,
@@ -367,7 +400,21 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
     ) -> impl std::future::Future<Output = Result<(), energy_api::Error>> + Send {
         let store = self.store.clone();
         let tenant_id = self.tenant_id;
+        let caller = caller_mp_id();
         async move {
+            // Attribution first, and above the idempotency guard: `accept`
+            // consumes the tx_id, so checking afterwards would let a spoofed
+            // request burn the key and turn the legitimate order into a
+            // silently-swallowed duplicate.
+            //
+            // `netzbetreiber_id` is a claim in the body; the client certificate
+            // is the authenticated fact. Both must name the same participant.
+            let claimed = request.netzbetreiber_id.to_string();
+            let caller = caller.ok_or_else(missing_caller_error)?;
+            if caller != claimed {
+                return Err(caller_mismatch_error(&caller, &claimed));
+            }
+
             // Idempotency — accept only the first delivery of this tx_id.
             let inbox_key = format!("wim-order:{tenant_id}:{tx_id}");
             let is_new = store
@@ -386,7 +433,7 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
                 return Ok(());
             }
 
-            let sender_mp_id = party_id_to_marktpartner(request.netzbetreiber_id.to_string());
+            let sender_mp_id = party_id_to_marktpartner(caller);
             let melo_id = MeLo::new(&*request.melo_id);
             // Represent device_category as a string; the workflow records it
             // in DeviceChangeData.document_date (process_date|category=...).
@@ -675,7 +722,7 @@ pub fn build_app(
 pub struct WebdiensteAuthState {
     /// Cedar-based authenticator/authorizer.
     pub cedar: Arc<crate::cedar_authz::CedarAuthorizer>,
-    /// Operator tenant (GLN) — the Cedar resource scope.
+    /// Operator tenant (MP-ID) — the Cedar resource scope.
     pub tenant: Arc<str>,
 }
 

@@ -35,6 +35,10 @@ struct MigProfile {
     // Added in  expiry date for release transition modeling.
     #[serde(default)]
     valid_until: Option<String>,
+    /// Date BDEW published the source document — source metadata, never the
+    /// Anwendungszeitpunkt. See the `publikationsdatum` doc in `codegen.rs`.
+    #[serde(default)]
+    publikationsdatum: Option<String>,
     // Added in  links a newer release to the older one it supersedes.
     #[serde(default)]
     supersedes_directory: Option<String>,
@@ -363,6 +367,7 @@ pub fn run(workspace_root: &str) -> bool {
     }
 
     check_pid_continuity(&profiles_dir, &mut errors, &mut warnings);
+    check_validity_continuity(&profiles_dir, &mut errors, &mut warnings);
 
     // Print results
     for w in &warnings {
@@ -381,6 +386,120 @@ pub fn run(workspace_root: &str) -> bool {
     );
 
     ok
+}
+
+// ── Validity continuity across releases ───────────────────────────────────────
+
+/// Every profile chain must be a non-overlapping sequence of validity windows.
+///
+/// Within one `(message_type, track)` the profiles partition the timeline: at any
+/// date exactly one Formatversion is the *Anwendungszeitpunkt* holder. Allgemeine
+/// Festlegungen 6.1d §2.5 gives the EDIFACT formats a single changeover instant
+/// and no overlap around it, so two profiles claiming the same day means one of
+/// their dates is wrong.
+///
+/// A six-month overlap is the signature of a Publikationsdatum written into
+/// `valid_from`, since the predecessor's `valid_until` comes from the regulatory
+/// calendar.
+///
+/// A **gap** is a warning, not an error: it means no profile was authored for
+/// that Formatversion, which is a coverage statement rather than a contradiction.
+fn check_validity_continuity(
+    profiles_dir: &Path,
+    errors: &mut Vec<String>,
+    warnings: &mut Vec<String>,
+) {
+    for msg_type_dir in read_subdirs(profiles_dir) {
+        let msg = msg_type_dir
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        if msg.eq_ignore_ascii_case("schemas") {
+            continue;
+        }
+        // Sparte tracks live in sibling directories distinguished by a `_suffix`
+        // (`fv20261001_gas`); they are independent chains.
+        let mut chains: BTreeMap<String, Vec<(String, String, Option<String>)>> = BTreeMap::new();
+        for release_dir in read_subdirs(&msg_type_dir) {
+            let folder = release_dir
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+                .to_string();
+            let Ok(raw) = std::fs::read_to_string(release_dir.join("mig.json")) else {
+                continue;
+            };
+            let Ok(mig) = serde_json::from_str::<serde_json::Value>(&raw) else {
+                continue;
+            };
+            let Some(from) = mig.get("valid_from").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let until = mig
+                .get("valid_until")
+                .and_then(|v| v.as_str())
+                .map(ToOwned::to_owned);
+            let track = folder
+                .split_once('_')
+                .map_or_else(String::new, |(_, suffix)| suffix.to_owned());
+            chains
+                .entry(track)
+                .or_default()
+                .push((folder, from.to_owned(), until));
+        }
+        for (track, mut chain) in chains {
+            chain.sort_by(|a, b| a.1.cmp(&b.1));
+            let label = if track.is_empty() {
+                msg.clone()
+            } else {
+                format!("{msg} ({track})")
+            };
+            for pair in chain.windows(2) {
+                let (ref older, _, ref older_until) = pair[0];
+                let (ref newer, ref newer_from, _) = pair[1];
+                let Some(until) = older_until else {
+                    errors.push(format!(
+                        "{label}  {older} has no valid_until but {newer} starts on \
+                         {newer_from} — an open-ended profile cannot precede another"
+                    ));
+                    continue;
+                };
+                match until.as_str().cmp(newer_from.as_str()) {
+                    std::cmp::Ordering::Less => {
+                        if !is_day_before(until, newer_from) {
+                            warnings.push(format!(
+                                "{label}  gap between {older} (valid_until {until}) and \
+                                 {newer} (valid_from {newer_from}) — no profile covers \
+                                 that Formatversion"
+                            ));
+                        }
+                    }
+                    _ => errors.push(format!(
+                        "{label}  {older} is valid until {until} but {newer} already \
+                         starts on {newer_from} — the windows overlap. `valid_from` is \
+                         the Anwendungszeitpunkt, six months after the Publikationsdatum \
+                         (Allgemeine Festlegungen 6.1d §2.5)."
+                    )),
+                }
+            }
+        }
+    }
+}
+
+/// Whether `until` is the calendar day immediately before `from` (ISO dates).
+fn is_day_before(until: &str, from: &str) -> bool {
+    let parse = |s: &str| -> Option<time::Date> {
+        let mut it = s.split('-');
+        let y: i32 = it.next()?.parse().ok()?;
+        let m: u8 = it.next()?.parse().ok()?;
+        let d: u8 = it.next()?.parse().ok()?;
+        time::Date::from_calendar_date(y, time::Month::try_from(m).ok()?, d).ok()
+    };
+    match (parse(until), parse(from)) {
+        (Some(u), Some(f)) => u.next_day() == Some(f),
+        _ => false,
+    }
 }
 
 // ── PID continuity across releases ────────────────────────────────────────────

@@ -544,7 +544,7 @@ impl Profile for AperakFv20251001Profile {
         Some("2.1i")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("APERAK MIG 2.1i, Stand 01.10.2025")
+        Some("APERAK MIG 2.1i, Publikationsdatum 01.04.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

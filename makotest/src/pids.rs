@@ -420,7 +420,10 @@ mod tests {
             .expect("a UTILMD Gas profile is active");
         assert!(strom.starts_with('S'), "{strom}");
         assert!(gas.starts_with('G'), "{gas}");
-        assert!(release_for("MSCONS", "2025-10-01", None).unwrap().is_some());
+        // MSCONS has no profile on 2025-10-01: AHB 3.1 (published 01.04.2025)
+        // was never authored, so its Formatversion is a documented gap. AHB
+        // 3.1g applies from 2026-04-01.
+        assert!(release_for("MSCONS", "2026-04-01", None).unwrap().is_some());
     }
 
     /// The two answer tables in this workspace must agree. `edi_energy` derives

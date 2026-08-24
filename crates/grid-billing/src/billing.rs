@@ -243,8 +243,8 @@ pub(crate) fn warn_if_straddles_turnover(
 #[must_use = "handle the BillingError"]
 pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
     // The period is ordered by construction, the Leistungspreis is paired by
-    // construction, and the §14a modules are exclusive by construction — so the
-    // guards that used to check those are gone with the states they checked.
+    // construction, and the §14a modules are exclusive by construction — none of
+    // those needs a runtime guard.
     //
     // What remains is what the types cannot express. It runs here rather than in
     // a validator the caller may skip: these are the errors that otherwise

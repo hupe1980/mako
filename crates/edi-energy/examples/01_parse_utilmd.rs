@@ -19,7 +19,7 @@ use edi_energy::{AnyMessage, EdiEnergyMessage, Platform};
 /// A minimal UTILMD 55001 "Lieferbeginn Strom" interchange.
 ///
 /// UNB  — interchange header
-/// UNH  — message header (UTILMD release S2.1, fv20241001 Strom)
+/// UNH  — message header (UTILMD release S2.1, `fv20251001` Strom)
 /// BGM  — "E01" document type, Pruefidentifikator 55001
 /// DTM  — document date 2024-01-15
 /// RFF  — Z13 reference (SG1, mandatory for PID 55001)

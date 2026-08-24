@@ -396,8 +396,7 @@ pub enum BdewProfileError {
     ///
     /// Includes the BDEW sign-and-encrypt floor: `asx-rs` reports a relaxing
     /// layer as `ProfileValidationCode::SecurityFloorViolation`, so the check
-    /// mako used to perform itself now lives in the layer that owns policy
-    /// resolution.
+    /// lives in the layer that owns policy resolution.
     #[error(transparent)]
     Validation(#[from] asx_rs::interop::ProfileValidationFailure),
 }

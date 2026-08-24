@@ -91,15 +91,7 @@ pub fn mabis_clearingliste_registry() -> AdapterRegistry<MabisClearinglisteWorkf
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // ── Field extraction ──────────────────────────────────────────
             let document_date_str = u
@@ -178,15 +170,7 @@ pub fn mabis_zp_lifecycle_registry() -> AdapterRegistry<MabisZpLifecycleWorkflow
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             let document_date = u
                 .dtm()
@@ -266,15 +250,7 @@ pub fn mabis_anforderung_registry() -> AdapterRegistry<MabisAnforderungWorkflow>
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             // BGM DE1225 message function `1` = Cancellation.
             let vorgang = if o.bgm().and_then(|b| b.function.as_deref()) == Some("1") {
@@ -337,15 +313,7 @@ pub fn mabis_listenabgleich_registry() -> AdapterRegistry<MabisListenabgleichWor
                 })
                 .and_then(convert_pid)?;
 
-            let validation_result = msg.validate().ok();
-            let validation_passed = validation_result
-                .as_ref()
-                .map(|r| r.is_valid())
-                .unwrap_or(false);
-            let validation_errors: Vec<String> = validation_result
-                .as_ref()
-                .map(|r| r.errors().iter().map(|i| format!("{i}")).collect())
-                .unwrap_or_default();
+            let (validation_passed, validation_errors) = super::ahb_verdict(msg);
 
             let document_date = u
                 .dtm()

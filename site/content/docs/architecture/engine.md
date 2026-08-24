@@ -1,6 +1,6 @@
 +++
 title = "Process Engine"
-description = "mako-engine architecture: event-sourced Workflow FSMs, atomic dual-write, DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, SlateDB backend, format-version coexistence (FV2025/FV2026), and ForwardCompatible policy."
+description = "mako-engine architecture: event-sourced Workflow FSMs, atomic dual-write, DeadlineStore, OutboxWorker, PidRouter, ProcessRegistry, SlateDB backend, format-version coexistence, and ForwardCompatible policy."
 weight = 14
 [extra]
 mermaid = true
@@ -56,7 +56,7 @@ graph TD
     end
 
     subgraph Partners["Partner Store"]
-        PT["PartnerStore<br/>pt/ — GLN → AS4 endpoint"]
+        PT["PartnerStore<br/>pt/ — MP-ID → AS4 endpoint"]
         OW --> PT
     end
 ```
@@ -310,158 +310,32 @@ Deadlines are always expressed as `17:00 Europe/Berlin` on the due date (not UTC
 
 ## Format-version coexistence
 
-Every `WorkflowId` carries a BDEW format version (`FV2025-10-01`). A process started under one format version continues executing under those rules for its entire lifetime, even after the annual cutover.
+`makod` serves every registered format version at once; which one applies to a
+message is a function of its date, not of what is deployed.
 
-```rust
-// FV2025-10-01 process started in September 2025:
-let wf_id = WorkflowId::new("supplier-change", "FV2025-10-01");
-let process = ctx.spawn::<SupplierChangeWorkflow>(tenant, wf_id);
+Selection is `ReleaseRegistry::profile_on(message_type, release, date)`, which
+returns the profile with the greatest `valid_from ≤ date`. The date comes from
+`ParseConfig::with_reference_date` and defaults to today. The wire release code
+in `UNH DE 0057` narrows the candidates but cannot decide alone — two
+Formatversionen can share one MIG.
 
-// Still runs under FV2025-10-01 rules in November 2025,
-// even though FV2026-10-01 is now active for new processes.
-```
+Releases ship on 01.04. and 01.10., six months after the documents are
+published; `profiles/<type>/<fv>/mig.json` carries `publikationsdatum`,
+`valid_from` and `valid_until`. See
+[Formatversion effective dates](@/docs/compliance/annual-release-workflow.md#appendix-c-formatversion-effective-dates).
 
-`WorkflowVersionPolicy::ForwardCompatible` is the default for all MaKo workflows — **do not use `Pinned`** except for tests.
-
----
-
-## Dead-letter sink
-
-Unroutable or permanently failing messages are sent to a `DeadLetterSink`:
-
-```rust
-pub enum DeadLetterReason {
-    UnknownPid { pid: u32, context: AuditContext },
-    UnknownConversation { conversation_id: String, context: AuditContext },
-    VersionMismatch { expected: String, received: String, context: AuditContext },
-    DuplicateMessage { inbox_key: String, context: AuditContext },
-    ProcessingError { message: String, context: AuditContext },
-    OutboxExhausted { message_id: OutboxMessageId, message_type: String, recipient: String, last_error: String, attempts: u32 },
-}
-```
-
-`AuditContext` carries § 147 AO / GoBD structured audit fields (`message_type`, `pid`, `sender_eic`, `receiver_eic`, `message_ref`, `process_id`, `tenant_id`, `correlation_id`, `timestamp`). Build it with the builder methods on `AuditContext::now()`.
-
-`LogDeadLetterSink` (default) emits `tracing::warn!` with all available audit fields. `NoopDeadLetterSink` is available behind the `testing` feature. Implement `DeadLetterSink` to write to Prometheus, a database, or a page channel.
-
-The `#[non_exhaustive]` attribute on `DeadLetterReason` allows new variants to be added without breaking existing sink implementations.
-
----
-
-## Deadline-triggered commands (`Workflow::on_deadline`)
-
-Workflows that own regulatory deadlines implement the `on_deadline` hook to turn
-a fired deadline into a command:
-
-```rust
-impl Workflow for SupplierChangeWorkflow {
-    // …
-
-    fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        match (deadline.label(), state) {
-            (APERAK_STROM_WINDOW_LABEL, SupplierChangeState::Received(_)) => {
-                Some(SupplierChangeCommand::TimeoutExpired {
-                    deadline_id: deadline.deadline_id(),
-                    label: deadline.label().into(),
-                })
-            }
-            _ => None,
-        }
-    }
-}
-```
-
-`Deadline` carries both a `deadline_id()` (the scheduler's handle) and a
-`label()` (the window it belongs to, e.g. `APERAK_STROM_WINDOW_LABEL`); the
-command echoes both so `apply` can clear exactly the deadline that fired.
-
-The `DeadlineScheduler` calls `Process::execute_timeout` every 30 seconds on
-each overdue deadline. The workflow produces an APERAK reject and appends it to
-the outbox atomically — no manual timer management required.
-
-```rust
-// DeadlineScheduler internally calls:
-let result = process.execute_timeout(&deadline).await?;
-// or, with automatic retry on VersionConflict:
-let result = process.execute_timeout_with_retry(&deadline, 3).await?;
-```
-
----
-
-## Correlated process lookup
-
-Some inbound messages (e.g. CONTRL referencing multiple previous conversations)
-need to locate more than one process at once. The **correlated registry** indexes
-processes by an arbitrary tag, enabling one-to-many lookups:
-
-```rust
-// Register a process under a Bilanzkreis tag when it is spawned:
-ctx.registry()
-    .register_correlated(tenant, "bilanzkreis:DE-ABC-123", process_id, identity)
-    .await?;
-
-// Look up all processes for a given Bilanzkreis (e.g. on incoming MSCONS):
-let identities = ctx.registry()
-    .lookup_correlated(tenant, "bilanzkreis:DE-ABC-123")
-    .await?;
-
-// Remove when the process terminates:
-ctx.registry()
-    .remove_correlated(tenant, "bilanzkreis:DE-ABC-123", process_id)
-    .await?;
-```
-
-The correlated index is stored under `ci/{tenant_id}/{tag}/{process_id}` in
-SlateDB — a per-tenant, per-tag prefix scan returns all matches in a single
-pass.
-
----
-
-## Inbound correlation via `CorrelationId`
-
-When an inbound EDIFACT message references a previous interchange (e.g. APERAK
-referencing the original UTILMD), use `context_for_inbound` to stamp the command
-context with a deterministic `CorrelationId` derived from the interchange
-reference number. This ties the new command back to the originating interchange
-in any tracing system without requiring a round-trip to the database:
-
-```rust
-// Derive a stable CorrelationId from the UNB interchange reference field:
-let ctx_with_correlation = process.context_for_inbound(&interchange_ref);
-let envelopes = process.execute_with_context(command, ctx_with_correlation).await?;
-```
-
-`CorrelationId::from_interchange_ref(ref)` uses UUID v5 with a fixed namespace,
-so the same interchange reference always produces the same `CorrelationId` —
-idempotent and deterministic.
-
----
-
-## Format-version coexistence
-
-`makod` runs **two BDEW format versions simultaneously** in production:
-
-| Format version | Valid period | Status |
-|---|---|---|
-| `FV2025-10-01` | 2025-10-01 – 2026-09-30 | Current production |
-| `FV2026-10-01` | from 2026-10-01 | Next release — profiles already deployed |
-
-The `PidRouter` dispatches each inbound EDIFACT message to the correct profile
-version based on the UNB `DE0031` date field (date of preparation) and the
-transition window. A process that **starts** under `FV2025-10-01` continues under
-those rules until it completes — even after the `FV2026-10-01` cutover date.
+A process that **starts** under one format version continues under those rules
+until it completes, even past a cutover.
 
 ```mermaid
 timeline
-    title Format-version lifecycle (annual BDEW release cycle)
-    section FV2025-10-01
-        Oct 2025 : Deployed, active
-        Oct 2026 : Superseded — new processes use FV2026
-    section FV2026-10-01
-        Oct 2026 : Goes live; FV2025 still handles in-flight processes
-        Sep 2027 : All FV2025 processes complete; FV2025 retired
-    section FV2027-10-01
-        Oct 2027 : Next annual release
+    title Format-version lifecycle
+    section Superseded version
+        Anwendungszeitpunkt : Active for new processes
+        Next changeover : Superseded — still runs its in-flight processes
+    section Current version
+        Anwendungszeitpunkt : Goes live for new processes
+        Next changeover : Superseded in turn
 ```
 
 ### `WorkflowVersionPolicy`
@@ -542,7 +416,7 @@ version in production.
 ## Trading-partner master data (`PartnerStore`)
 
 The `PartnerStore` trait provides a durable, PARTIN-aware registry of trading
-partners. It replaces the static `HashMap<GLN, URL>` that config-only solutions
+partners. It replaces the static `HashMap<MpId, Url>` that config-only solutions
 provide and survives restarts, runtime updates, and inbound PARTIN messages.
 
 ```rust

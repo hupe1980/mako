@@ -507,3 +507,58 @@ primary = true
         "--check must still run every validation.\nlogs: {logs}",
     );
 }
+
+// ── AS4 trust anchor ─────────────────────────────────────────────────────────
+
+/// An AS4 listener with no counterparty trust anchor must be refused.
+///
+/// # Why this is a test
+///
+/// Counterparty signing certificates are issued by the BDEW/BNetzA PKI. With no
+/// CA certificate configured, the session falls back to the operator's own
+/// signing certificate as its only trust anchor — it then trusts exactly one
+/// signer, itself, and rejects every message from every partner. The daemon
+/// starts, binds :4080, reports healthy, and receives nothing.
+///
+/// That used to be an `error!` log line above a successful boot, which is the
+/// shape an operator discovers when a counterparty escalates a missed Frist. It
+/// is a startup refusal now, with `--allow-no-as4-trust-anchor` as the explicit
+/// loopback-test opt-out — the same shape as `--allow-unencrypted-as4`.
+#[test]
+fn check_rejects_an_as4_listener_without_a_trust_anchor() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let cfg = write_config(
+        dir.path(),
+        r#"
+[[party]]
+mp_id = "9900001000001"
+roles = ["NB"]
+primary = true
+"#,
+    );
+    let out = makod()
+        .args(["--config"])
+        .arg(&cfg)
+        .args([
+            "--allow-volatile",
+            "--as4-addr",
+            "127.0.0.1:14080",
+            // `=` form: a PEM starts with hyphens, which clap would otherwise
+            // read as a flag.
+            "--as4-signing-key-pem=-----BEGIN PRIVATE KEY-----\nMIIB\n-----END PRIVATE KEY-----\n",
+            "--as4-signing-cert-pem=-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n",
+            "--allow-unencrypted-as4",
+            "--check",
+        ])
+        .output()
+        .expect("spawn makod");
+    assert!(
+        !out.status.success(),
+        "--check must reject an AS4 listener that can verify no counterparty"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("trust anchor") && stderr.contains("--allow-no-as4-trust-anchor"),
+        "the error must name the missing material and the opt-out: {stderr}"
+    );
+}

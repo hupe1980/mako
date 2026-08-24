@@ -23,8 +23,8 @@ use crate::{
 /// Wire type string: `ORDCHG:D:20B:UN:{release}`.
 ///
 /// Supported releases (fv-dated profiles):
-/// - `releases::ordchg_fv20241001()` (wire: `"1.1"`, AHB 1.0a, valid from 2024-10-01)
-/// - `releases::ordchg_fv20260401()` (wire: `"1.2"`, AHB 1.1, valid from 2026-04-01)
+/// - `releases::ordchg_fv20250401()` (wire: `"1.1"`, AHB 1.0a, valid from 2024-10-01)
+/// - `releases::ordchg_fv20261001()` (wire: `"1.2"`, AHB 1.1, valid from 2026-04-01)
 ///
 /// The key structural change between MIG 1.1 and MIG 1.2 is the **removal of
 /// SG6 (CTA + COM contact information)** from within SG3 (NAD). Both releases

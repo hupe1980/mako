@@ -24,8 +24,8 @@ use crate::{
 /// Wire type string: `QUOTES:D:10A:UN:{release}`.
 ///
 /// Supported releases (fv-dated profiles):
-/// - `releases::quotes_fv20250401()` (wire: `"1.3b"`, AHB 1.1, valid from 2025-04-01)
-/// - `releases::quotes_fv20260401()` (wire: `"1.3c"`, AHB 1.1a, valid from 2026-04-01)
+/// - `releases::quotes_fv20251001()` (wire: `"1.3b"`, AHB 1.1, valid from 2025-04-01)
+/// - `releases::quotes_fv20261001()` (wire: `"1.3c"`, AHB 1.1a, valid from 2026-04-01)
 ///
 /// Both releases share the same 5 Prüfidentifikatoren (15001/15002/15004/15005).
 #[derive(Debug, Clone)]

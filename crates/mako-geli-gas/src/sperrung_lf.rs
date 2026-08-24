@@ -440,6 +440,10 @@ impl Workflow for GeliGasSperrungLfWorkflow {
                     gnb_gln.as_str(),
                     serde_json::json!({
                         "type":        "GasSperrungAuftrag",
+                        // See the Strom counterpart: 17115/17117 name the same
+                        // Marktrolle in both Sparten, so the sender MP-ID can
+                        // only be resolved with the Sparte stated here.
+                        "sparte":      "Gas",
                         "pid":         pid.as_u32(),
                         "location_id": location_id.as_str(),
                         "message_ref": message_ref.as_str(),

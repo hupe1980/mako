@@ -468,9 +468,6 @@ pub(super) fn render_mscons_typ2(
         .receiver(receiver)
         .message_ref(message_ref)
         .document_code(mscons_document_code(MSCONS_PID_WERTE_TYP2))
-        // MSCONS AHB 3.2 §11.2: DE 2379 = `303` (`CCYYMMDDHHMMZZZ`), not the
-        // date-only `102` the older use cases carry.
-        .document_date_303()
         .pruefidentifikator(
             edi_energy::Pruefidentifikator::new(
                 u32::try_from(MSCONS_PID_WERTE_TYP2).unwrap_or_default(),

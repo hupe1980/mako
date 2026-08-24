@@ -400,6 +400,8 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     const EXPECTED_DETAIL_ORDER: &[&str] = &[
         "NAD", "LOC", "DTM", "CCI", "LIN", "PIA", "QTY", "DTM", "STS", "UNT",
     ];
+    /// Tags that trigger a repeatable segment group in the detail section.
+    const DETAIL_GROUP_TRIGGERS: &[&str] = &["RFF", "NAD", "CTA", "LOC", "LIN", "QTY"];
 
     /// Strict order check for the header section (no group repetition expected).
     fn check_header_section(
@@ -428,22 +430,27 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
     /// Group-trigger-aware order check for the detail section (post-UNS).
     ///
-    /// When the first tag in `expected` is seen again after the cursor has
-    /// already advanced, this indicates a new group-repetition occurrence
-    /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset
-    /// to that position instead of reporting an ordering violation.
+    /// Any tag that triggers a segment group may legitimately step the cursor
+    /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`
+    /// inside SG9, so the second reading of a line item returns from DTM to
+    /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —
+    /// rejected every multi-interval MSCONS, which is every Lastgang there is.
     fn check_detail_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],
         rule_id: &str,
         issues: &mut Vec<ValidationIssue>,
     ) {
-        let group_trigger = expected.first().copied().unwrap_or("");
         let mut cursor: usize = 0;
         for seg in segs {
-            // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.
-            if cursor > 0 && seg.tag == group_trigger {
-                cursor = 0;
+            // A group trigger seen at or before the cursor opens a new
+            // occurrence of that group; rewind to it.
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+                if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
+                    if pos <= cursor {
+                        cursor = pos;
+                    }
+                }
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;

@@ -2653,13 +2653,13 @@ impl Profile for InvoicFv20260401Profile {
         Some(::time::macros::date!(2026 - 04 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        None
+        Some(::time::macros::date!(2026 - 09 - 30))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
         Some("2.8e")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("INVOIC MIG 2.8e, Stand 01.04.2026")
+        Some("INVOIC MIG 2.8e, Publikationsdatum 01.10.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

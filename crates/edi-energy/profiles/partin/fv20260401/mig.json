@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "message_type": "PARTIN",
-  "release": "1.1",
+  "release": "1.0f",
   "valid_from": "2026-04-01",
   "ordering_hint": [
     "UNH",
@@ -11,6 +11,8 @@
     "DTM",
     "RFF",
     "NAD",
+    "CTA",
+    "COM",
     "NAD",
     "UNS",
     "NAD",
@@ -172,6 +174,36 @@
           "MS"
         ]
       }
+    },
+    {
+      "tag": "CTA",
+      "name": "Contact Information (Absender)",
+      "mandatory": true,
+      "max_occurrences": 1,
+      "elements": [
+        {
+          "id": "3139",
+          "status": "C"
+        },
+        {
+          "id": "C056",
+          "status": "C"
+        }
+      ],
+      "qualifier_restrictions": {}
+    },
+    {
+      "tag": "COM",
+      "name": "Communication Contact (Absender)",
+      "mandatory": true,
+      "max_occurrences": 5,
+      "elements": [
+        {
+          "id": "C076",
+          "status": "M"
+        }
+      ],
+      "qualifier_restrictions": {}
     },
     {
       "tag": "NAD",
@@ -458,6 +490,8 @@
     }
   ],
   "segment_groups": [],
-  "ahb_revision": "1.1",
-  "source_document": "PARTIN MIG 1.1, Stand 01.04.2026"
+  "valid_until": "2026-09-30",
+  "ahb_revision": "1.0f",
+  "source_document": "PARTIN MIG 1.0f, Publikationsdatum 01.10.2025",
+  "publikationsdatum": "2025-10-01"
 }

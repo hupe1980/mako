@@ -53,6 +53,19 @@ static SEGMENTS: &[SegmentDefinition] = &[
         ],
     ),
     SegmentDefinition::new(
+        "CTA",
+        "Contact Information (Absender)",
+        &[
+            ElementRef::new(1, "3139", Status::Conditional, 1),
+            ElementRef::new(2, "C056", Status::Conditional, 1),
+        ],
+    ),
+    SegmentDefinition::new(
+        "COM",
+        "Communication Contact (Absender)",
+        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
+    ),
+    SegmentDefinition::new(
         "UNS",
         "Section Control",
         &[ElementRef::new(1, "0081", Status::Mandatory, 1)],
@@ -87,19 +100,6 @@ static SEGMENTS: &[SegmentDefinition] = &[
         "CAV",
         "Merkmalswert",
         &[ElementRef::new(1, "C889", Status::Mandatory, 1)],
-    ),
-    SegmentDefinition::new(
-        "CTA",
-        "Contact Information (Ansprechpartner)",
-        &[
-            ElementRef::new(1, "3139", Status::Conditional, 1),
-            ElementRef::new(2, "C056", Status::Conditional, 1),
-        ],
-    ),
-    SegmentDefinition::new(
-        "COM",
-        "Communication Contact (Ansprechpartner)",
-        &[ElementRef::new(1, "C076", Status::Mandatory, 1)],
     ),
     SegmentDefinition::new(
         "UNT",
@@ -158,9 +158,9 @@ pub(crate) fn code_list(de_id: &str) -> Option<&'static [&'static str]> {
 // code-list validity. Does NOT check segment sequence or repetition
 // cardinality — those are Layer 3 (MIG ProfileRulePack) responsibilities.
 // Cached in a LazyLock so construction happens once per profile.
-static DIRECTORY_VALIDATOR_PARTIN_1_1: LazyLock<DirectoryValidator> = LazyLock::new(|| {
+static DIRECTORY_VALIDATOR_PARTIN_1_0F: LazyLock<DirectoryValidator> = LazyLock::new(|| {
     DirectoryValidator::new(
-        "EDI@Energy-PARTIN-1.1",
+        "EDI@Energy-PARTIN-1.0f",
         segment_lookup,
         is_code_valid,
         suggest_code,
@@ -170,7 +170,7 @@ static DIRECTORY_VALIDATOR_PARTIN_1_1: LazyLock<DirectoryValidator> = LazyLock::
 });
 
 pub(crate) fn directory_validator() -> &'static DirectoryValidator {
-    &DIRECTORY_VALIDATOR_PARTIN_1_1
+    &DIRECTORY_VALIDATOR_PARTIN_1_0F
 }
 
 fn rule_unh_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
@@ -238,6 +238,32 @@ fn rule_nad_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     }
 }
 
+fn rule_cta_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
+    if !segments.iter().any(|s| s.tag == "CTA") {
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                "mandatory segment CTA is missing".to_owned(),
+            )
+            .with_rule_id("MIG-CTA-REQ")
+            .with_segment("CTA".to_owned()),
+        );
+    }
+}
+
+fn rule_com_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
+    if !segments.iter().any(|s| s.tag == "COM") {
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                "mandatory segment COM is missing".to_owned(),
+            )
+            .with_rule_id("MIG-COM-REQ")
+            .with_segment("COM".to_owned()),
+        );
+    }
+}
+
 fn rule_uns_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     if !segments.iter().any(|s| s.tag == "UNS") {
         issues.push(
@@ -277,32 +303,6 @@ fn rule_cci_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     }
 }
 
-fn rule_cta_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    if !segments.iter().any(|s| s.tag == "CTA") {
-        issues.push(
-            ValidationIssue::new(
-                ValidationSeverity::Error,
-                "mandatory segment CTA is missing".to_owned(),
-            )
-            .with_rule_id("MIG-CTA-REQ")
-            .with_segment("CTA".to_owned()),
-        );
-    }
-}
-
-fn rule_com_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
-    if !segments.iter().any(|s| s.tag == "COM") {
-        issues.push(
-            ValidationIssue::new(
-                ValidationSeverity::Error,
-                "mandatory segment COM is missing".to_owned(),
-            )
-            .with_rule_id("MIG-COM-REQ")
-            .with_segment("COM".to_owned()),
-        );
-    }
-}
-
 fn rule_unt_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     if !segments.iter().any(|s| s.tag == "UNT") {
         issues.push(
@@ -312,6 +312,28 @@ fn rule_unt_mandatory(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
             )
             .with_rule_id("MIG-UNT-REQ")
             .with_segment("UNT".to_owned()),
+        );
+    }
+}
+
+/// Layer 3 — verify `COM` appears at most 5 times in the message header.
+///
+/// This rule only fires for segment tags that appear exclusively in the
+/// message header (not in any segment group).  Tags shared between the
+/// header and groups use per-group window rules instead.
+fn rule_com_max_occurrences(
+    segments: &[edifact_rs::Segment<'_>],
+    issues: &mut Vec<ValidationIssue>,
+) {
+    let count = segments.iter().filter(|s| s.tag == "COM").count();
+    if count > 5 {
+        issues.push(
+            ValidationIssue::new(
+                ValidationSeverity::Error,
+                format!("segment COM occurs {count} times; maximum is 5"),
+            )
+            .with_rule_id("MIG-COM-CARD-MAX")
+            .with_segment("COM".to_owned()),
         );
     }
 }
@@ -426,40 +448,21 @@ fn rule_nad_max_occurrences(
     }
 }
 
-/// Layer 3 — verify `COM` appears at most 5 times in the message header.
-///
-/// This rule only fires for segment tags that appear exclusively in the
-/// message header (not in any segment group).  Tags shared between the
-/// header and groups use per-group window rules instead.
-fn rule_com_max_occurrences(
-    segments: &[edifact_rs::Segment<'_>],
-    issues: &mut Vec<ValidationIssue>,
-) {
-    let count = segments.iter().filter(|s| s.tag == "COM").count();
-    if count > 5 {
-        issues.push(
-            ValidationIssue::new(
-                ValidationSeverity::Error,
-                format!("segment COM occurs {count} times; maximum is 5"),
-            )
-            .with_rule_id("MIG-COM-CARD-MAX")
-            .with_segment("COM".to_owned()),
-        );
-    }
-}
-
 /// Layer 3.5 — verify that segment tags appear in the normative sequence.
 ///
 /// The rule does NOT require every tag to be present (that is Layer 3's job);
 /// it only checks that tag positions are non-decreasing w.r.t. the expected order.
 fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<ValidationIssue>) {
     /// Header segment ordering (before UNS+D).
-    const EXPECTED_HEADER_ORDER: &[&str] =
-        &["UNH", "BGM", "DTM", "RFF", "DTM", "RFF", "NAD", "NAD"];
+    const EXPECTED_HEADER_ORDER: &[&str] = &[
+        "UNH", "BGM", "DTM", "RFF", "DTM", "RFF", "NAD", "CTA", "COM", "NAD",
+    ];
     /// Detail segment ordering (after UNS+D).
     const EXPECTED_DETAIL_ORDER: &[&str] = &[
         "NAD", "FII", "RFF", "RFF", "FTX", "CCI", "DTM", "CAV", "CCI", "NAD", "CTA", "COM", "UNT",
     ];
+    /// Tags that trigger a repeatable segment group in the detail section.
+    const DETAIL_GROUP_TRIGGERS: &[&str] = &[];
 
     /// Strict order check for the header section (no group repetition expected).
     fn check_header_section(
@@ -488,22 +491,27 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
 
     /// Group-trigger-aware order check for the detail section (post-UNS).
     ///
-    /// When the first tag in `expected` is seen again after the cursor has
-    /// already advanced, this indicates a new group-repetition occurrence
-    /// (e.g. a second `LOC` group in MSCONS).  The cursor is silently reset
-    /// to that position instead of reporting an ordering violation.
+    /// Any tag that triggers a segment group may legitimately step the cursor
+    /// *backwards*: the group is repeating. MSCONS SG10 is `QTY + DTM + STS`
+    /// inside SG9, so the second reading of a line item returns from DTM to
+    /// QTY. Resetting only on the *outermost* trigger — the previous behaviour —
+    /// rejected every multi-interval MSCONS, which is every Lastgang there is.
     fn check_detail_section(
         segs: &[edifact_rs::Segment<'_>],
         expected: &[&str],
         rule_id: &str,
         issues: &mut Vec<ValidationIssue>,
     ) {
-        let group_trigger = expected.first().copied().unwrap_or("");
         let mut cursor: usize = 0;
         for seg in segs {
-            // A repeated group-trigger tag resets the cursor to allow multiple group occurrences.
-            if cursor > 0 && seg.tag == group_trigger {
-                cursor = 0;
+            // A group trigger seen at or before the cursor opens a new
+            // occurrence of that group; rewind to it.
+            if DETAIL_GROUP_TRIGGERS.contains(&seg.tag) {
+                if let Some(pos) = expected.iter().position(|&t| t == seg.tag) {
+                    if pos <= cursor {
+                        cursor = pos;
+                    }
+                }
             }
             if let Some(pos) = expected[cursor..].iter().position(|&t| t == seg.tag) {
                 cursor += pos;
@@ -529,39 +537,39 @@ fn rule_segment_order(segments: &[edifact_rs::Segment<'_>], issues: &mut Vec<Val
     check_header_section(
         header_segs,
         EXPECTED_HEADER_ORDER,
-        "MIG-PARTIN-MIG-1.1-ORDER",
+        "MIG-PARTIN-MIG-1.0f-ORDER",
         issues,
     );
     check_detail_section(
         detail_segs,
         EXPECTED_DETAIL_ORDER,
-        "MIG-PARTIN-MIG-1.1-ORDER",
+        "MIG-PARTIN-MIG-1.0f-ORDER",
         issues,
     );
 }
 
 static MIG_PARTIN_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-MIG-1.1")
+        ProfileRulePack::new("PARTIN-MIG-1.0f")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_stateless_rule_fn(rule_unh_mandatory)
             .with_stateless_rule_fn(rule_bgm_mandatory)
             .with_stateless_rule_fn(rule_dtm_mandatory)
             .with_stateless_rule_fn(rule_rff_mandatory)
             .with_stateless_rule_fn(rule_nad_mandatory)
+            .with_stateless_rule_fn(rule_cta_mandatory)
+            .with_stateless_rule_fn(rule_com_mandatory)
             .with_stateless_rule_fn(rule_uns_mandatory)
             .with_stateless_rule_fn(rule_fii_mandatory)
             .with_stateless_rule_fn(rule_cci_mandatory)
-            .with_stateless_rule_fn(rule_cta_mandatory)
-            .with_stateless_rule_fn(rule_com_mandatory)
             .with_stateless_rule_fn(rule_unt_mandatory)
+            .with_stateless_rule_fn(rule_com_max_occurrences)
             .with_stateless_rule_fn(rule_fii_max_occurrences)
             .with_stateless_rule_fn(rule_ftx_max_occurrences)
             .with_stateless_rule_fn(rule_dtm_max_occurrences)
             .with_stateless_rule_fn(rule_cav_max_occurrences)
             .with_stateless_rule_fn(rule_nad_max_occurrences)
-            .with_stateless_rule_fn(rule_com_max_occurrences)
             .with_stateless_rule_fn(rule_segment_order),
     )
 });
@@ -579,9 +587,9 @@ use super::ahb_helpers::{
 
 static AHB_37000_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37000")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37000")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37000-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -692,9 +700,9 @@ fn ahb_37000_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37001_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37001")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37001")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37001-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -795,9 +803,9 @@ fn ahb_37001_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37002_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37002")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37002")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37002-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -898,9 +906,9 @@ fn ahb_37002_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37003_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37003")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37003")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37003-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1001,9 +1009,9 @@ fn ahb_37003_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37004_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37004")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37004")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37004-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1104,9 +1112,9 @@ fn ahb_37004_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37005_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37005")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37005")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37005-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1207,9 +1215,9 @@ fn ahb_37005_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37006_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37006")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37006")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37006-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1310,9 +1318,9 @@ fn ahb_37006_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37008_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37008")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37008")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37008-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1413,9 +1421,9 @@ fn ahb_37008_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37009_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37009")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37009")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37009-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1516,9 +1524,9 @@ fn ahb_37009_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37010_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37010")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37010")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37010-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1619,9 +1627,9 @@ fn ahb_37010_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37011_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37011")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37011")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37011-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1722,9 +1730,9 @@ fn ahb_37011_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37012_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37012")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37012")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37012-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1825,9 +1833,9 @@ fn ahb_37012_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37013_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37013")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37013")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37013-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -1928,9 +1936,9 @@ fn ahb_37013_pack() -> Arc<ProfileRulePack> {
 
 static AHB_37014_PACK: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
     Arc::new(
-        ProfileRulePack::new("PARTIN-AHB-1.1-37014")
+        ProfileRulePack::new("PARTIN-AHB-1.0f-37014")
             .for_message_type("PARTIN")
-            .for_release("1.1")
+            .for_release("1.0f")
             .with_named_stateless_rule_fn("AHB-37014-BGM-M", |segs, issues| {
                 ahb_check_mandatory(
                     segs,
@@ -2029,10 +2037,10 @@ fn ahb_37014_pack() -> Arc<ProfileRulePack> {
     Arc::clone(&AHB_37014_PACK)
 }
 
-static AHB_ALL_PACK_PARTIN_1_1: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
-    let pack = ProfileRulePack::new("PARTIN-AHB-1.1-ALL")
+static AHB_ALL_PACK_PARTIN_1_0F: LazyLock<Arc<ProfileRulePack>> = LazyLock::new(|| {
+    let pack = ProfileRulePack::new("PARTIN-AHB-1.0f-ALL")
         .for_message_type("PARTIN")
-        .for_release("1.1");
+        .for_release("1.0f");
     let pack = pack
         .merge_with_override(ahb_37000_pack().as_ref().clone())
         .expect("AHB union pack merge_with_override failed");
@@ -2094,7 +2102,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
             Some(37012) => ahb_37012_pack(),
             Some(37013) => ahb_37013_pack(),
             Some(37014) => ahb_37014_pack(),
-            None => Arc::clone(&AHB_ALL_PACK_PARTIN_1_1),
+            None => Arc::clone(&AHB_ALL_PACK_PARTIN_1_0F),
             Some(_unknown) => Arc::new(ProfileRulePack::new("unknown-pid")
                 .for_message_type("PARTIN")
                 .with_named_stateless_rule_fn("AHB-UNKNOWN-PID", |_segs, issues| {
@@ -2106,7 +2114,7 @@ pub(crate) fn ahb_rule_pack(pid: Option<Pruefidentifikator>) -> Arc<ProfileRuleP
         }
 }
 
-static RELEASE_PARTIN_FV20260401: LazyLock<Release> = LazyLock::new(|| Release::new("1.1"));
+static RELEASE_PARTIN_FV20260401: LazyLock<Release> = LazyLock::new(|| Release::new("1.0f"));
 
 pub(crate) struct PartinFv20260401Profile;
 
@@ -2121,13 +2129,13 @@ impl Profile for PartinFv20260401Profile {
         Some(::time::macros::date!(2026 - 04 - 01))
     }
     fn valid_until(&self) -> Option<::time::Date> {
-        None
+        Some(::time::macros::date!(2026 - 09 - 30))
     }
     fn ahb_revision(&self) -> Option<&'static str> {
-        Some("1.1")
+        Some("1.0f")
     }
     fn source_document(&self) -> Option<&'static str> {
-        Some("PARTIN MIG 1.1, Stand 01.04.2026")
+        Some("PARTIN MIG 1.0f, Publikationsdatum 01.10.2025")
     }
     fn mig_rule_pack(&self) -> Arc<ProfileRulePack> {
         mig_rule_pack()

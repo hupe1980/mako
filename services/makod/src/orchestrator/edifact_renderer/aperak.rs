@@ -12,8 +12,8 @@ use super::*;
 ///
 /// | Field             | Required | Description                                  |
 /// |-------------------|----------|----------------------------------------------|
-/// | `sender`          | yes      | Sender GLN                                   |
-/// | `receiver`        | no       | Receiver GLN (falls back to `msg.recipient`) |
+/// | `sender`          | yes      | Sender MP-ID                                   |
+/// | `receiver`        | no       | Receiver MP-ID (falls back to `msg.recipient`) |
 /// | `pid`             | no       | APERAK Prüfidentifikator (e.g. 29001)        |
 /// | `orig_message_ref`| no       | ACW reference to the message being acked     |
 /// | `error_code`      | no       | ERC error code (e.g. `"E01"`)                |

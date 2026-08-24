@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "message_type": "PARTIN",
-  "release": "1.1",
-  "source_document": "PARTIN AHB, wire release 1.1 (Stand 01.04.2026)",
+  "release": "1.0f",
+  "source_document": "PARTIN AHB, wire release 1.0f (Stand 01.10.2025)",
   "pruefidentifikatoren": [
     {
       "code": 37000,
@@ -93,7 +93,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37001)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37001)"
         }
       ]
     },
@@ -140,7 +140,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37002)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37002)"
         }
       ]
     },
@@ -187,7 +187,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37003)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37003)"
         }
       ]
     },
@@ -234,7 +234,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37004)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37004)"
         }
       ]
     },
@@ -281,7 +281,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37005)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37005)"
         }
       ]
     },
@@ -328,7 +328,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37006)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37006)"
         }
       ]
     },
@@ -375,7 +375,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37008)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37008)"
         }
       ]
     },
@@ -422,7 +422,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37009)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37009)"
         }
       ]
     },
@@ -469,7 +469,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37010)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37010)"
         }
       ]
     },
@@ -516,7 +516,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37011)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37011)"
         }
       ]
     },
@@ -563,7 +563,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37012)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37012)"
         }
       ]
     },
@@ -610,7 +610,7 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37013)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37013)"
         }
       ]
     },
@@ -657,11 +657,9 @@
         {
           "tag": "CAV",
           "requirement": "O",
-          "_description": "CAV is optional per MIG 1.1 (no AHB constraint for PID 37014)"
+          "_description": "CAV is optional per MIG 1.0f (no AHB constraint for PID 37014)"
         }
       ]
     }
-  ],
-  "reviewed_by": "xtask/import-xml-ahb",
-  "reviewed_at": "2026-07-08"
+  ]
 }

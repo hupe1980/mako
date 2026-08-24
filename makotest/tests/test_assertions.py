@@ -7,6 +7,7 @@ from makotest import (
     assert_invoice_reconciles,
     bo4e_schema_version,
 )
+from makotest.assertions import _generation
 
 
 def rechnung(**overrides) -> dict:
@@ -105,8 +106,15 @@ class TestInvoiceReconciliation:
 
 class TestBo4eGeneration:
     def test_the_expected_generation_comes_from_the_bundled_crates(self):
-        """Asked of `rubo4e`, never written down — so it cannot drift."""
-        assert bo4e_schema_version().startswith("v202607")
+        """Asked of `rubo4e`, never written down — so it cannot drift.
+
+        The *generation* is the assertion; the spelling is not. `rubo4e` has
+        reported both `v202607.0.0` and `202607.1.0`, and pinning the `v`
+        prefix here made this test fail on a patch release of the very crate
+        it is asking — the drift it exists to prevent, in the test itself.
+        """
+        assert_bo4e_generation_matches(bo4e_schema_version())
+        assert _generation(bo4e_schema_version()) == "202607"
 
     def test_matching_generations_pass_in_either_spelling(self):
         assert_bo4e_generation_matches("202607")

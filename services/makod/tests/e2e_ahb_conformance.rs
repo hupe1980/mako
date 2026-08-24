@@ -18,12 +18,12 @@
 //! | PID | Process | AHB release | Fixture |
 //! |---|---|---|---|
 //! | 55001 | GPKE Anmeldung verb. MaLo (LF → NB) | S2.2 / FV2026-10-01 | `beispiel_55001_lieferbeginn.edi` |
-//! | 44001 | GeLi Gas Lieferbeginn (nLFN → GNB) | G1.1 / FV2025-10-01 | `beispiel_44001_lieferbeginn_gas.edi` |
-//! | 44022 | GeLi Gas Stornierung Anfrage (LFN → GNB) | G1.1 / FV2025-10-01 | `beispiel_44022_stornierung_gas.edi` |
-//! | 44039 | WiM Gas Kündigung MSB Gas (MSBA → NB) | G1.1 / FV2025-10-01 | `beispiel_44039_kuendigung_msb_gas.edi` |
-//! | 44042 | WiM Gas Anmeldung MSB Gas (MSBA → NB) | G1.1 / FV2025-10-01 | `beispiel_44042_anmeldung_msb_gas.edi` |
-//! | 44168 | WiM Gas Verpflichtungsanfrage (NB → gMSB) | G1.1 / FV2025-10-01 | `beispiel_44168_verpflichtungsanfrage.edi` |
-//! | 31001 | GPKE INVOIC Abschlagsrechnung (MSB → NB) | 2.8e / FV2025-10-01 | `pid_31001.edi` |
+//! | 44001 | GeLi Gas Lieferbeginn (nLFN → GNB) | G1.1 / FV2026-04-01 | `beispiel_44001_lieferbeginn_gas.edi` |
+//! | 44022 | GeLi Gas Stornierung Anfrage (LFN → GNB) | G1.1 / FV2026-04-01 | `beispiel_44022_stornierung_gas.edi` |
+//! | 44039 | WiM Gas Kündigung MSB Gas (MSBA → NB) | G1.1 / FV2026-04-01 | `beispiel_44039_kuendigung_msb_gas.edi` |
+//! | 44042 | WiM Gas Anmeldung MSB Gas (MSBA → NB) | G1.1 / FV2026-04-01 | `beispiel_44042_anmeldung_msb_gas.edi` |
+//! | 44168 | WiM Gas Verpflichtungsanfrage (NB → gMSB) | G1.1 / FV2026-04-01 | `beispiel_44168_verpflichtungsanfrage.edi` |
+//! | 31001 | GPKE INVOIC Abschlagsrechnung (MSB → NB) | 2.8e / FV2026-04-01 | `pid_31001.edi` |
 //!
 //! ## Validation-only tests (parse → validate_on_date → assert is_valid)
 //!
@@ -33,17 +33,17 @@
 //! | PID | Process | AHB release | Fixture |
 //! |---|---|---|---|
 //! | 55002 | GPKE Bestätigung Anmeldung verb. MaLo (NB → LF) | S2.2 / FV2026-10-01 | `beispiel_55002_lieferende.edi` |
-//! | 44023 | GeLi Gas Stornierung Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44023_bestaetigung_stornierung_gas.edi` |
-//! | 44024 | GeLi Gas Stornierung Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44024_ablehnung_stornierung_gas.edi` |
-//! | 44040 | WiM Gas Kündigung Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44040_bestaetigung_kuendigung_msb_gas.edi` |
-//! | 44041 | WiM Gas Kündigung Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44041_ablehnung_kuendigung_msb_gas.edi` |
-//! | 44043 | WiM Gas Anmeldung Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44043_bestaetigung_anmeldung_msb_gas.edi` |
-//! | 44044 | WiM Gas Anmeldung Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44044_ablehnung_anmeldung_msb_gas.edi` |
-//! | 44051 | WiM Gas Ende MSB / Vorl. Abmeldung (NB → MSBA) | G1.1 / FV2025-10-01 | `beispiel_44051_ende_msb_gas.edi` |
-//! | 44052 | WiM Gas Ende Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44052_bestaetigung_ende_msb_gas.edi` |
-//! | 44053 | WiM Gas Ende Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44053_ablehnung_ende_msb_gas.edi` |
-//! | 44169 | Verpflichtungsanfrage Bestätigung | G1.1 / FV2025-10-01 | `beispiel_44169_bestaetigung_verpflichtungsanfrage.edi` |
-//! | 44170 | Verpflichtungsanfrage Ablehnung | G1.1 / FV2025-10-01 | `beispiel_44170_ablehnung_verpflichtungsanfrage.edi` |
+//! | 44023 | GeLi Gas Stornierung Bestätigung | G1.1 / FV2026-04-01 | `beispiel_44023_bestaetigung_stornierung_gas.edi` |
+//! | 44024 | GeLi Gas Stornierung Ablehnung | G1.1 / FV2026-04-01 | `beispiel_44024_ablehnung_stornierung_gas.edi` |
+//! | 44040 | WiM Gas Kündigung Bestätigung | G1.1 / FV2026-04-01 | `beispiel_44040_bestaetigung_kuendigung_msb_gas.edi` |
+//! | 44041 | WiM Gas Kündigung Ablehnung | G1.1 / FV2026-04-01 | `beispiel_44041_ablehnung_kuendigung_msb_gas.edi` |
+//! | 44043 | WiM Gas Anmeldung Bestätigung | G1.1 / FV2026-04-01 | `beispiel_44043_bestaetigung_anmeldung_msb_gas.edi` |
+//! | 44044 | WiM Gas Anmeldung Ablehnung | G1.1 / FV2026-04-01 | `beispiel_44044_ablehnung_anmeldung_msb_gas.edi` |
+//! | 44051 | WiM Gas Ende MSB / Vorl. Abmeldung (NB → MSBA) | G1.1 / FV2026-04-01 | `beispiel_44051_ende_msb_gas.edi` |
+//! | 44052 | WiM Gas Ende Bestätigung | G1.1 / FV2026-04-01 | `beispiel_44052_bestaetigung_ende_msb_gas.edi` |
+//! | 44053 | WiM Gas Ende Ablehnung | G1.1 / FV2026-04-01 | `beispiel_44053_ablehnung_ende_msb_gas.edi` |
+//! | 44169 | Verpflichtungsanfrage Bestätigung | G1.1 / FV2026-04-01 | `beispiel_44169_bestaetigung_verpflichtungsanfrage.edi` |
+//! | 44170 | Verpflichtungsanfrage Ablehnung | G1.1 / FV2026-04-01 | `beispiel_44170_ablehnung_verpflichtungsanfrage.edi` |
 //!
 //! # AHB profile coverage
 //!
@@ -109,7 +109,9 @@ const WIM_GAS_MSBA_ID: &str = "4012345000023";
 const WIM_GAS_NB_ID: &str = "9907317000007";
 
 /// Date on which G1.1 is the valid release for UTILMD Gas (first day of FV2025-10-01).
-const GAS_VALIDATION_DATE: time::Date = date!(2025 - 10 - 01);
+// UTILMD AHB Gas 1.1 (G1.1) was published 01.10.2025; its Anwendungszeitpunkt is
+// the April changeover (Allgemeine Festlegungen 6.1d §2.5.2).
+const GAS_VALIDATION_DATE: time::Date = date!(2026 - 04 - 01);
 
 // ── Fixture bytes (loaded from test fixtures at compile time) ─────────────────
 
@@ -597,7 +599,7 @@ async fn ahb_44039_kuendigung_msb_gas_validates_and_dispatches() {
 /// AHB-conformant INVOIC 2.8e PID 31001 (Abschlagsrechnung, MSB → NB).
 ///
 /// Source: `crates/edi-energy/tests/fixtures/invoic/valid/pid_31001.edi`
-/// Release: 2.8e (BDEW INVOIC AHB 2.8e / FV2025-10-01, BK6-22-024)
+/// Release: 2.8e (BDEW INVOIC AHB 1.0a / FV2026-04-01, BK6-22-024)
 const INVOIC_31001_VALID: &[u8] =
     include_bytes!("../../../crates/edi-energy/tests/fixtures/invoic/valid/pid_31001.edi");
 
@@ -605,10 +607,11 @@ const INVOIC_31001_VALID: &[u8] =
 const INVOIC_MSB_ID: &str = "4012345000023";
 /// GLN of the NB recipient in the INVOIC 31001 fixture (NAD+MR / UNB receiver).
 const INVOIC_NB_ID: &str = "9900357000004";
-/// BDEW FV for INVOIC 2.8e (starts 2025-10-01).
-const INVOIC_FV_2025: &str = "FV2025-10-01";
-/// Validation date: first day of FV2025-10-01.
-const INVOIC_VALIDATION_DATE: time::Date = date!(2025 - 10 - 01);
+/// BDEW Formatversion for INVOIC AHB 1.0a — published 01.10.2025, and so the
+/// Anwendungszeitpunkt is the April changeover (Allgemeine Festlegungen §2.5.2).
+const INVOIC_FV_2026: &str = "FV2026-04-01";
+/// Validation date: first day of FV2026-04-01.
+const INVOIC_VALIDATION_DATE: time::Date = date!(2026 - 04 - 01);
 
 // ── Test: GPKE 31001 INVOIC Abschlagsrechnung — real AHB validation passes ───
 
@@ -616,7 +619,7 @@ const INVOIC_VALIDATION_DATE: time::Date = date!(2025 - 10 - 01);
 ///
 /// Confirms that:
 /// 1. The INVOIC 2.8e fixture parses cleanly under `Platform::with_all_profiles()`.
-/// 2. `validate_on_date(2025-10-01)` returns `is_valid()=true` — no AHB bypass.
+/// 2. `validate_on_date(2026-04-01)` returns `is_valid()=true` — no AHB bypass.
 /// 3. The INVOIC fields are correctly adapted to `AbrechnungCommand::ReceiveInvoic`.
 /// 4. The GpkeAbrechnungWorkflow transitions to `AbrechnungState::ValidationPassed`
 ///    after accepting the command, proving the full dispatch chain is functional.
@@ -638,7 +641,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
     assert_eq!(release.as_str(), "2.8e", "fixture must encode 2.8e release");
 
     // Step 3: Adapt to domain command using gpke_abrechnung_registry.
-    let fv = FormatVersion::new(INVOIC_FV_2025);
+    let fv = FormatVersion::new(INVOIC_FV_2026);
     let adapter_cmd = gpke_abrechnung_registry()
         .dispatch(&msg as &dyn std::any::Any, &fv)
         .expect("gpke_abrechnung_registry must adapt PID 31001 INVOIC to AbrechnungCommand");
@@ -692,7 +695,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
     let nb_process: Process<GpkeAbrechnungWorkflow, InMemoryEventStore> = Process::new(
         InMemoryEventStore::new(),
         TenantId::from_party_id(INVOIC_NB_ID),
-        WorkflowId::new("gpke-abrechnung", INVOIC_FV_2025),
+        WorkflowId::new("gpke-abrechnung", INVOIC_FV_2026),
     );
 
     nb_process

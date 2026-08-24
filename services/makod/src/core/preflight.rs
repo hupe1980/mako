@@ -31,6 +31,41 @@ use secrecy::{ExposeSecret as _, SecretString};
 
 use crate::cedar_authz::{CedarAuthorizer, DefaultPolicy, NamedKey};
 
+/// Whether `url` may be used as an outbound delivery destination.
+///
+/// `true` for HTTPS, and for `localhost` on any scheme so a development
+/// instance can point at a local stub.
+///
+/// # Why this is one function
+///
+/// Three different paths can set a MaLo-ID callback address: the
+/// `--maloid-partner` flag, a record discovered from the BDEW
+/// Verzeichnisdienst, and `PUT /admin/partners/{mp_id}`. Only the first was
+/// checked at all, and only for parseability — so an endpoint on plain
+/// `http://` reached the store through either of the other two and `makod` then
+/// posted a `MaloIdentResultPositive` to it: the Marktlokation, its postal
+/// address and its NB/MSB assignment, in the clear (DSGVO Art. 32). A rule
+/// enforced on one of three paths is not enforced.
+#[must_use]
+pub fn is_secure_endpoint(url: &reqwest::Url) -> bool {
+    url.scheme() == "https" || url.host_str() == Some("localhost")
+}
+
+/// The `COM` DE 3155 qualifiers whose address is a URL `makod` **delivers to**.
+///
+/// `AK`/`AS4` is the AS4 inbox, `AW` the API-Webdienste callback. Everything
+/// else a `COM` segment can carry — `EM` e-mail, `TE` telephone, `FX` — is
+/// contact data, not a delivery destination, and is stored as given.
+pub const DELIVERY_CHANNEL_QUALIFIERS: &[&str] = &["AK", "AS4", "AW"];
+
+/// `true` when `qualifier` names a channel `makod` delivers to, and `address`
+/// is not a URL [`is_secure_endpoint`] accepts.
+#[must_use]
+pub fn is_insecure_delivery_channel(qualifier: &str, address: &str) -> bool {
+    DELIVERY_CHANNEL_QUALIFIERS.contains(&qualifier)
+        && !reqwest::Url::parse(address).is_ok_and(|u| is_secure_endpoint(&u))
+}
+
 /// Raw configuration values the preflight judges.
 ///
 /// Borrowed from the parsed CLI struct in `main`. Kept as an explicit input
@@ -47,9 +82,9 @@ pub struct PreflightInput<'a> {
     pub webdienste_enabled: bool,
     /// `--webdienste-allow-unauthenticated`.
     pub webdienste_allow_unauthenticated: bool,
-    /// `--as4-partner GLN=HTTPS-URL` pairs.
+    /// `--as4-partner MP-ID=HTTPS-URL` pairs.
     pub as4_partner: &'a [String],
-    /// `--as4-partner-cert GLN=<PEM>` pairs.
+    /// `--as4-partner-cert MP-ID=<PEM>` pairs.
     pub as4_partner_cert: &'a [String],
     /// `--as4-signing-key-pem`.
     pub as4_signing_key_pem: Option<&'a SecretString>,
@@ -63,6 +98,8 @@ pub struct PreflightInput<'a> {
     pub as4_party_id: Option<&'a str>,
     /// `--allow-unencrypted-as4`.
     pub allow_unencrypted_as4: bool,
+    /// `--allow-no-as4-trust-anchor`.
+    pub allow_no_as4_trust_anchor: bool,
     /// `--allow-no-as4-signing`.
     pub allow_no_as4_signing: bool,
     /// `--edifact-outbox-webhook-url`.
@@ -71,7 +108,7 @@ pub struct PreflightInput<'a> {
     pub erp_webhook_url: Option<&'a str>,
     /// `--netzzugang-endpoint-url`.
     pub netzzugang_endpoint_url: Option<&'a str>,
-    /// `--maloid-partner GLN=URL` pairs.
+    /// `--maloid-partner MP-ID=URL` pairs.
     pub maloid_partner: &'a [String],
     /// `--verzeichnisdienst-url`.
     pub verzeichnisdienst_url: Option<&'a str>,
@@ -223,6 +260,28 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
             );
         }
 
+        // Counterparty certificates are issued by the BDEW/BNetzA PKI, so
+        // verifying them needs that CA. With none configured the session falls
+        // back to the operator's own leaf certificate, which trusts exactly one
+        // signer — ourselves — and rejects every partner. That is a complete
+        // inbound outage presented by a daemon that reports healthy, so it is
+        // fail-closed like the encryption key above rather than a log line
+        // nobody reads until a counterparty escalates.
+        if !input.allow_no_as4_trust_anchor
+            && input.as4_trust_anchor_pem.is_none_or(|ta| ta == cert_pem)
+        {
+            anyhow::bail!(
+                "AS4 trust anchor not configured, or set to this operator's own \
+                 signing certificate. Counterparty signing certificates are issued \
+                 by the BDEW/BNetzA PKI, so every inbound AS4 message would fail \
+                 signature verification and the listener would accept nothing. \
+                 Set --as4-trust-anchor-pem / MAKOD_AS4_TRUST_ANCHOR_PEM (or \
+                 as4.trust_anchor_pem_file) to the BDEW/BNetzA PKI CA certificate, \
+                 or pass --allow-no-as4-trust-anchor for a loopback test where both \
+                 ends share one certificate."
+            );
+        }
+
         // Build a throw-away session to prove the PEM material parses and the
         // key matches the certificate. Deferring this to the real boot meant a
         // malformed key was found only after `--check` had reported success.
@@ -244,32 +303,32 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     let mut as4_profile = BdewAs4Profile::new();
     for pair in input.as4_partner {
         let (mp_id, url) = pair.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("--as4-partner: expected GLN=HTTPS-URL, got {pair:?}")
+            anyhow::anyhow!("--as4-partner: expected MP-ID=HTTPS-URL, got {pair:?}")
         })?;
         let (mp_id, url) = (mp_id.trim(), url.trim());
         anyhow::ensure!(
             !mp_id.is_empty(),
-            "--as4-partner: GLN must not be empty in {pair:?}"
+            "--as4-partner: MP-ID must not be empty in {pair:?}"
         );
         anyhow::ensure!(
             url.starts_with("https://"),
-            "--as4-partner: endpoint URL must use HTTPS (got {url:?} for GLN {mp_id:?})"
+            "--as4-partner: endpoint URL must use HTTPS (got {url:?} for MP-ID {mp_id:?})"
         );
         as4_profile.register_partner_all_actions(mp_id, url);
     }
 
     for pair in input.as4_partner_cert {
         let (mp_id, cert_pem) = pair.split_once('=').ok_or_else(|| {
-            anyhow::anyhow!("--as4-partner-cert: expected GLN=<PEM>, got {pair:?}")
+            anyhow::anyhow!("--as4-partner-cert: expected MP-ID=<PEM>, got {pair:?}")
         })?;
         let (mp_id, cert_pem) = (mp_id.trim(), cert_pem.trim());
         anyhow::ensure!(
             !mp_id.is_empty(),
-            "--as4-partner-cert: GLN must not be empty in {pair:?}"
+            "--as4-partner-cert: MP-ID must not be empty in {pair:?}"
         );
         anyhow::ensure!(
             cert_pem.contains("-----BEGIN CERTIFICATE-----"),
-            "--as4-partner-cert: value for GLN {mp_id:?} is not a PEM certificate \
+            "--as4-partner-cert: value for MP-ID {mp_id:?} is not a PEM certificate \
              (no -----BEGIN CERTIFICATE----- header). When using a file reference, \
              set as4.partner_cert_files in makod.toml."
         );
@@ -279,7 +338,7 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     // Every registered partner endpoint needs an encryption certificate — the
     // send path refuses `encrypt = true` without one, so a missing certificate
     // means every delivery to that partner dead-letters. Fail closed and name
-    // the GLNs rather than discovering it one dead letter at a time.
+    // the MP-IDs rather than discovering it one dead letter at a time.
     let cert_mp_ids: std::collections::HashSet<&str> = input
         .as4_partner_cert
         .iter()
@@ -300,15 +359,15 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
             "AS4 partners registered without encryption certificates: {missing:?}. \
              BDEW AS4-Profil v1.2 §2.2.6.2.2 requires every outbound message to be \
              encrypted with the recipient's EC (BrainpoolP256r1) certificate. \
-             Add --as4-partner-cert GLN=<PEM> (or as4.partner_cert_files in \
+             Add --as4-partner-cert MP-ID=<PEM> (or as4.partner_cert_files in \
              makod.toml) for each partner, or pass --allow-unencrypted-as4 for dev/test."
         );
     }
 
-    // The mirror case: a certificate whose GLN has no endpoint. Nothing consumes
+    // The mirror case: a certificate whose MP-ID has no endpoint. Nothing consumes
     // it, so the operator has configured a partner that cannot be delivered to
     // while the config reads as though they can — which is exactly how a
-    // mistyped GLN presents. The pair is the unit of configuration, so an
+    // mistyped MP-ID presents. The pair is the unit of configuration, so an
     // orphaned half is an error rather than a warning.
     let orphaned: Vec<&str> = cert_mp_ids
         .iter()
@@ -317,9 +376,9 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
         .collect();
     anyhow::ensure!(
         orphaned.is_empty(),
-        "AS4 encryption certificates configured for GLNs with no endpoint: {orphaned:?}. \
-         A certificate without a matching --as4-partner GLN=HTTPS-URL is never used, \
-         and a mistyped GLN looks exactly like this. Add the endpoint, or remove the \
+        "AS4 encryption certificates configured for MP-IDs with no endpoint: {orphaned:?}. \
+         A certificate without a matching --as4-partner MP-ID=HTTPS-URL is never used, \
+         and a mistyped MP-ID looks exactly like this. Add the endpoint, or remove the \
          certificate."
     );
 
@@ -370,9 +429,19 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     for pair in input.maloid_partner {
         let (mp_id, url_str) = pair
             .split_once('=')
-            .ok_or_else(|| anyhow::anyhow!("--maloid-partner: expected GLN=URL, got {pair:?}"))?;
+            .ok_or_else(|| anyhow::anyhow!("--maloid-partner: expected MP-ID=URL, got {pair:?}"))?;
         let url = reqwest::Url::parse(url_str.trim())
             .map_err(|e| anyhow::anyhow!("--maloid-partner: invalid URL {url_str:?}: {e}"))?;
+        // The AS4 partner endpoint two blocks up has always had to be HTTPS;
+        // this one carries the Marktlokation's postal address and its NB/MSB
+        // assignment, and was only checked for parseability.
+        anyhow::ensure!(
+            is_secure_endpoint(&url),
+            "--maloid-partner: the callback URL for {} must use HTTPS (got {url_str:?}). \
+             A MaLo-ID callback carries the Marktlokation's address and its NB/MSB \
+             assignment; it is not sent in the clear.",
+            mp_id.trim(),
+        );
         maloid_partners.insert(mp_id.trim().to_owned(), url);
     }
 
@@ -419,19 +488,19 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
 /// too, which is why they are not buried in the server-start branches.
 pub fn warn_on_degraded_config(input: &PreflightInput<'_>, durable_store: bool) {
     if input.as4_inbound_enabled {
-        // The correct production trust anchor is the BDEW/BNetzA PKI CA
-        // certificate. Falling back to the operator's own certificate accepts
-        // only the operator's own signature — every counterparty is rejected.
+        // Reachable only under `--allow-no-as4-trust-anchor`; the preflight
+        // refuses this configuration otherwise. Restated at boot because the
+        // opt-out is easy to leave in a config file and its effect — no
+        // counterparty can reach us — is otherwise invisible.
         if input
             .as4_trust_anchor_pem
             .is_none_or(|ta| Some(ta) == input.as4_signing_cert_pem)
         {
             tracing::error!(
-                "AS4 trust anchor is the operator's own signing certificate. \
-                 Inbound AS4 messages from all counterparties will be REJECTED because \
-                 their certificates are signed by the BDEW PKI CA, not by this operator. \
-                 Set --as4-trust-anchor-pem / MAKOD_AS4_TRUST_ANCHOR_PEM (or \
-                 as4.trust_anchor_pem_file) to the BDEW/BNetzA PKI CA certificate."
+                "--allow-no-as4-trust-anchor: the AS4 trust anchor is this operator's \
+                 own signing certificate. Inbound AS4 messages from all counterparties \
+                 will be REJECTED because their certificates are signed by the BDEW PKI \
+                 CA, not by this operator. Never run the regulated market this way."
             );
         }
         if input.as4_decryption_key_pem.is_none() {
@@ -486,6 +555,7 @@ mod tests {
             as4_decryption_key_pem: None,
             as4_party_id: None,
             allow_unencrypted_as4: false,
+            allow_no_as4_trust_anchor: false,
             allow_no_as4_signing: true,
             edifact_outbox_webhook_url: None,
             erp_webhook_url: None,
@@ -634,15 +704,15 @@ mod tests {
         preflight(&input).expect("a credentialed marktd client is startable");
     }
 
-    /// The mirror of the missing-certificate case. A certificate whose GLN has
-    /// no endpoint is never used, and a mistyped GLN presents exactly this way.
+    /// The mirror of the missing-certificate case. A certificate whose MP-ID has
+    /// no endpoint is never used, and a mistyped MP-ID presents exactly this way.
     #[test]
     fn a_partner_certificate_without_an_endpoint_is_rejected() {
         let keys = vec!["erp=token".to_owned()];
         let partners = vec!["9900001000002=https://p.example/as4".to_owned()];
         let certs = vec![
             "9900001000002=-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----".to_owned(),
-            // Transposed digits — no endpoint carries this GLN.
+            // Transposed digits — no endpoint carries this MP-ID.
             "9900001000020=-----BEGIN CERTIFICATE-----\nx\n-----END CERTIFICATE-----".to_owned(),
         ];
         let input = PreflightInput {

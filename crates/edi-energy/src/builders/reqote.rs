@@ -7,7 +7,7 @@ use edifact_rs::Writer;
 use crate::AgencyCode;
 use crate::{Error, Release};
 
-use super::{Set, Unset, bytes_to_segments, today_ccyymmdd};
+use super::{Set, Unset, bytes_to_segments, ccyymmddhhmm_utc, now_ccyymmddhhmm};
 
 #[derive(Debug, Clone)]
 struct ReqoteBuilderInner {
@@ -174,7 +174,11 @@ impl<S, R> ReqoteBuilder<S, R> {
         self
     }
 
-    /// Set the document date for DTM+137 (`YYYYMMDD`).
+    /// Set the document date for `DTM+137`.
+    ///
+    /// Accepts `CCYYMMDD` or `CCYYMMDDHHMM`; the segment is always rendered in
+    /// DE 2379 format `303` with the `+00` zone the AHB fixes. Defaults to the
+    /// render-time UTC minute.
     pub fn document_date(mut self, date: impl Into<String>) -> Self {
         self.inner.document_date = Some(date.into());
         self
@@ -198,6 +202,9 @@ impl<S, R> ReqoteBuilder<S, R> {
     }
 
     /// Set `DTM+76` — „Datum zum geplanten Leistungsbeginn“ (`CCYYMMDDHHMM`).
+    ///
+    /// The `+00` zone DE 2379 format `303` requires is appended here, so
+    /// callers pass the minute only.
     ///
     /// **Muss** on the ESA Werteanfrage (REQOTE AHB 1.2 §4.3): `WiM` Teil 2
     /// UC 4.1.2 Nr. 1 has the ESA state its Wunschtermin for the first
@@ -305,11 +312,14 @@ impl<S, R> ReqoteBuilder<S, R> {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, Error> {
+        // `DTM+137` is DE 2379 format `303` on every REQOTE Anwendungsfall the
+        // AHB defines (1.1 §4.2 for PID 35002, §4.3 for 35003), with condition
+        // `[931]` fixing the zone to `+00`.
         let dtm_val = self
             .inner
             .document_date
             .as_deref()
-            .map_or_else(today_ccyymmdd, str::to_owned);
+            .map_or_else(now_ccyymmddhhmm, str::to_owned);
 
         let mut buf = Vec::new();
         let mut w = Writer::new(&mut buf);
@@ -330,10 +340,10 @@ impl<S, R> ReqoteBuilder<S, R> {
             ["REQOTE", "D", "10A", "UN", self.inner.release.as_str()]
         );
         emit_seg!(w, "BGM", code, doc_id);
-        emit_comp!(w, "DTM", ["137", &dtm_val, "102"]);
+        emit_comp!(w, "DTM", ["137", &ccyymmddhhmm_utc(&dtm_val), "303"]);
         // `DTM+76` — geplanter Leistungsbeginn, format 303 (CCYYMMDDHHMMZZZ).
         if let Some(beginn) = &self.inner.leistungsbeginn {
-            emit_comp!(w, "DTM", ["76", beginn, "303"]);
+            emit_comp!(w, "DTM", ["76", &ccyymmddhhmm_utc(beginn), "303"]);
         }
         // `FTX+<4451>+++<C108>` — C108 sits at element position 4 in the
         // EDIFACT directory, with 4453 and C107 unused by this MIG. `FTX+ACB`
