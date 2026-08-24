@@ -49,14 +49,17 @@ fn release_ord() {
         "2.9a < 2.10a (numeric, not lexicographic)"
     );
 
-    // Cross-track comparisons are NOT meaningful; PartialOrd returns None.
+    // Cross-track comparisons carry no BDEW meaning, and `same_track_cmp` is the
+    // API that says so.  `Ord` stays total — it has to agree with `PartialOrd`
+    // or every sorted container is entitled to misbehave.
     let strom = Release::new("S2.1");
     let dotted = Release::new("5.5.3a");
     assert_eq!(
-        strom.partial_cmp(&dotted),
+        strom.same_track_cmp(&dotted),
         None,
-        "S2.1 and 5.5.3a are on different tracks — incomparable"
+        "S2.1 and 5.5.3a are on different tracks — no meaningful order"
     );
+    assert_eq!(strom.partial_cmp(&dotted), Some(strom.cmp(&dotted)));
 }
 
 #[test]
@@ -403,7 +406,7 @@ fn process_context_selects_active_utilmd_strom_release() {
     let before = ProcessContext::for_date(date!(2024 - 09 - 30));
     assert!(
         before
-            .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+            .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
             .is_none(),
         "no Strom UTILMD profile active before 2024-10-01"
     );
@@ -411,28 +414,28 @@ fn process_context_selects_active_utilmd_strom_release() {
     // From 2024-10-01 onward → S1.1a (not S2.1!)
     let s11a_era = ProcessContext::for_date(date!(2025 - 01 - 01));
     let s11a_rel = s11a_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("S1.1a must be active on 2025-01-01");
     assert_eq!(s11a_rel.as_str(), "S1.1a");
 
     // From 2025-06-06 → S1.2 (LFW24 bridging profile)
     let s12_era = ProcessContext::for_date(date!(2025 - 06 - 06));
     let s12_rel = s12_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("S1.2 must be active on 2025-06-06");
     assert_eq!(s12_rel.as_str(), "S1.2");
 
     // From 2025-10-01 → S2.1
     let s21_era = ProcessContext::for_date(date!(2025 - 10 - 01));
     let s21_rel = s21_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("S2.1 must be active on 2025-10-01");
     assert_eq!(s21_rel.as_str(), "S2.1");
 
     // On 2026-09-30 — still S2.1
     let last_day_s21 = ProcessContext::for_date(date!(2026 - 09 - 30));
     let last_rel = last_day_s21
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("S2.1 must be active on 2026-09-30");
     assert_eq!(
         last_rel.as_str(),
@@ -443,14 +446,14 @@ fn process_context_selects_active_utilmd_strom_release() {
     // From 2026-10-01 → S2.2
     let s22_era = ProcessContext::for_date(date!(2026 - 10 - 01));
     let s22_rel = s22_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("S2.2 must be active on 2026-10-01");
     assert_eq!(s22_rel.as_str(), "S2.2");
 
     // Far future still returns S2.2 (latest Strom profile)
     let far_future = ProcessContext::for_date(date!(2030 - 01 - 01));
     let future_rel = far_future
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("some Strom UTILMD profile must be active");
     assert_eq!(
         future_rel.as_str(),
@@ -477,7 +480,7 @@ fn process_context_selects_active_utilmd_gas_release() {
     let before = ProcessContext::for_date(date!(2024 - 09 - 30));
     assert!(
         before
-            .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
+            .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
             .is_none(),
         "no Gas UTILMD profile active before 2024-10-01"
     );
@@ -485,21 +488,21 @@ fn process_context_selects_active_utilmd_gas_release() {
     // From 2024-10-01 → G1.0a (not G1.1!)
     let g10a_era = ProcessContext::for_date(date!(2025 - 06 - 01));
     let g10a_rel = g10a_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
         .expect("G1.0a must be active on 2025-06-01");
     assert_eq!(g10a_rel.as_str(), "G1.0a");
 
     // From 2025-10-01 → G1.1
     let g11_era = ProcessContext::for_date(date!(2025 - 10 - 01));
     let g11_rel = g11_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
         .expect("G1.1 must be active on 2025-10-01");
     assert_eq!(g11_rel.as_str(), "G1.1");
 
     // From 2026-10-01 → G1.2
     let g12_era = ProcessContext::for_date(date!(2026 - 10 - 01));
     let g12_rel = g12_era
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
         .expect("G1.2 must be active on 2026-10-01");
     assert_eq!(g12_rel.as_str(), "G1.2");
 }
@@ -515,10 +518,10 @@ fn utilmd_gas_and_strom_tracks_are_independent() {
     let ctx = ProcessContext::for_date(date!(2025 - 01 - 01));
 
     let strom = ctx
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Strom)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Strom)
         .expect("Strom S2.1 must be active");
     let gas = ctx
-        .active_release_for_track(MessageType::Utilmd, &ReleaseTrack::Gas)
+        .active_release_for_track(MessageType::Utilmd, ReleaseTrack::Gas)
         .expect("Gas G1.1 must be active");
 
     // Track prefix guarantees they are different releases
@@ -1987,4 +1990,32 @@ fn report_serializes_to_json() {
         json.contains("\"totalIssues\""),
         "JSON must contain 'totalIssues' key"
     );
+}
+
+/// Every rule ID this crate emits must classify to an origin.
+///
+/// The classifier is a prefix table, so a rule ID that matches nothing reports
+/// `rule_origin: None` and disappears from any dashboard that groups by layer —
+/// silently, because `None` is also the honest answer for a caller's own rule.
+#[test]
+fn every_rule_id_the_crate_emits_classifies() {
+    use edi_energy::RuleOrigin;
+
+    for (rule_id, expected) in [
+        ("MIG-DTM-001", RuleOrigin::Mig),
+        ("AHB-13001-STS-I0", RuleOrigin::Ahb),
+        ("AHB-SKIP-NO-PID", RuleOrigin::Ahb),
+        ("SEM-UTILMD-001", RuleOrigin::Semantic),
+        ("PARSE-001", RuleOrigin::Parse),
+        ("DIR-001", RuleOrigin::Directory),
+        ("CUSTOM-001", RuleOrigin::Custom),
+        ("UNKNOWN-MSG-TYPE", RuleOrigin::Unvalidated),
+    ] {
+        assert_eq!(
+            edi_energy::RuleOrigin::classify(rule_id),
+            Some(expected),
+            "{rule_id} must classify to {expected}"
+        );
+    }
+    assert_eq!(edi_energy::RuleOrigin::classify("EE-PID-001"), None);
 }

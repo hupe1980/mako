@@ -84,11 +84,10 @@ pub(super) fn render_utilmd(
     } else {
         ReleaseTrack::Strom
     };
-    let release = active_release(MessageType::Utilmd, &track).ok_or_else(|| {
-        RenderError::NoActiveProfile {
+    let release =
+        active_release(MessageType::Utilmd, track).ok_or_else(|| RenderError::NoActiveProfile {
             message_type: mt.into(),
-        }
-    })?;
+        })?;
 
     let edifact_pid = Pruefidentifikator::new(pid).map_err(|e| RenderError::MissingField {
         message_type: mt.into(),

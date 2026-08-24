@@ -988,7 +988,7 @@ impl MakodMcpHandler {
 
         ContentBlock::json(serde_json::json!({
             "as_of":                 today.to_string(),
-            "transition_grace_days": registry.transition_grace_days(),
+            "receive_tolerance_days": registry.receive_tolerance_days(),
             "types_in_transition":   in_transition,
             "message_types":         types,
             "note": "Adapter coverage itself is enforced at startup — makod panics if a \

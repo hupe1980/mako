@@ -124,7 +124,7 @@ pub trait Profile: Send + Sync {
     /// The validator is constructed once (at first access) and stored in a
     /// `static LazyLock` inside each generated profile module.  Returning a
     /// `&'static` reference eliminates per-call allocation on hot validation
-    /// paths (resolves.
+    /// paths.
     ///
     /// Used by Layer 2 validation in the validation engine.
     fn directory_validator(&self) -> &'static DirectoryValidator;
@@ -150,12 +150,23 @@ const _: () = {
 
 // ── TransitionState ───────────────────────────────────────────────────────────
 
-/// Number of calendar days on each side of a release-boundary date during which
-/// both the outgoing and incoming format versions are accepted simultaneously.
+/// Default receive tolerance, in calendar days, for a format that has expired.
 ///
-/// This reflects the Übergangsfrist (transition grace period) specified in
-/// GPKE §10 and `WiM` §12 (7 calendar days).
-pub const TRANSITION_GRACE_DAYS: i64 = 7;
+/// **Zero, because EDIFACT has no transition window.** Allgemeine Festlegungen
+/// 6.1 §2.5 gives the EDIFACT formats a single *Anwendungszeitpunkt* — the 1st
+/// of April or October — and no overlap around it: before that instant the old
+/// format applies, from it the new one does.
+///
+/// The 15-*Werktage* Übergangszeitraum in §8.5 is the **XML** rule and does not
+/// transfer: it begins *at* the Anwendungszeitpunkt, counts Werktage rather than
+/// calendar days, and selects the version by the *Erfüllungsdatum* stated in the
+/// message rather than by when it was sent.
+///
+/// [`ReleaseRegistry::with_receive_tolerance_days`] raises this for operators who
+/// choose to accept a late-arriving message in the superseded format — a local
+/// inbound policy, not a licence to send late, and it extends only the trailing
+/// edge.
+pub const DEFAULT_RECEIVE_TOLERANCE_DAYS: i64 = 0;
 
 /// Name of the stand-in AHB rule pack returned for an unregistered
 /// Prüfidentifikator.
@@ -198,15 +209,19 @@ pub enum TransitionState<'r> {
         /// The currently active profile.
         profile: &'r dyn Profile,
     },
-    /// Two profiles overlap on this date (Übergangsfrist / transition grace period).
+    /// The successor has taken effect and the predecessor is still inside the
+    /// configured receive tolerance.
     ///
-    /// Both `outgoing` and `incoming` must be accepted for incoming messages.
-    /// For outgoing messages prefer `incoming` (the new standard), but `outgoing`
-    /// is still conformant until the grace period ends.
+    /// Send `incoming`: it is the format in force. Accept either on receipt,
+    /// which is the whole point of a non-zero tolerance.
+    ///
+    /// With the default tolerance of zero this state never occurs, because
+    /// EDIFACT changes at a single Anwendungszeitpunkt — see
+    /// [`DEFAULT_RECEIVE_TOLERANCE_DAYS`].
     Transition {
-        /// The profile expiring soon (`valid_until + TRANSITION_GRACE_DAYS ≥ date`).
+        /// The superseded profile, still inside `valid_until + tolerance`.
         outgoing: &'r dyn Profile,
-        /// The profile newly taking effect (`valid_from - TRANSITION_GRACE_DAYS ≤ date`).
+        /// The profile in force from its `valid_from`.
         incoming: &'r dyn Profile,
     },
     /// No profile with `valid_from ≤ date` exists for this `(type, track)`.
@@ -245,13 +260,11 @@ pub struct ReleaseRegistry {
     /// The list is sorted ascending by `valid_from` so the date-aware selector can
     /// pick the correct entry efficiently.
     index: std::collections::HashMap<MessageType, std::collections::HashMap<Box<str>, Vec<usize>>>,
-    /// Number of calendar days on each side of a release-boundary date during
-    /// which both the outgoing and incoming versions are accepted simultaneously.
+    /// Extra calendar days past `valid_until` during which a superseded format
+    /// is still accepted on receipt.
     ///
-    /// Defaults to [`TRANSITION_GRACE_DAYS`] (7).  Override via
-    /// [`ReleaseRegistry::with_transition_grace_days`] when contract or test
-    /// requirements differ from the BDEW default.
-    transition_grace_days: i64,
+    /// Defaults to [`DEFAULT_RECEIVE_TOLERANCE_DAYS`] (0 — the BDEW rule).
+    receive_tolerance_days: i64,
 }
 
 static REGISTRY: OnceLock<std::sync::Arc<ReleaseRegistry>> = OnceLock::new();
@@ -289,34 +302,34 @@ impl ReleaseRegistry {
         Self {
             profiles,
             index,
-            transition_grace_days: TRANSITION_GRACE_DAYS,
+            receive_tolerance_days: DEFAULT_RECEIVE_TOLERANCE_DAYS,
         }
     }
 
-    /// Override the grace period for this registry.
+    /// Accept a superseded format for `days` past its `valid_until`.
     ///
-    /// The returned registry is independent of the global singleton.  Use this
-    /// when building a [`crate::Platform`] for a specific tenant or test scenario
-    /// that requires a different Übergangsfrist.
+    /// The returned registry is independent of the global singleton. Use this
+    /// for a tenant whose contract tolerates late-arriving messages in the old
+    /// format — a receiving policy, not a BDEW rule; see
+    /// [`DEFAULT_RECEIVE_TOLERANCE_DAYS`] for why the default is zero.
     ///
     /// # Example
     /// ```rust,no_run
     /// use edi_energy::registry::ReleaseRegistry;
     ///
-    /// // Clone the global registry and apply a custom 14-day grace period.
-    /// let custom = ReleaseRegistry::global().clone().with_transition_grace_days(14);
-    /// assert_eq!(custom.transition_grace_days(), 14);
+    /// let lenient = ReleaseRegistry::global().clone().with_receive_tolerance_days(3);
+    /// assert_eq!(lenient.receive_tolerance_days(), 3);
     /// ```
     #[must_use]
-    pub fn with_transition_grace_days(mut self, days: i64) -> Self {
-        self.transition_grace_days = days;
+    pub fn with_receive_tolerance_days(mut self, days: i64) -> Self {
+        self.receive_tolerance_days = days;
         self
     }
 
-    /// The configured transition grace period in calendar days.
+    /// The configured receive tolerance in calendar days.
     #[must_use]
-    pub fn transition_grace_days(&self) -> i64 {
-        self.transition_grace_days
+    pub fn receive_tolerance_days(&self) -> i64 {
+        self.receive_tolerance_days
     }
 
     /// Return a reference to the global registry.
@@ -595,9 +608,8 @@ impl ReleaseRegistry {
     /// Return the semantically greatest (latest) release for `message_type`
     /// within the same release track as `reference`.
     ///
-    /// Only profiles whose release kind matches `reference.kind()` are
-    /// considered, avoiding the undefined cross-track ordering that
-    /// [`latest_for_track`][Self::latest_for_track] can produce.
+    /// Only profiles on `reference`'s own track are considered, so the result
+    /// never depends on the cross-track order, which carries no BDEW meaning.
     ///
     /// Returns `None` when no profiles on the same track are registered.
     #[must_use]
@@ -623,9 +635,9 @@ impl ReleaseRegistry {
     /// for example UTILMD Strom (`ReleaseTrack::Strom`) and UTILMD Gas
     /// (`ReleaseTrack::Gas`).
     ///
-    /// Resolves  uses the explicit `ReleaseTrack` enum for dispatch
-    /// instead of string-prefix matching, ensuring forward-compatibility when
-    /// BDEW introduces new tracks with codes that share prefixes.
+    /// Dispatch uses the explicit [`ReleaseTrack`](crate::ReleaseTrack) enum
+    /// rather than string-prefix matching, so a future BDEW track whose codes
+    /// share a prefix with an existing one cannot be silently folded into it.
     ///
     /// Returns the profile with the greatest `valid_from ≤ date` among those
     /// on the given track.  Returns `None` when no matching profile is found.
@@ -634,13 +646,13 @@ impl ReleaseRegistry {
         &self,
         message_type: MessageType,
         date: time::Date,
-        track: &crate::release::ReleaseTrack,
+        track: crate::release::ReleaseTrack,
     ) -> Option<&dyn Profile> {
         // Deterministic tie-breaking: latest valid_from wins; release string as secondary key.
         self.profiles
             .iter()
             .filter(|p| p.message_type() == message_type)
-            .filter(|p| &p.release().track() == track)
+            .filter(|p| p.release().track() == track)
             .filter_map(|p| p.valid_from().map(|vf| (vf, *p)))
             .filter(|(vf, _)| *vf <= date)
             .max_by(|(va, pa), (vb, pb)| {
@@ -650,16 +662,15 @@ impl ReleaseRegistry {
             .map(|(_, p)| p)
     }
 
-    /// Determine whether a message with the given wire `release` code is normatively
-    /// acceptable on `date`, considering the [`TRANSITION_GRACE_DAYS`] window.
+    /// Determine whether a message with the given wire `release` code is
+    /// acceptable on `date`.
     ///
-    /// Returns `true` when:
-    /// - The profile for `(message_type, release)` has `valid_from ≤ date` **and**
-    ///   either no `valid_until` or `valid_until + TRANSITION_GRACE_DAYS ≥ date`.
-    /// - The profile is not yet expired (past its grace window).
+    /// Returns `true` when a profile for `(message_type, release)` exists and
+    /// `date` falls in `[valid_from, valid_until + receive_tolerance_days]`.
     ///
-    /// Returns `false` when no such profile is registered or the profile is
-    /// outside the acceptable date window.
+    /// The leading edge is hard — Allgemeine Festlegungen 6.1 §2.5 puts the
+    /// EDIFACT change at a single Anwendungszeitpunkt — so a format is never
+    /// acceptable before it takes effect, whatever the tolerance is set to.
     #[must_use]
     pub fn is_acceptable_on(
         &self,
@@ -674,13 +685,12 @@ impl ReleaseRegistry {
             // No date information — assume always valid (legacy profile).
             return true;
         };
-        if valid_from > date {
+        if date < valid_from {
             return false;
         }
         if let Some(valid_until) = profile.valid_until() {
-            // Accept during the grace period: valid_until + transition_grace_days.
-            let grace_end = valid_until + time::Duration::days(self.transition_grace_days);
-            if date > grace_end {
+            let tolerance_end = valid_until + time::Duration::days(self.receive_tolerance_days);
+            if date > tolerance_end {
                 return false;
             }
         }
@@ -689,37 +699,38 @@ impl ReleaseRegistry {
 
     /// Return the [`TransitionState`] for `(message_type, date)`.
     ///
-    /// When `track_prefix` is `Some`, only profiles whose release code begins
-    /// with that prefix are considered (e.g. `"S"` for UTILMD Strom).
+    /// When `track` is `Some`, only profiles on that release track are
+    /// considered (e.g. [`ReleaseTrack::Strom`](crate::ReleaseTrack) for UTILMD
+    /// Strom). This takes the typed track rather than a string prefix because
+    /// prefix matching is the failure mode [`ReleaseTrack`](crate::ReleaseTrack)
+    /// was introduced to remove — `"S"` also prefixes any future BDEW code that
+    /// happens to start with it.
     ///
     /// # Algorithm
     ///
-    /// 1. Find the profile with the greatest `valid_from ≤ date` — this is the
-    ///    "current" profile.
-    /// 2. Check whether the current profile is in its outgoing grace window:
-    ///    `valid_until` is set and `valid_until + TRANSITION_GRACE_DAYS ≥ date`.
-    /// 3. If so, look for a successor profile whose `valid_from` is within the
-    ///    grace window: `valid_from - TRANSITION_GRACE_DAYS ≤ date ≤ valid_from`.
-    /// 4. Return `Transition { outgoing, incoming }` when both conditions hold,
-    ///    `Stable { profile }` otherwise.
+    /// 1. Find the profile with the greatest `valid_from ≤ date` — the one in
+    ///    force.
+    /// 2. Find its predecessor: the profile whose `valid_until + tolerance` has
+    ///    not yet passed on `date`.
+    /// 3. Return `Transition { outgoing, incoming }` when such a predecessor
+    ///    exists, `Stable { profile }` otherwise.
     ///
-    /// # Panics
-    ///
-    /// Panics if a profile whose `valid_from` was verified non-`None` in step 1
-    /// returns `None` in step 3 (should be unreachable).
+    /// With the default zero tolerance step 2 never matches, so this reports
+    /// `Stable` on every date a profile is in force — which is what Allgemeine
+    /// Festlegungen §2.5 describes.
     #[must_use]
     pub fn transition_state(
         &self,
         message_type: MessageType,
         date: time::Date,
-        track_prefix: Option<&str>,
+        track: Option<crate::ReleaseTrack>,
     ) -> TransitionState<'_> {
         // Candidate profiles restricted to the given track (if any).
         let candidates: Vec<&dyn Profile> = self
             .profiles
             .iter()
             .filter(|p| p.message_type() == message_type)
-            .filter(|p| track_prefix.is_none_or(|pfx| p.release().as_str().starts_with(pfx)))
+            .filter(|p| track.is_none_or(|t| p.release().track() == t))
             .copied()
             .collect();
 
@@ -739,35 +750,26 @@ impl ReleaseRegistry {
             return TransitionState::None;
         };
 
-        // Step 2: is the current profile in its outgoing grace window?
-        let in_outgoing_grace = current.valid_until().is_some_and(|vu| {
-            let grace_end = vu + time::Duration::days(self.transition_grace_days);
-            date >= vu && date <= grace_end
-        });
-
-        if !in_outgoing_grace {
-            return TransitionState::Stable { profile: current };
-        }
-
-        // Step 3: look for a successor whose valid_from is within the grace window.
-        let current_valid_from = current.valid_from().unwrap();
-        let incoming = candidates
+        // Step 2: is a superseded profile still inside the receive tolerance?
+        // The search runs backwards from the profile in force, because the
+        // overlap the tolerance creates is always trailing: a format is never
+        // acceptable before its own Anwendungszeitpunkt.
+        let tolerance = time::Duration::days(self.receive_tolerance_days);
+        let current_valid_from = current.valid_from().unwrap_or(date);
+        let outgoing = candidates
             .iter()
-            .filter_map(|p| p.valid_from().map(|vf| (vf, *p)))
-            // Must be strictly after the current profile.
-            .filter(|(vf, _)| *vf > current_valid_from)
-            // Its valid_from must fall within date ± GRACE_DAYS.
-            .filter(|(vf, _)| {
-                let earliest = *vf - time::Duration::days(self.transition_grace_days);
-                date >= earliest
+            .filter(|p| p.valid_from().is_some_and(|vf| vf < current_valid_from))
+            .filter(|p| {
+                p.valid_until()
+                    .is_some_and(|vu| vu < date && date <= vu + tolerance)
             })
-            .min_by_key(|(vf, _)| *vf)
-            .map(|(_, p)| p);
+            .max_by_key(|p| p.valid_from())
+            .copied();
 
-        match incoming {
-            Some(incoming) => TransitionState::Transition {
-                outgoing: current,
-                incoming,
+        match outgoing {
+            Some(outgoing) => TransitionState::Transition {
+                outgoing,
+                incoming: current,
             },
             None => TransitionState::Stable { profile: current },
         }
@@ -898,7 +900,7 @@ impl ProcessContext {
     pub fn active_release_for_track(
         &self,
         message_type: MessageType,
-        track: &crate::release::ReleaseTrack,
+        track: crate::release::ReleaseTrack,
     ) -> Option<&Release> {
         self.registry
             .profile_for_date_and_track(message_type, self.date, track)
@@ -911,7 +913,7 @@ impl ProcessContext {
     pub fn active_profile_for_track(
         &self,
         message_type: MessageType,
-        track: &crate::release::ReleaseTrack,
+        track: crate::release::ReleaseTrack,
     ) -> Option<&dyn Profile> {
         self.registry
             .profile_for_date_and_track(message_type, self.date, track)
@@ -919,9 +921,8 @@ impl ProcessContext {
 
     /// Return the [`TransitionState`] for `message_type` on this context's date.
     ///
-    /// When `track_prefix` is `Some`, only profiles on that release track are
-    /// considered (e.g. `Some("S")` for UTILMD Strom, `Some("G")` for Gas).
-    /// Pass `None` for message types with a single release track.
+    /// When `track` is `Some`, only profiles on that release track are
+    /// considered. Pass `None` for message types with a single release track.
     ///
     /// See [`TransitionState`] for the three possible outcomes and their
     /// handling implications.
@@ -929,10 +930,10 @@ impl ProcessContext {
     pub fn transition_state(
         &self,
         message_type: MessageType,
-        track_prefix: Option<&str>,
+        track: Option<crate::ReleaseTrack>,
     ) -> TransitionState<'_> {
         self.registry
-            .transition_state(message_type, self.date, track_prefix)
+            .transition_state(message_type, self.date, track)
     }
 
     /// Check whether a message carrying the given wire `release` code is

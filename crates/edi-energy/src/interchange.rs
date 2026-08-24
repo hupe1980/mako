@@ -57,66 +57,14 @@ impl InterchangeHeader {
     /// Used to attach envelope metadata to [`EdiEnergyReport`] so a single
     /// report carries both the interchange routing data (sender/receiver/control
     /// reference) and the validation findings.
-    #[cfg(any(
-        feature = "utilmd",
-        feature = "mscons",
-        feature = "aperak",
-        feature = "contrl",
-        feature = "invoic",
-        feature = "remadv",
-        feature = "orders",
-        feature = "iftsta",
-        feature = "insrpt",
-        feature = "reqote",
-        feature = "partin",
-        feature = "ordchg",
-        feature = "ordrsp",
-        feature = "quotes",
-        feature = "comdis",
-        feature = "pricat",
-        feature = "utilts",
-    ))]
+    #[cfg(any_message)]
     #[must_use]
     pub(crate) fn from_edifact_envelope(env: edifact_rs::InterchangeEnvelope) -> Self {
-        use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
-
-        // Parse YYMMDD (6-digit) or YYYYMMDD (8-digit) date + HHMM or HHMMSS time.
-        let transmission_datetime = (|| -> Option<OffsetDateTime> {
-            let date_str = &env.date;
-            let time_str = env.time.as_deref().unwrap_or("");
-
-            let d: Date = match date_str.len() {
-                6 => {
-                    let yy: i32 = date_str[0..2].parse().ok()?;
-                    let mm: u8 = date_str[2..4].parse().ok()?;
-                    let dd: u8 = date_str[4..6].parse().ok()?;
-                    Date::from_calendar_date(2000 + yy, Month::try_from(mm).ok()?, dd).ok()?
-                }
-                8 => {
-                    let yyyy: i32 = date_str[0..4].parse().ok()?;
-                    let mm: u8 = date_str[4..6].parse().ok()?;
-                    let dd: u8 = date_str[6..8].parse().ok()?;
-                    Date::from_calendar_date(yyyy, Month::try_from(mm).ok()?, dd).ok()?
-                }
-                _ => return None,
-            };
-            let t: Time = match time_str.len() {
-                4 => {
-                    let hh: u8 = time_str[0..2].parse().ok()?;
-                    let mi: u8 = time_str[2..4].parse().ok()?;
-                    Time::from_hms(hh, mi, 0).ok()?
-                }
-                6 => {
-                    let hh: u8 = time_str[0..2].parse().ok()?;
-                    let mi: u8 = time_str[2..4].parse().ok()?;
-                    let ss: u8 = time_str[4..6].parse().ok()?;
-                    Time::from_hms(hh, mi, ss).ok()?
-                }
-                // Time field may be absent; default to midnight
-                _ => Time::MIDNIGHT,
-            };
-            Some(OffsetDateTime::new_utc(d, t).to_offset(UtcOffset::UTC))
-        })();
+        // The same reader the `UNB` parse path uses.  A second copy here drifted
+        // into treating an absent time as midnight while the other rejected the
+        // record outright, and both indexed by byte offset into wire strings.
+        let transmission_datetime =
+            crate::parse::parse_unb_datetime(&env.date, env.time.as_deref().unwrap_or("0000"));
 
         let syntax_version: u8 = env.syntax_version.parse().unwrap_or(3);
 
@@ -182,26 +130,24 @@ impl MessageEnvelope {
     /// Validate the message using the profile registry.
     ///
     /// Delegates to [`EdiEnergyMessage::validate`] for all known message types.
-    /// For [`AnyMessage::Unknown`] this returns `Ok(report)` where the report
-    /// contains a single `Warning` with rule ID `"UNKNOWN-MSG-TYPE"`, consistent
-    /// with the behaviour of `EdiEnergyMessage::validate_against` on unknown variants.
+    /// For [`AnyMessage::Unknown`] the report carries a single **error** with
+    /// rule ID `"UNKNOWN-MSG-TYPE"` and `is_valid()` is `false` — nothing was
+    /// checked, so nothing may be reported as conformant.
     ///
-    /// **Rationale for returning `Ok` instead of `Err`:** an interchange may
-    /// legitimately contain message types that are not compiled into the current
-    /// binary (e.g. when only the `mscons` feature is enabled).  Returning `Err`
-    /// would abort validation of the entire interchange on the first unknown message,
-    /// preventing valid messages later in the interchange from being validated.
-    /// Callers that want strict unknown-type rejection can check
-    /// `report.is_valid() && report.warnings().is_empty()` after the fact.
+    /// **Why `Ok` and not `Err`:** an interchange may legitimately contain
+    /// message types this build does not compile in. Returning `Err` would abort
+    /// the whole interchange on the first one and hide the verdict for every
+    /// message after it. The failure is reported per message instead, in the
+    /// report.
     ///
     /// # Errors
     ///
     /// Returns [`crate::Error::ProfileNotFound`] when no profile matches the message's
     /// release code (known message type, unregistered release).
     pub fn validate(&self) -> Result<EdiEnergyReport, crate::Error> {
-        // Delegate to the EdiEnergyMessage trait impl for ALL variants, including
-        // Unknown.  The Unknown impl returns Ok(report) with a warning, which is
-        // exactly the consistent behaviour we want here (resolves.
+        // Delegate for every variant, `Unknown` included: its impl returns
+        // `Ok(report)` with an error inside, which is exactly the per-message
+        // reporting this method promises.
         EdiEnergyMessage::validate(&self.message)
     }
 

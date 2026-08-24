@@ -24,6 +24,7 @@ use crate::{AnyMessage, Error, MessageType};
 /// Valid BDEW release codes are ≤ 16 ASCII alphanumeric characters plus `.`.
 /// Anything outside that set could contain log-injection sequences, ANSI escape
 /// codes, or GDPR-sensitive data that must not appear in operator logs.
+#[cfg(feature = "tracing")]
 fn sanitize_release_code(s: &str) -> std::borrow::Cow<'_, str> {
     const MAX_LEN: usize = 16;
     if s.len() <= MAX_LEN && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '.') {
@@ -318,7 +319,7 @@ pub(crate) fn parse_with_registry(
         })
         .unwrap_or_default();
 
-    let message = dispatch_message(segments, registry)?;
+    let message = dispatch_message_on_date(segments, registry, config.reference_date)?;
     check_interchange_party_identity(&unb_sender, &unb_receiver, &message, 0)?;
     Ok(message)
 }
@@ -365,6 +366,7 @@ pub(crate) fn parse_interchange_impl(
 ) -> impl Iterator<Item = Result<AnyMessage, Error>> {
     let limit = config.max_messages_per_interchange;
     let per_msg_limit = config.max_segments_per_message;
+    let reference_date = config.reference_date;
     let cfg = config.to_reader_config();
 
     // Streaming counterpart of `decode_repertoire`: buffer only far enough to
@@ -400,7 +402,7 @@ pub(crate) fn parse_interchange_impl(
                             return Err(Error::TooManySegmentsInMessage { limit: lim, actual });
                         }
                     }
-                    dispatch_message(window.segments, &registry)
+                    dispatch_message_on_date(window.segments, &registry, reference_date)
                 })
         }))
 }
@@ -432,7 +434,8 @@ pub(crate) fn parse_interchange_buffered_impl(
     registry: std::sync::Arc<crate::registry::ReleaseRegistry>,
 ) -> Result<(crate::interchange::InterchangeHeader, InterchangeIter), Error> {
     let cfg = config.to_reader_config();
-    let segments: Vec<OwnedSegment> = from_bufread_stream_with_config(BufReader::new(reader), cfg)
+    let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
+    let segments: Vec<OwnedSegment> = from_bufread_stream_with_config(BufReader::new(decoded), cfg)
         .collect::<Result<_, _>>()
         .map_err(Error::Parse)?;
 
@@ -467,6 +470,7 @@ pub(crate) fn parse_interchange_buffered_impl(
         unz_ref,
         unz_checked: false,
         done: false,
+        reference_date: config.reference_date,
     };
 
     Ok((header, iter))
@@ -571,11 +575,19 @@ impl Parser {
     /// Returns `Err` on I/O errors, EDIFACT syntax errors, or unknown message type.
     pub fn parse_reader(&self, reader: impl Read) -> Result<AnyMessage, Error> {
         let cfg = self.config.to_reader_config();
+        // Transcode from the declared repertoire, as the byte-slice paths do:
+        // reading a `UNOC:3` interchange as UTF-8 rejects any message with an
+        // umlaut in a party name, which is most of them.
+        let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
         let segments: Vec<OwnedSegment> =
-            from_bufread_stream_with_config(BufReader::new(reader), cfg)
+            from_bufread_stream_with_config(BufReader::new(decoded), cfg)
                 .collect::<Result<_, _>>()
                 .map_err(Error::Parse)?;
-        dispatch_message(segments, crate::registry::ReleaseRegistry::global())
+        dispatch_message_on_date(
+            segments,
+            crate::registry::ReleaseRegistry::global(),
+            self.config.reference_date,
+        )
     }
 
     /// Parse only the UNH/BGM envelope fields from a byte slice, without
@@ -678,8 +690,9 @@ impl Parser {
         reader: impl Read,
     ) -> Result<crate::interchange::ParsedInterchange, Error> {
         let reader_cfg = self.config.to_reader_config();
+        let decoded = edifact_rs::decode_reader(BufReader::new(reader)).map_err(Error::Parse)?;
         let segments: Vec<OwnedSegment> =
-            from_bufread_stream_with_config(BufReader::new(reader), reader_cfg)
+            from_bufread_stream_with_config(BufReader::new(decoded), reader_cfg)
                 .collect::<Result<_, _>>()
                 .map_err(Error::Parse)?;
         parse_interchange_full_from_segments(segments, &self.config)
@@ -711,6 +724,7 @@ pub struct InterchangeIter {
     unz_ref: Option<String>,
     unz_checked: bool,
     done: bool,
+    reference_date: Option<time::Date>,
 }
 
 impl Iterator for InterchangeIter {
@@ -737,7 +751,16 @@ impl Iterator for InterchangeIter {
 
             let result = (|| {
                 let window = window_result.map_err(Error::Parse)?;
-                let message = dispatch_message(window.segments, &self.registry)?;
+                let message =
+                    dispatch_message_on_date(window.segments, &self.registry, self.reference_date)?;
+                // §2.13 is an authorisation boundary, so it holds on every path
+                // that yields a message.
+                check_interchange_party_identity(
+                    self.header.sender_id.as_ref(),
+                    self.header.receiver_id.as_ref(),
+                    &message,
+                    index,
+                )?;
                 Ok(crate::interchange::MessageEnvelope {
                     message,
                     header: self.header.clone(),
@@ -936,7 +959,7 @@ fn parse_interchange_full_from_segments_with_registry(
             }
         }
         let window = window_result.map_err(Error::Parse)?;
-        let message = dispatch_message(window.segments, &registry)?;
+        let message = dispatch_message_on_date(window.segments, &registry, config.reference_date)?;
         messages.push(MessageEnvelope {
             message,
             header: header.clone(),
@@ -981,46 +1004,62 @@ fn parse_interchange_full_from_segments_with_registry(
 /// Parse a UNB S004 date+time into an `OffsetDateTime`.
 ///
 /// EDIFACT date format: `YYMMDD` or `YYYYMMDD`; time format: `HHMM` or `HHMMSS`.
-fn parse_unb_datetime(date: &str, time: &str) -> Option<time::OffsetDateTime> {
-    use time::{Date, Month, OffsetDateTime, Time, UtcOffset};
+///
+/// Digits are verified before anything is sliced: these strings come from the
+/// wire, and a byte-index split like `&date[0..2]` panics inside a multi-byte
+/// character — `"aé345"` is six bytes and takes the `YYMMDD` branch.
+pub(crate) fn parse_unb_datetime(date: &str, time: &str) -> Option<time::OffsetDateTime> {
+    use time::{Date, Month, PrimitiveDateTime, Time, UtcOffset};
+
+    fn digits(s: &str, len: usize) -> Option<&str> {
+        (s.len() == len && s.bytes().all(|b| b.is_ascii_digit())).then_some(s)
+    }
 
     let (year, month_n, day) = match date.len() {
+        // YYMMDD — YY is 20YY, which BDEW interchanges have used since 2000.
         6 => {
-            // YYMMDD — interpret YY as 20YY (valid for 2000–2099)
-            let yy: i32 = date[0..2].parse().ok()?;
-            let mm: u8 = date[2..4].parse().ok()?;
-            let dd: u8 = date[4..6].parse().ok()?;
-            (2000 + yy, mm, dd)
+            let d = digits(date, 6)?;
+            (
+                2000 + d[0..2].parse::<i32>().ok()?,
+                d[2..4].parse::<u8>().ok()?,
+                d[4..6].parse::<u8>().ok()?,
+            )
         }
         8 => {
-            let yyyy: i32 = date[0..4].parse().ok()?;
-            let mm: u8 = date[4..6].parse().ok()?;
-            let dd: u8 = date[6..8].parse().ok()?;
-            (yyyy, mm, dd)
+            let d = digits(date, 8)?;
+            (
+                d[0..4].parse::<i32>().ok()?,
+                d[4..6].parse::<u8>().ok()?,
+                d[6..8].parse::<u8>().ok()?,
+            )
         }
         _ => return None,
     };
 
-    let month = Month::try_from(month_n).ok()?;
-    let d = Date::from_calendar_date(year, month, day).ok()?;
+    let d = Date::from_calendar_date(year, Month::try_from(month_n).ok()?, day).ok()?;
 
     let (hh, mi, ss) = match time.len() {
         4 => {
-            let hh: u8 = time[0..2].parse().ok()?;
-            let mi: u8 = time[2..4].parse().ok()?;
-            (hh, mi, 0u8)
+            let t = digits(time, 4)?;
+            (
+                t[0..2].parse::<u8>().ok()?,
+                t[2..4].parse::<u8>().ok()?,
+                0u8,
+            )
         }
         6 => {
-            let hh: u8 = time[0..2].parse().ok()?;
-            let mi: u8 = time[2..4].parse().ok()?;
-            let ss: u8 = time[4..6].parse().ok()?;
-            (hh, mi, ss)
+            let t = digits(time, 6)?;
+            (
+                t[0..2].parse::<u8>().ok()?,
+                t[2..4].parse::<u8>().ok()?,
+                t[4..6].parse::<u8>().ok()?,
+            )
         }
         _ => return None,
     };
 
     let t = Time::from_hms(hh, mi, ss).ok()?;
-    Some(OffsetDateTime::new_utc(d, t).replace_offset(UtcOffset::UTC))
+    Some(PrimitiveDateTime::new(d, t).assume_offset(UtcOffset::UTC))
 }
 
 // ── Dispatch ─────────────────────────────────────────────────────────────────
@@ -1030,6 +1069,15 @@ fn parse_unb_datetime(date: &str, time: &str) -> Option<time::OffsetDateTime> {
 pub(crate) fn dispatch_message(
     segments: Vec<OwnedSegment>,
     registry: &crate::registry::ReleaseRegistry,
+) -> Result<AnyMessage, Error> {
+    dispatch_message_on_date(segments, registry, None)
+}
+
+/// `dispatch_message`, recording the date `validate()` will resolve profiles at.
+pub(crate) fn dispatch_message_on_date(
+    segments: Vec<OwnedSegment>,
+    registry: &crate::registry::ReleaseRegistry,
+    reference_date: Option<time::Date>,
 ) -> Result<AnyMessage, Error> {
     // Locate the UNH segment (always the second segment after UNB).
     // Extract all needed strings before releasing the borrow so `segments` can
@@ -1052,45 +1100,13 @@ pub(crate) fn dispatch_message(
         (message_ref, msg_type_code, assoc_code)
     };
 
-    // Prüfidentifikator extraction: look up the profile to determine whether
-    // this message type stores its PID in BGM element 1 (DE 1004) or in a
-    // top-level RFF+Z13 segment.  The strategy is driven by the profile
-    // registry so that no message-type list needs to be maintained here.
-    //
-    // Both locations are tried, the profile's declared one first. `SG1 RFF+Z13`
-    // is where the AHBs put it — every BGM DE 1004 row in the MSCONS, REQOTE,
-    // ORDERS, ORDRSP, ORDCHG and QUOTES handbooks reads „Dokumentennummer" —
-    // while some mako-rendered messages historically carried it in BGM. Reading
-    // only one of the two makes a conformant partner's message undetectable,
-    // and an undetectable message is dropped without an APERAK.
-    //
-    // Both readers require a **plausible** Prüfidentifikator — a 5-digit code
-    // in `10000..=99999`. Accepting any parseable integer would let a numeric
-    // Belegnummer in BGM DE 1004 win over the real PID in `RFF+Z13` and defeat
-    // the fallback entirely.
-    let plausible = |s: &str| -> Option<u32> {
-        s.parse::<u32>().ok().filter(|v| {
-            (crate::Pruefidentifikator::MIN..=crate::Pruefidentifikator::MAX).contains(v)
-        })
-    };
-    let from_rff = || -> Option<u32> {
-        segments
-            .iter()
-            .filter(|s| s.tag == "RFF" && (s.element_str(0) == Some("Z13")))
-            .find_map(|rff| rff.component_str(0, 1).and_then(plausible))
-    };
-    let from_bgm = || -> Option<u32> {
-        segments
-            .iter()
-            .find(|s| s.tag == "BGM")
-            .and_then(|bgm| bgm.element_str(1))
-            .and_then(plausible)
-    };
-    let pruefidentifikator: Option<u32> =
-        match resolve_pid_source(&msg_type_code, &assoc_code, registry) {
-            crate::registry::PidSource::RffZ13 => from_rff().or_else(from_bgm),
-            crate::registry::PidSource::BgmDe1004 => from_bgm().or_else(from_rff),
-        };
+    // Shared with the envelope-only routing path and the typed-message path, so
+    // all three resolve the same code. See `pid_scan` for why both locations
+    // are read.
+    let pruefidentifikator: Option<u32> = crate::pid_scan::detect(
+        &segments,
+        resolve_pid_source(&msg_type_code, &assoc_code, registry),
+    );
 
     // Warn when the association code is not one of the recognised EDI@Energy release
     // patterns.  An `Opaque` release will cause `validate()` to return
@@ -1102,19 +1118,18 @@ pub(crate) fn dispatch_message(
         // Sanitize the release code before including it in any log output.
         // Valid BDEW codes are ≤ 16 ASCII alphanumeric chars plus '.'; anything
         // else may contain log-injection sequences or GDPR-sensitive data.
-        let safe_code = sanitize_release_code(&assoc_code);
+        // Only under `tracing`. The condition is observable without it — the
+        // release parses as `ReleaseKind::Opaque` and `validate()` returns
+        // `ProfileNotFound` — and a library writing to stderr cannot be
+        // filtered, rate-limited or routed.
         #[cfg(feature = "tracing")]
-        tracing::warn!(
-            release = %safe_code,
-            "unrecognised EDI@Energy release code — validate() will return ProfileNotFound"
-        );
-        // Always surface the warning even when the `tracing` feature is disabled,
-        // so misconfigured senders are never silently accepted.
-        #[cfg(not(feature = "tracing"))]
-        eprintln!(
-            "edi-energy: warning: unrecognised release code `{safe_code}` — \
-             validate() will return ProfileNotFound"
-        );
+        {
+            let safe_code = sanitize_release_code(&assoc_code);
+            tracing::warn!(
+                release = %safe_code,
+                "unrecognised EDI@Energy release code — validate() will return ProfileNotFound"
+            );
+        }
     } else {
         #[cfg(feature = "tracing")]
         tracing::debug!(
@@ -1125,13 +1140,17 @@ pub(crate) fn dispatch_message(
         );
     }
 
-    dispatch_by_type(
+    let mut message = dispatch_by_type(
         &msg_type_code,
         segments,
         message_ref,
         assoc_code,
         pruefidentifikator,
-    )
+    )?;
+    if let Some(date) = reference_date {
+        message.set_reference_date(date);
+    }
+    Ok(message)
 }
 
 /// Dispatch to a concrete `AnyMessage` variant based on the decoded type code.
@@ -1302,13 +1321,13 @@ fn dispatch_by_type(
             // Check if this is a known EDI@Energy message type whose Cargo feature
             // is not compiled in.  Return FeatureNotEnabled to give the caller
             // actionable guidance instead of silently producing Unknown.
-            if let Some(mt) = MessageType::from_unh_code(other) {
-                if !mt.is_feature_enabled() {
-                    return Err(Error::FeatureNotEnabled {
-                        message_type: other.to_owned(),
-                        feature: mt.as_str().to_lowercase(),
-                    });
-                }
+            if let Some(mt) =
+                MessageType::from_unh_code(other).filter(|mt| !mt.is_feature_enabled())
+            {
+                return Err(Error::FeatureNotEnabled {
+                    message_type: other.to_owned(),
+                    feature: mt.feature_name().to_owned(),
+                });
             }
             // Truly unknown type (not in EDI@Energy): return Unknown for pass-through.
             Ok(AnyMessage::Unknown {
@@ -1321,30 +1340,31 @@ fn dispatch_by_type(
     }
 }
 
-// ── MessageType helper ────────────────────────────────────────────────────────
+#[cfg(test)]
+mod unb_datetime_tests {
+    use super::parse_unb_datetime;
+    use time::macros::datetime;
 
-impl MessageType {
-    /// Returns `true` when the Cargo feature for this message type is compiled in.
-    #[must_use]
-    pub fn is_feature_enabled(self) -> bool {
-        match self {
-            MessageType::Utilmd => cfg!(feature = "utilmd"),
-            MessageType::Mscons => cfg!(feature = "mscons"),
-            MessageType::Aperak => cfg!(feature = "aperak"),
-            MessageType::Contrl => cfg!(feature = "contrl"),
-            MessageType::Invoic => cfg!(feature = "invoic"),
-            MessageType::Remadv => cfg!(feature = "remadv"),
-            MessageType::Orders => cfg!(feature = "orders"),
-            MessageType::Iftsta => cfg!(feature = "iftsta"),
-            MessageType::Insrpt => cfg!(feature = "insrpt"),
-            MessageType::Reqote => cfg!(feature = "reqote"),
-            MessageType::Partin => cfg!(feature = "partin"),
-            MessageType::Ordchg => cfg!(feature = "ordchg"),
-            MessageType::Ordrsp => cfg!(feature = "ordrsp"),
-            MessageType::Quotes => cfg!(feature = "quotes"),
-            MessageType::Comdis => cfg!(feature = "comdis"),
-            MessageType::Pricat => cfg!(feature = "pricat"),
-            MessageType::Utilts => cfg!(feature = "utilts"),
-        }
+    #[test]
+    fn parses_both_edifact_widths() {
+        assert_eq!(
+            parse_unb_datetime("260101", "0900"),
+            Some(datetime!(2026-01-01 09:00 UTC))
+        );
+        assert_eq!(
+            parse_unb_datetime("20260101", "090059"),
+            Some(datetime!(2026-01-01 09:00:59 UTC))
+        );
+    }
+
+    /// A hostile `UNB` must be rejected, not panic the parser.
+    #[test]
+    fn non_ascii_and_malformed_values_are_rejected() {
+        // Six *bytes*, but a character boundary sits inside `[0..2]`.
+        assert_eq!(parse_unb_datetime("aé345", "0900"), None);
+        assert_eq!(parse_unb_datetime("260101", "ü900"), None);
+        assert_eq!(parse_unb_datetime("261301", "0900"), None, "month 13");
+        assert_eq!(parse_unb_datetime("260101", "2500"), None, "hour 25");
+        assert_eq!(parse_unb_datetime("", ""), None);
     }
 }

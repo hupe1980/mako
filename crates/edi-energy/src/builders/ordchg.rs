@@ -105,7 +105,7 @@ impl<S, R> OrdchgBuilder<S, R> {
 
     /// Override the agency code for the sender's party identifier.
     ///
-    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Entso`] (`"305"`)
+    /// Default: [`AgencyCode::Bdew`] (`"293"`). Use [`AgencyCode::Etso`] (`"305"`)
     /// for TSO/ÜNB parties that carry a 16-char EIC code.
     pub fn sender_agency(mut self, agency: crate::AgencyCode) -> Self {
         self.inner.sender_agency = agency;

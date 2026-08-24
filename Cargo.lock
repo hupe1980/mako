@@ -3719,6 +3719,7 @@ dependencies = [
  "rust_decimal",
  "serde",
  "thiserror 2.0.20",
+ "time",
  "tracing",
 ]
 

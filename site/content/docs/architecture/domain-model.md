@@ -553,9 +553,9 @@ ALOCAT messages may be sent as initial, corrected, or final allocations:
 | Role | `GasMarketRole` | Notes |
 |---|---|---|
 | Bilanzkreisverantwortlicher | `Bkv` | Submits NOMINT; receives ALOCAT; subject to IMBNOT |
-| Fernleitungsnetzbetreiber | `Fnb` | Sends daily ALOCAT 90001; receives NOMINT |
-| Verteilnetzbetreiber | `Vnb` | Sends sub-daily ALOCAT 90003 |
-| Marktgebietsverantwortlicher | `Mgv` | Sends monthly ALOCAT 90002; imbalance settlement |
+| Fernleitungsnetzbetreiber | `Fnb` | Receives NOMINT; answers with NOMRES |
+| Verteilnetzbetreiber | `Vnb` | Sends ALOCAT to the MGV |
+| Marktgebietsverantwortlicher | `Mgv` | Sends ALOCAT to the BKV; imbalance settlement |
 | Lieferant | `Lf` | Supplies end customers; does not submit DVGW nominations directly |
 | Händler | `Haendler` | May submit nominations and delivery orders |
 

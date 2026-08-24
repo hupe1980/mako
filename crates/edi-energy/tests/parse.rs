@@ -797,3 +797,44 @@ UNZ+1+1'";
         "report must have 'errors' array"
     );
 }
+
+// ── ParseConfig::reference_date ──────────────────────────────────────────────
+
+/// `with_reference_date` must actually reach `validate()`.
+///
+/// It is a documented, public, builder-style setting, and it used to be inert:
+/// the field was stored on `ParseConfig` and read by nothing, so every caller
+/// that reached for it to make a test deterministic silently got today's date.
+/// A test that passes only until the next BDEW cutover is worse than no test.
+#[cfg(feature = "mscons")]
+#[test]
+fn the_configured_reference_date_reaches_validation() {
+    use edi_energy::{EdiEnergyMessage, ParseConfig, Parser};
+    use time::macros::date;
+
+    // MSCONS 2.4c: valid_from 2025-10-01, valid_until 2026-09-30.
+    let wire = b"UNH+1+MSCONS:D:04B:UN:2.4c'BGM+7+13002+9'UNT+3+1'";
+
+    // Inside the profile's window: the profile resolves and validation runs.
+    let inside =
+        Parser::with_config(ParseConfig::default().with_reference_date(date!(2026 - 01 - 15)))
+            .parse(wire)
+            .expect("parse");
+    assert!(
+        inside.validate().is_ok(),
+        "2.4c must resolve on a date inside its window"
+    );
+
+    // Long before it: the profile is not yet active, and the date is what says so.
+    let before =
+        Parser::with_config(ParseConfig::default().with_reference_date(date!(2020 - 01 - 15)))
+            .parse(wire)
+            .expect("parse");
+    assert!(
+        matches!(
+            before.validate(),
+            Err(edi_energy::Error::ProfileNotYetActive { .. })
+        ),
+        "a reference date before valid_from must be honoured, not ignored"
+    );
+}

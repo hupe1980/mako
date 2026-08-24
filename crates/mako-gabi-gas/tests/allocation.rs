@@ -1,7 +1,7 @@
 //! Integration tests for mako-gabi-gas Allocation workflow (ALOCAT).
 //!
 //! Verifies:
-//! - All ALLOCATION_PIDS (90001, 90002, 90003) route to `"gabi-gas-allocation"`.
+//! - All ALLOCATION_PIDS (70001–70023) route to `"gabi-gas-allocation"`.
 //! - AllocationType derived correctly from each PID.
 //! - Happy path for each of the three allocation types.
 //! - Duplicate `ReceiveAlocat` on a non-New state is rejected.
@@ -31,9 +31,9 @@ fn make_process() -> Process<GaBiGasAllocationWorkflow, InMemoryEventStore> {
     )
 }
 
-fn receive_alocat(synthetic_pid: u32, gas_day: &str) -> AllocationCommand {
+fn receive_alocat(pruefidentifikator: u32, gas_day: &str) -> AllocationCommand {
     AllocationCommand::ReceiveAlocat {
-        synthetic_pid,
+        pruefidentifikator,
         sender_eic: "11XFNB-SENDTESTE".to_owned(),
         receiver_eic: "11XBKV-RECVTEST8".to_owned(),
         gas_day: GasDay::parse(gas_day).expect("valid gas day"),
@@ -46,12 +46,12 @@ fn receive_alocat(synthetic_pid: u32, gas_day: &str) -> AllocationCommand {
 
 /// Same as [`receive_alocat`] but with an explicit KoV §6.4 version.
 fn receive_alocat_versioned(
-    synthetic_pid: u32,
+    pruefidentifikator: u32,
     gas_day: &str,
     version: AllocationVersion,
 ) -> AllocationCommand {
     AllocationCommand::ReceiveAlocat {
-        synthetic_pid,
+        pruefidentifikator,
         sender_eic: "11XFNB-SENDTESTE".to_owned(),
         receiver_eic: "11XBKV-RECVTEST8".to_owned(),
         gas_day: GasDay::parse(gas_day).expect("valid gas day"),
@@ -64,7 +64,7 @@ fn receive_alocat_versioned(
 
 // ── Tests ────────────────────────────────────────────────────────────────────────────────────
 
-/// All ALLOCATION_PIDS (90001, 90002, 90003) route to `"gabi-gas-allocation"`.
+/// All ALLOCATION_PIDS (70001–70023) route to `"gabi-gas-allocation"`.
 #[test]
 fn all_allocation_pids_route_correctly() {
     use mako_engine::{builder::EngineModule, marktrolle::DeploymentRoles, pid_router::PidRouter};
@@ -81,30 +81,30 @@ fn all_allocation_pids_route_correctly() {
     }
 }
 
-/// PID 90001 derives AllocationType::FnbDailyToBkv.
+/// PID 70001 derives AllocationType::NbAnMgv.
 #[test]
-fn allocation_type_from_pid_90001() {
+fn allocation_type_from_pid_70001() {
     assert_eq!(
-        AllocationType::from_pid(90001),
-        Some(AllocationType::FnbDailyToBkv)
+        AllocationType::from_pid(70001),
+        Some(AllocationType::NbAnMgv)
     );
 }
 
-/// PID 90002 derives AllocationType::MgvMonthlyToBkv.
+/// PID 70013 derives AllocationType::MgvAnBkv.
 #[test]
-fn allocation_type_from_pid_90002() {
+fn allocation_type_from_pid_70013() {
     assert_eq!(
-        AllocationType::from_pid(90002),
-        Some(AllocationType::MgvMonthlyToBkv)
+        AllocationType::from_pid(70013),
+        Some(AllocationType::MgvAnBkv)
     );
 }
 
-/// PID 90003 derives AllocationType::VnbSubDailyToFnb.
+/// PID 70011 derives AllocationType::EnbAnbAnNb.
 #[test]
-fn allocation_type_from_pid_90003() {
+fn allocation_type_from_pid_70011() {
     assert_eq!(
-        AllocationType::from_pid(90003),
-        Some(AllocationType::VnbSubDailyToFnb)
+        AllocationType::from_pid(70011),
+        Some(AllocationType::EnbAnbAnNb)
     );
 }
 
@@ -114,24 +114,24 @@ fn allocation_type_from_pid_unknown_returns_none() {
     assert_eq!(AllocationType::from_pid(12345), None);
 }
 
-/// Happy path — FNB daily allocation (PID 90001) received.
+/// Happy path — SLP allocation, NB an MGV (PID 70001).
 ///
 /// ```text
 /// New → AllocationReceived
 /// ```
 #[tokio::test]
-async fn fnb_daily_alocat_received() {
+async fn nb_an_mgv_alocat_received() {
     let proc = make_process();
 
-    proc.execute(receive_alocat(90001, "20250115"))
+    proc.execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
 
     let state = proc.state().await.unwrap();
     match state {
         AllocationState::Recorded(data) => {
-            assert_eq!(data.synthetic_pid, 90001);
-            assert_eq!(data.allocation_type, AllocationType::FnbDailyToBkv);
+            assert_eq!(data.pruefidentifikator, 70001);
+            assert_eq!(data.allocation_type, AllocationType::NbAnMgv);
             assert_eq!(data.gas_day, GasDay::parse("2025-01-15").unwrap());
             assert_eq!(data.clearing_number.as_deref(), Some("CLR-2025-001"));
         }
@@ -139,30 +139,30 @@ async fn fnb_daily_alocat_received() {
     }
 }
 
-/// Happy path — MGV monthly allocation (PID 90002) received.
+/// Happy path — SLP allocation, MGV an BKV (PID 70013).
 #[tokio::test]
-async fn mgv_monthly_alocat_received() {
+async fn mgv_an_bkv_alocat_received() {
     let proc = make_process();
 
-    proc.execute(receive_alocat(90002, "20250201"))
+    proc.execute(receive_alocat(70013, "20250201"))
         .await
         .unwrap();
 
     let state = proc.state().await.unwrap();
-    assert!(matches!(state, AllocationState::Recorded(ref d) if d.synthetic_pid == 90002));
+    assert!(matches!(state, AllocationState::Recorded(ref d) if d.pruefidentifikator == 70013));
 }
 
-/// Happy path — VNB sub-daily allocation (PID 90003) received.
+/// Happy path — korrigierte Mengenmeldung NKP, ENB/ANB an NB (PID 70011).
 #[tokio::test]
-async fn vnb_sub_daily_alocat_received() {
+async fn enb_an_nb_alocat_received() {
     let proc = make_process();
 
-    proc.execute(receive_alocat(90003, "20250115"))
+    proc.execute(receive_alocat(70011, "20250115"))
         .await
         .unwrap();
 
     let state = proc.state().await.unwrap();
-    assert!(matches!(state, AllocationState::Recorded(ref d) if d.synthetic_pid == 90003));
+    assert!(matches!(state, AllocationState::Recorded(ref d) if d.pruefidentifikator == 70011));
 }
 
 /// A second ALOCAT for the same gas day is a **correction**, not a duplicate:
@@ -170,12 +170,12 @@ async fn vnb_sub_daily_alocat_received() {
 #[tokio::test]
 async fn a_correction_supersedes_the_initial_allocation() {
     let proc = make_process();
-    proc.execute(receive_alocat(90001, "20250115"))
+    proc.execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
 
     proc.execute(receive_alocat_versioned(
-        90001,
+        70001,
         "20250115",
         AllocationVersion::Correction(1),
     ))
@@ -195,11 +195,11 @@ async fn a_correction_supersedes_the_initial_allocation() {
 #[tokio::test]
 async fn no_correction_is_admissible_after_the_final_allocation() {
     let proc = make_process();
-    proc.execute(receive_alocat(90001, "20250115"))
+    proc.execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
     proc.execute(receive_alocat_versioned(
-        90001,
+        70001,
         "20250115",
         AllocationVersion::Final,
     ))
@@ -210,7 +210,7 @@ async fn no_correction_is_admissible_after_the_final_allocation() {
 
     let result = proc
         .execute(receive_alocat_versioned(
-            90001,
+            70001,
             "20250115",
             AllocationVersion::Correction(2),
         ))
@@ -226,7 +226,7 @@ async fn no_correction_is_admissible_after_the_final_allocation() {
 #[tokio::test]
 async fn final_allocation_window_closing_without_a_final_is_recorded() {
     let proc = make_process();
-    proc.execute(receive_alocat(90001, "20250115"))
+    proc.execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
 
@@ -255,7 +255,7 @@ async fn a_closed_window_enqueues_the_alocat_missing_notification() {
     // Drive the state through the real command path, then hand it to `handle`
     // directly — `Process::execute` persists the outbox rather than returning it.
     let proc = make_process();
-    proc.execute(receive_alocat(90001, "20250115"))
+    proc.execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
     let state = proc.state().await.unwrap();
@@ -299,7 +299,7 @@ async fn a_settled_gas_day_enqueues_no_notification() {
 
     let proc = make_process();
     proc.execute(receive_alocat_versioned(
-        90001,
+        70001,
         "20250115",
         AllocationVersion::Final,
     ))
@@ -350,7 +350,7 @@ async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
     let settled = make_process();
     settled
         .execute(receive_alocat_versioned(
-            90001,
+            70001,
             "20250115",
             AllocationVersion::Final,
         ))
@@ -368,7 +368,7 @@ async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
     // Unsettled — only the initial allocation arrived.
     let unsettled = make_process();
     unsettled
-        .execute(receive_alocat(90001, "20250115"))
+        .execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
     assert!(
@@ -386,7 +386,7 @@ async fn on_deadline_is_silent_for_a_gas_day_that_settled() {
 async fn a_settled_gas_day_does_not_go_overdue() {
     let proc = make_process();
     proc.execute(receive_alocat_versioned(
-        90001,
+        70001,
         "20250115",
         AllocationVersion::Final,
     ))
@@ -425,11 +425,11 @@ async fn independent_gas_days_are_independent_streams() {
     let proc2 = make_process();
 
     proc1
-        .execute(receive_alocat(90001, "20250115"))
+        .execute(receive_alocat(70001, "20250115"))
         .await
         .unwrap();
     proc2
-        .execute(receive_alocat(90001, "20250116"))
+        .execute(receive_alocat(70001, "20250116"))
         .await
         .unwrap();
 

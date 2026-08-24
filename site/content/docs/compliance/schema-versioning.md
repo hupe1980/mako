@@ -68,8 +68,8 @@ alters its semantics in a way that requires all profiles to be updated.
 ## The `archived` field (profile lifecycle)
 
 Profiles have an optional `valid_until` date (ISO 8601, e.g. `"2026-09-30"`).
-Once the BDEW transition grace period has elapsed, the profile should no longer
-be compiled by default.
+Once a profile's `valid_until` has passed — plus whatever receive tolerance the
+deployment configures — it should no longer be compiled by default.
 
 A profile moves through three compilation states over its lifetime:
 

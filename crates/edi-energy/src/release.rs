@@ -5,7 +5,7 @@ use crate::Error;
 /// Coarse track classification for a BDEW EDI@Energy release code.
 ///
 /// Used for unambiguous multi-track dispatch in `ReleaseRegistry` without
-/// relying on fragile string-prefix matching (resolves.
+/// relying on fragile string-prefix matching.
 ///
 /// # Example
 ///
@@ -18,7 +18,7 @@ use crate::Error;
 /// let g11: Release = "G1.1".parse().unwrap();
 /// assert_eq!(g11.track(), ReleaseTrack::Gas);
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ReleaseTrack {
     /// UTILMD Strom track — release codes beginning with `S` (e.g. `S2.1`).
     Strom,
@@ -63,10 +63,10 @@ impl fmt::Display for ReleaseTrack {
 /// | `S<major>.<minor>` | `S2.1`, `S2.2` | UTILMD Strom (new track) |
 /// | `G<major>.<minor>` | `G1.1`, `G2.0` | UTILMD Gas |
 ///
-/// The `ReleaseKind` variant is used to implement the correct ordering rules
-/// within each track.  Releases from different tracks (e.g. `S2.1` vs `5.5.3a`)
-/// are considered incomparable — `PartialOrd` returns `None` and `Ord` falls
-/// back to the raw string for consistency.
+/// The `ReleaseKind` variant carries the ordering rules for its track.
+/// Releases from different tracks (e.g. `S2.1` vs `5.5.3a`) have no meaningful
+/// order; [`Release::same_track_cmp`] reports that by returning `None`, while
+/// [`Ord`] stays total so sorted containers behave.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ReleaseKind {
     /// Classic three-component form: `<major>.<minor>.<patch><letter>`.
@@ -93,30 +93,34 @@ pub enum ReleaseKind {
         /// Trailing letter qualifier (`a`, `b`, …).
         letter: char,
     },
-    /// Strom track: `S<major>.<minor>`.
+    /// Strom track: `S<major>.<minor>[letter]`.
     ///
-    /// Examples: `S2.1`, `S2.2`.
+    /// Examples: `S2.1`, `S2.2`, `S1.1a`.
     Strom {
         /// Major version component (after `S`).
         major: u32,
         /// Minor version component.
         minor: u32,
+        /// Trailing corrigendum letter, `None` when the code carries none.
+        letter: Option<char>,
     },
-    /// Gas track: `G<major>.<minor>`.
+    /// Gas track: `G<major>.<minor>[letter]`.
     ///
-    /// Examples: `G1.1`, `G2.0`.
+    /// Examples: `G1.1`, `G2.0`, `G1.0a`.
     Gas {
         /// Major version component (after `G`).
         major: u32,
         /// Minor version component.
         minor: u32,
+        /// Trailing corrigendum letter, `None` when the code carries none.
+        letter: Option<char>,
     },
     /// Any release code that does not match any of the above patterns.
     ///
     /// Retained verbatim for forward-compatibility.  When a release is
     /// constructed with an unrecognised code, `tracing::warn!` is emitted
     /// (when the `tracing` feature is enabled) so unknown patterns surface in
-    /// production observability backends (resolves.
+    /// production observability backends.
     Opaque(Box<str>),
 }
 
@@ -124,7 +128,7 @@ impl ReleaseKind {
     /// Returns the coarse [`ReleaseTrack`] for this release code.
     ///
     /// Use this for explicit, type-safe track dispatch instead of
-    /// `release.as_str().starts_with("S")` string-prefix matching (resolves.
+    /// `release.as_str().starts_with("S")` string-prefix matching.
     #[must_use]
     pub fn track(&self) -> ReleaseTrack {
         match self {
@@ -158,19 +162,21 @@ impl ReleaseKind {
     pub fn parse(s: &str) -> Self {
         // S<major>.<minor> or S<major>.<minor><letter>  e.g. "S2.1", "S1.1a"
         if let Some(rest) = s.strip_prefix('S') {
-            if let Some((maj, min)) = split_two_numeric_allow_suffix(rest) {
+            if let Some((major, minor, letter)) = split_two_numeric_with_suffix(rest) {
                 return ReleaseKind::Strom {
-                    major: maj,
-                    minor: min,
+                    major,
+                    minor,
+                    letter,
                 };
             }
         }
         // G<major>.<minor> or G<major>.<minor><letter>  e.g. "G1.1", "G1.0a"
         if let Some(rest) = s.strip_prefix('G') {
-            if let Some((maj, min)) = split_two_numeric_allow_suffix(rest) {
+            if let Some((major, minor, letter)) = split_two_numeric_with_suffix(rest) {
                 return ReleaseKind::Gas {
-                    major: maj,
-                    minor: min,
+                    major,
+                    minor,
+                    letter,
                 };
             }
         }
@@ -186,22 +192,26 @@ impl ReleaseKind {
     }
 }
 
-/// Parse `"<major>.<minor>"` or `"<major>.<minor><letter>"` into `(major, minor)`.
+/// Parse `"<major>.<minor>"` or `"<major>.<minor><letter>"`.
 ///
-/// Strips a trailing ASCII alphabetic suffix from the minor component so that
-/// BDEW corrigendum release codes like `"S1.1a"` and `"G1.0a"` are classified
-/// as Strom / Gas tracks instead of falling back to `ReleaseKind::Opaque`.
-fn split_two_numeric_allow_suffix(s: &str) -> Option<(u32, u32)> {
+/// The corrigendum letter is part of the identity: `"S1.1a"` and `"S1.1"` are
+/// different profiles, and dropping it would make them compare `Equal` while
+/// remaining `!=` — the `Ord`/`Eq` disagreement every sorted container relies on
+/// not happening.
+fn split_two_numeric_with_suffix(s: &str) -> Option<(u32, u32, Option<char>)> {
     let (a, b) = s.split_once('.')?;
     let major: u32 = a.parse().ok()?;
-    // Strip a trailing alphabetic suffix (e.g. "1a" → strip "a" → parse "1").
     let minor_str = b.trim_end_matches(|c: char| c.is_ascii_alphabetic());
-    let minor: u32 = minor_str.parse().ok()?;
-    // Guard against empty minor (e.g. "1." would give minor_str = "").
     if minor_str.is_empty() {
         return None;
     }
-    Some((major, minor))
+    let minor: u32 = minor_str.parse().ok()?;
+    let letter = b[minor_str.len()..].chars().next();
+    // Only a single-letter suffix is a BDEW corrigendum marker.
+    if b[minor_str.len()..].chars().count() > 1 {
+        return None;
+    }
+    Some((major, minor, letter))
 }
 
 fn parse_dotted(s: &str) -> Option<ReleaseKind> {
@@ -391,7 +401,7 @@ impl Release {
     /// Return the coarse [`ReleaseTrack`] for this release code.
     ///
     /// Prefer this over `release.as_str().starts_with("S")` pattern matching
-    /// for track dispatch — it is unambiguous and forward-compatible (resolves.
+    /// for track dispatch — it is unambiguous and forward-compatible.
     ///
     /// ```
     /// use edi_energy::{Release, ReleaseTrack};
@@ -409,8 +419,9 @@ impl Release {
     /// Compare two releases within the same track, returning `None` for
     /// cross-track pairs.
     ///
-    /// This is the semantically correct comparison to use in application code.
-    /// Unlike `Ord::cmp`, it never silently falls back to byte order.
+    /// This is the semantically correct comparison for application code: unlike
+    /// [`Ord::cmp`], which is total by construction, it says so when the two
+    /// codes have no meaningful order relative to each other.
     ///
     /// ```
     /// use edi_energy::Release;
@@ -425,36 +436,33 @@ impl Release {
     /// ```
     #[must_use]
     pub fn same_track_cmp(&self, other: &Release) -> Option<Ordering> {
-        self.partial_cmp(other)
+        let a = self.kind();
+        let b = other.kind();
+        a.same_track(&b).then(|| compare_kinds(&a, &b))
     }
 }
 
-// Cross-track comparisons are intentionally non-total; `Ord::cmp` falls back to
-// raw-byte ordering while `PartialOrd::partial_cmp` returns `None`.
-#[expect(clippy::non_canonical_partial_ord_impl)]
 impl PartialOrd for Release {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        let a = self.kind();
-        let b = other.kind();
-        if !a.same_track(&b) {
-            // Cross-track comparison is not meaningful.
-            return None;
-        }
-        Some(compare_kinds(&a, &b))
+        Some(self.cmp(other))
     }
 }
 
 impl Ord for Release {
+    /// A **total** order: track rank first, then the numeric components within
+    /// a track, then the raw code.
+    ///
+    /// Total by construction: `partial_cmp(a, b) == Some(cmp(a, b))` must hold,
+    /// or `sort`, `BTreeMap` and `binary_search` are free to produce arbitrary
+    /// results — and `ReleaseRegistry::releases()` sorts through this impl.
+    ///
+    /// Cross-track order is deterministic but carries no BDEW meaning. Reach for
+    /// [`Release::same_track_cmp`] when the answer must be meaningful; it says
+    /// so by returning `None`.
     fn cmp(&self, other: &Self) -> Ordering {
-        // Total ordering: use semantic ordering within a track, fall back to
-        // raw byte ordering for cross-track or opaque releases.
-        //
-        // ⚠ The byte-order fallback produces a *deterministic but meaningless*
-        // result for cross-track comparisons (e.g. `"S2.1"` vs `"2.4c"`).
-        // Use [`Release::same_track_cmp`] when the result must be semantically
-        // correct, and [`ReleaseKind::same_track`] to guard cross-track calls.
-        self.partial_cmp(other)
-            .unwrap_or_else(|| self.0.cmp(&other.0))
+        let a = self.kind();
+        let b = other.kind();
+        compare_kinds(&a, &b).then_with(|| self.0.cmp(&other.0))
     }
 }
 
@@ -494,26 +502,42 @@ fn compare_kinds(a: &ReleaseKind, b: &ReleaseKind) -> Ordering {
             ReleaseKind::Strom {
                 major: ma,
                 minor: mi,
+                letter: la,
             },
             ReleaseKind::Strom {
                 major: mb,
                 minor: mib,
+                letter: lb,
             },
         )
         | (
             ReleaseKind::Gas {
                 major: ma,
                 minor: mi,
+                letter: la,
             },
             ReleaseKind::Gas {
                 major: mb,
                 minor: mib,
+                letter: lb,
             },
-        ) => ma.cmp(mb).then(mi.cmp(mib)),
+        ) => ma.cmp(mb).then(mi.cmp(mib)).then(la.cmp(lb)),
         (ReleaseKind::Opaque(a), ReleaseKind::Opaque(b)) => a.cmp(b),
-        // Unreachable if called only after same_track check, but included for
-        // exhaustiveness.
-        _ => unreachable!("compare_kinds called with cross-track release kinds: {a:?} vs {b:?}"),
+        // Cross-track: rank by track so the order is total, then by the raw
+        // code.  `same_track_cmp` is what callers use when the answer has to be
+        // semantically meaningful; this arm only has to be consistent.
+        _ => track_rank(a).cmp(&track_rank(b)),
+    }
+}
+
+/// A stable rank per release kind, so cross-track comparison is deterministic.
+fn track_rank(kind: &ReleaseKind) -> u8 {
+    match kind {
+        ReleaseKind::Dotted { .. } => 0,
+        ReleaseKind::Short { .. } => 1,
+        ReleaseKind::Strom { .. } => 2,
+        ReleaseKind::Gas { .. } => 3,
+        ReleaseKind::Opaque(_) => 4,
     }
 }
 
@@ -572,13 +596,27 @@ mod release_kind_tests {
     #[test]
     fn parse_strom_track() {
         let k = ReleaseKind::parse("S2.1");
-        assert_eq!(k, ReleaseKind::Strom { major: 2, minor: 1 });
+        assert_eq!(
+            k,
+            ReleaseKind::Strom {
+                major: 2,
+                minor: 1,
+                letter: None
+            }
+        );
     }
 
     #[test]
     fn parse_gas_track() {
         let k = ReleaseKind::parse("G1.1");
-        assert_eq!(k, ReleaseKind::Gas { major: 1, minor: 1 });
+        assert_eq!(
+            k,
+            ReleaseKind::Gas {
+                major: 1,
+                minor: 1,
+                letter: None
+            }
+        );
     }
 
     #[test]
@@ -611,21 +649,74 @@ mod release_kind_tests {
     }
 
     #[test]
-    fn cross_track_partial_ord_is_none() {
+    fn cross_track_comparison_is_reported_as_meaningless() {
         let a = Release::new("S2.1");
         let b = Release::new("5.5.3a");
         assert_eq!(
-            a.partial_cmp(&b),
+            a.same_track_cmp(&b),
             None,
-            "cross-track comparison is incomparable"
+            "no meaningful cross-track order"
         );
+        // …but `Ord` still answers, and answers the same way every time.
+        assert_eq!(a.cmp(&b), b.cmp(&a).reverse());
+    }
+
+    /// `Ord` and `PartialOrd` must agree, or every sorted container is free to
+    /// misbehave.
+    #[test]
+    fn ord_and_partial_ord_agree_on_every_pair() {
+        let codes = [
+            "S2.1", "S2.2", "S1.1a", "S1.1", "G1.0a", "G1.1", "5.5.3a", "5.5.10a", "2.4c", "2.9a",
+            "2.10a", "UNKNOWN", "",
+            // Two spellings that parse to the same kind: the raw-code tiebreak
+            // has to keep `cmp` from calling them Equal while `Eq` says they
+            // differ.
+            "S02.1", "S2.01",
+        ];
+        for x in codes {
+            for y in codes {
+                let (a, b) = (Release::new(x), Release::new(y));
+                assert_eq!(
+                    a.partial_cmp(&b),
+                    Some(a.cmp(&b)),
+                    "partial_cmp disagrees with cmp for {x:?} vs {y:?}"
+                );
+                // Antisymmetry, and agreement with `Eq`.
+                assert_eq!(a.cmp(&b), b.cmp(&a).reverse(), "{x:?} vs {y:?}");
+                assert_eq!(
+                    a.cmp(&b) == Ordering::Equal,
+                    a == b,
+                    "Ord and Eq disagree for {x:?} vs {y:?}"
+                );
+            }
+        }
+    }
+
+    /// A corrigendum letter distinguishes two releases, so it must not be
+    /// dropped: `S1.1a` and `S1.1` are different profiles.
+    #[test]
+    fn the_corrigendum_letter_is_not_discarded() {
+        let plain = Release::new("S1.1");
+        let corrected = Release::new("S1.1a");
+        assert_ne!(plain, corrected);
+        assert_eq!(plain.same_track_cmp(&corrected), Some(Ordering::Less));
+        assert_eq!(plain.track(), ReleaseTrack::Strom);
+        assert_eq!(corrected.track(), ReleaseTrack::Strom);
     }
 
     #[test]
     fn same_track_strom() {
         assert!(
-            ReleaseKind::Strom { major: 2, minor: 1 }
-                .same_track(&ReleaseKind::Strom { major: 2, minor: 2 })
+            ReleaseKind::Strom {
+                major: 2,
+                minor: 1,
+                letter: None
+            }
+            .same_track(&ReleaseKind::Strom {
+                major: 2,
+                minor: 2,
+                letter: None
+            })
         );
     }
 }

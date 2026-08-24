@@ -628,6 +628,33 @@ impl GasDay {
         }
     }
 
+    /// The gas day a DVGW `DTM+Z01` period denotes.
+    ///
+    /// A gas day runs 06:00 → 06:00 Berlin local, so its start always falls on
+    /// the calendar date it names and the Berlin-local date of the period start
+    /// *is* the gas day. Working in local time keeps that true across both DST
+    /// transitions, where the boundary sits at 04:00 UTC rather than 05:00.
+    ///
+    /// Returns `None` when the period is not a gas day at all — a gas day is 23,
+    /// 24 or 25 hours long, and anything else is a period the caller must not
+    /// silently book against one.
+    ///
+    /// Deriving this by subtracting six hours from the start looks equivalent
+    /// and is not: it is exact only when the start is *exactly* 06:00 local, and
+    /// one minute either side of that lands on the previous date.
+    #[must_use]
+    pub fn from_period(start: OffsetDateTime, end: OffsetDateTime) -> Option<Self> {
+        use time_tz::{OffsetDateTimeExt, timezones};
+        let hours = (end - start).whole_hours();
+        if !(23..=25).contains(&hours) {
+            return None;
+        }
+        let berlin = start.to_timezone(timezones::db::europe::BERLIN);
+        Some(Self {
+            date: berlin.date(),
+        })
+    }
+
     /// End of this gas day (= start of the next gas day) in UTC.
     #[must_use]
     pub fn end_utc(&self) -> OffsetDateTime {
@@ -1416,5 +1443,71 @@ mod tests {
             dec!(900.0),
         );
         assert!(saldo.settlement_amount_ct().is_none());
+    }
+}
+
+#[cfg(test)]
+mod gas_day_from_period_tests {
+    use super::GasDay;
+    use time::{Duration, macros::datetime};
+
+    /// `from_period` must invert `start_utc`/`end_utc` on every day of a year,
+    /// including both DST transitions where the day is 23 or 25 hours long.
+    #[test]
+    fn from_period_inverts_the_gas_day_boundaries_across_a_full_year() {
+        let mut day = time::macros::date!(2026 - 01 - 01);
+        while day.year() == 2026 {
+            let gas_day = GasDay::new(day);
+            assert_eq!(
+                GasDay::from_period(gas_day.start_utc(), gas_day.end_utc()),
+                Some(gas_day),
+                "round trip failed for {day}"
+            );
+            day += Duration::days(1);
+        }
+    }
+
+    /// The DVGW NOMINT specification's own example states the period as
+    /// `201801050400201801060400` — 05:00 Berlin, an hour off the 06:00
+    /// boundary. It plainly means gas day 2018-01-05, and subtracting six hours
+    /// from the start would answer 2018-01-04.
+    #[test]
+    fn a_start_an_hour_off_the_boundary_still_names_its_own_day() {
+        assert_eq!(
+            GasDay::from_period(
+                datetime!(2018-01-05 04:00 UTC),
+                datetime!(2018-01-06 04:00 UTC)
+            ),
+            Some(GasDay::new(time::macros::date!(2018 - 01 - 05)))
+        );
+    }
+
+    /// A period that is not a gas day must be refused, not rounded to one.
+    #[test]
+    fn a_period_that_is_not_a_gas_day_is_refused() {
+        // An hour.
+        assert_eq!(
+            GasDay::from_period(
+                datetime!(2026-03-01 05:00 UTC),
+                datetime!(2026-03-01 06:00 UTC)
+            ),
+            None
+        );
+        // A month.
+        assert_eq!(
+            GasDay::from_period(
+                datetime!(2026-03-01 05:00 UTC),
+                datetime!(2026-04-01 04:00 UTC)
+            ),
+            None
+        );
+        // Inverted.
+        assert_eq!(
+            GasDay::from_period(
+                datetime!(2026-03-02 05:00 UTC),
+                datetime!(2026-03-01 05:00 UTC)
+            ),
+            None
+        );
     }
 }

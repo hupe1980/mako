@@ -500,6 +500,48 @@ impl EdifactIngestDispatcher {
         outcome
     }
 
+    /// Execute a **DVGW** message against its workflow.
+    ///
+    /// The counterpart of [`dispatch`](Self::dispatch) for the gas transport
+    /// family. A DVGW message is not an [`AnyMessage`] and never can be — the
+    /// two families share only the `PidRouter`, because DVGW allocates
+    /// 70000–79999 and BDEW does not — so the caller sniffs the interchange
+    /// (`dvgw_edi::sniff`), parses with the right library, and calls the
+    /// matching entry point here.
+    ///
+    /// There is no correlation-routing override: that exists to separate BDEW
+    /// reply PIDs claimed by several same-Sparte billing families, and DVGW has
+    /// no such collision — every code maps to exactly one workflow.
+    pub async fn dispatch_dvgw(
+        &self,
+        msg: &dvgw_edi::DvgwMessage,
+        workflow_name: &str,
+        pid: u32,
+    ) -> Result<IngestOutcome, EngineError> {
+        let outcome = self.dispatch_gabi_gas_dvgw(msg, workflow_name, pid).await;
+        let result = match &outcome {
+            Ok(IngestOutcome::Spawned { .. } | IngestOutcome::Dispatched { .. }) => "dispatched",
+            Ok(IngestOutcome::Skipped { .. }) => "skipped",
+            Err(_) => "error",
+        };
+        mako_engine::metrics::EngineMetrics::global().inbound_received(pid, result);
+        if let Ok(IngestOutcome::Skipped {
+            workflow_name,
+            reason,
+        }) = &outcome
+            && reason.starts_with("pid_not_in_")
+        {
+            tracing::warn!(
+                pid,
+                workflow = %workflow_name,
+                reason,
+                "ingest: PID is registered to this workflow but has no dispatch arm — \
+                 inbound message dropped (coverage bug)"
+            );
+        }
+        outcome
+    }
+
     /// Conversation-ID routing for reply messages whose PID is shared across
     /// same-Sparte billing families (REMADV / COMDIS).
     ///

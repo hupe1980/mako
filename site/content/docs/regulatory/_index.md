@@ -19,7 +19,7 @@ Prüfidentifikator (PID) reference covering all 17 EDI@Energy message types.
 | [Domain Model](domain-model) | Party roles (LF, NB, MSB, BKV, …), market objects (MaLo, MeLo, NeLo, NeBe), identifier formats, EDIFACT encoding |
 | [BNetzA Regulatory Reference](bnetza) | BK6 / BK7 rulings, APERAK Fristen, process scopes |
 | [Process Catalog](processes) | Business-level catalog of all MaKo processes — GPKE, WiM, GeLi Gas, MaBiS, Redispatch 2.0 — with message flows and implementation status |
-| [PID Reference](pid-reference) | Complete Prüfidentifikator table for all process families, including DVGW synthetic PIDs |
+| [PID Reference](pid-reference) | Complete Prüfidentifikator table for all process families, including the DVGW gas transport PIDs |
 
 ---
 

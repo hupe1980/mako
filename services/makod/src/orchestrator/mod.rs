@@ -9,6 +9,7 @@
 pub mod adapters;
 pub mod commands_api;
 pub mod deadline_dispatch;
+pub mod dvgw_ingest;
 pub mod edifact_renderer;
 pub mod ingest_dispatcher;
 pub mod netzzugang;

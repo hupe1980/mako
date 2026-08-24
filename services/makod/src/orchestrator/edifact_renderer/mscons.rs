@@ -184,7 +184,7 @@ pub(super) fn render_mscons(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Mscons, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Mscons, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -312,7 +312,7 @@ pub(super) fn render_mscons_arbeit_leistungsmax(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Mscons, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Mscons, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -449,7 +449,7 @@ pub(super) fn render_mscons_typ2(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Mscons, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Mscons, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }

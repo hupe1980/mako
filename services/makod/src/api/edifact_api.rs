@@ -430,6 +430,81 @@ pub(crate) async fn ingest_edifact(
         );
     }
 
+    // ── DVGW gas transport ──────────────────────────────────────────────────
+    //
+    // Tried before the BDEW parse, and nothing above this line may parse the
+    // body — a DVGW message rides `ORDERS` or `ORDRSP`, so the BDEW parser
+    // accepts an ALOCAT as a well-formed `ORDRSP` *and* reads its
+    // Prüfidentifikator correctly out of `RFF+Z13`, which is exactly where it
+    // looks. The message therefore routes to the right workflow and arrives as
+    // the wrong type: no document code, no gas day, no positions. Neither `UNH`
+    // nor the Prüfidentifikator separates the families; only `BGM` DE 1001 does,
+    // which is what `try_ingest` sniffs before it commits to the bytes.
+    //
+    // It returns `None` for a BDEW interchange, so that path pays one head-only
+    // scan and nothing else.
+    if let Some(report) = crate::dvgw_ingest::try_ingest(state.as_ref(), &body).await {
+        let messages: Vec<MessageResult> = report
+            .messages
+            .iter()
+            .map(|m| MessageResult {
+                message_type: m.document.map(|d| d.message_type().to_string()),
+                pid: m.pruefidentifikator,
+                workflow: m.workflow.clone(),
+                status: if m.error.is_some() {
+                    MessageStatus::ParseError
+                } else if m.pruefidentifikator.is_none() {
+                    MessageStatus::MissingPid
+                } else if m.workflow.is_none() {
+                    MessageStatus::UnknownPid
+                } else {
+                    MessageStatus::Routed
+                },
+                process_id: m.process_id.clone(),
+                // A DVGW message has no MaLo. Its correlation key is the
+                // published Zuordnungstupel, which is not a MaLo-shaped value.
+                malo_id: None,
+                error: m
+                    .error
+                    .clone()
+                    .or_else(|| m.skipped.map(|r| format!("skipped: {r}"))),
+            })
+            .collect();
+        // The CONTRL Empfangsbestätigung is owed here too. CONTRL AHB 1.0 §2.3.1
+        // keys the obligation on Sparte, and the DVGW formats *are* the gas
+        // transport layer, so it applies unconditionally — and this handler
+        // returns before the BDEW path's own emission block below.
+        if let Some(contrl_svc) = state.contrl_ack.as_deref() {
+            let sender = report.sender_mp_id.clone().unwrap_or_default();
+            if let Err(e) = contrl_svc
+                .emit_for_dvgw_interchange(
+                    &sender,
+                    &report.interchange_ref,
+                    &report.recipient_mp_id,
+                )
+                .await
+            {
+                state.dl_sink.reject(&DeadLetterReason::ProcessingError {
+                    message: format!("contrl_ack_failed: {e}"),
+                    context: AuditContext::now()
+                        .with_message_type("CONTRL")
+                        .with_receiver_eic(report.recipient_mp_id.as_str())
+                        .with_message_ref(report.interchange_ref.as_str())
+                        .with_tenant_id(state.tenant_id.to_string()),
+                });
+            }
+        }
+
+        return (
+            StatusCode::OK,
+            Json(IngestResponse {
+                accepted: report.accepted(),
+                rejected: report.rejected(),
+                messages,
+            }),
+        );
+    }
+
     let mut messages = Vec::new();
     // Collect successfully-parsed messages for CONTRL Empfangsbestätigung emission
     // after the loop (CONTRL AHB 1.0 §1.2: one CONTRL per interchange, not per message).

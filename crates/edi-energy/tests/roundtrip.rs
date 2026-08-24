@@ -10,9 +10,11 @@
 // feature-gated test modules; they carry individual #[allow(dead_code)] /
 // #[allow(unused_imports)] annotations below.
 
-// Items used via `use super::*` inside feature-gated test modules.
+// Reached via `use super::*` from feature-gated test modules, so which of these
+// are live depends on the feature set under test.
 #[allow(unused_imports)]
 use edi_energy::utilmd_codes::{Transaktionsgrund, dtm};
+#[allow(unused_imports)]
 use edi_energy::{
     AnyMessage, EdiEnergyMessage, MessageType, Platform, Pruefidentifikator, Release,
 };

@@ -27,7 +27,7 @@
 
 use std::any::Any;
 
-use dvgw_edi::AnyDvgwMessage;
+use dvgw_edi::{DvgwDocument, DvgwMessage, DvgwMessageType};
 use edi_energy::{AnyMessage, EdiEnergyMessage};
 use edifact_rs::OwnedSegment;
 use mako_engine::{
@@ -38,6 +38,7 @@ use mako_engine::{
     },
     version::FormatVersion,
 };
+use mako_gabi_gas::AllocationVersion;
 use rubo4e::current as bo4e;
 use rust_decimal::Decimal;
 
@@ -1315,31 +1316,19 @@ pub fn extract_gasqualitaet(_segs: &[OwnedSegment]) -> Option<&'static str> {
 
 // ── DVGW gas-day conversion helper ───────────────────────────────────────────
 
-/// Parse a DVGW reference-date string (`YYYY-MM-DD` or `YYYYMMDD`) into a
-/// typed [`mako_gabi_gas::GasDay`].
+/// The gas day a DVGW message reports on, from its `DTM+Z01` Gültigkeitszeitraum.
 ///
-/// DVGW messages encode the gas day in DTM qualifier 137.  The format is
-/// `YYYYMMDD` in older versions and `YYYY-MM-DD` in current NOMINT/ALOCAT.
-/// Both are accepted here; an invalid or absent date falls back to today.
-fn parse_dvgw_gas_day(raw: Option<&str>) -> mako_gabi_gas::GasDay {
-    let fallback = || mako_gabi_gas::GasDay::new(time::OffsetDateTime::now_utc().date());
-    let Some(s) = raw else { return fallback() };
-    // Try ISO 8601 first (`YYYY-MM-DD`), then compact form (`YYYYMMDD`).
-    if let Ok(d) = mako_gabi_gas::GasDay::parse(s) {
-        return d;
-    }
-    // Compact `YYYYMMDD` → insert dashes and retry.
-    if s.len() == 8 {
-        let iso = format!("{}-{}-{}", &s[..4], &s[4..6], &s[6..8]);
-        if let Ok(d) = mako_gabi_gas::GasDay::parse(&iso) {
-            return d;
-        }
-    }
-    tracing::warn!(
-        raw = s,
-        "adapters: could not parse DVGW gas day — using today as fallback"
-    );
-    fallback()
+/// `DTM+Z01` is the only field that states it. `DTM+137` is the moment the
+/// message was written — reading that as the gas day is off by however long the
+/// sender took to transmit, and its format-`203` value parses as neither
+/// `YYYYMMDD` nor ISO 8601, so a lenient reader falls through to "today" and
+/// books the whole message against the wrong day in silence.
+///
+/// Returns `None` when the message carries no decodable `DTM+Z01`; the caller
+/// refuses the message rather than inventing a day for it.
+fn dvgw_gas_day(msg: &DvgwMessage) -> Option<mako_gabi_gas::GasDay> {
+    msg.validity_period
+        .and_then(|period| mako_gabi_gas::GasDay::from_period(period.start, period.end))
 }
 
 #[cfg(test)]

@@ -77,10 +77,10 @@ pub mod portfolio;
 /// GaBi Gas INVOIC billing workflow — PIDs 31010, 31007, 31008.
 pub mod invoic;
 
-/// GaBi Gas Nomination workflow — NOMINT/NOMRES (BKV ↔ FNB/MGV, PIDs 90011/90012/90021/90022).
+/// GaBi Gas Nomination workflow — NOMINT/NOMRES (Transportkunde ↔ NB/MGV, PIDs 70030–70039).
 pub mod nomination;
 
-/// GaBi Gas Allocation workflow — ALOCAT receive-and-record (PIDs 90001/90002/90003).
+/// GaBi Gas Allocation workflow — ALOCAT receive-and-record (PIDs 70001–70023).
 pub mod allocation;
 
 /// GaBi Gas SCHEDL workflow — day-ahead transport schedule receive-and-record (PID 90031).
@@ -180,29 +180,13 @@ pub use tranot::{
 /// **MMM Allokationsliste Gas (MSCONS):**
 /// - PID 13013 → `"gabi-gas-mmma"` (Marktlokationsscharfe Allokationsliste Gas, NB → LF; Gas-only)
 ///
-/// **Nomination — NOMINT/NOMRES (DVGW synthetic PIDs):**
-/// - PID 90011 → `"gabi-gas-nomination"` (NOMINT BKV → FNB)
-/// - PID 90012 → `"gabi-gas-nomination"` (NOMINT BKV → MGV)
-/// - PID 90021 → `"gabi-gas-nomination"` (NOMRES FNB → BKV)
-/// - PID 90022 → `"gabi-gas-nomination"` (NOMRES MGV → BKV)
+/// **DVGW gas transport (Prüfidentifikatoren from `SG1 RFF+Z13`):**
+/// - PIDs 70001–70023 → `"gabi-gas-allocation"` (ALOCAT)
+/// - PIDs 70030–70039 → `"gabi-gas-nomination"` (NOMINT / NOMRES)
 ///
-/// **Allocation — ALOCAT (DVGW synthetic PIDs):**
-/// - PID 90001 → `"gabi-gas-allocation"` (ALOCAT FNB → BKV daily)
-/// - PID 90002 → `"gabi-gas-allocation"` (ALOCAT MGV → BKV monthly)
-/// - PID 90003 → `"gabi-gas-allocation"` (ALOCAT VNB → FNB sub-daily)
-///
-/// **Schedule — SCHEDL (DVGW synthetic PID):**
-/// - PID 90031 → `"gabi-gas-schedl"` (SCHEDL transport schedule, receive-and-record)
-///
-/// **Imbalance notification — IMBNOT (DVGW synthetic PID):**
-/// - PID 90041 → `"gabi-gas-imbnot"` (IMBNOT FNB/MGV → BKV)
-///
-/// **Transport notification — TRANOT (DVGW synthetic PID):**
-/// - PID 90051 → `"gabi-gas-tranot"` (TRANOT FNB/VNB → BKV/GH/MGV)
-///
-/// **Delivery order — DELORD/DELRES (DVGW synthetic PIDs):**
-/// - PID 90061 → `"gabi-gas-delivery-order"` (DELORD BKV/GH → FNB/MGV)
-/// - PID 90062 → `"gabi-gas-delivery-order"` (DELRES FNB/MGV → BKV/GH)
+/// The SCHEDL, IMBNOT, TRANOT and DELORD/DELRES workflows are placeholders:
+/// `dvgw-edi` does not parse those formats, so nothing routes to them and their
+/// ingest arm returns `Skipped`. See `ROADMAP.md`.
 ///
 /// Note: PID 31011 (Rechnung sonstige Leistung / AWH Sperrprozesse Gas) is
 /// handled by `mako-geli-gas` (`geli-gas-sperrprozesse-invoic`), not here.
@@ -253,12 +237,12 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
             "gabi-gas-invoic",
         );
 
-        // NOMINT / NOMRES synthetic PIDs (DVGW, 90011/90012/90021/90022).
+        // NOMINT / NOMRES Prüfidentifikatoren (DVGW, 70030–70039).
         for &pid in nomination::NOMINATION_PIDS {
             router.register(pid, "gabi-gas-nomination");
         }
 
-        // ALOCAT synthetic PIDs (DVGW, 90001/90002/90003).
+        // ALOCAT Prüfidentifikatoren (DVGW, 70001–70023).
         for &pid in allocation::ALLOCATION_PIDS {
             router.register(pid, "gabi-gas-allocation");
         }

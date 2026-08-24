@@ -90,7 +90,7 @@ pub(super) fn render_reqote(
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
     let message_ref = explicit_ref.as_deref().unwrap_or(causation_ref.as_str());
 
-    let release = active_release(MessageType::Reqote, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Reqote, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -202,7 +202,7 @@ pub(super) fn render_orders(
     let causation_ref = msg_ref_from_uuid(&msg.causation_event_id.to_string());
     let message_ref = explicit_ref.as_deref().unwrap_or(causation_ref.as_str());
 
-    let release = active_release(MessageType::Orders, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Orders, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -293,7 +293,7 @@ pub(super) fn render_ordchg(
     // ORDCHG BDEW releases are `1.x` (no trailing letter), which parse to the
     // `Other` track rather than `Short` — asking for `Short` here silently
     // returned NoActiveProfile for every ORDCHG (39000/39001/39002).
-    let release = active_release(MessageType::Ordchg, &ReleaseTrack::Other).ok_or_else(|| {
+    let release = active_release(MessageType::Ordchg, ReleaseTrack::Other).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -376,7 +376,7 @@ pub(super) fn render_ordrsp(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Ordrsp, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Ordrsp, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -510,7 +510,7 @@ pub(super) fn render_quotes(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Quotes, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Quotes, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }

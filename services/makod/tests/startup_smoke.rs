@@ -238,7 +238,9 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // AHB profile coverage — the difference is the deliberate
     // `KNOWN_PROFILE_GAPS` set, routed but without AHB rules. Both numbers are
     // correct and appear in different places; do not "harmonise" them.
-    const LANDING_PAGE_PIDS: usize = 428;
+    // Rose from 428 when the DVGW gas-transport PIDs stopped being a synthetic
+    // set of twelve and became the 33 codes DVGW actually publishes in RFF+Z13.
+    const LANDING_PAGE_PIDS: usize = 454;
     const LANDING_PAGE_WORKFLOWS: usize = 64;
 
     assert_eq!(

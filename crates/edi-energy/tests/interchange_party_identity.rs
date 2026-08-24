@@ -143,3 +143,45 @@ UNT+7+MSG1'UNZ+1+REF1'"
     assert_eq!(parsed.header.sender_qualifier.as_ref(), "14");
     assert_eq!(parsed.header.receiver_qualifier.as_ref(), "500");
 }
+
+/// The rule has to hold on **every** path that yields a message.
+///
+/// `parse` and `parse_interchange_full` enforced it; the buffered iterator did
+/// not, even though it holds the `UNB` header the check needs. An AS4 adapter
+/// that reached for `parse_interchange_buffered` — the path recommended for
+/// exactly that job, because it exposes the envelope before deserialization —
+/// got no §2.13 enforcement at all. An authorisation boundary that depends on
+/// which overload the caller picked is not a boundary.
+#[test]
+fn the_buffered_iterator_enforces_the_rule_too() {
+    let wire = interchange(SENDER, IMPOSTOR);
+    let parser = edi_energy::Parser::new();
+
+    let (header, iter) = parser
+        .parse_interchange_buffered(std::io::Cursor::new(wire))
+        .expect("the envelope itself is well-formed");
+    assert_eq!(header.sender_id.as_ref(), SENDER);
+
+    let results: Vec<_> = iter.collect();
+    assert!(
+        results
+            .iter()
+            .any(|r| matches!(r, Err(edi_energy::Error::InterchangePartyMismatch { .. }))),
+        "the buffered path must reject the impostor as the other paths do: {results:?}"
+    );
+}
+
+/// …and it must not reject a consistent interchange.
+#[test]
+fn the_buffered_iterator_accepts_a_consistent_interchange() {
+    let wire = interchange(SENDER, SENDER);
+    let (_header, iter) = edi_energy::Parser::new()
+        .parse_interchange_buffered(std::io::Cursor::new(wire))
+        .expect("well-formed envelope");
+    let results: Vec<_> = iter.collect();
+    assert!(
+        results.iter().all(std::result::Result::is_ok),
+        "a consistent interchange must pass: {results:?}"
+    );
+    assert_eq!(results.len(), 1);
+}

@@ -395,7 +395,7 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
 | `de.mako.process.failed` | Fatal error / regulatory deadline exceeded | `Marktlokation` |
 | `de.mako.malo.identified` | MaLo-ID lookup resolved | `Marktlokation` |
 | `de.vpp.dispatch.confirmed` | WiM Steuerungsauftrag (PID 55168) positively confirmed by MSB — triggers VPP auto-billing in `billingd` | `{tx_id, location_id, max_power_kw, execution_time_from, execution_time_until, command_type, sender_mp_id, produkt_code}` |
-| `de.gabi.alocat.missing` | KoV §6.4 final-allocation window closed with no binding final ALOCAT — the gas day's imbalance cannot be settled; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, synthetic_pid}` |
+| `de.gabi.alocat.missing` | KoV §6.4 final-allocation window closed with no binding final ALOCAT — the gas day's imbalance cannot be settled; open a Clearingfall with the FNB/MGV | `{gas_day, deadline_label, sender_eic, receiver_eic, pruefidentifikator}` |
 
 **Full example:**
 

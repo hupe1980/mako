@@ -61,7 +61,7 @@ pub(super) fn render_invoic(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Invoic, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Invoic, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }
@@ -137,7 +137,7 @@ pub(super) fn render_remadv(
         .map(msg_ref_from_uuid)
         .unwrap_or_else(|| msg_ref_from_uuid(&msg.causation_event_id.to_string()));
 
-    let release = active_release(MessageType::Remadv, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Remadv, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }

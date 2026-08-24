@@ -76,6 +76,40 @@ fn the_streaming_path_decodes_the_same_repertoire() {
     );
 }
 
+/// **Every** reader-based entry point must decode the repertoire, not just the
+/// streaming one.
+///
+/// `Parser::parse_reader`, `parse_interchange_buffered` and the reader form of
+/// `parse_interchange_full` used to hand the bytes straight to a UTF-8
+/// tokeniser while the byte-slice paths transcoded first. The same conformant
+/// interchange therefore parsed or failed depending only on which overload the
+/// caller reached for — and the failing ones are the paths an AS4 adapter uses,
+/// where the payload arrives as a stream.
+#[test]
+fn every_reader_entry_point_decodes_the_declared_repertoire() {
+    use edi_energy::Parser;
+
+    let parser = Parser::new();
+
+    parser
+        .parse_reader(std::io::Cursor::new(FIXTURE.to_vec()))
+        .expect("parse_reader must decode UNOC");
+
+    let (_header, iter) = parser
+        .parse_interchange_buffered(std::io::Cursor::new(FIXTURE.to_vec()))
+        .expect("parse_interchange_buffered must decode UNOC");
+    let buffered: Vec<_> = iter.collect();
+    assert!(
+        buffered.iter().any(std::result::Result::is_ok),
+        "buffered parse yielded no message: {buffered:?}"
+    );
+
+    let full = parser
+        .parse_interchange_full(std::io::Cursor::new(FIXTURE.to_vec()))
+        .expect("parse_interchange_full must decode UNOC");
+    assert!(!full.messages.is_empty());
+}
+
 /// An outbound interchange must be encoded into the repertoire its own `UNB`
 /// declares. A `UNOC` header over a UTF-8 body is mojibake at the counterparty
 /// with nothing in the file to explain it — and mako's own parser, which now

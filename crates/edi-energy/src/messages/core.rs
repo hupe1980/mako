@@ -7,70 +7,16 @@
 //! This module is `pub(crate)` — downstream users only see the concrete types
 //! and the [`EdiEnergyMessage`](crate::EdiEnergyMessage) trait.
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 use edifact_rs::{OwnedSegment, ProfileRulePack};
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 use crate::{
     EdiEnergyReport, Error, MessageType, Pruefidentifikator, Release, registry::ReleaseRegistry,
 };
 
 /// Internal storage shared by all concrete message types.
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 #[derive(Debug, Clone)]
 pub(crate) struct MessageCore {
     /// All parsed segments (owned, heap-allocated), including any UNB/UNZ envelope.
@@ -92,27 +38,15 @@ pub(crate) struct MessageCore {
     pub(crate) pruefidentifikator: Option<u32>,
     /// The resolved message type discriminant.
     pub(crate) message_type: MessageType,
+    /// The date `validate()` resolves profiles against.
+    ///
+    /// Carried from [`ParseConfig::reference_date`](crate::ParseConfig::reference_date)
+    /// so a parser configured with a fixed date actually validates against it.
+    /// `None` falls back to today's UTC date at validation time.
+    pub(crate) reference_date: Option<time::Date>,
 }
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 impl MessageCore {
     /// Construct from raw parsed data.
     pub(crate) fn new(
@@ -121,6 +55,25 @@ impl MessageCore {
         assoc_code: impl Into<Box<str>>,
         pruefidentifikator: Option<u32>,
         message_type: MessageType,
+    ) -> Self {
+        Self::new_on_date(
+            segments,
+            message_ref,
+            assoc_code,
+            pruefidentifikator,
+            message_type,
+            None,
+        )
+    }
+
+    /// Construct with an explicit reference date for profile resolution.
+    pub(crate) fn new_on_date(
+        segments: Vec<OwnedSegment>,
+        message_ref: impl Into<Box<str>>,
+        assoc_code: impl Into<Box<str>>,
+        pruefidentifikator: Option<u32>,
+        message_type: MessageType,
+        reference_date: Option<time::Date>,
     ) -> Self {
         let assoc_code: Box<str> = assoc_code.into();
         let release = if assoc_code.is_empty() {
@@ -139,6 +92,7 @@ impl MessageCore {
             release,
             pruefidentifikator,
             message_type,
+            reference_date,
         }
     }
 
@@ -184,7 +138,7 @@ impl MessageCore {
             release,
             semantic_pack,
             ReleaseRegistry::global(),
-            None,
+            self.reference_date,
         )
     }
 
@@ -199,7 +153,7 @@ impl MessageCore {
             release,
             semantic_pack,
             registry,
-            None,
+            self.reference_date,
         )
     }
 
@@ -213,7 +167,9 @@ impl MessageCore {
         registry: &ReleaseRegistry,
         reference_date: Option<time::Date>,
     ) -> Result<EdiEnergyReport, Error> {
-        let date = reference_date.unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
+        let date = reference_date
+            .or(self.reference_date)
+            .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
         // Layer 1: EDIFACT envelope validation — only when an interchange wrapper is
         // present.  Messages produced by builders contain UNH…UNT but no UNB/UNZ;
         // skipping the envelope check for bare messages lets callers validate
@@ -363,9 +319,15 @@ impl MessageCore {
         registry: &ReleaseRegistry,
     ) -> Result<EdiEnergyReport, Error> {
         let combined = match semantic_pack {
-            Some(sem) => sem
-                .merge_with_override(extra)
-                .expect("semantic + extra pack merge failed: incompatible release scopes"),
+            Some(sem) => sem.merge_with_override(extra).map_err(|e| {
+                // A caller-supplied pack scoped to a different release is a
+                // configuration mistake, not a reason to abort the process.
+                Error::Profile(crate::ProfileError::InvalidField {
+                    field: "rule_pack",
+                    value: "caller-supplied CustomRulePack".to_owned(),
+                    reason: format!("cannot merge with the built-in semantic pack: {e}"),
+                })
+            })?,
             None => extra,
         };
         let release = self.detect_release()?;
@@ -400,15 +362,13 @@ impl MessageCore {
         Ok((message_ref, assoc_code))
     }
 
-    /// Extract a Prüfidentifikator from the first `BGM` segment (element 1, DE 1004).
+    /// Extract a Prüfidentifikator during `EdifactDeserialize`.
     ///
-    /// Returns `None` when no `BGM` is present or element 1 is not a valid `u32`.
+    /// Uses the shared scanner, so this path resolves the same code the parser
+    /// does. The profile registry is not consulted here (`EdifactDeserialize`
+    /// has no release context), so `BGM` is tried first and `RFF+Z13` second.
     pub(crate) fn extract_bgm_pid(segments: &[edifact_rs::Segment<'_>]) -> Option<u32> {
-        segments
-            .iter()
-            .find(|s| s.tag == "BGM")
-            .and_then(|s| s.element_str(1))
-            .and_then(|v| v.parse().ok())
+        crate::pid_scan::detect(segments, crate::registry::PidSource::BgmDe1004)
     }
 
     /// Replay all raw segments through an EDIFACT event emitter.

@@ -90,25 +90,7 @@ pub struct Unset;
 
 // ── Shared helpers (pub(super) for child modules) ─────────────────────────────
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "invoic",
-    feature = "orders",
-    feature = "partin",
-    feature = "reqote",
-    feature = "remadv",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 pub(super) fn bytes_to_segments(
     bytes: &[u8],
 ) -> Result<Vec<edifact_rs::OwnedSegment>, crate::Error> {
@@ -161,25 +143,7 @@ pub(super) fn today_ccyymmdd() -> String {
 // emit_comp!(w, "NAD", ["MS"], [id, "", "293"]);       // NAD+MS+<id>::293
 // ```
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "invoic",
-    feature = "orders",
-    feature = "partin",
-    feature = "reqote",
-    feature = "remadv",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 macro_rules! emit_seg {
     ($writer:expr, $tag:expr, $($elem:expr),+ $(,)?) => {{
         let elements: &[&str] = &[$($elem),+];
@@ -189,25 +153,7 @@ macro_rules! emit_seg {
     }};
 }
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "invoic",
-    feature = "orders",
-    feature = "partin",
-    feature = "reqote",
-    feature = "remadv",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 macro_rules! emit_comp {
     ($writer:expr, $tag:expr, $([$($comp:expr),* $(,)?]),+ $(,)?) => {{
         let elements: &[&[&str]] = &[$(&[$($comp),*]),+];

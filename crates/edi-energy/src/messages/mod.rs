@@ -6,25 +6,7 @@ pub(crate) mod core;
 
 // ── impl_edi_energy_message! ──────────────────────────────────────────────────
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 /// Generate all [`crate::EdiEnergyMessage`] trait methods for a message type
 /// that delegates to an internal `self.core: MessageCore` field.
 ///
@@ -154,46 +136,10 @@ macro_rules! impl_edi_energy_message {
 /// Typed EDIFACT segment structs shared across all message types.
 ///
 /// This module is only compiled when at least one message-type feature is enabled.
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 pub mod segments;
 
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 pub mod layouts;
 
 /// APERAK — Application Error and Acknowledgement message.

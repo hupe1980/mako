@@ -41,12 +41,12 @@ pub enum GasMarketRole {
 
     /// Fernleitungsnetzbetreiber (FNB) — gas transmission system operator.
     ///
-    /// Responsibilities: transport scheduling, daily allocations (ALOCAT 90001).
+    /// Responsibilities: transport scheduling, allocation reporting (ALOCAT).
     Fnb,
 
     /// Verteilnetzbetreiber (VNB) — gas distribution network operator.
     ///
-    /// Responsibilities: sub-daily allocations (ALOCAT 90003), SLP allocation.
+    /// Responsibilities: allocation reporting to the NB (ALOCAT), SLP allocation.
     Vnb,
 
     /// Bilanzkreisverantwortlicher (BKV) — balance group manager.
@@ -57,7 +57,7 @@ pub enum GasMarketRole {
 
     /// Marktgebietsverantwortlicher (MGV) — market area responsible party.
     ///
-    /// Responsibilities: monthly allocations (ALOCAT 90002), imbalance settlement
+    /// Responsibilities: allocation reporting to the BKV (ALOCAT), imbalance settlement
     /// (IMBNOT), Ausgleichsenergie pricing.
     Mgv,
 

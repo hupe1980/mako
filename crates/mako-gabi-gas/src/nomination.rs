@@ -11,21 +11,28 @@
 //! curtailing, or rejecting the submitted quantities.
 //!
 //! ```text
-//! BKV ──(NOMINT 90011/90012)──→  FNB / MGV
-//! FNB / MGV ──(NOMRES 90021/90022)──→  BKV
+//! Transportkunde ──(NOMINT 70030–70034)──→  NB / MGV
+//! NB / MGV ──(NOMRES 70035–70039)──→  Transportkunde
 //! ```
 //!
-//! # Synthetic Prüfidentifikatoren
+//! # Prüfidentifikatoren
 //!
-//! DVGW messages carry no BGM Prüfidentifikator. The `dvgw-edi` crate assigns
-//! synthetic PIDs from the range 90000–90999:
+//! DVGW publishes real Prüfidentifikatoren in `SG1 RFF+Z13`; `dvgw-edi` reads
+//! them off the wire. The catalogue below is a projection of
+//! [`dvgw_edi::catalogue_for`] and is pinned to it by a test in this module.
 //!
-//! | PID   | Message | Direction          | Role qualifier |
-//! |-------|---------|--------------------|----------------|
-//! | 90011 | NOMINT  | BKV → FNB          | Z01            |
-//! | 90012 | NOMINT  | BKV → MGV          | Z02            |
-//! | 90021 | NOMRES  | FNB → BKV          | Z01            |
-//! | 90022 | NOMRES  | MGV → BKV          | Z02            |
+//! | PID | Message | Anwendungsfall | Richtung |
+//! |---|---|---|---|
+//! | 70030 | NOMINT | Nominierung an einem physikalischen Punkt (ungebündelt) | Transportkunde an NB |
+//! | 70031 | NOMINT | Nominierung an einem virtuellen Handelspunkt | Transportkunde an MGV |
+//! | 70032 | NOMINT | Flexibilitätsübertragung | Transportkunde an NB |
+//! | 70033 | NOMINT | Gebündelte Nominierung | Transportkunde an NB |
+//! | 70034 | NOMINT | Nominierungsweitergabe zwischen Netzbetreibern | NB an NB |
+//! | 70035 | NOMRES | Matching Benachrichtigung | NB an Transportkunde |
+//! | 70036 | NOMRES | Bestätigung | NB an Transportkunde |
+//! | 70037 | NOMRES | VHP Matching Benachrichtigung | MGV an Transportkunde |
+//! | 70038 | NOMRES | VHP Bestätigung | MGV an Transportkunde |
+//! | 70039 | NOMRES | Bestätigung Flexibilitätsübertragung | NB an Transportkunde |
 //!
 //! # State machine
 //!
@@ -53,23 +60,20 @@ use mako_engine::{
 
 use crate::domain::{GasDay, NominationQuantity};
 
-// ── Synthetic PID set ─────────────────────────────────────────────────────────
+// ── Prüfidentifikator set ─────────────────────────────────────────────────────
 
-/// All synthetic PIDs for the NOMINT/NOMRES nomination cycle.
+/// Every DVGW Prüfidentifikator that routes to the nomination workflow.
 ///
-/// | PID   | Message | Direction   |
-/// |-------|---------|-------------|
-/// | 90011 | NOMINT  | BKV → FNB  |
-/// | 90012 | NOMINT  | BKV → MGV  |
-/// | 90021 | NOMRES  | FNB → BKV  |
-/// | 90022 | NOMRES  | MGV → BKV  |
-pub const NOMINATION_PIDS: &[u32] = &[90011, 90012, 90021, 90022];
+/// See the module docs for the Anwendungsfall behind each code.
+pub const NOMINATION_PIDS: &[u32] = &[
+    70030, 70031, 70032, 70033, 70034, 70035, 70036, 70037, 70038, 70039,
+];
 
-/// Synthetic PIDs for outbound NOMINT (BKV → FNB or BKV → MGV).
-pub const NOMINT_PIDS: &[u32] = &[90011, 90012];
+/// Outbound NOMINT — the Transportkunde nominates.
+pub const NOMINT_PIDS: &[u32] = &[70030, 70031, 70032, 70033, 70034];
 
-/// Synthetic PIDs for inbound NOMRES (FNB/MGV → BKV).
-pub const NOMRES_PIDS: &[u32] = &[90021, 90022];
+/// Inbound NOMRES — the NB or MGV answers.
+pub const NOMRES_PIDS: &[u32] = &[70035, 70036, 70037, 70038, 70039];
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-nomination";
@@ -91,21 +95,23 @@ pub const NOMRES_DEADLINE_LABEL: &str = "gabi-gas-nomres-response-deadline";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum NominationCounterparty {
-    /// FNB (Fernleitungsnetzbetreiber) — synthetic PID 90011.
+    /// The network operator (FNB/VNB) — nominations at a physical point.
     Fnb,
-    /// MGV (Marktgebietsverantwortlicher) — synthetic PID 90012.
+    /// The Marktgebietsverantwortlicher — nominations at the virtual trading point.
     Mgv,
 }
 
 impl NominationCounterparty {
-    /// Derive from a synthetic PID.
+    /// Derive from the Prüfidentifikator.
     ///
-    /// Returns `None` for unrecognised PIDs.
+    /// The virtual-trading-point Anwendungsfälle (70031 nominate at the VHP,
+    /// 70037/70038 answer for it) are the MGV's; the physical-point ones are the
+    /// network operator's. Returns `None` for a code outside the nomination set.
     #[must_use]
     pub fn from_pid(pid: u32) -> Option<Self> {
         match pid {
-            90011 | 90021 => Some(Self::Fnb),
-            90012 | 90022 => Some(Self::Mgv),
+            70031 | 70037 | 70038 => Some(Self::Mgv),
+            70030 | 70032 | 70033 | 70034 | 70035 | 70036 | 70039 => Some(Self::Fnb),
             _ => None,
         }
     }
@@ -149,8 +155,8 @@ impl NomresAcceptance {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct NominationData {
-    /// Synthetic PID that initiated this nomination (90011 = FNB, 90012 = MGV).
-    pub synthetic_pid: u32,
+    /// The Prüfidentifikator that initiated this nomination (70030–70034).
+    pub pruefidentifikator: u32,
     /// Whether the counterparty is an FNB or MGV.
     pub counterparty: NominationCounterparty,
     /// EIC code of the sending BKV.
@@ -191,8 +197,8 @@ pub struct NominationData {
 pub enum NominationEvent {
     /// BKV dispatched a NOMINT nomination to FNB or MGV.
     NominationSent {
-        /// Synthetic PID (90011 = FNB, 90012 = MGV).
-        synthetic_pid: u32,
+        /// The Prüfidentifikator (70030–70034).
+        pruefidentifikator: u32,
         /// Whether the counterparty is FNB or MGV.
         counterparty: NominationCounterparty,
         /// EIC code of the sending BKV.
@@ -203,6 +209,13 @@ pub enum NominationEvent {
         gas_day: GasDay,
         /// NOMINT document reference.
         nomination_ref: MessageRef,
+        /// Nominated energy in kWh, integrated over the nominated periods.
+        ///
+        /// A DVGW `QTY` is a rate in kWh/h, so this is Σ(rate × duration) for the
+        /// direction the nomination states. `None` when no quantity could be
+        /// integrated — a curtailment then cannot be detected, and the workflow
+        /// records that rather than assuming none.
+        nominated_kwh: Option<rust_decimal::Decimal>,
     },
     /// FNB/MGV accepted the nomination in full.
     Accepted {
@@ -217,6 +230,12 @@ pub enum NominationEvent {
         nomres_ref: MessageRef,
         /// Gas day confirmed by the FNB/MGV.
         gas_day: GasDay,
+        /// Energy actually confirmed, in kWh — less than what was nominated.
+        ///
+        /// `None` when the counterparty stated a partial acceptance without a
+        /// figure this could integrate; the curtailed amount is then unknown
+        /// rather than zero.
+        confirmed_kwh: Option<rust_decimal::Decimal>,
     },
     /// FNB/MGV rejected the nomination.
     Rejected {
@@ -317,13 +336,13 @@ impl NominationState {
 /// [`Workflow::handle`] is pure — no I/O.
 #[derive(Clone)]
 pub enum NominationCommand {
-    /// BKV is dispatching a NOMINT nomination (PIDs 90011 or 90012).
+    /// The Transportkunde is dispatching a NOMINT nomination (PIDs 70030–70034).
     ///
     /// Constructed by the outbound dispatch layer in `makod` after the BKV
     /// submits a nomination via the Commands API.
     SendNomination {
-        /// Synthetic PID (90011 = FNB, 90012 = MGV).
-        synthetic_pid: u32,
+        /// The Prüfidentifikator (70030–70034).
+        pruefidentifikator: u32,
         /// EIC code of the sending BKV.
         sender_eic: String,
         /// EIC code of the receiving FNB/MGV.
@@ -332,9 +351,16 @@ pub enum NominationCommand {
         gas_day: GasDay,
         /// NOMINT document reference.
         nomination_ref: MessageRef,
+        /// Nominated energy in kWh, integrated over the nominated periods.
+        ///
+        /// A DVGW `QTY` is a rate in kWh/h, so this is Σ(rate × duration) for the
+        /// direction the nomination states. `None` when no quantity could be
+        /// integrated — a curtailment then cannot be detected, and the workflow
+        /// records that rather than assuming none.
+        nominated_kwh: Option<rust_decimal::Decimal>,
     },
 
-    /// Inbound NOMRES received from FNB/MGV (PIDs 90021 or 90022).
+    /// Inbound NOMRES received from the NB or MGV (PIDs 70035–70039).
     ///
     /// Constructed by the DVGW adapter in `makod` when a NOMRES arrives on the
     /// inbound channel. The `nomination_ref` must match the one in the outbound
@@ -346,6 +372,12 @@ pub enum NominationCommand {
         acceptance: NomresAcceptance,
         /// Gas day confirmed by the FNB/MGV.
         gas_day: GasDay,
+        /// Confirmed energy in kWh, integrated over the confirmed periods.
+        ///
+        /// Compared against the nomination's own figure to detect a curtailment:
+        /// NOMRES has no status segment, so a partial acceptance shows up **only**
+        /// as a reduced quantity. `None` leaves the acceptance as stated.
+        confirmed_kwh: Option<rust_decimal::Decimal>,
         /// Human-readable rejection reason (populated when `acceptance = Rejected`).
         rejection_reason: Option<String>,
     },
@@ -377,26 +409,43 @@ impl Workflow for GaBiGasNominationWorkflow {
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
             NominationEvent::NominationSent {
-                synthetic_pid,
+                pruefidentifikator,
                 counterparty,
                 sender_eic,
                 receiver_eic,
                 gas_day,
                 nomination_ref,
+                nominated_kwh,
             } => NominationState::NominationSent(NominationData {
-                synthetic_pid: *synthetic_pid,
+                pruefidentifikator: *pruefidentifikator,
                 counterparty: *counterparty,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
                 gas_day: *gas_day,
                 nomination_ref: nomination_ref.clone(),
-                quantity: None, // populated later when quantity is parsed from NOMINT payload
+                quantity: nominated_kwh.map(NominationQuantity::submitted),
                 corrects_nomination_ref: None, // set by handle() when correcting a prior NOMINT
                 correction_sequence: 0,
             }),
 
             NominationEvent::Accepted { .. } => match state {
-                NominationState::NominationSent(data) => NominationState::Accepted(data),
+                NominationState::NominationSent(mut data) => {
+                    data.quantity = data.quantity.map(NominationQuantity::accept_in_full);
+                    NominationState::Accepted(data)
+                }
+                other => other,
+            },
+
+            NominationEvent::PartiallyAccepted {
+                confirmed_kwh: Some(confirmed),
+                ..
+            } => match state {
+                NominationState::NominationSent(mut data) => {
+                    data.quantity = data
+                        .quantity
+                        .map(|q| q.accept_partial(*confirmed, Some("curtailed by NOMRES".into())));
+                    NominationState::PartiallyAccepted(data)
+                }
                 other => other,
             },
 
@@ -426,29 +475,31 @@ impl Workflow for GaBiGasNominationWorkflow {
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match command {
             NominationCommand::SendNomination {
-                synthetic_pid,
+                pruefidentifikator,
                 sender_eic,
                 receiver_eic,
                 gas_day,
                 nomination_ref,
+                nominated_kwh,
             } => {
                 if !matches!(state, NominationState::New) {
                     return Err(WorkflowError::invalid_state("New", state.label()));
                 }
-                let counterparty =
-                    NominationCounterparty::from_pid(synthetic_pid).ok_or_else(|| {
+                let counterparty = NominationCounterparty::from_pid(pruefidentifikator)
+                    .ok_or_else(|| {
                         WorkflowError::rejected(format!(
-                            "PID {synthetic_pid} is not a valid NOMINT PID \
-                             (expected 90011 or 90012)"
+                            "PID {pruefidentifikator} is not a NOMINT Prüfidentifikator \
+                             (expected one of 70030–70034)"
                         ))
                     })?;
                 Ok(vec![NominationEvent::NominationSent {
-                    synthetic_pid,
+                    pruefidentifikator,
                     counterparty,
                     sender_eic,
                     receiver_eic,
                     gas_day,
                     nomination_ref,
+                    nominated_kwh,
                 }]
                 .into())
             }
@@ -457,14 +508,32 @@ impl Workflow for GaBiGasNominationWorkflow {
                 nomres_ref,
                 acceptance,
                 gas_day,
+                confirmed_kwh,
                 rejection_reason,
             } => {
-                if !matches!(state, NominationState::NominationSent(_)) {
+                let NominationState::NominationSent(sent) = state else {
                     return Err(WorkflowError::invalid_state(
                         "NominationSent",
                         state.label(),
                     ));
-                }
+                };
+
+                // NOMRES has no status segment: a curtailment shows up **only** as
+                // a confirmed quantity below the nominated one. So a stated
+                // acceptance is upgraded to a partial one when the numbers say so
+                // — recording a curtailed nomination as fully accepted leaves the
+                // BKV's portfolio short by the difference with nothing pointing
+                // at it.
+                let nominated = sent.quantity.as_ref().map(|q| q.submitted_kwh);
+                let curtailed = matches!(
+                    (nominated, confirmed_kwh),
+                    (Some(nominated), Some(confirmed)) if confirmed < nominated
+                );
+                let acceptance = match acceptance {
+                    NomresAcceptance::Accepted if curtailed => NomresAcceptance::PartiallyAccepted,
+                    other => other,
+                };
+
                 let event = match &acceptance {
                     NomresAcceptance::Accepted => NominationEvent::Accepted {
                         nomres_ref,
@@ -473,6 +542,7 @@ impl Workflow for GaBiGasNominationWorkflow {
                     NomresAcceptance::PartiallyAccepted => NominationEvent::PartiallyAccepted {
                         nomres_ref,
                         gas_day,
+                        confirmed_kwh,
                     },
                     NomresAcceptance::Rejected | NomresAcceptance::Other(_) => {
                         NominationEvent::Rejected {
@@ -492,6 +562,44 @@ impl Workflow for GaBiGasNominationWorkflow {
                 }
                 Ok(vec![NominationEvent::DeadlineExpired { deadline_id, label }].into())
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pid_catalogue_conformance {
+    use super::{NOMINATION_PIDS, NOMINT_PIDS, NOMRES_PIDS, NominationCounterparty};
+
+    /// The lists above are a projection of the DVGW catalogue. A second copy
+    /// that drifts is how a published Anwendungsfall silently stops routing, so
+    /// they are pinned to the source rather than merely reviewed.
+    #[test]
+    fn the_pid_lists_match_the_dvgw_catalogue() {
+        for (message_type, expected) in [
+            (dvgw_edi::DvgwMessageType::Nomint, NOMINT_PIDS),
+            (dvgw_edi::DvgwMessageType::Nomres, NOMRES_PIDS),
+        ] {
+            let published: Vec<u32> = dvgw_edi::catalogue_for(message_type)
+                .map(|info| info.pid)
+                .collect();
+            assert_eq!(
+                published, expected,
+                "{message_type} routing list has drifted from the DVGW catalogue"
+            );
+        }
+        let union: Vec<u32> = NOMINT_PIDS.iter().chain(NOMRES_PIDS).copied().collect();
+        assert_eq!(union, NOMINATION_PIDS);
+    }
+
+    /// Every routed code must resolve to a counterparty, or the workflow rejects
+    /// a message DVGW publishes.
+    #[test]
+    fn every_routed_pid_resolves_to_a_counterparty() {
+        for &pid in NOMINATION_PIDS {
+            assert!(
+                NominationCounterparty::from_pid(pid).is_some(),
+                "PID {pid} routes here but has no counterparty"
+            );
         }
     }
 }

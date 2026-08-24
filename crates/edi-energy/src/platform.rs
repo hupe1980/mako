@@ -44,25 +44,7 @@
 use std::sync::Arc;
 
 use crate::{AnyMessage, Error, ParseConfig, generated, registry::ReleaseRegistry};
-#[cfg(any(
-    feature = "utilmd",
-    feature = "mscons",
-    feature = "aperak",
-    feature = "contrl",
-    feature = "invoic",
-    feature = "remadv",
-    feature = "orders",
-    feature = "iftsta",
-    feature = "insrpt",
-    feature = "reqote",
-    feature = "partin",
-    feature = "ordchg",
-    feature = "ordrsp",
-    feature = "quotes",
-    feature = "comdis",
-    feature = "pricat",
-    feature = "utilts",
-))]
+#[cfg(any_message)]
 use crate::{EdiEnergyReport, Release};
 
 /// An explicit EDI@Energy processing context.
@@ -107,21 +89,24 @@ impl Platform {
         Self::new(ReleaseRegistry::new(profiles))
     }
 
-    /// Override the transition grace period for this platform's registry.
+    /// Accept a superseded format for `days` past its `valid_until`.
     ///
-    /// The BDEW default is 7 calendar days (GPKE §10, `WiM` §12).  Use this when
-    /// a specific tenant contract or test scenario requires a different window.
+    /// The BDEW default is **zero** — EDIFACT changes at a single
+    /// Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 §2.5) with no window
+    /// around it. Raise this only for a tenant whose contract tolerates
+    /// late-arriving messages in the old format; see
+    /// [`DEFAULT_RECEIVE_TOLERANCE_DAYS`](crate::DEFAULT_RECEIVE_TOLERANCE_DAYS).
     ///
     /// Returns `self` for builder chaining:
     /// ```rust,no_run
     /// use edi_energy::Platform;
-    /// let platform = Platform::with_all_profiles().with_transition_grace_days(14);
+    /// let platform = Platform::with_all_profiles().with_receive_tolerance_days(3);
     /// ```
     #[must_use]
-    pub fn with_transition_grace_days(self, days: i64) -> Self {
+    pub fn with_receive_tolerance_days(self, days: i64) -> Self {
         let registry = Arc::try_unwrap(self.registry)
             .unwrap_or_else(|arc| (*arc).clone())
-            .with_transition_grace_days(days);
+            .with_receive_tolerance_days(days);
         Self {
             registry: Arc::new(registry),
         }
@@ -267,25 +252,7 @@ impl Platform {
     /// registered in this platform's registry.
     ///
     /// Returns `Err(Error::UnknownMessageType)` for [`AnyMessage::Unknown`].
-    #[cfg(any(
-        feature = "utilmd",
-        feature = "mscons",
-        feature = "aperak",
-        feature = "contrl",
-        feature = "invoic",
-        feature = "remadv",
-        feature = "orders",
-        feature = "iftsta",
-        feature = "insrpt",
-        feature = "reqote",
-        feature = "partin",
-        feature = "ordchg",
-        feature = "ordrsp",
-        feature = "quotes",
-        feature = "comdis",
-        feature = "pricat",
-        feature = "utilts",
-    ))]
+    #[cfg(any_message)]
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(skip(self, message), fields(message_type = ?message.try_message_type()))
@@ -309,25 +276,7 @@ impl Platform {
     /// Returns `Err(Error::ProfileNotFound)` when `release` is not registered.
     ///
     /// Returns `Err(Error::UnknownMessageType)` for [`AnyMessage::Unknown`].
-    #[cfg(any(
-        feature = "utilmd",
-        feature = "mscons",
-        feature = "aperak",
-        feature = "contrl",
-        feature = "invoic",
-        feature = "remadv",
-        feature = "orders",
-        feature = "iftsta",
-        feature = "insrpt",
-        feature = "reqote",
-        feature = "partin",
-        feature = "ordchg",
-        feature = "ordrsp",
-        feature = "quotes",
-        feature = "comdis",
-        feature = "pricat",
-        feature = "utilts",
-    ))]
+    #[cfg(any_message)]
     #[cfg_attr(
         feature = "tracing",
         tracing::instrument(

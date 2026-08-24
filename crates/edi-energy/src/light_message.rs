@@ -74,21 +74,12 @@ impl LightMessage {
             (message_ref, message_type_code, assoc_code)
         };
 
-        // Look up PID source from registry (same logic as full parse) so we can
-        // surface the PID without constructing any typed struct.
-        let pruefidentifikator: Option<u32> =
-            match crate::parse::resolve_pid_source_pub(&message_type_code, &assoc_code, registry) {
-                crate::registry::PidSource::RffZ13 => segments
-                    .iter()
-                    .find(|s| s.tag == "RFF" && s.element_str(0).is_some_and(|q| q == "Z13"))
-                    .and_then(|rff| rff.component_str(0, 1))
-                    .and_then(|s| s.parse().ok()),
-                crate::registry::PidSource::BgmDe1004 => segments
-                    .iter()
-                    .find(|s| s.tag == "BGM")
-                    .and_then(|bgm| bgm.element_str(1))
-                    .and_then(|s| s.parse().ok()),
-            };
+        // The same scan the full parse runs, so a routing decision here cannot
+        // disagree with the PID the parsed message reports.
+        let pruefidentifikator: Option<u32> = crate::pid_scan::detect(
+            &segments,
+            crate::parse::resolve_pid_source_pub(&message_type_code, &assoc_code, registry),
+        );
 
         Ok(Self {
             segments,

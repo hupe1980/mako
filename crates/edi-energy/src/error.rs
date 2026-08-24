@@ -9,12 +9,17 @@ use crate::report::EdiEnergyReport;
 /// `.`.  Characters outside that set are replaced with `?` to neutralize
 /// ANSI escape sequences and other log-injection payloads while keeping the
 /// value informative.
-#[allow(dead_code)]
+/// Truncation counts **characters**, not bytes: the value comes straight off
+/// the wire, and `&s[..16]` panics when byte 16 lands inside a multi-byte
+/// character — turning a malformed message into a downed parser.
+///
+/// Gated: with every message-type feature off there is no dispatch path that can
+/// produce an unknown type code, so nothing calls this.
+#[cfg(any_message)]
 pub(crate) fn sanitize_code(s: &str) -> String {
-    const MAX_LEN: usize = 16;
-    let truncated = if s.len() > MAX_LEN { &s[..MAX_LEN] } else { s };
-    truncated
-        .chars()
+    const MAX_CHARS: usize = 16;
+    s.chars()
+        .take(MAX_CHARS)
         .map(|c| {
             if c.is_ascii_alphanumeric() || c == '.' {
                 c
@@ -23,6 +28,23 @@ pub(crate) fn sanitize_code(s: &str) -> String {
             }
         })
         .collect()
+}
+
+#[cfg(all(test, any_message))]
+mod sanitize_tests {
+    use super::sanitize_code;
+
+    #[test]
+    fn truncates_on_character_boundaries() {
+        assert_eq!(sanitize_code(&"ü".repeat(17)), "?".repeat(16));
+    }
+
+    #[test]
+    fn neutralises_escape_sequences_and_keeps_plain_codes() {
+        assert_eq!(sanitize_code("UTILMD"), "UTILMD");
+        assert_eq!(sanitize_code("5.5.3a"), "5.5.3a");
+        assert_eq!(sanitize_code("A\u{1b}[31mB"), "A??31mB");
+    }
 }
 
 // ── ProfileError ──────────────────────────────────────────────────────────────
@@ -210,24 +232,6 @@ pub enum Error {
         date: time::Date,
     },
 
-    /// The requested profile has expired on `date`.
-    ///
-    /// The profile's `valid_until` date is before the processing date.
-    /// Use the successor profile that is valid on this date instead.
-    #[error(
-        "profile for {message_type:?} release {release} expired on {valid_until} (requested date: {date})"
-    )]
-    ProfileExpired {
-        /// The EDIFACT message type.
-        message_type: crate::MessageType,
-        /// The release / association code.
-        release: crate::Release,
-        /// The last date the profile was valid.
-        valid_until: time::Date,
-        /// The date that was requested.
-        date: time::Date,
-    },
-
     /// Validation completed but the report contains at least one error-level issue.
     ///
     /// Inspect [`EdiEnergyReport`] for the full list of findings.
@@ -350,7 +354,6 @@ impl miette::Diagnostic for Error {
             Error::ProfileNotFound { .. } => "edi-energy::profile-not-found",
             Error::ProfileArchived { .. } => "edi-energy::profile-archived",
             Error::ProfileNotYetActive { .. } => "edi-energy::profile-not-yet-active",
-            Error::ProfileExpired { .. } => "edi-energy::profile-expired",
             Error::Validation { .. } => "edi-energy::validation",
             Error::Io(_) => "edi-energy::io",
             Error::Profile(_) => "edi-energy::profile-config",
@@ -391,14 +394,6 @@ impl miette::Diagnostic for Error {
                 date,
             } => Some(Box::new(format!(
                 "{message_type} {release} is valid from {valid_from}; use a processing date ≥ {valid_from} (requested: {date})"
-            ))),
-            Error::ProfileExpired {
-                message_type,
-                release,
-                valid_until,
-                date,
-            } => Some(Box::new(format!(
-                "{message_type} {release} expired on {valid_until}; use a successor profile valid on {date}"
             ))),
             Error::UnknownMessageType { raw_code } => Some(Box::new(format!(
                 "`{raw_code}` is not a recognised EDI@Energy message type"

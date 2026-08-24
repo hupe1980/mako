@@ -1,49 +1,36 @@
+//! The `UNH` S009 DE 0057 value.
+
 use std::fmt;
 
-/// Version identifier for a DVGW message format.
+/// The Anwendungscode from `UNH` S009 DE 0057.
 ///
-/// DVGW uses a `<major>.<minor>[letter]` versioning scheme
-/// (e.g. `5.11a`, `4.6`, `4.7`) with optional Fehlerkorrektur (`FK`) suffix
-/// for editorial-only corrections.  The version string appears in the UNH
-/// segment DE 0057 (association assigned code).
+/// DVGW puts two different things in this field and does not distinguish them
+/// syntactically:
 ///
-/// # Version vs. release
+/// | Message | DE 0057 | Meaning |
+/// |---|---|---|
+/// | NOMINT 4.6, NOMRES 4.7 | `DVGW17` | Nachrichtentypen-Paket 17 |
+/// | ALOCAT 5.11a | `5.11a` | the message version itself |
 ///
-/// DVGW distinguishes:
-/// - **Version** (major bump): structural change — codelist change, new segments, etc.
-/// - **Fehlerkorrektur** (`FK`): editorial correction — no structural change.
-///   The version string stays the same; only the publication date changes.
+/// It is therefore **not** a uniform version key and nothing in this crate
+/// selects behaviour from it. It is captured verbatim so it round-trips and so
+/// operators can see which package a counterparty claims to be on.
 ///
-/// `DvgwVersion` stores the raw wire string so it round-trips faithfully.
+/// A structural change (new segments, changed code lists) bumps the number; a
+/// *Fehlerkorrektur* (`FK`) is editorial and leaves this field untouched.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct DvgwVersion(String);
+pub struct DvgwVersion(Box<str>);
 
 impl DvgwVersion {
-    /// Construct a version from a known-valid string without validation.
-    ///
-    /// Prefer `DvgwVersion::parse(s)` for user-supplied or deserialized input.
-    #[must_use]
-    pub fn new(s: impl Into<String>) -> Self {
-        Self(s.into())
-    }
-
-    /// Parse a version string, accepting any non-empty value.
-    ///
-    /// DVGW version strings are not formally specified beyond the conventions
-    /// documented in the DVGW Versionsmanagement page.  This method accepts
-    /// any non-empty ASCII string and returns `None` for empty input.
+    /// Capture a non-empty DE 0057 value.
     #[must_use]
     pub fn parse(s: &str) -> Option<Self> {
-        if s.is_empty() {
-            None
-        } else {
-            Some(Self(s.to_owned()))
-        }
+        (!s.is_empty()).then(|| Self(s.into()))
     }
 
-    /// Returns the version string as it appears on the wire (UNH DE 0057).
+    /// The value as it appears on the wire.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
@@ -59,5 +46,17 @@ impl fmt::Display for DvgwVersion {
 impl AsRef<str> for DvgwVersion {
     fn as_ref(&self) -> &str {
         &self.0
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DvgwVersion;
+
+    #[test]
+    fn both_shapes_round_trip_verbatim() {
+        assert_eq!(DvgwVersion::parse("DVGW17").unwrap().as_str(), "DVGW17");
+        assert_eq!(DvgwVersion::parse("5.11a").unwrap().as_str(), "5.11a");
+        assert_eq!(DvgwVersion::parse(""), None);
     }
 }

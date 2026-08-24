@@ -84,11 +84,16 @@ pub trait EdiEnergyMessage: Send + Sync {
     ///
     /// # Unknown message types
     ///
-    /// For [`AnyMessage::Unknown`](crate::AnyMessage), this method returns
-    /// `Ok(report)` where `report.is_valid() == true` and contains a single
-    /// Warning with rule ID `"UNKNOWN-MSG-TYPE"`.  This allows interchanges
-    /// with mixed message types to validate without failing on unrecognised
-    /// types.  The `release` parameter is not used in this case.
+    /// For [`AnyMessage::Unknown`](crate::AnyMessage) this returns `Ok(report)`
+    /// carrying a single **error** with rule ID `"UNKNOWN-MSG-TYPE"`, so
+    /// `report.is_valid()` is `false`. The `release` parameter is unused.
+    ///
+    /// It is an error rather than a warning because nothing was checked: a
+    /// message type this build cannot validate has passed no rule at all, and
+    /// reporting that as valid is the vacuous-validation trap — the caller
+    /// cannot tell it from a message that was checked and conformed. `Ok` rather
+    /// than `Err` so one unrecognised message does not abort validation of the
+    /// rest of an interchange; read `is_valid()` for the verdict.
     ///
     /// # Errors
     ///
@@ -117,9 +122,9 @@ pub trait EdiEnergyMessage: Send + Sync {
     ///
     /// This is the primary entry point for AS4 adapter integration:
     ///
-    /// - Checks that the message's declared release is normatively acceptable on
-    ///   `ctx`'s date (taking the 7-day `TRANSITION_GRACE_DAYS` window into account).
-    ///   If the release is outside the acceptable window, returns
+    /// - Checks that the message's declared release is acceptable on `ctx`'s
+    ///   date — in force, or superseded but still inside the registry's
+    ///   configured receive tolerance. Outside that window this returns
     ///   `Err(Error::ProfileNotFound)`.
     /// - Validates against the sender's declared release on `ctx`'s date.  This
     ///   preserves the sender's conformance claim: a message in the outgoing format
@@ -137,19 +142,19 @@ pub trait EdiEnergyMessage: Send + Sync {
     ///
     /// # Transition handling
     ///
-    /// During the 7-day grace window both outgoing and incoming releases are
-    /// acceptable (`is_acceptable` returns `true` for both).  A receiver must
-    /// accept messages in either format during this period.  `validate_with_context`
-    /// respects this by checking `is_acceptable` first and then running validation
-    /// only against the sender's declared release — callers do not need to implement
-    /// the `TransitionState` dispatch manually.
+    /// EDIFACT changes format at a single Anwendungszeitpunkt, so on any date
+    /// exactly one release is in force. When the registry is configured with a
+    /// non-zero receive tolerance, the superseded release stays acceptable for
+    /// that many days afterwards and both validate against their own profile —
+    /// callers do not need to dispatch on `TransitionState` themselves. See
+    /// [`DEFAULT_RECEIVE_TOLERANCE_DAYS`](crate::DEFAULT_RECEIVE_TOLERANCE_DAYS).
     ///
     /// # Errors
     ///
     /// Returns `Err(Error::MissingRelease)` when the message has no release code.
     ///
     /// Returns `Err(Error::ProfileNotFound)` when the message's release is not
-    /// normatively acceptable on `ctx`'s date (outside the valid + grace window).
+    /// acceptable on `ctx`'s date.
     ///
     /// Other errors mirror those of [`validate_against`](Self::validate_against).
     #[must_use = "validation result must be checked for errors"]

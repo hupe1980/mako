@@ -1,4 +1,4 @@
-//! GaBi Gas Allocation workflow — ALOCAT (FNB / MGV / VNB → BKV).
+//! GaBi Gas Allocation workflow — ALOCAT.
 //!
 //! Implements the receive-and-record side of gas quantity allocation governed
 //! by the Kooperationsvereinbarung Gas (KoV) and the BNetzA GaBi Gas 2.1
@@ -6,24 +6,20 @@
 //!
 //! # Process overview
 //!
-//! The FNB, MGV, or VNB sends an **allocation message** (ALOCAT) to the BKV
-//! reporting the final allocated gas quantities for a given gas day or period.
-//! No response is required.
+//! An **allocation message** (ALOCAT) reports the allocated gas quantities for a
+//! gas day. ALOCAT 5.11a publishes twenty-three Anwendungsfälle across five
+//! directions — NB→MGV, MGV→BKV, ENB/ANB→NB, MGV→NB and NB→BKV. No response is
+//! required.
 //!
 //! ```text
-//! FNB / MGV / VNB ──(ALOCAT 90001/90002/90003)──→  BKV
+//! NB / MGV / ENB / ANB ──(ALOCAT 70001–70023)──→  MGV / BKV / NB
 //! ```
 //!
-//! # Synthetic Prüfidentifikatoren
+//! # Prüfidentifikatoren
 //!
-//! DVGW messages carry no BGM Prüfidentifikator. The `dvgw-edi` crate assigns
-//! synthetic PIDs from the range 90000–90999:
-//!
-//! | PID   | Message | Direction          | Qualifier |
-//! |-------|---------|--------------------|-----------|
-//! | 90001 | ALOCAT  | FNB → BKV (daily)  | Z15       |
-//! | 90002 | ALOCAT  | MGV → BKV (monthly)| Z16       |
-//! | 90003 | ALOCAT  | VNB → FNB (sub-day)| Z17       |
+//! DVGW publishes real Prüfidentifikatoren in `SG1 RFF+Z13`; the routing list is
+//! [`ALLOCATION_PIDS`], pinned to [`dvgw_edi::catalogue_for`] by test.
+//! [`AllocationType`] derives the direction from the code.
 //!
 //! # State machine
 //!
@@ -54,16 +50,17 @@ use mako_engine::{
 
 use crate::domain::{GasDay, GasQuantity};
 
-// ── Synthetic PID set ─────────────────────────────────────────────────────────
+// ── Prüfidentifikator set ─────────────────────────────────────────────────────
 
-/// All synthetic PIDs for the ALOCAT allocation message.
+/// Every DVGW Prüfidentifikator that routes to the allocation workflow.
 ///
-/// | PID   | Message | Sender | Direction           |
-/// |-------|---------|--------|---------------------|
-/// | 90001 | ALOCAT  | FNB    | FNB → BKV (daily)   |
-/// | 90002 | ALOCAT  | MGV    | MGV → BKV (monthly) |
-/// | 90003 | ALOCAT  | VNB    | VNB → FNB (sub-day) |
-pub const ALLOCATION_PIDS: &[u32] = &[90001, 90002, 90003];
+/// ALOCAT 5.11a publishes twenty-three Anwendungsfälle across five
+/// communication directions; `dvgw_edi::catalogue_for` carries the description
+/// of each and a test in this module pins this list to it.
+pub const ALLOCATION_PIDS: &[u32] = &[
+    70001, 70002, 70003, 70004, 70005, 70006, 70007, 70008, 70009, 70010, 70011, 70012, 70013,
+    70014, 70015, 70016, 70017, 70018, 70019, 70020, 70021, 70022, 70023,
+];
 
 /// Workflow key for PID router registration.
 pub const WORKFLOW_NAME: &str = "gabi-gas-allocation";
@@ -79,31 +76,37 @@ pub const FINAL_ALOCAT_DEADLINE_LABEL: &str = "gabi-gas-final-alocat-deadline";
 
 // ── Allocation type ───────────────────────────────────────────────────────────
 
-/// Which category of allocation this ALOCAT message represents.
+/// Who sends this allocation to whom.
 ///
-/// Derived from the synthetic PID to allow downstream analysis without
-/// re-parsing the raw message.
+/// The five directions ALOCAT 5.11a publishes. Derived from the
+/// Prüfidentifikator so downstream analysis need not re-parse the message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AllocationType {
-    /// Daily allocation from FNB to BKV (synthetic PID 90001, qualifier Z15).
-    FnbDailyToBkv,
-    /// Monthly allocation from MGV to BKV (synthetic PID 90002, qualifier Z16).
-    MgvMonthlyToBkv,
-    /// Sub-daily allocation from VNB to FNB (synthetic PID 90003, qualifier Z17).
-    VnbSubDailyToFnb,
+    /// Netzbetreiber an Marktgebietsverantwortlichen (PIDs 70001–70010).
+    NbAnMgv,
+    /// Einspeise-/Ausspeisenetzbetreiber an Netzbetreiber (PIDs 70011, 70012).
+    EnbAnbAnNb,
+    /// Marktgebietsverantwortlicher an Bilanzkreisverantwortlichen (PIDs 70013–70020).
+    MgvAnBkv,
+    /// Marktgebietsverantwortlicher an Netzbetreiber (PIDs 70021, 70023).
+    MgvAnNb,
+    /// Netzbetreiber an Bilanzkreisverantwortlichen (PID 70022).
+    NbAnBkv,
 }
 
 impl AllocationType {
-    /// Derive from a synthetic PID.
+    /// Derive from the Prüfidentifikator.
     ///
-    /// Returns `None` for unrecognised PIDs.
+    /// Returns `None` for a code outside [`ALLOCATION_PIDS`].
     #[must_use]
     pub fn from_pid(pid: u32) -> Option<Self> {
         match pid {
-            90001 => Some(Self::FnbDailyToBkv),
-            90002 => Some(Self::MgvMonthlyToBkv),
-            90003 => Some(Self::VnbSubDailyToFnb),
+            70001..=70010 => Some(Self::NbAnMgv),
+            70011 | 70012 => Some(Self::EnbAnbAnNb),
+            70013..=70020 => Some(Self::MgvAnBkv),
+            70021 | 70023 => Some(Self::MgvAnNb),
+            70022 => Some(Self::NbAnBkv),
             _ => None,
         }
     }
@@ -143,8 +146,8 @@ impl AllocationVersion {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct AllocationData {
-    /// Synthetic PID that identifies the allocation category (90001/90002/90003).
-    pub synthetic_pid: u32,
+    /// The Prüfidentifikator that identifies the Anwendungsfall (70001–70023).
+    pub pruefidentifikator: u32,
     /// Category of this allocation (FNB daily, MGV monthly, or VNB sub-daily).
     pub allocation_type: AllocationType,
     /// EIC code of the sending party (FNB / MGV / VNB).
@@ -179,8 +182,8 @@ pub struct AllocationData {
 pub enum AllocationEvent {
     /// An ALOCAT allocation message was received from FNB, MGV, or VNB.
     AllocationReceived {
-        /// Synthetic PID (90001 = FNB daily, 90002 = MGV monthly, 90003 = VNB sub-day).
-        synthetic_pid: u32,
+        /// The Prüfidentifikator (70001–70023); [`AllocationType`] derives the direction.
+        pruefidentifikator: u32,
         /// Category of this allocation.
         allocation_type: AllocationType,
         /// EIC code of the sending party (FNB / MGV / VNB).
@@ -288,8 +291,8 @@ pub enum AllocationCommand {
     /// Constructed by the DVGW adapter in `makod` when an ALOCAT arrives on
     /// the inbound channel.
     ReceiveAlocat {
-        /// Synthetic PID (90001 / 90002 / 90003).
-        synthetic_pid: u32,
+        /// The Prüfidentifikator (70001–70023).
+        pruefidentifikator: u32,
         /// EIC code of the sending party (FNB / MGV / VNB).
         sender_eic: String,
         /// EIC code of the receiving party (BKV / FNB).
@@ -357,7 +360,7 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 other => other,
             },
             AllocationEvent::AllocationReceived {
-                synthetic_pid,
+                pruefidentifikator,
                 allocation_type,
                 sender_eic,
                 receiver_eic,
@@ -367,7 +370,7 @@ impl Workflow for GaBiGasAllocationWorkflow {
                 clearing_number,
                 message_ref,
             } => AllocationState::Recorded(Box::new(AllocationData {
-                synthetic_pid: *synthetic_pid,
+                pruefidentifikator: *pruefidentifikator,
                 allocation_type: *allocation_type,
                 sender_eic: sender_eic.clone(),
                 receiver_eic: receiver_eic.clone(),
@@ -386,7 +389,7 @@ impl Workflow for GaBiGasAllocationWorkflow {
     ) -> Result<WorkflowOutput<Self::Event>, WorkflowError> {
         match command {
             AllocationCommand::ReceiveAlocat {
-                synthetic_pid,
+                pruefidentifikator,
                 sender_eic,
                 receiver_eic,
                 gas_day,
@@ -405,14 +408,15 @@ impl Workflow for GaBiGasAllocationWorkflow {
                          KoV §6.4 admits no further correction",
                     ));
                 }
-                let allocation_type = AllocationType::from_pid(synthetic_pid).ok_or_else(|| {
-                    WorkflowError::rejected(format!(
-                        "PID {synthetic_pid} is not a valid ALOCAT PID \
-                         (expected 90001, 90002, or 90003)"
-                    ))
-                })?;
+                let allocation_type =
+                    AllocationType::from_pid(pruefidentifikator).ok_or_else(|| {
+                        WorkflowError::rejected(format!(
+                            "PID {pruefidentifikator} is not a valid ALOCAT PID \
+                         (expected one of 70001–70023)"
+                        ))
+                    })?;
                 Ok(vec![AllocationEvent::AllocationReceived {
-                    synthetic_pid,
+                    pruefidentifikator,
                     allocation_type,
                     sender_eic,
                     receiver_eic,
@@ -446,7 +450,7 @@ impl Workflow for GaBiGasAllocationWorkflow {
                         "deadline_label": label.as_ref(),
                         "sender_eic":     data.sender_eic,
                         "receiver_eic":   data.receiver_eic,
-                        "synthetic_pid":  data.synthetic_pid,
+                        "pruefidentifikator":  data.pruefidentifikator,
                     }),
                 );
                 Ok(WorkflowOutput {
@@ -459,6 +463,49 @@ impl Workflow for GaBiGasAllocationWorkflow {
                     deadlines: Vec::new(),
                 })
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pid_catalogue_conformance {
+    use super::{ALLOCATION_PIDS, AllocationType};
+
+    /// Pinned to the DVGW catalogue for the same reason as the nomination list:
+    /// a drifted copy stops routing a published Anwendungsfall in silence.
+    #[test]
+    fn the_pid_list_matches_the_dvgw_catalogue() {
+        let published: Vec<u32> = dvgw_edi::catalogue_for(dvgw_edi::DvgwMessageType::Alocat)
+            .map(|info| info.pid)
+            .collect();
+        assert_eq!(published, ALLOCATION_PIDS);
+    }
+
+    /// Every routed code must resolve to a direction.
+    #[test]
+    fn every_routed_pid_resolves_to_a_direction() {
+        for &pid in ALLOCATION_PIDS {
+            assert!(
+                AllocationType::from_pid(pid).is_some(),
+                "PID {pid} routes here but has no direction"
+            );
+        }
+    }
+
+    /// The direction this crate derives must agree with the one DVGW published.
+    #[test]
+    fn the_derived_direction_agrees_with_the_published_one() {
+        for info in dvgw_edi::catalogue_for(dvgw_edi::DvgwMessageType::Alocat) {
+            let derived = AllocationType::from_pid(info.pid).expect("catalogued PID");
+            let expected = match info.direction {
+                "NB an MGV" => AllocationType::NbAnMgv,
+                "ENB/ANB an NB" => AllocationType::EnbAnbAnNb,
+                "MGV an BKV" => AllocationType::MgvAnBkv,
+                "MGV an NB" => AllocationType::MgvAnNb,
+                "NB an BKV" => AllocationType::NbAnBkv,
+                other => panic!("PID {} has an unmapped direction {other:?}", info.pid),
+            };
+            assert_eq!(derived, expected, "PID {} direction disagrees", info.pid);
         }
     }
 }

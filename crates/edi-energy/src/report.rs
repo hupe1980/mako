@@ -2,27 +2,83 @@ use std::fmt;
 
 use edifact_rs::{ValidationIssue, ValidationReport};
 
-/// Classify a rule ID into a validation layer origin string.
+/// Which layer of the validation stack produced a finding.
 ///
-/// Used to populate [`ValidationIssueSummary::rule_origin`].
-///
-/// Returns `None` when `rule_id` is `None` or does not match a known prefix.
-fn classify_rule_origin(rule_id: &str) -> Option<&'static str> {
-    if rule_id.starts_with("MIG-") || rule_id.starts_with("UNKNOWN-MSG-TYPE") {
-        Some("mig")
-    } else if rule_id.starts_with("AHB-") || rule_id.starts_with("AHB-SKIP-") {
-        Some("ahb")
-    } else if rule_id.starts_with("SEM-") {
-        Some("semantic")
-    } else if rule_id.starts_with("PARSE-") {
-        Some("parse")
-    } else if rule_id.starts_with("DIR-") {
-        Some("directory")
-    } else if rule_id.starts_with("CUSTOM-") {
-        Some("custom")
-    } else {
-        None
+/// Typed rather than a bare string, so a mis-cased or misspelled origin is a
+/// compile error instead of an empty result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum RuleOrigin {
+    /// L1 — EDIFACT parse / tokeniser error.
+    Parse,
+    /// L2 — directory check (segment definitions, code lists).
+    Directory,
+    /// L3 — MIG structural rule (segment ordering, cardinality).
+    Mig,
+    /// L4–L5 — AHB Bedingungsoperator rule.
+    Ahb,
+    /// Message-type-specific semantic rule.
+    Semantic,
+    /// L6 — caller-supplied [`CustomRulePack`](crate::CustomRulePack) rule.
+    Custom,
+    /// The message type is not validated in this build, so no layer ran.
+    ///
+    /// Its own value rather than a layer's: the finding reports the *absence* of
+    /// validation, which is a build-configuration fact rather than a structural
+    /// violation of any layer.
+    Unvalidated,
+}
+
+impl RuleOrigin {
+    /// The lowercase tag used in serialized output.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Parse => "parse",
+            Self::Directory => "directory",
+            Self::Mig => "mig",
+            Self::Ahb => "ahb",
+            Self::Semantic => "semantic",
+            Self::Custom => "custom",
+            Self::Unvalidated => "unvalidated",
+        }
     }
+}
+
+impl fmt::Display for RuleOrigin {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl RuleOrigin {
+    /// Classify a rule ID into the layer that emitted it.
+    ///
+    /// Returns `None` for a rule ID that matches no known prefix — including a
+    /// caller's own, for which no layer is the honest answer.
+    #[must_use]
+    pub fn classify(rule_id: &str) -> Option<Self> {
+        classify_rule_origin(rule_id)
+    }
+}
+
+/// Classify a rule ID into the layer that emitted it.
+///
+/// Returns `None` for a rule ID that matches no known prefix.
+fn classify_rule_origin(rule_id: &str) -> Option<RuleOrigin> {
+    // `AHB-SKIP-…` is covered by the `AHB-` arm.
+    let origin = match () {
+        () if rule_id.starts_with("MIG-") => RuleOrigin::Mig,
+        () if rule_id == "UNKNOWN-MSG-TYPE" => RuleOrigin::Unvalidated,
+        () if rule_id.starts_with("AHB-") => RuleOrigin::Ahb,
+        () if rule_id.starts_with("SEM-") => RuleOrigin::Semantic,
+        () if rule_id.starts_with("PARSE-") => RuleOrigin::Parse,
+        () if rule_id.starts_with("DIR-") => RuleOrigin::Directory,
+        () if rule_id.starts_with("CUSTOM-") => RuleOrigin::Custom,
+        () => return None,
+    };
+    Some(origin)
 }
 
 /// The mako-facing projection of a single [`edifact_rs::ValidationIssue`].
@@ -100,24 +156,14 @@ pub struct ValidationIssueSummary {
     ///
     /// Classifies the issue by its origin in the layered validation stack:
     ///
-    /// | Value | Layer | Meaning |
-    /// |-------|-------|---------|
-    /// | `"parse"` | L1 | EDIFACT parse / tokenizer error |
-    /// | `"directory"` | L2 | Directory check (segment definitions, code lists) |
-    /// | `"mig"` | L3 | MIG structural rule (segment ordering, cardinality) |
-    /// | `"ahb"` | L4–L5 | AHB Bedingungsoperator rule |
-    /// | `"custom"` | L6 | Caller-supplied `CustomRulePack` rule |
+    /// See [`RuleOrigin`] for the layers. Derived from the `rule_id` prefix;
+    /// `None` when the rule ID is absent or matches no known prefix.
     ///
-    /// Used by monitoring dashboards and regulatory audit systems to distinguish
-    /// sender-side malformed EDI (L1–L2) from conformance violations (L3–L5)
-    /// from local business-rule failures (L6).
-    ///
-    /// Derived from the `rule_id` prefix heuristic:
-    /// - `"MIG-"` prefix → `"mig"`, `"AHB-"` → `"ahb"`, `"PARSE-"` → `"parse"`,
-    ///   `"DIR-"` → `"directory"`, `"CUSTOM-"` → `"custom"`.
-    /// - `None` when the `rule_id` is absent or does not match a known prefix.
+    /// Used by monitoring and audit systems to tell sender-side malformed EDI
+    /// (L1–L2) from conformance violations (L3–L5) from local business-rule
+    /// failures (L6).
     #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub rule_origin: Option<&'static str>,
+    pub rule_origin: Option<RuleOrigin>,
 }
 
 impl ValidationIssueSummary {
@@ -258,25 +304,7 @@ impl EdiEnergyReport {
     /// Call this when the message was validated from a full interchange (UNB…UNZ)
     /// so that the report carries both routing metadata and validation findings as
     /// a single audit record.
-    #[cfg(any(
-        feature = "utilmd",
-        feature = "mscons",
-        feature = "aperak",
-        feature = "contrl",
-        feature = "invoic",
-        feature = "remadv",
-        feature = "orders",
-        feature = "iftsta",
-        feature = "insrpt",
-        feature = "reqote",
-        feature = "partin",
-        feature = "ordchg",
-        feature = "ordrsp",
-        feature = "quotes",
-        feature = "comdis",
-        feature = "pricat",
-        feature = "utilts",
-    ))]
+    #[cfg(any_message)]
     #[must_use]
     pub(crate) fn with_interchange_header(
         mut self,
@@ -359,28 +387,18 @@ impl EdiEnergyReport {
 
     /// Iterate over issues from a specific validation layer.
     ///
-    /// Filters by the same `rule_origin` tag used in [`ValidationIssueSummary::rule_origin`]:
-    /// - `"parse"` — EDIFACT parse / tokenizer errors (L1)
-    /// - `"directory"` — directory structure checks (L2)
-    /// - `"mig"` — MIG structural rules (L3)
-    /// - `"ahb"` — AHB Bedingungsoperator rules (L4–L5)
-    /// - `"custom"` — caller-supplied `CustomRulePack` rules (L6)
-    ///
-    /// This allows monitoring dashboards to quickly separate "sender sent garbage"
-    /// (L1–L2) from "sender violated BDEW process rules" (L3–L5).
+    /// Separates "the sender sent garbage" (L1–L2) from "the sender violated a
+    /// BDEW process rule" (L3–L5) from a local business-rule failure (L6).
     ///
     /// # Example
     ///
     /// ```rust,no_run
-    /// use edi_energy::{EdiEnergyMessage, Platform};
+    /// use edi_energy::{EdiEnergyMessage, Platform, RuleOrigin};
     /// let msg = Platform::with_all_profiles().parse(b"UNB+...").unwrap();
     /// let report = msg.validate().unwrap();
-    /// let ahb_errors: Vec<_> = report.issues_by_origin("ahb").collect();
+    /// let ahb_errors: Vec<_> = report.issues_by_origin(RuleOrigin::Ahb).collect();
     /// ```
-    pub fn issues_by_origin<'a>(
-        &'a self,
-        origin: &'a str,
-    ) -> impl Iterator<Item = &'a ValidationIssue> + 'a {
+    pub fn issues_by_origin(&self, origin: RuleOrigin) -> impl Iterator<Item = &ValidationIssue> {
         self.inner.iter_issues().filter(move |issue| {
             issue.rule_id.as_deref().and_then(classify_rule_origin) == Some(origin)
         })
@@ -455,40 +473,11 @@ impl EdiEnergyReport {
         }
     }
 
-    /// Convert to a library `Result`, consuming `self`.
-    ///
-    /// Returns `Ok(())` when there are no errors, `Err(Error::Validation { ... })`
-    /// otherwise.  Use this when you want to propagate validation failure as a
-    /// first-class [`crate::Error`] variant rather than handling the raw report.
-    ///
-    /// Returns `Ok(self)` when the report has no error-level issues, `Err`
-    /// otherwise.
-    ///
-    /// This is the idiomatic alternative to [`into_error_result`][Self::into_error_result]:
-    /// callers that need the report for further inspection after an error can
-    /// recover it from the `Err` variant via pattern matching on
-    /// [`crate::Error::Validation`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`crate::Error::Validation`] when the report contains at least
-    /// one error-level issue.
-    pub fn as_result(self) -> Result<Self, crate::Error> {
-        if self.inner.has_errors() {
-            let count = self.inner.errors().len();
-            Err(crate::Error::Validation {
-                count,
-                report: self,
-            })
-        } else {
-            Ok(self)
-        }
-    }
-
     /// Returns `Ok(())` when the report has no error-level issues, `Err` otherwise.
     ///
-    /// Prefer [`as_result`][Self::as_result] when you need access to the report
-    /// after a validation failure.
+    /// The report is not lost on failure — it travels inside
+    /// [`crate::Error::Validation`]. Prefer [`result`][Self::result] when the
+    /// success path needs it too.
     ///
     /// # Errors
     ///
@@ -508,14 +497,17 @@ impl EdiEnergyReport {
 
     /// Convert to `Result<Self, Self>`, consuming `self`.
     ///
-    /// Returns `Ok(self)` when valid (no errors), `Err(self)` when invalid.
-    /// Mirrors the `edifact_rs::ValidationReport::result()` API so call-sites
-    /// that use `?` propagation work symmetrically across both types.
+    /// Returns `Ok(self)` when valid, `Err(self)` when not. Mirrors
+    /// `edifact_rs::ValidationReport::result()` so `?` works symmetrically
+    /// across both types, and keeps the report in hand either way.
+    ///
+    /// Use [`into_error_result`](Self::into_error_result) to propagate the
+    /// failure as a [`crate::Error`] instead.
     ///
     /// # Errors
     ///
     /// Returns `Err(self)` when the report contains at least one error-level issue.
-    #[must_use = "call into_result() or as_result() if you only need the side-effect"]
+    #[must_use = "the report is returned in both arms; discard it explicitly if unused"]
     pub fn result(self) -> Result<Self, Self> {
         if self.inner.has_errors() {
             Err(self)

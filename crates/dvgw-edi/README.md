@@ -1,162 +1,224 @@
 # dvgw-edi
 
-**DVGW EDIFACT format parser for the German gas transport and balancing market**
+**DVGW EDIFACT parser, validator and writer for the German gas transport and
+balancing market**
 
-Implements parsing of DVGW-governed EDIFACT formats used in GaBi Gas 2.1
-(BNetzA BK7-24-01-008). The crate is the DVGW counterpart to `edi-energy`, which
-covers BDEW EDI@Energy (UTILMD, MSCONS, INVOIC, APERAK, …).
+Covers the DVGW-governed formats used in GaBi Gas 2.1 (BNetzA BK7-24-01-008).
+The DVGW counterpart to `edi-energy`, which covers BDEW EDI@Energy (UTILMD,
+MSCONS, INVOIC, APERAK, …).
+
+## The one thing to know first
+
+**A DVGW message does not name itself in `UNH`.** Every format is a subset of a
+UN/EDIFACT D.07A message, so `UNH` carries the *carrier* — `ORDERS` or `ORDRSP`
+— and `BGM` C002 DE 1001 carries the message:
+
+```text
+UNH+1+ORDERS:D:07A:UN:DVGW18'          ← the carrier
+BGM+01G::332+NOMINT00052'              ← *this* says NOMINT
+DTM+Z05:0:805'                         ← the timestamps below are UTC
+DTM+137:201801042056:203'              ← message date/time
+DTM+Z01:201801050400201801060400:719'  ← Gültigkeitszeitraum = the gas day
+RFF+Z13:70030'                         ← Prüfidentifikator
+```
+
+Matching `UNH` against `"NOMINT"` therefore rejects every conformant message.
+Identity here comes from `DvgwDocument`, with the carrier as a cross-check.
+
+Two more consequences worth stating plainly:
+
+- **`DTM+137` is not the gas day.** It is when the message was written. The gas
+  day is `DTM+Z01`, a *period* in format `719`.
+- **DVGW publishes real Prüfidentifikatoren** in `SG1 RFF+Z13` — ALOCAT
+  70001–70023, NOMINT 70030–70034, NOMRES 70035–70039. No synthetic encoding is
+  needed, and the range does not collide with BDEW's.
 
 ## Supported formats
 
-| Message | Version | Valid from | UN/EDIFACT base | Description |
-|---|---|---|---|---|
-| `ALOCAT` | 5.11a | 2024-10-01 | D03A | Allokationsnachricht — gas quantity allocation |
-| `NOMINT` | 4.6 FK | 2026-02-01 | D01B | Nominierungsintegration — nomination submission |
-| `NOMRES` | 4.7 FK | 2026-02-01 | D01B | Nominierungsantwort — nomination response |
-| `SCHEDL` | G685/G2000 | — | D03A | Schedulingnachricht — transport schedule (FNB → BKV) |
-| `IMBNOT` | G685/G2000 | — | D03A | Imbalance Notification — intraday imbalance (FNB/MGV → BKV) |
-| `TRANOT` | G685/G2000 | — | D03A | Transport Notification — capacity restriction or event (FNB/VNB → BKV/GH/MGV) |
-| `DELORD` | G685/G2000 | — | D03A | Delivery Order — delivery nomination (BKV → FNB) |
-| `DELRES` | G685/G2000 | — | D03A | Delivery Response — FNB confirmation/rejection of DELORD (FNB → BKV) |
+| Message | Carrier | Document codes (`BGM` DE 1001) | Prüfidentifikatoren |
+|---|---|---|---|
+| **ALOCAT** — Allokationsnachricht | `ORDRSP` | `X1G X2G X3G X4G X5G X6G X7G XBG` | 70001–70023 |
+| **NOMINT** — Nominierung | `ORDERS` | `01G 55G Y1G Y6G Y7G` | 70030–70034 |
+| **NOMRES** — Nominierungsantwort | `ORDRSP` | `07G 08G 19G 20G Y2G` | 70035–70039 |
 
-**FK** = Fehlerkorrektur — editorial correction only; no structural change.
+`CONTRL` and `APERAK` acknowledge DVGW interchanges but are BDEW formats; they
+live in `edi-energy` and are not reimplemented here.
 
-## Quick start
+`UNH` S009 DE 0057 holds either a package code (`DVGW17`) or the message version
+(`5.11a`) depending on the format, so it is captured verbatim and nothing selects
+behaviour from it.
+
+## Reading
 
 ```rust
-use dvgw_edi::{DvgwPlatform, AnyDvgwMessage, DvgwMessage};
+use dvgw_edi::{DvgwMessageType, DvgwPlatform};
 
 let platform = DvgwPlatform::default();
-let msg = platform.parse(edi_bytes)?;
+for result in platform.parse_interchange(raw) {
+    let msg = result?;
+    println!("{} ({})", msg.message_type, msg.document.description());
 
-if let AnyDvgwMessage::Nomint(nomint) = msg {
-    // nomination_ref from BGM document number — use to correlate the NOMRES
-    println!("nomination ref:  {:?}", nomint.nomination_ref);
-    println!("sender EIC:      {:?}", nomint.sender_eic());
-    for qty in &nomint.quantities {
-        println!("  {} {} {}", qty.location_code, qty.quantity,
-                 qty.unit.as_deref().unwrap_or("?"));
+    // The gas day, decoded through the DTM's own format code.
+    if let Some(period) = msg.validity_period {
+        println!("  Gastag {period}");
+    }
+
+    // A LOC group carries a time series — Edig@s SG37 repeats up to 199 times —
+    // so a profile transmits many quantities, each with its own period.
+    for qty in msg.quantities() {
+        println!("  {:?} {:?} {:?}", qty.value, qty.unit, qty.period);
+    }
+
+    if msg.message_type == DvgwMessageType::Nomint {
+        // RFF+AGO — the nomination this one corrects, for a re-nomination.
+        // A NOMRES has no such reference: it is paired on the business key.
+        println!("  korrigiert {:?}", msg.original_nomination_ref());
+    }
+
+    let report = DvgwPlatform::validate_message(&msg);
+    for issue in report.errors() {
+        eprintln!("  {issue}");
     }
 }
-
-// For ALOCAT — always use quantity_decimal() for gas billing precision
-if let AnyDvgwMessage::Alocat(alocat) = msg {
-    for qty in &alocat.quantities {
-        // Decimal arithmetic per DVGW G 685 §7 (≥ 3 dp required)
-        if let Some(kwh) = qty.quantity_decimal() {
-            println!("  {} kWh_Hs (Decimal)", kwh);
-        }
-    }
-}
+# Ok::<(), dvgw_edi::Error>(())
 ```
 
-## Message routing
+### A quantity is a rate
 
-DVGW messages carry no BGM Prüfidentifikator. Routing uses the combination of
-message type and the direction qualifier extracted from the NAD+MS/MR role codes.
-
-Use `AnyDvgwMessage::detect_pid(role_qualifier)` to obtain the synthetic PID for
-registration with the `mako-engine` PID router:
+`KW1` is **kWh/h**, so a `QTY` states a rate over the period its own `DTM+2`
+names, and the energy is `Σ(rate × duration)`:
 
 ```rust
-// After parsing — BKV → FNB nomination
-let pid = msg.detect_pid(Some("Z01")); // → Some(90011)
+// 100 kWh/h for one hour + 200 kWh/h for two hours = 500 kWh (not 300).
+let totals = msg.energy_by_qualifier();
+assert_eq!(totals["Z02"].to_string(), "500");
 ```
 
-### Synthetic PID table (range `90000–90999`)
+Totals stay **per qualifier** because the qualifier is the direction — `Z02` in,
+`Z03` out — and a VHP nomination states a purchase and a sale in one interchange.
+`single_energy_kwh(keep)` returns one total only when there *is* one, refusing
+when the selected positions mix directions or when any quantity could not be
+integrated.
 
-| PID   | Message | Direction |
-|-------|---------|-----------|
-| 90001 | ALOCAT  | FNB → BKV (daily allocation) |
-| 90002 | ALOCAT  | MGV → BKV (monthly allocation) |
-| 90003 | ALOCAT  | VNB → FNB (sub-daily allocation) |
-| 90011 | NOMINT  | BKV → FNB (nomination) |
-| 90012 | NOMINT  | BKV → MGV (nomination) |
-| 90021 | NOMRES  | FNB → BKV (nomination response) |
-| 90022 | NOMRES  | MGV → BKV (nomination response) |
-| 90031 | SCHEDL  | FNB → BKV (schedule) |
-| 90041 | IMBNOT  | MGV → BKV (intraday imbalance) |
-| 90051 | TRANOT  | FNB → BKV (transport notification) |
-| 90061 | DELORD  | BKV → FNB (delivery order) |
-| 90062 | DELRES  | FNB → BKV (delivery response) |
+The `keep` filter is for NOMRES, which reports both sides of a match: `IMD` `17G`
+is what you nominated, `18G` the counterparty's mirror, `16G` the matched result.
+Exactly one label may be counted — `16G` when present.
 
-The range `90000–90999` is reserved exclusively for DVGW synthetic PIDs and will
-never collide with BDEW PIDs (10000–99999, documented in PID 3.3 / PID 4.0).
+Values are `Decimal`, not float: gas settles to at least three decimal places
+(DVGW G 685 §7) and binary floating point cannot hold those fractions exactly.
+`Quantity::raw_value` keeps the wire text so a non-numeric value is reportable
+rather than silently zero.
 
-## NOMINT/NOMRES correlation
+### How a message finds its process
 
-1. BKV sends **NOMINT** — `nomination_ref` holds the BGM document number.
-2. FNB/MGV responds with **NOMRES** — `nomination_ref` holds the `RFF+Z13` value
-   that back-references the originating NOMINT.
+ALOCAT 5.11a §3.3 publishes, per Prüfidentifikator, which *Zuordnungstupel* the
+receiver applies, and names the segments each element comes from — `ZO-T1`
+(Bilanzkreis, Netzbetreiber, Zeitreihentyp) through `ZG-T1` (Clearingnummer).
 
-Match `nomres.nomination_ref == nomint.nomination_ref` to correlate the response
-to the outbound nomination workflow.
+```rust
+let key = msg.correlation_key().expect("published Zuordnung");
+assert_eq!(key.zuordnung, dvgw_edi::Zuordnung::ZoT3);
 
-## DELORD/DELRES correlation
+// `process_key` adds the gas day for the ZO-T* tuples: they identify an
+// *object*, and a process is one gas day of it.
+assert_eq!(msg.process_key().as_deref(), Some("ZO-T3|BK1|NK1|Z01|2026-03-01"));
+```
 
-1. BKV sends **DELORD** — `order_ref` holds the BGM document number.
-2. FNB responds with **DELRES** — `order_ref` holds the `RFF+Z13` value that
-   back-references the originating DELORD.
+`ZG-T1` is returned unchanged — a Clearingnummer already identifies one
+Geschäftsvorfall, and a clearing case legitimately spans several days. A
+Prüfidentifikator with no published assignment yields `None` rather than a
+guessed key.
 
-Match `delres.order_ref == delord.order_ref` to correlate the delivery response
-to the outbound delivery order workflow.
+Nominations have no published tuple: a NOMRES carries no reference back to the
+NOMINT it answers, so the two are paired on the business key both carry.
 
-`delres.status` carries the overall disposition (`Accepted`, `Modified`, or
-`Rejected`). Per-location detail is in `delres.lines`.
+## Writing
 
-## Feature flags
+A BKV that can only parse cannot nominate. `MessageBuilder` renders the header
+and `LIN` loops the Nachrichtenbeschreibungen prescribe:
 
-| Feature   | Default | Description |
-|-----------|---------|-------------|
-| `alocat`  | ✅ on   | Enable `AlocatMessage` and ALOCAT parsing |
-| `nomint`  | ✅ on   | Enable `NomintMessage` and NOMINT parsing |
-| `nomres`  | ✅ on   | Enable `NomresMessage` and NOMRES parsing |
-| `schedl`  | ✅ on   | Enable `SchedlMessage` and SCHEDL parsing |
-| `imbnot`  | ✅ on   | Enable `ImbalanceMessage` and IMBNOT parsing |
-| `tranot`  | ✅ on   | Enable `TransportNotificationMessage` and TRANOT parsing |
-| `delord`  | ✅ on   | Enable `DeliveryOrderMessage` and DELORD parsing |
-| `delres`  | ✅ on   | Enable `DeliveryResponseMessage` and DELRES parsing |
-| `decimal` | ✅ on   | Add `quantity_decimal()` returning `rust_decimal::Decimal` to every quantity type |
-| `serde`   | ❌ off  | Add `serde::Serialize` / `Deserialize` to all public value types |
-| `tracing` | ❌ off  | Emit structured tracing spans during parse dispatch |
+```rust
+use dvgw_edi::{DvgwDocument, DvgwPeriod, MessageBuilder, Position};
+use time::macros::datetime;
 
-> **Quantities are `Decimal`, never `f64`.** DVGW G 685 §7 settles gas energy to
-> at least three decimal places, and binary floating point cannot represent those
-> decimal fractions exactly, so `quantity_decimal()` is the only accessor offered.
+let gas_day = DvgwPeriod {
+    start: datetime!(2026-03-01 05:00 UTC),
+    end:   datetime!(2026-03-02 05:00 UTC),
+};
+
+let wire = MessageBuilder::new(DvgwDocument::NominierungTransportkunde)
+    .document_number("NOMINT00052")
+    .version("DVGW17")
+    .pruefidentifikator(70030)
+    .message_datetime(datetime!(2026-02-28 20:56 UTC))
+    .validity_period(gas_day)
+    .sender("9870009700005")
+    .receiver("9870009700006")
+    .position(
+        Position::new()
+            .location("Z19", Some("ABCD1234"))
+            .quantity("Z03", "6782", gas_day)
+            .party("ZEU", "BK-CODE-1")
+            .party("ZES", "BK-CODE-2"),
+    )
+    .build()?;
+# Ok::<(), dvgw_edi::Error>(())
+```
+
+`build()` refuses rather than emitting a message missing a `Muss` field. The
+`UNB`/`UNZ` envelope is deliberately not written — the AS4 layer owns it and its
+control reference.
+
+## Validation
+
+`DvgwPlatform::validate` checks the message against the Segmentlayout of its
+Nachrichtenbeschreibung: the mandatory `BGM` fields, the three header `DTM` rows
+and whether each value matches the format code it declares, `RFF+Z13` and its
+range, `NAD+MS`/`NAD+MR`, at least one `LIN`, a `QTY` per `LOC` group, the `KW1`
+unit, and the per-family rows (`RFF+ANX` for ALOCAT, `IMD` for NOMRES).
+
+Findings come back as `DvgwIssue` with a typed `Severity` and a stable rule id;
+only failures that stop the message being *identified* are `Err`.
+
+## Telling the families apart
+
+A DVGW message rides `ORDERS`/`ORDRSP`, so a BDEW parser accepts one — and reads
+`70001` straight out of `RFF+Z13`, exactly where it looks for a
+Prüfidentifikator. Neither `UNH` nor the Prüfidentifikator separates the
+families; only `BGM` DE 1001 does.
+
+`sniff` reads `BGM` DE 1001 out of the head of the interchange and stops, so an
+ingest boundary can decide which parser owns the bytes for the price of one
+segment:
+
+```rust
+match dvgw_edi::sniff(bytes) {
+    Some(document) => { /* DVGW — parse with DvgwPlatform */ }
+    None => { /* BDEW — hand to edi-energy */ }
+}
+```
 
 ## Market roles
 
-| Role | Abbrev. | Description |
-|---|---|---|
-| Fernleitungsnetzbetreiber | FNB | Gas transmission system operator |
-| Verteilnetzbetreiber | VNB | Gas distribution system operator |
-| Bilanzkreisverantwortlicher | BKV | Balance responsible party |
-| Marktgebietsverantwortlicher | MGV | Market area manager |
+| Role | Abbreviation |
+|---|---|
+| Fernleitungsnetzbetreiber | FNB |
+| Verteilnetzbetreiber | VNB |
+| Bilanzkreisverantwortlicher | BKV |
+| Marktgebietsverantwortlicher | MGV |
 
-## Acknowledgements (CONTRL / APERAK)
+## Regulatory references
 
-`dvgw-edi` does not reimplement CONTRL or APERAK. These are handled by the
-`edi-energy` crate and shared across all message families. See
-"Ergänzungsblatt zur APERAK und CONTRL für die Nutzung in GaBi Prozessen"
-on [edi-energy.de](http://www.edi-energy.de/).
+- **§ 20 Abs. 3 EnWG** — Festlegungskompetenz for gas network access and balancing
+- **BNetzA BK7-24-01-008** — GaBi Gas 2.1
+- **Kooperationsvereinbarung Gas (KoV)** — nomination and allocation deadlines
+- **DVGW-Nachrichtenbeschreibungen** ALOCAT 5.11a, NOMINT 4.6, NOMRES 4.7 —
+  <https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
 
 ## Relationship to other crates
 
 | Crate | Layer |
 |---|---|
-| `dvgw-edi` | EDIFACT parsing (ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES) — **this crate** |
-| `mako-gabi-gas` | GaBi Gas process engine (INVOIC billing + all DVGW transport workflows) |
-| `edi-energy` | BDEW EDI@Energy (UTILMD, MSCONS, INVOIC, APERAK, CONTRL, …) |
-| `mako-engine` | Event-sourced workflow runtime |
-
-## Regulatory basis
-
-| Document | Scope |
-|---|---|
-| **GasNZV** | Statutory basis for gas network access and balancing (§ 20 Abs. 1b EnWG) |
-| **BNetzA BK7-24-01-008** | GaBi Gas 2.1 ruling — current production version |
-| **Kooperationsvereinbarung Gas** (KoV) | Industry agreement mandating DVGW EDIFACT formats |
-| **DVGW G 685** | Technical standard for gas metering and allocation calculations |
-
-DVGW AHBs and MIGs are published by DVGW S&C:
-<https://www.dvgw-sc.de/leistungen/it-dienstleistungen/datenaustausch-gas>
+| `dvgw-edi` | EDIFACT parsing / validation / writing — **this crate** |
+| `mako-gabi-gas` | GaBi Gas process engine (workflows, deadlines) |
+| `edi-energy` | BDEW EDI@Energy formats |

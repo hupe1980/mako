@@ -606,7 +606,7 @@ Partners are managed at runtime via the REST admin API — see
 | `mako-wim` | WiM **Strom und Gas** — Messstellenwechsel, Geräteübernahme, Weiterverpflichtung, INSRPT, WiM-Rechnung | 55039/55042/55051/55168 · 44039/44042/44051/44168 · 44183, 17001/17002/17009, 19001–19004/19015/19016, 23001–23012, 31009/31003/31004 | **3 / 5 / 7 / 1 Werktage**, per PID, in beiden Sparten |
 | `mako-geli-gas` | GeLi Gas — Lieferbeginn/-ende Gas, Stornierung (44022–44024, beide Use-Cases), Gas Sperrung (LF role), Gas Datenabruf, INVOIC 31011 | 44001–44024, 17103, 17104, 19103, 19104, 19116, 19117, 19128, 19129, 31011 | per PID, from `mako_fristen::antwort` |
 | `mako-mabis` | MABIS — Bilanzkreisabrechnung | 13003 (MSCONS Summenzeitreihe, IFTSTA 21000–21005) | n/a (batch, not saga) |
-| `mako-gabi-gas` | GaBi Gas 2.1 — allocation, nomination, schedules, imbalance, transport (ALOCAT/NOMINT/NOMRES/SCHEDL/IMBNOT/TRANOT/DELORD/DELRES) + Kapazitäts-/Mehr-Mindermengen-INVOIC | INVOIC 31007/31008/31010, ORDERS 17110, ORDRSP 19110, MSCONS 13013, synthetic 90001–90062 | KoV deadlines (GasDay D-1 14:00 etc.) |
+| `mako-gabi-gas` | GaBi Gas 2.1 — allocation and nomination (ALOCAT/NOMINT/NOMRES) + Kapazitäts-/Mehr-Mindermengen-INVOIC | INVOIC 31007/31008/31010, ORDERS 17110, ORDRSP 19110, MSCONS 13013, DVGW 70001–70039 | KoV deadlines (GasDay D-1 14:00 etc.) |
 
 ### MABIS architecture note
 

@@ -575,6 +575,24 @@ impl As4Sender for BdewAs4Sender {
                         .map(|pi| pi.header.receiver_id.to_string())
                         .unwrap_or_default();
 
+                    // A self-addressed DVGW interchange loops back through the
+                    // DVGW parser, for the same reason the inbound paths sniff
+                    // first: these bytes ride `ORDERS`/`ORDRSP`, so the BDEW
+                    // parser would accept them and read a Prüfidentifikator from
+                    // the wrong catalogue.
+                    if let Some(report) =
+                        crate::dvgw_ingest::try_ingest(loopback_state.as_ref(), &payload_bytes)
+                            .await
+                    {
+                        tracing::info!(
+                            message_id = %message_id_str,
+                            accepted   = report.accepted(),
+                            rejected   = report.rejected(),
+                            "loopback: DVGW interchange dispatched in-process",
+                        );
+                        return Ok(());
+                    }
+
                     // Every message in the interchange is visited. The previous
                     // version returned `Ok(())` at the *first* message whose PID
                     // had no workflow, which acknowledged the outbox entry while

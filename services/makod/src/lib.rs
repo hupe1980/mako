@@ -57,8 +57,8 @@ pub use crate::core::{
     cedar_authz, config, erp_adapter, health, malo_cache, party_registry, preflight, worker_health,
 };
 pub use crate::orchestrator::{
-    adapters, commands_api, deadline_dispatch, edifact_renderer, ingest_dispatcher, netzzugang,
-    projection_worker,
+    adapters, commands_api, deadline_dispatch, dvgw_ingest, edifact_renderer, ingest_dispatcher,
+    netzzugang, projection_worker,
 };
 pub use crate::transport::{
     api_bridge, as4_ingest, as4_sender, contrl_ack, malo_ident_sender, redispatch_xml_ingest,

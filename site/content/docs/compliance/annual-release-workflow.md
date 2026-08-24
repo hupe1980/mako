@@ -397,12 +397,21 @@ version active for that process; new events are written under the corresponding
 | PRICAT | `pricat` | – |
 | UTILTS | `utilts` | – |
 
-## Appendix B — BDEW Übergangsfrist (7-day grace period)
+## Appendix B — the cutover has no Übergangsfrist
 
-During the 7 days following each cutover date, both the outgoing and
-incoming release formats are normatively acceptable.  The library handles this
-automatically via `TransitionState` — no code changes are needed during the
-grace period.  See [Release Lifecycle](@/docs/compliance/release-lifecycle.md) for details.
+Allgemeine Festlegungen 6.1 §2.5 gives the EDIFACT formats a single
+*Anwendungszeitpunkt*: before it the old format applies, from it the new one.
+There is no window in which both are normatively acceptable, so a cutover is a
+step, not a fade.
+
+The 15-Werktage Übergangszeitraum in §8.5 belongs to the **XML** formats. It
+starts at the Anwendungszeitpunkt, counts Werktage, and selects the version by
+the *Erfüllungsdatum* stated in the message — none of which transfers to EDIFACT.
+
+An operator who wants to keep accepting a late-arriving message in the old
+format sets `ReleaseRegistry::with_receive_tolerance_days(n)`, which extends the
+trailing edge only. That is a local receiving policy and defaults to zero. See
+[Release Lifecycle](@/docs/compliance/release-lifecycle.md).
 
 ---
 

@@ -458,25 +458,7 @@ impl AnyMessage {
     /// for the [`Unknown`][AnyMessage::Unknown] variant.
     ///
     /// Used internally by [`Platform`][crate::Platform] for registry-aware validation.
-    #[cfg(any(
-        feature = "utilmd",
-        feature = "mscons",
-        feature = "aperak",
-        feature = "contrl",
-        feature = "invoic",
-        feature = "remadv",
-        feature = "orders",
-        feature = "iftsta",
-        feature = "insrpt",
-        feature = "reqote",
-        feature = "partin",
-        feature = "ordchg",
-        feature = "ordrsp",
-        feature = "quotes",
-        feature = "comdis",
-        feature = "pricat",
-        feature = "utilts",
-    ))]
+    #[cfg(any_message)]
     #[must_use]
     pub(crate) fn message_core(&self) -> Option<&crate::messages::core::MessageCore> {
         match self {
@@ -516,6 +498,63 @@ impl AnyMessage {
             AnyMessage::Utilts(m) => Some(&m.core),
             AnyMessage::Unknown { .. } => None,
         }
+    }
+
+    /// Mutable access to the shared core, for settings applied after dispatch.
+    #[cfg(any_message)]
+    pub(crate) fn message_core_mut(&mut self) -> Option<&mut crate::messages::core::MessageCore> {
+        match self {
+            #[cfg(feature = "utilmd")]
+            AnyMessage::Utilmd(m) => Some(&mut m.core),
+            #[cfg(feature = "mscons")]
+            AnyMessage::Mscons(m) => Some(&mut m.core),
+            #[cfg(feature = "aperak")]
+            AnyMessage::Aperak(m) => Some(&mut m.core),
+            #[cfg(feature = "contrl")]
+            AnyMessage::Contrl(m) => Some(&mut m.core),
+            #[cfg(feature = "invoic")]
+            AnyMessage::Invoic(m) => Some(&mut m.core),
+            #[cfg(feature = "remadv")]
+            AnyMessage::Remadv(m) => Some(&mut m.core),
+            #[cfg(feature = "orders")]
+            AnyMessage::Orders(m) => Some(&mut m.core),
+            #[cfg(feature = "iftsta")]
+            AnyMessage::Iftsta(m) => Some(&mut m.core),
+            #[cfg(feature = "insrpt")]
+            AnyMessage::Insrpt(m) => Some(&mut m.core),
+            #[cfg(feature = "reqote")]
+            AnyMessage::Reqote(m) => Some(&mut m.core),
+            #[cfg(feature = "partin")]
+            AnyMessage::Partin(m) => Some(&mut m.core),
+            #[cfg(feature = "ordchg")]
+            AnyMessage::Ordchg(m) => Some(&mut m.core),
+            #[cfg(feature = "ordrsp")]
+            AnyMessage::Ordrsp(m) => Some(&mut m.core),
+            #[cfg(feature = "quotes")]
+            AnyMessage::Quotes(m) => Some(&mut m.core),
+            #[cfg(feature = "comdis")]
+            AnyMessage::Comdis(m) => Some(&mut m.core),
+            #[cfg(feature = "pricat")]
+            AnyMessage::Pricat(m) => Some(&mut m.core),
+            #[cfg(feature = "utilts")]
+            AnyMessage::Utilts(m) => Some(&mut m.core),
+            AnyMessage::Unknown { .. } => None,
+        }
+    }
+
+    /// Record the date `validate()` resolves profiles against.
+    ///
+    /// Applied after dispatch rather than threaded through seventeen
+    /// `from_parts` signatures. This is what makes
+    /// [`ParseConfig::reference_date`](crate::ParseConfig::reference_date)
+    /// reach `validate()`.
+    pub(crate) fn set_reference_date(&mut self, date: time::Date) {
+        #[cfg(any_message)]
+        if let Some(core) = self.message_core_mut() {
+            core.reference_date = Some(date);
+        }
+        #[cfg(not(any_message))]
+        let _ = date;
     }
 }
 
@@ -574,6 +613,25 @@ macro_rules! delegate_any {
 // With `--no-default-features` all typed variants are removed and only
 // `Unknown` remains, making the `_ =>` delegation arms in each match
 // structurally unreachable.  The logic is correct; suppress the lint.
+
+/// The report for a message type this build cannot validate.
+///
+/// An **error**, not a warning: no rule ran, so nothing has been shown to
+/// conform — reporting it valid makes a vacuous pass indistinguishable from a
+/// real one.
+fn unknown_type_report(message_type_code: &str) -> EdiEnergyReport {
+    use edifact_rs::{ValidationIssue, ValidationReport, ValidationSeverity};
+    let mut inner = ValidationReport::default();
+    inner.add_error(
+        ValidationIssue::new(
+            ValidationSeverity::Error,
+            format!("message type {message_type_code:?} is not validated in this build"),
+        )
+        .with_rule_id("UNKNOWN-MSG-TYPE"),
+    );
+    EdiEnergyReport::new(inner)
+}
+
 #[allow(unreachable_patterns)]
 impl EdiEnergyMessage for AnyMessage {
     fn try_message_type(&self) -> Option<MessageType> {
@@ -608,20 +666,7 @@ impl EdiEnergyMessage for AnyMessage {
         match self {
             AnyMessage::Unknown {
                 message_type_code, ..
-            } => {
-                use edifact_rs::{ValidationIssue, ValidationReport, ValidationSeverity};
-                let mut inner = ValidationReport::default();
-                inner.add_error(
-                    ValidationIssue::new(
-                        ValidationSeverity::Error,
-                        format!(
-                            "message type {message_type_code:?} is not validated in this build"
-                        ),
-                    )
-                    .with_rule_id("UNKNOWN-MSG-TYPE"),
-                );
-                Ok(EdiEnergyReport::new(inner))
-            }
+            } => Ok(unknown_type_report(message_type_code)),
             _ => delegate_any!(self, m => m.validate()),
         }
     }
@@ -631,20 +676,7 @@ impl EdiEnergyMessage for AnyMessage {
         match self {
             AnyMessage::Unknown {
                 message_type_code, ..
-            } => {
-                use edifact_rs::{ValidationIssue, ValidationReport, ValidationSeverity};
-                let mut inner = ValidationReport::default();
-                inner.add_error(
-                    ValidationIssue::new(
-                        ValidationSeverity::Error,
-                        format!(
-                            "message type {message_type_code:?} is not validated in this build"
-                        ),
-                    )
-                    .with_rule_id("UNKNOWN-MSG-TYPE"),
-                );
-                Ok(EdiEnergyReport::new(inner))
-            }
+            } => Ok(unknown_type_report(message_type_code)),
             _ => delegate_any!(self, m => m.validate_against(release)),
         }
     }
@@ -667,9 +699,14 @@ impl EdiEnergyMessage for AnyMessage {
 
     fn validate_with_pack(&self, extra: CustomRulePack) -> Result<EdiEnergyReport, Error> {
         match self {
-            AnyMessage::Unknown { .. } => {
+            // Same contract as the other four validate methods: report the
+            // unknown type inside the report rather than as a different error on
+            // this one method alone.
+            AnyMessage::Unknown {
+                message_type_code, ..
+            } => {
                 let _ = extra;
-                Err(Error::MissingRelease)
+                Ok(unknown_type_report(message_type_code))
             }
             _ => delegate_any!(self, m => m.validate_with_pack(extra)),
         }
@@ -680,20 +717,7 @@ impl EdiEnergyMessage for AnyMessage {
         match self {
             AnyMessage::Unknown {
                 message_type_code, ..
-            } => {
-                use edifact_rs::{ValidationIssue, ValidationReport, ValidationSeverity};
-                let mut inner = ValidationReport::default();
-                inner.add_error(
-                    ValidationIssue::new(
-                        ValidationSeverity::Error,
-                        format!(
-                            "message type {message_type_code:?} is not validated in this build"
-                        ),
-                    )
-                    .with_rule_id("UNKNOWN-MSG-TYPE"),
-                );
-                Ok(EdiEnergyReport::new(inner))
-            }
+            } => Ok(unknown_type_report(message_type_code)),
             _ => delegate_any!(self, m => m.validate_on_date(reference_date)),
         }
     }

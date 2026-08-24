@@ -39,29 +39,6 @@ impl Pruefidentifikator {
     pub fn as_u32(self) -> u32 {
         self.0
     }
-
-    /// Parse from a string slice.
-    ///
-    /// `source_segment` is the EDIFACT segment tag where the value was read
-    /// (e.g. `"BGM"` or `"RFF"`) and is included in the error message when
-    /// the string is not a decimal integer.
-    ///
-    /// This method delegates to [`FromStr`] for the numeric parse so that both
-    /// entry points produce consistent error variants:
-    /// - Non-numeric input → [`Error::InvalidPruefidentifikatorFormat`] (carries the raw value).
-    /// - Out-of-range integer → [`Error::InvalidPruefidentifikatorRange`].
-    ///
-    /// The `source_segment` parameter is retained for API compatibility; it is
-    /// no longer used to select the error variant but may appear in future
-    /// diagnostics context.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidPruefidentifikatorRange`] if the value is out of range,
-    /// or [`Error::InvalidPruefidentifikatorFormat`] if the string is not a decimal integer.
-    pub fn parse(s: &str, _source_segment: &'static str) -> Result<Self, Error> {
-        s.parse()
-    }
 }
 
 impl fmt::Display for Pruefidentifikator {
@@ -81,10 +58,6 @@ impl FromStr for Pruefidentifikator {
     /// range, or [`Error::InvalidPruefidentifikatorFormat`] when the string is not a
     /// decimal integer.
     ///
-    /// # Note
-    ///
-    /// For segment-context error messages (e.g. when the source segment is
-    /// `"RFF"` for COMDIS/PRICAT), use [`Pruefidentifikator::parse`] directly.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         s.parse::<u32>()
             .map_err(|_| Error::InvalidPruefidentifikatorFormat {

@@ -1,34 +1,14 @@
-use edifact_rs::{
-    OwnedSegment, ProfileRulePack, ReaderConfig, ValidationContext, ValidationIssue,
-    ValidationSeverity, from_bytes_owned_with_config,
-};
+//! [`DvgwPlatform`] — the parse and validate entry points.
 
-use crate::{
-    AnyDvgwMessage, DvgwMessageType, Error,
-    error::sanitize_code,
-    message::{extract_message_ref, extract_message_type_code},
-    report::DvgwReport,
-    validate as sem,
-};
+use edifact_rs::{MessageWindowsIter, OwnedSegment, ReaderConfig};
 
-/// Explicit application handle for DVGW EDIFACT processing.
+use crate::{error::Error, message::DvgwMessage, report::DvgwReport, validate};
+
+/// Parse configuration and entry points for DVGW EDIFACT.
 ///
-/// `DvgwPlatform` bundles message-type dispatch and parse configuration so
-/// multiple platform instances can coexist in the same process — e.g. for
-/// test isolation or multi-tenant gateways.
-///
-/// For most applications, [`DvgwPlatform::default()`] is sufficient.
-///
-/// # Usage
-///
-/// ```rust,no_run
-/// use dvgw_edi::DvgwPlatform;
-///
-/// let platform = DvgwPlatform::default();
-/// let input: &[u8] = b"...EDIFACT bytes...";
-/// let msg = platform.parse(input)?;
-/// # Ok::<(), dvgw_edi::Error>(())
-/// ```
+/// `DvgwPlatform` is a handle rather than a set of free functions so several can
+/// coexist with different limits — a test harness and a production gateway in
+/// one process, say.
 #[derive(Debug, Clone)]
 pub struct DvgwPlatform {
     config: ReaderConfig,
@@ -41,10 +21,8 @@ impl Default for DvgwPlatform {
 }
 
 impl DvgwPlatform {
-    /// Construct a platform with default parse configuration.
-    ///
-    /// Uses the `edifact_rs` default [`ReaderConfig`], which applies a 64 KiB
-    /// per-segment byte limit to guard against `DoS` attacks.
+    /// A platform with the `edifact-rs` default limits, including the 64 KiB
+    /// per-segment ceiling that guards the parser against oversized input.
     #[must_use]
     pub fn new() -> Self {
         Self {
@@ -52,366 +30,127 @@ impl DvgwPlatform {
         }
     }
 
-    /// Construct a platform with all built-in DVGW profiles.
-    ///
-    /// Equivalent to [`DvgwPlatform::new()`]. The name mirrors the intended
-    /// future API once compiled-in profile data and strict segment validation
-    /// are added. Prefer this name in application code for forward-compatibility.
-    #[must_use]
-    pub fn with_all_profiles() -> Self {
-        Self::new()
-    }
-
-    /// Construct a platform with a custom `edifact_rs` [`ReaderConfig`].
+    /// A platform with explicit reader limits.
     #[must_use]
     pub fn with_config(config: ReaderConfig) -> Self {
         Self { config }
     }
 
-    /// Parse a raw DVGW EDIFACT interchange from a byte slice.
+    /// Parse the **first** message of an interchange.
     ///
-    /// Tokenises the input using the `edifact_rs` parser, extracts the message
-    /// type from the UNH segment, and dispatches to the appropriate concrete
-    /// message constructor.
+    /// Use [`parse_interchange`](Self::parse_interchange) when the input may hold
+    /// more than one `UNH`…`UNT` window: handing every segment of a multi-message
+    /// interchange to one constructor merges unrelated positions into a single
+    /// message.
     ///
     /// # Errors
     ///
-    /// - [`Error::Parse`] — the input is not valid EDIFACT syntax.
-    /// - [`Error::UnknownMessageType`] — the UNH type code is not a recognised DVGW format.
-    /// - [`Error::FeatureNotEnabled`] — the message type is known but its Cargo feature
-    ///   is not compiled in.
-    #[must_use = "parse result must be checked"]
-    pub fn parse(&self, input: &[u8]) -> Result<AnyDvgwMessage, Error> {
+    /// - [`Error::Parse`] — the input is not valid EDIFACT.
+    /// - [`Error::MissingSegment`] — no `UNH` or no `BGM`.
+    /// - [`Error::UnknownDocumentCode`] — `BGM` DE 1001 is not a DVGW code.
+    /// - [`Error::CarrierMismatch`] — `UNH` DE 0065 contradicts that code.
+    pub fn parse(&self, input: &[u8]) -> Result<DvgwMessage, Error> {
         #[cfg(feature = "tracing")]
         let _span = tracing::debug_span!("dvgw_parse", input_len = input.len()).entered();
 
-        let segments: Vec<OwnedSegment> = from_bytes_owned_with_config(input, self.config)
-            .collect::<Result<_, _>>()
-            .map_err(Error::Parse)?;
-
-        // Extract the message type from UNH
-        let type_code = extract_message_type_code(&segments).unwrap_or_default();
-
-        let Some(msg_type) = DvgwMessageType::from_unh_code(&type_code) else {
-            #[cfg(feature = "tracing")]
-            tracing::warn!(raw_code = %crate::error::sanitize_code(&type_code), "unknown DVGW message type");
-            return Err(Error::UnknownMessageType {
-                raw_code: sanitize_code(&type_code),
-            });
-        };
-
-        #[cfg(feature = "tracing")]
-        tracing::debug!(message_type = %msg_type, "dispatching DVGW message");
-
-        dispatch(segments, msg_type)
+        self.parse_interchange(input)
+            .next()
+            .unwrap_or(Err(Error::MissingSegment("UNH")))
     }
 
-    /// Parse and validate a raw DVGW EDIFACT interchange from a byte slice.
+    /// Parse every message of an interchange, one item per `UNH`…`UNT` window.
     ///
-    /// Runs two validation passes:
-    ///
-    /// 1. **Envelope validation** (when a UNB/UNZ wrapper is present) — checks
-    ///    that UNB/UNZ message counts are correct and the interchange structure
-    ///    is well-formed.  A hard structural failure (e.g. missing UNZ, stray
-    ///    segments) returns `Err(Error::Parse(…))`.
-    ///
-    /// 2. **Semantic validation** — checks message-type-specific mandatory
-    ///    elements: BGM presence, NAD+MS / NAD+MR role codes, mandatory DTM
-    ///    timing qualifiers, and correlation references (e.g. NOMRES RFF+Z13).
-    ///    Semantic findings are collected as `DvgwIssue` items in the returned
-    ///    [`DvgwReport`] rather than hard errors.
-    ///
-    /// Use [`parse`](Self::parse) when you only need the parsed struct without
-    /// validation overhead.  Use `validate` when processing inbound messages
-    /// from trading partners where conformance must be verified.
+    /// Envelope segments (`UNB`/`UNZ`, `UNG`/`UNE`) are stripped: a DVGW
+    /// interchange carries one message per envelope by convention, but nothing
+    /// on the wire enforces it and a merged parse is silent corruption.
     ///
     /// # Errors
     ///
-    /// - [`Error::Parse`] — the EDIFACT byte stream is syntactically invalid or
-    ///   the UNB/UNZ interchange envelope is structurally broken.
-    /// - [`Error::UnknownMessageType`] — the UNH type code is not a recognised
-    ///   DVGW format.
-    /// - [`Error::FeatureNotEnabled`] — the message type is known but its Cargo
-    ///   feature is not compiled in.
+    /// The leading `Err` reports a tokeniser failure; per-message failures are
+    /// yielded in place so one bad message does not hide the rest.
+    pub fn parse_interchange(
+        &self,
+        input: &[u8],
+    ) -> impl Iterator<Item = Result<DvgwMessage, Error>> + use<> {
+        let tokenized: Result<Vec<OwnedSegment>, Error> =
+            edifact_rs::from_bytes_owned_with_config(input, self.config)
+                .collect::<Result<_, _>>()
+                .map_err(Error::Parse);
+
+        let (segments, fatal) = match tokenized {
+            Ok(segments) => (Some(segments), None),
+            Err(e) => (None, Some(e)),
+        };
+
+        fatal.map(Err).into_iter().chain(
+            segments
+                .into_iter()
+                .flat_map(|segments| {
+                    MessageWindowsIter::new(
+                        segments.into_iter().map(Ok::<_, edifact_rs::EdifactError>),
+                    )
+                })
+                .map(|window| {
+                    let window = window.map_err(Error::Parse)?;
+                    DvgwMessage::from_segments(window.segments)
+                }),
+        )
+    }
+
+    /// Parse the first message and check it against the Nachrichtenbeschreibung.
     ///
-    /// # Example
+    /// Conformance findings land in the returned [`DvgwReport`]; only failures
+    /// that prevent the message from being identified at all are `Err`.
     ///
-    /// ```rust,no_run
-    /// use dvgw_edi::DvgwPlatform;
+    /// # Errors
     ///
-    /// # let input: &[u8] = b"";
-    /// let report = DvgwPlatform::default().validate(input)?;
-    ///
-    /// if !report.is_valid() {
-    ///     for issue in report.errors() {
-    ///         eprintln!("{}: {}", issue.severity, issue.message);
-    ///     }
-    /// }
-    /// # Ok::<(), dvgw_edi::Error>(())
-    /// ```
-    #[must_use = "validate result must be checked"]
+    /// As [`parse`](Self::parse).
     pub fn validate(&self, input: &[u8]) -> Result<DvgwReport, Error> {
         #[cfg(feature = "tracing")]
         let _span = tracing::debug_span!("dvgw_validate", input_len = input.len()).entered();
 
-        let segments: Vec<OwnedSegment> = from_bytes_owned_with_config(input, self.config)
-            .collect::<Result<_, _>>()
-            .map_err(Error::Parse)?;
+        let message = self.parse(input)?;
+        Ok(Self::validate_message(&message))
+    }
 
-        // Layer 1: EDIFACT envelope validation (lenient) — only when a UNB
-        // interchange wrapper is present.  Bare message streams (UNH…UNT
-        // without UNB/UNZ) are valid in DVGW contexts and skip this layer.
-        //
-        // Unlike the strict path used by `parse()`, the lenient path converts
-        // UNT/UNZ count mismatches into report issues rather than hard errors.
-        // A structurally unrecoverable interchange (missing UNB/UNZ entirely,
-        // stray segments) still triggers a hard `Error::Parse` because the
-        // message content cannot be extracted.
-        let mut envelope_issues: Vec<ValidationIssue> = Vec::new();
-        if segments.iter().any(|s| s.tag == "UNB") {
-            let lenient = edifact_rs::validate_envelope_lenient_owned(&segments);
-            if lenient.interchange.is_none() {
-                // Structurally unrecoverable — the interchange topology is
-                // broken and we cannot extract message content.
-                return Err(Error::Parse(
-                    lenient.errors.into_iter().next().unwrap_or_else(|| {
-                        edifact_rs::EdifactError::MissingSegment {
-                            tag: "UNB".to_owned(),
-                            expected_position: "start of interchange".to_owned(),
-                        }
-                    }),
-                ));
-            }
-            // Fold count-only violations into the report.
-            for e in lenient.errors {
-                envelope_issues.push(
-                    ValidationIssue::new(
-                        ValidationSeverity::Error,
-                        format!("EDIFACT envelope violation: {e}"),
-                    )
-                    .with_rule_id("ENVELOPE-COUNT-MISMATCH")
-                    .with_segment("UNZ"),
-                );
-            }
-        }
-
-        // Extract message type and reference for dispatch and report header.
-        let type_code = extract_message_type_code(&segments).unwrap_or_default();
-        let Some(msg_type) = DvgwMessageType::from_unh_code(&type_code) else {
-            return Err(Error::UnknownMessageType {
-                raw_code: sanitize_code(&type_code),
-            });
-        };
-        let message_ref = extract_message_ref(&segments).to_owned();
-
-        // Strip interchange/functional-group envelope segments before
-        // semantic validation — identical to the `parse()` path.
-        let msg_segs: Vec<OwnedSegment> = segments
-            .into_iter()
-            .filter(|s| !matches!(s.tag.as_str(), "UNB" | "UNZ" | "UNG" | "UNE"))
-            .collect();
-
-        // Layer 2: semantic validation via ProfileRulePack +
-        // ValidationContext::validate_lenient_owned — the same machinery used
-        // by edi-energy (minus the MIG/AHB directory layers that DVGW formats
-        // do not yet have compiled-in profiles for).
-        let pack = semantic_pack(msg_type)?;
-        let report = ValidationContext::builder()
-            .with_message_type(msg_type.as_str())
-            .with_message_ref(&message_ref)
-            .bail_on_first_critical(true)
-            .with_profile_pack(pack)
-            .build()
-            .validate_lenient_owned(&msg_segs);
-
-        // Merge envelope violations (Layer 1) with semantic issues (Layer 2)
-        // into a single flat list, envelope first.
-        let all: Vec<ValidationIssue> = envelope_issues
-            .into_iter()
-            .chain(report.iter_issues().cloned())
-            .collect();
-
-        Ok(DvgwReport::new(msg_type, message_ref, all))
+    /// Check an already-parsed message.
+    #[must_use]
+    pub fn validate_message(message: &DvgwMessage) -> DvgwReport {
+        DvgwReport::new(
+            message.message_type,
+            message.document,
+            message.message_ref.clone(),
+            validate::check(message),
+        )
     }
 }
 
-/// Dispatch parsed segments to the concrete message constructor.
-#[allow(clippy::too_many_lines)]
-fn dispatch(
-    segments: Vec<edifact_rs::OwnedSegment>,
-    msg_type: DvgwMessageType,
-) -> Result<AnyDvgwMessage, Error> {
-    match msg_type {
-        #[cfg(feature = "alocat")]
-        DvgwMessageType::Alocat => {
-            use crate::messages::alocat::AlocatMessage;
-            Ok(AnyDvgwMessage::Alocat(Box::new(
-                AlocatMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "alocat"))]
-        DvgwMessageType::Alocat => Err(Error::FeatureNotEnabled {
-            message_type: "ALOCAT".into(),
-            feature: "alocat".into(),
-        }),
-        #[cfg(feature = "nomint")]
-        DvgwMessageType::Nomint => {
-            use crate::messages::nomint::NomintMessage;
-            Ok(AnyDvgwMessage::Nomint(Box::new(
-                NomintMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "nomint"))]
-        DvgwMessageType::Nomint => Err(Error::FeatureNotEnabled {
-            message_type: "NOMINT".into(),
-            feature: "nomint".into(),
-        }),
-        #[cfg(feature = "nomres")]
-        DvgwMessageType::Nomres => {
-            use crate::messages::nomres::NomresMessage;
-            Ok(AnyDvgwMessage::Nomres(Box::new(
-                NomresMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "nomres"))]
-        DvgwMessageType::Nomres => Err(Error::FeatureNotEnabled {
-            message_type: "NOMRES".into(),
-            feature: "nomres".into(),
-        }),
-        #[cfg(feature = "schedl")]
-        DvgwMessageType::Schedl => {
-            use crate::messages::schedl::SchedlMessage;
-            Ok(AnyDvgwMessage::Schedl(Box::new(
-                SchedlMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "schedl"))]
-        DvgwMessageType::Schedl => Err(Error::FeatureNotEnabled {
-            message_type: "SCHEDL".into(),
-            feature: "schedl".into(),
-        }),
-        #[cfg(feature = "imbnot")]
-        DvgwMessageType::Imbnot => {
-            use crate::messages::imbnot::ImbalanceMessage;
-            Ok(AnyDvgwMessage::Imbnot(Box::new(
-                ImbalanceMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "imbnot"))]
-        DvgwMessageType::Imbnot => Err(Error::FeatureNotEnabled {
-            message_type: "IMBNOT".into(),
-            feature: "imbnot".into(),
-        }),
-        #[cfg(feature = "tranot")]
-        DvgwMessageType::Tranot => {
-            use crate::messages::tranot::TransportNotificationMessage;
-            Ok(AnyDvgwMessage::Tranot(Box::new(
-                TransportNotificationMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "tranot"))]
-        DvgwMessageType::Tranot => Err(Error::FeatureNotEnabled {
-            message_type: "TRANOT".into(),
-            feature: "tranot".into(),
-        }),
-        #[cfg(feature = "delord")]
-        DvgwMessageType::Delord => {
-            use crate::messages::delord::DeliveryOrderMessage;
-            Ok(AnyDvgwMessage::Delord(Box::new(
-                DeliveryOrderMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "delord"))]
-        DvgwMessageType::Delord => Err(Error::FeatureNotEnabled {
-            message_type: "DELORD".into(),
-            feature: "delord".into(),
-        }),
-        #[cfg(feature = "delres")]
-        DvgwMessageType::Delres => {
-            use crate::messages::delres::DeliveryResponseMessage;
-            Ok(AnyDvgwMessage::Delres(Box::new(
-                DeliveryResponseMessage::from_segments(segments),
-            )))
-        }
-        #[cfg(not(feature = "delres"))]
-        DvgwMessageType::Delres => Err(Error::FeatureNotEnabled {
-            message_type: "DELRES".into(),
-            feature: "delres".into(),
-        }),
-        other => Err(Error::FeatureNotEnabled {
-            message_type: other.as_str().to_owned(),
-            feature: other.required_feature().to_owned(),
-        }),
-    }
-}
-
-/// Build the semantic [`ProfileRulePack`] for the given DVGW message type.
+/// Does this interchange carry a DVGW message?
 ///
-/// Returns `Err(Error::FeatureNotEnabled)` when the required Cargo feature
-/// is not compiled in, mirroring the `dispatch` behaviour so callers get a
-/// consistent error regardless of which method they use.
-#[allow(unused_variables)]
-fn semantic_pack(msg_type: DvgwMessageType) -> Result<ProfileRulePack, Error> {
-    match msg_type {
-        #[cfg(feature = "alocat")]
-        DvgwMessageType::Alocat => Ok(sem::alocat_pack()),
-        #[cfg(not(feature = "alocat"))]
-        DvgwMessageType::Alocat => Err(Error::FeatureNotEnabled {
-            message_type: "ALOCAT".into(),
-            feature: "alocat".into(),
-        }),
-        #[cfg(feature = "nomint")]
-        DvgwMessageType::Nomint => Ok(sem::nomint_pack()),
-        #[cfg(not(feature = "nomint"))]
-        DvgwMessageType::Nomint => Err(Error::FeatureNotEnabled {
-            message_type: "NOMINT".into(),
-            feature: "nomint".into(),
-        }),
-        #[cfg(feature = "nomres")]
-        DvgwMessageType::Nomres => Ok(sem::nomres_pack()),
-        #[cfg(not(feature = "nomres"))]
-        DvgwMessageType::Nomres => Err(Error::FeatureNotEnabled {
-            message_type: "NOMRES".into(),
-            feature: "nomres".into(),
-        }),
-        #[cfg(feature = "schedl")]
-        DvgwMessageType::Schedl => Ok(sem::schedl_pack()),
-        #[cfg(not(feature = "schedl"))]
-        DvgwMessageType::Schedl => Err(Error::FeatureNotEnabled {
-            message_type: "SCHEDL".into(),
-            feature: "schedl".into(),
-        }),
-        #[cfg(feature = "imbnot")]
-        DvgwMessageType::Imbnot => Ok(sem::imbnot_pack()),
-        #[cfg(not(feature = "imbnot"))]
-        DvgwMessageType::Imbnot => Err(Error::FeatureNotEnabled {
-            message_type: "IMBNOT".into(),
-            feature: "imbnot".into(),
-        }),
-        #[cfg(feature = "tranot")]
-        DvgwMessageType::Tranot => Ok(sem::tranot_pack()),
-        #[cfg(not(feature = "tranot"))]
-        DvgwMessageType::Tranot => Err(Error::FeatureNotEnabled {
-            message_type: "TRANOT".into(),
-            feature: "tranot".into(),
-        }),
-        #[cfg(feature = "delord")]
-        DvgwMessageType::Delord => Ok(sem::delord_pack()),
-        #[cfg(not(feature = "delord"))]
-        DvgwMessageType::Delord => Err(Error::FeatureNotEnabled {
-            message_type: "DELORD".into(),
-            feature: "delord".into(),
-        }),
-        #[cfg(feature = "delres")]
-        DvgwMessageType::Delres => Ok(sem::delres_pack()),
-        #[cfg(not(feature = "delres"))]
-        DvgwMessageType::Delres => Err(Error::FeatureNotEnabled {
-            message_type: "DELRES".into(),
-            feature: "delres".into(),
-        }),
-        other => Err(Error::FeatureNotEnabled {
-            message_type: other.as_str().to_owned(),
-            feature: other.required_feature().to_owned(),
-        }),
-    }
+/// Reads `BGM` C002 DE 1001 and nothing else, so it is cheap enough to run at an
+/// ingest boundary before deciding which parser owns the bytes.
+///
+/// That decision cannot be made from `UNH`: a DVGW message rides `ORDERS` or
+/// `ORDRSP`, both of which are *also* real BDEW EDI@Energy message types, so an
+/// ALOCAT handed to a BDEW parser comes back as a perfectly well-formed
+/// `ORDRSP` with a Prüfidentifikator that means something else entirely. The
+/// document-name code is the only field that separates the two families.
+///
+/// Returns `None` for a BDEW interchange, for anything that is not EDIFACT, and
+/// for a DVGW-shaped message whose document code this crate does not know.
+#[must_use]
+pub fn sniff(input: &[u8]) -> Option<crate::document::DvgwDocument> {
+    let segments: Vec<OwnedSegment> =
+        edifact_rs::from_bytes_owned_with_config(input, ReaderConfig::default())
+            .take_while(Result::is_ok)
+            .map_while(Result::ok)
+            // `BGM` is the second segment of a message, so there is no reason to
+            // tokenise a whole interchange to find it.
+            .take(8)
+            .collect();
+    segments
+        .iter()
+        .find(|s| s.tag == "BGM")
+        .and_then(|bgm| bgm.component_str(0, 0))
+        .and_then(crate::document::DvgwDocument::from_code)
 }

@@ -164,96 +164,118 @@ pub fn gabi_gas_comdis_registry() -> AdapterRegistry<GaBiGasInvoicWorkflow> {
     registry
 }
 
-// ── GaBi Gas Nomination — NOMINT / NOMRES (DVGW synthetic PIDs 90011/90012/90021/90022) ──
+// ── GaBi Gas Nomination — NOMINT / NOMRES (DVGW PIDs 70030–70039) ────────────
 
 /// Build an [`AdapterRegistry`] for [`GaBiGasNominationWorkflow`].
 ///
-/// Handles both outbound NOMINT dispatch (synthetic PIDs 90011/90012,
-/// BKV → FNB/MGV) and inbound NOMRES response (synthetic PIDs 90021/90022,
-/// FNB/MGV → BKV).
+/// Handles outbound NOMINT (PIDs 70030–70034, Transportkunde → NB/MGV) and the
+/// inbound NOMRES that answers it (PIDs 70035–70039).
 ///
-/// DVGW messages carry no BGM Prüfidentifikator; the synthetic PID is derived
-/// from the message type and role qualifier via `AnyDvgwMessage::detect_pid`.
+/// The routing key is the Prüfidentifikator DVGW puts in `SG1 RFF+Z13`; it is
+/// read off the wire, not synthesised from the message type and a role code.
 ///
-/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-24-01-008.
+/// Regulatory basis: `KoV` (Kooperationsvereinbarung Gas), BNetzA BK7-24-01-008.
 #[must_use]
 pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
         |raw: &dyn Any, _fv: &FormatVersion| {
-            let msg = raw.downcast_ref::<AnyDvgwMessage>().ok_or_else(|| {
+            let msg = raw.downcast_ref::<DvgwMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
-                    "expected AnyDvgwMessage for GaBi Gas Nomination adapter".into(),
+                    "expected DvgwMessage for GaBi Gas Nomination adapter".into(),
                 )
             })?;
 
-            let synthetic_pid = msg.detect_pid(None).ok_or_else(|| {
+            let pid = msg.pruefidentifikator.ok_or_else(|| {
                 EngineError::Deserialization(
-                    "GaBi Gas Nomination adapter: could not derive synthetic PID".into(),
+                    "GaBi Gas Nomination adapter: no Prüfidentifikator in SG1 RFF+Z13".into(),
+                )
+            })?;
+            let gas_day = dvgw_gas_day(msg).ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Nomination adapter: no usable DTM+Z01 Gültigkeitszeitraum — \
+                     the gas day cannot be determined"
+                        .into(),
                 )
             })?;
 
-            let pid = Pruefidentifikator::new(synthetic_pid).map_err(|e| {
-                EngineError::Deserialization(format!(
-                    "GaBi Gas Nomination adapter: synthetic PID out of range: {e}"
-                ))
-            })?;
+            let sender_eic = msg.sender().map(|p| p.id.clone()).unwrap_or_default();
+            let receiver_eic = msg.receiver().map(|p| p.id.clone()).unwrap_or_default();
+            let message_ref = MessageRef::new(msg.message_ref.as_str());
 
-            let trait_msg = msg.as_trait().ok_or_else(|| {
-                EngineError::Deserialization(
-                    "GaBi Gas Nomination adapter: message has no trait impl".into(),
-                )
-            })?;
-            let sender_eic = trait_msg.sender_eic().unwrap_or("").to_owned();
-            let receiver_eic = trait_msg.receiver_eic().unwrap_or("").to_owned();
-            let message_ref = MessageRef::new(trait_msg.message_ref());
-
-            match msg {
-                AnyDvgwMessage::Nomint(nomint) => {
-                    // Outbound NOMINT — BKV sends nomination to FNB/MGV.
-                    let gas_day = parse_dvgw_gas_day(nomint.reference_date.as_deref());
-                    let nomination_ref = nomint
-                        .nomination_ref
+            match msg.message_type {
+                DvgwMessageType::Nomint => {
+                    // The Dokumentennummer is the nomination's own identity. The
+                    // NOMRES answering it carries no reference back, so the pair
+                    // is matched on the business key, not on this.
+                    let nomination_ref = msg
+                        .document_number
                         .as_deref()
-                        .map(MessageRef::new)
-                        .unwrap_or_else(|| message_ref.clone());
+                        .map_or_else(|| message_ref.clone(), MessageRef::new);
                     Ok(NominationCommand::SendNomination {
-                        synthetic_pid: pid.as_u32(),
+                        pruefidentifikator: pid.as_u32(),
                         sender_eic,
                         receiver_eic,
                         gas_day,
                         nomination_ref,
+                        // Every position of a NOMINT is the nomination itself, so
+                        // all of them count.
+                        nominated_kwh: msg.single_energy_kwh(|_| true),
                     })
                 }
-                AnyDvgwMessage::Nomres(nomres) => {
-                    // Inbound NOMRES — FNB/MGV responds to BKV.
-                    let gas_day = parse_dvgw_gas_day(nomres.reference_date.as_deref());
-                    let acceptance = match &nomres.overall_status {
-                        Some(dvgw_edi::messages::nomres::NomresStatus::Accepted) => {
+                DvgwMessageType::Nomres => {
+                    // NOMRES has no status segment, so only the document-name code
+                    // says what this message decides — and only a *Bestätigung*
+                    // decides anything. A Matching-Benachrichtigung (07G/19G)
+                    // reports the state of the match and is filtered out upstream,
+                    // in the ingest arm, so it can never reach here and be turned
+                    // into a terminal outcome.
+                    let acceptance = match msg.document {
+                        DvgwDocument::Bestaetigung
+                        | DvgwDocument::VhpBestaetigung
+                        | DvgwDocument::BestaetigungFlexibilitaetsuebertragung => {
                             NomresAcceptance::Accepted
                         }
-                        Some(dvgw_edi::messages::nomres::NomresStatus::PartiallyAccepted) => {
-                            NomresAcceptance::PartiallyAccepted
-                        }
-                        Some(dvgw_edi::messages::nomres::NomresStatus::Rejected) => {
-                            NomresAcceptance::Rejected
-                        }
-                        Some(dvgw_edi::messages::nomres::NomresStatus::Other(code)) => {
-                            NomresAcceptance::Other(code.clone())
-                        }
-                        Some(_) => NomresAcceptance::Other("unknown-variant".to_owned()),
-                        None => NomresAcceptance::Other("unknown".to_owned()),
+                        other => NomresAcceptance::Other(other.code().to_owned()),
                     };
+
+                    // Only the recipient's own side counts, and only **one** label
+                    // of it. A NOMRES states the nominated quantities under `IMD`
+                    // `17G`, the counterparty's mirror under `18G`, and the matched
+                    // result under `16G`; a message may carry `17G` *and* `16G` for
+                    // the same position. Selecting both sums two figures for one
+                    // quantity, which is the same double-count as including `18G`
+                    // — a curtailment then reads as an over-confirmation.
+                    //
+                    // `16G` wins when present: the matched quantity is what will
+                    // actually flow.
+                    let label = |code: &'static str| {
+                        move |item: &dvgw_edi::LineItem| item.description_code() == Some(code)
+                    };
+                    let has = |code: &'static str| msg.items.iter().any(label(code));
+                    let confirmed_kwh = if has(dvgw_edi::model::imd::GEMATCHT) {
+                        msg.single_energy_kwh(label(dvgw_edi::model::imd::GEMATCHT))
+                    } else if has(dvgw_edi::model::imd::NOMINIERT) {
+                        msg.single_energy_kwh(label(dvgw_edi::model::imd::NOMINIERT))
+                    } else {
+                        // Unlabelled: the message states one side only, so every
+                        // position is that side.
+                        msg.single_energy_kwh(|item: &dvgw_edi::LineItem| {
+                            item.description_code().is_none()
+                        })
+                    };
+
                     Ok(NominationCommand::ReceiveNomres {
                         nomres_ref: message_ref,
                         acceptance,
                         gas_day,
+                        confirmed_kwh,
                         rejection_reason: None,
                     })
                 }
-                _ => Err(EngineError::Deserialization(
-                    "GaBi Gas Nomination adapter: expected NOMINT or NOMRES message".into(),
+                DvgwMessageType::Alocat => Err(EngineError::Deserialization(
+                    "GaBi Gas Nomination adapter: expected NOMINT or NOMRES, got ALOCAT".into(),
                 )),
             }
         },
@@ -261,62 +283,82 @@ pub fn gabi_gas_nomination_registry() -> AdapterRegistry<GaBiGasNominationWorkfl
     registry
 }
 
-// ── GaBi Gas Allocation — ALOCAT (DVGW synthetic PIDs 90001/90002/90003) ─────
+// ── GaBi Gas Allocation — ALOCAT (DVGW PIDs 70001–70023) ─────────────────────
 
 /// Build an [`AdapterRegistry`] for [`GaBiGasAllocationWorkflow`].
 ///
-/// Handles inbound ALOCAT allocation messages (synthetic PIDs 90001/90002/90003,
-/// FNB/MGV/VNB → BKV). No response is sent — this is a receive-and-record workflow.
+/// Handles inbound ALOCAT allocation messages. No response is sent — this is a
+/// receive-and-record workflow.
 ///
-/// DVGW messages carry no BGM Prüfidentifikator; the synthetic PID is derived
-/// from the message type and role qualifier via `AnyDvgwMessage::detect_pid`.
-///
-/// Regulatory basis: KoV (Kooperationsvereinbarung Gas), BNetzA BK7-24-01-008.
+/// Regulatory basis: `KoV` (Kooperationsvereinbarung Gas), BNetzA BK7-24-01-008.
 #[must_use]
 pub fn gabi_gas_allocation_registry() -> AdapterRegistry<GaBiGasAllocationWorkflow> {
     let mut registry = AdapterRegistry::new();
     registry.register(FnAdapter::new(
         is_known_fv,
         |raw: &dyn Any, _fv: &FormatVersion| {
-            let msg = raw.downcast_ref::<AnyDvgwMessage>().ok_or_else(|| {
+            let msg = raw.downcast_ref::<DvgwMessage>().ok_or_else(|| {
                 EngineError::Deserialization(
-                    "expected AnyDvgwMessage for GaBi Gas Allocation adapter".into(),
+                    "expected DvgwMessage for GaBi Gas Allocation adapter".into(),
+                )
+            })?;
+            if msg.message_type != DvgwMessageType::Alocat {
+                return Err(EngineError::Deserialization(format!(
+                    "GaBi Gas Allocation adapter: expected ALOCAT, got {}",
+                    msg.message_type
+                )));
+            }
+
+            let pid = msg.pruefidentifikator.ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Allocation adapter: no Prüfidentifikator in SG1 RFF+Z13".into(),
+                )
+            })?;
+            let gas_day = dvgw_gas_day(msg).ok_or_else(|| {
+                EngineError::Deserialization(
+                    "GaBi Gas Allocation adapter: no usable DTM+Z01 Gültigkeitszeitraum — \
+                     the gas day cannot be determined"
+                        .into(),
                 )
             })?;
 
-            let AnyDvgwMessage::Alocat(alocat) = msg else {
-                return Err(EngineError::Deserialization(
-                    "GaBi Gas Allocation adapter: expected ALOCAT message".into(),
-                ));
+            // The version is stated by the document-name code, not assumed:
+            // reporting every message as `Initial` hides whether the binding
+            // final allocation ever arrived, which is what the KoV §6.4 deadline
+            // watches for.
+            //
+            // `X5G` (Endgültige Allokation) is deliberately **not** mapped to
+            // `Final` here. DVGW publishes `X6G`/`X7G` Korrigierte Allokation as
+            // messages that follow the endgültige one, while the workflow treats
+            // `Final` as settled and refuses any later correction — so mapping it
+            // would drop every correction that arrives afterwards. Closing that
+            // needs the KoV §6.4 question of what "binding" means once a
+            // correction follows, which is a process decision, not a parse one.
+            let version = match msg.document {
+                DvgwDocument::KorrigierteAllokationBilanzierungsbrennwert
+                | DvgwDocument::KorrigierteAllokationAbrechnungsbrennwert
+                | DvgwDocument::KorrigierteMengenmeldungNkp => AllocationVersion::Correction(1),
+                _ => AllocationVersion::Initial,
             };
 
-            let synthetic_pid = msg.detect_pid(None).ok_or_else(|| {
-                EngineError::Deserialization(
-                    "GaBi Gas Allocation adapter: could not derive synthetic PID".into(),
-                )
-            })?;
-
-            let pid = Pruefidentifikator::new(synthetic_pid).map_err(|e| {
-                EngineError::Deserialization(format!(
-                    "GaBi Gas Allocation adapter: synthetic PID out of range: {e}"
-                ))
-            })?;
-
-            let trait_msg = msg.as_trait().ok_or_else(|| {
-                EngineError::Deserialization(
-                    "GaBi Gas Allocation adapter: message has no trait impl".into(),
-                )
-            })?;
-
             Ok(AllocationCommand::ReceiveAlocat {
-                synthetic_pid: pid.as_u32(),
-                sender_eic: trait_msg.sender_eic().unwrap_or("").to_owned(),
-                receiver_eic: trait_msg.receiver_eic().unwrap_or("").to_owned(),
-                gas_day: parse_dvgw_gas_day(alocat.reference_date.as_deref()),
-                version: mako_gabi_gas::allocation::AllocationVersion::Initial,
-                allocated_quantity: None,
-                clearing_number: alocat.clearing_number.clone(),
-                message_ref: MessageRef::new(trait_msg.message_ref()),
+                pruefidentifikator: pid.as_u32(),
+                sender_eic: msg.sender().map(|p| p.id.clone()).unwrap_or_default(),
+                receiver_eic: msg.receiver().map(|p| p.id.clone()).unwrap_or_default(),
+                gas_day,
+                version,
+                // A DVGW `QTY` is a **rate** in kWh/h over the period its own
+                // `DTM+2` names, so the allocated energy is Σ(rate × duration) —
+                // never the sum of the values, which adds rates together.
+                // `single_energy_kwh` refuses when the message mixes Einspeisung
+                // (`Z02`) and Ausspeisung (`Z03`), because one scalar across them
+                // is a net position, and when any quantity could not be
+                // integrated, because a partial total understates the gas day.
+                allocated_quantity: msg
+                    .single_energy_kwh(|_| true)
+                    .map(mako_gabi_gas::GasQuantity::from_kwh),
+                clearing_number: msg.clearingnummer().map(str::to_owned),
+                message_ref: MessageRef::new(msg.message_ref.as_str()),
             })
         },
     ));

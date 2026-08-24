@@ -80,13 +80,14 @@ let platform = Platform::new(ReleaseRegistry::new(profiles));
 let msg = platform.parse(bytes)?;
 ```
 
-You can also override the transition grace period on any platform:
+You can also widen the receive tolerance on any platform:
 
 ```rust
 use edi_energy::Platform;
 
-// BDEW default is 7 days; widen it to 14 for a specific tenant or test scenario.
-let platform = Platform::with_all_profiles().with_transition_grace_days(14);
+// The BDEW default is 0 — EDIFACT changes format at a single instant.
+// Raise it for a tenant whose contract tolerates a late-arriving old-format message.
+let platform = Platform::with_all_profiles().with_receive_tolerance_days(3);
 ```
 
 ---
@@ -184,13 +185,28 @@ std::thread::spawn(move || {
 
 The registry resolves the correct profile using the UNH association code (`DE 0057`) extracted from each parsed message.
 
-### Transition windows
+### Format boundaries
 
-BDEW mandates a 7-day grace period around each annual profile boundary. The registry is aware of this:
+**EDIFACT has no transition window.** Allgemeine Festlegungen 6.1 §2.5 gives the
+EDIFACT formats a single *Anwendungszeitpunkt* — 1 April or 1 October — with no
+overlap around it: before that instant the old format applies, from it the new
+one does.
 
-- From `valid_from - 7 days` to `valid_until + 7 days` a release is considered "transitionally valid".
-- The global constant `TRANSITION_GRACE_DAYS = 7` governs this window.
-- The `ParseConfig::with_reference_date()` override lets tests simulate any date.
+The 15-*Werktage* Übergangszeitraum that does exist is §8.5, and it is the **XML**
+rule. It starts *at* the Anwendungszeitpunkt rather than before it, runs in
+Werktage rather than calendar days, and picks the version by the *Erfüllungsdatum*
+in the message rather than by when it was sent. None of that carries over.
+
+- `is_acceptable_on` accepts a release from its `valid_from` through its
+  `valid_until` — the leading edge is hard.
+- `ReleaseRegistry::with_receive_tolerance_days(n)` extends the *trailing* edge
+  by `n` calendar days, for operators who choose to accept a late-arriving
+  message in the superseded format. It is a local receiving policy, not a BDEW
+  rule, and it defaults to `DEFAULT_RECEIVE_TOLERANCE_DAYS = 0`.
+- `TransitionState::Transition` therefore occurs only with a non-zero tolerance,
+  and only after the boundary.
+- `ParseConfig::with_reference_date()` pins the date profile resolution uses, so
+  a test can sit on any boundary deterministically.
 
 ---
 

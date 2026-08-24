@@ -60,6 +60,7 @@ mod lokationstyp;
 mod message;
 mod message_type;
 mod parse;
+mod pid_scan;
 mod platform;
 mod pruefidentifikator;
 mod release;
@@ -92,35 +93,18 @@ pub use parse::{
 pub use platform::Platform;
 pub use pruefidentifikator::{Pruefidentifikator, ablehnung_pid, answer_pids, bestaetigung_pid};
 pub use registry::{
-    ProcessContext, ReleaseRegistry, TRANSITION_GRACE_DAYS, TransitionState, UNKNOWN_PID_PACK,
+    DEFAULT_RECEIVE_TOLERANCE_DAYS, ProcessContext, ReleaseRegistry, TransitionState,
+    UNKNOWN_PID_PACK,
 };
 pub use release::{Release, ReleaseKind, ReleaseTrack};
-pub use report::EdiEnergyReport;
+pub use report::{EdiEnergyReport, RuleOrigin};
 
 /// Well-known release identifiers for all registered profiles.
 ///
 /// Use these instead of `Release::new("...")` to get a compile error when a
 /// profile is removed or renamed after a BDEW format update.
 pub mod releases {
-    #[cfg(any(
-        feature = "aperak",
-        feature = "comdis",
-        feature = "contrl",
-        feature = "iftsta",
-        feature = "insrpt",
-        feature = "invoic",
-        feature = "mscons",
-        feature = "ordchg",
-        feature = "orders",
-        feature = "ordrsp",
-        feature = "partin",
-        feature = "pricat",
-        feature = "quotes",
-        feature = "remadv",
-        feature = "reqote",
-        feature = "utilmd",
-        feature = "utilts",
-    ))]
+    #[cfg(any_message)]
     pub use crate::generated::releases::*;
 }
 

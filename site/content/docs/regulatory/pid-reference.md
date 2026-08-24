@@ -1,6 +1,6 @@
 +++
 title = "PID Reference"
-description = "Complete Prüfidentifikator (PID) reference for all German energy market processes. Covers BDEW PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026), PID 4.0 (FV2026-10-01), and DVGW synthetic PIDs (90000–90999). Includes communication roles (Von → An), response-trigger PIDs (Reaktion), and the Rust domain crate that routes each PID."
+description = "Complete Prüfidentifikator (PID) reference for all German energy market processes. Covers BDEW PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026), PID 4.0 (FV2026-10-01), and the DVGW gas transport PIDs (70001–70039). Includes communication roles (Von → An), response-trigger PIDs (Reaktion), and the Rust domain crate that routes each PID."
 weight = 11
 +++
 # Prüfidentifikator (PID) Reference
@@ -8,7 +8,7 @@ weight = 11
 **Source documents:**
 - BDEW EDI@Energy — *Anwendungsübersicht der Prüfidentifikatoren*:
   PID 3.3 (FV2025-10-01, Fehlerkorrektur 27.03.2026) · PID 4.0 (FV2026-10-01, published 01.04.2026)
-- DVGW EDI-DVGW — synthetic PIDs 90000–90999 for GaBi Gas routing
+- DVGW EDI-DVGW — Prüfidentifikatoren 70000–79999 for GaBi Gas transport
 
 A Prüfidentifikator (PID) identifies a specific EDIFACT message use case within a
 business process. Each PID is bound to one EDIFACT format (UTILMD, MSCONS, INVOIC, …)
@@ -66,37 +66,66 @@ Source: BDEW PID 3.3 xlsx (Fehlerkorrektur 27.03.2026) and PID 4.0 xlsx (01.04.2
 15. [UTILTS AHB](#utilts-ahb)
 16. [COMDIS AHB](#comdis-ahb)
 17. [SSQNOT AHB](#ssqnot-ahb)
-18. [DVGW Synthetic PIDs (range 90000–90999)](#dvgw-synthetic-pids)
+18. [DVGW Pruefidentifikatoren (range 70000–79999)](#dvgw-pruefidentifikatoren)
 
 ---
 
-## DVGW Synthetic PIDs
+## DVGW Pruefidentifikatoren
 
-DVGW EDIFACT messages (ALOCAT, NOMINT, NOMRES, …) carry **no BGM Prüfidentifikator**.
-Routing uses the combination of message type and direction qualifier from NAD+MS/MR.
-To keep the PID router uniform, the range `90000–90999` is reserved for DVGW
-synthetic PIDs, derived from `(message_type, role_qualifier)`.
+DVGW EDIFACT messages **do** carry a Prüfidentifikator, and it is published, not
+synthesised. `SG1 RFF+Z13` DE 1153 is named „Prüfidentifikator" in every DVGW
+Nachrichtenbeschreibung, and DE 1154 holds the code:
 
-These PIDs are **not** defined by BDEW and do not appear in PID 3.3 or PID 4.0.
-They are workspace-internal routing keys used by `DvgwMessageType::synthetic_pid()`
-and `AnyDvgwMessage::detect_pid()` in the `dvgw-edi` crate.
+```text
+RFF+Z13:70001'      ← ALOCAT: Allokation anhand von SLP (NB an MGV)
+```
 
-| PID   | Message | Role qualifier | Direction |
-|-------|---------|----------------|-----------|
-| 90001 | ALOCAT  | Z15 / none     | FNB → BKV (daily allocation) |
-| 90002 | ALOCAT  | Z16            | MGV → BKV (monthly allocation) |
-| 90003 | ALOCAT  | Z17            | VNB → FNB (sub-daily allocation) |
-| 90011 | NOMINT  | Z01 / none     | BKV → FNB (nomination) |
-| 90012 | NOMINT  | Z02            | BKV → MGV (nomination) |
-| 90021 | NOMRES  | Z01 / none     | FNB → BKV (nomination response) |
-| 90022 | NOMRES  | Z02            | MGV → BKV (nomination response) |
-| 90031 | SCHEDL  | —              | FNB → BKV (schedule) |
-| 90041 | IMBNOT  | —              | MGV → BKV (intraday imbalance) |
-| 90051 | TRANOT  | —              | FNB → BKV (transport notification) |
-| 90061 | DELORD  | —              | BKV → FNB (delivery order) |
-| 90062 | DELRES  | —              | FNB → BKV (delivery response) |
+DVGW allocates from **70000–79999**, which does not overlap the BDEW ranges, so a
+single PID router serves both markets. `dvgw_edi::catalogue()` ships the
+published Anwendungsfälle with description and direction; `mako-gabi-gas` pins
+its routing lists to that catalogue by test.
 
-See [DVGW EDI](dvgw) for the full regulatory basis and parsing architecture.
+These PIDs are governed by DVGW, not BDEW, and so do not appear in the BDEW PID
+3.3 or 4.0 overviews.
+
+| PID | Message | Anwendungsfall | Kommunikation |
+|---|---|---|---|
+| 70001 | ALOCAT | Allokation anhand von Standardlastprofilen (SLP) | NB an MGV |
+| 70002 | ALOCAT | Korrigierte Mengenmeldung NKP je Netzkonto | NB an MGV |
+| 70003 | ALOCAT | Tägliche Mengenmeldung NKP je Netzkonto | NB an MGV |
+| 70004 | ALOCAT | Vorläufige Allokation (Intraday) | NB an MGV |
+| 70005 | ALOCAT | Endgültige Allokation (Bilanzierungsbrennwert) | NB an MGV |
+| 70006 | ALOCAT | Korrigierte Allokation (Bilanzierungsbrennwert) | NB an MGV |
+| 70007 | ALOCAT | Korrigierte Allokation (Abrechnungsbrennwert) | NB an MGV |
+| 70008 | ALOCAT | SLP Clearing | NB an MGV |
+| 70009 | ALOCAT | RLM Clearing (Bilanzierungsbrennwert) | NB an MGV |
+| 70010 | ALOCAT | RLM Clearing (Abrechnungsbrennwert) | NB an MGV |
+| 70011 | ALOCAT | Korrigierte Mengenmeldung NKP je Netzkonto | ENB/ANB an NB |
+| 70012 | ALOCAT | Tägliche Mengenmeldung NKP je Netzkonto | ENB/ANB an NB |
+| 70013 | ALOCAT | Allokation anhand von Standardlastprofilen (SLP) | MGV an BKV |
+| 70014 | ALOCAT | Untertägige Allokation (Intraday) | MGV an BKV |
+| 70015 | ALOCAT | Endgültige Allokation (Bilanzierungsbrennwert) | MGV an BKV |
+| 70016 | ALOCAT | Korrigierte Allokation (Bilanzierungsbrennwert) | MGV an BKV |
+| 70017 | ALOCAT | Korrigierte Allokation (Abrechnungsbrennwert) | MGV an BKV |
+| 70018 | ALOCAT | SLP Clearing | MGV an BKV |
+| 70019 | ALOCAT | RLM Clearing (Bilanzierungsbrennwert) | MGV an BKV |
+| 70020 | ALOCAT | RLM Clearing (Abrechnungsbrennwert) | MGV an BKV |
+| 70021 | ALOCAT | Ersatzwertversand an NB | MGV an NB |
+| 70022 | ALOCAT | Optional auf Wunsch tägliche SLP Allokation | NB an BKV |
+| 70023 | ALOCAT | Optional auf Wunsch monatlicher Datenrückversand je Netzkonto | MGV an NB |
+| 70030 | NOMINT | Nominierung an einem physikalischen Punkt (ungebündelt) | Transportkunde an NB |
+| 70031 | NOMINT | Nominierung an einem virtuellen Handelspunkt | Transportkunde an MGV |
+| 70032 | NOMINT | Flexibilitätsübertragung | Transportkunde an NB |
+| 70033 | NOMINT | Gebündelte Nominierung | Transportkunde an NB |
+| 70034 | NOMINT | Nominierungsweitergabe zwischen Netzbetreibern | NB an NB |
+| 70035 | NOMRES | Matching Benachrichtigung | NB an Transportkunde |
+| 70036 | NOMRES | Bestätigung | NB an Transportkunde |
+| 70037 | NOMRES | VHP Matching Benachrichtigung | MGV an Transportkunde |
+| 70038 | NOMRES | VHP Bestätigung | MGV an Transportkunde |
+| 70039 | NOMRES | Bestätigung Flexibilitätsübertragung | NB an Transportkunde |
+
+Sources: DVGW-Nachrichtenbeschreibungen ALOCAT 5.11a §3.3, NOMINT 4.6 §4,
+NOMRES 4.7 §4. See [DVGW EDI](dvgw) for the parsing architecture.
 
 ---
 
@@ -122,10 +151,9 @@ The split is enforced: `pid_reference_guard` cross-checks this table against the
 `PidRouter` on every CI run, so a row added here without a matching registration
 (or an entry in the test's `NOT_ROUTED_BY_DESIGN` list) fails the build.
 
-**Not listed here at all:** the twelve synthetic GaBi Gas PIDs (90001–90062).
-They are mako-internal routing keys for Gas balancing sub-processes, not
-BDEW-published Prüfidentifikatoren, so they are deliberately absent from a
-reference to the published set.
+**Not listed in the BDEW tables above:** the DVGW Prüfidentifikatoren
+(70001–70039). They are published by DVGW rather than BDEW and have their own
+section on this page.
 
 ---
 

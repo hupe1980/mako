@@ -306,7 +306,7 @@ fn finding_of(s: edi_energy::ValidationIssueSummary) -> Finding {
     Finding {
         severity: s.severity.to_owned(),
         rule_id: s.rule_id,
-        rule_origin: s.rule_origin.map(str::to_owned),
+        rule_origin: s.rule_origin.map(|o| o.as_str().to_owned()),
         error_code: s.error_code,
         segment: s.segment_tag,
         segment_group: s.segment_group,

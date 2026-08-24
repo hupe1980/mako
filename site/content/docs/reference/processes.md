@@ -119,12 +119,12 @@ Quick reference across all process families. Each row is a top-level domain.
 | **WiM Gas Abrechnung** | 🔥 | `mako-wim` `wim-invoic` | INVOIC 31003/31004 | Zahlungsziel (DTM+265) | AWH WiM Gas 2.0 Kap. 4.7 |
 | **GaBi Gas Abrechnung** | 🔥 | `mako-gabi-gas` `gabi-gas-invoic` | INVOIC 31007/31008/31010 | — | BK7-24-01-008 |
 | **GaBi Gas Allokationsliste (MMMA)** | 🔥 | `mako-gabi-gas` `gabi-gas-mmma` | MSCONS 13013 (ORDERS 17110 / ORDRSP 19110 routed via `mako-gpke` `gpke-allokationsliste`) | — | BK7-24-01-008 |
-| **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | Synthetic PIDs 90001–90003 | — | DVGW ALOCAT 5.11a |
-| **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | Synthetic PIDs 90011/90012/90021/90022 | — | DVGW NOMINT 4.6 FK |
-| **GaBi Gas SCHEDL** | 🔥 | `mako-gabi-gas` `gabi-gas-schedl` | Synthetic PIDs | — | DVGW G685/G2000 |
-| **GaBi Gas IMBNOT** | 🔥 | `mako-gabi-gas` `gabi-gas-imbnot` | Synthetic PIDs | — | DVGW IMBNOT 5.7a |
-| **GaBi Gas TRANOT** | 🔥 | `mako-gabi-gas` `gabi-gas-tranot` | Synthetic PIDs | — | DVGW TRANOT 5.8b |
-| **GaBi Gas DELORD/DELRES** | 🔥 | `mako-gabi-gas` `gabi-gas-delivery-order` | Synthetic PIDs | — | DVGW DELORD 4.5 FK |
+| **GaBi Gas ALOCAT** | 🔥 | `mako-gabi-gas` `gabi-gas-allocation` | PIDs 70001–70023 | — | DVGW ALOCAT 5.11a |
+| **GaBi Gas NOMINT/NOMRES** | 🔥 | `mako-gabi-gas` `gabi-gas-nomination` | PIDs 70030–70039 | — | DVGW NOMINT 4.6 / NOMRES 4.7 |
+| **GaBi Gas SCHEDL** | 🔥 | `mako-gabi-gas` `gabi-gas-schedl` | not implemented | — | DVGW G685/G2000 |
+| **GaBi Gas IMBNOT** | 🔥 | `mako-gabi-gas` `gabi-gas-imbnot` | not implemented | — | DVGW IMBNOT 5.7a |
+| **GaBi Gas TRANOT** | 🔥 | `mako-gabi-gas` `gabi-gas-tranot` | not implemented | — | DVGW TRANOT 5.8b |
+| **GaBi Gas DELORD/DELRES** | 🔥 | `mako-gabi-gas` `gabi-gas-delivery-order` | not implemented | — | DVGW DELORD 4.5 FK |
 | **Redispatch 2.0** | ⚡ | `mako-redispatch` | IFTSTA 21037/21038; XML documents | — | BK6-20-059/060/061 |
 
 ---
@@ -1344,35 +1344,39 @@ sequenceDiagram
 
 ## DVGW — Gas Transport
 
-DVGW EDIFACT messages handle gas transport nominations, allocations, and schedules
-between FNBs (Fernleitungsnetzbetreiber), BKVs, and MGVs. They carry **no BGM
-Prüfidentifikator**; routing uses synthetic PIDs (90000–90999) derived from
-`(message_type, role_qualifier)`.
+DVGW EDIFACT messages carry gas transport nominations and allocations between
+network operators (NB/FNB/VNB), market area managers (MGV) and balance
+responsible parties (BKV).
 
-> **Crate layering.** `dvgw-edi` is the **format library** — it parses and
-> validates DVGW EDIFACT messages (NOMINT, NOMRES, ALOCAT, SCHEDL, …),
-> analogous to `edi-energy` for EDI@Energy. `mako-gabi-gas` is the
-> **process layer** on top of it, implementing GABi Gas workflows (both
-> DVGW transport and BK7 billing) — analogous to `mako-gpke` on top of
-> `edi-energy`. See [GaBi Gas — Kapazitätsabrechnung Gas](#gabi-gas-kapazitatsabrechnung-gas)
+**They are identified by `BGM` DE 1001, not by `UNH`.** Every DVGW format is a
+subset of a UN/EDIFACT D.07A message, so `UNH` names the carrier (`ORDERS` or
+`ORDRSP`) and the document-name code names the message. The Prüfidentifikator is
+published and on the wire, in `SG1 RFF+Z13`, from the range 70000–79999.
+
+> **Crate layering.** `dvgw-edi` is the **format library** — it parses, validates
+> and writes DVGW EDIFACT messages, analogous to `edi-energy` for EDI@Energy.
+> `mako-gabi-gas` is the **process layer** on top of it, implementing GaBi Gas
+> workflows (both DVGW transport and BK7 billing) — analogous to `mako-gpke` on
+> top of `edi-energy`. See [GaBi Gas — Kapazitätsabrechnung Gas](#gabi-gas-kapazitatsabrechnung-gas)
 > for the full process table.
 
-See [DVGW EDI](@/docs/reference/dvgw.md) for the full regulatory basis and parsing architecture.
+See [DVGW EDI](@/docs/reference/dvgw.md) for the regulatory basis and parsing
+architecture, and the [PID Reference](@/docs/regulatory/pid-reference.md) for the
+full Anwendungsfall table.
 
-| Synthetic PID | Message | Direction | Description | Workflow |
-|---|---|---|---|---|
-| 90001 | ALOCAT | FNB → BKV | Daily allocation | `gabi-gas-allocation` ✅ |
-| 90002 | ALOCAT | MGV → BKV | Monthly allocation | `gabi-gas-allocation` ✅ |
-| 90003 | ALOCAT | VNB → FNB | Sub-daily allocation | `gabi-gas-allocation` ✅ |
-| 90011 | NOMINT | BKV → FNB | Nomination | `gabi-gas-nomination` ✅ |
-| 90012 | NOMINT | BKV → MGV | Nomination | `gabi-gas-nomination` ✅ |
-| 90021 | NOMRES | FNB → BKV | Nomination response | `gabi-gas-nomination` ✅ |
-| 90022 | NOMRES | MGV → BKV | Nomination response | `gabi-gas-nomination` ✅ |
-| 90031 | SCHEDL | FNB/BKV/MGV → receiver | Day-ahead transport schedule | `gabi-gas-schedl` ✅ |
-| 90041 | IMBNOT | FNB/MGV → BKV | Imbalance notification | `gabi-gas-imbnot` ✅ |
-| 90051 | TRANOT | FNB/VNB → BKV/GH/MGV | Transport notification | `gabi-gas-tranot` ✅ |
-| 90061 | DELORD | BKV/GH → FNB/MGV | Delivery order | `gabi-gas-delivery-order` ✅ |
-| 90062 | DELRES | FNB/MGV → BKV/GH | Delivery response | `gabi-gas-delivery-order` ✅ |
+| PIDs | Message | Direction | Workflow |
+|---|---|---|---|
+| 70001–70010 | ALOCAT | NB → MGV | `gabi-gas-allocation` ✅ |
+| 70011–70012 | ALOCAT | ENB/ANB → NB | `gabi-gas-allocation` ✅ |
+| 70013–70020 | ALOCAT | MGV → BKV | `gabi-gas-allocation` ✅ |
+| 70021, 70023 | ALOCAT | MGV → NB | `gabi-gas-allocation` ✅ |
+| 70022 | ALOCAT | NB → BKV | `gabi-gas-allocation` ✅ |
+| 70030–70034 | NOMINT | Transportkunde → NB/MGV | `gabi-gas-nomination` ✅ |
+| 70035–70039 | NOMRES | NB/MGV → Transportkunde | `gabi-gas-nomination` ✅ |
+
+SCHEDL, IMBNOT, TRANOT, DELORD/DELRES and SSQNOT are **not implemented** —
+`dvgw-edi` does not parse them, so nothing routes to their placeholder
+workflows. See `ROADMAP.md`.
 
 ---
 

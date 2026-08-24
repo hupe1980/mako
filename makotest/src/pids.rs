@@ -69,7 +69,7 @@ pub fn release_for(message_type: &str, on: &str, sparte: Option<&str>) -> PyResu
     let mt = message_type_from_str(message_type)?;
     let ctx = ProcessContext::for_date(parse_date(on)?);
     let release = match track_for(mt, sparte)? {
-        Some(track) => ctx.active_release_for_track(mt, &track),
+        Some(track) => ctx.active_release_for_track(mt, track),
         None => ctx.active_release(mt),
     };
     Ok(release.map(|r| r.as_str().to_owned()))
@@ -146,7 +146,7 @@ fn known_on(
     mt: MessageType,
     pid: Pruefidentifikator,
     on: time::Date,
-    track: Option<&ReleaseTrack>,
+    track: Option<ReleaseTrack>,
 ) -> bool {
     let ctx = ProcessContext::for_date(on);
     let profile = match track {
@@ -174,12 +174,7 @@ pub fn pid_has_ahb_rules(
     };
     match on {
         None => Ok(known_anywhere(mt, p)),
-        Some(date) => Ok(known_on(
-            mt,
-            p,
-            parse_date(date)?,
-            track_for(mt, sparte)?.as_ref(),
-        )),
+        Some(date) => Ok(known_on(mt, p, parse_date(date)?, track_for(mt, sparte)?)),
     }
 }
 
@@ -208,7 +203,7 @@ pub fn pruefidentifikatoren(
             };
             let known = match date {
                 None => known_anywhere(mt, p),
-                Some(d) => known_on(mt, p, d, track.as_ref()),
+                Some(d) => known_on(mt, p, d, track),
             };
             if known {
                 out.push(code);
@@ -307,7 +302,7 @@ pub(crate) fn resolve_release(
     };
     let ctx = ProcessContext::for_date(parse_date(date)?);
     let found = match track_for(mt, sparte)? {
-        Some(track) => ctx.active_release_for_track(mt, &track),
+        Some(track) => ctx.active_release_for_track(mt, track),
         None => ctx.active_release(mt),
     };
     found.map(|r| Release::new(r.as_str())).ok_or_else(|| {

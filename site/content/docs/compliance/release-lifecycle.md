@@ -1,6 +1,6 @@
 +++
 title = "Release Lifecycle"
-description = "BDEW format version lifecycle: active, upcoming, grace-period, and archived states. How mako-engine handles concurrent FV coexistence with WorkflowVersionPolicy::ForwardCompatible."
+description = "BDEW format version lifecycle: active, upcoming, and archived states. How mako-engine handles concurrent FV coexistence with WorkflowVersionPolicy::ForwardCompatible."
 weight = 11
 +++
 # Annual BDEW Release Lifecycle
@@ -18,9 +18,13 @@ Cutovers are **staggered per message type**, not synchronised on one annual date
 | BDEW publishes a new specification | ~ 2–3 months before that message type's cutover |
 | The specification becomes **valid** | its own `valid_from` — **January 1**, **April 1** or **October 1** (e.g. `fv20260101`, `fv20260401`, `fv20261001`) |
 | The predecessor **expires** | the day before its successor's `valid_from` |
-| Transition window (both valid) | **± 7 days** around the cutover |
+| Transition window (both valid) | **none** — EDIFACT changes at a single Anwendungszeitpunkt (Allgemeine Festlegungen 6.1 §2.5) |
 
-`edi-energy` enforces this via `valid_from` / `valid_until` metadata in each profile JSON and the `TRANSITION_GRACE_DAYS = 7` constant. Because the dates differ per message type, a running instance normally holds several format versions valid at once — see [Annual Release Workflow](@/docs/compliance/annual-release-workflow.md) for the step-by-step rollout and its appendices.
+`edi-energy` enforces this via `valid_from` / `valid_until` metadata in each profile JSON: a release is acceptable from its `valid_from` up to and including its `valid_until`, and the leading edge is hard. `ReleaseRegistry::with_receive_tolerance_days(n)` extends the *trailing* edge for an operator who chooses to accept a late-arriving message in the superseded format — a local receiving policy, defaulting to zero.
+
+The 15-Werktage Übergangszeitraum in Allgemeine Festlegungen §8.5 is the **XML** rule: it begins at the Anwendungszeitpunkt, counts Werktage, and selects the version by the Erfüllungsdatum stated in the message. It does not apply to the EDIFACT formats.
+
+Because the cutover dates differ per message type, a running instance normally holds several format versions valid at once — see [Annual Release Workflow](@/docs/compliance/annual-release-workflow.md) for the step-by-step rollout and its appendices.
 
 ---
 
@@ -364,7 +368,7 @@ The code generator (`xtask/src/codegen.rs`) reads the AHB JSON profiles and emit
 
 ### Annual maintenance
 
-After each BDEW cycle, archive profiles that have passed their grace window:
+After each BDEW cycle, archive profiles whose `valid_until` has passed:
 
 ```bash
 cargo xtask codegen --prune-expired   # sets "archived": true in expired mig.json files

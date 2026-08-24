@@ -285,7 +285,7 @@ use utilmd::*;
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Resolve the active `Release` for `(message_type, track)` from today's registry.
-fn active_release(message_type: MessageType, track: &ReleaseTrack) -> Option<Release> {
+fn active_release(message_type: MessageType, track: ReleaseTrack) -> Option<Release> {
     let today = time::OffsetDateTime::now_utc().date();
     ReleaseRegistry::global()
         .profile_for_date_and_track(message_type, today, track)

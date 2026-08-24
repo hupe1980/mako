@@ -192,6 +192,49 @@ impl ContrlAckService {
             return Ok(());
         };
 
+        self.enqueue(sender_mp_id.as_ref(), interchange_ref, recipient_mp_id)
+            .await
+    }
+
+    /// Enqueue the Empfangsbestätigung for a **DVGW** gas-transport interchange.
+    ///
+    /// The obligation is a property of the Übertragungsdatei and keyed on Sparte
+    /// (CONTRL AHB 1.0 §2.3.1), and a DVGW interchange is Gas by definition — the
+    /// DVGW formats *are* the gas transport layer — so neither of the two
+    /// decisions the BDEW path makes from its messages applies here: the Sparte
+    /// is not in question, and a DVGW message is never a CONTRL, so the
+    /// no-CONTRL-on-CONTRL exception cannot fire.
+    ///
+    /// What is left is the sender, which the caller reads from `NAD+MS`.
+    ///
+    /// # Errors
+    ///
+    /// As [`emit_for_interchange`](Self::emit_for_interchange).
+    pub async fn emit_for_dvgw_interchange(
+        &self,
+        sender_mp_id: &str,
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+    ) -> Result<(), EngineError> {
+        if sender_mp_id.is_empty() {
+            tracing::warn!(
+                interchange_ref,
+                "CONTRL ack: DVGW interchange has no NAD+MS sender — \
+                 Empfangsbestätigung NOT enqueued (regulatory gap)"
+            );
+            return Ok(());
+        }
+        self.enqueue(sender_mp_id, interchange_ref, recipient_mp_id)
+            .await
+    }
+
+    /// Queue the CONTRL and its 6-hour delivery deadline, atomically.
+    async fn enqueue(
+        &self,
+        sender_mp_id: &str,
+        interchange_ref: &str,
+        recipient_mp_id: &str,
+    ) -> Result<(), EngineError> {
         // CONTRL sender = the own MP-ID the interchange was addressed to (the
         // Sparte-correct GLN, even in a multi-Sparte deployment). Fall back to the
         // primary MP-ID when the recipient was resolved only by the heuristic.
@@ -215,10 +258,10 @@ impl ContrlAckService {
             ConversationId::new(),
             EventId::new(),
             "CONTRL",
-            sender_mp_id.as_ref(),
+            sender_mp_id,
             serde_json::json!({
                 "sender":          contrl_sender,
-                "receiver":        sender_mp_id.as_ref(),
+                "receiver":        sender_mp_id,
                 "accepted":        true,
                 // UNB DE0020 interchange control reference.
                 // Surfaced from the parsed interchange header; the CONTRL
@@ -266,7 +309,7 @@ impl ContrlAckService {
         {
             Ok(()) => {
                 tracing::debug!(
-                    sender_mp_id = sender_mp_id.as_ref(),
+                    sender_mp_id,
                     "CONTRL ack: Empfangsbestätigung + 6h deadline enqueued atomically",
                 );
                 Ok(())
@@ -276,7 +319,7 @@ impl ContrlAckService {
                 // obligations on the counterparty side (6h deadline violation).
                 tracing::error!(
                     error      = %e,
-                    sender_mp_id = sender_mp_id.as_ref(),
+                    sender_mp_id,
                     "CONTRL ack: atomic outbox+deadline enqueue failed — regulatory \
                      6h CONTRL window at risk (CONTRL AHB 1.0 §1.2 / APERAK AHB 1.0 §1.2)",
                 );

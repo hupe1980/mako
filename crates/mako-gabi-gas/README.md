@@ -12,30 +12,20 @@ billing between balance responsible parties (BKV), network operators
 ```mermaid
 sequenceDiagram
     autonumber
+    participant TK as Transportkunde<br/>(BKV / Shipper)
+    participant NB as NB / MGV<br/>(Netz / Marktgebiet)
     participant BKV as BKV<br/>(Bilanzkreis­verantwortlicher)
-    participant FNB as FNB / MGV<br/>(Netz / Marktgebiet)
-    participant VNB as VNB<br/>(Verteilnetz)
 
-    Note over BKV,FNB: Day-ahead (D-1, deadline 13:00 CET)
-    BKV->>FNB: NOMINT 90011/90012 (Nomination)
-    FNB-->>BKV: NOMRES 90021/90022 (Confirmation / Curtailment)
+    Note over TK,NB: Day-ahead nomination
+    TK->>NB: NOMINT 70030–70034 (Nominierung)
+    NB-->>TK: NOMRES 70035–70039 (Bestätigung / Matching)
 
-    Note over FNB,BKV: Intraday corrections allowed until gate closure
-    BKV->>FNB: DELORD 90061 (Delivery order)
-    FNB-->>BKV: DELRES 90062 (Delivery response)
+    Note over TK,NB: Intraday re-nomination — RFF+AGO cites the original
 
-    Note over FNB,BKV: Day D scheduling
-    FNB->>BKV: SCHEDL 90031 (Transport schedule)
-
-    Note over FNB,BKV: After gas day D
-    FNB->>BKV: ALOCAT 90001 (Daily allocation — initial)
-    FNB->>BKV: ALOCAT 90001 (Daily allocation — correction)
-    FNB->>BKV: ALOCAT 90001 (Daily allocation — final)
-    FNB->>BKV: IMBNOT 90041 (Imbalance notification)
-
-    Note over VNB,FNB: Sub-day / Distribution
-    VNB->>FNB: ALOCAT 90003 (Sub-daily allocation)
-    FNB->>BKV: TRANOT 90051 (Transport notification)
+    Note over NB,BKV: After gas day D
+    NB->>BKV: ALOCAT 70001 (SLP-Allokation, NB an MGV)
+    NB->>BKV: ALOCAT 70006 (korrigierte Allokation)
+    NB->>BKV: ALOCAT 70005 (endgültige Allokation — settles the imbalance)
 ```
 
 ## Implemented processes
@@ -43,13 +33,13 @@ sequenceDiagram
 | Workflow | PIDs / Message types | Governing document | Status |
 |---|---|---|---|
 | `gabi-gas-invoic` | INVOIC 31010 (Kapazitätsrechnung, NB/VNB → BKV) + 31007/31008 (Aggreg. MMM-Rechnung, NB → MGV) | BK7-24-01-008 | ✅ |
-| `gabi-gas-allocation` | ALOCAT (synthetic PIDs 90001–90003) | BK7-24-01-008 / DVGW ALOCAT 5.11a | ✅ |
-| `gabi-gas-nomination` | NOMINT (90011/90012) + NOMRES (90021/90022) | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
+| `gabi-gas-allocation` | ALOCAT (PIDs 70001–70023) | BK7-24-01-008 / DVGW ALOCAT 5.11a | ✅ |
+| `gabi-gas-nomination` | NOMINT (70030–70034) + NOMRES (70035–70039) | BK7-24-01-008 / DVGW NOMINT 4.6 FK / NOMRES 4.7 FK | ✅ |
 | `gabi-gas-mmma` | MSCONS 13013 + ORDERS 17110 + ORDRSP 19110 (Allokationsliste Gas, MMMA) | BK7-24-01-008 | ✅ |
-| `gabi-gas-schedl` | SCHEDL (synthetic PIDs) | DVGW SCHEDL G685/G2000 | ✅ |
-| `gabi-gas-imbnot` | IMBNOT (synthetic PIDs) | DVGW IMBNOT 5.7a | ✅ |
-| `gabi-gas-tranot` | TRANOT (synthetic PIDs) | DVGW TRANOT 5.8b | ✅ |
-| `gabi-gas-delivery-order` | DELORD + DELRES (synthetic PIDs) | DVGW DELORD 4.5 FK / DELRES 4.6 FK | ✅ |
+| `gabi-gas-schedl` | SCHEDL — **not routed** | DVGW SCHEDL G685/G2000 | placeholder |
+| `gabi-gas-imbnot` | IMBNOT — **not routed** | DVGW IMBNOT 5.7a | placeholder |
+| `gabi-gas-tranot` | TRANOT — **not routed** | DVGW TRANOT 5.8b | placeholder |
+| `gabi-gas-delivery-order` | DELORD + DELRES — **not routed** | DVGW DELORD 4.5 / DELRES 4.6 | placeholder |
 
 ## Domain model (`domain.rs` + `portfolio.rs`)
 
@@ -240,7 +230,7 @@ println!("ALOCAT:  {} (valid from {})", dvgw_versions::ALOCAT.version,
          dvgw_versions::ALOCAT.valid_from); // "5.11a" / 2024-10-01
 println!("NOMINT:  {} (valid from {})", dvgw_versions::NOMINT.version,
          dvgw_versions::NOMINT.valid_from); // "4.6 FK" / 2026-02-01
-// … NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES
+// … NOMRES
 ```
 
 DVGW releases take effect on **1 April** and **1 October at 06:00 CET** (= start of a gas day).
@@ -270,7 +260,7 @@ GaBi Gas capacity billing (PID 31010) is in this crate; AWH Sperrprozesse billin
 
 | Crate | Responsibility |
 |---|---|
-| `dvgw-edi` | EDIFACT parsing — ALOCAT, NOMINT, NOMRES, SCHEDL, IMBNOT, TRANOT, DELORD, DELRES |
+| `dvgw-edi` | EDIFACT parsing, validation and writing — ALOCAT, NOMINT, NOMRES |
 | `mako-gabi-gas` | Process engine — all eight workflow state machines, PID routing, deadline handling, domain model |
 
 ## INVOIC billing workflows
@@ -323,21 +313,31 @@ NB ──(ORDERS 17110 Anfrage)──► MGV
 
 ## DVGW transport workflows
 
-DVGW message types are parsed by `dvgw-edi` and routed via synthetic PIDs
-(90001–90062) through `mako-engine`. Each workflow corresponds to one DVGW
+DVGW message types are parsed by `dvgw-edi` and routed by the Prüfidentifikator
+through `mako-engine`. Each workflow corresponds to one DVGW
 message exchange:
 
-| Workflow | Synthetic PIDs | DVGW message(s) | Description |
+| Workflow | PIDs | DVGW message(s) | Description |
 |---|---|---|---|
-| `gabi-gas-allocation` | 90001–90003 | ALOCAT 5.11a | Gas quantity allocation — supports `Initial`, `Correction(n)`, `Final` versions per KoV §6.4 |
-| `gabi-gas-nomination` | 90011/90012 (NOMINT) · 90021/90022 (NOMRES) | NOMINT 4.6 FK · NOMRES 4.7 FK | BKV → FNB/MGV nomination + FNB confirmation/rejection; `NominationQuantity` tracks submitted/accepted/curtailed |
-| `gabi-gas-schedl` | synthetic | SCHEDL G685/G2000 | Transport schedule for a gas day (typed `GasDay`) |
-| `gabi-gas-imbnot` | synthetic | IMBNOT 5.7a | Intraday imbalance notification (MGV/FNB → BKV); `GasImbalanceSaldo` computes Mehr/Minder direction |
-| `gabi-gas-tranot` | synthetic | TRANOT 5.8b | Transport notification — capacity restriction or event (FNB/VNB → BKV/GH/MGV) |
-| `gabi-gas-delivery-order` | synthetic | DELORD 4.5 FK · DELRES 4.6 FK | Delivery nomination (BKV → FNB) + FNB confirmation/rejection |
+| `gabi-gas-allocation` | 70001–70023 | ALOCAT 5.11a | Gas quantity allocation — supports `Initial`, `Correction(n)`, `Final` versions per KoV §6.4 |
+| `gabi-gas-nomination` | 70030–70034 (NOMINT) · 70035–70039 (NOMRES) | NOMINT 4.6 · NOMRES 4.7 | Transportkunde → NB/MGV nomination + the NB's Bestätigung or Matching-Benachrichtigung; `NominationQuantity` tracks submitted/accepted/curtailed |
+| `gabi-gas-schedl` | not routed | SCHEDL G685/G2000 | Transport schedule for a gas day (typed `GasDay`) |
+| `gabi-gas-imbnot` | not routed | IMBNOT 5.7a | Intraday imbalance notification (MGV/FNB → BKV); `GasImbalanceSaldo` computes Mehr/Minder direction |
+| `gabi-gas-tranot` | not routed | TRANOT 5.8b | Transport notification — capacity restriction or event (FNB/VNB → BKV/GH/MGV) |
+| `gabi-gas-delivery-order` | not routed | DELORD 4.5 FK · DELRES 4.6 FK | Delivery nomination (BKV → FNB) + FNB confirmation/rejection |
 
-Synthetic PID assignment follows `dvgw_edi::AnyDvgwMessage::detect_pid(role_qualifier)`.
-PIDs in the 90001–90062 range are unique to this crate and never overlap with
+The PID is read from `SG1 RFF+Z13`; `dvgw_edi::catalogue()` names each
+Anwendungsfall. The process key is the **published Zuordnungstupel** (ALOCAT
+5.11a §3.3) composed with the gas day — `dvgw_edi::DvgwMessage::process_key()` —
+because a `ZO-T*` tuple identifies an *object* (an account) and a process is one
+gas day of it. `ZG-T1` (Clearingnummer) is left alone: a clearing case
+legitimately spans several days.
+
+Nominated and confirmed energies are integrated over their periods
+(`Σ(rate × duration)` — a DVGW `QTY` is kWh/h), which is what lets the workflow
+notice a curtailment: NOMRES has no status segment, so a Bestätigung confirming
+less than was nominated is only visible in the numbers.
+DVGW allocates from 70000–79999, which never overlaps with
 BDEW EDI@Energy PIDs.
 
 ## Market roles

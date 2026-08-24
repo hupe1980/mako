@@ -425,6 +425,58 @@ impl As4AxumHandler for BdewAs4IngestHandler {
                         "test interchange rejected: DE0035=1 on production endpoint",
                     );
                 }
+                // ── DVGW gas transport ────────────────────────────────────────
+                // Tried first, because a DVGW message rides `ORDERS`/`ORDRSP` and
+                // the BDEW parser would accept it as one — yielding a
+                // Prüfidentifikator from the wrong catalogue. `try_ingest` sniffs
+                // `BGM` DE 1001 and returns `None` for a BDEW interchange, which
+                // costs that path only the sniff.
+                {
+                    if let Some(report) =
+                        crate::dvgw_ingest::try_ingest(self.ingest.as_ref(), &edifact).await
+                    {
+                        tracing::info!(
+                            as4_message_id = %msg_id,
+                            accepted = report.accepted(),
+                            rejected = report.rejected(),
+                            "AS4 ingest: DVGW interchange dispatched",
+                        );
+                        // The EDIFACT-level CONTRL Empfangsbestätigung (CONTRL
+                        // AHB 1.0 §2.3.1) is owed within six wall-clock hours for
+                        // every inbound *Gas* interchange, and a DVGW interchange
+                        // is Gas by definition. The AS4 `eb:Receipt` below is a
+                        // *protocol* acknowledgement and does not discharge it.
+                        if let Some(contrl_svc) = self.contrl_ack.as_deref() {
+                            let sender = report.sender_mp_id.clone().unwrap_or_default();
+                            if let Err(e) = contrl_svc
+                                .emit_for_dvgw_interchange(
+                                    &sender,
+                                    &report.interchange_ref,
+                                    &report.recipient_mp_id,
+                                )
+                                .await
+                            {
+                                use mako_engine::dead_letter::{AuditContext, DeadLetterReason};
+                                self.ingest
+                                    .dl_sink
+                                    .reject(&DeadLetterReason::ProcessingError {
+                                        message: format!("contrl_ack_failed: {e}"),
+                                        context: AuditContext::now()
+                                            .with_message_type("CONTRL")
+                                            .with_receiver_eic(report.recipient_mp_id.as_str())
+                                            .with_message_ref(report.interchange_ref.as_str()),
+                                    });
+                            }
+                        }
+
+                        // The AS4 receipt is owed regardless of which family the
+                        // payload belongs to, so the DVGW path returns through the
+                        // same closure the BDEW path ends with rather than
+                        // short-circuiting it.
+                        return send_receipt();
+                    }
+                }
+
                 // ── EDIFACT dispatch ──────────────────────────────────────────
                 // Collect parsed messages so they can be passed to ContrlAckService
                 // after the dispatch loop (CONTRL AHB 1.0 §2.3.1 Gas obligation).

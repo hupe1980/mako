@@ -1,155 +1,174 @@
-//! Validation report types for DVGW EDIFACT messages.
-//!
-//! [`DvgwReport`] is returned by [`DvgwPlatform::validate`] and holds the
-//! complete set of validation findings for one DVGW interchange.
-//!
-//! [`DvgwPlatform::validate`]: crate::DvgwPlatform::validate
+//! Validation findings.
 
-use edifact_rs::{ValidationIssue, ValidationSeverity};
+use std::fmt;
 
-use crate::DvgwMessageType;
+use crate::document::{DvgwDocument, DvgwMessageType};
 
-/// A single validation finding for a DVGW EDIFACT message.
+/// How badly a finding breaks the message.
 ///
-/// Produced by [`DvgwPlatform::validate`] and stored in [`DvgwReport::issues`].
-///
-/// [`DvgwPlatform::validate`]: crate::DvgwPlatform::validate
-#[derive(Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
-#[non_exhaustive]
-pub struct DvgwIssue {
-    /// Severity level: `"error"`, `"warning"`, or `"info"`.
-    ///
-    /// Both `Critical` and `Error` severity levels in the underlying validator
-    /// are mapped to `"error"` here so callers only need to check one string.
-    pub severity: &'static str,
-    /// Human-readable description of the finding.
-    pub message: String,
-    /// The stable rule identifier, e.g. `"SEM-NOMINT-NAD-MS-REQUIRED"`.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub rule_id: Option<String>,
-    /// The EDIFACT segment tag where the issue was found, e.g. `"NAD"`.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub segment_tag: Option<String>,
-    /// Byte offset of the first byte of the affected region in the source input.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub offset: Option<usize>,
-    /// Exclusive end byte offset — forms the half-open range `[offset, byte_end)`.
-    ///
-    /// `None` for semantic issues that have no source byte position
-    /// (e.g. a missing-segment error: there is no segment to point at).
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub byte_end: Option<usize>,
-    /// Human-readable remediation hint, if available.
-    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
-    pub suggestion: Option<String>,
+/// A typed severity, not a string: `issue.severity == "error"` compiles happily
+/// when it is misspelled and then silently matches nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "lowercase"))]
+pub enum Severity {
+    /// Advisory; the message is conformant.
+    Info,
+    /// The message is processable but deviates from the Nachrichtenbeschreibung.
+    Warning,
+    /// The message violates a `Muss` row and must be rejected.
+    Error,
 }
 
-impl From<ValidationIssue> for DvgwIssue {
-    fn from(issue: ValidationIssue) -> Self {
-        let severity = match issue.severity {
-            ValidationSeverity::Critical | ValidationSeverity::Error => "error",
-            ValidationSeverity::Warning => "warning",
-            _ => "info",
-        };
-        let rule_id = issue.rule_id().map(str::to_owned);
-        let segment_tag = issue.segment_tag().map(str::to_owned);
-        // edifact-rs 0.13 collapsed the redundant `offset` into `span`.
-        let offset = issue.span().map(|s| s.start);
-        let byte_end = issue.span().map(|s| s.end);
-        let suggestion = issue.suggestion().map(str::to_owned);
-        Self {
-            severity,
-            message: issue.message,
-            rule_id,
-            segment_tag,
-            offset,
-            byte_end,
-            suggestion,
+impl Severity {
+    /// The lowercase name, for logs and JSON.
+    #[must_use]
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warning => "warning",
+            Self::Error => "error",
         }
     }
 }
 
-/// Validation report returned by [`DvgwPlatform::validate`].
-///
-/// Contains all findings (envelope structural errors, semantic warnings, and
-/// informational notices) produced during validation of one DVGW interchange.
-///
-/// ## Error checking
-///
-/// ```rust,no_run
-/// use dvgw_edi::DvgwPlatform;
-///
-/// # let input: &[u8] = b"";
-/// let report = DvgwPlatform::default().validate(input)?;
-///
-/// if !report.is_valid() {
-///     for e in report.errors() {
-///         eprintln!("[{}] {} (rule: {:?})", e.severity, e.message, e.rule_id);
-///     }
-/// }
-///
-/// // Or use the Result pattern for early exit:
-/// let valid = report.result().expect("DVGW message failed validation");
-/// # Ok::<(), dvgw_edi::Error>(())
-/// ```
-///
-/// [`DvgwPlatform::validate`]: crate::DvgwPlatform::validate
+impl fmt::Display for Severity {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+/// A single validation finding.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
+#[non_exhaustive]
+pub struct DvgwIssue {
+    /// How badly this breaks the message.
+    pub severity: Severity,
+    /// What is wrong, in prose.
+    pub message: String,
+    /// The stable rule identifier, e.g. `"DVGW-RFF-Z13"`.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub rule_id: Option<&'static str>,
+    /// The EDIFACT segment tag the finding is about.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub segment_tag: Option<&'static str>,
+    /// How to fix it.
+    #[cfg_attr(feature = "serde", serde(skip_serializing_if = "Option::is_none"))]
+    pub suggestion: Option<String>,
+}
+
+impl DvgwIssue {
+    pub(crate) fn new(severity: Severity, message: impl Into<String>) -> Self {
+        Self {
+            severity,
+            message: message.into(),
+            rule_id: None,
+            segment_tag: None,
+            suggestion: None,
+        }
+    }
+
+    pub(crate) fn with_rule(mut self, rule_id: &'static str) -> Self {
+        self.rule_id = Some(rule_id);
+        self
+    }
+
+    pub(crate) fn with_segment(mut self, tag: &'static str) -> Self {
+        self.segment_tag = Some(tag);
+        self
+    }
+
+    pub(crate) fn with_suggestion(mut self, text: impl Into<String>) -> Self {
+        self.suggestion = Some(text.into());
+        self
+    }
+}
+
+impl fmt::Display for DvgwIssue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[{}]", self.severity)?;
+        if let Some(rule) = self.rule_id {
+            write!(f, " {rule}")?;
+        }
+        if let Some(tag) = self.segment_tag {
+            write!(f, " ({tag})")?;
+        }
+        write!(f, ": {}", self.message)
+    }
+}
+
+/// The result of validating one DVGW message.
 #[derive(Debug, Clone)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "camelCase"))]
 #[non_exhaustive]
 pub struct DvgwReport {
-    /// The DVGW message type that was validated.
+    /// The family that was validated.
     pub message_type: DvgwMessageType,
-    /// The UNH message reference (DE 0062).
+    /// The `BGM` document-name code that was validated.
+    pub document: DvgwDocument,
+    /// The `UNH` message reference.
     pub message_ref: String,
-    /// All validation findings in discovery order.
+    /// All findings, in rule order.
     pub issues: Vec<DvgwIssue>,
 }
 
 impl DvgwReport {
-    /// Construct from raw `ValidationIssue` list.
     pub(crate) fn new(
         message_type: DvgwMessageType,
+        document: DvgwDocument,
         message_ref: String,
-        issues: Vec<ValidationIssue>,
+        issues: Vec<DvgwIssue>,
     ) -> Self {
         Self {
             message_type,
+            document,
             message_ref,
-            issues: issues.into_iter().map(DvgwIssue::from).collect(),
+            issues,
         }
     }
 
-    /// Returns `true` when there are no error-severity issues.
-    ///
-    /// Warnings and info notices do not affect validity.
+    /// `true` when nothing at [`Severity::Error`] was found.
     #[must_use]
     pub fn is_valid(&self) -> bool {
-        self.issues.iter().all(|i| i.severity != "error")
+        !self.issues.iter().any(|i| i.severity == Severity::Error)
     }
 
-    /// Converts `self` into `Ok(self)` when valid, `Err(self)` when there are
-    /// one or more error-severity issues.
-    ///
-    /// Mirrors the `EdiEnergyReport::result()` pattern for idiomatic `?` use.
+    /// The error-severity findings.
+    pub fn errors(&self) -> impl Iterator<Item = &DvgwIssue> {
+        self.issues.iter().filter(|i| i.severity == Severity::Error)
+    }
+
+    /// The warning-severity findings.
+    pub fn warnings(&self) -> impl Iterator<Item = &DvgwIssue> {
+        self.issues
+            .iter()
+            .filter(|i| i.severity == Severity::Warning)
+    }
+
+    /// `Ok(self)` when valid, `Err(self)` otherwise — for `?` at a call site
+    /// that treats a non-conformant message as a failure.
     ///
     /// # Errors
     ///
-    /// Returns `Err(self)` when [`is_valid`](Self::is_valid) returns `false`.
+    /// Returns `Err(self)` when [`is_valid`](Self::is_valid) is `false`.
     pub fn result(self) -> Result<Self, Self> {
         if self.is_valid() { Ok(self) } else { Err(self) }
     }
+}
 
-    /// Iterates over error-severity issues.
-    pub fn errors(&self) -> impl Iterator<Item = &DvgwIssue> {
-        self.issues.iter().filter(|i| i.severity == "error")
-    }
-
-    /// Iterates over warning-severity issues.
-    pub fn warnings(&self) -> impl Iterator<Item = &DvgwIssue> {
-        self.issues.iter().filter(|i| i.severity == "warning")
+impl fmt::Display for DvgwReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} ({}) {}: {} error(s), {} warning(s)",
+            self.message_type,
+            self.document.code(),
+            self.message_ref,
+            self.errors().count(),
+            self.warnings().count()
+        )
     }
 }

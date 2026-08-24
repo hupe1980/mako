@@ -1470,6 +1470,39 @@ The PID is read from `SG1 RFF+Z13` and `BGM` DE 1004, in the order the profile's
 message undetectable. Only a plausible 5-digit code is accepted from either, so
 a numeric Belegnummer cannot outrank the real PID.
 
+#### DVGW gas transport
+
+The endpoint accepts both message families. They share the transports and the
+`PidRouter` — DVGW allocates Prüfidentifikatoren from 70000–79999 and BDEW does
+not — but not the parser, and the difference is not optional: a DVGW message
+rides `ORDERS` or `ORDRSP`, so the BDEW parser accepts an ALOCAT as a well-formed
+`ORDRSP` and reads `70001` straight out of `RFF+Z13`. The message then *routes
+correctly* and arrives as the wrong type, carrying no document code, no gas day
+and no positions.
+
+`dvgw_edi::sniff` reads `BGM` C002 DE 1001 out of the head of the interchange —
+the only field that separates the families — and every inbound path tries it
+first: `POST /edifact`, AS4 inbound, and the combined-role loopback. A BDEW
+interchange pays only the sniff.
+
+For a DVGW interchange the response has the same shape, with `message_type` set
+to the DVGW family (`ALOCAT`, `NOMINT`, `NOMRES`) and `pid` to the code from
+`RFF+Z13`. Two DVGW-specific outcomes appear in `error` as `skipped: …`:
+
+| `skipped` | Meaning |
+|---|---|
+| `no_correlation_key` | The Prüfidentifikator has no Zuordnungstupel published for it (ALOCAT 5.11a §3.3), or a `ZO-T*` tuple had no gas day to scope it — the message has no defined way to reach a process, so it is not attached to a guessed one |
+| `process_not_found` | A NOMRES arrived with no nomination to answer. Only the NOMINT initiates; spawning on an answer would hand a fresh process a command it rejects |
+
+`malo_id` is always absent for a DVGW message: it has no MaLo, and its
+correlation key is the published Zuordnungstupel.
+
+The CONTRL Empfangsbestätigung is owed for a DVGW interchange too — CONTRL AHB
+1.0 §2.3.1 keys the obligation on Sparte, and the DVGW formats *are* the gas
+transport layer, so it applies unconditionally. The AS4 `eb:Receipt` is a
+protocol acknowledgement and does not discharge it; the six-hour EDIFACT-level
+one is enqueued from `NAD+MS` and the UNB DE 0020 control reference.
+
 ### Ingest durability
 
 Three properties hold for every inbound message, whichever transport carried it.

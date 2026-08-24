@@ -792,27 +792,27 @@ pub fn run(workspace_root: &str, args: &[String]) {
                 .iter()
                 .map(|p| p.message_type.to_uppercase())
                 .collect();
+            // `message_type.rs` declares one row per type in the `message_types!`
+            // table — `(Variant, "CODE", "feature")` — and the macro derives
+            // `as_str`, `from_unh_code`, `feature_name` and `is_feature_enabled`
+            // from it. So a single row per registered type is the whole check;
+            // there are no separate match arms to drift apart any more.
             let mut dispatch_errors: Vec<String> = Vec::new();
             for mt in &known_types {
-                // Check that from_unh_code() has an arm for this type
-                let arm = format!("\"{mt}\"");
-                if !mt_src.contains(&arm) {
+                let row = format!("\"{mt}\", \"{}\")", mt.to_lowercase());
+                if !mt_src.contains(&row) {
                     dispatch_errors.push(format!(
-                        "  error: MessageType::from_unh_code() missing arm for {mt:?} — \
-                         add it to crates/edi-energy/src/message_type.rs"
-                    ));
-                }
-                // Check that as_str() has an arm for this type
-                if !mt_src.contains(&format!("=> \"{mt}\"")) {
-                    dispatch_errors.push(format!(
-                        "  error: MessageType::as_str() missing arm for {mt:?} — \
-                         add it to crates/edi-energy/src/message_type.rs"
+                        "  error: the message_types! table has no row for {mt:?} — \
+                         add `({}, \"{mt}\", \"{}\")` to \
+                         crates/edi-energy/src/message_type.rs",
+                        title_case(mt),
+                        mt.to_lowercase()
                     ));
                 }
             }
             if dispatch_errors.is_empty() {
                 eprintln!(
-                    "xtask codegen --check: MessageType dispatch covers all {} registered types.",
+                    "xtask codegen --check: the message_types! table covers all {} registered types.",
                     known_types.len()
                 );
             } else {
@@ -5041,6 +5041,16 @@ fn rustfmt_string(rustfmt_bin: &str, src: String) -> Result<String, String> {
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
+
+/// `"UTILMD"` → `"Utilmd"` — the `MessageType` variant name for a wire code.
+fn title_case(code: &str) -> String {
+    let lower = code.to_lowercase();
+    let mut chars = lower.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
 
 #[cfg(test)]
 mod tests {

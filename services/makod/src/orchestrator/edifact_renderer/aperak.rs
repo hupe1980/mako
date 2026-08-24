@@ -45,7 +45,7 @@ pub(super) fn render_aperak(
         .and_then(|v| v.as_str())
         .unwrap_or(msg.recipient.as_ref());
 
-    let release = active_release(MessageType::Aperak, &ReleaseTrack::Short).ok_or_else(|| {
+    let release = active_release(MessageType::Aperak, ReleaseTrack::Short).ok_or_else(|| {
         RenderError::NoActiveProfile {
             message_type: mt.into(),
         }

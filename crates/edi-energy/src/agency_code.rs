@@ -5,9 +5,9 @@
 /// non-conformant EDIFACT that receiving parties may reject.
 ///
 /// In the **German energy market (BDEW `MaKo` / EDI@Energy)** the dominant code is
-/// [`AgencyCode::Bdew`] (`"293"`). Nearly all supplier, DSO, and MSB codes are
-/// issued and administered by BDEW and carry this agency qualifier — even when the
-/// 13-digit number is also a valid GS1 GLN (BDEW is a GS1 member prefix holder).
+/// [`AgencyCode::Bdew`] (`"293"`). Nearly all supplier, DSO, and MSB codes carry
+/// this agency qualifier — even when the 13-digit number is also a valid GS1 GLN
+/// (BDEW is a GS1 member prefix holder).
 ///
 /// # Wire format
 ///
@@ -26,7 +26,7 @@
 ///
 /// assert_eq!(AgencyCode::Bdew.as_str(), "293");
 /// assert_eq!(AgencyCode::Gs1.as_str(),  "9");
-/// assert_eq!(AgencyCode::Entso.as_str(), "305");
+/// assert_eq!(AgencyCode::Etso.as_str(), "305");
 ///
 /// // Parse from a raw NAD segment agency string.
 /// assert_eq!(AgencyCode::parse("293"), Some(AgencyCode::Bdew));
@@ -35,10 +35,14 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum AgencyCode {
-    /// `"293"` — BDEW (Bundesverband der Energie- und Wasserwirtschaft).
+    /// `"293"` — the German electricity-industry code list.
     ///
-    /// Used for all BDEW-issued market participant codes in the German electricity
-    /// and gas markets. This is the correct agency code for suppliers (LFN),
+    /// UN/EDIFACT DE 3055 registered this code to the VDEW (Verband der
+    /// Elektrizitätswirtschaft); BDEW succeeded the VDEW and the BDEW `MaKo`
+    /// documents call it "DE, BDEW". The number is what goes on the wire either
+    /// way.
+    ///
+    /// This is the correct agency code for suppliers (LFN),
     /// distribution system operators (NB/VNB), metering point operators (MSB),
     /// and balance responsible parties (BKV/BRK) registered in the BDEW
     /// Marktteilnehmerverzeichnis.
@@ -57,33 +61,35 @@ pub enum AgencyCode {
     /// operators use [`AgencyCode::Bdew`] even for GS1-compatible numbers.
     Gs1,
 
-    /// `"305"` — ECOD (ENTSO-E Coding Scheme / European network operator).
+    /// `"305"` — ETSO, registered in DE 3055 as the European transmission
+    /// system operators' association.
     ///
-    /// Used for 16-character EIC (Energy Identification Codes) issued by
-    /// ENTSO-E. Required for transmission grid operators (ÜNB/TSO), balance
-    /// zones (Regelzonen), and cross-border market participants.
+    /// The body became ENTSO-E, which now runs the EIC coding scheme, so this is
+    /// the agency for 16-character EIC codes: transmission operators (ÜNB/TSO),
+    /// Regelzonen, Bilanzkreise and cross-border participants.
     ///
     /// # NAD wire form
     ///
     /// ```text
     /// NAD+MS+10XDE-EON-NETZ--I::305'
     /// ```
-    Entso,
+    Etso,
 
-    /// `"332"` — DVGW (Deutscher Verein des Gas- und Wasserfaches).
+    /// `"332"` — the DVGW gas code list.
     ///
-    /// Occasionally used for gas-sector participants registered in the DVGW
-    /// system before the BDEW merger. Modern gas market messages prefer
-    /// [`AgencyCode::Bdew`]; this variant is kept for parsing legacy messages.
+    /// Not legacy: it is the agency on **every** coded value in the DVGW gas
+    /// transport formats (see the `dvgw-edi` crate), and Trading Hub Europe's
+    /// own market-participant code is issued under it. BDEW EDI@Energy messages
+    /// use [`AgencyCode::Bdew`].
     Dvgw,
 }
 
 impl AgencyCode {
     /// Default agency code for new outbound EDI@Energy messages.
     ///
-    /// `293` (BDEW) is the correct default for all standard German market
-    /// participants. Change to [`AgencyCode::Entso`] only for TSO/ÜNB parties
-    /// that carry an EIC code.
+    /// `293` is the correct default for all standard German market
+    /// participants. Use [`AgencyCode::Etso`] only for parties identified by an
+    /// EIC code.
     pub const DEFAULT: Self = Self::Bdew;
 
     /// Return the wire-format string for the DE 3055 component.
@@ -92,7 +98,7 @@ impl AgencyCode {
         match self {
             Self::Bdew => "293",
             Self::Gs1 => "9",
-            Self::Entso => "305",
+            Self::Etso => "305",
             Self::Dvgw => "332",
         }
     }
@@ -106,7 +112,7 @@ impl AgencyCode {
         match s {
             "293" => Some(Self::Bdew),
             "9" => Some(Self::Gs1),
-            "305" => Some(Self::Entso),
+            "305" => Some(Self::Etso),
             "332" => Some(Self::Dvgw),
             _ => None,
         }
@@ -140,7 +146,7 @@ mod tests {
         for (code, variant) in [
             ("293", AgencyCode::Bdew),
             ("9", AgencyCode::Gs1),
-            ("305", AgencyCode::Entso),
+            ("305", AgencyCode::Etso),
             ("332", AgencyCode::Dvgw),
         ] {
             assert_eq!(AgencyCode::parse(code), Some(variant));

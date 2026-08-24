@@ -637,7 +637,7 @@ makod (binary)
 │                             37008–37014, 31011, 17115–17117 (Gas NB)
 ├── registers mako-mabis   → PIDs 13003, 13010–13012, 55065/55069/55070 (Clearingliste)
 ├── registers mako-gabi-gas → PIDs 31007, 31008, 31010, ORDERS 17110, ORDRSP 19110,
-│                             MSCONS 13013, synthetic PIDs 90001–90062 (DVGW gas transport)
+│                             MSCONS 13013, DVGW PIDs 70001–70039 (gas transport)
 ├── registers mako-redispatch → Redispatch 2.0 XML workflows
 │
 └── wires EdifactIngestDispatcher
