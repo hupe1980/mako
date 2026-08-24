@@ -8902,6 +8902,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "productd"
+version = "0.16.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "mako-events",
+ "mako-markt",
+ "mako-service",
+ "reqwest 0.13.4",
+ "rmcp",
+ "rubo4e",
+ "rust_decimal",
+ "schemars 1.2.2",
+ "secrecy",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
+ "time",
+ "time-tz",
+ "tokio",
+ "tokio-util",
+ "tower-http",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "prometheus"
 version = "0.14.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -9907,9 +9937,9 @@ dependencies = [
 
 [[package]]
 name = "rubo4e"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ac6027ad9f0e21cf5e1ab6ca732154c6cd919f4f2cef906e9a8960079ebc5e77"
+checksum = "81d7c3605b6a05a9c93d69378892050442ab230320427b80a5f7d22f0ad611a8"
 dependencies = [
  "garde",
  "indexmap 2.14.0",
@@ -11454,36 +11484,6 @@ name = "target-lexicon"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
-
-[[package]]
-name = "tarifbd"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "axum",
- "mako-events",
- "mako-markt",
- "mako-service",
- "reqwest 0.13.4",
- "rmcp",
- "rubo4e",
- "rust_decimal",
- "schemars 1.2.2",
- "secrecy",
- "serde",
- "serde_json",
- "sqlx",
- "testcontainers",
- "testcontainers-modules",
- "time",
- "time-tz",
- "tokio",
- "tokio-util",
- "tower-http",
- "tracing",
- "tracing-subscriber",
- "uuid",
-]
 
 [[package]]
 name = "tempfile"

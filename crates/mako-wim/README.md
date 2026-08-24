@@ -318,4 +318,6 @@ one-shot order, and `E_0257` refuses a Stornierung of a started delivery with
 - BNetzA **BK6-22-024** Anlagen 2a/2b (WiM Strom Teil 1 und Teil 2)
 - BDEW/VKU/GEODE/FNBGas **AWH WiM Gas 2.0** (gültig ab 01.10.2026)
 - EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
-- EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)
+- EDI@Energy **APERAK AHB 1.1** (`FV2026-10-01`) — § 2.4.1 Strom, § 2.3.1 Gas.
+  2.2 is the APERAK **MIG** revision; AHB and MIG carry different version numbers
+  for every message type except UTILMD

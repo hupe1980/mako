@@ -45,15 +45,40 @@
 //!                   └── Process::execute(cmd)  ← pure domain logic here
 //! ```
 //!
-//! ## Key differences from electricity processes
+//! ## „GeLi Gas 2.0" and „GeLi Gas 3.0" are both current, and both correct
 //!
-//! | Aspect | GPKE / WiM (Strom) | GeLi Gas |
+//! The two names belong to different documents and neither supersedes the other:
+//!
+//! | Name | Document | Stand |
 //! |---|---|---|
-//! | Market | Electricity | **Gas** |
-//! | Location object | Messlokation (MeLo) | **Marktlokation (MaLo)** |
-//! | Grid operator | Netzbetreiber (NB) | **Gasnetzbetreiber (GNB)** |
-//! | Antwortfrist | clock time des 1. WT (GPKE) / 3–7 WT (WiM) | **4 / 3 / 2 Werktage** |
-//! | Frist helper | `add_hours(24)` / `add_werktage(5, …)` | **`add_werktage(10, BdewMaKo)`** |
+//! | **GeLi Gas 3.0** | the BNetzA Anlage zu BK7-06-067 in der Fassung **BK7-24-01-009** — the Festlegung itself | Beschluss 12.09.2025, Tenor ab 01.01.2026 |
+//! | **GeLi Gas 2.0** | the BDEW/VKU/GEODE/FNB Gas **Anwendungshilfe** (V1.2, 26.03.2026), which still carries the BK7-19-001 title | gültig ab 01.04.2026 |
+//!
+//! The Anwendungsübersicht Prüfidentifikatoren names „GeLi Gas 2.0" in its
+//! Festlegungs-Spalte for every 44xxx row, because it indexes the AWH. So a
+//! module citing „GeLi Gas 2.0" for a Prüfidentifikator and „GeLi Gas 3.0" for a
+//! Frist is not inconsistent — it is citing the two documents that state each.
+//!
+//! ## Key differences from the electricity processes
+//!
+//! Both Sparten switch suppliers at the **Marktlokation** and both are driven
+//! by UTILMD — the differences that actually change code are these:
+//!
+//! | Aspect | GPKE (Strom) | GeLi Gas |
+//! |---|---|---|
+//! | Festlegung | BK6-24-174 (Teil 1–3), BK6-22-024 Anlage 1d (Teil 4) | **BK7-24-01-009** (GeLi Gas 3.0, Tenor ab 01.01.2026) |
+//! | Antwortfrist shape | a wall-clock instant on the 1. WT nach dem ÜT — 07:00 / 09:00 / 11:00 / 12:00 | **Ablauf des 4. / 3. / 2. Werktags** nach Eingang |
+//! | Zuordnungszeitpunkt | 00:00 Uhr | **06:00 Uhr** — the Gastag runs 06:00–06:00 |
+//! | Vorlauffrist des LF | — | **10 WT** Anmeldung, **7 WT** Abmeldung, bei Lieferantenwechsel |
+//! | Entscheidungsbäume | `E_06xx` | **`E_30xx`** |
+//! | APERAK | Anerkennungs- *und* Verarbeitbarkeitsfehlermeldung; 45 min für UTILMD/ORDERS | **nur Verarbeitbarkeitsfehlermeldung**; nächster WT 12:00 (Folgeprozess) / 3 WT (Initialprozess) |
+//! | CONTRL | nur auf eine syntaktisch defekte APERAK | auf **jede** APERAK |
+//! | Grid operator | Netzbetreiber (NB) | Gasnetzbetreiber (GNB) |
+//!
+//! Every Frist above lives in [`mako_fristen`], never in a literal here: the
+//! two families disagree on shape as well as on number, and a helper chosen by
+//! Sparte rather than by Prüfidentifikator is how the 10-Werktage Vorlauffrist
+//! ended up sized as an answer window across this crate.
 //!
 //! ## Command construction example
 //!
@@ -295,7 +320,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 19116/19117 are shared with GPKE Sperrung Strom; process context is
         // resolved by correlation ID at runtime in mixed Strom+Gas deployments.
         // Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
-        // GNB execution window: 10 Werktage (BK7-24-01-009). APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
         for &pid in sperrung_lf::ORDRSP_SPERRUNG_PIDS {
             router.register(pid, sperrung_lf::WORKFLOW_NAME);
         }
@@ -308,7 +333,7 @@ impl mako_engine::builder::EngineModule for GeliGasModule {
         // PIDs 17115/17116/17117 are shared with GPKE Sperrung Strom (NB-role); process
         // context is resolved by commodity (Gas vs. Strom) at runtime.
         // Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas).
-        // GNB execution window: 10 Werktage (BK7-24-01-009). APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
+        // Business answer window: per-PID via `mako_fristen::antwort`. APERAK sending Frist: nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
         for &pid in sperrung_nb::SPERRUNG_PIDS {
             router.register(pid, sperrung_nb::WORKFLOW_NAME);
         }

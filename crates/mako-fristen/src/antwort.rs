@@ -121,6 +121,14 @@ pub enum FristShape {
     /// same-day cut-off; the Beginn der Ersatz-/Grundversorgung is the case
     /// that matters to a supplier.
     SameDayAt(Time),
+    /// „Am selben Tag wie …" — the end of the anchor's own day, with no
+    /// wall-clock time attached.
+    ///
+    /// The AWH GeLi Gas states the Lieferbeginn notifications this way (Kap.
+    /// 2.5.2 Nr. 6 / Nr. 7). Resolving them to 23:59:59 Europe/Berlin is the
+    /// latest instant that still satisfies „am selben Tag"; picking any earlier
+    /// clock time would invent a cut-off the document does not state.
+    SameDay,
 }
 
 impl FristShape {
@@ -134,6 +142,10 @@ impl FristShape {
             Self::SameDayAt(at) => {
                 let berlin = received.to_timezone(timezones::db::europe::BERLIN);
                 crate::berlin_at(berlin.date(), at)
+            }
+            Self::SameDay => {
+                let berlin = received.to_timezone(timezones::db::europe::BERLIN);
+                crate::end_of_day_berlin(berlin.date())
             }
         }
     }
@@ -474,7 +486,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0410"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.3 Prozessschritt 2 — „spätester ÜT ist der \
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2 — „spätester ÜT ist der \
                  2. WT nach dem ÜT von Nr. 1\"",
     },
     AntwortObligation {
@@ -485,7 +497,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0410"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.3 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_693,
@@ -495,7 +507,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0410"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.3 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.3 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_557,
@@ -505,7 +517,29 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
+    },
+    // 55555 carries two Use-Cases of GPKE Teil 4 under one Prüfidentifikator —
+    // the Rückmeldung auf eine Änderung 55553 (Kap. 1.4.4 Prozessschritte 2/5/8,
+    // answered in 2 WT) and the Bestellung einer Änderung (Kap. 1.5.4
+    // Prozessschritte 1/3/5, answered in 10 WT). Nothing in the message says
+    // which: only a preceding 55553 distinguishes them. A PID-keyed table has
+    // to pick one, and only the tighter one is safe — publishing 10 WT would
+    // report a lapsed 2-WT Frist as still running for eight Werktage.
+    //
+    // Both are answered by the IFTSTA 21047 Bearbeitungsstand, so the pair is
+    // the same PID twice, as it is for every Bearbeitungsstand row above.
+    AntwortObligation {
+        trigger_pid: 55_555,
+        name: "Anfrage Daten der individuellen Bestellung",
+        answered_by: "MSB",
+        antwort_pids: (21_047, 21_047),
+        ebd: Some("E_0632"),
+        frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
+        family: Family::Gpke,
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 3 — „spätester ÜT ist der 2. WT \
+                 nach dem ÜT von Nr. 2\" (the Bestellung variant, § 1.5.4 Prozessschritt 2, \
+                 has 10 WT; the tighter window is the one a PID-keyed table may publish)",
     },
     AntwortObligation {
         trigger_pid: 55_639,
@@ -515,7 +549,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_640,
@@ -525,7 +559,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_641,
@@ -535,7 +569,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_642,
@@ -545,7 +579,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 55_643,
@@ -555,7 +589,7 @@ pub const GPKE: &[AntwortObligation] = &[
         ebd: Some("E_0415"),
         frist: FristShape::WerktageAtCutoff(STAMMDATEN_RUECKMELDUNG_WERKTAGE),
         family: Family::Gpke,
-        source: "BK6-24-174 GPKE Teil 4 § 1.4.4 Prozessschritt 2",
+        source: "BK6-22-024 Anlage 1d (GPKE Teil 4) § 1.4.4 Prozessschritt 2",
     },
     AntwortObligation {
         trigger_pid: 35_004,
@@ -597,7 +631,9 @@ pub const GELI_GAS: &[AntwortObligation] = &[
         frist: FristShape::EndOfWerktag(4),
         family: Family::GeliGas,
         source: "GeLi Gas 3.0 Kap. 3.2.3 — „spätestens bis zum Ablauf des 4. Werktages nach \
-                 Eingang der Anmeldung\"",
+                 Eingang der Anmeldung\". The AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 5 refines this \
+                 into two branches; see `gas_lieferbeginn_antwort_nach_abmeldeanfrage` for the \
+                 sub-window that usually binds first.",
     },
     AntwortObligation {
         trigger_pid: 44_004,
@@ -655,6 +691,77 @@ pub const GELI_GAS: &[AntwortObligation] = &[
                  nach Eingang der Kündigung\"",
     },
 ];
+
+/// The Gas Lieferbeginn answer window that runs from the **LFA's answer**, not
+/// from the Anmeldung.
+///
+/// [`GELI_GAS`] publishes 44001 as „Ablauf des 4. Werktags nach Eingang der
+/// Anmeldung", which is what GeLi Gas 3.0 Kap. 3.2.3 says and what a table keyed
+/// on the Prüfidentifikator alone can state. The AWH GeLi Gas V1.2 Kap. 2.5.2
+/// Nr. 5 splits that into two branches, and in the branch that actually occurs
+/// on a Lieferantenwechsel the binding window is far tighter:
+///
+/// | Branch | Window | Cap |
+/// |---|---|---|
+/// | An Abmeldeanfrage was sent | **24 h nach Eingang der „Beantwortung der Abmeldeanfrage"** (Nr. 4) | Ablauf des 4. WT nach Prozessschritt 2 |
+/// | No Abmeldeanfrage was sent | 24 h nach der Prüfung | Ablauf des 4. WT nach Eingang der Anmeldung |
+/// | The LFA never answers | der WT nach dem 3. WT nach Versand von Prozessschritt 2 | — |
+///
+/// An LFA that answers on the first Werktag therefore leaves the GNB one day,
+/// not four. Nothing in the 44001 message says which branch it is in — that
+/// depends on whether the MaLo was still assigned — so the table cannot publish
+/// this window, and a caller that *knows* it sent an Abmeldeanfrage must ask for
+/// it here.
+///
+/// „Ist der Folgetag kein WT, so bezieht sich die Frist auf den nächstfolgenden
+/// WT": the 24 hours are wall-clock, but a due instant that lands on a Saturday
+/// moves to the same clock time on the next Werktag rather than being
+/// unreachable.
+///
+/// # Example
+///
+/// ```rust
+/// use mako_fristen::{HolidayCalendar, antwort};
+/// use time::macros::datetime;
+///
+/// // LFA answers Friday 14:00 → 24 h is Saturday, which is not a Werktag,
+/// // so the GNB has until Monday 14:00.
+/// let lfa_antwort = datetime!(2026-03-06 14:00 UTC);
+/// let due = antwort::gas_lieferbeginn_antwort_nach_abmeldeanfrage(
+///     lfa_antwort,
+///     HolidayCalendar::BdewMaKo,
+/// );
+/// assert_eq!(due.date(), time::macros::date!(2026 - 03 - 09));
+/// ```
+#[must_use]
+pub fn gas_lieferbeginn_antwort_nach_abmeldeanfrage(
+    lfa_antwort_eingang: OffsetDateTime,
+    cal: HolidayCalendar,
+) -> OffsetDateTime {
+    let berlin =
+        (lfa_antwort_eingang + Duration::hours(24)).to_timezone(timezones::db::europe::BERLIN);
+    if crate::is_werktag(berlin.date(), cal) {
+        return lfa_antwort_eingang + Duration::hours(24);
+    }
+    let werktag = crate::next_werktag(berlin.date(), cal);
+    crate::berlin_at(werktag, berlin.time())
+}
+
+/// The Gas Lieferbeginn answer window when the LFA lets its own window lapse.
+///
+/// „Bei Ausbleiben der ‚Beantwortung der Abmeldeanfrage' am WT nach dem 3. WT
+/// nach Versand von Prozessschritt 2" (AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 5) —
+/// so the GNB does not wait indefinitely for a silent Altlieferant. `versand_2`
+/// is the instant the „Information über existierende Zuordnung" (44036) went
+/// out, which is also when the Abmeldeanfrage was sent („zeitgleich zu
+/// Prozessschritt 2", Nr. 3).
+#[must_use]
+pub fn gas_lieferbeginn_antwort_bei_ausbleiben(
+    versand_2: OffsetDateTime,
+    cal: HolidayCalendar,
+) -> OffsetDateTime {
+    crate::end_of_werktag_after(versand_2, 4, cal)
+}
 
 /// WiM Strom — every inbound Prüfidentifikator whose answer window Teil 1
 /// states.
@@ -1304,6 +1411,40 @@ mod tests {
             Date::from_calendar_date(y, m, d).expect("valid date"),
             Time::from_hms(h, 0, 0).expect("valid time"),
         )
+    }
+
+    /// The Abmeldeanfrage branch is what actually binds on a
+    /// Lieferantenwechsel, and it is far tighter than the published 4 Werktage.
+    ///
+    /// An Altlieferant that answers on the first Werktag leaves the GNB one day.
+    /// Sizing that queue with the table's 4 WT — which is the *cap*, and the
+    /// only thing a PID-keyed lookup can state — reports a Frist that lapsed on
+    /// Tuesday as still running on Friday.
+    #[test]
+    fn the_abmeldeanfrage_branch_binds_before_the_published_cap() {
+        let anmeldung = utc(2026, Month::March, 2, 9); // Monday
+        let lfa_antwort = utc(2026, Month::March, 3, 10); // Tuesday
+        let sub =
+            gas_lieferbeginn_antwort_nach_abmeldeanfrage(lfa_antwort, HolidayCalendar::BdewMaKo);
+        let cap = antwort_deadline(44_001, anmeldung).expect("published");
+        assert!(
+            sub < cap,
+            "24 h after the LFA's Tuesday answer is Wednesday; the cap is Friday: \
+             {sub} vs {cap}"
+        );
+    }
+
+    /// A silent Altlieferant does not stall the Lieferbeginn: the GNB answers on
+    /// the Werktag after the 3rd Werktag following Prozessschritt 2.
+    #[test]
+    fn a_silent_altlieferant_still_closes_the_window() {
+        let versand_2 = utc(2026, Month::March, 2, 9); // Monday
+        let due = gas_lieferbeginn_antwort_bei_ausbleiben(versand_2, HolidayCalendar::BdewMaKo);
+        assert_eq!(
+            due.to_timezone(timezones::db::europe::BERLIN).date(),
+            Date::from_calendar_date(2026, Month::March, 6).expect("valid date"),
+            "Mon + 4 Werktage = Friday"
+        );
     }
 
     /// A GPKE Anmeldung is due 11:00 on the next Werktag — **not** 24 hours on.

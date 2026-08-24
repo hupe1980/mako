@@ -263,8 +263,8 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
 
         // MMM Allokationsliste Gas — MSCONS 13013 (NB → LF, Gas-only).
         //
-        // PID 13013 was previously misassigned to `mako-gpke` `gpke-allokationsliste`.
-        // MGV (Marktgebietsverantwortlicher) and the Gas MMM process are Gas-domain only.
+        // MGV (Marktgebietsverantwortlicher) and the Gas MMM process are
+        // Gas-domain only, so 13013 belongs here and not to `mako-gpke`.
         // PIDs 17110/19110 (ORDERS/ORDRSP) are informational; see `mmma` module doc.
         for &pid in mmma::MMMA_MSCONS_PIDS {
             router.register(pid, "gabi-gas-mmma");

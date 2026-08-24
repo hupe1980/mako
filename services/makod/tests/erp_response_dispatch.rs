@@ -335,19 +335,16 @@ async fn register_correlated_is_idempotent() {
     );
 }
 
-// ── NB-side dispatch tests — regression guards for the workflow-routing bug ──
+// ── NB-side dispatch tests ──
 //
-// Before the fix, `gpke.lieferbeginn.bestaetigen` (and the other three NB
-// commands) called `dispatch_lf_antwort` → `GpkeLfAnmeldungWorkflow`.
-// In a pure NB deployment that workflow does not exist for the MaLo, so every
-// call returned `ProcessNotFound`.  The fix wires them to
-// `dispatch_supplier_change_antwort` → `GpkeSupplierChangeWorkflow`.
+// `gpke.lieferbeginn.bestaetigen` and the other three NB commands must route to
+// `dispatch_supplier_change_antwort` → `GpkeSupplierChangeWorkflow`. Routing
+// them to `dispatch_lf_antwort` → `GpkeLfAnmeldungWorkflow` returns
+// `ProcessNotFound` in a pure NB deployment, where that workflow does not exist
+// for the MaLo.
 
 /// `gpke.lieferbeginn.bestaetigen` must dispatch `SendAntwort { accepted: true }`
 /// into `GpkeSupplierChangeWorkflow` and return `Dispatched`.
-///
-/// Regression: before the fix this returned `ProcessNotFound` because the
-/// command called `dispatch_lf_antwort` → `GpkeLfAnmeldungWorkflow`.
 #[tokio::test]
 async fn nb_lieferbeginn_bestaetigen_dispatches_to_supplier_change_workflow() {
     let state = make_state(&["NB"]).await;

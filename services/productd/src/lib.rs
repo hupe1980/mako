@@ -1,5 +1,5 @@
 #![deny(unsafe_code)]
-//! `tarifbd` — Product and Tariff Catalog daemon (LF role).
+//! `productd` — Product and Tariff Catalog daemon (LF role).
 //!
 //! Port: `:9080`
 //!

@@ -4,13 +4,13 @@
 //! matters is whether a receiving system can read it back as
 //! `rubo4e::current::Angebot` and find the supply point and cost lines.
 
-use rubo4e::current::{Angebot, Angebotsstatus, Mengeneinheit, Waehrungscode};
-use rust_decimal::dec;
-use tarifbd::bo4e_angebot::{
+use productd::bo4e_angebot::{
     ATTR_IST_BASIS, ATTR_LABEL, ATTR_MELO, ATTR_PRODUCT_CODE, ATTR_RABATT_PCT, build_angebot,
     status_from_str,
 };
-use tarifbd::handlers::{PositionCostBreakdown, ScenarioCostBreakdown};
+use productd::handlers::{PositionCostBreakdown, ScenarioCostBreakdown};
+use rubo4e::current::{Angebot, Angebotsstatus, Mengeneinheit, Waehrungscode};
+use rust_decimal::dec;
 
 fn position(malo: Option<&str>) -> PositionCostBreakdown {
     PositionCostBreakdown {

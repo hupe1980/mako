@@ -31,8 +31,10 @@
 //!
 //! - **BNetzA BK6-24-174 Anlage 1b** — GPKE Teil 2 §2.2 Neuanlage
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK 2.x** — Application error acknowledgement (**24h** wall-clock Frist,
-//!   same as Lieferbeginn/Lieferende per BK6-22-024)
+//! - **APERAK AHB 1.0 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//!   weekday for a UTILMD. A separate clock from the business answer window,
+//!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
+//!   dem ÜT.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -301,7 +303,11 @@ pub enum NeuanlageCommand {
     /// - 55600 → 55602 (accepted) / 55604 (rejected)
     /// - 55601 → 55603 (accepted) / 55605 (rejected)
     ///
-    /// BK6-24-174 / BK6-22-024: Response within **24 wall-clock hours**.
+    /// The Neuanlage answer window is **00:00 Uhr des 61. Werktags nach dem
+    /// ÜT** (BK6-24-174 GPKE Teil 2 § 2.2.2): `E_0608` Prüfschritte 110 und 590
+    /// give the NB 60 Werktage of daily re-identification before it may refuse a
+    /// newly commissioned Marktlokation. A 24-hour deadline on this process
+    /// manufactures a rejection roughly three months early.
     SendAntwort {
         /// The NB's answer: the resolved `E_0608` Antwortcode and its cluster.
         ///

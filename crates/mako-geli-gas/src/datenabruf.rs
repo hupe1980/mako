@@ -38,7 +38,18 @@ pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17103, 17104];
 /// | 19104 | Ablehnung Anfrage vom MSB Gas                  |
 pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19103, 19104];
 
-/// Deadline label for the Gas data-request response window (10 Werktage, GeLi Gas).
+/// Deadline label for the Gas data-request response window.
+///
+/// **10 Werktage** — and here the number is genuinely ten: „Die Übermittlung
+/// erfolgt spätestens 10 Werktage nach Eingang der Anfrage des Lieferanten"
+/// (GeLi Gas 3.0 Kap. 4.2, Anforderung von Brennwert und Zustandszahl). The
+/// same sentence also sets a **floor** the NB must respect — „aber nicht vor
+/// dem 10. Werktag des Monats, der auf den Monat folgt, in den das Ende der
+/// … Zeitspanne fällt" — which no deadline can express and which only binds
+/// the sender, so this window carries the ceiling alone.
+///
+/// Unrelated to the LFN's 10-Werktage Vorlauffrist before Lieferbeginn, which
+/// happens to be the same number for a different reason.
 pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-datenabruf-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -103,7 +114,8 @@ pub enum GeliGasDatanabrufState {
     /// No events yet.
     #[default]
     New,
-    /// ORDERS received; waiting for NB response within 10 Werktage.
+    /// ORDERS received; waiting for the NB's answer (10 Werktage,
+    /// GeLi Gas 3.0 Kap. 4.2).
     AnfrageGesendet {
         /// PID of the initial ORDERS.
         pid: Pruefidentifikator,
@@ -140,7 +152,7 @@ pub enum GeliGasDatanabrufCommand {
     /// ERP instructs the LF to initiate a Gas data request (ORDERS 17103/17104 outbound).
     ///
     /// Spawns a new `GeliGasDatanabrufWorkflow`, enqueues the outbound ORDERS
-    /// message, and registers a 10-Werktage response deadline.
+    /// message, and registers the 10-Werktage response deadline.
     ///
     /// Use PID 17103 to request Abrechnungsbrennwert + Zustandszahl.
     InitiateAnfrage {

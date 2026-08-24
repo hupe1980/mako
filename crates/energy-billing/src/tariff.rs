@@ -1,7 +1,7 @@
 //! Typed product definitions for the German retail energy market.
 //!
 //! The [`Product`] enum is the primary entry point. It deserializes directly from
-//! `tarifbd` product JSONB using the `"category"` discriminator field and provides
+//! `productd` product JSONB using the `"category"` discriminator field and provides
 //! a [`Product::build_engine`] method to construct the matching `BillingEngine`.
 //!
 //! ## Architecture
@@ -26,7 +26,7 @@
 //! Product::Sharing(SharingProduct)               → ElectricityProvider + EnergyShareProvider
 //! ```
 //!
-//! ## Deserializing from `tarifbd` JSONB
+//! ## Deserializing from `productd` JSONB
 //!
 //! ```rust
 //! use energy_billing::Product;
@@ -317,7 +317,7 @@ pub struct ElectricityProduct {
     /// true when Stromsteuer applies to solar self-consumption (normally §9a exempt).
     #[serde(default)]
     pub solar_include_stromsteuer: bool,
-    /// EEG Gutschrift EUR pass-through — set at bill-time from einsd, not stored in tarifbd.
+    /// EEG Gutschrift EUR pass-through — set at bill-time from einsd, not stored in productd.
     #[serde(default)]
     pub eeg_gutschrift_eur: Option<Decimal>,
     /// The feed-in operator has elected the Kleinunternehmerregelung (§19 UStG)
@@ -654,7 +654,7 @@ pub struct SharingProduct {
 
 /// Typed product dispatch enum — primary entry point for `energy-billing`.
 ///
-/// Deserializes from `tarifbd` JSONB via the `"category"` field.
+/// Deserializes from `productd` JSONB via the `"category"` field.
 ///
 /// ```rust
 /// use energy_billing::Product;
@@ -694,7 +694,7 @@ pub enum Product {
 }
 
 impl Product {
-    /// Product category string matching the tarifbd JSONB `"category"` field.
+    /// Product category string matching the productd JSONB `"category"` field.
     #[must_use]
     pub fn category_str(&self) -> &'static str {
         match self {
@@ -714,7 +714,7 @@ impl Product {
         }
     }
 
-    /// Product code from tarifbd (for ERP routing / audit trail).
+    /// Product code from productd (for ERP routing / audit trail).
     #[must_use]
     pub fn product_code(&self) -> Option<&str> {
         match self {

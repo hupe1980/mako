@@ -237,7 +237,7 @@ Before merging:
 - [ ] `cargo xtask codegen --prune-expired` run; expired profiles archived
 - [ ] `cargo xtask validate-profiles` exits 0
 - [ ] `cargo xtask codegen --check` exits 0
-- [ ] `cargo xtask validate-release-codes` exits 0 — every profile `release` field matches a UNH 0057 value in a fixture
+- [ ] `cargo xtask validate-release-codes` exits 0 — every release code a counterparty can still send matches a UNH 0057 value in a fixture. Both sides of a cutover need one: the outgoing version stays receivable until its `valid_until`.
 - [ ] `cargo test --all-features` exits 0
 - [ ] At least one `.edi` fixture added for newly introduced PIDs
 - [ ] If any workflow state schema changed: bespoke `StateMigration` impl added

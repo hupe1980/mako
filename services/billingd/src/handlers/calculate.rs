@@ -20,7 +20,7 @@ pub struct CalculateRequest {
     pub nb_mp_id: Option<String>,
     pub period_from: String,
     pub period_to: String,
-    /// Override: supply product data directly (skip tarifbd lookup).
+    /// Override: supply product data directly (skip productd lookup).
     pub tariff: Option<Product>,
     /// Override: supply Strom meter data directly (skip edmd lookup).
     pub meter: Option<MeterInput>,
@@ -96,7 +96,7 @@ pub struct CalculateRequest {
 ///
 /// Pipeline:
 /// 1. Parse + validate period
-/// 2. Fetch `Product` from `tarifbd` (or use request override)
+/// 2. Fetch `Product` from `productd` (or use request override)
 /// 3. Fetch consumption from `edmd` (or use request override)
 /// 4. Fetch grid pass-through from `marktd` (or use request override)
 /// 5. Dispatch to category-specific pure calculator
@@ -124,7 +124,7 @@ pub async fn post_calculate(
         tariff.category_str(),
         period_from,
         &cfg,
-        &deps.tarifbd,
+        &deps.productd,
     )
     .await;
 
@@ -449,7 +449,7 @@ pub async fn compute_preview(
         tariff.category_str(),
         period_from,
         cfg,
-        &deps.tarifbd,
+        &deps.productd,
     )
     .await;
 

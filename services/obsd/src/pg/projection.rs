@@ -247,8 +247,8 @@ impl ProcessProjectionRepository for PgProcessProjectionRepository {
             frist_compliance_rate: (with_frist > 0)
                 .then(|| 1.0 - (breached as f64 / with_frist as f64)),
             // NULL until something in the bucket closes. Carried as `None`, so
-            // the REST layer no longer has to patch a placeholder 0.0 back to
-            // null and the MCP layer no longer forgets to.
+            // no surface has to patch a placeholder 0.0 back to null — and none
+            // can forget to.
             avg_cycle_time_hours: row.try_get("avg_cycle_time_hours").unwrap_or(None),
             p95_cycle_time_hours: row.try_get("p95_cycle_time_hours").unwrap_or(None),
         })

@@ -236,9 +236,8 @@ impl Workflow for StammdatenWorkflow {
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
             // 6h ACK window while Received; 1-Werktag forward window (VNB →
-            // ÜNB, BK6-20-060) while Acknowledged — the latter was previously
-            // defined but never enforced, so an acknowledged Stammdaten
-            // document that was never forwarded now expires visibly.
+            // ÜNB, BK6-20-060) while Acknowledged, so an acknowledged
+            // Stammdaten document that is never forwarded expires visibly.
             (ACK_WINDOW_LABEL, StammdatenState::Received(_))
             | (FORWARD_WINDOW_LABEL, StammdatenState::Acknowledged { .. }) => {
                 Some(StammdatenCommand::TimeoutExpired {

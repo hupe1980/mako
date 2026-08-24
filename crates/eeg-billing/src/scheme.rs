@@ -63,10 +63,10 @@ pub enum SettlementScheme {
     /// drops out: the same formula as [`FeedInTariff`](Self::FeedInTariff), but
     /// §53 Abs. 3 reduces the anzulegender Wert by **20 %**.
     ///
-    /// Supply the plant's **ordinary** rate — the engine applies the reduction and
-    /// rounds to two decimals. It used to be the caller's job, and every caller
-    /// passed the ordinary rate straight through, so the one scheme that exists
-    /// for a plant in trouble paid it 25 % more than the statute allows.
+    /// Supply the plant's **ordinary** rate — the engine applies the reduction
+    /// and rounds to two decimals. Left to the caller, the ordinary rate passes
+    /// straight through and the one scheme that exists for a plant in trouble
+    /// pays it 25 % more than the statute allows.
     ///
     /// §21 Abs. 1 Satz 1 Nr. 3 also caps the Inanspruchnahme at **three
     /// consecutive calendar months and six calendar months per calendar year**;

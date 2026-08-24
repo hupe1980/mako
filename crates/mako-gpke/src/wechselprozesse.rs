@@ -1,8 +1,30 @@
 //! GPKE Wechselprozesse Strom — UTILMD-based connection processes.
 //!
-//! Covers all GPKE processes that use the UTILMD S2.x message format per the
-//! LFW24 specification (BK6-22-024, effective 2025-06-06). The authoritative PID
-//! list is the UTILMD AHB S2.1/S2.2 (EDI@Energy).
+//! Covers all GPKE processes that use the UTILMD S2.x message format. The
+//! authoritative PID list is the UTILMD AHB S2.1/S2.2 (EDI@Energy).
+//!
+//! # Which Festlegung
+//!
+//! | Festlegung | Carries |
+//! |---|---|
+//! | **BK6-24-174** | GPKE **Teil 1–3** = Anlagen 1a–1c; MaBiS = Anlage 3 |
+//! | **BK6-22-024** | LFW24 (§ 20a EnWG); GPKE **Teil 4** = Anlage 1d; WiM Strom Teil 1/2 = Anlagen 2a/2b |
+//!
+//! Everything in this module is Teil 1–3, so cite BK6-24-174.
+//!
+//! # The answer windows are clock times, not durations
+//!
+//! § 20a EnWG requires the *switch* to complete within 24 hours, and GPKE meets
+//! that with a chain of wall-clock instants on the **first Werktag after the
+//! ÜT** — 07:00 Information über existierende Zuordnung, 09:00 LFA-Antwort,
+//! 11:00 Bestätigung, 12:00 Beendigung der Zuordnung. GPKE Teil 1 Kap. 7
+//! („Fristenberechnung") defines WT, T, Zuordnungsbeginn, ÜT and ÜZ, and no
+//! duration at all.
+//!
+//! Read as a per-message deadline the statutory 24 hours is wrong in both
+//! directions — a Friday-afternoon Anmeldung expires on Saturday, a
+//! Tuesday-11:00 Frist reads healthy until Tuesday night. Every window here
+//! comes from [`mako_fristen::antwort`].
 //!
 //! This module implements the **receiving-party perspective** (Netzbetreiber / NB):
 //! the system receives inbound ANFRAGE messages and emits outbound ANTWORT messages.
@@ -18,9 +40,11 @@
 //!
 //! ## Outbound ANTWORT — derived by this workflow, NOT routed as inbound
 //!
-//! The AHB lays each Anwendungsfall out as a triple of adjacent PID columns
-//! `(Anfrage, Bestätigung, Ablehnung)`, so the response is `anfrage + 1` to
-//! accept and `anfrage + 2` to reject.
+//! The AHB usually lays an Anwendungsfall out as a triple of adjacent PID
+//! columns `(Anfrage, Bestätigung, Ablehnung)`, but **the pairs are not
+//! arithmetic**: 55077 is rejected with 55080, because 55079 is unassigned.
+//! `response_pid_for` is the mapping; deriving one with `+1` / `+2` puts an
+//! unassigned Prüfidentifikator on the wire.
 //!
 //! | PID   | Process name (AHB)                              | Derived from |
 //! |-------|-------------------------------------------------|--------------|
@@ -48,9 +72,11 @@
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
-//! - **BK6-22-024** — BNetzA ruling governing the GPKE timeline obligations
+//! - **BK6-24-174** — the BNetzA Festlegung that states every window below
+//!   (GPKE Teil 2, SD Lieferbeginn / Lieferende / Kündigung)
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format for grid connection processes
-//! - **APERAK 2.x** — Application error acknowledgement (**24h** wall-clock Frist)
+//! - **APERAK 1.0** — technical acknowledgement, **45 Minuten** on a weekday
+//!   (APERAK AHB 1.0 § 2.4.1), a different clock from the business answer
 
 use std::collections::HashMap;
 
@@ -113,7 +139,7 @@ pub const UTILMD_ANFRAGE_PIDS: &[u32] = &[55001, 55004, 55077];
 /// IFTSTA GPKE Prüfidentifikatoren — PIDs 21024–21028, 21033, 21035.
 ///
 /// These are the Vollzugsmeldung and Statusmeldung messages exchanged by LF,
-/// NB/LFA in the GPKE supplier-change (Wechsel) process (BK6-22-024 LFW24).
+/// NB/LFA in the GPKE supplier-change (Wechsel) process (BK6-24-174, LFW24).
 /// All are routed to `"gpke-supplier-change"` for correlation via conversation
 /// ID (CI tag).
 ///
@@ -197,7 +223,9 @@ pub enum SupplierChangeEvent {
     /// This is distinct from a business rejection (`AntwortGesendet { accepted: false }`):
     /// the APERAK replaces the UTILMD 55002/55003 response channel entirely.
     ///
-    /// BDEW GPKE / BK6-22-024: Must be dispatched within **24 wall-clock hours**.
+    /// APERAK AHB 1.0 § 2.4.1: **45 Minuten** on a weekday for a UTILMD — see
+    /// [`mako_fristen::aperak_strom_due_at`]. This is the technical
+    /// acknowledgement clock, not the business answer window.
     AperakFehlerDispatched {
         /// APERAK Prüfidentifikator sent (29001 = Verarbeitbarkeitsfehler).
         aperak_pid: Pruefidentifikator,
@@ -441,8 +469,11 @@ pub enum SupplierChangeCommand {
     /// - 55004 (Abmeldung / Lieferende)   → 55005 (accepted) / 55006 (rejected)
     /// - 55077 (Anmeldung erz. MaLo)      → 55078 (accepted) / 55080 (rejected)
     ///
-    /// BDEW GPKE / BK6-22-024: Response must be sent within **24 wall-clock
-    /// hours** of receiving the UTILMD Anfrage (not Werktage).
+    /// The answer window is a **wall-clock instant on the first Werktag after
+    /// the Übertragungstag**, not a duration: 11:00 Uhr for a Lieferbeginn
+    /// (55001 / 55077), 06:00 Uhr for an Abmeldung (55004) — BK6-24-174 GPKE
+    /// Teil 2, SD Lieferbeginn Nr. 5/6 and SD Lieferende von LF an NB Nr. 2/3.
+    /// [`mako_fristen::antwort::antwort_deadline`] resolves it.
     ///
     /// # Post-acceptance obligations
     ///
@@ -456,7 +487,7 @@ pub enum SupplierChangeCommand {
     ///
     /// This design keeps cross-process PID knowledge (MSCONS 13015, ORDERS 17134)
     /// outside the supplier-change state machine while preserving the atomicity
-    /// guarantee required by BK6-22-024.
+    /// guarantee the Festlegung's „unverzüglich" requires.
     SendAntwort {
         /// The NB's answer: the resolved EBD Antwortcode and its cluster.
         ///
@@ -487,7 +518,8 @@ pub enum SupplierChangeCommand {
     /// May be sent from `Initiated` or `ValidationPassed` state. Transitions
     /// the process to `Rejected`.
     ///
-    /// BDEW GPKE / BK6-22-024: Must be dispatched within **24 wall-clock hours**.
+    /// APERAK AHB 1.0 § 2.4.1: **45 Minuten** on a weekday for a UTILMD — see
+    /// [`mako_fristen::aperak_strom_due_at`].
     DispatchAperakFehler {
         /// Error reason included in the APERAK.
         reason: String,
@@ -583,12 +615,19 @@ pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruef
 
 // ── Deadline label constants ──────────────────────────────────────────────────
 
-/// Deadline label for the **24-hour process response window** per BK6-22-024 §4(3).
+/// Deadline label for the **business answer window** the NB owes on an inbound
+/// Anfrage.
 ///
-/// This is the maximum time within which the NB must send a UTILMD
-/// Bestätigung or Ablehnung after receiving the LF's Lieferbeginn UTILMD.
-/// It is **not** the APERAK *sending* deadline (45 min weekday per
-/// APERAK AHB 1.0 §2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`).
+/// The window is per-Prüfidentifikator and is a wall-clock instant on the first
+/// Werktag after the Übertragungstag — 11:00 Uhr for a Lieferbeginn, 06:00 Uhr
+/// for an Abmeldung (BK6-24-174 GPKE Teil 2). It is **not** 24 wall-clock
+/// hours: that number is in no Festlegung and it is wrong in both directions,
+/// firing on a Saturday for a Friday Anmeldung and reporting a Tuesday-morning
+/// Frist as still running until Tuesday night.
+///
+/// It is also **not** the APERAK *sending* deadline (45 min on a weekday per
+/// APERAK AHB 1.0 § 2.4.1 — see `mako_fristen::APERAK_STROM_WINDOW_LABEL`),
+/// which runs beside it on the same message.
 ///
 /// Register the deadline immediately after `ReceiveUtilmd` is processed:
 /// ```rust,ignore
@@ -599,7 +638,7 @@ pub(crate) fn response_pid_for(anfrage_pid: u32, accepted: bool) -> Option<Pruef
 ///
 /// The scheduler fires `on_deadline` → `SupplierChangeCommand::TimeoutExpired`
 /// when the window lapses.
-pub const GPKE_PROCESS_RESPONSE_LABEL: &str = "gpke-response-24h-window";
+pub const GPKE_PROCESS_RESPONSE_LABEL: &str = "gpke-antwortfrist";
 
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
@@ -623,14 +662,15 @@ impl Workflow for GpkeSupplierChangeWorkflow {
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"aperak-window"` | `Initiated` or `ValidationPassed` | `TimeoutExpired` | BK6-22-024 §4(3) — 24h Frist |
+    /// | [`GPKE_PROCESS_RESPONSE_LABEL`] | `Initiated` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 — the per-PID Antwortfrist |
     ///
     /// Processes in `Active` or `Rejected` state absorb any late-firing
     /// deadline as a no-op via `TimeoutExpired`'s idempotent handler.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
             // Process response window expired before the NB sent a UTILMD
-            // Bestätigung or Ablehnung → close as Rejected (BK6-22-024 §4(3)).
+            // Bestätigung or Ablehnung → close as Rejected. The window is the
+            // per-PID one in BK6-24-174 GPKE Teil 2, not a flat duration.
             (GPKE_PROCESS_RESPONSE_LABEL, SupplierChangeState::Initiated(_))
             | (GPKE_PROCESS_RESPONSE_LABEL, SupplierChangeState::ValidationPassed(_)) => {
                 Some(SupplierChangeCommand::TimeoutExpired {
@@ -973,7 +1013,7 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }];
 
                 // F-035: emit the APERAK outbox entry atomically with the event.
-                // APERAK AHB 1.0 §2.1.1: mandatory within 24h (BK6-22-024 §4).
+                // APERAK AHB 1.0 § 2.4.1: 45 Minuten on a weekday for a UTILMD.
                 let outbox = if let Some(data) = state.initiated_data() {
                     vec![
                         PendingOutbox::new(
@@ -1008,8 +1048,9 @@ impl Workflow for GpkeSupplierChangeWorkflow {
                 }
 
                 // Compensation: enqueue an AperakTimeout outbox entry so the
-                // OutboxErpWorker notifies the ERP that no APERAK was received
-                // within the 24h regulatory window (BK6-22-024 §4(3)).
+                // OutboxErpWorker notifies the ERP that the answer window
+                // published for this Prüfidentifikator lapsed unanswered
+                // (BK6-24-174 GPKE Teil 2).
                 // The outbox entry is persisted atomically with DeadlineExpired
                 // via execute_and_enqueue_with_retry → WriteBatch.
                 let mut outbox: Vec<PendingOutbox> = vec![];

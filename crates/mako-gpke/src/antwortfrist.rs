@@ -74,6 +74,9 @@ mod tests {
                     .iter()
                     .copied(),
             )
+            .chain(std::iter::once(
+                crate::anfrage_bestellung::ANFRAGE_PID.as_u32(),
+            ))
             .chain(crate::sperrung::SPERRUNG_PIDS.iter().copied())
             .chain(crate::sperrung::ORDCHG_STORNIERUNG_PIDS.iter().copied())
             .chain(

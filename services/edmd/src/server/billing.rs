@@ -5,9 +5,8 @@ use super::*;
 
 /// Mehr-/Mindermengen are a GPKE / GaBi Gas process, not a StromNZV one.
 ///
-/// § 13 Abs. 3 StromNZV and § 25 GasNZV — the citations edmd used to carry —
-/// were repealed with effect from the end of 31 December 2025. The rules now
-/// live in the Festlegungen themselves.
+/// § 13 Abs. 3 StromNZV and § 25 GasNZV were repealed with effect from the end
+/// of 31 December 2025; the rules live in the Festlegungen themselves.
 const IMBALANCE_LEGAL_BASIS: &str =
     "GPKE (BK6-24-174) Teil 1 Kap. 8.4 (Strom) · GaBi Gas 2.1 (BK7-24-01-008) Ziff. 3a (Gas)";
 

@@ -66,7 +66,7 @@ CREATE TABLE malo (
     fernsteuerbar        BOOLEAN,
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MARKTLOKATION
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -129,7 +129,7 @@ CREATE TABLE melo (
     lokationsbuendel_objektcode TEXT,  -- Messlokation.lokationsbuendelObjektcode (UTILMD Lokationsbündelstruktur)
     version      BIGINT      NOT NULL DEFAULT 1,
     data         JSONB       NOT NULL,              -- full BO4E MESSLOKATION
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
@@ -189,7 +189,7 @@ CREATE TABLE bilanzierungen (
     fallgruppenzuordnung      TEXT,                   -- GaBi Fallgruppe
     -- Full BO4E Bilanzierung (round-trip-preserving).
     data                      JSONB       NOT NULL,
-    bo4e_version              TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version              TEXT        NOT NULL DEFAULT '202607.1.0',
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     PRIMARY KEY (tenant, malo_id, bilanzierungsbeginn)
@@ -361,7 +361,7 @@ CREATE TABLE preisblaetter (
     valid_from   DATE,                              -- gueltigkeit.startdatum; NULL = open-started
     valid_to     DATE,                              -- gueltigkeit.enddatum;   NULL = open-ended
     data         JSONB       NOT NULL,
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     source       TEXT        NOT NULL DEFAULT 'api'
                              CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -405,7 +405,7 @@ CREATE TABLE preisblaetter_messung (
     valid_from   DATE,                              -- gueltigkeit.startdatum; NULL = open-started
     valid_to     DATE,                              -- gueltigkeit.enddatum;   NULL = open-ended
     data         JSONB       NOT NULL,
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     source       TEXT        NOT NULL DEFAULT 'api'
                              CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -452,7 +452,7 @@ CREATE TABLE preisblaetter_konzessionsabgabe (
     valid_from      DATE,
     valid_to        DATE,
     data            JSONB       NOT NULL,
-    bo4e_version    TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version    TEXT        NOT NULL DEFAULT '202607.1.0',
     source          TEXT        NOT NULL DEFAULT 'api'
                                 CHECK (source IN ('api', 'mako')),
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -490,7 +490,7 @@ CREATE TABLE preisblaetter_dienstleistung (
     valid_from   DATE,
     valid_to     DATE,
     data         JSONB       NOT NULL,
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     source       TEXT        NOT NULL DEFAULT 'api' CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -525,7 +525,7 @@ CREATE TABLE preisblaetter_hardware (
     valid_from   DATE,
     valid_to     DATE,
     data         JSONB       NOT NULL,
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     source       TEXT        NOT NULL DEFAULT 'api' CHECK (source IN ('api', 'mako')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -597,7 +597,7 @@ CREATE TABLE pricat_versions (
     valid_from          DATE        NOT NULL,
     valid_to            DATE,
     data                JSONB       NOT NULL,
-    bo4e_version        TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version        TEXT        NOT NULL DEFAULT '202607.1.0',
     source              TEXT        NOT NULL DEFAULT 'api'
                         CHECK (source IN ('api', 'mako')),
     dispatch_queued_at  TIMESTAMPTZ,
@@ -843,7 +843,10 @@ CREATE TABLE lokationszuordnungen (
     id           UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     tenant       TEXT        NOT NULL,
     von_id       TEXT        NOT NULL,   -- source node ID (MaLo/MeLo/NeLo/SR/TR)
-    von_typ      TEXT        NOT NULL CHECK (von_typ  IN ('MALO', 'MELO', 'NELO', 'SR', 'TR')),  -- BO4E Lokationstyp
+    -- mako's own Lokationstyp (`mako_markt::domain`). BO4E defined this enum
+    -- until schema release v202607.1.0 removed it — it typed no BO or COM, only
+    -- the edges of a graph BO4E does not model. Same five wire values.
+    von_typ      TEXT        NOT NULL CHECK (von_typ  IN ('MALO', 'MELO', 'NELO', 'SR', 'TR')),
     nach_id      TEXT        NOT NULL,   -- target node ID
     nach_typ     TEXT        NOT NULL CHECK (nach_typ IN ('MALO', 'MELO', 'NELO', 'SR', 'TR')),  -- BO4E Lokationstyp
     valid_from   DATE,                   -- NULL = from epoch
@@ -912,7 +915,7 @@ CREATE TABLE steuerbare_ressourcen (
     -- NULL = not yet populated from WiM Stammdaten.
     -- Required for pre-dispatch eligibility checks in wim.steuerungsauftrag.bestaetigen.
     konfigurationsprodukte JSONB,
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     version      BIGINT      NOT NULL DEFAULT 1,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -967,7 +970,7 @@ CREATE TABLE zaehler (
                  )),
     eichung_bis  DATE,                   -- calibration valid until (Eichgültigkeitsdatum)
     data         JSONB       NOT NULL DEFAULT '{}',  -- full BO4E Zaehler object
-    bo4e_version TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version TEXT        NOT NULL DEFAULT '202607.1.0',
     version      BIGINT      NOT NULL DEFAULT 1,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -991,7 +994,7 @@ CREATE TABLE geraete (
     -- (e.g. "all devices with SMGW_CERT_ABLAUFDATUM <= 30 days from now").
     -- Schema: [{parameter: "FIRMWARE_VERSION", wert: "2.4.1", updated_at: "...", notiz: null}, ...]
     geraet_konfigurationen JSONB       NOT NULL DEFAULT '[]',
-    bo4e_version           TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version           TEXT        NOT NULL DEFAULT '202607.1.0',
     version                BIGINT      NOT NULL DEFAULT 1,
     updated_at             TIMESTAMPTZ NOT NULL DEFAULT now(),
 
@@ -1025,7 +1028,7 @@ CREATE TABLE technische_ressourcen (
     verbrauchsart     TEXT,
     ist_fernschaltbar BOOLEAN,               -- can be remote-controlled (Redispatch 2.0)
     data              JSONB       NOT NULL DEFAULT '{}',  -- full BO4E TechnischeRessource
-    bo4e_version      TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version      TEXT        NOT NULL DEFAULT '202607.1.0',
     version           BIGINT      NOT NULL DEFAULT 1,
     updated_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
 

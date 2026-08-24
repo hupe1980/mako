@@ -39,7 +39,7 @@ pub struct VertragdConfig {
     pub erp_hmac_secret: Option<String>,
 
     /// HMAC-SHA256 secret verifying INBOUND CloudEvents from `makod`,
-    /// `processd` and `tarifbd` on `POST /api/v1/events` and
+    /// `processd` and `productd` on `POST /api/v1/events` and
     /// `POST /api/v1/webhooks/angebot`.
     ///
     /// Those two routes carry no operator token, so this is their only

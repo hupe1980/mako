@@ -589,7 +589,7 @@ impl InvoicdMcpHandler {
                     - Check 6 (Strom MMM): MMMA reference vs INVOIC Mehrmengen/Mindermengen price\n\
                     - Check 6 (Gas MMM): Trading Hub Europe MMMA Gas reference\n\
                     - Check 6 (31009 AufAbschlag): discount positions vs contracted AufAbschlag\n\
-                 4. Resolve upstream: update PRICAT in tarifbd, correct Messreihe in edmd,\n\
+                 4. Resolve upstream: update PRICAT in productd, correct Messreihe in edmd,\n\
                     or contact the NB for a corrected invoice.\n\
                  5. Record resolution: POST /api/v1/receipts/{id}/resolve-dispute with a note.\n\
                  6. Request corrected INVOIC from the NB or re-issue selbstausgestellt (PID 31006).",
@@ -641,7 +641,7 @@ impl InvoicdMcpHandler {
                  \n\
                  **2. Dispute triage**\n\
                  Call `list_disputes` and triage each open dispute:\n\
-                 - Check 4 failures → compare against tarifbd PreisblattNetznutzung\n\
+                 - Check 4 failures → compare against productd PreisblattNetznutzung\n\
                  - Check 6 failures → verify marktd MMMA prices are imported for the month\n\
                  - Period failures → verify edmd has complete Lastgang for the billing period\n\
                  \n\
@@ -689,7 +689,7 @@ impl InvoicdMcpHandler {
                  - Repeated `MmmPriceDeviation` (check 6) → NB using stale MMMA prices\n\
                  \n\
                  **Step 3: Root-cause confirmation**\n\
-                 - Check 4 systematic: verify `tarifbd` has current PreisblattNetznutzung for the NB.\n\
+                 - Check 4 systematic: verify `productd` has current PreisblattNetznutzung for the NB.\n\
                    If yes, the error is on the NB's side — send formal Beanstandungsschreiben.\n\
                  - Check 6 systematic: call `marktd GET /api/v1/mmm-preise/strom/{year}/{month}`\n\
                    (Gas: `/api/v1/mmma-preise/gas/{year}/{month}`) to verify the reference\n\

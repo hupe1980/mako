@@ -730,15 +730,11 @@ mod ingest_contract_tests {
     /// is the second pass of local 02:00–03:00. That is what a collapsed
     /// fall-back day looks like on the wire.
     ///
-    /// It used to be "any 96-interval day", which passed under `metering` 0.16
-    /// because V07 counted a day's intervals. 0.17 looks at the two-hour window
-    /// around the transition instead, and its own docs say why: an interval
-    /// count "cannot tell a collapsed hour from an ordinary gap", so *any* two
-    /// missing quarter-hours anywhere on the day produced a confident report
-    /// that the repeated hour had been collapsed — "which was simply untrue and
-    /// sent the reader looking in the wrong place". The old fixture was one of
-    /// those false positives: 96 contiguous quarter-hours from 22:00 UTC do
-    /// cover the repeated hour and simply stop an hour early.
+    /// "Any 96-interval day" is not that shape. V07 inspects the two-hour
+    /// window around the transition rather than counting a day's intervals,
+    /// because an interval count "cannot tell a collapsed hour from an ordinary
+    /// gap": 96 contiguous quarter-hours from 22:00 UTC cover the repeated hour
+    /// and simply stop an hour early.
     #[test]
     fn a_collapsed_fall_back_day_raises_v07_through_edmds_own_wrapper() {
         let start = datetime!(2026-10-24 22:00:00 UTC);

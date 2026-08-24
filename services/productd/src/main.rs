@@ -1,8 +1,8 @@
-//! `tarifbd` — Product & Tariff Catalog.
+//! `productd` — Product & Tariff Catalog.
 //!
 //! Single source of truth for all retail products the LF sells to end customers.
 //! All commercial pricing is defined here — `billingd` reads product definitions
-//! from `tarifbd` and calculates invoices from them.
+//! from `productd` and calculates invoices from them.
 //!
 //! ## Product Categories
 //!
@@ -49,29 +49,32 @@ use axum::{
     routing::{get, post, put},
 };
 use mako_service::{Daemon, ServiceContext};
+use productd::{config, handlers, mcp_server};
 use std::sync::Arc;
-use tarifbd::{config, handlers, mcp_server};
 use tracing::info;
 
-/// The `tarifbd` daemon. `mako_service::run` owns the lifecycle (tracing, tuned
+/// The `productd` daemon. `mako_service::run` owns the lifecycle (tracing, tuned
 /// pool, real DB-ping readiness, graceful shutdown); this only supplies the
 /// migrations and the domain router (product/tariff catalog + MCP server) plus
 /// the Angebot auto-expiry worker.
-struct Tarifbd;
+struct Productd;
 
-impl Daemon for Tarifbd {
-    type Config = config::TarifbdConfig;
-    const NAME: &'static str = "tarifbd";
+impl Daemon for Productd {
+    type Config = config::ProductdConfig;
+    const NAME: &'static str = "productd";
 
     async fn migrate(pool: &sqlx::PgPool) -> anyhow::Result<()> {
         sqlx::migrate!("./migrations")
             .run(pool)
             .await
-            .context("run tarifbd migrations")?;
+            .context("run productd migrations")?;
         Ok(())
     }
 
-    async fn build(cfg: Arc<config::TarifbdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
+    async fn build(
+        cfg: Arc<config::ProductdConfig>,
+        ctx: ServiceContext,
+    ) -> anyhow::Result<Router> {
         let pool = ctx.pool().clone();
 
         // ── OIDC/JWT authentication ───────────────────────────────────────────
@@ -85,7 +88,7 @@ impl Daemon for Tarifbd {
         .context("OIDC setup")?;
 
         // ── MCP server state ──────────────────────────────────────────────────
-        let mcp_state = Arc::new(mcp_server::TarifbdMcpState {
+        let mcp_state = Arc::new(mcp_server::ProductdMcpState {
             pool: pool.clone(),
             tenant: cfg.tenant.clone(),
             auth: mako_service::mcp_auth::McpAuth::from_auth_config(&cfg.mcp, &cfg.tenant),
@@ -188,7 +191,7 @@ impl Daemon for Tarifbd {
             .layer(Extension(Arc::clone(&cfg)))
             .layer(Extension(pool.clone()));
 
-        info!("tarifbd starting");
+        info!("productd starting");
 
         // ── Background: auto-expire stale Angebote ───────────────────────────
         // Runs daily; marks ANGELEGT/VERSANDT Angebote past gueltig_bis as
@@ -210,13 +213,13 @@ impl Daemon for Tarifbd {
                 interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
                 interval.tick().await; // consume the immediate first tick
                 loop {
-                    match tarifbd::pg::expire_stale_angebote(&pool_bg, &tenant).await {
+                    match productd::pg::expire_stale_angebote(&pool_bg, &tenant).await {
                         Ok(n) if n > 0 => {
-                            tracing::info!(expired = n, "tarifbd: auto-expired stale Angebote")
+                            tracing::info!(expired = n, "productd: auto-expired stale Angebote")
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            tracing::error!(error = %e, "tarifbd: expire_stale_angebote failed")
+                            tracing::error!(error = %e, "productd: expire_stale_angebote failed")
                         }
                     }
                     tokio::select! {
@@ -233,5 +236,5 @@ impl Daemon for Tarifbd {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    mako_service::run::<Tarifbd>().await
+    mako_service::run::<Productd>().await
 }

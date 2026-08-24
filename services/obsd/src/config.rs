@@ -40,10 +40,9 @@ use std::path::Path;
 // `deny_unknown_fields` like every nested block: a typo in a top-level key is a
 // refusal to start, not a setting that silently does nothing.
 //
-// The waiver this replaces said `load_config`'s env layer surfaces `OBSD_CONFIG`
-// as a stray `config` key. It does not: `load_config` ignores `CONFIG`,
-// `LOG_FORMAT` and `LOG_LEVEL` precisely so a `deny_unknown_fields` struct can
-// start. The waiver outlived its reason and left every top-level typo silent.
+// `deny_unknown_fields` is safe here: `load_config` ignores `CONFIG`,
+// `LOG_FORMAT` and `LOG_LEVEL` in its env layer precisely so this struct can
+// carry it. Waiving it would leave every top-level typo silent.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Config {

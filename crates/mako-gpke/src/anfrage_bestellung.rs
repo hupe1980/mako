@@ -1,17 +1,27 @@
 //! GPKE Anfrage Daten der individuellen Bestellung — UTILMD Strom PID 55555
-//! (GPKE Teil 4, BK6-24-174).
+//! (GPKE Teil 4, BK6-22-024 Anlage 1d).
 //!
-//! The Lieferant (LFN) sends this UTILMD message to the Netzbetreiber (NB)
-//! to query data associated with a specific individual order / Vorgang.
-//! The NB must respond within **24 wall-clock hours** (BK6-22-024 §5) with
-//! either the requested data or a reasoned rejection.
+//! PID 55555 is the message a **Berechtigter** — NB, LF or a weiterer MSB —
+//! sends to the **verantwortlicher MSB**, and it opens two different
+//! Use-Cases of GPKE Teil 4 that share the Prüfidentifikator:
+//!
+//! | Use-Case | Prozessschritt | 55555 is the … | Answered by | Frist |
+//! |---|---|---|---|---|
+//! | Bestellung zur Stammdatenänderung (Kap. 1.5.4) | 1 / 3 / 5 | Bestellung einer Änderung | IFTSTA 21047 Bearbeitungsstand | **10 WT** nach dem ÜT |
+//! | Stammdatenänderung vom MSB (Kap. 1.4.4) | 2 / 5 / 8 | Rückmeldung auf die Änderung 55553 | IFTSTA 21047 Bearbeitungsstand | **2 WT** nach dem ÜT |
+//!
+//! The message alone does not say which: only the presence of a preceding
+//! 55553 („Daten auf individuelle Bestellung", MSB → NB/LF/weiterer MSB)
+//! distinguishes them. [`mako_fristen::antwort`] therefore publishes the
+//! **tighter** of the two, exactly as it does for the Ersatz-/Grundversorgung —
+//! a queue sized by the looser window reports a lapsed Frist as still running.
 //!
 //! # Process overview
 //!
 //! ```text
-//! LFN ──── UTILMD 55555 Anfrage Daten ────► NB
-//!                                            ↓ (per-PID Antwortfrist, BK6-24-174 Teil 2)
-//!                    ◄──── data response / rejection ────
+//! NB / LF / weiterer MSB ──── UTILMD 55555 ────► MSB (verantwortlich)
+//!                                                 ↓ IFTSTA 21047 Bearbeitungsstand
+//!                        ◄──── 2 WT (Rückmeldung) / 10 WT (Bestellung) ────
 //! ```
 //!
 //! # BGM and STS qualifier semantics
@@ -30,7 +40,11 @@
 //! # Regulatory basis
 //!
 //! - **BDEW UTILMD AHB Strom S2.1 / S2.2** (profiles `fv20251001`, `fv20261001`)
-//! - **BNetzA BK6-24-174** — GPKE Teil 4 (eff. 2025-06-06)
+//! - **BNetzA BK6-22-024 Anlage 1d** — GPKE Teil 4 Kap. 1.4.4 / 1.5.4. Earlier
+//!   revisions of this module cited „BK6-22-024 § 5" and a 24-hour window. The
+//!   Aktenzeichen was right by accident — Teil 4 *is* an Anlage to BK6-22-024 —
+//!   but the Festlegung has no numbered § 5 and no 24-hour window; the windows
+//!   are the 2 and 10 Werktage in the table above.
 //! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1, same as all GPKE
 //!   processes)
 
@@ -52,7 +66,12 @@ pub const ANFRAGE_PID: Pruefidentifikator = Pruefidentifikator::const_new(55555)
 /// Stable workflow name used as `WorkflowId.name` in the process registry.
 pub const WORKFLOW_NAME: &str = "gpke-anfrage-bestellung";
 
-/// Deadline label for the 24-hour response window (BK6-22-024 §5).
+/// Deadline label for the MSB's Bearbeitungsstand window on an inbound 55555.
+///
+/// **2 Werktage** — the tighter of the two windows the Prüfidentifikator
+/// carries (GPKE Teil 4 Kap. 1.4.4 Prozessschritte 3 / 6 / 9; the Bestellung
+/// variant in Kap. 1.5.4 has 10). See the module header for why the tighter one
+/// is the one a PID-keyed table may publish.
 ///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
@@ -62,7 +81,7 @@ pub const WORKFLOW_NAME: &str = "gpke-anfrage-bestellung";
 /// let dl = Deadline::new(stream_id, …, ANFRAGE_WINDOW_LABEL, due);
 /// deadline_store.register(&dl).await?;
 /// ```
-pub const ANFRAGE_WINDOW_LABEL: &str = "gpke-anfrage-bestellung-24h";
+pub const ANFRAGE_WINDOW_LABEL: &str = "gpke-anfrage-bestellung-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -104,7 +123,7 @@ pub enum AnfrageBestellungEvent {
         /// Reason for rejection (only set when `data_provided = false`).
         reason: Option<String>,
     },
-    /// The 24-hour deadline expired before the NB dispatched a response.
+    /// The Bearbeitungsstand window lapsed without a response.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -226,16 +245,16 @@ pub enum AnfrageBestellungCommand {
     },
     /// NB dispatches a response — provides the requested data or rejects the query.
     ///
-    /// Must be called within **24 wall-clock hours** of receiving PID 55555
-    /// (BK6-22-024 §5). The ERP determines whether data is provided or the
-    /// request is rejected.
+    /// Must be called before the Bearbeitungsstand window lapses — 2 Werktage
+    /// nach dem ÜT (GPKE Teil 4 Kap. 1.4.4). The ERP determines whether data is
+    /// provided or the request is rejected.
     DispatchResponse {
         /// `true` = NB provides the requested data; `false` = NB rejects.
         data_provided: bool,
         /// Rejection reason — required when `data_provided = false`.
         reason: Option<String>,
     },
-    /// The 24-hour deadline fired before the NB dispatched a response.
+    /// The Bearbeitungsstand window fired before a response was dispatched.
     ///
     /// The scheduler constructs this command from `Deadline::label()` matching
     /// [`ANFRAGE_WINDOW_LABEL`]. The workflow records `DeadlineExpired` and
@@ -254,11 +273,11 @@ impl CommandPayload for AnfrageBestellungCommand {}
 
 /// GPKE Anfrage Daten der individuellen Bestellung workflow (PID 55555).
 ///
-/// The NB (Netzbetreiber) is the process owner.  The inbound message is
-/// PID 55555 (LFN → NB data query).  The NB must provide the data or reject
-/// the query within **24 wall-clock hours** per BK6-22-024 §5.
+/// The **verantwortlicher MSB** is the process owner: 55555 arrives from a
+/// Berechtigter (NB, LF or a weiterer MSB) and is answered with an IFTSTA
+/// 21047 Bearbeitungsstand within 2 Werktage.
 ///
-/// Governed by **BK6-24-174** (GPKE Teil 4, eff. 2025-06-06).
+/// Governed by **BK6-22-024 Anlage 1d**, GPKE Teil 4 Kap. 1.4.4 / 1.5.4.
 pub struct GpkeAnfrageBestellungWorkflow;
 
 impl Workflow for GpkeAnfrageBestellungWorkflow {
@@ -266,8 +285,8 @@ impl Workflow for GpkeAnfrageBestellungWorkflow {
     type Event = AnfrageBestellungEvent;
     type Command = AnfrageBestellungCommand;
 
-    /// Deadline compensation: fire `TimeoutExpired` when the 24-hour window
-    /// lapses without the NB having dispatched a response.
+    /// Deadline compensation: fire `TimeoutExpired` when the Bearbeitungsstand
+    /// window lapses without a response having been dispatched.
     ///
     /// Only non-terminal states (`Initiated`, `ValidationPassed`) will trigger
     /// a `TimeoutExpired` command; terminal states (`ResponseDispatched`,

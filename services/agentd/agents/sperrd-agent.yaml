@@ -57,7 +57,7 @@ spec:
       frühestes Startdatum, which sperrd stores and reports as `soll_am`.
       Earlier versions of this file asserted a two-Werktage BK6-22-024 execution
       SLA; it appears in no BNetzA or BDEW document, and orders were classified
-      against it. BK6-22-024 §5's 24 wall-clock hours is the deadline for the
+      against it. GPKE Teil 2 § 3.5's 1 Werktag is the deadline for the
       NB's **ORDRSP**, which makod tracks — not this queue.
 
   # What this agent is in a multi-agent arrangement.

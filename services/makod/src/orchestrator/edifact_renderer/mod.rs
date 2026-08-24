@@ -410,10 +410,10 @@ mod tests {
     /// The SG4 process date carries the qualifier the MIG defines for it.
     ///
     /// `163`/`164` are absent on purpose: UTILMD uses them for *Beginn* and
-    /// *Ende Messperiode* inside SG8/SG9, never for a SG4 process date. This
-    /// function used to return `163` for every PID and `164` for the two
-    /// Anmeldung *confirmations* — a qualifier UTILMD does not define at SG4,
-    /// on a message that marks the Anmeldung as a delivery *end*.
+    /// *Ende Messperiode* inside SG8/SG9, never for a SG4 process date.
+    /// Returning `163` for every PID and `164` for the Anmeldung
+    /// *confirmations* puts a qualifier UTILMD does not define at SG4 on a
+    /// message that marks the Anmeldung as a delivery *end*.
     #[test]
     fn utilmd_dtm_qualifier_by_pid() {
         use edi_energy::utilmd_codes::dtm;

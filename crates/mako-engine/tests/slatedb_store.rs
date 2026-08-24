@@ -419,11 +419,10 @@ fn registry_key_try_from_str_accepts_valid() {
 /// Fire N concurrent tasks all trying to `accept` the same inbox key.
 ///
 /// Exactly one must succeed (return `true`). All others must observe the
-/// committed sentinel and return `false`. This validates the SSI transaction
-/// CAS correctness — previously the in-process `DashMap<Mutex>` guard could
-/// not provide this guarantee across multiple `makod` instances; the SSI
-/// transaction makes it linearisable for all concurrent callers sharing the
-/// same SlateDB storage.
+/// committed sentinel and return `false`. The guarantee comes from the SSI
+/// transaction, which is linearisable for every concurrent caller sharing the
+/// same SlateDB storage — an in-process `DashMap<Mutex>` guard cannot provide
+/// it across multiple `makod` instances.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn inbox_concurrent_accept_exactly_one_winner() {
     use std::sync::Arc;

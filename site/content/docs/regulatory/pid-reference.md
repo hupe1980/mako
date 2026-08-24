@@ -147,6 +147,17 @@ An inbound message carrying one of the last group is dead-lettered as
 `makod_dead_letter_recorded_total{reason="unknown_pid:N"}`. It is observable, not
 silent, but it is not handled.
 
+### Meldepflichten — the gap that is *not* observable
+
+Six PIDs below carry a workflow of `—` for a different reason: **55036 / 55037 /
+55038** (Strom) and **44036 / 44037 / 44038** (Gas) are one-way notifications the
+NB owes around a Lieferbeginn, with no Bestätigung. Outbound, a missing one
+produces no timeout and no dead letter, because nobody is waiting for a reply.
+
+`edi-energy` carries no UTILMD AHB rules for any of the six. Their windows and
+Fundstellen are catalogued in `mako_fristen::meldung`, and
+`services/makod/tests/meldepflicht_coverage.rs` pins the gap.
+
 The split is enforced: `pid_reference_guard` cross-checks this table against the
 `PidRouter` on every CI run, so a row added here without a matching registration
 (or an entry in the test's `NOT_ROUTED_BY_DESIGN` list) fails the build.
@@ -361,6 +372,16 @@ section on this page.
 | 55694 | Rückmeldung/ Anfrage Daten der TR | GPKE Teil 4 | NB → LF | 55693 | — | ✅ | ⚠️ | ✅ | `mako-gpke` / `gpke-stammdatenaenderung` |
 
 ## UTILMD AHB Gas
+
+> **„GeLi Gas 2.0" in the Festlegung column is not stale.** The two names belong
+> to different documents and neither supersedes the other: **GeLi Gas 3.0** is
+> the BNetzA Anlage zu BK7-06-067 in der Fassung **BK7-24-01-009** (Tenor ab
+> 01.01.2026), while **GeLi Gas 2.0** is the BDEW/VKU/GEODE/FNB Gas
+> *Anwendungshilfe* (V1.2, 26.03.2026), which still carries its BK7-19-001 title.
+> This table is generated from the Anwendungsübersicht Prüfidentifikatoren, which
+> indexes the AWH — so a Prüfidentifikator cites „GeLi Gas 2.0" and its Frist
+> cites „GeLi Gas 3.0", and both are right.
+
 
 | PID | Beschreibung | Prozess | Von → An | Reaktion | ⚡ | 🔥 | 3.3 | 4.0 | Crate / Workflow |
 |-----|--------------|---------|----------|----------|---|---|-----|-----|------------------|

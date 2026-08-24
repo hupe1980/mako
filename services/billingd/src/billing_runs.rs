@@ -389,7 +389,7 @@ async fn bill_one(
             meter: None,
         }]
     } else {
-        // One round trip prices every leg: asking tarifbd per leg is an N+1 on
+        // One round trip prices every leg: asking productd per leg is an N+1 on
         // every invoice, and two calls could disagree if the catalogue changed
         // between them.
         let anfragen: Vec<(String, Date)> = slices
@@ -397,10 +397,10 @@ async fn bill_one(
             .map(|s| (s.product_code.clone(), s.gueltig_von.max(from)))
             .collect();
         let produkte = deps
-            .tarifbd
+            .productd
             .resolve_products(&cand.lf_mp_id, &anfragen)
             .await
-            .map_err(|e| anyhow::anyhow!("tarifbd resolve: {e}"))?;
+            .map_err(|e| anyhow::anyhow!("productd resolve: {e}"))?;
         let mut legs = Vec::with_capacity(slices.len());
         for (slice, produkt) in slices.iter().zip(produkte) {
             let tariff = produkt.ok_or_else(|| {

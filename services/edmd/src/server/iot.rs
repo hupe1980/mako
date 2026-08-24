@@ -42,10 +42,10 @@ pub(crate) struct IotPushRequest {
     /// Raw, undecoded payload as received (base64 or hex, verbatim).
     ///
     /// Recorded on the session row (`direct_push_sessions.raw_payload`) so a
-    /// value can be re-derived if the network server\'s codec changes: codecs are
-    /// mutable and carry no version on the uplink. It used to be accepted and
-    /// dropped, while the response still reported `raw_retained: true` — a claim
-    /// about evidence that was not kept.
+    /// value can be re-derived if the network server\'s codec changes: codecs
+    /// are mutable and carry no version on the uplink. `raw_retained: true` in
+    /// the response is a claim about evidence, so the payload must actually
+    /// reach the row.
     raw_payload: Option<String>,
     /// Brennwert Hs in kWh/m³. **Required** when `sparte = GAS` and `unit = M3`.
     ///

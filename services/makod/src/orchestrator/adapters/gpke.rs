@@ -1471,7 +1471,7 @@ pub fn gpke_stornierung_registry() -> AdapterRegistry<GpkeStornierungWorkflow> {
 
 /// Build an [`AdapterRegistry`] for [`GpkeAnfrageBestellungWorkflow`].
 ///
-/// Routes UTILMD Strom messages with PID 55555 (GPKE Teil 4, BK6-24-174):
+/// Routes UTILMD Strom messages with PID 55555 (GPKE Teil 4, BK6-22-024 Anlage 1d):
 ///
 /// **Message format**: UTILMD Strom S2.x (`AnyMessage::Utilmd`).
 /// **APERAK Frist:** 45 Minuten für eine UTILMD (APERAK AHB 1.0 § 2.4.1).

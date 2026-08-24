@@ -19,7 +19,7 @@ use uuid::Uuid;
 pub(crate) use mako_service::cedar::CedarEnforcer;
 
 use crate::{
-    clients::{BillingDeps, EdmdClient, TarifbdClient},
+    clients::{BillingDeps, EdmdClient, ProductdClient},
     config::BillingdConfig,
     pg::{
         fetch_billing_record, insert_billing_record, insert_correction_record,
@@ -221,8 +221,18 @@ fn build_aggregate_invoice(
         let mut idx = 0usize;
         for (malo_id, count) in &slices {
             for p in pos.iter_mut().skip(idx).take(*count) {
+                // `try_insert` refuses once the extension map hits its hardening
+                // caps. Dropping the annotation silently would leave a position
+                // on an aggregate invoice with no way back to the MaLo it
+                // settles, which is the one thing this annotation exists for —
+                // so a refusal fails the request instead.
                 p._additional
-                    .try_insert("marktlokationsId".to_owned(), serde_json::json!(malo_id));
+                    .try_insert("marktlokationsId".to_owned(), serde_json::json!(malo_id))
+                    .map_err(|e| {
+                        anyhow::anyhow!(
+                            "cannot annotate aggregate position with MaLo {malo_id}: {e}"
+                        )
+                    })?;
             }
             idx += count;
         }
@@ -319,7 +329,7 @@ pub(crate) fn parse_period(from: &str, to: &str) -> BillingResult<(time::Date, t
 /// Two services answer half the question each, and that is the point:
 /// **vertragd** says which product the customer is on — agreeing it is a
 /// Tarifwechsel under § 41 Abs. 5 EnWG, so it is a contract fact — and
-/// **tarifbd** says what that product costs on the day in question.
+/// **productd** says what that product costs on the day in question.
 ///
 /// # Errors
 ///
@@ -346,15 +356,15 @@ pub(crate) async fn resolve_tariff(
         ));
     };
     let produkte = deps
-        .tarifbd
+        .productd
         .resolve_products(&req.lf_mp_id, &[(slice.product_code.clone(), am)])
         .await
-        .map_err(|e| BillingError::upstream("tarifbd", e))?;
+        .map_err(|e| BillingError::upstream("productd", e))?;
     produkte.into_iter().next().flatten().ok_or_else(|| {
         BillingError::unprocessable(
             "NO_ACTIVE_PRODUCT",
             format!(
-                "product {} assigned to MaLo {malo_id} has no version valid on {am} in tarifbd",
+                "product {} assigned to MaLo {malo_id} has no version valid on {am} in productd",
                 slice.product_code
             ),
         )

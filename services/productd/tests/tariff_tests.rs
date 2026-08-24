@@ -1,4 +1,4 @@
-//! Unit tests for `tarifbd` — product validation, state machine, EPEX, Angebote.
+//! Unit tests for `productd` — product validation, state machine, EPEX, Angebote.
 //!
 //! These tests exercise pure logic (no database) wherever possible.
 //! For data-layer tests a PostgreSQL test database is required and those tests
@@ -656,7 +656,7 @@ mod tarifpreisblatt_tests {
 
 #[cfg(test)]
 mod eeg_kwkg_product_tests {
-    /// EEG billing categories supported by tarifbd + billingd.
+    /// EEG billing categories supported by productd + billingd.
     #[test]
     fn eeg_kwkg_preistypen_cover_all_models() {
         // § 20 EEG 2023: Einspeisevergütung
@@ -798,13 +798,13 @@ mod mwst_tests {
 
 #[cfg(test)]
 mod comparison_feed_tests {
-    use rust_decimal::dec;
-    use tarifbd::handlers::{
+    use productd::handlers::{
         compute_feed_etag, compute_jahreskosten_supply_netto, extract_bonus_rabatt_eur,
         extract_kuendigungsfrist_wochen, extract_laufzeit_monate, extract_mindestlaufzeit_monate,
         extract_preisgarantie_bis, extract_tarif_preise,
     };
-    use tarifbd::pg::ProductRow;
+    use productd::pg::ProductRow;
+    use rust_decimal::dec;
 
     // ── Helper: minimal ProductRow for ETag tests ─────────────────────────────
 
@@ -916,7 +916,7 @@ mod comparison_feed_tests {
         // GP: 5.50 ct/day × 365 / 100 = 20.075 EUR/a
         // AP: 28.40 ct/kWh × 3500 / 100 = 994.00 EUR/a
         // Total netto: 1014.075 EUR/a
-        let preise = tarifbd::pg::TarifPreise {
+        let preise = productd::pg::TarifPreise {
             grundpreis_ct_per_day: Some(dec!(5.50)),
             arbeitspreis_ct_per_kwh: Some(dec!(28.40)),
             arbeitspreis_ht_ct_per_kwh: None,
@@ -929,7 +929,7 @@ mod comparison_feed_tests {
 
     #[test]
     fn jahreskosten_no_ap_returns_none() {
-        let preise = tarifbd::pg::TarifPreise {
+        let preise = productd::pg::TarifPreise {
             grundpreis_ct_per_day: None,
             arbeitspreis_ct_per_kwh: None,
             arbeitspreis_ht_ct_per_kwh: None,
@@ -942,7 +942,7 @@ mod comparison_feed_tests {
     #[test]
     fn jahreskosten_only_grundpreis() {
         // Subscription product with only Grundpreis (flat fee)
-        let preise = tarifbd::pg::TarifPreise {
+        let preise = productd::pg::TarifPreise {
             grundpreis_ct_per_day: Some(dec!(100.00)),
             arbeitspreis_ct_per_kwh: None,
             arbeitspreis_ht_ct_per_kwh: None,
@@ -1117,7 +1117,7 @@ mod comparison_feed_tests {
 
     #[test]
     fn feed_categories_contains_energy_tariffs_only() {
-        use tarifbd::pg::FEED_CATEGORIES;
+        use productd::pg::FEED_CATEGORIES;
         // HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, BUNDLE must NOT appear in
         // the comparison feed — they are service products, not energy tariffs.
         let non_portal_categories = &["HEMS", "EMOBILITY", "ENERGIEDIENSTLEISTUNG", "BUNDLE"];
@@ -1140,7 +1140,7 @@ mod comparison_feed_tests {
 
     #[test]
     fn full_strom_tariff_extraction() {
-        // Simulate a fully populated STROM Tarifpreisblatt JSONB as stored by tarifbd.
+        // Simulate a fully populated STROM Tarifpreisblatt JSONB as stored by productd.
         let data = serde_json::json!({
             "_typ": "TARIFPREISBLATT",
             "tarifpreispositionen": [
@@ -1188,7 +1188,7 @@ mod comparison_feed_tests {
 mod sharing_category_tests {
     /// SHARING must be a valid category in the schema CHECK constraint.
     /// billingd reads SHARING products as SharingProduct (§42c EnWG); without
-    /// SHARING in the constraint, those products cannot be stored in tarifbd.
+    /// SHARING in the constraint, those products cannot be stored in productd.
     #[test]
     fn sharing_is_valid_category() {
         const VALID_CATEGORIES: &[&str] = &[
@@ -1802,7 +1802,7 @@ mod preistyp_count_tests {
     /// entry or if the README/docs are updated without updating the code.
     #[test]
     fn preistyp_count_is_30() {
-        // Mirror of tarifbd::handlers::VALID_PREISTYPEN
+        // Mirror of productd::handlers::VALID_PREISTYPEN
         const VALID_PREISTYPEN: &[&str] = &[
             "GRUNDPREIS",
             "ARBEITSPREIS_EINTARIF",

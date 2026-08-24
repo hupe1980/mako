@@ -68,7 +68,7 @@ GET /api/v1/malo/{malo_id}/produkte?from=2026-11-01&to=2026-11-30
 GET /api/v1/malo/{malo_id}/produkte?as_of=2026-11-20
 ```
 
-`tarifbd` answers the other half — what that code **costs** on that day. It does
+`productd` answers the other half — what that code **costs** on that day. It does
 not know who is on it.
 
 A **future-dated** Tarifwechsel is a slice that starts in the future: there is no

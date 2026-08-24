@@ -93,13 +93,13 @@ pub fn bdew_push_policy(decryption_key_pem: Option<Vec<u8>>) -> As4PushPolicy {
 /// §2.2.6.2.2 is unambiguous that encryption is a *MUSS*, and fixes the
 /// algorithms: the key reference MUSS be `X509SKI`, the content algorithm MUSS
 /// be `http://www.w3.org/2009/xmlenc11#aes128-gcm`, and key transport follows
-/// BSI [TR-03116-3] §9.2. This table previously read "Encryption required:
-/// `false` — BDEW KH §5.6 (optional)", which contradicted both the statute and
-/// the code beneath it.
+/// BSI [TR-03116-3] §9.2. Encryption is **required**, not optional: BDEW KH
+/// §5.6 alone would suggest otherwise and contradicts both the statute and the
+/// code beneath it.
 ///
-/// (Since asx-rs 0.11 the AS2 MIC knob lives in a separate `As2ValidationPolicy`,
-/// not the shared AS4 `ValidationPolicy` — an AS4 profile no longer carries a field
-/// that cannot apply to it.)
+/// (The AS2 MIC knob lives in a separate `As2ValidationPolicy`, not the shared
+/// AS4 `ValidationPolicy`, so an AS4 profile carries no field that cannot apply
+/// to it.)
 ///
 /// Add partner-specific overrides via `ProfileStack::partner_overrides` if needed.
 ///

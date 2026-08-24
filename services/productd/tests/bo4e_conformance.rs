@@ -2,20 +2,20 @@
 //!
 //! mako's price-type vocabulary is a superset of BO4E's ten `Preistyp` values —
 //! it prices an EEG-Marktprämie, a HEMS optimisation event, an E-Mobility
-//! roaming fee, none of which the standard models. Those values used to be
-//! written straight into `tarifpreispositionen[*].preistyp`, so a document
-//! stamped `_typ: "TARIFPREISBLATT"` carried price types a conforming reader
-//! resolves to `Unknown` — silently, because forward-compatible decoding is
-//! what BO4E-python, go-bo4e and BO4E-dotnet are supposed to do.
+//! roaming fee, none of which the standard models. Written straight into
+//! `tarifpreispositionen[*].preistyp`, they make a document stamped
+//! `_typ: "TARIFPREISBLATT"` carry price types a conforming reader resolves to
+//! `Unknown` — silently, because forward-compatible decoding is what
+//! BO4E-python, go-bo4e and BO4E-dotnet are supposed to do.
 //!
-//! They now travel in the `mako:preistyp` `ZusatzAttribut`, which is BO4E's own
-//! answer to carrying something the schema does not define. These tests pin
+//! They travel instead in the `mako:preistyp` `ZusatzAttribut`, which is BO4E's
+//! own answer to carrying something the schema does not define. These tests pin
 //! that: whatever `normalize_tarifpreisblatt` returns must round-trip through
 //! `rubo4e` with **no** enum anywhere in the tree falling through to `Unknown`.
 
 use mako_markt::bo4e::{MAKO_PREISTYP_ATTRIBUT, position_preistyp};
+use productd::handlers::normalize_tarifpreisblatt;
 use rubo4e::current::Tarifpreisblatt;
-use tarifbd::handlers::normalize_tarifpreisblatt;
 
 fn product(preistyp: &str) -> serde_json::Value {
     serde_json::json!({

@@ -31,7 +31,8 @@
 //! - **PID 55004**: Abmeldung (LF → NB)
 //! - **PID 55005**: Bestätigung Abmeldung (NB → LF, accept)
 //! - **PID 55006**: Ablehnung Abmeldung (NB → LF, reject)
-//! - **Deadline**: 24 wall-clock hours (BNetzA BK6-22-024)
+//! - **Deadline**: **06:00 Uhr des 1. Werktags nach dem ÜT** for the NB's answer
+//!   to a 55004 Abmeldung (BK6-24-174 GPKE Teil 2 § 2.5.1.2 Nr. 2/3)
 //! - **No MSCONS 13015**: Bewegungsdaten obligations are triggered **only** by
 //!   PID 55001 (Anmeldung). For PID 55004 (Abmeldung) the acceptance does
 //!   not require a subsequent MSCONS 13015 — there are no Bewegungsdaten to

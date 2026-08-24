@@ -1,6 +1,6 @@
 //! Read an accepted quotation out of its BO4E `Angebot`.
 //!
-//! `tarifbd` emits the priced quotation as a BO4E [`Angebot`]; the contract is
+//! `productd` emits the priced quotation as a BO4E [`Angebot`]; the contract is
 //! built from that document rather than from parallel scalar fields, so what was
 //! quoted and what is contracted cannot drift apart.
 //!

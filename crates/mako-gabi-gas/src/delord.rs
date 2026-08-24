@@ -313,6 +313,24 @@ impl Workflow for GaBiGasDeliveryOrderWorkflow {
     type Event = DeliveryOrderEvent;
     type Command = DeliveryOrderCommand;
 
+    /// Turn the fired [`DELRES_DEADLINE_LABEL`] into
+    /// [`DeliveryOrderCommand::DelresDeadlineExpired`].
+    ///
+    /// The command, the event and the terminal `DeadlineExpired` state were all
+    /// there; this hook was not, so a DELORD that never drew a DELRES stayed in
+    /// `OrderSent` forever and the missed response window was invisible.
+    fn on_deadline(
+        deadline: &mako_engine::deadline::Deadline,
+        state: &Self::State,
+    ) -> Option<Self::Command> {
+        (deadline.label() == DELRES_DEADLINE_LABEL
+            && matches!(state, DeliveryOrderState::OrderSent(_)))
+        .then(|| DeliveryOrderCommand::DelresDeadlineExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().to_owned(),
+        })
+    }
+
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
             DeliveryOrderEvent::DeliveryOrderSent {

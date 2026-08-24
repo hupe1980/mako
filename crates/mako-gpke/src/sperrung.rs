@@ -21,8 +21,13 @@
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
-//! - **AWH Sperrprozesse Gas / GPKE Teil 2** — BNetzA ruling BK6-22-024
-//! - **APERAK Frist**: 24 wall-clock hours for response
+//! - **BK6-24-174 GPKE Teil 2 § 3.5** — the only source that quantifies these
+//!   windows. The ORDERS and ORDRSP AHBs state no deadline for 17115 / 17116 /
+//!   17117 at all, and the Gas twins are governed by the BDEW AWH
+//!   „Unterbrechung / Wiederherstellung der Anschlussnutzung" (EBD `E_1000` /
+//!   `E_1004`, against Strom's `E_0470` / `E_0497`).
+//! - **APERAK AHB 1.0 § 2.4.1** — 45 Minuten on a weekday for an ORDERS. A
+//!   separate clock from the business answer below.
 //! - **IFTSTA 21039** — Auftragsstatus dispatched by NB after execution (outbound)
 
 use mako_engine::types::Pruefidentifikator;
@@ -63,9 +68,14 @@ pub const ORDCHG_STORNIERUNG_PIDS: &[u32] = &[39000, 39001];
 /// - 19119: Ablehnung Anfrage Sperrung (MSB → NB) — MSB cannot confirm meter access.
 pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 
-/// Deadline label for the 24-wall-clock-hour execution confirmation window.
+/// Deadline label for the NB's ORDRSP answer window on an inbound Sperr- or
+/// Entsperrauftrag.
 ///
-/// BK6-22-024: NB must dispatch the APERAK within **24 wall-clock hours**.
+/// „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" for 17115 /
+/// 17117 / 39000, and der **3. WT** for the Anfrage Sperrung 17116 that the NB
+/// puts to the MSB (BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 / 3.5.3.2).
+/// Werktage, not wall-clock hours, and not one flat number across the four.
+///
 /// Register a `Deadline` with this label immediately after `ValidationPassed`:
 ///
 /// ```rust,ignore
@@ -328,11 +338,11 @@ impl Workflow for GpkeSperrungWorkflow {
     type Event = SperrungEvent;
     type Command = SperrungCommand;
 
-    /// Deadline compensation for the GPKE Sperrung 24h window.
+    /// Deadline compensation for the GPKE Sperrung answer window.
     ///
-    /// | Label | State guard | Command emitted | BNetzA rule |
+    /// | Label | State guard | Command emitted | Fundstelle |
     /// |---|---|---|---|
-    /// | `"gpke-sperrung-window"` | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK6-22-024 — 24h wall-clock Frist |
+    /// | [`SPERRUNG_WINDOW_LABEL`] | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 § 3.5 — 1 WT (17115/17117/39000), 3 WT (17116) |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

@@ -14,9 +14,9 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
 };
+use mako_markt::domain::Lokationstyp;
 use mako_markt::repository::{Lokationsbuendel, LokationszuordnungRepository};
 use mako_service::cedar::CedarEnforcer;
-use rubo4e::current::Lokationstyp;
 use serde::{Deserialize, Serialize};
 
 use crate::pg::PgLokationszuordnungRepository;
@@ -32,11 +32,11 @@ pub type LzRepoExt = Arc<PgLokationszuordnungRepository>;
 pub struct UpsertEdgeRequest {
     /// Source node ID (e.g. MaLo-ID).
     pub von_id: String,
-    /// Source node type — BO4E [`Lokationstyp`] (`MALO`/`MELO`/`NELO`/`SR`/`TR`).
+    /// Source node type — [`Lokationstyp`] (`MALO`/`MELO`/`NELO`/`SR`/`TR`).
     pub von_typ: Lokationstyp,
     /// Target node ID.
     pub nach_id: String,
-    /// Target node type — BO4E [`Lokationstyp`].
+    /// Target node type — [`Lokationstyp`].
     pub nach_typ: Lokationstyp,
     /// Start of validity (`YYYY-MM-DD`). `null` = from epoch.
     pub valid_from: Option<String>,

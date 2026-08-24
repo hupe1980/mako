@@ -294,8 +294,8 @@ pub struct ErpEvent {
     /// BO4E JSON Schema URL that validates [`payload`](ErpEvent::payload).
     ///
     /// Examples:
-    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json"`
-    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Messlokation.json"`
+    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Marktlokation.json"`
+    /// - `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Messlokation.json"`
     ///
     /// `None` for events where no primary BO4E object is applicable
     /// (e.g. `ContrlReceived`).
@@ -384,7 +384,7 @@ pub struct InboundErpCommand {
     /// `payload`.
     ///
     /// Example:
-    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Vertrag.json"`
+    /// `"https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Vertrag.json"`
     pub payload_schema: String,
 
     /// BO4E-typed JSON payload.  `mako-engine` maps this to an internal
@@ -618,14 +618,21 @@ impl ErpCommandSource for ErpCommandSourceTestHarness {
 
 // ── BO4E schema URL constants ─────────────────────────────────────────────────
 
-/// BO4E schema URL base for v202607.0.0.
+/// BO4E schema URL base for the pinned snapshot.
 ///
 /// Use `bo4e_schema_url!(Marktlokation)` to construct typed schema URLs at
 /// compile time.
+///
+/// **The `v` belongs here and only here.** BO4E prefixes its git *tags* with
+/// one, so a raw.githubusercontent URL needs `v202607.1.0`; the `_version`
+/// field inside a payload never has it and reads `202607.1.0`.
+/// `mako_markt::bo4e::schema_version` is the payload spelling, and
+/// `services/makod/tests/bo4e_version_guard.rs` pins the two together — this
+/// crate cannot derive the tag itself because it does not depend on rubo4e.
 pub const BO4E_V202607_BASE: &str =
-    "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas";
+    "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas";
 
-/// Construct a BO4E v202607.0.0 JSON Schema URL for a Business Object.
+/// Construct a BO4E JSON Schema URL for a Business Object.
 ///
 /// ```rust
 /// use mako_engine::bo4e_schema_url;
@@ -635,7 +642,7 @@ pub const BO4E_V202607_BASE: &str =
 macro_rules! bo4e_schema_url {
     ($category:literal, $name:literal) => {
         concat!(
-            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/",
+            "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/",
             $category,
             "/",
             $name,

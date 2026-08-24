@@ -17,7 +17,7 @@
 //! so the model can correct itself and never gets the tool it nearly named. So a
 //! procedure step naming a nonexistent tool does not crash: the model asks, is
 //! refused, improvises, and burns turns. The step silently does not happen, and
-//! nobody notices, because the answer used to be prose.
+//! nobody notices, because the answer is prose.
 //!
 //! ## What it looks for
 //!

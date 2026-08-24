@@ -1,17 +1,34 @@
 //! GPKE Stornierung — cancellation of supplier-change requests (PIDs 55022–55024).
 //!
 //! A Lieferant (LFN) may request cancellation of a previously submitted
-//! Anmeldung (55001), Abmeldung (55002), or Kündigung (55016) by sending a
-//! UTILMD Strom message with PID 55022 (Anfrage nach Stornierung) to the NB.
-//! The NB must respond within **24 wall-clock hours** with either:
+//! Anmeldung (55001), Abmeldung (55004), or Kündigung (55016) by sending a
+//! UTILMD Strom message with PID 55022 (Anfrage nach Stornierung) to the NB,
+//! which answers with either:
 //! - PID 55023 (Bestätigung Stornierung) — cancellation accepted; original process cancelled.
 //! - PID 55024 (Ablehnung Stornierung) — cancellation rejected; original process continues.
+//!
+//! # The window is the original message's, not a window of its own
+//!
+//! **No Festlegung states an answer window for 55022.** GPKE Teil 4 Kap. 5
+//! gives the Stornierung a *precondition* instead — „auslösende Meldung wurde
+//! noch nicht beantwortet" — and defers everything else to the EDI@Energy
+//! „Allgemeine Festlegungen", which quantify nothing either (§ 7.3). The AWH
+//! GeLi Gas says the same for Gas in so many words: „Eine Stornierung der
+//! Anmeldung kann bis zum Eingang der Antwortnachricht erfolgen" (Kap. 2.5.2
+//! Nr. 2).
+//!
+//! So the Stornierung's real boundary is the **original** message's
+//! Antwortfrist: once the NB has answered the Anmeldung there is nothing left
+//! to storno, only a Rückabwicklung, which GPKE Teil 4 Kap. 5 makes a manual
+//! process requiring every party's consent. Size the deadline with
+//! [`mako_fristen::antwort::antwort_deadline`] on the **original** PID and its
+//! arrival instant — never with a duration invented for the Storno itself.
 //!
 //! # Process flow
 //!
 //! ```text
 //! LFN ──── 55022 Anfrage nach Stornierung ────►
-//!     ◄─── 55023 Bestätigung                   ── NB (within 24h)
+//!     ◄─── 55023 Bestätigung                   ── NB, before it answers the original
 //!      or ◄─ 55024 Ablehnung                   ──
 //! ```
 //!
@@ -27,8 +44,15 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW UTILMD AHB Strom 2.1 / 2.2** — AHB rules for PIDs 55022–55024 (GPKE Teil 4)
-//! - **BNetzA BK6-24-174** — Geschäftsprozesse Kundenlieferantenwechsel Strom (LFW24)
+//! - **BDEW UTILMD AHB Strom 2.1 / 2.2** — AHB rules for PIDs 55022–55024
+//!   (GPKE Teil 4); the answers are decided by `S_0087` / `S_0088`
+//! - **BNetzA BK6-22-024 Anlage 1d, GPKE Teil 4 Kap. 5** — Stornierung und
+//!   Rückabwicklung. It scopes the Stornierung to the Teil-2 Use-Cases
+//!   Kündigung, Lieferbeginn, Neuanlage, Beginn der Ersatz-/Grundversorgung,
+//!   Herstellung einer 100 % LF-Zuordnung and both Lieferende directions, plus
+//!   the WiM Teil 1 Kündigung Messstellenbetrieb — and states no Frist.
+//! - **EDI@Energy Allgemeine Festlegungen 6.1d § 7.3** — a Stornierung is a new
+//!   message carrying Transaktionsgrund „Stornierung"; also no Frist.
 //! - **APERAK Frist: 45 Minuten** für eine UTILMD (APERAK AHB 1.0 § 2.4.1)
 
 use mako_engine::types::Pruefidentifikator;
@@ -43,16 +67,23 @@ use mako_engine::{
 /// Stable workflow name used as the `WorkflowId.name` in the `ProcessRegistry`.
 pub const WORKFLOW_NAME: &str = "gpke-stornierung";
 
-/// APERAK deadline label — 24-hour window per BK6-22-024 §5.
+/// Deadline label for the window in which the Stornierung must be decided.
 ///
-/// Register a `Deadline` with this label immediately after `ValidationPassed`:
+/// It is **not** an APERAK window — the APERAK is a separate 45-minute clock —
+/// and it is not a duration of its own. No Festlegung publishes one; the
+/// boundary is the *original* message's Antwortfrist, because a Stornierung is
+/// only admissible while that message is unanswered (GPKE Teil 4 Kap. 5).
 ///
-/// ```text
-/// let due = received_at + time::Duration::hours(24);
-/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_APERAK_WINDOW_LABEL, due);
+/// Register a `Deadline` with this label immediately after `ValidationPassed`,
+/// sized from the **original** PID and its arrival instant:
+///
+/// ```rust,ignore
+/// let due = mako_fristen::antwort::antwort_deadline(original_pid, original_received)
+///     .expect("the storniert message has a published Antwortfrist");
+/// let deadline = Deadline::new(process.stream_id().clone(), ..., STORNIERUNG_ANTWORT_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
-pub const STORNIERUNG_APERAK_WINDOW_LABEL: &str = "gpke-stornierung-aperak-24h";
+pub const STORNIERUNG_ANTWORT_WINDOW_LABEL: &str = "gpke-stornierung-antwort";
 
 /// PIDs handled by the GPKE Stornierung workflow (UTILMD Strom).
 ///
@@ -231,7 +262,7 @@ pub enum GpkeStornierungCommand {
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
-        /// Label of the expired deadline (matches `STORNIERUNG_APERAK_WINDOW_LABEL`).
+        /// Label of the expired deadline (matches `STORNIERUNG_ANTWORT_WINDOW_LABEL`).
         label: Box<str>,
     },
 }
@@ -242,9 +273,13 @@ impl CommandPayload for GpkeStornierungCommand {}
 
 /// GPKE Stornierung workflow (PIDs 55022–55024).
 ///
-/// The NB (Netzbetreiber) is the process owner. The inbound message is PID 55022
-/// (Anfrage nach Stornierung). The NB responds with PID 55023 (Bestätigung) or
-/// PID 55024 (Ablehnung) within **24 wall-clock hours** per BK6-22-024 §5.
+/// The receiver of the original message is the process owner: PID 55022
+/// (Anfrage nach Stornierung) arrives from whoever sent it, and is answered
+/// with PID 55023 (Bestätigung) or 55024 (Ablehnung).
+///
+/// The window is the **original** message's Antwortfrist, because a Stornierung
+/// is only admissible while that message is unanswered (GPKE Teil 4 Kap. 5).
+/// See the module header — no Festlegung publishes a window for 55022 itself.
 pub struct GpkeStornierungWorkflow;
 
 impl Workflow for GpkeStornierungWorkflow {
@@ -258,7 +293,7 @@ impl Workflow for GpkeStornierungWorkflow {
     ) -> Option<Self::Command> {
         match (deadline.label(), state) {
             (
-                STORNIERUNG_APERAK_WINDOW_LABEL,
+                STORNIERUNG_ANTWORT_WINDOW_LABEL,
                 GpkeStornierungState::Initiated(_)
                 | GpkeStornierungState::ValidationPassed(_)
                 | GpkeStornierungState::AperakSent(_),
@@ -548,7 +583,7 @@ mod tests {
             &state,
             GpkeStornierungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: STORNIERUNG_APERAK_WINDOW_LABEL.into(),
+                label: STORNIERUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();
@@ -581,7 +616,7 @@ mod tests {
             &state,
             GpkeStornierungCommand::TimeoutExpired {
                 deadline_id: DeadlineId::new(),
-                label: STORNIERUNG_APERAK_WINDOW_LABEL.into(),
+                label: STORNIERUNG_ANTWORT_WINDOW_LABEL.into(),
             },
         )
         .unwrap();

@@ -1,4 +1,4 @@
-//! PostgreSQL persistence for `tarifbd`.
+//! PostgreSQL persistence for `productd`.
 
 use anyhow::Context as _;
 use rust_decimal::Decimal;
@@ -38,7 +38,7 @@ pub struct ProductUpsertRequest {
 }
 
 fn default_bo4e() -> String {
-    "v202607.0.0".to_owned()
+    mako_markt::bo4e::schema_version().to_owned()
 }
 
 fn default_published() -> String {

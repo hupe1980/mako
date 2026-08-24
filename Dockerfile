@@ -101,7 +101,7 @@ COPY . .
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 3a — demo-builder  (8 demo services — NO LanceDB/agentd/einsd/tarifbd)
+# ║ Stage 3a — demo-builder  (8 demo services — NO LanceDB/agentd/einsd/productd)
 # ╚══════════════════════════════════════════════════════════════════════════════
 # Compiles only the 7 services used by demo/docker-compose.yml.
 # edmd is excluded: its iceberg + datafusion deps add ~12 min to the cold build.
@@ -152,7 +152,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     cargo chef cook --profile ${PROFILE} \
                     -p makod -p marktd -p processd -p invoicd -p edmd -p obsd \
                     -p netzbilanzd -p sperrd -p einsd \
-                    -p tarifbd -p billingd -p outputd -p accountingd -p vertragd \
+                    -p productd -p billingd -p outputd -p accountingd -p vertragd \
                     -p portald -p agentd -p mabis-syncd \
                     --recipe-path recipe.json
 
@@ -162,7 +162,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     --mount=type=cache,id=cargo-target-full,sharing=locked,target=/build/target \
     CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p makod -p marktd -p invoicd -p edmd -p obsd \
                                      -p netzbilanzd -p sperrd -p einsd \
-                                     -p tarifbd -p billingd -p outputd -p accountingd \
+                                     -p productd -p billingd -p outputd -p accountingd \
                                      -p vertragd -p portald -p agentd -p mabis-syncd \
     && CARGO_INCREMENTAL=1 mold -run cargo build --profile ${PROFILE} -p processd --features integrated \
     && BIN_DIR="$([ "${PROFILE}" = "release" ] && echo target/release || echo target/debug)" \
@@ -175,7 +175,7 @@ RUN --mount=type=cache,id=cargo-registry,sharing=locked,target=/usr/local/cargo/
     && cp "${BIN_DIR}/netzbilanzd" /usr/local/bin/netzbilanzd && strip /usr/local/bin/netzbilanzd \
     && cp "${BIN_DIR}/sperrd"      /usr/local/bin/sperrd      && strip /usr/local/bin/sperrd \
     && cp "${BIN_DIR}/einsd"       /usr/local/bin/einsd       && strip /usr/local/bin/einsd \
-    && cp "${BIN_DIR}/tarifbd"     /usr/local/bin/tarifbd     && strip /usr/local/bin/tarifbd \
+    && cp "${BIN_DIR}/productd"     /usr/local/bin/productd     && strip /usr/local/bin/productd \
     && cp "${BIN_DIR}/billingd"    /usr/local/bin/billingd    && strip /usr/local/bin/billingd \
     && cp "${BIN_DIR}/outputd"     /usr/local/bin/outputd     && strip /usr/local/bin/outputd \
     && cp "${BIN_DIR}/accountingd" /usr/local/bin/accountingd && strip /usr/local/bin/accountingd \
@@ -528,9 +528,9 @@ LABEL org.opencontainers.image.title="einsd" \
       org.opencontainers.image.licenses="MIT OR Apache-2.0"
 
 # ╔══════════════════════════════════════════════════════════════════════════════
-# ║ Stage 13 — tarifbd-runtime (distroless)
+# ║ Stage 13 — productd-runtime (distroless)
 # ╚══════════════════════════════════════════════════════════════════════════════
-FROM gcr.io/distroless/cc-debian12:nonroot AS tarifbd-runtime
+FROM gcr.io/distroless/cc-debian12:nonroot AS productd-runtime
 
 COPY --from=builder /usr/share/zoneinfo/Europe      /usr/share/zoneinfo/Europe
 COPY --from=builder /usr/share/zoneinfo/UTC         /usr/share/zoneinfo/UTC
@@ -538,17 +538,17 @@ COPY --from=builder /usr/share/zoneinfo/leap-seconds.list \
                     /usr/share/zoneinfo/leap-seconds.list
 COPY --from=builder /usr/share/zoneinfo/Europe/Berlin /etc/localtime
 ENV TZ=Europe/Berlin
-COPY --from=builder --chown=root:root /usr/local/bin/tarifbd /usr/local/bin/tarifbd
+COPY --from=builder --chown=root:root /usr/local/bin/productd /usr/local/bin/productd
 EXPOSE 9080
-ENV TARIFBD_LOG_FORMAT=json \
-    TARIFBD_LOG_LEVEL=info
+ENV PRODUCTD_LOG_FORMAT=json \
+    PRODUCTD_LOG_LEVEL=info
 HEALTHCHECK --interval=10s --timeout=3s --start-period=20s --retries=5 \
-    CMD ["/usr/local/bin/tarifbd", "--check"]
-ENTRYPOINT ["/usr/local/bin/tarifbd"]
+    CMD ["/usr/local/bin/productd", "--check"]
+ENTRYPOINT ["/usr/local/bin/productd"]
 ARG OCI_VERSION=0.11.0
 ARG OCI_REVISION=unknown
 ARG OCI_CREATED=unknown
-LABEL org.opencontainers.image.title="tarifbd" \
+LABEL org.opencontainers.image.title="productd" \
       org.opencontainers.image.description="Product & Tariff Catalog daemon — LF role, EPEX §41a, B2B Angebote (MaKo)" \
       org.opencontainers.image.version="${OCI_VERSION}" \
       org.opencontainers.image.revision="${OCI_REVISION}" \

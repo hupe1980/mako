@@ -336,7 +336,7 @@ pub mod messwert {
     pub const SMGW_CERT_EXPIRY_WARNING: &str = "de.messwert.smgw.cert.expiry-warning";
 }
 
-/// Product & tariff catalog events (`de.tarif.*`), emitted by `tarifbd`.
+/// Product & tariff catalog events (`de.tarif.*`), emitted by `productd`.
 ///
 /// Renamed from the legacy `de.tarifbd.*` prefix (and the stray top-level
 /// `de.angebot.angenommen`).
@@ -345,10 +345,10 @@ pub mod tarif {
     pub const PRODUCT_UPDATED: &str = "de.tarif.product.updated";
     /// B2B Angebot accepted — vertragd auto-creates the Rahmenvertrag.
     pub const ANGEBOT_ANGENOMMEN: &str = "de.tarif.angebot.angenommen";
-    /// ⚠ phantom: subscribed by agentd (`tarifbd-agent`), no emitter yet
+    /// ⚠ phantom: subscribed by agentd (`productd-agent`), no emitter yet
     /// (tracked in ROADMAP). B2B quote expired.
     pub const ANGEBOT_ABGELAUFEN: &str = "de.tarif.angebot.abgelaufen";
-    /// ⚠ phantom: subscribed by agentd (`tarifbd-agent`), no emitter yet
+    /// ⚠ phantom: subscribed by agentd (`productd-agent`), no emitter yet
     /// (tracked in ROADMAP). EPEX D-1 prices not imported by 18:00 CET.
     pub const EPEX_MISSING: &str = "de.tarif.epex.missing";
 }
@@ -781,9 +781,9 @@ mod tests {
     /// Segments are dot-separated; multi-word segments join with `-`, never `_`.
     ///
     /// The catalog is a published contract, so a drifting separator means two
-    /// spellings of the same concept reach subscribers. Ten types used `_`
-    /// before this rule was enforced; hyphen is now the single convention.
-    /// Namespaces whose domain vocabulary is German keep German participles.
+    /// spellings of the same concept reach subscribers. Hyphen is the single
+    /// convention; namespaces whose domain vocabulary is German keep German
+    /// participles.
     ///
     /// `de.vertrag.*` is the clearest case: every event is a contract-lifecycle
     /// fact named in the language the contract itself uses — `gekuendigt`,

@@ -1,8 +1,9 @@
 //! GPKE Allokationsliste — LF requests allocation lists and billing basis data.
 //!
 //! This module handles LF-initiated requests for **Allokationslisten** and
-//! **bilanzierte Menge** data as defined in the GPKE / MMM (Mehr-/Mindermenge)
-//! process family (BK6-22-024):
+//! **bilanzierte Menge** data as defined in the MMM (Mehr-/Mindermenge) process
+//! family — the BDEW/VKU/bne/GEODE AWH „Prozesse Mehr-/Mindermengen Strom Gas"
+//! V2.1, not a BNetzA Festlegung:
 //!
 //! | PID   | ⚡ | 🔥 | Direction | Description |
 //! |-------|---|---|-----------|-------------|
@@ -24,7 +25,10 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GPKE / MMM Strom** — BK6-22-024
+//! - **BDEW/VKU/bne/GEODE AWH „Prozesse Mehr-/Mindermengen Strom Gas" V2.1**
+//!   (18.03.2025) — the MMM process family. There is no BNetzA Festlegung for
+//!   it — BK6-22-024 covers GPKE Teil 4 and WiM Strom, and neither mentions
+//!   Allokationslisten.
 
 use mako_engine::{
     error::WorkflowError,

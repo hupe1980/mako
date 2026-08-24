@@ -24,7 +24,7 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BDEW GPKE Teil 2** — Energiedaten nach Lieferbeginn (BK6-22-024)
+//! - **BDEW GPKE Teil 2** — Energiedaten nach Lieferbeginn (BK6-24-174 Anlage 1b)
 //! - **BDEW GPKE Teil 4** — Stamm- und Bewegungsdaten Strom
 //! - **MSCONS S1.x** — EDI@Energy metered data format
 //!

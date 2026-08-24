@@ -84,7 +84,7 @@ pub fn manifests() -> &'static BTreeMap<String, Manifest> {
             "../../agents/replacement-value-agent.yaml",
             "../../agents/smgw-diagnostics-agent.yaml",
             "../../agents/sperrd-agent.yaml",
-            "../../agents/tarifbd-agent.yaml",
+            "../../agents/productd-agent.yaml",
             "../../agents/tariff-optimization-agent.yaml",
             "../../agents/vertragd-agent.yaml",
             "../../agents/vpp-billing-agent.yaml",
@@ -333,9 +333,9 @@ mod tests {
     /// Knowledge is granted, not copied.
     ///
     /// mako's MCP servers publish fifty step-by-step prompts for their own
-    /// procedures. Before this, no manifest reached one: each specialist carried
-    /// a hand-typed paraphrase in `constraints`, so the server's prompt and the
-    /// agent's copy drifted apart the first time either changed.
+    /// procedures. A manifest names the prompt it needs; a hand-typed paraphrase
+    /// in `constraints` drifts from the server's prompt the first time either
+    /// changes.
     #[test]
     fn specialists_grant_the_knowledge_their_service_publishes() {
         // The two whose procedure is code or a plan need no prompt: one has no

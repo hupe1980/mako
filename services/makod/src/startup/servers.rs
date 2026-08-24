@@ -52,8 +52,7 @@ pub(crate) struct ServerDeps {
     pub pid_router: mako_engine::pid_router::PidRouter,
     pub mp_id_registry: Arc<MpIdRegistry>,
     /// Derived from the primary Marktpartner-ID. `makod` is single-tenant, so
-    /// this is computed once rather than re-derived at each of the dozen call
-    /// sites that used to do it.
+    /// it is computed once here rather than re-derived at each call site.
     pub tenant_id: TenantId,
     pub cedar: Arc<CedarAuthorizer>,
     pub platform: Arc<Platform>,
@@ -249,9 +248,8 @@ pub(crate) async fn serve_http(
         // API or the MCP endpoint.
         .layer(axum::middleware::from_fn(as4_ingest::rate_limit_middleware))
         // W3C trace-context capture for end-to-end tracing. `Router::layer`
-        // wraps only the routes already merged, so these must come last — the
-        // OpenAPI routes were previously merged after the trace layer and ran
-        // untraced.
+        // wraps only the routes already merged, so these must come last:
+        // anything merged after the trace layer runs untraced.
         .layer(axum::middleware::from_fn(super::trace_ctx_middleware));
 
     info!(

@@ -302,7 +302,7 @@ GET /api/v1/malo/{malo_id}/produkte?from=2026-11-01&to=2026-11-30
 }
 ```
 
-`billingd` bills one leg per slice; [`tarifbd`](@/docs/services/tarifbd.md)
+`billingd` bills one leg per slice; [`productd`](@/docs/services/productd.md)
 answers what each code costs on its own dates and does not know who is on it.
 
 **A future-dated Tarifwechsel is a slice that starts in the future** — no
@@ -391,7 +391,7 @@ curl -X POST …/tarifwechsel -d '{
 ```
 
 The caller supplies them because the caller chose the tariff and holds both
-price sheets — `vertragd` owns which product a Marktlokation is on, `tarifbd`
+price sheets — `vertragd` owns which product a Marktlokation is on, `productd`
 owns what it costs, and the two are deliberately uncoupled. More to the point,
 what a notice *said* is a fact about the notice: a catalogue lookup years later
 answers what the price is, not what the customer was told, which is exactly the
@@ -490,7 +490,7 @@ tenant   = "9900357000004"   # data-isolation key (here: the operator's BDEW-Cod
 lf_mp_id = "9900357000004"   # market identity registered on the UTILMD
 
 processd_url    = "http://processd:8580"
-tarifbd_url     = "http://tarifbd:9080"
+productd_url     = "http://productd:9080"
 accountingd_url = "http://accountingd:9380"
 edmd_url        = "http://edmd:8380"
 edmd_api_key    = "env:VERTRAGD_EDMD_SERVICE_KEY"
@@ -528,6 +528,6 @@ otherwise cannot see.
 |---|---|
 | [`portald`](@/docs/services/portald.md) | Customer portal; authorizes every request here |
 | [`billingd`](@/docs/services/billingd.md) | Reads § 40 Abs. 1 facts, BG-7 buyers, § 40b candidates |
-| [`tarifbd`](@/docs/services/tarifbd.md) | Product catalog; receives the tariff assignments |
+| [`productd`](@/docs/services/productd.md) | Product catalog; receives the tariff assignments |
 | [`processd`](@/docs/services/processd.md) | Runs the GPKE / GeLi Gas Lieferbeginn and Lieferende |
 | [`edmd`](@/docs/services/edmd.md) | Beginn- and Schlussablesung reading orders |

@@ -155,7 +155,7 @@ reason  = "rmcp 3.1 (the MCP server SDK) pins base64 0.23; the mainline workspac
 [[bans.skip]]
 name    = "typed-builder"
 version = "0.20.1"
-reason  = "iceberg 0.9.1 (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e 0.9.0 (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
+reason  = "iceberg 0.9.1 (edmd Iceberg cold-tier archive) pins typed-builder 0.20.1; rubo4e 0.10.0 (the BO4E domain model, used workspace-wide) uses 0.23.2. Resolve when iceberg bumps typed-builder."
 
 [[bans.skip]]
 name    = "typed-builder-macro"

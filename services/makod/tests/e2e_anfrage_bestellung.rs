@@ -3,7 +3,8 @@
 //!
 //! The Lieferant (LFN) queries the Netzbetreiber (NB) for data associated
 //! with a specific Vorgang (individual order).  The NB must respond within
-//! **24 wall-clock hours** (BNetzA BK6-22-024 §5).
+//! **2 Werktage** — the Bearbeitungsstand window of GPKE Teil 4 Kap. 1.4.4
+//! (BK6-22-024 Anlage 1d).
 //!
 //! # Protocol trace
 //!
@@ -23,7 +24,7 @@
 //! # Regulatory context
 //!
 //! - **PID 55555**: Anfrage Daten der individuellen Bestellung (LFN → NB, GPKE Teil 4)
-//! - **BK6-24-174** — GPKE Teil 4 (eff. 2025-06-06)
+//! - **BK6-22-024 Anlage 1d** — GPKE Teil 4
 //! - **APERAK Frist**: 45 minutes on a Werktag (APERAK AHB 1.0 §2.4.1)
 //! - STS DE 9015 `E07` = Anfrage für aktiven/bestätigten Vorgang
 //! - STS DE 9015 `E08` = Anfrage für noch nicht bestätigten Vorgang
@@ -203,7 +204,8 @@ impl MockNb {
 /// LFN sends UTILMD 55555 querying Vorgang data; NB receives the Anfrage,
 /// validates, and provides the requested data.
 ///
-/// Per BNetzA BK6-22-024 §5 the NB must respond within 24 wall-clock hours.
+/// Per GPKE Teil 4 Kap. 1.4.4 the MSB answers with an IFTSTA 21047
+/// Bearbeitungsstand within 2 Werktage.
 #[tokio::test]
 async fn e2e_anfrage_bestellung_data_provided() {
     let nb = MockNb::new();
@@ -299,12 +301,21 @@ async fn e2e_anfrage_bestellung_validation_failure() {
 
 /// Anfrage Bestellung — deadline label is canonical.
 ///
-/// Regression guard: changing `ANFRAGE_WINDOW_LABEL` would silently break
-/// the deadline scheduler's timeout dispatch.  Assert the constant is stable.
+/// Regression guard: changing `ANFRAGE_WINDOW_LABEL` would silently break the
+/// deadline scheduler's timeout dispatch, because `on_deadline` matches on the
+/// label and answers `None` to anything else.
+///
+/// GPKE Teil 4 answers a 55555 with an IFTSTA 21047 Bearbeitungsstand within
+/// **2 Werktage** as the Rückmeldung auf eine Änderung (Kap. 1.4.4) or **10** as
+/// the Bestellung (Kap. 1.5.4); `mako_fristen::antwort` publishes the tighter.
 #[test]
 fn anfrage_bestellung_deadline_label_is_canonical() {
     assert_eq!(
-        ANFRAGE_WINDOW_LABEL, "gpke-anfrage-bestellung-24h",
+        ANFRAGE_WINDOW_LABEL, "gpke-anfrage-bestellung-antwort",
         "deadline label must match the scheduler's DISPATCH_TABLE entry"
+    );
+    assert!(
+        !ANFRAGE_WINDOW_LABEL.contains("24h"),
+        "no GPKE Festlegung publishes a 24-hour window for 55555"
     );
 }

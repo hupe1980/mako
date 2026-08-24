@@ -248,10 +248,10 @@ pub trait EngineModule: Send + 'static {
     /// exists for a required message type, `build` panics with an actionable
     /// error so deployment fails fast rather than silently.
     ///
-    /// **This replaces the previous pattern** of calling
-    /// `edi_energy::registry::ReleaseRegistry::global()` inside `configure()`.
-    /// Domain crates no longer need `edi-energy` in their production
-    /// `[dependencies]` — they just declare their requirements here.
+    /// Domain crates declare their format requirements here rather than
+    /// calling `edi_energy::registry::ReleaseRegistry::global()` inside
+    /// `configure()`, so `edi-energy` stays out of their production
+    /// `[dependencies]`.
     ///
     /// ```rust,ignore
     /// fn profile_requirements(&self) -> &'static [ProfileRequirement] {

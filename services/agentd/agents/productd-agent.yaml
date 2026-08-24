@@ -14,7 +14,7 @@
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
-  name: tarifbd-agent
+  name: productd-agent
   version: "1.1.0"
 spec:
   execution:
@@ -31,7 +31,7 @@ spec:
       You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance specialist.
 
       ## TRIGGERED BY
-      - `de.tarif.product.updated` — new/updated product in tarifbd
+      - `de.tarif.product.updated` — new/updated product in productd
       - `de.tarif.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
       - `de.tarif.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
       - Annual cron (January) — check §42 Energiemix completeness for all active products
@@ -40,30 +40,30 @@ spec:
 
       ### On product update (de.tarif.product.updated)
       1. Extract `lf_mp_id` and `product_code` from event.
-      2. Call tarifbd `get_product` to fetch the current product definition.
-      3. Call tarifbd `validate_tariff_config` to verify BO4E schema correctness.
+      2. Call productd `get_product` to fetch the current product definition.
+      3. Call productd `validate_tariff_config` to verify BO4E schema correctness.
       4. Check §42 EnWG Energiemix:
-         - Call tarifbd `get_product_energiemix`.
+         - Call productd `get_product_energiemix`.
          - For STROM/GAS/WAERME/SOLAR categories: Energiemix is MANDATORY per §42 Abs. 2 Nr. 2 EnWG.
          - Check that `co2Emission` (g/kWh) and `anteilErneuerbareEnergien` (%) are present.
          - Missing: emit warning §42_ENERGIEMIX_INCOMPLETE.
       5. For dynamic products (`dyn_source = 'epex-spot-day-ahead'`):
-         - Call tarifbd `check_41a_epex_status` to verify D-1 prices are available.
+         - Call productd `check_41a_epex_status` to verify D-1 prices are available.
          - Alert if tomorrow's prices are missing and it is past 14:00 CET.
 
       ### On Angebot expiry (de.tarif.angebot.abgelaufen)
       1. Extract `angebot_id` and `lf_mp_id` from event.
-      2. Call tarifbd `get_angebot` to retrieve customer and product details.
+      2. Call productd `get_angebot` to retrieve customer and product details.
       3. Generate ERP follow-up recommendation: re-quote or mark as lost opportunity.
 
       ### On EPEX missing alert (de.tarif.epex.missing)
-      1. Call tarifbd `check_41a_epex_status` for current coverage status.
+      1. Call productd `check_41a_epex_status` for current coverage status.
       2. Determine gap severity (stale days).
       3. Alert operator via output: trigger immediate EPEX import.
 
       ### Annual §42 Energiemix sweep (January cron)
-      1. Call tarifbd `get_comparison_feed` to list all active PUBLISHED products.
-      2. For each STROM/GAS product: call tarifbd `get_product_energiemix`.
+      1. Call productd `get_comparison_feed` to list all active PUBLISHED products.
+      2. For each STROM/GAS product: call productd `get_product_energiemix`.
       3. Flag products missing Energiemix or with Energiemix older than 12 months.
       4. Generate compliance report: §42 Abs. 2 Nr. 2 EnWG requires annual update of energy source mix.
 
@@ -87,7 +87,7 @@ spec:
     role: specialist
 
   capabilities:
-    provides: [tarifbd]
+    provides: [productd]
 
   models:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
@@ -156,72 +156,72 @@ spec:
   # declared here where a reviewer sees it rather than fetched silently.
   context:
     prompts:
-      - server: tarifbd
+      - server: productd
         name: assign-product
         max_input_sensitivity: internal
         output_sensitivity: internal
-      - server: tarifbd
+      - server: productd
         name: configure-41a-tariff
         max_input_sensitivity: internal
         output_sensitivity: internal
 
   tools:
-    - ref: tool://tarifbd/list_products
+    - ref: tool://productd/list_products
       mutates: false
       max_sensitivity: internal
-      description: "list products via tarifbd"
-    - ref: tool://tarifbd/get_product
+      description: "list products via productd"
+    - ref: tool://productd/get_product
       mutates: false
       max_sensitivity: internal
-      description: "get product via tarifbd"
-    - ref: tool://tarifbd/resolve_product
+      description: "get product via productd"
+    - ref: tool://productd/resolve_product
       mutates: false
       max_sensitivity: internal
-      description: "get customer product via tarifbd"
-    - ref: tool://tarifbd/get_epex_price
+      description: "get customer product via productd"
+    - ref: tool://productd/get_epex_price
       mutates: false
       max_sensitivity: internal
-      description: "get epex price via tarifbd"
+      description: "get epex price via productd"
     - ref: tool://vertragd/list_expiring_contracts
       mutates: false
       max_sensitivity: confidential
       description: "list expiring contracts via vertragd"
-    - ref: tool://tarifbd/list_angebote
+    - ref: tool://productd/list_angebote
       mutates: false
       max_sensitivity: internal
-      description: "list angebote via tarifbd"
-    - ref: tool://tarifbd/get_angebot
+      description: "list angebote via productd"
+    - ref: tool://productd/get_angebot
       mutates: false
       max_sensitivity: internal
-      description: "get angebot via tarifbd"
-    - ref: tool://tarifbd/get_angebot_summary
+      description: "get angebot via productd"
+    - ref: tool://productd/get_angebot_summary
       mutates: false
       max_sensitivity: internal
-      description: "get angebot summary via tarifbd"
-    - ref: tool://tarifbd/check_41a_epex_status
+      description: "get angebot summary via productd"
+    - ref: tool://productd/check_41a_epex_status
       mutates: false
       max_sensitivity: internal
-      description: "check 41a epex status via tarifbd"
-    - ref: tool://tarifbd/get_product_energiemix
+      description: "check 41a epex status via productd"
+    - ref: tool://productd/get_product_energiemix
       mutates: false
       max_sensitivity: internal
-      description: "get product energiemix via tarifbd"
-    - ref: tool://tarifbd/validate_tariff_config
+      description: "get product energiemix via productd"
+    - ref: tool://productd/validate_tariff_config
       mutates: false
       max_sensitivity: internal
-      description: "validate tariff config via tarifbd"
-    - ref: tool://tarifbd/explain_invoice_position
+      description: "validate tariff config via productd"
+    - ref: tool://productd/explain_invoice_position
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via tarifbd"
-    - ref: tool://tarifbd/get_product_history
+      description: "explain invoice position via productd"
+    - ref: tool://productd/get_product_history
       mutates: false
       max_sensitivity: internal
-      description: "get product history via tarifbd"
-    - ref: tool://tarifbd/get_comparison_feed
+      description: "get product history via productd"
+    - ref: tool://productd/get_comparison_feed
       mutates: false
       max_sensitivity: internal
-      description: "get comparison feed via tarifbd"
+      description: "get comparison feed via productd"
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential

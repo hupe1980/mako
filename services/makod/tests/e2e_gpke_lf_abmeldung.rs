@@ -25,7 +25,8 @@
 //! - **PID 55007**: NB-initiated Lieferende Ankündigung (NB → LF, Strom)
 //! - **PID 55008**: LF Bestätigung (LF → NB, outbound)
 //! - **PID 55009**: LF Ablehnung (LF → NB, outbound)
-//! - **Deadline**: 24 wall-clock hours for LF response (BK6-22-024 §4)
+//! - **Deadline**: **05:00 Uhr des 1. Werktags nach dem ÜT** for the LF's answer
+//!   (BK6-24-174 GPKE Teil 2 § 2.5.2.2 Nr. 2)
 //! - **Regulatory basis**: UTILMD AHB Strom 2.1, GPKE domain
 //!
 //! AHB validation is bypassed for inbound `ReceiveAnkuendigung` because the
@@ -213,7 +214,8 @@ impl MockLf {
 /// NB sends UTILMD 55007; LF receives the announcement, confirms acceptance
 /// (→ 55008 Bestätigung), and marks the supply relationship as ended.
 ///
-/// Per BNetzA BK6-22-024 §4, the LF must respond within 24 wall-clock hours.
+/// Per BK6-24-174 GPKE Teil 2 § 2.5.2.2 Nr. 2, the LF answers by 05:00 Uhr des
+/// 1. Werktags nach dem ÜT.
 #[tokio::test]
 async fn e2e_lf_abmeldung_accepted_and_beendet() {
     let lf = MockLf::new();

@@ -78,7 +78,7 @@ graph TB
     end
     subgraph core["Core — market data"]
       MARKTD["marktd<br/>BO4E hub · fan-out"]
-      VERTRAGD["vertragd · tarifbd<br/>contracts · products"]
+      VERTRAGD["vertragd · productd<br/>contracts · products"]
       EDMD["edmd<br/>metering · SMGW"]
     end
     subgraph money["Settlement and billing"]
@@ -124,7 +124,7 @@ graph TB
       <div class="card">
         <h3>Market data</h3>
         <p>A typed BO4E market-data hub — MaLo/MeLo, contracts, supply status, device configuration, grid-operator registry — with durable CloudEvents fan-out and OIDC/JWT on every route.</p>
-        <a class="card-count" href="{{ get_url(path='@/docs/services/marktd.md') | safe }}">marktd · vertragd · tarifbd →</a>
+        <a class="card-count" href="{{ get_url(path='@/docs/services/marktd.md') | safe }}">marktd · vertragd · productd →</a>
       </div>
       <div class="card">
         <h3>Metering &amp; settlement</h3>

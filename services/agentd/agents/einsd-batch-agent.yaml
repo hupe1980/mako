@@ -62,7 +62,7 @@ spec:
       ### Post-EEG transition check
       1. Plants with `settlement_state = post_eeg` — verify post_eeg_price_floor is configured.
       2. Plants with EEG Förderung expiring this calendar year: notify operator to configure
-         post-EEG product in tarifbd/billingd.
+         post-EEG product in productd/billingd.
 
       ## §52 PENALTY REFERENCE (EEG 2023)
       Abs. 1 lists the Pflichtverstöße, Abs. 2 sets the rate, Abs. 3 reduces it.
@@ -294,62 +294,62 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: "get gas quality via edmd"
-    - ref: tool://tarifbd/list_products
+    - ref: tool://productd/list_products
       mutates: false
       max_sensitivity: internal
-      description: "list products via tarifbd"
-    - ref: tool://tarifbd/get_product
+      description: "list products via productd"
+    - ref: tool://productd/get_product
       mutates: false
       max_sensitivity: internal
-      description: "get product via tarifbd"
-    - ref: tool://tarifbd/resolve_product
+      description: "get product via productd"
+    - ref: tool://productd/resolve_product
       mutates: false
       max_sensitivity: internal
-      description: "get customer product via tarifbd"
-    - ref: tool://tarifbd/get_epex_price
+      description: "get customer product via productd"
+    - ref: tool://productd/get_epex_price
       mutates: false
       max_sensitivity: internal
-      description: "get epex price via tarifbd"
+      description: "get epex price via productd"
     - ref: tool://vertragd/list_expiring_contracts
       mutates: false
       max_sensitivity: confidential
       description: "list expiring contracts via vertragd"
-    - ref: tool://tarifbd/list_angebote
+    - ref: tool://productd/list_angebote
       mutates: false
       max_sensitivity: internal
-      description: "list angebote via tarifbd"
-    - ref: tool://tarifbd/get_angebot
+      description: "list angebote via productd"
+    - ref: tool://productd/get_angebot
       mutates: false
       max_sensitivity: internal
-      description: "get angebot via tarifbd"
-    - ref: tool://tarifbd/get_angebot_summary
+      description: "get angebot via productd"
+    - ref: tool://productd/get_angebot_summary
       mutates: false
       max_sensitivity: internal
-      description: "get angebot summary via tarifbd"
-    - ref: tool://tarifbd/check_41a_epex_status
+      description: "get angebot summary via productd"
+    - ref: tool://productd/check_41a_epex_status
       mutates: false
       max_sensitivity: internal
-      description: "check 41a epex status via tarifbd"
-    - ref: tool://tarifbd/get_product_energiemix
+      description: "check 41a epex status via productd"
+    - ref: tool://productd/get_product_energiemix
       mutates: false
       max_sensitivity: internal
-      description: "get product energiemix via tarifbd"
-    - ref: tool://tarifbd/validate_tariff_config
+      description: "get product energiemix via productd"
+    - ref: tool://productd/validate_tariff_config
       mutates: false
       max_sensitivity: internal
-      description: "validate tariff config via tarifbd"
-    - ref: tool://tarifbd/explain_invoice_position
+      description: "validate tariff config via productd"
+    - ref: tool://productd/explain_invoice_position
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via tarifbd"
-    - ref: tool://tarifbd/get_product_history
+      description: "explain invoice position via productd"
+    - ref: tool://productd/get_product_history
       mutates: false
       max_sensitivity: internal
-      description: "get product history via tarifbd"
-    - ref: tool://tarifbd/get_comparison_feed
+      description: "get product history via productd"
+    - ref: tool://productd/get_comparison_feed
       mutates: false
       max_sensitivity: internal
-      description: "get comparison feed via tarifbd"
+      description: "get comparison feed via productd"
     - ref: tool://obsd/get_process
       mutates: false
       max_sensitivity: internal

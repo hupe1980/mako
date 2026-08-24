@@ -325,7 +325,7 @@ pub use stammdatenaenderung::{
 pub use stornierung::{
     GpkeStornierungCommand, GpkeStornierungData, GpkeStornierungEvent, GpkeStornierungState,
     GpkeStornierungWorkflow,
-    STORNIERUNG_APERAK_WINDOW_LABEL as STORNIERUNG_GPKE_APERAK_WINDOW_LABEL,
+    STORNIERUNG_ANTWORT_WINDOW_LABEL as STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
     STORNIERUNG_PIDS as STORNIERUNG_GPKE_PIDS, WORKFLOW_NAME as STORNIERUNG_GPKE_WORKFLOW_NAME,
 };
 pub use utilts::{
@@ -667,7 +667,9 @@ impl mako_engine::builder::EngineModule for GpkeModule {
         //
         // LF sends ORDERS 17110/17114, NB rejects with ORDRSP 19110/19115.
         // Positive response comes via MSCONS (13013/13014) — MMM Strom/Gas PIDs,
-        // NOT GeLi Gas. Routed here per BK6-22-024 §8 / MMM AHB.
+        // NOT GeLi Gas. Routed here per the BDEW/VKU/bne/GEODE AWH „Prozesse
+        // Mehr-/Mindermengen Strom Gas" V2.1 (18.03.2025); the MMM processes
+        // sit in an Anwendungshilfe, not in a BNetzA Festlegung.
         for &pid in allokationsliste::ORDERS_ANFRAGE_PIDS {
             router.register(pid, allokationsliste::WORKFLOW_NAME);
         }

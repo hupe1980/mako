@@ -1,4 +1,4 @@
-//! Real-PostgreSQL guards for the tarifbd invariants that live in SQL: that a
+//! Real-PostgreSQL guards for the productd invariants that live in SQL: that a
 //! product PUT actually writes the `NOT NULL tenant` column, that reads are
 //! tenant-scoped, that a Tarifwechsel is atomic, and that `erp_angebot_id`
 //! makes Angebot creation idempotent.
@@ -7,11 +7,11 @@
 //! requirement); the tests skip gracefully when Docker is unavailable:
 //!
 //! ```bash
-//! just test-tarifbd-db
+//! just test-productd-db
 //! ```
 
+use productd::pg;
 use sqlx::PgPool;
-use tarifbd::pg;
 
 const SCHEMA: &str = include_str!("../migrations/0001_schema.sql");
 

@@ -29,7 +29,7 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GPKE Teil 3** — Geschäftsprozesse Konfiguration (BK6-22-024)
+//! - **BDEW GPKE Teil 3** — Geschäftsprozesse Konfiguration (BK6-24-174 Anlage 1c)
 //! - Response window: 5 Werktage for NB/MSB to respond (GPKE AWH Teil 3)
 
 use mako_engine::{
@@ -309,7 +309,7 @@ impl CommandPayload for KonfigurationAenderungCommand {}
 // ── Workflow ──────────────────────────────────────────────────────────────────
 
 /// GPKE Konfigurationsänderung workflow — LF-initiated config change requests
-/// (GPKE Teil 3, BK6-22-024).
+/// (GPKE Teil 3, BK6-24-174 Anlage 1c).
 pub struct GpkeKonfigurationAenderungWorkflow;
 
 /// Rejection ORDRSP PIDs (NB/MSB rejects LF's request).

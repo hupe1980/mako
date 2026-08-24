@@ -823,7 +823,7 @@ CREATE INDEX aal_operator  ON account_audit_log (operator_sub) WHERE operator_su
 -- ── IBAN hash index (fast lookup even when IBAN is encrypted) ─────────────────
 CREATE INDEX acct_iban_hash ON accounts (iban_hash, tenant) WHERE iban_hash IS NOT NULL;
 
--- The SKR 03/04 double-entry journal is no longer a shadow table here: it is the
+-- The SKR 03/04 double-entry journal is not a shadow table here: it is the
 -- doubleentry ledger itself. accountingd's `ledger.rs` posts each Buchungsart as a
 -- balanced two-leg entry — the customer Kontokorrent (SKR 1400 subledger) against
 -- a GL contra account (SKR 1200 Bank / 4000 Erlöse / 4003 Mahnerlöse / EEG-Aufwand).

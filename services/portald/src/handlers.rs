@@ -481,7 +481,7 @@ pub async fn get_portal_vertrag(
 /// Request body for `POST /api/v1/portal/{malo_id}/tarifwechsel`.
 #[derive(Debug, Deserialize)]
 pub struct PortalTarifwechselRequest {
-    /// New product code in `tarifbd`.
+    /// New product code in `productd`.
     pub new_product_code: String,
     /// When the new tariff takes effect (`YYYY-MM-DD`).
     ///

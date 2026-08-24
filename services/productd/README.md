@@ -1,6 +1,6 @@
-# tarifbd — Product & Tariff Catalog
+# productd — Product & Tariff Catalog
 
-`tarifbd` is the single source of truth for **everything the LF sells** to end
+`productd` is the single source of truth for **everything the LF sells** to end
 customers, and for the market prices its invoices are derived from.
 `billingd` and `portald` query it exclusively — `marktd` is never used for
 retail pricing.
@@ -41,7 +41,7 @@ inclusive.
 - `DELETE` is a withdrawal (`valid_to = today`), never a delete: § 147 AO keeps
   the basis of every invoice already issued.
 
-## What tarifbd is *not*
+## What productd is *not*
 
 **Which product a customer is on does not live here.** Agreeing it is a
 Tarifwechsel — a contract act governed by § 41 Abs. 5 EnWG and the contract's
@@ -49,7 +49,7 @@ Preisgarantie — so the valid-time MaLo→product assignment lives in `vertragd
 with the contract, and is asked for at
 `GET /api/v1/malo/{malo_id}/produkte`.
 
-`tarifbd` answers the other half — what a product **costs** on a given day:
+`productd` answers the other half — what a product **costs** on a given day:
 
 ```bash
 # One version, by code and date. Both validity bounds are applied.
@@ -141,32 +141,32 @@ from a list.
 ## Configuration
 
 ```toml
-# tarifbd.toml
+# productd.toml
 port     = 9080
 tenant   = "9900357000004"   # data-isolation key
 lf_mp_id = "9900357000004"   # market identity; defaults to tenant
 
 erp_webhook_url = "http://erp:8000/events"
-erp_hmac_secret = "env:TARIFBD_ERP_HMAC_SECRET"
+erp_hmac_secret = "env:PRODUCTD_ERP_HMAC_SECRET"
 
 [database]
-url = "postgresql://tarifbd:secret@db:5432/tarifbd"
+url = "postgresql://productd:secret@db:5432/productd"
 
 [oidc]
 issuer   = "https://auth.example.de/realms/mako"
-audience = "tarifbd"
+audience = "productd"
 
 # billingd and vertragd read and write with a service key:
 # [[oidc.service_keys]]
-# secret = "env:TARIFBD_BILLINGD_KEY"
+# secret = "env:PRODUCTD_BILLINGD_KEY"
 # sub    = "billingd"
 ```
 
 ## Tests
 
 ```bash
-cargo test -p tarifbd          # BEHG rules, BO4E projection, Tarifpreisblatt validation
-just test-tarifbd-db           # real PostgreSQL (testcontainers)
+cargo test -p productd          # BEHG rules, BO4E projection, Tarifpreisblatt validation
+just test-productd-db           # real PostgreSQL (testcontainers)
 ```
 
 The real-PostgreSQL suite proves what lives in SQL: product versioning across a

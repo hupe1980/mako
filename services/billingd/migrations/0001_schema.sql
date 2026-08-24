@@ -71,7 +71,7 @@ CREATE TABLE billing_records (
 
     -- Full rubo4e::current::Rechnung JSONB (§ 14b UStG / § 147 AO: 8 years)
     rechnung_json       JSONB       NOT NULL,
-    bo4e_version        TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version        TEXT        NOT NULL DEFAULT '202607.1.0',
     -- EN 16931 semantic invoice model (serde JSON) — the source for XRechnung /
     -- CII / PEPPOL-UBL rendering, mapped at bill time with full per-line VAT.
     en16931_json        JSONB,

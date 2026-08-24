@@ -46,13 +46,13 @@ pub struct BillingdConfig {
     /// Typically the operator's BDEW- or DVGW-Codenummer, but any stable unique string is valid.
     pub tenant: String,
 
-    /// `tarifbd` base URL — product catalog and EPEX prices.
-    pub tarifbd_url: String,
+    /// `productd` base URL — product catalog and EPEX prices.
+    pub productd_url: String,
 
-    /// `tarifbd` bearer token — register it there as an `[[oidc.service_keys]]`
+    /// `productd` bearer token — register it there as an `[[oidc.service_keys]]`
     /// entry. Without it every catalogue lookup is rejected and the invoice has
     /// no prices, no EPEX series and no nEHS certificate cost.
-    pub tarifbd_api_key: Option<String>,
+    pub productd_api_key: Option<String>,
 
     /// `edmd` base URL — `MeterBillingPeriod` for consumption data.
     pub edmd_url: String,
@@ -634,7 +634,7 @@ mod straddle_tests {
         let mut v = serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
             "tenant": "9900357000004",
-            "tarifbd_url": "http://localhost:9080",
+            "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080"
         });
@@ -720,7 +720,7 @@ mod seller_identity_tests {
         let mut v = serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
             "tenant": "9900357000004",
-            "tarifbd_url": "http://localhost:9080",
+            "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080"
         });

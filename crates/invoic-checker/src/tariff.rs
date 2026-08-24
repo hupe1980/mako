@@ -88,13 +88,14 @@ impl InMemoryPreisblattStore {
     /// Sort all entry lists by `gueltigkeit.startdatum` descending so that
     /// [`PreisblattStore::get`] returns the most-recently-valid sheet first.
     ///
-    /// Uses the `validity()` convenience method from rubo4e v0.5 — direct
-    /// `time::Date` comparison with no intermediate string allocation.
+    /// `validity()` returns the bounds directly as `(Option<Date>, Option<Date>)`,
+    /// so a sheet with no `gueltigkeit` and one with no `startdatum` both sort as
+    /// `None` — last, behind every dated sheet.
     pub fn sort(&mut self) {
         for sheets in self.inner.values_mut() {
             sheets.sort_by(|a, b| {
-                let a_start = a.validity().map(|(s, _)| s);
-                let b_start = b.validity().map(|(s, _)| s);
+                let (a_start, _) = a.validity();
+                let (b_start, _) = b.validity();
                 b_start.cmp(&a_start)
             });
         }
@@ -112,17 +113,28 @@ impl PreisblattStore for InMemoryPreisblattStore {
 
 /// Return `true` when `billing_date` falls within the sheet's validity window.
 ///
-/// Uses the `validity()` convenience method from rubo4e v0.5 for direct
-/// `time::Date` comparison — no string allocation or formatting needed.
+/// **`enddatum` is inclusive** — BO4E states it on the field, „Enddatum des
+/// betrachteten Zeitraums ist *inklusiv*", and gives the same date as the
+/// example for both bounds, so a one-day Zeitraum is one day. Reading the end
+/// exclusively drops a sheet's final day of validity, leaving a
+/// Netznutzungsrechnung dated on it with no price sheet at all.
 ///
-/// Window: `startdatum <= billing_date` AND (`enddatum` absent OR `billing_date < enddatum`)
-/// A missing `gueltigkeit` or missing `startdatum` means open-started (always valid from the past).
-/// A missing `enddatum` means open-ended (valid until replaced).
+/// Window: `startdatum <= billing_date <= enddatum`, each bound optional.
+///
+/// # Why not [`PreisblattNetznutzung::is_valid_at`]
+///
+/// The crate's own method treats a **missing** `gueltigkeit` as *never* valid.
+/// That is the right default for a library — an undated sheet makes no claim —
+/// but the wrong one for this store, whose job is to find *some* price sheet for
+/// a Netznutzungsrechnung. Here an undated sheet is the open-ended fallback, and
+/// [`InMemoryPreisblattStore::sort`] puts it behind every dated one, so it is
+/// consulted only when nothing dated matches.
 fn sheet_is_valid(sheet: &PreisblattNetznutzung, billing_date: time::Date) -> bool {
     match sheet.validity() {
-        None => true,
-        Some((start, None)) => billing_date >= start,
-        Some((start, Some(end))) => billing_date >= start && billing_date < end,
+        (None, None) => true,
+        (Some(start), None) => billing_date >= start,
+        (None, Some(end)) => billing_date <= end,
+        (Some(start), Some(end)) => billing_date >= start && billing_date <= end,
     }
 }
 
@@ -159,7 +171,9 @@ mod tests {
 
         assert!(store.get("9900000000001", date!(2025 - 06 - 01)).is_some());
         assert!(store.get("9900000000001", date!(2024 - 12 - 31)).is_none());
-        assert!(store.get("9900000000001", date!(2026 - 01 - 01)).is_none()); // exclusive end
+        // `enddatum` is **inclusive**: the sheet covers its own final day.
+        assert!(store.get("9900000000001", date!(2026 - 01 - 01)).is_some());
+        assert!(store.get("9900000000001", date!(2026 - 01 - 02)).is_none());
         assert!(store.get("9900000000999", date!(2025 - 06 - 01)).is_none()); // unknown mp_id
     }
 

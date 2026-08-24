@@ -750,6 +750,32 @@ impl Workflow for WimWertebestellungWorkflow {
     type Event = WertebestellungEvent;
     type Command = WertebestellungCommand;
 
+    /// Turn a fired deadline into the [`WertebestellungCommand::TimeoutExpired`]
+    /// that `handle` already knows how to decide.
+    ///
+    /// Without this hook the three windows this workflow registers —
+    /// [`ANGEBOT_WINDOW_LABEL`], [`ANTWORT_WINDOW_LABEL`] and
+    /// [`BINDUNGSFRIST_LABEL`] — fired into the engine's default `None` and the
+    /// process sat in `AnfrageEingegangen` forever. `handle` decides which of
+    /// them is a Fristversäumnis and which merely ends an offer; this only has
+    /// to make sure the three reach it and nothing else does.
+    fn on_deadline(
+        deadline: &mako_engine::deadline::Deadline,
+        _state: &Self::State,
+    ) -> Option<Self::Command> {
+        let owned = matches!(
+            deadline.label(),
+            ANGEBOT_WINDOW_LABEL | ANTWORT_WINDOW_LABEL | BINDUNGSFRIST_LABEL
+        );
+        // `handle` already checks whether the window was actually outstanding in
+        // the current state and returns no events when it was not, so the state
+        // filter belongs there and not here.
+        owned.then(|| WertebestellungCommand::TimeoutExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().into(),
+        })
+    }
+
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         use WertebestellungEvent as E;
         use WertebestellungState as S;

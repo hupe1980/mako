@@ -354,12 +354,11 @@ impl EdmdMcpHandler {
 
     /// Read the Mehr-/Mindermengensaldo for a MaLo and month.
     ///
-    /// One implementation, shared with `GET /api/v1/imbalance/…`: the arithmetic
-    /// and the sign convention are `metering::compute_imbalance`\'s. This tool
-    /// used to carry a third definition of its own — "Mehr = the positive
-    /// intervals, Minder = the absolute value of the negative ones" — which is
-    /// not the Mehr-/Mindermengensaldo at all but a series split by sign, and it
-    /// was documented as feeding the INVOIC 31006 MMM amount.
+    /// One implementation, shared with `GET /api/v1/imbalance/…`: the
+    /// arithmetic and the sign convention are `metering::compute_imbalance`\'s.
+    /// "Mehr = the positive intervals, Minder = the absolute value of the
+    /// negative ones" is a series split by sign, not the
+    /// Mehr-/Mindermengensaldo, and must never feed the INVOIC 31006 amount.
     #[tool(
         description = "Get the Mehr-/Mindermengensaldo for a MaLo and billing month. \
                        Compares the measured quantity edmd holds against the bilanzierte \
@@ -647,8 +646,8 @@ POST the returned text to agentd POST /api/v1/rag/ingest with source=msb-{malo_i
         .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
         // ── Quality scores ────────────────────────────────────────────────
-        // Per-interval `quality_warnings` no longer exists (meterstore owns the
-        // readings and has no such column); the per-batch verdicts live in
+        // There is no per-interval `quality_warnings` column — meterstore owns
+        // the readings; the per-batch verdicts live in
         // `quality_assessments`. Surface the non-clean assessments (grade ≠ A) as
         // the "quality warnings" section, sourced from that table on the pool.
         let quality_scores = sqlx::query(
@@ -825,8 +824,8 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
                 .and_then(|s| time::OffsetDateTime::parse(s, &Rfc3339).ok())
                 .unwrap_or(now);
 
-        // Per-interval `quality_warnings` no longer exists as a stored column
-        // (meterstore owns the readings). Recompute the Hampel/gap verdict on the
+        // There is no stored per-interval `quality_warnings` column —
+        // meterstore owns the readings. Recompute the Hampel/gap verdict on the
         // fly from the version-resolved series — the same scorer the ingest and
         // rescore paths use — so the tool reports a fresh grade for the window.
         let reads = self
@@ -853,13 +852,13 @@ Returns grade (A/B/C/F), outlier/spike timestamps, gaps detected, and coverage %
             })
             .collect();
 
-        // The **same** scorer the REST surface runs, not a second one. This tool
-        // used to call `score_intervals` directly with `QualityConfig::default()`,
-        // which is three divergences at once: electricity thresholds applied to
-        // every commodity (a summer gas profile grades as a stuck meter), an
-        // assumed 900 s cadence instead of the observed one, and a fixed
-        // `hampel_k3_t3` label that named parameters it had not used. An agent
-        // and an operator asking the same question got different answers.
+        // The **same** scorer the REST surface runs, not a second one.
+        // Calling `score_intervals` directly with `QualityConfig::default()`
+        // diverges three ways at once: electricity thresholds applied to every
+        // commodity (a summer gas profile grades as a stuck meter), an assumed
+        // 900 s cadence instead of the observed one, and a fixed `hampel_k3_t3`
+        // label naming parameters that were not used. An agent and an operator
+        // asking the same question would get different answers.
         let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
         let report = crate::server::compute_quality(&intervals, sparte, from_dt, to_dt);
 

@@ -107,7 +107,7 @@ const REGISTRY: &[(&str, &str)] = &[
         "mako:umsatzsteuer_hinweis",
         "the §13b / §19 note printed on the invoice",
     ),
-    // ── tarifbd: the price sheet ─────────────────────────────────────────────
+    // ── productd: the price sheet ─────────────────────────────────────────────
     (
         "mako:preistyp",
         "a price type BO4E `Preistyp` does not model (EEG, HEMS, E-Mobility, …)",

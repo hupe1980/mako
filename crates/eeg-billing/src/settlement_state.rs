@@ -587,8 +587,8 @@ mod sect9_tests {
         ));
     }
 
-    /// Below 25 kW the 60 % Leistungsbegrenzung is enough — the old rule charged
-    /// nothing here and everything just above, both by accident.
+    /// Below 25 kW the 60 % Leistungsbegrenzung is enough. A flat „≥ 25 kW must
+    /// have Fernsteuerbarkeit" charges nothing here and everything just above.
     #[test]
     fn below_25_kw_the_sixty_percent_cap_is_enough() {
         assert!(!sect9_verletzt(

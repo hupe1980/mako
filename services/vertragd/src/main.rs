@@ -72,7 +72,7 @@ impl Daemon for Vertragd {
             )))
             .layer(Extension(oidc));
 
-        // ── Durable outbound calls (processd / edmd / tarifbd / accountingd) ──
+        // ── Durable outbound calls (processd / edmd / productd / accountingd) ──
         tokio::spawn(
             outbound::OutboundWorker::new(pool.clone(), Arc::clone(&cfg), http.clone())
                 .run(shutdown.clone()),

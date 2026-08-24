@@ -1,11 +1,11 @@
 //! A commodity product must be able to price its commodity.
 //!
-//! The price fields of a `Product` are populated by mapping `tarifbd`'s
+//! The price fields of a `Product` are populated by mapping `productd`'s
 //! `preistyp` strings onto struct fields. A renamed position, a typo in the
 //! mapper, or a catalog row saved without its price maps to `None` — in
-//! silence. Before this guard the resulting invoice was not an error: it billed
-//! 1000 kWh of electricity for €20.50, which is the Stromsteuer and nothing
-//! else, and looked entirely ordinary on paper.
+//! silence. Unguarded, the resulting invoice is not an error: it bills 1000 kWh
+//! of electricity for €20.50 — the Stromsteuer and nothing else — and looks
+//! entirely ordinary on paper.
 
 use energy_billing::{
     BillingContext, BillingPeriod, EngineError, GridInput, MeterInput, Product, Quantities,

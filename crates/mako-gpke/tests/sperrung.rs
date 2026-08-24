@@ -9,7 +9,7 @@
 //!
 //! # APERAK Frist
 //!
-//! **24 wall-clock hours** (BK6-22-024 §5). Saturday is not a Werktag, but the
+//! the **1. Werktag nach dem ÜT** (BK6-24-174 GPKE Teil 2 § 3.5). Saturday is not a Werktag, but the
 //! 24h window is wall-clock, not business-day based.
 //!
 //! # Regulatory basis

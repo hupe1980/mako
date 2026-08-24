@@ -24,7 +24,9 @@
 //!
 //! - **PID 55600**: Neue verbindliche Marktlokation (NB → LF response: 55602/55604)
 //! - **PID 55601**: Neue erzeugende Marktlokation (NB → LF response: 55603/55605)
-//! - **Deadline**: 24 wall-clock hours for NB response (BK6-24-174 / BK6-22-024)
+//! - **Deadline**: the Neuanlage answer window, **00:00 Uhr des 61. Werktags
+//!   nach dem ÜT** (BK6-24-174 GPKE Teil 2 § 2.2.2) — `E_0608` makes the
+//!   identification of a newly commissioned MaLo a daily re-check for 60 WT
 //! - **Regulatory basis**: BNetzA BK6-24-174 Anlage 1b §2.2 (Neuanlage)
 //!
 //! AHB validation is bypassed for inbound `ReceiveAnmeldung` because the

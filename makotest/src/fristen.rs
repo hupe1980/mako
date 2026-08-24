@@ -342,6 +342,10 @@ fn convert(o: &antwort::AntwortObligation) -> AntwortObligation {
             Some(0),
             Some(format!("{:02}:{:02}", at.hour(), at.minute())),
         ),
+        // „Am selben Tag wie …" — the anchor's own day with no wall-clock time
+        // attached, so `werktage` is 0 like `same_day_at` but `clock_time` is
+        // absent rather than a cut-off the document does not state.
+        antwort::FristShape::SameDay => ("same_day", Some(0), None),
     };
     AntwortObligation {
         trigger_pid: o.trigger_pid,

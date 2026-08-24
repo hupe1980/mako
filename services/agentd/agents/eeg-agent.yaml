@@ -37,7 +37,7 @@ spec:
 
       1. Call einsd `get_plant` for full plant details.
       2. Calculate remaining days to foerderendedatum.
-      3. Determine post-EEG path: PostEegSpot (default) → check EPEX config in tarifbd.
+      3. Determine post-EEG path: PostEegSpot (default) → check EPEX config in productd.
       4. Check iMSys status: required for §41a dynamic tariffs post-EEG.
       5. Generate operator checklist.
 

@@ -1,6 +1,6 @@
 [package]
 name        = "billingd"
-description = "Multi-product billing engine (LF role). Pure calculation service: pulls ProductDefinition from tarifbd, consumption from edmd, grid pass-through from marktd; produces BO4E Rechnung for energy/service/telco/bundle; para.41a EPEX dynamic billing, para.14a Steuerbarkeits-Rabatt, EEG Gutschrift. Port :9280."
+description = "Multi-product billing engine (LF role). Pure calculation service: pulls ProductDefinition from productd, consumption from edmd, grid pass-through from marktd; produces BO4E Rechnung for energy/service/telco/bundle; para.41a EPEX dynamic billing, para.14a Steuerbarkeits-Rabatt, EEG Gutschrift. Port :9280."
 version.workspace     = true
 authors.workspace     = true
 edition.workspace     = true

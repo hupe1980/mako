@@ -38,7 +38,10 @@
 //! ## Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
-//! - **BK6-22-024** — BNetzA ruling; NB must respond within **24 wall-clock hours**
+//! - **BK6-24-174** — the Festlegung that states the NB's answer window: a
+//!   wall-clock instant on the 1. Werktag nach dem ÜT, per Prüfidentifikator
+//!   (GPKE Teil 2). BK6-22-024 still carries GPKE **Teil 4** and WiM, but none
+//!   of the Teil-2 Zuordnungsprozesse, and no 24-hour window anywhere.
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
 
 use mako_engine::types::Pruefidentifikator;
@@ -97,9 +100,9 @@ pub const ANTWORT_PIDS_LF: &[u32] = &[
 /// hours after its Frist lapsed.
 ///
 /// After sending the outbound ANFRAGE, the LF registers a deadline with this
-/// label. If no ANTWORT arrives within 24 wall-clock hours, the scheduler
-/// fires `on_deadline` → `TimeoutExpired` to transition the process to
-/// `Rejected`.
+/// label. If no ANTWORT arrives before the window this Prüfidentifikator
+/// publishes, the scheduler fires `on_deadline` → `TimeoutExpired` to
+/// transition the process to `Rejected`.
 ///
 /// ```rust,ignore
 /// let due = mako_fristen::antwort::antwort_deadline(pid, sent_at)
@@ -268,7 +271,8 @@ pub enum LfAnmeldungCommand {
     ///
     /// Typically dispatched after the ERP confirms supply activation downstream.
     Activate,
-    /// A registered deadline fired (NB did not respond within 24h wall-clock).
+    /// A registered deadline fired — the NB let the published answer window
+    /// lapse without a Bestätigung or Ablehnung.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -300,11 +304,17 @@ impl Workflow for GpkeLfAnmeldungWorkflow {
     type Event = LfAnmeldungEvent;
     type Command = LfAnmeldungCommand;
 
-    /// Deadline compensation for the NB/LFA response window (24h, BK6-22-024).
+    /// Deadline compensation for the NB/LFA answer window.
     ///
-    /// | Label | State guard | Command emitted | BNetzA rule |
+    /// | Label | State guard | Command emitted | Fundstelle |
     /// |---|---|---|---|
-    /// | `"nb-response-window"` | `Pending` | `TimeoutExpired` | BK6-22-024 — 24h wall-clock Frist |
+    /// | [`NB_RESPONSE_WINDOW_LABEL`] | `Pending` | `TimeoutExpired` | BK6-24-174 GPKE Teil 2 — the per-PID Antwortfrist |
+    ///
+    /// The label must be exactly this constant. `makod` registered
+    /// `nb-response-window-24h` here, which fell through to `_ => None`: the
+    /// deadline fired, nothing happened, and the process sat in `Pending`
+    /// forever. `services/makod/tests/deadline_labels.rs` pins the two ends
+    /// together.
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

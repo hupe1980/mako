@@ -320,7 +320,7 @@ async fn bilateral_lieferbeginn_strom_happy_path() {
             .unwrap()
             .deadlines
             .is_empty(),
-        "24h deadline must not be immediately due",
+        "the Antwortfrist must not be immediately due",
     );
 
     // ── 5. NB accepts — inspect outbox, then persist ──────────────────────────
@@ -567,8 +567,13 @@ async fn bilateral_lieferbeginn_rejection_path() {
 
 /// The Antwortfrist fires when the NB does not respond in time.
 /// Both sides must reach `Rejected` state after the timeout is dispatched.
+///
+/// The window is the one BK6-24-174 GPKE Teil 2 publishes for the
+/// Prüfidentifikator — 11:00 Uhr des 1. Werktags nach dem ÜT for a 55001 — and
+/// it is neither an APERAK window nor 24 wall-clock hours, which is what the old
+/// name of this test claimed.
 #[tokio::test]
-async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
+async fn bilateral_antwortfrist_deadline_fires_on_timeout() {
     let platform = Platform::with_all_profiles();
     let anfrage_ref = "MSG-LFN-TO-001";
 
@@ -610,7 +615,8 @@ async fn bilateral_24h_aperak_deadline_fires_on_timeout() {
     .await
     .unwrap();
 
-    // Register deadlines already in the past (simulates 24h elapsed on both sides).
+    // Register deadlines already in the past (simulates a lapsed Antwortfrist on
+    // both sides).
     let deadline_store = InMemoryDeadlineStore::new();
     let already_past = OffsetDateTime::now_utc() - time::Duration::seconds(1);
 

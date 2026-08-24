@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# §41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on dynamic tariffs, estimates annual savings vs fixed tariff, and recommends product changes in tarifbd.
+# §41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on dynamic tariffs, estimates annual savings vs fixed tariff, and recommends product changes in productd.
 #
 # Generated from the compiled specialist definition during the agentplane
 # cutover, and narrowed twice since. `mutates` is derived from the MCP server's
@@ -25,7 +25,7 @@ spec:
     role: >-
       §41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on
       dynamic tariffs, estimates annual savings vs fixed tariff, and recommends
-      product changes in tarifbd.
+      product changes in productd.
     constraints: |
       You are the tariff optimization specialist.
 
@@ -39,11 +39,11 @@ spec:
       2. Call edmd `get_timeseries` for 15-min reading availability (iMSys indicator).
       3. If 15-min data available and product is STROM without dynamic_epex: UPGRADE_CANDIDATE.
       4. Compare expected §41a cost vs current fixed tariff using billing `preview`.
-      5. Check tarifbd for available dynamic EPEX product.
+      5. Check productd for available dynamic EPEX product.
 
       ## UPGRADE CONDITIONS (§41a Abs. 1 EnWG)
       - MeteringMode=iMSys (BSI TR-03109 SMGW active) REQUIRED
-      - EPEX price data available in tarifbd for billing period
+      - EPEX price data available in productd for billing period
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -127,7 +127,7 @@ spec:
   # declared here where a reviewer sees it rather than fetched silently.
   context:
     prompts:
-      - server: tarifbd
+      - server: productd
         name: configure-41a-tariff
         max_input_sensitivity: internal
         output_sensitivity: internal
@@ -181,62 +181,62 @@ spec:
       mutates: false
       max_sensitivity: internal
       description: "get billing summary via billingd"
-    - ref: tool://tarifbd/list_products
+    - ref: tool://productd/list_products
       mutates: false
       max_sensitivity: internal
-      description: "list products via tarifbd"
-    - ref: tool://tarifbd/get_product
+      description: "list products via productd"
+    - ref: tool://productd/get_product
       mutates: false
       max_sensitivity: internal
-      description: "get product via tarifbd"
-    - ref: tool://tarifbd/resolve_product
+      description: "get product via productd"
+    - ref: tool://productd/resolve_product
       mutates: false
       max_sensitivity: internal
-      description: "get customer product via tarifbd"
-    - ref: tool://tarifbd/get_epex_price
+      description: "get customer product via productd"
+    - ref: tool://productd/get_epex_price
       mutates: false
       max_sensitivity: internal
-      description: "get epex price via tarifbd"
+      description: "get epex price via productd"
     - ref: tool://vertragd/list_expiring_contracts
       mutates: false
       max_sensitivity: confidential
       description: "list expiring contracts via vertragd"
-    - ref: tool://tarifbd/list_angebote
+    - ref: tool://productd/list_angebote
       mutates: false
       max_sensitivity: internal
-      description: "list angebote via tarifbd"
-    - ref: tool://tarifbd/get_angebot
+      description: "list angebote via productd"
+    - ref: tool://productd/get_angebot
       mutates: false
       max_sensitivity: internal
-      description: "get angebot via tarifbd"
-    - ref: tool://tarifbd/get_angebot_summary
+      description: "get angebot via productd"
+    - ref: tool://productd/get_angebot_summary
       mutates: false
       max_sensitivity: internal
-      description: "get angebot summary via tarifbd"
-    - ref: tool://tarifbd/check_41a_epex_status
+      description: "get angebot summary via productd"
+    - ref: tool://productd/check_41a_epex_status
       mutates: false
       max_sensitivity: internal
-      description: "check 41a epex status via tarifbd"
-    - ref: tool://tarifbd/get_product_energiemix
+      description: "check 41a epex status via productd"
+    - ref: tool://productd/get_product_energiemix
       mutates: false
       max_sensitivity: internal
-      description: "get product energiemix via tarifbd"
-    - ref: tool://tarifbd/validate_tariff_config
+      description: "get product energiemix via productd"
+    - ref: tool://productd/validate_tariff_config
       mutates: false
       max_sensitivity: internal
-      description: "validate tariff config via tarifbd"
-    - ref: tool://tarifbd/explain_invoice_position
+      description: "validate tariff config via productd"
+    - ref: tool://productd/explain_invoice_position
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via tarifbd"
-    - ref: tool://tarifbd/get_product_history
+      description: "explain invoice position via productd"
+    - ref: tool://productd/get_product_history
       mutates: false
       max_sensitivity: internal
-      description: "get product history via tarifbd"
-    - ref: tool://tarifbd/get_comparison_feed
+      description: "get product history via productd"
+    - ref: tool://productd/get_comparison_feed
       mutates: false
       max_sensitivity: internal
-      description: "get comparison feed via tarifbd"
+      description: "get comparison feed via productd"
     - ref: tool://edmd/get_timeseries
       mutates: false
       max_sensitivity: internal

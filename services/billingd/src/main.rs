@@ -1,6 +1,6 @@
 //! `billingd` — Energy Billing Engine.
 //!
-//! Pure calculation service.  Pulls product definitions from `tarifbd`,
+//! Pure calculation service.  Pulls product definitions from `productd`,
 //! consumption from `edmd`, and grid pass-through from `marktd`.
 //! Outputs canonical BO4E `Rechnung` objects and emits
 //! `de.billing.rechnung.erstellt` CloudEvents consumed by `accountingd`.
@@ -14,7 +14,7 @@
 //! ## Design: user-defined pricing
 //!
 //! All commercial rates (Arbeitspreis, Grundpreis, etc.) are defined by the
-//! operator in `tarifbd` — the engine contains zero hardcoded prices.
+//! operator in `productd` — the engine contains zero hardcoded prices.
 //! Statutory rates (Stromsteuer, Energiesteuer Gas, BEHG) are configured in
 //! `billingd.toml` under `[rates]` and can be overridden per-product.
 //!
@@ -149,9 +149,9 @@ impl Daemon for Billingd {
             .context("billingd.cedar must parse at startup")?,
         );
 
-        let tarifbd = Arc::new(clients::TarifbdClient::new(
-            &cfg.tarifbd_url,
-            cfg.tarifbd_api_key.clone(),
+        let productd = Arc::new(clients::ProductdClient::new(
+            &cfg.productd_url,
+            cfg.productd_api_key.clone(),
         ));
         let edmd = Arc::new(clients::EdmdClient::new(
             &cfg.edmd_url,
@@ -192,7 +192,7 @@ impl Daemon for Billingd {
         // function in the service past clippy's argument limit.
         let deps = Arc::new(clients::BillingDeps {
             cfg: Arc::clone(&cfg),
-            tarifbd,
+            productd,
             edmd,
             marktd,
             vertragd,

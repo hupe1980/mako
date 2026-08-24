@@ -390,11 +390,10 @@ pub(crate) async fn get_sharing_readiness(
         // `query` does not filter quality; keep only billable qualities
         // (`QualityFlag::is_billable`) — a faulty read is not a delivered
         // quarter-hour value.
-        // `classify_messtyp` takes a typed `SeriesOrigin` since metering 0.17;
-        // it used to take a free-text hint and match on strings the caller
-        // happened to pass. Only one distinction matters to it — did this series
-        // come from a Smart-Meter-Gateway — so edmd's own ingestion source is
-        // mapped onto that question rather than handed over verbatim.
+        // `classify_messtyp` takes a typed `SeriesOrigin`. Only one
+        // distinction matters to it — did this series come from a
+        // Smart-Meter-Gateway — so edmd's own ingestion source is mapped onto
+        // that question rather than handed over verbatim.
         let source_hint: Option<metering::SeriesOrigin> = reads.first().map(|r| {
             match r.source {
                 // A gateway push, direct or over CLS.

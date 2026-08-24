@@ -1,4 +1,4 @@
-//! HTTP handlers for `tarifbd`.
+//! HTTP handlers for `productd`.
 
 use axum::{
     Extension, Json,
@@ -13,7 +13,7 @@ use serde::Deserialize;
 use sqlx::PgPool;
 
 use crate::{
-    config::TarifbdConfig,
+    config::ProductdConfig,
     pg::{
         CreateAngebotRequest, EnergimixUpsertRequest, EpexImportRequest, ProductListQuery,
         ProductUpsertRequest, accept_angebot, decline_angebot, delete_energiemix,
@@ -26,8 +26,15 @@ use crate::{
 
 // ── BO4E Tarifpreisblatt validation ──────────────────────────────────────────
 
-/// Currently accepted BO4E schema version for Tarifpreisblatt payloads.
-pub const BO4E_VERSION: &str = "v202607.0.0";
+/// The BO4E schema release Tarifpreisblatt payloads are stamped with.
+///
+/// Server-derived from the generated types rather than written as a literal, so
+/// a rubo4e upgrade cannot leave productd stamping a release it no longer
+/// produces. See [`mako_markt::bo4e::schema_version`].
+#[must_use]
+pub fn bo4e_version() -> &'static str {
+    *mako_markt::bo4e::SCHEMA_VERSION
+}
 
 /// Product categories that store a BO4E `Tarifpreisblatt` payload.
 ///
@@ -124,19 +131,26 @@ pub fn normalize_tarifpreisblatt(
 ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
     let is_bo4e_category = TARIFPREISBLATT_CATEGORIES.contains(&category);
 
-    // ── 0. _version: reject mismatched schema versions for BO4E categories ───
-    // Missing _version is accepted — the round-trip injects the current version.
+    // ── 0. _version: reject payloads from another schema **series** ──────────
+    //
+    // Matched on the series (`202607`), not on the exact release: BO4E ships
+    // patch releases inside a series and every one of them deserializes into
+    // the same Rust types, so an equality check would reject a payload from a
+    // producer one patch ahead that productd reads perfectly.
+    //
+    // Missing _version is accepted — the round-trip injects the current one.
     if is_bo4e_category
         && let Some(v) = data
             .get("_version")
             .and_then(|v| v.as_str())
-            .filter(|&v| v != BO4E_VERSION)
+            .filter(|&v| !mako_markt::bo4e::version_is_readable(v))
     {
         return Err((
             StatusCode::UNPROCESSABLE_ENTITY,
             serde_json::json!({
                 "error": format!(
-                    "_version {v:?} is not accepted; expected {BO4E_VERSION:?}"
+                    "_version {v:?} is not accepted; this build reads BO4E series {:?}",
+                    *mako_markt::bo4e::SCHEMA_SERIES
                 )
             }),
         ));
@@ -367,7 +381,7 @@ fn normalize_energiemix(
 pub async fn put_product(
     claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path((lf_mp_id, product_code)): Path<(String, String)>,
     Json(mut req): Json<ProductUpsertRequest>,
 ) -> impl IntoResponse {
@@ -424,11 +438,10 @@ pub async fn put_product(
     let status = req.product_status.clone();
     match upsert_product(&pool, &lf_mp_id, claims.tenant(), &product_code, req).await {
         Ok(id) => {
-            // Notify the ERP / tarifbd-agent so §42 Energiemix completeness and
-            // §41a EPEX checks run against the new version. The agent's
-            // `de.tarif.product.updated` trigger was previously dead — nothing
-            // ever emitted it.
-            emit_tarifbd_event(
+            // Notify the ERP / productd-agent so §42 Energiemix completeness
+            // and §41a EPEX checks run against the new version. This is the only
+            // emitter of the agent's `de.tarif.product.updated` trigger.
+            emit_productd_event(
                 &cfg,
                 mako_events::tarif::PRODUCT_UPDATED,
                 &product_code,
@@ -450,8 +463,8 @@ pub async fn put_product(
 /// configured. The signature is computed over the exact bytes sent (the body
 /// is transmitted verbatim, not re-serialised), so a verifying subscriber sees
 /// a matching digest.
-async fn emit_tarifbd_event(
-    cfg: &TarifbdConfig,
+async fn emit_productd_event(
+    cfg: &ProductdConfig,
     event_type: &str,
     subject: &str,
     data: serde_json::Value,
@@ -460,7 +473,7 @@ async fn emit_tarifbd_event(
         return;
     };
     let ce = mako_service::CloudEvent::new(
-        mako_service::source("tarifbd", &cfg.tenant),
+        mako_service::source("productd", &cfg.tenant),
         event_type,
         subject,
         data,
@@ -475,7 +488,7 @@ async fn emit_tarifbd_event(
     )
     .await
     {
-        tracing::warn!(error = %e, event_type, "tarifbd: ERP webhook error");
+        tracing::warn!(error = %e, event_type, "productd: ERP webhook error");
     }
 }
 
@@ -575,7 +588,7 @@ pub struct ResolveProductsRequest {
 pub async fn post_resolve_products(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(lf_mp_id): Path<String>,
     Json(req): Json<ResolveProductsRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
@@ -881,7 +894,7 @@ pub async fn delete_energiemix_handler(
 ///
 /// NNE is NOT auto-fetched from `marktd` — the caller must supply it via
 /// `nne_arbeitspreis_ct_per_kwh` + `nne_grundpreis_eur_per_year` in the
-/// `AngebotPositionInput`.  This keeps `tarifbd` stateless with respect to
+/// `AngebotPositionInput`.  This keeps `productd` stateless with respect to
 /// `marktd`.  For automated quoting workflows, pre-fetch the NNE from
 /// `marktd GET /api/v1/preisblaetter/{nb_mp_id}` and pass it in.
 /// Detailed cost breakdown for one position within one Angebot scenario.
@@ -1074,7 +1087,7 @@ fn default_gueltig_bis() -> time::Date {
 ///
 /// ## Price calculation
 ///
-/// For each position, `tarifbd` fetches the product's `Tarifpreisblatt` and
+/// For each position, `productd` fetches the product's `Tarifpreisblatt` and
 /// estimates `jahreskosten_netto_eur` from:
 /// - `GRUNDPREIS` position: `ct/day × 365 / 100`
 /// - `ARBEITSPREIS_EINTARIF` position: `ct/kWh × jahresverbrauch_kwh / 100`
@@ -1096,7 +1109,7 @@ fn default_gueltig_bis() -> time::Date {
 pub async fn post_angebot(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Json(req): Json<CreateAngebotRequest>,
 ) -> impl IntoResponse {
     let lf_mp_id = req.lf_mp_id.as_deref().unwrap_or(&cfg.tenant);
@@ -1323,7 +1336,7 @@ pub struct AngebotListQuery {
 pub async fn list_angebote_handler(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Query(q): Query<AngebotListQuery>,
 ) -> impl IntoResponse {
     match list_angebote(
@@ -1344,7 +1357,7 @@ pub async fn list_angebote_handler(
 pub async fn get_angebot_handler(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     match fetch_angebot(&pool, id, &cfg.tenant).await {
@@ -1395,7 +1408,7 @@ pub async fn get_angebot_handler(
 pub async fn get_angebot_comparison(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     let angebot = match fetch_angebot(&pool, id, &cfg.tenant).await {
@@ -1535,11 +1548,11 @@ pub async fn get_angebot_comparison(
         Ok(v) => {
             if let Err(e) = crate::pg::store_angebot_bo4e(&pool, angebot.id, &cfg.tenant, &v).await
             {
-                tracing::warn!(angebot_id = %angebot.id, error = %e, "tarifbd: BO4E persist failed");
+                tracing::warn!(angebot_id = %angebot.id, error = %e, "productd: BO4E persist failed");
             }
         }
         Err(e) => {
-            tracing::warn!(angebot_id = %angebot.id, error = %e, "tarifbd: BO4E encode failed")
+            tracing::warn!(angebot_id = %angebot.id, error = %e, "productd: BO4E encode failed")
         }
     }
 
@@ -1569,7 +1582,7 @@ pub async fn get_angebot_comparison(
 pub async fn post_angebot_versenden(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     match mark_angebot_versandt(&pool, id, &cfg.tenant).await {
@@ -1596,7 +1609,7 @@ pub struct AnnehmenRequest {
 pub async fn post_angebot_annehmen(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<AnnehmenRequest>,
 ) -> impl IntoResponse {
@@ -1608,7 +1621,7 @@ pub async fn post_angebot_annehmen(
     // Emit de.tarif.angebot.angenommen CloudEvent.
     if let Some(ref webhook_url) = cfg.erp_webhook_url {
         let ce = mako_service::CloudEvent::new(
-            mako_service::source("tarifbd", &cfg.tenant),
+            mako_service::source("productd", &cfg.tenant),
             mako_events::tarif::ANGEBOT_ANGENOMMEN,
             angebot.id.to_string(),
             serde_json::json!({
@@ -1682,7 +1695,7 @@ pub async fn post_angebot_annehmen(
 pub async fn post_angebot_ablehnen(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
 ) -> impl IntoResponse {
     match decline_angebot(&pool, id, &cfg.tenant).await {
@@ -1698,7 +1711,7 @@ pub async fn post_angebot_ablehnen(
 pub async fn post_expire_angebote(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
 ) -> ApiResult<Json<serde_json::Value>> {
     let expired = expire_stale_angebote(&pool, &cfg.tenant)
         .await
@@ -1733,7 +1746,7 @@ pub struct UpdateAngebotRequest {
 pub async fn put_angebot(
     _claims: Claims,
     Extension(pool): Extension<PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<UpdateAngebotRequest>,
 ) -> impl IntoResponse {
@@ -2234,7 +2247,7 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
         zeitliche_gueltigkeit,
         vertragskonditionen,
         typ: Some(rubo4e::current::BoTyp::Tarifinfo),
-        version: Some("v202607.0.0".to_owned()),
+        version: Some(bo4e_version().to_owned()),
         website: None,
         bemerkung: None,
         anwendung_von: None,
@@ -2265,7 +2278,7 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
 ///   "tarife": [
 ///     {
 ///       "_typ": "TARIFINFO",
-///       "_version": "v202607.0.0",
+///       "_version": "202607.1.0",
 ///       "_id": "STROM_OEKO_2026",
 ///       "bezeichnung": "Ökostrom Plus",
 ///       "sparte": "STROM",
@@ -2282,7 +2295,7 @@ pub fn build_tarifinfo(row: &crate::pg::ProductRow, lf_mp_id: &str) -> Tarifinfo
 /// ```
 pub async fn get_comparison_feed_bo4e(
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Query(q): Query<crate::pg::ComparisonFeedQuery>,
     req_headers: HeaderMap,
 ) -> impl IntoResponse {
@@ -2402,7 +2415,7 @@ pub async fn get_comparison_feed_bo4e(
 /// without affecting subsequent pages.
 pub async fn get_comparison_feed(
     Extension(pool): Extension<sqlx::PgPool>,
-    Extension(cfg): Extension<std::sync::Arc<TarifbdConfig>>,
+    Extension(cfg): Extension<std::sync::Arc<ProductdConfig>>,
     Query(q): Query<crate::pg::ComparisonFeedQuery>,
     req_headers: HeaderMap,
 ) -> impl IntoResponse {

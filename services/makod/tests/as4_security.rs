@@ -704,13 +704,12 @@ async fn inbound_encryption_enforced_when_decryption_key_set() {
 
 // ── F-011: synchronous receipt verification via asx-rs 0.11 ───────────────────
 
-/// Exercises the receipt-verification path end to end (the CR-1 fix): the sender
-/// pushes a signed AS4 message and `send_and_verify` parses the mock's
-/// synchronous `eb:Receipt` namespace-correctly and correlates it to the sent
-/// `message_id` — replacing the hand-rolled substring scan makod used to carry.
+/// Exercises the receipt-verification path end to end: the sender pushes a
+/// signed AS4 message and `send_and_verify` parses the mock's synchronous
+/// `eb:Receipt` namespace-correctly and correlates it to the sent `message_id`.
 /// Signed-receipt / Non-Repudiation-of-Receipt digest verification is owned and
-/// exhaustively tested by asx-rs itself; here `relaxed()` keeps the fixture free of
-/// PKI-fingerprint pinning while still proving our integration of the new API.
+/// exhaustively tested by asx-rs itself; here `relaxed()` keeps the fixture free
+/// of PKI-fingerprint pinning while still proving mako's integration.
 #[tokio::test]
 async fn sync_receipt_is_verified_and_correlated() {
     use asx_rs::as4::{As4ReceiptPolicy, As4SendRequest, send_async};

@@ -40,7 +40,7 @@ test-integration name:
 # vars. Without Docker the `#[ignore]`d tests skip gracefully.
 
 # All database integration suites in one go.
-test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-tarifbd-db test-marktd-db test-processd-db test-sperrd-db
+test-db: test-edmd-db test-einsd-db test-accountingd-db test-billingd-db test-outputd-db test-vertragd-db test-productd-db test-marktd-db test-processd-db test-sperrd-db
 
 # Storage integration tests for edmd (meterstore hot/cold over PostgreSQL + a
 # filesystem Iceberg warehouse).
@@ -77,9 +77,9 @@ test-outputd-db:
 test-vertragd-db:
     cargo test -p vertragd --test dispatch_integration -- --include-ignored --test-threads=1
 
-# Catalog integration tests for tarifbd.
-test-tarifbd-db:
-    cargo test -p tarifbd --test catalog_integration -- --include-ignored --test-threads=1
+# Catalog integration tests for productd.
+test-productd-db:
+    cargo test -p productd --test catalog_integration -- --include-ignored --test-threads=1
 
 # All marktd integration suites (VersorgungsStatus, MeLo graph, ESA, registries,
 # durable fan-out, MaBiS-Zählpunkt, temporal constraints).
@@ -211,7 +211,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci lint-makotest test-makotest
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -405,7 +405,7 @@ validate-pruefids-strict:
 validate-pruefids-strict-ci:
     cargo xtask validate-pruefids --strict --min-coverage 1
 
-# Verify release codes appear in UNH 0057 fixtures
+# Verify every receivable profile's release code appears in a UNH 0057 fixture
 validate-release-codes:
     cargo xtask validate-release-codes
 

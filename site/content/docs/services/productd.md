@@ -1,13 +1,13 @@
 +++
-title = "tarifbd Operator Guide"
-description = "tarifbd operator guide: Product & Tariff Catalog daemon (LF role). User-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING); all prices in Tarifpreisblatt JSONB; product version history; MaLo→product assignment, 15-min EPEX Spot day-ahead prices for §41a dynamic tariffs."
+title = "productd Operator Guide"
+description = "productd operator guide: Product & Tariff Catalog daemon (LF role). User-defined energy products (STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE/SHARING); all prices in Tarifpreisblatt JSONB; product version history; MaLo→product assignment, 15-min EPEX Spot day-ahead prices for §41a dynamic tariffs."
 weight = 31
 [extra]
 mermaid = true
 +++
-# `tarifbd` — Product & Tariff Catalog
+# `productd` — Product & Tariff Catalog
 
-`tarifbd` is the single source of truth for **everything the LF sells** to end customers.
+`productd` is the single source of truth for **everything the LF sells** to end customers.
 `billingd` and the customer portal query it exclusively for pricing — `marktd` is never used
 for retail product pricing.
 
@@ -21,7 +21,7 @@ Port: **`:9080`**
 data is annual (BDEW format versions). Mixing them violates the single-responsibility
 principle and makes §20 EnWG audits harder.
 
-`tarifbd` mirrors the product catalog pattern of every mature energy billing platform
+`productd` mirrors the product catalog pattern of every mature energy billing platform
 (SAP IS-U FI-CA, powercloud, Wilken ENER:GY): a separate service, its own lifecycle,
 queried only by billing engines and portals.
 
@@ -40,11 +40,11 @@ graph LR
     SERV["HEMS / EMOBILITY<br/>ENERGIEDIENSTLEISTUNG<br/>platform + event fees"]
     BUNDLE["BUNDLE<br/>Component references<br/>per-position billing"]
     SHARING["SHARING<br/>§42c EnWG Energy Sharing<br/>community allocation"]
-    tarifbd["tarifbd :9080"]
-    STROM & GAS & WASSER & WAERME & EEG --> tarifbd
-    SMART & SERV & BUNDLE & SHARING --> tarifbd
-    tarifbd -->|"POST products/{lf}/resolve"| billingd["billingd :9280"]
-    tarifbd -->|"GET epex-prices/{date}/quarter-hourly"| billingd
+    productd["productd :9080"]
+    STROM & GAS & WASSER & WAERME & EEG --> productd
+    SMART & SERV & BUNDLE & SHARING --> productd
+    productd -->|"POST products/{lf}/resolve"| billingd["billingd :9280"]
+    productd -->|"GET epex-prices/{date}/quarter-hourly"| billingd
 ```
 
 ---
@@ -123,20 +123,20 @@ define — with `preistyp` left absent, which the schema permits:
 ```
 
 Readers do not branch: `mako_markt::bo4e::position_preistyp()` checks the BO4E
-field, then the attribute, and both `tarifbd` and `billingd` go through it.
+field, then the attribute, and both `productd` and `billingd` go through it.
 `tests/bo4e_conformance.rs` pins the result — whatever a `PUT` stores must
 round-trip through `rubo4e` with no enum anywhere falling through to `Unknown`.
 
 ---
 
-## What tarifbd is *not*
+## What productd is *not*
 
 **Which product a customer is on does not live here.** Agreeing it is a
 Tarifwechsel — a contract act under § 41 Abs. 5 EnWG, guarded by the contract's
 Preisgarantie — so the valid-time MaLo→product assignment lives in
 [`vertragd`](@/docs/services/vertragd.md), with the contract.
 
-`tarifbd` answers the other half — what a product **costs** on a given day:
+`productd` answers the other half — what a product **costs** on a given day:
 
 ```http
 POST /api/v1/products/{lf_mp_id}/resolve
@@ -169,7 +169,7 @@ accepted and expanded to quarter-hours on fetch.
 
 ```bash
 # Import 2026-07-15 (96 quarter-hour prices, ct/kWh)
-curl -s -X PUT "http://tarifbd:9080/api/v1/epex-prices/2026-07-15" \
+curl -s -X PUT "http://productd:9080/api/v1/epex-prices/2026-07-15" \
   -H "Content-Type: application/json" \
   -d '{
     "prices": [6.2, 6.1, 6.0, 5.9, /* … 96 entries … */ 6.5],
@@ -250,7 +250,7 @@ standard BO4E `Tarifinfo` objects — the format Verivox, Check24, and the BNetz
 Markttransparenzstelle can import schema-validated without any custom transformation.
 
 ```bash
-curl -s "http://tarifbd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp=Haushalt" | jq .
+curl -s "http://productd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp=Haushalt" | jq .
 ```
 
 ```json
@@ -259,7 +259,7 @@ curl -s "http://tarifbd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp=
   "tarife": [
     {
       "_typ": "TARIFINFO",
-      "_version": "v202607.0.0",
+      "_version": "202607.1.0",
       "_id": "STROM-PREMIUM-2026",
       "bezeichnung": "Mako Strom Premium",
       "anbietername": "9900357000004",
@@ -278,7 +278,7 @@ curl -s "http://tarifbd:9080/api/v1/comparison-feed/bo4e?sparte=STROM&kundentyp=
 
 #### TarifInfo field mapping
 
-| BO4E field | Source in tarifbd |
+| BO4E field | Source in productd |
 |---|---|
 | `bezeichnung` | `product.name` |
 | `anbietername` | `lf_mp_id` |
@@ -311,7 +311,7 @@ Both endpoints accept identical query parameters and return the same ETag/cachin
 ### Example: Household electricity tariffs
 
 ```bash
-curl -s "http://tarifbd:9080/api/v1/comparison-feed?sparte=STROM&kundentyp=Haushalt&verbrauch_kwh=3500" | jq .
+curl -s "http://productd:9080/api/v1/comparison-feed?sparte=STROM&kundentyp=Haushalt&verbrauch_kwh=3500" | jq .
 ```
 
 ```json
@@ -391,18 +391,18 @@ appear on page 1; existing pages remain stable.
 
 ```bash
 # Page 1
-curl "http://tarifbd:9080/api/v1/comparison-feed?limit=2"
+curl "http://productd:9080/api/v1/comparison-feed?limit=2"
 # → meta.next_cursor: "2026-07-17T10:00:00Z,STROM-BASIC"
 
 # Page 2
-curl "http://tarifbd:9080/api/v1/comparison-feed?limit=2&cursor=2026-07-17T10:00:00Z,STROM-BASIC"
+curl "http://productd:9080/api/v1/comparison-feed?limit=2&cursor=2026-07-17T10:00:00Z,STROM-BASIC"
 ```
 
 ---
 
 ## B2B Angebot as BO4E
 
-`tarifbd` emits typed BO4E for its tariff data (`Tarifinfo`, `Tarifpreisblatt`),
+`productd` emits typed BO4E for its tariff data (`Tarifinfo`, `Tarifpreisblatt`),
 and a B2B quotation is emitted the same way — a quotation is the natural CPQ/ERP
 interchange payload, which is the point of the format.
 
@@ -484,7 +484,7 @@ Marktlokation carrying a bad key — `MaloId` validates the BDEW check digit.
 | `dyn_source` | TEXT | `"epex-spot-day-ahead"` for §41a; NULL for fixed. Only this value is accepted — all others are rejected with 422 |
 | `valid_from` | DATE | Tariff validity start. Staging a version with a later start end-dates the running one automatically; `products_no_overlap` (GiST) forbids two versions covering the same day |
 | `valid_to` | DATE | Tariff validity end, inclusive. `DELETE` is a withdrawal that sets it to today. Both bounds are applied on read, so a withdrawn product stops pricing new periods and still prices the past |
-| `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload (validated on PUT: `_typ`, `_version = v202607.0.0`, enum fields, `preistyp` whitelist; always a *valid* BO4E document — mako-only price types ride in `zusatzAttribute`) |
+| `data` | JSONB | `Tarifpreisblatt` / `Preisblatt` BO4E payload (validated on PUT: `_typ`, `_version` series `202607`, enum fields, `preistyp` whitelist; always a *valid* BO4E document — mako-only price types ride in `zusatzAttribute`) |
 | `energiemix` | JSONB | §42 EnWG `Energiemix` COM — CO₂ emissions, fuel mix, certification labels |
 | `oekolabel` | TEXT[] | Extracted from energiemix for GIN `@>` filter queries |
 
@@ -523,7 +523,7 @@ Content-Type: application/json
 
 ## MCP tools
 
-`tarifbd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
+`productd` ships a built-in MCP server at `/mcp` (Streamable HTTP 2025-11-25) with
 **14 read-only tools** and **3 prompts**.
 
 | Tool | Description |
@@ -553,10 +553,10 @@ Content-Type: application/json
 ## Configuration
 
 ```toml
-# tarifbd.toml
+# productd.toml
 port   = 9080
 tenant = "9910000000002"   # operator LF BDEW-Codenummer
 
 [database]
-url = "postgresql://tarifbd:secret@db:5432/tarifbd"
+url = "postgresql://productd:secret@db:5432/productd"
 ```

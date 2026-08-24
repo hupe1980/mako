@@ -407,7 +407,7 @@ impl PortaldMcpHandler {
                  5. Use `get_balance` to check if the invoice is already overdue (positive balance).\n\
                  6. If the consumption data is wrong: contact the NB to re-send MSCONS readings.\n\
                  7. If the tariff is wrong: check vertragd `GET /api/v1/malo/{malo_id}/produkte` for which\n\
-                    product is assigned, then tarifbd `resolve_product` for what it costs.\n\
+                    product is assigned, then productd `resolve_product` for what it costs.\n\
                  8. For a REMADV dispute: processd will auto-send REMADV 33002 if invoic-checker fails.",
             ),
         ]

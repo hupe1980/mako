@@ -2,7 +2,8 @@
 //!
 //! Covers the critical latency budget for BDEW regulatory processes:
 //!
-//! - **GPKE**: APERAK must be sent within **24 wall-clock hours** — every
+//! - **GPKE**: the APERAK must be sent within **45 Minuten** on a Werktag for a
+//!   UTILMD or ORDERS (APERAK AHB 1.1 § 2.4.1) — every
 //!   `append` + `pending` call in the delivery path must stay well under 100 ms
 //!   even at queue depths of 1 000 messages.
 //! - **Snapshot**: `state_with_snapshot` must outperform full replay once the

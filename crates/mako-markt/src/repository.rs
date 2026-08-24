@@ -8,7 +8,6 @@
 //! All methods are `async` (AFIT, stable since Rust 1.75).
 //! All methods return `Result<_, MdmError>` annotated `#[must_use]`.
 
-use rubo4e::current::Lokationstyp;
 use serde::{Deserialize, Serialize};
 use time::Date;
 use uuid::Uuid;
@@ -16,7 +15,7 @@ use uuid::Uuid;
 use std::future::Future;
 
 use crate::{
-    domain::{MaloId, MarktpartnerId, MeloId, ProcessStatus, Sparte},
+    domain::{Lokationstyp, MaloId, MarktpartnerId, MeloId, ProcessStatus, Sparte},
     error::MdmError,
 };
 
@@ -189,7 +188,7 @@ pub struct MaloRecord {
     pub rollenzuordnung: Vec<Rollenzuordnung>,
     #[serde(with = "time::serde::rfc3339")]
     pub updated_at: time::OffsetDateTime,
-    /// BO4E schema version of the `data` payload (e.g. `"v202607.0.0"`).
+    /// BO4E schema version of the `data` payload (e.g. `"202607.1.0"`).
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -1943,7 +1942,7 @@ pub trait NeLoRepository: Send + Sync {
 /// PIDs 55619/55642/55652/55662/55686). One row per `(tranche_id, tenant)`; the
 /// parent MaLo is recorded for `list_by_malo` grouping.
 ///
-/// Source: GPKE Teil 4 (BK6-24-174) §1.4; BO4E `Tranche`.
+/// Source: GPKE Teil 4 (BK6-22-024 Anlage 1d) §1.4; BO4E `Tranche`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TrancheRecord {
     /// Tranche identifier (e.g. `<MaLo>-T01`).
@@ -2366,11 +2365,11 @@ pub struct LokationszuordnungEdge {
     pub tenant: String,
     /// Source node ID (e.g. MaLo-ID, MeLo-ID).
     pub von_id: String,
-    /// Source node type — the BO4E [`Lokationstyp`] (`MALO`/`MELO`/`NELO`/`SR`/`TR`).
+    /// Source node type ([`Lokationstyp`]: `MALO`/`MELO`/`NELO`/`SR`/`TR`).
     pub von_typ: Lokationstyp,
     /// Target node ID.
     pub nach_id: String,
-    /// Target node type — the BO4E [`Lokationstyp`].
+    /// Target node type ([`Lokationstyp`]).
     pub nach_typ: Lokationstyp,
     pub valid_from: Option<time::Date>,
     /// `None` = open-ended (currently active).
@@ -2537,12 +2536,18 @@ impl Lokationsbuendel {
                 if id == malo_id {
                     continue;
                 }
+                // Exhaustive rather than wildcarded: mako owns `Lokationstyp`
+                // now (BO4E removed it in v202607.1.0) and it carries no
+                // `Unknown`, so a new node type must be placed here
+                // deliberately instead of being silently discarded with `Malo`.
                 match typ {
                     Lokationstyp::Melo => melo.insert(id.clone()),
                     Lokationstyp::Nelo => nelo.insert(id.clone()),
                     Lokationstyp::Sr => sr.insert(id.clone()),
                     Lokationstyp::Tr => tr.insert(id.clone()),
-                    _ => false,
+                    // The bundle is keyed on this MaLo; another MaLo on an edge
+                    // is a sibling, not a member.
+                    Lokationstyp::Malo => false,
                 };
             }
         }
@@ -3122,7 +3127,7 @@ pub trait MmmPreisStromRepository: Send + Sync {
 ///
 /// The NB publishes the annual renewable energy mix of their grid area under
 /// §42 Abs. 5 EnWG.  Lieferanten use this to compute the Reststrommix
-/// for customer bills and to label Ökostrom tariffs in `tarifbd`.
+/// for customer bills and to label Ökostrom tariffs in `productd`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NbEnergiemixRecord {
     /// 13-digit BDEW/DVGW/GS1 NB MP-ID.

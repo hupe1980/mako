@@ -10,7 +10,8 @@
 //!
 //! # APERAK Frist
 //!
-//! **10 Werktage** (BK7-24-01-009). Saturdays, Sundays and federal public
+//! the window the Prüfidentifikator publishes — 1 Werktag for the
+//! Sperr-/Entsperrauftrag. Saturdays, Sundays and federal public
 //! holidays are not Werktage.
 //!
 //! # Regulatory basis
@@ -253,7 +254,7 @@ async fn lf_timeout_fires_deadline_expired() {
 
     p.execute(GasSperrungLfCommand::TimeoutExpired {
         deadline_id: DeadlineId::new(),
-        label: Box::from("geli-gas-sperrung-lf-antwort-10wt"),
+        label: Box::from(mako_geli_gas::sperrung_lf::ANTWORT_WINDOW_LABEL),
     })
     .await
     .expect("TimeoutExpired must succeed from AuftragGesendet");
@@ -479,8 +480,10 @@ async fn nb_domain_data_preserved_in_validation_passed() {
 #[test]
 fn nb_antwort_window_label_is_correct() {
     assert!(
-        GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL.contains("10wt")
-            || GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL.contains("geli-gas-sperrung-nb"),
-        "deadline label must identify the 10-WT gas sperrung window: {GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL}",
+        GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL.contains("geli-gas-sperrung-nb")
+            && !GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL.contains("10wt"),
+        "the Gas Sperrung answer window is 1 Werktag on the Sparte-neutral 17115/17117 \
+         row, not the 10 Werktage the old label advertised from a Festlegung that has \
+         no Sperrprozess in it: {GELI_GAS_SPERRUNG_NB_ANTWORT_WINDOW_LABEL}",
     );
 }

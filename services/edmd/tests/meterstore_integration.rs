@@ -1670,11 +1670,10 @@ async fn surveillance_does_not_cross_tenants() {
 
 /// A standing §14a fault is announced once, not once per sweep.
 ///
-/// The compliance log used to be append-only: every daily sweep wrote a row per
-/// open issue and emitted a CloudEvent to match, so a gateway on an expired
-/// certificate produced one `de.messwert.cls.compliance-issue` a day for as long
-/// as nobody fixed it. For a fleet that is an unbounded event stream saying the
-/// same thing forever, and a table that only grows.
+/// An append-only compliance log — a row and a CloudEvent per open issue per
+/// daily sweep — gives a gateway on an expired certificate one
+/// `de.messwert.cls.compliance-issue` a day for as long as nobody fixes it: for
+/// a fleet, an unbounded event stream saying the same thing forever.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_standing_compliance_fault_is_announced_once_and_closed_when_fixed() {

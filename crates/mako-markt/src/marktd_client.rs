@@ -1582,7 +1582,7 @@ impl MarktdClient {
     /// Used by:
     /// - `billingd` to compute Reststrommix disclosure on customer bills
     /// - `einsd` for EEG plant context and §42 Abs. 5 EnWG compliance
-    /// - `tarifbd` for Ökostrom/green-tariff labelling
+    /// - `productd` for Ökostrom/green-tariff labelling
     ///
     /// Returns `None` when no Energiemix has been published for this NB yet.
     /// When `year` is `None`, returns the most recent available year.

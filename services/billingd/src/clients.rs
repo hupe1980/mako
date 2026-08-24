@@ -22,16 +22,16 @@ fn upstream(name: &'static str, base_url: &str, api_key: Option<String>) -> Upst
     )
 }
 
-// ── TarifbdClient ─────────────────────────────────────────────────────────────
+// ── ProductdClient ─────────────────────────────────────────────────────────────
 
-pub struct TarifbdClient {
+pub struct ProductdClient {
     up: Upstream,
 }
 
-impl TarifbdClient {
+impl ProductdClient {
     pub fn new(base_url: &str, api_key: Option<String>) -> Self {
         Self {
-            up: upstream("tarifbd", base_url, api_key),
+            up: upstream("productd", base_url, api_key),
         }
     }
 
@@ -66,8 +66,8 @@ impl TarifbdClient {
             .up
             .json(self.up.post(&path).json(&body))
             .await
-            .context("tarifbd POST products/resolve")?
-            .context("tarifbd knows no products for this Lieferant")?;
+            .context("productd POST products/resolve")?
+            .context("productd knows no products for this Lieferant")?;
         let mut out = Vec::with_capacity(anfragen.len());
         for entry in payload
             .get("produkte")
@@ -97,7 +97,7 @@ impl TarifbdClient {
             .up
             .json::<serde_json::Value>(request)
             .await
-            .context("tarifbd GET nehs-prices latest")?
+            .context("productd GET nehs-prices latest")?
         else {
             return Ok(None);
         };
@@ -113,7 +113,7 @@ impl TarifbdClient {
 
     /// Fetch §41a EPEX spot prices for `[period_from, period_to]`, keyed on the
     /// UTC start instant of each 15-minute market time unit (the DST-safe key
-    /// used by `energy-billing`). tarifbd returns 15-min points (legacy hourly
+    /// used by `energy-billing`). productd returns 15-min points (legacy hourly
     /// data is expanded server-side).
     pub async fn get_epex_prices(
         &self,
@@ -129,7 +129,7 @@ impl TarifbdClient {
                 .up
                 .json(self.up.get(&path))
                 .await
-                .context("tarifbd GET epex-prices quarter-hourly")?
+                .context("productd GET epex-prices quarter-hourly")?
             {
                 Some(b) => b,
                 None => {
@@ -158,7 +158,7 @@ impl TarifbdClient {
                 // the failure here keeps that guard reachable.
                 let price_ct = decimal_from_json(entry.get("price_ct_kwh")).ok_or_else(|| {
                     anyhow::anyhow!(
-                        "tarifbd epex: price_ct_kwh missing or not a decimal for MTU {mtu_start}"
+                        "productd epex: price_ct_kwh missing or not a decimal for MTU {mtu_start}"
                     )
                 })?;
                 map.insert(mtu_start, price_ct);
@@ -173,7 +173,7 @@ impl TarifbdClient {
 ///
 /// Accepts both string (`"25.5"`) and JSON number (`25.5`) representations.
 /// Rejects nested objects — the old non-BO4E `{"wert": "25.5"}` form is no
-/// longer accepted after the `tarifbd` hard-cut.
+/// longer accepted after the `productd` hard-cut.
 fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
     match v? {
         serde_json::Value::String(s) => s.parse().ok(),
@@ -186,7 +186,7 @@ fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
 ///
 /// ## Preistyp — canonical ALLCAPS (hard-cut)
 ///
-/// `tarifbd` normalises all `preistyp` values to canonical ALLCAPS on PUT
+/// `productd` normalises all `preistyp` values to canonical ALLCAPS on PUT
 /// (enforced by `normalize_tarifpreisblatt()`).  Commodity disambiguation uses
 /// the product-level `category` field so that a single `GRUNDPREIS` position
 /// maps to the correct `TariffInput` field for STROM, GAS, and WAERME.
@@ -202,12 +202,12 @@ fn decimal_from_json(v: Option<&serde_json::Value>) -> Option<Decimal> {
 /// | `ARBEITSPREIS_EINTARIF` | any other | `arbeitspreis_ct_per_kwh` |
 /// | `ARBEITSPREIS_HT` / `ARBEITSPREIS_NT` | — | HT/NT fields |
 /// | `LEISTUNGSPREIS` | `WAERME` | `waerme_leistungspreis_eur_per_kw_month` |
-/// | mako extensions | — | see constants in `tarifbd::handlers` |
+/// | mako extensions | — | see constants in `productd::handlers` |
 ///
 /// ## Price extraction
 ///
 /// `preisstaffeln[0].preis` is a scalar `Decimal` (string or JSON number) after
-/// `tarifbd` normalisation.  The first staffel is the base price.
+/// `productd` normalisation.  The first staffel is the base price.
 ///
 /// Regulatory overrides (`stromsteuer_ct_per_kwh_override`, etc.) may be stored
 /// as top-level keys in `data`.
@@ -280,14 +280,14 @@ fn extract_tariff_from_product_data(
     let mut dropped: Vec<String> = Vec::new();
 
     for pp in &preispositionen {
-        // ALLCAPS after tarifbd normalisation. A BO4E-defined type sits in
+        // ALLCAPS after productd normalisation. A BO4E-defined type sits in
         // `preistyp`; a mako extension (EEG_MARKTPRAEMIE, HEMS_*, EMOBILITY_*)
         // sits in the `mako:preistyp` ZusatzAttribut, because writing it into
         // BO4E's own enum field made the stored Tarifpreisblatt invalid BO4E.
         let pt = mako_markt::bo4e::position_preistyp(pp);
 
-        // preisstaffeln[0].preis is a scalar Decimal (string or number) —
-        // the old nested {"wert": "..."} form was non-BO4E and is no longer stored.
+        // preisstaffeln[0].preis is a scalar Decimal (string or number); a
+        // nested {"wert": "..."} object is not BO4E and is never stored.
         let preis = pp
             .get("preisstaffeln")
             .and_then(|v| v.as_array())
@@ -311,7 +311,7 @@ fn extract_tariff_from_product_data(
             // Strom and Gas take their demand charge from the typed `data`
             // keys (`leistungspreis_strom_ct_per_kw_month`,
             // `gas_leistungspreis_ct_per_kw_month`), which state the unit.
-            // A `LEISTUNGSPREIS` *position* cannot be mapped there: tarifbd
+            // A `LEISTUNGSPREIS` *position* cannot be mapped there: productd
             // normalises `preis` to a bare scalar, so the BO4E `einheit` is
             // gone by the time it reaches here — and Wärme's field is
             // EUR/kW/month while Strom's is ct/kW/month. Guessing would risk a
@@ -353,7 +353,7 @@ fn extract_tariff_from_product_data(
                 .and_then(|v| v.as_str())
                 .unwrap_or("<unnamed>"),
             dropped = %dropped.join(", "),
-            "billingd: tarifbd product carries priced positions this mapper has no field for — \
+            "billingd: productd product carries priced positions this mapper has no field for — \
              they are absent from every invoice for this product. Either the preistyp is \
              misspelled in the catalog, or billingd needs a mapping for it."
         );
@@ -436,14 +436,14 @@ fn extract_tariff_from_product_data(
         "energiequellen": energiequellen,
     });
     serde_json::from_value::<Product>(flat)
-        .map_err(|e| anyhow::anyhow!("product deserialization from tarifbd JSONB: {e}"))
+        .map_err(|e| anyhow::anyhow!("product deserialization from productd JSONB: {e}"))
 }
 
 /// One valid-time slice of a MaLo's product assignment, clipped to the period.
 ///
 /// Comes from `vertragd`: which product a customer is on is a contract fact,
 /// agreed under § 41 Abs. 5 EnWG, so it lives with the contract. The product's
-/// *prices* come from `tarifbd`, resolved by code and date.
+/// *prices* come from `productd`, resolved by code and date.
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct ProductSlice {
     pub product_code: String,
@@ -855,7 +855,7 @@ impl VertragdClient {
     /// More than one slice means the period contains a price change.
     ///
     /// The mapping lives in `vertragd` because agreeing it *is* a contract act
-    /// (§ 41 Abs. 5 EnWG); `tarifbd` then prices each code.
+    /// (§ 41 Abs. 5 EnWG); `productd` then prices each code.
     pub async fn get_product_slices(
         &self,
         malo_id: &str,
@@ -1254,13 +1254,13 @@ impl serde::Serialize for IssuedDocument {
 
 /// Everything a calculation needs from outside this process.
 ///
-/// One `Extension` instead of six. Taking `cfg`, `tarifbd`, `edmd`, `marktd`,
+/// One `Extension` instead of six. Taking `cfg`, `productd`, `edmd`, `marktd`,
 /// `vertragd` and `outputd` as separate extractors pushes nearly every function
 /// in the service past clippy's argument limit, and the `allow` for that is a
 /// workaround for a lint that is right.
 pub struct BillingDeps {
     pub cfg: Arc<crate::config::BillingdConfig>,
-    pub tarifbd: Arc<TarifbdClient>,
+    pub productd: Arc<ProductdClient>,
     pub edmd: Arc<EdmdClient>,
     pub marktd: Arc<mako_markt::marktd_client::MarktdClient>,
     pub vertragd: Arc<VertragdClient>,

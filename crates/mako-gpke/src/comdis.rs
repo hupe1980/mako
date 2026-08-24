@@ -22,7 +22,7 @@
 //! | 29001 | NB     | NB → LF    | Ablehnung REMADV (formal rejection of REMADV dispute) |
 //! | 29002 | NB     | NB → LF    | Ablehnung IFTSTA (formal rejection of IFTSTA challenge) |
 //!
-//! Both PIDs live in `mako-gpke` (GPKE Teil 2/3, BK6-22-024).
+//! Both PIDs live in `mako-gpke` (GPKE Teil 2/3 = BK6-24-174 Anlagen 1b/1c).
 //!
 //! ## APERAK Frist
 //!
@@ -30,7 +30,7 @@
 //!
 //! ## Governing ruling
 //!
-//! **BK6-22-024** (GPKE, Beschluss 28.10.2022).
+//! **BK6-24-174** (GPKE Teil 2/3, Anlagen 1b/1c).
 
 use mako_engine::{
     error::WorkflowError,

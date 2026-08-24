@@ -239,7 +239,16 @@ GeLi Gas (Lieferantenwechsel Gas) is regulated under BK7. GaBi Gas (balancing) i
 - APERAK / CONTRL acknowledgements
 - **Does NOT cover** INVOIC billing or Mehr-/Mindermengen Gas — these belong to GaBi Gas (BK7 Bilanzierung)
 
-**APERAK Frist (GeLi Gas):** **10 Werktage** (Samstag, Sonntag und gesetzliche Feiertage zählen nicht)
+**APERAK Frist (Gas):** Gas kennt nur die **Verarbeitbarkeitsfehlermeldung** —
+**nächster Werktag 12:00 Uhr** bei einem Folgeprozess, **3 Werktage** bei einem
+Initialprozess (APERAK AHB 1.1 § 2.3.1); auf jede APERAK folgt eine CONTRL.
+Samstag, Sonntag und gesetzliche Feiertage zählen nicht.
+
+**Antwortfristen (GeLi Gas 3.0 Kap. 3.1–3.3):** Anmeldung **4 WT**, Abmeldung /
+Kündigung / Abmeldeanfrage **3 WT**, Ersatz-/Grundversorgung **2 WT** — jeweils
+bis zum *Ablauf* des Werktags nach Eingang. Die bekannten **10 Werktage** sind
+die **Vorlauffrist des Lieferanten** vor Aufnahme der Belieferung (Kap. 3.2.3),
+keine Antwortfrist; die Abmeldung hat dafür **7 WT** (Kap. 3.2.2).
 
 **Sonstiges / Gemeinsame Mitteilungen:**
 - Gemeinsame Mitteilungen zu Datenformaten (BK6 + BK7 joint): <https://www.bundesnetzagentur.de/DE/Beschlusskammern/BK06/BK6_83_Zug_Mess/835_mitteilungen_datenformate/Datenformate-node.html>

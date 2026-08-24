@@ -82,6 +82,100 @@ impl std::str::FromStr for Sparte {
     }
 }
 
+// ── Lokationstyp ─────────────────────────────────────────────────────────────
+
+/// The node type of an edge in the Lokationszuordnung graph.
+///
+/// | Variant | Wire value | Meaning |
+/// |---|---|---|
+/// | `Malo` | `MALO` | Marktlokation |
+/// | `Melo` | `MELO` | Messlokation |
+/// | `Nelo` | `NELO` | Netzlokation |
+/// | `Sr` | `SR` | Steuerbare Ressource |
+/// | `Tr` | `TR` | Technische Ressource |
+///
+/// # Why this is mako's and not BO4E's
+///
+/// This was `rubo4e::current::Lokationstyp` until BO4E **removed the enum** in
+/// schema release v202607.1.0. It could be removed because it was already
+/// unreferenced by every BO and COM in the release before it — BO4E defines the
+/// *locations* but no object that types an edge between two of them, which is
+/// exactly what mako's graph needs. So the concept is mako's, and keeping it
+/// here stops a schema release from deleting a column's domain again.
+///
+/// The wire values are unchanged, so the persisted `TEXT` columns and their
+/// `CHECK (von_typ IN ('MALO', 'MELO', 'NELO', 'SR', 'TR'))` constraints need no
+/// migration.
+///
+/// **Not to be confused with `edi_energy::Lokationstyp`**, which is the UTILMD
+/// `SG5 LOC` DE 3227 *qualifier* set (`Z16`–`Z22`). That one carries seven
+/// values, spells them as wire qualifiers, and includes `RuhendeMarktlokation`,
+/// which is a state of a Marktlokation rather than a node type. The two are
+/// deliberately separate: one names a position in mako's graph, the other names
+/// a code on the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Lokationstyp {
+    /// Marktlokation.
+    Malo,
+    /// Messlokation.
+    Melo,
+    /// Netzlokation.
+    Nelo,
+    /// Steuerbare Ressource.
+    Sr,
+    /// Technische Ressource.
+    Tr,
+}
+
+impl Lokationstyp {
+    /// Every variant, in declaration order — the source of truth for the SQL
+    /// `CHECK` lists on `von_typ` / `nach_typ`.
+    pub const VARIANTS: &'static [&'static str] = &["MALO", "MELO", "NELO", "SR", "TR"];
+
+    /// The wire value, as stored in the `TEXT` column.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Malo => "MALO",
+            Self::Melo => "MELO",
+            Self::Nelo => "NELO",
+            Self::Sr => "SR",
+            Self::Tr => "TR",
+        }
+    }
+}
+
+impl From<Lokationstyp> for &'static str {
+    fn from(t: Lokationstyp) -> Self {
+        t.as_str()
+    }
+}
+
+impl std::fmt::Display for Lokationstyp {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl std::str::FromStr for Lokationstyp {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_uppercase().as_str() {
+            "MALO" => Ok(Self::Malo),
+            "MELO" => Ok(Self::Melo),
+            "NELO" => Ok(Self::Nelo),
+            "SR" => Ok(Self::Sr),
+            "TR" => Ok(Self::Tr),
+            other => Err(format!(
+                "unknown Lokationstyp '{other}'; expected one of {:?}",
+                Self::VARIANTS
+            )),
+        }
+    }
+}
+
 // ── ProcessStatus ─────────────────────────────────────────────────────────────
 
 /// Status of a correlated MaKo process.

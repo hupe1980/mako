@@ -1,16 +1,16 @@
 //! **Every Frist in German market communication, in one leaf crate.**
 //!
-//! Deadlines are the regulatory asset this platform is built around, and they
-//! used to live in three places: the calendar in `mako-engine`, the
-//! per-Prüfidentifikator answer tables in `mako-gpke` and `mako-geli-gas`, and a
-//! hand-rolled copy in `obsd`. The copies disagreed. This crate is the one
-//! answer to "when is this due", and it depends on nothing but `time` — so
-//! every service can read it without pulling in a workflow engine.
+//! Deadlines are the regulatory asset this platform is built around, and this
+//! crate is the one answer to "when is this due". It depends on nothing but
+//! `time`, so every service can read it without pulling in a workflow engine —
+//! which is what keeps the calendar, the per-Prüfidentifikator answer tables and
+//! the alerting from each carrying a copy that disagrees with the others.
 //!
 //! | Question | Answer |
 //! |---|---|
 //! | *When is the 4th Werktag after this instant?* | [`add_werktage`], [`deadline_at_werktage`], [`end_of_werktag_after`], [`next_werktag_at`] |
-//! | *Which window does PID 55001 carry?* | `mako-pruefung` |
+//! | *Which window does PID 55001 carry?* | [`antwort`] |
+//! | *Which messages does receiving it oblige me to send?* | [`meldung`] |
 //! | *When must the CONTRL / APERAK go out?* | [`contrl_due_at`], [`aperak_strom_due_at`], [`aperak_gas_folgeprozess_due_at`], [`aperak_gas_initialprozess_due_at`] |
 //!
 //! `mako-engine` re-exports this crate as `mako_fristen`, so existing
@@ -76,6 +76,7 @@
 
 pub mod abmeldung;
 pub mod antwort;
+pub mod meldung;
 pub mod vorlauf;
 
 use time::{Date, Duration, Month, OffsetDateTime, PrimitiveDateTime, Time, Weekday};

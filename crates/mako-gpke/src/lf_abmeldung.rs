@@ -26,16 +26,19 @@
 //! # Note on LFW24 context
 //!
 //! PIDs 55007–55009 are **present in UTILMD AHB Strom 2.1 (FV2025-10-01)** and
-//! in the BDEW Anwendungsübersicht 3.3. They were NOT removed by BK6-22-024
-//! (LFW24); only the LF-initiated Lieferbeginn/Abmeldung (55001/55004) was
-//! redesigned for 24h processing. The NB-initiated Lieferende (55007–55009) is a
-//! separate process under GPKE Teil 2 §2.5.
+//! in the BDEW Anwendungsübersicht 3.3 / 4.0. LFW24 (BK6-24-174) redesigned
+//! only the LF-initiated Lieferbeginn/Abmeldung (55001/55004); the NB-initiated
+//! Lieferende is a separate process under GPKE Teil 2 § 2.5, answered by the LF
+//! at **05:00 Uhr des 1. Werktags nach dem ÜT**.
 //!
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE Teil 2 §2.5** — NB-seitiges Lieferende
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK 2.x** — **24h** wall-clock Frist (BK6-22-024 §4)
+//! - **APERAK AHB 1.0 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//!   weekday for a UTILMD. A separate clock from the business answer window,
+//!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
+//!   dem ÜT.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{

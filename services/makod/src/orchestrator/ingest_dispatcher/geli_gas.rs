@@ -120,12 +120,16 @@ impl EdifactIngestDispatcher {
                     // Vorlauffrist for a Lieferantenwechsel, not the GNB's
                     // answer window; using it left a Gas Anmeldung looking
                     // healthy six Werktage past its Frist.
+                    //
+                    // A PID the Festlegung does not quantify — the Bestandsliste
+                    // 44019 and its Änderungsmeldung 44020 have their Frist set
+                    // per Netzbetreiber under Kap. 2.6 — falls through to the
+                    // operating convention in `antwort_due_at`, which logs that
+                    // it is not a regulatory Frist. It must not fall back to
+                    // 10 Werktage: that would give an unquantified process a
+                    // longer window than any quantified one in the family.
                     let received = OffsetDateTime::now_utc();
-                    let due_at = antwort_due_at(
-                        pid,
-                        received,
-                        fristen::deadline_at_werktage(received, 10, HolidayCalendar::BdewMaKo),
-                    );
+                    let due_at = antwort_due_at(pid, received);
                     self.spawn_or_resume_guarded::<GeliGasSupplierChangeWorkflow>(
                         malo_id.as_str(),
                         "geli-gas-supplier-change",

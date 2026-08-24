@@ -934,9 +934,9 @@ mod dispatch_failure_tests {
         }
     }
 
-    /// A dispatch failure used to be logged as "non-fatal" while the receipt
-    /// still went out and the dedup entry stayed durable — the message was lost
-    /// with no § 147 AO trace. It must leave a dead letter naming the failure.
+    /// A dispatch failure must leave a dead letter naming it. Logged as
+    /// "non-fatal" while the receipt still goes out and the dedup entry stays
+    /// durable, the message is lost with no § 147 AO trace.
     #[test]
     fn a_failed_dispatch_is_dead_lettered() {
         let sink = CapturingSink::default();

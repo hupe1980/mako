@@ -1835,15 +1835,20 @@ fn rechnung_json_has_rechnungsempfaenger_and_faelligkeitsdatum() {
     );
     let emp = &obj["rechnungsempfaenger"];
     assert_eq!(zusatz_wert(emp, "mako:externe_kunden_id"), "51238696781");
-    // faelligkeitsdatum (BO4E due date, was zahlungsziel) must be a date
-    // string in the future: period_to + 14 days per §40c EnWG.
+    // faelligkeitsdatum (BO4E due date, was zahlungsziel): period_to + 14 days
+    // per §40c EnWG.
+    //
+    // BO4E declares the field `format: date-time`, so the wire value is an
+    // RFC 3339 timestamp, not a bare date. mako pins it to midnight UTC — the
+    // calendar date survives the promotion and survives being normalised to any
+    // other offset, which a `+01:00` midnight would not.
     assert!(
         obj.contains_key("faelligkeitsdatum"),
         "rechnung_json must have faelligkeitsdatum"
     );
     let ziel = obj["faelligkeitsdatum"].as_str().unwrap_or("");
     assert_eq!(
-        ziel, "2026-02-14",
+        ziel, "2026-02-14T00:00:00Z",
         "faelligkeitsdatum must be period_to + 14 days: {ziel}"
     );
 }
@@ -5541,8 +5546,9 @@ fn cancellation_negates_the_abschlag_netting() {
     );
 }
 
-/// The minimum-invoice top-up used to return before the reversal pass, so a
-/// Storno of a topped-up invoice billed the customer instead of crediting them.
+/// The minimum-invoice top-up must not return before the reversal pass: a
+/// Storno of a topped-up invoice would bill the customer instead of crediting
+/// them.
 #[test]
 fn cancellation_with_minimum_invoice_is_still_negated() {
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":5.0}"#);

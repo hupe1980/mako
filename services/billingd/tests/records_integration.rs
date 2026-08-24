@@ -635,8 +635,8 @@ async fn risk_context_reads_baseline_continuity_and_estimates() {
 }
 
 /// A `TARIFWECHSEL` combined invoice persists — the category must be in the
-/// `billing_records` CHECK list. Before the fix `POST …/tarifwechsel` inserted
-/// `'TARIFWECHSEL'`, which the CHECK rejected (23514) → 500 on every call.
+/// `billing_records` CHECK list, or `POST …/tarifwechsel` is a 23514 → 500 on
+/// every call.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]
 async fn a_tarifwechsel_record_is_a_valid_category() {

@@ -467,6 +467,35 @@ impl Workflow for EsaWertebestellungWorkflow {
     type Event = EsaWertebestellungEvent;
     type Command = EsaWertebestellungCommand;
 
+    /// Turn a fired deadline into the
+    /// [`EsaWertebestellungCommand::TimeoutExpired`] `handle` already decides.
+    ///
+    /// Without this hook the three windows this workflow registers fired into
+    /// the engine's default `None`: an Angebot that never arrived left the
+    /// process in `AnfrageGesendet` indefinitely instead of reaching
+    /// `Abgelehnt`, and nothing surfaced the missed Frist.
+    ///
+    /// Terminal states are filtered here rather than in `handle`, which records
+    /// a `FristVersaeumt` for whatever reaches it — a Bindungsfrist lapsing
+    /// after the order was already cancelled is not a missed obligation.
+    fn on_deadline(
+        deadline: &mako_engine::deadline::Deadline,
+        state: &Self::State,
+    ) -> Option<Self::Command> {
+        use mako_engine::workflow::OccupiesBusinessKey as _;
+
+        let owned = matches!(
+            deadline.label(),
+            ANGEBOT_WINDOW_LABEL | ANTWORT_WINDOW_LABEL | BINDUNGSFRIST_LABEL
+        );
+        (owned && state.occupies_business_key()).then(|| {
+            EsaWertebestellungCommand::TimeoutExpired {
+                deadline_id: deadline.deadline_id(),
+                label: deadline.label().into(),
+            }
+        })
+    }
+
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         use EsaWertebestellungEvent as E;
         use EsaWertebestellungState as S;

@@ -13,7 +13,8 @@
 //!       ↓ emits Initiated + UTILMD G outbox entry (PID 44022)
 //! AS4 sender → UTILMD G 44022 to GNB
 //!       ↓
-//! AS4 inbound ← UTILMD G 44023/44024 from GNB  (within 10 Werktage)
+//! AS4 inbound ← UTILMD G 44023/44024 from GNB  (before the original
+//!                                                message's own Antwortfrist)
 //!       ↓
 //!   [HandleAntwort]
 //!       ↓ emits AntwortReceived
@@ -39,8 +40,16 @@
 //! ## Regulatory basis
 //!
 //! - **BDEW UTILMD AHB Gas 1.1 / 1.2** — AHB rules for PIDs 44022–44024
-//! - **BNetzA BK7-24-01-009** — GeLi Gas 3.0; GNB must respond within **10 Werktage**
-//! - **APERAK Frist: 10 Werktage** (BdewMaKo calendar, German local time)
+//! - **GeLi Gas 3.0 Kap. 2.7** — „Wenn eine Antwort auf ein auslösendes
+//!   Ereignis bereits versendet wurde, ist eine Stornierung nicht mehr möglich."
+//!   The Festlegung gives the Stornierung a **precondition, not a window**, and
+//!   the AWH says the same in so many words: „Eine Stornierung der Anmeldung
+//!   kann bis zum Eingang der Antwortnachricht erfolgen" (Kap. 2.5.2 Nr. 2).
+//!   So the boundary is the *original* message's Antwortfrist — for a 44001
+//!   Anmeldung, the GNB's 4 Werktage — not a window of the Stornierung's own,
+//!   and certainly not the LFN's 10-Werktage Vorlauffrist.
+//! - **APERAK AHB 1.1 § 2.3.1** — Gas: nächster Werktag 12:00 (Folgeprozess),
+//!   3 Werktage (Initialprozess). A separate clock.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -80,10 +89,10 @@ pub const ANTWORT_PIDS_LF: &[u32] = &[
     44024, // Ablehnung Stornierung   (GNB rejected the cancellation)
 ];
 
-/// Deadline label for the GNB response window (10 Werktage, BK7-24-01-009).
+/// Deadline label for the window in which the GNB must answer the Stornierung.
 ///
 /// After sending the outbound 44022, the LF registers a deadline with this label.
-/// If no 44023/44024 arrives within 10 Werktage, the scheduler fires
+/// If no 44023/44024 arrives before the window lapses, the scheduler fires
 /// `on_deadline` → `TimeoutExpired` to transition the process to `Rejected`.
 ///
 /// ```rust,ignore
@@ -170,7 +179,7 @@ pub enum LfStornierungState {
     /// Initial state before `InitiateStornierung` is received.
     #[default]
     New,
-    /// UTILMD G 44022 sent; awaiting GNB response within 10 Werktage.
+    /// UTILMD G 44022 sent; awaiting the GNB's Bestätigung or Ablehnung.
     Pending(LfStornierungData),
     /// GNB accepted the cancellation (PID 44023 received).
     Accepted(LfStornierungData),
@@ -184,7 +193,7 @@ pub enum LfStornierungState {
 impl mako_engine::workflow::OccupiesBusinessKey for LfStornierungState {
     fn occupies_business_key(&self) -> bool {
         match self {
-            // Awaiting the GNB's answer inside the 10-Werktage window.
+            // Awaiting the GNB's answer inside the Stornierung window.
             Self::Pending(_) => true,
             // `Accepted` and `Rejected` are both terminal — the Stornierung
             // either took effect or did not, and either way this process is
@@ -253,7 +262,7 @@ pub enum LfStornierungCommand {
         /// EDIFACT message reference from the inbound response UNH.
         response_ref: MessageRef,
     },
-    /// The 10-Werktage GNB response deadline fired.
+    /// The GNB's Stornierung answer window fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -269,7 +278,7 @@ impl CommandPayload for LfStornierungCommand {}
 /// GeLi Gas LF-side outbound Stornierung workflow (PID 44022 outbound / 44023–44024 inbound).
 ///
 /// Handles the Lieferant's perspective of initiating a supply-change cancellation:
-/// sends UTILMD G 44022 to the GNB and tracks the 10-Werktage response.
+/// sends UTILMD G 44022 to the GNB and tracks the answer.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
 /// ```rust,ignore
@@ -285,11 +294,11 @@ impl Workflow for GeliGasLfStornierungWorkflow {
     type Event = LfStornierungEvent;
     type Command = LfStornierungCommand;
 
-    /// Deadline compensation for the GNB response window (10 Werktage, BK7-24-01-009).
+    /// Deadline compensation for the GNB's Stornierung answer window.
     ///
-    /// | Label | State guard | Command emitted | BNetzA rule |
+    /// | Label | State guard | Command emitted | Fundstelle |
     /// |---|---|---|---|
-    /// | `GNB_RESPONSE_WINDOW_LABEL` | `Pending` | `TimeoutExpired` | BK7-24-01-009 — 10 Werktage Frist |
+    /// | `GNB_RESPONSE_WINDOW_LABEL` | `Pending` | `TimeoutExpired` | GeLi Gas 3.0 Kap. 2.7 — bounded by the original message's Antwortfrist |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,

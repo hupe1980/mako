@@ -781,9 +781,8 @@ pub struct BillingContext {
     /// as the `stromkennzeichnung` ZusatzAttribut with the structure intact;
     /// prose belongs in [`crate::tariff::EnergieQuellen::beschreibung`].
     ///
-    /// This replaces a free-text `energiemix` string that could not carry the
-    /// CO₂ figure the law names explicitly — the structured type existed on the
-    /// product all along and never reached the invoice.
+    /// Structured rather than a free-text `energiemix` string, which cannot
+    /// carry the CO₂ figure the law names explicitly.
     #[serde(default)]
     pub energiequellen: Option<crate::tariff::EnergieQuellen>,
 

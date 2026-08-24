@@ -18,9 +18,9 @@ pub struct GgvTenantInput {
     /// PV portion (allocated from plant generation) + residual grid portion.
     /// Without `nutzungsplan`, the full amount is billed as solar eigenverbrauch.
     pub consumption_kwh: rust_decimal::Decimal,
-    /// Override product code; if absent, looked up from `tarifbd`.
+    /// Override product code; if absent, looked up from `productd`.
     pub product_code: Option<String>,
-    /// Supply price override (ct/kWh); if absent, looked up from `tarifbd`.
+    /// Supply price override (ct/kWh); if absent, looked up from `productd`.
     pub arbeitspreis_ct_per_kwh: Option<rust_decimal::Decimal>,
     /// Standard grid electricity rate for residual consumption (ct/kWh).
     ///
@@ -379,7 +379,7 @@ pub async fn post_ggv_billing(
     let rates = cfg.try_regulatory_rates_for_period("SOLAR", period_from, period_to)?;
 
     // ── Phase 1: calculate everything, touching no transaction ────────────────
-    // Resolving a tariff and a buyer per participant is a round-trip to tarifbd
+    // Resolving a tariff and a buyer per participant is a round-trip to productd
     // and vertragd each; doing that inside the write transaction would hold a
     // pool connection open across the whole fan-out. Everything below is pure
     // reads plus the engine, so a failure here has written nothing.
@@ -413,7 +413,7 @@ pub async fn post_ggv_billing(
         .ok();
         let tariff = match assigned {
             Some(t) => t,
-            // No product in tarifbd — build a minimal Product from the request.
+            // No product in productd — build a minimal Product from the request.
             None => {
                 let map = serde_json::json!({
                     "category": "SOLAR",
@@ -431,7 +431,7 @@ pub async fn post_ggv_billing(
             }
         };
 
-        // Per-request overrides take precedence over tarifbd product data.
+        // Per-request overrides take precedence over productd product data.
         // Product is an enum — apply overrides by rebuilding the Solar/Sharing variant.
         let tariff = match tariff {
             Product::Solar(mut p) => {
@@ -464,7 +464,7 @@ pub async fn post_ggv_billing(
             Product::Sharing(mut p) => {
                 // Stromsteuer is a *product* property, not an endpoint one: the
                 // §9 Nr. 3 / §9a StromStG exemption depends on plant size and
-                // spatial proximity, and `tarifbd` carries it as the typed
+                // spatial proximity, and `productd` carries it as the typed
                 // `stromsteuer_befreiung`. Forcing it off here — and only when
                 // an Arbeitspreis override happens to be present — would decide
                 // a tax question from a price field.

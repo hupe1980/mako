@@ -2,8 +2,8 @@
 //!
 //! # Why this lives in `edmd` and not in `metering`
 //!
-//! It used to be `metering::smgw`. `metering` 0.17 narrowed its scope to what
-//! its own documentation now states plainly — *"a standalone, pure library for
+//! `metering` 0.17 narrowed its scope to what its own documentation states
+//! plainly — *"a standalone, pure library for
 //! the quantity calculations German energy metering requires … zero I/O, no
 //! async, no clock"*, computing *"energy and volume, not money"*. A gateway's
 //! operational status, its X.509 certificate inventory and its CLS channel

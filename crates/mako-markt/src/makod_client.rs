@@ -455,10 +455,10 @@ mod conflict_tests {
     /// The defect this function exists to close.
     ///
     /// `invalid_state` (e.g. `bestaetigen` on an already-accepted process) is a
-    /// 409 that carries no `process_id`. It used to be reported as a success
-    /// whose `process_id` was `Uuid::nil()`; callers persisted that nil UUID as
-    /// a correlation handle, so the real error vanished and every later lookup
-    /// against the stored id missed.
+    /// 409 that carries no `process_id`, so it must surface as an error.
+    /// Reported as a success whose `process_id` is `Uuid::nil()`, callers
+    /// persist that nil UUID as a correlation handle: the real error vanishes
+    /// and every later lookup against the stored id misses.
     #[test]
     fn invalid_state_is_an_error_not_a_nil_uuid_success() {
         let err = classify_conflict(

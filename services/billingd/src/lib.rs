@@ -10,7 +10,7 @@
 //! | Module | Purpose |
 //! |---|---|
 //! | `billing_runs` | § 40b EnWG scheduled monthly runs |
-//! | `clients` | tarifbd / edmd / marktd / vertragd HTTP clients |
+//! | `clients` | productd / edmd / marktd / vertragd HTTP clients |
 //! | `config` | TOML + env configuration |
 //! | `einvoice` | EN 16931 semantic model — built, stored, and rendered to CII / UBL |
 //! | `error` | `BillingError` — the one coded JSON error envelope every route answers with |

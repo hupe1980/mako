@@ -16,9 +16,8 @@ pub struct NetzCheckConfig {
     /// Holiday calendar used for every Werktag computation in the date checks.
     ///
     /// Defaults to [`HolidayCalendar::BdewMaKo`] — the BDEW-defined,
-    /// Germany-wide MaKo calendar. Before this seam existed the crate used a
-    /// bare Mon–Fri approximation that silently accepted dates the exact
-    /// calendar would push out; the default now removes that gap.
+    /// Germany-wide MaKo calendar. A bare Mon–Fri approximation silently
+    /// accepts dates the exact calendar pushes out.
     pub holiday_calendar: HolidayCalendar,
 
     /// Gas Bearbeitungsfrist (in Werktage) added to the 6-week retroactive

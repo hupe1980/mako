@@ -63,7 +63,7 @@ use mako_engine::{
 /// | 31007 | Aggreg. MMM-Rechnung Gas (NB → MGV) — Gas-only, MGV is Gas role  |
 /// | 31008 | Aggreg. MMM-Rechnung Gas selbst ausgestellt (NB → MGV) — Gas-only |
 ///
-/// PIDs 31007/31008 were previously misassigned to `mako-gpke`; MGV
+/// PIDs 31007/31008 belong here and not to `mako-gpke`: MGV
 /// (Marktgebietsverantwortlicher) is a Gas-only market role that does not exist
 /// in the Strom domain. Regulatory basis: BK7-24-01-008 GaBi Gas 2.1.
 pub const GABI_GAS_INVOIC_PIDS: &[u32] = &[

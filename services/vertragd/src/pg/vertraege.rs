@@ -101,7 +101,7 @@ const fn default_grund() -> domain::Kuendigungsgrund {
 pub struct TarifwechselInput {
     /// UUID of the Vertragskomponente to be re-tariffed.
     pub komp_id: Uuid,
-    /// New product code in `tarifbd`.
+    /// New product code in `productd`.
     pub new_product_code: String,
     /// When the new tariff takes effect.
     pub wirksamkeit: Date,
@@ -117,7 +117,7 @@ pub struct TarifwechselInput {
     /// Supplied here because the caller chose the new tariff and therefore
     /// holds both price sheets, and because what the notice said is a fact
     /// about the notice: a catalogue lookup years later answers what the price
-    /// *is*, not what the customer was *told*. `vertragd` never asks `tarifbd`
+    /// *is*, not what the customer was *told*. `vertragd` never asks `productd`
     /// (BILLING.md § 3), and this is why it does not have to.
     ///
     /// Empty schedules the change and still emits the CloudEvent, but **no

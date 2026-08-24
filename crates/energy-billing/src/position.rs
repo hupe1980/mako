@@ -68,7 +68,7 @@ pub struct PositionTrace {
     /// Tariff source reference (product sheet or contract).
     ///
     /// `None` for statutory positions (Stromsteuer, BEHG, MwSt).
-    /// Set to tariff sheet ID for commodity positions from `tarifbd`.
+    /// Set to tariff sheet ID for commodity positions from `productd`.
     pub tariff_source: Option<String>,
 
     /// Any pro-rata fraction applied (0.0–1.0).

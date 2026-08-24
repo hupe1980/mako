@@ -43,8 +43,15 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **AWH Sperrprozesse Gas / GPKE Teil 2** — BNetzA BK6-22-024
-//! - NB must respond within **24 wall-clock hours**
+//! - **BK6-24-174 GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2** — the
+//!   NB answers the Sperr-/Entsperrauftrag „unverzüglich, jedoch spätester ÜT
+//!   ist der 1. WT nach dem ÜT". The ORDERS/ORDRSP AHBs quantify nothing; the
+//!   Festlegung is the only source, and it is a Werktag, not 24 wall-clock
+//!   hours.
+//! - **GPKE Teil 2 § 3.5** also bounds the rest of the process: execution
+//!   within 6 WT nach dem frühestmöglichen Sperrtermin, the IFTSTA 1 WT nach
+//!   Abschluss, the MSB's answer to an Anfrage Sperrung in 3 WT with silence
+//!   counting as consent, and at most **two** Sperrversuche per Auftrag.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -86,10 +93,14 @@ pub const ORDRSP_STORNO_PIDS: &[u32] = &[19128, 19129];
 /// 21039 is sent by the NB after executing the Sperrung/Entsperrung.
 pub const IFTSTA_SPERRUNG_PID: Pruefidentifikator = Pruefidentifikator::const_new(21039);
 
-/// Deadline label for the 24-hour NB response window.
+/// Deadline label for the NB's ORDRSP answer window on our Sperrauftrag.
 ///
-/// BK6-22-024: the NB must send ORDRSP within **24 wall-clock hours** of receipt.
-pub const ANTWORT_WINDOW_LABEL: &str = "gpke-sperrung-lf-antwort-24h";
+/// The window is a **Werktag** deadline, not 24 wall-clock hours: „Unverzüglich,
+/// jedoch spätester ÜT ist der 1. WT nach dem ÜT" (BK6-24-174 GPKE Teil 2
+/// §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2). The ORDERS/ORDRSP AHBs state no
+/// deadline for 17115/17117 at all — the Festlegung is the only source, and
+/// [`mako_fristen::antwort`] holds the number.
+pub const ANTWORT_WINDOW_LABEL: &str = "gpke-sperrung-lf-antwort";
 
 // ── Domain data ───────────────────────────────────────────────────────────────
 

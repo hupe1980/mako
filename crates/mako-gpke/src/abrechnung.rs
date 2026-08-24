@@ -23,7 +23,8 @@
 //! # Regulatory basis
 //!
 //! - **BDEW GPKE** — Geschäftsprozesse zur Kundenbelieferung mit Elektrizität
-//! - **BK6-22-024** — GPKE APERAK Frist: **24 wall-clock hours**
+//! - **APERAK AHB 1.0 § 2.4.1** — technical acknowledgement, 45 Minuten on a
+//!   weekday — a different clock from the business answer below.
 //! - **INVOIC AHB 2.8e / INVOIC AHB 1.0** — EDI@Energy invoice message format
 //! - **CONTRL / APERAK** — Acknowledgement and error responses
 
@@ -333,13 +334,16 @@ pub enum AbrechnungCommand {
     },
     /// Settle the invoice — dispatch a positive CONTRL to the sender.
     ///
-    /// BDEW GPKE / BK6-22-024: the response must be sent within **24
-    /// wall-clock hours** of receiving the INVOIC.
+    /// The answer to a Netznutzungsrechnung is owed **zum Zahlungsziel** —
+    /// `SG8 DTM+265` on the invoice itself (BK6-24-174 GPKE Teil 2 § 3.3.2;
+    /// GeLi Gas 3.0 Kap. 4.5 states the same as „bis zum 10. Werktag nach
+    /// Eingang der Abrechnung", which the Zahlungsziel already reflects). It is
+    /// not a 24-hour window.
     SettleInvoice,
     /// Dispute the invoice — dispatch a negative CONTRL or APERAK.
     ///
-    /// BDEW GPKE / BK6-22-024: the response must be sent within **24
-    /// wall-clock hours** of receiving the INVOIC.
+    /// Owed on the same clock as [`AbrechnungCommand::SettleInvoice`] — the
+    /// invoice's own Zahlungsziel (`SG8 DTM+265`), not a 24-hour window.
     DisputeInvoice {
         /// Human-readable reason for the dispute.
         reason: String,

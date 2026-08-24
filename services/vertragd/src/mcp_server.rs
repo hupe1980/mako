@@ -253,7 +253,7 @@ impl VertragdMcpHandler {
                        valid-time slices covering that period, in order — a Tarifwechsel inside \
                        the period splits it, and each slice is billed under its own product. \
                        Without them, the product in force today. This mapping is a contract \
-                       fact (§ 41 Abs. 5 EnWG); ask `tarifbd/resolve_product` for what the code \
+                       fact (§ 41 Abs. 5 EnWG); ask `productd/resolve_product` for what the code \
                        costs.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]

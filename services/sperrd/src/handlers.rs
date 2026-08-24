@@ -51,9 +51,9 @@ pub struct OrdersQuery {
     /// This is the field-dispatch list. The date is the Lieferant's
     /// (`DTM+203 Ausführungsdatum` or `DTM+469 frühestes Startdatum`) — GPKE
     /// fixes no Werktage window for the physical act, so there is nothing else
-    /// to measure "due" against. The filter this replaces counted a Werktage age
-    /// against a two-Werktage BK6-22-024 execution deadline that appears in no
-    /// BNetzA or BDEW document.
+    /// to measure "due" against — in particular not a Werktage age against a
+    /// two-Werktage execution deadline, which appears in no BNetzA or BDEW
+    /// document.
     #[serde(default)]
     pub due: bool,
 }

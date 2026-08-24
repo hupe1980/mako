@@ -53,7 +53,7 @@ pub struct PreisblattQuery {
 pub struct PreisblattUpsertRequest {
     /// Full BO4E `PreisblattNetznutzung` payload.
     pub data: serde_json::Value,
-    /// BO4E schema version of `data` (e.g. `"v202607.0.0"`). Defaults to current.
+    /// BO4E schema version of `data` (e.g. `"202607.1.0"`). Defaults to current.
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }

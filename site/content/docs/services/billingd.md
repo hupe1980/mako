@@ -1,6 +1,6 @@
 +++
 title = "billingd Operator Guide"
-description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from tarifbd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/2/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL; B2G per §4a EGovG/ERechV, B2B per §14 UStG)."
+description = "billingd operator guide: Multi-Product Billing Engine (LF role). Energy billing engine — user-defined product prices from productd; 13 categories (STROM/GAS/WAERME/WASSER/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/SHARING); §41a EPEX dynamic; §25 Nr. 4 MessEV Brennwertkorrektur; §14a Modul 1/2/3; EN 16931 e-invoicing (XRechnung 3.0 CII + PEPPOL UBL; B2G per §4a EGovG/ERechV, B2B per §14 UStG)."
 weight = 32
 [extra]
 mermaid = true
@@ -8,7 +8,7 @@ mermaid = true
 # `billingd` — Multi-Product Billing Engine
 
 `billingd` is a **pure calculation service**. It has no grid topology knowledge and no
-business policy — all decisions come from the product definition in `tarifbd` and the
+business policy — all decisions come from the product definition in `productd` and the
 measurement data in `edmd`.
 
 Port: **`:9280`**
@@ -21,7 +21,7 @@ Every billing run is **deterministic and reproducible**: given the same inputs (
 tariff), the output is always the same `Rechnung`. This means:
 
 - BNetzA § 147 AO / GoBD compliance: auditors can re-run the calculation from stored inputs
-- No hidden state: all inputs are either stored in `tarifbd`, `edmd`, or `marktd`
+- No hidden state: all inputs are either stored in `productd`, `edmd`, or `marktd`
 - Testable: `energy-billing` is exhaustively covered (property-based, golden master, integration) — zero I/O, zero async, all pure Rust
 
 ---
@@ -34,7 +34,7 @@ This follows the same pattern as `eeg-billing` for `einsd`:
 ```
 billingd (HTTP service)
     │   config · persistence · CloudEvents · EN 16931 e-invoicing
-    │   HTTP endpoints · tarifbd/edmd/marktd clients
+    │   HTTP endpoints · productd/edmd/marktd clients
     │
     └── energy-billing (pure crate, crates.io)
             │   Product (typed enum, 13 variants)
@@ -81,7 +81,7 @@ from `billingd.toml` — zero hardcoded values in the crate.
 ```mermaid
 graph TB
     ERP["ERP<br/>POST /api/v1/billing/{malo_id}/calculate"]
-    tarifbd["tarifbd :9080<br/>ProductDefinition<br/>(Tarifpreisblatt JSONB)"]
+    productd["productd :9080<br/>ProductDefinition<br/>(Tarifpreisblatt JSONB)"]
     edmd["edmd :8380<br/>MeterBillingPeriod<br/>(arbeitsmenge, spitzenleistung)"]
     marktd["marktd :8180<br/>PreisblattNetznutzung<br/>PreisblattKonzessionsabgabe"]
     calculator["energy-billing crate<br/>Product → BillingEngine → Invoice"]
@@ -89,10 +89,10 @@ graph TB
     erp_hook["ERP webhook<br/>de.billing.rechnung.erstellt"]
     accountingd["accountingd :9380<br/>→ debit entry"]
 
-    ERP --> tarifbd
+    ERP --> productd
     ERP --> edmd
     ERP --> marktd
-    tarifbd --> calculator
+    productd --> calculator
     edmd --> calculator
     marktd --> calculator
     calculator --> pg
@@ -105,7 +105,7 @@ graph TB
 ## Product categories
 
 `billingd` routes each billing request to a category-specific pure calculator.
-**All commercial prices are user-defined in `tarifbd`** — the engine contains no hardcoded
+**All commercial prices are user-defined in `productd`** — the engine contains no hardcoded
 rates. Statutory rates (Stromsteuer, Energiesteuer Gas, BEHG CO₂) are configured in
 `billingd.toml` under `[rates]` and can be overridden per-product.
 
@@ -137,9 +137,9 @@ graph LR
 ### STROM — Electricity
 
 ```
-Grundpreis              [from tarifbd]     ct/day
-Arbeitspreis            [from tarifbd]     ct/kWh
-Leistungspreis          [from tarifbd]     ct/kW/month  RLM demand charge on spitzenleistung_kw
+Grundpreis              [from productd]     ct/day
+Arbeitspreis            [from productd]     ct/kWh
+Leistungspreis          [from productd]     ct/kW/month  RLM demand charge on spitzenleistung_kw
 NNE Grundpreis          [from marktd]      pass-through
 NNE Arbeitspreis        [from marktd]      pass-through
 NNE Leistungspreis      [from marktd]      RLM only (EUR/kW/month)
@@ -158,7 +158,7 @@ Brutto
 
 Variants: `Eintarif`, `Zweitarif` (HT/NT), `Mehrtarif` (multiple registers).
 **§41a EPEX dynamic**: when `dynamic_epex = true` in the product, `billingd` fetches
-15-min Lastgang and 15-min EPEX MTU prices from `tarifbd`. `arbeitspreis_ct_per_kwh` is
+15-min Lastgang and 15-min EPEX MTU prices from `productd`. `arbeitspreis_ct_per_kwh` is
 ignored; the per-MTU price is spot + `auf_abschlag_ct_per_kwh`.
 
 **RLM demand charge**: For large commercial customers with measured peak demand (§ 12 StromNZV,
@@ -171,8 +171,8 @@ or `Imsys` metering points.
 
 ```
 Brennwertkorrektur      [informational]    m³ × Hs × Z → kWh_Hs  (§25 Nr. 4 MessEV)
-Grundpreis Gas          [from tarifbd]     ct/day
-Arbeitspreis Gas        [from tarifbd]     ct/kWh_Hs
+Grundpreis Gas          [from productd]     ct/day
+Arbeitspreis Gas        [from productd]     ct/kWh_Hs
 Gasnetzentgelt GP       [from marktd]      pass-through
 Gasnetzentgelt AP       [from marktd]      pass-through
 Konzessionsabgabe Gas   [from marktd]      pass-through
@@ -187,7 +187,7 @@ MwSt                    [from billingd.toml] 19%
 Since 2026 the nEHS certificate price is **auction-formed** (§10 Abs. 1 BEHG:
 weekly EEX auctions from 01.07.2026 within the 55–65 EUR/t corridor,
 Verkaufsphase at 68 EUR/t), so on the live bill/preview paths billingd
-overlays the **dated market price** from tarifbd's `nehs_prices` series onto
+overlays the **dated market price** from productd's `nehs_prices` series onto
 the year-table default. Resolution order: explicit `[rates]` override →
 `GET /api/v1/nehs-prices/latest?date={period_from}` (start-of-period basis,
 consistent with `regulatory_rates_for_period`; converted via
@@ -257,18 +257,18 @@ goes in `mako_geli_gas::gas_quality`.
 ### WAERME — District Heat (Fernwärme)
 
 ```
-Grundpreis Fernwärme    [from tarifbd]     EUR/month
-Leistungspreis          [from tarifbd]     EUR/kW/month × peak kW
-Arbeitspreis            [from tarifbd]     ct/kWh_th
+Grundpreis Fernwärme    [from productd]     EUR/month
+Leistungspreis          [from productd]     EUR/kW/month × peak kW
+Arbeitspreis            [from productd]     ct/kWh_th
 MwSt
 ```
 
 ### SOLAR — Mieterstrom (§21 Abs. 3 EEG) / GGV (§42b EnWG)
 
 ```
-Arbeitspreis Solar      [from tarifbd]     ct/kWh  (Eigenverbrauch supply price)
-Mieterstrom-Aufschlag   [from tarifbd]     ct/kWh  §21 Abs. 3 EEG 2023 (rate published under §48a)
-GGV-Preisvorteil        [from tarifbd]     ct/kWh  contractual, §42b Abs. 2 Nr. 2 EnWG
+Arbeitspreis Solar      [from productd]     ct/kWh  (Eigenverbrauch supply price)
+Mieterstrom-Aufschlag   [from productd]     ct/kWh  §21 Abs. 3 EEG 2023 (rate published under §48a)
+GGV-Preisvorteil        [from productd]     ct/kWh  contractual, §42b Abs. 2 Nr. 2 EnWG
 Stromsteuer             skipped by default  §9a StromStG exemption for on-site Eigenverbrauch
 MwSt
 ```
@@ -283,10 +283,10 @@ Direktvermarktung) or §21 Abs. 1 Einspeisevergütung — belongs to the plant a
 decided by `einsd`:
 
 ```
-EEG Einspeisevergütung  [from tarifbd]     ct/kWh (credit)
-EEG Marktprämie         [from tarifbd]     ct/kWh (credit, per settlement period)
-Managementprämie        [from tarifbd]     ct/kWh §53 EEG (fixed by technology)
-KWKG Zuschlag           [from tarifbd]     ct/kWh (credit, if applicable)
+EEG Einspeisevergütung  [from productd]     ct/kWh (credit)
+EEG Marktprämie         [from productd]     ct/kWh (credit, per settlement period)
+Managementprämie        [from productd]     ct/kWh §53 EEG (fixed by technology)
+KWKG Zuschlag           [from productd]     ct/kWh (credit, if applicable)
 MwSt
 ```
 
@@ -308,15 +308,15 @@ Net result is typically negative brutto (the LF pays the producer).
 >
 > **Kleinunternehmer (§19 UStG)**: a small feed-in operator who has elected the
 > Kleinunternehmerregelung issues the Gutschrift at 0 % USt — set
-> `kleinunternehmer_19_ustg: true` in the product definition in `tarifbd`. This
+> `kleinunternehmer_19_ustg: true` in the product definition in `productd`. This
 > is the operator's tax election, not a function of plant size (§12 Abs. 3 UStG
 > zero-rates the PV *system* supply, which this engine does not bill).
 
 ### EINSPEISUNG — Direktvermarktung Settlement
 
 ```
-Marktwert Strom         [from tarifbd]     ct/kWh (EPEX Spot Monatsmarktwert)
-Vermarktungsgebühr      [from tarifbd]     ct/kWh negative (aggregator fee)
+Marktwert Strom         [from productd]     ct/kWh (EPEX Spot Monatsmarktwert)
+Vermarktungsgebühr      [from productd]     ct/kWh negative (aggregator fee)
 MwSt
 ```
 
@@ -353,7 +353,7 @@ EMOBILITY: Betriebsgebühr (EUR/month) + Ladeenergie (ct/kWh) + Session/Roaming 
 ENERGIEDIENSTLEISTUNG: Flat fee (EUR/period) + per-event charge
 ```
 
-**A bundle is not a category here.** `tarifbd` carries `BUNDLE` and decomposes it
+**A bundle is not a category here.** `productd` carries `BUNDLE` and decomposes it
 into component product codes; `billingd` bills each component, so `BUNDLE` never
 appears in a `billing_records` row and is absent from its category CHECK.
 
@@ -366,7 +366,7 @@ appears in a `billing_records` row and is absent from its category CHECK.
 
 ### Product — type-safe dispatch
 
-`Product` is a typed enum deserialized directly from `tarifbd` JSONB using the `"category"`
+`Product` is a typed enum deserialized directly from `productd` JSONB using the `"category"`
 discriminator. Call `product.build_engine(&grid, &rates)` to obtain a configured `BillingEngine`:
 
 ```rust
@@ -443,7 +443,7 @@ Content-Type: application/json
 }
 ```
 
-The scheduled sweep needs none of this: it reads the slices from `tarifbd` and
+The scheduled sweep needs none of this: it reads the slices from `productd` and
 the per-leg readings from `edmd` itself.
 
 ### Pro-rata Grundpreis (move-in / move-out)
@@ -487,7 +487,7 @@ Content-Type: application/json
 ```
 
 `billingd` automatically fetches:
-1. Product from `tarifbd GET /api/v1/customer/51238696012/product`
+1. Product from `productd GET /api/v1/customer/51238696012/product`
 2. Meter data from `edmd GET /api/v1/billing-period/51238696012?from=...&to=...`
 3. NNE tariff from `marktd GET /api/v1/preisblaetter/{nb_mp_id}`
 4. KA tariff from `marktd GET /api/v1/preisblaetter-ka/{nb_mp_id}`
@@ -518,20 +518,20 @@ Content-Type: application/json
 
 ### §41a Dynamic Tariff (iMSys)
 
-When the product in `tarifbd` has `dynamic_epex: true`, `billingd` automatically:
+When the product in `productd` has `dynamic_epex: true`, `billingd` automatically:
 
 1. Fetches 15-min Lastgang from `edmd` (`GET /api/v1/lastgang/{malo_id}?from=…&to=…`)
-2. Fetches 15-min EPEX prices from `tarifbd` (`GET /api/v1/epex-prices/{date}/quarter-hourly`),
+2. Fetches 15-min EPEX prices from `productd` (`GET /api/v1/epex-prices/{date}/quarter-hourly`),
    keyed on each Market Time Unit's UTC start instant (SDAC 15-min go-live 2025-10-01)
 3. Calculates `Σ(kWh_MTU × (EPEX_MTU_ct + Aufschlag_ct)) / 100` as the energy cost —
    each 15-min consumption interval is floored to its quarter-hour and joined to that MTU's price
 4. Adds NNE / Konzessionsabgabe / Stromsteuer as usual
 
 The `tariff.arbeitspreis_ct_per_kwh` field is ignored when `dynamic_epex: true` — the EPEX
-spot price from `tarifbd` is the actual price applied per 15-min MTU, plus the supplier's
+spot price from `productd` is the actual price applied per 15-min MTU, plus the supplier's
 fixed `auf_abschlag_ct_per_kwh` Arbeitspreis-Aufschlag (§41a: market price + margin).
 
-**Price floor (`dynamic_epex_floor_ct_kwh`):** Set this field in the tarifbd product to cap
+**Price floor (`dynamic_epex_floor_ct_kwh`):** Set this field in the productd product to cap
 how low the EPEX price can go. Common configurations:
 - `null` (default) — full pass-through; negative EPEX → customer receives a credit
 - `0` — zero floor; negative EPEX bills at 0 ct/kWh (no credit, no charge)
@@ -584,7 +584,7 @@ Content-Type: application/json
 }
 ```
 
-> EPEX prices must be imported daily into `tarifbd` via `PUT /api/v1/epex-prices/{date}`.
+> EPEX prices must be imported daily into `productd` via `PUT /api/v1/epex-prices/{date}`.
 
 ---
 
@@ -639,7 +639,7 @@ so the action stays attributable.
 `energy-billing` carries `KEIN_ARBEITSPREIS` at **Error** severity in its
 validation pass, so `bill()` refuses rather than issuing.
 
-The `Product` price fields are populated by mapping `tarifbd`'s `preistyp`
+The `Product` price fields are populated by mapping `productd`'s `preistyp`
 strings onto struct fields. A renamed position, a typo in the mapper, or a
 catalog row saved without its price maps to `None` — in silence. The resulting
 invoice was not an error: a STROM product with every price field absent billed
@@ -754,7 +754,7 @@ code:
 | `ZEITRAUM_UEBERSCHREITET_SATZGRENZE` | 422 | the period straddles a rate boundary — the body names the Stichtage |
 | `VALIDATION_BLOCKED` | 422 | the engine refused — the body carries every blocking warning |
 | `SECT41A_NO_LASTGANG` | 422 | a dynamic tariff with no interval data to price |
-| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | `edmd` / `tarifbd` has nothing for this MaLo |
+| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | `edmd` / `productd` has nothing for this MaLo |
 | `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT`, `BT24_NOT_AN_INVOICE` | 422 | the stored EN 16931 model is absent or does not satisfy its own BT-24 |
 | `NUTZUNGSPLAN_INVALID`, `NUTZUNGSPLAN_INCOMPLETE`, `RABATT_EXCEEDS_ARBEITSPREIS` | 422 | a §42b GGV input that would mis-bill a participant |
 | `UPSTREAM_UNAVAILABLE` | 502 | an upstream did not answer — the body names which |
@@ -1278,7 +1278,7 @@ A dry run consumes **no number** from the §14 UStG series — the placeholder
 Useful for:
 - ERP billing simulations before committing to a monthly run
 - Customer portal "estimated invoice" features via `portald`
-- Plausibility checks before importing a new tariff into `tarifbd`
+- Plausibility checks before importing a new tariff into `productd`
 
 ---
 
@@ -1550,7 +1550,7 @@ forms — Endrechnung by deduction, or Restrechnung by residual.
 # billingd.toml
 port          = 9280
 tenant        = "9910000000002"
-tarifbd_url   = "http://tarifbd:9080"
+productd_url   = "http://productd:9080"
 edmd_url      = "http://edmd:8380"
 marktd_url    = "http://marktd:8180"
 

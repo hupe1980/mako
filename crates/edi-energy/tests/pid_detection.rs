@@ -27,7 +27,7 @@ fn mscons_13027(document_number: &str) -> Vec<u8> {
 }
 
 /// A partner message carries a real Belegnummer in DE 1004 — the PID is only
-/// in `RFF+Z13`. This is the shape that used to be dropped silently.
+/// in `RFF+Z13`. Reading DE 1004 as the PID drops this shape silently.
 #[test]
 fn a_conformant_partner_mscons_is_detected() {
     let wire = mscons_13027("BELEG0001");

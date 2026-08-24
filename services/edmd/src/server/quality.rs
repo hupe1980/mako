@@ -336,9 +336,9 @@ fn score_one_register(
     let spike_intervals = at(ValidationRuleId::ImplausiblePower);
 
     // The honest denominator: how many intervals the requested window holds at
-    // the observed cadence. It used to be derived as `span / (span / count)`,
-    // which is `count` again — so `expected_count` always equalled
-    // `interval_count` and could never show that anything was missing.
+    // the observed cadence. Deriving it as `span / (span / count)` is `count`
+    // again, so `expected_count` would equal `interval_count` and could never
+    // show that anything is missing.
     let expected_intervals = interval_secs.filter(|s| *s > 0).map(|secs| {
         let span = (period_end - period_start).whole_seconds().max(0);
         u32::try_from(span / i64::from(secs)).unwrap_or(u32::MAX)

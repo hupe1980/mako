@@ -282,7 +282,7 @@ pub(crate) fn nehs_overlay_applies(category: &str, cfg: &BillingdConfig) -> bool
 ///
 /// Since 2026 the nEHS certificate price is auction-formed (§10 Abs. 1 BEHG:
 /// weekly EEX auctions from 01.07.2026, Verkaufsphase 68 EUR/t), so the Gas
-/// CO₂ component follows the supplier's dated acquisition prices in tarifbd's
+/// CO₂ component follows the supplier's dated acquisition prices in productd's
 /// `nehs_prices` series. Resolution: explicit `[rates]` override > market
 /// series > year table (fallback inside `regulatory_rates_for_period`).
 ///
@@ -299,12 +299,12 @@ pub(crate) async fn apply_nehs_market_price(
     category: &str,
     period_from: time::Date,
     cfg: &BillingdConfig,
-    tarifbd: &TarifbdClient,
+    productd: &ProductdClient,
 ) {
     if !nehs_overlay_applies(category, cfg) {
         return;
     }
-    match tarifbd.get_latest_nehs_price(period_from).await {
+    match productd.get_latest_nehs_price(period_from).await {
         Ok(Some(eur_per_t)) => {
             rates.behg_gas_ct_per_kwh =
                 energy_billing::behg_ct_per_kwh_from_price(eur_per_t, cfg.behg_co2_factor());
@@ -319,12 +319,12 @@ pub(crate) async fn apply_nehs_market_price(
 pub(crate) async fn fetch_epex_prices(
     period_from: time::Date,
     period_to: time::Date,
-    tarifbd: &Arc<TarifbdClient>,
+    productd: &Arc<ProductdClient>,
 ) -> std::collections::HashMap<time::OffsetDateTime, rust_decimal::Decimal> {
-    // tarifbd owns the imported EPEX day-ahead series (15-min MTU). The map is
+    // productd owns the imported EPEX day-ahead series (15-min MTU). The map is
     // keyed on each MTU's UTC start instant, matching how `energy-billing`
     // floors a consumption interval to its quarter-hour.
-    match tarifbd.get_epex_prices(period_from, period_to).await {
+    match productd.get_epex_prices(period_from, period_to).await {
         Ok(map) => map,
         Err(e) => {
             tracing::warn!(error = %e, "billingd: EPEX price fetch failed; dynamic intervals will lack prices");
@@ -484,7 +484,11 @@ mod gas_enrichment_tests {
             .expect("aggregate tax position");
         assert!(tax.get("marktlokationsId").is_none());
         // Deterministic rechnungsdatum — no wall clock in the document.
-        assert_eq!(json["rechnungsdatum"], "2026-01-31");
+        //
+        // BO4E declares `rechnungsdatum` as `format: date-time`, so the wire
+        // value is a timestamp, not a bare date. Midnight UTC: the calendar
+        // date survives the promotion and any later offset normalisation.
+        assert_eq!(json["rechnungsdatum"], "2026-01-31T00:00:00Z");
     }
 
     /// A blocked engine validation reaches the wire as a 422 whose code and
@@ -517,7 +521,7 @@ mod nehs_overlay_tests {
         serde_json::from_value(serde_json::json!({
             "database": { "url": "postgres://unused" },
             "tenant": "9900000000001",
-            "tarifbd_url": "http://127.0.0.1:1",
+            "productd_url": "http://127.0.0.1:1",
             "edmd_url": "http://127.0.0.1:1",
             "marktd_url": "http://127.0.0.1:1",
             "rates": rates,
@@ -527,7 +531,7 @@ mod nehs_overlay_tests {
 
     /// Overlay precedence: an explicit `[rates] behg_gas_ct_per_kwh` override
     /// short-circuits the market lookup — `apply_nehs_market_price` returns
-    /// before any tarifbd fetch, so the pinned rate stands untouched.
+    /// before any productd fetch, so the pinned rate stands untouched.
     #[test]
     fn explicit_behg_override_skips_the_market_fetch() {
         let pinned = cfg(serde_json::json!({ "behg_gas_ct_per_kwh": "1.25" }));

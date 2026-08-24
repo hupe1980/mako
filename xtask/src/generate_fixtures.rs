@@ -30,6 +30,12 @@ struct MigProfile {
     release: String,
     #[serde(default)]
     archived: bool,
+    /// Anwendungszeitpunkt — the day this format version goes on the wire.
+    #[serde(default)]
+    valid_from: Option<String>,
+    /// Last day it is on the wire, `None` for the open-ended current one.
+    #[serde(default)]
+    valid_until: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -234,8 +240,21 @@ fn render_fixture(meta: &TypeMeta, pid: u32, release: &str, de1001: Option<&str>
 
 // ── Active profiles collection ───────────────────────────────────────────────
 
-/// `(message_type_lower, pid_code)` → latest `release` string.
-fn collect_active_pids(profiles_dir: &str) -> BTreeMap<(String, u32), ActivePid> {
+/// `(message_type_lower, pid_code)` → the release a fixture should carry.
+///
+/// The one **in force on `today`**, not the newest one shipped. A fixture is a
+/// message mako must be able to receive, and `valid_from` is a hard edge
+/// (Allgemeine Festlegungen 6.1 §2.5): a message stamped with the next format
+/// version is rejected until its Anwendungszeitpunkt, so generating the corpus
+/// at the newest shipped release stamps every fixture with a code that is not
+/// on the wire yet and leaves the in-force one with no witness at all.
+///
+/// Ordering is by `valid_from`, never by the release string — release codes are
+/// BDEW labels, not versions, and `"2.10" < "2.9"` under a string sort.
+fn collect_active_pids(
+    profiles_dir: &str,
+    today: time::Date,
+) -> BTreeMap<(String, u32), ActivePid> {
     let mut map: BTreeMap<(String, u32), ActivePid> = BTreeMap::new();
     let base = Path::new(profiles_dir);
     let msg_type_dirs = match std::fs::read_dir(base) {
@@ -295,17 +314,28 @@ fn collect_active_pids(profiles_dir: &str) -> BTreeMap<(String, u32), ActivePid>
                     Err(_) => continue,
                 };
 
+            let rank = rank_for(
+                iso_date(mig.valid_from.as_ref()),
+                iso_date(mig.valid_until.as_ref()),
+                today,
+            );
+
             for p in ahb.pruefidentifikatoren {
-                // Keep only the latest release per PID (sorted release name).
                 let key = (msg_type.clone(), p.code);
                 let candidate = ActivePid {
                     release: mig.release.clone(),
+                    rank,
                     bgm_qualifier: p.bgm_qualifier().map(ToOwned::to_owned),
                 };
-                let existing = map.entry(key).or_insert_with(|| candidate.clone());
-                // Use lexicographically larger release (most recent).
-                if mig.release > existing.release {
-                    *existing = candidate;
+                match map.entry(key) {
+                    std::collections::btree_map::Entry::Vacant(slot) => {
+                        slot.insert(candidate);
+                    }
+                    std::collections::btree_map::Entry::Occupied(mut slot) => {
+                        if candidate.rank > slot.get().rank {
+                            slot.insert(candidate);
+                        }
+                    }
                 }
             }
         }
@@ -313,12 +343,46 @@ fn collect_active_pids(profiles_dir: &str) -> BTreeMap<(String, u32), ActivePid>
     map
 }
 
-/// One PID's latest active release and the AHB facts a fixture must honour.
+/// One PID's in-force release and the AHB facts a fixture must honour.
 #[derive(Clone)]
 struct ActivePid {
     release: String,
+    /// How well this profile fits `today`; the highest wins. See [`rank_for`].
+    rank: (u8, i64),
     /// `BGM` DE 1001, where the profile restricts it.
     bgm_qualifier: Option<String>,
+}
+
+/// Parse an ISO 8601 `yyyy-mm-dd` profile date.
+fn iso_date(raw: Option<&String>) -> Option<time::Date> {
+    let raw = raw?;
+    time::Date::parse(raw, &time::format_description::well_known::Iso8601::DATE).ok()
+}
+
+/// Rank a profile's fitness to stand for "what is on the wire on `today`".
+///
+/// Tier first, then a tie-break within the tier:
+///
+/// | tier | profile | tie-break |
+/// |---|---|---|
+/// | 2 | in force on `today` | the later `valid_from` |
+/// | 1 | not yet in force | the *nearer* Anwendungszeitpunkt |
+/// | 0 | superseded | the later `valid_from` |
+///
+/// A profile with no dates at all ranks as in force — a legacy profile carrying
+/// no lifecycle is the only thing that could stand for its message type.
+fn rank_for(
+    valid_from: Option<time::Date>,
+    valid_until: Option<time::Date>,
+    today: time::Date,
+) -> (u8, i64) {
+    let epoch = time::Date::from_ordinal_date(2000, 1).expect("2000-001 is a valid date");
+    let days = |d: Option<time::Date>| d.map_or(0, |d| (d - epoch).whole_days());
+    match valid_from {
+        Some(from) if from > today => (1, -days(valid_from)),
+        _ if valid_until.is_some_and(|until| until < today) => (0, days(valid_from)),
+        _ => (2, days(valid_from)),
+    }
 }
 
 // ── Covered PIDs (mirrors validate_pruefids logic) ───────────────────────────
@@ -394,8 +458,10 @@ pub fn run(workspace_root: &str, args: &[String]) -> bool {
     let profiles_dir = format!("{workspace_root}/crates/edi-energy/profiles");
     let fixtures_base = format!("{workspace_root}/crates/edi-energy/tests/fixtures");
 
-    // Collect all active PIDs across all non-archived profiles.
-    let active_pids = collect_active_pids(&profiles_dir);
+    // Every PID across the non-archived profiles, each at the release in force
+    // today — the code a counterparty would actually put on the wire.
+    let today = time::OffsetDateTime::now_utc().date();
+    let active_pids = collect_active_pids(&profiles_dir, today);
     if active_pids.is_empty() {
         eprintln!("generate-fixtures: no active profiles found under {profiles_dir}");
         return false;

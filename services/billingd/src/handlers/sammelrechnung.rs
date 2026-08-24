@@ -55,7 +55,7 @@ pub async fn post_sammelrechnung(
     Json(req): Json<SammelrechnungRequest>,
 ) -> BillingResult<impl IntoResponse> {
     let cfg = Arc::clone(&deps.cfg);
-    let (tarifbd, vertragd) = (&deps.tarifbd, &deps.vertragd);
+    let (productd, vertragd) = (&deps.productd, &deps.vertragd);
     authorize(&cedar, &claims, "run-billing", &cfg.tenant)?;
     let (period_from, period_to) = parse_period(&req.period_from, &req.period_to)?;
 
@@ -121,7 +121,7 @@ pub async fn post_sammelrechnung(
             tariff.category_str(),
             period_from,
             &cfg,
-            tarifbd,
+            productd,
         )
         .await;
 
@@ -335,7 +335,7 @@ pub async fn post_sammelrechnung(
 /// One site's failure, as a structured entry in the run report.
 ///
 /// Coded, not `"{malo}: {prose}"`: a caller distinguishes a missing product
-/// from an unreachable tarifbd without reading German.
+/// from an unreachable productd without reading German.
 fn site_error(malo_id: &str, e: &BillingError) -> serde_json::Value {
     serde_json::json!({
         "malo_id": malo_id,

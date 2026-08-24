@@ -386,12 +386,9 @@ CREATE INDEX svl_method   ON substitute_value_log (method);
 
 -- ── Gerätewechsel: not an edmd table ─────────────────────────────────────────
 --
--- `meter_exchange_events` used to be declared here and was never read or
--- written by any code path — a WiM Gerätewechsel is device master data, which
--- `marktd` owns (see the marktd/edmd boundary: marktd owns MaLo/MeLo/Zähler/
--- Gerät/SMGW identity, edmd owns interval data). An empty table that looks like
--- the system of record for meter exchanges is worse than none, so it is gone
--- rather than left to be discovered by the first integration that trusts it.
+-- A WiM Gerätewechsel is device master data, which `marktd` owns: marktd owns
+-- MaLo/MeLo/Zähler/Gerät/SMGW identity, edmd owns interval data. An empty table
+-- here would look like the system of record for meter exchanges.
 
 -- ── GDPR Art. 17 erasure tracking ────────────────────────────────────────────
 --

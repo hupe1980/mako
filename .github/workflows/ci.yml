@@ -329,6 +329,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: cargo xtask validate-profiles
+      # Every format version a counterparty can still send must have a fixture
+      # carrying its UNH 0057 code, so a BDEW release bump cannot land in
+      # mig.json without a message that exercises it.
+      - run: cargo xtask validate-release-codes
 
   validate-pruefids:
     name: Validate Pruefidentifikator coverage

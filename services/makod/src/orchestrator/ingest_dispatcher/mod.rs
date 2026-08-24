@@ -1212,15 +1212,32 @@ pub fn extract_malo_from_invoic(msg: &AnyMessage) -> String {
 /// — the quiet failure — still calls a Tuesday-evening arrival healthy nine
 /// hours after its Frist has lapsed.
 ///
-/// `fallback` is used for a PID no table quantifies. It must stay a real value:
-/// a process with no registered deadline never transitions out of `Initiated`
-/// and is invisible to the deadline scheduler.
-pub(crate) fn antwort_due_at(
-    pid: u32,
-    received: OffsetDateTime,
-    fallback: OffsetDateTime,
-) -> OffsetDateTime {
-    mako_fristen::antwort::antwort_deadline(pid, received).unwrap_or(fallback)
+/// A PID no table quantifies still gets a real instant — a process with no
+/// registered deadline never transitions out of `Initiated` and is invisible to
+/// the deadline scheduler. But that instant is an **operating convention**, not
+/// a Frist, and the difference has to be visible: `mako_fristen::antwort::
+/// operator_window` marks it `is_regulatory: false` and carries a `source`
+/// saying so, which this logs at `warn` the moment it is used.
+///
+/// Every call site used to pass its own `fallback` — twelve copies of
+/// `add_hours(received, 24)`, the very number [`GPKE_IS_NOT_TWENTY_FOUR_HOURS`]
+/// exists to refute. Registering a PID without adding its row to the table then
+/// silently produced a fabricated 24-hour regulatory deadline. There is now one
+/// convention, in one place, and it announces itself.
+///
+/// [`GPKE_IS_NOT_TWENTY_FOUR_HOURS`]: mako_fristen::antwort::GPKE_IS_NOT_TWENTY_FOUR_HOURS
+pub(crate) fn antwort_due_at(pid: u32, received: OffsetDateTime) -> OffsetDateTime {
+    let window = mako_fristen::antwort::operator_window(pid, received);
+    if !window.is_regulatory {
+        tracing::warn!(
+            pid,
+            due_at = %window.deadline,
+            source = window.source,
+            "no published Antwortfrist for this Prüfidentifikator — the process \
+             deadline is an operating convention, not a regulatory Frist",
+        );
+    }
+    window.deadline
 }
 
 /// Extract the **Fälligkeitsdatum** (Zahlungsziel) from an INVOIC — `SG8 DTM+265`

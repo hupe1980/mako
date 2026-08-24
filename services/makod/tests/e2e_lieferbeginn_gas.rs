@@ -33,7 +33,7 @@
 //! - **PID 44001**: Anfrage Lieferbeginn Gas (LFN → GNB, GeLi Gas AHB G1.1)
 //! - **APERAK Frist**: **10 Werktage** (BNetzA BK7 GeLi Gas)
 //! - **Saturdays, Sundays and federal public holidays are not Werktage**
-//!   do not.  This is distinct from GPKE (24 wall-clock hours) and from WiM
+//!   do not.  This is distinct from GPKE (a clock time on the 1. WT) and from WiM
 //!   Strom, whose business-answer window is per PID (3 / 5 / 7 / 1 WT).
 //! - The GNB state machine:
 //!   `New → Initiated → ValidationPassed → AperakSent → Active` (positive)

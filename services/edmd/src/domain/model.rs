@@ -823,8 +823,8 @@ mod mscons_pid_tests {
         }
     }
 
-    /// Names that were previously wrong, pinned to the AHB 3.2 "Tabellenspalte"
-    /// headings so a future edit cannot quietly reintroduce them.
+    /// Names pinned to the AHB 3.2 "Tabellenspalte" headings, so an edit
+    /// cannot quietly reword them.
     #[test]
     fn names_match_the_ahb_tabellenspalte() {
         for (pid, expected) in [

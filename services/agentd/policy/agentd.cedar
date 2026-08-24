@@ -105,7 +105,7 @@ permit(principal, action == Action::"effect:perform", resource);
 forbid(principal, action == Action::"effect:perform", resource == Resource::"tool.call")
 unless {
   ["makod", "marktd", "processd", "obsd", "billingd", "invoicd", "accountingd",
-   "edmd", "einsd", "netzbilanzd", "portald", "sperrd", "tarifbd", "vertragd",
+   "edmd", "einsd", "netzbilanzd", "portald", "sperrd", "productd", "vertragd",
    "mabis_syncd"]
   .contains(context.args.server)
 };

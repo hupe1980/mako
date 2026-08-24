@@ -13,6 +13,7 @@
 //! just test-marktd-db
 //! ```
 
+use mako_markt::domain::Lokationstyp;
 use mako_markt::{
     domain::{MaloId, MeloId, Sparte},
     repository::{
@@ -25,7 +26,6 @@ use marktd::pg::{
     PgLokationszuordnungRepository, PgMaloRepository, PgMeloRepository, PgNeLoRepository,
     PgTrancheRepository,
 };
-use rubo4e::current::Lokationstyp;
 use sqlx::PgPool;
 
 const SCHEMA: &str = include_str!("../migrations/0001_initial.sql");

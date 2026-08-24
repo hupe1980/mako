@@ -60,7 +60,7 @@ spec:
          § 41 Abs. 5 Satz 4 EnWG, § 309 Nr. 9 lit. c BGB). Never derive a period
          from kuendigungsfrist_monate alone: for a Verbraucher a longer agreed
          period is void, and in the Grundversorgung it does not apply at all.
-      4. Generate renewal offers via tarifbd for eligible contracts.
+      4. Generate renewal offers via productd for eligible contracts.
 
       ### On Preisgarantie Tarifwechsel conflict
       1. Call vertragd `get_vertrag_status` — check `preisgarantie_bis` date.

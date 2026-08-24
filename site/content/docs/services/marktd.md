@@ -447,7 +447,7 @@ inside the JSON payload.
     },
     "preispositionen": [ ... ]
   },
-  "bo4e_version": "v202607.0.0"
+  "bo4e_version": "202607.1.0"
 }
 ```
 
@@ -457,7 +457,7 @@ inside the JSON payload.
 {
   "data":         { "bo_typ": "PREISBLATT_NETZNUTZUNG", ... },
   "source":       "api",
-  "bo4e_version": "v202607.0.0",
+  "bo4e_version": "202607.1.0",
   "updated_at":   "2025-10-01T08:15:00Z",
   "zeitvariable_preispositionen": [
     {
@@ -1366,7 +1366,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/preisblaetter-messung/9900012345678" \
         { "zaehlzeitregister": "NT", "preis": { "wert": "8.75",  "einheit": "EUR_PRO_KWH" } }
       ]
     },
-    "bo4e_version": "v202607.0.0"
+    "bo4e_version": "202607.1.0"
   }'
 
 # Retrieve for a billing date — response includes typed zeitvariable_preispositionen
@@ -1629,7 +1629,7 @@ curl -s -X PUT "http://marktd:8180/api/v1/zaehler/Z001234567" \
         { "_typ": "ZAEHLWERK", "obisKennzahl": "1-0:1.8.0", "richtung": "EINSP" }
       ]
     },
-    "bo4e_version": "v202607.0.0"
+    "bo4e_version": "202607.1.0"
   }'
 
 # List Zaehlwerk registers for a meter (typed Vec<Zaehlwerk>)
@@ -2205,7 +2205,7 @@ GET  /api/v1/malos/{malo_id}/technische-ressourcen
   "nutzung":           "STROMVERBRAUCHSART",
   "verbrauchsart":     "E_MOBILITAET",
   "ist_fernschaltbar": true,
-  "bo4e_version":      "v202607.0.0"
+  "bo4e_version":      "202607.1.0"
 }
 ```
 

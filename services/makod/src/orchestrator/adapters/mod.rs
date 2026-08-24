@@ -365,9 +365,9 @@ fn is_known_fv(fv: &FormatVersion) -> bool {
 /// Return all BDEW format versions registered in the compiled `edi-energy`
 /// profile registry, sorted chronologically.
 ///
-/// This replaces the previously hand-maintained allowlist. Adding a new BDEW
-/// format version now only requires shipping a new `edi-energy` profile;
-/// `makod` picks it up automatically on the next rebuild.
+/// Derived, not hand-maintained: adding a BDEW format version only requires
+/// shipping a new `edi-energy` profile, which `makod` picks up on the next
+/// rebuild.
 ///
 /// If the wire-format *changed* in the new format version, add a branch on
 /// `fv` inside the relevant adapter closure above before deploying.
@@ -530,11 +530,10 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
 
     let gesamtnetto = moa_betrag(header, "79");
     let gesamtbrutto = moa_betrag(header, "9");
-    // MOA+124 is the Steuerbetrag. It used to be dropped, so every inbound
-    // invoice reached `invoic-checker` looking like one that stated no tax —
-    // and an invoice without a stated tax is one the LF cannot deduct
-    // (§14 Abs. 4 Nr. 8 UStG). The checker could not tell that from an invoice
-    // whose tax simply had not been read.
+    // MOA+124 is the Steuerbetrag, and dropping it makes every inbound invoice
+    // reach `invoic-checker` looking like one that states no tax — which is an
+    // invoice the LF cannot deduct (§14 Abs. 4 Nr. 8 UStG). The checker cannot
+    // tell that apart from an invoice whose tax simply was not read.
     let gesamtsteuer = moa_betrag(header, "124");
     let steuerbetraege = build_steuerbetraege(header, gesamtnetto.as_ref(), gesamtsteuer.as_ref());
 
@@ -544,6 +543,10 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
         .and_then(|s| s.component_str(1, 0))
         .map(str::to_owned);
 
+    // DTM+163 / DTM+164 are the Abrechnungszeitraum's **inclusive** bounds —
+    // DTM+164 is the last day billed — and BO4E's `Zeitraum` date pair is
+    // inclusive too („Enddatum des betrachteten Zeitraums ist inklusiv"), so
+    // the dates carry across unchanged.
     let rechnungsperiode = match (period_start, period_end) {
         (Some(s), Some(e)) => Some(bo4e::Zeitraum {
             startdatum: Some(s),
@@ -558,7 +561,10 @@ fn build_rechnung(segs: &[OwnedSegment]) -> bo4e::Rechnung {
     };
     bo4e::Rechnung {
         rechnungsnummer,
-        rechnungsdatum: invoice_date,
+        // BO4E types `rechnungsdatum` as `format: date-time`; DTM+137 carries
+        // qualifier 102, a bare CCYYMMDD. Midnight UTC, so
+        // `rechnungsdatum_date()` gives back the day that was on the wire.
+        rechnungsdatum: invoice_date.map(|d| d.midnight().assume_utc()),
         rechnungsperiode,
         gesamtnetto,
         gesamtsteuer,

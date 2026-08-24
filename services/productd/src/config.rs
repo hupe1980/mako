@@ -1,9 +1,9 @@
-//! Configuration for `tarifbd`.
+//! Configuration for `productd`.
 
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
-pub struct TarifbdConfig {
+pub struct ProductdConfig {
     /// PostgreSQL connection + pool tuning (`[database]` block).
     pub database: mako_service::config::DatabaseConfig,
 
@@ -19,10 +19,10 @@ pub struct TarifbdConfig {
     ///
     /// Distinct from `tenant`: the isolation key and the market identity are
     /// the same string in a single-mandant install and different in a shared
-    /// one. Using `tenant` for both — which is what this used to do — filed
-    /// every MaLo→product assignment under a market party that does not trade,
-    /// and `billingd`'s lookup by the real MP-ID found nothing. Defaults to
-    /// `tenant` so a single-mandant deployment need not repeat itself.
+    /// one. Using `tenant` for both files every MaLo→product assignment under a
+    /// market party that does not trade, where `billingd`'s lookup by the real
+    /// MP-ID finds nothing. Defaults to `tenant` so a single-mandant deployment
+    /// need not repeat itself.
     #[serde(default, rename = "lf_mp_id")]
     lf_mp_id_override: Option<String>,
 
@@ -42,12 +42,12 @@ pub struct TarifbdConfig {
     pub erp_hmac_secret: Option<String>,
 
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
-    /// See `[mcp]` section in TOML — e.g. `api_key = "env:TARIFBD_MCP_API_KEY"`.
+    /// See `[mcp]` section in TOML — e.g. `api_key = "env:PRODUCTD_MCP_API_KEY"`.
     #[serde(default)]
     pub mcp: mako_service::mcp_auth::McpAuthConfig,
 }
 
-impl TarifbdConfig {
+impl ProductdConfig {
     /// The market identity products are sold under.
     #[must_use]
     pub fn lf_mp_id(&self) -> &str {
@@ -55,7 +55,7 @@ impl TarifbdConfig {
     }
 }
 
-impl mako_service::ServiceConfig for TarifbdConfig {
+impl mako_service::ServiceConfig for ProductdConfig {
     fn database(&self) -> Option<&mako_service::config::DatabaseConfig> {
         Some(&self.database)
     }

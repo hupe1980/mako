@@ -380,8 +380,8 @@ mod tests {
         assert_eq!(r.negative_quarter_hours, 1);
     }
 
-    /// A 2024 plant needs three consecutive negative hours; the old code applied
-    /// the Solarspitzen rule to it and reduced a month §51 did not touch.
+    /// A 2024 plant needs three consecutive negative hours. Applying the
+    /// post-Solarspitzengesetz rule to it reduces a month §51 does not touch.
     #[test]
     fn a_2024_plant_needs_three_consecutive_hours() {
         let regime = NegativpreisRegime::fuer_inbetriebnahme(date!(2024 - 07 - 01));
@@ -437,8 +437,8 @@ mod tests {
         );
     }
 
-    /// The 400 kW exemption of the original EEG 2023 §51 Abs. 2 — the old code
-    /// used 100 kW here and reduced plants the statute exempted.
+    /// The original EEG 2023 §51 Abs. 2 exempts at **400 kW**; the
+    /// post-Solarspitzengesetz 100 kW would reduce plants the statute exempts.
     #[test]
     fn the_original_eeg2023_exemption_is_400_kw() {
         let regime = NegativpreisRegime::fuer_inbetriebnahme(date!(2024 - 03 - 01));

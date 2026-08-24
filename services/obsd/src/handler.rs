@@ -411,12 +411,10 @@ mod tests {
 
     /// A GPKE Anmeldung is due at a clock time on the next Werktag.
     ///
-    /// This replaces `compute_deadline_gpke_24h`, which asserted
-    /// `started + 24 h` and therefore pinned the defect: BK6-24-174 Teil 2
-    /// states 11:00 Uhr des 1. WT nach dem ÜT, so a Friday arrival is
-    /// answerable until Monday and a Tuesday-evening one has under sixteen
-    /// hours. obsd breached the first on Saturday and called the second healthy
-    /// nine hours late.
+    /// BK6-24-174 Teil 2 states 11:00 Uhr des 1. WT nach dem ÜT, so a Friday
+    /// arrival is answerable until Monday and a Tuesday-evening one has under
+    /// sixteen hours. A flat 24 h breaches the first on Saturday and calls the
+    /// second healthy nine hours late.
     #[test]
     fn a_gpke_anmeldung_is_not_twenty_four_hours() {
         let started = datetime!(2026-07-17 14:00 UTC); // Friday
@@ -448,9 +446,8 @@ mod tests {
     /// obsd and the engine resolve the same instant, for every published PID,
     /// on every day of a year.
     ///
-    /// The test this replaces made the same claim and only ever checked the
-    /// families that already agreed, so the flat GPKE and Gas windows passed it.
-    /// Reading the PID list off the table is what makes it exhaustive.
+    /// Reading the PID list off the table is what makes this exhaustive: a
+    /// hand-written list checks only the families that already agree.
     #[test]
     fn obsd_agrees_with_the_table_on_every_published_window() {
         let mut day = datetime!(2026-01-01 09:00 UTC);

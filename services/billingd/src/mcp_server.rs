@@ -120,7 +120,7 @@ pub struct PreviewParams {
 
 #[derive(Debug, Deserialize, JsonSchema)]
 pub struct ValidateTariffParams {
-    /// TariffInput JSON string to validate (same format as tarifbd product JSONB).
+    /// TariffInput JSON string to validate (same format as productd product JSONB).
     pub tariff_json: String,
     /// Metering mode to test against (SLP, RLM, IMSYS). Relevant for §41a check.
     pub metering_mode: Option<String>,
@@ -457,9 +457,9 @@ period for re-billing."
     #[tool(
         description = "List all 13 billing product categories with their required and optional \
 TariffInput fields — the `Product` enum billingd dispatches on. Use this to discover what fields \
-to set in tarifbd for a given product type. Covers STROM (incl. §41a dynamic), GAS, WAERME, \
+to set in productd for a given product type. Covers STROM (incl. §41a dynamic), GAS, WAERME, \
 WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG \
-and SHARING. A bundle is not a category: tarifbd decomposes it into component product codes \
+and SHARING. A bundle is not a category: productd decomposes it into component product codes \
 before billing.",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -746,7 +746,7 @@ impl BillingdMcpHandler {
                 "The O2C cycle in mako has 6 phases:\n\n                 **1. Customer Onboarding (GPKE)**\n                 POST processd /api/v1/start-supply { malo_id, lieferbeginn_datum }\n                 → makod dispatches UTILMD 55001 to NB\n                 → NB responds UTILMD 55003 (Bestätigung) within 24h\n                 → VersorgungsStatus in marktd → Beliefert\n
                  **2. Tariff Assignment**\n                 POST vertragd /api/v1/vertraege/{id}/tarifwechsel { komp_id, new_product_code, wirksamkeit }\n                 → a valid-time slice; which product a MaLo is on is a contract fact, not a catalogue one\n
                  **3. Meter Data (edmd)**\n                 MSCONS readings arrive via makod EDIFACT pipeline automatically.\n                 Verify: edmd GET /api/v1/billing-period/{malo_id}\n
-                 **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → tarifbd → edmd → marktd (NNE) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
+                 **4. Invoice Generation (billingd)**\n                 POST /api/v1/billing/{malo_id}/calculate { lf_mp_id, nb_mp_id, period_from, period_to }\n                 → productd → edmd → marktd (NNE) → §14a discount → EEG credit\n                 → Rechnung BO4E persisted; CloudEvent de.billing.rechnung.erstellt\n                 Use `list_billing_records` to verify; `get_xrechnung` for B2G XML.\n
                  **5. Account Posting (accountingd)**\n                 de.billing.rechnung.erstellt → accountingd debit entry (Rechnungsbetrag)\n                 Check balance: accountingd `get_balance`\n                 Monthly SEPA: accountingd `run_sepa_collection` → pain.008 XML\n                 Payment receipt: accountingd `import_payments` (CAMT.054)\n
                  **6. Dunning & Collections (if overdue)**\n                 `list_overdue` → Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag)\n                 Mahnstufe 3 → de.accounting.sperrauftrag → sperrd → IFTSTA 21039 to NB\n
                  **Annual Jahresabschluss:**\n                 billingd annual settlement → accountingd `trigger_jahresabschluss` → `update_abschlag` with new rate.\n                 ⚠ EEG note: EEG Gutschrift in Rechnung is already netted in the debit amount. \n                 Do NOT separately book de.eeg.verguetung.berechnet credits for the same period.\n\n                 **Monthly Abschlagslauf (automated advance payment cycle):**\n                 accountingd `run_abschlag_cycle` on each billing_day → raises the Abschlagsforderungen (debits).\n                 Then `run_sepa_collection` N-5 bank days before due date → generates pain.008 XML.\n                 Import bank statement: `import_payments` (CAMT.054) to match SEPA returns.\n\n                 **Bilanzielle Abgrenzung (HGB §250 — period-end accruals):**\n                 At Monats-/Jahresabschluss: use accountingd `compute_bilanzielle_abgrenzung`.\n                 pRAP (passive): advance payments collected > energy billed → book as liability.\n                 aRAP (active): unbilled energy → edmd GET /billing-period/{malo_id} × tariff.\n                 ERP journals: Dr. Umsatzerlöse / Cr. pRAP 0990; Dr. FLL 1400 / Cr. Erlöse."
@@ -769,7 +769,7 @@ impl BillingdMcpHandler {
                 "To preview a billing invoice, use POST /api/v1/billing/{malo_id}/preview.\n\
                  Required: lf_mp_id, period_from, period_to.\n\
                  Optional: nb_mp_id (resolved from marktd when absent), tariff (override from \
-tarifbd), meter (override from edmd), grid (override from marktd).\n\n\
+productd), meter (override from edmd), grid (override from marktd).\n\n\
                  The preview runs the same pipeline as /calculate and stores nothing: no record, \
 no CloudEvent, and no number consumed from the §14 UStG series. The response carries every \
 Rechnungsposition, the netto/brutto totals and the engine warnings.",
@@ -791,9 +791,9 @@ Rechnungsposition, the netto/brutto totals and the engine warnings.",
                 Role::Assistant,
                 "For a §41a dynamic tariff (every supplier must offer one since 01.01.2025, \
 owed to customers who have an iMSys):\n\
-                 1. Verify the product in tarifbd has dynamic_epex: true\n\
+                 1. Verify the product in productd has dynamic_epex: true\n\
                  2. Verify EPEX day-ahead prices are imported for the whole billing period:\n\
-                    PUT /api/v1/epex-prices/{date} in tarifbd (15-min MTUs)\n\
+                    PUT /api/v1/epex-prices/{date} in productd (15-min MTUs)\n\
                  3. Verify the customer has 15-min Lastgang data in edmd:\n\
                     GET /api/v1/lastgang/{malo_id}?from=...&to=...\n\
                  4. Verify the meter is an iMSys — §41a Abs. 1 EnWG requires one, and billingd\n\
@@ -822,23 +822,23 @@ unpriced intervals would silently under-bill.",
                 Role::Assistant,
                 "§14a EnWG (Steuerbarkeitsrabatt) has 3 implementation models:\n\n\
                 **Modul 1 — Capacity-based NNE reduction (kW/year)**\n\
-                In tarifbd: set `sect14a_modul1_pauschale_eur_per_kw_year` in the WAERMEPUMPE/WALLBOX product.\n\
+                In productd: set `sect14a_modul1_pauschale_eur_per_kw_year` in the WAERMEPUMPE/WALLBOX product.\n\
                 Example: 150 EUR/kW/year → 5 kW WP → 750 EUR/year Netzentgelteinsparung (vor MwSt).\n\
                 Requires: spitzenleistung_kw in the meter reading or billing request.\n\
                 Formula: kW × rate_eur_per_kw_year / 12 × billing_months → credit position.\n\n\
                 **Modul 2 — Reduzierter NNE-Arbeitspreis (ct/kWh)**\n\
-                In tarifbd: set `sect14a_modul2_nne_reduktion_ct_per_kwh` in the product.\n\
+                In productd: set `sect14a_modul2_nne_reduktion_ct_per_kwh` in the product.\n\
                 Billed by `ControllableLoadProvider` as a per-kWh credit tagged 'sect14a_modul2'.\n\
                 Requires separate metering of the steuerbare Verbrauchseinrichtung, and is\n\
                 **mutually exclusive with Modul 3** — both re-price the network usage, and\n\
                 configuring them together is an Error-severity finding (MODUL2_AND_MODUL3).\n\n\
                 **Modul 3 — Load-shedding compensation (Laststeuerung hours × kW)**\n\
-                In tarifbd: set `sect14a_steuerungsentschaedigung_eur_per_kw_year` in the product.\n\
+                In productd: set `sect14a_steuerungsentschaedigung_eur_per_kw_year` in the product.\n\
                 Requires: steuerung_stunden in the meter reading (from agentd/processd).\n\
                 Formula: kW × rate × (steuerung_stunden / 8760) → credit position.\n\n\
                 **Setup steps:**\n\
-                1. GET tarifbd /api/v1/products → find WAERMEPUMPE or WALLBOX product\n\
-                2. PUT tarifbd /api/v1/products/{id} add sect14a_modul1_pauschale_eur_per_kw_year\n\
+                1. GET productd /api/v1/products → find WAERMEPUMPE or WALLBOX product\n\
+                2. PUT productd /api/v1/products/{id} add sect14a_modul1_pauschale_eur_per_kw_year\n\
                 3. POST /api/v1/billing/{malo_id}/preview — verify Steuerungsrabatt position appears\n\
                 4. Check: position tagged 'sect14a_modul1' (pauschale Reduzierung) or\n\
                    'sect14a_modul2' (Arbeitspreisreduzierung) → negative credit amount\n\
@@ -869,7 +869,7 @@ unpriced intervals would silently under-bill.",
                 "EEG billing in billingd covers two categories:\n\n\
                 **Category `EEG` — Vergütung (statutory feed-in tariff, §21 EEG)**\n\
                 Used when the plant receives a fixed kWh rate for 20 years.\n\
-                In tarifbd: set `eeg_verguetungssatz_ct_per_kwh` (e.g. 8.51 for ≤10 kWp solar 2024).\n\
+                In productd: set `eeg_verguetungssatz_ct_per_kwh` (e.g. 8.51 for ≤10 kWp solar 2024).\n\
                 Optional additions:\n\
                 - `eeg_marktpraemie_ct_per_kwh`: Gleitende Marktprämie (§20 EEG, Direktvermarktung)\n\
                 - `eeg_managementpraemie_ct_per_kwh`: Managementprämie (0.4 ct/kWh ≤100 MW)\n\
@@ -878,7 +878,7 @@ unpriced intervals would silently under-bill.",
                 Output: GUTSCHRIFT Rechnung (LF pays the plant owner)\n\n\
                 **Category `EINSPEISUNG` — Direktvermarktung (market price, §20 EEG)**\n\
                 Used when the Direktvermarkter sells to the spot market.\n\
-                In tarifbd: set `marktwert_ct_per_kwh` (e.g. current EPEX monthly average).\n\
+                In productd: set `marktwert_ct_per_kwh` (e.g. current EPEX monthly average).\n\
                 Optional: `vermarktungsgebuehr_ct_per_kwh` (Direktvermarkter service fee deducted).\n\
                 Input: `eeg_meter { einspeisung_kwh: 800 }`\n\
                 Output: GUTSCHRIFT Rechnung (net settlement: Marktwert − Gebühr)\n\n\
@@ -935,7 +935,7 @@ unpriced intervals would silently under-bill.",
                 | Energiesteuer | 0.55 ct/kWh_Hs | §2 Abs. 3 Nr. 4 EnergieStG |\n\
                 | BEHG CO₂ | 1.3104 ct/kWh_Hs | 65 EUR/t CO₂ × 0.20160 kg/kWh (2026 default); \
                 since 07/2026 the price is EEX-auctioned inside the §10 Abs. 2 BEHG corridor, so \
-                billingd prefers tarifbd's `nehs_prices` series over this table |\n\
+                billingd prefers productd's `nehs_prices` series over this table |\n\
                 | MwSt | 19% | Gas and Fernwärme are standard-rated. The 7% window was \
                 §28 Abs. 5/6 UStG (01.10.2022–31.03.2024) and has expired; billingd resolves \
                 it automatically for periods inside it and refuses periods that straddle the \

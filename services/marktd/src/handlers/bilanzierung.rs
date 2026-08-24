@@ -116,10 +116,10 @@ pub async fn put_bilanzierung(
         .and_then(|v| v.as_str())
         .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok());
 
-    let bo4e_version = body
-        .get("_version")
-        .and_then(|v| v.as_str())
-        .map_or_else(|| "v202607.0.0".to_owned(), str::to_owned);
+    let bo4e_version = body.get("_version").and_then(|v| v.as_str()).map_or_else(
+        || mako_markt::bo4e::schema_version().to_owned(),
+        str::to_owned,
+    );
 
     let rec = BilanzierungRecord {
         malo_id: malo_id.clone(),

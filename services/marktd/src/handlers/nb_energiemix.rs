@@ -10,7 +10,7 @@
 //! The NB is the authoritative source for the renewable energy mix in their
 //! grid area, derived from local EEG plant feed-in data. Lieferanten use this
 //! for §42 Abs. 5 EnWG Reststrommix disclosure on customer bills and for
-//! Ökostrom / green-tariff labelling in `tarifbd`.
+//! Ökostrom / green-tariff labelling in `productd`.
 //!
 //! ## Validation
 //!
@@ -222,7 +222,7 @@ pub async fn put_nb_energiemix(
 /// Retrieve the current (or specific year's) grid-area `Energiemix` for a NB.
 ///
 /// Used by:
-/// - `tarifbd` to attach NB Reststrommix to STROM products for §42 EnWG disclosure
+/// - `productd` to attach NB Reststrommix to STROM products for §42 EnWG disclosure
 /// - `portald` to display the local grid-area energy mix to customers
 /// - `agentd` for grid sustainability analytics
 pub async fn get_nb_energiemix(

@@ -429,10 +429,9 @@ pub async fn run_cls_compliance_sweep(
     // ── 1. Fetch the tenant's live gateways ───────────────────────────────────
     // `REPLACED` is excluded: the gateway is a historical record, physically
     // swapped out. Scanning it reported an expired certificate on a device that
-    // no longer exists, every day, forever — and the promoted `gateway_status`
+    // no longer exists, every day, forever. The promoted `gateway_status`
     // column exists precisely so this filter is an index lookup rather than a
-    // JSONB extraction. The column was promoted for it and the filter was never
-    // written.
+    // JSONB extraction.
     let rows = match sqlx::query(
         "SELECT malo_id, session FROM smgw_sessions
           WHERE tenant = $1 AND gateway_status <> 'REPLACED'",
@@ -1319,10 +1318,10 @@ pub async fn list_smgw_sessions(
             .into_response();
     }
 
-    // Filters are pushed into SQL and the result is bounded. They used to be
-    // applied with `Vec::retain` *after* fetching every session the tenant owns —
-    // a fleet-sized scan and materialisation on every dashboard poll, with
-    // `?status=` narrowing only the JSON that came back, not the work done.
+    // Filters are pushed into SQL and the result is bounded. Applying them with
+    // `Vec::retain` after fetching every session the tenant owns is a
+    // fleet-sized scan and materialisation on every dashboard poll, with
+    // `?status=` narrowing only the JSON that comes back, not the work done.
     let limit = q.limit.unwrap_or(500).clamp(1, 5_000);
     let rows = sqlx::query(
         r"SELECT s.malo_id, s.device_id, s.gateway_status, s.last_contact_at, s.updated_at,

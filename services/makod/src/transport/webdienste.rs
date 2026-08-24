@@ -111,10 +111,9 @@ fn caller_mp_id() -> Option<String> {
 /// Fail-closed on purpose. These endpoints receive **orders**: a §14a EnWG
 /// Steuerungsauftrag and a WiM Anmeldung both have to be answered to whoever
 /// sent them, and the answer is addressed with this value. Substituting the
-/// operator's own Marktpartner-ID — which is what this code used to do —
-/// produced a confirmation addressed to ourselves, so the ordering party was
-/// never told the control action had been carried out, and the §14a billing
-/// event named the wrong party.
+/// operator's own Marktpartner-ID produces a confirmation addressed to
+/// ourselves: the ordering party is never told the control action was carried
+/// out, and the §14a billing event names the wrong party.
 fn missing_caller_error() -> energy_api::Error {
     energy_api::Error::Http {
         status: 400,
@@ -431,15 +430,39 @@ impl wim_order::WimOrderHandler for MakodApiHandler {
 /// 55039 → 3 WT, 55042 → 5 WT, 55051 → 7 WT, 55168 → 1 WT. `mako_wim` owns the
 /// table so the REST and AS4 doors cannot drift apart.
 ///
-/// Commands that carry no request PID fall back to 5 WT — the Anmeldung's value,
-/// and the most common order.
+/// `ReceiveRestOrder` carries no PID on the wire — the workflow stamps it with
+/// 55042 (Anmeldung MSB), so this reads the same value rather than falling
+/// through to the default. Commands with no request PID at all fall back to
+/// 5 WT, the Anmeldung's value and the most common order.
 fn device_change_frist_wt(command: &DeviceChangeCommand) -> u32 {
     let pid = match command {
         DeviceChangeCommand::ReceiveUtilmd { pid, .. }
         | DeviceChangeCommand::InitiateDeviceChange { pid, .. } => Some(pid.as_u32()),
+        // `ReceiveRestOrder` is the /wimBestellung REST door; the workflow
+        // stamps PID 55042 on it (`geraetewechsel.rs`).
+        DeviceChangeCommand::ReceiveRestOrder { .. } => Some(55_042),
         _ => None,
     };
     pid.and_then(mako_wim::antwort_frist_werktage).unwrap_or(5)
+}
+
+/// The deadline label that matches the state `command` leaves the process in.
+///
+/// `WimDeviceChangeWorkflow::on_deadline` is keyed on `(label, state)` and
+/// answers `None` to any label it does not know — a mismatch produces a
+/// deadline that fires into the void and never transitions the process. The two
+/// windows are also different obligations: `ANTWORT_FRIST_WINDOW_LABEL` is
+/// *our* answer on an order we received, `AUFTRAG_ANTWORT_WINDOW_LABEL` is the
+/// counterparty's answer on an order we sent.
+fn device_change_window_label(command: &DeviceChangeCommand) -> &'static str {
+    match command {
+        // We sent the order → `AuftragGesendet`; the counterparty owes us.
+        DeviceChangeCommand::InitiateDeviceChange { .. } => {
+            mako_wim::geraetewechsel::AUFTRAG_ANTWORT_WINDOW_LABEL
+        }
+        // We received the order → `Initiated`; we owe the answer.
+        _ => mako_wim::geraetewechsel::ANTWORT_FRIST_WINDOW_LABEL,
+    }
 }
 
 async fn spawn_device_change(
@@ -486,7 +509,7 @@ async fn spawn_device_change(
         process_id,
         tenant_id,
         workflow_id,
-        "wim-anmeldung-antwort-5-werktage",
+        device_change_window_label(&command),
         due_at,
     );
     // Atomically persist events + deadline in one WriteBatch (F-043 fix).
@@ -558,7 +581,7 @@ async fn spawn_steuerungsauftrag(
         process_id,
         tenant_id,
         workflow_id,
-        "steuerungsauftrag-antwort-5-werktage",
+        mako_wim::steuerungsauftrag::STEUERUNGSAUFTRAG_DEADLINE_LABEL,
         due_at,
     );
     // Atomically persist events + deadline in one WriteBatch (F-043 fix).

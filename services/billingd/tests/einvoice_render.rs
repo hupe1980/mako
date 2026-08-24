@@ -58,7 +58,7 @@ fn cfg() -> BillingdConfig {
         // claim EAS 0088. `9900000000001` — the placeholder used elsewhere in
         // the fixtures — does not: the first twelve digits require a `4`.
         "tenant": "9900000000004",
-        "tarifbd_url": "http://tarifbd",
+        "productd_url": "http://productd",
         "edmd_url": "http://edmd",
         "marktd_url": "http://marktd",
         "seller_name": "Stadtwerke Musterstadt GmbH",
@@ -422,7 +422,7 @@ fn the_seller_steuernummer_reaches_the_model_and_the_wire() {
     let mut v = serde_json::to_value(serde_json::json!({
         "database": { "url": "postgres://localhost/x" },
         "tenant": "9900000000004",
-        "tarifbd_url": "http://tarifbd",
+        "productd_url": "http://productd",
         "edmd_url": "http://edmd",
         "marktd_url": "http://marktd",
         "seller_name": "Solar Kleinbetrieb e.K.",

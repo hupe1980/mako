@@ -60,8 +60,8 @@ mod sharing;
 mod substitute;
 mod virtual_meter;
 
-// Path-preserving re-exports: everything that used to live directly in
-// `server.rs` stays reachable under `crate::server::…` / `edmd::server::…`.
+// Path-preserving re-exports: every submodule item stays reachable under
+// `crate::server::…` / `edmd::server::…`.
 pub(crate) use archive::*;
 pub(crate) use billing::*;
 pub(crate) use confirmations::*;
@@ -312,10 +312,10 @@ pub(crate) const MAX_READ_WINDOW: time::Duration = time::Duration::days(732);
 
 /// Parse a `?from=` / `?to=` pair into a bounded UTC window.
 ///
-/// A malformed timestamp is a `400`, not a default. Both bounds used to be
-/// parsed with `.ok()` and fall back silently, so `?from=last-tuesday` returned
-/// the whole history and looked like a successful answer to the question the
-/// caller asked.
+/// A malformed timestamp is a `400`, not a default. Parsing a bound with
+/// `.ok()` and falling back silently makes `?from=last-tuesday` return the whole
+/// history, which looks like a successful answer to the question the caller
+/// asked.
 // A whole `axum::Response` in the `Err` arm trips `clippy::result_large_err`,
 // so the refusal travels as its message and is rendered by `into_response`.
 pub(crate) struct WindowRefusal(String);

@@ -52,11 +52,13 @@
 //! apply.
 //!
 //! Frist: Rückmeldung „unverzüglich, spätester ÜT = **2. Werktag** nach dem
-//! Eingang" (GPKE Teil 4 §1.4.2) — **not** the LFW24 24-hour regime.
+//! Eingang" (GPKE Teil 4 § 1.4.2). Not the Teil-2 Lieferbeginn window either —
+//! that one is a clock time on the 1. Werktag, and neither is a 24-hour
+//! duration, which no GPKE Festlegung contains.
 //!
 //! # Regulatory basis
 //!
-//! - **GPKE Teil 4 (BK6-24-174)** §1.4 Stammdatenänderung
+//! - **GPKE Teil 4 (BK6-22-024 Anlage 1d)** §1.4 Stammdatenänderung
 //! - **UTILMD AHB Strom 2.1** ch. 3 (object → PID → LOC map)
 //! - **EBD 4.2** E_0408/E_0409/E_0410/E_0412/E_0415/… (Rückmeldung A01/A02)
 //! - **APERAK AHB 1.0 §2.4.1** — Strom UTILMD 45-min APERAK Frist

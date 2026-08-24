@@ -31,7 +31,7 @@
 //! - **PID 44004**: Abmeldung NN (LF → NB, GeLi Gas AHB G1.1)
 //! - **APERAK Frist**: **10 Werktage** (BNetzA BK7 GeLi Gas 3.0, BK7-24-01-009)
 //! - **Saturdays, Sundays and federal public holidays are not Werktage.**
-//!   This is distinct from GPKE (24 wall-clock hours) and WiM (5 Werktage).
+//!   This is distinct from GPKE (a clock time on the 1. WT) and WiM (5 Werktage).
 //! - The GNB state machine:
 //!   `New → Initiated → ValidationPassed → AperakSent → Active` (positive)
 //!   `New → Initiated → ValidationPassed → Rejected` (negative APERAK)

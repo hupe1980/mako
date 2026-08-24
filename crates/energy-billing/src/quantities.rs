@@ -640,7 +640,7 @@ pub struct Quantities {
     /// ([`crate::provider::mtu_start`]) — DST-safe and aligned with the EPEX
     /// SPOT 15-min day-ahead products (live since 2025-10-01).
     ///
-    /// Set by the service layer (billingd) after fetching from `tarifbd`.
+    /// Set by the service layer (billingd) after fetching from `productd`.
     /// `DynamicElectricityProvider` reads this map as a fallback when its internal
     /// `SpotPriceSource` has no data for an interval. This is the standard production path:
     /// `build_engine()` creates the provider with an empty source, and prices flow in here

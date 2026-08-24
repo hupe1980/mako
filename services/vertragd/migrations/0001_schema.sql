@@ -400,12 +400,11 @@ CREATE INDEX komp_prozess  ON vertragskomponenten (mako_process_id)
 -- fact: agreeing it is a Tarifwechsel, governed by § 41 Abs. 5 EnWG and by the
 -- contract's Preisgarantie, and it is decided here — so it is stored here, once.
 --
--- It used to be stored twice: a current-value `product_code` column on the
--- component and a valid-time projection in `tarifbd.customer_products`,
--- delivered asynchronously. Two rows described one fact, and between the
--- contract change and the projection landing the contract said one product
--- while billing still priced the other. Now the slice and the contract change
--- commit in the same transaction, and there is nothing to reconcile.
+-- Storing it twice — a current-value `product_code` on the component plus an
+-- asynchronously delivered projection in `productd.customer_products` — lets
+-- the contract say one product while billing still prices the other, for as
+-- long as the projection lags. The slice and the contract change commit in the
+-- same transaction, so there is nothing to reconcile.
 --
 -- ## Half-open ranges
 --
@@ -435,9 +434,9 @@ CREATE TABLE komponenten_produkte (
     -- § 41 Abs. 5 Satz 1 EnWG — the **Umfang** of the announced change, as the
     -- notice states it: `[{bezeichnung, einheit, bisher, neu}, …]`.
     --
-    -- Here rather than resolved from `tarifbd` at notice time, and that is the
+    -- Here rather than resolved from `productd` at notice time, and that is the
     -- whole point. `vertragd` owns which product a Marktlokation is on;
-    -- `tarifbd` owns what a product costs, and the two are deliberately not
+    -- `productd` owns what a product costs, and the two are deliberately not
     -- coupled (see BILLING.md § 3). More importantly, the question a customer
     -- or a Schlichtungsstelle asks afterwards is *"what were we told our new
     -- price would be"*, which is a fact about the notice — one that a catalogue
@@ -527,7 +526,7 @@ CREATE TABLE outbound_tasks (
 
 COMMENT ON TABLE outbound_tasks IS
     'Durable queue for every outbound call vertragd owes processd / edmd / '
-    'tarifbd / accountingd. Written in the originating transaction and drained '
+    'productd / accountingd. Written in the originating transaction and drained '
     'by one worker with exponential backoff and a dead-letter.';
 
 CREATE INDEX outbound_pending ON outbound_tasks (next_attempt_at)

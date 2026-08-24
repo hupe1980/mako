@@ -974,7 +974,7 @@ CREATE TABLE invoice_drafts (
     CONSTRAINT id_due_after_invoice CHECK (due_date >= invoice_date),
     settlement_input    JSONB   NOT NULL,   -- replayable: what the figure was computed from
     rechnung            JSONB   NOT NULL,   -- rubo4e::current::Rechnung
-    bo4e_version        TEXT    NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version        TEXT    NOT NULL DEFAULT '202607.1.0',
 
     -- The three amounts an invoice states, each × 10⁻⁵ EUR, enforced to add up:
     -- an invoice whose parts do not sum to its whole is the one error nobody

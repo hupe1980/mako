@@ -3346,12 +3346,12 @@ mod tests {
     /// # Why this is a test
     ///
     /// A process is not usable when its events are durable — it is usable when
-    /// its business key resolves to it. The correlation entry used to be written
-    /// after the append, warn-only on failure, so a crash in between produced a
-    /// live process that no reply could find: every one resolved to
-    /// `Skipped(process_not_found)`, and the next thing to happen was the
-    /// process's own Frist expiring as a false timeout, with the business key
-    /// blocked against a fresh spawn for good.
+    /// its business key resolves to it — so the correlation entry is written in
+    /// the same transaction as the append. Written after it, warn-only on
+    /// failure, a crash in between leaves a live process no reply can find:
+    /// every one resolves to `Skipped(process_not_found)`, the process's own
+    /// Frist expires as a false timeout, and the business key stays blocked
+    /// against a fresh spawn.
     #[tokio::test]
     async fn a_spawn_writes_its_correlation_entry_in_the_same_batch() {
         use crate::{

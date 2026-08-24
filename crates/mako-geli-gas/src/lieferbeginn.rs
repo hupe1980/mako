@@ -21,16 +21,29 @@
 //! - **Responder role** (GNB/LFA receives the Anfrage): `ReceiveUtilmd` → `SendAntwort`.
 //! - **Initiator role** (GNB sends the Anfrage, awaits response): `InitiateGnbProcess` → `ReceiveGnbAntwort`.
 //!
-//! # APERAK Frist
+//! # Three clocks, and none of them is ten Werktage
 //!
-//! **10 Werktage** (BNetzA BK7-24-01-009). Saturdays, Sundays and
-//! public holidays are not Werktage.
+//! | Clock | Window | Fundstelle |
+//! |---|---|---|
+//! | CONTRL | 6 Stunden | CONTRL AHB 1.0 § 1.2 |
+//! | APERAK (Gas) | nächster Werktag 12:00 (Folgeprozess) / **3 Werktage** (Initialprozess) | APERAK AHB 1.1 § 2.3.1 |
+//! | Business answer | **4 / 3 / 2 Werktage**, per Prüfidentifikator | GeLi Gas 3.0 Kap. 3.1–3.3 |
+//!
+//! The familiar **10 Werktage** is none of these: it is the *supplier's*
+//! Vorlauffrist („mindestens 10 Werktage vor Aufnahme der Belieferung", GeLi
+//! Gas 3.0 Kap. 3.2.3) — how far ahead the LFN must send, not how long the GNB
+//! has to answer. Sizing an answer queue with it reports a lapsed Frist as
+//! still running for six Werktage. See
+//! [`mako_fristen::antwort::TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`].
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GeLi Gas 3.0** — BK7-24-01-009 (Beschluss 12.09.2025)
+//! - **GeLi Gas 3.0** — BK7-24-01-009 (Beschluss 12.09.2025, Tenor ab
+//!   01.01.2026), Anlage „Geschäftsprozesse Lieferantenwechsel Gas"
+//! - **BDEW/VKU/GEODE/FNB Gas AWH GeLi Gas V1.2** (26.03.2026, gültig ab
+//!   01.04.2026) — the Sequenzdiagramme that refine the Festlegung's windows
 //! - **UTILMD G AHB 1.1 / 1.2** — EDI@Energy UTILMD Gas profiles
-//! - **APERAK AHB** — 10-Werktage Frist for all GeLi Gas processes
+//! - **APERAK AHB 1.1 § 2.3.1** — the Gas APERAK windows above
 
 use std::collections::HashMap;
 
@@ -377,7 +390,8 @@ pub enum GasSupplierChangeState {
         /// Derived Antwort PID (None for 44019 Bestandsliste).
         response_pid: Option<Pruefidentifikator>,
     },
-    /// GNB sent the Anfrage; awaiting counterpart response within 10 Werktage.
+    /// GNB sent the Anfrage; awaiting the counterpart's answer inside the
+    /// window its Prüfidentifikator publishes.
     GnbPending(GasSupplierChangeData),
     /// Gas supply relationship is active (Lieferbeginn Gas 44001 only).
     Active(GasSupplierChangeData),
@@ -394,7 +408,7 @@ impl mako_engine::workflow::OccupiesBusinessKey for GasSupplierChangeState {
     fn occupies_business_key(&self) -> bool {
         match self {
             // In flight: validating, answered but not yet concluded, awaiting
-            // the counterpart within the 10-Werktage window, or supply running.
+            // the counterpart inside its published window, or supply running.
             Self::Initiated(_)
             | Self::ValidationPassed(_)
             | Self::AntwortGesendet { .. }
@@ -480,7 +494,7 @@ pub enum GasSupplierChangeCommand {
         /// UTC wall-clock time when the inbound UTILMD G was received.
         ///
         /// Used to compute the APERAK Gas *sending* deadline (APERAK AHB 1.0 §2.3.1)
-        /// and the 10-Werktage process deadline (BK7-24-01-009) that are
+        /// and the per-PID business answer deadline that are
         /// registered atomically with the `Initiated` event.
         received_at: OffsetDateTime,
         /// Bilanzierungsmethode from UTILMD G `TM+EM` segment (L1/N1).
@@ -519,7 +533,10 @@ pub enum GasSupplierChangeCommand {
     /// Derives the Antwort PID via `response_pid_for()`. The Antwort UTILMD G
     /// is placed in the outbox atomically with `AntwortGesendet`.
     ///
-    /// **APERAK Frist:** 10 Werktage (BK7-24-01-009).
+    /// The answer is owed on the window this Prüfidentifikator publishes —
+    /// 4 Werktage for a Lieferbeginn, 3 for an Abmeldung or Kündigung, 2 for
+    /// the Ersatz-/Grundversorgung (GeLi Gas 3.0 Kap. 3.1–3.3). Not the
+    /// APERAK's clock, and not the LFN's 10-Werktage Vorlauffrist.
     SendAntwort {
         /// `true` = Bestätigung (accept), `false` = Ablehnung (reject).
         ///
@@ -574,7 +591,7 @@ pub enum GasSupplierChangeCommand {
     },
     /// Mark supply as active (Lieferbeginn Gas 44001 only).
     Activate,
-    /// A registered 10-Werktage deadline fired.
+    /// A registered deadline fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -794,8 +811,8 @@ impl Workflow for GeliGasSupplierChangeWorkflow {
                     // Register two deadlines atomically with the events:
                     //   1. APERAK Gas *sending* deadline (APERAK AHB 1.0 \u00a72.3.1):
                     //      Initialprozess (44001): 3 Werktage; Folgeprozess: n\u00e4chster Werktag 12:00.
-                    //   2. GeLi Gas 10-Werktage *process response* deadline (BK7-24-01-009):
-                    //      The responder must issue the Antwort within 10 WT.
+                    //   2. The business answer deadline, per Prüfidentifikator
+                    //      out of `mako_fristen::antwort` (4 / 3 / 2 WT).
                     let aperak_send_dl = if is_initialprozess {
                         PendingDeadline::new(
                             APERAK_GAS_INITIALPROZESS_LABEL,
@@ -1746,10 +1763,8 @@ mod tests {
     // ── Deadline handling ─────────────────────────────────────────────────────
 
     /// The business answer window comes from `mako_fristen::antwort`, not from
-    /// a literal in this workflow. GeLi Gas 3.0 states 4 / 3 / 2 / 3 Werktage
-    /// per Prozessschritt; the 10 Werktage that used to sit here are the
-    /// **LFN's Vorlauffrist** before Lieferbeginn, and a queue sized by them
-    /// reports a lapsed Frist as still running.
+    /// a literal: GeLi Gas 3.0 states 4 / 3 / 2 Werktage per Prozessschritt,
+    /// while the familiar 10 Werktage is the **LFN's Vorlauffrist**.
     #[test]
     fn the_answer_deadline_is_the_published_one_not_ten_werktage() {
         for &anfrage_pid in ANFRAGE_PIDS {

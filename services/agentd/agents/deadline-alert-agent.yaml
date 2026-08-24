@@ -8,24 +8,19 @@
 # somebody forgot. There is no `execution` block either, so the behaviour is a
 # registered skill: `agentd::skills::DeadlineTriage`.
 #
-# It used to be `execution: { kind: tool-calling }` with an eight-turn ceiling
-# and a 200 000-token budget, and its prompt asked a frontier model to
-# "classify by severity: < 30 min CRITICAL, < 2h WARNING, already overdue
-# BREACH" and to "identify the responsible market participant". That is a
-# subtraction, three comparisons, and reading `partner_mp_id` out of the JSON
-# obsd returned — per deadline event, at whatever rate mako's counterparties
-# approach their Fristen.
+# The work is a subtraction, three comparisons against fixed severity bands,
+# and reading `partner_mp_id` out of the JSON obsd returned — per deadline
+# event, at whatever rate mako's counterparties approach their Fristen. Asking a
+# frontier model for that also makes it untestable: "is 29 minutes CRITICAL?"
+# would only be answerable by calling the model, so a drifting threshold would
+# be invisible to CI, under BNetzA monitoring. The bands live in
+# `skills/deadline.rs` and are pinned at every boundary.
 #
-# Worse, it was untestable. "Is 29 minutes CRITICAL?" could only be answered by
-# calling the model, so a drifting threshold was invisible to CI — under BNetzA
-# monitoring, which is not where one wants to discover a threshold moved. The
-# bands now live in `skills/deadline.rs` and are pinned at every boundary.
-#
-# Nothing about the governance changed. The tool call is still a journaled
-# effect through the policy gate; the clock read is still an effect, so a replay
-# classifies against the instant the original run saw; this manifest still binds
-# the grant, the ceilings and the egress, and still carries a digest a reviewer
-# approves. Governance was never what the model was buying.
+# Governance is unaffected by the absence of a model. The tool call is a
+# journaled effect through the policy gate; the clock read is an effect too, so
+# a replay classifies against the instant the original run saw; this manifest
+# binds the grant, the ceilings and the egress, and carries a digest a reviewer
+# approves.
 #
 # ## One grant, because one tool is called
 #
@@ -111,12 +106,12 @@ spec:
   # A model-free specialist still needs ceilings: a tool server that hangs, or a
   # projection that returns 200 rows every time, is bounded here.
   #
-  # No `max_tokens`, deliberately — and it used to say `max_tokens: 0`, which
-  # read as "an agent that cannot infer must not be allowed to spend" and
-  # actually meant "refuse this agent's first tool call": the budget gate
-  # treats a zero ceiling as exhausted before any effect, tokens or not. The
-  # agent cannot spend a token regardless (`models: {}` — there is no model to
-  # ask); the ceilings that bind something are the ones below.
+  # No `max_tokens`, deliberately. `max_tokens: 0` reads as "an agent that
+  # cannot infer must not be allowed to spend" but means "refuse this agent's
+  # first tool call": the budget gate treats a zero ceiling as exhausted before
+  # any effect, tokens or not. The agent cannot spend a token regardless
+  # (`models: {}` — there is no model to ask); the ceilings that bind something
+  # are the ones below.
   budgets:
     max_steps: 4
     max_effects: 8

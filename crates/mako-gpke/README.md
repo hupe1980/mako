@@ -12,7 +12,7 @@ and BNetzA rulings:
 
 **APERAK** (the transport acknowledgement): **45 Minuten** on a Werktag for
 UTILMD and ORDERS; a Saturday arrival is due Sunday 12:00 Berlin, everything else
-12:00 of the next Werktag (APERAK AHB 1.0 §2.4.1).
+12:00 of the next Werktag (APERAK AHB 1.1 § 2.4.1).
 
 **The business answer** is per Prüfidentifikator and comes from
 `mako_fristen::antwort` — 11:00 / 06:00 / 05:00 / 09:00 Uhr des 1. WT nach dem ÜT
@@ -22,6 +22,37 @@ for the GPKE Teil 2 core processes, 00:00 Uhr des 61. WT for a Neuanlage, the
 GPKE Teil 2 states every window as a wall-clock instant on a Werktag, never as a
 duration: a message arriving Friday afternoon is answerable until Monday morning,
 one arriving Tuesday evening has under sixteen hours.
+
+### There is no 24-hour message window
+
+LFW24 (**BK6-22-024**) implements § 20a EnWG, which requires the *supplier switch
+itself* to complete within 24 hours. GPKE does not express that as a per-message
+deadline: it chains wall-clock instants on the first Werktag after the ÜT —
+07:00, 09:00, 11:00, 12:00 — so the whole sequence fits inside the statutory
+duration. **GPKE Teil 1 Kap. 7 („Fristenberechnung") defines WT, T,
+Zuordnungsbeginn, ÜT and ÜZ and contains no 24-hour Frist at all.**
+
+Reading the statutory 24 hours as a message window is wrong in both directions:
+it expires a Friday-afternoon Anmeldung on Saturday, and it reports a
+Tuesday-11:00 Frist as still running until Tuesday night. Every window in this
+crate therefore comes from `mako_fristen::antwort`, never from a literal, and
+`services/makod/tests/deadline_labels.rs` pins the registration sites to the
+constants the workflows match.
+
+### Meldepflichten — obligations with no answer
+
+Three messages the NB owes around a Lieferbeginn have **no Bestätigung**, so a
+missing one produces no timeout and no alert:
+
+| PID | Message | NB → | Frist |
+|---|---|---|---|
+| 55036 | Information über existierende Zuordnung — **die Identität des LFA** | LFN | 07:00 Uhr des 1. WT nach dem ÜT |
+| 55037 | Beendigung der Zuordnung | LFA | 12:00 Uhr des 1. WT nach dem ÜT |
+| 55038 | Aufhebung einer zukünftigen Zuordnung | LFZ | 12:00 Uhr des 1. WT nach dem ÜT |
+
+**None of the three is implemented** — `edi-energy` carries no UTILMD AHB rules
+for them. They are catalogued with their Fundstellen in `mako_fristen::meldung`
+and the gap is pinned by `services/makod/tests/meldepflicht_coverage.rs`.
 
 ## PID Inventory
 
@@ -47,7 +78,7 @@ one arriving Tuesday evening has under sixteen hours.
 | 55015 | Ablehnung EOG Anmeldung                               | LF → NB     | ✅ Implemented (`gpke-eog`) |
 | 55016 | Kündigung Lieferbeginn                                | LFN → LFA   | ✅ Implemented |
 | 55017/55018 | Bestätigung / Ablehnung Kündigung Lieferbeginn  | LFA → LFN   | ↩ Derived from 55016 accept/reject |
-| 55555 | Anfrage Daten der individuellen Bestellung            | LFN → NB    | ✅ Implemented (GPKE Teil 4, BK6-24-174) |
+| 55555 | Anfrage Daten der individuellen Bestellung            | LFN → NB    | ✅ Implemented (GPKE Teil 4, BK6-22-024 Anlage 1d) |
 
 ### ORDERS/ORDRSP Konfigurationseinrichtung (GPKE Teil 4)
 
@@ -203,8 +234,10 @@ rejection within 24 h.
 | 19102 | Ablehnung Anfrage Stammdaten (NB → LF)             | NB → LF     | ↩ Derived      |
 | 19114 | Ablehnung Anfrage Werte (NB → LF)                  | NB → LF     | ↩ Derived      |
 
-> The response deadline (24 h window `gpke-datenabruf-antwort-24h`) is enforced
-> by a `DeadlineStore` entry registered on every outbound ORDERS Anfrage.
+> The response deadline (`gpke-datenabruf-antwort`) is **1 Werktag** —
+> „Unverzüglich, jedoch spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1", GPKE Teil 4
+> § 3.2 Prozessschritte 2 und 4 — and is enforced by a `DeadlineStore` entry
+> registered on every outbound ORDERS Anfrage.
 
 ### ORDERS Allokationsliste — MSCONS 13014 (GPKE MSCONS Strom)
 
@@ -294,4 +327,6 @@ let events = process.execute(SupplierChangeCommand::ReceiveUtilmd {
   process descriptions by BK6-24-174
 - EDI@Energy UTILMD Strom AHB S2.2 (`FV2026-10-01`)
 - EDI@Energy INVOIC AHB 2.8e / AHB 1.0 (`FV2025-10-01` onwards)
-- EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)
+- EDI@Energy **APERAK AHB 1.1** (`FV2026-10-01`) — § 2.4.1 Strom, § 2.3.1 Gas.
+  2.2 is the APERAK **MIG** revision; AHB and MIG carry different version numbers
+  for every message type except UTILMD

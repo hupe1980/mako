@@ -1,5 +1,5 @@
 [package]
-name        = "tarifbd"
+name        = "productd"
 description = "Product and Tariff Catalog daemon (LF role). Single source of truth for retail energy tariffs (Eintarif/Zweitarif/RLM), Energiedienstleistungen, Telco/Internet bundle products, Tarifpreisblatt JSONB, MaLo->product assignment, EPEX Spot day-ahead prices for para.41a dynamic tariffs. Port :9080."
 version.workspace     = true
 authors.workspace     = true
@@ -10,11 +10,11 @@ rust-version.workspace = true
 publish         = false
 
 [lib]
-name = "tarifbd"
+name = "productd"
 path = "src/lib.rs"
 
 [[bin]]
-name = "tarifbd"
+name = "productd"
 path = "src/main.rs"
 
 [dependencies]

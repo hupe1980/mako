@@ -1,7 +1,7 @@
 //! Signed inbound webhooks: MaKo process outcomes and accepted CPQ quotations.
 //!
 //! Neither route carries an operator token — they are called by `makod`,
-//! `processd` and `tarifbd`, which authenticate with the shared
+//! `processd` and `productd`, which authenticate with the shared
 //! Standard Webhooks signature over the raw body. `main` refuses to start without
 //! `inbound_secret` unless the deployment asked for an unauthenticated posture
 //! by name: a forged CloudEvent here creates contracts and moves supply.
@@ -184,7 +184,7 @@ async fn apply_outcome(
 // ── CPQ: accepted quotation → contract ───────────────────────────────────────
 
 /// `POST /api/v1/webhooks/angebot` — `de.tarif.angebot.angenommen` from
-/// `tarifbd`.
+/// `productd`.
 ///
 /// Creates the Rahmenvertrag and one Versorgungsvertrag per site, from the
 /// **accepted variant of the BO4E `Angebot`**: what the customer was quoted and

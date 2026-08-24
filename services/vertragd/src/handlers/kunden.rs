@@ -338,8 +338,17 @@ pub async fn get_person(
 
 /// `PUT /api/v1/kunden/{id}/zahlungsinformation` — IBAN/BIC/SEPA.
 ///
-/// The IBAN is checked against ISO 13616 mod-97 before storage, so a typo is a
-/// 422 here rather than a returned direct debit weeks later.
+/// **Both bank identifiers are checked before storage**, so a typo is a 422 here
+/// rather than a returned direct debit weeks later:
+///
+/// * the **IBAN** against ISO 7064 MOD-97-10, which catches every
+///   single-character error and every adjacent transposition;
+/// * the **BIC** against the ISO 9362 grammar — 8 or 11 characters, letters
+///   where the standard requires letters. ISO 9362 defines no checksum, so this
+///   is a shape check and nothing more, but a mistyped BIC still routes a
+///   transfer nowhere and the shape catches most of them.
+///
+/// [`Bic`]: rubo4e::identifiers::Bic
 pub async fn put_zahlungsinformation(
     _claims: Claims,
     Extension(ctx): Extension<Arc<Ctx>>,
@@ -354,6 +363,9 @@ pub async fn put_zahlungsinformation(
         && let Err(msg) = sepa::validate_iban(iban)
     {
         return Err(ApiError::unprocessable(format!("invalid IBAN: {msg}")));
+    }
+    if let Some(Err(e)) = typed.bic_checked() {
+        return Err(ApiError::unprocessable(format!("invalid BIC: {e}")));
     }
     let canonical =
         serde_json::to_value(&typed).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
@@ -503,4 +515,60 @@ pub async fn portfolio(
         "total_malos": total_malos,
         "komponenten": rows,
     }))
+}
+
+#[cfg(test)]
+mod zahlungsinformation_tests {
+    use rubo4e::current::Zahlungsinformation;
+
+    fn stated(iban: &str, bic: &str) -> Zahlungsinformation {
+        Zahlungsinformation {
+            iban: Some(iban.to_owned()),
+            bic: Some(bic.to_owned()),
+            ..Default::default()
+        }
+    }
+
+    /// A real German pair passes both checks.
+    #[test]
+    fn a_valid_pair_is_accepted() {
+        let z = stated("DE89370400440532013000", "COBADEFFXXX");
+        assert!(sepa::validate_iban(z.iban.as_deref().expect("iban")).is_ok());
+        assert!(matches!(z.bic_checked(), Some(Ok(_))));
+    }
+
+    /// A BIC of the wrong length is refused. ISO 9362 admits 8 or 11 characters
+    /// and nothing between; a 9-character value is a truncated paste, which is
+    /// how most of them arrive.
+    #[test]
+    fn a_bic_of_the_wrong_length_is_refused() {
+        let z = stated("DE89370400440532013000", "COBADEFFX");
+        assert!(matches!(z.bic_checked(), Some(Err(_))));
+    }
+
+    /// A digit where ISO 9362 requires a letter is refused — the institution
+    /// and country codes are alphabetic.
+    #[test]
+    fn a_bic_with_a_digit_in_the_letter_positions_is_refused() {
+        let z = stated("DE89370400440532013000", "C0BADEFFXXX");
+        assert!(matches!(z.bic_checked(), Some(Err(_))));
+    }
+
+    /// An absent BIC is not an error — BO4E marks the field optional, and a
+    /// SEPA credit transfer inside the EEA does not need one.
+    #[test]
+    fn an_absent_bic_is_not_an_error() {
+        let z = Zahlungsinformation {
+            iban: Some("DE89370400440532013000".to_owned()),
+            ..Default::default()
+        };
+        assert!(z.bic_checked().is_none());
+    }
+
+    /// A masked IBAN — routine on a printed invoice — must not be stored as a
+    /// customer's payment detail.
+    #[test]
+    fn a_masked_iban_is_refused() {
+        assert!(sepa::validate_iban("DE89 **** **** **** 3000").is_err());
+    }
 }

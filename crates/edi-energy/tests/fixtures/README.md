@@ -51,6 +51,7 @@ realistic (but synthetic) market-participant IDs and dates.
 | File                                       | PID   | Description                                |
 |--------------------------------------------|-------|--------------------------------------------|
 | `beispiel_13002_gas_release_2_5.edi`       | 13002 | Messwerte Zählerstand Gas (release 2.5)    |
+| `beispiel_13002_release_2_4c.edi`          | 13002 | Messwerte Zählerstand Strom (release 2.4c) |
 
 ### APERAK (BDEW 2.2, `fv20261001`)
 
@@ -58,6 +59,26 @@ realistic (but synthetic) market-participant IDs and dates.
 |------------------------------------------------|-------|--------------------------------------|
 | `beispiel_29001_verarbeitbarkeitsfehler.edi`   | 29001 | Verarbeitbarkeitsfehler mit FTX       |
 | `beispiel_29002_anerkennungsmeldung.edi`       | 29002 | Anerkennungsmeldung                   |
+
+## Which format version a fixture carries
+
+Every release code a counterparty can still send needs at least one fixture
+carrying it in `UNH` DE 0057 — `cargo xtask validate-release-codes` fails
+otherwise, and the annual-release checklist runs it.
+
+That is more than one code per message type during a transition. MSCONS `2.4c`
+runs until 2026-09-30 and `2.5` starts the next day, so both are on the wire
+within the same year and both are witnessed here. Only a **superseded** version
+needs no fixture: `ReleaseRegistry::is_acceptable_on` refuses it at the BDEW
+default receive tolerance of zero days, so retiring its fixtures with it is
+correct.
+
+`cargo xtask generate-fixtures` fills gaps for PIDs that have no fixture at all,
+stamping each with the release **in force today** — never the newest one shipped.
+`valid_from` is a hard edge (Allgemeine Festlegungen 6.1 §2.5): a message stamped
+with the next format version is rejected until its Anwendungszeitpunkt, so
+generating at the newest release produces a corpus of messages nobody can send
+yet and leaves the in-force version unexercised.
 
 ## Known Limitations
 

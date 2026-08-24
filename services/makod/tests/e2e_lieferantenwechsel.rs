@@ -10,7 +10,8 @@
 //! by the new supplier (LFN):
 //!
 //! 1. **LFN → NB**: Anfrage Lieferbeginn (PID 55001) — the NB must approve
-//!    or reject the supply start within **24 wall-clock hours** (BK6-22-024).
+//!    or reject the supply start by **11:00 Uhr des 1. Werktags nach dem ÜT**
+//!    (BK6-24-174 GPKE Teil 2 § 2.1.2 Nr. 5/6).
 //! 2. **LFN → LFA**: Kündigung Lieferbeginn (PID 55016) — the old supplier
 //!    **must always accept** the cancellation per LFW24; there is no rejection
 //!    path for PID 55016 (LFA responds with 55017 Bestätigung).

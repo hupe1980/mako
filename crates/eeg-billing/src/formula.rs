@@ -1004,10 +1004,10 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             // §53 Abs. 3 EEG 2023 — Ausfallvergütung: "verringert sich der
             // anzulegende Wert um 20 Prozent", rounded to two decimals.
             //
-            // The engine applies it. It used to be the caller's job, and every
-            // caller passed the plant's ordinary tariff straight through, so a
-            // plant on the Ausfallvergütung was paid the full rate — 25 % more
-            // than the statute allows, on the one scheme that exists because the
+            // The **engine** applies it, not the caller. Left to the caller,
+            // the plant's ordinary tariff passes straight through and a plant on
+            // the Ausfallvergütung is paid the full rate — 25 % more than the
+            // statute allows, on the one scheme that exists because the
             // operator's Direktvermarkter dropped out.
             let rate_ct = if ist_ausfallverguetung {
                 (rate_ct * dec!(0.8)).round_dp(2)

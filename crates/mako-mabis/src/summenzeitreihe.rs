@@ -629,13 +629,11 @@ mod tests {
 // message that files the territory EIC as the Meldepunkt parses, validates and
 // is accepted by the BIKO, which then settles against the wrong point.
 //
-// A `validate_identifiers()` method used to refuse that at build time, because
-// `BilanzierungsgebietId` was an unchecked `String` newtype and a caller could
-// put a 33-character Zählpunktbezeichnung in it. With the territory typed as a
-// 16-character Y-type EIC and the Meldepunkt as a 33-character
-// Zählpunktbezeichnung, the two cannot hold the same value — the check could
-// no longer fail, and a control that cannot fire is worse than none, because
-// review reads it as protection. The types are the protection now;
+// There is no runtime `validate_identifiers()` check for it. With the territory
+// typed as a 16-character Y-type EIC and the Meldepunkt as a 33-character
+// Zählpunktbezeichnung, the two cannot hold the same value, so such a check
+// could never fire — and a control that cannot fire is worse than none, because
+// review reads it as protection. The types are the protection;
 // `identifier_tests` pins that.
 
 #[cfg(test)]
@@ -664,7 +662,7 @@ mod identifier_tests {
         .build()
     }
 
-    /// A malformed Meldepunkt no longer reaches this check — it cannot be
+    /// A malformed Meldepunkt never reaches this check — it cannot be
     /// constructed. The 16-character territory EIC, the empty string and every
     /// other wrong shape fail at `MabisZaehlpunktId::new`, which `Deserialize`
     /// also runs.
@@ -680,10 +678,10 @@ mod identifier_tests {
 
     /// The Meldepunkt/Bilanzierungsgebiet swap cannot be built.
     ///
-    /// This replaces a runtime equality check. A Zählpunktbezeichnung is 33
-    /// characters and a Bilanzierungsgebiet is a 16-character EIC, so neither
-    /// can be parsed into the other's type — the substitution the BIKO cannot
-    /// detect is refused before a Summenzeitreihe exists.
+    /// The types are the check, not a runtime comparison: a
+    /// Zählpunktbezeichnung is 33 characters and a Bilanzierungsgebiet a
+    /// 16-character EIC, so neither parses into the other and the substitution
+    /// the BIKO cannot detect is refused before a Summenzeitreihe exists.
     #[test]
     fn the_meldepunkt_territory_swap_is_unrepresentable() {
         // A Meldepunkt offered as a territory: wrong length.

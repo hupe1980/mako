@@ -423,15 +423,25 @@ impl InvoicCheckEngine {
     ///   exceeds contractual/regulatory payment term.
     ///   Produces a `Warn` finding (`ZahlungszielExceeded`).
     ///
-    /// Source: §7 Allgemeine Festlegungen V6.1d (30 days standard);
-    ///         BK6-22-024 §5; BK7-24-01-009 §5.
+    /// Source: §7 Allgemeine Festlegungen V6.1d (30 days standard).
+    ///
+    /// # Compared as calendar dates, not timestamps
+    ///
+    /// BO4E types both fields `format: date-time`, but BDEW INVOIC transmits
+    /// them as DTM qualifier 102 — a bare `YYYYMMDD` — and a Zahlungsziel is a
+    /// term in *days*. Senders pin the timestamp to midnight in their own
+    /// offset, so subtracting two `OffsetDateTime`s measures the offsets as well
+    /// as the days: an invoice issued `2026-07-01T00:00+02:00` and due
+    /// `2026-07-31T00:00Z` is 30 calendar days but 30 days *plus two hours*,
+    /// and one issued at `23:00Z` reads as 29. `rechnungsdatum_date()` and
+    /// `faelligkeitsdatum_date()` take the date in the offset the payload
+    /// carries, which is the comparison the rule is about.
     fn check_zahlungsziel(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
-        let Some(faellig) = rechnung.faelligkeitsdatum else {
+        let Some(faellig) = rechnung.faelligkeitsdatum_date() else {
             return; // DTM+92 absent — not required on all PID types
         };
-        let rechnungs_datum = match rechnung.rechnungsdatum {
-            Some(d) => d,
-            None => return, // Cannot compute term without invoice date
+        let Some(rechnungs_datum) = rechnung.rechnungsdatum_date() else {
+            return; // Cannot compute term without invoice date
         };
 
         if faellig < rechnungs_datum {
@@ -468,25 +478,35 @@ impl InvoicCheckEngine {
         }
     }
 
-    /// Stage 1: Verify that every billing period has start < end.
+    /// Stage 1: Verify that every billing period is orientated forwards.
     ///
-    /// All period fields are native `time::Date` in rubo4e v0.5 — compared
-    /// directly. `billing_period()` returns `None` when either bound is absent,
-    /// which correctly skips the check for partially-specified periods.
+    /// **The two periods on a `Rechnung` use different interval conventions, and
+    /// the check differs accordingly.** BO4E is not uniform here:
+    ///
+    /// | Field | Kind | Interval | Invalid when |
+    /// |---|---|---|---|
+    /// | `rechnungsperiode` | `Zeitraum` **date** pair | `[start, end]` — „Enddatum … ist **inklusiv**" | `start > end` |
+    /// | `lieferungszeitraum` `von` / `bis` | **date-time** pair | `[start, end)` | `start >= end` |
+    ///
+    /// So a Rechnungsperiode with `start == end` is a legitimate **one-day**
+    /// period — the most common shape in a daily-granularity payload — while a
+    /// Lieferung with `von == bis` is an empty interval.
     fn check_periods(rechnung: &Rechnung, findings: &mut Vec<Finding>) {
-        // Message-level period (Rechnungsperiode) via convenience method.
-        if let Some((start, end)) = rechnung.billing_period()
-            && start >= end
-        {
-            findings.push(Finding::dispute(
-                FindingKind::PeriodInvalid,
-                format!("Message-level billing period invalid: start {start} ≥ end {end}"),
-                None,
-                None,
-                None,
-            ));
+        // Message-level period (Rechnungsperiode) — inclusive end.
+        if let Some(period) = rechnung.billing_period() {
+            let (start, end) = (*period.start(), *period.end());
+            if start > end {
+                findings.push(Finding::dispute(
+                    FindingKind::PeriodInvalid,
+                    format!("Message-level billing period invalid: start {start} > end {end}"),
+                    None,
+                    None,
+                    None,
+                ));
+            }
         }
-        // Line-level periods (Lieferung von/bis via lieferungszeitraum).
+        // Line-level periods (Lieferung von/bis) — half-open, so an empty
+        // interval is invalid too.
         for pos in rechnung.rechnungspositionen.iter().flatten() {
             if let (Some(start), Some(end)) = (pos.lieferung_von_date(), pos.lieferung_bis_date())
                 && start >= end
@@ -612,6 +632,45 @@ impl InvoicCheckEngine {
                 Some(brutto),
             ));
         }
+
+        // **The breakdown must add up to the total it breaks down.**
+        //
+        // BO4E states this rule outright, and rubo4e validates it since 0.10;
+        // this check verified `netto + steuer == brutto` and never looked
+        // inside `steuerbetraege`. The two figures are read by different
+        // parties for different purposes — the recipient computes its
+        // Vorsteuerabzug from the per-rate breakdown (§14 Abs. 4 Nr. 8 UStG,
+        // §15 Abs. 1) and pays from the total — so an invoice stating 19 % on
+        // 50 EUR and 7 % on 10 EUR while `gesamtsteuer` says 100 EUR is
+        // internally consistent to neither of them, and passed.
+        //
+        // Skipped when the breakdown is absent: its absence is already a
+        // `SteuerMissing` finding above, and a reverse-charged invoice states
+        // no amounts by design.
+        if let Some(steuer) = steuer
+            && !breakdown.is_empty()
+            && !reverse_charge
+        {
+            let summed = breakdown
+                .iter()
+                .filter_map(|b| b.steuerwert.and_then(euro_from_decimal))
+                .fold(EuroAmount::ZERO, |acc, v| acc + v);
+            if !steuer.within_tolerance_ppm(summed, config.total_tolerance_ppm) {
+                findings.push(Finding::dispute(
+                    FindingKind::SteuerMismatch,
+                    format!(
+                        "gesamtsteuer = {steuer} EUR, but the {} Steuerbetrag entries \
+                         sum to {summed} EUR. §14 Abs. 4 Nr. 8 UStG makes the per-rate \
+                         breakdown the basis of the recipient's Vorsteuerabzug, so it \
+                         must agree with the total it is a breakdown of.",
+                        breakdown.len()
+                    ),
+                    None,
+                    Some(summed),
+                    Some(steuer),
+                ));
+            }
+        }
     }
 
     fn check_total(
@@ -668,8 +727,8 @@ impl InvoicCheckEngine {
         // Both are native time::Date in rubo4e v0.5.
         let billing_date: time::Date = rechnung
             .billing_period()
-            .map(|(start, _)| start)
-            .or(rechnung.rechnungsdatum)
+            .map(|p| *p.start())
+            .or_else(|| rechnung.rechnungsdatum_date())
             .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
 
         if !preisblatt_store.has_preisblatt_for(sender_mp_id) {
@@ -726,14 +785,48 @@ impl InvoicCheckEngine {
             // This prevents a ToU-banded NB INVOIC from accidentally passing
             // plausibility when a flat band price coincidentally equals a ToU rate.
             let tol = config.tariff_tolerance_ppm;
-            let flat_prices: Vec<EuroAmount> = preisblatt
-                .preispositionen
-                .iter()
-                .flatten()
-                .flat_map(|pp| pp.preisstaffeln.iter().flatten())
-                .filter_map(|ps| ps.preis)
-                .filter_map(euro_from_decimal)
-                .collect();
+
+            // **The Staffel that applies to this quantity, not every Staffel.**
+            //
+            // A Preisposition states its price in tiers — `0 – 1000 → 0.30`,
+            // `1001 – 2000 → 0.25`, `2001+ → 0.20`. Collecting every tier's price
+            // and asking whether the invoice matches *any* of them ignores the
+            // bounds completely: it accepted a 500 kWh position billed at the
+            // 2001+ rate, which is the cheapest tier applied to the smallest
+            // quantity and exactly the deviation this check exists to catch.
+            //
+            // `select_for` picks the tier by the position's own quantity and
+            // implements BO4E's gap rule with it — the schema states bounds as
+            // `0 – 1000, 1001 – 2000` and rules that a value *between* two tiers
+            // („1000.6") *„rutscht in die obere Zone"*, which a plain
+            // `von <= x <= bis` scan finds no tier for at all.
+            //
+            // Without a quantity there is no tier to select, so the check falls
+            // back to every published price — permissive, but it only widens
+            // what is accepted and never invents a deviation.
+            use rubo4e::convenience::PreisstaffelSliceExt as _;
+            let flat_prices: Vec<EuroAmount> = match pos.positions_menge.wert_decimal() {
+                Some(menge) => preisblatt
+                    .preispositionen
+                    .iter()
+                    .flatten()
+                    .filter_map(|pp| {
+                        pp.preisstaffeln
+                            .as_deref()
+                            .and_then(|staffeln| staffeln.select_for(menge))
+                    })
+                    .filter_map(|ps| ps.preis)
+                    .filter_map(euro_from_decimal)
+                    .collect(),
+                None => preisblatt
+                    .preispositionen
+                    .iter()
+                    .flatten()
+                    .flat_map(|pp| pp.preisstaffeln.iter().flatten())
+                    .filter_map(|ps| ps.preis)
+                    .filter_map(euro_from_decimal)
+                    .collect(),
+            };
 
             // Extract (zaehlzeitregister, price) pairs from zeitvariablePreispositionen.
             // Band codes are validated on PUT (M5) — every entry has a non-empty register.
@@ -890,8 +983,8 @@ impl InvoicCheckEngine {
         // Checks 4–5 against PreisblattMessung.preispositionen.
         let billing_date: time::Date = rechnung
             .billing_period()
-            .map(|(start, _)| start)
-            .or(rechnung.rechnungsdatum)
+            .map(|p| *p.start())
+            .or_else(|| rechnung.rechnungsdatum_date())
             .unwrap_or_else(|| time::OffsetDateTime::now_utc().date());
 
         let published_prices: Vec<EuroAmount> = preisblatt_messung
@@ -1219,6 +1312,13 @@ mod tests {
             .expect("valid ISO date")
     }
 
+    /// A market date as the `date-time` BO4E declares for `rechnungsdatum` and
+    /// `faelligkeitsdatum`: midnight UTC, which is how a producer pins a value
+    /// BDEW transmits as a bare `YYYYMMDD`.
+    fn parse_dt(s: &str) -> time::OffsetDateTime {
+        parse_date(s).midnight().assume_utc()
+    }
+
     /// Parse a `"YYYY-MM-DD"` string to midnight UTC `OffsetDateTime`.
     fn periode(start: &str, end: &str) -> Zeitraum {
         Zeitraum {
@@ -1269,7 +1369,7 @@ mod tests {
         });
         Rechnung {
             rechnungsperiode: Some(periode("2024-12-01", "2024-12-31")),
-            rechnungsdatum: Some(parse_date("2025-01-15")),
+            rechnungsdatum: Some(parse_dt("2025-01-15")),
             gesamtnetto: gesamtnetto.map(betrag),
             gesamtsteuer: steuer.map(|w| Betrag {
                 wert: Some(w),
@@ -1705,6 +1805,168 @@ mod tests {
         );
     }
 
+    /// A price sheet stated in **tiers**, as BO4E states them: bounds on
+    /// `staffelgrenzeVon` / `staffelgrenzeBis`, cheaper as the quantity grows.
+    fn tiered_store() -> InMemoryPreisblattStore {
+        use rust_decimal::Decimal;
+        let mut store = InMemoryPreisblattStore::new();
+        let tier = |von: i64, bis: Option<i64>, preis: &str| Preisstaffel {
+            staffelgrenze_von: Some(Decimal::from(von)),
+            staffelgrenze_bis: bis.map(Decimal::from),
+            preis: Some(Decimal::from_str_exact(preis).expect("valid decimal")),
+            ..Default::default()
+        };
+        store.insert(
+            SENDER.to_owned(),
+            PreisblattNetznutzung {
+                gueltigkeit: None,
+                herausgeber: None,
+                preispositionen: Some(vec![Preisposition {
+                    preisstaffeln: Some(vec![
+                        tier(0, Some(1000), "0.30"),
+                        tier(1001, Some(2000), "0.25"),
+                        tier(2001, None, "0.20"),
+                    ]),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        );
+        store
+    }
+
+    /// A 500 kWh position billed at the **2001+** rate is a deviation.
+    ///
+    /// The check used to collect every tier's price and ask whether the invoice
+    /// matched *any* of them, which ignored the bounds completely: the cheapest
+    /// tier applied to the smallest quantity passed silently. rubo4e 0.10's
+    /// `PreisstaffelSliceExt::select_for` picks the tier the quantity actually
+    /// falls in, so the position is measured against 0.30 and disputed.
+    #[test]
+    fn a_position_billed_at_the_wrong_staffel_is_a_deviation() {
+        let invoic_price = EuroAmount::from_raw_units(20_000); // 0.20 EUR/kWh — the 2001+ tier
+        let pos = make_pos(
+            1,
+            "DE001",
+            Some("500.0"), // …but only 500 kWh, which is the 0 – 1000 tier
+            Some(invoic_price),
+            Some(EuroAmount::from_raw_units(10_000_000)), // 500 × 0.20
+        );
+        let r = make_rechnung(vec![pos], None);
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &tiered_store(), &CheckConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::TariffDeviation),
+            "500 kWh belongs in the 0 – 1000 tier at 0.30, not the 2001+ tier at 0.20"
+        );
+    }
+
+    /// The tier the quantity really falls in passes.
+    #[test]
+    fn a_position_billed_at_its_own_staffel_is_clean() {
+        let invoic_price = EuroAmount::from_raw_units(30_000); // 0.30 EUR/kWh
+        let pos = make_pos(
+            1,
+            "DE001",
+            Some("500.0"),
+            Some(invoic_price),
+            Some(EuroAmount::from_raw_units(15_000_000)), // 500 × 0.30
+        );
+        let r = make_rechnung(vec![pos], None);
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &tiered_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::TariffDeviation)
+        );
+    }
+
+    /// BO4E's **gap rule**: a quantity between two tiers „rutscht in die obere
+    /// Zone", so 1000.6 kWh bills at the `1001 – 2000` rate rather than matching
+    /// no tier at all.
+    #[test]
+    fn a_quantity_in_the_gap_between_two_staffeln_bills_at_the_upper_one() {
+        let invoic_price = EuroAmount::from_raw_units(25_000); // the 1001 – 2000 tier
+        let pos = make_pos(
+            1,
+            "DE001",
+            Some("1000.6"),
+            Some(invoic_price),
+            Some(EuroAmount::from_raw_units(25_015_000)), // 1000.6 × 0.25
+        );
+        let r = make_rechnung(vec![pos], None);
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &tiered_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::TariffDeviation),
+            "1000.6 falls between the tiers and rutscht in die obere Zone (1001 – 2000)"
+        );
+    }
+
+    /// A breakdown that does not add up to `gesamtsteuer` is a dispute.
+    ///
+    /// The recipient's Vorsteuerabzug comes from the per-rate entries and its
+    /// payment from the total; when the two disagree the invoice is usable for
+    /// neither. Checked since the rule became explicit in BO4E.
+    #[test]
+    fn a_tax_breakdown_that_does_not_sum_to_gesamtsteuer_is_a_dispute() {
+        use rust_decimal::Decimal;
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000_000)));
+        // gesamtsteuer says 19.00; the single entry says 5.00.
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(1_900_000)));
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(101_900_000)));
+        r.steuerbetraege = Some(vec![rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Ust),
+            steuersatz: Some(Decimal::from(19)),
+            basiswert: Some(Decimal::from(1000)),
+            steuerwert: Some(Decimal::from(5)),
+            ..Default::default()
+        }]);
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMismatch),
+            "a breakdown summing to 5.00 against a stated 19.00 must be disputed"
+        );
+    }
+
+    /// A breakdown that does add up passes — including one split across rates.
+    #[test]
+    fn a_tax_breakdown_split_across_rates_that_sums_is_clean() {
+        use rust_decimal::Decimal;
+        let mut r = make_rechnung(vec![], Some(EuroAmount::from_raw_units(100_000_000)));
+        r.gesamtsteuer = Some(betrag(EuroAmount::from_raw_units(2_600_000))); // 26.00
+        r.gesamtbrutto = Some(betrag(EuroAmount::from_raw_units(102_600_000)));
+        let entry = |satz: i64, basis: i64, wert: i64| rubo4e::current::Steuerbetrag {
+            steuerart: Some(rubo4e::current::Steuerart::Ust),
+            steuersatz: Some(Decimal::from(satz)),
+            basiswert: Some(Decimal::from(basis)),
+            steuerwert: Some(Decimal::from(wert)),
+            ..Default::default()
+        };
+        r.steuerbetraege = Some(vec![entry(19, 100, 19), entry(7, 100, 7)]);
+        let report =
+            InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
+        assert!(
+            !report
+                .findings
+                .iter()
+                .any(|f| f.kind == FindingKind::SteuerMismatch),
+            "19 + 7 = 26, which is what gesamtsteuer states"
+        );
+    }
+
     #[test]
     fn tariff_deviation_is_dispute() {
         let tariff_price = EuroAmount::from_raw_units(3_456); // 0.03456 EUR/kWh (PRICAT)
@@ -1852,8 +2114,8 @@ mod tests {
     #[test]
     fn zahlungsziel_within_limit_no_finding() {
         let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_date("2026-07-01"));
-        r.faelligkeitsdatum = Some(parse_date("2026-07-31")); // exactly 30 days
+        r.rechnungsdatum = Some(parse_dt("2026-07-01"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-07-31")); // exactly 30 days
 
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
@@ -1869,8 +2131,8 @@ mod tests {
     #[test]
     fn zahlungsziel_exceeded_is_warn() {
         let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_date("2026-07-01"));
-        r.faelligkeitsdatum = Some(parse_date("2026-09-01")); // 62 days — exceeds 30
+        r.rechnungsdatum = Some(parse_dt("2026-07-01"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-09-01")); // 62 days — exceeds 30
 
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
@@ -1891,8 +2153,8 @@ mod tests {
     #[test]
     fn zahlungsziel_before_invoice_date_is_dispute() {
         let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_date("2026-07-15"));
-        r.faelligkeitsdatum = Some(parse_date("2026-07-01")); // before invoice date
+        r.rechnungsdatum = Some(parse_dt("2026-07-15"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-07-01")); // before invoice date
 
         let report =
             InvoicCheckEngine::check(31001, SENDER, &r, &empty_store(), &CheckConfig::default());
@@ -1909,8 +2171,8 @@ mod tests {
     #[test]
     fn zahlungsziel_check_disabled_at_zero() {
         let mut r = make_rechnung(vec![], None);
-        r.rechnungsdatum = Some(parse_date("2026-01-01"));
-        r.faelligkeitsdatum = Some(parse_date("2026-12-31")); // 364 days — would normally trigger
+        r.rechnungsdatum = Some(parse_dt("2026-01-01"));
+        r.faelligkeitsdatum = Some(parse_dt("2026-12-31")); // 364 days — would normally trigger
 
         let config = CheckConfig {
             max_zahlungsziel_days: 0,

@@ -3,7 +3,9 @@
 //! The NB receives a Stornierungsanfrage (UTILMD 55022) from the LFN requesting
 //! cancellation of a previously submitted Anmeldung, Abmeldung, or Kündigung.
 //! The NB must respond with a positive (55023) or negative (55024) APERAK
-//! within **24 wall-clock hours** per BK6-22-024 §5.
+//! before it answers the *original* message — GPKE Teil 4 Kap. 5 makes the
+//! Stornierung admissible only while that message is unanswered, and publishes
+//! no window of its own.
 //!
 //! # State machine
 //!
@@ -27,7 +29,7 @@ use mako_engine::{
 };
 use mako_gpke::{
     GpkeStornierungCommand, GpkeStornierungState, GpkeStornierungWorkflow,
-    STORNIERUNG_GPKE_APERAK_WINDOW_LABEL,
+    STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -179,7 +181,7 @@ async fn timeout_fires_while_awaiting_aperak() {
 
     p.execute(GpkeStornierungCommand::TimeoutExpired {
         deadline_id: DeadlineId::new(),
-        label: Box::from(STORNIERUNG_GPKE_APERAK_WINDOW_LABEL),
+        label: Box::from(STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL),
     })
     .await
     .expect("TimeoutExpired must succeed from ValidationPassed");
@@ -230,9 +232,11 @@ async fn domain_data_preserved_in_validation_passed() {
 #[test]
 fn aperak_window_label_is_correct() {
     assert!(
-        STORNIERUNG_GPKE_APERAK_WINDOW_LABEL.contains("24h")
-            || STORNIERUNG_GPKE_APERAK_WINDOW_LABEL.contains("gpke-stornierung"),
-        "aperak window label must identify the 24h gpke-stornierung window: {STORNIERUNG_GPKE_APERAK_WINDOW_LABEL}",
+        STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL.contains("gpke-stornierung")
+            && !STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL.contains("24h"),
+        "the Stornierung window is the *original* message's Antwortfrist — no \
+         Festlegung publishes a 24-hour one (GPKE Teil 4 Kap. 5): \
+         {STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL}",
     );
 }
 

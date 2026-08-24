@@ -172,8 +172,8 @@ pub fn into_rechnung(document: &InvoiceDocument) -> Rechnung {
     let settlement_type = invoice.settlement_type;
     let mut rechnung = Rechnung::builder()
         .rechnungsnummer(document.rechnungsnummer.clone())
-        .rechnungsdatum(document.invoice_date)
-        .faelligkeitsdatum(document.due_date)
+        .rechnungsdatum(as_bo4e_timestamp(document.invoice_date))
+        .faelligkeitsdatum(as_bo4e_timestamp(document.due_date))
         .rechnungsperiode(lz)
         .gesamtnetto(betrag(invoice.total_eur))
         // §14 Abs. 4 Nr. 8 UStG: the rate and the tax amount, or the note
@@ -256,6 +256,26 @@ fn zu_zahlen_eur(document: &InvoiceDocument) -> rust_decimal::Decimal {
 }
 
 /// A EUR amount as BO4E states one.
+/// A BO4E date-only market value as the `date-time` the schema declares.
+///
+/// BDEW INVOIC transmits `rechnungsdatum` and `faelligkeitsdatum` as DTM
+/// qualifier 102 — a bare `YYYYMMDD` — while BO4E types both `format: date-time`.
+///
+/// **Midnight UTC.** `Rechnung::rechnungsdatum_date()` reads the date in the
+/// offset the payload carries, so `+00:00` reads back as the date that went in
+/// and stays that date under any later normalisation; a `+01:00` midnight
+/// becomes the previous day the moment someone converts it.
+///
+/// `None` for a year outside RFC 3339's `0000`–`9999`, which the field
+/// serialises as. The field is optional and an invoice with no billing period
+/// has no issue date, so it is omitted rather than made fatal — rejecting a
+/// periodless invoice is the engine's job, not the serializer's.
+fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
+    (0..=9999)
+        .contains(&date.year())
+        .then(|| date.midnight().assume_utc())
+}
+
 fn betrag(wert: rust_decimal::Decimal) -> Betrag {
     Betrag::builder()
         .wert(wert)

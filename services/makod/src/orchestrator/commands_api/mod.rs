@@ -886,10 +886,8 @@ mod tests {
         }
     }
 
-    /// `mabis.abrechnung.einleiten` must spawn a new billing process.
-    ///
-    /// Regression guard for F-001: before the fix, this command returned
-    /// `DispatchError::NotImplemented` instead of `DispatchOutcome::Spawned`.
+    /// `mabis.abrechnung.einleiten` must spawn a new billing process
+    /// (`DispatchOutcome::Spawned`), not report `NotImplemented`.
     #[tokio::test]
     async fn dispatch_mabis_einleiten_spawns_process() {
         let state = mabis_dispatch_state(&["BKV"]).await;

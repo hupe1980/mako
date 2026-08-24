@@ -28,7 +28,10 @@
 //!
 //! - **BDEW GPKE Teil 2** — Beendigung der Zuordnung
 //! - **UTILMD S2.1/S2.2** — EDI@Energy message format
-//! - **APERAK 2.x** — **24h** wall-clock Frist (BK6-22-024 §4)
+//! - **APERAK AHB 1.0 § 2.4.1** — technical acknowledgement, **45 Minuten** on a
+//!   weekday for a UTILMD. A separate clock from the business answer window,
+//!   which GPKE Teil 2 states as a wall-clock instant on the 1. Werktag nach
+//!   dem ÜT.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{

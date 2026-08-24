@@ -31,7 +31,7 @@ pub const DEAD_LETTER_ATTEMPTS: i16 = 5;
 /// The BO4E schema version a `Rechnung` was read under.
 ///
 /// Server-derived provenance, taken from the type that parsed it rather than
-/// written as a literal: a hard-coded `"v202607.0.0"` in four call sites keeps
+/// written as a literal: a hard-coded release string in four call sites keeps
 /// claiming the old version for a whole release after `rubo4e` moves on, and
 /// the column is what a later reader uses to decide how to interpret the JSONB.
 #[must_use]

@@ -669,9 +669,9 @@ mod tests {
     /// Regression test for the NB-role PID conflict between WiM Stammdaten
     /// UEBERMITTLUNG_PIDS (17102..=17133) and GPKE-owned PIDs in that range.
     ///
-    /// Before the fix, `!roles.is_all() && roles.contains(Nb)` caused WiM to
-    /// register GPKE PIDs → "wim-stammdaten", overwriting GPKE's entries and
-    /// silently misrouting messages.
+    /// A bare `!roles.is_all() && roles.contains(Nb)` has WiM register the
+    /// GPKE-owned PIDs in that range to "wim-stammdaten", overwriting GPKE's
+    /// entries and silently misrouting the messages.
     #[test]
     fn nb_role_sperrung_not_overwritten_by_stammdaten_range() {
         let nb = DeploymentRoles::from_roles([Marktrolle::Nb]);

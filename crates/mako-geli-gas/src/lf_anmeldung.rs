@@ -82,8 +82,8 @@ pub const ANTWORT_PIDS_LF: &[u32] = &[44002, 44003, 44005, 44006, 44017, 44018];
 /// Deadline label for the counterparty's published answer window.
 ///
 /// The window itself comes from `mako_fristen::antwort` — 4 / 3 / 3 Werktage by
-/// PID, never a flat number. The 10 Werktage this label used to name are the
-/// **LFN's own Vorlauffrist** before Lieferbeginn, a different clock entirely.
+/// PID, never a flat number. The familiar 10 Werktage is the **LFN's own
+/// Vorlauffrist** before Lieferbeginn, a different clock entirely.
 pub const GNB_RESPONSE_WINDOW_LABEL: &str = "geli-gas-lf-anmeldung-antwortfrist";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
@@ -121,7 +121,7 @@ pub enum GeliGasLfAnmeldungEvent {
     },
     /// Accepted Lieferbeginn Gas supply activated (44001 only).
     Activated,
-    /// 10-Werktage response deadline expired without GNB acknowledgement.
+    /// The GNB's answer window lapsed without a Bestätigung or Ablehnung.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -167,7 +167,8 @@ pub enum GeliGasLfAnmeldungState {
     /// No outbound Anfrage sent yet.
     #[default]
     New,
-    /// UTILMD G 44001/44002 sent; awaiting GNB response (10 Werktage).
+    /// UTILMD G 44001/44002 sent; awaiting the GNB's answer (4 Werktage
+    /// for a 44001 Anmeldung — GeLi Gas 3.0 Kap. 3.2.3).
     Pending(GeliGasLfAnmeldungData),
     /// GNB accepted — supply confirmed (Bestätigung received).
     Active(GeliGasLfAnmeldungData),
@@ -259,7 +260,7 @@ pub enum GeliGasLfAnmeldungCommand {
     /// Dispatched by `processd` after confirming activation downstream (e.g.
     /// MSCONS metering data received, or ERP billing system activated).
     Activate,
-    /// 10-Werktage response deadline fired.
+    /// The GNB's answer window fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -276,7 +277,10 @@ impl CommandPayload for GeliGasLfAnmeldungCommand {}
 ///
 /// **Initiation:** ERP calls `geli.lieferbeginn.anmelden` via `POST /api/v1/commands`.
 /// **Completion:** `Activate` command after ERP confirms supply is live.
-/// **Deadline:** 10 Werktage (BK7-24-01-009) from the time the outbound UTILMD G is sent.
+/// **Deadline:** the window the outbound Prüfidentifikator publishes — 4
+/// Werktage for a 44001 Anmeldung (GeLi Gas 3.0 Kap. 3.2.3), resolved through
+/// [`mako_fristen::antwort`]. The familiar 10 Werktage is the LFN's own
+/// *Vorlauffrist*, not the GNB's answer window.
 pub struct GeliGasLfAnmeldungWorkflow;
 
 impl Workflow for GeliGasLfAnmeldungWorkflow {

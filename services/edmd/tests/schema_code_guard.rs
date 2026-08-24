@@ -199,7 +199,7 @@ fn check_list(ddl: &str, column: &str) -> Vec<String> {
         .collect()
 }
 
-// NOTE: `meter_reads` and `esa_typ2_reads` are no longer declared in this
+// NOTE: `meter_reads` and `esa_typ2_reads` are not declared in this
 // migration — they (and their `source` / `quality` / `sparte` /
 // `allocation_version` / `delivery_path` CHECK constraints) are created and
 // owned by the `meterstore` crate. The corresponding enum⇄CHECK guards live
@@ -436,7 +436,7 @@ fn the_column_guard_catches_a_misnamed_select() {
         .expect("gas_quality_data is declared");
     assert!(
         gas.contains("source_pid") && !gas.contains("pid"),
-        "the column is `source_pid`; `pid` is the name that used to be queried"
+        "the column is `source_pid`, never a bare `pid`"
     );
 
     let bad = r#"sqlx::query("SELECT period_from, pid FROM gas_quality_data WHERE malo_id = $1")"#;

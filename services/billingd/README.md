@@ -1,7 +1,7 @@
 # billingd — Multi-Product Energy Billing Engine
 
 `billingd` is a **pure calculation service**: no grid topology knowledge, no EDIFACT,
-no customer management. It pulls product definitions from `tarifbd`, consumption from
+no customer management. It pulls product definitions from `productd`, consumption from
 `edmd`, and grid pass-through costs from `marktd`.
 
 | Feature | Detail |
@@ -10,7 +10,7 @@ no customer management. It pulls product definitions from `tarifbd`, consumption
 | **Database** | PostgreSQL (billing_records) |
 | **Authn** | OIDC/JWT on every business route — fail-closed at startup (`allow_insecure_no_auth` for dev) |
 | **Authz** | Cedar ABAC (`policies/billingd.cedar`) on every business route: tenant isolation plus a market-role gate on issuing, correcting and releasing |
-| **Product API** | `Product` typed enum — `#[serde(tag="category")]` deserialization from tarifbd JSONB |
+| **Product API** | `Product` typed enum — `#[serde(tag="category")]` deserialization from productd JSONB |
 | **Categories** | 13: STROM, GAS, WAERME, WASSER, SOLAR, EEG, EINSPEISUNG, WAERMEPUMPE, WALLBOX, HEMS, EMOBILITY, ENERGIEDIENSTLEISTUNG, SHARING |
 | **§41a EPEX dynamic** | 15-min Lastgang × 15-min EPEX day-ahead (SDAC MTU) → `STROM` dynamic category |
 | **§41a iMSys guard** | Hard error when `dynamic_epex=true` and `MeteringMode != Imsys` — reachable now that the dynamic path resolves the meter reading |
@@ -139,7 +139,7 @@ sniffing the body. The codes are stable and part of the API:
 | `ZEITRAUM_UEBERSCHREITET_SATZGRENZE` | 422 | the period straddles a rate boundary — the body names the Stichtage |
 | `VALIDATION_BLOCKED` | 422 | the engine refused — the body carries every blocking warning |
 | `SECT41A_NO_LASTGANG` | 422 | a dynamic tariff with no interval data to price |
-| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | edmd/tarifbd has nothing for this MaLo |
+| `NO_METER_DATA`, `NO_ACTIVE_PRODUCT` | 422 | edmd/productd has nothing for this MaLo |
 | `MODEL_MISSING`, `XRECHNUNG_NOT_CONFORMANT` | 422 | the stored EN 16931 model is absent or does not satisfy its own BT-24 |
 | `UPSTREAM_UNAVAILABLE` | 502 | an upstream did not answer — the body names which |
 
@@ -283,14 +283,14 @@ a Q1 bill announces 30 June. Adding the day count instead would announce
 Which product a MaLo is on is a **contract** fact — agreeing it is a
 Tarifwechsel under § 41 Abs. 5 EnWG — so `vertragd` owns it, as valid-time
 slices. What that product **costs** on a given day is a catalogue fact, so
-`tarifbd` owns it.
+`productd` owns it.
 
 ```text
 vertragd  GET /api/v1/malos/{malo}/produkte?from=&to=   → the slices, in order
-tarifbd   POST /api/v1/products/{lf}/resolve            → one version per (code, date)
+productd   POST /api/v1/products/{lf}/resolve            → one version per (code, date)
 ```
 
-Both in one round trip each, however many legs the period has. Asking `tarifbd`
+Both in one round trip each, however many legs the period has. Asking `productd`
 per leg would be an N+1 on every invoice, and two calls could disagree if the
 catalogue changed between them.
 
@@ -371,7 +371,7 @@ Mieterstrom, Tarifwechsel merge, proportional allocation, batch billing, and pre
 port          = 9280
 tenant        = "9900357000004"
 
-tarifbd_url     = "http://tarifbd:9080"
+productd_url     = "http://productd:9080"
 edmd_url        = "http://edmd:8380"
 edmd_api_key    = "env:BILLINGD_EDMD_SERVICE_KEY"  # opaque Bearer; register in edmd [[oidc.service_keys]]
 marktd_url      = "http://marktd:8180"
@@ -440,7 +440,7 @@ erp_hmac_secret = "env:BILLINGD_ERP_HMAC_SECRET"
 `energy-billing`'s validation pass carries `KEIN_ARBEITSPREIS` at **Error**
 severity, so `bill()` refuses rather than issuing the invoice.
 
-The `Product` price fields are populated by mapping `tarifbd`'s `preistyp`
+The `Product` price fields are populated by mapping `productd`'s `preistyp`
 strings onto struct fields (`clients::extract_tariff_from_product_data`). A
 renamed position, a typo in the mapper, or a catalog row saved without its price
 maps to `None` — in silence. The resulting invoice was not an error: a STROM

@@ -371,7 +371,7 @@ CREATE TABLE settlement_receipts (
     rechnung_json               JSONB,
     -- Human-readable Gutschrift number (GS-EEG-<tr>-<year>-<month>) for lookup/idempotency.
     gutschrift_nummer           TEXT,
-    bo4e_version                TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version                TEXT        NOT NULL DEFAULT '202607.1.0',
     -- 'calculated' | 'price_missing' | 'no_data' | 'error' | 'foerderung_beendet'
     status                      TEXT        NOT NULL DEFAULT 'calculated',
     -- Active | Reduced | Suspended | PostEeg | Ended (at time of settlement)

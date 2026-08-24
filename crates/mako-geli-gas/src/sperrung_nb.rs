@@ -20,14 +20,30 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK7-24-01-009** — GeLi Gas 3.0 (Gas Sperr-/Entsperrprozesse)
-//! - **AWH Sperrprozesse Gas** — published under BK7-24-01-009
+//! - **BDEW AWH „Unterbrechung der Anschlussnutzung" / „Wiederherstellung der
+//!   Anschlussnutzung"** — the Gas Sperrprozesse live in an Anwendungshilfe,
+//!   which the Anwendungsübersicht Prüfidentifikatoren 4.0 names as the
+//!   Festlegungs­spalte for 17115 / 17117 / 19116, with the Gas
+//!   Entscheidungsbäume `E_1000` (Sperrauftrag) and `E_1004` (Entsperrauftrag)
+//!   against Strom's `E_0470` / `E_0497`.
+//!
+//!   **GeLi Gas 3.0 (BK7-24-01-009) contains no Sperrprozess at all** — its
+//!   chapters are Kündigung, Lieferende, Lieferbeginn, Ersatz-/Grundversorgung
+//!   and the Annexprozesse.
+//!
+//! - **Frist**: 17115 / 17117 / 39000 and 17116 are Sparte-neutral ORDERS
+//!   Prüfidentifikatoren, so [`mako_fristen::antwort`] resolves them from one
+//!   row each — 1 Werktag for the Auftrag, 3 for the Anfrage Sperrung — sourced
+//!   from BK6-24-174 GPKE Teil 2 § 3.5, the only text on hand that quantifies
+//!   them. `regulatories/` does not yet carry the Gas AWH; if it turns out to
+//!   publish different numbers, the row must be split by Sparte rather than
+//!   this module inventing one.
+//!
 //! - **APERAK**: Gas knows only the Verarbeitbarkeitsfehlermeldung — nächster
 //!   Werktag 12:00 Uhr for a Folgeprozess, 3 Werktage for an Initialprozess
-//!   (APERAK AHB 1.1 §2.3.1). Separate from the **10-Werktage GNB execution
-//!   window** below, which is the business clock.
+//!   (APERAK AHB 1.1 § 2.3.1). A separate clock from the business answer.
 //! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
-//!   (GPKE Teil 1 Kap. 1.7); arithmetic runs in gesetzlicher deutscher Zeit.
+//!   (GeLi Gas 3.0 Kap. 2.6); arithmetic runs in gesetzlicher deutscher Zeit.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -67,21 +83,20 @@ pub const ORDCHG_STORNIERUNG_PIDS: &[u32] = &[39000, 39001];
 /// - 19119: Ablehnung Anfrage Sperrung (gMSB → GNB) — gMSB cannot confirm access.
 pub const MSB_ANTWORT_PIDS: &[u32] = &[19118, 19119];
 
-/// Deadline label for the 10-Werktage GNB execution window.
+/// Deadline label for the GNB's ORDRSP answer window on an inbound Auftrag.
 ///
-/// BK7-24-01-009 (AWH Sperrprozesse Gas): GNB must execute and confirm within
-/// **10 Werktage** of receiving the Sperrauftrag.
+/// Sized from the Prüfidentifikator, not from a flat number: 1 Werktag for the
+/// Sperr-/Entsperrauftrag and its Stornierung, 3 for the Anfrage Sperrung the
+/// GNB puts to the gMSB. See the module header for why these come out of the
+/// Sparte-neutral rows in [`mako_fristen::antwort`].
 ///
 /// ```rust,ignore
-/// let due = mako_fristen::deadline_at_werktage(
-///     received_at,
-///     10,
-///     mako_fristen::HolidayCalendar::BdewMaKo,
-/// );
+/// let due = mako_fristen::antwort::antwort_deadline(pid, received_at)
+///     .expect("a PID with a published Antwortfrist");
 /// let deadline = Deadline::new(process.stream_id().clone(), ..., ANTWORT_WINDOW_LABEL, due);
 /// deadline_store.register(&deadline).await?;
 /// ```
-pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-nb-10wt";
+pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-nb-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 
@@ -312,7 +327,8 @@ impl CommandPayload for GasSperrungNbCommand {}
 
 /// GeLi Gas GNB-side Gas Sperrung / Entsperrung workflow (ORDERS PIDs 17115–17117).
 ///
-/// Regulatory basis: BK7-24-01-009 (AWH Sperrprozesse Gas). The **10 Werktage**
+/// Regulatory basis: the BDEW AWH „Unterbrechung / Wiederherstellung der
+/// Anschlussnutzung". The answer window
 /// are the GNB execution window, not the APERAK sending deadline.
 pub struct GeliGasSperrungNbWorkflow;
 
@@ -321,11 +337,11 @@ impl Workflow for GeliGasSperrungNbWorkflow {
     type Event = GasSperrungNbEvent;
     type Command = GasSperrungNbCommand;
 
-    /// Deadline compensation for the Gas Sperrung 10-Werktage window.
+    /// Deadline compensation for the Gas Sperrung answer window.
     ///
     /// | Label | State guard | Command emitted | BNetzA rule |
     /// |---|---|---|---|
-    /// | `"geli-gas-sperrung-nb-10wt"` | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | BK7-24-01-009 — 10 Werktage |
+    /// | [`ANTWORT_WINDOW_LABEL`] | `AnweisungErhalten` or `ValidationPassed` | `TimeoutExpired` | 1 WT (17115/17117/39000) / 3 WT (17116) |
     fn on_deadline(
         deadline: &mako_engine::deadline::Deadline,
         state: &Self::State,
@@ -451,7 +467,7 @@ impl Workflow for GeliGasSperrungNbWorkflow {
                     });
                     // F-035: APERAK BGM+313 — mandatory per APERAK AHB 1.0 §2.1.1.
                     // APERAK Frist (Gas Folgeprozess): nächster Werktag 12 Uhr (APERAK AHB 1.0 §2.3.1).
-                    // Note: 10 Werktage is the GNB execution window (BK7-24-01-009), NOT the APERAK sending deadline.
+                    // Note: the business answer window is per-PID, NOT the APERAK sending deadline.
                     let outbox = vec![
                         PendingOutbox::new(
                             "APERAK",

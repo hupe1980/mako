@@ -594,10 +594,9 @@ impl Plane {
         }
         // Registrations are made at **admission**, so no run exists unwatched,
         // and delivery reads the run's own journal records past a cursor that
-        // advances only on 2xx. This replaces a fire-and-forget POST at request
-        // time: agentd was the one mako service emitting an event without
-        // persist-before-dispatch, in a system whose whole argument is that the
-        // journal is the plan of record.
+        // advances only on 2xx — persist-before-dispatch, as everywhere else in
+        // mako, in a system whose whole argument is that the journal is the plan
+        // of record.
         if let Some(outbox) = cfg.outbox {
             builder = builder.outbox(outbox);
         }

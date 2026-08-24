@@ -1483,10 +1483,10 @@ mod ahb_parser_tests {
     /// `O`: the group may be absent entirely, taking the segment with it, and a
     /// flat `M` would reject conformant messages.
     ///
-    /// This inverts the rule the parser previously applied. The shipped
-    /// profiles are the evidence: UTILMD `SG3` is `Kann` with `SG3 CTA` marked
-    /// `Muss`, and `fv20251001` records `CTA` as `O` for every PID in that
-    /// table. With the old rule the parser disagreed with its own profiles.
+    /// The shipped profiles are the evidence: UTILMD `SG3` is `Kann` with
+    /// `SG3 CTA` marked `Muss`, and `fv20251001` records `CTA` as `O` for every
+    /// PID in that table. Propagating the inner `Muss` outward would make the
+    /// parser disagree with its own profiles.
     #[test]
     fn a_muss_segment_inside_a_kann_group_is_optional() {
         let got = parse_ahb_requirements(TABLE).flat;

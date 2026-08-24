@@ -1,7 +1,8 @@
 //! GPKE Datenabruf — LF requests data values / reclamations from NB or MSB.
 //!
 //! This module handles the LF-initiated data-request and reclamation processes
-//! defined in **GPKE Teil 2 and Teil 4** (BK6-22-024):
+//! defined in **GPKE Teil 4** (BK6-22-024 Anlage 1d, Kap. 3
+//! „Geschäftsdatenanfrage"):
 //!
 //! | PID   | Direction   | Description |
 //! |-------|-------------|-------------|
@@ -16,7 +17,8 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BDEW GPKE Teil 2 / Teil 4** — BK6-22-024
+//! - **GPKE Teil 4 § 3.2** (BK6-22-024 Anlage 1d) — „Unverzüglich, jedoch
+//!   spätester ÜZ ist 1 WT nach dem ÜZ von Nr. 1"
 //! - APERAK Frist: 45 Minuten für ORDERS (APERAK AHB 1.0 § 2.4.1)
 
 use mako_engine::{
@@ -50,8 +52,14 @@ pub const ORDERS_ANFRAGE_PIDS: &[u32] = &[17004, 17102, 17113];
 /// | 19114 | Ablehnung der Reklamation von Werten (NB/MSB → LF) |
 pub const ORDRSP_ABLEHNUNG_PIDS: &[u32] = &[19101, 19102, 19114];
 
-/// Deadline label for the data-request response window (24h, GPKE Teil 2).
-pub const ANTWORT_WINDOW_LABEL: &str = "gpke-datenabruf-antwort-24h";
+/// Deadline label for the answer window on an inbound Geschäftsdatenanfrage.
+///
+/// **1 Werktag** — „Unverzüglich, jedoch spätester ÜZ ist 1 WT nach dem ÜZ von
+/// Nr. 1" (GPKE Teil 4 § 3.2 Prozessschritte 2 und 4), which
+/// [`mako_fristen::antwort::GESCHAEFTSDATENANFRAGE_WERKTAGE`] holds. Not 24
+/// wall-clock hours, and not a GPKE Teil 2 window: the Geschäftsdatenanfrage
+/// lives in Teil 4.
+pub const ANTWORT_WINDOW_LABEL: &str = "gpke-datenabruf-antwort";
 
 // ── Domain events ─────────────────────────────────────────────────────────────
 

@@ -191,10 +191,9 @@ async fn process_invoic(
         bo4e_version: pg::bo4e_version(&incoming.rechnung).to_owned(),
         outcome: verdict.label.to_owned(),
         findings: serde_json::to_value(&report.findings).unwrap_or_else(|_| serde_json::json!([])),
-        pay_by: incoming
-            .rechnung
-            .faelligkeitsdatum
-            .map(|d| d.with_time(time::Time::MIDNIGHT).assume_utc()),
+        // Already the `date-time` the BO4E schema declares, so the TIMESTAMPTZ
+        // column takes it as it stands.
+        pay_by: incoming.rechnung.faelligkeitsdatum,
         received_at,
         checked_at,
         dispatched_at: None,
@@ -250,7 +249,11 @@ async fn process_invoic(
             direction: pg::receipts::DIRECTION_INBOUND,
             sender_mp_id: &incoming.sender_mp_id,
             outcome: verdict.label,
-            pay_by: incoming.rechnung.faelligkeitsdatum,
+            // The event carries the Zahlungsziel as a calendar date: BDEW
+            // INVOIC transmits it as DTM+92 qualifier 102, a bare YYYYMMDD, and
+            // a consumer comparing it against a Frist wants the date, not an
+            // offset it has to normalise first.
+            pay_by: incoming.rechnung.faelligkeitsdatum_date(),
             findings_count: report.findings.len(),
             dispatched,
         },
@@ -328,8 +331,8 @@ async fn run_check(state: &HandlerState, route: &PidRoute, inc: &Incoming) -> Ch
     // from a hard-coded year that quietly stops existing.
     let billing_date = rechnung
         .billing_period()
-        .map(|(start, _)| start)
-        .or(rechnung.rechnungsdatum)
+        .map(|p| *p.start())
+        .or_else(|| rechnung.rechnungsdatum_date())
         .unwrap_or_else(|| OffsetDateTime::now_utc().date());
 
     if route.check == CheckKind::Messung {

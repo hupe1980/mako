@@ -11,8 +11,8 @@
 //! These are Höchstbeträge in the same sense as the KAV §2 ceilings, and the
 //! crate already refuses to let a Konzessionsabgabe exceed its ceiling silently.
 //! A metering charge above the POG is the same class of defect — an amount the
-//! customer is entitled to have refunded — and was previously unchecked: the MSB
-//! settlement validated only that the fee was non-negative.
+//! customer is entitled to have refunded — so the settlement checks the ceiling
+//! and not merely that the fee is non-negative.
 
 use rust_decimal::Decimal;
 use rust_decimal::dec;

@@ -568,8 +568,7 @@ impl Workflow for AktivierungWorkflow {
                 })
             }
             // 6h AcknowledgementDocument window (BK6-20-059): our sent
-            // ACR/AAR was never technically acknowledged — escalate. This
-            // label was previously defined but never handled.
+            // ACR/AAR was never technically acknowledged — escalate.
             (
                 ACK_WINDOW_LABEL,
                 AktivierungState::Confirmed { .. } | AktivierungState::PartialRejection { .. },

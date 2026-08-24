@@ -421,9 +421,9 @@ impl MeterStoreTimeSeriesRepository {
     /// transaction-time axis across **both** tiers and re-runs version resolution
     /// under that ceiling. So a correction delivered after `as_of`, **and an
     /// interval first stored after it**, are both invisible — the value returned is
-    /// the one that was in force at that instant. This replaces the former overlay
-    /// that reverted corrected values from an audit table but could not hide a
-    /// later-inserted interval, so it now reconstructs set membership too.
+    /// the one that was in force at that instant. Set membership is
+    /// reconstructed, not overlaid: reverting corrected values from an audit
+    /// table alone cannot hide a later-inserted interval.
     pub async fn query_as_of(
         &self,
         q: &TimeSeriesQuery,
@@ -1089,12 +1089,11 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // The conflict target is the index's **column list**, not
         // `ON CONSTRAINT mbp_tenant_period_unique`. That name belongs to a
         // `CREATE UNIQUE INDEX`, and `ON CONFLICT ON CONSTRAINT` only accepts a
-        // *table constraint* — so PostgreSQL rejected every one of these
-        // statements with "constraint … does not exist". The error was
-        // discarded by `let _ =`, so the cache silently never populated: every
-        // billing read recomputed from the resolved series, and
-        // `GET /api/v1/billing-periods` (which used to read this table) returned
-        // an empty list to `mabis-syncd` no matter how much data was stored.
+        // *table constraint*, so `ON CONFLICT ON CONSTRAINT` here makes
+        // PostgreSQL reject every one of these statements with
+        // "constraint … does not exist" — and a rejection discarded by
+        // `let _ =` leaves the cache permanently empty while every billing read
+        // recomputes from the resolved series.
         let cached = sqlx::query(
             // The tariff split is cached with the total. It is read back by the
             // cache-hit branch above, so leaving it out of the write made the
@@ -1207,11 +1206,11 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
     ) -> Result<Vec<uuid::Uuid>, EdmError> {
         use crate::domain::CorrectionSource;
 
-        // The audit rows commit together or not at all. They used to be written
-        // one autocommit statement at a time, so a failure half-way through a
-        // multi-interval correction left the earlier rows standing — against a
-        // documented "all or none" contract, and with no way for the caller to
-        // tell which half landed. The store appends run outside this transaction
+        // The audit rows commit together or not at all. One autocommit
+        // statement at a time leaves the earlier rows standing when a
+        // multi-interval correction fails half-way — against the documented
+        // "all or none" contract, and with no way for the caller to tell which
+        // half landed. The store appends run outside this transaction
         // by necessity (meterstore owns its own tiers), so the ordering is:
         // audit rows staged → intervals appended → audit committed. A crash
         // between the append and the commit loses audit rows for values that did
@@ -1489,10 +1488,11 @@ impl Typ2Repository for MeterStoreTyp2Repository {
 
 /// The `meter_read_corrections.source` category an ingest door falls into.
 ///
-/// The audit row records *who* superseded a stored value. Every displacement
-/// used to be filed as `MSCONS_UPDATE` by `edmd-ingest`, so an Ersatzwert
-/// overwriting a faulty slot and an SMGW re-push correcting one both read, in the
-/// § 147 AO trail, as an EDIFACT redelivery that never happened.
+/// The audit row records *who* superseded a stored value, so it is derived from
+/// the ingestion source rather than filed as a blanket `MSCONS_UPDATE`. Filed
+/// that way, an Ersatzwert overwriting a faulty slot and an SMGW re-push
+/// correcting one both read, in the § 147 AO trail, as an EDIFACT redelivery
+/// that never happened.
 fn correction_source_of(source: crate::domain::IngestionSource) -> &'static str {
     use crate::domain::IngestionSource as S;
     match source {

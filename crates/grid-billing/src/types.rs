@@ -1643,7 +1643,7 @@ pub struct NneInput {
 /// ## Caller responsibility
 ///
 /// The caller (service layer) must:
-/// 1. Fetch the EPEX Spot day-ahead price for each 15-min interval from `tarifbd`
+/// 1. Fetch the EPEX Spot day-ahead price for each 15-min interval from `productd`
 ///    or the `PreisblattNetznutzung` formula.
 /// 2. Apply the formula from `lastvariablePreispositionen` to derive `nne_rate_ct_per_kwh`.
 /// 3. Fetch `menge_kwh` from `edmd Lastgang` for the interval.
@@ -2188,9 +2188,9 @@ mod input_model_tests {
 
     /// A reduction factor outside `(0, 1]` cannot be built.
     ///
-    /// It used to be a bare `Decimal`, range-checked in a validator the engine
-    /// did not call — so `settle_nne` would happily multiply the published
-    /// tariff by 5.
+    /// The type is the check. A bare `Decimal` range-checked in a validator
+    /// leaves `settle_nne` free to multiply the published tariff by 5 whenever
+    /// the engine does not call it.
     #[test]
     fn a_reduction_factor_must_actually_reduce() {
         assert!(Reduktionsfaktor::new(dec!(0.85)).is_ok());

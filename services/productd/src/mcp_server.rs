@@ -1,4 +1,4 @@
-//! MCP server for `tarifbd` — Product & Tariff Catalog (LF role).
+//! MCP server for `productd` — Product & Tariff Catalog (LF role).
 //!
 //! ## Tools (14)
 //!
@@ -23,7 +23,7 @@
 //! | Prompt | Description |
 //! |---|---|
 //! | `configure-41a-tariff` | Step-by-step: configure a §41a EPEX dynamic tariff product |
-//! | `assign-product` | Where a MaLo→product assignment is made (vertragd), and tarifbd's part in it |
+//! | `assign-product` | Where a MaLo→product assignment is made (vertragd), and productd's part in it |
 //! | `create-b2b-quotation` | Step-by-step: create a formal B2B Angebot for a C&I customer |
 
 use axum::{
@@ -50,7 +50,7 @@ use time::OffsetDateTime;
 use tokio_util::sync::CancellationToken;
 
 #[derive(Clone)]
-pub struct TarifbdMcpState {
+pub struct ProductdMcpState {
     pub pool: PgPool,
     pub tenant: String,
     pub auth: mako_service::mcp_auth::McpAuth,
@@ -139,17 +139,17 @@ pub struct ExplainInvoicePositionParams {
 // ── MCP handler ────────────────────────────────────────────────────────────────
 
 #[derive(Clone)]
-pub struct TarifbdMcpHandler {
-    state: Arc<TarifbdMcpState>,
+pub struct ProductdMcpHandler {
+    state: Arc<ProductdMcpState>,
     #[allow(dead_code)]
-    tool_router: ToolRouter<TarifbdMcpHandler>,
+    tool_router: ToolRouter<ProductdMcpHandler>,
     #[allow(dead_code)]
-    prompt_router: PromptRouter<TarifbdMcpHandler>,
+    prompt_router: PromptRouter<ProductdMcpHandler>,
 }
 
 #[tool_router]
-impl TarifbdMcpHandler {
-    fn new(state: Arc<TarifbdMcpState>) -> Self {
+impl ProductdMcpHandler {
+    fn new(state: Arc<ProductdMcpState>) -> Self {
         Self {
             state,
             tool_router: Self::tool_router(),
@@ -632,13 +632,13 @@ Use before sending an Angebot to a C&I customer to verify correctness.",
             pt if is_dynamic => format!(
                 "{pt} on dynamic tariff (dyn_source=epex-spot-day-ahead):\n\
                  Formula: EPEX_Spot[q] × kwh[q] / 100 for each 15-min MTU q\n\
-                 Requires: tarifbd epex_prices for each day in billing period\n\
+                 Requires: productd epex_prices for each day in billing period\n\
                  §41a guard: Customer MaLo must have iMSys=true (billingd enforces)\n\
                  Missing EPEX prices → BillingError (billingd does NOT fall back silently)"
             ),
             pt => format!(
                 "{pt}: mako-extended preistyp.\n\
-                 See VALID_PREISTYPEN in tarifbd handlers.rs for full billing formula documentation.\n\
+                 See VALID_PREISTYPEN in productd handlers.rs for full billing formula documentation.\n\
                  Product category: {}, dyn_source: {:?}",
                 product.category,
                 product.dyn_source.as_deref().unwrap_or("none")
@@ -794,7 +794,7 @@ fn german_utc_offset(date: time::Date, hour_utc: u8) -> i8 {
 // ── Prompts ────────────────────────────────────────────────────────────────────
 
 #[prompt_router]
-impl TarifbdMcpHandler {
+impl ProductdMcpHandler {
     #[prompt(
         name = "configure-41a-tariff",
         description = "Step-by-step: configure a §41a EPEX dynamic tariff product for iMSys customers"
@@ -809,7 +809,7 @@ impl TarifbdMcpHandler {
                 Role::Assistant,
                 "§41a EnWG requires all LFs to offer dynamic tariffs to iMSys customers (mandatory since Jan 2025).\n\n\
                  Steps:\n\n\
-                 1. Create the product in tarifbd:\n\
+                 1. Create the product in productd:\n\
                     PUT /api/v1/products/{lf_mp_id}/STROM-EPEX-01\n\
                     {\n\
                       \"category\": \"STROM\",\n\
@@ -852,7 +852,7 @@ impl TarifbdMcpHandler {
                  vertragd enforces the Preisgarantie and the § 41 Abs. 5 notice period, and \
                  writes a valid-time slice. A future wirksamkeit is simply a slice that \
                  starts then.\n\n\
-                 tarifbd's part is the catalogue: `list_products` to pick a code, \
+                 productd's part is the catalogue: `list_products` to pick a code, \
                  `resolve_product` to see what it costs on a given day.\n\
                  Verify the assignment with vertragd `get_malo_produkt { malo_id }`.",
             ),
@@ -908,7 +908,7 @@ impl TarifbdMcpHandler {
                  ## 5. Contract creation (automated via ERP webhook)\n\
                  -- ERP receives de.tarif.angebot.angenommen with positionen + chosen variant\n\
                  -- Creates Rahmenvertrag + N x Versorgungsvertrag in vertragd\n\
-                 -- Returns rahmenvertrag_id → tarifbd links the Angebot\n\n\
+                 -- Returns rahmenvertrag_id → productd links the Angebot\n\n\
                  ## Key facts\n\
                  - Angebot expires automatically after gueltig_bis (background worker)\n\
                  - jahreskosten includes NNE + KA if supplied in positionen\n\
@@ -924,14 +924,14 @@ impl TarifbdMcpHandler {
 
 #[tool_handler]
 #[prompt_handler]
-impl ServerHandler for TarifbdMcpHandler {
+impl ServerHandler for ProductdMcpHandler {
     fn get_info(&self) -> ServerInfo {
         InitializeResult::new(
             ServerCapabilities::builder().enable_tools().enable_prompts().build(),
         )
-        .with_server_info(Implementation::new("tarifbd", env!("CARGO_PKG_VERSION")))
+        .with_server_info(Implementation::new("productd", env!("CARGO_PKG_VERSION")))
         .with_instructions(
-            "tarifbd MCP -- Product & Tariff Catalog (LF role).\n\
+            "productd MCP -- Product & Tariff Catalog (LF role).\n\
              Single source of truth for retail products the LF sells to end customers.\n\
              Categories: STROM/GAS/WAERME/SOLAR/EEG/EINSPEISUNG/WAERMEPUMPE/WALLBOX/HEMS/EMOBILITY/ENERGIEDIENSTLEISTUNG/BUNDLE.\n\
              Also manages EPEX Spot day-ahead prices for §41a dynamic tariffs (iMSys, mandatory since Jan 2025).\n\
@@ -950,15 +950,15 @@ impl ServerHandler for TarifbdMcpHandler {
 // ── Auth middleware + router ──────────────────────────────────────────────────
 
 async fn mcp_auth_middleware(
-    axum::extract::State(state): axum::extract::State<Arc<TarifbdMcpState>>,
+    axum::extract::State(state): axum::extract::State<Arc<ProductdMcpState>>,
     request: axum::extract::Request,
     next: Next,
 ) -> axum::response::Response {
     state.auth.authenticate(request, next).await
 }
 
-pub fn router(state: Arc<TarifbdMcpState>, _shutdown: CancellationToken) -> Router {
-    let handler = TarifbdMcpHandler::new(Arc::clone(&state));
+pub fn router(state: Arc<ProductdMcpState>, _shutdown: CancellationToken) -> Router {
+    let handler = ProductdMcpHandler::new(Arc::clone(&state));
     let service = StreamableHttpService::new(
         move || Ok(handler.clone()),
         LocalSessionManager::default().into(),

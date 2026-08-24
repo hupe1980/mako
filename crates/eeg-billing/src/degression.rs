@@ -15,9 +15,9 @@
 //! 1. The step is **semi-annual**, not quarterly: 1 February and 1 August.
 //! 2. The rate is a **fixed 1 %**. The "atmender Deckel" — a degression rate
 //!    keyed to the previous year's GW of new capacity — belonged to §49 EEG 2021
-//!    and is gone. (§23a EEG 2023, under which the tiered model used to be filed
-//!    here, is one sentence long and says only that the Marktprämie is computed
-//!    per Anlage 1. It has never carried a degression table.)
+//!    and is gone. (§23a EEG 2023 is one sentence long and says only that the
+//!    Marktprämie is computed per Anlage 1 — it carries no degression table, so
+//!    it is not where the tiered model belongs.)
 //! 3. Compounding runs on the **unrounded** chain; the 2-dp rounding is a
 //!    presentation step applied to each published window, never fed forward.
 //!

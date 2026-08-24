@@ -90,7 +90,7 @@ Body (CloudEvents 1.0 structured-mode JSON):
   "type": "de.mako.aperak.accepted",
   "time": "2026-10-01T10:15:00+02:00",
   "subject": "018f3a2b-...",
-  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json",
+  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Marktlokation.json",
   "datacontenttype": "application/json",
   "makoconvid": "...",
   "makocausationid": "...",
@@ -407,7 +407,7 @@ BO4E-typed JSON object. Deserialise using the ERP's own BO4E library.
   "type": "de.mako.aperak.accepted",
   "time": "2026-10-01T10:15:00+02:00",
   "subject": "018f3a2b-...",
-  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.0.0/src/bo4e_schemas/bo/Marktlokation.json",
+  "dataschema": "https://raw.githubusercontent.com/BO4E/BO4E-Schemas/v202607.1.0/src/bo4e_schemas/bo/Marktlokation.json",
   "datacontenttype": "application/json",
   "makoconvid": "...",
   "makocausationid": "...",
@@ -973,7 +973,9 @@ With BO4E:
   (`de.mako.aperak.accepted`, `de.mako.process.completed`) — not raw EDIFACT codes.
 - `ErpEventType::label()` provides short snake_case labels (`aperak_accepted`)
   for structured logging and metric dimensions.
-- BO4E versioning (`v202607.0.0`) is independent of BDEW format versions.
+- BO4E versioning is independent of BDEW format versions. The schema **tag**
+  is `v202607.1.0`; the `_version` a payload carries is `202607.1.0`, without the
+  `v`, and dispatch keys on the series `202607` alone.
 
 ---
 
@@ -987,7 +989,7 @@ With BO4E:
 | `OutboxErpWorker` (exponential back-off) | `makod/src/core/erp_adapter.rs` | At-least-once delivery with retry + dead-letter |
 | `POST /api/v1/commands` | `makod/src/orchestrator/commands_api/` | ERP-initiated process commands |
 | `PUT /admin/malo/{malo_id}` · `PUT /admin/partners/{mp_id}` | `makod` | Master-data cache sync |
-| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.9"`, BO4E schema v202607; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) |
+| BO4E typed model (`rubo4e`) | workspace dependency | `rubo4e = "0.10"`, BO4E schema v202607.1.0; typed BOs at every API boundary, strict-decoded on ingest (`Bo4eStrict::ensure_known_enums`) |
 
 ---
 

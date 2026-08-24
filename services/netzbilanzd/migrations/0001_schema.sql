@@ -74,7 +74,7 @@ CREATE TABLE invoice_drafts (
     settlement_input    JSONB       NOT NULL,
     -- The rendered document — `rubo4e::current::Rechnung`.
     rechnung            JSONB       NOT NULL,
-    bo4e_version        TEXT        NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version        TEXT        NOT NULL DEFAULT '202607.1.0',
 
     -- The three amounts an invoice states, each × 10⁻⁵ EUR as an integer, so
     -- reporting never rounds through a float. `netto + steuer = brutto` is

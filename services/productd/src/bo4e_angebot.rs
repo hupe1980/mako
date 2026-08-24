@@ -1,6 +1,6 @@
 //! Projection of a priced quotation into the BO4E `Angebot` business object.
 //!
-//! `tarifbd` emits typed BO4E for its tariff data (`Tarifinfo`,
+//! `productd` emits typed BO4E for its tariff data (`Tarifinfo`,
 //! `Tarifpreisblatt`); a B2B quotation is the natural CPQ/ERP interchange
 //! payload, so it is emitted the same way rather than as an ad-hoc JSON shape.
 //!
@@ -78,7 +78,16 @@ fn menge(wert: Decimal, einheit: Mengeneinheit) -> Menge {
 }
 
 /// A price per unit, e.g. 24.9 ct/kWh.
-fn preis(wert: Decimal, einheit: Waehrungseinheit, bezugswert: Decimal) -> Preis {
+///
+/// `bezugswert` is the **reference quantity the price is stated per** — BO4E:
+/// *"Angabe, für welche Bezugsgröße der Preis gilt. Z.B. kWh"* — so it is a
+/// [`Mengeneinheit`], not a number. Until rubo4e 0.10 the field was typed
+/// `Decimal` (name-based inference read the `…wert` suffix and ignored the
+/// schema), and this function passed `Decimal::ONE` into it: every price on
+/// every Angebot went out with no unit of reference at all, so an Arbeitspreis
+/// of `24.9 ct` did not say *per kWh* and a Grundpreis of `120 EUR` did not say
+/// *per year*.
+fn preis(wert: Decimal, einheit: Waehrungseinheit, bezugswert: Mengeneinheit) -> Preis {
     Preis {
         wert: Some(wert),
         einheit: Some(einheit),
@@ -147,7 +156,7 @@ fn teil(pos: &PositionCostBreakdown, lieferzeitraum: Option<&Zeitraum>) -> Angeb
     if let Some(ap) = pos.arbeitspreis_ct_per_kwh {
         positionen.push(Angebotsposition {
             positionsbezeichnung: Some("Arbeitspreis".to_owned()),
-            positionspreis: Some(preis(ap, Waehrungseinheit::Ct, Decimal::ONE)),
+            positionspreis: Some(preis(ap, Waehrungseinheit::Ct, Mengeneinheit::Kwh)),
             positionsmenge: Some(menge(pos.jahresverbrauch_kwh, Mengeneinheit::Kwh)),
             ..Default::default()
         });
@@ -155,7 +164,7 @@ fn teil(pos: &PositionCostBreakdown, lieferzeitraum: Option<&Zeitraum>) -> Angeb
     if let Some(gp) = pos.grundpreis_eur_per_year {
         positionen.push(Angebotsposition {
             positionsbezeichnung: Some("Grundpreis".to_owned()),
-            positionspreis: Some(preis(gp, Waehrungseinheit::Eur, Decimal::ONE)),
+            positionspreis: Some(preis(gp, Waehrungseinheit::Eur, Mengeneinheit::Jahr)),
             positionsmenge: Some(menge(Decimal::ONE, Mengeneinheit::Jahr)),
             ..Default::default()
         });

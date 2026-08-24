@@ -22,7 +22,7 @@
 #   accountingd: postgres://dev:dev@localhost:5432/accountingd
 #   billingd:    postgres://dev:dev@localhost:5432/billingd
 #   outputd:     postgres://dev:dev@localhost:5432/outputd
-#   tarifbd:     postgres://dev:dev@localhost:5432/tarifbd
+#   productd:     postgres://dev:dev@localhost:5432/productd
 #   vertragd:    postgres://dev:dev@localhost:5432/vertragd
 #   mabis-syncd: postgres://dev:dev@localhost:5432/mabis_syncd
 #   agentd:      postgres://dev:dev@localhost:5432/agentd

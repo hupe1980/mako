@@ -14,7 +14,8 @@
 //!
 //! # Regulatory basis
 //!
-//! - **BK6-22-024 (LFW24)** — GPKE APERAK Frist: **24 wall-clock hours**
+//! - **APERAK AHB 1.1 § 2.4.1** — 45 Minuten on a Werktag for UTILMD/ORDERS;
+//!   the INVOIC answer itself is owed zum Zahlungsziel (`SG8 DTM+265`)
 //! - **INVOIC AHB 1.0 / MIG 2.8e** — German energy-market invoice format
 //! - **PIDs 31001/31002** — Abschlagsrechnung / NN-Rechnung (Netznutzungsabrechnung)
 //! - **PIDs 31005–31008** — Mehr-/Mindermengen billing variants

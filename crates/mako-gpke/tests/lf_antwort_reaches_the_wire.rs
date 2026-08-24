@@ -247,7 +247,7 @@ fn the_kuendigung_answer_is_dispatched() {
     assert_eq!(utilmd.payload["antwort_ebd"], "E_0614");
 }
 
-/// The Kündigung no longer shares the supplier change's PID table, so an
+/// The Kündigung does not share the supplier change's PID table, so an
 /// Anmeldung can never be answered as one.
 #[test]
 fn the_kuendigung_left_the_supplier_change_pid_table() {

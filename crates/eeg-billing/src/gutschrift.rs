@@ -113,8 +113,16 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
         sparte: Some(bo::Sparte::Strom),
         rechnungsnummer: non_empty(&meta.invoice_number),
         rechnungstitel: non_empty(&meta.period_label),
-        rechnungsdatum: meta.issue_date.as_deref().and_then(parse_iso_date),
-        faelligkeitsdatum: meta.due_date.as_deref().and_then(parse_iso_date),
+        rechnungsdatum: meta
+            .issue_date
+            .as_deref()
+            .and_then(parse_iso_date)
+            .and_then(as_bo4e_timestamp),
+        faelligkeitsdatum: meta
+            .due_date
+            .as_deref()
+            .and_then(parse_iso_date)
+            .and_then(as_bo4e_timestamp),
         rechnungsperiode: meta.period.as_ref().map(|per| bo::Zeitraum {
             startdatum: parse_iso_date(&per.from),
             enddatum: parse_iso_date(&per.to),
@@ -136,15 +144,29 @@ fn document_to_rechnung(doc: &BillingDocument) -> Result<bo::Rechnung, BillingEr
     // The NB issues the Gutschrift (Gutschriftverfahren); the Anlagenbetreiber
     // receives it. BO4E models these as full Geschaeftspartner objects — we carry
     // only the MP-IDs, as round-trip-preserved keys.
+    // `try_insert` refuses once the extension map hits its hardening caps. It
+    // cannot happen here — the map is freshly constructed and takes at most
+    // three keys — so the invariant is asserted rather than discarded, because
+    // dropping an audit record silently is the alternative. (No helper: naming
+    // `serde_json::Value` in a signature would pull a dependency this crate
+    // deliberately does without.)
     if let Some(id) = &meta.issuer_id {
-        let _ = rechnung
+        let inserted = rechnung
             ._additional
             .try_insert("rechnungserstellerId".into(), id.value.as_str().into());
+        debug_assert!(
+            inserted.is_ok(),
+            "extension map refused rechnungserstellerId"
+        );
     }
     if let Some(id) = &meta.recipient_id {
-        let _ = rechnung
+        let inserted = rechnung
             ._additional
             .try_insert("rechnungsempfaengerId".into(), id.value.as_str().into());
+        debug_assert!(
+            inserted.is_ok(),
+            "extension map refused rechnungsempfaengerId"
+        );
     }
     Ok(rechnung)
 }
@@ -170,9 +192,13 @@ fn position_to_bo4e(number: usize, p: &LineItem) -> bo::Rechnungsposition {
     };
     // The legal basis (§21 EEG 2023, …) is the audit record of why the rate applies.
     if let Some(lb) = p.get_meta("legal_basis") {
-        let _ = pos
+        let inserted = pos
             ._additional
             .try_insert("rechtlicheGrundlage".into(), lb.into());
+        debug_assert!(
+            inserted.is_ok(),
+            "extension map refused rechtlicheGrundlage"
+        );
     }
     pos
 }
@@ -187,6 +213,26 @@ fn betrag(wert: Decimal) -> bo::Betrag {
 
 fn non_empty(s: &str) -> Option<String> {
     (!s.is_empty()).then(|| s.to_owned())
+}
+
+/// A BO4E date-only market value as the `date-time` the schema declares.
+///
+/// BDEW INVOIC transmits `rechnungsdatum` and `faelligkeitsdatum` as DTM
+/// qualifier 102 — a bare `YYYYMMDD` — while BO4E types both `format: date-time`.
+///
+/// **Midnight UTC.** `Rechnung::rechnungsdatum_date()` reads the date in the
+/// offset the payload carries, so `+00:00` reads back as the date that went in
+/// and stays that date under any later normalisation; a `+01:00` midnight
+/// becomes the previous day the moment someone converts it.
+///
+/// `None` for a year outside RFC 3339's `0000`–`9999`, which the field
+/// serialises as. The field is optional and an invoice with no billing period
+/// has no issue date, so it is omitted rather than made fatal — rejecting a
+/// periodless invoice is the engine's job, not the serializer's.
+fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
+    (0..=9999)
+        .contains(&date.year())
+        .then(|| date.midnight().assume_utc())
 }
 
 /// Parse an ISO `YYYY-MM-DD` date (tolerating a trailing time); `None` otherwise.

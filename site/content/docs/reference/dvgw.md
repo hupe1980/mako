@@ -91,7 +91,7 @@ DVGW ingest path; the AS4 `eb:Receipt` is a protocol acknowledgement and does no
 
 SCHEDL, IMBNOT, TRANOT, DELORD, DELRES, CHACAP and SSQNOT are not parsed. The
 matching `mako-gabi-gas` workflows are placeholders whose ingest arm returns
-`Skipped`, so nothing routes to them. Tracked in `ROADMAP.md`.
+`Skipped`, so nothing routes to them.
 
 ---
 
@@ -276,8 +276,7 @@ are returned as `Err`.
 | `DVGW-PID-FAMILY` | all | Warning | the `RFF+Z13` code belongs to this family |
 
 There is no compiled-in MIG/AHB profile layer as in `edi-energy`: DVGW does
-publish per-PID Anwendungsfall tables, but they are not imported yet. See
-`ROADMAP.md`.
+publish per-PID Anwendungsfall tables, but they are not imported.
 
 ---
 
@@ -355,13 +354,13 @@ Three properties of the dispatch are worth stating:
   the match; only a Bestätigung accepts. The ingest arm records one and leaves the
   nomination open — treating it as an answer drives the process to a terminal
   `Rejected`, and the Bestätigung that follows then fails, leaving a confirmed
-  nomination on file as rejected. See `ROADMAP.md` for the matching obligations,
-  which are a process question rather than a format one.
+  nomination on file as rejected. The matching obligations themselves are a
+  process question rather than a format one.
 
 `X5G` (Endgültige Allokation) is deliberately **not** mapped to
 `AllocationVersion::Final`: DVGW publishes `X6G`/`X7G` corrections that follow
 the endgültige one, while the workflow treats `Final` as settled and refuses any
-later correction. See `ROADMAP.md`.
+later correction.
 
 ### 9.2 INVOIC billing
 

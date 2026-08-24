@@ -38,9 +38,15 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BK7-24-01-009** — GeLi Gas 3.0 (Gas Sperr-/Entsperrprozesse Gas)
-//! - GNB must respond within **10 Werktage** (German business days)
-//! - Saturdays, Sundays and public holidays are not Werktage
+//! - **BDEW AWH „Unterbrechung / Wiederherstellung der Anschlussnutzung"** —
+//!   the Gas Sperrprozesse live in an Anwendungshilfe, with the Gas
+//!   Entscheidungsbäume `E_1000` / `E_1004`. **GeLi Gas 3.0 (BK7-24-01-009)
+//!   contains no Sperrprozess.**
+//! - **Frist**: the GNB answers the Auftrag on the Sparte-neutral row in
+//!   [`mako_fristen::antwort`] — 1 Werktag, sourced from BK6-24-174 GPKE Teil 2
+//!   § 3.5, the only text on hand that quantifies 17115 / 17117.
+//! - Saturdays, Sundays and gesetzliche Feiertage are not Werktage
+//!   (GeLi Gas 3.0 Kap. 2.6)
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -77,12 +83,13 @@ pub const ORDRSP_SPERRUNG_PIDS: &[u32] = &[19116, 19117];
 /// - 19129: Ablehnung Stornierung Gas-Sperrauftrag (GNB → LF)
 pub const ORDRSP_STORNO_PIDS: &[u32] = &[19128, 19129];
 
-/// Deadline label for the 10-Werktage GNB response window.
+/// Deadline label for the GNB's ORDRSP answer window on our Gas-Sperrauftrag.
 ///
-/// BK7-24-01-009: the GNB must send ORDRSP within **10 Werktage** of receipt.
-/// Use `mako_fristen::add_werktage(date, 10, BdewMaKo)` to compute the
-/// deadline. Saturdays, Sundays and public holidays are not Werktage.
-pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-lf-antwort-10wt";
+/// **1 Werktag**, resolved per Prüfidentifikator through
+/// [`mako_fristen::antwort::antwort_deadline`] — the same Sparte-neutral row
+/// the Strom side uses, because 17115 / 17117 are one ORDERS Anwendungsfall in
+/// both Sparten — see the module header for the Fundstelle.
+pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-sperrung-lf-antwort";
 
 // ── Domain data ───────────────────────────────────────────────────────────────
 
@@ -178,7 +185,7 @@ impl EventPayload for GasSperrungLfEvent {
 ///                       → OrdrspAbgelehnt  (GNB rejects)              [terminal]
 ///             ↘ StornierungGesendet → StornoBestaetigt                [terminal]
 ///                                   → StornoAbgelehnt                 [terminal]
-///             ↘ DeadlineExpired (10-Werktage window expired)          [terminal]
+///             ↘ DeadlineExpired (answer window expired)               [terminal]
 /// ```
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -301,7 +308,7 @@ pub enum GasSperrungLfCommand {
         /// GLN of the GNB sender.
         sender: MarktpartnerCode,
     },
-    /// A registered deadline (10-Werktage window) fired.
+    /// A registered deadline (the GNB's answer window) fired.
     TimeoutExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -320,7 +327,7 @@ impl CommandPayload for GasSperrungLfCommand {}
 /// responses from the Gasnetzbetreiber (ORDRSP 19116/19117) and Stornierung
 /// responses (ORDRSP 19128/19129).
 ///
-/// Deadline: **10 Werktage** per BK7-24-01-009. Compute with
+/// Deadline: **1 Werktag** on the Sparte-neutral 17115 / 17117 row. Compute with
 /// `mako_fristen::add_werktage(date, 10, BdewMaKo)`.
 pub struct GeliGasSperrungLfWorkflow;
 

@@ -38,45 +38,52 @@ fn utc(year: i32, month: Month, day: u8, hour: u8, minute: u8) -> OffsetDateTime
 // add_hours: GPKE 24-hour wall-clock deadline
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// GPKE process Frist: 24 wall-clock hours.
-/// A message arriving at 10:00 UTC on a Monday must be due at 10:00 UTC the
-/// next day — pure wall-clock, no timezone conversion involved.
+/// `add_hours` is pure wall-clock arithmetic.
+///
+/// An instant 24 hours after 10:00 UTC on a Monday is 10:00 UTC on Tuesday, with
+/// no timezone conversion involved.
+///
+/// **This is not a GPKE window.** No GPKE Festlegung publishes a 24-hour answer
+/// Frist — Teil 2 states every one as a wall-clock instant on the first Werktag
+/// after the ÜT, and Teil 1 Kap. 7 defines no duration at all. `add_hours` is a
+/// generic helper; the AWH GeLi Gas Prozessschritt-5 sub-window is the one place
+/// in these families where 24 hours is a real number, and it lives in
+/// `mako_fristen::antwort::gas_lieferbeginn_antwort_nach_abmeldeanfrage`.
 #[test]
-fn add_hours_gpke_24h_normal_day() {
+fn add_hours_is_exact_across_a_normal_day() {
     let received = utc(2025, Month::October, 6, 10, 0);
     let due = add_hours(received, 24);
     let expected = utc(2025, Month::October, 7, 10, 0);
     assert_eq!(
         due, expected,
-        "GPKE 24h deadline must be exactly 24 wall-clock hours after receipt"
+        "add_hours must be exactly 24 wall-clock hours after receipt"
     );
 }
 
-/// add_hours is a pure wall-clock addition — it does NOT shift at DST
-/// boundaries.  A message arriving at 10:00 UTC the night before spring-forward
-/// must still be due 24 UTC hours later (not 23 or 25).
+/// `add_hours` does NOT shift at DST boundaries. An instant 24 hours after
+/// 10:00 UTC the night before spring-forward is 24 UTC hours later, not 23 or 25.
 #[test]
-fn add_hours_gpke_24h_across_spring_forward() {
+fn add_hours_is_exact_across_spring_forward() {
     // 2025-03-29 10:00 UTC = 11:00 CET, night before spring-forward
     let received = utc(2025, Month::March, 29, 10, 0);
     let due = add_hours(received, 24);
     let expected = utc(2025, Month::March, 30, 10, 0);
     assert_eq!(
         due, expected,
-        "GPKE 24h deadline must be exactly 24 UTC hours across spring-forward"
+        "add_hours must be exactly 24 UTC hours across spring-forward"
     );
 }
 
 /// Same across fall-back (2025-10-26).
 #[test]
-fn add_hours_gpke_24h_across_fall_back() {
+fn add_hours_is_exact_across_fall_back() {
     // 2025-10-25 10:00 UTC = 12:00 CEST, night before fall-back
     let received = utc(2025, Month::October, 25, 10, 0);
     let due = add_hours(received, 24);
     let expected = utc(2025, Month::October, 26, 10, 0);
     assert_eq!(
         due, expected,
-        "GPKE 24h deadline must be exactly 24 UTC hours across fall-back"
+        "add_hours must be exactly 24 UTC hours across fall-back"
     );
 }
 

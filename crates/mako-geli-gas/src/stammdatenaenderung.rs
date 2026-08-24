@@ -56,7 +56,15 @@ use mako_fristen::{
 /// Workflow name used for PID routing and `WorkflowId` construction.
 pub const WORKFLOW_NAME: &str = "geli-gas-stammdatenaenderung";
 
-/// Deadline label for the 10-Werktage Antwort window (GeLiGas AWH §5.3).
+/// Deadline label for the 10-Werktage Antwort window.
+///
+/// „Es ist hierfür ein Konzept anzuwenden, dass … die Änderung, Bearbeitung und
+/// Übermittlung von geänderten Stammdaten in vorzugebenden Fristen, die
+/// insgesamt **10 Werktage** nicht überschreiten, … sicherstellt" — GeLi Gas
+/// 3.0 Kap. 4.3. Five times the Strom window
+/// ([`mako_fristen::antwort::STAMMDATEN_RUECKMELDUNG_WERKTAGE`]) and genuinely
+/// so: Gas gives the Berechtigter a real Zustimmung/Ablehnung, where Strom has
+/// only asynchronous quality feedback.
 pub const ANTWORT_WINDOW_LABEL: &str = "geli-gas-stammdaten-antwort-window";
 
 /// Change-family `(Änderung PID, Antwort PID, bilanzierungsrelevant)` rows

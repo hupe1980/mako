@@ -551,7 +551,7 @@ jobs:
           mkdir -p /tmp/digests
           for service in makod marktd processd invoicd edmd obsd \
                         netzbilanzd sperrd einsd \
-                        tarifbd billingd accountingd vertragd \
+                        productd billingd accountingd vertragd \
                         portald agentd mabis-syncd; do
             digest=$(echo '${{ steps.bake.outputs.metadata }}' | jq -r --arg svc "$service" '.[$svc]["containerimage.digest"]')
             echo "${digest#sha256:}" > "/tmp/digests/${service}"
@@ -596,7 +596,7 @@ jobs:
             description: "Sperrung execution tracking daemon — NB role, IFTSTA 21039 auto-dispatch"
           - service: einsd
             description: "Einspeiser Registry + EEG/KWKG Settlement daemon — 10 settlement schemes, EEG/KWKG Gutschrift"
-          - service: tarifbd
+          - service: productd
             description: "Product & Tariff Catalog daemon — LF role, EPEX §41a, B2B Angebote"
           - service: billingd
             description: "Energy Billing Engine daemon — LF role, 12 categories, XRechnung 3.0, §14a, §41a"

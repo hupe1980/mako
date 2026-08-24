@@ -730,11 +730,9 @@ pub fn specimen_invoice() -> en16931::Invoice {
     // The exempt position is a *genuine* durchlaufender Posten: under the WiM
     // Rechnungsabwicklung des MSB über den LF (QUOTES 15002 / ORDERS 17005),
     // the LF collects the MSB's Messentgelt in the MSB's name and for the
-    // MSB's account — exactly § 10 Abs. 1 Satz 4 UStG. (It was previously
-    // labelled "Konzessionsabgabe", which is wrong twice over: the
-    // Konzessionsabgabe is collected in the supplier's own name as part of
-    // the Entgelt and is subject to VAT, and the Satz cited was the pre-2019
-    // numbering.)
+    // MSB's account — exactly § 10 Abs. 1 Satz 4 UStG. A Konzessionsabgabe is
+    // not one: it is collected in the supplier's own name as part of the
+    // Entgelt and is subject to VAT.
     .line(line(
         "5",
         "Durchlaufender Posten: Messentgelt MSB (in fremdem Namen vereinnahmt)",

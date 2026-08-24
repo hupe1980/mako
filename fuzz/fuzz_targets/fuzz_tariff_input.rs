@@ -22,7 +22,7 @@
 //!
 //! ## Corpus
 //!
-//! Add representative tarifbd JSONB samples to
+//! Add representative productd JSONB samples to
 //! `fuzz/corpus/fuzz_tariff_input/` to guide coverage-guided mutation.
 
 #![no_main]

@@ -183,9 +183,9 @@ impl MessageCore {
 
         // Build the owned message-content segment slice, filtering out interchange-envelope
         // segments (UNB/UNZ interchange wrapper, UNG/UNE functional group wrapper).
-        // Staying on owned segments avoids a separate Vec<Segment<'_>> borrow allocation.
-        // edifact-rs 0.11 exposes group_owned_segments_indexed and validate_lenient_grouped_owned
-        // so the borrowed intermediary is no longer necessary at this layer.
+        // Staying on owned segments avoids a separate Vec<Segment<'_>> borrow allocation:
+        // group_owned_segments_indexed and validate_lenient_grouped_owned work on them
+        // directly, so no borrowed intermediary is needed at this layer.
         let message_segments: Vec<edifact_rs::OwnedSegment> = self
             .segments
             .iter()

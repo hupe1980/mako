@@ -23,7 +23,7 @@
 //!
 //! ## Regulatory basis
 //!
-//! - **BDEW GPKE Teil 3** — Konfigurationseinrichtung (BK6-22-024)
+//! - **BDEW GPKE Teil 3** — Konfigurationseinrichtung (BK6-24-174 Anlage 1c)
 //! - **WiM Strom Teil 2 / AWH NBW** — Berechnungsformel
 //! - **UTILTS S1.x** — EDI@Energy utility time series format
 

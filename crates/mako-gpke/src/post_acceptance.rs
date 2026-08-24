@@ -40,7 +40,7 @@ use mako_engine::{
 /// Returns an empty `Vec` when `anfrage_pid != 55001` — other
 /// Prüfidentifikatoren do not carry Teil 3/4 obligations.
 ///
-/// # Obligations (BDEW GPKE / BK6-22-024)
+/// # Obligations (BK6-24-174 GPKE Teil 2, SD Lieferbeginn Nr. 7–21)
 ///
 /// - **MSCONS 13015** — "Bewegungsdaten im Kalenderjahr vor Lieferbeginn Strom":
 ///   The NB delivers historical movement data to the new LFN before the supply

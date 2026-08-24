@@ -4,11 +4,11 @@
 //! regime applies, whether the period is kept, what the Sonderkündigungsrecht
 //! runs to — and this renders and delivers it through `outputd`.
 //!
-//! # Why the prices come from the caller and not from `tarifbd`
+//! # Why the prices come from the caller and not from `productd`
 //!
 //! § 41 Abs. 5 Satz 1 wants the **Umfang** of the change, which the product
 //! catalogue looks like the source for and is not, twice over: `vertragd` owns
-//! which product a Marktlokation is on and `tarifbd` owns what it costs, and
+//! which product a Marktlokation is on and `productd` owns what it costs, and
 //! the two are deliberately uncoupled (BILLING.md § 3); and the question asked
 //! afterwards is *what were we told our new price would be*, which is a fact
 //! about the notice that a catalogue read years later cannot answer.

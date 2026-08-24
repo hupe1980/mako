@@ -14,7 +14,7 @@
 //!
 //! ```text
 //! handler ─┬─ contract write ──┐
-//!          └─ enqueue task  ───┴─ COMMIT ─→ worker ─→ processd / edmd / tarifbd / accountingd
+//!          └─ enqueue task  ───┴─ COMMIT ─→ worker ─→ processd / edmd / productd / accountingd
 //! ```
 
 use std::sync::Arc;

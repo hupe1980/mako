@@ -48,8 +48,7 @@ impl EdifactIngestDispatcher {
                     // separate 45-minute clock on the same message (APERAK AHB
                     // 1.0 §2.4.1; Saturday → Sunday 12:00 Berlin).
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     // Also index the process under this Sperrauftrag's Belegnummer so
                     // a later ORDCHG 39000 Stornierung (which carries no LOC) can
@@ -135,8 +134,7 @@ impl EdifactIngestDispatcher {
                     // (55016). The APERAK acknowledgement is a separate,
                     // 45-minute clock on the same message.
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeSupplierChangeWorkflow>(
                         malo_id.as_str(),
@@ -190,8 +188,7 @@ impl EdifactIngestDispatcher {
                     let received = OffsetDateTime::now_utc();
                     // 05:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferende von NB an LF Prozessschritt 2).
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeLfAbmeldungWorkflow>(
                         malo_id.as_str(),
@@ -219,8 +216,7 @@ impl EdifactIngestDispatcher {
                     let received = OffsetDateTime::now_utc();
                     // 09:00 Uhr des 1. WT nach dem ÜT (GPKE Teil 2, SD
                     // Lieferbeginn Prozessschritt 4).
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeBeendigungZuordnungWorkflow>(
                         malo_id.as_str(),
@@ -253,8 +249,7 @@ impl EdifactIngestDispatcher {
                     let received = OffsetDateTime::now_utc();
                     // Ablauf des 1. WT nach dem ÜT (GPKE Teil 2, SD Kündigung
                     // Prozessschritt 2).
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<mako_gpke::GpkeKuendigungWorkflow>(
                         malo_id.as_str(),
@@ -403,8 +398,10 @@ impl EdifactIngestDispatcher {
             //
             // The NB (invoicer) sends an INVOIC to the LF (payer).  `makod`
             // acting as the LF receives the INVOIC and spawns a new billing
-            // process.  The settlement window is 24 wall-clock hours per
-            // BK6-22-024.  After spawning, the `ProcessInitiated` outbox
+            // process.  The settlement window is the invoice's own Zahlungsziel
+            // (`SG8 DTM+265`) — BK6-24-174 GPKE Teil 2 § 3.3.2 and GeLi Gas 3.0
+            // Kap. 4.5 both answer „zum Zahlungsziel", never in 24 wall-clock
+            // hours.  After spawning, the `ProcessInitiated` outbox
             // message notifies `invoicd`, which runs automated plausibility
             // checks and submits a SettleInvoice or DisputeInvoice command.
             //
@@ -482,8 +479,7 @@ impl EdifactIngestDispatcher {
                     // back to the operating convention — and says so, rather
                     // than citing a Festlegung that does not state it.
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeKonfigurationWorkflow>(
                         malo_id.as_str(),
@@ -521,8 +517,7 @@ impl EdifactIngestDispatcher {
                     // No published window for the UTILMD Stornierung — the
                     // fallback is an operating convention, not a citation.
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeStornierungWorkflow>(
                         malo_id.as_str(),
@@ -531,7 +526,7 @@ impl EdifactIngestDispatcher {
                         &fv,
                         &[
                             (
-                                mako_gpke::STORNIERUNG_GPKE_APERAK_WINDOW_LABEL,
+                                mako_gpke::STORNIERUNG_GPKE_ANTWORT_WINDOW_LABEL,
                                 process_due_at,
                             ),
                             (fristen::APERAK_STROM_WINDOW_LABEL, aperak_due_at),
@@ -557,8 +552,7 @@ impl EdifactIngestDispatcher {
                     // without an answer.
                     // APERAK AHB 1.0 §2.4.1: Strom UTILMD — 45 min on weekdays.
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeAnkuendigungZuordnungLfWorkflow>(
                         malo_id.as_str(),
@@ -591,8 +585,7 @@ impl EdifactIngestDispatcher {
                     // Werktage of *daily* re-identification before it may refuse
                     // a newly commissioned Marktlokation.
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeNeuanlageWorkflow>(
                         malo_id.as_str(),
@@ -623,8 +616,7 @@ impl EdifactIngestDispatcher {
                     // 3.1.2.2 / 3.1.3.2) — a business Frist, longer than the
                     // 45-minute APERAK clock that runs beside it.
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<mako_gpke::GpkeAbrechnungsdatenWorkflow>(
                         malo_id.as_str(),
@@ -652,8 +644,7 @@ impl EdifactIngestDispatcher {
                     let cmd = adapters::gpke_anfrage_bestellung_registry().dispatch(raw, &fv)?;
                     let malo_id = extract_malo_from_msg(msg);
                     let received = OffsetDateTime::now_utc();
-                    let process_due_at =
-                        antwort_due_at(pid, received, fristen::add_hours(received, 24));
+                    let process_due_at = antwort_due_at(pid, received);
                     let aperak_due_at = fristen::aperak_strom_due_at(received);
                     self.spawn_or_resume::<GpkeAnfrageBestellungWorkflow>(
                         malo_id.as_str(),

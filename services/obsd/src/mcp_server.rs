@@ -253,8 +253,8 @@ impl ObsdMcpHandler {
         let (from, to) = month_bounds(p.period.as_deref())?;
         let repo = crate::pg::PgProcessProjectionRepository::new(self.state.pool.clone());
         // The repository owns the query, so this tool and `GET /obs/kpis`
-        // cannot drift. The inline copy this replaces bounded the period with
-        // `started_at <= <last day at 00:00>`, silently dropping every process
+        // cannot drift. An inline copy that bounds the period with
+        // `started_at <= <last day at 00:00>` silently drops every process
         // started on the last day of the month.
         match repo.kpi_report(p.pid, from, to, &self.state.tenant).await {
             Ok(report) => ContentBlock::json(serde_json::json!({

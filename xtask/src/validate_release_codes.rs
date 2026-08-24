@@ -1,8 +1,8 @@
 //! `cargo xtask validate-release-codes`
 //!
-//! Cross-checks that every non-archived `mig.json` profile's `"release"` field
-//! appears in at least one UNH segment (data element 0057) in the `.edi` fixture
-//! files under `crates/edi-energy/tests/fixtures/`.
+//! Cross-checks that every `mig.json` profile a counterparty can still send
+//! declares a `"release"` that appears in at least one UNH segment (data
+//! element 0057) in the `.edi` fixtures under `crates/edi-energy/tests/`.
 //!
 //! # Motivation
 //!
@@ -12,6 +12,18 @@
 //! reject or misroute inbound messages whose UNH carries the new code.
 //!
 //! This task makes the mismatch visible before it reaches production.
+//!
+//! # Which profiles must be witnessed
+//!
+//! The ones that can still carry an inbound message: in force today, or not yet
+//! in force (their Anwendungszeitpunkt is the day mako starts receiving them, so
+//! the fixture has to exist *before* the cutover, not after).
+//!
+//! A **superseded** profile — one past its `valid_until` — is reported but does
+//! not fail. `ReleaseRegistry::is_acceptable_on` refuses it at the BDEW default
+//! receive tolerance of zero days, so no fixture can witness a live wire value
+//! that no longer exists, and retiring the fixtures alongside the format version
+//! is correct rather than a regression.
 //!
 //! # UNH segment layout
 //!
@@ -26,9 +38,9 @@
 //!
 //! # Exit codes
 //!
-//! - 0 — every active (non-archived) profile's release code appears in at least
-//!   one fixture UNH 0057 value for the same message type.
-//! - 1 — one or more profiles have no matching fixture (wire-value mismatch risk).
+//! - 0 — every receivable profile's release code appears in at least one fixture
+//!   UNH 0057 value for the same message type.
+//! - 1 — a receivable profile has no matching fixture (wire-value mismatch risk).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -43,6 +55,9 @@ struct MigProfile {
     release: String,
     #[serde(default)]
     archived: bool,
+    /// Last day this format version is on the wire; `None` for the current one.
+    #[serde(default)]
+    valid_until: Option<String>,
 }
 
 // ── Public entry-point ────────────────────────────────────────────────────────
@@ -55,7 +70,7 @@ pub fn run(workspace_root: &str, _args: &[String]) -> bool {
 
     // ── Step 1: collect declared release codes per message type ──────────────
     // Key: (message_type_lowercase, release_code)
-    let mut declared: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
+    let mut declared: BTreeMap<(String, String), Declared> = BTreeMap::new();
     let profiles_path = Path::new(&profiles_dir);
     if !profiles_path.exists() {
         eprintln!("validate-release-codes: profiles directory not found: {profiles_dir}");
@@ -84,21 +99,21 @@ pub fn run(workspace_root: &str, _args: &[String]) -> bool {
     }
 
     // ── Step 3: cross-check ───────────────────────────────────────────────────
+    let today = time::OffsetDateTime::now_utc().date();
     let mut ok = true;
+    let mut superseded = 0usize;
 
-    for ((msg_type, release_code), profile_paths) in &declared {
+    for ((msg_type, release_code), declared) in &declared {
         let witnessed = observed
             .get(msg_type)
-            .map(|codes| codes.contains(release_code))
-            .unwrap_or(false);
-
-        let status = if witnessed { "OK     " } else { "MISSING" };
-        let path_display = profile_paths.first().map(String::as_str).unwrap_or("?");
+            .is_some_and(|codes| codes.contains(release_code));
+        let receivable = declared.receivable_on(today);
+        let path_display = declared.paths.first().map(String::as_str).unwrap_or("?");
 
         if witnessed {
-            println!("{status}  {msg_type:<10}  release={release_code:<12}  {path_display}");
-        } else {
-            eprintln!("{status}  {msg_type:<10}  release={release_code:<12}  {path_display}");
+            println!("OK        {msg_type:<10}  release={release_code:<12}  {path_display}");
+        } else if receivable {
+            eprintln!("MISSING   {msg_type:<10}  release={release_code:<12}  {path_display}");
             eprintln!(
                 "         → no .edi fixture has UNH 0057={release_code:?} for message type {msg_type:?}"
             );
@@ -110,12 +125,21 @@ pub fn run(workspace_root: &str, _args: &[String]) -> bool {
                 eprintln!("         → no .edi fixtures found at all for message type {msg_type:?}");
             }
             ok = false;
+        } else {
+            let expired_on = declared.last_day.map(|d| d.to_string()).unwrap_or_default();
+            println!(
+                "SUPERSEDED {msg_type:<9}  release={release_code:<12}  {path_display}\n\
+                 {:11}→ superseded on {expired_on}; no fixture needed",
+                ""
+            );
+            superseded += 1;
         }
     }
 
     if ok {
         println!(
-            "\nvalidate-release-codes: all active profiles have matching fixture UNH 0057 values ✓"
+            "\nvalidate-release-codes: every receivable profile has a matching fixture UNH 0057 value ✓\
+             \n  ({superseded} superseded profile(s) skipped — see SUPERSEDED above)"
         );
     } else {
         eprintln!("\nvalidate-release-codes: FAILED — see MISSING entries above");
@@ -126,11 +150,32 @@ pub fn run(workspace_root: &str, _args: &[String]) -> bool {
     ok
 }
 
+/// Every profile declaring one `(message type, release)` pair.
+///
+/// BDEW reuses a release code across format versions — `2.0b` covers both
+/// CONTRL `fv20251001` and `fv20260101` — so a code is on the wire while *any*
+/// profile carrying it is unexpired.
+#[derive(Default)]
+struct Declared {
+    paths: Vec<String>,
+    /// Set when one of those profiles is open-ended (`valid_until: null`).
+    open_ended: bool,
+    /// Otherwise the last day any of them is on the wire.
+    last_day: Option<time::Date>,
+}
+
+impl Declared {
+    /// Whether a counterparty can still send this release code on `today`.
+    fn receivable_on(&self, today: time::Date) -> bool {
+        self.open_ended || self.last_day.is_none_or(|last| today <= last)
+    }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 /// Walk `dir` recursively and collect every `mig.json` profile that is not
 /// archived. The key is `(message_type_lowercase, release_code)`.
-fn collect_profiles(dir: &Path, out: &mut BTreeMap<(String, String), Vec<String>>) {
+fn collect_profiles(dir: &Path, out: &mut BTreeMap<(String, String), Declared>) {
     let Ok(entries) = std::fs::read_dir(dir) else {
         return;
     };
@@ -158,8 +203,16 @@ fn collect_profiles(dir: &Path, out: &mut BTreeMap<(String, String), Vec<String>
                     .map(|n| n.to_string_lossy().into_owned())
                     .unwrap_or_default()
             });
+            let valid_until = profile.valid_until.as_deref().and_then(|raw| {
+                time::Date::parse(raw, &time::format_description::well_known::Iso8601::DATE).ok()
+            });
             let key = (msg_type.to_lowercase(), profile.release.clone());
-            out.entry(key).or_default().push(path.display().to_string());
+            let slot = out.entry(key).or_default();
+            slot.paths.push(path.display().to_string());
+            match valid_until {
+                None => slot.open_ended = true,
+                Some(day) => slot.last_day = Some(slot.last_day.map_or(day, |cur| cur.max(day))),
+            }
         }
     }
 }

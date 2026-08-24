@@ -32,7 +32,9 @@
 //! - **PID 17115**: Auftrag zur Sperrung/Entsperrung (NB → LFN/MSB, Strom, ORDERS)
 //! - **PID 17116**: Anfrage Sperrung
 //! - **PID 17117**: Entsperrauftrag
-//! - **Deadline**: 24 wall-clock hours for execution confirmation
+//! - **Deadline**: the NB's ORDRSP by the **1. Werktag nach dem ÜT**; execution
+//!   within **6 WT nach dem frühestmöglichen Sperrtermin** and the IFTSTA within
+//!   1 WT nach Abschluss (BK6-24-174 GPKE Teil 2 § 3.5)
 //!   (BNetzA BK6-22-024).
 //! - The workflow state machine:
 //!   `New → AnweisungErhalten → ValidationPassed → Ausgefuehrt` (success)
@@ -215,7 +217,7 @@ impl MockLfn {
 /// execution (e.g. smart meter instructed, meter physically disconnected).
 ///
 /// Per BNetzA BK6-22-024 the execution confirmation must be delivered within
-/// 24 wall-clock hours.
+/// the 1. Werktag nach dem ÜT.
 #[tokio::test]
 async fn e2e_sperrung_execution_success() {
     let lfn = MockLfn::new();

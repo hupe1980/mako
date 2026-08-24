@@ -811,9 +811,9 @@ pub fn settle_nne(input: &NneInput) -> Result<SettlementResult, BillingError> {
         }
         // KAV §2 rates are Höchstbeträge, so a rate above the statutory ceiling
         // is a compliance defect, not merely unusual. Because the rate and the
-        // customer group now arrive together, this check can no longer be
-        // skipped — it used to be conditional on a separately-optional group,
-        // which is precisely when an over-charge goes unnoticed.
+        // customer group arrive together, so this check cannot be skipped.
+        // Making it conditional on a separately-optional group is precisely
+        // when an over-charge goes unnoticed.
         match gruppe.hoechstsatz_ct_per_kwh(input.sparte) {
             Some(max) if ka_ct > max => warnings.push(SettlementWarning {
                 severity: WarningSeverity::Warning,
@@ -1545,9 +1545,9 @@ pub fn settle_msb(input: &MsbInput) -> Result<SettlementResult, BillingError> {
         status: SettlementStatus::Initial,
         korrektur_grund: None,
         period: input.period,
-        // PID 31009 is issued *by* the MSB. This used to be filled the other way
-        // round — NB as sender, MSB as recipient — which inverted the invoice:
-        // the party owed money was named as the one billing for it.
+        // PID 31009 is issued *by* the MSB, so the MSB is the sender. NB as
+        // sender and MSB as recipient inverts the invoice: the party owed money
+        // is named as the one billing for it.
         sender_mp_id: input.msb_mp_id.clone(),
         recipient_mp_id: input.empfaenger.mp_id.clone(),
         positions,
@@ -2291,8 +2291,8 @@ mod tests {
 
     /// A demand charge is a pair, so half of one cannot be built.
     ///
-    /// This used to be a runtime error checked in two separate places; the
-    /// `Leistungspreis` type is now the check.
+    /// The `Leistungspreis` type is the check, rather than a runtime error
+    /// repeated at each call site.
     #[test]
     fn a_demand_charge_is_a_pair() {
         let mut i = base_nne();
@@ -2429,9 +2429,8 @@ mod tests {
 
     /// The Prüfidentifikator is a property of the document, not the settlement.
     ///
-    /// It used to be a mutable field the caller patched after calculation —
-    /// netzbilanzd set the NN-Rechnung PID 31002 and 31011 for AWH that way. It
-    /// now lives on `InvoiceDocument`, where routing information belongs.
+    /// It lives on `InvoiceDocument`, where routing information belongs — not
+    /// as a mutable field the caller patches after calculation.
     #[test]
     fn the_pid_lives_on_the_document_not_the_settlement() {
         let settlement = settle_nne(&base_nne()).unwrap();
@@ -2520,9 +2519,9 @@ mod tests {
 
     /// A metering charge above the §30 MsbG Preisobergrenze is reported.
     ///
-    /// It used to be unchecked — the MSB settlement validated only that the fee
-    /// was non-negative, while the analogous KAV ceiling *was* checked. Both are
-    /// Höchstbeträge, and an amount above either is one the customer may reclaim.
+    /// The §30 MsbG Preisobergrenze and the KAV ceiling are both Höchstbeträge,
+    /// so an amount above either is one the customer may reclaim. Validating
+    /// only that the fee is non-negative catches neither.
     #[test]
     fn a_metering_charge_above_the_msbg_ceiling_is_reported() {
         use crate::msbg::{Entgeltschuldner, MessstellenKategorie, PflichtBand};
@@ -3806,9 +3805,10 @@ mod modul3_tests {
 
     /// The §19 Abs. 2 reduction must cover the §14a Modul 3 Spotpreis positions.
     ///
-    /// Those are emitted per dispatch interval, and used to be pushed *after* the
-    /// §19 block ran — so a Modul-3 customer with a 10 % agreement had a basis of
-    /// zero and was billed the published Netzentgelt in full.
+    /// They are emitted per dispatch interval and must be in the basis before
+    /// the §19 block runs. Pushed after it, a Modul-3 customer with a 10 %
+    /// agreement has a basis of zero and is billed the published Netzentgelt in
+    /// full.
     #[test]
     fn sect19_reduction_covers_the_modul3_spot_positions() {
         use time::macros::datetime;

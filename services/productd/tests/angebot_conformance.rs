@@ -1,4 +1,4 @@
-//! The BO4E `Angebot` tarifbd emits must be a valid BO4E document.
+//! The BO4E `Angebot` productd emits must be a valid BO4E document.
 //!
 //! `vertragd` builds the contract by reading this document back
 //! (`angebot_bo4e.rs`) — what was quoted and what is contracted come from one
@@ -6,8 +6,8 @@
 //! an integration contract between two services, and an enum in it that decodes
 //! to `Unknown` is a term neither side can act on.
 
+use productd::bo4e_angebot::{build_angebot, status_from_str};
 use rubo4e::current::Angebotsstatus;
-use tarifbd::bo4e_angebot::{build_angebot, status_from_str};
 use time::macros::date;
 
 /// Every status the database can hold must map to a known BO4E value.

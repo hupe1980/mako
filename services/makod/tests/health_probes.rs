@@ -2,11 +2,11 @@
 //!
 //! # Why this is a test
 //!
-//! `/health` used to be one endpoint serving both Kubernetes probes, and it
-//! reported dependency state — a stale worker heartbeat or an unreachable object
-//! store flipped it to 503. Kubernetes answers a *liveness* failure with a
-//! restart, so a transient object-store outage restarted the container mid-
-//! delivery, which costs an AS4 retry cycle and does not fix the object store.
+//! One endpoint serving both Kubernetes probes cannot report dependency state:
+//! a stale worker heartbeat or an unreachable object store would flip it to 503,
+//! and Kubernetes answers a *liveness* failure with a restart. A transient
+//! object-store outage would restart the container mid-delivery, which costs an
+//! AS4 retry cycle and does not fix the object store.
 //! Liveness must therefore report only that the process is up, and readiness is
 //! what carries the dependency state.
 //!

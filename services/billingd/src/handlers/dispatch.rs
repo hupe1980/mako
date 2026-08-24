@@ -13,7 +13,7 @@ pub(crate) async fn build_quantities(
     period_from: time::Date,
     period_to: time::Date,
 ) -> BillingResult<Quantities> {
-    let (edmd, marktd, tarifbd) = (&deps.edmd, &deps.marktd, &deps.tarifbd);
+    let (edmd, marktd, productd) = (&deps.edmd, &deps.marktd, &deps.productd);
     let mut q = Quantities {
         eeg_gutschrift_eur: req.eeg_gutschrift_eur,
         ..Default::default()
@@ -38,7 +38,7 @@ pub(crate) async fn build_quantities(
             if is_dynamic {
                 q.dynamic_intervals =
                     fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await?;
-                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, tarifbd).await;
+                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, productd).await;
                 // Without intervals the dynamic provider prices nothing: the
                 // invoice comes back carrying the Grundpreis and no energy at
                 // all — no Arbeitspreis, no Stromsteuer, no NNE-Arbeitspreis —
@@ -103,7 +103,7 @@ pub(crate) async fn build_quantities(
         }
         other => {
             // Every `Product` variant is named above. A category that is not is
-            // a tarifbd/billingd version skew, and billing it as electricity
+            // a productd/billingd version skew, and billing it as electricity
             // would issue a plausible-looking invoice for the wrong product.
             return Err(BillingError::unprocessable(
                 "UNKNOWN_CATEGORY",
@@ -255,7 +255,7 @@ pub(crate) async fn dispatch_invoice(
                 .and_then(crate::config::SellerConfig::kontakt),
             ..Default::default()
         }),
-        // Propagate minimum invoice from product definition (tarifbd) to billing context.
+        // Propagate minimum invoice from product definition (productd) to billing context.
         minimum_invoice_eur_brutto: tariff.minimum_invoice_eur_brutto(),
         // §42 EnWG — the product's Stromkennzeichnung, structured, so the
         // invoice can state the fuel mix and the mandatory CO₂ figure.
@@ -540,12 +540,12 @@ pub(crate) async fn resolve_zaehlernummer(
     let edges = marktd.get_lokationen(malo_id, "malo", None).await.ok()?;
     let melo_id = edges
         .iter()
-        .find(|e| e.nach_typ == rubo4e::current::Lokationstyp::Melo)
+        .find(|e| e.nach_typ == mako_markt::domain::Lokationstyp::Melo)
         .map(|e| e.nach_id.clone())
         .or_else(|| {
             edges
                 .iter()
-                .find(|e| e.von_typ == rubo4e::current::Lokationstyp::Melo)
+                .find(|e| e.von_typ == mako_markt::domain::Lokationstyp::Melo)
                 .map(|e| e.von_id.clone())
         })?;
     marktd
@@ -756,7 +756,7 @@ mod leg_summary_tests {
         serde_json::from_value(serde_json::json!({
             "database": { "url": "postgres://localhost/x" },
             "tenant": "9900357000004",
-            "tarifbd_url": "http://localhost:9080",
+            "productd_url": "http://localhost:9080",
             "edmd_url": "http://localhost:8380",
             "marktd_url": "http://localhost:8080"
         }))

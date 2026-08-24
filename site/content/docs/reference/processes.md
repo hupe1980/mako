@@ -170,11 +170,13 @@ Quick reference across all process families. Each row is a top-level domain.
 
 ## GPKE — Kundenbelieferung Elektrizität
 
-**Regulatory basis:** BK6-24-174 (Beschluss 24.10.2024, gültig ab 06.06.2025) +
-BK6-22-024 (GPKE Teil 4, Stammdaten und Konfiguration)
+**Regulatory basis:** **BK6-24-174** (Beschluss 24.10.2024, gültig ab
+06.06.2025) — GPKE Teil 1–3 = Anlagen 1a–1c; **BK6-22-024** (Beschluss
+21.03.2024) — LFW24 (§ 20a EnWG) and GPKE Teil 4 = Anlage 1d.
 
-**APERAK Frist:** **45 Minuten** an einem Werktag (APERAK AHB 1.0 §2.4.1) — a
-separate clock from the business Antwortfrist of the process itself.
+**APERAK Frist:** **45 Minuten** an einem Werktag für UTILMD und ORDERS,
+Samstag → Sonntag 12:00, sonst nächster Werktag 12:00 (APERAK AHB 1.1 § 2.4.1) —
+a separate clock from the business Antwortfrist of the process itself.
 
 ---
 
@@ -182,20 +184,65 @@ separate clock from the business Antwortfrist of the process itself.
 
 The supplier-switch process (GPKE Teil 2) is the highest-volume process in the
 German electricity market. The incoming supplier (LFN) initiates the registration
-and simultaneously cancels the outgoing supplier's (LFA) contract. Both the
-NB and LFA must respond within 24 h.
+and separately cancels the outgoing supplier's (LFA) contract.
 
-**Process timing rules (BK6-22-024 / BK6-24-174):**
+**Every answer window is a wall-clock instant on the first Werktag after the ÜT**
+— never a duration. LFW24 does require the *switch itself* to complete within 24
+hours (§ 20a EnWG), and GPKE meets that by chaining those instants; but GPKE
+Teil 1 Kap. 7 („Fristenberechnung") defines only WT, T, Zuordnungsbeginn, ÜT and
+ÜZ, and contains no 24-hour Frist. Reading the statutory duration as a message
+deadline expires a Friday-afternoon Anmeldung on Saturday and reports a
+Tuesday-11:00 Frist as healthy until Tuesday night.
+
+**Der Sequenzablauf des Lieferbeginn (GPKE Teil 2 § 2.1.2):**
+
+| Nr. | Aktion | PID | Richtung | Spätester ÜZ |
+|---|---|---|---|---|
+| 1 | Anmeldung | 55001 / 55077 | LFN → NB | — (Vorlauffrist, s. u.) |
+| 2 | Information über existierende Zuordnung | **55036** | NB → LFN | **07:00 Uhr des 1. WT nach dem ÜT** |
+| 3 | Anfrage zur Beendigung der Zuordnung | 55010 | NB → LFA | parallel zu Nr. 2 |
+| 4 | Antwort auf die Anfrage | 55011 / 55012 | LFA → NB | **09:00 Uhr des 1. WT** — Schweigen gilt als Zustimmung |
+| 5 | Zuordnung des LFN (Bestätigung) | 55002 / 55078 | NB → LFN | **11:00 Uhr des 1. WT** |
+| 6 | Ablehnung der Anmeldung | 55003 / 55080 | NB → LFN | **11:00 Uhr des 1. WT** |
+| 10 | Beendigung der Zuordnung | **55037** | NB → LFA | **12:00 Uhr des 1. WT** |
+| 13 | Aufhebung einer zukünftigen Zuordnung | **55038** | NB → LFZ | **12:00 Uhr des 1. WT** |
+
+Nr. 2, 10 and 13 are **Meldepflichten** — one-way notifications with no answer,
+and **mako implements none of them**; see
+[the Meldepflicht gap](#meldepflichten-obligations-with-no-answer) below.
+
+**Vorlauffristen (BK6-24-174 GPKE Teil 2, SD Lieferbeginn Nr. 1):**
 
 | Scenario | Mindestvorlauffrist | Notes |
 |---|---|---|
-| Lieferbeginn (LFW24, 24h-Wechsel) | Tag nach dem nächsten WT nach dem ÜT | Spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn (day-granular, kein Uhrzeit-Cutoff) — BK6-24-174 GPKE Teil 2, SD Lieferbeginn Schritt 1. Seit LFW24 gibt es keine separate „Standardwechsel“-Frist mehr; frühere Anmeldung ist zulässig („unverzüglich nach Vorliegen des Anmeldegrundes“) |
-| Neuanlage MaLo | keine Mindestfrist | Lieferbeginn = Tag der Fertigstellung |
-| Stornierung Zuordnung | bis 24 h vor Lieferbeginn | Nur der ursprüngliche Sender darf stornieren |
+| Lieferbeginn (LFW24) | spätester ÜT ist der Tag vor dem letzten WT vor dem Zuordnungsbeginn | Day-granular, kein Uhrzeit-Cutoff. Seit LFW24 gibt es keine separate „Standardwechsel"-Frist mehr; frühere Anmeldung ist zulässig („unverzüglich nach Vorliegen des Anmeldegrundes") |
+| EEG-Marktlokationen und Tranchen | sechs published Fristen, keyed on Geschäftsvorfall und Veräußerungsform | GPKE Teil 2 § 2.1.1, Tabelle „Fristen für die Anmeldung (Prozessschritt 1)" |
+| Neuanlage MaLo | keine Mindestfrist | Antwortfrist dafür 00:00 Uhr des **61. WT** — `E_0608` macht die Identifikation einer neu in Betrieb genommenen MaLo zu einer *täglichen* Wiederholprüfung über 60 WT |
+| Stornierung einer Zuordnung | solange die auslösende Meldung **noch nicht beantwortet** ist | GPKE Teil 4 Kap. 5. Danach nur noch Rückabwicklung — ein manueller Prozess, der das Einverständnis aller Beteiligten erfordert. Es gibt **keine** „24 h vor Lieferbeginn"-Frist |
 
-> **Einreichungstag rule:** UTILMD 55001 (LFN → NB) and UTILMD 55016 (LFN → LFA)
-> must be submitted on the **same calendar day**. The NB coordinates the transition;
-> the actual LFA disconnection follows automatically at Lieferbeginn-Datum.
+> **Kündigung und Anmeldung sind nicht taggleich gekoppelt.** GPKE Teil 2 § 1.2.1
+> stellt für den Use-Case „Kündigung" keine Bedingung auf, dass 55016 (LFN → LFA)
+> am selben Kalendertag wie 55001 (LFN → NB) zu senden wäre. Was die Festlegung
+> verlangt, ist die **Nachbedingung im Erfolgsfall**: „Der LFA ist verpflichtet,
+> unmittelbar mit Bestätigung der Kündigung gegenüber dem LFN auch den Use-Case
+> ‚Lieferende von LF an NB' gegenüber dem NB anzustoßen."
+
+#### Meldepflichten — obligations with no answer
+
+Three of the eight steps above carry no Bestätigung, so a missing one produces no
+timeout, no dead letter and no alert. It surfaces later as a counterparty holding
+a stale view of who supplies the Marktlokation.
+
+| PID | Message | NB → | Substance |
+|---|---|---|---|
+| 55036 | Information über existierende Zuordnung | LFN | **die Identität des LFA** — „Hierbei teilt der NB dem LFN insbesondere die Identität des LFA … mit" |
+| 55037 | Beendigung der Zuordnung | LFA | Zuordnungsende und Grund |
+| 55038 | Aufhebung einer zukünftigen Zuordnung | LFZ | dass eine künftige Zuordnung entfällt |
+
+The Gas twins are 44036 / 44037 / 44038. **None of the six is implemented** —
+`edi-energy` carries no UTILMD AHB rules for them. Fundstellen in
+`mako_fristen::meldung`; the gap is pinned by
+`services/makod/tests/meldepflicht_coverage.rs`.
 
 **Ersatz-/Grundversorgung (EoG, §36/§38 EnWG):** When a MaLo draws energy
 without an assignable supply contract (after Lieferende without successor,
@@ -802,31 +849,83 @@ There is no per-process deadline (Frist) — the submission windows are calendar
 
 ## GeLi Gas — Lieferantenwechsel Gas
 
-**Regulatory basis:** BK7-24-01-009 (Beschluss 12.09.2025, Tenor gültig ab 01.01.2026; KoV-XV-Cluster ab 01.10.2026)
-Supersedes BK7-19-001 and BK7-06-067.
+**Regulatory basis:** **BK7-24-01-009** — „GeLi Gas 3.0", Anlage zu BK7-06-067 in
+der Fassung BK7-24-01-009 (Beschluss 12.09.2025, Tenor gültig ab 01.01.2026;
+KoV-XV-Cluster ab 01.10.2026). Supersedes BK7-19-001 and the original
+BK7-06-067 (2007). The Sequenzdiagramme that refine it are the BDEW/VKU/GEODE/FNB
+Gas **AWH GeLi Gas V1.2** (26.03.2026, gültig ab 01.04.2026).
 
-**APERAK Frist:** **10 Werktage** (longest Frist across all MaKo process families)
+**APERAK Frist:** Gas knows only the **Verarbeitbarkeitsfehlermeldung** —
+nächster Werktag 12:00 Uhr for a Folgeprozess, **3 Werktage** for an
+Initialprozess (APERAK AHB 1.1 § 2.3.1). Every APERAK is answered with a CONTRL.
+This is the *technical* clock; the business Antwortfristen are 4 / 3 / 2 Werktage
+per Prüfidentifikator.
 
-**Key difference from electricity:** Gas uses **MaLo** (not MeLo) as the supply
-object. The grid operator is called **GNB** (Gasnetzbetreiber), not NB.
+**Key differences from electricity.** Both Sparten switch suppliers at the
+**Marktlokation** and both use UTILMD. What differs: the answer window is the
+*Ablauf* of a Werktag rather than a wall-clock instant on one; the
+Zuordnungszeitpunkt is **06:00 Uhr** (the Gastag runs 06:00–06:00) rather than
+00:00; the Entscheidungsbäume are `E_30xx` rather than `E_06xx`; and the LF
+carries a **Vorlauffrist** the Strom side does not. The grid operator is called
+**GNB**.
 
 ---
 
 ### Lieferantenwechsel Gas
 
-**Process timing rules (BK7-24-01-009):**
+**Vorlauffristen und Antwortfristen (BK7-24-01-009 Kap. 3.1–3.3):**
 
-| Scenario | Mindestvorlauffrist | Notes |
+| Scenario | Frist | Fundstelle |
 |---|---|---|
-| Standardwechsel | 10 Werktage vor Lieferbeginn | Eingang bei GNB und LFA auf demselben Werktag |
-| Schneller Wechsel | **nicht anwendbar** | Gas kennt keinen schnellen Lieferantenwechsel |
-| Neuanlage | keine Mindestfrist | Lieferbeginn = frühestmöglicher Termin |
-| Stornierung | bis 24 h vor Lieferbeginn | Nur der ursprüngliche Sender darf stornieren |
+| Anmeldung bei Lieferantenwechsel — LF-Vorlauf | **mindestens 10 Werktage** vor Aufnahme der Belieferung | Kap. 3.2.3 |
+| Anmeldung — Antwort des GNB | **Ablauf des 4. Werktags** nach Eingang | Kap. 3.2.3 |
+| Abmeldung bei Lieferantenwechsel — LF-Vorlauf | **mindestens 7 Werktage** vor dem Abmeldedatum | Kap. 3.2.2 |
+| Abmeldung — Antwort des GNB | **Ablauf des 3. Werktags** nach Eingang | Kap. 3.2.2 |
+| Kündigung — Antwort des LFA | **Ablauf des 3. Werktags** nach Eingang | Kap. 3.1 |
+| Zuordnung E/G — Antwort des E/G | **Ablauf des 2. Werktags** | Kap. 3.3.2 |
+| Neuanlage | keine Mindestvorlauffrist | Lieferbeginn = frühestmöglicher Termin |
+| Stornierung | solange die auslösende Meldung **noch nicht beantwortet** ist | Kap. 2.7; AWH Kap. 2.5.2 Nr. 2: „Eine Stornierung der Anmeldung kann bis zum Eingang der Antwortnachricht erfolgen" |
+
+> **Die „10 Werktage" sind die Vorlauffrist des Lieferanten, keine Antwortfrist.**
+> Sie sagen, wie weit im Voraus der LFN senden muss — nicht, wie lange der GNB
+> antworten darf. Wer damit eine Antwortqueue dimensioniert, meldet eine seit
+> sechs Werktagen abgelaufene Frist als noch laufend.
+
+**Wo bei Gas die 24 Stunden stehen.** Die AWH GeLi Gas nimmt seit V1.1 die
+Neuregelung zum **Lieferantenwechsel in 24 Stunden Gas (§ 20a EnWG)** auf: „Der
+Vorgang der Bestätigung einer Anmeldung zu einem LF ist nach erfolgreichem
+Abschluss aller relevanten Prüfungen für die Zuordnung der entsprechenden MaLo
+innerhalb von höchstens 24 Stunden vorzunehmen" (Kap. 1.6). Das ist eine Frist
+auf die **Ausführung nach bestandener Prüfung**, keine Antwortfrist auf die
+Nachricht — die bleibt bei 4 Werktagen als Obergrenze.
+
+Die AWH V1.2 präzisiert Prozessschritt 5 („Antwort auf Anmeldung") weiter in zwei
+Zweige:
+
+| Zweig | Frist | Obergrenze |
+|---|---|---|
+| Eine Abmeldeanfrage wurde versendet | **24 h nach Eingang der „Beantwortung der Abmeldeanfrage"** (ist der Folgetag kein WT, dann der nächstfolgende WT) | Ablauf des 4. WT nach Prozessschritt 2 |
+| Keine Abmeldeanfrage versendet | 24 h nach der Prüfung | Ablauf des 4. WT nach Eingang der Anmeldung |
+| Der LFA antwortet gar nicht | der WT nach dem 3. WT nach Versand von Prozessschritt 2 | — |
+
+`mako_fristen::antwort::gas_lieferbeginn_antwort_nach_abmeldeanfrage` rechnet den
+ersten Zweig aus; die PID-Tabelle veröffentlicht die Obergrenze, weil aus der
+Nachricht selbst nicht hervorgeht, welcher Zweig gilt.
+
+**Meldepflichten — Nachrichten ohne Antwort.** Wie bei GPKE trägt auch das Gas-SD
+Lieferbeginn drei einseitige Informationsmeldungen, die **mako nicht
+implementiert**: **44036** (Informationsmeldung über existierende Zuordnung,
+GNB → LFN, Ablauf des 4. WT — sie nennt dem LFN die **Identität des LFA**),
+**44037** (Beendigung der Zuordnung, GNB → LFA) und **44038** (Aufhebung einer
+zukünftigen Zuordnung, GNB → LFZ), die beiden letzten „am selben Tag wie
+Prozessschritt 5, wenn die Anmeldung bestätigt wurde" (AWH Kap. 2.5.2 Nr. 2 / 6 /
+7). Katalogisiert in `mako_fristen::meldung`, Lücke fixiert durch
+`services/makod/tests/meldepflicht_coverage.rs`.
 
 > **GNB-role note:** In the gas market the grid operator is always called **GNB**
 > (Gasnetzbetreiber). Messages are addressed to the GNB by EIC/GLN. The GNB
-> coordinates with the outgoing LF (LFA) automatically after receiving the LFN's
-> Anmeldung.
+> coordinates with the outgoing LF (LFA) after receiving the LFN's Anmeldung, by
+> sending the Abmeldeanfrage of Prozessschritt 3.
 
 | Process | Initiator → Responder | UTILMD PID | Antwort OK | Antwort NG | Crate |
 |---|---|---|---|---|---|
@@ -858,7 +957,9 @@ When makod is deployed in the **LF role**, the LF initiates the Lieferbeginn Gas
 UTILMD G 44001 outbound to the GNB. The response arrives inbound as 44002 (Bestätigung)
 or 44003 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Strom.
 
-**Workflow:** `geli-gas-lf-anmeldung` — APERAK Frist: **10 Werktage**
+**Workflow:** `geli-gas-lf-anmeldung` — the GNB's answer window on a 44001 is
+**Ablauf des 4. Werktags** (`mako_fristen::antwort`); the APERAK beside it is
+nächster Werktag 12:00 / 3 Werktage.
 
 | Direction | Message | PID | Role |
 |---|---|---|---|
@@ -869,12 +970,19 @@ or 44003 (Ablehnung). This mirrors the GPKE `gpke-lf-anmeldung` workflow for Str
 | Inbound (LFA → LFN) | Bestätigung Kündigung | UTILMD G **44017** | LFA confirms |
 | Inbound (LFA → LFN) | Ablehnung Kündigung | UTILMD G **44018** | LFA rejects |
 
-> **Einreichungstag rule (Gas):** Like GPKE Strom, UTILMD G 44001 (LFN → GNB) and
-> UTILMD G 44016 (LFN → LFA) must be submitted on the **same Werktag**.
-> The Mindestvorlauffrist for a Standardwechsel is **10 Werktage**. GPKE Strom,
-> by contrast, has no fixed Standardwechsel-Vorlauffrist — the 24-hour switching
-> regime (LFW24) governs there. Gas has **no fast-switch equivalent**
-> (`Schneller Lieferantenwechsel` does not exist in Gas; BK7-24-01-009 §2.1).
+> **Kündigung und Anmeldung sind nicht taggleich gekoppelt.** Weder GeLi Gas 3.0
+> Kap. 3.1 noch die AWH verlangen, dass 44016 (LFN → LFA) am selben Werktag wie
+> 44001 (LFN → GNB) versendet wird. Was Kap. 3.1 verlangt, ist die Nachbedingung:
+> „Der Altlieferant ist ferner verpflichtet, unmittelbar mit Bestätigung der
+> Kündigung gegenüber dem Neulieferanten auch das Lieferende gegenüber dem
+> Netzbetreiber einzuleiten."
+>
+> Die Mindestvorlauffrist für den Lieferantenwechsel ist **10 Werktage** (Anmeldung)
+> bzw. **7 Werktage** (Abmeldung). GPKE Strom kennt seit LFW24 keine feste
+> Standardwechsel-Vorlauffrist mehr, sondern nur „spätester ÜT ist der Tag vor dem
+> letzten WT vor dem Zuordnungsbeginn". § 20a EnWG gilt in beiden Sparten — bei
+> Gas als 24-Stunden-Frist auf die **Ausführung der Zuordnung nach bestandener
+> Prüfung** (AWH Kap. 1.6), nicht als Antwortfrist.
 
 ```mermaid
 sequenceDiagram
@@ -882,11 +990,11 @@ sequenceDiagram
     participant GNB as Gasnetzbetreiber (GNB)
     participant LFA as Alter LF (LFA)
 
-    Note over LFN,LFA: Einreichungstag = gleichzeitig
+    Note over LFN,LFA: Keine taggleiche Kopplung vorgeschrieben
     LFN->>GNB: UTILMD G 44001 (Anmeldung Lieferbeginn)
     LFN->>LFA: UTILMD G 44016 (Kündigung beim alten LF)
 
-    Note over LFN,GNB: Frist: 10 Werktage (keine Express-Option)
+    Note over LFN,GNB: LF-Vorlauf 10 WT · GNB antwortet bis Ablauf des 4. WT
 
     alt GNB bestätigt
         GNB-->>LFN: UTILMD G 44002 (Bestätigung Anmeldung NN)
@@ -935,7 +1043,12 @@ sequenceDiagram
 
 The gas disconnection / reconnection process (LF-initiated) follows the same PID
 numbers as the Strom Sperrung, but runs between the LF and the GNB on a Gas MaLo
-and is governed by BK7-24-01-009 with a **10-Werktage deadline** instead of 24 h.
+and answers on the **same Sparte-neutral row** as Strom: 17115 / 17117 / 39000
+are one ORDERS Anwendungsfall in both Sparten, so the GNB's ORDRSP is due
+„spätester ÜT ist der 1. WT nach dem ÜT". The Gas process itself lives in the
+BDEW AWH „Unterbrechung / Wiederherstellung der Anschlussnutzung" — with the Gas
+Entscheidungsbäume `E_1000` / `E_1004` against Strom's `E_0470` / `E_0497` —
+**not** in GeLi Gas 3.0, which contains no Sperrprozess at all.
 
 **LF-Seite** — `geli-gas-sperrung-lf` (LF initiates, awaits GNB response)
 
@@ -970,7 +1083,7 @@ sequenceDiagram
     participant GNB as Gasnetzbetreiber (GNB)
 
     LF->>GNB: ORDERS 17115 (Gas-Sperrauftrag, LF → GNB)
-    Note over LF,GNB: GNB hat 10 Werktage Zeit (BK7-24-01-009)
+    Note over LF,GNB: ORDRSP bis zum 1. WT nach dem ÜT
 
     alt Bestätigung
         GNB-->>LF: ORDRSP 19116 (Bestätigung Gas-Sperrauftrag)
@@ -1042,8 +1155,10 @@ actual data (MSCONS or similar); ORDRSP is sent only for rejections.
 **Workflow:** `geli-gas-mscons`
 
 Gas meter readings, load profiles, energy quantities, and gas quality values
-delivered via MSCONS by the GNB or MSB to the LF. The LF acknowledges
-with APERAK within **10 Werktage** (BK7-24-01-009).
+delivered via MSCONS by the GNB or MSB to the LF. The LF acknowledges with an
+APERAK on the Gas APERAK clock — **nächster Werktag 12:00 Uhr** for a
+Folgeprozess, 3 Werktage for an Initialprozess (APERAK AHB 1.1 § 2.3.1). Not
+10 Werktage: that is the supplier's Vorlauffrist before a Lieferbeginn.
 
 | PID | Content | Sender → Empfänger |
 |---|---|---|
@@ -1376,7 +1491,7 @@ full Anwendungsfall table.
 
 SCHEDL, IMBNOT, TRANOT, DELORD/DELRES and SSQNOT are **not implemented** —
 `dvgw-edi` does not parse them, so nothing routes to their placeholder
-workflows. See `ROADMAP.md`.
+workflows.
 
 ---
 

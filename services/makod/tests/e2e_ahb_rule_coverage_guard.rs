@@ -35,7 +35,7 @@ const RULELESS_BY_DESIGN: &[(u32, &str)] = &[
 /// Routed PIDs whose AHB rules were never imported — an acknowledged backlog.
 ///
 /// Cross-checked against the BDEW **PID overview 4.0 (01.04.2026)**: the UTILMD
-/// profiles carry 104 of 189 published Strom PIDs and 39 of 88 Gas PIDs, and
+/// profiles carry 110 of 189 published Strom PIDs and 50 of 88 Gas PIDs, and
 /// ORDERS 35 of 44. These are the subset that a workflow actually routes, so
 /// they are the ones with live consequences: the message is accepted and its AHB
 /// rules are not applied.
@@ -46,7 +46,7 @@ const RULELESS_BY_DESIGN: &[(u32, &str)] = &[
 const KNOWN_PROFILE_GAPS: &[u32] = &[
     // GeLi Gas Bestandsliste / Änderungsmeldung (UTILMD AHB Gas § 5.8).
     // 44007–44016 — the four processes an LF must answer — were curated from
-    // UTILMD AHB Gas 1.2 §§ 5.3/5.4/5.6/5.7 and are no longer listed here.
+    // UTILMD AHB Gas 1.2 §§ 5.3/5.4/5.6/5.7 and so are absent from this list.
     44019, 44020, 44021, // GeLi Gas Stammdatenänderung band
     44137, 44138, 44139, 44140, 44142, 44143, 44145, 44146, 44147, 44148, 44149, 44150, 44151,
     44152, 44156, 44157, 44162, 44163, 44164, 44165, 44166, 44167, 44180, 44181, 44182,
@@ -57,7 +57,7 @@ const KNOWN_PROFILE_GAPS: &[u32] = &[
     // 55156/55220/55673 are the GPKE Teil 2 § 3.1 Rückmeldung/Bestellung
     // Abrechnungsdaten answered by IFTSTA 21047.
     // 55007/55607 (with their answers) were curated from UTILMD AHB Strom 2.2
-    // §§ 8.10 and 8.15 and are no longer listed here.
+    // §§ 8.10 and 8.15 and so are absent from this list.
     55077, 55078, 55080, 55156, 55220, 55230, 55232, 55557, 55559, 55673,
     // MaBiS-ZP lifecycle (`mabis-zp-lifecycle`) — Aktivierung/Deaktivierung of
     // the MaBiS-Zählpunkt, the Zuordnungsermächtigung and the AAÜZ/LF-AASZR

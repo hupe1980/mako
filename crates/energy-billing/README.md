@@ -16,7 +16,7 @@ zero async, zero hardcoded regulatory rates**. It answers one question:
 `BillingContext.energiequellen` carries the typed `EnergieQuellen` (fuel-mix
 percentages, the CO₂ g/kWh figure §42 Abs. 2 Nr. 2 EnWG makes mandatory, HKN
 certification) and `to_rechnung_json` emits it as the `stromkennzeichnung`
-ZusatzAttribut with the structure intact. billingd copies it from the tarifbd
+ZusatzAttribut with the structure intact. billingd copies it from the productd
 product via `Product::energiequellen()`.
 
 The invoice emits the structured type — there is no free-text Energiemix
@@ -136,7 +136,7 @@ the `vertragsart` ZusatzAttribut on every invoice:
 
 ```
 billingd (HTTP service)
-    │   tarifbd/edmd/marktd clients · HTTP endpoints
+    │   productd/edmd/marktd clients · HTTP endpoints
     │   XRechnung 3.0 CII / PEPPOL UBL · PostgreSQL · CloudEvents
     │
     └── energy-billing (pure crate)
@@ -188,7 +188,7 @@ use energy_billing::{BillingContext, BillingPeriod, GridInput, InvoiceType, Mete
 use rust_decimal::dec;
 use time::macros::date;
 
-// Deserialize directly from tarifbd JSONB using the "category" discriminator
+// Deserialize directly from productd JSONB using the "category" discriminator
 let product: Product = serde_json::from_str(r#"{
     "category": "STROM",
     "arbeitspreis_ct_per_kwh": 32.0,
@@ -232,7 +232,7 @@ let rechnung_json: serde_json::Value = invoice.to_rechnung_json();
 Each category has its own struct with only the relevant fields — no silent field confusion.
 
 ```rust
-// Deserializes via #[serde(tag = "category")] from flat tarifbd JSONB:
+// Deserializes via #[serde(tag = "category")] from flat productd JSONB:
 // {"category":"STROM","arbeitspreis_ct_per_kwh":28.5} → Product::Strom(ElectricityProduct{...})
 // {"category":"WAERMEPUMPE","sect14a_modul2_nne_reduktion_ct_per_kwh":1.5,...} → Product::Waermepumpe(...)
 // {"category":"GAS","gas_arbeitspreis_ct_per_kwh_hs":7.5,...} → Product::Gas(GasProduct{...})
@@ -572,7 +572,7 @@ pub struct PositionTrace {
     pub input_unit_price_eur: Decimal,
     pub gross_eur: Decimal,
     pub regulatory_basis: Vec<String>, // ["§3 StromStG", "§41 EnWG"]
-    pub tariff_source: Option<String>, // product sheet ID from tarifbd
+    pub tariff_source: Option<String>, // product sheet ID from productd
     pub pro_rata_fraction: Option<Decimal>,
 }
 ```

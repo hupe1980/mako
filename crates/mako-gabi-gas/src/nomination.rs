@@ -406,6 +406,24 @@ impl Workflow for GaBiGasNominationWorkflow {
     type Event = NominationEvent;
     type Command = NominationCommand;
 
+    /// Turn the fired [`NOMRES_DEADLINE_LABEL`] into
+    /// [`NominationCommand::NomresDeadlineExpired`].
+    ///
+    /// The command, the event and the terminal `DeadlineExpired` state were all
+    /// there; this hook was not, so a NOMINT that never drew a NOMRES stayed in
+    /// `NominationSent` forever and the missed D+1 window was invisible.
+    fn on_deadline(
+        deadline: &mako_engine::deadline::Deadline,
+        state: &Self::State,
+    ) -> Option<Self::Command> {
+        (deadline.label() == NOMRES_DEADLINE_LABEL
+            && matches!(state, NominationState::NominationSent(_)))
+        .then(|| NominationCommand::NomresDeadlineExpired {
+            deadline_id: deadline.deadline_id(),
+            label: deadline.label().to_owned(),
+        })
+    }
+
     fn apply(state: Self::State, event: &Self::Event) -> Self::State {
         match event {
             NominationEvent::NominationSent {

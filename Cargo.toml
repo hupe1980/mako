@@ -35,7 +35,7 @@ members = [
     "services/netzbilanzd",
     "services/sperrd",
     "services/einsd",
-    "services/tarifbd",
+    "services/productd",
     "services/agentd",
     "services/billingd",
     "services/outputd",
@@ -60,7 +60,7 @@ anyhow      = "1"
 dashmap     = "6"
 edifact-rs   = "~0.16"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
-rubo4e       = { version = "0.9.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum", "builder"] }
+rubo4e       = { version = "0.10.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum", "builder"] }
 rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
 billing      = { version = "0.13.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`

@@ -446,15 +446,20 @@ impl Invoice {
                 // extension keys (round-trip-preserved by rubo4e) so the audit
                 // tooling keeps reading the same flat fields it always did.
                 if let Some(lb) = &p.legal_basis {
-                    pos._additional
-                        .try_insert("rechtlicheGrundlage".to_owned(), serde_json::json!(lb));
+                    annotate(
+                        &mut pos._additional,
+                        "rechtlicheGrundlage",
+                        serde_json::json!(lb),
+                    );
                 }
-                pos._additional.try_insert(
-                    "positionstyp".to_owned(),
+                annotate(
+                    &mut pos._additional,
+                    "positionstyp",
                     serde_json::json!(p.tags.first().map(String::as_str).unwrap_or("POSITION")),
                 );
-                pos._additional.try_insert(
-                    "kategorie".to_owned(),
+                annotate(
+                    &mut pos._additional,
+                    "kategorie",
                     serde_json::json!(format!("{:?}", p.category)),
                 );
                 pos
@@ -668,8 +673,8 @@ impl Invoice {
             // BO4E marks a Stornorechnung with `istStorno`, not a Rechnungstyp.
             ist_storno: ctx.invoice_type.is_reversal().then_some(true),
             original_rechnungsnummer: ctx.invoice_type.original_invoice_id().map(str::to_owned),
-            rechnungsdatum: Some(ctx.ausstellungsdatum()),
-            faelligkeitsdatum: Some(faelligkeitsdatum),
+            rechnungsdatum: as_bo4e_timestamp(ctx.ausstellungsdatum()),
+            faelligkeitsdatum: as_bo4e_timestamp(faelligkeitsdatum),
             // The delivery point as a typed Marktlokation. `_id` always carries
             // the raw string; `marktlokationsId` only when it passes the BDEW
             // checksum — a synthetic or aggregate subject id must not claim to
@@ -749,11 +754,13 @@ impl Invoice {
     ///
     /// # Panics
     ///
-    /// Never, for any `Invoice` this crate can build: a `Rechnung` is a tree of
-    /// `Decimal`, `String` and BO4E enums, none of which `serde_json` can fail
-    /// on. Stated rather than defaulted, because the callers store and dispatch
-    /// the result — and PostgreSQL accepts a JSON `null` into a `JSONB NOT
-    /// NULL` column, so a defaulted failure would travel as the invoice.
+    /// Never, for any `Invoice` this crate can build. A `Rechnung` is a tree of
+    /// `Decimal`, `String`, BO4E enums and two timestamps; the first three
+    /// cannot fail, and the timestamps are produced by `as_bo4e_timestamp`,
+    /// which yields `None` rather than a date RFC 3339 cannot express. Stated
+    /// rather than defaulted, because the callers store and dispatch the result
+    /// — and PostgreSQL accepts a JSON `null` into a `JSONB NOT NULL` column, so
+    /// a defaulted failure would travel as the invoice.
     #[must_use]
     #[cfg(feature = "bo4e")]
     pub fn to_rechnung_json(&self) -> serde_json::Value {
@@ -945,6 +952,44 @@ impl Invoice {
 /// A BO4E `ZusatzAttribut` — the sanctioned extension point for facts the
 /// schema does not model.
 #[cfg(feature = "bo4e")]
+/// A BO4E date-only market value as the `date-time` the schema declares.
+///
+/// BDEW INVOIC transmits `rechnungsdatum` and `faelligkeitsdatum` as DTM
+/// qualifier 102 — a bare `YYYYMMDD` — while BO4E types both `format: date-time`.
+///
+/// **Midnight UTC.** `Rechnung::rechnungsdatum_date()` reads the date in the
+/// offset the payload carries, so `+00:00` reads back as the date that went in
+/// and stays that date under any later normalisation; a `+01:00` midnight
+/// becomes the previous day the moment someone converts it.
+///
+/// `None` for a year outside RFC 3339's `0000`–`9999`, which the field
+/// serialises as. The field is optional and an invoice with no billing period
+/// has no issue date, so it is omitted rather than made fatal — rejecting a
+/// periodless invoice is the engine's job, not the serializer's.
+fn as_bo4e_timestamp(date: time::Date) -> Option<time::OffsetDateTime> {
+    (0..=9999)
+        .contains(&date.year())
+        .then(|| date.midnight().assume_utc())
+}
+
+/// Add a provenance key to a BO4E object's extension map.
+///
+/// BO4E has no field for these — the legal basis of a rate, the position type,
+/// the MaLo an aggregate line settles — so they ride as extension keys, which
+/// rubo4e round-trip-preserves.
+///
+/// `try_insert` refuses once the map hits its hardening caps and names which.
+/// That cannot happen here — each map is freshly constructed and receives at
+/// most three keys — so the assertion states the invariant, and a cap set below
+/// three fails every test run instead of silently dropping an audit record.
+fn annotate(map: &mut rubo4e::json::LimitedExtensionMap, key: &str, value: serde_json::Value) {
+    let outcome = map.try_insert(key.to_owned(), value);
+    debug_assert!(
+        outcome.is_ok(),
+        "extension map refused the provenance key {key:?}: {outcome:?}"
+    );
+}
+
 fn zusatz_attribut(name: &str, wert: serde_json::Value) -> rubo4e::current::ZusatzAttribut {
     rubo4e::current::ZusatzAttribut {
         name: Some(name.to_owned()),
@@ -1515,8 +1560,8 @@ mod rechnung_json_tests {
         );
     }
 
-    /// Every §40/§41/§42 EnWG Pflichtangabe the JSON builder used to emit must
-    /// survive the typed-BO migration — enumerated one by one, not sampled.
+    /// Every §40/§41/§42 EnWG Pflichtangabe must reach the typed BO —
+    /// enumerated one by one, not sampled.
     ///
     /// Typed fields: Zählernummer (§41 Abs. 1 Nr. 6 → `zaehler`), Netzbetreiber
     /// (§41 Abs. 1 Nr. 5 → `netzbetreiber.rollencodenummer`), Abrechnungszeitraum
@@ -1615,7 +1660,11 @@ mod rechnung_json_tests {
                 .and_then(|v| v.vertragsnummer.clone()),
             Some("V-2026-042".to_owned())
         );
-        assert_eq!(rechnung.faelligkeitsdatum, Some(date!(2026 - 02 - 14)));
+        assert_eq!(
+            rechnung.faelligkeitsdatum_date(),
+            Some(date!(2026 - 02 - 14)),
+            "the schema types this as date-time; the calendar date must survive the promotion"
+        );
         let periode = rechnung
             .rechnungsperiode
             .as_ref()

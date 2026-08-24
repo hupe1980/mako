@@ -120,8 +120,8 @@ fn anlage1_direktvermarktung_positive_spread() {
 
 /// Anlage 1 Nr. 3.1.2 EEG 2023 — zero spread (MW = AW): the claim is zero.
 ///
-/// Nothing tops it up. The Managementprämie that used to be booked here was an
-/// EEG 2012 construct with no basis in Anlage 1 or §20.
+/// Nothing tops it up: the Managementprämie is an EEG 2012 construct with no
+/// basis in Anlage 1 or §20.
 #[test]
 fn anlage1_zero_spread_pays_nothing() {
     let out = calculate_settlement(&SettleInput {
@@ -186,10 +186,10 @@ fn s20_no_epex_price_missing() {
 
 /// Anlage 1 Nr. 3.1.2 EEG 2023 — plant size does not enter the Marktprämie.
 ///
-/// The formula is `MP = AW − MW` for a 9 kWp roof and a 110 MW park alike. The
-/// capacity-tiered Managementprämie that used to be added on top was an EEG 2012
-/// construct; since EEG 2014 the marketing cost sits inside the AW, and neither
-/// §20 nor Anlage 1 mentions it.
+/// The formula is `MP = AW − MW` for a 9 kWp roof and a 110 MW park alike. A
+/// capacity-tiered Managementprämie on top is an EEG 2012 construct; since
+/// EEG 2014 the marketing cost sits inside the AW, and neither §20 nor Anlage 1
+/// mentions it.
 #[test]
 fn anlage1_marktpraemie_has_no_capacity_dependent_component() {
     let out = calculate_settlement(&SettleInput {
@@ -474,10 +474,9 @@ fn s25_after_registration_normal_settlement() {
 /// not of the law year.
 ///
 /// A plant commissioned on 24.02.2025 and one commissioned the next day are both
-/// "EEG 2023" plants; the Solarspitzengesetz governs only the second. The engine
-/// used to apply the post-Solarspitzengesetz rule to every 2023+ plant and so
-/// reduced 2023 and 2024 plants for isolated negative quarter-hours the statute
-/// still paid for.
+/// "EEG 2023" plants; the Solarspitzengesetz governs only the second. Applying
+/// the post-Solarspitzengesetz rule to every 2023+ plant reduces 2023 and 2024
+/// plants for isolated negative quarter-hours the statute still pays for.
 #[test]
 fn s51_threshold_follows_the_commissioning_date() {
     use eeg_billing::NegativpreisRegime as R;
@@ -3169,9 +3168,9 @@ fn settlement_state_healthy_plant_is_active() {
 /// §9 Abs. 2 Nr. 2 EEG — a 50 kW plant may satisfy §9 with the 60 %
 /// Leistungsbegrenzung instead of Fernsteuerbarkeit.
 ///
-/// The rule used to be a flat "≥ 25 kW must have Fernsteuerbarkeit", which put
-/// every compliant plant in the 25–100 kW band into `Reduced` and charged it a
-/// §52 Abs. 1 Nr. 1 Pflichtzahlung of 10 €/kW/month it did not owe.
+/// A flat "≥ 25 kW must have Fernsteuerbarkeit" would put every compliant plant
+/// in the 25–100 kW band into `Reduced` and charge it a §52 Abs. 1 Nr. 1
+/// Pflichtzahlung of 10 €/kW/month it does not owe.
 #[test]
 fn settlement_state_sixty_percent_cap_satisfies_sect9_below_100kw() {
     use eeg_billing::settlement_state::{

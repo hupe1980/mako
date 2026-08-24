@@ -301,8 +301,8 @@ mod tests {
 
     /// The bands, at and around every boundary.
     ///
-    /// This is the test the prompt version could not have: "is 29 minutes
-    /// CRITICAL" was previously only answerable by calling a model.
+    /// The classification is code, so "is 29 minutes CRITICAL" is answerable
+    /// without calling a model.
     #[test]
     fn severity_bands_are_exact_at_their_boundaries() {
         assert_eq!(classify(-1), Severity::Breach);

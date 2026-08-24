@@ -1,4 +1,4 @@
--- ── tarifbd schema — Product & Tariff Catalog ────────────────────────────────
+-- ── productd schema — Product & Tariff Catalog ────────────────────────────────
 --
 -- `products`: central product register with full BO4E Tarifpreisblatt JSONB.
 -- `product_history`: immutable version history of every product update.
@@ -8,7 +8,7 @@
 -- `angebote`: formal B2B quotation workflow (C&I / RLM customers).
 --
 -- All prices are user-defined in data.tarifpreispositionen.
--- tarifbd contains no hardcoded commercial rates.
+-- productd contains no hardcoded commercial rates.
 
 CREATE EXTENSION IF NOT EXISTS btree_gist;
 
@@ -39,7 +39,7 @@ CREATE TABLE products (
     valid_to        DATE,
     -- Full BO4E payload; validated against rubo4e::current on PUT
     data            JSONB   NOT NULL,
-    bo4e_version    TEXT    NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version    TEXT    NOT NULL DEFAULT '202607.1.0',
     -- DRAFT = staged/preview — invisible to billingd and comparison feed.
     -- PUBLISHED = active for billing, portald, and § 41c comparison feed.
     product_status  TEXT    NOT NULL DEFAULT 'PUBLISHED'
@@ -144,7 +144,7 @@ CREATE TABLE product_history (
     product_code    TEXT    NOT NULL,
     data            JSONB   NOT NULL,
     energiemix      JSONB,
-    bo4e_version    TEXT    NOT NULL DEFAULT 'v202607.0.0',
+    bo4e_version    TEXT    NOT NULL DEFAULT '202607.1.0',
     changed_at      TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

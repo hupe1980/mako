@@ -36,7 +36,7 @@
 //!   55039 3 WT · 55042 5 WT · 55051 7 WT · 55168 1 WT (BK6-24-174 Teil 1
 //!   Kap. 2.2.2 / 2.3.2 / 2.4.2 / 2.5.2), via `antwort_frist_werktage`.
 //! - **Saturdays, Sundays and federal public holidays are not Werktage**
-//!   do not.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
+//!   do not.  This is distinct from GPKE (a clock time on the 1. WT) and GeLi Gas
 //!   (10 Werktage).
 //! - The NB state machine:
 //!   `New → Initiated → ValidationPassed → AperakSent → Completed` (positive)
@@ -273,8 +273,10 @@ impl MockNb {
 /// test exists to catch: the counterparty gets an acknowledged order, no
 /// answer, and a Frist that lapses on a process both sides believe is running.
 ///
-/// Per WiM AHB: Saturdays, Sundays and federal public holidays are not Werktage.  This is distinct from GPKE (24 wall-clock hours) and GeLi Gas
-/// (10 Werktage).
+/// Per WiM AHB: Saturdays, Sundays and federal public holidays are not Werktage.
+/// The MSB-Wechsel windows are 3 / 5 / 7 / 1 Werktage per Prüfidentifikator —
+/// distinct from GPKE, which states a wall-clock instant on the 1. Werktag nach
+/// dem ÜT, and from GeLi Gas, which runs to the Ablauf des 4. / 3. / 2. Werktags.
 #[tokio::test]
 async fn e2e_wim_geraetewechsel_positive_aperak() {
     let nb = MockNb::new();

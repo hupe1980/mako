@@ -758,8 +758,8 @@ impl OidcConfig {
     /// - **`None` config** → returns [`OidcVerifier::disabled`] scoped to
     ///   `tenant_id` (dev mode — all requests accepted without a token).
     ///
-    /// This replaces the identical 8-line boilerplate that every OIDC service
-    /// copied into its startup code:
+    /// The whole OIDC startup sequence, so a service does not copy eight lines
+    /// of it:
     ///
     /// ```rust,no_run
     /// # use mako_service::oidc::{OidcConfig, OidcVerifier};

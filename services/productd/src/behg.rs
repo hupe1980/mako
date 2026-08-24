@@ -15,9 +15,8 @@
 //! | **Nachkauf** (Mehrmengen) | after the 2026 auctions | **68** EUR/t | auction terms |
 //!
 //! The 68 EUR/t figure is the **Nachkauf** price for supplementary purchases
-//! once the auctioned volume no longer covers demand — it is not, as this was
-//! documented, a "Verkaufsphase" price. The Verkaufsphase ended at 55 EUR/t in
-//! 2025.
+//! once the auctioned volume no longer covers demand, not a "Verkaufsphase"
+//! price — the Verkaufsphase ended at 55 EUR/t in 2025.
 //!
 //! From 2027 § 10 Abs. 2 BEHG sets no figures of its own (it defers to the
 //! decision under § 24 Abs. 2 Nr. 2), so nothing is asserted about those years.

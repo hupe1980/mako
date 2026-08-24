@@ -143,7 +143,7 @@ static BUILTIN_AGENTS: &[Specialist] = &[
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
         feature = "role-lf",
     ))]
-    TARIFBD_AGENT,
+    PRODUCTD_AGENT,
     PROCESSD_AGENT,
     #[cfg(any(
         not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
@@ -368,7 +368,7 @@ const GRID_ANOMALY_AGENT: Specialist = Specialist {
 ))]
 const TARIFF_OPTIMIZATION_AGENT: Specialist = Specialist {
     name: "tariff-optimization-agent",
-    specialty: "§41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on dynamic tariffs, estimates annual savings vs fixed tariff, and recommends product changes in tarifbd.",
+    specialty: "§41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on dynamic tariffs, estimates annual savings vs fixed tariff, and recommends product changes in productd.",
     trigger_patterns: &[
         mako_events::billing::RECHNUNG_ERSTELLT,
         mako_events::mako::PROCESS_COMPLETED,
@@ -395,8 +395,8 @@ const VERTRAGD_AGENT: Specialist = Specialist {
     not(any(feature = "role-lf", feature = "role-nb", feature = "role-msb")),
     feature = "role-lf",
 ))]
-const TARIFBD_AGENT: Specialist = Specialist {
-    name: "tarifbd-agent",
+const PRODUCTD_AGENT: Specialist = Specialist {
+    name: "productd-agent",
     specialty: "Product catalog hygiene, §41a EPEX price availability monitor, and §42 Energiemix \
 completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix disclosures \
 (annual update), expired B2B quotations needing ERP follow-up, and DRAFT products not yet published.",

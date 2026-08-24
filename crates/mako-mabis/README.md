@@ -24,9 +24,8 @@ than substituting a plausible value.
 | Meldepunkt absent | same — there is no empty `MabisZaehlpunktId` |
 | Meldepunkt **equals** the Bilanzierungsgebiet | `validate_identifiers`, at runtime — `BilanzierungsgebietId` is unvalidated, so a 33-character value there could still collide |
 
-Passing a `BilanzierungsgebietId` where a Meldepunkt belongs is now a compile
-error: both halves of the dangerous pair are typed, where previously only one
-was.
+Passing a `BilanzierungsgebietId` where a Meldepunkt belongs is a compile
+error: both halves of the dangerous pair are typed.
 
 The **inbound** side deliberately keeps a plain `String`
 (`ZpLifecycleCommand::ReceiveAnfrage`). A counterparty's malformed Meldepunkt has

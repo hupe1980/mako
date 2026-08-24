@@ -582,21 +582,15 @@ fn buyer_from_geschaeftspartner(
 ) -> RechnungsempfaengerRow {
     use rubo4e::current::Geschaeftspartner;
 
-    // `kontaktwege` is lifted out before the typed read, and that is upstream's
-    // defect rather than a choice: `rubo4e` 0.9 with the workspace's `decimal`
-    // feature types `Kontaktweg.kontaktwert` — its own doc says *"Die Nummer
-    // oder E-Mail-Adresse"* — as `Option<Decimal>`. `serde_json` refuses an
-    // address as a decimal, so a `Geschaeftspartner` carrying any contact
-    // method fails to deserialise entirely: name, address, VAT-ID and all.
-    // Everything else stays typed.
-    let mut raw = gp.cloned();
-    let kontaktwege = raw
-        .as_mut()
-        .and_then(|v| v.get_mut("kontaktwege"))
-        .map(serde_json::Value::take);
-    let email = email_from_kontaktwege(kontaktwege.as_ref());
-
-    let Some(gp) = raw.and_then(|v| serde_json::from_value::<Geschaeftspartner>(v).ok()) else {
+    // Fully typed, including the contact methods.
+    //
+    // `Kontaktweg.kontaktwert` is a `String` per the schema, so the whole
+    // `Geschaeftspartner` — name, address, VAT-ID and contact methods — reads as
+    // one typed object and the e-mail comes off it directly.
+    let Some(gp) = gp
+        .cloned()
+        .and_then(|v| serde_json::from_value::<Geschaeftspartner>(v).ok())
+    else {
         return RechnungsempfaengerRow {
             name: None,
             line1: None,
@@ -605,9 +599,10 @@ fn buyer_from_geschaeftspartner(
             country: None,
             vat_id,
             stromwiederverkaeufer,
-            email,
+            email: None,
         };
     };
+    let email = email_from_kontaktwege(gp.kontaktwege.as_deref());
 
     // Organisation or natural person — BO4E models both in one object.
     let person = |gp: &Geschaeftspartner| match (gp.vorname.as_deref(), gp.nachname.as_deref()) {
@@ -644,28 +639,25 @@ fn buyer_from_geschaeftspartner(
     }
 }
 
-/// The customer's e-mail out of a raw BO4E `kontaktwege` array: the bevorzugter
-/// `E_MAIL` entry, else the first. Raw only because of the upstream
-/// `kontaktwert` defect noted in [`buyer_from_geschaeftspartner`].
-fn email_from_kontaktwege(kontaktwege: Option<&serde_json::Value>) -> Option<String> {
-    let entries = kontaktwege?.as_array()?;
-    let is_mail = |k: &&serde_json::Value| {
-        k.get("kontaktart").and_then(serde_json::Value::as_str) == Some("E_MAIL")
-    };
-    let value = |k: &serde_json::Value| {
-        k.get("kontaktwert")
-            .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.trim().is_empty())
+/// The customer's e-mail out of a BO4E `kontaktwege` list: the bevorzugter
+/// `E_MAIL` entry, else the first `E_MAIL`.
+///
+/// `kontaktwert` is a `String`, so the whole read is typed.
+fn email_from_kontaktwege(kontaktwege: Option<&[rubo4e::current::Kontaktweg]>) -> Option<String> {
+    use rubo4e::current::Kontaktart;
+
+    let entries = kontaktwege?;
+    let is_mail = |k: &&rubo4e::current::Kontaktweg| k.kontaktart == Some(Kontaktart::EMail);
+    let value = |k: &rubo4e::current::Kontaktweg| {
+        k.kontaktwert
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
             .map(str::to_owned)
     };
     entries
         .iter()
-        .find(|k| {
-            is_mail(k)
-                && k.get("istBevorzugterKontaktweg")
-                    .and_then(serde_json::Value::as_bool)
-                    == Some(true)
-        })
+        .find(|k| is_mail(k) && k.ist_bevorzugter_kontaktweg == Some(true))
         .and_then(value)
         .or_else(|| entries.iter().find(is_mail).and_then(value))
 }
@@ -818,21 +810,32 @@ mod buyer_tests {
     }
 
     /// The bevorzugter address wins; otherwise the first e-mail does.
+    ///
+    /// Built from the typed `Kontaktweg`.
     #[test]
     fn the_preferred_email_is_the_one_documents_go_to() {
-        let ways = serde_json::json!([
-            { "kontaktart": "E_MAIL", "kontaktwert": "info@beispiel.test" },
-            { "kontaktart": "E_MAIL", "kontaktwert": "buchhaltung@beispiel.test",
-              "istBevorzugterKontaktweg": true }
-        ]);
+        use rubo4e::current::{Kontaktart, Kontaktweg};
+
+        let way = |art: Kontaktart, wert: &str, bevorzugt: Option<bool>| Kontaktweg {
+            kontaktart: Some(art),
+            kontaktwert: Some(wert.to_owned()),
+            ist_bevorzugter_kontaktweg: bevorzugt,
+            ..Default::default()
+        };
+
+        let ways = [
+            way(Kontaktart::EMail, "info@beispiel.test", None),
+            way(Kontaktart::EMail, "buchhaltung@beispiel.test", Some(true)),
+        ];
         assert_eq!(
             email_from_kontaktwege(Some(&ways)).as_deref(),
             Some("buchhaltung@beispiel.test")
         );
-        let unranked = serde_json::json!([
-            { "kontaktart": "TELEFON", "kontaktwert": "+49 30 1" },
-            { "kontaktart": "E_MAIL", "kontaktwert": "info@beispiel.test" }
-        ]);
+
+        let unranked = [
+            way(Kontaktart::Telefon, "+49 30 1", None),
+            way(Kontaktart::EMail, "info@beispiel.test", None),
+        ];
         assert_eq!(
             email_from_kontaktwege(Some(&unranked)).as_deref(),
             Some("info@beispiel.test")

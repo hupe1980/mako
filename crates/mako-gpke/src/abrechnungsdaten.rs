@@ -239,9 +239,17 @@ impl Workflow for GpkeAbrechnungsdatenWorkflow {
     type Event = AbrechnungsdatenEvent;
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
-        (!state.is_terminal()).then(|| AbrechnungsdatenCommand::TimeoutExpired {
-            deadline_id: deadline.deadline_id(),
-            label: deadline.label().into(),
+        // Only the **business** window ends this process. `makod` registers a
+        // second deadline on the same stream — the APERAK 45-minute *delivery*
+        // window — which the outbox worker discharges the moment the APERAK
+        // goes out. Accepting any label made a late technical acknowledgement
+        // fail the Abrechnungsdaten process, which is neither what the Frist
+        // means nor what GPKE Teil 2 §§ 3.1.1.2 / 3.1.2.2 / 3.1.3.2 sanction.
+        (deadline.label() == BEARBEITUNGSSTAND_WINDOW_LABEL && !state.is_terminal()).then(|| {
+            AbrechnungsdatenCommand::TimeoutExpired {
+                deadline_id: deadline.deadline_id(),
+                label: deadline.label().into(),
+            }
         })
     }
 

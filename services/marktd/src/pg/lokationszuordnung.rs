@@ -5,15 +5,15 @@
 
 use std::str::FromStr;
 
+use mako_markt::domain::Lokationstyp;
 use mako_markt::{
     error::MdmError,
     repository::{LokationszuordnungEdge, LokationszuordnungRepository},
 };
-use rubo4e::current::Lokationstyp;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-/// Decode a `Lokationstyp` from its canonical BO4E code stored in a TEXT column.
+/// Decode a [`Lokationstyp`] from the wire value stored in a `TEXT` column.
 ///
 /// rubo4e's `sqlx` feature is not enabled workspace-wide, so the graph bridges
 /// the enum at the SQL boundary via its strum `FromStr`/`IntoStaticStr` impls.

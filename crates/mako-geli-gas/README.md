@@ -24,15 +24,63 @@ This is the *technical* clock. The business Antwortfristen are per
 Prüfidentifikator in `mako_fristen::antwort`. Saturdays, Sundays and gesetzliche
 Feiertage are not Werktage.
 
-## Key difference from electricity processes
+## Key differences from the electricity processes
 
-| Aspect          | GPKE (Strom)      | WiM (Strom)       | GeLi Gas          |
-|-----------------|-------------------|-------------------|-------------------|
-| Market          | Electricity       | Electricity       | **Gas**           |
-| Location object | MeLo (Messlok.)   | MeLo (Messlok.)   | **MaLo (Marktlok.)** |
-| Grid operator   | Netzbetreiber     | Netzbetreiber     | **Gasnetzbetreiber (GNB)** |
-| Antwortfrist    | clock time, 1. WT | 3 / 5 / 7 / 1 WT  | **4 / 3 / 2 WT**  |
-| EDIFACT format  | UTILMD Strom S2.x | UTILMD Strom S2.x | **UTILMD Gas G2.x** |
+Both Sparten switch suppliers at the **Marktlokation** and both are driven by
+UTILMD. What actually differs:
+
+| Aspect | GPKE (Strom) | GeLi Gas |
+|---|---|---|
+| Festlegung | BK6-24-174 (Teil 1–3), BK6-22-024 Anlage 1d (Teil 4) | **BK7-24-01-009** (GeLi Gas 3.0) |
+| Antwortfrist shape | wall-clock instant on the 1. WT nach dem ÜT (07:00 / 09:00 / 11:00 / 12:00) | **Ablauf des 4. / 3. / 2. Werktags** nach Eingang |
+| Zuordnungszeitpunkt | 00:00 Uhr | **06:00 Uhr** — the Gastag runs 06:00–06:00 |
+| Vorlauffrist des LF | — | **10 WT** Anmeldung, **7 WT** Abmeldung, bei Lieferantenwechsel |
+| Entscheidungsbäume | `E_06xx` | **`E_30xx`** |
+| APERAK | Anerkennungs- *und* Verarbeitbarkeitsfehlermeldung; 45 min für UTILMD/ORDERS | **nur Verarbeitbarkeitsfehlermeldung**; nächster WT 12:00 / 3 WT |
+| CONTRL | nur auf eine syntaktisch defekte APERAK | auf **jede** APERAK |
+| EDIFACT profile | UTILMD Strom S2.x | UTILMD Gas G1.x/G2.x |
+| Grid operator | Netzbetreiber (NB) | Gasnetzbetreiber (GNB) |
+
+### „10 Werktage" is the supplier's Vorlauffrist, not an answer window
+
+„Bei Anmeldungen anlässlich eines Lieferantenwechsels erfolgt dies mindestens 10
+Werktage vor Aufnahme der Belieferung" (GeLi Gas 3.0 Kap. 3.2.3) says how far
+ahead the **LFN must send**. The GNB's answer window on the same message is
+**4 Werktage**; the Abmeldung pairs a 7-Werktage lead time with a 3-Werktage
+answer window. Sizing an answer queue with the lead time reports a lapsed Frist
+as still running for six Werktage — see
+`mako_fristen::antwort::TEN_WERKTAGE_IS_THE_SUPPLIERS_VORLAUFFRIST`.
+
+The AWH GeLi Gas V1.2 Kap. 2.5.2 Nr. 5 refines the 4 Werktage further: where an
+Abmeldeanfrage was sent, the GNB answers within **24 h of the LFA's reply**
+(shifted to the next Werktag when that lands on a weekend), capped at the 4. WT.
+`mako_fristen::antwort::gas_lieferbeginn_antwort_nach_abmeldeanfrage` computes
+that sub-window; the PID-keyed table publishes the cap, which is all it can
+state without knowing whether an Abmeldeanfrage went out.
+
+### Meldepflichten — obligations with no answer
+
+| PID | Message | NB → | Frist |
+|---|---|---|---|
+| 44036 | Informationsmeldung über existierende Zuordnung — **die Identität des LFA** | LFN | Ablauf des 4. WT nach Eingang |
+| 44037 | Informationsmeldung zur Beendigung der Zuordnung | LFA | am selben Tag wie die Antwort |
+| 44038 | Informationsmeldung zur Aufhebung einer zuk. Zuordnung | LFZ | am selben Tag wie die Antwort |
+
+**None of the three is implemented** — `edi-energy` carries no UTILMD Gas AHB
+rules for them. Catalogued in `mako_fristen::meldung`; the gap is pinned by
+`services/makod/tests/meldepflicht_coverage.rs`.
+
+### The Sperrprozesse are not in GeLi Gas at all
+
+GeLi Gas 3.0's chapters are Kündigung, Lieferende, Lieferbeginn,
+Ersatz-/Grundversorgung and the Annexprozesse — **there is no Sperr- or
+Entsperrprozess in it**. The Gas Sperrprozesse live in the BDEW AWH
+„Unterbrechung / Wiederherstellung der Anschlussnutzung" (Gas-Entscheidungsbäume
+`E_1000` / `E_1004`, against Strom's `E_0470` / `E_0497`), which is not yet in
+`regulatories/`. Because 17115 / 17117 / 19116 are Sparte-neutral ORDERS
+Anwendungsfälle, `mako_fristen::antwort` resolves them from one row each — **1
+Werktag**, sourced from BK6-24-174 GPKE Teil 2 § 3.5, the only text on hand that
+quantifies them.
 
 ## PID Inventory
 
@@ -178,7 +226,8 @@ let out = process.execute(GasSupplierChangeCommand::ReceiveUtilmd {
 The `GeliGasSperrungLfWorkflow` models the LF-side of the gas disconnection /
 reconnection process per BK7-24-01-009. The LF initiates the process by sending
 an ORDERS 17115 (Sperrauftrag) or 17117 (Entsperrauftrag) to the GNB and then
-waits up to **10 Werktage** for the GNB's ORDRSP response.
+waits for the GNB's ORDRSP — due „spätester ÜT ist der **1. WT** nach dem ÜT"
+on the Sparte-neutral 17115 / 17117 row (`mako_fristen::antwort`).
 
 ```rust
 use mako_geli_gas::{
@@ -222,7 +271,9 @@ The `GeliGasSperrungNbWorkflow` models the GNB-side of the gas disconnection /
 reconnection process per BK7-24-01-009. The GNB receives the Anweisung from the
 LF (ORDERS 17115/17117), optionally forwards a meter-access request to the gMSB
 (ORDERS 17116), waits for the gMSB's ORDRSP (19118/19119), and then confirms
-or rejects execution to the LF. Deadline: **10 Werktage**.
+or rejects execution to the LF. Deadline: the ORDRSP by the **1. WT nach dem
+ÜT**; the gMSB's answer to a 17116 Anfrage Sperrung by the **3. WT**, with
+silence counting as consent.
 
 ```rust
 use mako_geli_gas::{
@@ -284,9 +335,15 @@ let cmd = DatanabrufCommand::InitiateAnfrage {
 ## Regulatory references
 
 - BDEW GeLi Gas Geschäftsprozesse Lieferantenwechsel Gas
-- BNetzA **BK7-24-01-009** — GeLi Gas 3.0 (Beschluss 12.09.2025, g. 24.09.2025) — APERAK Frist 10 Werktage
+- BNetzA **BK7-24-01-009** — GeLi Gas 3.0 (Beschluss 12.09.2025, Tenor ab 01.01.2026);
+  Antwortfristen 4 / 3 / 2 WT, LF-Vorlauffristen 10 WT (Anmeldung) und 7 WT (Abmeldung).
+  **Enthält keinen Sperrprozess** — der steht in der BDEW AWH „Unterbrechung /
+  Wiederherstellung der Anschlussnutzung" (`E_1000` / `E_1004`)
+- BDEW/VKU/GEODE/FNB Gas **AWH GeLi Gas V1.2** (26.03.2026, gültig ab 01.04.2026) —
+  die Sequenzdiagramme, u. a. der Zwei-Zweig-Zuschnitt von Prozessschritt 5
 - BNetzA BK7-19-001 — previous ruling (superseded)
 - BNetzA BK7-06-067 — original GeLi Gas ruling 2007 (superseded)
 - EDI@Energy UTILMD Gas AHB G2.x (`FV2026-10-01`)
 - EDI@Energy ORDERS/ORDRSP/ORDCHG AHB 1.4b (`FV2026-10-01`)
-- EDI@Energy APERAK AHB 2.2 (`FV2026-10-01`)
+- EDI@Energy APERAK AHB 1.1 § 2.3.1 — Gas: nächster Werktag 12:00 (Folgeprozess),
+  3 Werktage (Initialprozess)

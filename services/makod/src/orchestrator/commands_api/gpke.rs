@@ -323,7 +323,9 @@ pub(super) fn cmd_gpke_abrechnung_selbstausstellen<'a>(
 /// 3. Spawn a new `GpkeLfAnmeldungWorkflow` process.
 /// 4. Execute `InitiateAnmeldung` — writes the `Initiated` event and enqueues
 ///    the outbound UTILMD outbox entry atomically.
-/// 5. Register a 24h NB-response deadline (GPKE BK6-22-024).
+/// 5. Register the NB-response deadline the Prüfidentifikator publishes —
+///    11:00 Uhr des 1. Werktags nach dem ÜT for a 55001 Anmeldung
+///    (BK6-24-174 GPKE Teil 2), never a flat 24 hours.
 pub(super) async fn dispatch_lf_anmeldung(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -439,21 +441,41 @@ pub(super) async fn dispatch_lf_anmeldung(
 
     let process_id = process.process_id();
 
-    // ── Build 24h NB-response deadline before the atomic write ───────────────
+    // ── Build the NB-response deadline before the atomic write ───────────────
     //
-    // The deadline is built from `now_utc()` here so the regulatory window
-    // starts at the moment the ERP request is received, not when the store
-    // write completes.  It is passed to `execute_and_enqueue_with_deadlines`
-    // so that events, outbox entries, and the deadline land in a single SSI
-    // transaction (F-009).
-    let due_at = mako_fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
+    // The window is the one the Festlegung publishes for this Prüfidentifikator
+    // — for a Strom Anmeldung 11:00 Uhr des 1. Werktags nach dem ÜT
+    // (BK6-24-174 GPKE Teil 2, SD Lieferbeginn Nr. 5/6), for a Gas Anmeldung
+    // Ablauf des 4. Werktags (GeLi Gas 3.0 Kap. 3.2.3). It is **not** 24 wall-
+    // clock hours: that number is in no Festlegung, and it is wrong in both
+    // directions — it fires on a Saturday for a Friday Anmeldung, and it
+    // reports a Tuesday-morning Frist as still running until Tuesday night.
+    //
+    // The instant is taken from `now_utc()` here so the window starts when the
+    // ERP request is received, not when the store write completes, and is
+    // passed to `execute_and_enqueue_with_deadlines` so events, outbox entries
+    // and the deadline land in a single SSI transaction (F-009).
+    //
+    // The label must be the one `GpkeLfAnmeldungWorkflow::on_deadline` matches;
+    // a label it does not know produces a deadline that fires into `_ => None`
+    // and never transitions the process. `deadline_labels.rs` pins that.
+    let sent_at = time::OffsetDateTime::now_utc();
+    let window = mako_fristen::antwort::operator_window(pid_code, sent_at);
+    if !window.is_regulatory {
+        tracing::warn!(
+            pid = pid_code,
+            due_at = %window.deadline,
+            "no published Antwortfrist for this PID — the NB-response window is an \
+             operating convention, not a regulatory deadline",
+        );
+    }
     let deadline = Deadline::new(
         process.stream_id().clone(),
         process_id,
         state.tenant_id,
         workflow_id.clone(),
-        "nb-response-window-24h",
-        due_at,
+        mako_gpke::lf_anmeldung::NB_RESPONSE_WINDOW_LABEL,
+        window.deadline,
     );
     process
         .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
@@ -1073,7 +1095,11 @@ pub(super) async fn dispatch_gpke_sperrung_ausfuehrung(
 /// later reports execution via IFTSTA 21039 — both routed back to this process
 /// by `PidRouter`.
 ///
-/// Deadline: 24 wall-clock hours for the NB's ORDRSP (BK6-22-024).
+/// Deadline: the ORDRSP window GPKE Teil 2 §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2
+/// publishes — „spätester ÜT ist der 1. WT nach dem ÜT" — resolved through
+/// [`mako_fristen::antwort::operator_window`]. The AHBs themselves state no
+/// deadline for 17115/17117; the Festlegung does, and it is a Werktag, not 24
+/// wall-clock hours.
 pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -1150,15 +1176,28 @@ pub(super) async fn dispatch_gpke_sperrung_lf_beauftragen(
     );
     let process_id = process.process_id();
 
-    // 24 wall-clock hours for the NB's ORDRSP (BK6-22-024) — not Werktage.
-    let due_at = mako_fristen::add_hours(time::OffsetDateTime::now_utc(), 24);
+    // The NB's ORDRSP window is a Werktag deadline, not 24 wall-clock hours:
+    // „Unverzüglich, jedoch spätester ÜT ist der 1. WT nach dem ÜT" (GPKE Teil 2
+    // §§ 3.5.1.2 / 3.5.2.2 Prozessschritt 2). A flat 24 h expires on a Saturday
+    // for a Friday Sperrauftrag and leaves a Monday-evening one unflagged until
+    // Tuesday night.
+    let sent_at = time::OffsetDateTime::now_utc();
+    let window = mako_fristen::antwort::operator_window(pid_code, sent_at);
+    if !window.is_regulatory {
+        tracing::warn!(
+            pid = pid_code,
+            due_at = %window.deadline,
+            "no published Antwortfrist for this Sperrung PID — the ORDRSP window is \
+             an operating convention, not a regulatory deadline",
+        );
+    }
     let deadline = Deadline::new(
         process.stream_id().clone(),
         process_id,
         state.tenant_id,
         workflow_id,
         SPERRUNG_LF_ANTWORT_WINDOW_LABEL,
-        due_at,
+        window.deadline,
     );
     process
         .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])

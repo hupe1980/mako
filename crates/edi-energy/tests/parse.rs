@@ -802,10 +802,10 @@ UNZ+1+1'";
 
 /// `with_reference_date` must actually reach `validate()`.
 ///
-/// It is a documented, public, builder-style setting, and it used to be inert:
-/// the field was stored on `ParseConfig` and read by nothing, so every caller
-/// that reached for it to make a test deterministic silently got today's date.
-/// A test that passes only until the next BDEW cutover is worse than no test.
+/// It is a documented, public, builder-style setting. If the field were stored
+/// on `ParseConfig` and read by nothing, every caller reaching for it to make a
+/// test deterministic would silently get today's date — and a test that passes
+/// only until the next BDEW cutover is worse than no test.
 #[cfg(feature = "mscons")]
 #[test]
 fn the_configured_reference_date_reaches_validation() {

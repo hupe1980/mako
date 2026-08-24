@@ -1,7 +1,7 @@
 //! Concrete `BillingProvider` implementations for all product types.
 //!
 //! Each provider corresponds to one product category. Build providers from
-//! a `TariffInput` (the product definition from `tarifbd`) and register them
+//! a `TariffInput` (the product definition from `productd`) and register them
 //! with `BillingEngine`.
 
 use crate::rates::RoundMoney;
@@ -76,7 +76,7 @@ impl BillingProvider for ElectricityProvider {
         // price field `None` — billed 1000 kWh for €20.50: the Stromsteuer, and
         // nothing for the electricity. No error, no warning, an invoice that
         // looks ordinary. That is not a hypothetical: the price fields are
-        // populated by mapping `tarifbd`'s `preistyp` strings onto struct
+        // populated by mapping `productd`'s `preistyp` strings onto struct
         // fields, and a renamed or missing position maps to `None` in silence.
         //
         // Error severity, so `bill()` refuses. A product that genuinely charges
@@ -104,7 +104,7 @@ impl BillingProvider for ElectricityProvider {
                 message: "the product carries no Arbeitspreis in any form (Eintarif, HT/NT, \
                           dynamic, indexed, seasonal or tiered) — the invoice would charge \
                           the Stromsteuer and nothing for the electricity. Check the \
-                          tarifbd product's price positions."
+                          productd product's price positions."
                     .to_owned(),
             });
         }
@@ -1161,7 +1161,7 @@ impl BillingProvider for GasProvider {
                 severity: WarningSeverity::Error,
                 message: "the gas product carries no Arbeitspreis in any form (kWh_Hs, \
                           indexed or seasonal) — the invoice would charge the Energiesteuer \
-                          and the BEHG levy and nothing for the gas. Check the tarifbd \
+                          and the BEHG levy and nothing for the gas. Check the productd \
                           product's price positions."
                     .to_owned(),
             });
@@ -1669,7 +1669,7 @@ impl BillingProvider for HeatProvider {
                 severity: WarningSeverity::Error,
                 message: "the Fernwärme product carries no Arbeitspreis — the invoice would \
                           bill the standing and demand charges and nothing for the delivered \
-                          heat. Check the tarifbd product's price positions."
+                          heat. Check the productd product's price positions."
                     .to_owned(),
             });
         }

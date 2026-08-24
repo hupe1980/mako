@@ -125,8 +125,8 @@ pub fn preflight(input: &PreflightInput<'_>) -> anyhow::Result<Preflight> {
     // ── Ingest transport ─────────────────────────────────────────────────────
     //
     // A daemon that can receive nothing is a misconfiguration, not a quiet
-    // idle process. This used to be discovered after the workers had already
-    // been spawned, which made the failure racy and unreportable by `--check`.
+    // idle process — and it is caught here, before the workers are spawned.
+    // Discovered afterwards the failure is racy and unreportable by `--check`.
     anyhow::ensure!(
         input.as4_inbound_enabled || input.http_enabled,
         "No ingest transport configured: neither --as4-addr nor --http-addr is set. \
@@ -512,8 +512,8 @@ mod tests {
         preflight(&input).expect("minimal config is startable");
     }
 
-    /// The regression this module exists for: `--check` used to report success
-    /// for a config whose real boot bailed on the missing certificate.
+    /// `--check` must not report success for a config whose real boot bails on
+    /// the missing certificate.
     #[test]
     fn a_partner_without_an_encryption_certificate_is_rejected() {
         let keys = vec!["erp=token".to_owned()];

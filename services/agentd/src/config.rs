@@ -90,9 +90,9 @@ pub struct AgentdConfig {
     /// signed-payload shape against agentplane's, because two implementations
     /// of one spec is where a wire contract drifts.
     ///
-    /// Unlike the body-only HMAC this replaces, the signature covers the
-    /// message id and the timestamp, so a captured delivery cannot be replayed
-    /// once the tolerance window has passed.
+    /// The signature covers the message id and the timestamp, not just the
+    /// body, so a captured delivery cannot be replayed once the tolerance window
+    /// has passed.
     pub audit_hmac_secret: Option<SecretString>,
 
     /// The retiring signing secret, presented **beside** `audit_hmac_secret`
