@@ -45,8 +45,8 @@ pub use meterstore::WarehouseAuth;
 use crate::domain::validation::ValidatedReads;
 use crate::domain::{
     BillingPeriodQuery, CorrectionRecord, EnergyDirection, ImbalanceReport, Messtyp,
-    MeterBillingPeriod, MeterDataReceipt, MeterRead, QualityFlag, Sparte, TimeSeriesQuery,
-    Typ2DeliveryPath, Typ2Read,
+    MeterBillingPeriod, MeterDataReceipt, MeterRead, MeterReading, QualityFlag, Sparte,
+    TimeSeriesQuery, Typ2DeliveryPath, Typ2Read,
     error::EdmError,
     messtyp_as_str, messtyp_from_str,
     repository::{TimeSeriesRepository, Typ2Repository},
@@ -238,7 +238,10 @@ pub async fn build_stores(
 /// from the newest contributing delivery on read (§4.2) — declaring them here is
 /// what stops the store round-trip dropping them. When `with_subject` is set, a
 /// nullable `subject_ref` **subject** column and a [`SubjectRegistry`] are attached
-/// for GDPR Art. 17 erasure.
+/// for GDPR Art. 17 erasure — on **both** tables, because a Typ-2 value is
+/// non-authoritative for settlement and every bit as personal as an authoritative
+/// one. `with_subject` now selects only the ingestion-provenance columns, which
+/// the Typ-2 stream genuinely does not carry.
 async fn table_builder(
     cold: &Arc<meterstore::IcebergCold>,
     hot: &Arc<PostgresHot>,
@@ -267,14 +270,24 @@ async fn table_builder(
         .archival_step(tiering.archival_step)
         .settlement_lag(tiering.settlement_lag)
         .identity_column(Field::new("tenant", DataType::Utf8, false))
-        .attribute_column(Field::new("sender_mp_id", DataType::Utf8, true));
+        .attribute_column(Field::new("sender_mp_id", DataType::Utf8, true))
+        // **Both** stores carry the GDPR subject reference. A Typ-2 value is
+        // non-authoritative for settlement, which says nothing about whether it
+        // is personal data: it is a quarter-hourly consumption series against a
+        // MaLo-ID, exactly like the authoritative one, and § 60 Abs. 6 MsbG's
+        // deletion duty makes no exception for it. Attached only to the
+        // authoritative table, Article 17 erasure destroyed one mapping and left
+        // every ESA Typ-2 reading fully attributable — the one store an erasure
+        // could not reach. `SubjectRegistry` is a single `meterstore_subject_map`
+        // over one pool, so a subject registered by either store is the same
+        // subject and one erasure unlinks both.
+        .subject_column("subject_ref");
     config = if with_subject {
         // The authoritative store: ingestion provenance and the MaBiS delivery
         // label, plus the GDPR subject reference.
         config
             .attribute_column(meterstore::coded_column("source", &source_codes, true))
             .attribute_column(Field::new("allocation_version", DataType::Utf8, true))
-            .subject_column("subject_ref")
     } else {
         // The ESA Typ-2 stream carries neither — but it does carry the transport
         // it arrived on (Codeliste 1.4 Kap. 4.6: MSCONS backend vs. direct from
@@ -302,13 +315,11 @@ async fn table_builder(
     )
     .await?;
     let provider = cold.table_provider(table_name).await?;
-    let mut builder = MeterStore::builder()
+    let builder = MeterStore::builder()
         .hot(hot.clone())
         .cold(cold.clone(), provider)
-        .table(config);
-    if with_subject {
-        builder = builder.subject_registry(SubjectRegistry::new(pool.clone()));
-    }
+        .table(config)
+        .subject_registry(SubjectRegistry::new(pool.clone()));
     Ok(builder)
 }
 
@@ -411,6 +422,184 @@ impl MeterStoreTimeSeriesRepository {
             malo = read.malo_id,
             from = read.dtm_from,
         )))
+    }
+
+    /// Aggregate a billing period from the resolved series and re-cache it.
+    ///
+    /// The read-through half of [`TimeSeriesRepository::billing_period`], split
+    /// out so the cache-hit path can fall back to it — a cached row whose Sparte
+    /// or quality does not decode is a row edmd did not write, and answering
+    /// from it would put a guessed commodity or a non-billable flag on an
+    /// invoice.
+    async fn recompute_billing_period(
+        &self,
+        q: &BillingPeriodQuery,
+    ) -> Result<Option<MeterBillingPeriod>, EdmError> {
+        // On-the-fly aggregation from the resolved series, over the commodity's
+        // own balancing period (Gastag for Gas).
+        let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to);
+        // Billable qualities only (§60 Abs. 2), pushed into the scan.
+        let resolved = self
+            .store
+            .series(malo(&q.malo_id)?)
+            .map_err(store_err)?
+            .column_eq(TENANT_COL, tenant_scope(&q.tenant))
+            .range(from_ts, to_ts)
+            .quality_in(&billable_qualities())
+            .collect_resolved()
+            .await
+            .map_err(store_err)?;
+        let reads: Vec<MeterRead> = resolved
+            .map(|r| series_to_reads(&r, &q.tenant))
+            .unwrap_or_default();
+        if reads.is_empty() {
+            return Ok(None);
+        }
+
+        // The Arbeitsmenge is the **Bezug**, projected onto one canonical set of
+        // registers: the resolved read spans every channel, and a prosumer's
+        // Einspeisung or a dual-tariff meter's HT/NT split beside its total would
+        // otherwise be summed into the invoiced figure (`domain::register`).
+        let intervals = crate::domain::energy_intervals(&reads, EnergyDirection::Bezug);
+        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value).sum();
+        // The tariff split, reported when the meter actually delivers one. It is
+        // read off the HT/NT registers rather than the total, so it stays `None`
+        // for a single-tariff meter instead of claiming a zero NT quantity.
+        let tariff_sum = |stage: fn(&metering::obis::ObisCode) -> bool| -> Option<Decimal> {
+            let sum: Decimal = reads
+                .iter()
+                .filter(|r| r.quality.is_billable())
+                .filter_map(|r| {
+                    let c: metering::obis::ObisCode = r.obis_code.as_deref()?.parse().ok()?;
+                    (c.is_import() && crate::domain::register::is_energy_register(c) && stage(&c))
+                        .then_some(r.quantity_kwh)
+                })
+                .sum();
+            (sum != Decimal::ZERO).then_some(sum)
+        };
+        let arbeitsmenge_ht_kwh = tariff_sum(metering::obis::ObisCode::is_ht);
+        let arbeitsmenge_nt_kwh = tariff_sum(metering::obis::ObisCode::is_nt);
+        let sparte = reads.first().map_or(Sparte::Strom, |r| r.sparte);
+        let first_interval_min = intervals
+            .first()
+            .map(|iv| (iv.to - iv.from).whole_minutes().unsigned_abs());
+        let messtyp = match first_interval_min {
+            Some(m) if m <= 60 => Messtyp::Rlm,
+            _ => Messtyp::Slp,
+        };
+        // Peak demand is a **power**: the interval's energy divided by its own
+        // length in hours. Hard-coding the ÷¼ h of a quarter-hour grid meant an
+        // hourly RLM series — legitimate, and the norm for Gas — reported no
+        // Leistungsmaximum at all, because no interval matched the filter.
+        let spitzenleistung_kw = if messtyp == Messtyp::Rlm && sparte == Sparte::Strom {
+            intervals
+                .iter()
+                .filter_map(|iv| {
+                    let minutes = Decimal::from((iv.to - iv.from).whole_minutes().unsigned_abs());
+                    (minutes > Decimal::ZERO).then(|| iv.value * Decimal::from(60) / minutes)
+                })
+                .max()
+        } else {
+            None
+        };
+        let worst_quality = crate::domain::worst_quality(&intervals);
+
+        // § 40 Abs. 2 Nr. 6 EnWG: an energy invoice must show the opening and
+        // closing register reading. These were hardcoded `None` — the columns
+        // existed, carried that citation in a comment, and could never be
+        // filled, so every invoice built from this aggregate was missing a
+        // statutory line item. They come from the Zählerstandsgang, which is why
+        // edmd stores it (BK6-24-174).
+        let (zaehlerstand_anfang, zaehlerstand_ende) = self
+            .period_zaehlerstaende(&q.malo_id, from_ts, to_ts, &q.tenant)
+            .await
+            .unwrap_or_else(|e| {
+                // A missing pair is a gap on the invoice, not a wrong
+                // Arbeitsmenge — so the aggregate still answers, and says so.
+                tracing::warn!(
+                    malo_id = %q.malo_id, error = %e,
+                    "edmd: could not read the period's Zählerstände (§ 40 Abs. 2 Nr. 6 EnWG)"
+                );
+                (None, None)
+            });
+
+        let result = MeterBillingPeriod {
+            malo_id: q.malo_id.clone(),
+            period_from: q.period_from,
+            period_to: q.period_to,
+            messtyp,
+            sparte,
+            arbeitsmenge_kwh: total_kwh,
+            arbeitsmenge_ht_kwh,
+            arbeitsmenge_nt_kwh,
+            spitzenleistung_kw,
+            brennwert_kwh_per_m3: None,
+            zustandszahl: None,
+            zaehlerstand_anfang,
+            zaehlerstand_ende,
+            quality: worst_quality,
+            lastprofil: None,
+            profil_typ: None,
+        };
+
+        // Cache the computed aggregate.
+        //
+        // The conflict target is the index's **column list**, not
+        // `ON CONSTRAINT mbp_tenant_period_unique`. That name belongs to a
+        // `CREATE UNIQUE INDEX`, and `ON CONFLICT ON CONSTRAINT` only accepts a
+        // *table constraint*, so `ON CONFLICT ON CONSTRAINT` here makes
+        // PostgreSQL reject every one of these statements with
+        // "constraint … does not exist" — and a rejection discarded by
+        // `let _ =` leaves the cache permanently empty while every billing read
+        // recomputes from the resolved series.
+        let cached = sqlx::query(
+            // The tariff split is cached with the total. It is read back by the
+            // cache-hit branch above, so leaving it out of the write made the
+            // *same* period answer with an HT/NT split on the computing request
+            // and without one on every request after it.
+            r"INSERT INTO meter_billing_periods
+                  (malo_id, period_from, period_to, messtyp, sparte,
+                   arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant,
+                   arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh,
+                   zaehlerstand_anfang, zaehlerstand_ende)
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+              ON CONFLICT (malo_id, period_from, period_to, tenant)
+              DO UPDATE SET messtyp             = EXCLUDED.messtyp,
+                            sparte              = EXCLUDED.sparte,
+                            arbeitsmenge_kwh    = EXCLUDED.arbeitsmenge_kwh,
+                            spitzenleistung_kw  = EXCLUDED.spitzenleistung_kw,
+                            quality             = EXCLUDED.quality,
+                            arbeitsmenge_ht_kwh = EXCLUDED.arbeitsmenge_ht_kwh,
+                            arbeitsmenge_nt_kwh = EXCLUDED.arbeitsmenge_nt_kwh,
+                            zaehlerstand_anfang = EXCLUDED.zaehlerstand_anfang,
+                            zaehlerstand_ende   = EXCLUDED.zaehlerstand_ende,
+                            computed_at         = now()",
+        )
+        .bind(&result.malo_id)
+        .bind(result.period_from)
+        .bind(result.period_to)
+        .bind(messtyp_as_str(result.messtyp))
+        .bind(result.sparte.as_str())
+        .bind(result.arbeitsmenge_kwh)
+        .bind(result.spitzenleistung_kw)
+        .bind(quality_to_str(result.quality))
+        .bind(&q.tenant)
+        .bind(result.arbeitsmenge_ht_kwh)
+        .bind(result.arbeitsmenge_nt_kwh)
+        .bind(result.zaehlerstand_anfang)
+        .bind(result.zaehlerstand_ende)
+        .execute(&self.pool)
+        .await;
+        // A failed cache write is not a failed read — the aggregate is correct
+        // either way — but it must be visible, not swallowed.
+        if let Err(e) = cached {
+            tracing::warn!(
+                malo_id = %q.malo_id, error = %e,
+                "edmd: could not cache the computed billing period"
+            );
+        }
+
+        Ok(Some(result))
     }
 
     /// As [`TimeSeriesRepository::query`], but reading the data **as it was known
@@ -973,15 +1162,30 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
 
         if let Some(row) = pre {
             let dec = |c: &str| row.try_get::<Option<Decimal>, _>(c).ok().flatten();
-            let sparte_str: String = row.try_get("sparte").unwrap_or_else(|_| "STROM".into());
+            // A cache row that cannot be decoded is not a cache miss and not a
+            // zero — it is a row edmd did not write, and answering from it would
+            // put a guessed Sparte or a non-billable quality on an invoice. The
+            // read falls through to the on-the-fly aggregation instead, which
+            // recomputes from the resolved series and rewrites the row.
+            let decoded = (|| {
+                let sparte = str_to_sparte(&row.try_get::<String, _>("sparte").ok()?)?;
+                let quality = str_to_quality(&row.try_get::<String, _>("quality").ok()?)?;
+                Some((sparte, quality))
+            })();
+            let Some((sparte, quality)) = decoded else {
+                tracing::warn!(
+                    malo_id = %q.malo_id,
+                    "edmd: cached billing period holds an unreadable sparte/quality — recomputing"
+                );
+                return self.recompute_billing_period(q).await;
+            };
             let messtyp_str: String = row.try_get("messtyp").unwrap_or_else(|_| "SLP".into());
-            let quality_str: String = row.try_get("quality").unwrap_or_else(|_| "UNKNOWN".into());
             return Ok(Some(MeterBillingPeriod {
                 malo_id: q.malo_id.clone(),
                 period_from: q.period_from,
                 period_to: q.period_to,
                 messtyp: messtyp_from_str(&messtyp_str),
-                sparte: str_to_sparte(&sparte_str),
+                sparte,
                 arbeitsmenge_kwh: row.try_get("arbeitsmenge_kwh").unwrap_or(Decimal::ZERO),
                 arbeitsmenge_ht_kwh: dec("arbeitsmenge_ht_kwh"),
                 arbeitsmenge_nt_kwh: dec("arbeitsmenge_nt_kwh"),
@@ -990,153 +1194,13 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 zustandszahl: dec("zustandszahl"),
                 zaehlerstand_anfang: dec("zaehlerstand_anfang"),
                 zaehlerstand_ende: dec("zaehlerstand_ende"),
-                quality: str_to_quality(&quality_str),
+                quality,
                 lastprofil: None,
                 profil_typ: None,
             }));
         }
 
-        // 2. Fall back to on-the-fly aggregation from the resolved series, over
-        //    the commodity's own balancing period (Gastag for Gas).
-        let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to);
-        // Billable qualities only (§60 Abs. 2), pushed into the scan.
-        let resolved = self
-            .store
-            .series(malo(&q.malo_id)?)
-            .map_err(store_err)?
-            .column_eq(TENANT_COL, tenant_scope(&q.tenant))
-            .range(from_ts, to_ts)
-            .quality_in(&billable_qualities())
-            .collect_resolved()
-            .await
-            .map_err(store_err)?;
-        let reads: Vec<MeterRead> = resolved
-            .map(|r| series_to_reads(&r, &q.tenant))
-            .unwrap_or_default();
-        if reads.is_empty() {
-            return Ok(None);
-        }
-
-        // The Arbeitsmenge is the **Bezug**, projected onto one canonical set of
-        // registers: the resolved read spans every channel, and a prosumer's
-        // Einspeisung or a dual-tariff meter's HT/NT split beside its total would
-        // otherwise be summed into the invoiced figure (`domain::register`).
-        let intervals = crate::domain::energy_intervals(&reads, EnergyDirection::Bezug);
-        let total_kwh: Decimal = intervals.iter().map(|iv| iv.value).sum();
-        // The tariff split, reported when the meter actually delivers one. It is
-        // read off the HT/NT registers rather than the total, so it stays `None`
-        // for a single-tariff meter instead of claiming a zero NT quantity.
-        let tariff_sum = |stage: fn(&metering::obis::ObisCode) -> bool| -> Option<Decimal> {
-            let sum: Decimal = reads
-                .iter()
-                .filter(|r| r.quality.is_billable())
-                .filter_map(|r| {
-                    let c: metering::obis::ObisCode = r.obis_code.as_deref()?.parse().ok()?;
-                    (c.is_import() && crate::domain::register::is_energy_register(c) && stage(&c))
-                        .then_some(r.quantity_kwh)
-                })
-                .sum();
-            (sum != Decimal::ZERO).then_some(sum)
-        };
-        let arbeitsmenge_ht_kwh = tariff_sum(metering::obis::ObisCode::is_ht);
-        let arbeitsmenge_nt_kwh = tariff_sum(metering::obis::ObisCode::is_nt);
-        let sparte = reads.first().map_or(Sparte::Strom, |r| r.sparte);
-        let first_interval_min = intervals
-            .first()
-            .map(|iv| (iv.to - iv.from).whole_minutes().unsigned_abs());
-        let messtyp = match first_interval_min {
-            Some(m) if m <= 60 => Messtyp::Rlm,
-            _ => Messtyp::Slp,
-        };
-        // Peak demand is a **power**: the interval's energy divided by its own
-        // length in hours. Hard-coding the ÷¼ h of a quarter-hour grid meant an
-        // hourly RLM series — legitimate, and the norm for Gas — reported no
-        // Leistungsmaximum at all, because no interval matched the filter.
-        let spitzenleistung_kw = if messtyp == Messtyp::Rlm && sparte == Sparte::Strom {
-            intervals
-                .iter()
-                .filter_map(|iv| {
-                    let minutes = Decimal::from((iv.to - iv.from).whole_minutes().unsigned_abs());
-                    (minutes > Decimal::ZERO).then(|| iv.value * Decimal::from(60) / minutes)
-                })
-                .max()
-        } else {
-            None
-        };
-        let worst_quality = crate::domain::worst_quality(&intervals);
-
-        let result = MeterBillingPeriod {
-            malo_id: q.malo_id.clone(),
-            period_from: q.period_from,
-            period_to: q.period_to,
-            messtyp,
-            sparte,
-            arbeitsmenge_kwh: total_kwh,
-            arbeitsmenge_ht_kwh,
-            arbeitsmenge_nt_kwh,
-            spitzenleistung_kw,
-            brennwert_kwh_per_m3: None,
-            zustandszahl: None,
-            zaehlerstand_anfang: None,
-            zaehlerstand_ende: None,
-            quality: worst_quality,
-            lastprofil: None,
-            profil_typ: None,
-        };
-
-        // Cache the computed aggregate.
-        //
-        // The conflict target is the index's **column list**, not
-        // `ON CONSTRAINT mbp_tenant_period_unique`. That name belongs to a
-        // `CREATE UNIQUE INDEX`, and `ON CONFLICT ON CONSTRAINT` only accepts a
-        // *table constraint*, so `ON CONFLICT ON CONSTRAINT` here makes
-        // PostgreSQL reject every one of these statements with
-        // "constraint … does not exist" — and a rejection discarded by
-        // `let _ =` leaves the cache permanently empty while every billing read
-        // recomputes from the resolved series.
-        let cached = sqlx::query(
-            // The tariff split is cached with the total. It is read back by the
-            // cache-hit branch above, so leaving it out of the write made the
-            // *same* period answer with an HT/NT split on the computing request
-            // and without one on every request after it.
-            r"INSERT INTO meter_billing_periods
-                  (malo_id, period_from, period_to, messtyp, sparte,
-                   arbeitsmenge_kwh, spitzenleistung_kw, quality, tenant,
-                   arbeitsmenge_ht_kwh, arbeitsmenge_nt_kwh)
-              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-              ON CONFLICT (malo_id, period_from, period_to, tenant)
-              DO UPDATE SET messtyp             = EXCLUDED.messtyp,
-                            sparte              = EXCLUDED.sparte,
-                            arbeitsmenge_kwh    = EXCLUDED.arbeitsmenge_kwh,
-                            spitzenleistung_kw  = EXCLUDED.spitzenleistung_kw,
-                            quality             = EXCLUDED.quality,
-                            arbeitsmenge_ht_kwh = EXCLUDED.arbeitsmenge_ht_kwh,
-                            arbeitsmenge_nt_kwh = EXCLUDED.arbeitsmenge_nt_kwh,
-                            computed_at         = now()",
-        )
-        .bind(&result.malo_id)
-        .bind(result.period_from)
-        .bind(result.period_to)
-        .bind(messtyp_as_str(result.messtyp))
-        .bind(result.sparte.as_str())
-        .bind(result.arbeitsmenge_kwh)
-        .bind(result.spitzenleistung_kw)
-        .bind(quality_to_str(result.quality))
-        .bind(&q.tenant)
-        .bind(result.arbeitsmenge_ht_kwh)
-        .bind(result.arbeitsmenge_nt_kwh)
-        .execute(&self.pool)
-        .await;
-        // A failed cache write is not a failed read — the aggregate is correct
-        // either way — but it must be visible, not swallowed.
-        if let Err(e) = cached {
-            tracing::warn!(
-                malo_id = %q.malo_id, error = %e,
-                "edmd: could not cache the computed billing period"
-            );
-        }
-
-        Ok(Some(result))
+        self.recompute_billing_period(q).await
     }
 
     async fn record_gas_quality(
@@ -1377,6 +1441,249 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         tx.commit().await.map_err(store_err)?;
         Ok(ids)
     }
+
+    async fn store_readings(&self, readings: &[MeterReading]) -> Result<u64, EdmError> {
+        if readings.is_empty() {
+            return Ok(0);
+        }
+        // One `unnest` statement rather than a row at a time: a quarter-hourly
+        // Zählerstandsgang is 96 rows a day per register, and a month of them is
+        // the ordinary payload.
+        let mut cols = ReadingColumns::with_capacity(readings.len());
+        for r in readings {
+            cols.tenants.push(r.tenant.clone());
+            cols.malos.push(r.malo_id.clone());
+            cols.obis.push(normalise_obis(r.obis_code.as_deref()));
+            cols.ats.push(r.read_at);
+            cols.values.push(r.zaehlerstand);
+            // The unit the **register** counts, not the one the Sparte settles
+            // in: a Zählerstand is stored as the meter displays it, and only the
+            // difference is converted (§ 25 Nr. 4 MessEV).
+            cols.units
+                .push(r.sparte.measured_unit().as_str().to_owned());
+            cols.spartes.push(r.sparte.as_str().to_owned());
+            cols.qualities.push(r.quality.as_str().to_owned());
+            cols.sources.push(r.source.as_str().to_owned());
+            cols.senders.push(r.sender_mp_id.clone());
+            cols.sessions.push(r.push_session.clone());
+        }
+        let result = sqlx::query(
+            r"INSERT INTO meter_readings
+                  (tenant, malo_id, obis_code_norm, read_at, zaehlerstand,
+                   unit, sparte, quality, source, sender_mp_id, push_session)
+              SELECT * FROM unnest(
+                  $1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::numeric[],
+                  $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
+              ON CONFLICT (tenant, malo_id, obis_code_norm, read_at) DO UPDATE
+                  SET zaehlerstand = EXCLUDED.zaehlerstand,
+                      quality      = EXCLUDED.quality,
+                      source       = EXCLUDED.source,
+                      sender_mp_id = EXCLUDED.sender_mp_id,
+                      push_session = EXCLUDED.push_session,
+                      recorded_at  = now()",
+        )
+        .bind(&cols.tenants)
+        .bind(&cols.malos)
+        .bind(&cols.obis)
+        .bind(&cols.ats)
+        .bind(&cols.values)
+        .bind(&cols.units)
+        .bind(&cols.spartes)
+        .bind(&cols.qualities)
+        .bind(&cols.sources)
+        .bind(&cols.senders)
+        .bind(&cols.sessions)
+        .execute(&self.pool)
+        .await
+        .map_err(store_err)?;
+        Ok(result.rows_affected())
+    }
+
+    async fn readings(
+        &self,
+        malo_id: &str,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        tenant: &str,
+    ) -> Result<Vec<MeterReading>, EdmError> {
+        let rows = sqlx::query(
+            r"SELECT malo_id, read_at, zaehlerstand, quality, sparte,
+                     obis_code_norm, source, sender_mp_id, push_session
+              FROM meter_readings
+              WHERE tenant = $1 AND malo_id = $2 AND read_at >= $3 AND read_at <= $4
+              ORDER BY read_at",
+        )
+        .bind(tenant)
+        .bind(malo_id)
+        .bind(from)
+        .bind(to)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(store_err)?;
+        rows.iter()
+            .map(|row| {
+                let obis: String = row.try_get("obis_code_norm").map_err(store_err)?;
+                let sparte: String = row.try_get("sparte").map_err(store_err)?;
+                let quality: String = row.try_get("quality").map_err(store_err)?;
+                Ok(MeterReading {
+                    malo_id: row.try_get("malo_id").map_err(store_err)?,
+                    read_at: row.try_get("read_at").map_err(store_err)?,
+                    zaehlerstand: row.try_get("zaehlerstand").map_err(store_err)?,
+                    // A row edmd wrote always decodes; one that does not is a
+                    // schema/enum divergence, and reading it as UNKNOWN would
+                    // quietly make a stored measurement unbillable.
+                    quality: str_to_quality(&quality).ok_or_else(|| {
+                        EdmError::Internal(format!("meter_readings.quality {quality:?} is unknown"))
+                    })?,
+                    sparte: str_to_sparte(&sparte).ok_or_else(|| {
+                        EdmError::Internal(format!("meter_readings.sparte {sparte:?} is unknown"))
+                    })?,
+                    obis_code: (!obis.is_empty()).then_some(obis),
+                    tenant: tenant.to_owned(),
+                    source: crate::domain::IngestionSource::from_db_str(
+                        &row.try_get::<String, _>("source").map_err(store_err)?,
+                    ),
+                    sender_mp_id: row.try_get("sender_mp_id").map_err(store_err)?,
+                    push_session: row.try_get("push_session").map_err(store_err)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn log_zsg_conversion(
+        &self,
+        entries: &[crate::domain::ZsgConversionEntry],
+    ) -> Result<(), EdmError> {
+        for e in entries {
+            sqlx::query(
+                r"INSERT INTO zsg_conversion_log
+                      (tenant, malo_id, obis_code_norm, span_from, span_to, outcome,
+                       previous_value, current_value, delta, register_capacity, session_id)
+                  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+            )
+            .bind(&e.tenant)
+            .bind(&e.malo_id)
+            .bind(&e.obis_code_norm)
+            .bind(e.span_from)
+            .bind(e.span_to)
+            .bind(e.outcome)
+            .bind(e.previous_value)
+            .bind(e.current_value)
+            .bind(e.delta)
+            .bind(e.register_capacity)
+            .bind(&e.session_id)
+            .execute(&self.pool)
+            .await
+            .map_err(store_err)?;
+        }
+        Ok(())
+    }
+
+    async fn period_zaehlerstaende(
+        &self,
+        malo_id: &str,
+        from: OffsetDateTime,
+        to: OffsetDateTime,
+        tenant: &str,
+    ) -> Result<(Option<Decimal>, Option<Decimal>), EdmError> {
+        let Some(register) = self.dominant_register(malo_id, tenant).await? else {
+            return Ok((None, None));
+        };
+        // "At or before", on both ends. A Zählerstand dated after the period end
+        // did not hold at the period end, and reporting it as the closing
+        // reading overstates the period on an invoice a customer checks against
+        // the meter.
+        let at_or_before = |bound: OffsetDateTime| {
+            sqlx::query_scalar::<_, Decimal>(
+                r"SELECT zaehlerstand
+                  FROM meter_readings
+                  WHERE tenant = $1 AND malo_id = $2 AND obis_code_norm = $3
+                    AND read_at <= $4
+                  ORDER BY read_at DESC
+                  LIMIT 1",
+            )
+            .bind(tenant.to_owned())
+            .bind(malo_id.to_owned())
+            .bind(register.clone())
+            .bind(bound)
+            .fetch_optional(&self.pool)
+        };
+        let anfang = at_or_before(from).await.map_err(store_err)?;
+        let ende = at_or_before(to).await.map_err(store_err)?;
+        Ok((anfang, ende))
+    }
+}
+
+// ── Zählerstandsgang (BK6-24-174) ────────────────────────────────────────────
+
+/// A Zählerstandsgang batch, transposed into the arrays `unnest` binds.
+///
+/// A struct rather than an eleven-element tuple: the columns are positional in
+/// the SQL either way, and a named field is what stops a `sender_mp_id` and a
+/// `push_session` — both `Vec<Option<String>>`, both nullable text — from being
+/// swapped without the type system noticing.
+#[derive(Default)]
+struct ReadingColumns {
+    tenants: Vec<String>,
+    malos: Vec<String>,
+    obis: Vec<String>,
+    ats: Vec<OffsetDateTime>,
+    values: Vec<Decimal>,
+    units: Vec<String>,
+    spartes: Vec<String>,
+    qualities: Vec<String>,
+    sources: Vec<String>,
+    senders: Vec<Option<String>>,
+    sessions: Vec<Option<String>>,
+}
+
+impl ReadingColumns {
+    fn with_capacity(n: usize) -> Self {
+        Self {
+            tenants: Vec::with_capacity(n),
+            malos: Vec::with_capacity(n),
+            obis: Vec::with_capacity(n),
+            ats: Vec::with_capacity(n),
+            values: Vec::with_capacity(n),
+            units: Vec::with_capacity(n),
+            spartes: Vec::with_capacity(n),
+            qualities: Vec::with_capacity(n),
+            sources: Vec::with_capacity(n),
+            senders: Vec::with_capacity(n),
+            sessions: Vec::with_capacity(n),
+        }
+    }
+}
+
+impl MeterStoreTimeSeriesRepository {
+    /// The reading rows of a window, on the point's **dominant** register.
+    ///
+    /// "Dominant" is the register carrying the most readings, which for a ZSG is
+    /// the one the Lastgang is derived from. A prosumer reports a feed-in
+    /// register too, and an invoice's opening/closing Zählerstand is about the
+    /// consumption meter the customer can walk up to and read.
+    async fn dominant_register(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+    ) -> Result<Option<String>, EdmError> {
+        let row = sqlx::query(
+            r"SELECT obis_code_norm
+              FROM meter_readings
+              WHERE tenant = $1 AND malo_id = $2
+              GROUP BY obis_code_norm
+              ORDER BY count(*) DESC, obis_code_norm
+              LIMIT 1",
+        )
+        .bind(tenant)
+        .bind(malo_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(store_err)?;
+        row.map(|r| r.try_get::<String, _>("obis_code_norm"))
+            .transpose()
+            .map_err(store_err)
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1417,7 +1724,8 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
     let recorded_at = r.received_at.unwrap_or_else(OffsetDateTime::now_utc);
     // Typ-2 values are stored as delivered and never corrected, so arrival order
     // is the only order there is — but it still has to be an order, hence the
-    // nanosecond resolution (see `version_of`).
+    // millisecond resolution (see `version_of`): two deliveries in the same
+    // second are two versions rather than one merge-key conflict.
     let version = version_of(None, recorded_at)?;
     let source = MeasurementSource::Mscons {
         pid: r.pid,
@@ -1462,8 +1770,33 @@ impl Typ2Repository for MeterStoreTyp2Repository {
         if reads.is_empty() {
             return Ok(());
         }
-        let stored: Vec<StoredSeries> =
-            reads.iter().map(typ2_to_stored).collect::<Result<_, _>>()?;
+        // Same erasure enrolment as the authoritative store, and deliberately the
+        // same natural id: one `(tenant, MaLo)` subject, one mapping, so a single
+        // Article 17 erasure unlinks the Typ-2 readings along with the billed
+        // ones. Without it the ESA stream was the one place an erased MaLo stayed
+        // named. `register_subject` is idempotent, so this is one lookup per MaLo.
+        let mut subjects: HashMap<String, String> = HashMap::new();
+        let mut stored: Vec<StoredSeries> = Vec::with_capacity(reads.len());
+        for r in reads {
+            let natural = subject_natural_id(&r.tenant, &r.malo_id);
+            let subject = match subjects.get(&natural) {
+                Some(s) => s.clone(),
+                None => {
+                    let s = self
+                        .store
+                        .register_subject(&natural)
+                        .await
+                        .map_err(store_err)?
+                        .as_str()
+                        .to_owned();
+                    subjects.insert(natural, s.clone());
+                    s
+                }
+            };
+            stored.push(
+                typ2_to_stored(r)?.with_extra("subject_ref", ScalarValue::Utf8(Some(subject))),
+            );
+        }
         self.store.append(&stored).await.map_err(store_err)?;
         Ok(())
     }
@@ -1615,48 +1948,41 @@ fn row_to_receipt(row: &sqlx::postgres::PgRow) -> Result<MeterDataReceipt, EdmEr
 }
 
 /// Canonical form of an OBIS code as it enters the audit-row key.
-fn normalise_obis(obis_code: Option<&str>) -> String {
-    obis_code.map_or_else(String::new, |s| {
-        s.parse::<ObisCode>()
-            .map_or_else(|_| s.to_owned(), |c| c.to_string())
-    })
-}
+///
+/// [`crate::domain::normalise_obis_code`] and nothing else — the store, the
+/// validator and the BO4E export each had their own copy, and a merge key that
+/// normalises differently from the group it is validated in is two registers
+/// wearing one name.
+use crate::domain::normalise_obis_code as normalise_obis;
 
 /// The canonical wire spelling of a quality flag, shared with the API surface so
 /// a response cannot invent a different vocabulary than the one stored.
+///
+/// [`QualityFlag::as_str`] and nothing else: a hand-written `match` here would be
+/// a second copy of a vocabulary `metering` publishes, free to drift from the
+/// `FromStr` that reads it back and the DB `CHECK` that constrains it.
 pub(crate) fn quality_to_str(q: QualityFlag) -> &'static str {
-    match q {
-        QualityFlag::Measured => "MEASURED",
-        QualityFlag::Estimated => "ESTIMATED",
-        QualityFlag::Substituted => "SUBSTITUTED",
-        QualityFlag::Calculated => "CALCULATED",
-        QualityFlag::Corrected => "CORRECTED",
-        QualityFlag::Preliminary => "PRELIMINARY",
-        QualityFlag::Faulty => "FAULTY",
-        QualityFlag::Unknown => "UNKNOWN",
-    }
+    q.as_str()
 }
 
-fn str_to_quality(s: &str) -> QualityFlag {
-    match s {
-        "MEASURED" => QualityFlag::Measured,
-        "ESTIMATED" => QualityFlag::Estimated,
-        "SUBSTITUTED" => QualityFlag::Substituted,
-        "CALCULATED" => QualityFlag::Calculated,
-        "CORRECTED" => QualityFlag::Corrected,
-        "PRELIMINARY" => QualityFlag::Preliminary,
-        "FAULTY" => QualityFlag::Faulty,
-        _ => QualityFlag::Unknown,
-    }
+/// Read a `quality` column back, or `None` when the value is not one edmd wrote.
+///
+/// `metering`'s `FromStr` refuses unknown input deliberately: an unrecognised
+/// status is not `Unknown` — which is a statement about the *measurement* — but
+/// a parse failure, which is a statement about the *storage*. The lenient
+/// version this replaced mapped a corrupted or newly-added code onto `Unknown`,
+/// and `Unknown` is non-billable, so a cache row that failed to decode silently
+/// removed a period's Arbeitsmenge from every bill.
+fn str_to_quality(s: &str) -> Option<QualityFlag> {
+    s.parse().ok()
 }
 
-fn str_to_sparte(s: &str) -> Sparte {
-    match s {
-        "GAS" => Sparte::Gas,
-        "WAERME" => Sparte::Waerme,
-        "WASSER" => Sparte::Wasser,
-        _ => Sparte::Strom,
-    }
+/// Read a `sparte` column back, or `None` when the value is not one edmd wrote.
+///
+/// Same reasoning: defaulting to `Strom` relabelled a cached gas period as
+/// electricity, and the Sparte decides the unit and the balancing day.
+fn str_to_sparte(s: &str) -> Option<Sparte> {
+    s.parse().ok()
 }
 
 #[cfg(test)]

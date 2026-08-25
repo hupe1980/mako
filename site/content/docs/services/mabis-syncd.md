@@ -85,7 +85,7 @@ flowchart LR
         runs["submission_runs<br/>submission_malo_log"]
     end
 
-    edmd -->|"GET /api/v1/lastgang/{malo_id}"| syncd
+    edmd -->|"GET /api/v1/energy/{malo_id}?direction=BEZUG"| syncd
     syncd -->|"SummenzeitreiheBuilder<br/>(mako-mabis crate)"| syncd
     syncd -->|"POST /api/v1/commands<br/>mabis.summenzeitreihe.uebermitteln"| makod
     makod -->|"MSCONS 13003 via AS4"| biko
@@ -156,10 +156,20 @@ from a territory that genuinely drew nothing.
 ## Aggregation is quarter-hourly
 
 MaBiS settles electricity on a **¼-h grid**, so `fetch_lastgang` reads
-`GET /api/v1/lastgang/{malo_id}` — the BO4E `Lastgang` projection, which carries
-one `Zeitreihenwert` per metered slot.
+`GET /api/v1/energy/{malo_id}?direction=BEZUG` — edmd's canonical register
+projection, one entry per metered slot.
 
-The resampled endpoints are not interchangeable here. Aggregating monthly buckets
+**Not `/api/v1/lastgang`.** That endpoint returns one BO4E object per OBIS
+register — the right shape for a BO4E export and the wrong input for a settlement
+figure, because folding it back into one series *is* the register projection.
+A bare `ObisCode::is_import` filter is not that projection: on a dual-tariff MaLo
+the total register `1-0:1.8.0` passes it **and so do** `1-0:1.8.1` and
+`1-0:1.8.2`, its own decomposition, which puts the consumption into the
+Summenzeitreihe twice — in a filing the BIKO cannot withdraw. A `1-0:1.6.0`
+Jahreshöchstleistung in **kW** and the Fehlerregister `…63` are import too.
+edmd's `domain::register` makes that decision once and serves the answer.
+
+The resampled endpoints are not interchangeable here either. Aggregating monthly buckets
 produces a Summenzeitreihe whose period total is right but whose **shape is
 wrong**, and the BIKO cannot detect that from the message alone.
 
@@ -284,7 +294,7 @@ sequenceDiagram
     loop for each Bilanzierungsgebiet
         syncd->>syncd: resolve the MaBiS-Zählpunkt (marktd)
         loop for each MaLo in the territory
-            syncd->>edmd: GET /api/v1/lastgang/{malo_id}
+            syncd->>edmd: GET /api/v1/energy/{malo_id}?direction=BEZUG
             edmd-->>syncd: BO4E Lastgang — Bezugsregister, one value per ¼-h slot
             syncd->>mabis: SummenzeitreiheBuilder.add_malo(intervals)?
             syncd->>syncd: INSERT submission_malo_log

@@ -45,16 +45,28 @@ pub(crate) fn edm_sparte_to_einheit(s: EdmSparte) -> Mengeneinheit {
     }
 }
 
-/// Map a `QualityFlag` to the nearest `Messwertstatus` variant.
+/// Map a `QualityFlag` onto the BO4E `Messwertstatus` that says the same thing.
+///
+/// BO4E's vocabulary is narrower than `metering`'s, so the mapping is lossy —
+/// but never in a direction that asserts something false:
+///
+/// | Flag | Status | Why that one |
+/// |---|---|---|
+/// | `Measured`, `Corrected` | `Abgelesen` | BO4E carries no "corrected" status; in the market a correction rides on the MSCONS *version*, and the value itself was read off the meter. `Vorlaeufigerwert` would say "subject to revision", and a correction *is* the revision. |
+/// | `Estimated` | `Prognosewert` | A forecast. |
+/// | `Preliminary` | `Vorlaeufigerwert` | A measurement subject to revision, which is not a forecast. |
+/// | `Substituted` | `Ersatzwert` | — |
+/// | `Calculated` | `Energiemengesummiert` | Derived from other readings (Residuallast = Bezug − Einspeisung), not provisional. |
+/// | `Faulty` | `NichtVerwendbar` | The one status that says "do not bill this". `Unknown` is BO4E's forward-compatibility catch-all and says nothing about the reading. |
+/// | `Unknown` | `Unknown` | The quality is not known — the one case where the catch-all is honest. |
 pub(crate) fn quality_to_messwertstatus(q: QualityFlag) -> Messwertstatus {
     match q {
-        QualityFlag::Measured => Messwertstatus::Abgelesen,
+        QualityFlag::Measured | QualityFlag::Corrected => Messwertstatus::Abgelesen,
         QualityFlag::Estimated => Messwertstatus::Prognosewert,
         QualityFlag::Substituted => Messwertstatus::Ersatzwert,
-        QualityFlag::Calculated => Messwertstatus::Vorlaeufigerwert,
-        QualityFlag::Corrected => Messwertstatus::Vorlaeufigerwert,
-        QualityFlag::Preliminary => Messwertstatus::Prognosewert,
-        QualityFlag::Faulty => Messwertstatus::Unknown,
+        QualityFlag::Calculated => Messwertstatus::Energiemengesummiert,
+        QualityFlag::Preliminary => Messwertstatus::Vorlaeufigerwert,
+        QualityFlag::Faulty => Messwertstatus::NichtVerwendbar,
         QualityFlag::Unknown => Messwertstatus::Unknown,
     }
 }
@@ -122,16 +134,68 @@ pub(crate) fn read_to_zeitreihenwert(r: &crate::domain::MeterRead) -> Zeitreihen
 }
 
 /// Build a `Menge` representing an interval length from whole minutes.
+///
+/// The `wert` counts the `einheit`: a quarter-hour is **one** `ViertelStunde`, as
+/// an hour is one `Stunde` and a day is one `Tag`. Fifteen `ViertelStunde` would
+/// be three and three-quarter hours.
 pub(crate) fn minutes_to_menge(minutes: u32) -> Menge {
     let (wert, einheit) = match minutes {
-        15 => (Decimal::from(15u32), Mengeneinheit::ViertelStunde),
-        60 => (Decimal::from(1u32), Mengeneinheit::Stunde),
-        1440 => (Decimal::from(1u32), Mengeneinheit::Tag),
+        15 => (Decimal::ONE, Mengeneinheit::ViertelStunde),
+        60 => (Decimal::ONE, Mengeneinheit::Stunde),
+        1440 => (Decimal::ONE, Mengeneinheit::Tag),
         m => (Decimal::from(m), Mengeneinheit::Minute),
     };
     Menge {
         wert: Some(wert),
         einheit: Some(einheit),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The two mappings a consumer acts on: "do not bill this" and "this may
+    /// still be revised".
+    #[test]
+    fn the_unbillable_and_the_provisional_statuses_are_the_bo4e_ones() {
+        assert_eq!(
+            quality_to_messwertstatus(QualityFlag::Faulty),
+            Messwertstatus::NichtVerwendbar,
+            "`Unknown` is the forward-compat catch-all, not a statement about the reading"
+        );
+        assert_eq!(
+            quality_to_messwertstatus(QualityFlag::Preliminary),
+            Messwertstatus::Vorlaeufigerwert,
+            "a vorläufiger Wert is a measurement, not a Prognose"
+        );
+        assert_eq!(
+            quality_to_messwertstatus(QualityFlag::Corrected),
+            Messwertstatus::Abgelesen,
+            "a correction is the revision, so it cannot be `subject to revision`"
+        );
+        // `Unknown` is the one case where the catch-all is honest.
+        assert_eq!(
+            quality_to_messwertstatus(QualityFlag::Unknown),
+            Messwertstatus::Unknown
+        );
+    }
+
+    /// A quarter-hour is one `ViertelStunde`, not fifteen of them.
+    #[test]
+    fn an_interval_length_counts_its_own_unit() {
+        let m = minutes_to_menge(15);
+        assert_eq!(m.wert, Some(Decimal::ONE));
+        assert_eq!(m.einheit, Some(Mengeneinheit::ViertelStunde));
+
+        let hour = minutes_to_menge(60);
+        assert_eq!(hour.wert, Some(Decimal::ONE));
+        assert_eq!(hour.einheit, Some(Mengeneinheit::Stunde));
+
+        // Anything the enum has no unit for falls back to counting minutes.
+        let odd = minutes_to_menge(7);
+        assert_eq!(odd.wert, Some(Decimal::from(7u32)));
+        assert_eq!(odd.einheit, Some(Mengeneinheit::Minute));
     }
 }

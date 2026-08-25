@@ -35,13 +35,30 @@ pub(crate) async fn list_confirmations(
             .into_response();
     }
     let limit = params.limit.unwrap_or(200).clamp(1, 2000);
-    let status = params.status.as_deref();
+    // An unrecognised status is refused rather than returning an empty list: an
+    // operator filtering on a typo would otherwise read "no open obligations"
+    // off a § 60 Abs. 2 queue that is not empty.
+    const STATUSES: [&str; 3] = ["OFFEN", "BESTAETIGT", "UEBERFAELLIG"];
+    let status = params.status.as_deref().map(str::trim);
+    if let Some(s) = status.filter(|s| !STATUSES.contains(s)) {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("unknown status `{s}`"),
+                "expected": STATUSES,
+            })),
+        )
+            .into_response();
+    }
     let rows = sqlx::query(
+        // The parentheses are load-bearing: `AND` binds tighter than `OR`, so
+        // without them the default branch and the filter branch read as one
+        // condition.
         r"SELECT malo_id, dtm_from, dtm_to, obis_code_norm, quality,
                  created_at, status, resolved_at, resolved_by
           FROM estimated_read_confirmations
           WHERE tenant = $1
-            AND ($2::text IS NULL AND status IN ('OFFEN','UEBERFAELLIG')
+            AND (($2::text IS NULL AND status IN ('OFFEN','UEBERFAELLIG'))
                  OR status = $2)
           ORDER BY created_at ASC
           LIMIT $3",

@@ -49,7 +49,7 @@ graph LR
     subgraph transport ["Transport & Metering"]
         AS4["AS4-Profil v1.2<br/>BrainpoolP256r1"]
         BSI["BSI TR-03109<br/>iMSys · §14a CLS"]
-        MsbG["§ 60 Abs. 2 MsbG<br/>Ersatzwert · Jahresprognose"]
+        MsbG["§ 60 Abs. 2 MsbG<br/>Plausibilisierung · Ersatzwert"]
         NNNEV["StromNEV/GasNEV/KAV<br/>Grid charges"]
     end
 
@@ -62,7 +62,7 @@ graph LR
     ENW41 -->|"vertragd"| LF_impl["B2C/B2B contracts<br/>GDPR Art. 15/17/20"]
     EEG -->|"eeg-billing<br/>einsd"| EEG_impl["10 settlement schemes<br/>§14 UStG Gutschrift"]
     BSI -->|"metering<br/>edmd"| IOT_impl["SmgwSession<br/>ClsChannel"]
-    MsbG -->|"metering<br/>edmd"| SUB_impl["V01-V10 validation<br/>Fill gaps · Forecast"]
+    MsbG -->|"metering<br/>edmd"| SUB_impl["V01–V09/V11/V12 validation<br/>Fill gaps · Forecast"]
     NNNEV -->|"grid-billing<br/>netzbilanzd"| NNE_impl["NNE/KA/MMM<br/>§14a Modul 1/2/3"]
 ```
 
@@ -82,7 +82,8 @@ graph LR
 | **Residuallast** (ordinary supply, no special §) | Strom | `metering` crate (`Residual` rule), `edmd` |
 | **EEG 2000–2023 / KWKG** (Feed-in settlement) | Strom | `eeg-billing` crate (10 schemes), `einsd` |
 | **§14 Abs. 2 UStG** (Gutschriftverfahren — NB issues the EEG Gutschrift) | Strom | `eeg-billing` (`settlement_to_gutschrift`), `einsd` (`rechnung_json`) |
-| **§ 60 Abs. 2 MsbG** (Ersatzwertbildung, Jahresprognose, Substitution) | Both | `metering` crate (V01–V10 validation, `fill_gaps`, `project_annual_consumption`), `edmd` |
+| **§ 60 Abs. 2 MsbG** (Plausibilisierung und Ersatzwertbildung im Smart-Meter-Gateway) | Both | `metering` crate (V01–V09/V11/V12 validation, `fill_gaps`), `edmd` |
+| **§ 40a Abs. 2 EnWG** (Verbrauchsschätzung) · **§ 13 Abs. 1 StromGVV** (Abschlagshöhe) | Strom | `metering::project_annual_consumption`, `edmd /api/v1/forecast` |
 | **BSI TR-03109** (iMSys / SMGW lifecycle, §14a CLS channels) | Strom | `metering` (`SmgwSession`, `ClsChannel`), `edmd` |
 | **StromNEV / GasNEV / KAV** (grid charge settlement) | Both | `grid-billing` crate, `netzbilanzd` |
 | **§14a EnWG** (Steuerbare Verbrauchseinrichtungen — Modul 1/2/3) | Strom | `grid-billing` (`Sect14aModule`), `processd` (produktcode check, GPKE Teil 3 Kap. 1.3) |

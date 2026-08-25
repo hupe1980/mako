@@ -17,12 +17,8 @@ const IMBALANCE_LEGAL_BASIS: &str =
 /// the boundary GaBi Gas settles on, and the one an aggregate must use or it
 /// carries six hours of the neighbouring day.
 fn sparte_of(raw: Option<&str>) -> crate::domain::Sparte {
-    match raw.map(str::to_ascii_lowercase).as_deref() {
-        Some("gas") => crate::domain::Sparte::Gas,
-        Some("wasser") => crate::domain::Sparte::Wasser,
-        Some("waerme" | "wärme") => crate::domain::Sparte::Waerme,
-        _ => crate::domain::Sparte::Strom,
-    }
+    raw.and_then(crate::domain::parse_sparte)
+        .unwrap_or(crate::domain::Sparte::Strom)
 }
 
 #[derive(Debug, Deserialize)]
@@ -116,15 +112,11 @@ pub(crate) async fn get_imbalance(
         Ok(d) => d,
         Err(_) => return (StatusCode::BAD_REQUEST, "invalid date").into_response(),
     };
-    let to = match from.replace_month(month_enum).and_then(|d| {
-        // Last day of month.
-        let next_month = if month == 12 {
-            Date::from_calendar_date(year + 1, Month::January, 1)
-        } else {
-            Date::from_calendar_date(year, Month::try_from(month + 1).unwrap(), 1)
-        };
-        next_month.map(|nm| nm.previous_day().unwrap_or(d))
-    }) {
+    // The last day of the month, from `Month::length`, which already knows about
+    // leap years. Rolling forward to the first of the next month and stepping
+    // back needed a December special case and a `Month::try_from(month + 1)` that
+    // only avoided panicking because of it.
+    let to = match Date::from_calendar_date(year, month_enum, month_enum.length(year)) {
         Ok(d) => d,
         Err(_) => return (StatusCode::BAD_REQUEST, "date calculation failed").into_response(),
     };
@@ -208,7 +200,7 @@ pub(crate) async fn get_imbalance(
 /// - `spitzenleistung_kw` — peak demand (RLM Strom only)
 /// - `brennwert_kwh_per_m3` / `zustandszahl` — Gas conversion factors
 ///
-/// Source: GPKE BK6-22-024 §3; GeLi Gas 3.0 (BK7-24-01-009) §3.
+/// Source: GPKE (BK6-24-174) Teil 1; GeLi Gas 3.0 (BK7-24-01-009).
 #[derive(Debug, Deserialize)]
 pub(crate) struct BillingPeriodParams {
     /// ISO 8601 date `YYYY-MM-DD` — start of billing period (inclusive).

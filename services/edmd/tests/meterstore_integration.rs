@@ -126,7 +126,7 @@ fn validated(reads: Vec<MeterRead>) -> ValidatedReads {
         .first()
         .map_or("51238696012", |r| r.malo_id.as_str())
         .to_owned();
-    ValidatedReads::validate(reads, "TEST", &malo).0
+    ValidatedReads::validate(reads, edmd::domain::IngestContext::new("TEST", &malo)).0
 }
 
 /// One 15-minute interval for `malo` starting at `from`.
@@ -2170,4 +2170,664 @@ async fn erasure_removes_virtual_meter_configs_naming_the_subject() {
     .await
     .expect("scan for lingering identifiers");
     assert_eq!(lingering, 0, "no rule may still name the erased subject");
+}
+
+/// An Ersatzwert is filed under the register whose gap it fills.
+///
+/// The request may omit `obis_code`, in which case the substitution picks the
+/// point's dominant energy register — and it used to write the value back with
+/// the *request's* register, i.e. none. An unlabelled reading is the canonical
+/// **total** register (`domain::register`), so on a dual-tariff point that
+/// reports only HT and NT, one such substitute made the whole month's HT/NT
+/// series look like a decomposition of it: every aggregate over the period
+/// collapsed to the substitute alone.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_substitute_is_filed_under_the_register_it_fills() {
+    use edmd::server::{SubstituteRequest, run_substitute_values};
+    use time::format_description::well_known::Rfc3339;
+
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let malo = "51238696129";
+    let ht = "1-0:1.8.1";
+    let nt = "1-0:1.8.2";
+    let tenant = "9910000000001";
+
+    let gap_from = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+    let gap_to = gap_from + Duration::minutes(150);
+    let week = Duration::days(7);
+
+    // A reference week on both tariff registers, and no total register anywhere.
+    // HT carries the Lastgang at quarter-hours and NT reports hourly, so HT is
+    // the point's dominant energy register — which is the one a request naming
+    // none substitutes.
+    let mut prior: Vec<MeterRead> = Vec::new();
+    for i in 0..672 {
+        let start = gap_from - week + Duration::minutes(15 * i);
+        prior.push(read(malo, start, "4.0", Sparte::Strom, ht));
+        if i % 4 == 0 {
+            prior.push(read(malo, start, "1.0", Sparte::Strom, nt));
+        }
+    }
+    repo.store_reads(validated(prior))
+        .await
+        .expect("store prior week");
+
+    // The HT register goes dark for the whole gap window; NT keeps delivering on
+    // its own hourly cadence.
+    let nt_window: Vec<MeterRead> = (0..3)
+        .map(|n| {
+            read(
+                malo,
+                gap_from + Duration::minutes(60 * n),
+                "1.0",
+                Sparte::Strom,
+                nt,
+            )
+        })
+        .collect();
+    repo.store_reads(validated(nt_window))
+        .await
+        .expect("store the NT window");
+
+    let req = SubstituteRequest {
+        gap_from: gap_from.format(&Rfc3339).expect("rfc3339"),
+        gap_to: gap_to.format(&Rfc3339).expect("rfc3339"),
+        interval_secs: None,
+        method: Some("PriorPeriodAverage".to_owned()),
+        prior_days: Some(7),
+        operator_id: Some("TEST-OPERATOR".to_owned()),
+        sparte: None,
+        reason: Some("MeterFault".to_owned()),
+        // Deliberately unnamed: the point's dominant energy register is chosen.
+        obis_code: None,
+    };
+    let status = run_substitute_values(&repo, tenant, malo, &req)
+        .await
+        .status();
+    assert_eq!(status.as_u16(), 201, "the HT gap is fillable");
+
+    let stored = repo
+        .query(&TimeSeriesQuery {
+            malo_id: malo.to_owned(),
+            from: gap_from,
+            to: gap_to,
+            sparte: None,
+            tenant: tenant.to_owned(),
+        })
+        .await
+        .expect("read the gap window back");
+
+    let substituted: Vec<_> = stored
+        .iter()
+        .filter(|r| r.quality == QualityFlag::Substituted)
+        .collect();
+    assert!(!substituted.is_empty(), "something was substituted");
+    assert!(
+        substituted.iter().all(|r| r.obis_code.is_some()),
+        "an Ersatzwert must name the register it stands in for, never land \
+         unlabelled: {substituted:#?}"
+    );
+
+    // The consequence that matters: the period's Arbeitsmenge is still the two
+    // tariff registers summed, not the substitute alone.
+    let period = repo
+        .billing_period(&BillingPeriodQuery {
+            malo_id: malo.to_owned(),
+            period_from: gap_from.date(),
+            period_to: gap_from.date(),
+            tenant: tenant.to_owned(),
+            sparte: Sparte::Strom,
+        })
+        .await
+        .expect("aggregate the day")
+        .expect("the day has readings");
+    assert!(
+        period.arbeitsmenge_kwh > kwh("10"),
+        "an unlabelled substitute must not swallow the tariff registers: {period:#?}"
+    );
+}
+
+/// Article 17 erasure has to reach the ESA Typ-2 store too.
+///
+/// A Typ-2 value is non-authoritative for *settlement*, which says nothing about
+/// whether it is personal data: it is a quarter-hourly consumption series against
+/// a MaLo-ID exactly like the billed one. With the subject registry attached only
+/// to the authoritative table, erasure destroyed one mapping and left every ESA
+/// Typ-2 reading fully attributable — the one store an erasure could not reach.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn erasure_unlinks_the_esa_typ2_store_as_well() {
+    let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
+    let (reads_store, typ2_store, _cold) = build_stores(
+        pool.clone(),
+        &url,
+        &warehouse_uri,
+        TieringConfig::default(),
+        &WarehouseAuth::default(),
+    )
+    .await
+    .expect("build meterstore tiers");
+    let typ2 = MeterStoreTyp2Repository::new(typ2_store);
+    let tenant = "9910000000001";
+    let malo = "51238696012";
+
+    let t = OffsetDateTime::now_utc() - Duration::days(1);
+    typ2.store_typ2_reads(&[Typ2Read {
+        malo_id: malo.to_owned(),
+        melo_id: None,
+        dtm_from: t,
+        dtm_to: t + Duration::minutes(15),
+        quantity_kwh: kwh("9.0"),
+        quality: QualityFlag::Measured,
+        pid: 13027,
+        sparte: Sparte::Strom,
+        obis_code: Some("1-0:1.8.0".to_owned()),
+        tenant: tenant.to_owned(),
+        delivery_path: Typ2DeliveryPath::default(),
+        sender_mp_id: None,
+        received_at: None,
+    }])
+    .await
+    .expect("store typ2 read");
+
+    // The Typ-2 write enrolled the same `(tenant, MaLo)` subject the
+    // authoritative store uses, so the mapping exists and covers both.
+    let subject: Option<String> =
+        sqlx::query_scalar("SELECT subject_ref FROM meterstore_subject_map WHERE natural_id = $1")
+            .bind(edmd::store::subject_natural_id(tenant, malo))
+            .fetch_optional(&pool)
+            .await
+            .expect("query the subject map");
+    let subject = subject.expect("a Typ-2 write enrols an erasure subject");
+
+    // Erasure destroys it, and the readings become unattributable.
+    reads_store
+        .subject_registry()
+        .expect("the reads store carries the registry")
+        .erase(
+            &meterstore::SubjectRef::new(subject).expect("subject ref"),
+            "DSGVO Art. 17",
+            "test",
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("erase the subject");
+
+    let remaining: Option<String> =
+        sqlx::query_scalar("SELECT subject_ref FROM meterstore_subject_map WHERE natural_id = $1")
+            .bind(edmd::store::subject_natural_id(tenant, malo))
+            .fetch_optional(&pool)
+            .await
+            .expect("re-query the subject map");
+    assert!(
+        remaining.is_none(),
+        "one erasure must unlink the Typ-2 readings along with the billed ones"
+    );
+}
+
+/// A Zählerstandsgang differences into a Lastgang, and both halves are kept.
+///
+/// BK6-24-174 („Datenübermittlung ZSG", wirksam 06.06.2025) puts the
+/// differencing at the Messstellenbetreiber, which is what edmd is. The
+/// readings are the primary record — § 146 Abs. 4 AO requires the original to
+/// stay recoverable, and a stored difference cannot reproduce the register
+/// values it came from.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let malo = "51238696129";
+    let base = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+
+    // Four quarter-hourly register readings: 1000 → 1002.5 → 1004.8 → 1007.
+    let readings: Vec<edmd::domain::MeterReading> = [
+        ("1000.0", 0i64),
+        ("1002.5", 1),
+        ("1004.8", 2),
+        ("1007.0", 3),
+    ]
+    .into_iter()
+    .map(|(v, i)| edmd::domain::MeterReading {
+        malo_id: malo.to_owned(),
+        read_at: base + Duration::minutes(15 * i),
+        zaehlerstand: kwh(v),
+        quality: QualityFlag::Measured,
+        sparte: Sparte::Strom,
+        obis_code: Some("1-0:1.8.0".to_owned()),
+        tenant: tenant.to_owned(),
+        source: IngestionSource::DirectPush,
+        sender_mp_id: Some("9900000000001".to_owned()),
+        push_session: Some("ZSG-TEST-1".to_owned()),
+    })
+    .collect();
+
+    let stored = repo.store_readings(&readings).await.expect("store the ZSG");
+    assert_eq!(stored, 4);
+
+    // The readings come back as the meter displayed them.
+    let back = repo
+        .readings(malo, base, base + Duration::hours(1), tenant)
+        .await
+        .expect("read the ZSG back");
+    assert_eq!(back.len(), 4);
+    assert_eq!(back[0].zaehlerstand, kwh("1000.0"));
+    assert_eq!(
+        back[3].zaehlerstand,
+        kwh("1007.0"),
+        "a Zählerstand is stored unconverted — the difference is what gets converted"
+    );
+
+    // Redelivery overwrites rather than duplicating, like an interval redelivery.
+    repo.store_readings(&readings).await.expect("redeliver");
+    let again = repo
+        .readings(malo, base, base + Duration::hours(1), tenant)
+        .await
+        .expect("re-read");
+    assert_eq!(again.len(), 4, "a redelivered ZSG upserts on its key");
+}
+
+/// § 40 Abs. 2 Nr. 6 EnWG: the invoice's opening and closing register reading.
+///
+/// The columns carried that citation from the start and were hardcoded `None`,
+/// so every invoice built from the aggregate was missing a statutory line. They
+/// come from the Zählerstandsgang, and the bounds are **at or before** each end
+/// — a reading dated after the period end did not hold at the period end.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let malo = "51238696129";
+    // A Berlin January, so the aggregate's window and the readings agree.
+    let day = time::Date::from_calendar_date(2026, time::Month::January, 15).expect("date");
+    let midnight =
+        OffsetDateTime::from_unix_timestamp(1_768_431_600).expect("2026-01-15T00:00 CET");
+
+    let reading = |offset_min: i64, value: &str| edmd::domain::MeterReading {
+        malo_id: malo.to_owned(),
+        read_at: midnight + Duration::minutes(offset_min),
+        zaehlerstand: kwh(value),
+        quality: QualityFlag::Measured,
+        sparte: Sparte::Strom,
+        obis_code: Some("1-0:1.8.0".to_owned()),
+        tenant: tenant.to_owned(),
+        source: IngestionSource::DirectPush,
+        sender_mp_id: None,
+        push_session: None,
+    };
+    repo.store_readings(&[
+        // Before the day: the opening reading.
+        reading(-15, "5000.0"),
+        reading(60, "5002.0"),
+        // The last reading inside the day: the closing one.
+        reading(23 * 60, "5010.0"),
+        // The next day's first reading must NOT become the closing Zählerstand.
+        reading(25 * 60, "5099.0"),
+    ])
+    .await
+    .expect("store the readings");
+
+    // Some intervals, so the aggregate has an Arbeitsmenge to report at all.
+    let intervals: Vec<MeterRead> = (0..4)
+        .map(|i| {
+            read(
+                malo,
+                midnight + Duration::minutes(15 * i),
+                "2.5",
+                Sparte::Strom,
+                "1-0:1.8.0",
+            )
+        })
+        .collect();
+    repo.store_reads(validated(intervals))
+        .await
+        .expect("store the Lastgang");
+
+    let period = repo
+        .billing_period(&BillingPeriodQuery {
+            malo_id: malo.to_owned(),
+            period_from: day,
+            period_to: day,
+            tenant: tenant.to_owned(),
+            sparte: Sparte::Strom,
+        })
+        .await
+        .expect("aggregate")
+        .expect("the day has readings");
+
+    assert_eq!(
+        period.zaehlerstand_anfang,
+        Some(kwh("5000.0")),
+        "the opening reading is the last one at or before the period start"
+    );
+    assert_eq!(
+        period.zaehlerstand_ende,
+        Some(kwh("5010.0")),
+        "the closing reading is the last one at or before the period END — the \
+         next day's reading did not hold at the period end: {period:#?}"
+    );
+}
+
+/// Article 17 erasure reaches the Zählerstandsgang.
+///
+/// A table added after the erasure path was written is the classic way a subject
+/// stays named — `virtual_meter_configs` was one, and `meter_readings` holds the
+/// *primary* measurement, so it would have been a worse one. It is a
+/// Buchungsbeleg (§ 147 Abs. 1 AO), so the row survives and the identity does
+/// not.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn erasure_pseudonymises_the_zaehlerstandsgang() {
+    let (repo, pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let malo = "51238696129";
+    let at = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+
+    repo.store_readings(&[edmd::domain::MeterReading {
+        malo_id: malo.to_owned(),
+        read_at: at,
+        zaehlerstand: kwh("4321.0"),
+        quality: QualityFlag::Measured,
+        sparte: Sparte::Strom,
+        obis_code: Some("1-0:1.8.0".to_owned()),
+        tenant: tenant.to_owned(),
+        source: IngestionSource::DirectPush,
+        sender_mp_id: None,
+        push_session: None,
+    }])
+    .await
+    .expect("store a Zählerstand");
+
+    // The erasure path's own statement, run the way the handler runs it.
+    let pseudonym = "SUBJ-TEST";
+    sqlx::query("UPDATE meter_readings SET malo_id = $1 WHERE malo_id = $2 AND tenant = $3")
+        .bind(pseudonym)
+        .bind(malo)
+        .bind(tenant)
+        .execute(&pool)
+        .await
+        .expect("pseudonymise");
+
+    let named: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM meter_readings WHERE malo_id = $1 AND tenant = $2",
+    )
+    .bind(malo)
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(named, 0, "the MaLo must not survive erasure by name");
+
+    let kept: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM meter_readings WHERE malo_id = $1 AND tenant = $2",
+    )
+    .bind(pseudonym)
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("count");
+    assert_eq!(
+        kept, 1,
+        "the value survives — § 147 Abs. 1 AO, Art. 17 Abs. 3 lit. b"
+    );
+}
+
+/// A completed Ablesung files its Zählerstand where billing can see it.
+///
+/// The whole point of a reading order is to obtain one number, and that number
+/// used to be written onto the order row and nowhere else — unreachable from
+/// § 40 Abs. 2 Nr. 6 EnWG and from the year-on-year difference that *is* the
+/// billing path for an SLP point with no interval metering at all.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_completed_ablesung_reaches_the_reading_store() {
+    let (repo, pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let malo = "51238696129";
+
+    // A year apart, as a Jahresablesung is.
+    let last_year = OffsetDateTime::from_unix_timestamp(1_735_689_600).expect("2025-01-01T00:00Z");
+    let this_year = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+
+    for (at, value) in [(last_year, "14230.0"), (this_year, "17845.0")] {
+        let id = uuid::Uuid::new_v4();
+        sqlx::query(
+            "INSERT INTO ablese_auftraege
+               (id, malo_id, tenant, anlass, auftraggeber_rolle, geplant_am, sparte)
+             VALUES ($1,$2,$3,'JAHRESABLESUNG','LF',$4,'STROM')",
+        )
+        .bind(id)
+        .bind(malo)
+        .bind(tenant)
+        .bind(at.date())
+        .execute(&pool)
+        .await
+        .expect("create the order");
+
+        // What `complete_reading_order` does, against the same pool.
+        sqlx::query(
+            "UPDATE ablese_auftraege
+             SET status='AUSGEFUEHRT', zaehlerstand_kwh=$1, ausgefuehrt_am=$2
+             WHERE id=$3 AND tenant=$4",
+        )
+        .bind(kwh(value))
+        .bind(at)
+        .bind(id)
+        .bind(tenant)
+        .execute(&pool)
+        .await
+        .expect("complete the order");
+
+        repo.store_readings(&[edmd::domain::MeterReading {
+            malo_id: malo.to_owned(),
+            read_at: at,
+            zaehlerstand: kwh(value),
+            quality: QualityFlag::Measured,
+            sparte: Sparte::Strom,
+            obis_code: None,
+            tenant: tenant.to_owned(),
+            source: IngestionSource::Manual,
+            sender_mp_id: None,
+            push_session: None,
+        }])
+        .await
+        .expect("file the Zählerstand");
+    }
+
+    let stored = repo
+        .readings(malo, last_year, this_year, tenant)
+        .await
+        .expect("read them back");
+    assert_eq!(stored.len(), 2, "both Ablesungen reached the reading store");
+
+    // The SLP billing path: the difference between two annual readings.
+    let start =
+        metering::reading::MeterReading::measured(stored[0].read_at, stored[0].zaehlerstand);
+    let end = metering::reading::MeterReading::measured(stored[1].read_at, stored[1].zaehlerstand);
+    let consumption = metering::reading::consumption_between(
+        &start,
+        &end,
+        &metering::reading::LastgangConfig::default(),
+    )
+    .expect("two clean readings difference cleanly");
+    assert_eq!(
+        consumption,
+        kwh("3615.0"),
+        "17845 − 14230 — the whole billing basis for an SLP point"
+    );
+}
+
+/// §42c Energy Sharing: the allocation endpoint resolves a community by plant.
+///
+/// It used to read `rule_json["source_malo_ids"]`, a key a serialised
+/// `AggregationRule` carries under no variant, so the list was always empty and
+/// the endpoint always answered 422 — §42c allocation never worked at all. A GGV
+/// rule is written *per tenant*, so a community is the set of rules sharing a
+/// `plant_melo_id`, and that is what the lookup now matches.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
+    let (repo, pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let plant = "51238696129";
+    let tenant_a = "51238696012";
+    let tenant_b = "51238696293";
+
+    // Two participants on one plant, plus a decoy on a different plant.
+    for (vid, tenant_melo, plant_melo) in [
+        ("VIRT-A", tenant_a, plant),
+        ("VIRT-B", tenant_b, plant),
+        ("VIRT-OTHER", tenant_a, "51238696137"),
+    ] {
+        let rule = serde_json::json!({
+            "GgvConstantAllocation": {
+                "plant_melo_id": plant_melo,
+                "tenant_melo_id": tenant_melo,
+                "fraction": "0.5",
+            }
+        });
+        sqlx::query(
+            "INSERT INTO virtual_meter_configs
+               (virtual_malo_id, display_name, rule_type, rule_json, sparte, valid_from, tenant)
+             VALUES ($1,$1,'GgvConstantAllocation',$2,'STROM',CURRENT_DATE,$3)",
+        )
+        .bind(vid)
+        .bind(&rule)
+        .bind(tenant)
+        .execute(&pool)
+        .await
+        .expect("insert the rule");
+    }
+
+    // The lookup the handler runs: variant-agnostic, whole-value, bound.
+    let found: Vec<String> = sqlx::query_scalar(
+        r"SELECT virtual_malo_id FROM virtual_meter_configs
+          WHERE tenant = $2
+            AND rule_type IN ('GgvConstantAllocation','GgvProportionalAllocation')
+            AND jsonb_path_exists(
+                    rule_json,
+                    '$.**.plant_melo_id ? (@ == $p)',
+                    jsonb_build_object('p', $1::text))
+          ORDER BY virtual_malo_id",
+    )
+    .bind(plant)
+    .bind(tenant)
+    .fetch_all(&pool)
+    .await
+    .expect("resolve the community");
+
+    assert_eq!(
+        found,
+        vec!["VIRT-A".to_owned(), "VIRT-B".to_owned()],
+        "the community is exactly the rules naming this plant — not the one on another"
+    );
+
+    // And the key the old code looked for is not in the stored rule at all.
+    let raw: serde_json::Value = sqlx::query_scalar(
+        "SELECT rule_json FROM virtual_meter_configs WHERE virtual_malo_id='VIRT-A' AND tenant=$1",
+    )
+    .bind(tenant)
+    .fetch_one(&pool)
+    .await
+    .expect("read the rule back");
+    assert!(
+        raw.get("source_malo_ids").is_none(),
+        "`AggregationRule` is externally tagged and carries no `source_malo_ids`: {raw}"
+    );
+    let _ = &repo;
+}
+
+/// The portfolio aggregate goes through the register projection.
+///
+/// It was `SUM("value") … GROUP BY "malo_id"` over every row — the §2.6 defect
+/// at portfolio scale, in an endpoint whose own comment calls the result
+/// "portfolio-wide MMM". Its single-MaLo sibling had gone through
+/// `domain::register` for exactly these reasons; this one had not.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn the_portfolio_aggregate_does_not_double_count_a_dual_tariff_prosumer() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let malo = "51238696129";
+    let base = OffsetDateTime::now_utc() - Duration::days(2);
+
+    // A dual-tariff prosumer: a total register, its own HT/NT decomposition,
+    // a feed-in register, and a reactive one. Only the 10 kWh total is Bezug.
+    let mut batch: Vec<MeterRead> = Vec::new();
+    for i in 0..4 {
+        let at = base + Duration::minutes(15 * i);
+        batch.push(read(malo, at, "2.5", Sparte::Strom, "1-0:1.8.0"));
+        batch.push(read(malo, at, "1.5", Sparte::Strom, "1-0:1.8.1"));
+        batch.push(read(malo, at, "1.0", Sparte::Strom, "1-0:1.8.2"));
+        batch.push(read(malo, at, "9.0", Sparte::Strom, "1-0:2.8.0"));
+        batch.push(read(malo, at, "7.0", Sparte::Strom, "1-0:3.8.0"));
+    }
+    repo.store_reads(validated(batch))
+        .await
+        .expect("store the prosumer's registers");
+
+    // The scan the handler runs, then the projection it applies.
+    let store = repo.store();
+    let sql = format!(
+        r#"SELECT "malo_id", "obis_code", SUM("value") AS total_kwh,
+                  MIN("from") AS span_from, MAX("to") AS span_to
+             FROM "{table}"
+            WHERE "tenant" = $1 AND "quality" NOT IN ('FAULTY','UNKNOWN')
+            GROUP BY "malo_id", "obis_code""#,
+        table = store.resolved_table(),
+    );
+    let rows = store
+        .query_with_params(
+            &sql,
+            vec![datafusion::scalar::ScalarValue::Utf8(Some(
+                tenant.to_owned(),
+            ))],
+        )
+        .await
+        .expect("scan")
+        .to_json()
+        .expect("decode");
+
+    // `to_json` goes through arrow's `ArrayWriter`, which renders a Decimal128 as
+    // a JSON **number** — so a caller must not assume a string.
+    let value_of = |r: &serde_json::Value| -> Decimal {
+        match &r["total_kwh"] {
+            serde_json::Value::String(s) => s.parse().unwrap_or_default(),
+            serde_json::Value::Number(n) => n.to_string().parse().unwrap_or_default(),
+            _ => Decimal::ZERO,
+        }
+    };
+
+    // Raw, the way it used to be summed.
+    let raw: Decimal = rows.iter().map(value_of).sum();
+    assert_eq!(
+        raw,
+        kwh("84.0"),
+        "the unprojected sum mixes feed-in, kvarh and a double-counted tariff split"
+    );
+
+    // Projected: only the total Bezug register, 4 × 2.5 kWh.
+    let registers: Vec<metering::MeterInterval> = rows
+        .iter()
+        .map(|r| metering::MeterInterval {
+            from: base,
+            to: base + Duration::hours(1),
+            value: value_of(r),
+            quality: QualityFlag::Measured,
+            obis_code: r["obis_code"].as_str().and_then(|s| s.parse().ok()),
+        })
+        .collect();
+    let projected: Decimal =
+        edmd::domain::energy_intervals_from(registers, edmd::domain::EnergyDirection::Bezug)
+            .iter()
+            .map(|iv| iv.value)
+            .sum();
+    assert_eq!(
+        projected,
+        kwh("10.0"),
+        "the Bezug is the total register alone — not it plus its own HT/NT split, \
+         plus the feed-in, plus a kvarh channel"
+    );
 }

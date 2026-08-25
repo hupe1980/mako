@@ -11,8 +11,10 @@ use super::*;
 /// requested time window.  Reads without an OBIS code are grouped together
 /// under a single `Lastgang` with `obis_kennzahl = null`.
 ///
-/// The interval length (`zeit_intervall_laenge`) is inferred from the first
-/// read pair:
+/// The interval length (`zeit_intervall_laenge`) is the register's **observed**
+/// cadence (`metering::classification::detect_interval_length`), not the spacing
+/// of whichever two readings happen to come first — a series whose window opens
+/// on a gap reported the gap as its resolution:
 /// - 15 min → `Mengeneinheit::ViertelStunde`
 /// - 60 min → `Mengeneinheit::Stunde`
 /// - other  → `Mengeneinheit::Minute` with the exact value
@@ -115,11 +117,12 @@ pub(crate) async fn get_lastgang(
             .into_response();
     }
 
-    // Group by OBIS code (None → empty-string sentinel key so BTreeMap works).
+    // One Lastgang per register, keyed on the **canonical** OBIS spelling:
+    // `1-0:1.8.0` and `1-0:1.8.0*255` are the same register and must not become
+    // two objects with half the readings each.
     let mut groups: BTreeMap<String, Vec<_>> = BTreeMap::new();
     for r in &reads {
-        let key = r.obis_code.clone().unwrap_or_default();
-        groups.entry(key).or_default().push(r);
+        groups.entry(register_key(r)).or_default().push(r);
     }
 
     let lastgaenge: Vec<Lastgang> = groups
@@ -132,17 +135,11 @@ pub(crate) async fn get_lastgang(
                 rubo4e::identifiers::ObisCode::new(&obis_key).ok()
             };
 
-            // Infer interval from first consecutive pair (fallback: 15 min).
-            let interval_min = group
-                .windows(2)
-                .next()
-                .map(|w| {
-                    (w[1].dtm_from - w[0].dtm_from)
-                        .whole_minutes()
-                        .unsigned_abs() as u32
-                })
-                .filter(|&m| m > 0)
-                .unwrap_or(15);
+            // The register's observed cadence. Taking the first consecutive pair
+            // instead reported the *gap* as the resolution whenever the window
+            // opened on one, and 15 min for any single-reading series whatever
+            // its length.
+            let interval_min = observed_interval_minutes(&group);
 
             let werte: Vec<Zeitreihenwert> =
                 group.iter().map(|r| read_to_zeitreihenwert(r)).collect();
@@ -189,24 +186,60 @@ pub(crate) async fn get_lastgang(
     Json(lastgaenge).into_response()
 }
 
-/// `GET /api/v1/feed-in/{malo_id}?from=RFC3339&to=RFC3339`
+/// Query parameters for [`get_energy_series`].
+#[derive(Debug, Deserialize)]
+pub(crate) struct EnergyParams {
+    /// RFC 3339 start (inclusive). Defaults to the last 31 days.
+    from: Option<String>,
+    /// RFC 3339 end (inclusive). Defaults to now.
+    to: Option<String>,
+    /// `BEZUG` (default) or `EINSPEISUNG`.
+    direction: Option<String>,
+    /// Bitemporal point-in-time query (RFC 3339) — see [`get_lastgang`].
+    ///
+    /// A MaBiS correction under the KBKA has to say what changed since the
+    /// version the BIKO settled, which needs the state as it stood when that
+    /// version was filed and not only the current one.
+    as_of: Option<String>,
+}
+
+/// `GET /api/v1/energy/{malo_id}?direction=BEZUG|EINSPEISUNG&from=&to=`
 ///
-/// Purpose-built quarter-hour **Einspeisung** (feed-in) feed for the §51
-/// Negativpreisregel derivation in `einsd`: plain JSON, one entry per ¼h, with a
-/// billability flag (§60 Abs. 2 MsbG) and period coverage — so the settlement
-/// side does not have to re-parse BO4E or re-derive the export-OBIS filter.
+/// **The canonical projected series** — one entry per interval, in one
+/// direction, already through `domain::register`: non-billable qualities
+/// dropped (§ 60 Abs. 2 MsbG), non-kWh registers dropped, the other direction
+/// dropped, and no total register added to the tariff intervals it covers.
+///
+/// `GET /api/v1/lastgang` is the BO4E **export** and returns one object per
+/// register — the right shape for an export and the wrong input to a figure,
+/// because folding it back into one series *is* the register projection. Serving
+/// the projection made is what keeps `mabis-syncd`, `billingd` and `einsd` from
+/// each deriving their own.
+///
+/// `?as_of=` reads through meterstore's transaction-time axis, exactly as
+/// `GET /api/v1/lastgang` does.
 ///
 /// ```json
-/// { "malo_id": "…", "resolution_min": 15, "coverage_pct": 98.5, "billable_pct": 100.0,
-///   "intervals": [ { "start": "2026-07-01T12:00:00Z", "kwh": "3.2", "billable": true }, … ] }
+/// { "malo_id": "…", "direction": "EINSPEISUNG", "resolution_min": 15,
+///   "coverage_pct": 98.5, "billable_pct": 100.0, "interval_count": 2976,
+///   "intervals": [ { "start": "2026-07-01T12:00:00Z", "end": "2026-07-01T12:15:00Z",
+///                    "kwh": "3.2", "quality": "MEASURED" } ] }
 /// ```
-pub(crate) async fn get_feed_in(
+///
+/// `billable_pct` is the share of the direction's series — **by duration, before
+/// the projection filtered it** — that is billable at all. Without it a caller
+/// cannot tell a complete month from one where a third of the intervals arrived
+/// `FAULTY` and were dropped, which is exactly the § 60 Abs. 2 MsbG gate `einsd`
+/// applies before auto-deriving the § 51 EEG reduction. `None` means the point
+/// reports no register in that direction — a different fact from 0 %.
+pub(crate) async fn get_energy_series(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
     State(state): State<HandlerState>,
     Path(malo_id): Path<String>,
-    Query(params): Query<LastgangParams>,
+    Query(params): Query<EnergyParams>,
 ) -> impl IntoResponse {
+    use crate::domain::EnergyDirection;
     use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
@@ -218,10 +251,44 @@ pub(crate) async fn get_feed_in(
             .into_response();
     }
 
+    // Refused, not defaulted: a caller that mistypes the direction would
+    // otherwise be handed the grid draw where it asked for the feed-in, and
+    // § 51 EEG pays on the difference.
+    let direction = match params.direction.as_deref().map(str::trim) {
+        None | Some("") | Some("BEZUG") => EnergyDirection::Bezug,
+        Some("EINSPEISUNG") => EnergyDirection::Einspeisung,
+        Some(other) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!("unknown direction `{other}`"),
+                    "expected": ["BEZUG", "EINSPEISUNG"],
+                })),
+            )
+                .into_response();
+        }
+    };
+
     let (from, to) = match read_window(params.from.as_deref(), params.to.as_deref()) {
         Ok(w) => w,
         Err(refusal) => return refusal.into_response(),
     };
+    let as_of_ts = match params.as_of.as_deref() {
+        None => None,
+        Some(s) => match OffsetDateTime::parse(s, &Rfc3339) {
+            Ok(ts) => Some(ts),
+            Err(_) => {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "error": format!("invalid as_of timestamp {s:?}; expected RFC 3339")
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
+
     let q = TimeSeriesQuery {
         malo_id: malo_id.clone(),
         from,
@@ -229,24 +296,27 @@ pub(crate) async fn get_feed_in(
         sparte: None,
         tenant: state.tenant.clone(),
     };
-    let reads = match state.repo.query(&q).await {
+    let read_result = match as_of_ts {
+        Some(as_of) => state.repo.query_as_of(&q, as_of).await,
+        None => state.repo.query(&q).await,
+    };
+    let reads = match read_result {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!(error = %e, malo_id, "edmd: get_feed_in query failed");
+            tracing::warn!(error = %e, malo_id, "edmd: energy series query failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    // Only Einspeisung registers feed the § 51 EEG reduction, and the canonical
-    // projection is what decides which those are — including the total-vs-HT/NT
-    // rule, which a bare direction filter misses (`domain::register`).
-    let selected =
-        crate::domain::energy_intervals(&reads, crate::domain::EnergyDirection::Einspeisung);
+    let selected = crate::domain::energy_intervals(&reads, direction);
     let intervals: Vec<serde_json::Value> = selected
         .iter()
         .map(|iv| {
             serde_json::json!({
                 "start": iv.from.format(&Rfc3339).unwrap_or_default(),
+                // The interval's own end, so a consumer building a
+                // `MeterInterval` need not assume a grid.
+                "end": iv.to.format(&Rfc3339).unwrap_or_default(),
                 "kwh": iv.value.to_string(),
                 // The projection admits only billable qualities, so every
                 // interval here is one — but Estimated/Substituted are among
@@ -259,7 +329,7 @@ pub(crate) async fn get_feed_in(
     let count = intervals.len();
     // Coverage is a **duration ratio**, measured against the cadence the series
     // actually delivers. Assuming a quarter-hour grid reported a legitimately
-    // hourly feed-in series as 25 % covered.
+    // hourly series as 25 % covered.
     let covered: i64 = selected
         .iter()
         .map(|iv| (iv.to - iv.from).whole_seconds().max(0))
@@ -272,12 +342,58 @@ pub(crate) async fn get_feed_in(
 
     Json(serde_json::json!({
         "malo_id": malo_id,
+        "direction": match direction {
+            EnergyDirection::Bezug => "BEZUG",
+            EnergyDirection::Einspeisung => "EINSPEISUNG",
+        },
         "resolution_min": resolution_min,
         "coverage_pct": coverage_pct,
+        // `None` when the direction has no energy register at all — 0 % and
+        // "nothing to say" are different answers, and a § 60 Abs. 2 gate must
+        // not read the second as the first.
+        "billable_pct": crate::domain::billable_share_pct(&reads, direction),
         "interval_count": count,
         "intervals": intervals,
     }))
     .into_response()
+}
+
+/// The canonical OBIS spelling a read groups under, `""` for an unlabelled one.
+///
+/// The same normalisation `domain::register_groups`, the validator and the
+/// storage merge key use, so a BO4E export, a validation finding and a stored
+/// row all name one register the same way.
+fn register_key(r: &MeterRead) -> String {
+    crate::domain::normalise_obis_code(r.obis_code.as_deref())
+}
+
+/// The observed cadence of one register's readings, in minutes.
+///
+/// `detect_interval_length` is the shared cadence detector — it takes the modal
+/// spacing rather than the first one it finds, so a gap in the middle of a month
+/// does not become the series' resolution. Falls back to each reading's own
+/// declared length, and finally to a quarter-hour.
+fn observed_interval_minutes(group: &[&MeterRead]) -> u32 {
+    let intervals: Vec<metering::MeterInterval> = group
+        .iter()
+        .map(|r| metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value: r.quantity_kwh,
+            quality: r.quality,
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
+        })
+        .collect();
+    metering::classification::detect_interval_length(&intervals)
+        .map(|r| r.nominal_seconds() / 60)
+        .or_else(|| {
+            group
+                .first()
+                .map(|r| (r.dtm_to - r.dtm_from).whole_minutes().unsigned_abs())
+                .and_then(|m| u32::try_from(m).ok())
+        })
+        .filter(|&m| m > 0)
+        .unwrap_or(15)
 }
 
 /// `true` when the request `Accept` header requests Arrow IPC stream format.
@@ -553,11 +669,10 @@ pub(crate) async fn get_zeitreihe(
             .into_response();
     }
 
-    // Group by OBIS code.
+    // One Zeitreihe per register, on the same canonical key as `get_lastgang`.
     let mut groups: BTreeMap<String, Vec<_>> = BTreeMap::new();
     for r in &reads {
-        let key = r.obis_code.clone().unwrap_or_default();
-        groups.entry(key).or_default().push(r);
+        groups.entry(register_key(r)).or_default().push(r);
     }
 
     let zeitreihen: Vec<Zeitreihe> = groups

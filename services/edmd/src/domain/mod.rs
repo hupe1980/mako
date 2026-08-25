@@ -7,6 +7,8 @@
 //!   billing-period DTOs, the MSCONS PID tables, and `IngestionSource`.
 //! - [`register`] — which OBIS registers may be folded into one energy figure.
 //! - [`repository`] — the `TimeSeriesRepository` + `Typ2Repository` traits.
+//! - [`validation`] — the one V-rule pass every ingest door, the MCP tool and
+//!   the § 60 Abs. 2 substitute path share.
 //! - [`error`] — `EdmError`.
 
 pub mod error;
@@ -18,6 +20,8 @@ pub mod validation;
 pub use error::EdmError;
 pub use model::*;
 pub use register::{
-    EnergyDirection, energy_intervals, energy_intervals_from, register_groups, worst_quality,
+    EnergyDirection, billable_share_pct, energy_intervals, energy_intervals_from,
+    normalise_obis_code, register_groups, worst_quality,
 };
 pub use repository::{TimeSeriesRepository, Typ2Repository};
+pub use validation::{IngestContext, ValidatedReads, batch_period};

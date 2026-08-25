@@ -78,7 +78,13 @@ impl EnergyDirection {
     /// measuring point's consumption — but reading the same silence as feed-in
     /// would put unlabelled consumption into the § 51 EEG reduction, which is a
     /// guess about money. Provenance is recorded, never guessed.
-    fn matches(self, code: Option<ObisCode>) -> bool {
+    ///
+    /// Public because "which registers is this figure about" is asked outside
+    /// the projection too — reporting how much of a direction's series is
+    /// billable at all needs the same answer the sum uses, or the two describe
+    /// different sets of readings.
+    #[must_use]
+    pub fn matches(self, code: Option<ObisCode>) -> bool {
         match (self, code) {
             (Self::Bezug, None) => true,
             (Self::Einspeisung, None) => false,
@@ -118,6 +124,28 @@ pub fn is_energy_register(code: ObisCode) -> bool {
     }
 }
 
+/// The canonical spelling a register is keyed under, `""` when unlabelled.
+///
+/// `1-0:1.8.0` and `1-0:1.8.0*255` are the same register and must land on the
+/// same key — in a storage merge key, in a validation group, in a BO4E export
+/// object and in an audit row alike, or one register becomes two and every
+/// figure folded per register is taken over half the data.
+///
+/// A code the parser rejects keeps its raw spelling rather than collapsing into
+/// the unlabelled bucket: an unparseable register is still a *named* one, and
+/// merging it with the reads that named nothing would put it in the total
+/// register's bucket (§2.6) — which is the one bucket that changes a sum.
+///
+/// There were three private copies of this, in the store, the validator and the
+/// BO4E export. They agreed, and nothing made them.
+#[must_use]
+pub fn normalise_obis_code(obis_code: Option<&str>) -> String {
+    obis_code.map_or_else(String::new, |s| {
+        s.parse::<ObisCode>()
+            .map_or_else(|_| s.to_owned(), |c| c.to_string())
+    })
+}
+
 /// Which bucket a read's register falls in for the tariff-stage rule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Stage {
@@ -139,17 +167,28 @@ enum Stage {
 ///    OBIS code is absent or unparseable carries no direction: it counts as
 ///    Bezug, because that is what an unqualified energy quantity means, and never
 ///    as Einspeisung, which has to be claimed explicitly.
-/// 4. **The total register wins over the tariff registers, or they are summed.**
-///    This is the rule that stops the double count, and it has two halves. When
-///    a total register (`E = 0`) is present it *is* the answer and the tariff
-///    registers are its own decomposition — `1.8.0 = 1.8.1 + 1.8.2` — so they
-///    are dropped. When only tariff registers are present they are **summed**
-///    per slot, because each covers a disjoint part of the tariff calendar and
+/// 4. **The total register wins over the tariff registers it covers, or they
+///    are summed.** This is the rule that stops the double count, and it has
+///    two halves. Where a total register (`E = 0`) reports, it *is* the answer
+///    and the tariff registers are its own decomposition —
+///    `1.8.0 = 1.8.1 + 1.8.2` — so a tariff interval overlapping a total one is
+///    dropped. Where no total reports, the tariff registers are **summed** per
+///    slot, because each covers a disjoint part of the tariff calendar and
 ///    dropping one loses that part of the consumption outright.
 ///
 /// Step 4's second half is the one that is easy to get backwards. Picking a
 /// single winner per slot — the shape a naive dedup takes — silently discards
 /// NT consumption for every dual-tariff meter that does not also report a total.
+///
+/// The preference is **per interval, not per window**. Deciding once for the
+/// whole batch — "any total anywhere ⇒ drop every tariff reading" — loses real
+/// consumption whenever the two do not span the same time: a meter reconfigured
+/// mid-month, a device exchange, a delivery that carries the total for the first
+/// week and the HT/NT split for the rest. Those tariff slots overlap no total
+/// interval, so nothing is double-counted by keeping them, and everything is
+/// lost by dropping them. Overlap rather than an equal start is what the test
+/// has to be: an hourly total beside a quarter-hourly HT/NT pair shares no
+/// timestamp with it and would otherwise be added to its own decomposition.
 #[must_use]
 pub fn energy_intervals(reads: &[MeterRead], direction: EnergyDirection) -> Vec<MeterInterval> {
     energy_intervals_from(
@@ -238,9 +277,58 @@ pub fn energy_intervals_from(
     }
 
     // The total register is the measuring point's own statement of the figure the
-    // tariff registers decompose; prefer it whenever it is there.
-    let chosen = if total.is_empty() { tariff } else { total };
-    chosen.into_values().collect()
+    // tariff registers decompose, so it wins **where it reports** — and only
+    // there. A tariff interval that no total interval overlaps is consumption
+    // nothing else accounts for.
+    let covered = TotalCoverage::of(&total);
+    let mut out: Vec<MeterInterval> = Vec::with_capacity(total.len() + tariff.len());
+    out.extend(
+        tariff
+            .into_values()
+            .filter(|iv| !covered.overlaps(iv.from, iv.to)),
+    );
+    out.extend(total.into_values());
+    out.sort_by_key(|iv| iv.from);
+    out
+}
+
+/// The time the total registers actually report, as an interval-overlap oracle.
+///
+/// `[from, to)` overlaps some total interval exactly when one of them starts
+/// before `to` *and* ends after `from`. The starts are sorted, so "starts before
+/// `to`" is a prefix — and whether any interval in that prefix ends after `from`
+/// is answered by a running maximum of the ends. One binary search per query.
+///
+/// A backwards scan for "the last total starting at or before `from`" is the
+/// obvious shape and is wrong: the total registers need not be disjoint among
+/// themselves — a point may report both an hourly and a daily total — and a long
+/// interval starting well before `from` is invisible to a query that only looks
+/// at the nearest start. The running maximum is what makes an enclosing interval
+/// visible.
+struct TotalCoverage {
+    /// Sorted by start; `.1` is the largest end at or before that position.
+    starts: Vec<(OffsetDateTime, OffsetDateTime)>,
+}
+
+impl TotalCoverage {
+    fn of(total: &BTreeMap<OffsetDateTime, MeterInterval>) -> Self {
+        // `BTreeMap` iterates in key order, so the starts are already sorted.
+        let mut max_end = OffsetDateTime::UNIX_EPOCH;
+        let starts = total
+            .values()
+            .map(|iv| {
+                max_end = max_end.max(iv.to);
+                (iv.from, max_end)
+            })
+            .collect();
+        Self { starts }
+    }
+
+    fn overlaps(&self, from: OffsetDateTime, to: OffsetDateTime) -> bool {
+        // The prefix of totals starting strictly before `to`.
+        let prefix = self.starts.partition_point(|(start, _)| *start < to);
+        prefix > 0 && self.starts[prefix - 1].1 > from
+    }
 }
 
 /// One register's readings, kept apart from every other register's.
@@ -259,7 +347,9 @@ pub struct RegisterGroup {
 /// statements about a single series, and a MaLo routinely delivers several at
 /// once. Flattened together the registers share every timestamp, so:
 ///
-/// - the observed cadence collapses to zero (consecutive starts are equal),
+/// - the observed cadence becomes the median duration *across* registers rather
+///   than the series' own — an hourly secondary register beside a quarter-hourly
+///   Lastgang can decide the grid every gap is then divided by,
 /// - every same-slot pair reads as an overlap,
 /// - and coverage is inflated by the number of registers.
 ///
@@ -296,18 +386,51 @@ pub fn register_groups(reads: &[MeterRead]) -> Vec<RegisterGroup> {
     out
 }
 
-/// The worst quality among `reads`, or `Measured` when there are none.
+/// How much of one direction's series is billable, by **duration**.
+///
+/// The companion figure to [`energy_intervals`], which drops non-billable
+/// readings: a caller that only sees the projection cannot tell a complete month
+/// from one where a third of the intervals arrived `FAULTY` and were filtered
+/// out. § 60 Abs. 2 MsbG turns on exactly that difference, so a settlement path
+/// gated on data quality — § 51 EEG's negative-price reduction is the live one —
+/// needs both numbers.
+///
+/// Measured over the same register set the sum is about, so the two agree:
+/// energy registers of the requested direction, and no others. `None` when that
+/// set is empty, because 0 % and "nothing to say" are different answers.
+#[must_use]
+pub fn billable_share_pct(reads: &[MeterRead], direction: EnergyDirection) -> Option<f64> {
+    let mut total = 0i64;
+    let mut billable = 0i64;
+    for r in reads {
+        let code: Option<ObisCode> = r.obis_code.as_deref().and_then(|s| s.parse().ok());
+        if !direction.matches(code) || code.is_some_and(|c| !is_energy_register(c)) {
+            continue;
+        }
+        let secs = (r.dtm_to - r.dtm_from).whole_seconds().max(0);
+        total += secs;
+        if r.quality.is_billable() {
+            billable += secs;
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    (total > 0).then(|| billable as f64 / total as f64 * 100.0)
+}
+
+/// The worst quality among `intervals`, or `Unknown` when there are none.
 ///
 /// A figure folded from several registers is only as trustworthy as its worst
 /// contributor: a saldo built partly from Ersatzwerte is a different fact from
 /// one built entirely from measurements, and the settlement side must see it.
+/// An empty set has no measurement to speak for it, so the neutral answer is
+/// "not known" rather than "measured".
+///
+/// The ranking is [`QualityFlag::worst_of`]'s, not a second one here: `metering`
+/// publishes it precisely so every aggregation inside and outside the crate
+/// reaches the same verdict.
 #[must_use]
 pub fn worst_quality(intervals: &[MeterInterval]) -> QualityFlag {
-    intervals
-        .iter()
-        .map(|iv| iv.quality)
-        .max_by_key(|q| q.severity_rank())
-        .unwrap_or_default()
+    QualityFlag::worst_of(intervals.iter().map(|iv| iv.quality))
 }
 
 #[cfg(test)]
@@ -502,6 +625,88 @@ mod tests {
             .find(|g| g.obis_code.is_some_and(|c| c.is_import()))
             .expect("bezug group");
         assert_eq!(bezug.intervals.len(), 2);
+    }
+
+    #[test]
+    fn tariff_slots_the_total_register_does_not_cover_are_kept() {
+        // A meter reconfigured mid-window: the total register reports for the
+        // first two slots, the HT/NT pair for the next two. Deciding once for
+        // the whole batch — "a total exists, drop every tariff reading" — threw
+        // the second half of the consumption away.
+        let reads = vec![
+            measured(Some("1-0:1.8.0"), 0, 10),
+            measured(Some("1-0:1.8.0"), 1, 10),
+            measured(Some("1-0:1.8.1"), 2, 6),
+            measured(Some("1-0:1.8.2"), 2, 4),
+            measured(Some("1-0:1.8.1"), 3, 7),
+            measured(Some("1-0:1.8.2"), 3, 3),
+        ];
+        let picked = energy_intervals(&reads, EnergyDirection::Bezug);
+        assert_eq!(sum(&picked), Decimal::from(40));
+        assert_eq!(picked.len(), 4);
+        assert!(
+            picked.windows(2).all(|w| w[0].from <= w[1].from),
+            "the projection is ascending by interval start"
+        );
+    }
+
+    #[test]
+    fn an_hourly_total_still_beats_a_quarter_hourly_tariff_split() {
+        // Overlap, not an equal start, is the test: the hourly total shares no
+        // timestamp with the quarter-hours it decomposes, so a same-slot rule
+        // would add the register to its own decomposition.
+        let hour = OffsetDateTime::UNIX_EPOCH;
+        let total = MeterRead {
+            dtm_to: hour + Duration::hours(1),
+            ..measured(Some("1-0:1.8.0"), 0, 20)
+        };
+        let reads = vec![
+            total,
+            measured(Some("1-0:1.8.1"), 0, 6),
+            measured(Some("1-0:1.8.2"), 1, 4),
+            measured(Some("1-0:1.8.1"), 2, 6),
+            measured(Some("1-0:1.8.2"), 3, 4),
+        ];
+        let picked = energy_intervals(&reads, EnergyDirection::Bezug);
+        assert_eq!(sum(&picked), Decimal::from(20));
+        assert_eq!(picked.len(), 1);
+    }
+
+    #[test]
+    fn a_long_total_hides_the_tariff_slots_inside_it() {
+        // Two total registers that are not disjoint among themselves: a daily
+        // figure spanning the window and an hourly one inside it. A backwards
+        // scan for "the nearest total starting at or before this slot" finds the
+        // hourly one, sees it ended, and lets the tariff readings through — so
+        // the day's consumption is counted twice.
+        let base = OffsetDateTime::UNIX_EPOCH;
+        let day = MeterRead {
+            dtm_to: base + Duration::days(1),
+            ..measured(Some("1-0:1.8.0"), 0, 240)
+        };
+        let hour = MeterRead {
+            dtm_from: base + Duration::hours(1),
+            dtm_to: base + Duration::hours(2),
+            ..measured(Some("1-0:1.8.0"), 0, 10)
+        };
+        let reads = vec![
+            day,
+            hour,
+            // Quarter-hours well after the hourly total but inside the daily one.
+            measured(Some("1-0:1.8.1"), 40, 6),
+            measured(Some("1-0:1.8.2"), 40, 4),
+        ];
+        let picked = energy_intervals(&reads, EnergyDirection::Bezug);
+        assert_eq!(
+            sum(&picked),
+            Decimal::from(250),
+            "the tariff slots lie inside the daily total and must not be added              to it: {picked:#?}"
+        );
+    }
+
+    #[test]
+    fn an_empty_projection_has_no_measurement_to_speak_for_it() {
+        assert_eq!(worst_quality(&[]), QualityFlag::Unknown);
     }
 
     #[test]

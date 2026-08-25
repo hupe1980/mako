@@ -20,7 +20,7 @@
 //! | `validate_timeseries`        | Run the metering validation rules (V01–V09/V11/V12) on meter reads |
 //! | `get_quality_assessments`    | Per-batch quality history (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD)) |
 //! | `get_summenzeitreihe`        | Monthly aggregated kWh for MaBiS |
-//! | `get_annual_forecast`        | § 60 Abs. 2 MsbG Jahresprognose |
+//! | `get_annual_forecast`        | § 40a Abs. 2 EnWG Verbrauchsschätzung / Abschlagshöhe |
 //! | `get_gas_quality`            | PID 13007 Brennwert + Zustandszahl |
 //!
 //! ## Prompts (5)
@@ -233,8 +233,12 @@ pub struct ValidateTimeseriesParams {
     pub from: String,
     /// ISO 8601 end of validation window.
     pub to: String,
-    /// Expected interval length in seconds (default: 900 = 15 min).
-    pub interval_secs: Option<u32>,
+    /// Physical capacity ceiling of the metered plant, in kW.
+    ///
+    /// Supply it and **V12** (`ImplausiblePower`) checks each interval's average
+    /// power against it. Omit it and V12 stays off — edmd holds no master data
+    /// of its own and will not invent a ceiling.
+    pub max_plant_power_kw: Option<rust_decimal::Decimal>,
 }
 
 #[derive(Debug, Deserialize, JsonSchema)]
@@ -379,28 +383,24 @@ impl EdmdMcpHandler {
             .map_err(|_| McpError::invalid_params("month must be 1–12", None))?;
         let from = Date::from_calendar_date(p.year, month, 1)
             .map_err(|_| McpError::invalid_params("invalid year/month combination", None))?;
-        let to = {
-            let (ny, nm) = if p.month == 12 {
-                (p.year + 1, Month::January)
-            } else {
-                (p.year, Month::try_from(p.month + 1).unwrap())
-            };
-            Date::from_calendar_date(ny, nm, 1)
-                .unwrap()
-                .previous_day()
-                .unwrap_or(from)
-        };
-        let sparte = match p
-            .sparte
-            .as_deref()
-            .unwrap_or("STROM")
-            .to_uppercase()
-            .as_str()
-        {
-            "GAS" => metering::Sparte::Gas,
-            "WAERME" | "WÄRME" => metering::Sparte::Waerme,
-            "WASSER" => metering::Sparte::Wasser,
-            _ => metering::Sparte::Strom,
+        // The last day of the month, from `Month::length` — no rolling forward
+        // into the next month and no December special case.
+        let to = Date::from_calendar_date(p.year, month, month.length(p.year))
+            .map_err(|_| McpError::invalid_params("invalid year/month combination", None))?;
+        // Refused, not defaulted: an agent that mistypes the commodity would
+        // otherwise get a Strom saldo for a gas measuring point — settled on the
+        // calendar day instead of the 06:00 Gastag — with nothing to say so.
+        let sparte = match p.sparte.as_deref() {
+            None => metering::Sparte::Strom,
+            Some(raw) => crate::domain::parse_sparte(raw).ok_or_else(|| {
+                McpError::invalid_params(
+                    format!(
+                        "unknown sparte `{raw}`; expected one of {:?}",
+                        metering::Sparte::CODES
+                    ),
+                    None,
+                )
+            })?,
         };
 
         let report = match self
@@ -1464,7 +1464,6 @@ impl EdmdMcpHandler {
         &self,
         Parameters(p): Parameters<ValidateTimeseriesParams>,
     ) -> Result<CallToolResult, McpError> {
-        use metering::{MeterInterval, ValidationConfig, validate_intervals};
         use time::format_description::well_known::Rfc3339;
 
         let from_ts = time::OffsetDateTime::parse(&p.from, &Rfc3339)
@@ -1489,53 +1488,34 @@ impl EdmdMcpHandler {
             .await
             .map_err(|e| McpError::internal_error(e.to_string(), None))?;
 
-        let intervals: Vec<MeterInterval> = reads
-            .iter()
-            .map(|r| MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            })
-            .collect();
+        // The **same** pass the ingest doors run: split by register — V01 gap and
+        // V02 overlap are statements about a single series, and a MaLo delivers
+        // several at once, so flattened they made every prosumer's same-slot
+        // import/export pair an `Error`-severity overlap — with thresholds from
+        // each series' own Sparte and the cadence observed rather than assumed.
+        //
+        // A bare `ValidationConfig::default()` here — electricity thresholds, an
+        // assumed 900 s grid — would call an ordinary hourly gas series broken
+        // while the ingest door that stored it called it clean. An MCP tool that
+        // disagrees with its REST twin is worse than one that does not exist: it
+        // is consulted exactly when nobody is checking.
+        let found = crate::domain::validation::findings(&reads, p.max_plant_power_kw);
+        let register_count = crate::domain::register_groups(&reads).len();
+        let billing_block_count = found.iter().filter(|f| f.issue.blocks_billing()).count();
+        let has_errors = billing_block_count > 0;
+        let is_clean = found.is_empty();
 
-        // V01 (gap) and V02 (overlap) are statements about a **single** series,
-        // and a MaLo delivers several registers at once. Validated flat, every
-        // same-slot pair of a bidirectional or dual-tariff meter reported as an
-        // overlapping interval at `Error` severity — so this tool told an agent
-        // that a perfectly ordinary prosumer delivery was unbillable. The ingest
-        // path splits by register for exactly this reason (`domain::validation`);
-        // so does this one now.
-        let config = ValidationConfig {
-            expected_interval_secs: Some(p.interval_secs.unwrap_or(900)),
-            now: Some(time::OffsetDateTime::now_utc()),
-            ..ValidationConfig::default()
-        };
-        let groups = crate::domain::register_groups(&reads);
-        let mut issues = Vec::new();
-        let mut billing_block_count = 0usize;
-        let mut has_errors = false;
-        for group in &groups {
-            let result = validate_intervals(&group.intervals, &config);
-            billing_block_count += result.billing_block_count();
-            has_errors |= result.has_errors();
-            for i in &result.issues {
-                issues.push((group.obis_code, i.clone()));
-            }
-        }
-        let is_clean = issues.is_empty();
-
-        let issues_json: Vec<serde_json::Value> = issues
+        let issues_json: Vec<serde_json::Value> = found
             .iter()
-            .map(|(obis, i)| {
+            .map(|f| {
+                let i = &f.issue;
                 serde_json::json!({
                     "rule": i.rule_id.to_string(),
                     "severity": format!("{:?}", i.severity),
                     "message": i.message,
                     // Which register the finding is about: an index into one
                     // group means nothing without it.
-                    "obis_code": obis.map(|c| c.to_string()),
+                    "obis_code": f.obis_code.map(|c| c.to_string()),
                     "interval_index": i.interval_index,
                     "affected_from": i.affected_from.map(|t| t.format(&Rfc3339).ok()),
                     "affected_value_kwh": i.affected_value,
@@ -1547,12 +1527,12 @@ impl EdmdMcpHandler {
         let out = serde_json::json!({
             "malo_id": malo_id,
             "period": { "from": &p.from, "to": &p.to },
-            "interval_count": intervals.len(),
-            "register_count": groups.len(),
+            "interval_count": reads.len(),
+            "register_count": register_count,
             "is_clean": is_clean,
             "has_errors": has_errors,
             "billing_block_count": billing_block_count,
-            "issue_count": issues.len(),
+            "issue_count": found.len(),
             "issues": issues_json,
             "_note": if billing_block_count > 0 {
                 format!("{billing_block_count} interval(s) require § 60 Abs. 2 MsbG substitute values before billing")
@@ -1637,8 +1617,8 @@ impl EdmdMcpHandler {
         name = "get_summenzeitreihe",
         description = "Get monthly aggregated energy (Summenzeitreihe) for a MaLo. \
                        Returns total_kwh per calendar month with coverage percentage. \
-                       Used for MaBiS UTILTS submissions (BK6-22-024 Anlage 3) and \
-                       Mehr-/Mindermengensaldo (GPKE Teil 1 Kap. 8.4). \
+                       Feeds the MaBiS Summenzeitreihe (MSCONS 13003, BK6-24-174 Anlage 3) and \
+                       the Mehr-/Mindermengensaldo (GPKE BK6-24-174 Teil 1 Kap. 8.4). \
                        Params: malo_id (required), from / to (ISO 8601 UTC).",
         annotations(read_only_hint = true, open_world_hint = false)
     )]
@@ -1715,7 +1695,10 @@ impl EdmdMcpHandler {
             "total_kwh": total_kwh.to_string(),
             "month_count": months.len(),
             "months": months,
-            "legal_basis": "MaBiS BK6-22-024 Anlage 3 / GPKE (BK6-24-174) Teil 1 Kap. 8.4 Mehr-/Mindermengensaldo",
+            // MaBiS is **Anlage 3 to BK6-24-174**, the same Festlegung as GPKE.
+            // BK6-22-024 is where WiM Strom still lives — it was not reissued —
+            // and citing it for MaBiS sends a reader to the wrong document.
+            "legal_basis": "MaBiS (BK6-24-174) Anlage 3 / GPKE (BK6-24-174) Teil 1 Kap. 8.4 Mehr-/Mindermengensaldo",
         }))
         .map(|s| CallToolResult::success(vec![ContentBlock::text(s)]))
         .map_err(|e| McpError::internal_error(e.to_string(), None))

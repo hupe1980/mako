@@ -146,6 +146,58 @@ pub trait TimeSeriesRepository: Send + Sync + 'static {
         &self,
         records: &[crate::domain::CorrectionRecord],
     ) -> Result<Vec<uuid::Uuid>, EdmError>;
+
+    /// Persist a **Zählerstandsgang** — the register readings themselves.
+    ///
+    /// The primary record behind every derived interval. BK6-24-174 puts the
+    /// Zählerstandsgang → Lastgang differencing at the Messstellenbetreiber, so
+    /// edmd holds both halves: these rows and the intervals they produced.
+    /// Keeping only the difference would satisfy billing and fail § 146 Abs. 4
+    /// AO, which requires the original to stay recoverable.
+    ///
+    /// Idempotent on `(tenant, malo_id, obis_code_norm, read_at)`: a redelivered
+    /// Zählerstandsgang overwrites, exactly as a redelivered Lastgang does.
+    async fn store_readings(
+        &self,
+        readings: &[crate::domain::MeterReading],
+    ) -> Result<u64, EdmError>;
+
+    /// Read a MaLo's Zählerstände over a window, ascending by instant.
+    async fn readings(
+        &self,
+        malo_id: &str,
+        from: time::OffsetDateTime,
+        to: time::OffsetDateTime,
+        tenant: &str,
+    ) -> Result<Vec<crate::domain::MeterReading>, EdmError>;
+
+    /// Record what the ZSG conversion did across each contested span.
+    ///
+    /// Reconstructed wraps and refused differences alike — see
+    /// [`ZsgConversionEntry`](crate::domain::ZsgConversionEntry).
+    async fn log_zsg_conversion(
+        &self,
+        entries: &[crate::domain::ZsgConversionEntry],
+    ) -> Result<(), EdmError>;
+
+    /// The register readings bracketing a billing period, for § 40 Abs. 2 Nr. 6
+    /// EnWG.
+    ///
+    /// An energy invoice must show the opening and closing Zählerstand. Returns
+    /// the last reading at or before `from` and the last at or before `to`, on
+    /// the point's dominant register — the pair a customer can check against the
+    /// meter — or `None` for either end that has no reading.
+    ///
+    /// Deliberately "at or before" rather than "nearest": a Zählerstand dated
+    /// after the period end did not hold at the period end, and putting it on
+    /// the invoice as the closing reading overstates the period.
+    async fn period_zaehlerstaende(
+        &self,
+        malo_id: &str,
+        from: time::OffsetDateTime,
+        to: time::OffsetDateTime,
+        tenant: &str,
+    ) -> Result<(Option<rust_decimal::Decimal>, Option<rust_decimal::Decimal>), EdmError>;
 }
 
 /// Persistent store for **ESA "Werte nach Typ 2"** intervals (MSCONS PID 13027).

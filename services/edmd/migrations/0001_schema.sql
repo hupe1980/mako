@@ -85,6 +85,109 @@ CREATE INDEX mbp_tenant_malo_v2
     ON meter_billing_periods (tenant, malo_id, period_from, period_to)
     WHERE tenant <> '';
 
+-- ── Zählerstandsgang (BK6-24-174 „Datenübermittlung ZSG") ───────────────────
+--
+-- What an intelligentes Messsystem actually produces. § 2 Satz 1 Nr. 27 MsbG
+-- defines it verbatim as "die Messung einer Reihe viertelstündig ermittelter
+-- Zählerstände von elektrischer Arbeit und stündlich ermittelter Zählerstände
+-- von Gasmengen" — note the two resolutions. BK6-24-174 (Beschluss 24.10.2024,
+-- wirksam 06.06.2025) is titled "Anpassung der Marktkommunikation zur
+-- Realisierung der nach dem Messstellenbetriebsgesetz geforderten Übermittlung
+-- von Zählerstandsgängen (Datenübermittlung ZSG)", and the model it puts in
+-- place is:
+--
+--     SMGW ──Zählerstandsgang──► MSB ──Lastgang──► NB, Lieferant
+--                                └── the differencing happens at the MSB
+--
+-- edmd is the MSB side, so the differencing is its job. The **readings** are the
+-- primary record and the Lastgang is derived from them, which is why they are
+-- stored rather than discarded after conversion: § 146 Abs. 4 AO requires the
+-- original to stay recoverable, and a stored difference cannot reproduce the
+-- register values it came from.
+--
+-- The derived intervals live in meterstore like any other Lastgang. These rows
+-- do not: a Zählerstand is a value at an *instant*, not over a span, and
+-- meterstore's merge key and tiering watermark are both interval-shaped.
+
+CREATE TABLE meter_readings (
+    tenant          TEXT          NOT NULL,
+    malo_id         TEXT          NOT NULL,
+    -- Canonical OBIS spelling, '' for an unlabelled register — the same
+    -- normalisation the interval store and the audit tables use, so one register
+    -- is one key everywhere.
+    obis_code_norm  TEXT          NOT NULL DEFAULT '',
+    -- The instant the register held this value.
+    read_at         TIMESTAMPTZ   NOT NULL,
+    -- The register value, in the unit the register counts: kWh for electricity
+    -- and heat, m3 for gas and water. Deliberately **not** converted — the
+    -- conversion applies to the difference (§ 25 Nr. 4 MessEV), and a converted
+    -- register value would no longer be the reading the meter displayed.
+    zaehlerstand    NUMERIC(18,5) NOT NULL,
+    unit            TEXT          NOT NULL
+                        CHECK (unit IN ('KWH','M3')),
+    sparte          TEXT          NOT NULL DEFAULT 'STROM'
+                        CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
+    quality         TEXT          NOT NULL DEFAULT 'MEASURED'
+                        CHECK (quality IN (
+                            'MEASURED','ESTIMATED','SUBSTITUTED','CALCULATED',
+                            'CORRECTED','PRELIMINARY','FAULTY','UNKNOWN'
+                        )),
+    -- Provenance, as on a reading: the door and the reporting market partner.
+    source          TEXT          NOT NULL DEFAULT 'MSCONS',
+    sender_mp_id    TEXT,
+    push_session    TEXT,
+    recorded_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
+    -- One value per register per instant. A redelivery overwrites, exactly as an
+    -- interval redelivery does.
+    PRIMARY KEY (tenant, malo_id, obis_code_norm, read_at)
+);
+
+CREATE INDEX mr_malo_time ON meter_readings (tenant, malo_id, read_at DESC);
+
+-- ── ZSG conversion audit (§ 146 Abs. 4 AO) ──────────────────────────────────
+--
+-- Where a difference could not be taken honestly, `metering::reading` emits no
+-- interval and records why. The hole then surfaces as a V01 gap and is filled,
+-- with its own audit trail, by the § 60 Abs. 2 substitute path — so the two logs
+-- together say "this quarter-hour is an Ersatzwert *because* the register went
+-- backwards here", which neither says alone.
+--
+-- A reconstructed register wrap is recorded too, and is **not** an anomaly: the
+-- interval it produced is real. It is logged because a wrap is the one place the
+-- conversion adds 10^digits to a difference on the strength of a configured
+-- device property, and an auditor is entitled to see where that happened.
+
+CREATE TABLE zsg_conversion_log (
+    id              UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
+    tenant          TEXT          NOT NULL,
+    malo_id         TEXT          NOT NULL,
+    obis_code_norm  TEXT          NOT NULL DEFAULT '',
+    span_from       TIMESTAMPTZ   NOT NULL,
+    span_to         TIMESTAMPTZ   NOT NULL,
+    -- 'ROLLOVER' for a reconstructed wrap (the interval exists), otherwise the
+    -- `AnomalyKind` that refused the difference (the interval is absent).
+    outcome         TEXT          NOT NULL
+                        CHECK (outcome IN (
+                            'ROLLOVER',
+                            'BACKWARDS_WITHOUT_REGISTER_WIDTH',
+                            'IMPLAUSIBLE_ROLLOVER',
+                            'IMPLAUSIBLE_DELTA',
+                            'ZERO_LENGTH_SPAN',
+                            'NON_BILLABLE_ENDPOINT'
+                        )),
+    previous_value  NUMERIC(18,5) NOT NULL,
+    current_value   NUMERIC(18,5) NOT NULL,
+    -- Set only for a ROLLOVER: the reconstructed consumption and the register
+    -- capacity that explains it.
+    delta           NUMERIC(18,5),
+    register_capacity NUMERIC(28,5),
+    session_id      TEXT,
+    created_at      TIMESTAMPTZ   NOT NULL DEFAULT now()
+);
+
+CREATE INDEX zsg_log_malo ON zsg_conversion_log (tenant, malo_id, span_from DESC);
+CREATE INDEX zsg_log_outcome ON zsg_conversion_log (outcome) WHERE outcome <> 'ROLLOVER';
+
 -- ── Bitemporal corrections (§ 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) audit trail) ──────────────────────────
 
 CREATE TABLE meter_read_corrections (
@@ -157,6 +260,18 @@ CREATE TABLE ablese_auftraege (
                                'OFFEN','BEAUFTRAGT','AUSGEFUEHRT',
                                'STORNIERT','FEHLGESCHLAGEN'
                            )),
+    -- Which commodity is being read. A completed Ablesung files its Zählerstand
+    -- into `meter_readings`, and that row has to name a Sparte: it decides the
+    -- register's unit (kWh or m3) and the balancing day. Inferring it from which
+    -- of the two Zählerstand columns was filled cannot distinguish Strom from
+    -- Wärme, or Gas from Wasser.
+    sparte             TEXT        NOT NULL DEFAULT 'STROM'
+                           CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
+    -- OBIS register the reading was taken from, when the caller knows it. NULL
+    -- is the unlabelled register — the right answer for a single-register SLP
+    -- meter, and the wrong one for a point that also delivers a labelled
+    -- Zählerstandsgang, where the two would become two registers.
+    obis_code          TEXT,
     -- Register readings at NUMERIC(18,5) and Brennwert at NUMERIC(10,4), matching
     -- meter_billing_periods and gas_quality_data — one precision for a quantity,
     -- so a value copied between tables never loses decimals.
@@ -225,6 +340,16 @@ CREATE TABLE direct_push_sessions (
     -- server codecs are mutable and carry no version, so the stored value can
     -- only be re-derived from the original frame.
     raw_payload     TEXT,
+    -- IoT provenance: the transport the uplink arrived over (LORAWAN / MBUS /
+    -- WMBUS / REST) and the device that produced it (devEUI, M-Bus secondary
+    -- address). Both used to be echoed back in the response and stored nowhere.
+    --
+    -- `device_id` lives here and **not** in the reading's `sender_mp_id`: that
+    -- column is a BDEW Codenummer and keys the meterstore version scope, so a
+    -- devEUI in it gave every device a scope of its own and no replacement
+    -- device's readings could supersede the ones they corrected.
+    transport       TEXT,
+    device_id       TEXT,
     tenant          TEXT        NOT NULL,
     created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (tenant, session_id)
@@ -328,16 +453,21 @@ CREATE TABLE quality_assessments (
     outlier_count  INTEGER     NOT NULL DEFAULT 0,
     coverage_pct   NUMERIC(5,2),
     billing_blocked BOOLEAN    NOT NULL DEFAULT false,
-    -- Ingest family the assessment was made for. Must cover every family that
-    -- scores quality, or the insert fails the constraint and the history is
-    -- silently missing for exactly the paths that produced it.
+    -- Ingest family the assessment was made for: the batch's own
+    -- `IngestionSource`, plus `BATCH_RESCORE` for a retroactive re-scoring,
+    -- which is not an ingest at all. The list must cover every variant of that
+    -- enum — an insert naming one it omits fails the constraint, and the failure
+    -- is only a warning, so the history goes silently missing for exactly the
+    -- door that thought it was recording one. `schema_code_guard` pins the two
+    -- together.
     source         TEXT        NOT NULL DEFAULT 'MSCONS'
                        CHECK (source IN (
-                           'MSCONS','DIRECT_PUSH','DIRECT_GAS','IOT_PUSH',
-                           'API_IMPORT','CORRECTION','BATCH_RESCORE'
+                           'MSCONS','DIRECT_PUSH','DIRECT_GAS','API_IMPORT',
+                           'AUTO_SUBSTITUTE','CORRECTION','MANUAL','ESTIMATED',
+                           'IOT_PUSH','BATCH_RESCORE'
                        )),
-    -- Rule findings behind the grade (V01–V10), so a disputed invoice can be
-    -- traced to the specific check that failed rather than to a letter.
+    -- Rule findings behind the grade (V01–V09/V11/V12), so a disputed invoice
+    -- can be traced to the specific check that failed rather than to a letter.
     issues_json    JSONB,
     -- MSCONS Prüfidentifikator, when the assessment came from a MaKo process.
     pid            INTEGER,
@@ -469,6 +599,13 @@ CREATE INDEX smgw_session_gin    ON smgw_sessions USING GIN (session);
 --
 -- `issue_type` maps to the MSB's legal exposure:
 --   CERT_EXPIRED        — §14a eligibility lost; the SM-PKI chain no longer validates
+--   CERT_REVOKED        — the SM-PKI withdrew it; a security incident, not an
+--                         expiry, and the remedy is a new certificate now rather
+--                         than a renewal before a deadline (§ 25 MsbG, § 28 MsbG)
+--   CERT_NOT_YET_VALID  — `valid_from` is in the future: a provisioning fault, not
+--                         a lifecycle one. It was reported as CERT_EXPIRED with a
+--                         negative "days ago", which reads as a renewal problem
+--                         and sends an operator to the wrong remedy
 --   CERT_EXPIRING       — inside the operator's renewal warning window
 --   TLS_CERT_MISSING    — SMGW unreachable over the Admin interface (BSI TR-03109-4)
 --   CLS_NOT_COMPLIANT   — §14a Konfigurationsprodukt not assigned (BK6-22-300)
@@ -479,7 +616,8 @@ CREATE TABLE cls_compliance_issues (
     tenant            TEXT        NOT NULL,
     device_id         TEXT        NOT NULL,
     issue_type        TEXT        NOT NULL CHECK (issue_type IN (
-                          'CERT_EXPIRED','CERT_EXPIRING','TLS_CERT_MISSING',
+                          'CERT_EXPIRED','CERT_REVOKED','CERT_NOT_YET_VALID',
+                          'CERT_EXPIRING','TLS_CERT_MISSING',
                           'CLS_NOT_COMPLIANT','COMMUNICATION_FAULT','GATEWAY_REVOKED'
                       )),
     -- Part of the identity: one expiring certificate is not another.

@@ -157,8 +157,24 @@ pub(crate) async fn get_virtual_lastgang(
                 let intervals = source_intervals(&reads, generation_ids.contains(&malo_id));
                 sources.insert(malo_id.to_owned(), intervals);
             }
+            // A read that failed is not a source that is missing. Dropping it
+            // and carrying on left `compute_virtual_meter` to report
+            // `MissingSource` as a 422 — a configuration error the operator
+            // would have gone looking for in the rule, when the rule was fine
+            // and the database was not. Worse, for a rule whose arithmetic
+            // tolerates an absent series it would have produced a number: a §42b
+            // allocation computed without the plant's generation bills the
+            // tenant their whole consumption.
             Err(e) => {
-                tracing::warn!(error = %e, malo_id, "edmd: virtual meter source query failed");
+                tracing::error!(error = %e, malo_id, "edmd: virtual meter source query failed");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": format!("source series {malo_id} could not be read: {e}"),
+                        "virtual_malo_id": virtual_malo_id,
+                    })),
+                )
+                    .into_response();
             }
         }
     }

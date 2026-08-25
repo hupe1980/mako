@@ -43,7 +43,7 @@ graph TB
     end
 
     subgraph data ["Energy Data & Observability"]
-        edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>Hampel · V01–V10 · virtual meters"]
+        edmd[":8380 edmd<br/>MSCONS · iMSys direct push<br/>Hampel · V01–V09/V11/V12 · virtual"]
         obsd[":8480 obsd<br/>process projections · KPI<br/>§20 EnWG parity report"]
         mabis[":8880 mabis-syncd<br/>MaBiS Summenzeitreihe<br/>MSCONS 13003 · 10. Werktag · MCP"]
         einsd[":9180 einsd<br/>EEG/KWKG settlement<br/>10 schemes · §14 UStG Gutschrift"]
@@ -96,7 +96,7 @@ graph TB
 
 | Service | Port | Role | Purpose |
 |---|---|---|---|
-| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V10 validation, virtual meters (§42b EnWG GGV), § 60 Abs. 2 MsbG Jahresprognose forecasting, Resampling, Ablesesteuerung (INSRPT auto-order), meterstore hot/cold tiering (PostgreSQL + Apache Iceberg) with cross-tier OLAP + a read-only Iceberg REST catalog; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
+| [edmd](@/docs/services/edmd.md) | `:8380` | All | Energy Data Management — MSCONS, iMSys direct push, Kafka batch ingest, Hampel quality scoring, V01–V09/V11/V12 validation, virtual meters (§42b EnWG GGV), § 40a Abs. 2 EnWG Verbrauchsschätzung (annual projection), Resampling, Ablesesteuerung (INSRPT auto-order), meterstore hot/cold tiering (PostgreSQL + Apache Iceberg) with cross-tier OLAP + a read-only Iceberg REST catalog; Cedar write actions role-gated (MSB/NB/admin); 15-tool MCP server |
 | [mabis-syncd](@/docs/services/mabis-syncd.md) | `:8880` | ÜNB/NB | MaBiS synchronisation — aggregates quarter-hourly Lastgang per Bilanzierungsgebiet via `SummenzeitreiheBuilder`, files with the BIKO as MSCONS 13003 on the 10. Werktag; records the BIKO-assigned Datenstatus and open Korrekturbedarf; emits `de.mabis.*` failure events; 4-tool read-only MCP server |
 | [einsd](@/docs/services/einsd.md) | `:9180` | NB/LF | Einspeiser Registry + EEG/KWKG settlement — 10 settlement schemes; issues the **§14 UStG Gutschrift** (Gutschriftverfahren) per billable settlement as a BO4E `Rechnung` with per-rate USt breakdown; 19-tool MCP server |
 | [obsd](@/docs/services/obsd.md) | `:8480` | All | Business-process observability — per-PID KPIs with the APERAK and Antwortfrist clocks reported separately, deadlines read from `mako-fristen` (never computed here), `completed_at` cycle-time tracking, `GET /api/v1/audit/gleichbehandlung` for the § 7a Abs. 5 EnWG filing, 6-tool MCP server |

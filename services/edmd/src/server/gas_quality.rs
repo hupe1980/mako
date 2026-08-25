@@ -44,11 +44,16 @@ pub(crate) async fn get_gas_quality(
     // every request to this endpoint a 500. The two NUMERIC factors decode as
     // `Decimal` — asking sqlx for a `String` fails the same way, and the
     // `unwrap_or_default()` around it turned that failure into a silent `""`.
+    // Overlap, not containment. A Brennwert is published per supply area per
+    // month and a delivery's period routinely straddles the window a caller
+    // asks about — "which calorific value applies to my July consumption" was
+    // answered with nothing whenever the published period ran 25.06.–25.07.
+    // The predicate that returns it is the one that overlaps the request.
     match sqlx::query(
         "SELECT period_from, period_to, brennwert_kwh_per_m3, zustandszahl,
                 source_pid, received_at
            FROM gas_quality_data
-          WHERE malo_id = $1 AND period_from >= $2 AND period_to <= $3
+          WHERE malo_id = $1 AND period_from <= $3 AND period_to >= $2
             AND tenant = $4
           ORDER BY period_from DESC LIMIT 50",
     )

@@ -12,7 +12,14 @@ pub struct SubstituteRequest {
     pub gap_from: String,
     /// Gap end (UTC, RFC3339).
     pub gap_to: String,
-    /// Interval length in seconds (default: 900).
+    /// Interval length of the grid to fill, in seconds.
+    ///
+    /// Omit it and the **observed** cadence of the register being substituted is
+    /// used, falling back to the Sparte's own default when the series is too
+    /// short to have one. A flat 900 s default filled a quarter-hour grid into an
+    /// hourly gas series: four times as many Ersatzwerte as the meter has slots,
+    /// each a quarter of the energy, and none of them lining up with the
+    /// intervals the operator later delivers.
     pub interval_secs: Option<u32>,
     /// Substitution method: `LinearInterpolation`, `PriorPeriodAverage`,
     /// `ZeroFill`, or `LastValueCarryForward`. Default: `PriorPeriodAverage`.
@@ -39,10 +46,12 @@ pub struct SubstituteRequest {
     pub reason: Option<String>,
     /// OBIS register the gap belongs to.
     ///
-    /// Part of the primary key, so omitting it files the substitute under the
-    /// empty-string register rather than against the reading it stands in for —
-    /// leaving both rows in the table and double-counting the interval in every
-    /// aggregate that sums without an OBIS filter.
+    /// Omit it and the measuring point's **dominant energy register** — the one
+    /// carrying the most intervals in the window — is substituted, and the
+    /// Ersatzwert is filed under that register. It is worth naming explicitly on
+    /// a multi-register point: the reference data, the occupied-slot guard and
+    /// the interpolation brackets are all read from the one register the value
+    /// is written to, and "dominant" is a guess about which one the caller meant.
     pub obis_code: Option<String>,
 }
 
@@ -151,7 +160,6 @@ pub async fn run_substitute_values(
             .into_response();
     }
 
-    let interval_secs = req.interval_secs.unwrap_or(900);
     let prior_days = req.prior_days.unwrap_or(7) as i64;
     let operator_id = req.operator_id.as_deref().unwrap_or("AUTO");
 
@@ -239,6 +247,33 @@ pub async fn run_substitute_values(
         code == target
     };
     let resolved: Vec<MeterRead> = resolved.into_iter().filter(in_target).collect();
+
+    // The grid to fill. The request wins when it states one; otherwise the
+    // register's own observed cadence, which is the only honest answer for a
+    // point that reports hourly or daily.
+    let target_sparte = resolved.first().map(|r| r.sparte);
+    let observed_secs = metering::classification::detect_interval_length(
+        &resolved
+            .iter()
+            .map(|r| MeterInterval {
+                from: r.dtm_from,
+                to: r.dtm_to,
+                value: r.quantity_kwh,
+                quality: r.quality,
+                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
+            })
+            .collect::<Vec<_>>(),
+    )
+    .map(|r| r.nominal_seconds());
+    let interval_secs = req.interval_secs.or(observed_secs).unwrap_or_else(|| {
+        target_sparte.map_or(900, |sp| {
+            metering::QualityConfig::for_sparte(sp)
+                .validation
+                .expected_interval_secs
+                .unwrap_or(900)
+        })
+    });
+
     let existing: Vec<MeterRead> = resolved
         .iter()
         .filter(|r| r.quality.is_billable())
@@ -367,19 +402,11 @@ pub async fn run_substitute_values(
     // Store generated intervals and log them. The Sparte is authoritative on
     // the stored series the gap belongs to; the request value is only a
     // fallback for a MaLo with no resolved reads in the window.
-    let sparte = resolved.first().map(|r| r.sparte).unwrap_or_else(|| {
-        match req
-            .sparte
+    let sparte = target_sparte.unwrap_or_else(|| {
+        req.sparte
             .as_deref()
-            .unwrap_or("STROM")
-            .to_uppercase()
-            .as_str()
-        {
-            "GAS" => metering::interval::Sparte::Gas,
-            "WAERME" | "WÄRME" => metering::interval::Sparte::Waerme,
-            "WASSER" => metering::interval::Sparte::Wasser,
-            _ => metering::interval::Sparte::Strom,
-        }
+            .and_then(|s| s.trim().parse().ok())
+            .unwrap_or(metering::Sparte::Strom)
     });
 
     let reason_str = req
@@ -401,51 +428,13 @@ pub async fn run_substitute_values(
         rust_decimal::Decimal,
     )> = Vec::new();
 
-    // The same V-rule pass every ingest path runs: engine-generated values
-    // are still stored values, and an Ersatzwert derived from anomalous prior
-    // data (negative carry-forward, implausible spike) must carry its warning
-    // annotation into `quality_warnings` like any other reading.
-    let substitute_warnings: std::collections::HashMap<usize, serde_json::Value> = {
-        let series: Vec<MeterInterval> = substitute_entries
-            .iter()
-            .map(|e| e.interval.clone())
-            .collect();
-        let report = metering::validation::validate_intervals(
-            &series,
-            &metering::validation::ValidationConfig {
-                expected_interval_secs: Some(interval_secs),
-                now: Some(OffsetDateTime::now_utc()),
-                ..Default::default()
-            },
-        );
-        let mut by_index: std::collections::HashMap<usize, Vec<serde_json::Value>> =
-            std::collections::HashMap::new();
-        for issue in &report.issues {
-            if let Some(idx) = issue.interval_index {
-                by_index.entry(idx).or_default().push(serde_json::json!({
-                    "rule": issue.rule_id.to_string(),
-                    "message": issue.message,
-                    "blocks_billing": issue.blocks_billing(),
-                }));
-            }
-        }
-        by_index
-            .into_iter()
-            .map(|(idx, issues)| {
-                (
-                    idx,
-                    serde_json::json!({
-                        "has_warnings": true,
-                        "issue_count": issues.len(),
-                        "issues": issues,
-                        "source": "SUBSTITUTE_VALIDATION",
-                    }),
-                )
-            })
-            .collect()
-    };
-
-    for (entry_idx, entry) in substitute_entries.iter().enumerate() {
+    // No second V-rule pass here: `ValidatedReads::validate` below runs the same
+    // one every ingest door runs — split per register, thresholds from the
+    // batch's own Sparte, cadence observed. A local `ValidationConfig::default()`
+    // would apply electricity thresholds to a substitute series that is routinely
+    // gas, heat or water, and flag a ZeroFill on a vacant flat's water meter as a
+    // stuck meter.
+    for entry in &substitute_entries {
         let iv = &entry.interval;
         // A § 60 Abs. 2 MsbG Ersatzwert fills a gap; it never overwrites a real
         // measurement. A slot already carrying a billable reading is left untouched
@@ -467,11 +456,21 @@ pub async fn run_substitute_values(
             quality: QualityFlag::Substituted,
             pid: 0,
             sparte,
-            obis_code: req.obis_code.clone(),
+            // The register the Ersatzwert was **derived from**, not whatever the
+            // request happened to name. `target` is the request's `obis_code`
+            // when it gave one and the point's dominant energy series otherwise;
+            // writing `req.obis_code` instead filed an unrequested substitute
+            // under the empty-string register. That is not merely untidy: an
+            // unlabelled reading *is* the canonical total register
+            // (`domain::register`), so on a dual-tariff point with no total of
+            // its own, one substitute made the whole HT/NT series look like a
+            // decomposition of itself and every aggregate over the month
+            // collapsed to the substitute alone.
+            obis_code: target.clone(),
             tenant: tenant.to_string(),
             source: IngestionSource::AutoSubstitute,
             push_session: None,
-            quality_warnings: substitute_warnings.get(&entry_idx).cloned(),
+            quality_warnings: None,
             sender_mp_id: sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: None,
@@ -511,10 +510,9 @@ pub async fn run_substitute_values(
     // Ersatzwerte are edmd's own output, but they are billed like any other
     // reading, so they run the same V-rules — a generator that emits a wrong
     // interval length or a duplicate slot must fail here, not at settlement.
-    let (validated, _) = crate::domain::validation::ValidatedReads::validate(
+    let (validated, _) = crate::domain::ValidatedReads::validate(
         substitute_reads,
-        "SUBSTITUTE_VALIDATION",
-        malo_id,
+        crate::domain::IngestContext::new("SUBSTITUTE_VALIDATION", malo_id),
     );
 
     if let Err(e) = repo.store_reads(validated).await {
@@ -590,6 +588,8 @@ pub async fn run_substitute_values(
             "gap_to": gap_to,
             "generated_count": stored,
             "method_requested": format!("{method:?}"),
+            "interval_secs": interval_secs,
+            "obis_code": target,
             // What each interval was actually produced by. A requested strategy
             // with no data to work from degrades — prior-period to carry-forward
             // to zero — and the § 147 Abs. 1 AO / § 146 Abs. 4 AO (GoBD) record must name what ran, not what

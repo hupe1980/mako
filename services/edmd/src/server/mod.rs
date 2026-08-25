@@ -30,7 +30,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::domain::{
     BillingPeriodQuery, IngestionSource, MeterRead, QualityFlag, Sparte as EdmSparte,
-    TimeSeriesQuery,
+    TimeSeriesQuery, batch_period,
     repository::{TimeSeriesRepository, Typ2Repository},
 };
 use crate::{
@@ -59,6 +59,7 @@ mod reading_orders;
 mod sharing;
 mod substitute;
 mod virtual_meter;
+mod zsg;
 
 // Path-preserving re-exports: every submodule item stays reachable under
 // `crate::server::…` / `edmd::server::…`.
@@ -78,6 +79,7 @@ pub(crate) use reading_orders::*;
 pub(crate) use sharing::*;
 pub use substitute::*;
 pub(crate) use virtual_meter::*;
+pub use zsg::*;
 
 // ── Router ────────────────────────────────────────────────────────────────────
 
@@ -94,7 +96,18 @@ pub fn router(state: HandlerState) -> Router {
         // mabis-syncd calls: GET /api/v1/billing-periods?from=YYYY-MM-DD&to=YYYY-MM-DD&tenant=...
         .route("/api/v1/billing-periods", get(list_billing_periods))
         .route("/api/v1/lastgang/{malo_id}", get(get_lastgang))
-        .route("/api/v1/feed-in/{malo_id}", get(lastgang::get_feed_in))
+        // The canonical projected series, in one direction, through
+        // `domain::register`. `/lastgang` is the BO4E export and returns one
+        // object per register; folding that back into one series *is* the
+        // projection, so it is served made rather than left to each consumer.
+        .route("/api/v1/energy/{malo_id}", get(lastgang::get_energy_series))
+        // ── Zählerstandsgang (BK6-24-174 „Datenübermittlung ZSG") ─────────────
+        // What an iMSys actually measures (§ 2 Satz 1 Nr. 27 MsbG). The
+        // differencing into a Lastgang is the MSB's job, and edmd is the MSB.
+        .route(
+            "/api/v1/zaehlerstandsgang/{malo_id}",
+            post(zsg::post_zaehlerstandsgang).get(zsg::get_zaehlerstandsgang),
+        )
         .route("/api/v1/zeitreihe/{malo_id}", get(get_zeitreihe))
         // ESA "Werte nach Typ 2" — a deliberately separate read path from the
         // billing endpoints above. It reads `esa_typ2_reads` only, never

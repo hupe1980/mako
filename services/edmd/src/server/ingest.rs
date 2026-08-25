@@ -95,6 +95,16 @@ pub struct DirectPushRequest {
     /// Omit it and arrival order decides — see `MeterRead::mscons_version`.
     #[serde(default)]
     pub mscons_version: Option<u128>,
+
+    /// Physical capacity ceiling of the metered plant, in kW.
+    ///
+    /// Nameplate capacity or Anschlussleistung. Supply it and **V12**
+    /// (`ImplausiblePower`) checks each interval's average power against it: a
+    /// value above the ceiling is not unusual, it is impossible, so it is an
+    /// `Error` and blocks billing. Omit it and V12 stays off — edmd holds no
+    /// master data of its own and will not invent a ceiling.
+    #[serde(default)]
+    pub max_plant_power_kw: Option<Decimal>,
 }
 
 /// `POST /api/v1/meter-reads/rlm/{malo_id}`
@@ -444,17 +454,6 @@ pub(crate) async fn post_direct_reads_inner(
     let mut quality = compute_quality(&samples, msparte, period_start, period_end);
     quality.intervals_rejected = rejected_count;
 
-    record_quality_assessment(
-        pool,
-        &state.tenant,
-        malo_id,
-        period_start,
-        period_end,
-        source,
-        &quality,
-    )
-    .await;
-
     let quality_json = serde_json::json!({
         "intervals_accepted": quality.intervals_accepted,
         "intervals_rejected": quality.intervals_rejected,
@@ -505,16 +504,30 @@ pub(crate) async fn post_direct_reads_inner(
         })
         .collect();
 
-    let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
+    let (validated, validation) = crate::domain::ValidatedReads::validate(
         batch,
-        "DIRECT_PUSH_VALIDATION",
-        malo_id,
+        crate::domain::IngestContext::new("DIRECT_PUSH_VALIDATION", malo_id)
+            .with_capacity_kw(req.max_plant_power_kw),
     );
 
     if let Err(e) = state.repo.store_reads(validated).await {
         tracing::error!(malo_id, error = %e, "edmd: direct push batch insert failed");
         return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response();
     }
+
+    // Recorded once the readings are stored. Written first, the verdict stands
+    // for a delivery that failed and never landed — in the table the § 147 AO
+    // history is read out of.
+    record_quality_assessment(
+        pool,
+        &state.tenant,
+        malo_id,
+        period_start,
+        period_end,
+        source,
+        &quality,
+    )
+    .await;
 
     // \u2500\u2500 Record session \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
     let _ = sqlx::query(
@@ -701,8 +714,10 @@ mod ingest_contract_tests {
     /// make, so a change to the validation entry point breaks these tests
     /// rather than silently bypassing them.
     fn raised_v07(batch: Vec<MeterRead>) -> bool {
-        let (_, report) =
-            crate::domain::validation::ValidatedReads::validate(batch, "TEST", "51238696012");
+        let (_, report) = crate::domain::ValidatedReads::validate(
+            batch,
+            crate::domain::IngestContext::new("TEST", "51238696012"),
+        );
         report.rules.iter().any(|r: &String| r.contains("V07"))
     }
 
@@ -1016,7 +1031,13 @@ pub struct BulkReadRequest {
     pub session_id: Option<String>,
     /// Energy commodity (STROM or GAS).
     pub sparte: String,
-    /// OBIS-Kennzahl (optional — defaults to `1-0:1.8.0*255` for Strom Bezug).
+    /// OBIS-Kennzahl of the register these readings belong to.
+    ///
+    /// Optional, and **not defaulted**: an unlabelled reading is the canonical
+    /// total register for the point (`domain::register`), which is the right
+    /// reading of a single-register delivery and the wrong one for a batch that
+    /// is really the HT half of a dual-tariff meter. Naming the register is how
+    /// the caller says which it is.
     #[serde(default)]
     pub obis_code: Option<String>,
     /// Ingestion source from the [`IngestionSource`] vocabulary. Default:
@@ -1029,6 +1050,24 @@ pub struct BulkReadRequest {
     /// See [`DirectPushRequest::mscons_version`].
     #[serde(default)]
     pub mscons_version: Option<u128>,
+
+    /// Physical capacity ceiling of the metered plant, in kW.
+    ///
+    /// Nameplate capacity or Anschlussleistung. Supply it and **V12**
+    /// (`ImplausiblePower`) checks each interval's average power against it: a
+    /// value above the ceiling is not unusual, it is impossible, so it is an
+    /// `Error` and blocks billing. Omit it and V12 stays off — edmd holds no
+    /// master data of its own and will not invent a ceiling.
+    #[serde(default)]
+    pub max_plant_power_kw: Option<Decimal>,
+
+    /// MP-ID of the delivering MSB / network operator.
+    ///
+    /// It keys the meterstore version scope, so a bulk redelivery that states it
+    /// lands in the same scope as the MSCONS delivery it supersedes. Omitted, the
+    /// scope falls back to the tenant and the two cannot displace each other.
+    #[serde(default)]
+    pub sender_mp_id: Option<String>,
 }
 
 /// One interval in a bulk read batch.
@@ -1116,23 +1155,17 @@ pub async fn post_bulk_reads(
 
     // Sparte determines the storage unit, so an unrecognised value is rejected
     // rather than defaulted.
-    let sparte = match req.sparte.to_uppercase().as_str() {
-        "STROM" => "STROM",
-        "GAS" => "GAS",
-        "WAERME" | "WÄRME" => "WAERME",
-        "WASSER" => "WASSER",
-        other => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!(
-                        "unknown sparte `{other}`; expected STROM, GAS, WAERME or WASSER"
-                    )
-                })),
-            )
-                .into_response();
-        }
+    let Some(sparte_enum) = crate::domain::parse_sparte(&req.sparte) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!("unknown sparte `{}`", req.sparte),
+                "expected": EdmSparte::CODES,
+            })),
+        )
+            .into_response();
     };
+    let sparte = sparte_enum.as_str();
     let ingestion_source = match req
         .source
         .as_deref()
@@ -1161,12 +1194,6 @@ pub async fn post_bulk_reads(
         .clone()
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
-    let sparte_enum = match sparte {
-        "GAS" => EdmSparte::Gas,
-        "WAERME" => EdmSparte::Waerme,
-        "WASSER" => EdmSparte::Wasser,
-        _ => EdmSparte::Strom,
-    };
     let mut batch: Vec<MeterRead> = Vec::with_capacity(req.reads.len());
 
     for entry in &req.reads {
@@ -1238,7 +1265,7 @@ pub async fn post_bulk_reads(
             source: ingestion_source,
             push_session: Some(session_id.clone()),
             quality_warnings: None,
-            sender_mp_id: None,
+            sender_mp_id: req.sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: req.mscons_version,
@@ -1246,16 +1273,21 @@ pub async fn post_bulk_reads(
     }
 
     // Validation runs before the write so its findings can be stored with the
-    // rows they describe, in the same statement.
-    batch.sort_by_key(|r| r.dtm_from);
-    let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
+    // rows they describe. The batch is **not** pre-sorted: V11
+    // (`UnorderedSeries`) is the engine's report that a caller's file arrived
+    // shuffled, which on a bulk import usually means a broken merge, and sorting
+    // first would delete that signal while changing nothing else — the adjacency
+    // rules already evaluate in timestamp order.
+    let (validated, validation) = crate::domain::ValidatedReads::validate(
         batch,
-        "BULK_IMPORT_VALIDATION",
-        &malo_id,
+        crate::domain::IngestContext::new("BULK_IMPORT_VALIDATION", &malo_id)
+            .with_capacity_kw(req.max_plant_power_kw),
     );
 
-    let period_from = validated.as_slice().first().map(|r| r.dtm_from);
-    let period_to = validated.as_slice().last().map(|r| r.dtm_to);
+    let (period_from, period_to) = batch_period(validated.as_slice());
+    // Graded from the borrow, recorded once the readings are stored — a verdict
+    // written first would stand for a delivery that failed and never landed.
+    let hampel = crate::server::score_batch(validated.as_slice());
 
     // One batched statement, so the count reported is the count committed.
     let stored = validated.len();
@@ -1270,6 +1302,10 @@ pub async fn post_bulk_reads(
             })),
         )
             .into_response();
+    }
+
+    if let Some(q) = &hampel {
+        q.record(state.repo.pool(), &state.tenant, &malo_id).await;
     }
 
     let issues_summary = serde_json::json!({
@@ -1311,7 +1347,9 @@ pub async fn post_bulk_reads(
         period_from,
         period_to,
         validation: &validation,
-        hampel: None,
+        hampel: hampel
+            .as_ref()
+            .map(|q| crate::server::hampel_summary(&q.report)),
     };
     crate::server::quality_alert::raise_quality_warning(
         state.erp_webhook_url.as_deref(),
@@ -1332,6 +1370,7 @@ pub async fn post_bulk_reads(
             "malo_id": malo_id,
             "stored_count": stored,
             "validation": issues_summary,
+            "quality": hampel.as_ref().map(|q| crate::server::hampel_summary(&q.report)),
         })),
     )
         .into_response()

@@ -281,7 +281,9 @@ pub async fn handle_webhook(
     // required for an accurate Mehr-/Mindermengensaldo. (PID 55009 is the
     // *Ablehnung* of an Abmeldung — supply continues, no reading is due.)
     //
-    // Legal basis: GPKE BK6-22-024 §3; GPKE Beginn-/Schlussablesung Ablesung bei Lieferbeginn/-ende.
+    // Legal basis: GPKE (BK6-24-174) Teil 1 — Ablesung bei Lieferbeginn/-ende.
+    // Not BK6-22-024: GPKE Teil 1–3 were reissued under BK6-24-174, and what
+    // stayed behind there is GPKE Teil 4 and WiM Strom Teil 1/2.
     if ce_type == mako_events::mako::PROCESS_COMPLETED && matches!(pid, 55001 | 55004 | 55007) {
         let (anlass, label) = if pid == 55001 {
             ("LIEFERBEGINN", "Lieferbeginn")
@@ -512,16 +514,23 @@ pub async fn handle_webhook(
         // a MSCONS reading lands with the same key, unit and quality record as
         // one that arrived by direct push.
         if let Some(reads_array) = data["reads"].as_array().filter(|a| !a.is_empty()) {
-            let sparte = match data["sparte"]
-                .as_str()
-                .unwrap_or("STROM")
-                .to_uppercase()
-                .as_str()
-            {
-                "GAS" => EdmSparte::Gas,
-                "WAERME" | "WÄRME" => EdmSparte::Waerme,
-                "WASSER" => EdmSparte::Wasser,
-                _ => EdmSparte::Strom,
+            // A payload naming an unknown commodity is a decode fault upstream,
+            // not an electricity delivery. `marktd` redelivers on a 5xx, so the
+            // batch is refused rather than stored under a guessed Sparte — and a
+            // guessed one is stored in the wrong unit: gas settles in kWh_Hs,
+            // water in m³.
+            let sparte = match data["sparte"].as_str() {
+                None => EdmSparte::Strom,
+                Some(raw) => match crate::domain::parse_sparte(raw) {
+                    Some(s) => s,
+                    None => {
+                        error!(
+                            process_id = %process_id, pid, malo_id = %malo_id, sparte = raw,
+                            "edmd: MSCONS payload names an unknown Sparte — refusing the batch"
+                        );
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                },
             };
 
             // The MSCONS correction version the operator assigned, if the
@@ -537,6 +546,16 @@ pub async fn handle_webhook(
                         .map(u128::from)
                         .or_else(|| v.as_str().and_then(|s| s.parse::<u128>().ok()))
                 });
+
+            // The metered plant's physical capacity, when the decode carried it
+            // up. It is what makes V12 (`ImplausiblePower`) fireable: without a
+            // ceiling there is nothing for an average power to be impossible
+            // against, and the rule is inert.
+            let max_plant_power_kw = data.get("max_plant_power_kw").and_then(|v| {
+                v.as_str()
+                    .and_then(|s| s.parse::<rust_decimal::Decimal>().ok())
+                    .or_else(|| v.as_f64().and_then(rust_decimal::Decimal::from_f64_retain))
+            });
 
             let mut batch: Vec<MeterRead> = Vec::with_capacity(reads_array.len());
             let mut skipped = 0usize;
@@ -644,16 +663,20 @@ pub async fn handle_webhook(
 
             // Warnings attach to the intervals they name, in the same statement
             // as the readings.
-            let (validated, validation) = crate::domain::validation::ValidatedReads::validate(
+            let (validated, validation) = crate::domain::ValidatedReads::validate(
                 batch,
-                "MSCONS_VALIDATION",
-                &malo_id,
+                crate::domain::IngestContext::new("MSCONS_VALIDATION", &malo_id)
+                    .with_capacity_kw(max_plant_power_kw),
             );
 
             let stored = validated.len();
             // Captured before the batch moves into the store, for the alert below.
-            let period_from = validated.as_slice().first().map(|r| r.dtm_from);
-            let period_to = validated.as_slice().last().map(|r| r.dtm_to);
+            let (period_from, period_to) = crate::domain::batch_period(validated.as_slice());
+            // The Hampel grade and its `quality_assessments` row, as on every
+            // other door: the § 147 AO history is only as complete as its
+            // least-covered path. Graded from the borrow, recorded once the
+            // readings are stored.
+            let hampel = crate::server::score_batch(validated.as_slice());
             if let Err(err) = state.repo.store_reads(validated).await {
                 // A 5xx makes `marktd` redeliver. Answering 204 here would mark
                 // the process delivered while the readings were never stored.
@@ -662,6 +685,10 @@ pub async fn handle_webhook(
                     "edmd: MSCONS interval store failed — signalling redelivery"
                 );
                 return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+            }
+
+            if let Some(q) = &hampel {
+                q.record(state.repo.pool(), &state.tenant, &malo_id).await;
             }
 
             info!(
@@ -681,9 +708,9 @@ pub async fn handle_webhook(
                 period_from,
                 period_to,
                 validation: &validation,
-                // The MSCONS door does not run the Hampel scorer at ingest;
-                // the V-rules are its signal. Retroactive rescoring adds the grade.
-                hampel: None,
+                hampel: hampel
+                    .as_ref()
+                    .map(|q| crate::server::hampel_summary(&q.report)),
             };
             if alert.is_warning() {
                 warn!(

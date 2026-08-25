@@ -571,18 +571,27 @@ impl EdmdClient {
         Ok(Some(meter))
     }
 
-    /// Fetch Lastgang intervals for §41a dynamic billing.
+    /// Fetch the MaLo's quarter-hour **Bezug** series for §41a dynamic billing.
     ///
-    /// Calls `GET /api/v1/lastgang/{malo_id}?from={from}&to={to}` with
-    /// **RFC3339** bounds (edmd rejects bare dates: an unparsable bound
-    /// silently widened the window to epoch..now) and parses the **BO4E
-    /// `Lastgang`** response shape edmd actually emits — one `Lastgang`
-    /// object per OBIS code, each with `werte[]` of
-    /// `{wert, status, zeitraum{startdatum, startuhrzeit}}`. The previous
-    /// flat `{timestamp_utc, wert}` parser matched nothing, so every §41a
-    /// dynamic run saw zero intervals and hard-blocked.
+    /// Calls `GET /api/v1/energy/{malo_id}?direction=BEZUG` with **RFC 3339**
+    /// bounds (edmd rejects bare dates: an unparsable bound silently widened the
+    /// window to epoch..now).
     ///
-    /// Returns an empty Vec when the MaLo has no Lastgang data.
+    /// # Why not `/api/v1/lastgang`
+    ///
+    /// That endpoint returns one BO4E object **per OBIS register**, and this
+    /// method used to `flat_map` over all of them with no register filter at
+    /// all. So a prosumer's Einspeisung (`1-0:2.8.x`) was added to the grid draw
+    /// it bills, a dual-tariff meter's `1.8.1`/`1.8.2` were added to the
+    /// `1.8.0` they decompose, and a `1-0:1.6.0` peak-demand register in **kW**
+    /// was billed as though it were energy — each of them at a dynamic price,
+    /// against a §41a customer.
+    ///
+    /// Which registers a figure is about is `edmd`'s `domain::register` decision
+    /// and is served already made. Re-deriving it from a per-register export is
+    /// how this went wrong.
+    ///
+    /// Returns an empty Vec when the MaLo has no Bezugs-series.
     pub async fn get_lastgang(
         &self,
         malo_id: &str,
@@ -595,42 +604,29 @@ impl EdmdClient {
             .midnight()
             .assume_utc();
         let rfc3339 = time::format_description::well_known::Rfc3339;
-        let path = format!("/api/v1/lastgang/{malo_id}");
+        let path = format!("/api/v1/energy/{malo_id}");
         let request = self.up.get(&path).query(&[
             ("from", from_dt.format(&rfc3339).context("format from")?),
             ("to", to_dt.format(&rfc3339).context("format to")?),
+            ("direction", "BEZUG".to_owned()),
         ]);
         let Some(body) = self
             .up
             .json::<serde_json::Value>(request)
             .await
-            .context("edmd GET lastgang")?
+            .context("edmd GET energy series")?
         else {
             return Ok(Vec::new());
         };
-        let mut intervals: Vec<DynamicInterval> = body
+        let mut intervals: Vec<DynamicInterval> = body["intervals"]
             .as_array()
             .cloned()
             .unwrap_or_default()
             .iter()
-            .flat_map(|lastgang| {
-                lastgang
-                    .get("werte")
-                    .and_then(serde_json::Value::as_array)
-                    .cloned()
-                    .unwrap_or_default()
-            })
-            .filter_map(|w| {
-                let kwh = decimal_from_json(w.get("wert"))?;
-                let zeitraum = w.get("zeitraum")?;
-                let datum = zeitraum.get("startdatum")?.as_str()?;
-                // `startuhrzeit` is `HH:MM:SS+00:00`; missing → midnight.
-                let uhrzeit = zeitraum
-                    .get("startuhrzeit")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("00:00:00+00:00");
+            .filter_map(|iv| {
+                let kwh = decimal_from_json(iv.get("kwh"))?;
                 let ts = time::OffsetDateTime::parse(
-                    &format!("{datum}T{uhrzeit}"),
+                    iv.get("start")?.as_str()?,
                     &time::format_description::well_known::Rfc3339,
                 )
                 .ok()?;
@@ -640,8 +636,9 @@ impl EdmdClient {
                 })
             })
             .collect();
-        // Multiple OBIS Lastgänge arrive concatenated — price lookup needs
-        // chronological order.
+        // edmd returns the series in order; the price lookup depends on it, and
+        // a §41a bill that silently mis-prices because an upstream sort changed
+        // is not a failure mode worth keeping.
         intervals.sort_by_key(|i| i.timestamp_utc);
         Ok(intervals)
     }

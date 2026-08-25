@@ -513,3 +513,106 @@ fn every_on_conflict_target_has_a_matching_unique_constraint() {
 
     assert!(problems.is_empty(), "{}", problems.join("\n"));
 }
+
+/// `quality_assessments.source` must admit every `IngestionSource`.
+///
+/// The column records which ingest family produced a verdict, and every door
+/// now scores its batch. A variant the CHECK omits fails the insert — and the
+/// insert failure is deliberately only a warning, because the readings are
+/// already stored — so the audit history goes silently missing for exactly the
+/// door that believed it was recording one. That is how the Kafka and bulk doors
+/// would have behaved the moment they started scoring.
+#[test]
+fn quality_assessment_source_check_covers_every_ingestion_source() {
+    let ddl = ddl_of(&migration(), "quality_assessments");
+    let start = ddl
+        .find("CHECK (source IN (")
+        .expect("quality_assessments declares a source CHECK");
+    let end = start + ddl[start..].find("))").expect("terminated CHECK");
+    let listed = &ddl[start..end];
+
+    for source in edmd::domain::IngestionSource::ALL {
+        let code = source.as_str();
+        assert!(
+            listed.contains(&format!("'{code}'")),
+            "quality_assessments.source CHECK omits `{code}`; a verdict from that \
+             door would fail the insert and vanish from the history"
+        );
+    }
+    // The one legitimate non-ingest value: a retroactive re-scoring.
+    assert!(
+        listed.contains("'BATCH_RESCORE'"),
+        "the retroactive rescore path records BATCH_RESCORE"
+    );
+}
+
+/// `zsg_conversion_log.outcome` must admit every conversion outcome.
+///
+/// The column records what the Zählerstandsgang → Lastgang differencing did
+/// across a contested span: a reconstructed register wrap, or the `AnomalyKind`
+/// that refused the difference. `AnomalyKind` is `#[non_exhaustive]` and lives
+/// upstream, so a kind added there would otherwise fail the audit insert at
+/// runtime — and the insert is deliberately non-fatal (the readings are already
+/// stored), so the § 146 Abs. 4 AO trail would go missing with a warning.
+#[test]
+fn zsg_outcome_check_covers_every_conversion_outcome() {
+    let ddl = ddl_of(&migration(), "zsg_conversion_log");
+    let start = ddl
+        .find("CHECK (outcome IN (")
+        .expect("zsg_conversion_log declares an outcome CHECK");
+    let end = start + ddl[start..].find("))").expect("terminated CHECK");
+    let listed = &ddl[start..end];
+
+    for outcome in edmd::domain::zsg_outcomes() {
+        assert!(
+            listed.contains(&format!("'{outcome}'")),
+            "zsg_conversion_log.outcome CHECK omits `{outcome}`; that conversion \
+             outcome would fail the audit insert and vanish from the trail"
+        );
+    }
+}
+
+/// A Zählerstand is stored in the unit the **register** counts.
+///
+/// Not the Sparte's billing unit. § 25 Nr. 4 MessEV converts the *difference*
+/// between two readings; a register value rewritten into kWh is no longer the
+/// number on the meter, and § 40 Abs. 2 Nr. 6 EnWG puts that number on an
+/// invoice for a customer to check.
+#[test]
+fn meter_readings_admit_both_register_units() {
+    let ddl = ddl_of(&migration(), "meter_readings");
+    for unit in ["KWH", "M3"] {
+        assert!(
+            ddl.contains(&format!("'{unit}'")),
+            "meter_readings.unit CHECK omits `{unit}` — gas and water registers count m³"
+        );
+    }
+}
+
+/// `cls_compliance_issues.issue_type` must admit every compliance issue type.
+///
+/// The sweep's insert is deliberately non-fatal — a failed registration is a
+/// warning, because the fleet report is derived data — so a type the CHECK omits
+/// would make that issue invisible rather than loud. The three certificate
+/// faults are the live example: `is_valid` answers one boolean over revoked,
+/// expired and not-yet-valid, and splitting them added two types.
+#[test]
+fn compliance_issue_type_check_covers_every_variant() {
+    let ddl = ddl_of(&migration(), "cls_compliance_issues");
+    for code in [
+        "CERT_EXPIRED",
+        "CERT_REVOKED",
+        "CERT_NOT_YET_VALID",
+        "CERT_EXPIRING",
+        "TLS_CERT_MISSING",
+        "CLS_NOT_COMPLIANT",
+        "COMMUNICATION_FAULT",
+        "GATEWAY_REVOKED",
+    ] {
+        assert!(
+            ddl.contains(&format!("'{code}'")),
+            "cls_compliance_issues.issue_type CHECK omits `{code}`; that issue \
+             would fail its insert and never reach the fleet report"
+        );
+    }
+}

@@ -32,8 +32,13 @@
 //! pill must not wedge the partition); records that fail to store abort the
 //! poll loop iteration without committing, so they are redelivered.
 //!
-//! Every batch runs the same V01–V09/V11/V12 `ValidatedReads::validate` pass as the REST
-//! ingest paths — a "trusted" transport does not skip validation.
+//! Every batch runs the same V01–V09/V11/V12 `ValidatedReads::validate` pass and
+//! the same Hampel grading as the REST ingest doors, and records the verdict in
+//! `quality_assessments` — a "trusted" transport does not skip validation, and a
+//! head-end feed is the least supervised door there is. An unrecognised `sparte`
+//! or `source` is refused for the same reason: coercing them stored a gas batch
+//! as electricity, in the wrong unit, with `MSCONS` provenance on values that
+//! never went near EDIFACT.
 
 use std::time::Duration;
 
@@ -85,6 +90,10 @@ struct WireBatch {
     /// Present, it decides resolution; absent, arrival order does.
     #[serde(default)]
     mscons_version: Option<u128>,
+    /// Physical capacity ceiling of the metered plant, in kW, enabling **V12**
+    /// (`ImplausiblePower`). Absent, the rule stays off.
+    #[serde(default)]
+    max_plant_power_kw: Option<Decimal>,
     intervals: Vec<WireInterval>,
 }
 
@@ -291,19 +300,39 @@ async fn store_batch(
     alerts: &QualityAlertTarget,
     batch: WireBatch,
 ) -> anyhow::Result<usize> {
-    let sparte = match batch
-        .sparte
-        .as_deref()
-        .unwrap_or("STROM")
-        .to_uppercase()
-        .as_str()
-    {
-        "GAS" => Sparte::Gas,
-        "WAERME" | "WÄRME" => Sparte::Waerme,
-        "WASSER" => Sparte::Wasser,
-        _ => Sparte::Strom,
+    // An unrecognised Sparte or source is **refused**, not coerced — the same
+    // rule the REST doors follow. Falling back silently put a gas batch into an
+    // electricity store labelled STROM, and stamped `MSCONS` provenance on a
+    // head-end feed that never went near EDIFACT (`IngestionSource::from_db_str`
+    // is for read-back, where the column CHECK has already vouched for the
+    // value). A record that fails here is a poison pill: it is skipped and
+    // logged like any other unparseable one, so one broken producer does not
+    // wedge the partition.
+    let sparte = match batch.sparte.as_deref() {
+        None => Sparte::Strom,
+        Some(raw) => raw.trim().parse::<Sparte>().map_err(|_| {
+            anyhow::anyhow!(
+                "malo {}: unknown sparte `{raw}`; expected one of {:?}",
+                batch.malo_id,
+                Sparte::CODES
+            )
+        })?,
     };
-    let source = IngestionSource::from_db_str(batch.source.as_deref().unwrap_or("IOT_PUSH"));
+    let source = match batch
+        .source
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        None => IngestionSource::IotPush,
+        Some(raw) => IngestionSource::parse_db_str(raw).ok_or_else(|| {
+            anyhow::anyhow!(
+                "malo {}: unknown source `{raw}`; expected one of {:?}",
+                batch.malo_id,
+                IngestionSource::ALL.map(IngestionSource::as_str)
+            )
+        })?,
+    };
 
     let mut reads: Vec<MeterRead> = Vec::with_capacity(batch.intervals.len());
     for iv in &batch.intervals {
@@ -360,25 +389,40 @@ async fn store_batch(
         return Ok(0);
     }
 
-    // Same V-rule pass as every REST ingest path.
+    // Same V-rule pass — and the same Hampel grade — as every REST ingest path.
     let malo_id = reads[0].malo_id.clone();
-    let (validated, validation) =
-        crate::domain::validation::ValidatedReads::validate(reads, "KAFKA_INGEST", &malo_id);
+    let (validated, validation) = crate::domain::ValidatedReads::validate(
+        reads,
+        crate::domain::IngestContext::new("KAFKA_INGEST", &malo_id)
+            .with_capacity_kw(batch.max_plant_power_kw),
+    );
     // A Kafka record carries no session identifier, so the correlation id is
     // minted here and both extensions share it — better an honest per-batch id
     // than a borrowed field that means something else.
     let correlation_id = uuid::Uuid::new_v4().to_string();
+    let (period_from, period_to) = crate::domain::batch_period(validated.as_slice());
+    let hampel = crate::server::score_batch(validated.as_slice());
+
+    let n = validated.len();
+    repo.store_reads(validated)
+        .await
+        .map_err(|e| anyhow::anyhow!("store_reads: {e}"))?;
+    if let Some(q) = &hampel {
+        q.record(repo.pool(), tenant, &malo_id).await;
+    }
+
     let alert = crate::server::quality_alert::QualityAlert {
         malo_id: &malo_id,
         door: "kafka-ingest",
         correlation_id: &correlation_id,
         causation_id: &correlation_id,
         sparte: Some(sparte.as_str()),
-        period_from: validated.as_slice().first().map(|r| r.dtm_from),
-        period_to: validated.as_slice().last().map(|r| r.dtm_to),
+        period_from,
+        period_to,
         validation: &validation,
-        // The Kafka door does not run the Hampel scorer; the V-rules are its signal.
-        hampel: None,
+        hampel: hampel
+            .as_ref()
+            .map(|q| crate::server::hampel_summary(&q.report)),
     };
     crate::server::quality_alert::raise_quality_warning(
         alerts.webhook_url.as_deref(),
@@ -387,11 +431,6 @@ async fn store_batch(
         &alert,
     )
     .await;
-
-    let n = validated.len();
-    repo.store_reads(validated)
-        .await
-        .map_err(|e| anyhow::anyhow!("store_reads: {e}"))?;
     Ok(n)
 }
 

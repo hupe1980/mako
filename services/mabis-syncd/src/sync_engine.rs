@@ -740,25 +740,7 @@ impl SyncEngine {
         Ok(malo_ids)
     }
 
-    /// Reconstruct an instant from a BO4E `Zeitraum` date/time pair.
-    ///
-    /// `startdatum` is an ISO date and `startuhrzeit` a time carrying its own
-    /// UTC offset, which the pair must be recombined through — reading the date
-    /// as if it were already UTC would shift every slot by the offset.
-    fn parse_zeitraum_bound(
-        date: &serde_json::Value,
-        uhrzeit: &serde_json::Value,
-    ) -> Option<OffsetDateTime> {
-        let date = date.as_str()?;
-        let uhrzeit = uhrzeit.as_str()?;
-        OffsetDateTime::parse(
-            &format!("{date}T{uhrzeit}"),
-            &time::format_description::well_known::Rfc3339,
-        )
-        .ok()
-    }
-
-    /// Read a decimal that BO4E may serialise as either a JSON string or number.
+    /// Read a decimal that edmd may serialise as either a JSON string or number.
     fn parse_decimal(v: &serde_json::Value) -> Option<Decimal> {
         match v {
             serde_json::Value::String(s) => s.parse().ok(),
@@ -767,29 +749,35 @@ impl SyncEngine {
         }
     }
 
-    /// Map a BO4E `Messwertstatus` onto the metering quality flag.
-    ///
-    /// The forward mapping in edmd is lossy, so this errs toward treating a
-    /// value as non-measured: over-reporting substitution costs a flag in the
-    /// MaBiS log, under-reporting it lets an estimate settle as a reading.
-    fn messwertstatus_to_quality(status: Option<&str>) -> metering::QualityFlag {
-        use metering::QualityFlag as Q;
-        match status {
-            Some("ABGELESEN") => Q::Measured,
-            Some("ERSATZWERT") => Q::Substituted,
-            Some("PROGNOSEWERT" | "VORSCHLAGSWERT") => Q::Estimated,
-            Some("VORLAEUFIGERWERT") => Q::Preliminary,
-            Some("NICHT_VERWENDBAR") => Q::Faulty,
-            _ => Q::Unknown,
-        }
-    }
+    // The BO4E `Zeitraum` re-assembler and the `Messwertstatus` reverse-mapping
+    // that used to live here are gone with the `/lastgang` parse. `/energy`
+    // carries RFC 3339 instants and the stored `QualityFlag` vocabulary
+    // directly, so neither the date/offset recombination nor a lossy inverse of
+    // edmd's own BO4E mapping has to be maintained on this side.
 
-    /// Fetch a MaLo's quarter-hourly Lastgang from edmd.
+    /// Fetch a MaLo's quarter-hourly **Bezug** series from edmd.
     ///
-    /// Reads the BO4E `Lastgang` projection, which carries one `Zeitreihenwert`
-    /// per metered slot. MaBiS settles on that grid, so the resampled endpoints
-    /// are not interchangeable here: a coarser bucket preserves the period total
-    /// but destroys the shape the BIKO settles against.
+    /// Reads `GET /api/v1/energy/{malo_id}?direction=BEZUG` — edmd's canonical
+    /// register projection, one entry per metered slot. MaBiS settles on that
+    /// grid, so the resampled endpoints are not interchangeable here: a coarser
+    /// bucket preserves the period total but destroys the shape the BIKO settles
+    /// against.
+    ///
+    /// # Why not `/api/v1/lastgang`
+    ///
+    /// That endpoint returns one BO4E object **per OBIS register**, which is the
+    /// right shape for a BO4E export and the wrong input for a settlement
+    /// figure — folding it back into one series is the projection, and doing it
+    /// here got it wrong. The filter was `ObisCode::is_import`, so on a
+    /// dual-tariff MaLo the total register `1-0:1.8.0` passed it **and so did**
+    /// `1-0:1.8.1` and `1-0:1.8.2`, which are its own decomposition: the
+    /// consumption went into the Summenzeitreihe twice, in a filing the BIKO
+    /// cannot withdraw. `1-0:1.6.0` — a Jahreshöchstleistung in kW — is import
+    /// too, and was summed in as though it were energy, as was the
+    /// Fehlerregister `…63`.
+    ///
+    /// edmd's `domain::register` decides all of that once, and now serves the
+    /// answer instead of the raw registers.
     async fn fetch_lastgang(
         &self,
         malo_id: &str,
@@ -801,87 +789,77 @@ impl SyncEngine {
         let mut query = vec![
             ("from", from.format(&Rfc3339).unwrap_or_default()),
             ("to", to.format(&Rfc3339).unwrap_or_default()),
+            ("direction", "BEZUG".to_owned()),
         ];
         // `as_of` reconstructs the data as it stood when an earlier version was
-        // filed (§ 60 Abs. 6 MsbG). A correction under the KBKA has to be able
-        // to say what changed since the version the BIKO settled, which requires
-        // the earlier state and not just the current one.
+        // filed. A correction under the KBKA has to be able to say what changed
+        // since the version the BIKO settled, which requires the earlier state
+        // and not just the current one.
         if let Some(ts) = as_of {
             query.push(("as_of", ts.format(&Rfc3339).unwrap_or_default()));
         }
 
-        let path = format!("/api/v1/lastgang/{malo_id}");
+        let path = format!("/api/v1/energy/{malo_id}");
         let data: serde_json::Value = self
             .edmd
             .json(self.edmd.get(&path).query(&query))
             .await
-            .with_context(|| format!("edmd lastgang for {malo_id}"))?
-            .with_context(|| format!("edmd has no Lastgang for {malo_id} in this period"))?;
+            .with_context(|| format!("edmd energy series for {malo_id}"))?
+            .with_context(|| format!("edmd has no Bezugs-series for {malo_id} in this period"))?;
 
-        Self::parse_lastgaenge(malo_id, &data)
+        Self::parse_energy_series(malo_id, &data)
     }
 
-    /// Turn edmd's BO4E `Lastgang` array into the MaLo's Bezugs-intervals.
+    /// Turn edmd's projected energy series into typed intervals.
     ///
-    /// The endpoint returns **one Lastgang per OBIS code**. Flattening all of
-    /// them summed a MaLo's Bezugs- (`1.x.y`) and Einspeisungsregister
-    /// (`2.x.y`) into the same settlement slot, double-counting the MaLo into
-    /// the Summenzeitreihe. The BG-SZR settles Bezug, so only the import
-    /// direction contributes.
-    fn parse_lastgaenge(
+    /// No register logic here, deliberately: the response is already one series
+    /// in one direction, and re-deriving anything from it is how the previous
+    /// version came to double-count. The only judgement left is that a MaLo the
+    /// BG-SZR needs must actually have a Bezugs-series — reporting nothing would
+    /// look like a MaLo without data and short the territory silently.
+    fn parse_energy_series(
         malo_id: &str,
         data: &serde_json::Value,
     ) -> Result<Vec<metering::MeterInterval>> {
-        let lastgaenge = data
-            .as_array()
-            .with_context(|| format!("edmd /lastgang/{malo_id} did not return an array"))?;
+        use time::format_description::well_known::Rfc3339;
 
-        let mut intervals: Vec<metering::MeterInterval> = Vec::new();
-        let mut skipped: Vec<String> = Vec::new();
-        for lastgang in lastgaenge {
-            // metering 0.16 types OBIS as `ObisCode`; parse and drop an unparseable code.
-            let raw_obis = lastgang["obisKennzahl"].as_str().unwrap_or_default();
-            let obis = metering::ObisCode::parse(raw_obis).ok();
-            if !obis.as_ref().is_some_and(metering::ObisCode::is_import) {
-                skipped.push(raw_obis.to_owned());
+        let entries = data["intervals"]
+            .as_array()
+            .with_context(|| format!("edmd /energy/{malo_id} carried no `intervals` array"))?;
+
+        let mut intervals: Vec<metering::MeterInterval> = Vec::with_capacity(entries.len());
+        for iv in entries {
+            let (Some(from), Some(to)) = (
+                iv["start"]
+                    .as_str()
+                    .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok()),
+                iv["end"]
+                    .as_str()
+                    .and_then(|s| OffsetDateTime::parse(s, &Rfc3339).ok()),
+            ) else {
                 continue;
-            }
-            for wert in lastgang["werte"].as_array().into_iter().flatten() {
-                let zeitraum = &wert["zeitraum"];
-                let from =
-                    Self::parse_zeitraum_bound(&zeitraum["startdatum"], &zeitraum["startuhrzeit"]);
-                let to = Self::parse_zeitraum_bound(&zeitraum["enddatum"], &zeitraum["enduhrzeit"]);
-                let (Some(from), Some(to)) = (from, to) else {
-                    continue;
-                };
-                let Some(value) = Self::parse_decimal(&wert["wert"]) else {
-                    continue;
-                };
-                intervals.push(metering::MeterInterval {
-                    from,
-                    to,
-                    value,
-                    quality: Self::messwertstatus_to_quality(wert["status"].as_str()),
-                    obis_code: obis,
-                });
-            }
+            };
+            let Some(value) = Self::parse_decimal(&iv["kwh"]) else {
+                continue;
+            };
+            intervals.push(metering::MeterInterval {
+                from,
+                to,
+                value,
+                quality: iv["quality"]
+                    .as_str()
+                    .and_then(|q| q.parse().ok())
+                    .unwrap_or(metering::QualityFlag::Unknown),
+                obis_code: None,
+            });
         }
         intervals.sort_by_key(|iv| iv.from);
 
-        // Every series was a non-Bezug register. Reporting nothing would look
-        // like a MaLo without data and short the territory silently, so it is
-        // named instead.
-        if intervals.is_empty() && !skipped.is_empty() {
+        if intervals.is_empty() {
             anyhow::bail!(
-                "edmd returned no Bezugs-Lastgang for {malo_id}; only these registers: {}",
-                skipped.join(", ")
-            );
-        }
-        if !skipped.is_empty() {
-            info!(
-                malo_id,
-                skipped = skipped.join(", "),
-                "mabis-syncd: non-Bezug registers excluded from the Summenzeitreihe"
+                "edmd returned no Bezugs-series for {malo_id}: the point reports \
+                 {count} interval(s) in that direction",
+                count = intervals.len()
             );
         }
 
@@ -1278,43 +1256,47 @@ mod window_tests {
 mod lastgang_tests {
     use super::*;
 
-    fn lastgang(obis: &str, wert: &str) -> serde_json::Value {
+    fn series(intervals: serde_json::Value) -> serde_json::Value {
         serde_json::json!({
-            "obisKennzahl": obis,
-            "werte": [{
-                "zeitraum": {
-                    "startdatum": "2026-06-01",
-                    "startuhrzeit": "00:00:00+00:00",
-                    "enddatum": "2026-06-01",
-                    "enduhrzeit": "00:15:00+00:00",
-                },
-                "wert": wert,
-                "status": "ABGELESEN",
-            }],
+            "malo_id": "50123456789",
+            "direction": "BEZUG",
+            "resolution_min": 15,
+            "coverage_pct": 100.0,
+            "billable_pct": 100.0,
+            "interval_count": 1,
+            "intervals": intervals,
         })
     }
 
-    /// A MaLo with both a Bezugs- and an Einspeisungsregister returns two
-    /// Lastgänge over the same slots. Summing both put the feed-in energy into
-    /// the Summenzeitreihe as consumption.
-    #[test]
-    fn the_einspeisung_register_does_not_contribute() {
-        let data = serde_json::json!([
-            lastgang("1-0:1.29.0", "12.5"),
-            lastgang("1-0:2.29.0", "40.0"),
-        ]);
-        let intervals = SyncEngine::parse_lastgaenge("50123456789", &data).expect("parses");
-        assert_eq!(intervals.len(), 1, "one slot, not one per register");
-        assert_eq!(intervals[0].value, Decimal::new(125, 1));
+    fn slot(start: &str, end: &str, kwh: &str) -> serde_json::Value {
+        serde_json::json!({ "start": start, "end": end, "kwh": kwh, "quality": "MEASURED" })
     }
 
-    /// A MaLo whose only registers are non-Bezug would otherwise look like a
-    /// MaLo without data, and short the territory without saying so.
+    /// The projected series is taken as given — no register logic here.
     #[test]
-    fn a_malo_with_no_bezug_register_is_an_error() {
-        let data = serde_json::json!([lastgang("1-0:2.29.0", "40.0")]);
-        let err = SyncEngine::parse_lastgaenge("50123456789", &data).expect_err("refuses");
-        assert!(err.to_string().contains("1-0:2.29.0"), "{err}");
+    fn the_projected_series_is_parsed_slot_for_slot() {
+        let data = series(serde_json::json!([
+            slot("2026-06-01T00:00:00Z", "2026-06-01T00:15:00Z", "12.5"),
+            slot("2026-06-01T00:15:00Z", "2026-06-01T00:30:00Z", "13.5"),
+        ]));
+        let intervals = SyncEngine::parse_energy_series("50123456789", &data).expect("parses");
+        assert_eq!(intervals.len(), 2);
+        assert_eq!(intervals[0].value, Decimal::new(125, 1));
+        assert_eq!(intervals[0].quality, metering::QualityFlag::Measured);
+        assert_eq!(
+            intervals[0].to,
+            time::macros::datetime!(2026-06-01 00:15:00 UTC),
+            "the interval's own end, not an assumed grid"
+        );
+    }
+
+    /// A MaLo with no Bezugs-series would otherwise look like a MaLo without
+    /// data, and short the territory without saying so.
+    #[test]
+    fn a_malo_with_no_bezug_series_is_an_error() {
+        let data = series(serde_json::json!([]));
+        let err = SyncEngine::parse_energy_series("50123456789", &data).expect_err("refuses");
+        assert!(err.to_string().contains("50123456789"), "{err}");
     }
 }
 

@@ -252,6 +252,15 @@ pub(crate) async fn post_gdpr_erasure(
     }
 
     // Buchungsbeleg-bearing: the values must survive, the identity must not.
+    //
+    // `meter_readings` is the Zählerstandsgang — the *primary* measurement behind
+    // every derived interval, and the source of the § 40 Abs. 2 Nr. 6 EnWG
+    // opening/closing reading on an invoice. It is exactly as personal as the
+    // readings in the lake and exactly as retained: pseudonymised, never dropped.
+    // `zsg_conversion_log` says why a given quarter-hour has no measured value,
+    // which is the other half of a § 60 Abs. 2 substitution's justification.
+    pseudonymise!("pseudonymise_readings", "meter_readings");
+    pseudonymise!("pseudonymise_zsg_log", "zsg_conversion_log");
     pseudonymise!("pseudonymise_corrections", "meter_read_corrections");
     pseudonymise!("pseudonymise_substitute_log", "substitute_value_log");
     pseudonymise!("pseudonymise_receipts", "meter_data_receipts");
@@ -324,17 +333,19 @@ pub(crate) async fn post_gdpr_erasure(
             "legal_basis":      "DSGVO Art. 17; Art. 17 Abs. 3 lit. b for the retained \
                                  Buchungsbelege (§ 147 Abs. 1 AO)",
             "pseudonymised": [
-                "meter_read_corrections", "substitute_value_log", "meter_data_receipts",
-                "ablese_auftraege", "gas_quality_data",
+                "meter_readings", "zsg_conversion_log", "meter_read_corrections",
+                "substitute_value_log", "meter_data_receipts", "ablese_auftraege",
+                "gas_quality_data",
             ],
             "deleted": [
                 "meter_billing_periods", "quality_assessments",
                 "estimated_read_confirmations", "direct_push_sessions",
                 "smgw_sessions", "cls_compliance_issues", "delivery_surveillance",
-                "smgw_cert_expiry_alerts",
+                "smgw_cert_expiry_alerts", "virtual_meter_configs",
             ],
-            "audit_note": "Subject mapping destroyed — readings survive in both tiers and the \
-                           § 147 AO trail survives in edmd, but neither identifies the MaLo. \
+            "audit_note": "Subject mapping destroyed — readings survive in both tiers, in the \
+                           authoritative store and the ESA Typ-2 one alike, and the § 147 AO \
+                           trail survives in edmd, but none of them identifies the MaLo. \
                            Derived and operational rows deleted outright.",
         })),
     )

@@ -25,6 +25,16 @@ pub(crate) struct CreateReadingOrderRequest {
     pub ausfuehrt_bis: Option<time::Date>,
     pub auftrag_position_id: Option<uuid::Uuid>,
     pub insrpt_process_id: Option<String>,
+    /// `STROM` (default) · `GAS` · `WAERME` · `WASSER`.
+    ///
+    /// Decides the unit of the Zählerstand this order will report, so it is part
+    /// of the order rather than of the completion: the person reading the meter
+    /// should not be the one deciding what commodity it measures.
+    #[serde(default)]
+    pub sparte: Option<String>,
+    /// OBIS register to be read, when it is known.
+    #[serde(default)]
+    pub obis_code: Option<String>,
 }
 
 /// Register readings and gas factors reported when a reading order completes.
@@ -41,6 +51,13 @@ pub(crate) struct CompleteReadingOrderRequest {
     pub brennwert: Option<Decimal>,
     pub zustandszahl: Option<Decimal>,
     pub mscons_ref: Option<String>,
+    /// When the reading was taken, if not now.
+    ///
+    /// A Jahresablesung is frequently entered days after the meter was read, and
+    /// the § 40 Abs. 2 Nr. 6 EnWG opening/closing Zählerstand is selected by the
+    /// instant it *held*, not the instant it was typed in.
+    #[serde(default, with = "time::serde::rfc3339::option")]
+    pub abgelesen_am: Option<time::OffsetDateTime>,
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -86,13 +103,33 @@ pub(crate) async fn create_reading_order(
             .into_response();
     }
 
+    // Refused, not defaulted: the Sparte decides the unit of the Zählerstand
+    // this order will report, and a gas reading filed as electricity is a
+    // register value in the wrong dimension.
+    let sparte = match req.sparte.as_deref() {
+        None => crate::domain::Sparte::Strom,
+        Some(raw) => match crate::domain::parse_sparte(raw) {
+            Some(s) => s,
+            None => {
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": format!("unknown sparte `{raw}`"),
+                        "expected": crate::domain::Sparte::CODES,
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
+
     let id = uuid::Uuid::new_v4();
     let res = sqlx::query(
         "INSERT INTO ablese_auftraege
          (id,malo_id,melo_id,tenant,anlass,auftraggeber_rolle,
           ausfuehrender_msb,geplant_am,ausfuehrt_bis,
-          auftrag_position_id,insrpt_process_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
+          auftrag_position_id,insrpt_process_id,sparte,obis_code)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)",
     )
     .bind(id)
     .bind(&req.malo_id)
@@ -105,6 +142,8 @@ pub(crate) async fn create_reading_order(
     .bind(req.ausfuehrt_bis)
     .bind(req.auftrag_position_id)
     .bind(&req.insrpt_process_id)
+    .bind(sparte.as_str())
+    .bind(&req.obis_code)
     .execute(state.repo.pool())
     .await;
 
@@ -195,6 +234,19 @@ pub(crate) async fn get_reading_order(
 }
 
 /// `PUT /api/v1/reading-orders/{id}/complete`
+///
+/// Records the reading and **files the Zählerstand into the reading store**.
+///
+/// The second half is the point. A completed Ablesung used to write the register
+/// value onto its own order row and nowhere else, so the one number the whole
+/// order existed to obtain was unreachable from billing: it could not answer
+/// § 40 Abs. 2 Nr. 6 EnWG (the invoice's opening and closing Zählerstand), and it
+/// could not be differenced against the previous year's reading — which for an
+/// **SLP** delivery point, with no interval metering at all, is the entire
+/// billing path (`metering::reading::consumption_between`).
+///
+/// The order row keeps its copy: it is the record of what this Auftrag returned,
+/// which is a different fact from what the register held at an instant.
 pub(crate) async fn complete_reading_order(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -202,6 +254,8 @@ pub(crate) async fn complete_reading_order(
     Path(id): Path<uuid::Uuid>,
     Json(req): Json<CompleteReadingOrderRequest>,
 ) -> impl IntoResponse {
+    use sqlx::Row as _;
+
     if let Err(e) = enforcer.check(&claims.principal(), "write-reading-order", &state.tenant) {
         return (
             StatusCode::FORBIDDEN,
@@ -210,6 +264,11 @@ pub(crate) async fn complete_reading_order(
             .into_response();
     }
 
+    // The instant the register *held* the value, not the instant it was typed
+    // in: a Jahresablesung is routinely entered days later, and the period
+    // bounds select on the reading's own timestamp.
+    let abgelesen_am = req.abgelesen_am.unwrap_or_else(OffsetDateTime::now_utc);
+
     let res = sqlx::query(
         "UPDATE ablese_auftraege
          SET status='AUSGEFUEHRT',
@@ -217,9 +276,10 @@ pub(crate) async fn complete_reading_order(
              zaehlerstand_qm3=$2,
              brennwert=$3,
              zustandszahl=$4,
-             ausgefuehrt_am=now(),
+             ausgefuehrt_am=$8,
              mscons_ref=COALESCE($5,mscons_ref)
-         WHERE id=$6 AND tenant=$7 AND status IN ('OFFEN','BEAUFTRAGT')",
+         WHERE id=$6 AND tenant=$7 AND status IN ('OFFEN','BEAUFTRAGT')
+         RETURNING malo_id, sparte, obis_code",
     )
     .bind(req.zaehlerstand_kwh)
     .bind(req.zaehlerstand_qm3)
@@ -228,14 +288,94 @@ pub(crate) async fn complete_reading_order(
     .bind(&req.mscons_ref)
     .bind(id)
     .bind(&state.tenant)
-    .execute(state.repo.pool())
+    .bind(abgelesen_am)
+    .fetch_optional(state.repo.pool())
     .await;
 
-    match res {
-        Ok(r) if r.rows_affected() == 0 => StatusCode::NOT_FOUND.into_response(),
-        Ok(_) => StatusCode::NO_CONTENT.into_response(),
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    let row = match res {
+        Ok(Some(row)) => row,
+        Ok(None) => return StatusCode::NOT_FOUND.into_response(),
+        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()).into_response(),
+    };
+
+    let malo_id: String = row.try_get("malo_id").unwrap_or_default();
+    let sparte = row
+        .try_get::<String, _>("sparte")
+        .ok()
+        .as_deref()
+        .and_then(crate::domain::parse_sparte)
+        .unwrap_or(crate::domain::Sparte::Strom);
+    let obis_code: Option<String> = row.try_get("obis_code").unwrap_or(None);
+
+    // The register value in the unit the register counts — the same rule the
+    // Zählerstandsgang follows. `zaehlerstand_qm3` is a volume and belongs to a
+    // gas or water meter; `zaehlerstand_kwh` is an energy register. Reporting
+    // the one that does not match the order's Sparte is a decode fault, not a
+    // reading, so it is refused rather than filed in the wrong dimension.
+    let value = match sparte.measured_unit() {
+        metering::MeasurementUnit::CubicMetre => req.zaehlerstand_qm3,
+        metering::MeasurementUnit::KiloWattHour => req.zaehlerstand_kwh,
+    };
+    let mismatched = match sparte.measured_unit() {
+        metering::MeasurementUnit::CubicMetre => req.zaehlerstand_kwh.is_some(),
+        metering::MeasurementUnit::KiloWattHour => req.zaehlerstand_qm3.is_some(),
+    };
+    if mismatched {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(serde_json::json!({
+                "error": format!(
+                    "the order is for {}, whose register counts {} — the other \
+                     Zählerstand field belongs to a different commodity",
+                    sparte.as_str(),
+                    sparte.measured_unit().as_str(),
+                ),
+            })),
+        )
+            .into_response();
     }
+
+    // A completion without a reading is legitimate — an order can be closed
+    // administratively — so it records the status and files nothing.
+    if let Some(zaehlerstand) = value {
+        let reading = crate::domain::MeterReading {
+            malo_id: malo_id.clone(),
+            read_at: abgelesen_am,
+            zaehlerstand,
+            quality: QualityFlag::Measured,
+            sparte,
+            obis_code,
+            tenant: state.tenant.clone(),
+            // An Ablesung is an operator entry, whoever physically took it.
+            source: IngestionSource::Manual,
+            sender_mp_id: None,
+            push_session: None,
+        };
+        if let Err(e) = state
+            .repo
+            .store_readings(std::slice::from_ref(&reading))
+            .await
+        {
+            // The order is already AUSGEFUEHRT and the value is on its row, so
+            // nothing is lost — but the billing path cannot see it, which is the
+            // whole reason for filing it, so it must be visible.
+            tracing::error!(
+                order = %id, malo_id = %malo_id, error = %e,
+                "edmd: reading order completed but its Zählerstand could not be filed"
+            );
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
+                    "error": e.to_string(),
+                    "status": "AUSGEFUEHRT",
+                    "zaehlerstand_filed": false,
+                })),
+            )
+                .into_response();
+        }
+    }
+
+    StatusCode::NO_CONTENT.into_response()
 }
 
 /// `PUT /api/v1/reading-orders/{id}/cancel`

@@ -31,9 +31,26 @@ pub(crate) struct IotPushRequest {
     session_id: String,
     /// Transport the reading arrived over, for provenance:
     /// `LORAWAN` · `MBUS` · `WMBUS` · `REST`.
+    ///
+    /// Recorded on the session row (`direct_push_sessions.transport`).
     transport: String,
     /// Optional device identity (LoRaWAN devEUI, M-Bus secondary address).
+    ///
+    /// Recorded on the session row beside the transport. It is deliberately
+    /// **not** a `sender_mp_id`: that column is the BDEW Codenummer of the
+    /// operator who assigned the MSCONS version, and it keys the meterstore
+    /// version scope. Filing a devEUI there put every device in a scope of its
+    /// own, so a replaced meter's readings could never supersede the ones they
+    /// corrected — and every read-back reported the devEUI as the reporting
+    /// market partner.
     device_id: Option<String>,
+    /// MP-ID of the market partner delivering these values (the MSB operating
+    /// the submetering, when there is one).
+    ///
+    /// Keys the meterstore version scope. Absent, the scope falls back to the
+    /// tenant, which is the right answer for a device nobody reports on behalf of.
+    #[serde(default)]
+    sender_mp_id: Option<String>,
     /// Optional OBIS code. Medium group: 4 = Heizkostenverteiler, 5/6 = thermal,
     /// 7 = gas, 8 = cold water, 9 = hot water.
     obis_code: Option<String>,
@@ -54,6 +71,13 @@ pub(crate) struct IotPushRequest {
     brennwert_kwh_per_m3: Option<rust_decimal::Decimal>,
     /// Zustandszahl (dimensionless), default 1.0 when not separately metered.
     zustandszahl: Option<rust_decimal::Decimal>,
+    /// Physical capacity ceiling of the metered plant, in kW.
+    ///
+    /// Supply it and **V12** (`ImplausiblePower`) checks each interval's average
+    /// power against it. Omit it and V12 stays off — edmd holds no master data
+    /// of its own and will not invent a ceiling.
+    #[serde(default)]
+    max_plant_power_kw: Option<rust_decimal::Decimal>,
     /// Calibration validity (`Eichfrist`) end date, `YYYY-MM-DD`, if known.
     ///
     /// Per §34 Abs. 2 MessEV a Eichfrist of at least a year ends only *"mit dem
@@ -101,7 +125,7 @@ pub(crate) async fn post_iot_reads(
     Path(malo_id): Path<String>,
     Json(req): Json<IotPushRequest>,
 ) -> impl IntoResponse {
-    use metering::interval::{MeasurementUnit, Sparte as MSparte};
+    use metering::interval::MeasurementUnit;
     use time::format_description::well_known::Rfc3339;
 
     let resource_tenant = state.tenant.as_str();
@@ -131,12 +155,10 @@ pub(crate) async fn post_iot_reads(
             .into_response();
     }
 
-    let sparte = match req.sparte.to_uppercase().as_str() {
-        "STROM" => MSparte::Strom,
-        "GAS" => MSparte::Gas,
-        "WAERME" | "WÄRME" => MSparte::Waerme,
-        "WASSER" => MSparte::Wasser,
-        other => {
+    let sparte = match crate::domain::parse_sparte(&req.sparte) {
+        Some(s) => s,
+        None => {
+            let other = req.sparte.as_str();
             return (
                 StatusCode::UNPROCESSABLE_ENTITY,
                 Json(serde_json::json!({
@@ -272,7 +294,12 @@ pub(crate) async fn post_iot_reads(
                 to,
                 value: converted,
                 quality: metering::QualityFlag::Measured,
-                obis_code: None,
+                // The register the batch names, so the scorer's own
+                // energy-register filter (`domain::register`) sees what the
+                // stored rows carry. Left `None`, a Heizkostenverteiler batch —
+                // dimensionless Verbrauchseinheiten, not energy — was scored as
+                // though it were a kWh series.
+                obis_code: req.obis_code.as_deref().and_then(|s| s.parse().ok()),
             })
         })
         .collect();
@@ -371,7 +398,7 @@ pub(crate) async fn post_iot_reads(
             source: IngestionSource::IotPush,
             push_session: Some(req.session_id.clone()),
             quality_warnings: None,
-            sender_mp_id: req.device_id.clone(),
+            sender_mp_id: req.sender_mp_id.clone(),
             allocation_version: "INITIAL".to_owned(),
             valid_from_tx: Some(OffsetDateTime::now_utc()),
             mscons_version: None,
@@ -379,14 +406,31 @@ pub(crate) async fn post_iot_reads(
         stored += 1;
     }
 
-    let (validated, validation) =
-        crate::domain::validation::ValidatedReads::validate(batch, "IOT_PUSH_VALIDATION", &malo_id);
+    let (validated, validation) = crate::domain::ValidatedReads::validate(
+        batch,
+        crate::domain::IngestContext::new("IOT_PUSH_VALIDATION", &malo_id)
+            .with_capacity_kw(req.max_plant_power_kw),
+    );
 
-    if let (Some(q), Some(first), Some(last)) = (
-        quality.as_ref(),
-        validated.as_slice().first().map(|r| r.dtm_from),
-        validated.as_slice().last().map(|r| r.dtm_to),
-    ) {
+    // Captured before the batch moves into the store, so the alert below can
+    // name the window it covers. Min/max rather than the ends of the slice: a
+    // batch is not required to arrive sorted.
+    let (period_from, period_to) = crate::domain::batch_period(validated.as_slice());
+
+    if !validated.is_empty()
+        && let Err(e) = state.repo.store_reads(validated).await
+    {
+        tracing::error!(malo_id = %malo_id, error = %e, "edmd: IoT batch insert failed");
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({ "error": e.to_string() })),
+        )
+            .into_response();
+    }
+
+    // Recorded once the readings are stored, for the same reason every other
+    // door does: a verdict written first stands for a delivery that failed.
+    if let (Some(q), Some(first), Some(last)) = (quality.as_ref(), period_from, period_to) {
         let mut report = QualityReport { ..q.clone() };
         report.intervals_rejected = rejected.len();
         record_quality_assessment(
@@ -401,34 +445,22 @@ pub(crate) async fn post_iot_reads(
         .await;
     }
 
-    // Captured before the batch moves into the store, so the alert below can
-    // name the window it covers.
-    let period_from = validated.as_slice().first().map(|r| r.dtm_from);
-    let period_to = validated.as_slice().last().map(|r| r.dtm_to);
-
-    if !validated.is_empty()
-        && let Err(e) = state.repo.store_reads(validated).await
-    {
-        tracing::error!(malo_id = %malo_id, error = %e, "edmd: IoT batch insert failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(serde_json::json!({ "error": e.to_string() })),
-        )
-            .into_response();
-    }
-
     // Commit the session only when something landed, so a wholly-failed batch
     // stays retryable.
     if stored > 0 {
         let _ = sqlx::query(
             r"INSERT INTO direct_push_sessions
                 (session_id, malo_id, source, obis_code, interval_count,
-                 period_from, period_to, status, raw_payload, tenant)
-              VALUES ($1,$2,'IOT_PUSH',$3,$4,$5,$6,'committed',$7,$8)
+                 period_from, period_to, status, raw_payload, transport, device_id, tenant)
+              VALUES ($1,$2,'IOT_PUSH',$3,$4,$5,$6,'committed',$7,$8,$9,$10)
               ON CONFLICT (tenant, session_id) DO UPDATE
                   SET status      = 'committed',
                       raw_payload = COALESCE(EXCLUDED.raw_payload,
-                                             direct_push_sessions.raw_payload)",
+                                             direct_push_sessions.raw_payload),
+                      transport   = COALESCE(EXCLUDED.transport,
+                                             direct_push_sessions.transport),
+                      device_id   = COALESCE(EXCLUDED.device_id,
+                                             direct_push_sessions.device_id)",
         )
         .bind(&req.session_id)
         .bind(&malo_id)
@@ -437,6 +469,8 @@ pub(crate) async fn post_iot_reads(
         .bind(period_from)
         .bind(period_to)
         .bind(&req.raw_payload)
+        .bind(req.transport.trim())
+        .bind(&req.device_id)
         .bind(resource_tenant)
         .execute(state.repo.pool())
         .await;

@@ -520,7 +520,13 @@ Content-Type: application/json
 
 When the product in `productd` has `dynamic_epex: true`, `billingd` automatically:
 
-1. Fetches 15-min Lastgang from `edmd` (`GET /api/v1/lastgang/{malo_id}?from=…&to=…`)
+1. Fetches the 15-min **Bezug** series from `edmd`
+   (`GET /api/v1/energy/{malo_id}?direction=BEZUG&from=…&to=…`) — the canonical
+   register projection, **not** `/lastgang`. That endpoint returns one BO4E object
+   per OBIS register, and folding them together unfiltered would bill a prosumer's
+   Einspeisung as grid draw, add a dual-tariff meter's `1.8.1`/`1.8.2` to the
+   `1.8.0` they decompose, and price a `1-0:1.6.0` peak-demand register in **kW**
+   as energy — each at a dynamic price, against a §41a customer
 2. Fetches 15-min EPEX prices from `productd` (`GET /api/v1/epex-prices/{date}/quarter-hourly`),
    keyed on each Market Time Unit's UTC start instant (SDAC 15-min go-live 2025-10-01)
 3. Calculates `Σ(kWh_MTU × (EPEX_MTU_ct + Aufschlag_ct)) / 100` as the energy cost —

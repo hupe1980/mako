@@ -13,7 +13,7 @@ and files them with the BIKO as MSCONS PID 13003, through `makod`.
 edmd /billing-periods ──► discover MaLos (Sparte = STROM)
 marktd /malos/{id}    ──► group by Bilanzierungsgebiet
 marktd /…/mabis-zp    ──► the LOC+172 Meldepunkt per territory
-edmd /lastgang/{id}   ──► Bezugs-register only (OBIS 1.x.y)
+edmd /energy/{id}     ──► the canonical Bezug projection (domain::register)
                           │
               SummenzeitreiheBuilder (15-min grid, Berlin-local)
                           │

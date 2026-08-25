@@ -18,6 +18,8 @@ jobs:
   preflight:
     name: Pre-flight (fmt / clippy / test)
     runs-on: ubuntu-latest
+    env:
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
 
@@ -28,6 +30,15 @@ jobs:
 
       - name: Cache Cargo registry
         uses: Swatinem/rust-cache@v2
+
+      # `makotest` binds PyO3 with `abi3-py311`, so every workspace-wide cargo
+      # command needs an interpreter >= 3.11. `.cargo/config.toml` points
+      # PYO3_PYTHON at the developer's `.venv`, which does not exist here — and
+      # cargo leaves an already-set variable alone, so naming the runner's
+      # interpreter here is what makes the workspace build.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
       - name: Install protoc
         run: sudo apt-get update -y && sudo apt-get install -y protobuf-compiler

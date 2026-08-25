@@ -10,6 +10,26 @@ use uuid::Uuid;
 // an 8-arm identity match (`map_quality_flag`) in every service that used both crates.
 pub use metering::{QualityFlag, Sparte};
 
+/// Parse a Sparte off the wire, or `None` when it names no known commodity.
+///
+/// [`metering::Sparte`] owns the vocabulary and its `FromStr` is the parser;
+/// this adds exactly one thing — the umlaut spelling `WÄRME`, which German
+/// callers type and which the canonical `WAERME` code does not cover.
+///
+/// The point of having one of these is that the doors agree. Five of them had
+/// their own `match` and three of those ended in a catch-all arm that made an
+/// unknown commodity silently `STROM` — so a mislabelled gas batch was stored,
+/// scored and billed as electricity, in the electricity unit, with no error
+/// anywhere. Returning `None` puts the refusal where the caller can see it.
+#[must_use]
+pub fn parse_sparte(raw: &str) -> Option<Sparte> {
+    let trimmed = raw.trim();
+    if trimmed.eq_ignore_ascii_case("WÄRME") {
+        return Some(Sparte::Waerme);
+    }
+    trimmed.parse().ok()
+}
+
 /// MSCONS PIDs that `edmd` consumes from `marktd` webhook fan-out.
 ///
 /// ## Messwesen PIDs
@@ -411,6 +431,131 @@ fn default_allocation_version() -> String {
     "INITIAL".to_owned()
 }
 
+/// One cumulative register reading (**Zählerstand**) at an instant.
+///
+/// What an intelligentes Messsystem actually measures. § 2 Satz 1 Nr. 27 MsbG
+/// defines the Zählerstandsgang verbatim as *"die Messung einer Reihe
+/// **viertelstündig ermittelter Zählerstände** von elektrischer Arbeit und
+/// **stündlich ermittelter Zählerstände** von Gasmengen"* — two media, two
+/// resolutions — and **BK6-24-174** („Datenübermittlung ZSG", Beschluss
+/// 24.10.2024, wirksam 06.06.2025) puts the differencing at the
+/// Messstellenbetreiber:
+///
+/// ```text
+/// SMGW ──Zählerstandsgang──► MSB ──Lastgang──► NB, Lieferant
+///                             └── edmd
+/// ```
+///
+/// So a [`MeterRead`] is *derived* and this is the primary record. Both are
+/// kept: § 146 Abs. 4 AO requires the original to stay recoverable, and a stored
+/// difference cannot reproduce the register values it came from.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MeterReading {
+    /// 11-digit Marktlokations-ID.
+    pub malo_id: String,
+    /// The instant the register held this value (UTC).
+    pub read_at: OffsetDateTime,
+    /// The register value, **in the unit the register counts** — kWh for
+    /// electricity and heat, m³ for gas and water.
+    ///
+    /// Deliberately unconverted. § 25 Nr. 4 MessEV converts the *difference*
+    /// between two readings, not a register value, and a Zählerstand rewritten
+    /// into kWh is no longer the number on the meter an operator reads off it.
+    pub zaehlerstand: Decimal,
+    /// Quality of this reading.
+    pub quality: QualityFlag,
+    /// Commodity — decides the register's unit and the expected cadence.
+    pub sparte: Sparte,
+    /// OBIS register, e.g. `1-0:1.8.0` (a Zählerstand: value group `D = 8`).
+    pub obis_code: Option<String>,
+    /// Owning tenant.
+    pub tenant: String,
+    /// Which door the reading came in by.
+    pub source: IngestionSource,
+    /// BDEW Codenummer of the reporting MSB / network operator.
+    pub sender_mp_id: Option<String>,
+    /// Idempotency key of the delivering session, when there was one.
+    pub push_session: Option<String>,
+}
+
+/// What the Zählerstandsgang → Lastgang conversion did across one span.
+///
+/// Written to `zsg_conversion_log`. Two different facts share the table because
+/// they answer the same question — *what happened between these two readings,
+/// and why* — which an auditor asks without knowing the answer:
+///
+/// - a reconstructed register **wrap**, where the interval exists and the
+///   conversion added the register capacity to the difference on the strength of
+///   a configured device width;
+/// - an **anomaly**, where no honest difference could be taken and the interval
+///   is therefore absent. It surfaces downstream as a V01 gap and is filled by
+///   the § 60 Abs. 2 MsbG substitute path, which writes its own audit row.
+///
+/// Together the two logs say "this quarter-hour is an Ersatzwert *because* the
+/// register went backwards here", which neither says alone.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ZsgConversionEntry {
+    pub tenant: String,
+    pub malo_id: String,
+    /// Canonical OBIS spelling, empty for an unlabelled register.
+    pub obis_code_norm: String,
+    pub span_from: OffsetDateTime,
+    pub span_to: OffsetDateTime,
+    /// [`ZSG_OUTCOME_ROLLOVER`], or the `AnomalyKind` that refused the
+    /// difference.
+    pub outcome: &'static str,
+    pub previous_value: Decimal,
+    pub current_value: Decimal,
+    /// Reconstructed consumption across a wrap. `None` for an anomaly.
+    pub delta: Option<Decimal>,
+    /// The register capacity that explained a wrap. `None` for an anomaly.
+    pub register_capacity: Option<Decimal>,
+    pub session_id: Option<String>,
+}
+
+/// The `zsg_conversion_log.outcome` for a reconstructed register wrap.
+pub const ZSG_OUTCOME_ROLLOVER: &str = "ROLLOVER";
+
+/// The whole `zsg_conversion_log.outcome` vocabulary.
+///
+/// [`ZSG_OUTCOME_ROLLOVER`] plus every [`AnomalyKind`], in the crate's own
+/// declaration order. `schema_code_guard` pins the DB `CHECK` against it, so a
+/// kind added upstream fails the build rather than an insert at runtime — and
+/// the insert is where an audit row would otherwise go missing with a warning.
+///
+/// [`AnomalyKind`]: metering::reading::AnomalyKind
+#[must_use]
+pub fn zsg_outcomes() -> Vec<&'static str> {
+    std::iter::once(ZSG_OUTCOME_ROLLOVER)
+        .chain(
+            metering::reading::AnomalyKind::ALL
+                .iter()
+                .copied()
+                .map(anomaly_outcome),
+        )
+        .collect()
+}
+
+/// The stored `outcome` label for an anomaly kind.
+///
+/// Spelled out rather than derived from `Debug`, because the column is
+/// CHECK-constrained and a rename upstream would turn every audit insert into a
+/// silent warning. `AnomalyKind` is `#[non_exhaustive]`, so a kind this does not
+/// know falls back to the label that says a difference was refused without
+/// claiming to know why.
+#[must_use]
+pub fn anomaly_outcome(kind: metering::reading::AnomalyKind) -> &'static str {
+    use metering::reading::AnomalyKind as K;
+    match kind {
+        K::BackwardsWithoutRegisterWidth => "BACKWARDS_WITHOUT_REGISTER_WIDTH",
+        K::ImplausibleRollover => "IMPLAUSIBLE_ROLLOVER",
+        K::ImplausibleDelta => "IMPLAUSIBLE_DELTA",
+        K::ZeroLengthSpan => "ZERO_LENGTH_SPAN",
+        K::NonBillableEndpoint => "NON_BILLABLE_ENDPOINT",
+        _ => "IMPLAUSIBLE_DELTA",
+    }
+}
+
 /// A single metered interval read sourced from an MSCONS message.
 ///
 /// Populated when domain crates emit typed read payloads in `ProcessCompleted`.
@@ -607,7 +752,7 @@ pub struct ImbalanceReport {
 /// `GET /api/v1/timeseries/{malo_id}` to avoid transferring 35 k rows per MaLo
 /// in a billing-period summary response.
 ///
-/// Source: GPKE BK6-22-024; GeLi Gas 3.0 (BK7-24-01-009); Allgemeine Festlegungen §6.
+/// Source: GPKE (BK6-24-174) Teil 1; GeLi Gas 3.0 (BK7-24-01-009).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MeterBillingPeriod {
     /// 11-digit Marktlokations-ID.

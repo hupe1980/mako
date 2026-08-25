@@ -118,6 +118,13 @@ pub enum CampaignError {
     InvalidNbMpId,
     /// `marktd` could not be reached or answered with an error.
     Marktd(String),
+    /// The orders could not be written.
+    ///
+    /// Its own variant rather than a reuse of [`Self::Marktd`]: the two say
+    /// different things to an operator — one is "the master-data service is
+    /// down", the other "this database refused the write" — and they are fixed
+    /// in different places.
+    Store(String),
 }
 
 impl CampaignError {
@@ -135,6 +142,11 @@ impl CampaignError {
                 Json(serde_json::json!({ "error": detail })),
             )
                 .into_response(),
+            Self::Store(detail) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({ "error": detail })),
+            )
+                .into_response(),
         }
     }
 
@@ -143,7 +155,7 @@ impl CampaignError {
     pub fn detail(&self) -> String {
         match self {
             Self::InvalidNbMpId => "nb_mp_id must be a 13-digit BDEW/DVGW Codenummer".to_owned(),
-            Self::Marktd(d) => d.clone(),
+            Self::Marktd(d) | Self::Store(d) => d.clone(),
         }
     }
 }
@@ -200,7 +212,11 @@ pub async fn run_jahresablesung_campaign(
     if nb_mp_id.len() != 13 || !nb_mp_id.chars().all(|c| c.is_ascii_digit()) {
         return Err(CampaignError::InvalidNbMpId);
     }
-    let mut malos: Vec<String> = Vec::new();
+    // The MaLo **and its Sparte**. A campaign enumerates SLP Marktlokationen,
+    // and an SLP point is as often gas as electricity — the Sparte decides
+    // whether the Zählerstand the order comes back with is kWh or m³, and a
+    // reading filed in the wrong dimension is refused rather than stored.
+    let mut malos: Vec<(String, crate::domain::Sparte)> = Vec::new();
     let mut page = 1i64;
     let page_size = 500i64;
 
@@ -233,7 +249,12 @@ pub async fn run_jahresablesung_campaign(
 
         for item in &items {
             if let Some(mid) = item.get("malo_id").and_then(|v| v.as_str()) {
-                malos.push(mid.to_owned());
+                let sparte = item
+                    .get("sparte")
+                    .and_then(|v| v.as_str())
+                    .and_then(crate::domain::parse_sparte)
+                    .unwrap_or(crate::domain::Sparte::Strom);
+                malos.push((mid.to_owned(), sparte));
                 if malos.len() as i64 >= max_malos {
                     break;
                 }
@@ -249,59 +270,44 @@ pub async fn run_jahresablesung_campaign(
     }
 
     let total_malos = malos.len();
-    let mut created = 0u64;
-    let mut skipped = 0u64;
 
-    for malo_id in &malos {
-        // Check whether this MaLo already has a Jahresablesung this year.
-        let existing: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM ablese_auftraege
-             WHERE malo_id = $1 AND tenant = $2
-               AND anlass = 'JAHRESABLESUNG'
-               AND auftraggeber_rolle = 'NB'
-               AND extract(year FROM geplant_am) = $3
-               AND status IN ('OFFEN','BEAUFTRAGT','AUSGEFUEHRT')",
-        )
-        .bind(malo_id)
-        .bind(tenant)
-        .bind(year)
-        .fetch_one(pool)
-        .await
-        .unwrap_or(0);
-
-        if existing > 0 {
-            skipped += 1;
-            continue;
+    // One statement for the whole campaign, not a SELECT and an INSERT per MaLo.
+    // At the 50 000-MaLo ceiling that was 100 000 round trips, and the pre-check
+    // it saved was never the thing that made the run safe: `ON CONFLICT DO
+    // NOTHING` against `ablese_scheduled_unique`
+    // `(tenant, malo_id, anlass, geplant_am)` is, because only the constraint
+    // survives two campaign runs racing. `rows_affected` is then exactly the
+    // number of orders created, and everything else was already scheduled.
+    let (malo_ids, spartes): (Vec<String>, Vec<String>) = malos
+        .iter()
+        .map(|(m, s)| (m.clone(), s.as_str().to_owned()))
+        .unzip();
+    let created = match sqlx::query(
+        "INSERT INTO ablese_auftraege
+             (malo_id,tenant,anlass,auftraggeber_rolle,ausfuehrender_msb,
+              geplant_am,ausfuehrt_bis,sparte)
+         SELECT m, $2, 'JAHRESABLESUNG', 'NB', $3, $4, $5, sp
+           FROM unnest($1::text[], $6::text[]) AS t(m, sp)
+         ON CONFLICT (tenant, malo_id, anlass, geplant_am)
+             WHERE insrpt_process_id IS NULL
+         DO NOTHING",
+    )
+    .bind(&malo_ids)
+    .bind(tenant)
+    .bind(&req.ausfuehrender_msb)
+    .bind(geplant_am)
+    .bind(ausfuehrt_bis)
+    .bind(&spartes)
+    .execute(pool)
+    .await
+    {
+        Ok(r) => r.rows_affected(),
+        Err(e) => {
+            tracing::error!(error = %e, "edmd: Jahresablesung campaign insert failed");
+            return Err(CampaignError::Store(format!("campaign insert failed: {e}")));
         }
-
-        // `ON CONFLICT DO NOTHING` against `ablese_scheduled_unique`
-        // (tenant, malo_id, anlass, geplant_am): the pre-check above trims the
-        // common case, but only the DB constraint makes two concurrent
-        // campaign runs race-safe.
-        let res = sqlx::query(
-            "INSERT INTO ablese_auftraege
-             (malo_id,tenant,anlass,auftraggeber_rolle,ausfuehrender_msb,geplant_am,ausfuehrt_bis)
-             VALUES ($1,$2,'JAHRESABLESUNG','NB',$3,$4,$5)
-             ON CONFLICT (tenant, malo_id, anlass, geplant_am)
-                 WHERE insrpt_process_id IS NULL
-             DO NOTHING",
-        )
-        .bind(malo_id)
-        .bind(tenant)
-        .bind(&req.ausfuehrender_msb)
-        .bind(geplant_am)
-        .bind(ausfuehrt_bis)
-        .execute(pool)
-        .await;
-
-        match res {
-            Ok(r) if r.rows_affected() > 0 => created += 1,
-            Ok(_) => skipped += 1,
-            Err(e) => {
-                tracing::warn!(malo_id, error = %e, "edmd: campaign insert failed for MaLo");
-            }
-        }
-    }
+    };
+    let skipped = total_malos as u64 - created.min(total_malos as u64);
 
     tracing::info!(
         nb_mp_id = %req.nb_mp_id,

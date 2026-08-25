@@ -532,7 +532,7 @@ Result: `effective_kwh = 920; settlement_eur = 920 × rate / 100`.
 
 **Or omit both and let `einsd` derive them.** Load the EPEX day-ahead spot prices once, and
 every settle (single, batch and the monthly auto-settle) that does **not** carry explicit
-values fetches the plant's ¼h feed-in from edmd (`GET /api/v1/feed-in/{malo_id}`), overlays it
+values fetches the plant's ¼h feed-in from edmd (`GET /api/v1/energy/{malo_id}?direction=EINSPEISUNG`), overlays it
 against the stored prices, and applies the plant's regime — including its run-length threshold
 — in `eeg-billing::negativpreis`:
 

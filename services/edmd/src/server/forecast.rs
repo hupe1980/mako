@@ -1,19 +1,47 @@
-//! Annual forecast (§ 60 Abs. 2 MsbG Jahresprognose) and §22 EnWG Netzverlust.
+//! Annual consumption projection (§ 40a Abs. 2 EnWG Verbrauchsschätzung) and
+//! §22 EnWG Netzverlust.
 
 #[allow(unused_imports)]
 use super::*;
+
+/// What an annual projection is for, and under which provision.
+///
+/// § 40a Abs. 2 EnWG authorises billing on an estimate — based on the previous
+/// period or on comparable customers — where no reading was transmitted;
+/// § 13 Abs. 1 StromGVV sizes an Abschlag the same way. Both verified against the
+/// consolidated texts. Not § 60 Abs. 2 MsbG, which is Ersatzwertbildung in the
+/// Smart-Meter-Gateway — a different obligation.
+pub(crate) const FORECAST_LEGAL_BASIS: &str =
+    "§ 40a Abs. 2 EnWG (Verbrauchsschätzung) · § 13 Abs. 1 StromGVV (Abschlagshöhe)";
 
 // ── Annual forecast ─────────────────────────────────────────────────────
 
 /// `GET /api/v1/forecast/{malo_id}?from=&to=`
 ///
-/// Computes an annual energy consumption forecast from the available meter reads
-/// in the given window. Returns the projected annual kWh per § 60 Abs. 2 MsbG.
+/// Projects a year's consumption from the meter reads in the given window,
+/// with a prior-year seasonal correction when the same window one year earlier
+/// has data.
 ///
-/// This is useful for:
+/// ## What this is, legally
+///
+/// It is a **Verbrauchsschätzung** in the sense of **§ 40a Abs. 2 EnWG**: where
+/// no reading has been transmitted, the supplier may bill on an estimate made
+/// *"unter angemessener Berücksichtigung der tatsächlichen Verhältnisse"*, based
+/// on the previous period's consumption or on comparable customers — which is
+/// exactly a prior-year-corrected projection over the point's own history. The
+/// same figure sizes an Abschlag under **§ 13 Abs. 1 StromGVV**, which measures
+/// it *"anteilig entsprechend dem Verbrauch im vorangegangenen
+/// Abrechnungszeitraum"*.
+///
+/// It is **not** § 60 Abs. 2 MsbG: that provision places *Plausibilisierung und
+/// Ersatzwertbildung* in the Smart-Meter-Gateway (BSI assessment, BNetzA
+/// Festlegung under § 75), which is the anchor for `server::substitute` and says
+/// nothing about forecasting.
+///
+/// Uses:
 /// - Setting Abschlag (advance payment) amounts
-/// - Anticipating Mehr-/Mindermengensaldo at year-end
-/// - Informing Jahresprognose in MSCONS
+/// - Anticipating the Mehr-/Mindermengensaldo at year-end
+/// - Feeding a Jahresverbrauchsprognose into SLP-Bilanzierung
 pub(crate) async fn get_annual_forecast(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -113,7 +141,7 @@ pub(crate) async fn get_annual_forecast(
             "confidence_lower_kwh": forecast.confidence_lower,
             "confidence_upper_kwh": forecast.confidence_upper,
             "prediction_interval_note": metering::AnnualForecast::prediction_interval_note(),
-            "legal_basis": "§ 60 Abs. 2 MsbG Jahresprognose",
+            "legal_basis": FORECAST_LEGAL_BASIS,
         }))
         .into_response(),
         None => (

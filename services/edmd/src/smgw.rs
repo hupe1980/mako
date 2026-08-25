@@ -96,6 +96,22 @@ use crate::handler::HandlerState;
 pub enum ComplianceIssueType {
     /// TLS certificate has passed its `valid_to` date.
     CertExpired,
+    /// The certificate was **revoked** by the SM-PKI.
+    ///
+    /// Its own type, not an expiry. `GatewayCertificate::is_valid` is false for
+    /// a revoked certificate as well as an expired one, and the single
+    /// `CertExpired` branch reported both — so a revoked but in-date certificate
+    /// came out as "expired **−30** days ago". Beyond reading as nonsense, that
+    /// sends an operator to the wrong remedy: a revocation is a security
+    /// incident needing a new certificate now (§ 25 MsbG reporting duty, § 28
+    /// MsbG SM-PKI), not a renewal before a deadline.
+    CertRevoked,
+    /// The certificate's `valid_from` is in the future.
+    ///
+    /// A provisioning fault — a certificate installed early, or a clock wrong on
+    /// the gateway — and again not an expiry. It shared the `CertExpired` branch
+    /// for the same reason and produced the same negative "days ago".
+    CertNotYetValid,
     /// TLS certificate will expire within the warning window (default: 30 days).
     CertExpiring,
     /// No TLS certificate registered for this gateway.
@@ -112,6 +128,8 @@ impl ComplianceIssueType {
     fn severity(self) -> &'static str {
         match self {
             Self::CertExpired
+            | Self::CertRevoked
+            | Self::CertNotYetValid
             | Self::TlsCertMissing
             | Self::CommunicationFault
             | Self::GatewayRevoked => "CRITICAL",
@@ -122,6 +140,8 @@ impl ComplianceIssueType {
     fn db_str(self) -> &'static str {
         match self {
             Self::CertExpired => "CERT_EXPIRED",
+            Self::CertRevoked => "CERT_REVOKED",
+            Self::CertNotYetValid => "CERT_NOT_YET_VALID",
             Self::CertExpiring => "CERT_EXPIRING",
             Self::TlsCertMissing => "TLS_CERT_MISSING",
             Self::ClsNotCompliant => "CLS_NOT_COMPLIANT",
@@ -129,6 +149,52 @@ impl ComplianceIssueType {
             Self::GatewayRevoked => "GATEWAY_REVOKED",
         }
     }
+}
+
+/// Why a certificate is not valid today, when it is not.
+///
+/// [`GatewayCertificate::is_valid`] answers one boolean over three distinct
+/// faults — revoked, expired, not yet valid — and they need three different
+/// things done about them. `None` when the certificate *is* valid.
+///
+/// [`GatewayCertificate::is_valid`]: crate::smgw_model::GatewayCertificate::is_valid
+fn invalid_cert_issue(
+    cert: &crate::smgw_model::GatewayCertificate,
+    today: time::Date,
+    days_to_expiry: i32,
+) -> Option<(ComplianceIssueType, String)> {
+    if cert.is_revoked {
+        return Some((
+            ComplianceIssueType::CertRevoked,
+            format!(
+                "{} was revoked by the SM-PKI — a security incident: install a new \
+                 certificate now and report the deficiency (§ 25 MsbG; § 28 MsbG \
+                 Wurzelzertifikate). §14a eligibility is lost meanwhile",
+                cert.serial_number
+            ),
+        ));
+    }
+    if today < cert.valid_from {
+        return Some((
+            ComplianceIssueType::CertNotYetValid,
+            format!(
+                "{} is not valid until {} — a provisioning fault (installed early, or \
+                 the gateway's clock is wrong), not a renewal one",
+                cert.serial_number, cert.valid_from
+            ),
+        ));
+    }
+    if today > cert.valid_to {
+        return Some((
+            ComplianceIssueType::CertExpired,
+            format!(
+                "{} expired {} days ago — §14a eligibility lost (BSI TR-03109-4 \
+                 SM-PKI; § 25 MsbG)",
+                cert.serial_number, -days_to_expiry
+            ),
+        ));
+    }
+    None
 }
 
 /// A single detected compliance issue for a SMGW session.
@@ -273,22 +339,20 @@ pub fn check_session_compliance(
         // Check each TLS cert (there should normally be one active + possibly one pending renewal).
         for cert in &tls_certs {
             let days = cert.days_to_expiry(today);
-            if !cert.is_valid(today) {
-                // Expired or revoked.
+            // `is_valid` is false for three different faults, and they have three
+            // different remedies. Reported as one, a revoked-but-in-date
+            // certificate came out as "expired −30 days ago".
+            if let Some((issue_type, description)) = invalid_cert_issue(cert, today, days) {
                 issues.push(ComplianceIssue {
                     malo_id: session.malo_id.clone(),
                     device_id: session.device_id.clone(),
-                    issue_type: ComplianceIssueType::CertExpired,
-                    severity: ComplianceIssueType::CertExpired.severity(),
+                    issue_type,
+                    severity: issue_type.severity(),
                     cert_serial: Some(cert.serial_number.clone()),
                     cert_type: Some("TLS".to_owned()),
                     days_to_expiry: Some(days),
                     channel_id: None,
-                    description: format!(
-                        "SMGW {} TLS cert {} expired {} days ago — §14a eligibility lost \
-                         (BSI TR-03109-4 SM-PKI; § 25 MsbG)",
-                        session.device_id, cert.serial_number, -days
-                    ),
+                    description: format!("SMGW {} TLS cert {description}", session.device_id),
                 });
             } else if cert.is_expiring_soon(today, cert_warning_days) {
                 issues.push(ComplianceIssue {
@@ -1543,5 +1607,61 @@ mod cert_expiry_tests {
             cert_type_str(CertificateType::KeyAgreement),
             "KEY_AGREEMENT"
         );
+    }
+    /// `is_valid` is false for three different faults, and an operator has to do
+    /// three different things about them.
+    #[test]
+    fn a_revoked_certificate_is_not_reported_as_an_expired_one() {
+        use super::{ComplianceIssueType, invalid_cert_issue};
+        use crate::smgw_model::GatewayCertificate;
+        use time::macros::date;
+
+        let today = date!(2026 - 07 - 01);
+        let base = GatewayCertificate {
+            serial_number: "ABC123".to_owned(),
+            cert_type: CertificateType::Tls,
+            subject_cn: "smgw".to_owned(),
+            issuer_cn: "SM-PKI".to_owned(),
+            valid_from: date!(2026 - 01 - 01),
+            valid_to: date!(2027 - 01 - 01),
+            is_revoked: false,
+            revoked_at: None,
+        };
+
+        // Revoked but still in date — reported as an expiry it reads
+        // "expired -184 days ago".
+        let revoked = GatewayCertificate {
+            is_revoked: true,
+            ..base.clone()
+        };
+        let (kind, text) = invalid_cert_issue(&revoked, today, revoked.days_to_expiry(today))
+            .expect("a revoked certificate is a finding");
+        assert_eq!(kind, ComplianceIssueType::CertRevoked);
+        assert!(
+            !text.contains("expired"),
+            "a revocation is not an expiry: {text}"
+        );
+
+        // Installed early — a provisioning fault, not a renewal one.
+        let future = GatewayCertificate {
+            valid_from: date!(2026 - 12 - 01),
+            ..base.clone()
+        };
+        let (kind, _) = invalid_cert_issue(&future, today, future.days_to_expiry(today))
+            .expect("a not-yet-valid certificate is a finding");
+        assert_eq!(kind, ComplianceIssueType::CertNotYetValid);
+
+        // Genuinely expired: the days count reads forwards.
+        let expired = GatewayCertificate {
+            valid_to: date!(2026 - 06 - 01),
+            ..base.clone()
+        };
+        let (kind, text) = invalid_cert_issue(&expired, today, expired.days_to_expiry(today))
+            .expect("an expired certificate is a finding");
+        assert_eq!(kind, ComplianceIssueType::CertExpired);
+        assert!(text.contains("expired 30 days ago"), "{text}");
+
+        // A valid certificate is not a finding at all.
+        assert!(invalid_cert_issue(&base, today, base.days_to_expiry(today)).is_none());
     }
 }

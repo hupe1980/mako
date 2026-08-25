@@ -7,22 +7,29 @@ use super::*;
 
 /// `GET /api/v1/sharing/{community_id}/allocation?from=RFC3339&to=RFC3339`
 ///
-/// Returns the quarter-hour VZW (Viertelstunden-Zeitreihe) allocation for a
-/// `§42c EnWG Energy Sharing community`. Each 15-min interval shows the total
-/// community production and the per-participant attribution fraction.
+/// The quarter-hour §42c EnWG allocation for one Energy-Sharing community:
+/// what the shared plant produced in each interval, and how much of it each
+/// participant was allocated.
 ///
-/// The `community_id` maps to a `virtual_meter_configs` entry with
-/// `rule_type IN ('GgvConstantAllocation', 'GgvProportionalAllocation')`.
-/// Source MaLo IDs for the producer(s) and participants are encoded in `rule_json`.
+/// **`community_id` is the plant's MeLo.** A GGV rule is written per tenant —
+/// both variants name one `plant_melo_id` and one `tenant_melo_id` — so a
+/// `virtual_meter_configs` row is a *participant*; the community is the set of
+/// rules sharing a plant, which is what this resolves.
 ///
-/// ## Regulatory basis
+/// **The allocated share comes from the engine**, not a second computation:
 ///
-/// §42c EnWG (Energy Sharing), as addressed by BNetzA Mitteilung Nr. 73 vom
-/// 07.07.2026 (Az. BK6-06-009), which endorses the §42c Dienstleistungsmodell
-/// and defines **no** new MaKo processes for it. Accordingly this endpoint
-/// implements no mandated market process: it computes the per-participant
-/// quarter-hour attribution on demand from locally stored meter reads and the
-/// community's stored `AggregationRule`, and returns it as JSON.
+/// ```text
+/// allocated[t] = consumption[t] − net_grid_draw[t]
+/// ```
+///
+/// so the `max(0, …)` cap of §42b Abs. 5 — a tenant is never credited more
+/// community PV than they consumed in the interval — and the zero-consumption
+/// guard apply here exactly as they do to the derived series.
+///
+/// §42c EnWG defines **no** new MaKo process (BNetzA Mitteilung Nr. 73 vom
+/// 07.07.2026, Az. BK6-06-009, endorsing the Dienstleistungsmodell), so this
+/// computes the attribution on demand from stored reads and stored rules rather
+/// than implementing a mandated exchange.
 pub(crate) async fn get_sharing_allocation(
     claims: Claims,
     Extension(enforcer): Extension<Arc<CedarEnforcer>>,
@@ -30,6 +37,11 @@ pub(crate) async fn get_sharing_allocation(
     Path(community_id): Path<String>,
     Query(params): Query<LastgangParams>,
 ) -> impl IntoResponse {
+    use metering::{AggregationRule, MeterInterval, compute_virtual_meter};
+    use rust_decimal::Decimal;
+    use sqlx::Row as _;
+    use std::collections::HashMap;
+
     let resource_tenant = state.tenant.as_str();
     if let Err(e) = enforcer.check(&claims.principal(), "read-timeseries", resource_tenant) {
         return (
@@ -43,99 +55,91 @@ pub(crate) async fn get_sharing_allocation(
         Ok(w) => w,
         Err(refusal) => return refusal.into_response(),
     };
-    // Load the virtual meter config for this community.
+
+    // Every GGV rule naming this plant. The match is `jsonb_path_exists` with the
+    // MeLo as a **bound variable**, not a `LIKE` over the serialised JSON: the
+    // recursive wildcard covers both variants without hard-coding either tag,
+    // while still comparing whole values, so one MeLo cannot match as a
+    // substring of another and pull a stranger's community in.
     let pool = state.repo.pool();
-    let config_row = sqlx::query(
-        r"SELECT rule_type, rule_json, display_name, legal_basis
+    let rows = match sqlx::query(
+        r"SELECT virtual_malo_id, rule_type, rule_json, display_name, legal_basis
           FROM virtual_meter_configs
-          WHERE virtual_malo_id = $1 AND tenant = $2
+          WHERE tenant = $2
             AND rule_type IN ('GgvConstantAllocation','GgvProportionalAllocation')
-          LIMIT 1",
+            AND jsonb_path_exists(
+                    rule_json,
+                    '$.**.plant_melo_id ? (@ == $p)',
+                    jsonb_build_object('p', $1::text))
+          ORDER BY virtual_malo_id",
     )
     .bind(&community_id)
     .bind(resource_tenant)
-    .fetch_optional(pool)
-    .await;
-
-    use sqlx::Row as _;
-    let config_row = match config_row {
-        Ok(Some(r)) => r,
-        Ok(None) => {
-            return (
-                StatusCode::NOT_FOUND,
-                Json(serde_json::json!({
-                    "error": "No Energy Sharing community found",
-                    "community_id": community_id,
-                    "hint": "Create via POST /api/v1/virtual with rule_type GgvConstantAllocation or GgvProportionalAllocation"
-                })),
-            )
-                .into_response();
-        }
+    .fetch_all(pool)
+    .await
+    {
+        Ok(rows) => rows,
         Err(e) => {
-            tracing::warn!(error = %e, "edmd: get_sharing_allocation query failed");
+            tracing::warn!(error = %e, community_id, "edmd: sharing allocation query failed");
             return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
-    let rule_type: String = config_row.try_get("rule_type").unwrap_or_default();
-    let rule_json: serde_json::Value = config_row.try_get("rule_json").unwrap_or_default();
-    let display_name: String = config_row.try_get("display_name").unwrap_or_default();
-    let legal_basis: Option<String> = config_row.try_get("legal_basis").unwrap_or(None);
-
-    // Extract source MaLo IDs from rule_json.
-    // Expected shape: { "source_malo_ids": ["11234567873"], "participant_malo_ids": ["11234567089", ...], "fractions": [...] }
-    let source_malo_ids: Vec<String> = rule_json
-        .get("source_malo_ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    let participant_malo_ids: Vec<String> = rule_json
-        .get("participant_malo_ids")
-        .and_then(|v| v.as_array())
-        .map(|arr| {
-            arr.iter()
-                .filter_map(|v| v.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-
-    if source_malo_ids.is_empty() {
+    if rows.is_empty() {
         return (
-            StatusCode::UNPROCESSABLE_ENTITY,
+            StatusCode::NOT_FOUND,
             Json(serde_json::json!({
-                "error": "Community rule_json must contain non-empty 'source_malo_ids'",
+                "error": "no Energy-Sharing participants are configured against this plant",
                 "community_id": community_id,
+                "hint": "`community_id` is the shared plant's MeLo — the `plant_melo_id` \
+                         of the GGV rules. Create one rule per participant via \
+                         POST /api/v1/virtual with a GgvConstantAllocation or \
+                         GgvProportionalAllocation rule_json.",
             })),
         )
             .into_response();
     }
 
-    // Fetch the aggregation rule and compute via metering::compute_virtual_meter.
-    use metering::MeterInterval;
-    use rust_decimal::Decimal;
+    // Read each series once, however many rules name it: the proportional
+    // variant lists every participant's MeLo as its denominator, so a community
+    // of n tenants would otherwise be n² reads.
+    let mut series: HashMap<String, Vec<MeterInterval>> = HashMap::new();
+    let mut wanted: Vec<(String, bool)> = Vec::new();
+    let mut participants: Vec<(String, AggregationRule, String)> = Vec::new();
+    for row in &rows {
+        let rule_json: serde_json::Value = row.try_get("rule_json").unwrap_or_default();
+        let rule: AggregationRule = match serde_json::from_value(rule_json) {
+            Ok(r) => r,
+            Err(e) => {
+                // A stored rule that no longer deserialises is a config fault, and
+                // silently dropping a participant under-allocates the settlement.
+                tracing::error!(error = %e, community_id, "edmd: undeserialisable GGV rule");
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("a stored GGV rule could not be read: {e}"),
+                        "community_id": community_id,
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let virtual_malo_id: String = row.try_get("virtual_malo_id").unwrap_or_default();
+        let display_name: String = row.try_get("display_name").unwrap_or_default();
+        let generation = crate::server::generation_source_ids(&rule);
+        for id in rule.source_malo_ids() {
+            wanted.push((id.to_owned(), generation.contains(&id)));
+        }
+        participants.push((virtual_malo_id, rule, display_name));
+    }
+    wanted.sort();
+    wanted.dedup();
 
-    // Load production intervals from all source MaLos through the meterstore
-    // repository (version-resolved, tenant-scoped). `repo.query` returns the
-    // NUMERIC quantity as a typed `Decimal`, so the previous
-    // String-decode-then-parse (which silently allocated ZERO on the NUMERIC
-    // column) is gone. Sources are the community's *producers*, so each is
-    // projected onto its generation registers via `source_intervals` — which
-    // also drops non-billable qualities (§60 Abs. 2) and same-slot register
-    // duplicates; summing every register would book the plant's own grid draw
-    // (1.8.x Bezug) as community production. A failed read must error, not
-    // silently under-allocate the §42c settlement, so the former
-    // `unwrap_or_default()` is removed.
-    let mut all_production: Vec<MeterInterval> = Vec::new();
-    for malo_id in &source_malo_ids {
+    for (id, is_generation) in &wanted {
         let reads = match state
             .repo
             .query(&TimeSeriesQuery {
-                malo_id: malo_id.clone(),
+                malo_id: id.clone(),
                 from,
                 to,
                 sparte: None,
@@ -144,56 +148,129 @@ pub(crate) async fn get_sharing_allocation(
             .await
         {
             Ok(r) => r,
+            // A read that failed is not a participant who consumed nothing.
+            // Under-allocating a §42c settlement silently is the one outcome
+            // worth refusing outright.
             Err(e) => {
-                tracing::warn!(error = %e, malo_id, "edmd: sharing allocation read failed");
-                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                tracing::error!(error = %e, melo = id, "edmd: sharing allocation read failed");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Json(serde_json::json!({
+                        "error": format!("series {id} could not be read: {e}"),
+                        "community_id": community_id,
+                    })),
+                )
+                    .into_response();
             }
         };
-        all_production.extend(source_intervals(&reads, true));
+        series.insert(
+            id.clone(),
+            crate::server::source_intervals(&reads, *is_generation),
+        );
     }
-    all_production.sort_by_key(|iv| iv.from);
 
-    // Compute community production totals per interval.
-    // Per-participant attribution is done by the LF using the fractions in rule_json
-    // (GgvConstantAllocation) or by the dynamic consumption ratio (GgvProportionalAllocation).
-    // This endpoint returns the community-level production data; callers fetch individual
-    // participant consumption via GET /api/v1/lastgang/{malo_id}.
-    let total_kwh: Decimal = all_production.iter().map(|iv| iv.value).sum();
-    let interval_count = all_production.len();
+    // The community's production: the plant's own generation series.
+    let production = series.get(&community_id).cloned().unwrap_or_default();
+    let production_kwh: Decimal = production.iter().map(|iv| iv.value).sum();
 
-    let allocation_intervals: Vec<serde_json::Value> = all_production
+    // Per participant: the allocated energy, from the engine's own net grid draw.
+    let mut allocations: Vec<serde_json::Value> = Vec::new();
+    let mut allocated_total = Decimal::ZERO;
+    for (virtual_malo_id, rule, display_name) in &participants {
+        let tenant_melo = match rule {
+            AggregationRule::GgvConstantAllocation { tenant_melo_id, .. }
+            | AggregationRule::GgvProportionalAllocation { tenant_melo_id, .. } => {
+                tenant_melo_id.clone()
+            }
+            // The query restricts `rule_type` to the two GGV variants, so this
+            // is unreachable; skipping is the conservative answer if it is not.
+            _ => continue,
+        };
+        let net = match compute_virtual_meter(rule, &series) {
+            Ok(intervals) => intervals,
+            Err(e) => {
+                tracing::error!(error = %e, virtual_malo_id, "edmd: GGV allocation failed");
+                return (
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    Json(serde_json::json!({
+                        "error": e.to_string(),
+                        "participant": virtual_malo_id,
+                        "community_id": community_id,
+                    })),
+                )
+                    .into_response();
+            }
+        };
+        let consumption: HashMap<OffsetDateTime, Decimal> = series
+            .get(&tenant_melo)
+            .map(|ivs| ivs.iter().map(|iv| (iv.from, iv.value)).collect())
+            .unwrap_or_default();
+
+        // allocated[t] = consumption[t] − net_grid_draw[t]. Taken from the
+        // engine's output rather than recomputed, so §42b Abs. 5's `Pos()` cap
+        // and the zero-consumption guard apply here as they do to the series.
+        let mut intervals: Vec<serde_json::Value> = Vec::with_capacity(net.len());
+        let mut participant_total = Decimal::ZERO;
+        for iv in &net {
+            let consumed = consumption.get(&iv.from).copied().unwrap_or(Decimal::ZERO);
+            let allocated = (consumed - iv.value).max(Decimal::ZERO);
+            participant_total += allocated;
+            intervals.push(serde_json::json!({
+                "from": iv.from,
+                "to": iv.to,
+                "consumption_kwh": consumed.to_string(),
+                "net_grid_draw_kwh": iv.value.to_string(),
+                "allocated_kwh": allocated.to_string(),
+                "quality": crate::store::quality_to_str(iv.quality),
+            }));
+        }
+        allocated_total += participant_total;
+        allocations.push(serde_json::json!({
+            "virtual_malo_id": virtual_malo_id,
+            "display_name": display_name,
+            "tenant_melo_id": tenant_melo,
+            "rule_type": crate::server::rule_type_of(rule),
+            "allocated_kwh": participant_total.to_string(),
+            "interval_count": intervals.len(),
+            "intervals": intervals,
+        }));
+    }
+
+    let production_intervals: Vec<serde_json::Value> = production
         .iter()
         .map(|iv| {
             serde_json::json!({
-                "from":         iv.from,
-                "to":           iv.to,
-                "total_kwh":    iv.value.to_string(),
-                // The real flag, not a hardcoded MEASURED: the filter admits
+                "from": iv.from,
+                "to": iv.to,
+                "total_kwh": iv.value.to_string(),
+                // The real flag, not a hardcoded MEASURED: the projection admits
                 // Estimated/Substituted/Corrected/Preliminary, and a §42c
-                // settlement consumer has to be able to see that a slot of
-                // "production" is an Ersatzwert.
-                "quality":      crate::store::quality_to_str(iv.quality),
+                // settlement has to see that a slot of "production" is an
+                // Ersatzwert.
+                "quality": crate::store::quality_to_str(iv.quality),
             })
         })
         .collect();
 
+    let legal_basis: Option<String> = rows[0].try_get("legal_basis").unwrap_or(None);
     (
         StatusCode::OK,
         Json(serde_json::json!({
-            "community_id":          community_id,
-            "display_name":          display_name,
-            "rule_type":             rule_type,
-            "legal_basis":           legal_basis.as_deref().unwrap_or("§42c EnWG"),
-            "from":                  from,
-            "to":                    to,
-            "source_malo_ids":       source_malo_ids,
-            "participant_malo_ids":  participant_malo_ids,
-            "total_production_kwh":  total_kwh.to_string(),
-            "interval_count":        interval_count,
-            "intervals":             allocation_intervals,
-            "note": "Per-participant allocation fractions applied per rule_type. \
-                     Fetch participant consumption via GET /api/v1/lastgang/{malo_id} \
-                     for the full §42c VZW settlement picture.",
+            "community_id":         community_id,
+            "plant_melo_id":        community_id,
+            "legal_basis":          legal_basis.as_deref().unwrap_or(
+                "§42c EnWG · §42b Abs. 5 EnWG (Pos()-Deckel) · BNetzA Mitteilung Nr. 73"),
+            "from":                 from,
+            "to":                   to,
+            "participant_count":    participants.len(),
+            "total_production_kwh": production_kwh.to_string(),
+            // What the plant produced but nobody was allocated: it fed the grid.
+            // § 42b Abs. 5 caps each tenant at their own consumption, so this is
+            // a real remainder and not a rounding error.
+            "unallocated_kwh":      (production_kwh - allocated_total).max(Decimal::ZERO).to_string(),
+            "total_allocated_kwh":  allocated_total.to_string(),
+            "production":           production_intervals,
+            "participants":         allocations,
         })),
     )
         .into_response()
@@ -299,9 +376,15 @@ pub(crate) async fn get_sharing_readiness(
         .min_coverage_pct
         .unwrap_or(DEFAULT_COVERAGE_THRESHOLD_PCT);
 
-    // Expected quarter-hour slots in the window — the coverage denominator.
-    let window_secs = (to - from).whole_seconds().max(1);
-    let expected_slots = (window_secs as f64 / 900.0).max(1.0);
+    // The coverage denominator: the window's own duration. Coverage is a
+    // **duration ratio**, not an interval count — the same rule the delivery
+    // sweep uses (`surveillance::assess_delivery`), and for the same two
+    // reasons. Counting intervals against an assumed quarter-hour grid reported
+    // every legitimately hourly series as 25 % covered; counting them across all
+    // of a measuring point's registers ran a prosumer past 100 %, where the clamp
+    // hid it and no multi-register point could ever fall below the threshold.
+    #[allow(clippy::cast_precision_loss)]
+    let window_secs = (to - from).whole_seconds().max(1) as f64;
 
     let explicit: Option<Vec<String>> = params.malo_ids.as_deref().map(|s| {
         s.split(',')
@@ -405,36 +488,57 @@ pub(crate) async fn get_sharing_readiness(
                 _ => metering::SeriesOrigin::Other,
             }
         });
-        let intervals: Vec<MeterInterval> = reads
+        // Split per register before anything is measured. `detect_interval_length`
+        // takes the median interval *duration*, so a flattened multi-register
+        // series answers with the median across registers: a point whose
+        // Lastgang is quarter-hourly and whose secondary register reports
+        // hourly can be classified on the secondary one. The same split
+        // `domain::register_groups` exists for everywhere else.
+        let billable: Vec<MeterRead> = reads
             .iter()
             .filter(|r| r.quality.is_billable())
-            .map(|r| MeterInterval {
-                from: r.dtm_from,
-                to: r.dtm_to,
-                value: r.quantity_kwh,
-                quality: r.quality,
-                obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
-            })
+            .cloned()
             .collect();
+        let groups = crate::domain::register_groups(&billable);
+        let reading_count = billable.len() as u64;
 
-        let interval_class = detect_interval_length(&intervals);
-        let messtyp = if intervals.is_empty() {
+        // The best-covered register decides, not the sum and not the worst. The
+        // question §42c asks is whether the point delivers quarter-hour values at
+        // all; a point whose Lastgang is complete delivers them even if a
+        // secondary register reports monthly.
+        #[allow(clippy::cast_precision_loss)]
+        let coverage_pct = groups
+            .iter()
+            .map(|g| {
+                let covered: f64 = g
+                    .intervals
+                    .iter()
+                    .map(|iv| (iv.to - iv.from).whole_seconds().max(0) as f64)
+                    .sum();
+                (covered / window_secs * 100.0).clamp(0.0, 100.0)
+            })
+            .fold(None::<f64>, |acc, c| Some(acc.map_or(c, |a: f64| a.max(c))));
+
+        // Cadence and Messtyp are judged on the dominant register — the one
+        // carrying the most intervals — for the same reason.
+        let dominant: Vec<MeterInterval> = groups
+            .iter()
+            .max_by_key(|g| g.intervals.len())
+            .map(|g| g.intervals.clone())
+            .unwrap_or_default();
+        let interval_class = detect_interval_length(&dominant);
+        let messtyp = if dominant.is_empty() {
             None
         } else {
-            Some(classify_messtyp(&intervals, source_hint))
-        };
-        let coverage_pct = if intervals.is_empty() {
-            None
-        } else {
-            Some(((intervals.len() as f64 / expected_slots) * 100.0).min(100.0))
+            Some(classify_messtyp(&dominant, source_hint))
         };
 
         let evidence = DeliveryEvidenceInput {
             resolution: interval_class,
             messtyp,
             coverage_pct,
-            reading_count: intervals.len() as u64,
-            last_reading_at: intervals.last().map(|iv| iv.to),
+            reading_count,
+            last_reading_at: billable.iter().map(|r| r.dtm_to).max(),
         };
         let (delivery, reasons) = assess_delivery(&evidence, threshold);
 
@@ -455,7 +559,7 @@ pub(crate) async fn get_sharing_readiness(
             interval_seconds: interval_class.map(|r| i64::from(r.nominal_seconds())),
             messtyp: messtyp.map(|m| format!("{m:?}").to_uppercase()),
             coverage_pct,
-            reading_count: intervals.len() as u64,
+            reading_count,
             // `assess_delivery` returns typed `Finding`s since metering 0.17,
             // where it returned free text. The API keeps emitting strings, so
             // they are rendered here — one place, one vocabulary, instead of

@@ -465,7 +465,7 @@ where regulation demands auditability, ML-ready where statistics end:
    double-billing, Ersatzversorgung > 3 months) means the invoice **never
    exists** (`VALIDATION_BLOCKED`); `assert_valid` pins the arithmetic
    invariants; the DB uniqueness guard prevents double-billing a period; and
-   metering's V01–V10 + Hampel grades (F blocks billing) guard the inputs.
+   metering's V01–V09/V11/V12 + Hampel grades (F blocks billing) guard the inputs.
 2. **Deterministic risk gate (`[risk]`, default on)** — every calculated
    invoice is scored 0–100 from coded findings: content checks
    (Σ Steuerbeträge vs gesamtsteuer, valid German VAT rates, negative/zero

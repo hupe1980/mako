@@ -189,6 +189,102 @@ pub(crate) async fn record_quality_assessment(
     }
 }
 
+/// Score a stored batch and record the verdict, for the ingest doors.
+///
+/// Every door runs this, and that is the point: the § 147 AO history a billing
+/// dispute is answered from is only as complete as its least-covered path, and
+/// the MSCONS webhook is *the* door in German MaKo. The V-rules alone are a
+/// different signal — they say a rule fired, not how complete or how anomalous
+/// the delivery was against its own commodity's thresholds.
+///
+/// The period is the batch's own extent (`domain::batch_period`), because a
+/// pushed batch declares the window it covers. `None` when the batch is empty:
+/// there is nothing to grade, and a grade over nothing is not "A".
+///
+/// Scoring and recording are two calls because the batch has to be **stored
+/// first**. A `ValidatedReads` moves into `store_reads`, so the grade has to be
+/// computed from the borrow beforehand — but writing the assessment row before
+/// the readings land leaves a verdict standing for a delivery that failed and
+/// was never stored, in the table the § 147 AO history is read out of.
+/// [`BatchQuality::record`] is therefore called after the store succeeds.
+pub(crate) struct BatchQuality {
+    /// The grade and its findings, for the response and the CloudEvent.
+    pub report: QualityReport,
+    period_from: OffsetDateTime,
+    period_to: OffsetDateTime,
+    /// The batch's own [`IngestionSource`], not a label the caller invents
+    /// beside it. `quality_assessments.source` is CHECK-constrained, so a door
+    /// passing a name outside the vocabulary fails the insert — and the insert
+    /// failure is a warning, which means the history goes silently missing for
+    /// exactly the door that thought it was recording one.
+    ///
+    /// [`IngestionSource`]: crate::domain::IngestionSource
+    source: &'static str,
+}
+
+impl BatchQuality {
+    /// Persist the verdict. Call once the readings are stored.
+    pub(crate) async fn record(&self, pool: &sqlx::PgPool, tenant: &str, malo_id: &str) {
+        record_quality_assessment(
+            pool,
+            tenant,
+            malo_id,
+            self.period_from,
+            self.period_to,
+            self.source,
+            &self.report,
+        )
+        .await;
+    }
+}
+
+/// Grade a batch about to be stored, without recording anything yet.
+pub(crate) fn score_batch(reads: &[MeterRead]) -> Option<BatchQuality> {
+    let (Some(period_from), Some(period_to)) = crate::domain::batch_period(reads) else {
+        return None;
+    };
+    // The commodity is the batch's own — every door builds a batch for one
+    // Sparte, and scoring a gas delivery with electricity thresholds is the
+    // defect `QualityConfig::for_sparte` exists to prevent.
+    let sparte = reads.first().map_or(metering::Sparte::Strom, |r| r.sparte);
+    let samples: Vec<metering::MeterInterval> = reads
+        .iter()
+        .map(|r| metering::MeterInterval {
+            from: r.dtm_from,
+            to: r.dtm_to,
+            value: r.quantity_kwh,
+            quality: r.quality,
+            obis_code: r.obis_code.as_deref().and_then(|s| s.parse().ok()),
+        })
+        .collect();
+    Some(BatchQuality {
+        report: compute_quality(&samples, sparte, period_from, period_to),
+        period_from,
+        period_to,
+        source: reads
+            .first()
+            .map_or(IngestionSource::Mscons, |r| r.source)
+            .as_str(),
+    })
+}
+
+/// The compact `hampel` block an ingest response and its CloudEvent both carry.
+///
+/// One renderer, so the two cannot describe the same batch differently.
+pub(crate) fn hampel_summary(q: &QualityReport) -> serde_json::Value {
+    serde_json::json!({
+        "grade": q.grade,
+        "coverage_pct": q.coverage_pct,
+        "gaps_detected": q.gaps_detected,
+        "outliers": q.outlier_intervals.len() + q.spike_intervals.len(),
+        "expected_intervals": q.expected_intervals,
+        "interval_secs": q.interval_secs,
+        "has_warnings": q.has_warnings,
+        "blocks_billing": q.grade == "F",
+        "algorithm": q.algorithm,
+    })
+}
+
 /// Score a series over the window the caller asked about.
 ///
 /// Takes typed intervals so the values keep their `Decimal` precision and the
@@ -216,10 +312,10 @@ pub(crate) fn compute_quality(
 ) -> QualityReport {
     // Cadence, gaps, overlaps and the Hampel filter are all statements about a
     // **single** series, and a MaLo delivers several registers at once. Scored
-    // flat they share every timestamp, so consecutive starts are equal, the
-    // observed cadence collapses towards zero, every same-slot pair reads as an
-    // overlap, and coverage is multiplied by the number of registers. So each
-    // register is scored on its own and the verdicts folded conservatively.
+    // flat, the observed cadence is a median across registers rather than the
+    // series' own, every same-slot pair reads as an overlap, and coverage is
+    // multiplied by the number of registers. So each register is scored on its
+    // own and the verdicts folded conservatively.
     //
     // Only the **energy** registers are scored. A Fehlerregister or a reactive
     // channel legitimately reports far less often than the Lastgang, and letting

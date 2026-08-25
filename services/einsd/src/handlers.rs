@@ -27,11 +27,26 @@ use crate::{
 
 // ── edmd auto-fetch helper ────────────────────────────────────────────────────
 
-/// Fetch `arbeitsmenge_kwh` from `edmd` for a given MaLo and billing month.
+/// Fetch the month's **Einspeisemenge** from `edmd` for a MaLo.
 ///
-/// Calls `GET {edmd_url}/api/v1/billing-period/{malo_id}?from=YYYY-MM-01&to=YYYY-MM-LD`
-/// and extracts `arbeitsmenge_kwh` from the response JSON.
-/// Returns `None` when `edmd_url` is not configured or the MaLo has no data.
+/// Calls `GET {edmd_url}/api/v1/energy/{malo_id}?direction=EINSPEISUNG` over the
+/// billing month in German local time and sums the projected intervals.
+///
+/// # Why not `/billing-period`
+///
+/// It used to read `arbeitsmenge_kwh` off
+/// `GET /api/v1/billing-period/{malo_id}` — and that field is the **Bezug**, the
+/// grid draw, projected onto the consumption registers (edmd's
+/// `domain::register`). An Erzeugungs-MaLo reports only `1-0:2.8.x`, so the
+/// consumption projection over it is empty and the figure came back as **0 kWh**:
+/// every auto-settled EEG month paid on nothing, and the batch dry-run counted
+/// the plant as "has data" because `Some(0)` is not `None`.
+///
+/// The direction has to be stated, and only `/energy` lets it be.
+///
+/// Returns `None` when `edmd_url` is not configured, the read fails, or the MaLo
+/// reports no feed-in intervals at all — a plant with no metered feed-in is not a
+/// plant that fed in nothing.
 pub async fn fetch_einspeisemenge_from_edmd(
     cfg: &EinsdConfig,
     client: &reqwest::Client,
@@ -40,26 +55,56 @@ pub async fn fetch_einspeisemenge_from_edmd(
     month: i16,
 ) -> Option<Decimal> {
     let edmd = cfg.edmd(client.clone())?;
-    let last_day = days_in_month(year, month);
-    let path = format!("/api/v1/billing-period/{malo_id}");
+    // The billing month in German local time — the same window the §51 overlay
+    // uses. Taking it from midnight UTC shifts the boundary by an hour (two at
+    // DST), moving an hour of feed-in into the neighbouring month.
+    let (from, to) = billing_month_range(year, month)?;
+    use time::format_description::well_known::Rfc3339;
+    let (Ok(from_s), Ok(to_s)) = (from.format(&Rfc3339), to.format(&Rfc3339)) else {
+        return None;
+    };
+    let path = format!("/api/v1/energy/{malo_id}");
     let request = edmd.get(&path).query(&[
-        ("from", format!("{year:04}-{month:02}-01")),
-        ("to", format!("{year:04}-{month:02}-{last_day:02}")),
+        ("from", from_s),
+        ("to", to_s),
+        ("direction", "EINSPEISUNG".to_owned()),
     ]);
-    let body: serde_json::Value = edmd.json(request).await.ok().flatten()?;
-    body.get("arbeitsmenge_kwh")
-        .and_then(|v| v.as_str())
-        .and_then(|s| s.parse::<Decimal>().ok())
-        .or_else(|| {
-            body.get("arbeitsmenge_kwh")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-        })
+    let feed = match edmd.json::<FeedInResponse>(request).await {
+        Ok(Some(feed)) => feed,
+        Ok(None) => return None,
+        Err(e) => {
+            tracing::warn!(
+                malo_id, year, month, error = %e,
+                "einsd: edmd Einspeisemenge could not be read — settling on the \
+                 caller-supplied quantity only"
+            );
+            return None;
+        }
+    };
+    if feed.intervals.is_empty() {
+        return None;
+    }
+    Some(
+        feed.intervals
+            .iter()
+            .filter_map(|iv| iv.kwh.parse::<Decimal>().ok())
+            .sum(),
+    )
 }
 
 #[derive(serde::Deserialize)]
 struct FeedInResponse {
     coverage_pct: f64,
-    billable_pct: f64,
+    /// Share of the Einspeisung series that is billable at all, by duration.
+    ///
+    /// `Option`, and that is the fix: edmd documented this field and did not
+    /// emit it, so `serde` failed the whole response on a missing key, the
+    /// `Ok(Some(_))` arm never matched, and **every** § 51 auto-derivation
+    /// answered `Negativpreis::Unbekannt` — silently, because a failed
+    /// derivation and an inapplicable one looked identical from here. `None`
+    /// now means "the point reports no Einspeisung register", which is a
+    /// different fact from 0 %.
+    billable_pct: Option<f64>,
     intervals: Vec<FeedInInterval>,
 }
 
@@ -149,18 +194,48 @@ pub async fn derive_negativpreis_from_edmd(
     let (Ok(from_s), Ok(to_s)) = (range_from.format(&Rfc3339), range_to.format(&Rfc3339)) else {
         return Negativpreis::Unbekannt;
     };
-    let path = format!("/api/v1/feed-in/{malo_id}");
-    let request = edmd.get(&path).query(&[("from", from_s), ("to", to_s)]);
-    let Ok(Some(feed)) = edmd.json::<FeedInResponse>(request).await else {
-        return Negativpreis::Unbekannt;
+    // edmd's canonical projected series: the Einspeisung registers only, through
+    // `domain::register`, with `billable_pct` measured over the direction's whole
+    // series before the projection filtered the non-billable readings out.
+    let path = format!("/api/v1/energy/{malo_id}");
+    let request = edmd.get(&path).query(&[
+        ("from", from_s),
+        ("to", to_s),
+        ("direction", "EINSPEISUNG".to_owned()),
+    ]);
+    let feed = match edmd.json::<FeedInResponse>(request).await {
+        Ok(Some(feed)) => feed,
+        // A read that failed is not "no negative-price hours". Answering
+        // `Unbekannt` is right either way, but it has to be visible: this gate
+        // decides whether a § 51 EEG reduction is applied at all, and it spent
+        // its whole life silently failing on a response field edmd documented
+        // and never emitted (`billable_pct`).
+        Ok(None) => {
+            tracing::warn!(
+                malo_id,
+                "§51 auto-derivation skipped — edmd holds no Einspeisung series for the period"
+            );
+            return Negativpreis::Unbekannt;
+        }
+        Err(e) => {
+            tracing::warn!(
+                malo_id, error = %e,
+                "§51 auto-derivation skipped — edmd's energy series could not be read"
+            );
+            return Negativpreis::Unbekannt;
+        }
     };
 
     // §60 Abs. 2 gate: auto-derive only on near-complete, fully-billable data.
-    if feed.coverage_pct < 95.0 || feed.billable_pct < 100.0 {
+    // `billable_pct` is absent when the MaLo reports no Einspeisung register at
+    // all — which is not "0 % billable", it is nothing to judge, and it must not
+    // pass a gate that exists to refuse incomplete data.
+    let billable_pct = feed.billable_pct.unwrap_or(0.0);
+    if feed.coverage_pct < 95.0 || billable_pct < 100.0 {
         tracing::warn!(
             malo_id,
             coverage = feed.coverage_pct,
-            billable = feed.billable_pct,
+            billable = billable_pct,
             "§51 auto-derivation skipped — metering coverage/quality below threshold; \
              supply kwh_during_negative_epex manually or backfill substitute values"
         );
@@ -249,21 +324,12 @@ impl Negativpreis {
     }
 }
 
-fn days_in_month(year: i16, month: i16) -> u8 {
-    match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 => {
-            let y = year as i32;
-            if y % 400 == 0 || (y % 4 == 0 && y % 100 != 0) {
-                29
-            } else {
-                28
-            }
-        }
-        _ => 28,
-    }
-}
+// A hand-rolled `days_in_month` used to stand here, for the calendar-date bounds
+// the `/billing-period` fetch needed. Both are gone: the Einspeisemenge is read
+// over an instant range from `billing_month_range`, which takes the month in
+// German local time through the `time` crate's own calendar — the one that
+// already knows about leap years and does not silently answer 28 for a month
+// number outside 1..=12.
 
 // ── CloudEvent emission ───────────────────────────────────────────────────────
 
@@ -2153,45 +2219,45 @@ mod veraeusserungsform_tests {
 
 #[cfg(test)]
 mod calendar_tests {
-    use super::days_in_month;
+    use super::billing_month_range;
+    use time::Duration;
 
-    /// EEG settlement is per calendar month, so a wrong day count changes the
-    /// Vergütung on a legally binding Gutschrift.
+    /// EEG settlement is per calendar month, so a wrong month boundary changes
+    /// the Vergütung on a legally binding Gutschrift. The window comes from
+    /// `billing_month_range`, in **German local time** — the hand-rolled
+    /// `days_in_month` this replaced produced calendar dates that were then read
+    /// as UTC, shifting the boundary by an hour and by two across a DST change.
     #[test]
-    fn month_lengths_are_correct() {
-        for (m, want) in [
-            (1, 31),
-            (3, 31),
-            (4, 30),
-            (5, 31),
-            (6, 30),
-            (7, 31),
-            (8, 31),
-            (9, 30),
-            (10, 31),
-            (11, 30),
-            (12, 31),
+    fn a_billing_month_spans_its_own_length_in_berlin_time() {
+        for (year, month, hours) in [
+            // Ordinary months, in hours.
+            (2026_i16, 1_i16, 31 * 24_i64),
+            (2026, 4, 30 * 24),
+            (2026, 2, 28 * 24),
+            // Leap February, on the full Gregorian rule.
+            (2024, 2, 29 * 24),
+            (2000, 2, 29 * 24),
+            (1900, 2, 28 * 24),
+            (2100, 2, 28 * 24),
+            // March loses an hour to CEST, October gains one back.
+            (2026, 3, 31 * 24 - 1),
+            (2026, 10, 31 * 24 + 1),
         ] {
-            assert_eq!(days_in_month(2026, m), want, "month {m}");
+            let (from, to) = billing_month_range(year, month).expect("a real month");
+            assert_eq!(
+                to - from,
+                Duration::hours(hours),
+                "{year}-{month:02} should span {hours} h"
+            );
         }
     }
 
-    /// The Gregorian rule, not the naive "divisible by four".
+    /// A month number outside 1..=12 has no window. The old helper answered 28
+    /// days for one.
     #[test]
-    fn february_follows_the_full_gregorian_leap_rule() {
-        assert_eq!(days_in_month(2024, 2), 29, "2024 is a leap year");
-        assert_eq!(days_in_month(2026, 2), 28, "2026 is not");
-        assert_eq!(
-            days_in_month(1900, 2),
-            28,
-            "1900 is divisible by 100, not 400"
-        );
-        assert_eq!(days_in_month(2000, 2), 29, "2000 is divisible by 400");
-        assert_eq!(
-            days_in_month(2100, 2),
-            28,
-            "2100 is divisible by 100, not 400"
-        );
+    fn an_impossible_month_has_no_window() {
+        assert!(billing_month_range(2026, 0).is_none());
+        assert!(billing_month_range(2026, 13).is_none());
     }
 }
 
