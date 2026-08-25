@@ -83,125 +83,65 @@ pub const BEHG_CO2_FACTOR_H_GAS: Decimal = dec!(0.20160);
 /// Use this constant for supply points in the L-Gas area (primarily NW Germany).
 pub const BEHG_CO2_FACTOR_L_GAS: Decimal = dec!(0.20140);
 
-// ── Stromsteuer history (§3 StromStG) ────────────────────────────────────────
+// ── Stromsteuer (§ 3 StromStG) ───────────────────────────────────────────────
 
-/// §3 StromStG standard rate in ct/kWh by calendar year.
+/// The standard § 3 StromStG rate: **2,05 ct/kWh** (20,50 EUR/MWh), unchanged
+/// since 01.04.2003 (BGBl. I 2002 S. 4602).
+pub const STROMSTEUER_REGELSATZ_CT_PER_KWH: Decimal = dec!(2.05);
+
+/// First calendar year the § 3 StromStG standard rate applies to.
+const STROMSTEUER_SINCE: i32 = 2003;
+
+/// The standard § 3 StromStG rate (ct/kWh) for a calendar year.
 ///
-/// The standard Stromsteuer rate has been **2.05 ct/kWh** since 01.04.2003
-/// (BGBl. I 2002 S. 4602). There was a temporary reduction to 0.5 ct/kWh for
-/// heat-pump electricity under old tariff structures, but the per-kWh standard
-/// rate for household/commercial supply has remained 2.05 ct/kWh.
+/// `None` before 2003, when the rate was still climbing through the Ökosteuer
+/// stages — a caller billing such a period must supply the rate itself rather
+/// than inherit today's.
 ///
-/// `None` = no statutory rate known for the year; caller should use
-/// `RegulatoryRates::stromsteuer_ct_per_kwh` as the default.
+/// This replaced a 24-row table of identical values. The rate has not moved in
+/// twenty-three years and the reliefs that did move are **Entlastungen**
+/// (§ 9b StromStG, permanent at the EU minimum rate since 01.01.2026), which
+/// the customer claims from the Hauptzollamt and which never change what a
+/// supplier invoices — see [`crate::steuer`].
 ///
 /// ## Usage for retroactive corrections
-///
-/// When correcting an invoice from a prior year, supply the year so the correct
-/// rate is used:
 ///
 /// ```rust
 /// use energy_billing::rates::stromsteuer_for_year;
 /// assert_eq!(stromsteuer_for_year(2024), Some(rust_decimal::dec!(2.05)));
-/// assert_eq!(stromsteuer_for_year(1999), None); // before StromStG
+/// assert_eq!(stromsteuer_for_year(1999), None); // before the standard rate
 /// ```
-const STROMSTEUER_HISTORY: &[(i32, &str)] = &[
-    // Standard rate 2.05 ct/kWh since 01.04.2003 (BGBl. I 2002 S. 4602)
-    // All years from 2003 onward use the same rate unless changed.
-    (2003, "2.05"),
-    (2004, "2.05"),
-    (2005, "2.05"),
-    (2006, "2.05"),
-    (2007, "2.05"),
-    (2008, "2.05"),
-    (2009, "2.05"),
-    (2010, "2.05"),
-    (2011, "2.05"),
-    (2012, "2.05"),
-    (2013, "2.05"),
-    (2014, "2.05"),
-    (2015, "2.05"),
-    (2016, "2.05"),
-    (2017, "2.05"),
-    (2018, "2.05"),
-    (2019, "2.05"),
-    (2020, "2.05"),
-    (2021, "2.05"),
-    (2022, "2.05"),
-    (2023, "2.05"),
-    (2024, "2.05"),
-    (2025, "2.05"),
-    (2026, "2.05"),
-];
-
-/// Return the standard §3 StromStG rate (ct/kWh) for a given calendar year.
-///
-/// Returns `None` when the year predates the StromStG (before 2003) or is
-/// beyond the known table. Callers should fall back to
-/// `RegulatoryRates::stromsteuer_ct_per_kwh` for unknown years.
 #[must_use]
 pub fn stromsteuer_for_year(year: i32) -> Option<Decimal> {
-    STROMSTEUER_HISTORY
-        .iter()
-        .find(|(y, _)| *y == year)
-        .map(|(_, rate)| rate.parse().expect("rate is a valid decimal literal"))
+    (year >= STROMSTEUER_SINCE).then_some(STROMSTEUER_REGELSATZ_CT_PER_KWH)
 }
 
-// ── Energiesteuer Gas history (§2 Nr. 3 EnergieStG) ───────────────────────────
+// ── Energiesteuer Erdgas (§ 2 Abs. 3 Satz 1 Nr. 4 EnergieStG) ────────────────
 
-/// §2 Abs. 3 Nr. 4 EnergieStG Erdgas (Heizstoff) rate in ct/kWh_Hs by year.
+/// The Erdgas-als-Heizstoff rate: **0,55 ct/kWh_Hs** (5,50 EUR/MWh).
+pub const ENERGIESTEUER_GAS_CT_PER_KWH: Decimal = dec!(0.55);
+
+/// First calendar year the EnergieStG applies to (in force 01.08.2006).
+const ENERGIESTEUER_SINCE: i32 = 2006;
+
+/// The § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG heating-gas rate (ct/kWh_Hs) for a
+/// calendar year, or `None` before the EnergieStG.
 ///
-/// The heating-gas rate is **5.50 EUR/MWh = 0.55 ct/kWh** and has been
-/// constant since the 2003 Ökosteuer stage, carried over into the EnergieStG
-/// (in force since 01.08.2006). The 2022 Energiesteuersenkungsgesetz
-/// (BGBl. I 2022 S. 810, 01.06.–31.08.2022) reduced **motor-fuel** rates
-/// (§2 Abs. 1) only — heating gas was never reduced; the actual 2022/23 gas
-/// reliefs were the Dezember-Soforthilfe (EWSG) and the USt cut to 7 %
-/// (§28 Abs. 5/6 UStG, see [`mwst_rate_for_gas_waerme_period`]).
-///
-/// `None` = year not in table; use `RegulatoryRates::energiesteuer_gas_ct_per_kwh`.
+/// Constant since the 2003 Ökosteuer stage and carried over into the EnergieStG.
+/// The 2022 Energiesteuersenkungsgesetz (BGBl. I 2022 S. 810) reduced
+/// **motor-fuel** rates (§ 2 Abs. 1) only; the 2022/23 gas reliefs were the
+/// Dezember-Soforthilfe (EWSG) and the USt cut to 7 % (§ 28 Abs. 5/6 UStG, see
+/// [`mwst_rate_for_gas_waerme_period`]).
 ///
 /// ```rust
 /// use energy_billing::rates::energiesteuer_gas_for_year;
 /// // No heating-gas reduction existed in 2022 (the Tankrabatt was fuels-only)
 /// assert_eq!(energiesteuer_gas_for_year(2022), Some(rust_decimal::dec!(0.55)));
-/// assert_eq!(energiesteuer_gas_for_year(2023), Some(rust_decimal::dec!(0.55)));
+/// assert_eq!(energiesteuer_gas_for_year(2005), None);
 /// ```
-const ENERGIESTEUER_GAS_HISTORY: &[(i32, &str)] = &[
-    (2006, "0.55"),
-    (2007, "0.55"),
-    (2008, "0.55"),
-    (2009, "0.55"),
-    (2010, "0.55"),
-    (2011, "0.55"),
-    (2012, "0.55"),
-    (2013, "0.55"),
-    (2014, "0.55"),
-    (2015, "0.55"),
-    (2016, "0.55"),
-    (2017, "0.55"),
-    (2018, "0.55"),
-    (2019, "0.55"),
-    (2020, "0.55"),
-    (2021, "0.55"),
-    (2022, "0.55"),
-    (2023, "0.55"),
-    (2024, "0.55"),
-    (2025, "0.55"),
-    (2026, "0.55"),
-];
-
-/// Return the §2 Abs. 3 Nr. 4 EnergieStG heating-gas rate (ct/kWh_Hs) for a
-/// given calendar year.
-///
-/// For years before the EnergieStG (pre-2006), returns `None` — use the
-/// configured `RegulatoryRates::energiesteuer_gas_ct_per_kwh`.
 #[must_use]
 pub fn energiesteuer_gas_for_year(year: i32) -> Option<Decimal> {
-    ENERGIESTEUER_GAS_HISTORY
-        .iter()
-        .find(|(y, _)| *y == year)
-        .map(|(_, rate)| rate.parse().expect("rate is a valid decimal literal"))
+    (year >= ENERGIESTEUER_SINCE).then_some(ENERGIESTEUER_GAS_CT_PER_KWH)
 }
 
 /// Compute BEHG ct/kWh_Hs for a given calendar year.
@@ -252,13 +192,26 @@ pub struct RegulatoryRates {
     /// §3 StromStG — ct/kWh (current: 2.05 ct/kWh since 01.04.2003,
     /// BGBl. I 2002 S. 4602; see [`stromsteuer_for_year`]).
     pub stromsteuer_ct_per_kwh: Decimal,
-    /// §2 Nr. 3 EnergieStG Erdgas H — ct/kWh_Hs (current: 0.55 ct/kWh).
+    /// § 2 Abs. 3 Satz 1 Nr. 4 EnergieStG, Erdgas als Heizstoff —
+    /// ct/kWh_Hs (current: 0.55 ct/kWh = 5,50 EUR/MWh).
     pub energiesteuer_gas_ct_per_kwh: Decimal,
     /// BEHG CO₂ levy for Erdgas H — ct/kWh_Hs.
     /// = CO₂-Preis EUR/t × 0.20160 kg_CO₂/kWh_Hs ÷ 10
     pub behg_gas_ct_per_kwh: Decimal,
     /// Standard MwSt rate (fraction, e.g. `0.19`).
     pub mwst_rate: Decimal,
+    /// Reduced MwSt rate (§ 12 Abs. 2 UStG, fraction, e.g. `0.07`).
+    ///
+    /// Used for the Anlage-2 supplies this engine bills — Trinkwasser (Nr. 34).
+    /// Carried as a rate rather than a literal so a statutory change is one
+    /// configuration edit rather than a grep across the providers.
+    #[serde(default = "default_mwst_reduced")]
+    pub mwst_rate_reduced: Decimal,
+}
+
+/// Serde default for [`RegulatoryRates::mwst_rate_reduced`].
+fn default_mwst_reduced() -> Decimal {
+    dec!(0.07)
 }
 
 impl Default for RegulatoryRates {
@@ -268,6 +221,7 @@ impl Default for RegulatoryRates {
             energiesteuer_gas_ct_per_kwh: dec!(0.55),
             behg_gas_ct_per_kwh: dec!(1.3104), // 65 EUR/t × 0.20160 kg_CO₂/kWh_Hs ÷ 10 (2026, BEHG §10)
             mwst_rate: dec!(0.19),
+            mwst_rate_reduced: dec!(0.07),
         }
     }
 }

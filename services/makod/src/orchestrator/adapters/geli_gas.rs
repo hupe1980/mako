@@ -602,7 +602,7 @@ pub fn geli_gas_stornierung_registry() -> AdapterRegistry<GeliGasStornierungWork
 /// Build an [`AdapterRegistry`] for [`GeliGasSperrprozesseInvoicWorkflow`].
 ///
 /// Extracts INVOIC fields to construct a
-/// [`GeliGasSperrprozesseInvoicCommand::ReceiveInvoic`] for GeLi Gas AWH
+/// [`InvoicCommand::ReceiveInvoic`] for GeLi Gas AWH
 /// billing PID 31011 (Rechnung sonstige Leistung, VNB → LFN/LFA).
 ///
 /// Regulatory basis: BK7-24-01-009 (GeLi Gas 3.0).
@@ -640,7 +640,7 @@ pub fn geli_gas_sperrprozesse_invoic_registry()
                 .and_then(|b| b.document_id.as_deref())
                 .unwrap_or(msg.message_ref());
 
-            Ok(GeliGasSperrprozesseInvoicCommand::ReceiveInvoic {
+            Ok(InvoicCommand::ReceiveInvoic {
                 pid,
                 sender: MarktpartnerCode::new(
                     inv.sender()
@@ -662,6 +662,10 @@ pub fn geli_gas_sperrprozesse_invoic_registry()
                     .to_owned(),
                 validation_passed,
                 validation_errors,
+                // The BO4E `Rechnung` rides along so `invoicd` can run its
+                // plausibility checks straight off the ProcessInitiated
+                // payload, as it already does for GPKE and WiM.
+                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
             })
         },
     ));

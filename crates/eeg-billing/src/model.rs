@@ -780,7 +780,12 @@ impl SettleInput {
 // ── SettleOutput ──────────────────────────────────────────────────────────────
 
 /// Output of a settlement calculation.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// [`Default`] is "nothing settled": `NoData`, no amount, no positions. Every
+/// early exit in the engine builds on it with `..SettleOutput::default()`
+/// rather than restating ten fields — which is how a field added to this struct
+/// stays correct at the twenty-eight places that return one.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 pub struct SettleOutput {
@@ -984,7 +989,12 @@ impl SettlePosition {
 // ── SettlementStatus ──────────────────────────────────────────────────────────
 
 /// Outcome of a settlement calculation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+///
+/// The [`Default`] is [`NoData`](Self::NoData) — the outcome that pays nothing.
+/// A default that fell into `Calculated` would make a partially-constructed
+/// [`SettleOutput`] read as a settled figure of zero, which downstream is
+/// indistinguishable from "correctly settled, nothing due".
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
@@ -992,6 +1002,7 @@ pub enum SettlementStatus {
     /// Amount calculated successfully.
     Calculated,
     /// No meter data for the billing period. Try again once data arrives.
+    #[default]
     NoData,
     /// Required price data (EPEX monthly average) is missing.
     PriceMissing,

@@ -217,6 +217,30 @@
       align: (right, right),
       inset: (x: 5pt, y: 2.5pt),
       [Summe netto], [#money(invoice.totals.line_total) €],
+      // BG-20 — document-level allowances, each with its own VAT terms. A
+      // Restrechnung deducts every advance this way (§ 14 Abs. 5 Satz 2 UStG),
+      // which is what makes BT-106 and BT-109 differ. Printing the net sum and
+      // then a VAT breakdown on a smaller base, with nothing between them,
+      // shows a page that does not add up while the embedded XML is correct.
+      ..invoice.allowances.map(a => (
+        [
+          #if a.reason != none [#a.reason] else [Abzug]
+          #if a.vat_rate != none and a.vat_rate != "0" [ (#num(a.vat_rate) % USt)]
+        ],
+        [#sym.minus#money(a.amount) €],
+      )).flatten(),
+      ..invoice.charges.map(c => (
+        [
+          #if c.reason != none [#c.reason] else [Zuschlag]
+          #if c.vat_rate != none and c.vat_rate != "0" [ (#num(c.vat_rate) % USt)]
+        ],
+        [#money(c.amount) €],
+      )).flatten(),
+      // Restate the base the VAT is actually computed on, but only where it
+      // differs — on an ordinary invoice a second identical line is noise.
+      ..if invoice.totals.line_total != invoice.totals.taxable_total {
+        ([Summe netto nach Abzügen], [#money(invoice.totals.taxable_total) €])
+      } else { () },
       // Highest rate first, the exempt/zero categories last — the order a
       // German reader expects (19 % before 7 % before "steuerbefreit"). The
       // model's order is the reconciler's grouping order, which is not a

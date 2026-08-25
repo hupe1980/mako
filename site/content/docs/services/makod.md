@@ -630,6 +630,16 @@ them apart by the **Bindungsfrist** — an Angebot carries `DTM+273`, an Ablehnu
 does not (its reason rides `FTX+ACB`). `DTM+273` is a *duration* (a count plus
 `802` Monat / `803` Woche / `804` Tag), not a date.
 
+### Callers name the command, they do not spell it
+
+An unknown command name is refused with `422`, which means a caller that writes
+the wire name a second time can drift from the registry and only find out when a
+real message arrives: the work is done, the dispatch fails, and the Frist expires
+on a process that looked healthy. `mako_markt::commands` therefore holds one
+constant per command an out-of-process caller posts, `DISPATCHED_BY_SERVICES`
+lists them, and a registry test here asserts every one is registered. Services
+name those constants; `cargo xtask check-answer-commands` refuses a bare literal.
+
 `marktrollen` declares which market-participant roles this deployment is
 authorised to issue commands for.  Every command submitted to
 `POST /api/v1/commands` is checked against this list before any workflow is
@@ -1800,13 +1810,13 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.stoerung.ergebnis-melden` | `MSB` | WiM | 23008 | MSB sends the Ergebnisbericht and closes the Use-Case |
 | `wim.rechnung.annehmen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer accepts the invoice (REMADV) |
 | `wim.rechnung.ablehnen` | `LF`, `NB`, `GNB`, `MSB`, `NMSB`, `ESA` | WiM | 31009 · 31003 · 31004 | the payer disputes the invoice (REMADV with `E_0406` codes) |
-| `invoic.stornorechnung.annehmen` | any invoice party | INVOIC | 31004 | Accept a Sparte-neutral Stornorechnung (REMADV) |
-| `invoic.stornorechnung.ablehnen` | any invoice party | INVOIC | 31004 | Dispute a Stornorechnung by the invoice's Zahlungsziel |
+| `invoic.stornorechnung.annehmen` | the union of every billing family's recipients | INVOIC | 31004 | Accept a Sparte-neutral Stornorechnung (REMADV). 31004 cancels an invoice from *any* family, so whoever could receive the original can receive its cancellation — the permitted set is derived from the family commands, not restated |
+| `invoic.stornorechnung.ablehnen` | the union of every billing family's recipients | INVOIC | 31004 | Dispute a Stornorechnung by the invoice's Zahlungsziel |
 | `invoic.sonstige-leistung.stellen` | `NB` or `GNB` | Sparte-neutral | 31011 | Rechnung sonstige Leistung (GPKE Teil 2 · AWH Sperrprozesse Gas) |
 | `invoic.sonstige-leistung.annehmen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF accepts the invoice (REMADV) |
 | `invoic.sonstige-leistung.ablehnen` | `LF`, `LFG`, `LFN`, `LFA` | Sparte-neutral | 31011 | LF disputes the invoice (REMADV) |
-| `gabi.mmm.rechnung.annehmen` | `BKV` | GaBi Gas | 31007 | BKV accepts the Gas Mehr-/Mindermengenrechnung |
-| `gabi.mmm.rechnung.ablehnen` | `BKV` | GaBi Gas | 31007 | BKV disputes the Gas Mehr-/Mindermengenrechnung |
+| `gabi.rechnung.annehmen` | `BKV` · `MGV` | GaBi Gas | 31007 | Settles a GaBi Gas invoice — the MGV the aggregated MMM-Rechnung 31007/31008, the BKV the Kapazitätsrechnung 31010 |
+| `gabi.rechnung.ablehnen` | `BKV` · `MGV` | GaBi Gas | 31007 | Disputes one — same family, same two roles |
 | `geli.lieferbeginn.ablehnen` | `GNB` | GeLi Gas | 44003 | GNB rejects the Anmeldung Netznutzung (`G_0011`) |
 | `geli.nb-lieferende.bestaetigen` | `LFG` | GeLi Gas | 44008 | LFG confirms the GNB-initiated Lieferende |
 | `geli.beendigung-zuordnung.bestaetigen` | `LFG` | GeLi Gas | 44011 | LFA confirms the Abmeldungsanfrage |

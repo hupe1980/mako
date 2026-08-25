@@ -22,6 +22,7 @@ members = [
     "crates/mako-service",
     "crates/mako-plugin",
     "crates/invoic-checker",
+    "crates/mako-invoic",
     "crates/mako-pruefung",
     "crates/grid-billing",
     "crates/eeg-billing",
@@ -62,7 +63,7 @@ edifact-rs   = "~0.16"
 miette       = { version = "7", features = ["fancy-no-syscall"] }
 rubo4e       = { version = "0.10.0", features = ["versioned", "identifiers", "decimal", "time", "validate", "schemars", "json", "strum", "builder"] }
 rust_decimal = { version = "1", features = ["db-postgres", "macros"] }
-billing      = { version = "0.13.0", features = ["serde"] }
+billing      = { version = "0.14.0", features = ["serde"] }
 # EN 16931 semantic invoice model + business-rule validation (the `billing`
 # adapter bridges the shared money core); en16931-formats renders XRechnung/CII +
 # PEPPOL UBL, and its `zugferd` feature *reads* a finished ZUGFeRD PDF — the
@@ -70,8 +71,8 @@ billing      = { version = "0.13.0", features = ["serde"] }
 # outputd's publish gate runs. Writing the carrier is mako's
 # (`outputd::document::facturx`), because that crate deliberately ships no
 # writer — a position upstream holds by design (fed back to its authors).
-en16931         = { version = "0.5.0", features = ["billing", "serde", "time"] }
-en16931-formats = { version = "0.5.0", features = ["cii", "ubl", "serde", "zugferd"] }
+en16931         = { version = "0.6.0", features = ["billing", "serde", "time"] }
+en16931-formats = { version = "0.6.0", features = ["cii", "ubl", "serde", "zugferd"] }
 serde        = { version = "1", features = ["derive"] }
 serde_json   = "1"
 thiserror    = "2"
@@ -109,6 +110,10 @@ eeg-billing      = { path = "crates/eeg-billing",      version = "0.16" }
 mako-obs         = { path = "crates/mako-obs",         version = "0.16" }
 mako-wim         = { path = "crates/mako-wim",         version = "0.16" }
 mako-gpke        = { path = "crates/mako-gpke",        version = "0.16" }
+# The INVOIC settle/dispute state machine, shared by every billing family.
+# GPKE, WiM, GaBi Gas and GeLi Gas register a family against it rather than
+# re-implementing the process — four copies had already drifted apart.
+mako-invoic      = { path = "crates/mako-invoic",      version = "0.16" }
 mako-geli-gas    = { path = "crates/mako-geli-gas",    version = "0.16" }
 # Every Frist in one leaf crate: BDEW Werktage, the MaKo holiday calendar, and
 # the per-Prüfidentifikator Antwortfrist tables. `mako-engine` re-exports it as
@@ -124,7 +129,7 @@ invoic-checker   = { path = "crates/invoic-checker",   version = "0.16" }
 mako-pruefung      = { path = "crates/mako-pruefung",      version = "0.16" }
 energy-billing   = { path = "crates/energy-billing",   version = "0.16" }
 dvgw-edi         = { path = "crates/dvgw-edi",         version = "0.16" }
-metering         = { version = "0.18" }
+metering         = { version = "0.19" }
 sepa             = { version = "0.6.0" }
 # Immutable, tamper-evident double-entry ledger kernel (sibling repo). accountingd's
 # storage/accounting base. Domain-neutral by design — the BillingDocument→Entry and

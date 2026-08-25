@@ -53,10 +53,8 @@ use mako_engine::{
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
-use mako_gpke::{
-    ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungState, GPKE_INVOIC_PIDS,
-    GpkeAbrechnungWorkflow,
-};
+use mako_gpke::{ABRECHNUNG_WINDOW_LABEL, GPKE_INVOIC_PIDS, GpkeAbrechnungWorkflow};
+use mako_invoic::{InvoicCommand, InvoicState};
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -97,7 +95,7 @@ impl MockNb {
             vec!["profile rule Z01 violated: missing LIN segment".to_owned()]
         };
         self.process
-            .execute(AbrechnungCommand::ReceiveInvoic {
+            .execute(InvoicCommand::ReceiveInvoic {
                 pid: Pruefidentifikator::new(pid).unwrap(),
                 sender: MarktpartnerCode::new(NB_ID),
                 recipient: MarktpartnerCode::new(LF_ID),
@@ -114,7 +112,7 @@ impl MockNb {
     /// NB settles the invoice (positive CONTRL received from LF).
     async fn settle_invoice(&self) {
         self.process
-            .execute(AbrechnungCommand::SettleInvoice)
+            .execute(InvoicCommand::SettleInvoice)
             .await
             .expect("SettleInvoice");
     }
@@ -122,14 +120,14 @@ impl MockNb {
     /// NB disputes the invoice (negative CONTRL / APERAK from LF).
     async fn dispute_invoice(&self, reason: &str) {
         self.process
-            .execute(AbrechnungCommand::DisputeInvoice {
+            .execute(InvoicCommand::DisputeInvoice {
                 reason: reason.to_owned(),
             })
             .await
             .expect("DisputeInvoice");
     }
 
-    async fn state(&self) -> AbrechnungState {
+    async fn state(&self) -> InvoicState {
         self.process.state().await.unwrap()
     }
 }
@@ -148,7 +146,7 @@ async fn e2e_gpke_abrechnung_31001_settle() {
 
     let state = nb.state().await;
     match &state {
-        AbrechnungState::ValidationPassed(d) => {
+        InvoicState::ValidationPassed(d) => {
             assert_eq!(d.pruefidentifikator.as_u32(), 31001);
             assert_eq!(d.sender.as_str(), NB_ID);
             assert_eq!(d.recipient.as_str(), LF_ID);
@@ -162,7 +160,7 @@ async fn e2e_gpke_abrechnung_31001_settle() {
 
     let state = nb.state().await;
     match state {
-        AbrechnungState::Settled(d) => {
+        InvoicState::Settled(d) => {
             assert_eq!(d.pruefidentifikator.as_u32(), 31001);
             assert_eq!(d.sender.as_str(), NB_ID);
             assert_eq!(d.recipient.as_str(), LF_ID);
@@ -182,14 +180,14 @@ async fn e2e_gpke_abrechnung_31002_settle() {
 
     let state = nb.state().await;
     assert!(
-        matches!(state, AbrechnungState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == 31002),
+        matches!(state, InvoicState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == 31002),
         "expected ValidationPassed(31002); got: {state:?}"
     );
 
     nb.settle_invoice().await;
 
     assert!(
-        matches!(nb.state().await, AbrechnungState::Settled(_)),
+        matches!(nb.state().await, InvoicState::Settled(_)),
         "must be Settled"
     );
 }
@@ -206,13 +204,13 @@ async fn e2e_gpke_abrechnung_31005_mmm_settle() {
 
     let state = nb.state().await;
     assert!(
-        matches!(state, AbrechnungState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == 31005),
+        matches!(state, InvoicState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == 31005),
         "expected ValidationPassed(31005); got: {state:?}"
     );
 
     nb.settle_invoice().await;
 
-    assert!(matches!(nb.state().await, AbrechnungState::Settled(_)));
+    assert!(matches!(nb.state().await, InvoicState::Settled(_)));
 }
 
 /// GPKE Abrechnung — all active INVOIC PIDs are accepted by the workflow.
@@ -230,7 +228,7 @@ async fn e2e_gpke_abrechnung_all_pids_accepted() {
 
         let state = nb.state().await;
         assert!(
-            matches!(state, AbrechnungState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == pid),
+            matches!(state, InvoicState::ValidationPassed(ref d) if d.pruefidentifikator.as_u32() == pid),
             "PID {pid}: expected ValidationPassed; got: {state:?}"
         );
     }
@@ -253,7 +251,7 @@ async fn e2e_gpke_abrechnung_dispute() {
 
     let state = nb.state().await;
     match &state {
-        AbrechnungState::Disputed { data, reason } => {
+        InvoicState::Disputed { data, reason } => {
             assert_eq!(data.pruefidentifikator.as_u32(), 31002);
             assert!(
                 reason.contains("DE0001000001234567890"),
@@ -277,7 +275,7 @@ async fn e2e_gpke_abrechnung_validation_failure_rejected() {
 
     let state = nb.state().await;
     match &state {
-        AbrechnungState::Rejected { reason } => {
+        InvoicState::Rejected { reason } => {
             assert!(
                 reason.contains("Z01"),
                 "rejection reason must carry validation error details; got: {reason:?}"
@@ -297,7 +295,7 @@ async fn e2e_gpke_abrechnung_invalid_pid_rejected() {
 
     let result = nb
         .process
-        .execute(AbrechnungCommand::ReceiveInvoic {
+        .execute(InvoicCommand::ReceiveInvoic {
             pid: Pruefidentifikator::new(31003).unwrap(),
             sender: MarktpartnerCode::new(NB_ID),
             recipient: MarktpartnerCode::new(LF_ID),
@@ -315,7 +313,7 @@ async fn e2e_gpke_abrechnung_invalid_pid_rejected() {
     );
     let state = nb.state().await;
     assert!(
-        matches!(state, AbrechnungState::New),
+        matches!(state, InvoicState::New),
         "state must remain New after rejected PID; got: {state:?}"
     );
 }
@@ -329,14 +327,11 @@ async fn e2e_gpke_abrechnung_duplicate_receive_rejected() {
     let nb = MockNb::new();
 
     nb.receive_invoic(31001, "INVOIC-DUP-001", true).await;
-    assert!(matches!(
-        nb.state().await,
-        AbrechnungState::ValidationPassed(_)
-    ));
+    assert!(matches!(nb.state().await, InvoicState::ValidationPassed(_)));
 
     let result = nb
         .process
-        .execute(AbrechnungCommand::ReceiveInvoic {
+        .execute(InvoicCommand::ReceiveInvoic {
             pid: Pruefidentifikator::new(31001).unwrap(),
             sender: MarktpartnerCode::new(NB_ID),
             recipient: MarktpartnerCode::new(LF_ID),
@@ -354,7 +349,7 @@ async fn e2e_gpke_abrechnung_duplicate_receive_rejected() {
     );
     // State must remain ValidationPassed — the second receive must be idempotent
     assert!(
-        matches!(nb.state().await, AbrechnungState::ValidationPassed(_)),
+        matches!(nb.state().await, InvoicState::ValidationPassed(_)),
         "state must remain ValidationPassed after duplicate receive"
     );
 }
@@ -372,7 +367,7 @@ async fn e2e_gpke_abrechnung_timeout_fires_rejected() {
 
     let deadline_id = DeadlineId::new();
     nb.process
-        .execute(AbrechnungCommand::TimeoutExpired {
+        .execute(InvoicCommand::TimeoutExpired {
             deadline_id,
             label: ABRECHNUNG_WINDOW_LABEL.into(),
         })
@@ -381,7 +376,7 @@ async fn e2e_gpke_abrechnung_timeout_fires_rejected() {
 
     let state = nb.state().await;
     match &state {
-        AbrechnungState::Rejected { reason } => {
+        InvoicState::Rejected { reason } => {
             assert!(
                 reason.contains(ABRECHNUNG_WINDOW_LABEL),
                 "rejection reason must name the deadline label; got: {reason:?}"
@@ -401,11 +396,11 @@ async fn e2e_gpke_abrechnung_late_timeout_absorbed_on_settled() {
 
     nb.receive_invoic(31001, "INVOIC-LATE-001", true).await;
     nb.settle_invoice().await;
-    assert!(matches!(nb.state().await, AbrechnungState::Settled(_)));
+    assert!(matches!(nb.state().await, InvoicState::Settled(_)));
 
     let deadline_id = DeadlineId::new();
     nb.process
-        .execute(AbrechnungCommand::TimeoutExpired {
+        .execute(InvoicCommand::TimeoutExpired {
             deadline_id,
             label: ABRECHNUNG_WINDOW_LABEL.into(),
         })
@@ -413,7 +408,7 @@ async fn e2e_gpke_abrechnung_late_timeout_absorbed_on_settled() {
         .expect("TimeoutExpired on Settled must be absorbed without error");
 
     assert!(
-        matches!(nb.state().await, AbrechnungState::Settled(_)),
+        matches!(nb.state().await, InvoicState::Settled(_)),
         "state must remain Settled after late timeout"
     );
 }
@@ -428,11 +423,11 @@ async fn e2e_gpke_abrechnung_late_timeout_absorbed_on_disputed() {
     nb.receive_invoic(31002, "INVOIC-DISP-LATE-001", true).await;
     nb.dispute_invoice("Rechnungsbetrag nicht nachvollziehbar")
         .await;
-    assert!(matches!(nb.state().await, AbrechnungState::Disputed { .. }));
+    assert!(matches!(nb.state().await, InvoicState::Disputed { .. }));
 
     let deadline_id = DeadlineId::new();
     nb.process
-        .execute(AbrechnungCommand::TimeoutExpired {
+        .execute(InvoicCommand::TimeoutExpired {
             deadline_id,
             label: ABRECHNUNG_WINDOW_LABEL.into(),
         })
@@ -440,7 +435,7 @@ async fn e2e_gpke_abrechnung_late_timeout_absorbed_on_disputed() {
         .expect("TimeoutExpired on Disputed must be absorbed without error");
 
     assert!(
-        matches!(nb.state().await, AbrechnungState::Disputed { .. }),
+        matches!(nb.state().await, InvoicState::Disputed { .. }),
         "state must remain Disputed after late timeout"
     );
 }

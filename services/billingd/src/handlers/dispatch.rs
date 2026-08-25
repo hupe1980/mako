@@ -38,7 +38,7 @@ pub(crate) async fn build_quantities(
             if is_dynamic {
                 q.dynamic_intervals =
                     fetch_dynamic_intervals(malo_id, period_from, period_to, edmd).await?;
-                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, productd).await;
+                q.dynamic_epex_prices = fetch_epex_prices(period_from, period_to, productd).await?;
                 // Without intervals the dynamic provider prices nothing: the
                 // invoice comes back carrying the Grundpreis and no energy at
                 // all — no Arbeitspreis, no Stromsteuer, no NNE-Arbeitspreis —
@@ -60,7 +60,7 @@ pub(crate) async fn build_quantities(
         }
         "GAS" => {
             let mut meter = req.gas_meter.clone().unwrap_or_default();
-            enrich_gas_meter(&mut meter, malo_id, period_from, period_to, edmd, marktd).await;
+            enrich_gas_meter(&mut meter, malo_id, period_from, period_to, edmd, marktd).await?;
             q.gas = Some(meter);
         }
         "WAERME" => {
@@ -210,6 +210,15 @@ pub(crate) async fn dispatch_invoice(
             InvoiceType::Initial
         },
         abschlage: req.abschlaege.clone(),
+        // §14 Abs. 5 Satz 2 UStG — how the settling invoice presents the
+        // advances. Both forms are lawful and the customer pays the same;
+        // `Endrechnung` (the default) states the whole supply and deducts the
+        // advances with their tax, `Restrechnung` invoices only the remainder,
+        // which is what the BMF recommends for e-invoices (Schreiben v.
+        // 15.10.2024, Rn. 48) because EN 16931's core profiles have nowhere to
+        // carry per-advance tax. Per request, falling back to the operator's
+        // configured default.
+        settlement_form: req.settlement_form.unwrap_or(cfg.settlement_form()),
         // §13b Abs. 2 Nr. 5 lit. b UStG — supply to a Stromwiederverkäufer:
         // invoice net, recipient owes the VAT (EN 16931 `AE` tax breakdown).
         // Derived from the customer master (`kunden.stromwiederverkaeufer`) —

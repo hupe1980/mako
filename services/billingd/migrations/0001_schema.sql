@@ -11,7 +11,7 @@
 --
 -- `invoice_number_series`: § 14 Abs. 4 Nr. 4 UStG fortlaufende Rechnungsnummer.
 -- `billing_run_log`: § 40b EnWG monthly batch-run audit.
--- `abrechnungsinfo_log`: § 40b Abs. 2 EnWG monthly info dispatch claim.
+-- `abrechnungsinfo_log`: § 40b Abs. 3 EnWG monthly info dispatch claim.
 -- `vpp_dispatch_ledger`: idempotency guard for de.vpp.dispatch.confirmed.
 
 -- ── § 14 Abs. 4 Nr. 4 UStG — the number series ───────────────────────────────
@@ -75,6 +75,14 @@ CREATE TABLE billing_records (
     -- EN 16931 semantic invoice model (serde JSON) — the source for XRechnung /
     -- CII / PEPPOL-UBL rendering, mapped at bill time with full per-line VAT.
     en16931_json        JSONB,
+    -- Why this record carries no `en16931_json`, when the reason is a property
+    -- of the invoice rather than a missing step. Today one reason exists: a
+    -- document mixing a not-subject-to-VAT line (EN 16931 category `O` — a
+    -- hoheitliche Abwassergebühr) with any other category, which BR-O-11 ff.
+    -- forbid. The paper invoice is lawful and still issued; there is simply no
+    -- valid e-invoice of it, and the render endpoints say so instead of
+    -- telling the operator to re-run a calculation that would refuse again.
+    en16931_blocked     TEXT,
 
     -- Monetary summary for fast reporting (avoids JSONB parse)
     total_netto_eur     NUMERIC(16, 5),
@@ -214,7 +222,7 @@ COMMENT ON TABLE billing_run_log IS
     'table answers "did the scheduled runs of month X happen, and how did '
     'they go".';
 
--- ── §40b Abs. 2 EnWG — monthly Abrechnungsinformation log ────────────────────
+-- ── § 40b Abs. 3 EnWG — monthly Abrechnungsinformation log ────────────────────
 -- Customers with remote-readable meters (iMSys) receive a free monthly
 -- consumption/cost information. One row per delivered info; the UNIQUE guard
 -- makes the daily worker idempotent per month.
@@ -230,7 +238,7 @@ CREATE TABLE abrechnungsinfo_log (
 );
 
 COMMENT ON TABLE abrechnungsinfo_log IS
-    '§40b Abs. 2 EnWG: monthly Abrechnungsinformation dispatch log for '
+    '§ 40b Abs. 3 EnWG: monthly Abrechnungsinformation dispatch log for '
     'iMSys/fernauslesbare MaLos. UNIQUE guard = one info per MaLo and month. '
     'A claim is released again when the delivery it guards does not happen, '
     'so a transient failure postpones the info rather than cancelling it.';

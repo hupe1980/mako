@@ -313,8 +313,8 @@ impl InvoicCheckEngine {
     ///
     /// # Arguments
     ///
-    /// - `pid` — BDEW Prüfidentifikator (31001–31011) from `AbrechnungData`.
-    /// - `sender_mp_id` — verified sender GLN from `AbrechnungData.sender`
+    /// - `pid` — BDEW Prüfidentifikator (31001–31011) from `InvoicData`.
+    /// - `sender_mp_id` — verified sender GLN from `InvoicData.sender`
     ///   (identity-checked at transport layer; used for tariff lookups).
     /// - `rechnung` — BO4E invoice object stored in the event.
     /// - `tariff_store` — tariff database seeded from PRICAT 27003.

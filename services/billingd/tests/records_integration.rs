@@ -527,7 +527,7 @@ async fn the_monthly_run_log_accumulates_daily_sweeps() {
     assert_eq!(status, "failed");
 }
 
-/// §40b Abs. 2: the monthly Abrechnungsinformation is claimed exactly once
+/// § 40b Abs. 3: the monthly Abrechnungsinformation is claimed exactly once
 /// per MaLo and month — the second daily sweep must not re-send it.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL)"]

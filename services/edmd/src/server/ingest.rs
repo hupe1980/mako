@@ -645,6 +645,7 @@ pub(crate) async fn post_direct_reads_inner(
                 "issue_count":         validation.issue_count,
                 "billing_block_count": validation.billing_block_count,
                 "rules":               validation.rules,
+                "skipped_rules":      validation.skipped_rules,
             },
             // The cached billing-period aggregate for this window was invalidated
             // on store; it is recomputed lazily on the next read (read-through),
@@ -1313,6 +1314,7 @@ pub async fn post_bulk_reads(
         "billing_block_count": validation.billing_block_count,
         "issue_count": validation.issue_count,
         "rules_triggered": validation.rules,
+        "rules_skipped": validation.skipped_rules,
     });
 
     // Persist session record

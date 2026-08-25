@@ -148,7 +148,7 @@ pub(super) fn cmd_wim_rechnung_annehmen<'a>(
     Box::pin(async move {
         let invoice_ref = extract_invoice_ref(p)?;
         dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
-            WimInvoicCommand::SettleInvoice
+            InvoicCommand::SettleInvoice
         })
         .await
     })
@@ -168,7 +168,7 @@ pub(super) fn cmd_wim_rechnung_ablehnen<'a>(
             .unwrap_or("Automatisch ermittelte Abweichung — WiM 31009")
             .to_owned();
         dispatch_to_process::<WimInvoicWorkflow, _>(s, &invoice_ref, "wim-invoic", || {
-            WimInvoicCommand::DisputeInvoice { reason }
+            InvoicCommand::DisputeInvoice { reason }
         })
         .await
     })

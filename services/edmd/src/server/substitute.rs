@@ -372,6 +372,13 @@ pub async fn run_substitute_values(
             method,
             prior_period_intervals: prior_intervals.clone(),
             short_gap_threshold: 3,
+            // Gas balances on the Gastag, so a daily or longer grid is cut at
+            // 06:00 rather than midnight. Sub-daily resolutions are unaffected,
+            // which is why this is safe to derive from the Sparte alone.
+            day_boundary: match target_sparte {
+                Some(metering::Sparte::Gas) => metering::calendar::DayBoundary::Gastag,
+                _ => metering::calendar::DayBoundary::Midnight,
+            },
             // § 60 Abs. 2 MsbG: this endpoint fills a gap, which is what
             // `NoMeasurementAvailable` records. A caller that knows better —
             // a meter fault, a gateway outage — is a richer request than this

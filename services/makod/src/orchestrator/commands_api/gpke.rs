@@ -249,7 +249,7 @@ pub(super) fn cmd_gpke_abrechnung_annehmen<'a>(
         // we can route to the correct billing process.
         let invoice_ref = extract_invoice_ref(p)?;
         dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
-            AbrechnungCommand::SettleInvoice
+            InvoicCommand::SettleInvoice
         })
         .await
     })
@@ -269,7 +269,7 @@ pub(super) fn cmd_gpke_abrechnung_ablehnen<'a>(
             .unwrap_or("Automatisch ermittelte Abweichung")
             .to_owned();
         dispatch_to_process::<GpkeAbrechnungWorkflow, _>(s, &invoice_ref, "gpke-abrechnung", || {
-            AbrechnungCommand::DisputeInvoice { reason }
+            InvoicCommand::DisputeInvoice { reason }
         })
         .await
     })
@@ -301,7 +301,7 @@ pub(super) fn cmd_gpke_abrechnung_selbstausstellen<'a>(
             s,
             &invoice_ref_str,
             "gpke-abrechnung",
-            move || AbrechnungCommand::SendInvoic {
+            move || InvoicCommand::SendInvoic {
                 pid: mako_engine::types::Pruefidentifikator::new(31006)
                     .expect("31006 is a valid PID"),
                 sender: mako_engine::types::MarktpartnerCode::new(sender_mp_id.as_str()),

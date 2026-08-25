@@ -23,6 +23,7 @@ fn rates_2026() -> RegulatoryRates {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(0.62),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     }
 }
 
@@ -643,10 +644,15 @@ fn eeg_zero_einspeisung_is_zero() {
 // ── Solar ─────────────────────────────────────────────────────────────────────
 
 #[test]
-fn solar_mieterstrom_zuschlag_adds_to_brutto() {
+fn the_mieterstromzuschlag_never_reaches_the_tenants_invoice() {
+    // § 21 Abs. 3 EEG 2023 is the Anlagenbetreiber's claim against the
+    // Netzbetreiber. Added as a per-kWh surcharge on the tenant instead, a
+    // 1,5 ct/kWh Zuschlag over-charges a 200 kWh tenant by 3,57 EUR for a
+    // payment the network operator owes the landlord.
     let (_f, _t) = period();
     let base = j(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25}"#);
-    let ms = j(
+    // The field no longer exists; serde ignores it, and nothing is billed.
+    let legacy = j(
         r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":25,"mieterstrom_aufschlag_ct_per_kwh":1.5}"#,
     );
     let m = SolarMeterInput {
@@ -660,19 +666,56 @@ fn solar_mieterstrom_zuschlag_adds_to_brutto() {
         },
     );
     let r2 = bill(
-        &ms,
+        &legacy,
         Quantities {
             solar: Some(m.clone()),
             ..Default::default()
         },
     );
-    assert!(r2.brutto_eur > r1.brutto_eur);
-    let diff = r2.brutto_eur - r1.brutto_eur;
-    // 200 × 1.5 ct × 1.19 = 3.57 EUR
+    assert_eq!(r1.brutto_eur, r2.brutto_eur);
     assert!(
-        diff > dec!(3.5) && diff < dec!(3.65),
-        "Expected ~3.57, got {diff}"
+        !r2.positions
+            .iter()
+            .any(|p| p.has_tag("mieterstrom_aufschlag")),
+        "no Mieterstrom surcharge may be billed to the tenant"
     );
+}
+
+/// § 42a Abs. 4 EnWG caps the Mieterstrompreis at 90 % of the local
+/// Grundversorgungstarif. Above it there is no lawful invoice to issue.
+#[test]
+fn mieterstrom_above_ninety_percent_of_grundversorgung_is_refused() {
+    let (f, t) = period();
+    let over = j(
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":28,"grundversorgung_arbeitspreis_ct_per_kwh":30}"#,
+    );
+    let ctx = ctx_for(f, t);
+    let q = Quantities {
+        solar: Some(SolarMeterInput {
+            eigenverbrauch_kwh: dec!(200),
+        }),
+        ..Default::default()
+    };
+    let err = over
+        .build_engine(&GridInput::default(), &RegulatoryRates::default())
+        .bill(ctx, &q)
+        .expect_err("28 ct/kWh exceeds 90 % of 30 ct/kWh");
+    assert!(format!("{err:?}").contains("MIETERSTROM_UEBER_90PCT_GRUNDVERSORGUNG"));
+
+    // At the cap exactly (27 ct/kWh) it bills, and states the ceiling.
+    let at_cap = j(
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":27,"grundversorgung_arbeitspreis_ct_per_kwh":30}"#,
+    );
+    let r = bill(
+        &at_cap,
+        Quantities {
+            solar: Some(SolarMeterInput {
+                eigenverbrauch_kwh: dec!(200),
+            }),
+            ..Default::default()
+        },
+    );
+    assert!(r.positions.iter().any(|p| p.has_tag("preisobergrenze")));
 }
 
 // ── HEMS ──────────────────────────────────────────────────────────────────────
@@ -1126,7 +1169,7 @@ fn dynamic_strom_applies_arbeitspreis_aufschlag() {
 
     let plain = j(r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#);
     let with_aufschlag = j(
-        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"auf_abschlag_ct_per_kwh":5}"#,
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,"dynamic_aufschlag_ct_per_kwh":5}"#,
     );
     let r_plain = bill(
         &plain,
@@ -2611,7 +2654,6 @@ fn strom_block_tariff_lower_than_flat_rate_for_high_consumption() {
 #[cfg(feature = "bo4e")]
 #[test]
 fn strom_verbrauchshistorie_produces_info_positions() {
-    use energy_billing::Verbrauchshistorie;
     use time::macros::date;
 
     let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
@@ -2622,7 +2664,7 @@ fn strom_verbrauchshistorie_produces_info_positions() {
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
         invoice_type: InvoiceType::Initial,
         regulatory_rates: rates_2026(),
-        verbrauchshistorie: Some(Verbrauchshistorie {
+        verbrauchshistorie: Some(energy_billing::Verbrauchshistorie {
             vorjahr_kwh: Some(dec!(2800)),
             bundesdurchschnitt_kwh: Some(dec!(3500)),
             kundengruppe: Some("3-Personen-Haushalt".to_owned()),
@@ -3849,7 +3891,7 @@ fn seasonal_price_override_contains_month_wrap_around() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-// Prosumer net metering (§9a Nr. 1 StromStG)
+// Prosumer net metering (§ 9 Abs. 1 Nr. 3 StromStG)
 // ═══════════════════════════════════════════════════════════════════════════
 
 /// Prosumer invoice: only grid consumption attracts commodity charges.
@@ -4448,14 +4490,18 @@ fn eeg_regelbesteuerung_normal_mwst() {
     );
 }
 
+/// § 9b StromStG is a **Steuerentlastung**: the supplier invoices the full
+/// 2,05 ct/kWh and the customer reclaims 2,00 ct/kWh from the Hauptzollamt.
+/// Zero-rating the levy at supply — what the old
+/// `industrie_stromsteuer_befreiung` flag did — under-declared the supplier's
+/// own Stromsteueranmeldung and let the customer reclaim tax nobody had paid.
 #[test]
-fn industrie_stromsteuer_befreiung_produces_info_position() {
-    // §9 Abs. 1 Nr. 4 StromStG — industrial Stromsteuer exemption.
+fn a_produzierendes_gewerbe_is_billed_the_full_stromsteuer() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "STROM",
         "arbeitspreis_ct_per_kwh": 18.0,
-        "industrie_stromsteuer_befreiung": true
+        "steuerentlastungen": ["STROMSTEUER9B"]
     }"#,
     )
     .unwrap();
@@ -4484,24 +4530,94 @@ fn industrie_stromsteuer_befreiung_produces_info_position() {
         .unwrap();
     invoice.assert_valid();
 
-    // Must have a Stromsteuer exemption info position, not a levy position
-    let exempt_pos: Vec<_> = invoice.positions_by_tag("stromsteuer_befreiung").collect();
-    assert_eq!(
-        exempt_pos.len(),
-        1,
-        "Must have exactly one Stromsteuer exemption info position"
-    );
+    // The levy is billed in full: 1000 kWh × 2,05 ct = 20,50 EUR.
+    let levy: Vec<_> = invoice.positions_by_tag("stromsteuer").collect();
+    assert_eq!(levy.len(), 1, "the Stromsteuer stays on the invoice");
+    assert_eq!(levy[0].net_eur.round_dp(2), dec!(20.50));
+    assert_eq!(invoice.netto_eur.round_dp(2), dec!(200.50));
 
-    // Must NOT have a Stromsteuer levy position
-    let levy_pos: Vec<_> = invoice.positions_by_tag("stromsteuer").collect();
-    assert_eq!(levy_pos.len(), 0, "Must have no Stromsteuer levy position");
-
-    // Net amount: 1000 × 18ct = EUR 180 — no Stromsteuer added
+    // …and the customer is told what they may reclaim, and on what.
+    let hinweis: Vec<_> = invoice.positions_by_tag("steuerentlastung").collect();
+    assert_eq!(hinweis.len(), 1);
+    assert_eq!(hinweis[0].net_eur, Decimal::ZERO);
+    assert!(hinweis[0].description.contains("20.50"));
     assert_eq!(
-        invoice.netto_eur.round_dp(2),
-        dec!(180.00),
-        "No Stromsteuer added when exempt"
+        hinweis[0].legal_basis.as_deref(),
+        Some("\u{a7} 9b StromStG")
     );
+}
+
+/// § 9 Abs. 2 StromStG is a **reduction**, not an exemption: Fahrstrom is
+/// taxed at 11,42 EUR/MWh. The old `Bahnstrom` variant dropped the line
+/// entirely and lost 1,142 ct/kWh of tax on every rail-traction invoice.
+#[test]
+fn fahrstrom_is_billed_at_the_reduced_rate() {
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "STROM",
+        "arbeitspreis_ct_per_kwh": 18.0,
+        "stromsteuer_tarif": { "art": "ERMAESSIGUNG", "grund": "FAHRSTROM" }
+    }"#,
+    )
+    .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(1000),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let levy: Vec<_> = invoice.positions_by_tag("stromsteuer").collect();
+    assert_eq!(levy.len(), 1);
+    // 1000 kWh × 1,142 ct = 11,42 EUR
+    assert_eq!(levy[0].net_eur.round_dp(2), dec!(11.42));
+}
+
+/// § 9 Abs. 1 Nr. 3 StromStG — a genuine exemption still removes the levy.
+#[test]
+fn a_kleinanlage_exemption_removes_the_levy() {
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "STROM",
+        "arbeitspreis_ct_per_kwh": 18.0,
+        "stromsteuer_tarif": { "art": "BEFREIUNG", "grund": "KLEINANLAGE" }
+    }"#,
+    )
+    .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(1000),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(invoice.positions_by_tag("stromsteuer").count(), 0);
+    assert_eq!(invoice.positions_by_tag("stromsteuer_befreiung").count(), 1);
+    assert_eq!(invoice.netto_eur.round_dp(2), dec!(180.00));
 }
 
 #[test]
@@ -5097,7 +5213,7 @@ fn nne_grundpreis_is_clipped_to_the_contract() {
 /// dispatch system that inspects `invoice.warnings`.
 #[test]
 fn the_promised_warnings_fire() {
-    use energy_billing::{MeterInput, Verbrauchshistorie};
+    use energy_billing::MeterInput;
 
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "STROM",
@@ -5108,7 +5224,7 @@ fn the_promised_warnings_fire() {
     let ctx = BillingContext {
         malo_id: "51238696781".to_owned(),
         period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
-        verbrauchshistorie: Some(Verbrauchshistorie {
+        verbrauchshistorie: Some(energy_billing::Verbrauchshistorie {
             vorjahr_kwh: Some(dec!(1000)),
             bundesdurchschnitt_kwh: None,
             kundengruppe: None,
@@ -5148,6 +5264,9 @@ fn sect14a_modul3_bills_three_bands() {
     let product: energy_billing::Product = serde_json::from_value(serde_json::json!({
         "category": "WAERMEPUMPE",
         "arbeitspreis_ct_per_kwh": 20.0,
+        // BK6-22-300: Modul 3 is only offered in combination with Modul 1, and
+        // only against an iMSys — both are preconditions the engine enforces.
+        "sect14a_modul1_pauschale_eur_per_kw_year": 0.0,
         "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
         "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
         "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
@@ -5161,6 +5280,7 @@ fn sect14a_modul3_bills_three_bands() {
     let quantities = Quantities {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(600),
+            metering_mode: MeteringMode::Imsys,
             ..Default::default()
         }),
         sect14a_modul3: Some(Sect14aModul3Verbrauch {
@@ -5229,7 +5349,7 @@ fn sect14a_modul3_with_flat_nne_is_refused() {
 
 // ── Vertragsart: §38 EnWG Ersatzversorgung, GVV disclosure ────────────────────
 
-/// §38 Abs. 2 S. 2 EnWG: Ersatzversorgung ends at the latest three months
+/// § 38 Abs. 4 EnWG: Ersatzversorgung ends at the latest three months
 /// after it began. A four-month Ersatzversorgung period describes a supply
 /// that cannot legally exist — the engine refuses it with a typed error
 /// carrying the blocking warning.
@@ -5420,6 +5540,7 @@ fn sect14a_modul1_combines_with_modul3() {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(600),
             spitzenleistung_kw: Some(dec!(11)),
+            metering_mode: MeteringMode::Imsys,
             ..Default::default()
         }),
         sect14a_modul3: Some(Sect14aModul3Verbrauch {
@@ -5470,7 +5591,7 @@ fn ctx_for(from: time::Date, to: time::Date) -> BillingContext {
 }
 
 /// The Gas RLM Leistungspreis is quoted per kW **and month**, so an annual bill
-/// charges twelve of them. It used to charge exactly one.
+/// charges twelve of them — not one.
 #[test]
 fn gas_rlm_leistungspreis_scales_with_the_billed_months() {
     let tariff = j(r#"{
@@ -5765,4 +5886,593 @@ impl energy_billing::BillingProvider for FixedPositions {
     ) -> Result<Vec<energy_billing::BillingPosition>, energy_billing::EngineError> {
         Ok(self.0.clone())
     }
+}
+
+// ── Regressions: periodic charges and their signs ─────────────────────────────
+
+/// A monthly Rabatt reduces the bill. Computing `net_eur` from the (already
+/// negative) monthly figure and then multiplying by −1 again *adds* the same
+/// amount: a −5 EUR/month discount bills +5 EUR under a line labelled "Rabatt".
+/// The gas provider carries no such factor,
+/// which is why only electricity was affected and no test caught it — the one
+/// covering the field used a positive surcharge.
+#[test]
+fn a_monthly_rabatt_reduces_the_invoice() {
+    let plain = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0}"#);
+    let with_rabatt = j(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"auf_abschlag_eur_per_month":-5.0}"#,
+    );
+    let with_aufschlag = j(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"auf_abschlag_eur_per_month":5.0}"#,
+    );
+
+    let base = bill(&plain, elec(dec!(300)));
+    let rabatt = bill(&with_rabatt, elec(dec!(300)));
+    let aufschlag = bill(&with_aufschlag, elec(dec!(300)));
+
+    assert!(
+        rabatt.netto_eur < base.netto_eur,
+        "a Rabatt must lower the net: {} vs {}",
+        rabatt.netto_eur,
+        base.netto_eur
+    );
+    // January is exactly one month, so the deduction is the full 5 EUR.
+    assert_eq!((base.netto_eur - rabatt.netto_eur).round_dp(2), dec!(5.00));
+    assert_eq!(
+        (aufschlag.netto_eur - base.netto_eur).round_dp(2),
+        dec!(5.00)
+    );
+
+    // The Rabatt line is a Discount and its amount is negative.
+    let line = rabatt
+        .positions
+        .iter()
+        .find(|p| p.has_tag("auf_abschlag"))
+        .expect("Rabatt position");
+    assert_eq!(line.category, PositionCategory::Discount);
+    assert!(line.net_eur < Decimal::ZERO, "got {}", line.net_eur);
+}
+
+/// Fernwärme billed for a year is billed a year of Grundpreis. `months`
+/// defaulted to `1`, so a caller that did not state it — every caller billing
+/// on calendar periods — got one month's standing charge on an annual invoice
+/// and a plausible-looking total.
+#[test]
+fn fernwaerme_without_stated_months_bills_the_billed_period() {
+    let tariff = j(
+        r#"{"category":"WAERME","waerme_grundpreis_eur_per_month":25.0,"waerme_arbeitspreis_ct_per_kwh":9.0}"#,
+    );
+    let rates = rates_2026();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "TEST-WAERME-YEAR".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 12 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                heat: Some(WaermeMeterInput {
+                    kwh_waerme: dec!(12000),
+                    months: None,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let gp = invoice
+        .positions
+        .iter()
+        .find(|p| p.description.starts_with("Grundpreis"))
+        .expect("Grundpreis");
+    assert_eq!(gp.quantity, dec!(12), "twelve months, not one");
+    assert_eq!(gp.net_eur.round_dp(2), dec!(300.00));
+}
+
+/// CO2KostAufG § 3 obliges a heat supplier to state the CO₂ cost it bore.
+/// `HeatProvider` billed none at all, while the platform documented BEHG
+/// coverage for "Gas and Wärme".
+#[test]
+fn fernwaerme_passes_through_its_co2_cost_and_states_the_emissions() {
+    let tariff = j(
+        r#"{"category":"WAERME","waerme_arbeitspreis_ct_per_kwh":9.0,
+             "waerme_co2_kosten_ct_per_kwh":0.9,"waerme_co2_emission_g_per_kwh":180,
+             "waerme_erneuerbar_anteil_pct":35}"#,
+    );
+    let r = bill(
+        &tariff,
+        Quantities {
+            heat: Some(WaermeMeterInput {
+                kwh_waerme: dec!(1000),
+                months: Some(dec!(1)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    let co2 = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("behg"))
+        .expect("CO₂ position");
+    assert_eq!(co2.net_eur.round_dp(2), dec!(9.00)); // 1000 × 0,9 ct
+    assert_eq!(co2.legal_basis.as_deref(), Some("CO2KostAufG § 3"));
+    assert!(r.positions.iter().any(|p| p.has_tag("co2_emission")));
+    assert!(r.positions.iter().any(|p| p.has_tag("erneuerbar_anteil")));
+}
+
+/// An indexed B2B tariff whose index value has not arrived cannot be priced.
+/// Adding no Arbeitspreis position and billing the Grundpreis alone is the exact
+/// silent-zero shape `KEIN_ARBEITSPREIS` exists to refuse — and the presence of
+/// the *config* is not the presence of a price.
+#[test]
+fn an_indexed_tariff_without_its_index_value_is_refused() {
+    let tariff = j(r#"{"category":"STROM","grundpreis_ct_per_day":30,
+             "indexed_price":{"base_ct_per_kwh":5,"spread_ct_per_kwh":1,
+                              "index_name":"Phelix Base","factor_ct_per_unit":0.1}}"#);
+    let (f, t) = period();
+    let err = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx_for(f, t), &elec(dec!(500)))
+        .expect_err("no index value, no price");
+    let msg = format!("{err:?}");
+    assert!(msg.contains("INDEXWERT_FEHLT"), "got {msg}");
+}
+
+/// With the index value present the indexed price is what gets billed — even
+/// when a static Arbeitspreis is also configured. Resolving to the static one
+/// would bill a price the contract does not contain.
+#[test]
+fn an_indexed_tariff_outranks_the_static_arbeitspreis() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30,
+             "indexed_price":{"base_ct_per_kwh":5,"spread_ct_per_kwh":1,
+                              "index_name":"Phelix Base","index_value":80,
+                              "factor_ct_per_unit":0.1}}"#);
+    let r = bill(&tariff, elec(dec!(1000)));
+    let ap = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("indexed_price"))
+        .expect("indexed Arbeitspreis");
+    // 5 + 1 + 80 × 0.1 = 14 ct/kWh
+    assert_eq!(ap.net_eur.round_dp(2), dec!(140.00));
+    assert_eq!(
+        r.positions
+            .iter()
+            .filter(|p| p.has_tag("arbeitspreis"))
+            .count(),
+        1,
+        "exactly one Arbeitspreis reaches the invoice"
+    );
+}
+
+/// § 40 Abs. 2 EnWG applies to a dynamic tariff exactly as it does to a fixed
+/// one. The § 41a path emitted no Zählerstand (Nr. 6), no Vorjahresvergleich
+/// (Nr. 7), no Vergleichsgruppe (Nr. 8) and no estimation notice — none of it
+/// visible in the totals, all of it missing from the page.
+#[test]
+fn a_dynamic_invoice_carries_the_same_display_duties_as_a_static_one() {
+    use std::collections::HashMap;
+    let mut prices = HashMap::new();
+    prices.insert(time::macros::datetime!(2026-01-01 12:00 UTC), dec!(20));
+
+    let tariff = j(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":30,
+             "dynamic_aufschlag_ct_per_kwh":5,"msb_gebuehr_ct_per_day":5}"#,
+    );
+    let (f, t) = period();
+    let mut ctx = ctx_for(f, t);
+    ctx.verbrauchshistorie = Some(energy_billing::Verbrauchshistorie {
+        vorjahr_kwh: Some(dec!(3100)),
+        bundesdurchschnitt_kwh: Some(dec!(2900)),
+        kundengruppe: Some("Haushalt 2 Personen".to_owned()),
+    });
+    let invoice = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(
+            ctx,
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(1),
+                    metering_mode: MeteringMode::Imsys,
+                    zaehlerstand_von: Some(dec!(1000)),
+                    zaehlerstand_bis: Some(dec!(1001)),
+                    is_estimated: true,
+                    ..Default::default()
+                }),
+                dynamic_intervals: vec![DynamicInterval {
+                    timestamp_utc: time::macros::datetime!(2026-01-01 12:00 UTC),
+                    kwh: dec!(1),
+                }],
+                dynamic_epex_prices: prices,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    for tag in [
+        "zaehlerstand",
+        "verbrauchshistorie",
+        "schatzwert",
+        "msb_gebuehr",
+    ] {
+        assert!(
+            invoice.positions.iter().any(|p| p.has_tag(tag)),
+            "a §41a invoice must carry the '{tag}' position"
+        );
+    }
+    // Nr. 7 and Nr. 8 are two separate lines.
+    assert_eq!(invoice.positions_by_tag("verbrauchshistorie").count(), 2);
+}
+
+/// BK6-22-300 offers Modul 3 **only in combination with Modul 1**, and only
+/// against an intelligentes Messsystem. Neither precondition was checked: a
+/// product carrying the bands alone priced a tariff no Netzbetreiber offers and
+/// dropped the Modul 1 reduction the customer was entitled to, and an SLP meter
+/// got band prices against a synthetic profile rather than a measurement.
+#[test]
+fn modul3_needs_modul1_and_an_imsys() {
+    use energy_billing::Sect14aModul3Verbrauch;
+
+    let bands = serde_json::json!({
+        "category": "WAERMEPUMPE",
+        "arbeitspreis_ct_per_kwh": 28.0,
+        "sect14a_modul3_nne_ht_ct_per_kwh": 12.0,
+        "sect14a_modul3_nne_st_ct_per_kwh": 6.0,
+        "sect14a_modul3_nne_nt_ct_per_kwh": 2.0,
+    });
+    let q = |mode| Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(600),
+            metering_mode: mode,
+            ..Default::default()
+        }),
+        sect14a_modul3: Some(Sect14aModul3Verbrauch {
+            ht_kwh: dec!(100),
+            st_kwh: dec!(300),
+            nt_kwh: dec!(200),
+        }),
+        ..Default::default()
+    };
+    let (f, t) = period();
+
+    // Bands without Modul 1, on an iMSys → only the Modul 1 finding.
+    let product: Product = serde_json::from_value(bands.clone()).unwrap();
+    let msg = product
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx_for(f, t), &q(MeteringMode::Imsys))
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("MODUL3_OHNE_MODUL1"), "{msg}");
+    assert!(!msg.contains("MODUL3_IMSYS_REQUIRED"), "{msg}");
+
+    // Bands with Modul 1, on an SLP meter → only the metering finding.
+    let mut with_m1 = bands.clone();
+    with_m1["sect14a_modul1_pauschale_eur_per_kw_year"] = serde_json::json!(24.0);
+    let product: Product = serde_json::from_value(with_m1.clone()).unwrap();
+    let msg = product
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx_for(f, t), &q(MeteringMode::Slp))
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("MODUL3_IMSYS_REQUIRED"), "{msg}");
+    assert!(!msg.contains("MODUL3_OHNE_MODUL1"), "{msg}");
+
+    // Both preconditions met → it bills.
+    let product: Product = serde_json::from_value(with_m1).unwrap();
+    product
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx_for(f, t), &q(MeteringMode::Imsys))
+        .expect("Modul 1 + Modul 3 on an iMSys is the combination BK6-22-300 offers");
+}
+
+/// A `minimum_invoice_eur_brutto` top-up must actually reach the minimum.
+///
+/// Pass 4 grossed the shortfall up with the standard rate unconditionally, so
+/// on a mixed-rate invoice — 7 % Trinkwasser beside a 19 % energy line — the
+/// resulting brutto landed short by the rate difference on the top-up. The
+/// Mindestbetrag is a contractual charge, so the contract names its rate.
+#[test]
+fn a_minimum_invoice_topup_reaches_the_minimum_at_the_agreed_rate() {
+    let tariff = j(
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":25.0,"minimum_invoice_eur_brutto":100.0}"#,
+    );
+    let rates = rates_2026();
+    let (f, t) = period();
+    let bill_at = |rate: Option<rust_decimal::Decimal>| {
+        let mut ctx = ctx_for(f, t);
+        ctx.minimum_invoice_eur_brutto = Some(dec!(100));
+        ctx.minimum_invoice_mwst_rate = rate;
+        tariff
+            .build_engine(&no_grid(), &rates)
+            .bill(ctx, &elec(dec!(100)))
+            .unwrap()
+    };
+
+    // Unstated → the standard rate, and the minimum is met exactly.
+    let standard = bill_at(None);
+    assert_eq!(standard.brutto_eur.round_dp(2), dec!(100.00));
+
+    // Agreed at the reduced rate → still exactly the minimum, and the top-up
+    // sits in the 7 % bucket rather than the 19 % one.
+    let reduced = bill_at(Some(dec!(0.07)));
+    assert_eq!(reduced.brutto_eur.round_dp(2), dec!(100.00));
+    let topup = reduced
+        .positions
+        .iter()
+        .find(|p| p.has_tag("mindestbetrag"))
+        .expect("top-up position");
+    assert_eq!(topup.applicable_tax_rate, Some(dec!(0.07)));
+    let subs = reduced.tax_subtotals(rates.mwst_rate);
+    assert!(
+        subs.iter().any(|s| s.rate_percent == dec!(7)),
+        "the top-up forms its own 7 % subtotal: {subs:?}"
+    );
+}
+
+/// § 40 Abs. 2 Nr. 6 EnWG names **three** things, not two: the opening and
+/// closing readings, the consumption derived from them, *and* "die Art, wie der
+/// Zählerstand ermittelt wurde". The third was on the page only when the
+/// reading happened to be an estimate — a customer could not tell a remote
+/// read-out from their own self-reported figure, and what they can do about a
+/// wrong number differs in each case.
+#[test]
+fn the_invoice_states_how_the_reading_was_obtained() {
+    use energy_billing::Ablesungsart;
+
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let read = |art| Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(500),
+            zaehlerstand_von: Some(dec!(1000)),
+            zaehlerstand_bis: Some(dec!(1500)),
+            ablesungsart: art,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    for (art, needle) in [
+        (Ablesungsart::Fernauslesung, "ferngelesen"),
+        (Ablesungsart::Abgelesen, "Messstellenbetreiber"),
+        (Ablesungsart::Kundenselbstablesung, "Selbstablesung"),
+        (Ablesungsart::Rechnerisch, "rechnerisch"),
+    ] {
+        let r = bill(&tariff, read(art));
+        let pos = r
+            .positions
+            .iter()
+            .find(|p| p.has_tag("zaehlerstand"))
+            .expect("Zählerstand position");
+        assert!(
+            pos.description.contains(needle),
+            "{art:?} must reach the page: {:?}",
+            pos.description
+        );
+    }
+
+    // Unstated: the sentence is absent, and the operator is told before dispatch.
+    let (f, t) = period();
+    let warnings = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .validate(&ctx_for(f, t), &read(Ablesungsart::Unbekannt));
+    assert!(warnings.iter().any(|w| w.code == "ABLESUNGSART_FEHLT"));
+}
+
+/// The § 42c sharing input carries three transparency terms, and all three were
+/// documented as reaching the invoice. The provider read `allocated_kwh` and
+/// dropped the rest, so a participant saw a credited quantity with no way to
+/// check it: the total the community generated and the fraction they were
+/// allotted are the two figures whose product *is* that quantity.
+#[test]
+fn a_sharing_credit_shows_what_it_was_derived_from() {
+    let tariff = j(
+        r#"{"category":"SHARING","arbeitspreis_ct_per_kwh":30.0,"sharing_credit_ct_per_kwh":8.0}"#,
+    );
+    let r = bill(
+        &tariff,
+        Quantities {
+            electricity: Some(MeterInput {
+                arbeitsmenge_kwh: dec!(500),
+                ..Default::default()
+            }),
+            energy_share: Some(energy_billing::EnergyShareMeterInput {
+                allocated_kwh: dec!(150),
+                total_plant_generation_kwh: Some(dec!(400)),
+                allocation_fraction: Some(dec!(0.375)),
+                gemeinschaft_id: Some("EGK-2026-001".to_owned()),
+            }),
+            ..Default::default()
+        },
+    );
+
+    // The credit itself, unchanged: 150 kWh × 8 ct.
+    let credit = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("sharing") && p.net_eur != Decimal::ZERO)
+        .expect("sharing credit");
+    assert_eq!(credit.net_eur.round_dp(2), dec!(-12.00));
+
+    // …and what it was derived from, on the page and costing nothing.
+    let id = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("gemeinschaft"))
+        .expect("community identifier");
+    assert!(id.description.contains("EGK-2026-001"));
+    assert_eq!(id.net_eur, Decimal::ZERO);
+
+    let alloc = r
+        .positions
+        .iter()
+        .find(|p| p.has_tag("zuteilung"))
+        .expect("allocation line");
+    assert!(alloc.description.contains("37.5"), "{}", alloc.description);
+    assert!(alloc.description.contains("400"), "{}", alloc.description);
+    assert_eq!(alloc.net_eur, Decimal::ZERO);
+}
+
+// ── Zweitarif: the product must price the quantities it is given ──────────────
+
+/// A `Zweitarif` product prices HT and NT and nothing else. Handed a meter that
+/// reports only a total — what `edmd` returns whenever the register split did
+/// not arrive — the HT/NT branch does not fire, no other branch matches, and
+/// 1000 kWh billed for **€20.50**: the Stromsteuer, and nothing for the
+/// electricity. `KEIN_ARBEITSPREIS` waved it through because a price field
+/// *was* populated; the guard checked the product, not the pairing.
+#[test]
+fn a_zweitarif_product_without_an_ht_nt_split_is_refused() {
+    let tariff = j(r#"{"category":"STROM","register_count":"Zweitarif",
+             "arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#);
+    let (f, t) = period();
+    let err = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(ctx_for(f, t), &elec(dec!(1000)))
+        .expect_err("a total alone cannot be priced HT/NT");
+    assert!(
+        err.to_string().contains("ZWEITARIF_OHNE_HT_NT_AUFTEILUNG"),
+        "{err}"
+    );
+
+    // With the split it bills: 400 × 32 ct + 600 × 22 ct = 128 + 132 = 260 EUR.
+    let r = bill(
+        &tariff,
+        Quantities {
+            electricity: Some(MeterInput {
+                arbeitsmenge_kwh: dec!(1000),
+                arbeitsmenge_ht_kwh: Some(dec!(400)),
+                arbeitsmenge_nt_kwh: Some(dec!(600)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
+}
+
+/// The HT/NT registers alone are a complete statement of consumption — the
+/// total is their sum, not an independent fact. Gating the Arbeitspreis block
+/// on `arbeitsmenge_kwh` billed such a caller nothing for their electricity
+/// while still charging them the Stromsteuer on nothing.
+#[test]
+fn ht_and_nt_alone_are_enough_to_bill() {
+    let tariff = j(
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#,
+    );
+    let r = bill(
+        &tariff,
+        Quantities {
+            electricity: Some(MeterInput {
+                arbeitsmenge_kwh: Decimal::ZERO, // not stated
+                arbeitsmenge_ht_kwh: Some(dec!(400)),
+                arbeitsmenge_nt_kwh: Some(dec!(600)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
+    // …and the levy is charged on the same 1000 kWh, not on zero.
+    assert_eq!(r.total_by_tag("stromsteuer").round_dp(2), dec!(20.50));
+}
+
+/// An HT/NT split that does not add up to the stated total prices one of the
+/// two registers wrongly, and which one is not knowable from here.
+#[test]
+fn an_ht_nt_split_that_does_not_add_up_is_refused() {
+    let tariff = j(
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#,
+    );
+    let (f, t) = period();
+    let err = tariff
+        .build_engine(&no_grid(), &rates_2026())
+        .bill(
+            ctx_for(f, t),
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(1000),
+                    arbeitsmenge_ht_kwh: Some(dec!(400)),
+                    arbeitsmenge_nt_kwh: Some(dec!(500)), // 100 kWh unaccounted
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        )
+        .expect_err("900 != 1000");
+    assert!(err.to_string().contains("HT_NT_SUMME_WEICHT_AB"), "{err}");
+}
+
+/// A two-register meter on a **single-rate** tariff is ordinary, and it billed
+/// nothing for the electricity: the HT/NT arm was selected by the *meter*
+/// alone, found no band prices on the product, pushed no position, and blocked
+/// the Eintarif arm below it. The Stromsteuer was charged all the same.
+///
+/// Found by `proptest_invoice::any_billable_consumption_produces_a_work_price`,
+/// which is the general statement of this whole failure class.
+#[test]
+fn an_eintarif_product_bills_a_two_register_meter_on_its_total() {
+    let tariff = j(r#"{"category":"STROM","arbeitspreis_ct_per_kwh":30.0}"#);
+    let r = bill(
+        &tariff,
+        Quantities {
+            electricity: Some(MeterInput {
+                arbeitsmenge_kwh: dec!(1000),
+                arbeitsmenge_ht_kwh: Some(dec!(400)),
+                arbeitsmenge_nt_kwh: Some(dec!(600)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    );
+    assert_eq!(r.total_by_tag("arbeitspreis").round_dp(2), dec!(300.00));
+    assert_eq!(r.total_by_tag("stromsteuer").round_dp(2), dec!(20.50));
+}
+
+/// Half a Zweitarif — one band priced, the other not — has no sensible reading:
+/// billing the unpriced band at the other's rate invents a price, dropping it
+/// under-bills. Left to `TimeOfUsePricing` it is refused, but as a raw `billing`
+/// error (`unknown band "HT"`) rather than a finding naming the product.
+#[test]
+fn half_a_zweitarif_is_refused_as_a_product_defect() {
+    let (f, t) = period();
+    let q = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(1000),
+            arbeitsmenge_ht_kwh: Some(dec!(400)),
+            arbeitsmenge_nt_kwh: Some(dec!(600)),
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+    for tariff in [
+        r#"{"category":"STROM","arbeitspreis_nt_ct_per_kwh":22.0}"#,
+        r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0}"#,
+    ] {
+        let err = j(tariff)
+            .build_engine(&no_grid(), &rates_2026())
+            .bill(ctx_for(f, t), &q)
+            .expect_err("a Zweitarif needs both bands");
+        let msg = err.to_string();
+        assert!(msg.contains("ZWEITARIF_UNVOLLSTAENDIG"), "{msg}");
+        assert!(
+            !msg.contains("unknown band"),
+            "the caller gets a product finding, not a library error: {msg}"
+        );
+    }
+
+    // Both priced: it bills. 400 × 32 + 600 × 22 = 260,00 EUR.
+    let ok = bill(
+        &j(
+            r#"{"category":"STROM","arbeitspreis_ht_ct_per_kwh":32.0,"arbeitspreis_nt_ct_per_kwh":22.0}"#,
+        ),
+        q,
+    );
+    assert_eq!(ok.total_by_tag("arbeitspreis").round_dp(2), dec!(260.00));
 }

@@ -1,12 +1,23 @@
-//! Biomass-specific EEG settlement models — §§42–44 EEG 2023.
+//! Biomass-specific EEG settlement models — §§ 42–44b EEG 2023.
 //!
-//! Biomass plants have complex, fuel-type-dependent remuneration rules.
-//! Key rules:
-//! - §42 EEG 2023: biomass plants commissioned from 2023 are subject to
-//!   substrate caps (max 40% Energiepflanzen vom Acker, §43 Abs. 1 Nr. 2).
-//! - §44 EEG 2023: small manure-fed biogas plants (≤75 kW, ≥80% Gülle)
-//!   receive a higher "Güllekleinanlage" bonus.
-//! - §42a EEG 2023: Holzbiomasse (wood biomass) is restricted in its use.
+//! Biomass plants have fuel-type-dependent remuneration rules:
+//!
+//! - **§ 42** — the statutory anzulegender Wert for Biomasse: 12,67 ct/kWh up to
+//!   a Bemessungsleistung of 150 kW, and Satz 2 excludes Biomethan. Above that,
+//!   the value comes from a tender (§ 22 Abs. 4).
+//! - **§ 43** — Vergärung von Bioabfällen: a separate, higher claim for plants
+//!   running on ≥ 90 Masseprozent separately collected Bioabfälle.
+//! - **§ 44** — Vergärung von Gülle: the Güllekleinanlage claim, ≤ 150 kW
+//!   installed at the Biogaserzeugungsanlage's site with a minimum manure share.
+//! - **§ 44b Abs. 1** — the 45 %-Bemessungsleistung annual quota for Biogas
+//!   plants over 100 kW installed; § 44 Gülle plants and § 39 tendered plants
+//!   are excluded by Satz 3.
+//! - **§ 39i Abs. 1** — the Getreidekorn-und-Mais cap, which applies **only to
+//!   plants holding a tender award** and steps down by award year: 40 % (2023),
+//!   35 % (2024 – 24.02.2025), 30 % (25.02.2025 – 2025), 25 % (2026–2028).
+//!
+//! There is no § 42a EEG, and the EEG 2023 imposes no Holzbiomasse restriction —
+//! the sustainability rules for solid biomass sit outside it.
 
 use rust_decimal::Decimal;
 
@@ -15,17 +26,18 @@ use rust_decimal::Decimal;
 /// Biomass fuel type — determines which §43/§44 EEG 2023 rules apply.
 ///
 /// The fuel type affects:
-/// - Whether the Güllekleinanlage bonus (§44 EEG 2023) is applicable.
-/// - Whether Holzbiomasse restrictions apply (§42a EEG 2023).
-/// - Whether substrate caps apply (§43 Abs. 1 Nr. 2: max 40% Energiepflanzen).
+/// - Whether the § 44 Güllekleinanlage claim is applicable.
+/// - Whether the § 39i Abs. 1 Getreidekorn/Mais cap applies (tendered plants).
+/// - Which of §§ 42/43/44 sets the anzulegender Wert.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(rename_all = "SCREAMING_SNAKE_CASE"))]
 pub enum BiomassBrennstoff {
     /// Standard plant-based biomass (agricultural residues, dedicated crops).
     ///
-    /// Subject to §43 Abs. 1 Nr. 2 substrate cap: max 40% Ackerpflanzen
-    /// (energy crops from arable land).
+    /// Where the plant holds a tender award, subject to the § 39i Abs. 1
+    /// Getreidekorn-und-Mais cap, which steps down 40 → 35 → 30 → 25 % by the
+    /// year of the award.
     PflanzlicheBiomasse,
 
     /// Biomethane from biomass feedstocks — upgraded and fed into the gas grid.
@@ -44,10 +56,14 @@ pub enum BiomassBrennstoff {
     /// Solid manure (Festmist) — also eligible for Güllekleinanlage if ≥80%.
     Festmist,
 
-    /// Wood biomass — subject to §42a EEG 2023 restrictions.
+    /// Wood biomass (feste Biomasse).
     ///
-    /// §42a prohibits new Holzbiomasse plants from using fresh wood for primary
-    /// energy production from 2026. Only residual/recycled wood is permitted.
+    /// The EEG 2023 sets no separate anzulegender Wert for it and imposes no
+    /// fresh-wood restriction — the sustainability requirements for solid
+    /// biomass sit outside the EEG. What the EEG does add for tendered plants
+    /// running feste Biomasse is the § 39i Abs. 2 Höchstbemessungsleistung: 25 %
+    /// below the awarded Gebotsmenge, above which the claim falls to zero (or to
+    /// the Marktwert under an Einspeisevergütung).
     Holzbiomasse,
 
     /// Sewage gas (Klärgas) from wastewater treatment.

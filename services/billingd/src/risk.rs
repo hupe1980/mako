@@ -200,7 +200,11 @@ pub struct RiskContext {
 /// evidence. Stated as a set rather than as a heavy weight, because a weight
 /// only holds while it stays above `hold_at`, and raising that threshold is
 /// ordinary tuning with no visible connection to this promise.
-const BLOCKING_FINDINGS: [&str; 2] = ["MWST_STICHTAG_IM_ZEITRAUM", "BEHG_JAHRESGRENZE_IM_ZEITRAUM"];
+const BLOCKING_FINDINGS: [&str; 3] = [
+    "MWST_STICHTAG_IM_ZEITRAUM",
+    "BEHG_JAHRESGRENZE_IM_ZEITRAUM",
+    "HT_NT_SUMME_WEICHT_AB",
+];
 
 /// Score one calculated invoice.
 ///
@@ -316,6 +320,27 @@ pub fn assess(
             "BEHG_JAHRESGRENZE_IM_ZEITRAUM" => (80, "BEHG_JAHRESGRENZE_IM_ZEITRAUM"),
             "SECT40C_DEADLINE_EXCEEDED" => (10, "SECT40C_DEADLINE_EXCEEDED"),
             "PREISGARANTIE_ENDET" => (5, "PREISGARANTIE_ENDET"),
+            // The index for a Preisgleitklausel has not arrived, and a static
+            // price carried the invoice instead. Not blocking — the engine
+            // already refuses the case where *nothing* can price the commodity
+            // — but the customer is being billed a figure their contract does
+            // not name, which is squarely an analyst's call.
+            "INDEXWERT_FEHLT" => (40, "INDEXWERT_FEHLT"),
+            // A § 40 Abs. 2 Nr. 6 Pflichtangabe is missing from the page. Not a
+            // money defect, so a light weight — but an operator shipping every
+            // invoice without it will see it accumulate.
+            "ABLESUNGSART_FEHLT" => (10, "ABLESUNGSART_FEHLT"),
+            // The HT/NT registers do not add up to the stated total. The engine
+            // refuses it, so this only appears where a caller pinned rates past
+            // the guard — and then it is a verdict, not evidence: one of the two
+            // registers is wrong and the difference is billed at whichever rate
+            // happens to apply.
+            "HT_NT_SUMME_WEICHT_AB" => (80, "HT_NT_SUMME_WEICHT_AB"),
+            // A hoheitliche Gebühr shares the document with a taxable supply.
+            // Lawful on paper, and impossible as an e-invoice (BR-O-11 ff.) —
+            // `to_en16931` refuses it, so a record that reaches scoring at all
+            // is one an operator is about to send on paper. Worth a look.
+            "GEBUEHR_UND_ENTGELT_AUF_EINEM_BELEG" => (30, "GEBUEHR_UND_ENTGELT_AUF_EINEM_BELEG"),
             _ => continue,
         };
         add(code, weight, w.message.clone());

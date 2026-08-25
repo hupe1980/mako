@@ -40,17 +40,36 @@ One pipeline; the differences are a table in `src/routing.rs`.
 |---|---|---|---|
 | 31001 | Abschlagsrechnung Netznutzung | `PreisblattNetznutzung` | `gpke.abrechnung.*` |
 | 31002 | NN-Rechnung (both Sparten) | `PreisblattNetznutzung` | `gpke.abrechnung.*` |
-| 31003 | WiM Gas Rechnung | `PreisblattNetznutzung` | `wim.gas.rechnung.*` |
+| 31003 | WiM-Rechnung — Dienstleistungen im Messwesen, **beide Sparten** | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
 | 31004 | Stornorechnung — Sparte-neutral, any process | arithmetic only | `invoic.stornorechnung.*` |
 | 31005 | MMM-Rechnung Strom | + MMM Strom prices | `gpke.abrechnung.*` |
 | 31006 | MMM Mehrmenge, selbst ausgestellt | + MMM Strom prices | `gpke.abrechnung.*` |
-| 31007 | GaBi Gas MMM-Rechnung | + MMM Gas prices (THE) | `gabi.mmm.rechnung.*` |
-| 31008 | GaBi Gas MMM, selbst ausgestellt | + MMM Gas prices (THE) | `gabi.mmm.rechnung.*` |
+| 31007 | GaBi Gas MMM-Rechnung | + MMM Gas prices (THE) | `gabi.rechnung.*` |
+| 31008 | GaBi Gas MMM, selbst ausgestellt | + MMM Gas prices (THE) | `gabi.rechnung.*` |
 | 31009 | WiM MSB-Rechnung | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
 | 31011 | Rechnung sonstige Leistung — Sparte-neutral (GPKE Teil 2 · AWH Sperrprozesse Gas) | `PreisblattNetznutzung` | `invoic.sonstige-leistung.*` |
 
 A PID with no route is ignored, never answered with a default command. The
 subscription PID filter is derived from the same table.
+
+31003 is **not** a Gas Netznutzungsrechnung: it bills the Dienstleistungen im
+Messwesen the abgebender MSB rendered — temporäre Fortführung, Geräteübernahme,
+Zwischen- oder Kontrollablesung — in both Sparten, so it prices against
+`PreisblattMessung` for the same reason 31009 does. There is no `wim.gas.*`
+command; `wim.rechnung.annehmen` carries `Gnb` among its permitted roles because
+the Gas NB is a payer of 31003.
+
+### The answer commands are named, not spelled
+
+`makod` rejects an unknown command name with HTTP 422, so a route naming one it
+does not register fails only when a real invoice arrives — the check runs, the
+verdict is persisted, the dispatch fails, and the Antwortfrist expires on a
+process that looked healthy.
+
+The table therefore names constants from `mako_markt::commands` instead of
+writing the wire name twice. They are listed in `DISPATCHED_BY_SERVICES`, which
+`makod`'s registry test asserts against; `cargo xtask check-answer-commands`
+closes the loop from this side.
 
 Strom Mehr-/Mindermengenpreise are **one nationwide monthly BDEW series**
 (§ 13 Abs. 3 StromNZV, GPKE Teil 1 Kap. 8.4 from 01.01.2026), so the application

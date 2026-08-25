@@ -67,9 +67,14 @@ pub enum SolarBauform {
 
     /// **Stecker-PV** (Balkonkraftwerk) — plug-in balcony solar ≤ 2 kWp.
     ///
-    /// §48b EEG 2023 (Solarpaket I 2024): simplified registration, no smart meter
-    /// obligation, no Einspeisevergütung above simplified MaStR threshold.
-    /// Feed-in kWh typically registered via standardised `SLP S0` profile.
+    /// Defined in § 3 Nr. 43 EEG 2023 and governed by **§ 8 Abs. 5a** (the
+    /// simplified Netzanschluss, for up to **2 kW installed and 800 VA inverter
+    /// power** behind a Letztverbraucher's Entnahmestelle, assigned to the
+    /// unentgeltliche Abnahme), **§ 9** (the technische Vorgaben do not apply to
+    /// them) and **§ 10a Abs. 2** (the Messstellenbetreiber fits a
+    /// Zweirichtungszähler or an iMSys without a separate order).
+    ///
+    /// There is no § 48b EEG.
     SteckerPv,
 }
 

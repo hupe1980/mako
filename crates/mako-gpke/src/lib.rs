@@ -124,8 +124,10 @@
 //! | 31006 | MMM-Rechnung (selbst ausgestellt)            | ✅ Implemented |
 //!
 //! All 4 PIDs use [`GpkeAbrechnungWorkflow`] (workflow name:
-//! `"gpke-abrechnung"`). The `pruefidentifikator` stored in
-//! [`abrechnung::AbrechnungData`] lets read-models distinguish variants.
+//! `"gpke-abrechnung"`) — the shared INVOIC state machine from `mako-invoic`,
+//! which this crate parameterises with the GPKE family. The
+//! `pruefidentifikator` stored in `mako_invoic::InvoicData` lets read-models
+//! distinguish variants.
 //! PID 31003 (WiM-Rechnung) belongs to `mako-wim`. PID 31004 (Stornorechnung)
 //! is the Sparte-neutral universal Storno (INVOIC AHB §3.1.2) — checked
 //! generically by `invoicd`, not registered as a GPKE billing PID here.
@@ -214,10 +216,8 @@ pub mod utilts;
 pub mod wechselprozesse;
 
 pub use abrechnung::{
-    ABRECHNUNG_WINDOW_LABEL, AbrechnungCommand, AbrechnungData, AbrechnungEvent,
-    AbrechnungProjection, AbrechnungRecord, AbrechnungState, GPKE_COMDIS_ABLEHNUNG_PID,
-    GPKE_INVOIC_PIDS, GPKE_REMADV_PIDS, GpkeAbrechnungWorkflow,
-    WORKFLOW_NAME as ABRECHNUNG_WORKFLOW_NAME,
+    ABRECHNUNG_WINDOW_LABEL, GPKE_COMDIS_ABLEHNUNG_PID, GPKE_INVOIC_PIDS, GPKE_REMADV_PIDS,
+    GpkeAbrechnung, GpkeAbrechnungWorkflow, WORKFLOW_NAME as ABRECHNUNG_WORKFLOW_NAME,
 };
 pub use abrechnungsdaten::{
     ABRECHNUNGSDATEN_PIDS, AbrechnungsdatenCommand, AbrechnungsdatenData, AbrechnungsdatenEvent,

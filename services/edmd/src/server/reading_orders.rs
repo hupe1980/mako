@@ -279,7 +279,7 @@ pub(crate) async fn complete_reading_order(
              ausgefuehrt_am=$8,
              mscons_ref=COALESCE($5,mscons_ref)
          WHERE id=$6 AND tenant=$7 AND status IN ('OFFEN','BEAUFTRAGT')
-         RETURNING malo_id, sparte, obis_code",
+         RETURNING malo_id, melo_id, sparte, obis_code",
     )
     .bind(req.zaehlerstand_kwh)
     .bind(req.zaehlerstand_qm3)
@@ -335,6 +335,38 @@ pub(crate) async fn complete_reading_order(
             .into_response();
     }
 
+    // A Zählerstand is filed against a register of a meter, and the
+    // Zählerstandsgang store keys on both: a Marktlokation may be measured by
+    // several Messlokationen, and two meters carry the same OBIS register at the
+    // same instants. Neither is derivable from an order that does not name it,
+    // and inventing a canonical register per commodity would file the reading
+    // against a channel nobody read.
+    let melo_id: Option<String> = row.try_get("melo_id").unwrap_or(None);
+    if value.is_some() {
+        let missing: Vec<&str> = [
+            obis_code.is_none().then_some("obis_code"),
+            melo_id.is_none().then_some("melo_id"),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        if !missing.is_empty() {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "the order names no {} , so its Zählerstand cannot be filed: a reading \
+                         belongs to one register of one meter, and stored without them a second \
+                         meter's reading would overwrite the first",
+                        missing.join(" and no ")
+                    ),
+                    "missing": missing,
+                })),
+            )
+                .into_response();
+        }
+    }
+
     // A completion without a reading is legitimate — an order can be closed
     // administratively — so it records the status and files nothing.
     if let Some(zaehlerstand) = value {
@@ -345,6 +377,8 @@ pub(crate) async fn complete_reading_order(
             quality: QualityFlag::Measured,
             sparte,
             obis_code,
+            // The meter the register belongs to, as the order named it.
+            melo_id: melo_id.clone(),
             tenant: state.tenant.clone(),
             // An Ablesung is an operator entry, whoever physically took it.
             source: IngestionSource::Manual,

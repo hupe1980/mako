@@ -39,6 +39,7 @@ use mako_engine::{
     version::FormatVersion,
 };
 use mako_gabi_gas::AllocationVersion;
+use mako_invoic::InvoicCommand;
 use rubo4e::current as bo4e;
 use rust_decimal::Decimal;
 
@@ -137,22 +138,21 @@ pub(crate) fn parse_ccyymmdd(v: &str) -> Option<time::OffsetDateTime> {
         .map(|d| d.midnight().assume_utc())
 }
 use mako_gabi_gas::{
-    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
-    GaBiGasNominationWorkflow, NominationCommand, NomresAcceptance,
+    AllocationCommand, GaBiGasAllocationWorkflow, GaBiGasInvoicWorkflow, GaBiGasNominationWorkflow,
+    NominationCommand, NomresAcceptance,
 };
 use mako_geli_gas::{
     GasKommunikationsdatenCommand, GasMsconsDatenCommand, GasSperrungLfCommand,
     GasSperrungNbCommand, GasSupplierChangeCommand, GeliGasLfStornierungWorkflow,
-    GeliGasMsconsWorkflow, GeliGasPartinWorkflow, GeliGasSperrprozesseInvoicCommand,
-    GeliGasSperrprozesseInvoicWorkflow, GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow,
-    GeliGasStornierungCommand, GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
-    LfStornierungCommand,
+    GeliGasMsconsWorkflow, GeliGasPartinWorkflow, GeliGasSperrprozesseInvoicWorkflow,
+    GeliGasSperrungLfWorkflow, GeliGasSperrungNbWorkflow, GeliGasStornierungCommand,
+    GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow, LfStornierungCommand,
 };
 use mako_gpke::{
-    AbrechnungCommand, AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand,
-    AllokationslisteCommand, AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand,
-    BeendigungZuordnungCommand, DatanabrufCommand, GpkeAbrechnungWorkflow,
-    GpkeAbrechnungsdatenWorkflow, GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
+    AbrechnungsdatenCommand as GpkeAbrechnungsdatenCommand, AllokationslisteCommand,
+    AnfrageBestellungCommand, AnkuendigungZuordnungLfCommand, BeendigungZuordnungCommand,
+    DatanabrufCommand, GpkeAbrechnungWorkflow, GpkeAbrechnungsdatenWorkflow,
+    GpkeAllokationslisteWorkflow, GpkeAnfrageBestellungWorkflow,
     GpkeAnkuendigungZuordnungLfWorkflow, GpkeBeendigungZuordnungWorkflow, GpkeDatanabrufWorkflow,
     GpkeKonfigurationAenderungWorkflow, GpkeKonfigurationWorkflow, GpkeLfAbmeldungWorkflow,
     GpkeLfAnmeldungWorkflow, GpkeMesswerteLieferungWorkflow, GpkeNeuanlageWorkflow,
@@ -169,8 +169,8 @@ use mako_mabis::{
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
     StammdatenCommand, TechnikAenderungCommand, WeiterverpflichtungCommand,
-    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicCommand,
-    WimInvoicWorkflow, WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
+    WimDeviceChangeWorkflow, WimGeraeteubernahmeWorkflow, WimInsrptWorkflow, WimInvoicWorkflow,
+    WimPreisanfrageWorkflow, WimPreislisteWorkflow, WimStammdatenWorkflow,
     WimTechnikAenderungWorkflow, WimWeiterverpflichtungWorkflow,
     esa_wertebestellung::EsaWertebestellungWorkflow, insrpt::StoerungsmeldungCommand,
     wertebestellung::WimWertebestellungWorkflow,
@@ -605,7 +605,6 @@ coverage_table! {
     gabi_gas_comdis_registry,
     gabi_gas_invoic_registry,
     gabi_gas_nomination_registry,
-    gabi_gas_remadv_registry,
     geli_gas_datenabruf_ablehnung_registry,
     geli_gas_datenabruf_receive_registry,
     geli_gas_lf_anmeldung_registry,

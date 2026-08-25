@@ -5,6 +5,7 @@
 
 #[allow(unused_imports)]
 use super::*;
+use crate::store::TENANT_COL;
 
 /// A refusal, small enough to sit in an `Err` without carrying a whole response.
 struct Refusal {
@@ -133,15 +134,17 @@ pub(crate) async fn get_archive_olap(
         Err(refusal) => return refusal.into_response(),
     };
 
-    match query
-        .column_eq(
-            "tenant",
-            datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
-        )
-        .range(from, to)
-        .collect()
-        .await
-    {
+    let query = match query.column_eq(
+        TENANT_COL,
+        datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
+    ) {
+        Ok(q) => q,
+        Err(e) => {
+            tracing::error!(error = %e, "edmd: series read could not be scoped to the tenant");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match query.range(from, to).collect().await {
         Ok(Some(series)) => {
             // The same canonical Bezug projection the REST and MCP aggregates
             // use: a resolved read spans every register, so summing it raw mixed
@@ -488,15 +491,17 @@ pub(crate) async fn get_archive_timeseries(
         Err(refusal) => return refusal.into_response(),
     };
 
-    match query
-        .column_eq(
-            "tenant",
-            datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
-        )
-        .range(from, to)
-        .collect()
-        .await
-    {
+    let query = match query.column_eq(
+        TENANT_COL,
+        datafusion::scalar::ScalarValue::Utf8(Some(state.tenant.clone())),
+    ) {
+        Ok(q) => q,
+        Err(e) => {
+            tracing::error!(error = %e, "edmd: series read could not be scoped to the tenant");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+    match query.range(from, to).collect().await {
         Ok(Some(series)) if !series.intervals.is_empty() => {
             let rows: Vec<serde_json::Value> = series
                 .intervals
@@ -612,7 +617,7 @@ pub(crate) async fn post_sql_query(
     // non-authoritative (Codeliste 1.4 Kap. 4.6): they never reconcile against
     // `meter_reads` and never reach a billing path, and edmd's claim is that the
     // separation is *structural* — the `Typ2Repository` trait shares no read
-    // method with the billing store. Both tables live in one DataFusion session,
+    // method with the billing store. Every table lives in one DataFusion session,
     // though, so a free-form `SELECT * FROM esa_typ2_reads` walked straight
     // around that: the one query surface where the separation was a naming
     // convention rather than a type.
@@ -646,13 +651,26 @@ pub(crate) async fn post_sql_query(
             .into_response();
     }
 
+    // Every typed read scopes to the tenant with `column_eq`; caller-supplied SQL
+    // cannot, because the caller writes the `WHERE`. `scoped` injects the
+    // predicate into the plan and enforces it *below the projection*, so no
+    // statement can omit it, alias around it or `UNION` past it — the same
+    // guarantee the typed paths have, on the one surface that cannot express it.
+    let scoped = match store.scoped(TENANT_COL, state.tenant.as_str()).await {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!(error = %e, "edmd: SQL session could not be scoped to the tenant");
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
     // Run the statement across both tiers in meterstore's own DataFusion session
     // (the resolved relation is registered as `store.resolved_table()`), then take
     // the provenance the result carries. `spans_tiers` / `touched_hot_tier` tell a
     // reporting caller whether the figure is reproducible or read the mutable hot
     // tier — the one fact a bare row set cannot state about itself.
     let limit = req.limit.min(default_sql_limit());
-    match store.query(&req.sql).await {
+    match scoped.query(&req.sql).await {
         Ok(result) => {
             let touched_hot = result.touched_hot_tier();
             let spans = result.spans_tiers();

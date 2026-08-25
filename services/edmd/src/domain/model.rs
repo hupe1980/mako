@@ -468,6 +468,16 @@ pub struct MeterReading {
     pub sparte: Sparte,
     /// OBIS register, e.g. `1-0:1.8.0` (a Zählerstand: value group `D = 8`).
     pub obis_code: Option<String>,
+    /// 33-character Messlokations-ID — the **meter** the register belongs to.
+    ///
+    /// Part of a reading's identity, not a label. A Marktlokation may be
+    /// measured by several Messlokationen, and two meters carry the same OBIS
+    /// register at the same instants: keyed on the Marktlokation alone, the
+    /// second meter's Zählerstandsgang reads as a restatement of the first and
+    /// silently overwrites it. A Lastgang is the other shape — one channel
+    /// however many meters produce it — which is why the interval store is
+    /// keyed on the Marktlokation and this is not.
+    pub melo_id: Option<String>,
     /// Owning tenant.
     pub tenant: String,
     /// Which door the reading came in by.

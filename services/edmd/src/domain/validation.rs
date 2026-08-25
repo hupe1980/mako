@@ -150,6 +150,14 @@ pub struct BatchValidation {
     pub issue_count: usize,
     pub billing_block_count: usize,
     pub rules: Vec<String>,
+    /// Rules that did **not** run on this batch, as their `Vnn` codes.
+    ///
+    /// Without this a caller cannot tell "the rule ran and found nothing" from
+    /// "the rule never ran". V12 is the live case: it needs the metered plant's
+    /// capacity, which edmd holds no master data for, so it is inert on every
+    /// door that is not told one — and a batch would otherwise report a clean
+    /// bill of health that no implausible-power check stands behind.
+    pub skipped_rules: Vec<String>,
 }
 
 impl BatchValidation {
@@ -227,8 +235,27 @@ pub fn config_for(
 /// actually about.
 #[must_use]
 pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec<RegisterFinding> {
+    findings_with_coverage(batch, max_plant_power_kw).0
+}
+
+/// [`findings`], plus the rules that actually ran.
+///
+/// A clean result means "these rules found nothing", not "nothing is wrong". A
+/// rule can be inert because the config gave it nothing to work with — V12
+/// needs a plant capacity edmd does not hold as master data — or because the
+/// data was too thin for it. Either way the caller has to be able to say so:
+/// reporting a spotless batch while V12 never ran is the shape of defect this
+/// exists to prevent.
+///
+/// The set is the **intersection** across registers, so a rule counts as
+/// evaluated only where it ran for every series in the batch.
+#[must_use]
+pub fn findings_with_coverage(
+    batch: &[MeterRead],
+    max_plant_power_kw: Option<Decimal>,
+) -> (Vec<RegisterFinding>, metering::validation::RuleSet) {
     if batch.is_empty() {
-        return Vec::new();
+        return (Vec::new(), metering::validation::RuleSet::EMPTY);
     }
 
     // Group the batch's positions by the series each belongs to, preserving the
@@ -247,6 +274,7 @@ pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec
     }
 
     let mut out: Vec<RegisterFinding> = Vec::new();
+    let mut evaluated: Option<metering::validation::RuleSet> = None;
     for positions in groups.values() {
         let sparte = batch[positions[0]].sparte;
         // Handed in the caller's order, deliberately. `validate_intervals`
@@ -278,6 +306,10 @@ pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec
             &series,
             &config_for(sparte, &series, max_plant_power_kw),
         );
+        evaluated = Some(match evaluated {
+            Some(acc) => acc.intersection(report.evaluated),
+            None => report.evaluated,
+        });
         for issue in report.issues {
             // `interval_index` points into this group's slice; map it back onto
             // the caller's batch so the annotation lands on the right row.
@@ -289,7 +321,10 @@ pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec
             });
         }
     }
-    out
+    (
+        out,
+        evaluated.unwrap_or(metering::validation::RuleSet::EMPTY),
+    )
 }
 
 /// Run the V-rule engine over an ingest batch and annotate the rows each issue
@@ -311,10 +346,23 @@ pub fn findings(batch: &[MeterRead], max_plant_power_kw: Option<Decimal>) -> Vec
 /// counts stay, because "how bad is this delivery" is a real question too; they
 /// are just not the same question.
 fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> BatchValidation {
-    let found = findings(batch, ctx.max_plant_power_kw);
+    let (found, evaluated) = findings_with_coverage(batch, ctx.max_plant_power_kw);
 
     let issue_count = found.len();
     let billing_block_count = found.iter().filter(|f| f.issue.blocks_billing()).count();
+    let skipped_rules: Vec<String> = evaluated
+        .complement()
+        .iter()
+        .map(|r| r.as_str().to_owned())
+        .collect();
+    if !skipped_rules.is_empty() {
+        tracing::debug!(
+            malo_id = %ctx.malo_id,
+            source = %ctx.source,
+            skipped = %skipped_rules.join(","),
+            "edmd: validation rules that did not run on this batch"
+        );
+    }
     let summary = BatchValidation {
         issue_count,
         billing_block_count,
@@ -324,6 +372,7 @@ fn validate_and_annotate(batch: &mut [MeterRead], ctx: IngestContext<'_>) -> Bat
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()
             .collect(),
+        skipped_rules,
     };
 
     if issue_count == 0 {
@@ -651,6 +700,46 @@ mod tests {
         assert!(
             !rules.contains(&"V01".to_owned()),
             "a reversed complete series has no gaps: {rules:?}"
+        );
+    }
+
+    /// A clean batch says which rules stood behind that verdict.
+    ///
+    /// V12 needs the metered plant's capacity, and edmd holds none as master
+    /// data — so on every door that is not told one, the rule is inert. A report
+    /// that could not distinguish "no implausible power" from "nobody looked"
+    /// let an Error-severity rule sit switched off while the docs, the API and
+    /// the operator guide all described it as active.
+    #[test]
+    fn a_clean_batch_names_the_rules_that_did_not_run() {
+        use metering::validation::ValidationRuleId;
+
+        let base = datetime!(2026 - 07 - 01 00:00 UTC);
+        let batch: Vec<MeterRead> = (0..8)
+            .map(|i| {
+                read(
+                    base + time::Duration::minutes(15 * i),
+                    15,
+                    "2.0",
+                    Sparte::Strom,
+                    Some("1-0:1.8.0"),
+                )
+            })
+            .collect();
+
+        // No ceiling supplied — V12 cannot fire.
+        let (found, evaluated) = findings_with_coverage(&batch, None);
+        assert!(found.is_empty(), "this batch is clean: {found:?}");
+        assert!(
+            !evaluated.contains(ValidationRuleId::ImplausiblePower),
+            "without a capacity ceiling V12 must be reported as skipped"
+        );
+
+        // Supplied — V12 runs, and the same clean batch now says so.
+        let (_, evaluated) = findings_with_coverage(&batch, Some(Decimal::from(30)));
+        assert!(
+            evaluated.contains(ValidationRuleId::ImplausiblePower),
+            "a capacity ceiling must bring V12 into the evaluated set"
         );
     }
 }

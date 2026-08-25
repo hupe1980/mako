@@ -13,6 +13,7 @@ categories   = ["data-structures"]
 [dependencies]
 mako-fristen = { workspace = true }
 mako-engine = { workspace = true }
+mako-invoic  = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 thiserror   = { workspace = true }

@@ -17,7 +17,7 @@ fn party(payload: &serde_json::Value, preferred: &str, legacy: &str) -> String {
         .to_owned()
 }
 
-/// Helper: dispatch `AbrechnungCommand::SendInvoic` for a given PID.
+/// Helper: dispatch `InvoicCommand::SendInvoic` for a given PID.
 ///
 /// Called by `invoic.nne.stellen` and `invoic.nne.stellen`
 /// (both PID 31002, NN-Rechnung — the Sparte is carried in the payload, not the
@@ -46,7 +46,7 @@ pub(super) async fn dispatch_nne_send_invoic(
         state,
         &invoice_ref_str,
         "gpke-abrechnung",
-        move || AbrechnungCommand::SendInvoic {
+        move || InvoicCommand::SendInvoic {
             pid: mako_engine::types::Pruefidentifikator::new(pid).expect("valid NNE PID"),
             sender: mako_engine::types::MarktpartnerCode::new(nb_mp_id.as_str()),
             recipient: mako_engine::types::MarktpartnerCode::new(lf_mp_id.as_str()),
@@ -117,7 +117,7 @@ async fn dispatch_wim_msb_send_invoic(
         state,
         &invoice_ref_str,
         mako_wim::invoic::WORKFLOW_NAME,
-        move || WimInvoicCommand::SendInvoic {
+        move || InvoicCommand::SendInvoic {
             pid: mako_engine::types::Pruefidentifikator::new(31009)
                 .expect("valid MSB-Rechnung PID"),
             sender: mako_engine::types::MarktpartnerCode::new(sender.as_str()),

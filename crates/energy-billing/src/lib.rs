@@ -51,9 +51,9 @@
 //! | `WAERMEPUMPE` | `ControllableLoadProvider` (§14a) | §14a EnWG |
 //! | `WALLBOX` | `ControllableLoadProvider` (§14a) | §14a EnWG |
 //! | `GAS` | `GasProvider` | §41 EnWG |
-//! | `WAERME` | `HeatProvider` | §41 EnWG |
+//! | `WAERME` | `HeatProvider` | §41 EnWG; AVBFernwärmeV §24; CO2KostAufG §3; §14 WPG |
 //! | `WASSER` | `WaterProvider` | AVBWasserV; §12 Abs. 2 Nr. 1 UStG (7 %); gesplittete Abwassergebühr |
-//! | `SOLAR` | `SolarProvider` | §21 Abs. 3 EEG (Mieterstrom) / §42b EnWG (GGV) |
+//! | `SOLAR` | `SolarProvider` | §42a Abs. 4 EnWG (Mieterstrom-Preisdeckel) / §42b EnWG (GGV) |
 //! | `EEG` | `EegProvider` (→ eeg-billing) | §§20–21 EEG 2023 |
 //! | `EINSPEISUNG` | `EinspeisungProvider` | §20 EEG 2023 |
 //! | `HEMS` | `HemsProvider` | — |
@@ -78,6 +78,12 @@ pub mod provider;
 pub mod providers;
 pub mod quantities;
 pub mod rates;
+/// Verbrauchsteuerliche Begünstigungen — Befreiung, Ermäßigung, Entlastung.
+///
+/// Only the first two change what a supplier invoices; the third is the
+/// customer's own claim at the Hauptzollamt. Keeping them apart is what stops a
+/// § 9b StromStG relief from being billed as a § 9 Abs. 1 exemption.
+pub mod steuer;
 pub mod tariff;
 
 // ── Primary API re-exports ────────────────────────────────────────────────────
@@ -96,10 +102,10 @@ pub use invoice::{
 pub use position::{
     BillingPosition, BillingWarning, PositionCategory, PositionTrace, WarningSeverity,
 };
-pub use provider::{BillingProvider, EpexSpotSource, SpotPriceSource};
+pub use provider::{BillingProvider, MTU_MINUTES, mtu_start};
 pub use quantities::{
-    Abschlagsplan, AbschlagsplanEntry, Absetzung, AbsetzungsGrund, DynamicInterval, EegMeterInput,
-    EmobilityMeterInput, EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan,
+    Ablesungsart, Abschlagsplan, AbschlagsplanEntry, Absetzung, AbsetzungsGrund, DynamicInterval,
+    EegMeterInput, EmobilityMeterInput, EnergyShareMeterInput, GasMeterInput, GgvNutzungsplan,
     GgvNutzungsplanEntry, GgvSolarInput, GridInput, HemsMeterInput, MeterInput, MeteringMode,
     ProsumerMeterInput, Quantities, Sect14aModul3Verbrauch, Sect41aAnnualComparison,
     ServiceMeterInput, SolarMeterInput, WaermeMeterInput, WasserMeterInput,
@@ -110,13 +116,17 @@ pub use rates::{
     mwst_rate_for_gas_waerme_period, mwst_rate_for_period, round_money,
     steuer_stichtage_im_zeitraum, stromsteuer_for_year,
 };
+pub use steuer::{
+    EnergiesteuerBefreiung, EnergiesteuerTarif, Steuerentlastung, StromsteuerBefreiung,
+    StromsteuerErmaessigung, StromsteuerTarif,
+};
 
 // Typed Product enum + per-category product structs
 pub use tariff::{
     AbwasserRegime, BlockTierInput, ControllableLoadProduct, EegProduct, EinspeisungProduct,
     ElectricityProduct, EmobilityProduct, EnergieQuellen, GasProduct, HeatProduct, HemsProduct,
     IndexedPriceConfig, Product, SeasonalPriceOverride, ServiceProduct, SharingProduct,
-    SolarProduct, StromsteuerBefreiung, WaterProduct,
+    SolarProduct, WaterProduct,
 };
 
 // Concrete providers

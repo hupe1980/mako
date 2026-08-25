@@ -230,26 +230,24 @@ use mako_engine::{
     version::WorkflowId,
     workflow::OccupiesBusinessKey as _,
 };
-use mako_gabi_gas::{
-    GaBiGasInvoicCommand, GaBiGasInvoicWorkflow,
-    INVOIC_WORKFLOW_NAME as GABI_GAS_INVOIC_WORKFLOW_NAME,
-};
+use mako_gabi_gas::{GaBiGasInvoicWorkflow, INVOIC_WORKFLOW_NAME as GABI_GAS_INVOIC_WORKFLOW_NAME};
 use mako_geli_gas::{
     GELI_GAS_DATENABRUF_WORKFLOW_NAME, GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
     GasSupplierChangeCommand, GeliGasDatanabrufCommand, GeliGasDatanabrufWorkflow,
-    GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow, GeliGasSperrprozesseInvoicCommand,
-    GeliGasSperrprozesseInvoicWorkflow, GeliGasSupplierChangeWorkflow, LF_ANMELDUNG_ANFRAGE_PIDS,
+    GeliGasLfAnmeldungCommand, GeliGasLfAnmeldungWorkflow, GeliGasSperrprozesseInvoicWorkflow,
+    GeliGasSupplierChangeWorkflow, LF_ANMELDUNG_ANFRAGE_PIDS,
 };
 use mako_gpke::{
-    AbrechnungCommand, AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow,
-    GpkeAnkuendigungZuordnungLfWorkflow, GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow,
-    GpkeSupplierChangeWorkflow, LfAnmeldungCommand, SupplierChangeCommand,
+    AnkuendigungZuordnungLfCommand, GpkeAbrechnungWorkflow, GpkeAnkuendigungZuordnungLfWorkflow,
+    GpkeLfAbmeldungWorkflow, GpkeLfAnmeldungWorkflow, GpkeSupplierChangeWorkflow,
+    LfAnmeldungCommand, SupplierChangeCommand,
 };
 use mako_gpke::{
     GpkeSperrungLfWorkflow, GpkeSperrungWorkflow, SPERRUNG_LF_ANFRAGE_PIDS,
     SPERRUNG_LF_ANTWORT_WINDOW_LABEL, SPERRUNG_LF_WORKFLOW_NAME, SPERRUNG_WORKFLOW_NAME,
     SperrungCommand, SperrungLfCommand,
 };
+use mako_invoic::InvoicCommand;
 use mako_mabis::{
     BillingCommand, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID,
     IFTSTA_PIDS as MABIS_IFTSTA_PIDS, MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
@@ -257,7 +255,7 @@ use mako_mabis::{
 use mako_markt::repository::{
     NetzzugangAktion, NetzzugangAntrag, NetzzugangAntragTyp, NetzzugangStatus,
 };
-use mako_wim::invoic::{WimInvoicCommand, WimInvoicWorkflow};
+use mako_wim::invoic::WimInvoicWorkflow;
 use mako_wim::steuerungsauftrag::{SteuerungsauftragCommand, WimSteuerungsauftragWorkflow};
 use mako_wim::{DeviceChangeCommand, WimDeviceChangeWorkflow};
 use mako_wim::{PreisanfrageCommand, WimPreisanfrageWorkflow};
@@ -790,6 +788,73 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// The Sparte-neutral Storno must be answerable by everyone it can reach.
+    ///
+    /// PID 31004 cancels an invoice from *any* billing family (INVOIC AHB
+    /// § 3.1.2 — GPKE, MMM, WiM Strom + Gas, Kapazität, AWH, GeLi), so whoever
+    /// could receive the original can receive its cancellation. Its permitted
+    /// set is the union of the families' own sets, derived here rather than
+    /// trusted: a role missing from the hand-written list cannot answer a
+    /// cancellation of an invoice it received itself.
+    #[test]
+    fn the_storno_answers_every_family_it_cancels() {
+        let family_commands = [
+            "gpke.abrechnung.annehmen",
+            "wim.rechnung.annehmen",
+            "gabi.rechnung.annehmen",
+            "invoic.sonstige-leistung.annehmen",
+        ];
+        let mut required: Vec<Marktrolle> = Vec::new();
+        for command in family_commands {
+            let d = COMMAND_REGISTRY
+                .iter()
+                .find(|d| d.name == command)
+                .unwrap_or_else(|| panic!("{command} is registered"));
+            for role in d.permitted_roles {
+                if !required.contains(role) {
+                    required.push(*role);
+                }
+            }
+        }
+
+        let storno = COMMAND_REGISTRY
+            .iter()
+            .find(|d| d.name == "invoic.stornorechnung.annehmen")
+            .expect("the Storno command is registered");
+        for role in &required {
+            assert!(
+                storno.permitted_roles.contains(role),
+                "{role:?} can receive a billing invoice but not its Stornorechnung"
+            );
+        }
+    }
+
+    /// The GaBi Gas billing family reaches **two** roles, and the command that
+    /// answers it must permit both.
+    ///
+    /// One workflow settles all three PIDs: the MGV receives the aggregated
+    /// MMM-Rechnung 31007/31008, the BKV the Kapazitätsrechnung 31010. A
+    /// descriptor naming one PID must still permit both, or the recipient of
+    /// the other cannot answer its own invoices.
+    #[test]
+    fn the_gabi_billing_family_is_answerable_by_both_of_its_recipients() {
+        for role in ["MGV", "BKV"] {
+            for command in ["gabi.rechnung.annehmen", "gabi.rechnung.ablehnen"] {
+                assert!(
+                    validate_command(command, Some(role), &roles(&[role])).is_ok(),
+                    "{role} receives a GaBi Gas invoice and must be able to answer it \
+                     with {command}"
+                );
+            }
+        }
+    }
+
+    /// …and not by a role that receives none of them.
+    #[test]
+    fn a_supplier_may_not_answer_a_gabi_gas_invoice() {
+        assert!(validate_command("gabi.rechnung.annehmen", Some("LF"), &roles(&["LF"])).is_err());
     }
 
     #[test]

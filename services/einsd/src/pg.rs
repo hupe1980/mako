@@ -1572,7 +1572,7 @@ fn build_gutschrift(
         period: Some(period),
         issue_date: Some(time::OffsetDateTime::now_utc().date().to_string()),
         due_date: output.faelligkeitsdatum.map(|d| d.to_string()),
-        // `billing` 0.13 gave `PartyIdentifier` an optional ISO 6523 ICD
+        // `PartyIdentifier` carries an optional ISO 6523 ICD
         // `scheme`. Both values are left scheme-less on purpose: the tenant is a
         // BDEW/DVGW Codenummer (not every one of which is a GLN) and the MaLo-ID
         // is an 11-digit BDEW identifier with no ICD at all. A scheme is

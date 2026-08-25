@@ -1180,7 +1180,9 @@ fn negate_wert_field(obj: &mut serde_json::Map<String, serde_json::Value>) {
 /// A structured code, not free text: EN16931 validates the category against the
 /// rate, and the wrong pairing fails a receiving system's schematron rather than
 /// merely looking odd.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub enum VatCategory {
     /// `S` — standard rate.
     Standard,
@@ -1190,6 +1192,12 @@ pub enum VatCategory {
     ReverseCharge,
     /// `E` — exempt from VAT.
     Exempt,
+    /// `O` — not subject to VAT (services outside the scope).
+    ///
+    /// The hoheitliche Abwassergebühr under a KAG-Satzung lands here. EN 16931
+    /// **BR-O-11 … BR-O-14** make it exclusive: no other category may appear on
+    /// the same document.
+    OutOfScope,
 }
 
 impl VatCategory {
@@ -1201,7 +1209,14 @@ impl VatCategory {
             Self::ZeroRated => "Z",
             Self::ReverseCharge => "AE",
             Self::Exempt => "E",
+            Self::OutOfScope => "O",
         }
+    }
+
+    /// `true` for a category EN 16931 forbids mixing with any other (`O`).
+    #[must_use]
+    pub const fn is_exclusive(self) -> bool {
+        matches!(self, Self::OutOfScope)
     }
 }
 
@@ -1245,6 +1260,7 @@ impl TaxSubtotal {
                 VatCategory::ZeroRated => billing::TaxCategory::ZeroRated,
                 VatCategory::ReverseCharge => billing::TaxCategory::ReverseCharge,
                 VatCategory::Exempt => billing::TaxCategory::Exempt,
+                VatCategory::OutOfScope => billing::TaxCategory::OutOfScope,
             },
             self.rate_percent / Decimal::ONE_HUNDRED,
             EuroAmount::checked_from_decimal(self.taxable_base_eur)?,
@@ -1284,7 +1300,7 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
     // groups with 0.19, and §13b reverse-charge supplies form their own subtotal:
     // they carry rate 0 like a genuine zero-rated supply but are legally distinct
     // (EN 16931 `AE` vs `Z`), so they must never be merged.
-    let mut buckets: BTreeMap<(bool, String), (Decimal, Decimal, bool)> = BTreeMap::new();
+    let mut buckets: BTreeMap<(VatCategory, String), (Decimal, Decimal)> = BTreeMap::new();
     for p in positions {
         if matches!(
             p.category,
@@ -1293,34 +1309,40 @@ pub fn tax_subtotals_of(positions: &[BillingPosition], default_rate: Decimal) ->
             continue;
         }
         let rate = p.applicable_tax_rate.unwrap_or(default_rate).normalize();
-        let rc = p.is_reverse_charge();
+        let cat = vat_category_of(p, rate);
         let entry = buckets
-            .entry((rc, rate.to_string()))
-            .or_insert((rate, Decimal::ZERO, rc));
+            .entry((cat, rate.to_string()))
+            .or_insert((rate, Decimal::ZERO));
         entry.1 += p.net_eur;
     }
 
     buckets
-        .into_values()
-        .map(|(rate, base, reverse_charge)| {
-            let pct = (rate * Decimal::ONE_HUNDRED).normalize();
-            let tax = (base * rate).round_kfm(2);
-            TaxSubtotal {
-                // §13b reverse charge: the recipient owes the VAT, so the
-                // supplier's invoice shows no tax but the category is `AE`, not `Z`.
-                category: if reverse_charge {
-                    VatCategory::ReverseCharge
-                } else if rate.is_zero() {
-                    VatCategory::ZeroRated
-                } else {
-                    VatCategory::Standard
-                },
-                rate_percent: pct,
-                taxable_base_eur: base.round_kfm(2),
-                tax_amount_eur: tax,
-            }
+        .into_iter()
+        .map(|((category, _), (rate, base))| TaxSubtotal {
+            category,
+            rate_percent: (rate * Decimal::ONE_HUNDRED).normalize(),
+            taxable_base_eur: base.round_kfm(2),
+            tax_amount_eur: (base * rate).round_kfm(2),
         })
         .collect()
+}
+
+/// The EN 16931 VAT category one position falls into.
+///
+/// Three zero-rate cases that must not be merged: §13b reverse charge (`AE`,
+/// the recipient owes the tax), a genuine zero-rated supply (`Z`), and a
+/// hoheitliche Leistung the UStG does not reach at all (`O`).
+#[must_use]
+pub fn vat_category_of(position: &BillingPosition, effective_rate: Decimal) -> VatCategory {
+    if position.is_out_of_scope() {
+        VatCategory::OutOfScope
+    } else if position.is_reverse_charge() {
+        VatCategory::ReverseCharge
+    } else if effective_rate.is_zero() {
+        VatCategory::ZeroRated
+    } else {
+        VatCategory::Standard
+    }
 }
 
 #[cfg(all(test, feature = "bo4e"))]

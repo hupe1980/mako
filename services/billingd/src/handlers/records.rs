@@ -80,11 +80,19 @@ pub async fn record_with_model(
         .en16931_json
         .as_ref()
         .and_then(|v| serde_json::from_value::<en16931::Invoice>(v.clone()).ok())
-        .ok_or_else(|| {
-            BillingError::unprocessable(
+        .ok_or_else(|| match row.en16931_blocked.as_deref() {
+            // The invoice *cannot* have one, and the record says why. Telling
+            // the operator to re-run would produce the same refusal.
+            Some(reason) => BillingError::unprocessable(
+                "MODEL_NOT_REPRESENTABLE",
+                format!(
+                    "this document has no valid EN 16931 representation and can only be                      issued on paper: {reason}"
+                ),
+            ),
+            None => BillingError::unprocessable(
                 "MODEL_MISSING",
                 "record has no EN 16931 model — re-run the billing calculation",
-            )
+            ),
         })?;
     Ok((row, model))
 }

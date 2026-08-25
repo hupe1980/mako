@@ -55,19 +55,13 @@ pub(crate) fn generation_source_ids(rule: &metering::AggregationRule) -> Vec<&st
     }
 }
 
-/// The `rule_type` discriminator for a rule, matching the DDL\'s CHECK list.
+/// The `rule_type` discriminator for a rule, matching the DDL's CHECK list.
 ///
-/// The single source of truth is the enum variant, so the stored discriminator
-/// and the stored rule can never disagree.
+/// `AggregationRule` is internally tagged, so `kind()` is the same string the
+/// stored `rule_json` carries in its `kind` field — the column and the document
+/// cannot disagree.
 pub(crate) fn rule_type_of(rule: &metering::AggregationRule) -> &'static str {
-    use metering::AggregationRule as R;
-    match rule {
-        R::Sum { .. } => "Sum",
-        R::Residual { .. } => "Residual",
-        R::PvSelfConsumption { .. } => "PvSelfConsumption",
-        R::GgvConstantAllocation { .. } => "GgvConstantAllocation",
-        R::GgvProportionalAllocation { .. } => "GgvProportionalAllocation",
-    }
+    rule.kind().as_str()
 }
 
 /// `GET /api/v1/virtual/{virtual_malo_id}/lastgang`

@@ -85,64 +85,6 @@ CREATE INDEX mbp_tenant_malo_v2
     ON meter_billing_periods (tenant, malo_id, period_from, period_to)
     WHERE tenant <> '';
 
--- ── Zählerstandsgang (BK6-24-174 „Datenübermittlung ZSG") ───────────────────
---
--- What an intelligentes Messsystem actually produces. § 2 Satz 1 Nr. 27 MsbG
--- defines it verbatim as "die Messung einer Reihe viertelstündig ermittelter
--- Zählerstände von elektrischer Arbeit und stündlich ermittelter Zählerstände
--- von Gasmengen" — note the two resolutions. BK6-24-174 (Beschluss 24.10.2024,
--- wirksam 06.06.2025) is titled "Anpassung der Marktkommunikation zur
--- Realisierung der nach dem Messstellenbetriebsgesetz geforderten Übermittlung
--- von Zählerstandsgängen (Datenübermittlung ZSG)", and the model it puts in
--- place is:
---
---     SMGW ──Zählerstandsgang──► MSB ──Lastgang──► NB, Lieferant
---                                └── the differencing happens at the MSB
---
--- edmd is the MSB side, so the differencing is its job. The **readings** are the
--- primary record and the Lastgang is derived from them, which is why they are
--- stored rather than discarded after conversion: § 146 Abs. 4 AO requires the
--- original to stay recoverable, and a stored difference cannot reproduce the
--- register values it came from.
---
--- The derived intervals live in meterstore like any other Lastgang. These rows
--- do not: a Zählerstand is a value at an *instant*, not over a span, and
--- meterstore's merge key and tiering watermark are both interval-shaped.
-
-CREATE TABLE meter_readings (
-    tenant          TEXT          NOT NULL,
-    malo_id         TEXT          NOT NULL,
-    -- Canonical OBIS spelling, '' for an unlabelled register — the same
-    -- normalisation the interval store and the audit tables use, so one register
-    -- is one key everywhere.
-    obis_code_norm  TEXT          NOT NULL DEFAULT '',
-    -- The instant the register held this value.
-    read_at         TIMESTAMPTZ   NOT NULL,
-    -- The register value, in the unit the register counts: kWh for electricity
-    -- and heat, m3 for gas and water. Deliberately **not** converted — the
-    -- conversion applies to the difference (§ 25 Nr. 4 MessEV), and a converted
-    -- register value would no longer be the reading the meter displayed.
-    zaehlerstand    NUMERIC(18,5) NOT NULL,
-    unit            TEXT          NOT NULL
-                        CHECK (unit IN ('KWH','M3')),
-    sparte          TEXT          NOT NULL DEFAULT 'STROM'
-                        CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
-    quality         TEXT          NOT NULL DEFAULT 'MEASURED'
-                        CHECK (quality IN (
-                            'MEASURED','ESTIMATED','SUBSTITUTED','CALCULATED',
-                            'CORRECTED','PRELIMINARY','FAULTY','UNKNOWN'
-                        )),
-    -- Provenance, as on a reading: the door and the reporting market partner.
-    source          TEXT          NOT NULL DEFAULT 'MSCONS',
-    sender_mp_id    TEXT,
-    push_session    TEXT,
-    recorded_at     TIMESTAMPTZ   NOT NULL DEFAULT now(),
-    -- One value per register per instant. A redelivery overwrites, exactly as an
-    -- interval redelivery does.
-    PRIMARY KEY (tenant, malo_id, obis_code_norm, read_at)
-);
-
-CREATE INDEX mr_malo_time ON meter_readings (tenant, malo_id, read_at DESC);
 
 -- ── ZSG conversion audit (§ 146 Abs. 4 AO) ──────────────────────────────────
 --
@@ -261,10 +203,10 @@ CREATE TABLE ablese_auftraege (
                                'STORNIERT','FEHLGESCHLAGEN'
                            )),
     -- Which commodity is being read. A completed Ablesung files its Zählerstand
-    -- into `meter_readings`, and that row has to name a Sparte: it decides the
-    -- register's unit (kWh or m3) and the balancing day. Inferring it from which
-    -- of the two Zählerstand columns was filled cannot distinguish Strom from
-    -- Wärme, or Gas from Wasser.
+    -- into the Zählerstandsgang store, and that delivery has to name a Sparte:
+    -- it decides the register's unit (kWh or m3) and the balancing day.
+    -- Inferring it from which of the two Zählerstand columns was filled cannot
+    -- distinguish Strom from Wärme, or Gas from Wasser.
     sparte             TEXT        NOT NULL DEFAULT 'STROM'
                            CHECK (sparte IN ('STROM','GAS','WAERME','WASSER')),
     -- OBIS register the reading was taken from, when the caller knows it. NULL
@@ -393,10 +335,12 @@ CREATE INDEX        gqd_tenant      ON gas_quality_data (tenant);
 -- `virtual_malo_id` — a virtual meter *is* a Marktlokation, addressed by its own
 -- MaLo-ID, which is why the column is not a bare `virtual_id`.
 --
--- `rule_type` must match the variants of `metering::aggregation_rule::AggregationRule`
--- exactly. `edmd` deserialises `rule_json` into that enum, so a value here that
--- the enum does not know is an unreadable row. The `virtual_meter_rule_types`
--- guard test in `crates/metering` pins the two lists together.
+-- `rule_type` must match `metering::VirtualMeterKind::as_str` exactly. It is the
+-- same string the internally-tagged `rule_json` carries in its `kind` field, so
+-- the column and the document cannot disagree; `edmd` deserialises `rule_json`
+-- into `AggregationRule`, and a value here the enum does not know is an
+-- unreadable row. `rule_type_check_matches_the_aggregation_rule_enum` pins the
+-- list.
 --
 -- §42c Energy Sharing reuses `GgvProportionalAllocation`: the allocation
 -- arithmetic is identical, and the two regimes are distinguished by
@@ -410,11 +354,11 @@ CREATE TABLE virtual_meter_configs (
     display_name    TEXT,
     rule_type       TEXT        NOT NULL
                         CHECK (rule_type IN (
-                            'Sum',
-                            'Residual',
-                            'PvSelfConsumption',
-                            'GgvConstantAllocation',
-                            'GgvProportionalAllocation'
+                            'SUM',
+                            'RESIDUAL',
+                            'PV_SELF_CONSUMPTION',
+                            'GGV_CONSTANT_ALLOCATION',
+                            'GGV_PROPORTIONAL_ALLOCATION'
                         )),
     -- Serialised `AggregationRule`, including its source MaLo-IDs.
     rule_json       JSONB,

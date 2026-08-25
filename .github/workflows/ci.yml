@@ -229,6 +229,10 @@ jobs:
       # A read grant declared mutating stops for a human on every call; a
       # mutating one declared read-only is dispatched unattended.
       - run: cargo run -p xtask -- check-tool-grants
+      # A PID routed to a command makod never registered fails only when a real
+      # invoice arrives — the check runs, the verdict is persisted, the dispatch
+      # 404s, and the Antwortfrist expires on a process that looked healthy.
+      - run: cargo run -p xtask -- check-answer-commands
 
   codegen-check:
     name: Codegen check (generated files are up-to-date)

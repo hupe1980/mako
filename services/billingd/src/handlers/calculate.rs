@@ -88,6 +88,22 @@ pub struct CalculateRequest {
     /// carries the VAT rate it was invoiced at.
     #[serde(default)]
     pub abschlaege: Vec<energy_billing::AbschlagDeduction>,
+    /// § 14 Abs. 5 Satz 2 UStG — how the settling invoice presents the advances.
+    ///
+    /// `ENDRECHNUNG` invoices the whole supply and deducts the advances **and
+    /// the tax contained in them**; `RESTRECHNUNG` invoices only the remainder
+    /// and lists no advances. Both are lawful and the customer pays the same
+    /// amount; they differ in what the document shows.
+    ///
+    /// The BMF recommends the Restrechnung for e-invoices (Schreiben v.
+    /// 15.10.2024, Rn. 48), because EN 16931's core profiles carry no
+    /// per-advance tax — mako renders it as one BG-20 document-level allowance
+    /// per `(VAT category, rate)` group, so the residual base per rate is
+    /// exact even when an advance was invoiced at a different rate.
+    ///
+    /// Absent, the operator's `[billing] settlement_form` default applies.
+    #[serde(default)]
+    pub settlement_form: Option<energy_billing::SettlementForm>,
 }
 
 // ── Calculate ─────────────────────────────────────────────────────────────────

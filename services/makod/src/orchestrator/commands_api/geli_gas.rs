@@ -726,9 +726,9 @@ pub(super) async fn dispatch_geli_gas_invoic(
         GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
         move || {
             if settle {
-                GeliGasSperrprozesseInvoicCommand::SettleInvoice
+                InvoicCommand::SettleInvoice
             } else {
-                GeliGasSperrprozesseInvoicCommand::DisputeInvoice {
+                InvoicCommand::DisputeInvoice {
                     reason: reason.clone(),
                 }
             }
@@ -764,7 +764,7 @@ async fn dispatch_geli_gas_awh_send_invoic(
         state,
         &invoice_ref,
         GELI_GAS_SPERRPROZESSE_INVOIC_WORKFLOW_NAME,
-        move || GeliGasSperrprozesseInvoicCommand::SendInvoic {
+        move || InvoicCommand::SendInvoic {
             pid: mako_engine::types::Pruefidentifikator::new(31011)
                 .expect("valid AWH Sperrprozesse PID"),
             sender: mako_engine::types::MarktpartnerCode::new(sender.as_str()),

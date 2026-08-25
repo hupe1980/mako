@@ -17,7 +17,11 @@
 //! 8. **§40 Kilowattstundenpreis** — mandatory all-inclusive price per kWh
 //! 9. **§41 mandatory fields** — rechnung_json contains all §41 EnWG fields
 //! 10. **§42c Energy Sharing** — sharing credit reduces effective customer cost
-//! 11. **Industrie §9 StromStG** — typed StromsteuerBefreiung enum
+//! 11. **Industrie §9b StromStG** — an Entlastung is billed in full and noted
+//! 12. **§41a dynamic tariff** — a priced day to the cent, the weighted-average
+//!     price, both DST days, and what does and does not block the run
+//! 13. **Mieterstrom / GGV** — the §42a Abs. 4 ceiling, the §9 Abs. 1 Nr. 3
+//!     exemption stated on the page, and the GGV PV/grid tax split
 //!
 //! ## Updating golden values
 //!
@@ -103,13 +107,22 @@ fn sect41a_dynamic_tariff_rejects_non_imsys_metering_mode() {
         "§41a: at least one Error-severity warning expected"
     );
 
-    // iMSys mode — must succeed
+    // iMSys mode — must succeed. The interval series is what a dynamic tariff
+    // is billed from, so a well-formed input carries one that matches the
+    // meter: 300 kWh stated, 300 kWh delivered, priced.
+    let mut prices = std::collections::HashMap::new();
+    prices.insert(time::macros::datetime!(2026-01-01 13:00 UTC), dec!(25));
     let quantities_imsys = Quantities {
         electricity: Some(MeterInput {
             arbeitsmenge_kwh: dec!(300),
             metering_mode: MeteringMode::Imsys,
             ..Default::default()
         }),
+        dynamic_intervals: vec![energy_billing::DynamicInterval {
+            timestamp_utc: time::macros::datetime!(2026-01-01 13:00 UTC),
+            kwh: dec!(300),
+        }],
+        dynamic_epex_prices: prices,
         ..Default::default()
     };
     let result_imsys = tariff
@@ -164,6 +177,7 @@ fn golden_strom_slp_eintarif_jan_2026() {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     };
 
     let ctx = BillingContext {
@@ -244,6 +258,7 @@ fn golden_strom_reverse_charge_13b_charges_no_vat() {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     };
 
     let ctx = BillingContext {
@@ -332,6 +347,7 @@ fn golden_gas_with_levies_jan_2026() {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     };
 
     let ctx = BillingContext {
@@ -549,6 +565,7 @@ fn golden_rlm_demand_charge() {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     };
 
     let ctx = BillingContext {
@@ -617,30 +634,33 @@ fn golden_rlm_demand_charge() {
 
 /// **Golden: Industrial gas invoice with §54 EnergieStG Energiesteuer exemption (KWK)**
 ///
-/// A CHP (KWK) plant operator receives a gas supply invoice where Energiesteuer
-/// is exempt under §54 Abs. 1 EnergieStG (gas used in Kraft-Wärme-Kopplung).
+/// A CHP (KWK) plant operator buys gas. **§ 53a EnergieStG is a
+/// Steuerentlastung**, applied for at the Hauptzollamt after the fact — the
+/// supplier invoices the full 0,55 ct/kWh and says so. The old scenario
+/// zero-rated it at supply under "§54 EnergieStG", which is a relief too, and
+/// the invoice lost 275 EUR of Energiesteuer that the operator would then
+/// reclaim a second time.
 ///
 /// ## Tariff
 /// - Gas Arbeitspreis: 8.00 ct/kWh_Hs
-/// - Grundpreis: 0
-/// - Energiesteuer: EXEMPT (§54 EnergieStG KWK)
-/// - BEHG: 1.3104 ct/kWh_Hs (BEHG applies even to KWK plants)
+/// - Energiesteuer: Regelsatz 0.55 ct/kWh_Hs + § 53a Entlastungshinweis
+/// - BEHG: 1.3104 ct/kWh_Hs
 /// - MwSt: 19%
 ///
 /// ## Consumption
 /// - 50 000 kWh_Hs (gas consumed in KWK plant, January 2026)
 ///
 /// ## Expected
-/// - No Energiesteuer levy position
-/// - Exemption info position must appear
+/// - Energiesteuer billed in full: 50 000 × 0.55 ct = 275.00 EUR
+/// - One § 53a Entlastungshinweis naming that figure
 /// - BEHG applies: 50 000 × 1.3104 ct / 100 = 655.20 EUR
 #[test]
-fn golden_gas_energiesteuer_exempt_kwk() {
+fn golden_gas_kwk_is_billed_the_full_energiesteuer_with_a_53a_note() {
     let tariff: Product = serde_json::from_str(
         r#"{
         "category": "GAS",
         "gas_arbeitspreis_ct_per_kwh_hs": 8.00,
-        "gas_energiesteuer_befreiung": true
+        "steuerentlastungen": ["ENERGIESTEUER53A"]
     }"#,
     )
     .unwrap();
@@ -650,6 +670,7 @@ fn golden_gas_energiesteuer_exempt_kwk() {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     };
 
     let ctx = BillingContext {
@@ -675,24 +696,28 @@ fn golden_gas_energiesteuer_exempt_kwk() {
         .bill(ctx, &quantities)
         .unwrap();
 
-    // No regular Energiesteuer levy position
-    let has_regular_energiesteuer = invoice
-        .positions
-        .iter()
-        .any(|p| p.tags.iter().any(|t| t == "energiesteuer_gas"));
+    // The levy is billed in full: 50 000 × 0.55 ct = 275.00 EUR
+    let energiesteuer = invoice.total_by_tag("energiesteuer_gas");
+    assert_eq!(
+        energiesteuer.round_dp(2),
+        dec!(275.00),
+        "a § 53a Entlastung does not reduce what the supplier invoices"
+    );
     assert!(
-        !has_regular_energiesteuer,
-        "KWK invoice must NOT have regular Energiesteuer position"
+        !invoice
+            .positions
+            .iter()
+            .any(|p| p.tags.iter().any(|t| t == "energiesteuer_gas_befreiung")),
+        "§ 53a is not a Befreiung — no exemption notice may appear"
     );
 
-    // Exemption info position must be present
-    let has_exemption = invoice
-        .positions
-        .iter()
-        .any(|p| p.tags.iter().any(|t| t == "energiesteuer_gas_befreiung"));
-    assert!(
-        has_exemption,
-        "KWK invoice must have Energiesteuer Befreiung info position"
+    // …and the operator is told what to file, and on what.
+    let hinweis: Vec<_> = invoice.positions_by_tag("steuerentlastung").collect();
+    assert_eq!(hinweis.len(), 1);
+    assert!(hinweis[0].description.contains("275.00"));
+    assert_eq!(
+        hinweis[0].legal_basis.as_deref(),
+        Some("\u{a7} 53a EnergieStG")
     );
 
     // BEHG still applies: 50 000 × 1.3104 ct / 100 = 655.20 EUR
@@ -1049,12 +1074,18 @@ fn sect42c_energy_sharing_credit_reduces_effective_cost() {
     );
 }
 
-// ── CustomerKategorie — industrial Stromsteuer exemption ──────────────────────
+// ── Steuerbegünstigungen — Entlastung vs. Befreiung ───────────────────────────
 
-/// §9 Nr. 1 StromStG: industrial customers (Industrie category) with
-/// `industrie_stromsteuer_befreiung = true` must not have a Stromsteuer position.
+/// A large industrial customer is **not** exempt from Stromsteuer. § 9b StromStG
+/// is a Steuerentlastung it claims from the Hauptzollamt after being invoiced in
+/// full (permanent at the EU minimum rate since 01.01.2026: 20,00 of the
+/// 20,50 EUR/MWh, from 12 500 kWh a year).
+///
+/// Zero-rating the levy on a product boolean instead would leave the supplier's
+/// own Stromsteueranmeldung short by 1 025 EUR on this one invoice — the
+/// customer's later Entlastungsantrag does not repair that, it duplicates it.
 #[test]
-fn industrie_customer_stromsteuer_befreiung_removes_levy() {
+fn an_industrial_customer_is_billed_the_full_stromsteuer_and_told_about_9b() {
     use energy_billing::*;
     use rust_decimal::dec;
     use time::macros::date;
@@ -1078,7 +1109,7 @@ fn industrie_customer_stromsteuer_befreiung_removes_levy() {
         ..Default::default()
     };
     let tariff: Product = serde_json::from_str(
-        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":18.0,"industrie_stromsteuer_befreiung":true}"#,
+        r#"{"category":"STROM","arbeitspreis_ct_per_kwh":18.0,"steuerentlastungen":["STROMSTEUER9B"]}"#,
     )
     .unwrap();
 
@@ -1091,27 +1122,26 @@ fn industrie_customer_stromsteuer_befreiung_removes_levy() {
         .bill(ctx, &quantities)
         .unwrap();
 
-    // Stromsteuer levy position must be absent (§9 Nr. 1 StromStG exemption)
-    let stromsteuer_positions: Vec<_> = invoice
-        .positions
-        .iter()
-        .filter(|p| p.has_tag("stromsteuer"))
-        .collect();
+    // 50 000 kWh × 2,05 ct = 1 025,00 EUR, invoiced.
+    assert_eq!(
+        invoice.total_by_tag("stromsteuer").round_dp(2),
+        dec!(1025.00)
+    );
     assert!(
-        stromsteuer_positions.is_empty(),
-        "§9 StromStG: industrial exemption — no Stromsteuer position should appear"
+        !invoice
+            .positions
+            .iter()
+            .any(|p| p.has_tag("stromsteuer_befreiung")),
+        "§ 9b is not a Befreiung — no exemption notice may appear"
     );
 
-    // Instead, an informational exemption note with tag "stromsteuer_befreiung" should appear
-    let exemption_info: Vec<_> = invoice
+    let hinweis: Vec<_> = invoice
         .positions
         .iter()
-        .filter(|p| p.category == PositionCategory::Info && p.has_tag("stromsteuer_befreiung"))
+        .filter(|p| p.category == PositionCategory::Info && p.has_tag("steuerentlastung"))
         .collect();
-    assert!(
-        !exemption_info.is_empty(),
-        "§9 StromStG: industrial exemption must generate an informational position with tag 'stromsteuer_befreiung'"
-    );
+    assert_eq!(hinweis.len(), 1);
+    assert!(hinweis[0].description.contains("1025.00"));
 }
 
 // ── Outbound BO4E conformance ────────────────────────────────────────────────
@@ -1162,6 +1192,7 @@ fn emitted_invoices() -> Vec<(&'static str, energy_billing::Invoice)> {
         energiesteuer_gas_ct_per_kwh: dec!(0.55),
         behg_gas_ct_per_kwh: dec!(1.3104),
         mwst_rate: dec!(0.19),
+        mwst_rate_reduced: dec!(0.07),
     };
 
     let ctx = |nr: &str| BillingContext {
@@ -1224,4 +1255,771 @@ fn emitted_invoices() -> Vec<(&'static str, energy_billing::Invoice)> {
                 .expect("gas invoice"),
         ),
     ]
+}
+
+// ── Scenario 12: §41a EnWG — a dynamic tariff, end to end ────────────────────
+
+/// The full §41a invoice, computed by hand.
+///
+/// A ZVT customer on an iMSys, four quarter-hours of a January day:
+///
+/// | MTU (UTC) | kWh | EPEX ct/kWh | clamped into [0, 40] | + 3,0 Aufschlag | EUR |
+/// |---|---|---|---|---|---|
+/// | 11:00 | 0,500 | 8,00 | 8,00 | 11,00 | 0,05500 |
+/// | 11:15 | 0,250 | −2,00 | **0,00** (floor) | 3,00 | 0,00750 |
+/// | 11:30 | 1,000 | 45,00 | **40,00** (cap) | 43,00 | 0,43000 |
+/// | 11:45 | 0,750 | 12,00 | 12,00 | 15,00 | 0,11250 |
+/// | | **2,500** | | | | **0,60500** |
+///
+/// Then, on 2,5 kWh:
+/// - NNE Arbeitspreis 7,50 ct → 0,18750 EUR
+/// - Konzessionsabgabe 1,32 ct → 0,03300 EUR
+/// - Stromsteuer 2,05 ct → 0,05125 EUR
+/// - Grundpreis 30 ct/day × 31 days → 9,30 EUR
+///
+/// netto = 0,605 + 0,1875 + 0,033 + 0,05125 + 9,30 = **10,17675 EUR**
+/// MwSt 19 % on that = 1,93 EUR (rounded per rate) → brutto **12,10675 EUR**
+#[test]
+fn golden_sect41a_dynamic_day_reconciles_to_the_cent() {
+    use energy_billing::{DynamicInterval, MeteringMode};
+    use std::collections::HashMap;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "STROM",
+        "dynamic_epex": true,
+        "grundpreis_ct_per_day": 30.0,
+        "dynamic_aufschlag_ct_per_kwh": 3.0,
+        "dynamic_epex_floor_ct_kwh": 0.0,
+        "dynamic_epex_cap_ct_kwh": 40.0
+    }"#,
+    )
+    .unwrap();
+
+    let mtu = |m: u8| {
+        time::macros::datetime!(2026-01-15 11:00 UTC) + time::Duration::minutes(i64::from(m))
+    };
+    let mut prices = HashMap::new();
+    prices.insert(mtu(0), dec!(8.00));
+    prices.insert(mtu(15), dec!(-2.00));
+    prices.insert(mtu(30), dec!(45.00));
+    prices.insert(mtu(45), dec!(12.00));
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "GOLDEN-41A-001".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let grid = GridInput {
+        nne_arbeitspreis_ct_per_kwh: Some(dec!(7.50)),
+        ka_ct_per_kwh: Some(dec!(1.32)),
+        ..Default::default()
+    };
+    let quantities = Quantities {
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(2.5),
+            metering_mode: MeteringMode::Imsys,
+            ..Default::default()
+        }),
+        dynamic_intervals: vec![
+            DynamicInterval {
+                timestamp_utc: mtu(0),
+                kwh: dec!(0.5),
+            },
+            DynamicInterval {
+                timestamp_utc: mtu(15),
+                kwh: dec!(0.25),
+            },
+            DynamicInterval {
+                timestamp_utc: mtu(30),
+                kwh: dec!(1.0),
+            },
+            DynamicInterval {
+                timestamp_utc: mtu(45),
+                kwh: dec!(0.75),
+            },
+        ],
+        dynamic_epex_prices: prices,
+        ..Default::default()
+    };
+
+    let invoice = tariff
+        .build_engine(&grid, &rates)
+        .bill(ctx, &quantities)
+        .expect("a fully priced §41a day bills");
+    invoice.assert_valid();
+
+    // The energy leg, to the 10⁻⁵ EUR the engine works in.
+    assert_eq!(invoice.total_by_tag("§41a").round_dp(5), dec!(0.60500));
+    // …and each pass-through on the same 2,5 kWh.
+    assert_eq!(
+        invoice.total_by_tag("nne_arbeitspreis").round_dp(5),
+        dec!(0.18750)
+    );
+    assert_eq!(
+        invoice.total_by_tag("konzessionsabgabe").round_dp(5),
+        dec!(0.03300)
+    );
+    assert_eq!(
+        invoice.total_by_tag("stromsteuer").round_dp(5),
+        dec!(0.05125)
+    );
+    assert_eq!(invoice.total_by_tag("grundpreis").round_dp(2), dec!(9.30));
+
+    assert_eq!(invoice.netto_eur.round_dp(5), dec!(10.17675));
+    assert_eq!(invoice.mwst_eur.round_dp(2), dec!(1.93));
+    assert_eq!(invoice.brutto_eur.round_dp(5), dec!(12.10675));
+}
+
+/// The Arbeitspreis line states a **weighted-average** ct/kWh, and it has to be
+/// the one the amount actually implies — a customer checking the invoice
+/// divides the total by the kWh and expects the printed figure.
+#[test]
+fn golden_sect41a_average_price_matches_the_amount() {
+    use energy_billing::{DynamicInterval, MeteringMode};
+    use std::collections::HashMap;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0,
+             "dynamic_aufschlag_ct_per_kwh":2.0}"#,
+    )
+    .unwrap();
+    // Deliberately uneven: 3 kWh at 10 ct and 1 kWh at 30 ct average to 15 ct,
+    // not to the 20 ct an unweighted mean would give.
+    let t0 = time::macros::datetime!(2026-01-15 08:00 UTC);
+    let t1 = t0 + time::Duration::minutes(15);
+    let mut prices = HashMap::new();
+    prices.insert(t0, dec!(10.00));
+    prices.insert(t1, dec!(30.00));
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(4),
+                    metering_mode: MeteringMode::Imsys,
+                    ..Default::default()
+                }),
+                dynamic_intervals: vec![
+                    DynamicInterval {
+                        timestamp_utc: t0,
+                        kwh: dec!(3),
+                    },
+                    DynamicInterval {
+                        timestamp_utc: t1,
+                        kwh: dec!(1),
+                    },
+                ],
+                dynamic_epex_prices: prices,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+    let ap = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("§41a"))
+        .expect("Arbeitspreis position");
+    // (3 × 12 + 1 × 32) ct = 68 ct over 4 kWh = 17 ct/kWh.
+    assert_eq!(ap.net_eur.round_dp(5), dec!(0.68000));
+    assert_eq!(ap.quantity, dec!(4));
+    assert_eq!(
+        (ap.net_eur / ap.quantity * dec!(100)).round_dp(4),
+        dec!(17.0000)
+    );
+    assert!(
+        ap.description.contains("17.0000"),
+        "the printed average must be the one the amount implies: {:?}",
+        ap.description
+    );
+}
+
+/// **DST.** CET and CEST are whole-hour offsets, so a local quarter-hour is
+/// always a UTC quarter-hour and flooring in UTC needs no timezone conversion.
+///
+/// The days that prove it are the switches: 25 hours (100 MTUs) on the last
+/// Sunday in October and 23 hours (92 MTUs) on the last Sunday in March. Both
+/// are ordinary UTC sequences, and every interval must find its price.
+#[test]
+fn golden_sect41a_prices_every_mtu_of_a_dst_day() {
+    use energy_billing::{DynamicInterval, MeteringMode, mtu_start};
+    use std::collections::HashMap;
+
+    // 25.10.2026 is the last Sunday in October — the 25-hour day.
+    // 00:00 CEST = 22:00 UTC on the 24th; the day runs 100 quarter-hours.
+    for (label, start, mtus) in [
+        (
+            "Oct (25 h)",
+            time::macros::datetime!(2026-10-24 22:00 UTC),
+            100_i64,
+        ),
+        (
+            "Mar (23 h)",
+            time::macros::datetime!(2026-03-28 23:00 UTC),
+            92_i64,
+        ),
+    ] {
+        let mut prices = HashMap::new();
+        let mut intervals = Vec::new();
+        for i in 0..mtus {
+            let t = start + time::Duration::minutes(15 * i);
+            prices.insert(t, dec!(10.00));
+            // Offset the consumption timestamp inside its quarter-hour: the
+            // lookup must floor to the MTU, not match the instant.
+            intervals.push(DynamicInterval {
+                timestamp_utc: t + time::Duration::seconds(437),
+                kwh: dec!(1),
+            });
+            assert_eq!(mtu_start(t + time::Duration::seconds(437)), t, "{label}");
+        }
+
+        let tariff: Product = serde_json::from_str(
+            r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#,
+        )
+        .unwrap();
+        let rates = RegulatoryRates::default();
+        let ctx = BillingContext {
+            period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 12 - 31)).unwrap(),
+            regulatory_rates: rates.clone(),
+            ..Default::default()
+        };
+        let invoice = tariff
+            .build_engine(&GridInput::default(), &rates)
+            .bill(
+                ctx,
+                &Quantities {
+                    electricity: Some(MeterInput {
+                        arbeitsmenge_kwh: dec!(1) * rust_decimal::Decimal::from(mtus),
+                        metering_mode: MeteringMode::Imsys,
+                        ..Default::default()
+                    }),
+                    dynamic_intervals: intervals,
+                    dynamic_epex_prices: prices,
+                    ..Default::default()
+                },
+            )
+            .unwrap_or_else(|e| panic!("{label}: every MTU must be priced: {e}"));
+
+        // Every quarter-hour reached the bill: mtus kWh × 10 ct.
+        let expected = rust_decimal::Decimal::from(mtus) / dec!(10);
+        assert_eq!(
+            invoice.total_by_tag("§41a").round_dp(5),
+            expected,
+            "{label}"
+        );
+    }
+}
+
+/// A missing price in a **zero-consumption** quarter-hour costs nothing and is
+/// documented as harmless — so it must not block the run, while the very same
+/// gap in an interval that carries energy must.
+#[test]
+fn golden_sect41a_only_an_unpriced_kwh_blocks_the_run() {
+    use energy_billing::{DynamicInterval, MeteringMode};
+    use std::collections::HashMap;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0}"#,
+    )
+    .unwrap();
+    let t0 = time::macros::datetime!(2026-01-15 08:00 UTC);
+    let t1 = t0 + time::Duration::minutes(15);
+    let mut prices = HashMap::new();
+    prices.insert(t0, dec!(10.00)); // t1 deliberately unpriced
+
+    let rates = RegulatoryRates::default();
+    let run = |kwh_at_t1| {
+        let ctx = BillingContext {
+            period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+            regulatory_rates: rates.clone(),
+            ..Default::default()
+        };
+        tariff.build_engine(&GridInput::default(), &rates).bill(
+            ctx,
+            &Quantities {
+                electricity: Some(MeterInput {
+                    arbeitsmenge_kwh: dec!(5),
+                    metering_mode: MeteringMode::Imsys,
+                    ..Default::default()
+                }),
+                dynamic_intervals: vec![
+                    DynamicInterval {
+                        timestamp_utc: t0,
+                        kwh: dec!(5),
+                    },
+                    DynamicInterval {
+                        timestamp_utc: t1,
+                        kwh: kwh_at_t1,
+                    },
+                ],
+                dynamic_epex_prices: prices.clone(),
+                ..Default::default()
+            },
+        )
+    };
+
+    // Nothing consumed in the unpriced quarter-hour: bill the rest.
+    let ok = run(dec!(0)).expect("an unpriced empty interval is harmless");
+    assert_eq!(ok.total_by_tag("§41a").round_dp(5), dec!(0.50000));
+
+    // One watt-hour in it, and the invoice would silently under-bill.
+    let err = run(dec!(0.001)).expect_err("consumption without a price cannot be billed");
+    assert!(
+        err.to_string().contains("SECT41A_MISSING_EPEX_PRICES"),
+        "{err}"
+    );
+}
+
+// ── Scenario 13: Mieterstrom (§ 42a EnWG) ────────────────────────────────────
+
+/// The full Mieterstrom invoice, computed by hand.
+///
+/// A tenant in a building with a 60 kWp rooftop plant draws 250 kWh of solar in
+/// the month. The Mieterstrompreis is 24 ct/kWh; the local Grundversorgung
+/// Arbeitspreis is 30 ct/kWh, so **§ 42a Abs. 4 EnWG** caps the price at 27 ct
+/// and 24 ct is lawful.
+///
+/// - Arbeitspreis  250 kWh × 24 ct = **60,00 EUR**
+/// - Stromsteuer   **none** — § 9 Abs. 1 Nr. 3 lit. b StromStG: the plant is
+///   under 2 MW and the operator delivers to Letztverbraucher drawing the
+///   electricity im räumlichen Zusammenhang. The invoice *states* the ground.
+/// - MwSt 19 % on 60,00 = **11,40 EUR** → brutto **71,40 EUR**
+///
+/// The Mieterstromzuschlag (§ 21 Abs. 3 EEG 2023) appears nowhere: it is the
+/// Anlagenbetreiber's claim against the Netzbetreiber, settled by `einsd`.
+#[test]
+fn golden_mieterstrom_invoice_reconciles_and_states_its_ceiling() {
+    use energy_billing::SolarMeterInput;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "SOLAR",
+        "solar_arbeitspreis_ct_per_kwh": 24.0,
+        "grundversorgung_arbeitspreis_ct_per_kwh": 30.0,
+        "anlage_kwp": 60.0
+    }"#,
+    )
+    .unwrap();
+
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "GOLDEN-MS-001".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                solar: Some(SolarMeterInput {
+                    eigenverbrauch_kwh: dec!(250),
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("24 ct is inside the § 42a Abs. 4 ceiling");
+    invoice.assert_valid();
+
+    assert_eq!(
+        invoice.total_by_tag("arbeitspreis").round_dp(2),
+        dec!(60.00)
+    );
+    assert_eq!(invoice.netto_eur.round_dp(2), dec!(60.00));
+    assert_eq!(invoice.mwst_eur.round_dp(2), dec!(11.40));
+    assert_eq!(invoice.brutto_eur.round_dp(2), dec!(71.40));
+
+    // No Stromsteuer — and the ground is on the page, not merely absent.
+    assert_eq!(invoice.total_by_tag("stromsteuer"), dec!(0));
+    let exemption = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("stromsteuer_befreiung"))
+        .expect("§ 9 Abs. 1 Nr. 3 StromStG must be stated");
+    assert_eq!(
+        exemption.legal_basis.as_deref(),
+        Some("§ 9 Abs. 1 Nr. 3 StromStG")
+    );
+    assert_eq!(exemption.net_eur, dec!(0));
+
+    // The § 42a Abs. 4 ceiling is stated too, so a tenant can check it.
+    let cap = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("preisobergrenze"))
+        .expect("the 90 % ceiling belongs on the page");
+    assert_eq!(cap.legal_basis.as_deref(), Some("§ 42a Abs. 4 EnWG"));
+    assert!(cap.description.contains("27.0000"), "{}", cap.description);
+
+    // The § 21 Abs. 3 EEG Zuschlag is somebody else's claim.
+    assert!(
+        !invoice
+            .positions
+            .iter()
+            .any(|p| p.description.contains("Zuschlag")),
+        "the Mieterstromzuschlag is settled by einsd, never billed to the tenant"
+    );
+}
+
+/// **§ 42a Abs. 4 EnWG is a ceiling, and the boundary is exact.**
+///
+/// 90 % of 30 ct is 27 ct. At 27,00 the invoice bills; one hundredth of a cent
+/// above it there is no lawful invoice to issue, so the run is refused rather
+/// than producing one an operator would have to unwind.
+#[test]
+fn golden_mieterstrom_ceiling_is_exact_at_ninety_percent() {
+    use energy_billing::SolarMeterInput;
+
+    let rates = RegulatoryRates::default();
+    let bill_at = |ms_ct: &str| {
+        let tariff: Product = serde_json::from_str(&format!(
+            r#"{{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":{ms_ct},
+                 "grundversorgung_arbeitspreis_ct_per_kwh":30.0}}"#
+        ))
+        .unwrap();
+        let ctx = BillingContext {
+            period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+            regulatory_rates: rates.clone(),
+            ..Default::default()
+        };
+        tariff.build_engine(&GridInput::default(), &rates).bill(
+            ctx,
+            &Quantities {
+                solar: Some(SolarMeterInput {
+                    eigenverbrauch_kwh: dec!(100),
+                }),
+                ..Default::default()
+            },
+        )
+    };
+
+    assert!(bill_at("26.99").is_ok(), "below the ceiling");
+    assert!(bill_at("27.00").is_ok(), "exactly at the ceiling is lawful");
+    let err = bill_at("27.01").expect_err("above the ceiling there is no lawful invoice");
+    assert!(
+        err.to_string()
+            .contains("MIETERSTROM_UEBER_90PCT_GRUNDVERSORGUNG"),
+        "{err}"
+    );
+}
+
+/// Without a stated Grundversorgungstarif there is nothing to cap against, so
+/// the engine bills what it was told — the ceiling is a check on a comparison
+/// the operator supplies, not a figure the engine can invent.
+#[test]
+fn golden_mieterstrom_without_a_reference_tariff_bills_unchecked() {
+    use energy_billing::SolarMeterInput;
+
+    let tariff: Product =
+        serde_json::from_str(r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":35.0}"#)
+            .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                solar: Some(SolarMeterInput {
+                    eigenverbrauch_kwh: dec!(100),
+                }),
+                ..Default::default()
+            },
+        )
+        .expect("no reference tariff, no comparison");
+    assert_eq!(invoice.netto_eur.round_dp(2), dec!(35.00));
+    assert!(
+        !invoice
+            .positions
+            .iter()
+            .any(|p| p.has_tag("preisobergrenze")),
+        "nothing to state without a Grundversorgungstarif"
+    );
+}
+
+/// A Mieterstrom supply that does **not** qualify for § 9 Abs. 1 Nr. 3 — a
+/// plant over 2 MW, or delivery beyond the räumlicher Zusammenhang — is taxed
+/// like any other supply, and the product says so.
+#[test]
+fn golden_mieterstrom_outside_the_exemption_is_taxed() {
+    use energy_billing::SolarMeterInput;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"SOLAR","solar_arbeitspreis_ct_per_kwh":24.0,
+             "stromsteuer_tarif":{"art":"REGEL"}}"#,
+    )
+    .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                solar: Some(SolarMeterInput {
+                    eigenverbrauch_kwh: dec!(250),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    // 250 kWh × 2,05 ct = 5,125 EUR of Stromsteuer, on top of the 60,00 supply.
+    assert_eq!(
+        invoice.total_by_tag("stromsteuer").round_dp(5),
+        dec!(5.12500)
+    );
+    assert_eq!(invoice.netto_eur.round_dp(5), dec!(65.12500));
+    assert_eq!(invoice.positions_by_tag("stromsteuer_befreiung").count(), 0);
+}
+
+/// **§ 42b EnWG GGV** — the hybrid split, computed by hand.
+///
+/// A participant consumes 400 kWh in the month and is allocated 300 kWh of the
+/// building's PV. The remaining 100 kWh comes off the grid.
+///
+/// - PV portion    300 kWh × 24 ct = 72,00 EUR, less the 3 ct GGV-Rabatt
+///   (300 × 3 ct = 9,00) = **63,00 EUR**, no Stromsteuer (§ 9 Abs. 1 Nr. 3)
+/// - Grid portion  100 kWh × 32 ct = **32,00 EUR**, plus Stromsteuer
+///   100 × 2,05 ct = **2,05 EUR** — grid electricity is taxed
+///
+/// netto = 63,00 + 32,00 + 2,05 = **97,05 EUR**
+#[test]
+fn golden_ggv_splits_pv_and_grid_and_taxes_only_the_grid() {
+    use energy_billing::GgvSolarInput;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{
+        "category": "SOLAR",
+        "solar_arbeitspreis_ct_per_kwh": 24.0,
+        "arbeitspreis_ct_per_kwh": 32.0,
+        "gemeinschaft_rabatt_ct_per_kwh": 3.0
+    }"#,
+    )
+    .unwrap();
+    let rates = RegulatoryRates::default();
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        rechnungsnummer: "GOLDEN-GGV-001".to_owned(),
+        period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+        regulatory_rates: rates.clone(),
+        ..Default::default()
+    };
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &rates)
+        .bill(
+            ctx,
+            &Quantities {
+                ggv_solar: Some(GgvSolarInput {
+                    pv_allocated_kwh: dec!(300),
+                    actual_consumption_kwh: dec!(400),
+                }),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    invoice.assert_valid();
+
+    assert_eq!(invoice.total_by_tag("ggv_pv").round_dp(2), dec!(63.00));
+    assert_eq!(invoice.total_by_tag("ggv_grid").round_dp(2), dec!(34.05));
+    assert_eq!(invoice.netto_eur.round_dp(2), dec!(97.05));
+
+    // The PV portion is exempt and says so; the grid portion is taxed.
+    assert_eq!(
+        invoice.total_by_tag("stromsteuer").round_dp(5),
+        dec!(2.05000)
+    );
+    assert_eq!(invoice.positions_by_tag("stromsteuer_befreiung").count(), 1);
+
+    // …and the coverage ratio a participant checks their allocation against.
+    let cov = invoice
+        .positions
+        .iter()
+        .find(|p| p.has_tag("ggv_coverage"))
+        .expect("coverage line");
+    assert!(cov.description.contains("75"), "{}", cov.description);
+}
+
+/// A **year** of hourly intervals still reconciles exactly.
+///
+/// `billing::DynamicPricing` accumulates the interval products as exact
+/// `Decimal` and reduces once at the end. Reducing each product to five
+/// decimals before adding instead accumulates a bias that a single billed day
+/// cannot show — the golden day above is 96 quarter-hours, and the drift only
+/// becomes visible over thousands of intervals.
+///
+/// So this bills 8 760 hourly intervals against prices that do not divide
+/// cleanly, and asserts the total against the sum computed the exact way. A
+/// re-introduced per-product rounding fails here and nowhere else.
+#[test]
+fn golden_sect41a_a_year_of_intervals_does_not_drift() {
+    use energy_billing::{DynamicInterval, MeteringMode};
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0.0}"#,
+    )
+    .unwrap();
+
+    let start = time::macros::datetime!(2026-01-01 00:00 UTC);
+    let hours = 8_760_i64;
+
+    // Quantities and prices chosen so neither the product nor the average is
+    // representable in five decimals: 1/3 kWh at a price that cycles through
+    // thirds of a cent.
+    let mut intervals = Vec::with_capacity(hours as usize);
+    let mut prices = HashMap::new();
+    let mut expected_net = Decimal::ZERO;
+    for h in 0..hours {
+        let at = start + time::Duration::hours(h);
+        let kwh = dec!(0.333);
+        let price_ct = dec!(7.777) + Decimal::from(h % 13) * dec!(0.011);
+        intervals.push(DynamicInterval {
+            timestamp_utc: at,
+            kwh,
+        });
+        prices.insert(at, price_ct);
+        expected_net += kwh * price_ct / dec!(100);
+    }
+
+    let (f, t) = (date!(2026 - 01 - 01), date!(2026 - 12 - 31));
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "GOLD-41A-YEAR".to_owned(),
+        period: BillingPeriod::new(f, t).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: RegulatoryRates::default(),
+        ..Default::default()
+    };
+    let q = Quantities {
+        dynamic_intervals: intervals,
+        dynamic_epex_prices: prices,
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(0.333) * Decimal::from(hours),
+            metering_mode: MeteringMode::Imsys,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &RegulatoryRates::default())
+        .bill(ctx, &q)
+        .expect("a full year of priced intervals bills");
+
+    // The energy line, against the exact sum. Two cents of tolerance covers the
+    // single documented rounding to the cent, and nothing else.
+    let billed = invoice.total_by_tag("§41a");
+    let drift = (billed - expected_net).abs();
+    assert!(
+        drift < dec!(0.02),
+        "a year of intervals drifted by {drift} EUR (billed {billed}, exact {expected_net}) \
+         — the per-interval products are being rounded before they are summed"
+    );
+}
+
+/// **PEPPOL-EN16931-R120**: a line's stated unit price must multiply out to its
+/// amount, within ±0.02.
+///
+/// The §41a Arbeitspreis states a *weighted average* price, which is a rounded
+/// figure, against the exact sum of the priced intervals. Rounding the displayed
+/// price is right — a customer reads it — but the further it is rounded and the
+/// more energy it multiplies, the further the product drifts from the amount
+/// beside it. At a year's consumption that drift is what a PEPPOL receiver
+/// rejects on.
+#[test]
+fn golden_sect41a_price_times_quantity_matches_the_amount() {
+    use energy_billing::{DynamicInterval, MeteringMode, PositionCategory};
+    use rust_decimal::Decimal;
+    use std::collections::HashMap;
+
+    let tariff: Product = serde_json::from_str(
+        r#"{"category":"STROM","dynamic_epex":true,"grundpreis_ct_per_day":0.0}"#,
+    )
+    .unwrap();
+
+    let start = time::macros::datetime!(2026-01-01 00:00 UTC);
+    let hours = 8_760_i64;
+    let mut intervals = Vec::with_capacity(hours as usize);
+    let mut prices = HashMap::new();
+    for h in 0..hours {
+        let at = start + time::Duration::hours(h);
+        intervals.push(DynamicInterval {
+            timestamp_utc: at,
+            kwh: dec!(2000.0),
+        });
+        prices.insert(at, dec!(7.777) + Decimal::from(h % 13) * dec!(0.011));
+    }
+
+    let (f, t) = (date!(2026 - 01 - 01), date!(2026 - 12 - 31));
+    let ctx = BillingContext {
+        malo_id: "51238696781".to_owned(),
+        lf_mp_id: "9900000000001".to_owned(),
+        rechnungsnummer: "GOLD-R120".to_owned(),
+        period: BillingPeriod::new(f, t).unwrap(),
+        invoice_type: InvoiceType::Initial,
+        regulatory_rates: RegulatoryRates::default(),
+        ..Default::default()
+    };
+    let q = Quantities {
+        dynamic_intervals: intervals,
+        dynamic_epex_prices: prices,
+        electricity: Some(MeterInput {
+            arbeitsmenge_kwh: dec!(2000.0) * Decimal::from(hours),
+            metering_mode: MeteringMode::Imsys,
+            ..Default::default()
+        }),
+        ..Default::default()
+    };
+
+    let invoice = tariff
+        .build_engine(&GridInput::default(), &RegulatoryRates::default())
+        .bill(ctx, &q)
+        .expect("bills");
+
+    for p in invoice
+        .positions
+        .iter()
+        .filter(|p| p.category != PositionCategory::Info && p.quantity != Decimal::ZERO)
+    {
+        let product = p.quantity * p.unit_price_eur;
+        let drift = (product - p.net_eur).abs();
+        assert!(
+            drift <= dec!(0.02),
+            "PEPPOL-EN16931-R120: {:?} states {} x {} = {} but its amount is {} \
+             (drift {drift})",
+            p.description,
+            p.quantity,
+            p.unit_price_eur,
+            product,
+            p.net_eur
+        );
+    }
 }

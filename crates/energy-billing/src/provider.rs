@@ -1,4 +1,4 @@
-//! `BillingProvider` trait and `SpotPriceSource` abstraction.
+//! The `BillingProvider` trait — one implementation per product type.
 //!
 //! Every product type (electricity, gas, EEG feed-in, HEMS…) implements
 //! `BillingProvider`. The `BillingEngine` orchestrates them in order.
@@ -28,29 +28,7 @@ use crate::position::{BillingPosition, BillingWarning};
 
 pub use crate::quantities::Quantities;
 
-// ── SpotPriceSource ───────────────────────────────────────────────────────────
-
-/// Abstraction over spot electricity price sources.
-///
-/// Decouples the §41a EnWG dynamic tariff implementation from any specific
-/// exchange (EPEX, NordPool, Tibber, aWATTar, etc.).
-///
-/// ## Extension
-///
-/// Implement this trait to add:
-/// - `NordPoolSource` (Nordic / Baltic day-ahead)
-/// - `TibberSource` (real-time pricing)
-/// - `aWATTarSource`
-/// - `EntsoESource` (ENTSO-E transparency platform)
-pub trait SpotPriceSource: Send + Sync {
-    /// Price in ct/kWh for the given UTC timestamp.
-    ///
-    /// Returns `None` when price data is unavailable for the timestamp.
-    fn price_ct_kwh(&self, timestamp_utc: time::OffsetDateTime) -> Option<rust_decimal::Decimal>;
-
-    /// Source name for billing position labels (e.g. `"EPEX Spot Day-Ahead"`).
-    fn source_name(&self) -> &str;
-}
+// ── Market time unit ──────────────────────────────────────────────────────────
 
 /// Market Time Unit (MTU) length for the EPEX day-ahead auction, in minutes.
 ///
@@ -63,33 +41,23 @@ pub const MTU_MINUTES: i64 = 15;
 ///
 /// CET/CEST are whole-hour offsets, so a local quarter-hour boundary is always
 /// a UTC quarter-hour boundary — flooring in UTC is therefore DST-safe and
-/// needs no timezone conversion. This is the canonical spot-price map key.
+/// needs no timezone conversion. This is the canonical spot-price map key:
+/// [`Quantities::dynamic_epex_prices`](crate::Quantities::dynamic_epex_prices)
+/// is keyed on it, and a consumption interval is floored to it before lookup.
+///
+/// There is deliberately no `SpotPriceSource` trait behind this. One existed,
+/// with one implementation over a `HashMap` and a documented invitation to add
+/// NordPool and Tibber adapters; every construction path in the workspace
+/// passed it an **empty** map and priced from `dynamic_epex_prices` anyway. A
+/// seam nothing enters is not an extension point, it is a second code path to
+/// keep correct — and this one hid the price lookup behind a `dyn` call that
+/// could return `None` for reasons the caller could not see.
 #[must_use]
 pub fn mtu_start(timestamp_utc: time::OffsetDateTime) -> time::OffsetDateTime {
     let step = MTU_MINUTES * 60;
     let secs = timestamp_utc.unix_timestamp();
     let floored = secs - secs.rem_euclid(step);
     time::OffsetDateTime::from_unix_timestamp(floored).unwrap_or(timestamp_utc)
-}
-
-/// EPEX Spot Day-Ahead price lookup map.
-///
-/// Key: the UTC start instant of the 15-minute market time unit ([`mtu_start`]).
-/// Value: spot price in ct/kWh. DST-safe and resolution-agnostic — a lookup
-/// floors any timestamp to its quarter-hour before matching.
-pub struct EpexSpotSource {
-    /// Maps the quarter-hour MTU start (UTC) → ct/kWh.
-    pub prices: std::collections::HashMap<time::OffsetDateTime, rust_decimal::Decimal>,
-}
-
-impl SpotPriceSource for EpexSpotSource {
-    fn price_ct_kwh(&self, timestamp_utc: time::OffsetDateTime) -> Option<rust_decimal::Decimal> {
-        self.prices.get(&mtu_start(timestamp_utc)).copied()
-    }
-
-    fn source_name(&self) -> &str {
-        "EPEX Spot Day-Ahead"
-    }
 }
 
 // ── BillingProvider trait ─────────────────────────────────────────────────────

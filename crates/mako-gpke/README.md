@@ -98,6 +98,11 @@ spawn a new process; the `invoicd` daemon listens for
 `gpke.abrechnung.ablehnen` (→ COMDIS) on the Command API. Inbound REMADV and
 COMDIS from the NB are handled via `ReceiveRemadv` and `ReceiveComdis` commands.
 
+The state machine itself is not this crate's: all four INVOIC billing families
+(GPKE, WiM, GaBi Gas, GeLi Gas) share `mako-invoic`, and this crate declares
+only the family — its PID set, its deadline label, and which of the two roles
+the deployment plays.
+
 | PID   | Process name                                  | Status          |
 |-------|-----------------------------------------------|-----------------|
 | 31001 | Abschlagsrechnung (Netznutzung)               | ✅ Implemented  |

@@ -163,19 +163,35 @@ pub fn validate(model: &en16931::Invoice) -> en16931::validation::ValidationRepo
     }
 }
 
-/// Log any fatal conformance finding against the declared profile.
+/// Log the conformance findings against the declared profile.
+///
+/// Both severities, because they mean different things and only one is a
+/// blocker. KoSIT publishes five of XRechnung's own narrowings — `BR-DE-17`,
+/// `BR-DE-21`, `BR-DE-26`, `BR-DE-27`, `BR-DE-28` — as **warnings**, so a
+/// receiver does not reject on them and neither does the dispatch gate. That
+/// makes them invisible unless they are said out loud: a BT-24 naming an
+/// unpublished XRechnung version is a warning, and it is still wrong.
 fn report_conformance(model: &en16931::Invoice, invoice_number: &str) {
     let report = validate(model);
-    let fatal: Vec<String> = report
-        .fatal()
-        .map(|f| format!("{} at {}", f.rule, f.path))
-        .collect();
+    let render = |f: &en16931::validation::Finding| format!("{} at {}", f.rule, f.path);
+
+    let fatal: Vec<String> = report.fatal().map(render).collect();
     if !fatal.is_empty() {
         tracing::warn!(
             invoice_number,
             findings = %fatal.join(", "),
             "e-invoice: the stored model does not satisfy the profile it declares \
              in BT-24 — a receiving validator will reject it",
+        );
+    }
+
+    let warnings: Vec<String> = report.warnings().map(render).collect();
+    if !warnings.is_empty() {
+        tracing::info!(
+            invoice_number,
+            findings = %warnings.join(", "),
+            "e-invoice: conformance warnings against the declared profile — a \
+             receiver accepts the document, but the terms they name are wrong",
         );
     }
 }
@@ -196,18 +212,17 @@ pub const BUSINESS_PROCESS: &str = "urn:fdc:peppol.eu:2017:poacc:billing:01:1.0"
 ///
 /// Also stamps BT-23 business process and the BG-16 SEPA payment instruction
 /// (BT-81 means code 58 + BT-84 seller IBAN).
-#[must_use]
 pub fn build(
     invoice: &Invoice,
     cfg: &BillingdConfig,
     malo_id: &str,
     buyer: Option<&crate::clients::Rechnungsempfaenger>,
-) -> en16931::Invoice {
+) -> Result<en16931::Invoice, energy_billing::EngineError> {
     let mut model = invoice.to_en16931(
         EN16931_SPEC_ID,
         seller_party(cfg),
         buyer_party(malo_id, buyer),
-    );
+    )?;
     model.business_process = Some(BUSINESS_PROCESS.to_owned());
     if let Some(iban) = cfg.seller_iban.clone() {
         model.payment = Some(en16931::invoice::PaymentInstructions {
@@ -225,7 +240,7 @@ pub fn build(
         });
     }
     report_conformance(&model, model.number.as_deref().unwrap_or("<no number>"));
-    model
+    Ok(model)
 }
 
 /// Map and persist the EN 16931 model for a record, in the caller's transaction.
@@ -238,9 +253,34 @@ pub async fn store(
     cfg: &BillingdConfig,
     malo_id: &str,
     buyer: Option<&crate::clients::Rechnungsempfaenger>,
-) -> anyhow::Result<()> {
-    let model = build(invoice, cfg, malo_id, buyer);
-    crate::pg::attach_en16931(exec, record_id, &serde_json::to_value(&model)?).await
+) -> crate::error::BillingResult<()> {
+    // `to_en16931` refuses an invoice the standard cannot represent — today,
+    // one mixing a not-subject-to-VAT line with any other category
+    // (BR-O-11 ff.: a hoheitliche Abwassergebühr beside taxable Trinkwasser,
+    // which is how most German municipalities bill).
+    //
+    // That is **not** a reason to refuse the invoice: the paper document is
+    // lawful, and over 90 % of municipalities issue exactly it. So the record is
+    // written, the reason is stored on it, and the e-invoicing endpoints answer
+    // with that reason instead of "re-run the calculation" — advice that would
+    // produce the same refusal. Any other mapping failure is a genuine fault
+    // and propagates.
+    let model = match build(invoice, cfg, malo_id, buyer) {
+        Ok(m) => m,
+        Err(e @ energy_billing::EngineError::ValidationBlocked { .. }) => {
+            tracing::warn!(
+                %record_id, %malo_id,
+                reason = %e,
+                "billingd: invoice has no valid EN 16931 representation — stored as a                  paper-only document"
+            );
+            crate::pg::attach_en16931_blocked(exec, record_id, &e.to_string()).await?;
+            return Ok(());
+        }
+        Err(e) => return Err(e.into()),
+    };
+    let json = serde_json::to_value(&model).map_err(anyhow::Error::from)?;
+    crate::pg::attach_en16931(exec, record_id, &json).await?;
+    Ok(())
 }
 
 /// Persist an already-built model (used by the correction path, which credits an

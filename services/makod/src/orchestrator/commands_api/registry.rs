@@ -756,6 +756,11 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // both Sparten (NB/GNB, LF variants, MSB, BKV, ESA for WiM Strom Teil 2).
     CommandDescriptor {
         name: "invoic.stornorechnung.annehmen",
+        // The union of every family's recipients, because 31004 cancels an
+        // invoice from any of them — `Nmsb` receives the Storno of a WiM 31003
+        // (MSBA → MSBN), `Mgv` that of a GaBi 31007/31008 (NB → MGV).
+        // `the_storno_answers_every_family_it_cancels` derives the set rather
+        // than trusting this list.
         permitted_roles: &[
             Marktrolle::Nb,
             Marktrolle::Gnb,
@@ -764,7 +769,9 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Lfn,
             Marktrolle::Lfa,
             Marktrolle::Msb,
+            Marktrolle::Nmsb,
             Marktrolle::Bkv,
+            Marktrolle::Mgv,
             Marktrolle::Esa,
         ],
         primary_pid: pid(31004),
@@ -772,6 +779,11 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     },
     CommandDescriptor {
         name: "invoic.stornorechnung.ablehnen",
+        // The union of every family's recipients, because 31004 cancels an
+        // invoice from any of them — `Nmsb` receives the Storno of a WiM 31003
+        // (MSBA → MSBN), `Mgv` that of a GaBi 31007/31008 (NB → MGV).
+        // `the_storno_answers_every_family_it_cancels` derives the set rather
+        // than trusting this list.
         permitted_roles: &[
             Marktrolle::Nb,
             Marktrolle::Gnb,
@@ -780,7 +792,9 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
             Marktrolle::Lfn,
             Marktrolle::Lfa,
             Marktrolle::Msb,
+            Marktrolle::Nmsb,
             Marktrolle::Bkv,
+            Marktrolle::Mgv,
             Marktrolle::Esa,
         ],
         primary_pid: pid(31004),
@@ -830,16 +844,19 @@ pub(crate) static COMMAND_REGISTRY: &[CommandDescriptor] = &[
     // GaBi Gas MMM-Rechnung (PIDs 31007/31008): NB bills MGV for
     // Mehr-/Mindermengen Gas settlement. BKV/MGV receives and settles/disputes.
     CommandDescriptor {
-        name: "gabi.mmm.rechnung.annehmen",
-        permitted_roles: &[Marktrolle::Bkv],
+        name: "gabi.rechnung.annehmen",
+        // One workflow answers the whole GaBi Gas billing family, and its three
+        // PIDs reach two different roles: the **MGV** receives the aggregated
+        // MMM-Rechnung 31007/31008, the **BKV** the Kapazitätsrechnung 31010.
+        permitted_roles: &[Marktrolle::Bkv, Marktrolle::Mgv],
         primary_pid: pid(31007),
-        dispatch: cmd_gabi_gas_mmm_rechnung_annehmen,
+        dispatch: cmd_gabi_gas_rechnung_annehmen,
     },
     CommandDescriptor {
-        name: "gabi.mmm.rechnung.ablehnen",
-        permitted_roles: &[Marktrolle::Bkv],
+        name: "gabi.rechnung.ablehnen",
+        permitted_roles: &[Marktrolle::Bkv, Marktrolle::Mgv],
         primary_pid: pid(31007),
-        dispatch: cmd_gabi_gas_mmm_rechnung_ablehnen,
+        dispatch: cmd_gabi_gas_rechnung_ablehnen,
     },
     // ── MABIS Bilanzkreisabrechnung ────────────────────────────────────────────
     CommandDescriptor {

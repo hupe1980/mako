@@ -27,9 +27,11 @@ use super::*;
 /// 1. Records the erasure request in `gdpr_deletions` (idempotent on
 ///    `malo_id + tenant`).
 /// 2. Destroys the MaLo's subject mapping in meterstore's registry
-///    ([`SubjectRegistry::erase_in`]) — the readings in both tiers become
-///    unattributable. Skipped when the MaLo has no mapping (never stored, or
-///    already erased), which is recorded rather than treated as an error.
+///    ([`SubjectRegistry::erase_in`]) — the intervals, the ESA Typ-2 values and
+///    the Zählerstandsgang become unattributable in both tiers at once. One
+///    registry spans the catalog's tables, so this is one destruction rather
+///    than three. Skipped when the MaLo has no mapping (never stored, or already
+///    erased), which is recorded rather than treated as an error.
 /// 3. Rewrites `malo_id` to the (now unmapped) subject reference in every table
 ///    whose rows are Buchungsbelege — `meter_read_corrections`,
 ///    `substitute_value_log`, `meter_data_receipts`, `ablese_auftraege`,
@@ -253,13 +255,13 @@ pub(crate) async fn post_gdpr_erasure(
 
     // Buchungsbeleg-bearing: the values must survive, the identity must not.
     //
-    // `meter_readings` is the Zählerstandsgang — the *primary* measurement behind
-    // every derived interval, and the source of the § 40 Abs. 2 Nr. 6 EnWG
-    // opening/closing reading on an invoice. It is exactly as personal as the
-    // readings in the lake and exactly as retained: pseudonymised, never dropped.
-    // `zsg_conversion_log` says why a given quarter-hour has no measured value,
-    // which is the other half of a § 60 Abs. 2 substitution's justification.
-    pseudonymise!("pseudonymise_readings", "meter_readings");
+    // The Zählerstandsgang itself is **not** here. It is a meterstore point
+    // table with its own `subject_ref`, so destroying the subject mapping
+    // unlinks it in both tiers exactly as it unlinks the intervals — the same
+    // mechanism, not a second one. `zsg_conversion_log` stays: it says why a
+    // given quarter-hour has no measured value, which is the other half of a
+    // § 60 Abs. 2 substitution's justification, and it is an edmd audit table
+    // rather than a measurement.
     pseudonymise!("pseudonymise_zsg_log", "zsg_conversion_log");
     pseudonymise!("pseudonymise_corrections", "meter_read_corrections");
     pseudonymise!("pseudonymise_substitute_log", "substitute_value_log");
@@ -333,7 +335,7 @@ pub(crate) async fn post_gdpr_erasure(
             "legal_basis":      "DSGVO Art. 17; Art. 17 Abs. 3 lit. b for the retained \
                                  Buchungsbelege (§ 147 Abs. 1 AO)",
             "pseudonymised": [
-                "meter_readings", "zsg_conversion_log", "meter_read_corrections",
+                "zsg_conversion_log", "meter_read_corrections",
                 "substitute_value_log", "meter_data_receipts", "ablese_auftraege",
                 "gas_quality_data",
             ],

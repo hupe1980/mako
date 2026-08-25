@@ -1166,7 +1166,17 @@ fn settle_normal_body(input: &SettleInput) -> SettleOutput {
             // Source: EEG 2023 §51b, Clearingstelle EEG|KWKG Working Text 23.12.2025.
             // "verringert sich der anzulegende Wert auf null für Zeiträume, in denen
             //  der Spotmarktpreis 2 Cent pro Kilowattstunde oder weniger beträgt."
-            if input.tariff_source.is_biogas_sect51b() && epex_ct <= dec!(2) {
+            //
+            // § 101 Abs. 2 put § 51b under a Genehmigungsvorbehalt; the European
+            // Commission granted it on 18.09.2025, and § 51b names no fallback
+            // version, so there was nothing to apply before that day. A
+            // settlement of an earlier period must not zero the AW — near-zero
+            // spot prices were common well before then, and doing so withholds a
+            // payment that was owed.
+            if input.tariff_source.is_biogas_sect51b()
+                && crate::version::sect51b_anwendbar(input.billing_date)
+                && epex_ct <= dec!(2)
+            {
                 // AW = 0 for this period; payment is zero.
                 return SettleOutput {
                     settlement_eur: Some(Decimal::ZERO),

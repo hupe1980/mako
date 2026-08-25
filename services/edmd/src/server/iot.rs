@@ -546,6 +546,7 @@ pub(crate) async fn post_iot_reads(
                 "issue_count":         validation.issue_count,
                 "billing_block_count": validation.billing_block_count,
                 "rules":               validation.rules,
+                "skipped_rules":      validation.skipped_rules,
             },
             "legal_basis": "HeizkostenV §5 Abs. 3 / §6a; MessEG §37",
         })),

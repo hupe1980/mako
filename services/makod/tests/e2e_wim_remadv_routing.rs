@@ -24,7 +24,8 @@ use mako_engine::{
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
-use mako_wim::invoic::{WimInvoicCommand, WimInvoicWorkflow};
+use mako_invoic::InvoicCommand;
+use mako_wim::invoic::WimInvoicWorkflow;
 use makod::ingest_dispatcher::{EdifactIngestDispatcher, IngestOutcome};
 
 const OWN_MP: &str = "9900357000004"; // UNB recipient (our own party) in the fixture
@@ -76,7 +77,7 @@ async fn spawn_wim_invoic(store: &SlateDbStore, tenant: TenantId, invoice_ref: &
     );
     let process_id = process.process_id();
     process
-        .execute(WimInvoicCommand::SendInvoic {
+        .execute(InvoicCommand::SendInvoic {
             pid: Pruefidentifikator::new(31009).unwrap(),
             sender: MarktpartnerCode::new("4012345000023"), // MSB invoicer
             recipient: MarktpartnerCode::new(OWN_MP),       // NB/LF/ESA payer

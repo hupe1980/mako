@@ -982,6 +982,14 @@ let settlement = grid_billing::settle_mmm(&input).unwrap();
 `validate_mmm_input` / `validate_msb_input` / `validate_gas_awh_input` exist
 for the settlement types where a pre-flight warning list is useful.)
 
+**Running them is not optional.** `ValidationResult::is_valid` goes false on any
+`Error`-severity finding, and for a long time nothing read it: the engine
+computed the finding, attached it to the result, and the service billed the
+settlement anyway. An MSB input with `billing_months = 0` produced a Grundgebühr
+of nothing; a Gas-AWH input with no positions produced an empty invoice — both
+sent to a counterparty who then had to dispute them back. `netzbilanzd` and
+`invoicd` now refuse an invalid input before settling, naming the finding.
+
 ### Service-layer conversion to BO4E `Rechnung`
 
 ```rust,no_run

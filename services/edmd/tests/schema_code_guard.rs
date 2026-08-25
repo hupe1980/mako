@@ -132,19 +132,18 @@ fn superseded_column_names_are_gone() {
 fn rule_type_check_matches_the_aggregation_rule_enum() {
     let ddl = ddl_of(&migration(), "virtual_meter_configs");
 
-    // Externally-tagged serde: the JSON tag is the variant name verbatim.
-    const VARIANTS: [&str; 5] = [
-        "Sum",
-        "Residual",
-        "PvSelfConsumption",
-        "GgvConstantAllocation",
-        "GgvProportionalAllocation",
-    ];
+    // Internally-tagged serde: the JSON `kind` field is `VirtualMeterKind::as_str`,
+    // and the column stores the same string. Derived from the enum, so a new
+    // variant fails here rather than becoming an unreadable row.
+    let variants: Vec<&'static str> = metering::VirtualMeterKind::ALL
+        .iter()
+        .map(|k| k.as_str())
+        .collect();
 
-    for v in VARIANTS {
+    for v in &variants {
         assert!(
             ddl.contains(&format!("'{v}'")),
-            "AggregationRule::{v} is missing from the rule_type CHECK"
+            "AggregationRule {v} is missing from the rule_type CHECK"
         );
     }
 
@@ -172,8 +171,8 @@ fn rule_type_check_matches_the_aggregation_rule_enum() {
 
     assert_eq!(
         listed.len(),
-        VARIANTS.len(),
-        "rule_type CHECK lists {listed:?}, AggregationRule has {VARIANTS:?}"
+        variants.len(),
+        "rule_type CHECK lists {listed:?}, AggregationRule has {variants:?}"
     );
 }
 
@@ -237,19 +236,28 @@ fn ablese_auftraege_auftraggeber_rolle_admits_esa() {
     }
 }
 
-/// A round-trip proving the variant names are the real serde tags, so the
-/// hardcoded list above cannot quietly go stale.
+/// A round-trip proving the stored `rule_type` is the tag inside `rule_json`.
+///
+/// `AggregationRule` is internally tagged, so the document carries its own
+/// discriminator in `kind`. If the column and the document ever disagreed, a
+/// query filtering on `rule_type` would return rows whose rule says otherwise.
 #[test]
-fn aggregation_rule_variant_names_are_the_serde_tags() {
+fn the_rule_type_column_is_the_tag_inside_the_rule_json() {
     use metering::aggregation_rule::AggregationRule;
 
     let rule = AggregationRule::Sum {
         source_malo_ids: vec!["51238696781".to_owned()],
     };
     let json = serde_json::to_value(&rule).expect("AggregationRule must serialise");
-    assert!(
-        json.get("Sum").is_some(),
-        "expected externally-tagged `Sum`, got {json}"
+    assert_eq!(
+        json.get("kind").and_then(|k| k.as_str()),
+        Some("SUM"),
+        "expected an internally-tagged `kind`, got {json}"
+    );
+    assert_eq!(
+        json["kind"].as_str(),
+        Some(rule.kind().as_str()),
+        "the document's tag and `AggregationRule::kind` must be the same string"
     );
 }
 
@@ -568,23 +576,6 @@ fn zsg_outcome_check_covers_every_conversion_outcome() {
             listed.contains(&format!("'{outcome}'")),
             "zsg_conversion_log.outcome CHECK omits `{outcome}`; that conversion \
              outcome would fail the audit insert and vanish from the trail"
-        );
-    }
-}
-
-/// A Zählerstand is stored in the unit the **register** counts.
-///
-/// Not the Sparte's billing unit. § 25 Nr. 4 MessEV converts the *difference*
-/// between two readings; a register value rewritten into kWh is no longer the
-/// number on the meter, and § 40 Abs. 2 Nr. 6 EnWG puts that number on an
-/// invoice for a customer to check.
-#[test]
-fn meter_readings_admit_both_register_units() {
-    let ddl = ddl_of(&migration(), "meter_readings");
-    for unit in ["KWH", "M3"] {
-        assert!(
-            ddl.contains(&format!("'{unit}'")),
-            "meter_readings.unit CHECK omits `{unit}` — gas and water registers count m³"
         );
     }
 }

@@ -100,7 +100,10 @@ fn period_window(sparte: Sparte, from: Date, to: Date) -> (OffsetDateTime, Offse
 /// The identity column every store is keyed on. A reading is unique only *within*
 /// a tenant, so every series read is scoped by it — an unscoped read would fold
 /// two tenants' readings for one MaLo into a single series.
-const TENANT_COL: &str = "tenant";
+///
+/// Typed reads scope with `column_eq`; the caller-supplied SQL endpoint cannot,
+/// and uses [`MeterStore::scoped`](meterstore::MeterStore::scoped) instead.
+pub(crate) const TENANT_COL: &str = "tenant";
 
 /// The tenant identity as the store binds it, for [`SeriesQuery::column_eq`].
 fn tenant_scope(tenant: &str) -> ScalarValue {
@@ -121,6 +124,15 @@ pub fn subject_natural_id(tenant: &str, malo_id: &str) -> String {
 pub const READS_TABLE: &str = "meter_reads_versions";
 /// Physical (raw, versioned) table name for the ESA Typ-2 store.
 pub const TYP2_TABLE: &str = "esa_typ2_reads_versions";
+
+/// The Zählerstandsgang table — register values at instants, not energy over
+/// spans.
+///
+/// A separate table because `value` means two different things: summing
+/// Zählerstände gives a number with no meaning that looks exactly like a
+/// consumption total, so `meterstore` keeps the two time models apart and
+/// refuses `append` here and `append_readings` there.
+pub const ZSG_TABLE: &str = "meter_readings_versions";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Store construction
@@ -160,18 +172,19 @@ impl Default for TieringConfig {
 const CATALOG_NAME: &str = "meterstore";
 const CATALOG_NAMESPACE: &str = "metering";
 /// The `SqlCatalog`'s own metadata pool, bound small: this single catalog (shared
-/// by both tables) plus edmd's main pool and meterstore's hot tier must not
+/// by every table) plus edmd's main pool and meterstore's hot tier must not
 /// exhaust PostgreSQL's connection slots (the `SqlCatalog` default is 10).
 const CATALOG_POOL_MAX: u32 = 4;
 
-/// Build edmd's two meter-data tables over **one** shared Iceberg catalog and
+/// Build edmd's three meter-data tables over **one** shared Iceberg catalog and
 /// **one** DataFusion session.
 ///
-/// edmd's storage is exactly the shape [`meterstore::MeterCatalog`] exists for: an
-/// authoritative `meter_reads` store beside a non-authoritative `esa_typ2_reads`
-/// stream that must never reach a billing query. Building them as a catalog rather
-/// than two independent handles means one `SqlCatalog` (one metadata pool) and one
-/// `SessionContext` instead of two of each — the tables still keep their own
+/// edmd's storage is exactly the shape [`meterstore::MeterCatalog`] exists for:
+/// the authoritative `meter_reads` intervals, the non-authoritative
+/// `esa_typ2_reads` stream that must never reach a billing query, and the
+/// `meter_readings` Zählerstandsgang — a **point** table, register values at
+/// instants rather than energy over spans. One catalog means one `SqlCatalog`
+/// (one metadata pool) and one `SessionContext`; each table still keeps its own
 /// watermark, archiver and tiering. Each returned [`MeterStore`] is a cheap clone
 /// sharing that session; the [`meterstore::ColdTier`] carries the
 /// [`catalog_facade`](meterstore::ColdTier::catalog_facade) for the read-only
@@ -179,14 +192,14 @@ const CATALOG_POOL_MAX: u32 = 4;
 ///
 /// The cold tier (the `SqlCatalog` + object-store backend chosen from
 /// `warehouse_uri`'s scheme) is built by `meterstore` itself — edmd wires none of
-/// the Iceberg catalog stack directly. Returns `(reads, typ2, cold)`.
+/// the Iceberg catalog stack directly. Returns `(reads, typ2, zsg, cold)`.
 pub async fn build_stores(
     pool: PgPool,
     database_url: &str,
     warehouse_uri: &str,
     tiering: TieringConfig,
     auth: &WarehouseAuth,
-) -> anyhow::Result<(MeterStore, MeterStore, meterstore::ColdTier)> {
+) -> anyhow::Result<(MeterStore, MeterStore, MeterStore, meterstore::ColdTier)> {
     let cold_tier = meterstore::IcebergSqlCatalog {
         database_url,
         warehouse_uri,
@@ -205,12 +218,46 @@ pub async fn build_stores(
 
     // `meter_reads` is authoritative and carries the GDPR subject registry;
     // `esa_typ2_reads` is the non-authoritative ESA stream (never billed).
-    let reads = table_builder(&cold, &hot, &pool, READS_TABLE, true, tiering).await?;
-    let typ2 = table_builder(&cold, &hot, &pool, TYP2_TABLE, false, tiering).await?;
+    use meterstore::config::TimeModel;
+    let reads = table_builder(
+        &cold,
+        &hot,
+        &pool,
+        READS_TABLE,
+        true,
+        tiering,
+        TimeModel::Interval,
+    )
+    .await?;
+    let typ2 = table_builder(
+        &cold,
+        &hot,
+        &pool,
+        TYP2_TABLE,
+        false,
+        tiering,
+        TimeModel::Interval,
+    )
+    .await?;
+    // The Zählerstandsgang. BK6-24-174 makes it the *primary* record — the MSB
+    // transmits register values and derives the Lastgang from them — so it is
+    // tiered like any other measurement rather than growing without bound in the
+    // hot tier beside the intervals it produced.
+    let zsg = table_builder(
+        &cold,
+        &hot,
+        &pool,
+        ZSG_TABLE,
+        true,
+        tiering,
+        TimeModel::Point,
+    )
+    .await?;
 
     let catalog = MeterCatalog::builder()
         .table(reads)
         .table(typ2)
+        .table(zsg)
         .build()
         .await?;
     catalog.create_tables().await?; // hot + registry (cold already provisioned)
@@ -226,7 +273,11 @@ pub async fn build_stores(
         .table(TYP2_TABLE)
         .expect("typ2 table registered")
         .clone();
-    Ok((reads_store, typ2_store, cold_tier))
+    let zsg_store = catalog
+        .table(ZSG_TABLE)
+        .expect("zsg table registered")
+        .clone();
+    Ok((reads_store, typ2_store, zsg_store, cold_tier))
 }
 
 /// The per-table [`MeterStoreBuilder`], ready to join a [`MeterCatalog`].
@@ -236,12 +287,14 @@ pub async fn build_stores(
 /// `sender_mp_id` and `allocation_version` are nullable **attribute** columns:
 /// provenance that travels with the values but stays out of the merge key, folded
 /// from the newest contributing delivery on read (§4.2) — declaring them here is
-/// what stops the store round-trip dropping them. When `with_subject` is set, a
-/// nullable `subject_ref` **subject** column and a [`SubjectRegistry`] are attached
-/// for GDPR Art. 17 erasure — on **both** tables, because a Typ-2 value is
-/// non-authoritative for settlement and every bit as personal as an authoritative
-/// one. `with_subject` now selects only the ingestion-provenance columns, which
-/// the Typ-2 stream genuinely does not carry.
+/// what stops the store round-trip dropping them.
+///
+/// Every table carries a nullable `subject_ref` **subject** column and a
+/// [`SubjectRegistry`] for GDPR Art. 17 erasure: a Typ-2 value is
+/// non-authoritative for settlement, which says nothing about whether it is
+/// personal data, and the Zählerstandsgang is the primary measurement. One
+/// registry spans them, so one erasure unlinks all three. `with_subject` selects
+/// only the ingestion-provenance columns, which the Typ-2 stream does not carry.
 async fn table_builder(
     cold: &Arc<meterstore::IcebergCold>,
     hot: &Arc<PostgresHot>,
@@ -249,6 +302,7 @@ async fn table_builder(
     table_name: &str,
     with_subject: bool,
     tiering: TieringConfig,
+    time_model: meterstore::config::TimeModel,
 ) -> anyhow::Result<MeterStoreBuilder> {
     use meterstore::arrow::datatypes::{DataType, Field};
 
@@ -266,21 +320,24 @@ async fn table_builder(
         .map(|p| p.as_str())
         .collect();
     let mut config = TableConfig::new(table_name)
+        // A Zählerstandsgang is instants, a Lastgang spans. `identify_by_melo`
+        // follows the model: a register belongs to the *meter*, so two meters
+        // under one Marktlokation carry the same OBIS code at the same instants
+        // and the Messlokation is what tells their readings apart.
+        .time_model(time_model)
         .partition_step(tiering.partition_step)
         .archival_step(tiering.archival_step)
         .settlement_lag(tiering.settlement_lag)
         .identity_column(Field::new("tenant", DataType::Utf8, false))
         .attribute_column(Field::new("sender_mp_id", DataType::Utf8, true))
-        // **Both** stores carry the GDPR subject reference. A Typ-2 value is
+        // Every store carries the GDPR subject reference. A Typ-2 value is
         // non-authoritative for settlement, which says nothing about whether it
         // is personal data: it is a quarter-hourly consumption series against a
         // MaLo-ID, exactly like the authoritative one, and § 60 Abs. 6 MsbG's
-        // deletion duty makes no exception for it. Attached only to the
-        // authoritative table, Article 17 erasure destroyed one mapping and left
-        // every ESA Typ-2 reading fully attributable — the one store an erasure
-        // could not reach. `SubjectRegistry` is a single `meterstore_subject_map`
-        // over one pool, so a subject registered by either store is the same
-        // subject and one erasure unlinks both.
+        // deletion duty makes no exception for it — nor for the register
+        // readings the intervals are derived from. `SubjectRegistry` is a single
+        // `meterstore_subject_map` over one pool, so a subject registered by any
+        // of them is the same subject and one erasure unlinks all three.
         .subject_column("subject_ref");
     config = if with_subject {
         // The authoritative store: ingestion provenance and the MaBiS delivery
@@ -334,14 +391,23 @@ async fn table_builder(
 #[derive(Clone)]
 pub struct MeterStoreTimeSeriesRepository {
     store: MeterStore,
+    /// The Zählerstandsgang table — a **point** store, keyed by Messlokation.
+    zsg: MeterStore,
     pool: PgPool,
 }
 
 impl MeterStoreTimeSeriesRepository {
-    /// Wrap an already-constructed [`MeterStore`] and edmd's business-table pool.
+    /// Wrap the interval store, the Zählerstandsgang store and edmd's
+    /// business-table pool.
     #[must_use]
-    pub fn new(store: MeterStore, pool: PgPool) -> Self {
-        Self { store, pool }
+    pub fn new(store: MeterStore, zsg: MeterStore, pool: PgPool) -> Self {
+        Self { store, zsg, pool }
+    }
+
+    /// The Zählerstandsgang store (register values at instants).
+    #[must_use]
+    pub fn zsg_store(&self) -> &MeterStore {
+        &self.zsg
     }
 
     /// The edmd business-table pool (readiness probe, metrics, audit queries).
@@ -356,72 +422,75 @@ impl MeterStoreTimeSeriesRepository {
         &self.store
     }
 
+    /// The meter and register an invoice's opening/closing Zählerstand is about.
+    ///
+    /// "Dominant" is the register carrying the most readings, which for a ZSG is
+    /// the one the Lastgang is derived from. A prosumer reports a feed-in
+    /// register too, and an invoice's Zählerstand is about the consumption meter
+    /// the customer can walk up to and read.
+    async fn dominant_register(
+        &self,
+        malo_id: &str,
+        tenant: &str,
+    ) -> Result<Option<(String, String)>, EdmError> {
+        let deliveries = self
+            .zsg
+            .readings(malo(malo_id)?)
+            .map_err(store_err)?
+            .column_eq(TENANT_COL, tenant_scope(tenant))
+            .map_err(store_err)?
+            .deliveries()
+            .await
+            .map_err(store_err)?;
+
+        let mut counts: std::collections::BTreeMap<(String, String), usize> =
+            std::collections::BTreeMap::new();
+        for d in deliveries {
+            let Some(melo) = d.melo_id.as_ref() else {
+                continue;
+            };
+            *counts
+                .entry((melo.as_str().to_owned(), d.obis_code.to_string()))
+                .or_default() += d.readings.len();
+        }
+        // Most readings wins; the key breaks a tie deterministically.
+        Ok(counts
+            .into_iter()
+            .max_by(|a, b| a.1.cmp(&b.1).then_with(|| b.0.cmp(&a.0)))
+            .map(|(k, _)| k))
+    }
+
     /// Append a value **edmd itself authored**, ensuring it becomes the current one.
     ///
     /// Ordinary ingest must not do this: a delivery that arrives late is
-    /// legitimately shadowed by a newer one, and forcing it to win would let a
-    /// replayed original supersede the correction that fixed it. But an operator
-    /// correction (`POST /api/v1/corrections/{malo_id}`) and a § 60 Abs. 2
-    /// Ersatzwert are not deliveries — they are edmd asserting a value *now*,
-    /// about a slot whose current content it has just read and judged unusable.
-    /// They have to take effect.
+    /// legitimately shadowed by a newer one. An operator correction
+    /// (`POST /api/v1/corrections/{malo_id}`) and a § 60 Abs. 2 Ersatzwert are
+    /// not deliveries — they are edmd asserting a value about a slot whose
+    /// current content it has just judged unusable — and neither carries an
+    /// MSCONS version, so through a plain `append` both resolve to `Shadowed`
+    /// while the audit row, the § 60 confirmation and the cache invalidation all
+    /// record a correction that did not take.
     ///
-    /// They could not. Neither carries an MSCONS version, so both fell back to
-    /// [`version_of`]'s transaction-time millisecond value — 13 digits,
-    /// deliberately one short of the ≥ 14 MSCONS mandates so that a stated
-    /// version always outranks a fallback. That rule is right for a delivery and
-    /// exactly backwards here: against any reading that *did* arrive with a
-    /// stated version, the correction resolved to `Effect::Shadowed` and the
-    /// original stayed current. Nothing failed. The audit row was still written,
-    /// the § 60 confirmation still closed as `BESTAETIGT`, the billing-period
-    /// cache was still invalidated — and the recomputed aggregate returned the
-    /// uncorrected value, because it never changed. The § 147 AO trail recorded a
-    /// correction that had not happened, which is worse than refusing one.
-    ///
-    /// So the write asserts itself against the incumbent instead of guessing a
-    /// magnitude: append, read the effect off the store's own report, and on
-    /// `Shadowed`/`Duplicate` re-append one above the version that actually
-    /// holds. The incumbent comes from [`Displacement::superseded`], which is
-    /// populated for those effects precisely so a caller can see that its write
-    /// did not take. That is race-free in the way a read-then-write is not — the
-    /// report describes the state the write itself observed — and it needs no
-    /// assumption about how many digits an operator's versions run to.
-    ///
-    /// [`Displacement::superseded`]: meterstore::session::Displacement::superseded
+    /// [`MeterStore::append_authoritative`] treats the version as a *floor* and
+    /// re-appends at the next version **of the scope already in force**. That
+    /// last part is why edmd cannot write the loop itself: a version is
+    /// comparable only within its own scope, and the hot tier refuses a second
+    /// network operator for one reading.
     async fn append_superseding(
         &self,
         read: &MeterRead,
         subject: &str,
     ) -> Result<Option<meterstore::session::Displacement>, EdmError> {
-        // One retry is enough for an uncontended write; the rest cover another
-        // writer landing a higher version between our append and our retry.
-        const ATTEMPTS: u8 = 4;
-        let mut forced: Option<Version> = None;
-        for _ in 0..ATTEMPTS {
-            let stored = read_to_stored_at(read, forced)?
-                .with_extra("subject_ref", ScalarValue::Utf8(Some(subject.to_owned())));
-            let outcome = self.store.append(&[stored]).await.map_err(store_err)?;
-            let Some(d) = outcome.displacements.into_iter().next() else {
-                // No displacement reported: nothing contended the slot.
-                return Ok(None);
-            };
-            if d.effect.changed_current_value() {
-                return Ok(Some(d));
-            }
-            // Shadowed or Duplicate — an existing version still wins. Re-assert
-            // directly above it.
-            let Some(prior) = d.superseded.as_ref() else {
-                return Ok(Some(d));
-            };
-            let next = prior.version.version().get().saturating_add(1);
-            forced = Some(Version::new(next).map_err(store_err)?);
-        }
-        Err(EdmError::Internal(format!(
-            "could not make an edmd-authored value current for MaLo {malo} at {from}: \
-             {ATTEMPTS} attempts were each outranked by a higher stored version",
-            malo = read.malo_id,
-            from = read.dtm_from,
-        )))
+        let stored = read_to_stored(read)?
+            .with_extra("subject_ref", ScalarValue::Utf8(Some(subject.to_owned())));
+        let outcome = self
+            .store
+            .append_authoritative(&[stored])
+            .await
+            .map_err(store_err)?;
+        // Every displacement it returns took effect; `written` carries the
+        // version the row actually landed at, which is what the audit records.
+        Ok(outcome.displacements.into_iter().next())
     }
 
     /// Aggregate a billing period from the resolved series and re-cache it.
@@ -439,19 +508,8 @@ impl MeterStoreTimeSeriesRepository {
         // own balancing period (Gastag for Gas).
         let (from_ts, to_ts) = period_window(q.sparte, q.period_from, q.period_to);
         // Billable qualities only (§60 Abs. 2), pushed into the scan.
-        let resolved = self
-            .store
-            .series(malo(&q.malo_id)?)
-            .map_err(store_err)?
-            .column_eq(TENANT_COL, tenant_scope(&q.tenant))
-            .range(from_ts, to_ts)
-            .quality_in(&billable_qualities())
-            .collect_resolved()
-            .await
-            .map_err(store_err)?;
-        let reads: Vec<MeterRead> = resolved
-            .map(|r| series_to_reads(&r, &q.tenant))
-            .unwrap_or_default();
+        let reads: Vec<MeterRead> =
+            read_all_channels(&self.store, &q.malo_id, &q.tenant, from_ts, to_ts, true).await?;
         if reads.is_empty() {
             return Ok(None);
         }
@@ -623,6 +681,7 @@ impl MeterStoreTimeSeriesRepository {
             .series(malo(&q.malo_id)?)
             .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
+            .map_err(store_err)?
             .range(q.from, q.to)
             .collect_resolved()
             .await
@@ -650,19 +709,9 @@ impl MeterStoreTimeSeriesRepository {
 /// boundary instead of entering the resolved view, where a short version still
 /// orders — wrongly but silently — within its scope.
 ///
-/// A delivery that states none falls back to **transaction time in
-/// milliseconds**, which is a deliberate choice of magnitude, not just of
-/// precision:
-///
-/// - Unix milliseconds are 13 digits, one short of the ≥ 14 MSCONS mandates,
-///   so a timestamp fallback always sorts *below* any stated version in the
-///   same scope. A delivery that says which version it is therefore always
-///   beats one that does not, whatever order they arrived in. Anything finer
-///   (microseconds, 16 digits) crosses into the MSCONS band and the two
-///   schemes would start interleaving by accident.
-/// - It is still sub-second, so two writes for one interval in the same second
-///   are two versions rather than one `(merge_key, version)` conflict on the
-///   hot tier — which whole-second timestamps produced.
+/// A delivery that states none falls back to [`Version::arrival`], which derives
+/// one from transaction time and reports `is_well_formed() == false` — the fact
+/// that separates "the operator said so" from "we assigned one".
 ///
 /// This is not a substitute for the wire version. Between two unversioned
 /// deliveries, arrival order still decides, and a replayed original still wins.
@@ -671,11 +720,105 @@ impl MeterStoreTimeSeriesRepository {
 fn version_of(mscons: Option<u128>, recorded_at: OffsetDateTime) -> Result<Version, EdmError> {
     match mscons {
         Some(v) => Version::mscons(v).map_err(store_err),
-        None => {
-            let millis = (recorded_at.unix_timestamp_nanos() / 1_000_000).max(1);
-            Version::new(millis as u128).map_err(store_err)
+        None => Version::arrival(recorded_at).map_err(store_err),
+    }
+}
+
+/// The next representable instant after `at`, for an inclusive upper bound.
+///
+/// meterstore's ranges are half-open `[from, to)`, and two of edmd's reading
+/// questions are inclusive: "every Zählerstand in this window" and "the last one
+/// **at or before** this bound" — a reading dated exactly at a period end did
+/// hold at the period end, and § 40 Abs. 2 Nr. 6 EnWG puts that number on an
+/// invoice. Instants are stored at microsecond precision, so one microsecond is
+/// the smallest step that cannot skip a stored value.
+fn inclusive_end(at: OffsetDateTime) -> OffsetDateTime {
+    at + time::Duration::microseconds(1)
+}
+
+/// The OBIS channels a measuring point reported inside a window.
+///
+/// One scan of the resolved relation. `series(..)` reads a single channel, so a
+/// multi-register read has to know which ones exist before it can ask for them,
+/// and there is no cheaper source for that than the data.
+async fn channels_in_window(
+    store: &MeterStore,
+    malo_id: &str,
+    tenant: &str,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+) -> Result<Vec<String>, EdmError> {
+    let sql = format!(
+        "SELECT DISTINCT obis_code FROM {table} \
+         WHERE malo_id = $1 AND {TENANT_COL} = $2 AND \"from\" >= $3 AND \"from\" < $4",
+        table = store.resolved_table(),
+    );
+    let rows = store
+        .query_with_params(
+            &sql,
+            vec![
+                ScalarValue::Utf8(Some(malo_id.to_owned())),
+                tenant_scope(tenant),
+                crate::server::ts_param(from),
+                crate::server::ts_param(to),
+            ],
+        )
+        .await
+        .map_err(store_err)?
+        .to_json()
+        .map_err(store_err)?;
+
+    let mut channels: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.get("obis_code").and_then(serde_json::Value::as_str))
+        .map(str::to_owned)
+        .collect();
+    channels.sort_unstable();
+    channels.dedup();
+    Ok(channels)
+}
+
+/// Every register a measuring point reported in a window, as `MeterRead`s.
+///
+/// **A MaLo is a set of registers, and this returns all of them.** meterstore
+/// refuses to collect a range spanning two channels — a prosumer reports import
+/// beside export at the same instants, and folded into one series `aggregate`
+/// sums both and doubles the month. edmd's callers project the registers
+/// themselves through [`crate::domain::register`], so the answer is one typed,
+/// version-resolved read per channel rather than a narrower one.
+///
+/// Raw SQL over the resolved relation would be one scan instead of N, at the
+/// cost of moving version resolution and tier handling into edmd.
+async fn read_all_channels(
+    store: &MeterStore,
+    malo_id: &str,
+    tenant: &str,
+    from: OffsetDateTime,
+    to: OffsetDateTime,
+    billable_only: bool,
+) -> Result<Vec<MeterRead>, EdmError> {
+    let channels = channels_in_window(store, malo_id, tenant, from, to).await?;
+    let mut out: Vec<MeterRead> = Vec::new();
+    for obis in channels {
+        let mut q = store
+            .series(malo(malo_id)?)
+            .map_err(store_err)?
+            .column_eq(TENANT_COL, tenant_scope(tenant))
+            .map_err(store_err)?
+            .obis(&obis)
+            .map_err(store_err)?
+            .range(from, to);
+        if billable_only {
+            q = q.quality_in(&billable_qualities());
+        }
+        if let Some(r) = q.collect_resolved().await.map_err(store_err)? {
+            out.extend(series_to_reads(&r, tenant));
         }
     }
+    // Callers assume chronological order; reading channel by channel is
+    // register-major.
+    out.sort_by(|a, b| a.dtm_from.cmp(&b.dtm_from));
+    Ok(out)
 }
 
 /// The unit a stored quantity is expressed in — always the Sparte's **billing**
@@ -715,7 +858,9 @@ fn read_to_stored_at(r: &MeterRead, version: Option<Version>) -> Result<StoredSe
     // The operator that assigned the MSCONS version — the BDEW Codenummer of the
     // reporting NB/MSB, not the tenant.
     let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
-    let scope = VersionScope::for_interval(&operator, r.dtm_from).map_err(store_err)?;
+    // The Bilanzierungsmonat the version scope names is Sparte-dependent: gas
+    // balances on the Gastag, so 01.02. 03:00 still belongs to January.
+    let scope = VersionScope::for_interval(&operator, r.dtm_from, r.sparte).map_err(store_err)?;
     let recorded_at = r.valid_from_tx.unwrap_or_else(OffsetDateTime::now_utc);
     let version = match version {
         Some(v) => v,
@@ -1015,19 +1160,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
     }
 
     async fn query(&self, q: &TimeSeriesQuery) -> Result<Vec<MeterRead>, EdmError> {
-        // Single-meter typed read, version-resolved & tier-split by meterstore.
-        let resolved = self
-            .store
-            .series(malo(&q.malo_id)?)
-            .map_err(store_err)?
-            .column_eq(TENANT_COL, tenant_scope(&q.tenant))
-            .range(q.from, q.to)
-            .collect_resolved()
-            .await
-            .map_err(store_err)?;
-        Ok(resolved
-            .map(|r| series_to_reads(&r, &q.tenant))
-            .unwrap_or_default())
+        read_all_channels(&self.store, &q.malo_id, &q.tenant, q.from, q.to, false).await
     }
 
     async fn receipts(
@@ -1070,19 +1203,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         // Only billable qualities enter the saldo — the FAULTY/UNKNOWN filter is
         // pushed into the scan rather than applied after materialising the
         // series.
-        let resolved = self
-            .store
-            .series(malo(malo_id)?)
-            .map_err(store_err)?
-            .column_eq(TENANT_COL, tenant_scope(tenant))
-            .range(from_ts, to_ts)
-            .quality_in(&billable_qualities())
-            .collect_resolved()
-            .await
-            .map_err(store_err)?;
-        let reads = resolved
-            .map(|r| series_to_reads(&r, tenant))
-            .unwrap_or_default();
+        let reads = read_all_channels(&self.store, malo_id, tenant, from_ts, to_ts, true).await?;
         if reads.is_empty() {
             return Err(EdmError::NoData {
                 malo_id: malo_id.to_owned(),
@@ -1133,6 +1254,7 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
             .series(malo(malo_id)?)
             .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(tenant))
+            .map_err(store_err)?
             .latest_resolved()
             .await
             .map_err(store_err)?;
@@ -1350,6 +1472,12 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
                 .series(malo(&rec.malo_id)?)
                 .map_err(store_err)?
                 .column_eq(TENANT_COL, tenant_scope(&rec.tenant))
+                .map_err(store_err)?
+                // The correction is about one register, so the read is too: a
+                // measuring point reporting import beside export has two rows
+                // at these instants and a series can describe only one.
+                .obis(rec.obis_code.as_deref().unwrap_or_default())
+                .map_err(store_err)?
                 .range(rec.dtm_from, rec.dtm_to)
                 .collect_resolved()
                 .await
@@ -1446,57 +1574,126 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         if readings.is_empty() {
             return Ok(0);
         }
-        // One `unnest` statement rather than a row at a time: a quarter-hourly
-        // Zählerstandsgang is 96 rows a day per register, and a month of them is
-        // the ordinary payload.
-        let mut cols = ReadingColumns::with_capacity(readings.len());
+        // A Zählerstandsgang is one register of one meter, so the batch is
+        // grouped by `(MeLo, OBIS)` and each group appended as its own delivery.
+        // Both are part of a reading's identity: a Marktlokation may be measured
+        // by several Messlokationen, and two meters carry the same register at
+        // the same instants.
+        let mut groups: std::collections::BTreeMap<(String, String), Vec<&MeterReading>> =
+            std::collections::BTreeMap::new();
         for r in readings {
-            cols.tenants.push(r.tenant.clone());
-            cols.malos.push(r.malo_id.clone());
-            cols.obis.push(normalise_obis(r.obis_code.as_deref()));
-            cols.ats.push(r.read_at);
-            cols.values.push(r.zaehlerstand);
-            // The unit the **register** counts, not the one the Sparte settles
-            // in: a Zählerstand is stored as the meter displays it, and only the
-            // difference is converted (§ 25 Nr. 4 MessEV).
-            cols.units
-                .push(r.sparte.measured_unit().as_str().to_owned());
-            cols.spartes.push(r.sparte.as_str().to_owned());
-            cols.qualities.push(r.quality.as_str().to_owned());
-            cols.sources.push(r.source.as_str().to_owned());
-            cols.senders.push(r.sender_mp_id.clone());
-            cols.sessions.push(r.push_session.clone());
+            let melo = r.melo_id.clone().ok_or_else(|| {
+                EdmError::Internal(format!(
+                    "a Zählerstand for MaLo {} names no Messlokation. The register belongs to \
+                     the meter, and two meters under one Marktlokation carry the same OBIS code \
+                     at the same instants — stored without it, the second silently overwrites \
+                     the first",
+                    r.malo_id
+                ))
+            })?;
+            groups
+                .entry((melo, normalise_obis(r.obis_code.as_deref())))
+                .or_default()
+                .push(r);
         }
-        let result = sqlx::query(
-            r"INSERT INTO meter_readings
-                  (tenant, malo_id, obis_code_norm, read_at, zaehlerstand,
-                   unit, sparte, quality, source, sender_mp_id, push_session)
-              SELECT * FROM unnest(
-                  $1::text[], $2::text[], $3::text[], $4::timestamptz[], $5::numeric[],
-                  $6::text[], $7::text[], $8::text[], $9::text[], $10::text[], $11::text[])
-              ON CONFLICT (tenant, malo_id, obis_code_norm, read_at) DO UPDATE
-                  SET zaehlerstand = EXCLUDED.zaehlerstand,
-                      quality      = EXCLUDED.quality,
-                      source       = EXCLUDED.source,
-                      sender_mp_id = EXCLUDED.sender_mp_id,
-                      push_session = EXCLUDED.push_session,
-                      recorded_at  = now()",
-        )
-        .bind(&cols.tenants)
-        .bind(&cols.malos)
-        .bind(&cols.obis)
-        .bind(&cols.ats)
-        .bind(&cols.values)
-        .bind(&cols.units)
-        .bind(&cols.spartes)
-        .bind(&cols.qualities)
-        .bind(&cols.sources)
-        .bind(&cols.senders)
-        .bind(&cols.sessions)
-        .execute(&self.pool)
-        .await
-        .map_err(store_err)?;
-        Ok(result.rows_affected())
+
+        let mut written = 0_u64;
+        for ((melo, obis), rows) in groups {
+            let first = rows[0];
+            let obis: ObisCode = obis.parse().map_err(|_| {
+                EdmError::Internal(format!(
+                    "a Zählerstandsgang must name the register it comes from; {:?} is not an \
+                     OBIS code",
+                    first.obis_code
+                ))
+            })?;
+            let values: Vec<metering::reading::MeterReading> = rows
+                .iter()
+                .map(|r| metering::reading::MeterReading {
+                    at: r.read_at,
+                    value: r.zaehlerstand,
+                    quality: r.quality,
+                    obis_code: Some(obis),
+                })
+                .collect();
+
+            let natural = subject_natural_id(&first.tenant, &first.malo_id);
+            let subject = self
+                .zsg
+                .register_subject(&natural)
+                .await
+                .map_err(store_err)?
+                .as_str()
+                .to_owned();
+
+            let operator = first
+                .sender_mp_id
+                .clone()
+                .unwrap_or_else(|| first.tenant.clone());
+            let scope = VersionScope::for_interval(&operator, first.read_at, first.sparte)
+                .map_err(store_err)?;
+            let recorded_at = OffsetDateTime::now_utc();
+
+            let melo: metering::MeloId = melo.parse().map_err(|e: metering::ParseError| {
+                EdmError::Internal(format!("not a MeLo-ID: {melo} ({e})"))
+            })?;
+            let mut stored = meterstore::encode::StoredReadings::new(
+                malo(&first.malo_id)?,
+                obis,
+                first.sparte,
+                values.clone(),
+                // The door the delivery came in by, as the reading records it.
+                match first.source {
+                    crate::domain::IngestionSource::Manual => MeasurementSource::ManualEntry {
+                        operator_id: first
+                            .sender_mp_id
+                            .clone()
+                            .unwrap_or_else(|| first.tenant.clone()),
+                        reason: "Ablesung".to_owned(),
+                    },
+                    _ => MeasurementSource::Mscons {
+                        pid: 0,
+                        message_ref: first.push_session.clone(),
+                        sender_mp_id: first
+                            .sender_mp_id
+                            .clone()
+                            .unwrap_or_else(|| first.tenant.clone()),
+                    },
+                },
+                ScopedVersion::new(scope, version_of(None, recorded_at)?),
+                recorded_at,
+            )
+            // A Zählerstand is stored in the unit the **register** counts, never
+            // the one the Sparte settles in: the conversion applies to the
+            // difference (§ 25 Nr. 4 MessEV), and a converted register value is
+            // no longer the number on the meter.
+            .in_unit(first.sparte.measured_unit())
+            .with_melo_id(melo)
+            .with_extra("subject_ref", ScalarValue::Utf8(Some(subject)))
+            .with_extra(TENANT_COL, ScalarValue::Utf8(Some(first.tenant.clone())))
+            .with_extra(
+                "source",
+                ScalarValue::Utf8(Some(first.source.as_str().to_owned())),
+            );
+            // How often the register is read, derived from the timestamps rather
+            // than assumed — § 2 Satz 1 Nr. 27 MsbG names a quarter-hourly Strom
+            // and an hourly Gas cadence, and completeness asks "how many values a
+            // day should there be".
+            if let Some(cadence) = metering::reading::detect_reading_cadence(&values) {
+                stored = stored.at_cadence(cadence);
+            }
+            if let Some(mp) = &first.sender_mp_id {
+                stored = stored.with_extra("sender_mp_id", ScalarValue::Utf8(Some(mp.clone())));
+            }
+
+            let outcome = self
+                .zsg
+                .append_readings(&[stored])
+                .await
+                .map_err(store_err)?;
+            written += outcome.hot_rows + outcome.cold_rows;
+        }
+        Ok(written)
     }
 
     async fn readings(
@@ -1506,48 +1703,43 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         to: OffsetDateTime,
         tenant: &str,
     ) -> Result<Vec<MeterReading>, EdmError> {
-        let rows = sqlx::query(
-            r"SELECT malo_id, read_at, zaehlerstand, quality, sparte,
-                     obis_code_norm, source, sender_mp_id, push_session
-              FROM meter_readings
-              WHERE tenant = $1 AND malo_id = $2 AND read_at >= $3 AND read_at <= $4
-              ORDER BY read_at",
-        )
-        .bind(tenant)
-        .bind(malo_id)
-        .bind(from)
-        .bind(to)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(store_err)?;
-        rows.iter()
-            .map(|row| {
-                let obis: String = row.try_get("obis_code_norm").map_err(store_err)?;
-                let sparte: String = row.try_get("sparte").map_err(store_err)?;
-                let quality: String = row.try_get("quality").map_err(store_err)?;
-                Ok(MeterReading {
-                    malo_id: row.try_get("malo_id").map_err(store_err)?,
-                    read_at: row.try_get("read_at").map_err(store_err)?,
-                    zaehlerstand: row.try_get("zaehlerstand").map_err(store_err)?,
-                    // A row edmd wrote always decodes; one that does not is a
-                    // schema/enum divergence, and reading it as UNKNOWN would
-                    // quietly make a stored measurement unbillable.
-                    quality: str_to_quality(&quality).ok_or_else(|| {
-                        EdmError::Internal(format!("meter_readings.quality {quality:?} is unknown"))
-                    })?,
-                    sparte: str_to_sparte(&sparte).ok_or_else(|| {
-                        EdmError::Internal(format!("meter_readings.sparte {sparte:?} is unknown"))
-                    })?,
-                    obis_code: (!obis.is_empty()).then_some(obis),
+        // Every register of every meter under the Marktlokation. `collect` reads
+        // one channel of one meter; `deliveries` is the multi-channel shape.
+        let deliveries = self
+            .zsg
+            .readings(malo(malo_id)?)
+            .map_err(store_err)?
+            .column_eq(TENANT_COL, tenant_scope(tenant))
+            .map_err(store_err)?
+            // The trait's window is inclusive on both ends.
+            .range(from, inclusive_end(to))
+            .deliveries()
+            .await
+            .map_err(store_err)?;
+
+        let mut out: Vec<MeterReading> = Vec::new();
+        for d in deliveries {
+            for r in &d.readings {
+                out.push(MeterReading {
+                    malo_id: d.malo_id.as_str().to_owned(),
+                    read_at: r.at,
+                    zaehlerstand: r.value,
+                    quality: r.quality,
+                    sparte: d.sparte,
+                    obis_code: Some(d.obis_code.to_string()),
+                    melo_id: d.melo_id.as_ref().map(|m| m.as_str().to_owned()),
                     tenant: tenant.to_owned(),
-                    source: crate::domain::IngestionSource::from_db_str(
-                        &row.try_get::<String, _>("source").map_err(store_err)?,
-                    ),
-                    sender_mp_id: row.try_get("sender_mp_id").map_err(store_err)?,
-                    push_session: row.try_get("push_session").map_err(store_err)?,
-                })
-            })
-            .collect()
+                    source: extra_str(&d.extra, "source")
+                        .map_or_else(crate::domain::IngestionSource::default, |s| {
+                            crate::domain::IngestionSource::from_db_str(&s)
+                        }),
+                    sender_mp_id: extra_str(&d.extra, "sender_mp_id"),
+                    push_session: None,
+                });
+            }
+        }
+        out.sort_by_key(|r| r.read_at);
+        Ok(out)
     }
 
     async fn log_zsg_conversion(
@@ -1586,108 +1778,43 @@ impl TimeSeriesRepository for MeterStoreTimeSeriesRepository {
         to: OffsetDateTime,
         tenant: &str,
     ) -> Result<(Option<Decimal>, Option<Decimal>), EdmError> {
-        let Some(register) = self.dominant_register(malo_id, tenant).await? else {
+        let Some((melo, register)) = self.dominant_register(malo_id, tenant).await? else {
             return Ok((None, None));
         };
         // "At or before", on both ends. A Zählerstand dated after the period end
         // did not hold at the period end, and reporting it as the closing
         // reading overstates the period on an invoice a customer checks against
-        // the meter.
-        let at_or_before = |bound: OffsetDateTime| {
-            sqlx::query_scalar::<_, Decimal>(
-                r"SELECT zaehlerstand
-                  FROM meter_readings
-                  WHERE tenant = $1 AND malo_id = $2 AND obis_code_norm = $3
-                    AND read_at <= $4
-                  ORDER BY read_at DESC
-                  LIMIT 1",
-            )
-            .bind(tenant.to_owned())
-            .bind(malo_id.to_owned())
-            .bind(register.clone())
-            .bind(bound)
-            .fetch_optional(&self.pool)
+        // the meter. `until(bound).latest()` is exactly that, resolved at the
+        // storage layer rather than by folding the history in memory.
+        let at_or_before = async |bound: OffsetDateTime| -> Result<Option<Decimal>, EdmError> {
+            Ok(self
+                .zsg
+                .readings(malo(malo_id)?)
+                .map_err(store_err)?
+                .column_eq(TENANT_COL, tenant_scope(tenant))
+                .map_err(store_err)?
+                .melo(&melo)
+                .map_err(store_err)?
+                .obis(&register)
+                .map_err(store_err)?
+                // "At or before": a Zählerstand dated exactly at the bound held
+                // at the bound.
+                .until(inclusive_end(bound))
+                .latest()
+                .await
+                .map_err(store_err)?
+                .map(|r| r.value))
         };
-        let anfang = at_or_before(from).await.map_err(store_err)?;
-        let ende = at_or_before(to).await.map_err(store_err)?;
+        let anfang = at_or_before(from).await?;
+        let ende = at_or_before(to).await?;
         Ok((anfang, ende))
     }
 }
 
 // ── Zählerstandsgang (BK6-24-174) ────────────────────────────────────────────
 
-/// A Zählerstandsgang batch, transposed into the arrays `unnest` binds.
-///
-/// A struct rather than an eleven-element tuple: the columns are positional in
-/// the SQL either way, and a named field is what stops a `sender_mp_id` and a
-/// `push_session` — both `Vec<Option<String>>`, both nullable text — from being
-/// swapped without the type system noticing.
-#[derive(Default)]
-struct ReadingColumns {
-    tenants: Vec<String>,
-    malos: Vec<String>,
-    obis: Vec<String>,
-    ats: Vec<OffsetDateTime>,
-    values: Vec<Decimal>,
-    units: Vec<String>,
-    spartes: Vec<String>,
-    qualities: Vec<String>,
-    sources: Vec<String>,
-    senders: Vec<Option<String>>,
-    sessions: Vec<Option<String>>,
-}
-
-impl ReadingColumns {
-    fn with_capacity(n: usize) -> Self {
-        Self {
-            tenants: Vec::with_capacity(n),
-            malos: Vec::with_capacity(n),
-            obis: Vec::with_capacity(n),
-            ats: Vec::with_capacity(n),
-            values: Vec::with_capacity(n),
-            units: Vec::with_capacity(n),
-            spartes: Vec::with_capacity(n),
-            qualities: Vec::with_capacity(n),
-            sources: Vec::with_capacity(n),
-            senders: Vec::with_capacity(n),
-            sessions: Vec::with_capacity(n),
-        }
-    }
-}
-
-impl MeterStoreTimeSeriesRepository {
-    /// The reading rows of a window, on the point's **dominant** register.
-    ///
-    /// "Dominant" is the register carrying the most readings, which for a ZSG is
-    /// the one the Lastgang is derived from. A prosumer reports a feed-in
-    /// register too, and an invoice's opening/closing Zählerstand is about the
-    /// consumption meter the customer can walk up to and read.
-    async fn dominant_register(
-        &self,
-        malo_id: &str,
-        tenant: &str,
-    ) -> Result<Option<String>, EdmError> {
-        let row = sqlx::query(
-            r"SELECT obis_code_norm
-              FROM meter_readings
-              WHERE tenant = $1 AND malo_id = $2
-              GROUP BY obis_code_norm
-              ORDER BY count(*) DESC, obis_code_norm
-              LIMIT 1",
-        )
-        .bind(tenant)
-        .bind(malo_id)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(store_err)?;
-        row.map(|r| r.try_get::<String, _>("obis_code_norm"))
-            .transpose()
-            .map_err(store_err)
-    }
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
-// ESA "Werte nach Typ 2" store — a SECOND meterstore table (never billed).
+// ESA "Werte nach Typ 2" store — its own meterstore table (never billed).
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Meterstore-backed ESA "Werte nach Typ 2" store.
@@ -1720,7 +1847,7 @@ fn typ2_to_stored(r: &Typ2Read) -> Result<StoredSeries, EdmError> {
         obis_code: obis,
     };
     let operator = r.sender_mp_id.clone().unwrap_or_else(|| r.tenant.clone());
-    let scope = VersionScope::for_interval(&operator, r.dtm_from).map_err(store_err)?;
+    let scope = VersionScope::for_interval(&operator, r.dtm_from, r.sparte).map_err(store_err)?;
     let recorded_at = r.received_at.unwrap_or_else(OffsetDateTime::now_utc);
     // Typ-2 values are stored as delivered and never corrected, so arrival order
     // is the only order there is — but it still has to be an order, hence the
@@ -1807,6 +1934,7 @@ impl Typ2Repository for MeterStoreTyp2Repository {
             .series(malo(&q.malo_id)?)
             .map_err(store_err)?
             .column_eq(TENANT_COL, tenant_scope(&q.tenant))
+            .map_err(store_err)?
             .range(q.from, q.to)
             .collect_resolved()
             .await

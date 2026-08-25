@@ -21,12 +21,12 @@
 //! |---|---|---|---|
 //! | 31001 | Abschlagsrechnung Netznutzung | NNE price sheet | `gpke.abrechnung.*` |
 //! | 31002 | NN-Rechnung (Netznutzung, both Sparten) | NNE price sheet | `gpke.abrechnung.*` |
-//! | 31003 | WiM Gas Rechnung (Gas NNE) | NNE price sheet | `wim.gas.rechnung.*` |
+//! | 31003 | WiM-Rechnung (Dienstleistungen im Messwesen, **beide Sparten**) | `PreisblattMessung` | `wim.rechnung.*` |
 //! | 31004 | Stornorechnung — **Sparte-neutral, any process** | arithmetic only | `invoic.stornorechnung.*` |
 //! | 31005 | MMM-Rechnung Strom | NNE sheet + MMM Strom prices | `gpke.abrechnung.*` |
 //! | 31006 | MMM Mehrmenge, selbst ausgestellt | NNE sheet + MMM Strom prices | `gpke.abrechnung.*` |
-//! | 31007 | GaBi Gas MMM-Rechnung | NNE sheet + MMM Gas prices | `gabi.mmm.rechnung.*` |
-//! | 31008 | GaBi Gas MMM, selbst ausgestellt | NNE sheet + MMM Gas prices | `gabi.mmm.rechnung.*` |
+//! | 31007 | GaBi Gas MMM-Rechnung | NNE sheet + MMM Gas prices | `gabi.rechnung.*` |
+//! | 31008 | GaBi Gas MMM, selbst ausgestellt | NNE sheet + MMM Gas prices | `gabi.rechnung.*` |
 //! | 31009 | WiM MSB-Rechnung | `PreisblattMessung` + AufAbschlag | `wim.rechnung.*` |
 //! | 31011 | Rechnung sonstige Leistung — **Sparte-neutral** (GPKE Teil 2 · AWH Sperrprozesse Gas) | NNE price sheet | `invoic.sonstige-leistung.*` |
 //!
@@ -35,6 +35,8 @@
 //! (BK7-24-01-009).
 
 /// Which reference data the plausibility check needs, and which stages to run.
+use mako_markt::commands;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CheckKind {
     /// Stages 1–5 against `PreisblattNetznutzung` from the sending NB.
@@ -91,71 +93,80 @@ pub const ROUTES: &[PidRoute] = &[
     PidRoute {
         pid: 31001,
         check: CheckKind::Netznutzung,
-        accept: "gpke.abrechnung.annehmen",
-        reject: "gpke.abrechnung.ablehnen",
+        accept: commands::GPKE_ABRECHNUNG_ANNEHMEN,
+        reject: commands::GPKE_ABRECHNUNG_ABLEHNEN,
         salt: b"gpke",
     },
     PidRoute {
         pid: 31002,
         check: CheckKind::Netznutzung,
-        accept: "gpke.abrechnung.annehmen",
-        reject: "gpke.abrechnung.ablehnen",
+        accept: commands::GPKE_ABRECHNUNG_ANNEHMEN,
+        reject: commands::GPKE_ABRECHNUNG_ABLEHNEN,
         salt: b"gpke",
     },
     PidRoute {
         pid: 31003,
-        check: CheckKind::Netznutzung,
-        accept: "wim.gas.rechnung.annehmen",
-        reject: "wim.gas.rechnung.ablehnen",
-        salt: b"wim-gas",
+        // The WiM-Rechnung bills *Dienstleistungen im Messwesen* — the temporäre
+        // Fortführung, the Geräteübernahme, a Zwischen- oder Kontrollablesung —
+        // between the abgebender and the aufnehmender MSB. That is metering
+        // service, not network use, so it prices against `PreisblattMessung`
+        // for the same reason PID 31009 does.
+        check: CheckKind::Messung,
+        // …and it belongs to the WiM billing family, which is what `makod`
+        // registers. There is no `wim.gas.*` command: the Gas 31003 is answered
+        // by `wim.rechnung.*` too, which is why that descriptor carries `Gnb`
+        // among its permitted roles.
+        accept: commands::WIM_RECHNUNG_ANNEHMEN,
+        reject: commands::WIM_RECHNUNG_ABLEHNEN,
+        salt: b"wim-dienstleistung",
     },
     PidRoute {
         pid: 31004,
         check: CheckKind::ArithmetikNur,
-        accept: "invoic.stornorechnung.annehmen",
-        reject: "invoic.stornorechnung.ablehnen",
+        accept: commands::INVOIC_STORNORECHNUNG_ANNEHMEN,
+        reject: commands::INVOIC_STORNORECHNUNG_ABLEHNEN,
         salt: b"invoic-storno",
     },
     PidRoute {
         pid: 31005,
         check: CheckKind::NetznutzungMitMmmStrom,
-        accept: "gpke.abrechnung.annehmen",
-        reject: "gpke.abrechnung.ablehnen",
+        accept: commands::GPKE_ABRECHNUNG_ANNEHMEN,
+        reject: commands::GPKE_ABRECHNUNG_ABLEHNEN,
         salt: b"gpke",
     },
     PidRoute {
         pid: 31006,
         check: CheckKind::NetznutzungMitMmmStrom,
-        accept: "gpke.abrechnung.annehmen",
-        reject: "gpke.abrechnung.ablehnen",
+        accept: commands::GPKE_ABRECHNUNG_ANNEHMEN,
+        reject: commands::GPKE_ABRECHNUNG_ABLEHNEN,
         salt: b"gpke",
     },
     PidRoute {
         pid: 31007,
         check: CheckKind::NetznutzungMitMmmGas,
-        accept: "gabi.mmm.rechnung.annehmen",
-        reject: "gabi.mmm.rechnung.ablehnen",
+        accept: commands::GABI_RECHNUNG_ANNEHMEN,
+        reject: commands::GABI_RECHNUNG_ABLEHNEN,
         salt: b"gabi-gas",
     },
     PidRoute {
         pid: 31008,
         check: CheckKind::NetznutzungMitMmmGas,
-        accept: "gabi.mmm.rechnung.annehmen",
-        reject: "gabi.mmm.rechnung.ablehnen",
+        accept: commands::GABI_RECHNUNG_ANNEHMEN,
+        reject: commands::GABI_RECHNUNG_ABLEHNEN,
         salt: b"gabi-gas",
     },
     PidRoute {
         pid: 31009,
         check: CheckKind::Messung,
-        accept: "wim.rechnung.annehmen",
-        reject: "wim.rechnung.ablehnen",
+        accept: commands::WIM_RECHNUNG_ANNEHMEN,
+        reject: commands::WIM_RECHNUNG_ABLEHNEN,
         salt: b"wim-msb",
     },
     PidRoute {
         pid: 31011,
         check: CheckKind::Netznutzung,
-        accept: "invoic.sonstige-leistung.annehmen",
-        reject: "invoic.sonstige-leistung.ablehnen",
+        accept: commands::INVOIC_SONSTIGE_LEISTUNG_ANNEHMEN,
+        reject: commands::INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN,
         salt: b"geli-gas",
     },
 ];
@@ -192,10 +203,9 @@ mod tests {
         for r in ROUTES {
             let expected = match r.pid {
                 31001 | 31002 | 31005 | 31006 => "gpke.abrechnung.",
-                31003 => "wim.gas.rechnung.",
+                31003 | 31009 => "wim.rechnung.",
                 31004 => "invoic.stornorechnung.",
-                31007 | 31008 => "gabi.mmm.rechnung.",
-                31009 => "wim.rechnung.",
+                31007 | 31008 => "gabi.rechnung.",
                 31011 => "invoic.sonstige-leistung.",
                 other => panic!("PID {other} has no expected command family"),
             };

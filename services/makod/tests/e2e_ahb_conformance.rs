@@ -65,10 +65,8 @@ use mako_geli_gas::{
     GasSupplierChangeCommand, GeliGasStornierungCommand, GeliGasStornierungState,
     GeliGasStornierungWorkflow, GeliGasSupplierChangeWorkflow,
 };
-use mako_gpke::{
-    AbrechnungCommand, AbrechnungState, GpkeAbrechnungWorkflow, GpkeSupplierChangeWorkflow,
-    SupplierChangeCommand,
-};
+use mako_gpke::{GpkeAbrechnungWorkflow, GpkeSupplierChangeWorkflow, SupplierChangeCommand};
+use mako_invoic::{InvoicCommand, InvoicState};
 use mako_wim::{DeviceChangeCommand, DeviceChangeState, WimDeviceChangeWorkflow};
 use makod::adapters::{
     geli_gas_registry, geli_gas_stornierung_registry, gpke_abrechnung_registry, gpke_registry,
@@ -620,8 +618,8 @@ const INVOIC_VALIDATION_DATE: time::Date = date!(2026 - 04 - 01);
 /// Confirms that:
 /// 1. The INVOIC 2.8e fixture parses cleanly under `Platform::with_all_profiles()`.
 /// 2. `validate_on_date(2026-04-01)` returns `is_valid()=true` — no AHB bypass.
-/// 3. The INVOIC fields are correctly adapted to `AbrechnungCommand::ReceiveInvoic`.
-/// 4. The GpkeAbrechnungWorkflow transitions to `AbrechnungState::ValidationPassed`
+/// 3. The INVOIC fields are correctly adapted to `InvoicCommand::ReceiveInvoic`.
+/// 4. The GpkeAbrechnungWorkflow transitions to `InvoicState::ValidationPassed`
 ///    after accepting the command, proving the full dispatch chain is functional.
 #[tokio::test]
 async fn ahb_31001_invoic_validates_and_dispatches() {
@@ -644,10 +642,10 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
     let fv = FormatVersion::new(INVOIC_FV_2026);
     let adapter_cmd = gpke_abrechnung_registry()
         .dispatch(&msg as &dyn std::any::Any, &fv)
-        .expect("gpke_abrechnung_registry must adapt PID 31001 INVOIC to AbrechnungCommand");
+        .expect("gpke_abrechnung_registry must adapt PID 31001 INVOIC to InvoicCommand");
 
     // Step 4: Assert command fields match fixture content.
-    let AbrechnungCommand::ReceiveInvoic {
+    let InvoicCommand::ReceiveInvoic {
         pid: cmd_pid,
         sender: cmd_sender,
         recipient: cmd_recipient,
@@ -656,7 +654,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
         ..
     } = adapter_cmd
     else {
-        panic!("expected AbrechnungCommand::ReceiveInvoic");
+        panic!("expected InvoicCommand::ReceiveInvoic");
     };
 
     assert_eq!(cmd_pid.as_u32(), 31001);
@@ -676,7 +674,7 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
     );
 
     // Step 5: Build the execute command with authoritative AHB result (no bypass).
-    let exec_cmd = AbrechnungCommand::ReceiveInvoic {
+    let exec_cmd = InvoicCommand::ReceiveInvoic {
         pid: cmd_pid,
         sender: cmd_sender,
         recipient: cmd_recipient,
@@ -703,13 +701,13 @@ async fn ahb_31001_invoic_validates_and_dispatches() {
         .await
         .expect("NB process must accept AHB-validated 31001 INVOIC without error");
 
-    let state: AbrechnungState = nb_process
+    let state: InvoicState = nb_process
         .state()
         .await
         .expect("must be able to load state");
 
     assert!(
-        matches!(state, AbrechnungState::ValidationPassed(_)),
+        matches!(state, InvoicState::ValidationPassed(_)),
         "after AHB-validated 31001 ReceiveInvoic, state must be ValidationPassed; got: {state:?}",
     );
 }

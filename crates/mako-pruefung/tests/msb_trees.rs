@@ -50,8 +50,8 @@ fn the_wim_alphabets_are_disjoint_from_the_gpke_ones() {
     }
 }
 
-/// The codes `processd` used to send. Neither is published by any WiM tree, so
-/// every automatic MSB-Wechsel rejection mako emitted was a code the
+/// `A02` and `A05` belong to GPKE, not WiM. Neither is published by any WiM
+/// tree, so an automatic MSB-Wechsel rejection carrying one names a code the
 /// counterparty's Codeliste does not contain.
 #[test]
 fn a02_and_a05_are_not_wim_msb_wechsel_codes() {

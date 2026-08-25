@@ -2138,8 +2138,8 @@ mod tests {
 
     /// An inverted period cannot reach the engine at all.
     ///
-    /// Constructing `SettlementPeriod` is the check, so the five per-calculation
-    /// guards that used to re-test the same thing are gone with it.
+    /// Constructing `SettlementPeriod` is the check, so no per-calculation guard
+    /// re-tests it.
     #[test]
     fn an_inverted_period_is_unrepresentable() {
         assert!(matches!(
@@ -2825,9 +2825,9 @@ mod tests {
 
     /// PID 31009 is issued **by** the MSB, to the NB / LF / ESA.
     ///
-    /// This used to assert the opposite — the MSB as `counterparty` (recipient)
-    /// and the NB as sender — which inverted the invoice: the party owed money
-    /// was named as the one billing for it. Verified against the
+    /// Naming the MSB as `counterparty` (recipient) and the NB as sender inverts
+    /// the invoice: the party owed money becomes the one billing for it.
+    /// Verified against the
     /// *Anwendungsübersicht der Prüfidentifikatoren* 4.0, which lists seven
     /// Anwendungsfälle for 31009, all `MSB -> {NB, LF, ESA}`.
     #[test]
@@ -3852,8 +3852,8 @@ mod modul3_tests {
     }
 
     /// The basis covers every NNE kind the settlement can emit — including the
-    /// Modul 3 ST band and the Modul 2 reduced Arbeitspreis, both of which the
-    /// filter used to omit.
+    /// Modul 3 ST band and the Modul 2 reduced Arbeitspreis, which a filter
+    /// keyed on the plain Arbeitspreis alone would omit.
     #[test]
     fn sect19_reduction_covers_the_modul3_time_of_use_bands() {
         let mp = |kwh: &str| MengePreis {

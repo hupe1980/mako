@@ -256,58 +256,36 @@ pub fn solar_pv_volleinspeisung_lookup(inbetriebnahme: time::Date) -> Option<Rat
 
 // ── Wind Onshore ──────────────────────────────────────────────────────────────
 
-/// Return the EEG reference Anzulegender Wert table for **wind onshore** plants.
+/// **There is no statutory anzulegender Wert for Windenergie an Land.**
 ///
-/// Wind onshore plants >750 kW must participate in BNetzA tenders since 2017
-/// (§22 EEG 2017+). The values here are the statutory reference AW used as
-/// seed values and for small plants (≤750 kW) that are exempt from tenders.
+/// § 22 Abs. 2 Satz 1 EEG 2023: the claim under § 19 Abs. 1 exists "nur, solange
+/// und soweit ein von der Bundesnetzagentur erteilter Zuschlag für die Anlage
+/// wirksam ist". The value itself is then derived per § 36h Abs. 1 — the
+/// Zuschlagswert for the Referenzstandort, multiplied by the Korrekturfaktor of
+/// the plant's Gütefaktor (Anlage 2 Nr. 2 and 7) — which is a property of the
+/// individual award and site, not of a capacity band.
 ///
-/// The parameter to `rate_for()` is the **installed capacity in kW**.
-///
-/// Returns `None` for unsupported years.
-///
-/// ## Example
-///
-/// ```rust
-/// use eeg_billing::rates;
-/// use rust_decimal::dec;
-///
-/// let table = rates::wind_onshore_lookup(2023).unwrap();
-/// // ≤750 kW (small turbines, tender-exempt)
-/// let rate = table.rate_for(dec!(500)).unwrap();
-/// // rate = 6.28 ct/kWh for ≤750 kW (EEG 2023 §21 reference)
-/// assert_eq!(rate, billing::Amount::parse("0.06280").unwrap());
-/// ```
-pub fn wind_onshore_lookup(eeg_year: i16) -> Option<RateLookup> {
-    match eeg_year {
-        // ── EEG 2023 ──────────────────────────────────────────────────────────
-        // Source: §21 EEG 2023 i.V.m. Anlage 2, Referenzwert wind onshore
-        // Plants ≤750 kW: statutory AW = 6.28 ct/kWh
-        // Plants >750 kW: mandatory tender (AW set by BNetzA per auction round)
-        2023..=2026 => RateLookup::builder()
-            .at_most(dec!(750), amount_ct("6.28")) // ≤750 kW: tender-exempt AW
-            .fallback(amount_ct("6.28")) // >750 kW: tender-based (use direktverm_aw_ct)
-            .build()
-            .ok(),
-
-        // ── EEG 2021 ──────────────────────────────────────────────────────────
-        2021 | 2022 => RateLookup::builder()
-            .at_most(dec!(750), amount_ct("6.29")) // ≤750 kW
-            .fallback(amount_ct("6.29"))
-            .build()
-            .ok(),
-
-        _ => None,
-    }
+/// So this function always answers `None`, and the caller supplies the awarded
+/// value as [`crate::TariffSource::Auction`] with
+/// [`crate::wind::korrekturfaktor_fuer_guetefaktor`] applied.
+#[must_use]
+pub fn wind_onshore_lookup(_eeg_year: i16) -> Option<RateLookup> {
+    None
 }
 
-// ── Biomasse ──────────────────────────────────────────────────────────────────
+// ── Biomasse — § 42 EEG 2023 ─────────────────────────────────────────────────
 
-/// Return the EEG rate table for **Biomasse** plants.
+/// § 42 EEG 2023 — the statutory anzulegender Wert for **Biomasse**.
 ///
-/// The parameter to `rate_for()` is the **installed capacity in kW_el**.
+/// The statute gives **one** tier: 12,67 ct/kWh up to a Bemessungsleistung of
+/// 150 kW, and Satz 2 excludes Biomethan. Above 150 kW the anzulegender Wert is
+/// set by tender (§ 22 Abs. 4), so there is no statutory value to return and the
+/// table's open tier is deliberately absent — `rate_for` then answers `Err`
+/// rather than a made-up rate.
 ///
-/// Returns `None` for unsupported years.
+/// § 43 (Vergärung von Bioabfällen) and § 44 (Vergärung von Gülle) set their own
+/// higher values for plants that qualify — those are separate claims, not tiers
+/// of this one.
 ///
 /// ## Example
 ///
@@ -316,26 +294,50 @@ pub fn wind_onshore_lookup(eeg_year: i16) -> Option<RateLookup> {
 /// use rust_decimal::dec;
 ///
 /// let table = rates::biomasse_lookup(2023).unwrap();
-/// assert_eq!(table.rate_for(dec!(200)).unwrap(), billing::Amount::parse("0.14670").unwrap());
+/// assert_eq!(table.rate_for(dec!(120)).unwrap(), billing::Amount::parse("0.12670").unwrap());
+/// // Above 150 kW the value comes from a tender, not from the statute.
+/// assert!(table.rate_for(dec!(600)).is_err());
 /// ```
 pub fn biomasse_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
-        // ── EEG 2023 ──────────────────────────────────────────────────────────
-        // Source: §21 EEG 2023 i.V.m. Anlage 3 (Biomasse §21 Abs. 1)
         2023..=2026 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("14.67")) // ≤500 kW
-            .at_most(dec!(5_000), amount_ct("11.90")) // ≤5 MW
-            .fallback(amount_ct("7.58")) // >5 MW
+            .at_most(dec!(150), amount_ct("12.67"))
             .build()
             .ok(),
+        _ => None,
+    }
+}
 
-        2021 | 2022 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("13.63"))
-            .at_most(dec!(5_000), amount_ct("11.42"))
-            .fallback(amount_ct("7.26"))
+/// § 43 Abs. 1 EEG 2023 — **Vergärung von Bioabfällen** (≥ 90 Masseprozent
+/// separately collected Bioabfälle), by Bemessungsleistung.
+///
+/// Abs. 2 additionally requires the anaerobic digestion to be directly coupled
+/// to a Nachrotte stage whose residue is materially recovered — a plant
+/// condition the caller checks.
+pub fn bioabfall_lookup(eeg_year: i16) -> Option<RateLookup> {
+    match eeg_year {
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("14.16"))
+            .at_most(dec!(20_000), amount_ct("12.41"))
             .build()
             .ok(),
+        _ => None,
+    }
+}
 
+/// § 44 Abs. 1 EEG 2023 — **Vergärung von Gülle** (Güllekleinanlage), by
+/// Bemessungsleistung.
+///
+/// Abs. 2 conditions the claim on generation at the Biogaserzeugungsanlage's
+/// site, ≤ 150 kW installed there, and an average manure share the statute
+/// names — see [`crate::biomasse`].
+pub fn guelle_lookup(eeg_year: i16) -> Option<RateLookup> {
+    match eeg_year {
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(75), amount_ct("22.00"))
+            .at_most(dec!(150), amount_ct("19.00"))
+            .build()
+            .ok(),
         _ => None,
     }
 }
@@ -374,48 +376,61 @@ pub fn kwkg_zuschlag_lookup() -> Option<RateLookup> {
 
 // ── Convenience helper ────────────────────────────────────────────────────────
 
-/// Convert a ct/kWh string to a `billing::Amount<5>` (EUR/kWh).
+/// A rate in ct/kWh as a `billing::Amount<5>` in EUR/kWh.
 ///
-/// 8.11 ct/kWh → `Amount::parse("0.00811")`
+/// 8,11 ct/kWh → `0.00811 EUR/kWh`.
+///
+/// Both forms go through [`Amount::from_decimal_rounded`] with the workspace's
+/// kaufmännisches Runden.
 ///
 /// # Panics
-/// Panics if the string is malformed — only called from static table constructors.
+/// Panics on a malformed literal or an out-of-range rate. Only ever called from
+/// the static table constructors below, where both are authorship errors.
 fn amount_from_ct(ct: rust_decimal::Decimal) -> Amount<5> {
-    let eur = ct / rust_decimal::Decimal::from(100u32);
-    Amount::parse(&format!("{eur:.5}")).expect("5dp EUR/kWh")
+    Amount::from_decimal_rounded(
+        ct / rust_decimal::Decimal::from(100u32),
+        billing::RoundingStrategy::MidpointAwayFromZero,
+    )
+    .expect("statutory rate is in range")
 }
 
-/// Convert a ct/kWh string to a `billing::Amount<5>` (EUR/kWh).
-///
-/// 8.11 ct/kWh → `Amount::parse("0.00811")`
+/// [`amount_from_ct`] for a literal, e.g. `amount_ct("12.03")`.
 ///
 /// # Panics
-/// Panics if the string is malformed — only called from static table constructors.
+/// Panics if the literal is not a decimal, or the rate is out of range.
 fn amount_ct(ct_str: &str) -> Amount<5> {
-    // Convert ct/kWh to EUR/kWh by dividing by 100
-    let ct: rust_decimal::Decimal = ct_str.parse().expect("static rate string");
-    let eur = ct / rust_decimal::Decimal::from(100u32);
-    let eur_str = eur.to_string();
-    Amount::parse(&eur_str)
-        .unwrap_or_else(|_| Amount::parse(&format!("{:.5}", eur)).expect("5dp EUR/kWh"))
+    amount_from_ct(ct_str.parse().expect("static rate string"))
 }
 
-// ── §40 Wasserkraft ───────────────────────────────────────────────────────────
+// ── Nicht-solare gesetzliche anzulegende Werte (§§ 40–45 EEG 2023) ───────────
+//
+// Every table below is the **Startwert** as enacted for its EEG version — the
+// value before the statutory annual Absenkung, which each Erzeugungsart carries
+// at its own rate and cadence:
+//
+// | Erzeugungsart | Absenkung | ab | § |
+// |---|---|---|---|
+// | Wasserkraft | 0,5 %/Jahr | 01.01.2024 | § 40 Abs. 3 |
+// | Deponie-/Klär-/Grubengas | 1,5 %/Jahr | 01.01.2024 | § 41 Abs. 4 |
+// | Biomasse (§§ 42–44) | 0,5 %/Jahr | **01.07.**2024 | § 44a |
+// | Geothermie | 0,5 %/Jahr | 01.01.2024 | § 45 Abs. 2 |
+//
+// Apply it with [`crate::degression::JaehrlicheAbsenkung`]. Every value here is
+// asserted against the statute by `statutory_rate_tests`.
 
-/// Return the EEG statutory rate table for **Wasserkraft** (run-of-river hydro).
+/// § 40 Abs. 1 EEG 2023 — **Wasserkraft**, by Bemessungsleistung.
 ///
-/// The parameter to `rate_for()` is the installed capacity in **kW_el**.
-/// Rates are defined in §40 EEG 2023 / §40 EEG 2021 / §29 EEG 2017.
+/// Gezeiten-, Wellen-, Salzgradienten- und Strömungsenergie are Wasserkraft
+/// (§ 3 Nr. 21 lit. a) and settle from this table. There is no § 41a EEG.
 ///
-/// Hydro rates are unchanged across EEG 2017–2023.
-///
-/// **Note**: Plants > 500 kW require Ausschreibung per §22 Abs. 3 Nr. 3 EEG 2023.
-/// For tendered plants, use `TariffSource::Auction` with the BNetzA awarded value.
+/// The parameter to `rate_for()` is the **Bemessungsleistung in kW** (§ 3 Nr. 6
+/// — the annual energy divided by the hours of the year), not the installed
+/// capacity: § 40 Abs. 1 says "Bemessungsleistung" in every Nummer.
 ///
 /// ## §53 deduction
 ///
-/// Subtract 0.2 ct/kWh from the returned gross rate:
-/// `net_verguetung = lookup.rate_for(kw) - sect53_deduction(ErzeugungsArt::Wasserkraft)`
+/// Subtract 0.2 ct/kWh for an Einspeisevergütung plant:
+/// `net = lookup.rate_for(kw)? - sect53_deduction(ErzeugungsArt::Wasserkraft)`
 ///
 /// ## Example
 ///
@@ -424,80 +439,99 @@ fn amount_ct(ct_str: &str) -> Amount<5> {
 /// use rust_decimal::dec;
 ///
 /// let table = rates::wasserkraft_lookup(2023).unwrap();
-/// // 200 kW run-of-river plant: ≤500 kW tier
-/// assert_eq!(table.rate_for(dec!(200)).unwrap(), billing::Amount::parse("0.12370").unwrap());
-/// // 3,000 kW plant: ≤5,000 kW tier
-/// assert_eq!(table.rate_for(dec!(3000)).unwrap(), billing::Amount::parse("0.07560").unwrap());
+/// // 200 kW: ≤ 500 kW tier
+/// assert_eq!(table.rate_for(dec!(200)).unwrap(), billing::Amount::parse("0.12030").unwrap());
+/// // 3 MW: ≤ 5 MW tier
+/// assert_eq!(table.rate_for(dec!(3000)).unwrap(), billing::Amount::parse("0.06070").unwrap());
+/// // 60 MW: the open top tier
+/// assert_eq!(table.rate_for(dec!(60000)).unwrap(), billing::Amount::parse("0.03370").unwrap());
 /// ```
 pub fn wasserkraft_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
-        // EEG 2017–2023: §40 EEG 2023 / §40 EEG 2021 / §29 EEG 2017.
-        // Rates are identical across EEG versions for Wasserkraft.
-        // Source: §40 Abs. 1 EEG 2023 (BGBl. I 2023 Nr. 1, S. 2476).
-        2017..=2026 => RateLookup::builder()
-            .at_most(dec!(500), amount_ct("12.37")) // ≤ 500 kW
-            .at_most(dec!(2_000), amount_ct("9.79")) // ≤ 2 MW
-            .at_most(dec!(5_000), amount_ct("7.56")) // ≤ 5 MW
-            .at_most(dec!(10_000), amount_ct("6.47")) // ≤ 10 MW
-            .at_most(dec!(20_000), amount_ct("5.59")) // ≤ 20 MW
-            .fallback(amount_ct("3.88")) //  > 20 MW
+        // § 40 Abs. 1 EEG 2023.
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("12.03"))
+            .at_most(dec!(2_000), amount_ct("7.93"))
+            .at_most(dec!(5_000), amount_ct("6.07"))
+            .at_most(dec!(10_000), amount_ct("5.32"))
+            .at_most(dec!(20_000), amount_ct("5.13"))
+            .at_most(dec!(50_000), amount_ct("4.12"))
+            .fallback(amount_ct("3.37"))
+            .build()
+            .ok(),
+        // § 40 Abs. 1 EEG 2021.
+        2017..=2022 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("12.15"))
+            .at_most(dec!(2_000), amount_ct("8.01"))
+            .at_most(dec!(5_000), amount_ct("6.13"))
+            .at_most(dec!(10_000), amount_ct("5.37"))
+            .at_most(dec!(20_000), amount_ct("5.18"))
+            .at_most(dec!(50_000), amount_ct("4.16"))
+            .fallback(amount_ct("3.40"))
             .build()
             .ok(),
         _ => None,
     }
 }
 
-// ── §41 Geothermie / §41a Gezeiten ───────────────────────────────────────────
+/// § 41 Abs. 1 EEG 2023 — **Deponiegas**, by Bemessungsleistung.
+///
+/// ```rust
+/// use eeg_billing::rates;
+/// use rust_decimal::dec;
+/// let t = rates::deponiegas_lookup(2023).unwrap();
+/// assert_eq!(t.rate_for(dec!(400)).unwrap(), billing::Amount::parse("0.07460").unwrap());
+/// assert_eq!(t.rate_for(dec!(3000)).unwrap(), billing::Amount::parse("0.05170").unwrap());
+/// ```
+pub fn deponiegas_lookup(eeg_year: i16) -> Option<RateLookup> {
+    match eeg_year {
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("7.46"))
+            .fallback(amount_ct("5.17"))
+            .build()
+            .ok(),
+        _ => None,
+    }
+}
 
-/// Return the EEG statutory rate table for **Geothermie** and **Gezeiten**.
+/// § 41 Abs. 2 EEG 2023 — **Klärgas**, by Bemessungsleistung.
+pub fn klaergas_lookup(eeg_year: i16) -> Option<RateLookup> {
+    match eeg_year {
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(500), amount_ct("5.93"))
+            .fallback(amount_ct("5.17"))
+            .build()
+            .ok(),
+        _ => None,
+    }
+}
+
+/// § 41 Abs. 3 EEG 2023 — **Grubengas**, by Bemessungsleistung.
 ///
-/// The parameter to `rate_for()` is the installed capacity in **kW_el**.
-/// Rates are defined in §41 EEG 2023 (Geothermie) / §41a EEG 2023 (Gezeiten).
+/// Satz 2: the claim exists only where the gas comes from active or
+/// decommissioned mining operations — a condition on the plant, checked by the
+/// caller, not expressible in a rate table.
+pub fn grubengas_lookup(eeg_year: i16) -> Option<RateLookup> {
+    match eeg_year {
+        2023..=2026 => RateLookup::builder()
+            .at_most(dec!(1_000), amount_ct("5.98"))
+            .at_most(dec!(5_000), amount_ct("3.81"))
+            .fallback(amount_ct("3.37"))
+            .build()
+            .ok(),
+        _ => None,
+    }
+}
+
+/// § 45 Abs. 1 EEG 2023 — **Geothermie**, a flat 25,20 ct/kWh.
 ///
-/// Geothermie is a flat rate — all capacity classes receive the same AW.
-/// Plants > 150 kW require Ausschreibung per §22 Abs. 3 Nr. 3 EEG 2023.
-///
-/// ## §53 deduction
-///
-/// Subtract 0.2 ct/kWh: `net = rate − sect53_deduction(ErzeugungsArt::Geothermie)`
+/// Not § 41: that is Deponie-, Klär- und Grubengas. Plants above the § 22 Abs. 4
+/// threshold have their anzulegender Wert set by tender — use
+/// [`crate::TariffSource::Auction`] with the awarded value.
 pub fn geothermie_lookup(eeg_year: i16) -> Option<RateLookup> {
     match eeg_year {
-        // Source: §41 Abs. 1 EEG 2023. Flat rate, no capacity tiers.
-        // For plants > 150 kW: AW is set by BNetzA tender — use TariffSource::Auction.
-        2023..=2026 => RateLookup::builder()
-            .fallback(amount_ct("25.20")) // flat for ≤ 150 kW; > 150 kW uses auction
-            .build()
-            .ok(),
-        2017..=2022 => RateLookup::builder()
+        2017..=2026 => RateLookup::builder()
             .fallback(amount_ct("25.20"))
-            .build()
-            .ok(),
-        _ => None,
-    }
-}
-
-// ── §42 Klärgas / Deponiegas / Grubengas ──────────────────────────────────────
-
-/// Return the EEG statutory rate table for **Klärgas**, **Deponiegas**, and **Grubengas**.
-///
-/// The parameter to `rate_for()` is the installed capacity in **kW_el**.
-/// Rates are defined in §42 EEG 2023.
-///
-/// These are flat rates — all capacity classes receive the same AW.
-/// Plants > 500 kW are uncommon for these fuel types; they use Ausschreibung.
-///
-/// ## §53 deduction
-///
-/// Subtract 0.2 ct/kWh from the returned rate.
-pub fn gasart_lookup(eeg_year: i16) -> Option<RateLookup> {
-    match eeg_year {
-        // Source: §42 Abs. 1 EEG 2023. Flat rate regardless of capacity.
-        2023..=2026 => RateLookup::builder()
-            .fallback(amount_ct("7.74"))
-            .build()
-            .ok(),
-        2017..=2022 => RateLookup::builder()
-            .fallback(amount_ct("7.74"))
             .build()
             .ok(),
         _ => None,
@@ -577,11 +611,18 @@ pub fn lookup_rate_for(
         E::WindOnshore => wind_onshore_lookup(eeg_year),
         // Offshore wind (§§70 ff.) is tender-only — no static statutory table.
         E::WindOffshore => None,
-        E::Biomasse | E::BiomassHolz | E::Biogas | E::Biomethan => biomasse_lookup(eeg_year),
+        // § 42 Satz 2 excludes Biomethan from the statutory value, and
+        // Holzbiomasse has none of its own — both resolve from the DB series.
+        E::Biomasse | E::Biogas => biomasse_lookup(eeg_year),
+        E::BiomassHolz | E::Biomethan => None,
         E::Kwk => kwkg_zuschlag_lookup(),
-        E::Wasserkraft => wasserkraft_lookup(eeg_year),
-        E::Geothermie | E::Gezeiten => geothermie_lookup(eeg_year),
-        E::Klaegas | E::Grubengas | E::Deponiegas => gasart_lookup(eeg_year),
+        // Gezeitenenergie is Wasserkraft (§ 3 Nr. 21 lit. a), settled from § 40.
+        E::Wasserkraft | E::Gezeiten => wasserkraft_lookup(eeg_year),
+        E::Geothermie => geothermie_lookup(eeg_year),
+        // § 41 gives each gas its own ladder; they are not interchangeable.
+        E::Deponiegas => deponiegas_lookup(eeg_year),
+        E::Klaegas => klaergas_lookup(eeg_year),
+        E::Grubengas => grubengas_lookup(eeg_year),
     }
     .ok_or(BillingError::InvalidInput {
         reason:
@@ -703,5 +744,147 @@ pub fn guellekleinanlage_rate(eeg_year: i16) -> Option<RateLookup> {
             .build()
             .ok(),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod statutory_rate_tests {
+    use super::*;
+
+    /// Assert a whole ladder at once: `(Bemessungsleistung, ct/kWh)`.
+    fn assert_ladder(table: &RateLookup, tiers: &[(&str, &str)], what: &str) {
+        for (kw, ct) in tiers {
+            let kw: Decimal = kw.parse().expect("test literal");
+            let expected = amount_ct(ct);
+            assert_eq!(
+                table
+                    .rate_for(kw)
+                    .unwrap_or_else(|e| panic!("{what} at {kw} kW: {e}")),
+                expected,
+                "{what}: {kw} kW must pay {ct} ct/kWh",
+            );
+        }
+    }
+
+    /// **§ 40 Abs. 1 EEG 2023** — seven tiers, and the top one is open.
+    ///
+    /// The table ran `12,37 / 9,79 / 7,56 / 6,47 / 5,59 / 3,88` — six tiers,
+    /// none of them a statutory figure, missing the ≤ 50 MW band, and above the
+    /// law at every step. Nothing caught it because nothing asserted it.
+    #[test]
+    fn wasserkraft_pays_the_seven_tiers_of_sect40() {
+        let t = wasserkraft_lookup(2023).expect("EEG 2023 table");
+        assert_ladder(
+            &t,
+            &[
+                ("500", "12.03"),
+                ("2000", "7.93"),
+                ("5000", "6.07"),
+                ("10000", "5.32"),
+                ("20000", "5.13"),
+                ("50000", "4.12"),
+                ("60000", "3.37"),
+            ],
+            "§ 40 Abs. 1 EEG 2023",
+        );
+        // EEG 2021 is its own ladder, one cent-fraction above throughout.
+        let t = wasserkraft_lookup(2021).expect("EEG 2021 table");
+        assert_ladder(
+            &t,
+            &[("500", "12.15"), ("2000", "8.01"), ("60000", "3.40")],
+            "§ 40 Abs. 1 EEG 2021",
+        );
+    }
+
+    /// **§ 41 EEG 2023** — Deponie-, Klär- und Grubengas each have their own
+    /// ladder. They shared one flat 7,74 ct, which paid Klärgas 1,81 ct/kWh
+    /// above its statutory rate and large Grubengas more than twice.
+    #[test]
+    fn each_gas_pays_its_own_sect41_ladder() {
+        assert_ladder(
+            &deponiegas_lookup(2023).expect("table"),
+            &[("500", "7.46"), ("3000", "5.17")],
+            "§ 41 Abs. 1 EEG 2023 (Deponiegas)",
+        );
+        assert_ladder(
+            &klaergas_lookup(2023).expect("table"),
+            &[("500", "5.93"), ("3000", "5.17")],
+            "§ 41 Abs. 2 EEG 2023 (Klärgas)",
+        );
+        assert_ladder(
+            &grubengas_lookup(2023).expect("table"),
+            &[("1000", "5.98"), ("5000", "3.81"), ("9000", "3.37")],
+            "§ 41 Abs. 3 EEG 2023 (Grubengas)",
+        );
+    }
+
+    /// **§ 42 Satz 1 EEG 2023** — one tier, and nothing above it.
+    ///
+    /// Above 150 kW the anzulegender Wert is set by tender (§ 22 Abs. 4), so the
+    /// table has no open tier: `rate_for` answers `Err` rather than inventing a
+    /// rate. The old table ran three tiers to 5 MW and beyond.
+    #[test]
+    fn biomasse_pays_one_statutory_tier_and_refuses_above_it() {
+        let t = biomasse_lookup(2023).expect("table");
+        assert_ladder(&t, &[("150", "12.67")], "§ 42 Satz 1 EEG 2023");
+        assert!(
+            t.rate_for(dec!(600)).is_err(),
+            "above 150 kW the value comes from a tender, not from this table",
+        );
+    }
+
+    /// **§§ 43 and 44 EEG 2023** — Bioabfall- and Güllevergärung are separate,
+    /// higher claims, not tiers of § 42.
+    #[test]
+    fn bioabfall_and_guelle_are_their_own_claims() {
+        assert_ladder(
+            &bioabfall_lookup(2023).expect("table"),
+            &[("500", "14.16"), ("20000", "12.41")],
+            "§ 43 Abs. 1 EEG 2023",
+        );
+        assert_ladder(
+            &guelle_lookup(2023).expect("table"),
+            &[("75", "22.00"), ("150", "19.00")],
+            "§ 44 Abs. 1 EEG 2023",
+        );
+    }
+
+    /// **§ 45 Abs. 1 EEG 2023** — Geothermie is a flat 25,20 ct/kWh.
+    #[test]
+    fn geothermie_is_flat() {
+        let t = geothermie_lookup(2023).expect("table");
+        assert_ladder(
+            &t,
+            &[("100", "25.20"), ("5000", "25.20")],
+            "§ 45 Abs. 1 EEG 2023",
+        );
+    }
+
+    /// **Wind an Land has no statutory anzulegender Wert.**
+    ///
+    /// § 22 Abs. 2 Satz 1: the claim exists "nur, solange und soweit ein von der
+    /// Bundesnetzagentur erteilter Zuschlag für die Anlage wirksam ist", and
+    /// § 36h Abs. 1 then derives the value from that Zuschlagswert. A flat
+    /// 6,28 ct "statutory AW for ≤ 750 kW" was a rate no statute contains.
+    #[test]
+    fn wind_onshore_has_no_statutory_rate() {
+        for year in [2021, 2023, 2026] {
+            assert!(wind_onshore_lookup(year).is_none(), "year {year}");
+        }
+        assert!(
+            lookup_rate_for(crate::ErzeugungsArt::WindOnshore, dec!(700), 2023).is_err(),
+            "a wind plant is settled from its award, not from a table",
+        );
+    }
+
+    /// Gezeitenenergie is Wasserkraft (§ 3 Nr. 21 lit. a), so it settles from
+    /// § 40 — not from a table of its own, and not at the geothermal rate.
+    #[test]
+    fn tidal_settles_as_wasserkraft() {
+        use crate::ErzeugungsArt as E;
+        let tidal = lookup_rate_for(E::Gezeiten, dec!(3000), 2023).expect("§ 40 covers it");
+        let hydro = lookup_rate_for(E::Wasserkraft, dec!(3000), 2023).expect("§ 40");
+        assert_eq!(tidal, hydro);
+        assert_eq!(tidal, amount_ct("6.07"));
     }
 }

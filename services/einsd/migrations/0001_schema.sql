@@ -543,25 +543,46 @@ INSERT INTO eeg_verguetungssaetze (erzeugungsart, leistung_min_kwp, leistung_max
 ('SOLAR_AUFDACH',  10,  40, 'UEBERSCHUSS', 9.33, '2021-01-01', '2021-12-31', 2021, 'EEG 2021 10–40 kWp'),
 -- EEG 2017 solar
 ('SOLAR_AUFDACH',   0,  10, 'UEBERSCHUSS', 9.87, '2017-04-01', '2020-12-31', 2017, 'EEG 2017 ≤10 kWp avg'),
--- Wind onshore statutory (≤750 kW only; >750 kW via Ausschreibung)
-('WIND_ONSHORE',  0, 750, 'UEBERSCHUSS', 7.35, '2023-01-01', NULL, 2023, 'EEG 2023 §21 Onshore ≤750 kW'),
+-- Wind onshore has NO statutory anzulegender Wert. § 22 Abs. 2 Satz 1 EEG 2023:
+-- the claim exists "nur, solange und soweit ein von der Bundesnetzagentur
+-- erteilter Zuschlag für die Anlage wirksam ist", and § 36h Abs. 1 then derives
+-- the value from that Zuschlagswert times the Gütefaktor-Korrekturfaktor. A row
+-- here read "EEG 2023 §21 Onshore ≤750 kW, 7.35 ct" — § 21 is Einspeisevergütung
+-- und Mieterstromzuschlag, and 750 kW is the *solar* second-segment threshold
+-- from § 22 Abs. 3. Awarded values are imported per plant, not seeded.
 -- KWKG 2023 (§7 Abs. 1 KWKG 2023)
 ('KWKG',    0,   50, 'KWK_ZUSCHLAG', 8.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 1, ≤50 kW_el'),
 ('KWKG',   50,  100, 'KWK_ZUSCHLAG', 6.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 2, >50–100 kW_el'),
 ('KWKG',  100,  250, 'KWK_ZUSCHLAG', 5.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 3, >100–250 kW_el'),
 ('KWKG',  250, 2000, 'KWK_ZUSCHLAG', 4.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 4, >250 kW–2 MW_el'),
 ('KWKG', 2000, NULL, 'KWK_ZUSCHLAG', 3.00, '2023-01-01', NULL, 0, 'KWKG 2023 §7 Abs. 1 Nr. 5, >2 MW_el'),
--- Biomasse (§42–43 EEG 2023)
-('BIOMASSE',   0, 150, 'UEBERSCHUSS', 16.40, '2023-01-01', NULL, 2023, 'EEG 2023 §21 Biomasse ≤150 kW'),
-('BIOMASSE', 150, 500, 'UEBERSCHUSS', 14.30, '2023-01-01', NULL, 2023, 'EEG 2023 §21 Biomasse 150–500 kW'),
--- Gas-related (§41 EEG 2023)
-('KLAEGAS', 0, NULL, 'UEBERSCHUSS', 12.50, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Klärgas'),
-('GRUBENGAS', 0, NULL, 'UEBERSCHUSS', 12.50, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Grubengas'),
-('DEPONIEGAS', 0, NULL, 'UEBERSCHUSS', 9.10, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Deponiegas'),
--- Wasserkraft (§40 EEG 2023)
-('WASSERKRAFT',    0,  500, 'UEBERSCHUSS', 12.48, '2023-01-01', NULL, 2023, 'EEG 2023 §40 ≤500 kW'),
-('WASSERKRAFT',  500, 5000, 'UEBERSCHUSS',  8.59, '2023-01-01', NULL, 2023, 'EEG 2023 §40 500 kW–5 MW'),
-('WASSERKRAFT', 5000, NULL, 'UEBERSCHUSS',  7.56, '2023-01-01', NULL, 2023, 'EEG 2023 §40 >5 MW');
+-- Biomasse — § 42 Satz 1 EEG 2023 gives ONE statutory tier (≤150 kW); above it
+-- the value is set by tender (§ 22 Abs. 4). §§ 43/44 are separate, higher claims
+-- for plants that qualify, not tiers of § 42.
+('BIOMASSE',   0, 150, 'UEBERSCHUSS', 12.67, '2023-01-01', NULL, 2023, 'EEG 2023 §42 Satz 1, ≤150 kW Bemessungsleistung'),
+('BIOGAS',     0, 500, 'UEBERSCHUSS', 14.16, '2023-01-01', NULL, 2023, 'EEG 2023 §43 Abs. 1 Nr. 1 Bioabfallvergärung, ≤500 kW'),
+('BIOGAS',   500, 20000, 'UEBERSCHUSS', 12.41, '2023-01-01', NULL, 2023, 'EEG 2023 §43 Abs. 1 Nr. 2 Bioabfallvergärung, ≤20 MW'),
+-- Deponie-, Klär- und Grubengas — § 41 EEG 2023 gives each gas its own ladder.
+-- These were seeded as a flat 12.50 / 12.50 / 9.10, which paid Klärgas more than
+-- twice its statutory value.
+('DEPONIEGAS',    0,  500, 'UEBERSCHUSS', 7.46, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 1 Nr. 1, ≤500 kW'),
+('DEPONIEGAS',  500, 5000, 'UEBERSCHUSS', 5.17, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 1 Nr. 2, ≤5 MW'),
+('KLAEGAS',       0,  500, 'UEBERSCHUSS', 5.93, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 2 Nr. 1, ≤500 kW'),
+('KLAEGAS',     500, 5000, 'UEBERSCHUSS', 5.17, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 2 Nr. 2, ≤5 MW'),
+('GRUBENGAS',     0, 1000, 'UEBERSCHUSS', 5.98, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 3 Nr. 1, ≤1 MW'),
+('GRUBENGAS',  1000, 5000, 'UEBERSCHUSS', 3.81, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 3 Nr. 2, ≤5 MW'),
+('GRUBENGAS',  5000, NULL, 'UEBERSCHUSS', 3.37, '2023-01-01', NULL, 2023, 'EEG 2023 §41 Abs. 3 Nr. 3, >5 MW'),
+-- Geothermie — § 45 Abs. 1 EEG 2023, flat. Absent from the seed entirely before.
+('GEOTHERMIE',    0, NULL, 'UEBERSCHUSS', 25.20, '2023-01-01', NULL, 2023, 'EEG 2023 §45 Abs. 1, flat'),
+-- Wasserkraft — § 40 Abs. 1 EEG 2023, seven tiers by Bemessungsleistung. The
+-- seed had three (12.48 / 8.59 / 7.56), none of which is a statutory value.
+('WASSERKRAFT',     0,   500, 'UEBERSCHUSS', 12.03, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 1, ≤500 kW'),
+('WASSERKRAFT',   500,  2000, 'UEBERSCHUSS',  7.93, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 2, ≤2 MW'),
+('WASSERKRAFT',  2000,  5000, 'UEBERSCHUSS',  6.07, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 3, ≤5 MW'),
+('WASSERKRAFT',  5000, 10000, 'UEBERSCHUSS',  5.32, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 4, ≤10 MW'),
+('WASSERKRAFT', 10000, 20000, 'UEBERSCHUSS',  5.13, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 5, ≤20 MW'),
+('WASSERKRAFT', 20000, 50000, 'UEBERSCHUSS',  4.12, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 6, ≤50 MW'),
+('WASSERKRAFT', 50000,  NULL, 'UEBERSCHUSS',  3.37, '2023-01-01', NULL, 2023, 'EEG 2023 §40 Abs. 1 Nr. 7, >50 MW');
 -- No ON CONFLICT clause on purpose: it would swallow key collisions, and the §48
 -- Abs. 2a Volleinspeisung block collides with the Überschuss rows on
 -- (erzeugungsart, leistung_min_kwp, billing_start). A migration that reports

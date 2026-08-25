@@ -177,9 +177,12 @@ Gasnetzentgelt GP       [from marktd]      pass-through
 Gasnetzentgelt AP       [from marktd]      pass-through
 Konzessionsabgabe Gas   [from marktd]      pass-through
 Bilanzierungsumlage Gas [from marktd]      pass-through
-Energiesteuer Erdgas    [from billingd.toml] §2 EnergieStG  0.55 ct/kWh_Hs
-                        OR Exemption notice when gas_energiesteuer_befreiung=true
-                           (§54 EnergieStG KWK/industrial) — requires customer certificate
+Energiesteuer Erdgas    [from billingd.toml] § 2 Abs. 3 S. 1 Nr. 4 EnergieStG
+                                             0.55 ct/kWh_Hs
+                        OR Exemption notice when energiesteuer_tarif = BEFREIUNG
+                           (§§ 25–28 EnergieStG, Erlaubnis nach § 24 Abs. 2)
+Entlastungshinweis      [informational]    § 53a / § 54 EnergieStG — the levy is
+                                           billed in full; the customer files
 CO₂-Abgabe BEHG         [from billingd.toml] ~1.31 ct/kWh_Hs (65 EUR/t CO₂, 2026)
 MwSt                    [from billingd.toml] 19%
 ```
@@ -263,17 +266,33 @@ Arbeitspreis            [from productd]     ct/kWh_th
 MwSt
 ```
 
-### SOLAR — Mieterstrom (§21 Abs. 3 EEG) / GGV (§42b EnWG)
+### SOLAR — Mieterstrom (§ 42a EnWG) / GGV (§ 42b EnWG)
 
 ```
-Arbeitspreis Solar      [from productd]     ct/kWh  (Eigenverbrauch supply price)
-Mieterstrom-Aufschlag   [from productd]     ct/kWh  §21 Abs. 3 EEG 2023 (rate published under §48a)
-GGV-Preisvorteil        [from productd]     ct/kWh  contractual, §42b Abs. 2 Nr. 2 EnWG
-Stromsteuer             skipped by default  §9a StromStG exemption for on-site Eigenverbrauch
+Arbeitspreis Solar      [from productd]     ct/kWh  the PV supply price
+GGV-Preisvorteil        [from productd]     ct/kWh  contractual, § 42b Abs. 2 Nr. 2 EnWG
+Preisobergrenze         [informational]     § 42a Abs. 4 EnWG — 90 % of the stated
+                                            Grundversorgungs-Arbeitspreis; a price above
+                                            it is refused, not billed
+Stromsteuer             none by default     § 9 Abs. 1 Nr. 3 StromStG — the ground is
+                                            **stated** on the invoice, not merely omitted
 MwSt
 ```
 
-Set `solar_include_stromsteuer: true` in the product definition for non-exempt cases.
+On a **GGV** invoice the two portions are taxed differently and both appear: the
+allocated PV is exempt under § 9 Abs. 1 Nr. 3 and the residual grid draw carries
+the full Stromsteuer.
+
+The default is the § 9 Abs. 1 Nr. 3 Kleinanlage-Befreiung because that is what a
+rooftop Mieterstrom or GGV supply is — an installation up to 2 MW whose operator
+delivers to Letztverbraucher drawing im räumlichen Zusammenhang (lit. b), or
+self-consumes (lit. a). § 9 Abs. 4 conditions it on the customer's Erlaubnis,
+which is why the page names the ground. A supply that does not qualify sets
+`stromsteuer_tarif = {"art": "REGEL"}`.
+
+The **Mieterstromzuschlag (§ 21 Abs. 3 EEG 2023)** is deliberately absent: it is
+the Anlagenbetreiber's claim against the Netzbetreiber, settled by `einsd`, and
+never a surcharge on the tenant.
 
 ### EEG — Feed-in Settlement (Gutschrift)
 
@@ -389,7 +408,14 @@ let invoice = engine.bill(ctx, &quantities)?;
 | Addition | Law |
 |---|---|
 | `kleinunternehmer_19_ustg` → 0% USt on feed-in Gutschrift | §19 UStG |
-| `industrie_stromsteuer_befreiung` → exemption notice | §9 Abs. 1 Nr. 4 StromStG |
+| `stromsteuer_tarif` → Befreiung (levy dropped) or Ermäßigung (reduced rate) | § 9 Abs. 1 / Abs. 2 / Abs. 3 StromStG |
+| `steuerentlastungen` → informational note, levy billed in full | § 9a/9b/9c StromStG, §§ 53a, 54 EnergieStG |
+| `grundversorgung_arbeitspreis_ct_per_kwh` → Mieterstrom capped at 90 % | § 42a Abs. 4 EnWG |
+| `waerme_co2_kosten_ct_per_kwh` → CO₂ cost line + emissions disclosure | CO2KostAufG § 3 |
+| `settlement_form` → Endrechnung (BT-113 paid) or Restrechnung (BG-20 allowance per rate) | § 14 Abs. 5 Satz 2 UStG; BMF 15.10.2024 Rn. 48 |
+| `en16931_blocked` → `MODEL_NOT_REPRESENTABLE` instead of an invalid e-invoice | EN 16931 BR-O-11 ff. |
+| `ablesungsart` → how the reading was obtained, beside the readings | § 40 Abs. 2 Nr. 6 EnWG |
+| `ZWEITARIF_OHNE_HT_NT_AUFTEILUNG` / `HT_NT_SUMME_WEICHT_AB` → refused, not under-billed | § 41 EnWG |
 | `preisgarantie_bis` → disclosure on invoice | §41 Abs. 1 Nr. 4 EnWG |
 | `MeteringMode` (SLP/RLM/iMSys) on MeterInput | §3/§ 12 StromNZV, §31 MsbG |
 | `is_estimated` flag → § 60 Abs. 2 MsbG notice | § 60 Abs. 2 MsbG |
@@ -657,6 +683,29 @@ The guard asks whether the product can price its commodity *at all* — Eintarif
 HT/NT, dynamic, indexed, seasonal or tiered all satisfy it — and covers Strom,
 Gas and Fernwärme. An operator who genuinely charges nothing per kWh states a
 `0.0`: that is how a decision is distinguished from missing data.
+
+Water has the same failure mode and it is harder to see, because the invoice is
+not empty. The Schmutzwassergebühr rides the Frischwassermaßstab, so a tariff
+that prices only the Abwasser side produces a full, plausible Gebühr and nothing
+for the drinking water delivered. `KEIN_TRINKWASSERPREIS` refuses it.
+
+### The quantity side
+
+A provider can also fail to price the quantity it is *handed*. On the § 41a path
+the quarter-hour series **is** the billed quantity: Arbeitspreis, Netzentgelt,
+Konzessionsabgabe and Stromsteuer all ride the sum of the priced intervals, and
+nothing reads the register total. A short Lastgang therefore bills every levy on
+the days that happened to import, and states no shortfall.
+
+The register total is the independent witness:
+
+| Finding | Refuses |
+|---|---|
+| `SECT41A_KEINE_INTERVALLE` | no series at all, against a meter reporting consumption |
+| `SECT41A_INTERVALLSUMME_WEICHT_AB` | a series missing the meter total by more than 0,5 % (1 kWh floor — an interval sum and a difference of two readings never agree exactly) |
+
+billingd refuses an empty Lastgang earlier still, as `SECT41A_NO_LASTGANG`; the
+engine guards cover every other caller.
 
 ---
 
@@ -1249,7 +1298,7 @@ Rechnungsnummer. A **held** invoice is never sent whatever the setting says: the
 risk gate withheld its issuance, so no receivable stands behind it.
 
 iMSys MaLos additionally receive the free monthly Abrechnungsinformation
-(§40b Abs. 2 EnWG) as `de.billing.abrechnungsinformation.monatlich`, enqueued
+(§ 40b Abs. 3 EnWG) as `de.billing.abrechnungsinformation.monatlich`, enqueued
 through the same transactional outbox as every other event and claimed in
 `abrechnungsinfo_log` exactly once per MaLo and month. The claim is taken
 *before* the work so two sweeps cannot both deliver, and **released again** on

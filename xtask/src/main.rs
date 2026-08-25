@@ -28,6 +28,7 @@ Commands:
   check-malo-ids       Refuse a MaLo-ID literal whose BDEW check digit is wrong
   check-wire-timestamps  Refuse raw `time` values in JSON output (they serialise as component arrays)
                         under axum 0.8 (the fix is `/{param}`)
+  check-answer-commands  Refuse an invoicd PID route naming a makod command that does not exist
   check-tool-grants   Verify every agentd manifest tool grant names a real MCP tool and
                         agrees with that server's own `read_only_hint`
 
@@ -123,6 +124,7 @@ Exit codes:
 mod add_release;
 mod audit_ahb;
 mod bump_version;
+mod check_answer_commands;
 mod check_bo4e_attributes;
 mod check_malo_ids;
 mod check_prompt_tools;
@@ -154,6 +156,7 @@ fn main() {
         Some("check-bo4e-attributes") => check_bo4e_attributes(),
         Some("check-malo-ids") => check_malo_ids(),
         Some("check-wire-timestamps") => check_wire_timestamps(),
+        Some("check-answer-commands") => check_answer_commands(),
         Some("check-tool-grants") => check_tool_grants(),
         Some("codegen") => codegen(),
         Some("validate-extraction") => validate_extraction::validate_extraction(),
@@ -216,6 +219,13 @@ fn check_routes() {
 fn check_prompt_tools() {
     let (workspace_root, _) = workspace_info();
     if !check_prompt_tools::run(std::path::Path::new(&workspace_root)) {
+        std::process::exit(1);
+    }
+}
+
+fn check_answer_commands() {
+    let (workspace_root, _) = workspace_info();
+    if !check_answer_commands::run(std::path::Path::new(&workspace_root)) {
         std::process::exit(1);
     }
 }

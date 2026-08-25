@@ -380,10 +380,40 @@ fn the_page_carries_the_mandatory_invoice_content() {
         flat.contains("DurchlaufenderPosten"),
         "the BT-120 exemption reason must reach the page",
     );
-    // The amount due is the model's, to the cent, in German notation.
+    // The amount due is the model's, to the cent, in German notation — taken
+    // from the specimen rather than pinned, so adding a term to the specimen
+    // (a BG-20 allowance, say) does not turn this into a stale-literal failure
+    // that says nothing about the page.
+    let due_de = specimen.totals.due.replace('.', ",");
     assert!(
-        flat.contains("383,17"),
-        "the amount due must be printed as a German decimal",
+        flat.contains(&due_de),
+        "the amount due ({due_de}) must be printed as a German decimal",
+    );
+
+    // BG-20 — the allowance and the base it leaves behind are both on the page.
+    // Printing "Summe netto" and then a VAT breakdown on a smaller base, with
+    // nothing between them, is a page that does not add up while the embedded
+    // XML is correct — the one disagreement no rendering test above would see.
+    assert!(!specimen.allowances.is_empty(), "the specimen carries one");
+    for a in &specimen.allowances {
+        let amount: String = a.amount.replace('.', ",");
+        assert!(
+            flat.contains(&amount),
+            "the BG-20 allowance ({amount}) must reach the page",
+        );
+        let reason: String = a
+            .reason
+            .clone()
+            .unwrap()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        assert!(flat.contains(&reason), "and so must its BT-97 reason");
+    }
+    let taxable_de = specimen.totals.taxable_total.replace('.', ",");
+    assert!(
+        flat.contains(&taxable_de),
+        "the base the VAT is computed on ({taxable_de}) must be on the page",
     );
     // Both VAT rates appear — the mixed-rate case the engine exists for.
     assert!(

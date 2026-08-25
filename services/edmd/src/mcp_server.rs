@@ -1456,6 +1456,10 @@ impl EdmdMcpHandler {
                        statistical outliers (V04), zero-runs (V05), inconsistent intervals (V06), \
                        DST ambiguity (V07), future timestamps (V08), non-billable quality (V09), \
                        unordered input (V11) and implausible power (V12). There is no V10. \
+                       `rules_evaluated` / `rules_skipped` say which of them actually ran: a \
+                       rule the configuration or the data left inert found nothing, so a clean \
+                       result is only as strong as the rules behind it. V12 needs \
+                       `max_plant_power_kw`. \
                        Use before billing to detect intervals requiring § 60 Abs. 2 MsbG \
                        substitute values.",
         annotations(read_only_hint = true, open_world_hint = false)
@@ -1499,7 +1503,8 @@ impl EdmdMcpHandler {
         // while the ingest door that stored it called it clean. An MCP tool that
         // disagrees with its REST twin is worse than one that does not exist: it
         // is consulted exactly when nobody is checking.
-        let found = crate::domain::validation::findings(&reads, p.max_plant_power_kw);
+        let (found, evaluated) =
+            crate::domain::validation::findings_with_coverage(&reads, p.max_plant_power_kw);
         let register_count = crate::domain::register_groups(&reads).len();
         let billing_block_count = found.iter().filter(|f| f.issue.blocks_billing()).count();
         let has_errors = billing_block_count > 0;
@@ -1530,6 +1535,19 @@ impl EdmdMcpHandler {
             "interval_count": reads.len(),
             "register_count": register_count,
             "is_clean": is_clean,
+            // What `is_clean` is a statement about. A rule that never ran found
+            // nothing, and without this an agent reads a spotless report as a
+            // guarantee no rule stands behind — V12 is inert unless the caller
+            // supplies `max_plant_power_kw`, which edmd holds no master data for.
+            "rules_evaluated": evaluated
+                .iter()
+                .map(|r| r.as_str())
+                .collect::<Vec<_>>(),
+            "rules_skipped": evaluated
+                .complement()
+                .iter()
+                .map(|r| r.as_str())
+                .collect::<Vec<_>>(),
             "has_errors": has_errors,
             "billing_block_count": billing_block_count,
             "issue_count": found.len(),

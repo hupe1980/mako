@@ -5,10 +5,15 @@
 
 use super::*;
 
-/// Settle or dispute a GaBi Gas MMM-Rechnung INVOIC (PIDs 31007 / 31008).
+/// Settle or dispute a GaBi Gas billing INVOIC — the whole family, PIDs 31007,
+/// 31008 and 31010.
 ///
-/// Dispatched by `invoicd` after the plausibility check (including MMM Gas price
-/// check 6 against Trading Hub Europe MMMA prices) completes.
+/// One workflow answers all three, so one command pair does too. `invoicd`
+/// dispatches it for 31007/31008 after the plausibility check (including MMM
+/// Gas price check 6 against Trading Hub Europe MMMA prices); the
+/// Kapazitätsrechnung 31010 has no price basis to check against and is answered
+/// by an operator through the same command.
+///
 /// Business key = `invoice_ref`.
 pub(super) async fn dispatch_gabi_gas_invoic(
     state: &CommandsApiState,
@@ -19,7 +24,7 @@ pub(super) async fn dispatch_gabi_gas_invoic(
     let reason = payload
         .get("ablehnungsgrund")
         .and_then(|v| v.as_str())
-        .unwrap_or("Automatisch ermittelte Abweichung — GaBi Gas 31007/31008")
+        .unwrap_or("Automatisch ermittelte Abweichung — GaBi Gas Rechnung")
         .to_owned();
     dispatch_to_process::<GaBiGasInvoicWorkflow, _>(
         state,
@@ -27,9 +32,9 @@ pub(super) async fn dispatch_gabi_gas_invoic(
         GABI_GAS_INVOIC_WORKFLOW_NAME,
         move || {
             if settle {
-                GaBiGasInvoicCommand::SettleInvoice
+                InvoicCommand::SettleInvoice
             } else {
-                GaBiGasInvoicCommand::DisputeInvoice {
+                InvoicCommand::DisputeInvoice {
                     reason: reason.clone(),
                 }
             }
@@ -38,7 +43,7 @@ pub(super) async fn dispatch_gabi_gas_invoic(
     .await
 }
 
-pub(super) fn cmd_gabi_gas_mmm_rechnung_annehmen<'a>(
+pub(super) fn cmd_gabi_gas_rechnung_annehmen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<
@@ -47,7 +52,7 @@ pub(super) fn cmd_gabi_gas_mmm_rechnung_annehmen<'a>(
     Box::pin(dispatch_gabi_gas_invoic(s, p, true))
 }
 
-pub(super) fn cmd_gabi_gas_mmm_rechnung_ablehnen<'a>(
+pub(super) fn cmd_gabi_gas_rechnung_ablehnen<'a>(
     s: &'a CommandsApiState,
     p: &'a serde_json::Value,
 ) -> std::pin::Pin<

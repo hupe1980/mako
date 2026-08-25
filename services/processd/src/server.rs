@@ -1083,7 +1083,7 @@ mod rest {
                 StatusCode::ACCEPTED,
                 axum::Json(serde_json::json!({
                     "process_id": accepted.process_id,
-                    "command": "gpke.lieferbeginn.anmelden",
+                    "command": mako_markt::commands::GPKE_LIEFERBEGINN_ANMELDEN,
                     "malo_id": malo_id,
                     "lieferbeginn_datum": lieferbeginn.to_string(),
                     "status": "initiated",
@@ -1274,7 +1274,7 @@ mod rest {
                 StatusCode::ACCEPTED,
                 axum::Json(serde_json::json!({
                     "process_id": accepted.process_id,
-                    "command": "geli.lieferbeginn.anmelden",
+                    "command": mako_markt::commands::GELI_LIEFERBEGINN_ANMELDEN,
                     "malo_id": malo_id,
                     "status": "initiated",
                     // The GNB's answer window, not the supplier's own 10 WT

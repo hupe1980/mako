@@ -132,6 +132,7 @@ mod tests {
             } else {
                 vec!["V09".to_owned()]
             },
+            skipped_rules: Vec::new(),
         }
     }
 

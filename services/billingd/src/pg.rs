@@ -24,8 +24,12 @@ pub struct BillingRecordRow {
     pub rechnung_json: serde_json::Value,
     pub bo4e_version: String,
     /// EN 16931 semantic invoice model (serde), rendered to XRechnung/CII/UBL.
-    /// `None` for records written before the model was attached.
+    /// `None` when the model has not been attached yet, or when
+    /// [`Self::en16931_blocked`] says one cannot exist.
     pub en16931_json: Option<serde_json::Value>,
+    /// Why this record has no EN 16931 model, when the reason is the invoice
+    /// itself rather than a missing step. `None` on every ordinary record.
+    pub en16931_blocked: Option<String>,
     pub total_netto_eur: Option<Decimal>,
     pub total_brutto_eur: Option<Decimal>,
     pub outcome: String,
@@ -195,6 +199,7 @@ pub async fn insert_billing_record(
               -- callers re-attach these in this same transaction when they have
               -- a value; NULL is the honest state until they do.
               en16931_json    = NULL,
+              en16931_blocked = NULL,
               risk_score      = NULL,
               risk_band       = NULL,
               risk_findings   = NULL,
@@ -374,12 +379,40 @@ pub async fn attach_en16931(
     id: Uuid,
     model: &serde_json::Value,
 ) -> anyhow::Result<()> {
-    sqlx::query("UPDATE billing_records SET en16931_json = $2, updated_at = now() WHERE id = $1")
-        .bind(id)
-        .bind(model)
-        .execute(executor)
-        .await
-        .context("attach_en16931")?;
+    sqlx::query(
+        "UPDATE billing_records \
+         SET en16931_json = $2, en16931_blocked = NULL, updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(model)
+    .execute(executor)
+    .await
+    .context("attach_en16931")?;
+    Ok(())
+}
+
+/// Record *why* this invoice has no EN 16931 model.
+///
+/// The counterpart to [`attach_en16931`] for an invoice the standard cannot
+/// represent. Storing the reason is what lets the render endpoints answer
+/// "this document has no valid e-invoice, because …" rather than "re-run the
+/// calculation" — advice that would produce the same refusal.
+pub async fn attach_en16931_blocked(
+    executor: impl sqlx::PgExecutor<'_>,
+    id: Uuid,
+    reason: &str,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "UPDATE billing_records \
+         SET en16931_json = NULL, en16931_blocked = $2, updated_at = now() \
+         WHERE id = $1",
+    )
+    .bind(id)
+    .bind(reason)
+    .execute(executor)
+    .await
+    .context("attach_en16931_blocked")?;
     Ok(())
 }
 
@@ -945,7 +978,7 @@ pub async fn billing_record_exists_for_period(
     Ok(row.is_some())
 }
 
-/// Claim the monthly §40b Abs. 2 Abrechnungsinformation for a MaLo.
+/// Claim the monthly § 40b Abs. 3 Abrechnungsinformation for a MaLo.
 ///
 /// Returns `true` when this call inserted the claim (caller must now send the
 /// info), `false` when the month was already delivered — the UNIQUE guard
@@ -973,7 +1006,7 @@ pub async fn claim_abrechnungsinfo(
     Ok(row.is_some())
 }
 
-/// Release a §40b Abs. 2 claim whose delivery did not happen.
+/// Release a § 40b Abs. 3 claim whose delivery did not happen.
 ///
 /// The claim is taken *before* the work so two concurrent sweeps cannot both
 /// deliver. When the work then fails, holding the claim would suppress that

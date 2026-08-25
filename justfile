@@ -211,7 +211,7 @@ smoke-roles:
             --allow-no-as4-signing --check
     done
 
-ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
+ci: check test test-features clippy clippy-roles smoke-roles fmt-check deny no-version-alias check-bo4e-coverage check-routes check-wire-timestamps check-malo-ids check-bo4e-attributes check-prompt-tools check-tool-grants check-answer-commands doc-check codegen-check validate-profiles-strict validate-pruefids-strict-ci validate-release-codes lint-makotest test-makotest
 
 # mako proves the carrier by reading its own output back (outputd's publish
 # gate), and `en16931 validate` — an independent implementation — reports the
@@ -451,6 +451,15 @@ check-routes:
 # a mutation declared read-only is dispatched unattended.
 check-tool-grants:
     cargo xtask check-tool-grants
+
+# Refuse an invoicd PID route naming a makod command that does not exist.
+#
+# The command name is a string on both sides. A route naming one makod never
+# registered fails only when a real invoice arrives: the check runs, the verdict
+# is persisted, the dispatch 404s, and the Antwortfrist expires on a process that
+# looked healthy the whole way.
+check-answer-commands:
+    cargo run -q -p xtask -- check-answer-commands
 
 # ── AHB audit ─────────────────────────────────────────────────────────────────
 

@@ -254,7 +254,7 @@ fn extract_tariff_from_product_data(
     let mut waerme_arbeitspreis_ct_per_kwh: Option<Decimal> = None;
     let mut waerme_leistungspreis_eur_per_kw_month: Option<Decimal> = None;
     let mut solar_arbeitspreis_ct_per_kwh: Option<Decimal> = None;
-    let mut mieterstrom_aufschlag_ct_per_kwh: Option<Decimal> = None;
+    let mut grundversorgung_arbeitspreis_ct_per_kwh: Option<Decimal> = None;
     let mut gemeinschaft_rabatt_ct_per_kwh: Option<Decimal> = None;
     let mut eeg_verguetungssatz_ct_per_kwh: Option<Decimal> = None;
     let mut eeg_marktpraemie_ct_per_kwh: Option<Decimal> = None;
@@ -319,7 +319,17 @@ fn extract_tariff_from_product_data(
             ("LEISTUNGSPREIS", other) => dropped.push(format!("LEISTUNGSPREIS ({other})")),
 
             ("SOLAR_ARBEITSPREIS", _) => solar_arbeitspreis_ct_per_kwh = preis,
-            ("MIETERSTROM_AUFSCHLAG", _) => mieterstrom_aufschlag_ct_per_kwh = preis,
+            // The Mieterstromzuschlag (§ 21 Abs. 3 EEG) is the plant operator's
+            // claim against the Netzbetreiber, settled by `einsd`. A catalog
+            // position claiming to be one on a *retail* product is a modelling
+            // error, so it is reported rather than billed to the tenant.
+            ("MIETERSTROM_AUFSCHLAG", _) => dropped.push(
+                "MIETERSTROM_AUFSCHLAG (§ 21 Abs. 3 EEG is settled by einsd, not billed to the tenant)"
+                    .to_owned(),
+            ),
+            ("GRUNDVERSORGUNG_ARBEITSPREIS", _) => {
+                grundversorgung_arbeitspreis_ct_per_kwh = preis
+            }
             ("GEMEINSCHAFT_RABATT", _) => gemeinschaft_rabatt_ct_per_kwh = preis,
             ("EEG_VERGUETUNG", _) => eeg_verguetungssatz_ct_per_kwh = preis,
             ("EEG_MARKTPRAEMIE", _) => eeg_marktpraemie_ct_per_kwh = preis,
@@ -362,8 +372,20 @@ fn extract_tariff_from_product_data(
     let gas_indexed_price: Option<energy_billing::IndexedPriceConfig> = product
         .and_then(|p| p.get("gas_indexed_price"))
         .and_then(|v| serde_json::from_value(v.clone()).ok());
-    let stromsteuer_befreiung: energy_billing::StromsteuerBefreiung = product
-        .and_then(|p| p.get("stromsteuer_befreiung"))
+    // How the Stromsteuer applies, and which Entlastungen the customer may
+    // claim afterwards. Both are pass-through of what the catalog states — an
+    // unparseable value falls back to "taxed at the standard rate", never to a
+    // silent exemption (see `energy_billing::steuer`).
+    let stromsteuer_tarif: energy_billing::StromsteuerTarif = product
+        .and_then(|p| p.get("stromsteuer_tarif"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let energiesteuer_tarif: energy_billing::EnergiesteuerTarif = product
+        .and_then(|p| p.get("energiesteuer_tarif"))
+        .and_then(|v| serde_json::from_value(v.clone()).ok())
+        .unwrap_or_default();
+    let steuerentlastungen: Vec<energy_billing::Steuerentlastung> = product
+        .and_then(|p| p.get("steuerentlastungen"))
         .and_then(|v| serde_json::from_value(v.clone()).ok())
         .unwrap_or_default();
     let energiequellen: Option<energy_billing::EnergieQuellen> = product
@@ -389,16 +411,25 @@ fn extract_tariff_from_product_data(
         "gas_arbeitspreis_ct_per_kwh_hs": gas_arbeitspreis_ct_per_kwh_hs,
         "gas_leistungspreis_ct_per_kw_month": get_decimal("gas_leistungspreis_ct_per_kw_month"),
         "gas_indexed_price": gas_indexed_price,
-        "gas_energiesteuer_befreiung": product.and_then(|p| p.get("gas_energiesteuer_befreiung")).and_then(|v| v.as_bool()).unwrap_or(false),
+        "energiesteuer_tarif": energiesteuer_tarif,
         "waerme_grundpreis_eur_per_month": waerme_grundpreis_eur_per_month,
         "waerme_arbeitspreis_ct_per_kwh": waerme_arbeitspreis_ct_per_kwh,
         "waerme_leistungspreis_eur_per_kw_month": waerme_leistungspreis_eur_per_kw_month,
         "waerme_leistungspreis_eur_per_kw_year": get_decimal("waerme_leistungspreis_eur_per_kw_year"),
         "waerme_erneuerbar_anteil_pct": get_decimal("waerme_erneuerbar_anteil_pct"),
+        "waerme_co2_kosten_ct_per_kwh": get_decimal("waerme_co2_kosten_ct_per_kwh"),
+        "waerme_co2_emission_g_per_kwh": get_decimal("waerme_co2_emission_g_per_kwh"),
         "solar_arbeitspreis_ct_per_kwh": solar_arbeitspreis_ct_per_kwh,
-        "mieterstrom_aufschlag_ct_per_kwh": mieterstrom_aufschlag_ct_per_kwh,
+        "grundversorgung_arbeitspreis_ct_per_kwh": grundversorgung_arbeitspreis_ct_per_kwh
+            .or_else(|| get_decimal("grundversorgung_arbeitspreis_ct_per_kwh")),
         "gemeinschaft_rabatt_ct_per_kwh": gemeinschaft_rabatt_ct_per_kwh,
-        "solar_include_stromsteuer": false,
+        // § 9 StromStG treatment of the solar supply. Absent, the engine
+        // defaults to the § 9 Abs. 1 Nr. 3 Kleinanlage-Befreiung — what a
+        // rooftop Mieterstrom or GGV supply is — and states the ground on the
+        // invoice. A catalog product that does not qualify sets REGEL.
+        "stromsteuer_tarif": product
+            .and_then(|p| p.get("stromsteuer_tarif"))
+            .cloned(),
         "eeg_verguetungssatz_ct_per_kwh": eeg_verguetungssatz_ct_per_kwh,
         "eeg_marktpraemie_ct_per_kwh": eeg_marktpraemie_ct_per_kwh,
         "eeg_managementpraemie_ct_per_kwh": eeg_managementpraemie_ct_per_kwh,
@@ -416,6 +447,9 @@ fn extract_tariff_from_product_data(
         "service_event_price_eur": service_event_price_eur,
         "dynamic_epex": dynamic_epex,
         "dynamic_epex_floor_ct_kwh": get_decimal("dynamic_epex_floor_ct_kwh"),
+        "dynamic_epex_cap_ct_kwh": get_decimal("dynamic_epex_cap_ct_kwh"),
+        "dynamic_aufschlag_ct_per_kwh": get_decimal("dynamic_aufschlag_ct_per_kwh"),
+        "dynamic_price_source": product.and_then(|p| p.get("dyn_source")).and_then(|v| v.as_str()),
         "auf_abschlag_ct_per_kwh": get_decimal("auf_abschlag_ct_per_kwh"),
         "auf_abschlag_eur_per_month": get_decimal("auf_abschlag_eur_per_month"),
         "msb_gebuehr_ct_per_day": get_decimal("msb_gebuehr_ct_per_day"),
@@ -424,8 +458,8 @@ fn extract_tariff_from_product_data(
         "indexed_price": product.and_then(|p| p.get("indexed_price")).cloned(),
         "seasonal_prices": product.and_then(|p| p.get("seasonal_prices")).cloned(),
         "anlage_kwp": get_decimal("anlage_kwp"),
-        "industrie_stromsteuer_befreiung": product.and_then(|p| p.get("industrie_stromsteuer_befreiung")).and_then(|v| v.as_bool()).unwrap_or(false),
-        "stromsteuer_befreiung": stromsteuer_befreiung,
+        "stromsteuer_tarif": stromsteuer_tarif,
+        "steuerentlastungen": steuerentlastungen,
         "preisgarantie_bis": product.and_then(|p| p.get("preisgarantie_bis")).and_then(|v| v.as_str()),
         "stromsteuer_ct_per_kwh_override": get_decimal("stromsteuer_ct_per_kwh_override"),
         "energiesteuer_gas_ct_per_kwh_override": get_decimal("energiesteuer_gas_ct_per_kwh_override"),
@@ -566,6 +600,9 @@ impl EdmdClient {
             // a real measurement must be labeled as estimated on the bill.
             is_estimated: quality_is_estimated(&body),
             metering_mode: metering_mode_from_messtyp(&body),
+            // § 40 Abs. 2 Nr. 6 EnWG — the *Art* of the reading, as far as
+            // edmd's data actually determines it.
+            ablesungsart: ablesungsart_from(&body),
             ..Default::default()
         };
         Ok(Some(meter))
@@ -772,6 +809,30 @@ pub struct GasBillingPeriod {
 
 /// `true` when the period's collapsed quality flag means the value was not a
 /// real measurement (§40a EnWG: estimation must be labeled on the bill).
+/// The § 40 Abs. 2 Nr. 6 EnWG Ablesungsart, as far as edmd's data determines it.
+///
+/// MSCONS quality answers *how good* a value is, not *who obtained it*, so the
+/// two questions only partly overlap:
+///
+/// - anything that is not a real measurement is `Rechnerisch`;
+/// - a measured value on an iMSys or RLM meter is `Fernauslesung` by definition;
+/// - a measured value on an **SLP** meter could be a Messstellenbetreiber read
+///   or a customer self-read, and nothing in the payload says which.
+///
+/// The last stays `Unbekannt` rather than guessing — that is the distinction the
+/// statute cares about — and the engine's `ABLESUNGSART_FEHLT` warning reports
+/// that the datum is missing upstream.
+fn ablesungsart_from(body: &serde_json::Value) -> energy_billing::Ablesungsart {
+    use energy_billing::{Ablesungsart, MeteringMode};
+    if quality_is_estimated(body) {
+        return Ablesungsart::Rechnerisch;
+    }
+    match metering_mode_from_messtyp(body) {
+        MeteringMode::Imsys | MeteringMode::Rlm => Ablesungsart::Fernauslesung,
+        MeteringMode::Slp => Ablesungsart::Unbekannt,
+    }
+}
+
 fn quality_is_estimated(body: &serde_json::Value) -> bool {
     matches!(
         body.get("quality").and_then(|v| v.as_str()),

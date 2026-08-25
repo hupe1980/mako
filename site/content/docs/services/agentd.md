@@ -600,7 +600,7 @@ graph TB
         OVERSIGHT["Worklist<br/>task per mutating call<br/>obligation + on_expiry: deny"]
     end
 
-    subgraph tools ["MCP Tools — 14 services"]
+    subgraph tools ["MCP Tools — 15 services, 163 tools"]
         T1["makod · marktd · billingd"]
         T2["edmd · accountingd · obsd"]
         T3["einsd · netzbilanzd · sperrd · ..."]

@@ -207,12 +207,19 @@ impl BillingEngine {
             let current_brutto = current_invoice.brutto_eur;
             if current_brutto < min_brutto {
                 let gap_brutto = min_brutto - current_brutto;
-                // Use the configured MwSt rate directly — deriving it from existing
-                // positions is unreliable when netto is zero or all positions are
-                // credits (P0 fix: use configured rate, not derived ratio).
-                // Under §13b reverse charge the invoice carries no VAT, so the
-                // gap is net as-is.
-                let mwst_rate = ctx.regulatory_rates.mwst_rate;
+                // The Mindestbetrag is a **contractual** charge, so the rate it
+                // is agreed at is the contract's to state:
+                // `ctx.minimum_invoice_mwst_rate`, falling back to the standard
+                // rate. Deriving it from the position mix is unreliable exactly
+                // where it matters — when the net is zero, or every position is
+                // a credit — and using the standard rate unconditionally left a
+                // mixed-rate invoice (7 % Trinkwasser beside 19 % energy) short
+                // of the configured minimum by the rate difference on the
+                // top-up. Under §13b reverse charge the invoice carries no VAT,
+                // so the gap is net as-is.
+                let mwst_rate = ctx
+                    .minimum_invoice_mwst_rate
+                    .unwrap_or(ctx.regulatory_rates.mwst_rate);
                 let divisor = if ctx.reverse_charge {
                     rust_decimal::Decimal::ONE
                 } else {
@@ -239,6 +246,12 @@ impl BillingEngine {
                 )
                 .with_legal_basis("Vertraglich")
                 .with_tag("mindestbetrag");
+                // Stamp the rate the top-up is agreed at, so the MwSt pass and
+                // the BG-23 breakdown put it in the right bucket instead of the
+                // engine default.
+                if let Some(rate) = ctx.minimum_invoice_mwst_rate {
+                    topup = topup.with_tax_rate(rate);
+                }
                 // The top-up is a supply position like any other: §13b covers it too.
                 if ctx.reverse_charge {
                     topup = topup.with_reverse_charge();
@@ -277,7 +290,7 @@ impl BillingEngine {
 
 /// Warnings derived from the context alone, independent of any provider.
 ///
-/// Currently one check: §38 Abs. 2 S. 2 EnWG limits Ersatzversorgung to three
+/// Currently one check: § 38 Abs. 4 EnWG limits Ersatzversorgung to three
 /// months — a longer Ersatzversorgung period describes a supply that cannot
 /// legally exist, so it blocks the run (`Error` severity). Bill the first
 /// three months as Ersatzversorgung and the remainder under the regime the
@@ -295,7 +308,7 @@ fn context_warnings(ctx: &BillingContext) -> Vec<BillingWarning> {
                 severity: WarningSeverity::Error,
                 message: format!(
                     "Ersatzversorgung endet spätestens drei Monate nach Beginn \
-                     (§38 Abs. 2 S. 2 EnWG): Zeitraum {}..{} überschreitet die \
+                     (§ 38 Abs. 4 EnWG): Zeitraum {}..{} überschreitet die \
                      Grenze {limit}",
                     from,
                     ctx.period_to(),

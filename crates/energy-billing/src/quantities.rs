@@ -35,6 +35,54 @@ pub enum MeteringMode {
     Imsys,
 }
 
+/// How the meter reading on the invoice was obtained.
+///
+/// **§ 40 Abs. 2 Nr. 6 EnWG** requires a consumption invoice to state the
+/// opening and closing readings, the consumption derived from them, *and* "die
+/// Art, wie der Zählerstand ermittelt wurde". The third of those is a distinct
+/// duty: a customer reading an invoice has to be able to tell a remote read-out
+/// from a self-reported figure from an estimate, because what they can do about
+/// a wrong number differs in each case.
+///
+/// `is_estimated` alone cannot carry it — it distinguishes an estimate from
+/// everything else and says nothing about what "everything else" was.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Ablesungsart {
+    /// Not stated. The invoice then omits the Nr. 6 sentence — which is a gap
+    /// in the data, not a shape the statute permits, so `billingd` warns.
+    #[default]
+    Unbekannt,
+    /// Ferngelesen — read out over the iMSys/Smart-Meter-Gateway.
+    Fernauslesung,
+    /// Read on site by the Messstellenbetreiber or their agent.
+    Abgelesen,
+    /// Self-reported by the customer (Selbstablesung).
+    Kundenselbstablesung,
+    /// Estimated under § 40a EnWG / § 60 Abs. 2 MsbG (Ersatzwert).
+    Rechnerisch,
+}
+
+impl Ablesungsart {
+    /// The wording that goes on the invoice, or `None` when unstated.
+    #[must_use]
+    pub const fn label(self) -> Option<&'static str> {
+        match self {
+            Self::Unbekannt => None,
+            Self::Fernauslesung => Some("ferngelesen"),
+            Self::Abgelesen => Some("abgelesen durch den Messstellenbetreiber"),
+            Self::Kundenselbstablesung => Some("Selbstablesung durch den Kunden"),
+            Self::Rechnerisch => Some("rechnerisch ermittelt (Schätzung)"),
+        }
+    }
+
+    /// `true` when the figure is not a measured reading.
+    #[must_use]
+    pub const fn is_estimate(self) -> bool {
+        matches!(self, Self::Rechnerisch)
+    }
+}
+
 /// Electricity meter data for one billing period.
 #[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct MeterInput {
@@ -77,6 +125,17 @@ pub struct MeterInput {
     #[serde(default)]
     pub metering_mode: MeteringMode,
 
+    /// § 40 Abs. 2 Nr. 6 EnWG — how the reading was obtained.
+    ///
+    /// See also [`MeterInput::billable_kwh`], which is what decides whether
+    /// there is any consumption to price.
+    ///
+    /// Stated on the invoice beside the readings themselves. `Rechnerisch`
+    /// implies [`Self::is_estimated`]; the two are kept separate because a
+    /// caller that knows only "this is an estimate" can still say so.
+    #[serde(default)]
+    pub ablesungsart: Ablesungsart,
+
     /// `true` when the consumption figure is an estimate (§ 60 Abs. 2 MsbG Ersatzwert).
     ///
     /// Estimated readings must be labeled on the invoice. The meter operator must
@@ -90,6 +149,24 @@ pub struct MeterInput {
     /// meter serial numbers. The invoice must note the meter exchange.
     #[serde(default)]
     pub zaehler_replaced: bool,
+}
+
+impl MeterInput {
+    /// The consumption there is to price, in kWh.
+    ///
+    /// `arbeitsmenge_kwh` where it is stated, otherwise the HT/NT registers.
+    /// A Zweitarif caller may legitimately supply only the split — the total is
+    /// its sum, not an independent fact — and gating the whole Arbeitspreis
+    /// block on the total alone billed such a customer nothing for their
+    /// electricity while still charging them the Stromsteuer.
+    #[must_use]
+    pub fn billable_kwh(&self) -> Decimal {
+        if self.arbeitsmenge_kwh > Decimal::ZERO {
+            return self.arbeitsmenge_kwh;
+        }
+        self.arbeitsmenge_ht_kwh.unwrap_or(Decimal::ZERO)
+            + self.arbeitsmenge_nt_kwh.unwrap_or(Decimal::ZERO)
+    }
 }
 
 /// Gas meter data for one billing period.
@@ -126,6 +203,9 @@ pub struct GasMeterInput {
     /// Meter reading at period end, in m³ (§40 Abs. 2 Nr. 6 EnWG).
     #[serde(default)]
     pub zaehlerstand_bis: Option<Decimal>,
+    /// § 40 Abs. 2 Nr. 6 EnWG — how the reading was obtained.
+    #[serde(default)]
+    pub ablesungsart: Ablesungsart,
     /// Reading is an estimate / Ersatzwert (§40a EnWG, § 60 Abs. 2 MsbG).
     /// Must be prominently labeled on the bill; the customer may demand a
     /// correction once a real reading arrives.
@@ -547,20 +627,25 @@ pub struct EnergyShareMeterInput {
 
     /// Total generation from the community's shared plant (kWh).
     ///
-    /// Optional — for invoice display and audit trail only.
+    /// Rendered as an informational position: a participant cannot check their
+    /// own allocation without the total it was taken from.
     #[serde(default)]
     pub total_plant_generation_kwh: Option<Decimal>,
 
     /// Participant's allocation fraction (0.0–1.0).
     ///
-    /// Informational — used for invoice transparency only.
+    /// Rendered as an informational position — the other half of the same
+    /// check: fraction × total should be the allocated kWh, and a participant
+    /// who can see both can verify it.
     #[serde(default)]
     pub allocation_fraction: Option<Decimal>,
 
-    /// Community registration ID (from BNetzA Marktstammdatenregister).
+    /// The community's own identifier, as the operator runs it.
     ///
-    /// §42c Abs. 3 EnWG: communities must register with the BNetzA.
-    /// The registration ID appears on invoices as a ZusatzAttribut.
+    /// Rendered on the invoice so a participant in more than one arrangement
+    /// can tell which credit belongs to which. **Not** a statutory registration
+    /// number: § 42c EnWG contains no BNetzA/Marktstammdatenregister
+    /// registration duty for the community.
     #[serde(default)]
     pub gemeinschaft_id: Option<String>,
 }
@@ -652,7 +737,7 @@ pub struct Quantities {
     ///
     /// When set, `ElectricityProvider` uses the prosumer billing path:
     /// - Grid consumption is billed at full tariff (commodity + NNE + Stromsteuer)
-    /// - Self-consumption is Stromsteuer-exempt (§9a Nr. 1 StromStG for ≤30 kWp)
+    /// - Self-consumption is Stromsteuer-exempt (§ 9 Abs. 1 Nr. 3 StromStG)
     /// - NNE does NOT apply to self-consumed energy
     pub prosumer: Option<ProsumerMeterInput>,
 
@@ -690,7 +775,7 @@ pub struct Quantities {
 ///
 /// ## Stromsteuer exemption
 ///
-/// §9a Nr. 1 StromStG exempts self-consumed electricity from plants ≤30 kWp
+/// § 9 Abs. 1 Nr. 3 StromStG exempts self-consumed electricity from plants up to 2 MW
 /// from Stromsteuer. This is applied automatically when `self_consumption_kwh > 0`.
 ///
 /// ## Network charge exemption
@@ -721,7 +806,7 @@ pub struct ProsumerMeterInput {
     /// Electricity generated by the customer's PV plant and consumed on-site (kWh).
     ///
     /// - No NNE (does not transit the grid)
-    /// - No Stromsteuer for ≤30 kWp plants (§9a Nr. 1 StromStG)
+    /// - No Stromsteuer on the self-consumed part (§ 9 Abs. 1 Nr. 3 StromStG)
     /// - Appears as an informational invoice line showing the self-supply ratio
     pub self_consumption_kwh: Decimal,
 

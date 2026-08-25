@@ -1,56 +1,32 @@
-//! Integration tests for mako-gabi-gas INVOIC billing (PID 31010 only).
+//! What the GaBi Gas billing family chooses.
 //!
-//! Verifies:
-//! - PID routing: 31010 routes to `"gabi-gas-invoic"`.
-//! - Happy path: INVOIC received → ValidationPassed → Settled.
-//! - Validation failure leads to `Rejected`.
-//! - Timeout fires `DeadlineExpired` and transitions to `Rejected`.
-//! - The settlement deadline label matches the exported constant.
+//! The state machine itself is [`mako_invoic`]'s and is tested there, once, in
+//! `mako-invoic/tests/state_machine.rs`. These tests cover the family: its PID
+//! set, its routing, and the roles a GaBi Gas deployment actually plays.
 //!
-//! Note: PID 31011 (Rechnung sonstige Leistung, AWH Sperrprozesse Gas) belongs
-//! to `mako-geli-gas`, not `mako-gabi-gas`.
+//! Regulatory basis: BK7-24-01-008 (GaBi Gas 2.1).
 
 use mako_engine::{
     event_store::InMemoryEventStore,
-    ids::{DeadlineId, TenantId},
+    ids::TenantId,
     process::Process,
     types::{MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
 use mako_gabi_gas::{
-    GABI_GAS_INVOIC_PIDS, GaBiGasInvoicCommand, GaBiGasInvoicState, GaBiGasInvoicWorkflow,
-    INVOIC_SETTLEMENT_WINDOW_LABEL,
+    GABI_GAS_INVOIC_PIDS, GaBiGasInvoicWorkflow, INVOIC_SETTLEMENT_WINDOW_LABEL,
+    INVOIC_WORKFLOW_NAME,
 };
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
+use mako_invoic::{InvoicCommand, InvoicFamily};
 
 fn make_process() -> Process<GaBiGasInvoicWorkflow, InMemoryEventStore> {
     Process::new(
         InMemoryEventStore::new(),
         TenantId::new(),
-        WorkflowId::new("gabi-gas-invoic", "FV2025-10-01"),
+        WorkflowId::new(INVOIC_WORKFLOW_NAME, "FV2025-10-01"),
     )
 }
 
-fn receive_invoic(pid: u32, validation_passed: bool) -> GaBiGasInvoicCommand {
-    GaBiGasInvoicCommand::ReceiveInvoic {
-        pid: Pruefidentifikator::new(pid).unwrap(),
-        sender: MarktpartnerCode::new("4012345000023"),
-        recipient: MarktpartnerCode::new("9900357000004"),
-        invoice_ref: MessageRef::new("INVOIC-GABI-001"),
-        document_date: "20250115".to_owned(),
-        validation_passed,
-        validation_errors: if validation_passed {
-            vec![]
-        } else {
-            vec!["Pflichtfeld BGM:1225 fehlt".to_owned()]
-        },
-    }
-}
-
-// ── Tests ─────────────────────────────────────────────────────────────────────
-
-/// Settlement deadline label must be `"gabi-gas-invoic-settlement-deadline"`.
 #[test]
 fn settlement_label_matches_constant() {
     assert_eq!(
@@ -59,22 +35,7 @@ fn settlement_label_matches_constant() {
     );
 }
 
-/// PID 31010 (Kapazitätsrechnung) routes to `"gabi-gas-invoic"`.
-#[test]
-fn pid_31010_routes_to_gabi_gas_invoic() {
-    use mako_engine::{builder::EngineModule, marktrolle::DeploymentRoles, pid_router::PidRouter};
-    use mako_gabi_gas::GaBiGasModule;
-
-    let mut router = PidRouter::new();
-    GaBiGasModule.register_pids_with_roles(&mut router, &DeploymentRoles::all());
-    assert_eq!(
-        router.route(31010),
-        Some("gabi-gas-invoic"),
-        "31010 must route to gabi-gas-invoic"
-    );
-}
-
-/// All `GABI_GAS_INVOIC_PIDS` route to `"gabi-gas-invoic"`.
+/// Every GaBi Gas billing PID routes to the family's workflow.
 #[test]
 fn all_invoic_pids_route_to_gabi_gas_invoic() {
     use mako_engine::{builder::EngineModule, marktrolle::DeploymentRoles, pid_router::PidRouter};
@@ -91,89 +52,74 @@ fn all_invoic_pids_route_to_gabi_gas_invoic() {
     }
 }
 
-/// Happy path: INVOIC received (valid) → ValidationPassed → Settled.
-#[tokio::test]
-async fn happy_path_invoic_31010() {
-    let process = make_process();
-
-    // Step 1: Receive valid INVOIC 31010.
-    process
-        .execute(receive_invoic(31010, true))
-        .await
-        .expect("ReceiveInvoic should succeed");
-
-    let state = process.state().await.expect("state after ReceiveInvoic");
-    assert!(
-        matches!(state, GaBiGasInvoicState::ValidationPassed(_)),
-        "must be ValidationPassed after valid INVOIC, got: {state:?}"
-    );
-
-    // Step 2: Settle invoice.
-    process
-        .execute(GaBiGasInvoicCommand::SettleInvoice)
-        .await
-        .expect("SettleInvoice should succeed");
-
-    let state = process.state().await.expect("state after SettleInvoice");
-    assert!(
-        matches!(state, GaBiGasInvoicState::Settled(_)),
-        "must be Settled after SettleInvoice, got: {state:?}"
-    );
+/// **GaBi Gas receives invoices; it does not issue them.**
+///
+/// All three PIDs arrive *at* the roles this platform plays — the BKV receives
+/// the Kapazitätsrechnung, the MGV the aggregated MMM-Rechnung — and nothing
+/// here renders one, so the issuer leg must stay shut.
+///
+/// Accepting an inbound REMADV would invert the direction of the conversation:
+/// after *receiving* an invoice this platform is the one that sends it.
+#[test]
+fn gabi_gas_is_a_payer_only_family() {
+    // The capabilities are `const`, so this is a compile-time statement about
+    // the family rather than a runtime check.
+    const {
+        assert!(
+            !mako_gabi_gas::GaBiGasInvoic::SENDS_INVOIC,
+            "nothing in this platform issues a GaBi Gas invoice"
+        );
+        assert!(
+            mako_gabi_gas::GaBiGasInvoic::ANSWERS_COMDIS,
+            "COMDIS 29001 is inbound for a payer — the invoicer refusing our REMADV"
+        );
+    }
 }
 
-/// Validation failure transitions directly to `Rejected`.
 #[tokio::test]
-async fn validation_failure_leads_to_rejected() {
-    let process = make_process();
-    process
-        .execute(receive_invoic(31010, false))
-        .await
-        .expect("ReceiveInvoic failure must not panic");
-    let state = process.state().await.expect("state");
-    assert!(
-        matches!(state, GaBiGasInvoicState::Rejected { .. }),
-        "validation failure must transition to Rejected, got: {state:?}"
-    );
-}
-
-/// Settlement deadline timeout leads to `Rejected`.
-#[tokio::test]
-async fn timeout_leads_to_rejected() {
-    let process = make_process();
-    process
-        .execute(receive_invoic(31010, true))
-        .await
-        .expect("step 1 ok");
-
-    process
-        .execute(GaBiGasInvoicCommand::TimeoutExpired {
-            deadline_id: DeadlineId::new(),
-            label: INVOIC_SETTLEMENT_WINDOW_LABEL.into(),
+async fn the_issuer_leg_is_refused() {
+    let p = make_process();
+    let err = p
+        .execute(InvoicCommand::SendInvoic {
+            pid: Pruefidentifikator::new(31010).unwrap(),
+            sender: MarktpartnerCode::new("9900357000004"),
+            recipient: MarktpartnerCode::new("4012345000023"),
+            document_date: "20260601".to_owned(),
+            invoice_ref: MessageRef::new("INV-1"),
         })
         .await
-        .expect("TimeoutExpired must not panic");
-
-    let state = process.state().await.expect("state");
-    assert!(
-        matches!(state, GaBiGasInvoicState::Rejected { .. }),
-        "deadline timeout must transition to Rejected, got: {state:?}"
-    );
+        .expect_err("GaBi Gas does not issue invoices");
+    assert!(format!("{err}").contains("issuer role"), "{err}");
 }
 
-/// TimeoutExpired on already-Rejected is absorbed without error.
 #[tokio::test]
-async fn timeout_on_rejected_is_absorbed() {
-    let process = make_process();
-    process.execute(receive_invoic(31010, false)).await.unwrap(); // → Rejected
-
-    let result = process
-        .execute(GaBiGasInvoicCommand::TimeoutExpired {
-            deadline_id: DeadlineId::new(),
-            label: INVOIC_SETTLEMENT_WINDOW_LABEL.into(),
+async fn an_inbound_remadv_is_refused() {
+    let p = make_process();
+    let err = p
+        .execute(InvoicCommand::ReceiveRemadv {
+            pid: Pruefidentifikator::new(33002).unwrap(),
+            remadv_ref: MessageRef::new("REM-1"),
+            sender: MarktpartnerCode::new("4012345000023"),
         })
-        .await;
-    assert!(
-        result.is_ok(),
-        "TimeoutExpired on Rejected must be absorbed"
-    );
+        .await
+        .expect_err("after receiving an invoice this platform sends the REMADV");
+    assert!(format!("{err}").contains("never issues"), "{err}");
+}
+
+/// No REMADV PID is routed to this family — the inbound direction does not
+/// exist for the roles modelled here.
+#[test]
+fn no_remadv_pid_routes_to_gabi_gas_invoic() {
+    use mako_engine::{builder::EngineModule, marktrolle::DeploymentRoles, pid_router::PidRouter};
+    use mako_gabi_gas::GaBiGasModule;
+
+    let mut router = PidRouter::new();
+    GaBiGasModule.register_pids_with_roles(&mut router, &DeploymentRoles::all());
+    for pid in mako_invoic::REMADV_PIDS {
+        assert_ne!(
+            router.route(*pid),
+            Some("gabi-gas-invoic"),
+            "REMADV {pid} must not route to a family that issues no invoices"
+        );
+    }
 }

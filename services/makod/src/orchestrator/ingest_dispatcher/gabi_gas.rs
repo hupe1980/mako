@@ -47,18 +47,6 @@ impl EdifactIngestDispatcher {
                     )
                     .await
                 }
-                33001 => {
-                    // REMADV — payer confirms payment; invoicer (us) resumes process.
-                    // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.
-                    let cmd = adapters::gabi_gas_remadv_registry().dispatch(raw, &fv)?;
-                    let invoice_ref = extract_invoice_ref_from_remadv(msg);
-                    self.resume_by_key::<GaBiGasInvoicWorkflow>(
-                        &invoice_ref,
-                        "gabi-gas-invoic",
-                        cmd,
-                    )
-                    .await
-                }
                 29001 => {
                     // COMDIS — invoicer rejects payer's REMADV.
                     // Correlation: RFF+Z13 back-reference to original INVOIC message_ref.

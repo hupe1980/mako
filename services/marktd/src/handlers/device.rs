@@ -1641,13 +1641,17 @@ pub struct SharingEligibilityResponse {
     pub malo_id: Option<String>,
     /// `QUALIFIED` · `DISQUALIFIED` · `UNKNOWN`.
     pub capability: String,
-    /// Qualifying statutory limb, when one was established.
+    /// Qualifying statutory limb, when one was established — a stable code,
+    /// `ZAEHLERSTANDSGANGMESSUNG` or `REGISTRIERENDE_LEISTUNGSMESSUNG`.
     pub basis: Option<String>,
     /// Citation for `basis`.
     pub legal_basis: Option<String>,
     /// What an operator must do to make this point eligible.
     pub required_action: String,
-    /// Why the point does not qualify, or which master data is missing.
+    /// Why the point does not qualify, or which master data is missing —
+    /// stable codes from `metering`'s `Finding`, plus marktd's own
+    /// `KEIN_BILANZIERUNGSGEBIET` (§42c Abs. 4 requires a shared Gebiet until
+    /// 01.06.2028, which is master data rather than metering).
     pub reasons: Vec<String>,
     /// Bilanzierungsgebiet — §42c Abs. 4 requires all participants to share one
     /// until 1 June 2028.
@@ -1803,19 +1807,15 @@ pub async fn get_sharing_eligibility(
     };
     let (capability, findings) = assess_capability(&input);
 
-    // `assess_capability` returns typed `Finding`s since metering 0.17, where it
-    // returned prose. The API still emits strings, so they are rendered at this
-    // boundary — and marktd's own finding, which the crate cannot know about
-    // because Bilanzierungsgebiet is master data rather than metering, is
-    // appended here rather than being pushed into the crate's vocabulary.
-    let mut reasons: Vec<String> = findings.iter().map(|f| format!("{f:?}")).collect();
+    // `assess_capability` returns typed `Finding`s, each with a stable wire code
+    // — `Debug` formatting would put a Rust variant name on the API. marktd's
+    // own finding, which the crate cannot know about because Bilanzierungsgebiet
+    // is master data rather than metering, is appended here rather than being
+    // pushed into the crate's vocabulary.
+    let mut reasons: Vec<String> = findings.iter().map(|f| f.as_str().to_owned()).collect();
 
     if bilanzierungsgebiet.is_none() {
-        reasons.push(
-            "kein Bilanzierungsgebiet an der Marktlokation — \
-             §42c Abs. 4 verlangt bis 01.06.2028 ein gemeinsames Gebiet"
-                .to_owned(),
-        );
+        reasons.push("KEIN_BILANZIERUNGSGEBIET".to_owned());
     }
 
     let (cap_label, basis) = match capability {
@@ -1834,7 +1834,7 @@ pub async fn get_sharing_eligibility(
         melo_id,
         malo_id,
         capability: cap_label.to_owned(),
-        basis: basis.map(|b| b.label().to_owned()),
+        basis: basis.map(|b| b.as_str().to_owned()),
         legal_basis: basis.map(|b| b.legal_basis().to_owned()),
         required_action: required_action.to_owned(),
         reasons,

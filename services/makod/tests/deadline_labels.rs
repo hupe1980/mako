@@ -150,6 +150,59 @@ fn label_constants(sources: &[PathBuf]) -> BTreeMap<String, (String, PathBuf)> {
     out
 }
 
+/// Deadline labels reached through an [`mako_invoic::InvoicFamily`] impl.
+///
+/// The four INVOIC billing families share one state machine, so their
+/// `on_deadline` is `InvoicWorkflow::on_deadline` and it matches
+/// `F::DEADLINE_LABEL` — a generic path, not a constant this scanner can see.
+/// The binding that makes it concrete is the family's own
+/// `const DEADLINE_LABEL: &'static str = SOME_CONSTANT;`, so that is what is
+/// collected here.
+///
+/// `shared_on_deadline_matches_the_family_label` checks the other half: that
+/// the shared workflow really does dispatch on `F::DEADLINE_LABEL`. Without it
+/// this function would let a label through on trust.
+fn family_deadline_labels(sources: &[PathBuf]) -> Vec<String> {
+    let mut out = Vec::new();
+    for path in sources {
+        let Ok(src) = std::fs::read_to_string(path) else {
+            continue;
+        };
+        for line in src.lines() {
+            let line = line.trim();
+            let Some(rest) = line.strip_prefix("const DEADLINE_LABEL:") else {
+                continue;
+            };
+            let Some((_, value)) = rest.split_once('=') else {
+                continue;
+            };
+            out.push(value.trim().trim_end_matches(';').trim().to_owned());
+        }
+    }
+    out
+}
+
+/// The shared INVOIC workflow dispatches on the family's declared label.
+///
+/// This is what licenses `family_deadline_labels` to treat a
+/// `const DEADLINE_LABEL` binding as proof the label is handled.
+#[test]
+fn shared_on_deadline_matches_the_family_label() {
+    let root = workspace_root();
+    let bodies = on_deadline_bodies(&crate_src_sources(&root));
+    let shared = bodies
+        .iter()
+        .find(|(path, _)| path.ends_with("mako-invoic/src/lib.rs"))
+        .map(|(_, body)| body.as_str())
+        .expect("mako-invoic declares an on_deadline for the shared INVOIC workflow");
+    assert!(
+        shared.contains("F::DEADLINE_LABEL"),
+        "the shared INVOIC `on_deadline` must dispatch on the family's declared \
+         label; otherwise every billing family's settlement deadline fires into \
+         the engine's default `None`.\n{shared}"
+    );
+}
+
 /// Rule 1 — every label constant is matched by some `on_deadline`.
 #[test]
 fn every_deadline_label_is_handled_by_a_workflow() {
@@ -162,10 +215,17 @@ fn every_deadline_label_is_handled_by_a_workflow() {
         constants.len()
     );
 
-    let handled: String = on_deadline_bodies(&crate_sources)
+    let mut handled: String = on_deadline_bodies(&crate_sources)
         .into_iter()
         .map(|(_, body)| body)
         .collect();
+    // A billing family reaches the shared `on_deadline` through
+    // `F::DEADLINE_LABEL`; its `const DEADLINE_LABEL` binding is the concrete
+    // end of that path.
+    for label in family_deadline_labels(&crate_sources) {
+        handled.push_str(&label);
+        handled.push('\n');
+    }
 
     let unhandled: Vec<_> = constants
         .iter()

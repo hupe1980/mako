@@ -14,6 +14,7 @@ categories   = ["data-structures"]
 mako-fristen = { workspace = true }
 rubo4e      = { workspace = true }
 mako-engine = { workspace = true }
+mako-invoic = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 thiserror   = { workspace = true }

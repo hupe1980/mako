@@ -376,18 +376,61 @@ assert!(requires_ausschreibung(dec!(1500), ErzeugungsArt::SolarAufdach)); // >1 
 | `SolarFreiflaeche` | Ground-mounted PV | Tender >1 MWp |
 | `SolarAgriPv` | Agri-PV | §51a factor 0.5 |
 | `SolarMieterstrom` | §21 Abs. 3 building solar | — |
-| `SolarStecker` | Balkonkraftwerk ≤800 W | Simplified registration |
-| `WindOnshore` | Wind onshore | §36h Korrekturfaktor required |
+| `SolarStecker` | Steckersolargerät, ≤2 kW **and** ≤800 VA inverter | §3 Nr. 43, §8 Abs. 5a, §9, §10a Abs. 2 |
+| `WindOnshore` | Wind onshore | **No statutory AW** — §22 Abs. 2 requires a Zuschlag, §36h derives the value from it |
 | `WindOffshore` | Wind offshore | Always Ausschreibungspflicht |
-| `Biomasse` | Solid biomass | §43 |
-| `BiomassHolz` | Wood biomass | §42a restricted |
-| `Biogas` | Fermentation biogas | — |
-| `Biomethan` | Upgraded biomethane | — |
-| `Klaegas` / `Grubengas` / `Deponiegas` | Special gases | §41 EEG |
-| `Wasserkraft` | Hydro | — |
-| `Geothermie` | Geothermal | — |
-| `Gezeiten` | Tidal | — |
+| `Biomasse` | Biomasse | §42 — 12,67 ct ≤150 kW Bemessungsleistung; above that, tender |
+| `BiomassHolz` | Feste Biomasse | No separate AW; tendered plants meet the §39i Abs. 2 Höchstbemessungsleistung |
+| `Biogas` | Fermentation biogas | §43 Bioabfälle / §44 Gülle where they qualify |
+| `Biomethan` | Upgraded biomethane | Excluded from the §42 statutory value by Satz 2 |
+| `Klaegas` / `Grubengas` / `Deponiegas` | Special gases | §41 — **one ladder each**, Abs. 1/2/3 |
+| `Wasserkraft` | Hydro | §40 — seven tiers by Bemessungsleistung |
+| `Geothermie` | Geothermal | §45 — flat 25,20 ct |
+| `Gezeiten` | Tidal, wave, salinity gradient, current | §40 — these *are* Wasserkraft (§3 Nr. 21 lit. a); there is no §41a EEG |
 | `Kwk` | CHP/BHKW | KWKG 2023, not EEG |
+
+## The statutory rates
+
+`rates` carries the **anzulegende Werte** — the ct/kWh a Netzbetreiber owes an
+Anlagenbetreiber, each a figure fixed by statute:
+
+| Erzeugungsart | § EEG 2023 | Shape |
+|---|---|---|
+| Wasserkraft (incl. Gezeiten, § 3 Nr. 21 lit. a) | § 40 Abs. 1 | seven tiers, `12,03` → `3,37` |
+| Deponiegas | § 41 Abs. 1 | `7,46` ≤ 500 kW, `5,17` ≤ 5 MW |
+| Klärgas | § 41 Abs. 2 | `5,93` ≤ 500 kW, `5,17` ≤ 5 MW |
+| Grubengas | § 41 Abs. 3 | `5,98` ≤ 1 MW, `3,81` ≤ 5 MW, `3,37` above |
+| Biomasse | § 42 Satz 1 | one tier, `12,67` ≤ 150 kW; above that, tender |
+| Bioabfallvergärung | § 43 Abs. 1 | `14,16` ≤ 500 kW, `12,41` ≤ 20 MW |
+| Güllevergärung | § 44 Abs. 1 | `22,00` ≤ 75 kW, `19,00` ≤ 150 kW |
+| Geothermie | § 45 Abs. 1 | flat `25,20` |
+| Solar | § 48 | see below (§ 101 Abs. 1 Satz 2) |
+| Wind an Land | — | **no statutory value**: § 22 Abs. 2 requires a Zuschlag, § 36h derives the AW from it |
+
+Every figure is asserted against the statute by `rates::statutory_rate_tests`,
+which walks each ladder tier by tier and pins the two non-tables — § 42 answering
+`Err` above 150 kW rather than inventing a rate, and `wind_onshore_lookup`
+answering `None`.
+
+### § 101 — a provision under a Genehmigungsvorbehalt has a start date
+
+§ 101 EEG 2023 lists provisions that "erst nach der beihilferechtlichen
+Genehmigung durch die Europäische Kommission … angewandt werden" dürfen, and for
+some names the version that applies meanwhile. Two of them are load-bearing here:
+
+- **§ 48 Abs. 2** (Satz 2 fallback) — why the in-force solar base values are
+  `8,60 / 7,50 / 6,20` and not the consolidated `8,51 / 7,43 / 7,64`.
+- **§ 51b** — the biogas AW → 0 at a spot price ≤ 2 ct/kWh. It names no fallback
+  version, so it applies only from the Commission's approval on **18 September
+  2025** (`version::SECT51B_GENEHMIGT_AB`), keyed on the settled **supply
+  period**. An undated settlement does not apply it: a provision under a
+  Genehmigungsvorbehalt is not applied on the strength of not knowing when the
+  supply happened.
+
+Every table is the **Startwert** as enacted. The statutory annual Absenkung is
+separate, and each Erzeugungsart carries its own rate and cadence — biomass steps
+on **1 July**, the rest on 1 January — via
+`degression::JaehrlicheAbsenkung`.
 
 ---
 

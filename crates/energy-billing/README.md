@@ -81,6 +81,15 @@ BG-25 line keeps a correct BT-151/152, and the BG-23 breakdown plus BG-22 totals
 are derived from the rounded line amounts so BR-CO-10/13 and BR-S-08 reconcile.
 E-invoicing does not round-trip through BO4E.
 
+`to_en16931` is **fallible**, for one reason: EN 16931 category `O` (*not
+subject to VAT*) is exclusive to its document under **BR-O-11 … BR-O-14**. A
+hoheitliche Abwassergebühr is category `O`, so a combined
+Trinkwasser-plus-Gebühr invoice — the shape over 90 % of German municipalities
+bill in — has no valid rendering. The engine still produces the combined paper
+document (with a `GEBUEHR_UND_ENTGELT_AUF_EINEM_BELEG` warning, because that
+statement is lawful); it is the *e-invoice* that is refused, with the reason,
+instead of handing the recipient a file their schematron rejects days later.
+
 ## Period-correct rates
 
 The year tables (`stromsteuer_for_year`, `energiesteuer_gas_for_year`,
@@ -93,11 +102,21 @@ still wins.
 
 ## Pro-rating conventions (stated, deliberately)
 
-Three coexist, each matching how its charge is contractually quoted:
-per-day charges bill **active contract days** (clipped to
-`vertragsbeginn`/`vertragsende`) — this includes the NNE Grundpreis, so a
-mid-month move-in pays only its active days; annual EUR/a charges bill
-**days/365**; monthly EUR/month charges bill **days/30.4375**.
+Everything is clipped to the **active contract window** — `vertragsbeginn` /
+`vertragsende` intersected with the billing period — and then expressed in the
+unit its price is quoted in:
+
+| Price quoted in | Billed as | Helper |
+|---|---|---|
+| EUR/day, ct/day | active contract days | `ctx.prorate_days().0` |
+| EUR/month | calendar-exact months | `ctx.billed_months()` |
+| EUR/year, EUR/kW·a | calendar-exact years | `ctx.billed_years()` |
+
+**Calendar-exact** means each calendar month contributes `billed days ÷ that
+month's own length` and each year `billed days ÷ that year's length`. January
+1–31 is exactly `1` month, a full year exactly `12`, a leap year exactly `1`
+year, and 16–31 January exactly `16/31` — none of which an average-month
+divisor produces.
 
 ## Typed errors
 
@@ -115,6 +134,61 @@ mid-month move-in pays only its active days; annual EUR/a charges bill
 warnings behind a blocked validation so services can answer with structured
 error bodies instead of parsed prose.
 
+
+### Refusals, not silent zeros
+
+A pairing the engine cannot price refuses the run rather than issuing an invoice
+that charges the levies and nothing for the energy:
+
+| Finding | The pairing |
+|---|---|
+| `KEIN_ARBEITSPREIS` | a product with every price field `None` |
+| `INDEXWERT_FEHLT` | an index-linked tariff whose index value has not arrived |
+| `ZWEITARIF_UNVOLLSTAENDIG` | one HT/NT band priced and not the other |
+| `ZWEITARIF_OHNE_HT_NT_AUFTEILUNG` | an HT/NT-only product against a meter reporting one total |
+| `HT_NT_SUMME_WEICHT_AB` | an HT/NT split that does not reconcile with the stated total |
+| `SECT41A_MISSING_EPEX_PRICES` | a §41a interval carrying consumption at no market price |
+| `SECT41A_KEINE_INTERVALLE` | a §41a tariff with no interval series at all, against a meter reporting consumption |
+| `SECT41A_INTERVALLSUMME_WEICHT_AB` | a §41a interval series that does not reconcile with the meter total (0,5 % tolerance, 1 kWh floor) |
+| `KEIN_TRINKWASSERPREIS` | water delivered under a tariff pricing only the Abwasser side |
+| `KEIN_LADEPREIS` | charging energy measured at the charge point under a tariff with no per-kWh price |
+
+The two §41a series findings are the dynamic twin of the HT/NT pair above: on
+that path the quarter-hour series *is* the billed quantity — Arbeitspreis,
+Netzentgelt, Konzessionsabgabe and Stromsteuer all ride the sum of the priced
+intervals — so an absent or short series bills every levy on whatever arrived.
+The meter total is the independent witness.
+
+Two neighbouring shapes are *billed* instead, because the data is complete and
+only its reading is at issue: HT/NT registers with no stated total bill on their
+sum (`MeterInput::billable_kwh`), and a two-register meter on an Eintarif product
+bills on its total.
+
+One finding does not refuse. `KEIN_EREIGNISPREIS` reports counted
+Energiedienstleistung events that nothing prices, at `Warning` severity: an
+event count is also a legitimate informational figure — how many Einsätze a
+maintenance flat rate covered — so it alone does not settle which was meant.
+
+The general statement is a pair of property tests in `proptest_invoice`:
+whenever `bill()` succeeds and a quantity was delivered, an Arbeitspreis position
+exists and is non-zero. `any_billable_consumption_produces_a_work_price` covers
+the electricity pricing shapes (Eintarif, HT/NT, indexed, tiered, split and
+unsplit meters); `any_delivered_commodity_produces_a_work_price` covers gas,
+Fernwärme and charging energy. The second exists because the first was
+electricity-only, which is precisely why the defect kept recurring outside it.
+
+### Every line multiplies out
+
+**PEPPOL-EN16931-R120** allows ±0.02 between a line's `price × quantity` and its
+amount. The trap is a *rounded* price: rounding what the page prints is right,
+but the same figure is BT-146, and the further it is rounded and the more units
+it multiplies, the further the product drifts from the amount beside it.
+
+§41a states a weighted average — rarely representable — so the machine field
+carries it at full precision and only the description rounds
+(`∅ 7,8430 ct/kWh`). `every_position_price_multiplies_out_to_its_amount` holds
+the rule for every position of every product.
+
 ## Validated period, stated regime
 
 `BillingContext.period` is a `BillingPeriod` — the constructor (and the serde
@@ -128,7 +202,7 @@ the `vertragsart` ZusatzAttribut on every invoice:
 - **`Grundversorgung`** — the published Allgemeine Preise apply (§36 EnWG,
   StromGVV/GasGVV).
 - **`Ersatzversorgung`** — §38 EnWG fallback supply. It ends by law three
-  months after it began (§38 Abs. 2 S. 2 EnWG), so the engine **refuses** a
+  months after it began (§ 38 Abs. 4 EnWG), so the engine **refuses** a
   longer Ersatzversorgung period with `ERSATZVERSORGUNG_UEBER_3_MONATE`:
   such a supply cannot exist, and billing it would invent one.
 
@@ -244,9 +318,9 @@ Each category has its own struct with only the relevant fields — no silent fie
 | `Waermepumpe(ControllableLoadProduct)` | `WAERMEPUMPE` | `ControllableLoadProvider` | §14a Modul 1/2/3 |
 | `Wallbox(ControllableLoadProduct)` | `WALLBOX` | `ControllableLoadProvider` | §14a Modul 1/2/3 |
 | `Gas(GasProduct)` | `GAS` | `GasProvider` | Brennwertkorrektur; Energiesteuer; BEHG CO₂ |
-| `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel |
-| `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee outside USt |
-| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b EnWG GGV; §21 Abs. 3 EEG Mieterstrom; 0% USt if Kleinunternehmer (§19 UStG) |
+| `Waerme(HeatProduct)` | `WAERME` | `HeatProvider` | Fernwärme; standard-rated (19 %); AVBFernwärmeV §24 Preisgleitklausel; CO2KostAufG § 3 CO₂-Kosten + § 14 WPG Anteil |
+| `Wasser(WaterProduct)` | `WASSER` | `WaterProvider` | Trinkwasser 7 % USt; gesplittete Abwassergebühr (Schmutzwasser − Absetzungen, Niederschlagswasser m²); public-law fee is EN 16931 `O`, not `Z` |
+| `Solar(SolarProduct)` | `SOLAR` | `SolarProvider` | §42b EnWG GGV; Mieterstrom mit § 42a Abs. 4 EnWG 90 %-Deckel; Stromsteuer per § 9 Abs. 1 Nr. 3 StromStG, **stated** not omitted; 0 % USt if Kleinunternehmer (§19 UStG) |
 | `Eeg(EegProduct)` | `EEG` | `EegProvider` | LF-side Gutschrift; `eeg` feature for §51/§52 |
 | `Einspeisung(EinspeisungProduct)` | `EINSPEISUNG` | `EinspeisungProvider` | Direktvermarktung Marktwert − Gebühr |
 | `Hems(HemsProduct)` | `HEMS` | `HemsProvider` | Platform subscription + events |
@@ -277,7 +351,7 @@ Each category has its own struct with only the relevant fields — no silent fie
 | MSB pass-through | `msb_gebuehr_ct_per_day` (MsbG) |
 | Multi-rate MwSt | Per-position `applicable_tax_rate` → grouped `MwStProvider` |
 | 0% USt feed-in Gutschrift | `kleinunternehmer_19_ustg` (§19 UStG Kleinunternehmer) |
-| Stromsteuer exemption | `StromsteuerBefreiung` typed enum (§9 Nr. 1-5 + §9a) |
+| Verbrauchsteuer-Begünstigungen | `stromsteuer_tarif` / `energiesteuer_tarif` (Befreiung, Ermäßigung) and `steuerentlastungen` (notes only) — see below |
 | Gas RLM Leistungspreis | `gas_leistungspreis_ct_per_kw_month` in `GasProduct` |
 | §42 Energiemix | `EnergieQuellen` struct with `co2_g_per_kwh` (mandatory §42 Abs. 2 Nr. 2 EnWG) |
 
@@ -303,21 +377,47 @@ for w in &warnings {
 // §41a violations produce BillingWarning { code: "SECT41A_IMSYS_REQUIRED", severity: Error }
 ```
 
-### §9 StromStG — typed Stromsteuer exemption
+### Verbrauchsteuern — Befreiung, Ermäßigung, Entlastung (`steuer` module)
 
-`StromsteuerBefreiung` is a typed enum covering all §9 StromStG exemption grounds:
+German excise law knows three instruments and only two of them change what a
+supplier may invoice:
+
+| Instrument | Who acts | Effect on the invoice |
+|---|---|---|
+| **Steuerbefreiung** — § 9 Abs. 1 StromStG, §§ 25–28 EnergieStG | supplier, against the customer's Erlaubnis | the levy is **not** invoiced |
+| **Steuerermäßigung** — § 9 Abs. 2/3 StromStG | supplier | invoiced at the **reduced** statutory rate |
+| **Steuerentlastung** — § 9a/§ 9b/§ 9c StromStG, §§ 53a, 54 EnergieStG | the *customer*, afterwards, at the Hauptzollamt | **none** — invoiced in full |
 
 ```rust
-pub enum StromsteuerBefreiung {
-    Keine,                     // Standard Stromsteuer applies
-    Bahnstrom,                 // §9 Nr. 1 — rail traction
-    NachweisErneuerbarer,      // §9 Nr. 2 — certified renewable
-    KwkSelbstverbrauch,        // §9 Nr. 3 — CHP < 2 MW
-    IndustrieProduktionesGewerbe, // §9 Nr. 4 — industry > 2 GWh/year
-    LandForstwirtschaft,       // §9 Nr. 5 — agricultural
-    SolarEigenverbrauch,       // §9a Nr. 1 — PV self-consumption ≤ 30 kWp
+pub enum StromsteuerTarif {
+    Regel,                                        // § 3 StromStG — 2,05 ct/kWh
+    Befreiung   { grund: StromsteuerBefreiung },  // § 9 Abs. 1 Nr. 1–8
+    Ermaessigung{ grund: StromsteuerErmaessigung },// § 9 Abs. 2 (11,42 €/MWh) / Abs. 3 (0,50 €/MWh)
+}
+
+pub enum EnergiesteuerTarif {
+    Regel,                                        // § 2 Abs. 3 S. 1 Nr. 4 — 0,55 ct/kWh_Hs
+    Befreiung { grund: EnergiesteuerBefreiung },  // §§ 25–28 gegen Erlaubnis (§ 24 Abs. 2)
+}
+
+/// Notes only. Never an amount.
+pub enum Steuerentlastung {
+    Stromsteuer9a, Stromsteuer9b, Stromsteuer9c,
+    Energiesteuer53a, Energiesteuer54,
 }
 ```
+
+**Why the split is load-bearing.** Zero-rating an Entlastung at supply
+under-declares the supplier's own Stromsteueranmeldung, and the customer's later
+Entlastungsantrag duplicates it rather than repairing it — a Unternehmen des
+Produzierenden Gewerbes is invoiced the full 2,05 ct/kWh and reclaims 2,00 from
+the Hauptzollamt (§ 9b, permanent at the EU minimum rate since 01.01.2026, from
+12 500 kWh a year). Treating an Ermäßigung as an exemption fails the other way:
+§ 9 Abs. 2 Fahrstrom is a *rate* of 11,42 EUR/MWh, and dropping the line loses
+1,142 ct/kWh on every rail-traction invoice.
+
+A `Steuerentlastung` renders one 0-EUR informational position stating the levy
+it may be claimed against — the customer cannot file without that figure.
 
 ---
 
@@ -395,7 +495,8 @@ same tax billed twice. `abschlag_ust_eur` exists so that figure is always
 available to state.
 
 The Restrechnung form is what the BMF recommends for e-invoices, because
-EN 16931's core profiles have nowhere to carry per-advance tax. Compute it with:
+EN 16931's core profiles have nowhere to carry per-advance tax. Compute the
+residual directly with:
 
 ```rust
 let residual = invoice.residual_breakdown(default_rate)?;  // supply − advances, per rate
@@ -403,6 +504,19 @@ let residual = invoice.residual_breakdown(default_rate)?;  // supply − advance
 
 Over-deduction is refused rather than silently accepted: advances exceeding the
 supply in any `(category, rate)` group would understate the output tax owed.
+
+**`to_en16931` implements the difference.** An Endrechnung states the full
+supply and the advances as BT-113 *paid*. A Restrechnung deducts each advance as
+a **BG-20 document-level allowance** carrying its own BT-95/96 VAT category and
+rate — one per `(category, rate)` group, not one per advance, so a monthly
+Abschlagsplan does not put eleven identical rows on the page. The reconciler then
+derives BG-23 as `lines − allowances` per rate, which *is* the residual, and
+nothing is stated as paid. Both documents ask the customer for the same BT-115.
+
+That is what the flat BT-113 cannot do: an advance invoiced at 19 % stays a 19 %
+deduction on a settlement billed at another rate. The field selected nothing at
+all until it was wired — declared, documented here, and read by no code path, so
+every settling invoice went out as an Endrechnung regardless.
 
 ### Crossing into `billing`
 
@@ -461,8 +575,8 @@ pub struct MeterInput {
 | Field | Law | Effect |
 |---|---|---|
 | `kleinunternehmer_19_ustg` | §19 UStG | 0 % USt on the feed-in Gutschrift (operator has elected Kleinunternehmer) |
-| `stromsteuer_befreiung` | §9 StromStG | Typed enum; replaces levy with exemption notice |
-| `industrie_stromsteuer_befreiung` | §9 Nr. 4 StromStG | Legacy bool; prefer `stromsteuer_befreiung` |
+| `stromsteuer_tarif` | § 9 StromStG | `REGEL` \| `BEFREIUNG{grund}` \| `ERMAESSIGUNG{grund}` |
+| `steuerentlastungen` | § 9a/9b/9c StromStG | Notes only — the levy is billed in full |
 | `leistungspreis_strom_ct_per_kw_month` | §41 EnWG | RLM demand charge (ct/kW/month) |
 | `preisgarantie_bis` | §41 Abs. 1 Nr. 4 EnWG | Price guarantee expiry on invoice |
 | `mwst_rate_override` | §12 UStG | Override 19% per product |
@@ -483,7 +597,7 @@ pub struct MeterInput {
 
 | Field | Law | Effect |
 |---|---|---|
-| `gas_energiesteuer_befreiung` | §54 EnergieStG | KWK / industrial exemption notice |
+| `energiesteuer_tarif` | §§ 24 Abs. 2, 25–28 EnergieStG | `REGEL` \| `BEFREIUNG{grund}` (Erlaubnisschein) |
 | `gas_leistungspreis_ct_per_kw_month` | §41 EnWG | RLM demand charge for large gas customers |
 | `gas_indexed_price` | §41 EnWG (Sonderkundenvertrag) | B2B TTF/NCG indexed price (alias: `indexed_price`) |
 
@@ -595,7 +709,7 @@ if invoice.has_errors() {
 | Law | Coverage |
 |---|---|
 | §3 StromStG | Stromsteuer 2.05 ct/kWh; `stromsteuer_for_year(year)` for retroactive corrections |
-| §9 StromStG | All 5 exemption grounds + §9a via typed `StromsteuerBefreiung` enum |
+| § 9 StromStG | All eight Abs. 1 Befreiungen plus the Abs. 2/3 ermäßigte Sätze, typed; § 9a/9b/9c Entlastungen kept out of the amounts |
 | §2 EnergieStG | Erdgassteuer 0.55 ct/kWh; `energiesteuer_gas_for_year(year)` (incl. 2022 0-rate) |
 | §54 EnergieStG | KWK / industrial gas Energiesteuer exemption |
 | BEHG §10 | CO₂-Preis H-Gas (65 EUR/t 2026) + L-Gas factor; `behg_ct_per_kwh_for_year(year)` |
@@ -605,11 +719,15 @@ if invoice.has_errors() {
 | §14a EnWG | Controllable loads, Modul 1/2/3 (BNetzA BK6-22-300) via `ControllableLoadProvider` |
 | § 60 Abs. 2 MsbG | Estimated reading notice on invoice |
 | §40 / §40b EnWG | Mandatory ct/kWh; structured price-comparison data in JSON |
-| §40 EnWG | Invoice content (Zählerstände §40 Abs. 2 Nr. 6, Netzbetreiber, Energiemix §42) |
+| §40 EnWG | Invoice content (Netzbetreiber, Energiemix §42) |
+| § 40 Abs. 2 Nr. 6 EnWG | Anfangs-/Endzählerstand, the consumption **and** the `Ablesungsart` — the third is its own duty and was on the page only for estimates |
 | §40 Abs. 2 Nr. 7/8 EnWG | Verbrauchshistorie (prior-year + national average) |
-| §41a / §41a Abs. 1 EnWG | §41a EPEX per-interval; §41a iMSys guard enforced as hard error |
+| §41a / §41a Abs. 1 EnWG | §41a EPEX per-interval; iMSys guard and missing-price guard both hard errors; the § 40 Abs. 2 display duties ride the dynamic path too |
 | §42 Abs. 2 Nr. 2 EnWG | CO₂ emissions label via typed `EnergieQuellen.co2_g_per_kwh` |
-| §21 Abs. 3 EEG / §42b EnWG | Mieterstrom / Gemeinschaftliche Gebäudeversorgung|§21 Abs. 3 EEG / §42b EnWG | Mieterstrom / Gemeinschaftliche Gebäudeversorgung |
+| § 42a Abs. 4 EnWG | Mieterstrom price capped at 90 % of the Grundversorgung — refused above it, and the ceiling stated on the page |
+| § 9 Abs. 1 Nr. 3 StromStG | A rooftop Mieterstrom/GGV supply is exempt (≤ 2 MW, räumlicher Zusammenhang) — the **default**, and the ground reaches the invoice |
+| §42b EnWG | Gemeinschaftliche Gebäudeversorgung (PV/grid hybrid split) |
+| CO2KostAufG § 3 / § 14 WPG | Fernwärme CO₂-Kosten pass-through, specific emissions and renewable share |
 | §42c EnWG | Energiegemeinschaft sharing credit via `SharingProduct` |
 | §51 EEG 2023 | Negativpreisregel (contractual LF feature via `eeg` feature) |
 
@@ -625,7 +743,7 @@ Coverage spans six suites:
 
 | Suite | Coverage |
 |---|---|
-| Unit tests (lib) | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerBefreiung`, tariff deserialization |
+| Unit tests (lib) | `RegulatoryRates`, levy lookups, `prorate_days`, `InvoiceType`, `Product` enum roundtrip, `StromsteuerTarif`/`Steuerentlastung`, `billed_months`/`billed_years`, tariff deserialization |
 | `calculator_tests` | All 13 categories (incl. WASSER), §14a/§41a/§41a Abs. 1, GGV, seasonal, indexed, prosumer, block tariffs, RLM demand charge, multi-rate MwSt, cancellation, BO4E JSON, pro-rata, Tarifwechsel, `bill_batch`, `validate` |
 | `golden_scenarios` | Golden master: SLP electricity; gas + levies; EEG Gutschrift; RLM demand charge; §54 KWK exemption; historic rates 2022 (heating gas constant 0.55, 7 % gas-USt window); §41a Abs. 1 rejection; §40 ct/kWh; §40 mandatory fields; §42c sharing; §9 exemption |
 | `proptest_invoice` | Property-based: `brutto == netto + mwst`, cancellation sign, 0% MwSt, gas arithmetic, demand charge non-negative, StromStG year table |

@@ -152,6 +152,26 @@ All EEG versions (2017, 2021, 2023) deduct a flat amount from the gross `anzuleg
 `eeg_billing::rates::sect53_deduction(ErzeugungsArt)` helper to compute it from the gross AW.
 §53 does **not** apply to Direktvermarktung, PostEegSpot, or KWKG plants.
 
+### Where the gross AW comes from
+
+`eeg_verguetungssaetze` is seeded with the **Startwerte as enacted**:
+
+| Erzeugungsart | § EEG 2023 | Shape |
+|---|---|---|
+| Wasserkraft | § 40 Abs. 1 | seven tiers, 12,03 → 3,37 ct |
+| Deponie-, Klär-, Grubengas | § 41 Abs. 1 / 2 / 3 | **one ladder each** |
+| Biomasse | § 42 Satz 1 | 12,67 ct ≤ 150 kW; above that, tender |
+| Bioabfall- / Güllevergärung | § 43 / § 44 | separate, higher claims |
+| Geothermie | § 45 Abs. 1 | flat 25,20 ct |
+| Solar | § 48 | in the version § 101 Abs. 1 Satz 2 keeps in force |
+
+There is deliberately **no wind-onshore row**: § 22 Abs. 2 makes the claim
+conditional on a BNetzA Zuschlag and § 36h derives the value from it, so an
+awarded value is imported per plant rather than seeded.
+
+The same values live in `eeg_billing::rates`, asserted tier by tier by that
+crate's `statutory_rate_tests`.
+
 ---
 
 ## Generator Types (`erzeugungsart`)
@@ -1088,15 +1108,13 @@ Derived from the stored receipts, not recomputed — the monthly runs are what c
 payment obligation. Each month contributes its **latest** receipt: the correction where one
 exists, the original otherwise.
 
-That was wrong until now. The statement summed only the non-correction rows, reasoning that
-a correction must not be *added* to its month. True — but a correction does not supersede
-its original in place either: it is a separate row and the original stays as it was. So the
-statement reported the superseded amounts, and the one artifact whose stated purpose is to
-agree with what was paid disagreed with exactly the receipts that were.
+A correction is a separate row and does not supersede its original in place, so neither
+summing every row (which double-counts the month) nor summing only the originals (which
+reports superseded amounts) agrees with what was paid. Taking the latest per month does.
 
 `missing_months` is bounded by the commissioning date and the Förderende, so a plant
-commissioned in June is not missing January. Demanding all twelve made a plant's first and
-last years permanently `vorlaeufig`, listing months that were never owed.
+commissioned in June is not missing January — demanding all twelve would leave a plant's
+first and last years permanently `vorlaeufig`, listing months that were never owed.
 
 ---
 

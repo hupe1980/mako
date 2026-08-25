@@ -67,69 +67,6 @@ mod date_option_serde {
     }
 }
 
-// ── StromsteuerBefreiung ──────────────────────────────────────────────────────
-
-/// §9 StromStG — typed Stromsteuer exemption grounds.
-///
-/// When set to any variant except `Keine`, the `ElectricityProvider` replaces
-/// the Stromsteuer levy with an informational exemption notice on the invoice.
-/// **Operators must hold the formal certificate before enabling.**
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
-pub enum StromsteuerBefreiung {
-    #[default]
-    Keine,
-    Bahnstrom,
-    NachweisErneuerbarer,
-    KwkSelbstverbrauch,
-    IndustrieProduktionesGewerbe,
-    LandForstwirtschaft,
-    SolarEigenverbrauch,
-}
-
-impl StromsteuerBefreiung {
-    #[must_use]
-    pub fn citation(self) -> &'static str {
-        match self {
-            Self::Keine => "",
-            Self::Bahnstrom => "§9 Nr. 1 StromStG",
-            Self::NachweisErneuerbarer => "§9 Nr. 2 StromStG",
-            Self::KwkSelbstverbrauch => "§9 Nr. 3 StromStG",
-            Self::IndustrieProduktionesGewerbe => "§9 Nr. 4 StromStG",
-            Self::LandForstwirtschaft => "§9 Nr. 5 StromStG",
-            Self::SolarEigenverbrauch => "§9a Nr. 1 StromStG",
-        }
-    }
-
-    #[must_use]
-    pub fn description(self) -> &'static str {
-        match self {
-            Self::Keine => "",
-            Self::Bahnstrom => "Stromsteuer: befreit gemäß §9 Nr. 1 StromStG (Bahnstrom)",
-            Self::NachweisErneuerbarer => {
-                "Stromsteuer: befreit gemäß §9 Nr. 2 StromStG (nachweisbar erneuerbarer Strom)"
-            }
-            Self::KwkSelbstverbrauch => {
-                "Stromsteuer: befreit gemäß §9 Nr. 3 StromStG (KWK-Selbstverbrauch <2 MW)"
-            }
-            Self::IndustrieProduktionesGewerbe => {
-                "Stromsteuer: befreit gemäß §9 Nr. 4 StromStG (produzierendes Gewerbe >2 GWh/a)"
-            }
-            Self::LandForstwirtschaft => {
-                "Stromsteuer: befreit gemäß §9 Nr. 5 StromStG (Land-/Forstwirtschaft)"
-            }
-            Self::SolarEigenverbrauch => {
-                "Stromsteuer: befreit gemäß §9a Nr. 1 StromStG (Eigenverbrauch PV ≤30 kWp)"
-            }
-        }
-    }
-
-    #[must_use]
-    pub fn is_exempt(self) -> bool {
-        !matches!(self, Self::Keine)
-    }
-}
-
 // ── EnergieQuellen ────────────────────────────────────────────────────────────
 
 /// §42 EnWG Abs. 2 Nr. 2 — typed energy source mix for invoice disclosure.
@@ -230,6 +167,14 @@ impl IndexedPriceConfig {
     }
 }
 
+/// The § 9 Abs. 1 Nr. 3 StromStG Kleinanlage-Befreiung — the default treatment
+/// of a rooftop solar supply.
+fn solar_stromsteuer_default() -> crate::steuer::StromsteuerTarif {
+    crate::steuer::StromsteuerTarif::Befreiung {
+        grund: crate::steuer::StromsteuerBefreiung::Kleinanlage,
+    }
+}
+
 // ── Per-category product structs ──────────────────────────────────────────────
 
 /// STROM electricity product.
@@ -274,6 +219,16 @@ pub struct ElectricityProduct {
     /// with both bills the spot price clamped into `[floor, cap]`.
     #[serde(default)]
     pub dynamic_epex_cap_ct_kwh: Option<Decimal>,
+    /// § 41a Arbeitspreis-Aufschlag (ct/kWh) — the supplier's margin on top of
+    /// the clamped spot price. Distinct from `auf_abschlag_ct_per_kwh`, which
+    /// is the static path's Rabatt/Aufschlag line.
+    #[serde(default)]
+    pub dynamic_aufschlag_ct_per_kwh: Option<Decimal>,
+    /// Label of the price series the § 41a Arbeitspreis is formed from, as
+    /// stated on the invoice — `productd`'s `dyn_source` column
+    /// (e.g. `"EPEX Spot Day-Ahead"`). Defaults to EPEX day-ahead.
+    #[serde(default)]
+    pub dynamic_price_source: Option<String>,
     #[serde(default)]
     pub auf_abschlag_ct_per_kwh: Option<Decimal>,
     #[serde(default)]
@@ -290,12 +245,17 @@ pub struct ElectricityProduct {
     /// MSB Grundgebühr bundled on retail invoice (ct/day). §41 EnWG.
     #[serde(default)]
     pub msb_gebuehr_ct_per_day: Option<Decimal>,
-    /// §9 StromStG typed exemption.
+    /// How the Stromsteuer applies: Regelsatz, § 9 Abs. 1 Steuerbefreiung, or
+    /// § 9 Abs. 2/3 ermäßigter Satz. See [`crate::steuer`] — a
+    /// **Steuerentlastung** (§ 9a/§ 9b/§ 9c StromStG) is not one of these and
+    /// belongs in `steuerentlastungen`.
     #[serde(default)]
-    pub stromsteuer_befreiung: StromsteuerBefreiung,
-    /// Legacy §9 Nr. 4 bool. New products: use `stromsteuer_befreiung`.
+    pub stromsteuer_tarif: crate::steuer::StromsteuerTarif,
+    /// Reliefs the *customer* may claim afterwards at the Hauptzollamt. They do
+    /// not change a single amount on this invoice; each renders one
+    /// informational note so the customer knows what it carried.
     #[serde(default)]
-    pub industrie_stromsteuer_befreiung: bool,
+    pub steuerentlastungen: Vec<crate::steuer::Steuerentlastung>,
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
     #[serde(default)]
@@ -314,9 +274,6 @@ pub struct ElectricityProduct {
     /// §42 EnWG typed energy source mix (CO₂ label).
     #[serde(default)]
     pub energiequellen: Option<EnergieQuellen>,
-    /// true when Stromsteuer applies to solar self-consumption (normally §9a exempt).
-    #[serde(default)]
-    pub solar_include_stromsteuer: bool,
     /// EEG Gutschrift EUR pass-through — set at bill-time from einsd, not stored in productd.
     #[serde(default)]
     pub eeg_gutschrift_eur: Option<Decimal>,
@@ -405,9 +362,18 @@ pub struct GasProduct {
     pub gas_indexed_price: Option<IndexedPriceConfig>,
     #[serde(default)]
     pub seasonal_prices: Option<Vec<SeasonalPriceOverride>>,
-    /// §54 EnergieStG full exemption (KWK / industrial manufacturing).
+    /// How the Energiesteuer applies: Regelsatz, or steuerfreie Verwendung
+    /// against an Erlaubnis nach § 24 Abs. 2 EnergieStG. See [`crate::steuer`].
+    ///
+    /// §§ 53a and 54 EnergieStG are **Steuerentlastungen** the customer claims
+    /// afterwards, not exemptions at supply — they belong in
+    /// `steuerentlastungen`.
     #[serde(default)]
-    pub gas_energiesteuer_befreiung: bool,
+    pub energiesteuer_tarif: crate::steuer::EnergiesteuerTarif,
+    /// Reliefs the *customer* may claim afterwards at the Hauptzollamt. Render
+    /// as notes; they change no amount on this invoice.
+    #[serde(default)]
+    pub steuerentlastungen: Vec<crate::steuer::Steuerentlastung>,
     #[serde(default)]
     pub auf_abschlag_ct_per_kwh: Option<Decimal>,
     #[serde(default)]
@@ -452,6 +418,23 @@ pub struct HeatProduct {
     /// [`crate::rates::mwst_rate_for_gas_waerme_period`], not by renewable share.
     #[serde(default)]
     pub waerme_erneuerbar_anteil_pct: Option<Decimal>,
+    /// CO₂ cost passed through on the heat supply, in ct/kWh_th.
+    ///
+    /// **CO2KostAufG § 3** obliges the supplier to state the CO₂ cost it
+    /// actually bore on a Wärmelieferung, and § 5 makes that statement part of
+    /// the Abrechnung. The rate is *not* the gas BEHG rate: the heat generator's
+    /// fuel mix and conversion losses sit between the two, so it is a property
+    /// of the heat product and the operator states it.
+    ///
+    /// `None` leaves the position off. `Some(0)` is how a fully renewable
+    /// network says it bears none, and still prints the § 5 statement.
+    #[serde(default)]
+    pub waerme_co2_kosten_ct_per_kwh: Option<Decimal>,
+    /// Specific CO₂ emissions of the delivered heat in g/kWh — the
+    /// CO2KostAufG § 3 Abs. 2 figure the cost statement is derived from.
+    /// Disclosure only.
+    #[serde(default)]
+    pub waerme_co2_emission_g_per_kwh: Option<Decimal>,
     #[serde(default)]
     pub mwst_rate_override: Option<Decimal>,
     #[serde(default)]
@@ -527,15 +510,35 @@ pub struct SolarProduct {
     /// When not set, `solar_arbeitspreis_ct_per_kwh` is used as fallback.
     #[serde(default)]
     pub arbeitspreis_ct_per_kwh: Option<Decimal>,
-    /// §21 Abs. 3 EEG Mieterstrom-Zuschlag (ct/kWh).
+    /// § 42a Abs. 4 EnWG — the Grundversorgungs-Arbeitspreis (ct/kWh) the
+    /// Mieterstrompreis is capped against.
+    ///
+    /// A Mieterstromvertrag may charge at most **90 %** of the ortsüblichen
+    /// Grundversorgungstarifs. Set this and the provider refuses a
+    /// `solar_arbeitspreis_ct_per_kwh` above the cap.
+    ///
+    /// The **Mieterstromzuschlag (§ 21 Abs. 3 EEG 2023)** deliberately has no
+    /// field here: it is the *Anlagenbetreiber's* claim against the
+    /// *Netzbetreiber*, settled by `eeg-billing`'s `TenantElectricity` scheme,
+    /// not a surcharge on the tenant.
     #[serde(default)]
-    pub mieterstrom_aufschlag_ct_per_kwh: Option<Decimal>,
+    pub grundversorgung_arbeitspreis_ct_per_kwh: Option<Decimal>,
     /// §42b EnWG GGV community energy discount (ct/kWh).
     #[serde(default)]
     pub gemeinschaft_rabatt_ct_per_kwh: Option<Decimal>,
-    /// true when Stromsteuer applies (normally exempt §9a Nr. 1 StromStG).
-    #[serde(default)]
-    pub solar_include_stromsteuer: bool,
+    /// How the Stromsteuer applies to the solar supply.
+    ///
+    /// Defaults to the **§ 9 Abs. 1 Nr. 3 StromStG** Kleinanlage-Befreiung,
+    /// which is what a rooftop Mieterstrom or GGV supply is: an installation up
+    /// to 2 MW, delivered by its operator to Letztverbraucher drawing *im
+    /// räumlichen Zusammenhang* (lit. b) or self-consumed (lit. a). The invoice
+    /// states the ground rather than merely omitting the levy — § 9 Abs. 4
+    /// conditions the exemption on the customer's Erlaubnis.
+    ///
+    /// Set `{"art": "REGEL"}` where the supply does not qualify: an installation
+    /// over 2 MW, or delivery beyond the räumlicher Zusammenhang.
+    #[serde(default = "solar_stromsteuer_default")]
+    pub stromsteuer_tarif: crate::steuer::StromsteuerTarif,
     /// Plant capacity (kWp) — informational (MaStR / §48 EEG size class).
     #[serde(default)]
     pub anlage_kwp: Option<Decimal>,
@@ -779,18 +782,13 @@ impl Product {
             ElectricityProvider, EmobilityProvider, EnergyShareProvider, GasProvider, HeatProvider,
             HemsProvider, MwStProvider, ServiceProvider, SolarProvider, WaterProvider,
         };
-        use std::collections::HashMap;
 
         match self {
             Self::Strom(p) => {
                 let mwst = rates.effective_mwst_electricity(p);
                 if p.dynamic_epex {
                     BillingEngine::new()
-                        .add(DynamicElectricityProvider::with_epex_map(
-                            p.clone(),
-                            grid.clone(),
-                            HashMap::new(),
-                        ))
+                        .add(DynamicElectricityProvider::new(p.clone(), grid.clone()))
                         .add(MwStProvider::new(mwst))
                 } else {
                     BillingEngine::new()

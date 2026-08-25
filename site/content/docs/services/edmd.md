@@ -253,11 +253,14 @@ reading kept its MaLo-ID through an erasure that reached everything else.
 Non-authoritative is a statement about settlement, not about personal data —
 § 60 Abs. 6 MsbG makes no exception for it.
 
-That covers the readings. edmd keeps a dozen tables of its own keyed on
-`malo_id`, five of them holding meter values beside it, so the same transaction
-splits them by what each row is: the **Buchungsbelege** — `meter_readings` (the
-Zählerstandsgang, the primary measurement behind every derived interval),
-`zsg_conversion_log`, `meter_read_corrections`, `substitute_value_log`,
+That covers every measurement, the Zählerstandsgang included: one subject
+registry spans the catalog's tables, so destroying the mapping unlinks the
+intervals, the ESA Typ-2 values and the register readings at once.
+
+edmd keeps a dozen tables of its own keyed on `malo_id`, several of them holding
+values beside it, so the same transaction splits them by what each row is: the
+**Buchungsbelege** — `zsg_conversion_log`, `meter_read_corrections`,
+`substitute_value_log`,
 `meter_data_receipts`, `ablese_auftraege`, `gas_quality_data` — have their
 `malo_id` rewritten to that same subject
 reference (§ 147 Abs. 1 AO requires them kept; Art. 17 Abs. 3 lit. b DSGVO
@@ -300,7 +303,7 @@ is single-tenant by deployment (`cfg.tenant` is written to every row). Three
 relations are rejected there with `403`: the raw, every-version table, because
 summing it double-counts every correction, and **both ESA Typ-2 relations**,
 because that store's separation from billing is otherwise a naming convention on
-this one surface — the two tables share a DataFusion session, so a free-form
+this one surface — every table shares a DataFusion session, so a free-form
 `SELECT * FROM esa_typ2_reads` walked straight around it.
 
 ### GDPR erasure is one transaction
@@ -438,6 +441,14 @@ validated ones, and V03 (negative energy), V04 (impossible spike) and V09
 § 147 AO / GoBD requires billed data to have been validated. `validate` takes
 the batch **by value**, so a caller cannot retain the raw `Vec` and persist it
 by another route.
+
+Running the rules is not the same as every rule running. A rule can be inert
+because the configuration gave it nothing to work with — V12 needs a plant
+capacity edmd holds no master data for — or because the batch was too thin for
+it. Every ingest response therefore carries `skipped_rules`, and the MCP
+`validate_timeseries` tool carries `rules_evaluated` / `rules_skipped`: a clean
+verdict says which rules stand behind it instead of reading as a guarantee none
+of them made.
 
 Every family is behind it: IoT push, RLM/gas direct push, bulk import, the Kafka
 consumer, and edmd's own § 60 Abs. 2 MsbG Ersatzwerte — substitutes are edmd's
@@ -631,10 +642,23 @@ Content-Type: application/json
 `GET` on the same path reads the stored register values back. Four properties are
 load-bearing:
 
-**Both halves are stored** — the readings in `meter_readings`, the derived
-intervals in meterstore. § 146 Abs. 4 AO requires the original to stay
+**Both halves are stored, and both are tiered** — the readings in the
+`meter_readings` **point** table, the derived intervals in the interval table,
+over one meterstore catalog. § 146 Abs. 4 AO requires the original to stay
 recoverable, and a stored difference cannot reproduce the register values it came
 from, nor can a customer check it against the number on their meter.
+
+A point table holds register values at instants; an interval table holds energy
+over spans. They stay separate because `value` means two different things:
+summing Zählerstände gives a number with no meaning that looks exactly like a
+consumption total.
+
+The ZSG is keyed by **Messlokation** as well as register. A Lastgang belongs to
+the market location — one channel however many meters produce it — but a register
+belongs to the *meter*, and two meters under one Marktlokation carry the same
+OBIS code at the same instants. Keyed on the Marktlokation alone, the second
+meter's readings would overwrite the first's, so a delivery naming no
+Messlokation is refused.
 
 **A Zählerstand is stored unconverted.** § 25 Nr. 4 MessEV converts the
 *difference*: a gas register counts m³ and the row says m³, while the interval it
@@ -864,10 +888,11 @@ land in their own table, `esa_typ2_reads`, and never in `meter_reads`:
   `GET /api/v1/esa/typ2/{malo_id}`; it is never reconciled against, corrected,
   or substituted for a Typ-1 value.
 
-The separation is a table boundary, not a session one. `meter_reads` and
-`esa_typ2_reads` are built as two tables of a single `meterstore::MeterCatalog`
-(`build_stores`), so they share one Iceberg `SqlCatalog` — one metadata pool — and
-one DataFusion session, while each keeps its own watermark, archiver and tiering
+The separation is a table boundary, not a session one. `meter_reads`,
+`esa_typ2_reads` and the `meter_readings` Zählerstandsgang are built as three
+tables of a single `meterstore::MeterCatalog` (`build_stores`), so they share one
+Iceberg `SqlCatalog` — one metadata pool — and one DataFusion session, while each
+keeps its own watermark, archiver and tiering
 (§15.3). Sharing the session costs no isolation on the typed paths: a billing
 query names `meter_reads` and a Typ-2 read names `esa_typ2_reads`, and neither
 can reach the other's rows.
@@ -1112,7 +1137,7 @@ deletes that signal for nothing.
 
 ## The rule set is `metering`'s, and there is no V10
 
-`metering` 0.18 runs **V01–V09, V11 and V12**. V10 was a "register rollover" rule
+`metering` runs **V01–V09, V11 and V12**. V10 was a "register rollover" rule
 comparing consecutive interval energies, which is meaningless for a series of
 per-interval quantities rather than cumulative Zählerstände — for it to fire, one
 quarter-hour would have had to carry 50 MWh, or 200 MW of average load. The crate
@@ -1286,11 +1311,14 @@ community is the set of rules sharing a plant. They are matched with
 whole-value, so one MeLo cannot match as a substring of another and pull in a
 stranger's community.
 
-**The allocated share is read off the engine**, not recomputed:
-`allocated[t] = consumption[t] − net_grid_draw[t]`. That keeps the §42b Abs. 5
-`Pos()` cap and the zero-consumption guard applying here exactly as they do to
-the derived series. A source read that fails answers `503`; under-allocating a
-§42c settlement in silence is the one outcome worth refusing.
+**The allocation comes from the engine whole** — `metering::compute_ggv_allocation`
+returns each interval's consumption, the plant's generation, the nominal share,
+what was actually allocated and the residual grid draw, with
+`consumption == allocated + net_grid_draw` holding exactly. The §42b Abs. 5
+`Pos()` cap is therefore *reported* rather than inferred: `capped` says the share
+exceeded what the tenant could use, and `surplus_to_grid_kwh` is the part that
+fed the public grid instead. A source read that fails answers `503`;
+under-allocating a §42c settlement in silence is the one outcome worth refusing.
 
 ### §42c Energy-Sharing readiness
 
@@ -2413,9 +2441,9 @@ event_types   = [
 **Connection budget.** edmd opens more PostgreSQL pools than most services, so size
 `pool_size` and the server's `max_connections` with all of them in mind: the main
 pool (`pool_size`, which also backs meterstore's hot tier), plus the single shared
-Iceberg catalog metadata pool — `meter_reads` and `esa_typ2_reads` are two tables of
-one `MeterCatalog`, so they share one `SqlCatalog` (one metadata pool, bounded to 4
-connections), not one pool each. The pool is built through the shared
+Iceberg catalog metadata pool — `meter_reads`, `esa_typ2_reads` and
+`meter_readings` are three tables of one `MeterCatalog`, so they share one
+`SqlCatalog` (one metadata pool, bounded to 4 connections), not one pool each. The pool is built through the shared
 `DatabaseConfig::connect` builder, so the configured size and lifetimes actually
 take effect and every connection is tagged `edmd` in `pg_stat_activity`.
 

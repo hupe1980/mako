@@ -609,7 +609,7 @@ pub enum Vertragsart {
 
     /// Ersatzversorgung (§38 EnWG): the fallback supply when energy is drawn
     /// without an assignable contract. Ends by law after **three months** at
-    /// the latest (§38 Abs. 2 S. 2 EnWG) — the engine refuses to bill a
+    /// the latest (§ 38 Abs. 4 EnWG) — the engine refuses to bill a
     /// longer Ersatzversorgung period, because such a supply cannot exist.
     Ersatzversorgung,
 }
@@ -692,7 +692,7 @@ pub struct BillingContext {
     /// The contractual regime — Sondervertrag, Grundversorgung, or
     /// Ersatzversorgung. Emitted as the `vertragsart` ZusatzAttribut; an
     /// Ersatzversorgung period longer than three months blocks the run
-    /// (§38 Abs. 2 S. 2 EnWG).
+    /// (§ 38 Abs. 4 EnWG).
     #[serde(default)]
     pub vertragsart: Vertragsart,
 
@@ -701,6 +701,15 @@ pub struct BillingContext {
     /// Only consulted when `abschlage` is non-empty. See [`SettlementForm`].
     #[serde(default)]
     pub settlement_form: SettlementForm,
+
+    /// The VAT rate a `minimum_invoice_eur_brutto` top-up is agreed at.
+    ///
+    /// The Mindestbetrag is a contractual charge, not a statutory one, so the
+    /// contract names its rate. `None` uses the period's standard rate — right
+    /// for a single-rate invoice and wrong for a mixed one, where the gross-up
+    /// otherwise misses the configured minimum by the rate difference.
+    #[serde(default)]
+    pub minimum_invoice_mwst_rate: Option<Decimal>,
 
     /// Statutory levy rates (Stromsteuer, Energiesteuer, BEHG, MwSt).
     ///
@@ -998,6 +1007,151 @@ impl BillingContext {
             .unwrap_or(self.period_to());
         let active = ((effective_to - effective_from).whole_days() + 1).max(0) as u32;
         (active.min(total), total)
+    }
+
+    /// The active contract window inside the billing period.
+    ///
+    /// `(from, to)` clipped by `vertragsbeginn` / `vertragsende`, inclusive.
+    /// Returns `None` when the contract does not overlap the period at all.
+    #[must_use]
+    pub fn active_window(&self) -> Option<(time::Date, time::Date)> {
+        let from = self
+            .vertragsbeginn
+            .filter(|&vb| vb > self.period_from())
+            .unwrap_or(self.period_from());
+        let to = self
+            .vertragsende
+            .filter(|&ve| ve < self.period_to())
+            .unwrap_or(self.period_to());
+        (from <= to).then_some((from, to))
+    }
+
+    /// The billed period expressed in **months**, for EUR/month rates.
+    ///
+    /// Each calendar month contributes `billed days ÷ that month's length`, so
+    /// January 1–31 is exactly `1`, a full year is exactly `12`, and a
+    /// mid-month move-in gets the fraction of the month it actually occupied —
+    /// none of which `days ÷ 30.4375` produces (it makes a billed January
+    /// 1.0185 months, and a leap year 12.0164).
+    ///
+    /// Clipped to the active contract window, like every other periodic charge.
+    #[must_use]
+    pub fn billed_months(&self) -> rust_decimal::Decimal {
+        use rust_decimal::Decimal;
+        let Some((from, to)) = self.active_window() else {
+            return Decimal::ZERO;
+        };
+        let mut months = Decimal::ZERO;
+        let mut cursor = from;
+        while cursor <= to {
+            let len = time::util::days_in_month(cursor.month(), cursor.year());
+            let month_end = time::Date::from_calendar_date(cursor.year(), cursor.month(), len)
+                .expect("last day of the month is a valid date");
+            let slice_end = month_end.min(to);
+            let days = (slice_end - cursor).whole_days() + 1;
+            months += Decimal::from(days) / Decimal::from(len);
+            let Some(next) = month_end.next_day() else {
+                break;
+            };
+            cursor = next;
+        }
+        months
+    }
+
+    /// The billed period expressed in **years**, for EUR/year rates.
+    ///
+    /// Leap-aware: each calendar year contributes `billed days ÷ that year's
+    /// length`, so 2024 divides by 366 and 2025 by 365.
+    #[must_use]
+    pub fn billed_years(&self) -> rust_decimal::Decimal {
+        use rust_decimal::Decimal;
+        let Some((from, to)) = self.active_window() else {
+            return Decimal::ZERO;
+        };
+        let mut years = Decimal::ZERO;
+        let mut cursor = from;
+        while cursor <= to {
+            let len = time::util::days_in_year(cursor.year());
+            let year_end = time::Date::from_calendar_date(cursor.year(), time::Month::December, 31)
+                .expect("31 December is a valid date");
+            let slice_end = year_end.min(to);
+            let days = (slice_end - cursor).whole_days() + 1;
+            years += Decimal::from(days) / Decimal::from(len);
+            let Some(next) = year_end.next_day() else {
+                break;
+            };
+            cursor = next;
+        }
+        years
+    }
+}
+
+#[cfg(test)]
+mod period_fraction_tests {
+    use super::*;
+    use rust_decimal::dec;
+    use time::macros::date;
+
+    fn ctx(from: time::Date, to: time::Date) -> BillingContext {
+        BillingContext {
+            period: BillingPeriod::new(from, to).expect("period"),
+            ..Default::default()
+        }
+    }
+
+    /// The property `days ÷ 30.4375` cannot have: calendar-aligned periods come
+    /// out exact.
+    #[test]
+    fn calendar_aligned_periods_are_exact() {
+        assert_eq!(
+            ctx(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).billed_months(),
+            dec!(1)
+        );
+        assert_eq!(
+            ctx(date!(2026 - 02 - 01), date!(2026 - 02 - 28)).billed_months(),
+            dec!(1)
+        );
+        assert_eq!(
+            ctx(date!(2026 - 01 - 01), date!(2026 - 12 - 31)).billed_months(),
+            dec!(12)
+        );
+        // …in a leap year too, where 366 ÷ 30.4375 would be 12.0246.
+        assert_eq!(
+            ctx(date!(2024 - 01 - 01), date!(2024 - 12 - 31)).billed_months(),
+            dec!(12)
+        );
+        assert_eq!(
+            ctx(date!(2024 - 01 - 01), date!(2024 - 12 - 31)).billed_years(),
+            dec!(1)
+        );
+    }
+
+    /// A mid-month move-in pays for the part of that month it occupied.
+    #[test]
+    fn a_partial_month_is_that_months_own_fraction() {
+        // 16–31 January = 16 of 31 days.
+        let c = BillingContext {
+            period: BillingPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap(),
+            vertragsbeginn: Some(date!(2026 - 01 - 16)),
+            ..Default::default()
+        };
+        assert_eq!(c.billed_months(), dec!(16) / dec!(31));
+        // …and February's 13 days are 13/28, not 13/30.4375.
+        let c = ctx(date!(2026 - 02 - 16), date!(2026 - 02 - 28));
+        assert_eq!(c.billed_months(), dec!(13) / dec!(28));
+    }
+
+    /// A contract that ended before the period began bills nothing.
+    #[test]
+    fn a_closed_contract_bills_no_months() {
+        let c = BillingContext {
+            period: BillingPeriod::new(date!(2026 - 03 - 01), date!(2026 - 03 - 31)).unwrap(),
+            vertragsende: Some(date!(2026 - 02 - 10)),
+            ..Default::default()
+        };
+        assert_eq!(c.active_window(), None);
+        assert_eq!(c.billed_months(), rust_decimal::Decimal::ZERO);
+        assert_eq!(c.billed_years(), rust_decimal::Decimal::ZERO);
     }
 }
 

@@ -376,3 +376,381 @@ proptest! {
         );
     }
 }
+
+// ── Verbrauchsteuer-Begünstigungen ────────────────────────────────────────────
+
+proptest! {
+    /// **A Steuerentlastung never moves an amount.**
+    ///
+    /// § 9a/§ 9b/§ 9c StromStG are reliefs the customer claims from the
+    /// Hauptzollamt after being invoiced in full. Declaring one must leave
+    /// netto, MwSt and brutto bit-identical for any tariff and any consumption
+    /// — the only difference is one 0-EUR note. This is the property the old
+    /// model could not have: its `industrie_stromsteuer_befreiung` flag zeroed
+    /// the levy, so declaring the relief changed the invoice by 2,05 ct/kWh.
+    #[test]
+    fn an_entlastung_leaves_every_total_untouched(
+        ap in arb_arbeitspreis(),
+        gp in arb_grundpreis(),
+        kwh in arb_kwh(),
+    ) {
+        let plain: Product = serde_json::from_value(serde_json::json!({
+            "category": "STROM",
+            "arbeitspreis_ct_per_kwh": ap,
+            "grundpreis_ct_per_day": gp,
+        })).unwrap();
+        let entlastet: Product = serde_json::from_value(serde_json::json!({
+            "category": "STROM",
+            "arbeitspreis_ct_per_kwh": ap,
+            "grundpreis_ct_per_day": gp,
+            "steuerentlastungen": ["STROMSTEUER9B", "STROMSTEUER9A"],
+        })).unwrap();
+
+        let q = Quantities {
+            electricity: Some(MeterInput { arbeitsmenge_kwh: kwh, ..Default::default() }),
+            ..Default::default()
+        };
+        let rates = RegulatoryRates::default();
+        let a = plain.build_engine(&GridInput::default(), &rates)
+            .bill(base_ctx(), &q).unwrap();
+        let b = entlastet.build_engine(&GridInput::default(), &rates)
+            .bill(base_ctx(), &q).unwrap();
+
+        prop_assert_eq!(a.netto_eur, b.netto_eur);
+        prop_assert_eq!(a.mwst_eur, b.mwst_eur);
+        prop_assert_eq!(a.brutto_eur, b.brutto_eur);
+        // …and the notes are the only new lines, all of them zero.
+        prop_assert_eq!(b.positions.len(), a.positions.len() + 2);
+        for p in b.positions.iter().filter(|p| p.has_tag("steuerentlastung")) {
+            prop_assert_eq!(p.net_eur, Decimal::ZERO);
+        }
+    }
+
+    /// **A Befreiung removes exactly the levy, and an Ermäßigung replaces it.**
+    ///
+    /// Both are supplier-side, so both change the invoice — the property is
+    /// that they change it by exactly the levy and by nothing else. An
+    /// Ermäßigung that dropped the line instead (the old `Bahnstrom` shape)
+    /// would fail the second assertion.
+    #[test]
+    fn a_befreiung_and_an_ermaessigung_move_only_the_levy(
+        ap in arb_arbeitspreis(),
+        kwh in 1.0_f64..=50_000.0_f64,
+    ) {
+        let kwh = to_decimal(kwh);
+        let make = |tarif: serde_json::Value| -> Product {
+            serde_json::from_value(serde_json::json!({
+                "category": "STROM",
+                "arbeitspreis_ct_per_kwh": ap,
+                "stromsteuer_tarif": tarif,
+            })).unwrap()
+        };
+        let q = Quantities {
+            electricity: Some(MeterInput { arbeitsmenge_kwh: kwh, ..Default::default() }),
+            ..Default::default()
+        };
+        let rates = RegulatoryRates::default();
+        let bill = |p: Product| p.build_engine(&GridInput::default(), &rates)
+            .bill(base_ctx(), &q).unwrap();
+
+        let regel = bill(make(serde_json::json!({"art": "REGEL"})));
+        let befreit = bill(make(serde_json::json!({
+            "art": "BEFREIUNG", "grund": "KLEINANLAGE"
+        })));
+        let ermaessigt = bill(make(serde_json::json!({
+            "art": "ERMAESSIGUNG", "grund": "FAHRSTROM"
+        })));
+
+        // The Regelsatz levy is the whole difference to the Befreiung.
+        let levy = regel.total_by_tag("stromsteuer");
+        prop_assert_eq!(levy, energy_billing::round_money(kwh * dec!(0.0205), 5));
+        prop_assert_eq!(befreit.total_by_tag("stromsteuer"), Decimal::ZERO);
+        prop_assert_eq!(regel.netto_eur - befreit.netto_eur, levy);
+
+        // The Ermäßigung keeps a levy line, at the statutory reduced rate.
+        let reduced = ermaessigt.total_by_tag("stromsteuer");
+        prop_assert_eq!(reduced, energy_billing::round_money(kwh * dec!(0.01142), 5));
+        prop_assert!(reduced > Decimal::ZERO || kwh.is_zero());
+        prop_assert_eq!(regel.netto_eur - ermaessigt.netto_eur, levy - reduced);
+    }
+}
+
+// ── Calendar-exact period fractions ───────────────────────────────────────────
+
+proptest! {
+    /// **Twelve monthly invoices bill exactly what one annual invoice bills.**
+    ///
+    /// The property `days ÷ 30.4375` cannot have: it makes each month slightly
+    /// more than a month, so twelve of them over-bill a year of Grundpreis —
+    /// consistently, and always in the operator's favour.
+    #[test]
+    fn twelve_months_of_grundpreis_equal_one_year(
+        eur_per_month in 1.0_f64..=500.0_f64,
+    ) {
+        let gp = to_decimal(eur_per_month);
+        let tariff: Product = serde_json::from_value(serde_json::json!({
+            "category": "WAERME",
+            "waerme_grundpreis_eur_per_month": gp,
+            "waerme_arbeitspreis_ct_per_kwh": 9.0,
+        })).unwrap();
+        let rates = RegulatoryRates::default();
+        let heat = |kwh: Decimal| Quantities {
+            heat: Some(energy_billing::WaermeMeterInput {
+                kwh_waerme: kwh,
+                months: None,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let ctx_for = |from, to| BillingContext {
+            period: BillingPeriod::new(from, to).unwrap(),
+            regulatory_rates: rates.clone(),
+            ..base_ctx()
+        };
+
+        let annual = tariff.build_engine(&GridInput::default(), &rates)
+            .bill(ctx_for(date!(2026-01-01), date!(2026-12-31)), &heat(dec!(12000)))
+            .unwrap();
+
+        let mut monthly_total = Decimal::ZERO;
+        for m in 1u8..=12 {
+            let month = time::Month::try_from(m).unwrap();
+            let first = time::Date::from_calendar_date(2026, month, 1).unwrap();
+            let last = time::Date::from_calendar_date(
+                2026, month, time::util::days_in_month(month, 2026)).unwrap();
+            let inv = tariff.build_engine(&GridInput::default(), &rates)
+                .bill(ctx_for(first, last), &heat(dec!(1000))).unwrap();
+            monthly_total += inv
+                .positions
+                .iter()
+                .filter(|p| p.description.starts_with("Grundpreis"))
+                .map(|p| p.net_eur)
+                .sum::<Decimal>();
+        }
+        let annual_gp: Decimal = annual
+            .positions
+            .iter()
+            .filter(|p| p.description.starts_with("Grundpreis"))
+            .map(|p| p.net_eur)
+            .sum();
+        prop_assert_eq!(annual_gp, monthly_total);
+        prop_assert_eq!(annual_gp, energy_billing::round_money(gp * dec!(12), 5));
+    }
+}
+
+// ── No silent zero ────────────────────────────────────────────────────────────
+
+proptest! {
+    /// **Consumption that reaches the engine is always priced.**
+    ///
+    /// The generalisation of every silent-zero defect this crate has had: a
+    /// priceless product, an indexed tariff with no index value, a Zweitarif
+    /// product against an unsplit meter, HT/NT registers with no stated total.
+    /// Each billed the levies and nothing for the electricity, each looked like
+    /// an ordinary invoice, and each was found by hand.
+    ///
+    /// The property is the invariant behind all of them: whenever `bill()`
+    /// *succeeds* and there is consumption, an Arbeitspreis position exists and
+    /// is non-zero. A future pricing shape that cannot price its quantities
+    /// must therefore refuse, not return a Grundpreis-and-levies invoice.
+    #[test]
+    fn any_billable_consumption_produces_a_work_price(
+        ap in arb_arbeitspreis(),
+        ht in arb_arbeitspreis(),
+        nt in arb_arbeitspreis(),
+        kwh in 1.0_f64..=50_000.0_f64,
+        shape in 0usize..4,
+        split in prop::option::of(0.0_f64..=1.0_f64),
+    ) {
+        let kwh = to_decimal(kwh);
+        prop_assume!(kwh > Decimal::ZERO);
+
+        // Four pricing shapes the catalog can produce.
+        let tariff = match shape {
+            0 => serde_json::json!({"category": "STROM", "arbeitspreis_ct_per_kwh": ap}),
+            1 => serde_json::json!({
+                "category": "STROM",
+                "arbeitspreis_ht_ct_per_kwh": ht,
+                "arbeitspreis_nt_ct_per_kwh": nt,
+            }),
+            2 => serde_json::json!({
+                "category": "STROM",
+                "arbeitspreis_ct_per_kwh": ap,
+                "indexed_price": {
+                    "base_ct_per_kwh": 5, "spread_ct_per_kwh": 1,
+                    "index_name": "Phelix Base", "factor_ct_per_unit": 0.1,
+                },
+            }),
+            _ => serde_json::json!({
+                "category": "STROM",
+                "block_tiers": [{"bis_kwh": 1000, "preis_ct_per_kwh": ap}, {"preis_ct_per_kwh": ap}],
+            }),
+        };
+        let product: Product = serde_json::from_value(tariff).unwrap();
+
+        // …and the meter, with or without an HT/NT split.
+        let electricity = match split {
+            Some(f) => {
+                let f = to_decimal(f).min(Decimal::ONE);
+                let ht_kwh = (kwh * f).round_dp(3);
+                MeterInput {
+                    arbeitsmenge_kwh: kwh,
+                    arbeitsmenge_ht_kwh: Some(ht_kwh),
+                    arbeitsmenge_nt_kwh: Some(kwh - ht_kwh),
+                    ..Default::default()
+                }
+            }
+            None => MeterInput { arbeitsmenge_kwh: kwh, ..Default::default() },
+        };
+        let quantities = Quantities { electricity: Some(electricity), ..Default::default() };
+
+        let rates = RegulatoryRates::default();
+        // A refusal is a correct outcome — the point is that *success* implies
+        // the electricity was priced.
+        if let Ok(invoice) = product
+            .build_engine(&GridInput::default(), &rates)
+            .bill(base_ctx(), &quantities)
+        {
+            let work = invoice.total_by_tag("arbeitspreis");
+            prop_assert!(
+                work > Decimal::ZERO,
+                "billed {kwh} kWh and charged {work} EUR for the electricity; \
+                 positions: {:?}",
+                invoice
+                    .positions
+                    .iter()
+                    .map(|p| (&p.description, p.net_eur))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+proptest! {
+    /// **The same invariant, across the other metered commodities.**
+    ///
+    /// The property above is electricity-only, which is exactly why the defect
+    /// recurred outside it: gas, Fernwärme and charging energy each reach the
+    /// engine as a delivered quantity, and each had (or could have had) a
+    /// pricing shape that billed the fees and nothing for the commodity.
+    ///
+    /// Same statement, same tag: whenever `bill()` succeeds and a quantity was
+    /// delivered, an Arbeitspreis position exists and is non-zero. A refusal
+    /// remains a correct outcome — the claim is about what *success* implies.
+    #[test]
+    fn any_delivered_commodity_produces_a_work_price(
+        ap in arb_arbeitspreis(),
+        qty in 1.0_f64..=50_000.0_f64,
+        shape in 0usize..3,
+    ) {
+        let qty = to_decimal(qty);
+        prop_assume!(qty > Decimal::ZERO);
+        prop_assume!(ap > Decimal::ZERO);
+
+        let (product, quantities) = match shape {
+            0 => (
+                serde_json::json!({
+                    "category": "GAS",
+                    "gas_arbeitspreis_ct_per_kwh_hs": ap,
+                }),
+                Quantities {
+                    gas: Some(GasMeterInput { kwh_hs: Some(qty), ..Default::default() }),
+                    ..Default::default()
+                },
+            ),
+            1 => (
+                serde_json::json!({
+                    "category": "WAERME",
+                    "waerme_arbeitspreis_ct_per_kwh": ap,
+                }),
+                Quantities {
+                    heat: Some(energy_billing::WaermeMeterInput {
+                        kwh_waerme: qty,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ),
+            _ => (
+                serde_json::json!({
+                    "category": "EMOBILITY",
+                    "emobility_kwh_price_ct": ap,
+                }),
+                Quantities {
+                    emobility: Some(energy_billing::EmobilityMeterInput {
+                        kwh_charged: Some(qty),
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            ),
+        };
+        let product: Product = serde_json::from_value(product).unwrap();
+
+        let rates = RegulatoryRates::default();
+        if let Ok(invoice) = product
+            .build_engine(&GridInput::default(), &rates)
+            .bill(base_ctx(), &quantities)
+        {
+            let work = invoice.total_by_tag("arbeitspreis");
+            prop_assert!(
+                work > Decimal::ZERO,
+                "delivered {qty} and charged {work} EUR for the commodity; positions: {:?}",
+                invoice
+                    .positions
+                    .iter()
+                    .map(|p| (&p.description, p.net_eur))
+                    .collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
+proptest! {
+    /// **Every line multiplies out.** `PEPPOL-EN16931-R120` allows ±0.02 between
+    /// a line's `price × quantity` and its amount, and a receiver rejects on it.
+    ///
+    /// The trap is a *rounded* price: rounding what the page prints is right,
+    /// but the same figure is the machine field BT-146, and the further it is
+    /// rounded and the more units it multiplies, the further the product drifts
+    /// from the amount beside it. §41a states a weighted average — rarely
+    /// representable — so it is the position most exposed, and the drift only
+    /// appears at volume.
+    #[test]
+    fn every_position_price_multiplies_out_to_its_amount(
+        ap in arb_arbeitspreis(),
+        gp in 0.0_f64..=500.0_f64,
+        kwh in 1.0_f64..=20_000_000.0_f64,
+    ) {
+        let kwh = to_decimal(kwh);
+        prop_assume!(kwh > Decimal::ZERO);
+        let tariff = serde_json::json!({
+            "category": "STROM",
+            "arbeitspreis_ct_per_kwh": ap,
+            "grundpreis_ct_per_day": to_decimal(gp),
+        });
+        let product: Product = serde_json::from_value(tariff).unwrap();
+        let quantities = Quantities {
+            electricity: Some(MeterInput { arbeitsmenge_kwh: kwh, ..Default::default() }),
+            ..Default::default()
+        };
+
+        if let Ok(invoice) = product
+            .build_engine(&GridInput::default(), &RegulatoryRates::default())
+            .bill(base_ctx(), &quantities)
+        {
+            for p in &invoice.positions {
+                if p.quantity == Decimal::ZERO {
+                    continue;
+                }
+                let drift = (p.quantity * p.unit_price_eur - p.net_eur).abs();
+                prop_assert!(
+                    drift <= dec!(0.02),
+                    "PEPPOL-EN16931-R120: {:?} states {} x {} against an amount of {} \
+                     (drift {drift})",
+                    p.description, p.quantity, p.unit_price_eur, p.net_eur
+                );
+            }
+        }
+    }
+}

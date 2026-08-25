@@ -22,6 +22,7 @@ mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 mako-engine      = { path = "../../crates/mako-engine", features = ["slatedb"] }
 mako-gpke        = { path = "../../crates/mako-gpke" }
+mako-invoic      = { path = "../../crates/mako-invoic" }
 # The Antwortcode catalogue: a code is validated against the Entscheidungsbaum
 # that publishes it before the answer can reach the wire.
 mako-pruefung      = { path = "../../crates/mako-pruefung", default-features = false }

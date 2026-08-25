@@ -155,7 +155,7 @@ async fn build_and_dispatch(
     // ── The settlement ───────────────────────────────────────────────────────
     let period = grid_billing::SettlementPeriod::new(period_from, period_to)
         .map_err(|e| unprocessable(format!("invalid settlement period: {e}")))?;
-    let settlement = grid_billing::settle_mmm(&grid_billing::MmmInput {
+    let input = grid_billing::MmmInput {
         malo_id: req.malo_id.clone(),
         // The NB is the counterparty even though it does not write the
         // document: `nb_mp_id`/`lf_mp_id` name the roles in the settlement, and
@@ -170,8 +170,28 @@ async fn build_and_dispatch(
         minder_preis_ct_per_kwh: prices.minder_ct_kwh,
         wiederverkaeufer: WIEDERVERKAEUFER,
         selbstausgestellt: true,
-    })
-    .map_err(|e| unprocessable(format!("settlement failed: {e}")))?;
+    };
+    // `grid-billing` computes an `Error`-severity finding for an input it cannot
+    // bill — and nothing read it, so the invoice went to the Netzbetreiber with
+    // the defect the validator had already named. A self-issued document is the
+    // worst place for that: the counterparty did not write it and has to dispute
+    // it back.
+    let validation = grid_billing::validate_mmm_input(&input);
+    if !validation.is_valid {
+        let findings = validation
+            .warnings
+            .iter()
+            .filter(|w| w.severity == grid_billing::WarningSeverity::Error)
+            .map(|w| format!("[{}] {}", w.code, w.message))
+            .collect::<Vec<_>>()
+            .join("; ");
+        return Err(unprocessable(format!(
+            "MMM settlement for MaLo {} is not billable: {findings}",
+            req.malo_id
+        )));
+    }
+    let settlement = grid_billing::settle_mmm(&input)
+        .map_err(|e| unprocessable(format!("settlement failed: {e}")))?;
 
     let invoice_date = time::OffsetDateTime::now_utc().date();
     let rechnungsnummer = rechnungsnummer(&state.tenant, &req.malo_id, req.year, req.month);

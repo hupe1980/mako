@@ -31,6 +31,26 @@ pub struct RatesConfig {
     pub behg_co2_factor_kg_per_kwh: Option<Decimal>,
     /// MwSt rate as decimal fraction (default 0.19).
     pub mwst_rate: Option<Decimal>,
+    /// Reduced MwSt rate as decimal fraction (§ 12 Abs. 2 UStG, default 0.07).
+    /// Applies to the Anlage-2 supplies this platform bills — Trinkwasser.
+    pub mwst_rate_reduced: Option<Decimal>,
+}
+
+/// `[billing]` — how a document is shaped, where the law offers a choice.
+#[derive(Debug, Deserialize, Default)]
+pub struct BillingConfig {
+    /// § 14 Abs. 5 Satz 2 UStG — the default settlement form for an invoice
+    /// that deducts advances.
+    ///
+    /// `"ENDRECHNUNG"` (the default) states the whole supply and deducts the
+    /// advances together with the tax contained in them. `"RESTRECHNUNG"`
+    /// invoices only the remainder and lists no advances — what the BMF
+    /// recommends for e-invoices (Schreiben v. 15.10.2024, Rn. 48), because
+    /// EN 16931's core profiles have nowhere to carry per-advance tax.
+    ///
+    /// Both are lawful and the customer pays the same amount either way. A
+    /// request may override it per invoice.
+    pub settlement_form: Option<energy_billing::SettlementForm>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -157,6 +177,11 @@ pub struct BillingdConfig {
 
     /// Statutory rate defaults.  Override here instead of per-product.
     pub rates: Option<RatesConfig>,
+
+    /// `[billing]` — document-shape defaults that are the operator's choice
+    /// rather than a statutory rate.
+    #[serde(default)]
+    pub billing: Option<BillingConfig>,
 
     /// MCP server authentication. Supports API-key, OIDC, or dev mode.
     /// See `[mcp]` section in TOML — e.g. `api_key = "env:BILLINGD_MCP_API_KEY"`.
@@ -378,7 +403,7 @@ impl SellerConfig {
 /// billing period from its `abrechnungszyklus`, bills every period that has
 /// no invoice yet, and accumulates the month's `billing_run_log` row. For
 /// iMSys MaLos it additionally delivers the free monthly
-/// Abrechnungsinformation (§40b Abs. 2 EnWG) as a CloudEvent.
+/// Abrechnungsinformation (§ 40b Abs. 3 EnWG) as a CloudEvent.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BillingRunsConfig {
@@ -388,7 +413,7 @@ pub struct BillingRunsConfig {
     /// UTC hour (0–23) after which the daily sweep runs. Default: 4.
     #[serde(default = "default_billing_run_hour")]
     pub run_hour_utc: u8,
-    /// Emit the §40b Abs. 2 monthly Abrechnungsinformation for iMSys MaLos.
+    /// Emit the § 40b Abs. 3 monthly Abrechnungsinformation for iMSys MaLos.
     /// Default: true (only effective while `enabled`).
     #[serde(default = "default_true")]
     pub abrechnungsinformation: bool,
@@ -482,6 +507,7 @@ impl BillingdConfig {
                 .and_then(|r| r.behg_gas_ct_per_kwh)
                 .unwrap_or(dec!(1.3104)),
             mwst_rate: r.and_then(|r| r.mwst_rate).unwrap_or(dec!(0.19)),
+            mwst_rate_reduced: r.and_then(|r| r.mwst_rate_reduced).unwrap_or(dec!(0.07)),
         }
     }
 }
@@ -514,6 +540,19 @@ impl BillingdConfig {
         self.rates
             .as_ref()
             .and_then(|r| r.behg_co2_factor_kg_per_kwh)
+    }
+
+    /// The operator's default § 14 Abs. 5 Satz 2 UStG settlement form.
+    ///
+    /// `Endrechnung` unless `[billing] settlement_form = "RESTRECHNUNG"` — the
+    /// German paper norm is to state the whole supply and deduct the advances
+    /// with their tax, and switching that silently would change every
+    /// Jahresrechnung an operator has ever issued.
+    pub fn settlement_form(&self) -> energy_billing::SettlementForm {
+        self.billing
+            .as_ref()
+            .and_then(|b| b.settlement_form)
+            .unwrap_or_default()
     }
 
     /// The statutory rate boundaries inside a period, if any.
@@ -600,6 +639,9 @@ impl BillingdConfig {
                     }
                 })
                 .unwrap_or(defaults.mwst_rate),
+            mwst_rate_reduced: configured
+                .and_then(|r| r.mwst_rate_reduced)
+                .unwrap_or(defaults.mwst_rate_reduced),
         }
     }
 }

@@ -393,6 +393,7 @@ pub async fn post_zaehlerstandsgang(
             quality: r.quality,
             sparte,
             obis_code: obis_for_readings.clone(),
+            melo_id: req.melo_id.clone(),
             tenant: tenant.clone(),
             source: ingestion_source,
             sender_mp_id: req.sender_mp_id.clone(),
@@ -416,11 +417,10 @@ pub async fn post_zaehlerstandsgang(
             tenant: tenant.clone(),
             malo_id: malo_id.clone(),
             obis_code_norm: obis_norm.clone(),
-            // A wrap is reported at the later reading; the span it explains ends
-            // there, and `metering` does not carry the earlier instant on the
-            // `Rollover`, so the interval it produced is the record of the span.
-            span_from: r.at,
-            span_to: r.at,
+            // The wrap explains the span between the two readings it sits
+            // between, and `Rollover` carries both instants.
+            span_from: r.from,
+            span_to: r.to,
             outcome: ZSG_OUTCOME_ROLLOVER,
             previous_value: r.previous,
             current_value: r.current,
@@ -573,7 +573,8 @@ pub async fn post_zaehlerstandsgang(
         .iter()
         .map(|r| {
             serde_json::json!({
-                "at": r.at.format(&Rfc3339).unwrap_or_default(),
+                "from": r.from.format(&Rfc3339).unwrap_or_default(),
+                "to": r.to.format(&Rfc3339).unwrap_or_default(),
                 "previous": r.previous.to_string(),
                 "current": r.current.to_string(),
                 "register_capacity": r.register_capacity.to_string(),
@@ -606,6 +607,7 @@ pub async fn post_zaehlerstandsgang(
                 "issue_count": validation.issue_count,
                 "billing_block_count": validation.billing_block_count,
                 "rules": validation.rules,
+                "skipped_rules": validation.skipped_rules,
             },
             "quality": hampel.as_ref().map(|q| crate::server::hampel_summary(&q.report)),
             "legal_basis": "BK6-24-174 (Datenübermittlung ZSG) · § 2 Satz 1 Nr. 27 MsbG",

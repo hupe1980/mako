@@ -23,8 +23,9 @@ use std::sync::Arc;
 use anyhow::Context as _;
 use grid_billing::{
     GasAwhInput, InvoiceDocument, MmmInput, MsbInput, MsbRechnungsempfaenger, NneInput,
-    SettlementPeriod, SettlementResult, Sparte, settle_abschlag, settle_gas_awh, settle_mmm,
-    settle_msb, settle_nne,
+    SettlementPeriod, SettlementResult, Sparte, ValidationResult, settle_abschlag, settle_gas_awh,
+    settle_mmm, settle_msb, settle_nne, validate_gas_awh_input, validate_mmm_input,
+    validate_msb_input,
 };
 use invoic_checker::{InvoicCheckEngine, check::CheckConfig, tariff::InMemoryPreisblattStore};
 use mako_markt::marktd_client::MarktdClient;
@@ -237,7 +238,7 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
             let minder = mmm
                 .minder_preis_ct_per_kwh
                 .context("MMM Mindermengenpreis was not resolved")?;
-            settle_mmm(&MmmInput {
+            let input = MmmInput {
                 malo_id: position.malo_id.clone(),
                 nb_mp_id: mmm.nb_mp_id.clone(),
                 lf_mp_id: mmm.lf_mp_id.clone(),
@@ -252,34 +253,68 @@ pub fn settle(position: &BillingPositionRequest) -> anyhow::Result<SettlementRes
                 // Handelsrechnung. The self-issued Mehrmenge leg (PID 31006) is
                 // written by the receiving party — `invoicd`, in the LF role.
                 selbstausgestellt: false,
-            })
+            };
+            refuse_invalid("MMM", &position.malo_id, validate_mmm_input(&input))?;
+            settle_mmm(&input)
         }
-        SettlementRequest::Msb(msb) => settle_msb(&MsbInput {
-            malo_id: position.malo_id.clone(),
-            msb_mp_id: msb.msb_mp_id.clone(),
-            empfaenger: MsbRechnungsempfaenger {
-                rolle: msb.empfaenger_rolle,
-                mp_id: msb.empfaenger_mp_id.clone(),
-            },
-            period,
-            sparte: msb.sparte,
-            grundgebuehr_eur_per_month: msb.grundgebuehr_eur_per_month,
-            billing_months: msb.billing_months,
-            messdienstleistung_eur: msb.messdienstleistung_eur,
-            messstellen_kategorie: msb.messstellen_kategorie,
-            entgeltschuldner: msb.entgeltschuldner,
-        }),
-        SettlementRequest::GasAwh(awh) => settle_gas_awh(&GasAwhInput {
-            malo_id: position.malo_id.clone(),
-            nb_mp_id: awh.nb_mp_id.clone(),
-            lf_mp_id: awh.lf_mp_id.clone(),
-            period,
-            awh_positionen: awh.positionen.clone(),
-            tariff_sheet_id: awh.tariff_sheet_id.clone(),
-        }),
+        SettlementRequest::Msb(msb) => {
+            let input = MsbInput {
+                malo_id: position.malo_id.clone(),
+                msb_mp_id: msb.msb_mp_id.clone(),
+                empfaenger: MsbRechnungsempfaenger {
+                    rolle: msb.empfaenger_rolle,
+                    mp_id: msb.empfaenger_mp_id.clone(),
+                },
+                period,
+                sparte: msb.sparte,
+                grundgebuehr_eur_per_month: msb.grundgebuehr_eur_per_month,
+                billing_months: msb.billing_months,
+                messdienstleistung_eur: msb.messdienstleistung_eur,
+                messstellen_kategorie: msb.messstellen_kategorie,
+                entgeltschuldner: msb.entgeltschuldner,
+            };
+            refuse_invalid("MSB", &position.malo_id, validate_msb_input(&input))?;
+            settle_msb(&input)
+        }
+        SettlementRequest::GasAwh(awh) => {
+            let input = GasAwhInput {
+                malo_id: position.malo_id.clone(),
+                nb_mp_id: awh.nb_mp_id.clone(),
+                lf_mp_id: awh.lf_mp_id.clone(),
+                period,
+                awh_positionen: awh.positionen.clone(),
+                tariff_sheet_id: awh.tariff_sheet_id.clone(),
+            };
+            refuse_invalid("AWH", &position.malo_id, validate_gas_awh_input(&input))?;
+            settle_gas_awh(&input)
+        }
     };
 
     result.map_err(|e| anyhow::anyhow!("settlement failed for MaLo {}: {e}", position.malo_id))
+}
+
+/// Refuse a settlement whose pre-flight validation found an `Error`.
+///
+/// `grid-billing`'s `validate_mmm_input` / `validate_msb_input` /
+/// `validate_gas_awh_input` return a [`ValidationResult`] whose `is_valid` goes
+/// false on an `Error`-severity finding — a Grundgebühr with no month count, an
+/// AWH position with no rate. Such an input is not billable: the invoice would
+/// reach the counterparty carrying the defect the validator already named.
+///
+/// Warnings below `Error` are left on the result: they are for the operator to
+/// read, not for the run to stop on.
+fn refuse_invalid(kind: &str, malo_id: &str, v: ValidationResult) -> anyhow::Result<()> {
+    if v.is_valid {
+        return Ok(());
+    }
+    let findings = v
+        .warnings
+        .iter()
+        .filter(|w| w.severity == grid_billing::WarningSeverity::Error)
+        .map(|w| format!("[{}] {}", w.code, w.message))
+        .collect::<Vec<_>>()
+        .join("; ");
+    anyhow::bail!("{kind} settlement for MaLo {malo_id} is not billable: {findings}")
 }
 
 /// Everything about a document that is not the settlement itself.
@@ -752,5 +787,71 @@ mod tests {
         // inputs are nonsense, and truncating silently would report a plausible
         // total for an invoice that was never computable.
         assert!(eur_units(Decimal::MAX).is_err());
+    }
+
+    /// `grid-billing`'s pre-flight validators were computed and ignored.
+    ///
+    /// Each returns a `ValidationResult` whose `is_valid` goes false on an
+    /// `Error`-severity finding, and the crate's README documents them as the
+    /// gate a service runs. No service ran one: `is_valid` was written by the
+    /// engine and read only by a unit test, so an MSB settlement with
+    /// `billing_months = 0` billed a Grundgebühr of nothing, and a Gas-AWH
+    /// settlement with no positions billed an empty invoice — both to a
+    /// counterparty, both with the defect already named in the result.
+    #[test]
+    fn an_input_the_validator_rejects_is_not_billed() {
+        use grid_billing::{
+            AwhPositionInput, GasAwhInput, MsbInput, MsbRechnungsempfaenger, SettlementPeriod,
+            Sparte, validate_gas_awh_input, validate_msb_input,
+        };
+        use rust_decimal::dec;
+        use time::macros::date;
+
+        let period = SettlementPeriod::new(date!(2026 - 01 - 01), date!(2026 - 01 - 31)).unwrap();
+
+        // A Messstellenbetrieb invoice over zero months.
+        let msb = MsbInput {
+            malo_id: "51238696781".to_owned(),
+            msb_mp_id: "9900000000002".to_owned(),
+            empfaenger: MsbRechnungsempfaenger {
+                rolle: grid_billing::MsbEmpfaengerRolle::Lieferant,
+                mp_id: "9900000000001".to_owned(),
+            },
+            period,
+            sparte: Sparte::Strom,
+            grundgebuehr_eur_per_month: dec!(20),
+            billing_months: 0,
+            messdienstleistung_eur: None,
+            messstellen_kategorie: None,
+            entgeltschuldner: None,
+        };
+        let err = refuse_invalid("MSB", "51238696781", validate_msb_input(&msb))
+            .expect_err("zero billing months is not billable");
+        assert!(err.to_string().contains("ZERO_BILLING_MONTHS"), "{err}");
+
+        // A Gas-AWH invoice with nothing on it.
+        let awh = GasAwhInput {
+            malo_id: "51238696781".to_owned(),
+            nb_mp_id: "9900000000003".to_owned(),
+            lf_mp_id: "9900000000001".to_owned(),
+            period,
+            awh_positionen: Vec::new(),
+            tariff_sheet_id: None,
+        };
+        let err = refuse_invalid("AWH", "51238696781", validate_gas_awh_input(&awh))
+            .expect_err("an empty AWH invoice is not billable");
+        assert!(err.to_string().contains("EMPTY_AWH_POSITIONEN"), "{err}");
+
+        // …and a sound input still passes.
+        let ok = GasAwhInput {
+            awh_positionen: vec![AwhPositionInput {
+                beschreibung: "Sperrung Gaszähler".to_owned(),
+                anzahl: 1,
+                preis_eur: dec!(15),
+                artikel_id: Some("2-01-7-001".to_owned()),
+            }],
+            ..awh
+        };
+        assert!(refuse_invalid("AWH", "51238696781", validate_gas_awh_input(&ok)).is_ok());
     }
 }

@@ -471,7 +471,7 @@ before billing.",
             { "category": "STROM", "description": "Standard electricity — Eintarif/Zweitarif/Mehrtarif", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["grundpreis_ct_per_day", "arbeitspreis_ht_ct_per_kwh", "arbeitspreis_nt_ct_per_kwh", "dynamic_epex", "dynamic_epex_floor_ct_kwh"], "regulatory": "§41a EnWG for dynamic; §3 StromStG levy included" },
             { "category": "GAS", "description": "Natural gas with Brennwertkorrektur and CO₂ levies", "required": ["gas_arbeitspreis_ct_per_kwh_hs"], "optional": ["gas_grundpreis_ct_per_day", "energiesteuer_gas_ct_per_kwh_override", "behg_gas_ct_per_kwh_override"], "regulatory": "§25 Nr. 4 MessEV (Brennwertkorrektur), §2 EnergieStG, BEHG" },
             { "category": "WAERME", "description": "Fernwärme — Grundpreis, Arbeitspreis, Leistungspreis", "required": ["waerme_arbeitspreis_ct_per_kwh"], "optional": ["waerme_grundpreis_eur_per_month", "waerme_leistungspreis_eur_per_kw_month", "mwst_rate_override"], "regulatory": "District heating is standard-rated (19%); the 7% gas/Fernwärme window was §28 Abs. 5/6 UStG (2022–31.03.2024, expired) — set mwst_rate_override for a period inside it" },
-            { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §21 Abs. 3 EEG, §42b EnWG GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["mieterstrom_aufschlag_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "solar_include_stromsteuer", "stromsteuer_befreiung"], "regulatory": "§12 Abs. 3 UStG is the 0 % rate on the PV **hardware supply** — it never applies to the electricity. Consumption is 19 %; a feed-in Gutschrift is 0 % only when the operator is a §19 UStG Kleinunternehmer (declared on the plant, not here)" },
+            { "category": "SOLAR", "description": "Solar self-consumption, Mieterstrom §21 Abs. 3 EEG, §42b EnWG GGV community solar", "required": ["solar_arbeitspreis_ct_per_kwh"], "optional": ["grundversorgung_arbeitspreis_ct_per_kwh", "gemeinschaft_rabatt_ct_per_kwh", "stromsteuer_tarif"], "regulatory": "§12 Abs. 3 UStG is the 0 % rate on the PV **hardware supply** — it never applies to the electricity. Consumption is 19 %; a feed-in Gutschrift is 0 % only when the operator is a §19 UStG Kleinunternehmer (declared on the plant, not here). The Mieterstromzuschlag (§21 Abs. 3 EEG) is the plant operator's claim against the Netzbetreiber, settled by einsd — never a surcharge on the tenant; set grundversorgung_arbeitspreis_ct_per_kwh and the §42a Abs. 4 EnWG 90 % cap is enforced. Stromsteuer defaults to the §9 Abs. 1 Nr. 3 StromStG Kleinanlage-Befreiung (≤2 MW, räumlicher Zusammenhang) and the ground is stated on the invoice; a supply that does not qualify sets stromsteuer_tarif={\"art\":\"REGEL\"}" },
             { "category": "EEG", "description": "EEG feed-in Vergütung — credit note to plant operator (LF role, contractual)", "required": ["eeg_verguetungssatz_ct_per_kwh"], "optional": ["eeg_marktpraemie_ct_per_kwh", "eeg_managementpraemie_ct_per_kwh", "kwkg_zuschlag_ct_per_kwh"], "meter": "eeg_meter.einspeisung_kwh, eeg_meter.kwh_during_negative_epex (§51 contractual suspension)", "regulatory": "§21 EEG Vergütung; §20 EEG Marktprämie; §51 EEG Negativpreisregel (contractual for LF)" },
             { "category": "EINSPEISUNG", "description": "Direktvermarktung settlement — Marktwert minus Vermarktungsgebühr", "required": ["marktwert_ct_per_kwh"], "optional": ["vermarktungsgebuehr_ct_per_kwh"], "regulatory": "§20 EEG Direktvermarktung; Direktvermarkter bears negative-price risk (§51 does NOT apply)" },
             { "category": "WAERMEPUMPE", "description": "Heat pump electricity with §14a EnWG Steuerungsrabatt Modul 1/3", "required": ["arbeitspreis_ct_per_kwh"], "optional": ["sect14a_modul1_pauschale_eur_per_kw_year", "sect14a_steuerungsentschaedigung_eur_per_kw_year"], "meter": "meter.spitzenleistung_kw (required for §14a), meter.steuerung_stunden (Modul 3)", "regulatory": "§14a EnWG; BNetzA BK6-22-300 (27.11.2023), in force 01.01.2024 — applies to steuerbare Verbrauchseinrichtungen above 4.2 kW Netzanschlussleistung" },
@@ -561,14 +561,22 @@ before billing.",
             }));
         }
 
-        // Check §9 exemption: industrie_stromsteuer_befreiung legacy flag migration reminder
-        if matches!(&tariff, Product::Strom(e) if e.industrie_stromsteuer_befreiung && e.stromsteuer_befreiung == energy_billing::StromsteuerBefreiung::Keine)
-            || matches!(&tariff, Product::Waermepumpe(c) if c.base.industrie_stromsteuer_befreiung)
-        {
+        // § 9 StromStG: a Befreiung zero-rates the levy on the supplier's own
+        // invoice and therefore on the supplier's own Stromsteueranmeldung. It
+        // is only lawful against the customer's Erlaubnis (§ 9 Abs. 4), so an
+        // operator setting one deserves to be reminded what it rests on — and
+        // told which grounds are *not* exemptions at all.
+        let befreiung = match &tariff {
+            Product::Strom(e) => Some(e.stromsteuer_tarif),
+            Product::Waermepumpe(c) | Product::Wallbox(c) => Some(c.base.stromsteuer_tarif),
+            _ => None,
+        }
+        .filter(|t| t.is_befreit());
+        if befreiung.is_some() {
             extra_checks.push(serde_json::json!({
-                "code": "STROMSTEUER_BEFREIUNG_LEGACY_FLAG",
+                "code": "STROMSTEUER_BEFREIUNG_ERLAUBNIS",
                 "severity": "Warning",
-                "message": "industrie_stromsteuer_befreiung=true is a legacy flag. Migrate to stromsteuer_befreiung=INDUSTRIE_PRODUKTIONES_GEWERBE (§9 Nr. 4 StromStG) for typed exemption tracking."
+                "message": "stromsteuer_tarif=BEFREIUNG bills no Stromsteuer at all. § 9 Abs. 4 StromStG requires the customer's Erlaubnis on file. A produzierendes Gewerbe is NOT exempt — § 9b StromStG is a Steuerentlastung the customer claims from the Hauptzollamt after being invoiced in full; declare it in steuerentlastungen instead."
             }));
         }
 

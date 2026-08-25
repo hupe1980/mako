@@ -33,7 +33,7 @@ mod preistyp_tests {
             "KWKG_ZUSCHLAG",
             "MARKTWERT",
             "VERMARKTUNGSGEBUEHR",
-            "MIETERSTROM_AUFSCHLAG",
+            "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
             "STEUERUNGSRABATT_MODUL3",
@@ -75,7 +75,7 @@ mod preistyp_tests {
             "KWKG_ZUSCHLAG",
             "MARKTWERT",
             "VERMARKTUNGSGEBUEHR",
-            "MIETERSTROM_AUFSCHLAG",
+            "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
             "STEUERUNGSRABATT_MODUL3",
@@ -684,13 +684,17 @@ mod eeg_kwkg_product_tests {
         }
     }
 
-    /// Mieterstrom §42b EnWG uses MIETERSTROM_AUFSCHLAG + regular ARBEITSPREIS_EINTARIF.
+    /// A Mieterstrom product prices the supply and states the tariff it is
+    /// capped against (§ 42a Abs. 4 EnWG: 90 % of the Grundversorgung).
+    ///
+    /// There is deliberately no `MIETERSTROM_AUFSCHLAG` Preistyp: the
+    /// Mieterstromzuschlag (§ 21 Abs. 3 EEG 2023) is the plant operator's claim
+    /// against the *Netzbetreiber*, settled by `einsd`. Offering it as a retail
+    /// price position invited billing it to the tenant, which `billingd` did.
     #[test]
-    fn mieterstrom_aufschlag_preistyp_exists() {
-        let pt = "MIETERSTROM_AUFSCHLAG";
-        // MIETERSTROM products: external grid energy + Mieterstrom Aufschlag combined
-        // The Aufschlag is the surcharge that funds the solar plant on the building
-        assert_eq!(pt, "MIETERSTROM_AUFSCHLAG");
+    fn mieterstrom_prices_the_supply_and_names_its_ceiling() {
+        assert!(productd::handlers::VALID_PREISTYPEN.contains(&"GRUNDVERSORGUNG_ARBEITSPREIS"));
+        assert!(!productd::handlers::VALID_PREISTYPEN.contains(&"MIETERSTROM_AUFSCHLAG"));
     }
 
     /// §42b EnWG Gemeinschaftliche Gebäudeversorgung uses GEMEINSCHAFT_RABATT.
@@ -1330,7 +1334,7 @@ mod mcp_validate_tariff_tests {
             "KWKG_ZUSCHLAG",
             "MARKTWERT",
             "VERMARKTUNGSGEBUEHR",
-            "MIETERSTROM_AUFSCHLAG",
+            "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
             "STEUERUNGSRABATT_MODUL3",
@@ -1374,7 +1378,7 @@ mod mcp_validate_tariff_tests {
             "KWKG_ZUSCHLAG",
             "MARKTWERT",
             "VERMARKTUNGSGEBUEHR",
-            "MIETERSTROM_AUFSCHLAG",
+            "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
             "STEUERUNGSRABATT_MODUL3",
@@ -1821,7 +1825,7 @@ mod preistyp_count_tests {
             "KWKG_ZUSCHLAG",
             "MARKTWERT",
             "VERMARKTUNGSGEBUEHR",
-            "MIETERSTROM_AUFSCHLAG",
+            "GRUNDVERSORGUNG_ARBEITSPREIS",
             "GEMEINSCHAFT_RABATT",
             "STEUERUNGSRABATT_MODUL1",
             "STEUERUNGSRABATT_MODUL3",

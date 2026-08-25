@@ -384,9 +384,18 @@ url = "postgresql://billingd:secret@db:5432/billingd"
 
 [rates]
 stromsteuer_ct_per_kwh        = 2.05   # §3 StromStG
-energiesteuer_gas_ct_per_kwh  = 0.55   # §2 Abs. 3 Nr. 4 EnergieStG (constant since 2003)
+energiesteuer_gas_ct_per_kwh  = 0.55   # § 2 Abs. 3 S. 1 Nr. 4 EnergieStG (constant since 2003)
 behg_gas_ct_per_kwh           = 1.310  # BEHG §10, 65 EUR/t × 0.20160 kg/kWh (2026)
-mwst_rate                     = 0.19
+mwst_rate                     = 0.19   # § 12 Abs. 1 UStG
+mwst_rate_reduced             = 0.07   # § 12 Abs. 2 UStG — Trinkwasser (Anlage 2 Nr. 34)
+
+[billing]
+# § 14 Abs. 5 Satz 2 UStG — how an invoice that deducts advances presents them.
+# ENDRECHNUNG (default): the whole supply, then the advances and their tax.
+# RESTRECHNUNG: only the remainder, each advance as a BG-20 document-level
+# allowance carrying its own VAT rate — what the BMF recommends for e-invoices
+# (Schreiben v. 15.10.2024, Rn. 48). A request may override it per invoice.
+settlement_form = "ENDRECHNUNG"
 
 # §40 Abs. 2 Nr. 1 EnWG — supplier identity as shown on invoices. The
 # statutory consumer hints (Schlichtungsstelle Energie §111b EnWG, BNetzA
@@ -452,8 +461,18 @@ only into the SAMPLE band, which still dispatches.
 The guard asks whether the product can price its commodity *at all* — Eintarif,
 HT/NT, dynamic, indexed, seasonal or tiered all satisfy it — and covers Strom,
 Gas and Fernwärme. An operator who genuinely charges nothing per kWh states a
-`0.0`, which is how a decision is distinguished from missing data.
-`crates/energy-billing/tests/priceless_product_is_refused.rs` pins it.
+`0.0`, which is how a decision is distinguished from missing data. Water has the
+same shape — a tariff pricing only the Abwasser side bills a plausible Gebühr and
+nothing for the drinking water — and is refused as `KEIN_TRINKWASSERPREIS`.
+
+The quantity side has the same shape. On the § 41a path the quarter-hour series
+*is* the billed quantity, so a short Lastgang bills every levy on whatever
+arrived. The register total is the witness:
+`SECT41A_INTERVALLSUMME_WEICHT_AB` refuses a series missing it by more than
+0,5 % (1 kWh floor), `SECT41A_KEINE_INTERVALLE` one absent altogether. This
+service refuses an empty Lastgang earlier still, as `SECT41A_NO_LASTGANG`.
+
+`crates/energy-billing/tests/priceless_product_is_refused.rs` pins all of it.
 
 ## Layered billing quality assurance
 
@@ -543,7 +562,7 @@ outside the billing transaction: a delivery failure is logged and repeated by
 which would re-bill it under a second Rechnungsnummer.
 
 For **iMSys** MaLos the worker additionally delivers the free monthly
-**Abrechnungsinformation** (§40b Abs. 2 EnWG) as a
+**Abrechnungsinformation** (§ 40b Abs. 3 EnWG) as a
 `de.billing.abrechnungsinformation.monatlich` CloudEvent (a preview
 calculation, never a persisted invoice), claimed once per MaLo and month in
 `abrechnungsinfo_log` and enqueued through the same transactional outbox as

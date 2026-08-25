@@ -39,11 +39,19 @@ pub(crate) fn normalize_gasqualitaet(raw: &str) -> Option<&'static str> {
 /// here can fill `messung_qm3` — the m³ path exists for callers holding a
 /// customer-read meter value.
 ///
-/// ## Non-blocking
+/// ## Failure handling
 ///
-/// All external fetches are best-effort.  Failures are logged as `WARN` and
-/// billing proceeds with the data available.  This prevents an edmd or marktd
-/// outage from blocking all gas invoicing.
+/// The **annotations** (gas quality, conversion factors) are best-effort: a
+/// failure is logged and billing proceeds on the engine's DVGW defaults.
+///
+/// The **quantity** is not. When the caller supplied neither `kwh_hs` nor a
+/// volume, an `edmd` failure leaves both at zero and the invoice comes back
+/// carrying the Grundpreis and nothing for the gas — no Arbeitspreis, no
+/// Energiesteuer, no BEHG — and looks entirely ordinary. That is the gas twin
+/// of the §41a `SECT41A_NO_LASTGANG` defect, so it is returned as an error
+/// (`502` for an outage, `422` when edmd simply has no period) rather than
+/// billed. The electricity path has always done this
+/// ([`resolve_strom_meter`]); gas was the one door left open.
 ///
 /// ## DVGW G 685 / §25 Nr. 4 MessEV compliance
 ///
@@ -62,7 +70,7 @@ pub(crate) async fn enrich_gas_meter(
     period_to: time::Date,
     edmd: &EdmdClient,
     marktd: &Arc<mako_markt::marktd_client::MarktdClient>,
-) {
+) -> BillingResult<()> {
     use crate::clients::{GasBillingPeriod, GasQualityRecord};
 
     // Track which fields were enriched for structured logging.
@@ -109,15 +117,17 @@ pub(crate) async fn enrich_gas_meter(
                 enriched_from_edmd_period = true;
             }
             Ok(None) => {
-                tracing::debug!(malo_id, "billingd GAS: no billing period in edmd");
+                return Err(BillingError::unprocessable(
+                    "NO_METER_DATA",
+                    format!(
+                        "edmd has no gas billing period for MaLo {malo_id} in \
+                         {period_from}..{period_to}, and the request supplied neither \
+                         kwh_hs nor a volume — the invoice would bill the Grundpreis and \
+                         no gas at all"
+                    ),
+                ));
             }
-            Err(e) => {
-                tracing::warn!(
-                    malo_id,
-                    error = %e,
-                    "billingd GAS: edmd billing-period fetch failed — proceeding without"
-                );
-            }
+            Err(e) => return Err(BillingError::upstream("edmd", e)),
         }
     }
 
@@ -219,6 +229,7 @@ pub(crate) async fn enrich_gas_meter(
             "billingd GAS: meter enrichment complete"
         );
     }
+    Ok(())
 }
 
 /// The metered quantities for the period: the request override, else edmd.
@@ -316,21 +327,28 @@ pub(crate) async fn apply_nehs_market_price(
     }
 }
 
+/// The day-ahead price series a §41a tariff is billed against.
+///
+/// `productd` owns the imported EPEX series (15-min MTU). The map is keyed on
+/// each MTU's UTC start instant, matching how `energy-billing` floors a
+/// consumption interval to its quarter-hour.
+///
+/// # Errors
+///
+/// `502` when productd cannot be reached. Swallowing the error and returning an
+/// empty map made every unreachable-productd invoice fail downstream as
+/// `SECT41A_MISSING_EPEX_PRICES`, telling the operator to import prices that
+/// were already imported — a 502 reported as a data problem, pointing at the
+/// wrong fix.
 pub(crate) async fn fetch_epex_prices(
     period_from: time::Date,
     period_to: time::Date,
     productd: &Arc<ProductdClient>,
-) -> std::collections::HashMap<time::OffsetDateTime, rust_decimal::Decimal> {
-    // productd owns the imported EPEX day-ahead series (15-min MTU). The map is
-    // keyed on each MTU's UTC start instant, matching how `energy-billing`
-    // floors a consumption interval to its quarter-hour.
-    match productd.get_epex_prices(period_from, period_to).await {
-        Ok(map) => map,
-        Err(e) => {
-            tracing::warn!(error = %e, "billingd: EPEX price fetch failed; dynamic intervals will lack prices");
-            std::collections::HashMap::new()
-        }
-    }
+) -> BillingResult<std::collections::HashMap<time::OffsetDateTime, rust_decimal::Decimal>> {
+    productd
+        .get_epex_prices(period_from, period_to)
+        .await
+        .map_err(|e| BillingError::upstream("productd", format!("EPEX Spot: {e}")))
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

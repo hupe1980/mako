@@ -215,3 +215,34 @@ impl Default for EegGesetz {
 #[derive(Debug, thiserror::Error)]
 #[error("unknown eeg_gesetz year: {0}")]
 pub struct InvalidEegGesetz(pub i16);
+
+// ── § 101 EEG 2023 — beihilferechtlicher Genehmigungsvorbehalt ───────────────
+
+/// The day the European Commission's state-aid approval made **§ 51b EEG 2023**
+/// applicable: **18 September 2025**.
+///
+/// § 101 Abs. 2 Satz 1 lists § 51b among the provisions that may be applied
+/// "erst nach der beihilferechtlichen Genehmigung durch die Europäische
+/// Kommission". Unlike the provisions in Satz 2 it names no fallback version, so
+/// there is nothing to apply to an earlier period — and § 51b zeroes a tendered
+/// biogas plant's anzulegender Wert whenever the spot price is at or below
+/// 2 ct/kWh, which was common well before September 2025.
+pub const SECT51B_GENEHMIGT_AB: time::Date = time::macros::date!(2025 - 09 - 18);
+
+/// Whether § 51b EEG 2023 may be applied to a settlement of the period starting
+/// on `periodenbeginn` ([`SettleInput::billing_date`](crate::SettleInput)).
+///
+/// Keyed on the **supply period**, not on when the invoice is written: a
+/// Gutschrift issued in 2026 for August 2025 settles a supply § 51b did not
+/// reach.
+///
+/// Two answers are deliberately conservative. An unknown period is `false` — a
+/// provision under a Genehmigungsvorbehalt is not applied on the strength of not
+/// knowing when the supply happened. So is a period *starting* before the
+/// approval day: a month straddling it has qualifying quarter-hours on both
+/// sides, and the input carries one Marktwert for the period. A settlement that
+/// needs the split bills the two parts as separate periods.
+#[must_use]
+pub fn sect51b_anwendbar(periodenbeginn: Option<time::Date>) -> bool {
+    periodenbeginn.is_some_and(|d| d >= SECT51B_GENEHMIGT_AB)
+}

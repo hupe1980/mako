@@ -113,9 +113,7 @@ pub use allocation::{
 };
 pub use invoic::{
     COMDIS_RESUME_PATH as INVOIC_COMDIS_RESUME_PATH, GABI_GAS_COMDIS_ABLEHNUNG_PID,
-    GABI_GAS_INVOIC_PIDS, GABI_GAS_REMADV_PIDS, GaBiGasInvoicCommand, GaBiGasInvoicData,
-    GaBiGasInvoicEvent, GaBiGasInvoicProjection, GaBiGasInvoicRecord, GaBiGasInvoicState,
-    GaBiGasInvoicWorkflow, REMADV_RESUME_PATH as INVOIC_REMADV_RESUME_PATH,
+    GABI_GAS_INVOIC_PIDS, GaBiGasInvoic, GaBiGasInvoicWorkflow,
     SETTLEMENT_WINDOW_LABEL as INVOIC_SETTLEMENT_WINDOW_LABEL,
     WORKFLOW_NAME as INVOIC_WORKFLOW_NAME,
 };
@@ -180,16 +178,10 @@ impl mako_engine::builder::EngineModule for GaBiGasModule {
             router.register(pid, "gabi-gas-invoic");
         }
 
-        // REMADV 33001 — inbound payment confirmation (invoicer role).
-        //
-        // After the FNB/VNB sends INVOIC 31010, the BKV sends REMADV
-        // 33001 (Zahlungsavis Bestätigung vollständige Zahlung) to confirm
-        // payment. Without this registration, REMADV is silently dropped.
-        //
-        // Source: REMADV AHB 1.0, GaBi Gas, BK7.
-        for &pid in invoic::GABI_GAS_REMADV_PIDS {
-            router.register(pid, "gabi-gas-invoic");
-        }
+        // No REMADV registration: every GaBi Gas INVOIC arrives *at* this
+        // platform, so the REMADV answering it is one this platform sends. The
+        // inbound direction does not exist for the roles modelled here — see
+        // the module docs on `invoic`.
 
         // COMDIS 29001 — inbound Ablehnung REMADV (payer role).
         //

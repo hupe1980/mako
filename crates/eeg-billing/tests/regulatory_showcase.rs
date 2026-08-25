@@ -3625,6 +3625,8 @@ fn sect51b_biogas_ausschreibung_epex_at_exactly_2ct_triggers_zero_aw() {
         }),
         einspeisemenge_kwh: Some(d("5000")),
         marktwert_ct_kwh: Some(d("2.00")), // boundary: exactly 2 ct
+        // After the 18.09.2025 state-aid approval § 101 Abs. 2 made § 51b wait for.
+        billing_date: Some(date!(2026 - 01 - 31)),
         ..SettleInput::default()
     });
     // At exactly 2 ct, §51b applies → AW = 0
@@ -3651,6 +3653,7 @@ fn sect51b_biogas_ausschreibung_epex_above_2ct_receives_market_premium() {
         }),
         einspeisemenge_kwh: Some(d("5000")),
         marktwert_ct_kwh: Some(d("2.01")), // just above 2 ct
+        billing_date: Some(date!(2026 - 01 - 31)),
         ..SettleInput::default()
     });
     // MarketPremium = max(0, AW + Mgmt - EPEX) = 13.50 + 0.40 - 2.01 = 11.89 ct
@@ -3660,6 +3663,55 @@ fn sect51b_biogas_ausschreibung_epex_above_2ct_receives_market_premium() {
         out.settlement_eur.is_some_and(|e| e > d("0")),
         "expected positive settlement above 2ct"
     );
+}
+
+/// § 101 Abs. 2 EEG 2023 put § 51b under a **beihilferechtlicher
+/// Genehmigungsvorbehalt**: it "darf erst nach der beihilferechtlichen
+/// Genehmigung durch die Europäische Kommission … angewandt werden", and unlike
+/// the provisions in Satz 2 it names no fallback version — before the approval
+/// there was simply nothing to apply. The Commission granted it on
+/// **18 September 2025**.
+///
+/// So a back-settlement of an earlier period must **not** zero the anzulegender
+/// Wert. Near-zero spot prices were common well before September 2025, and
+/// applying § 51b to them withholds a payment the operator was owed under a
+/// provision that was not yet in force.
+#[test]
+fn sect51b_does_not_reach_periods_before_its_state_aid_approval() {
+    let settle = |billing_date| {
+        calculate_settlement(&SettleInput {
+            scheme: SettlementScheme::MarketPremium {
+                direktverm_aw_ct: d("13.50"),
+                wind_korrekturfaktor: None,
+                wind_standort: None,
+            },
+            tariff_source: eeg_billing::TariffSource::Auction(eeg_billing::AusschreibungMetadata {
+                award_ct: Some(d("13.50")),
+                is_biogas_sect51b: true,
+                ..Default::default()
+            }),
+            einspeisemenge_kwh: Some(d("5000")),
+            marktwert_ct_kwh: Some(d("1.00")), // well inside the §51b trigger
+            billing_date,
+            ..SettleInput::default()
+        })
+    };
+
+    // The day before the approval: the ordinary Marktprämie is owed.
+    // max(0, 13.50 − 1.00) = 12.50 ct × 5000 kWh = 625 EUR.
+    let before = settle(Some(date!(2025 - 09 - 17)));
+    assert_eq!(before.status, SettlementStatus::Calculated);
+    assert_eq!(before.settlement_eur, Some(d("625.00000")));
+    assert!(!before.positions[0].legal_basis.contains("51b"));
+
+    // From the approval day on, § 51b zeroes it.
+    let after = settle(Some(date!(2025 - 09 - 18)));
+    assert_eq!(after.settlement_eur, Some(d("0.00000")));
+    assert!(after.positions[0].legal_basis.contains("51b"));
+
+    // An unknown period is not a licence to apply it.
+    let undated = settle(None);
+    assert_eq!(undated.settlement_eur, Some(d("625.00000")));
 }
 
 // ── §23b — Post-EEG 10 ct/kWh cap boundary ────────────────────────────────────

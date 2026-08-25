@@ -282,6 +282,17 @@ Any active state ──TimeoutExpired──► Rejected
 After `ValidationPassed`, register a deadline with label
 `"gabi-gas-invoic-settlement-deadline"` to enforce the contractual response window.
 
+The state machine itself is not this crate's: all four INVOIC billing families
+(GPKE, WiM, GaBi Gas, GeLi Gas) share `mako-invoic`, and this crate declares
+only the family — its PID set, its deadline label, and which of the two roles
+the deployment plays.
+
+**GaBi Gas receives invoices; it does not issue them.** All three PIDs arrive at
+the role this platform plays — the BKV receives the Kapazitätsrechnung, the MGV
+the aggregated MMM-Rechnung — so the issuer leg stays shut and no REMADV PID
+routes here. COMDIS 29001 does: it is the invoicer refusing *our* REMADV, which
+is genuinely inbound for a payer.
+
 ## Allokationsliste Gas MMMA (`gabi-gas-mmma`)
 
 The MMMA (Marktgebiets-Mehr-/Mindermengenabrechnungs-Allokation) process handles

@@ -207,7 +207,7 @@ pub fn gpke_sperrung_registry() -> AdapterRegistry<GpkeSperrungWorkflow> {
 /// Build an [`AdapterRegistry`] for [`GpkeAbrechnungWorkflow`].
 ///
 /// Extracts INVOIC 2.x fields to construct an
-/// [`AbrechnungCommand::ReceiveInvoic`] for any of the INVOIC-based GPKE
+/// [`InvoicCommand::ReceiveInvoic`] for any of the INVOIC-based GPKE
 /// billing PIDs (31001–31008: Netznutzungsabrechnung, Mehr-/Mindermengen Strom).
 #[must_use]
 pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
@@ -242,7 +242,7 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
                 .and_then(|b| b.document_id.as_deref())
                 .unwrap_or(msg.message_ref());
 
-            Ok(AbrechnungCommand::ReceiveInvoic {
+            Ok(InvoicCommand::ReceiveInvoic {
                 pid,
                 sender: MarktpartnerCode::new(
                     inv.sender()
@@ -277,7 +277,7 @@ pub fn gpke_abrechnung_registry() -> AdapterRegistry<GpkeAbrechnungWorkflow> {
 ///
 /// After the NB sends an INVOIC to the LF, the LF (payer) responds with a REMADV
 /// confirming or partially disputing the payment.  `makod` resumes the billing
-/// process with [`AbrechnungCommand::ReceiveRemadv`].
+/// process with [`InvoicCommand::ReceiveRemadv`].
 ///
 /// **Correlation**: `extract_invoice_ref_from_remadv` reads `RFF+Z13:<invoice_ref>` to
 /// map back to the spawned billing process.
@@ -306,7 +306,7 @@ pub fn gpke_abrechnung_remadv_registry() -> AdapterRegistry<GpkeAbrechnungWorkfl
                     )
                 })
                 .and_then(convert_pid)?;
-            Ok(AbrechnungCommand::ReceiveRemadv {
+            Ok(InvoicCommand::ReceiveRemadv {
                 pid,
                 remadv_ref: MessageRef::new(msg.message_ref()),
                 sender: MarktpartnerCode::new(
@@ -324,7 +324,7 @@ pub fn gpke_abrechnung_remadv_registry() -> AdapterRegistry<GpkeAbrechnungWorkfl
 ///
 /// After the LF (payer) sends a REMADV, the NB (invoicer) may reject it via
 /// COMDIS 29001 (Ablehnung der Zahlung).  `makod` resumes the billing process
-/// with [`AbrechnungCommand::ReceiveComdis`].
+/// with [`InvoicCommand::ReceiveComdis`].
 ///
 /// **Correlation**: `extract_invoice_ref_from_comdis` reads `RFF+Z13:<invoice_ref>`.
 ///
@@ -343,7 +343,7 @@ pub fn gpke_abrechnung_comdis_registry() -> AdapterRegistry<GpkeAbrechnungWorkfl
                     "GPKE COMDIS adapter: expected COMDIS message (PID 29001)".into(),
                 ));
             };
-            Ok(AbrechnungCommand::ReceiveComdis {
+            Ok(InvoicCommand::ReceiveComdis {
                 comdis_ref: MessageRef::new(msg.message_ref()),
             })
         },

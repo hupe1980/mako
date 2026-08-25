@@ -608,11 +608,11 @@ fn a_lapsed_bindungsfrist_is_not_a_fristversaeumnis() {
 /// `SG1 RFF+Z13` text "35003 Anfrage von Werten für ESA"; the PID overview 4.0
 /// lists 35003 under WiM Strom Teil 2 and nowhere else.
 ///
-/// mako used to send 35002, which is §4.2 "Anfrage zur Rechnungsabwicklung des
-/// Messstellenbetriebs über den LF" (LF → MSB, WiM Teil 1) — a different process
-/// with a different sender role. That wrong PID also invented a collision with
-/// the Preisanfrage stream, which a sender-role classifier then had to resolve;
-/// with the correct PID there is nothing to resolve.
+/// 35002 is §4.2 "Anfrage zur Rechnungsabwicklung des Messstellenbetriebs über
+/// den LF" (LF → MSB, WiM Teil 1) — a different process with a different sender
+/// role. Sending it here would also collide with the Preisanfrage stream, which
+/// only a sender-role classifier could then resolve; with 35003 there is nothing
+/// to resolve.
 #[test]
 fn the_esa_werteanfrage_is_reqote_35003() {
     assert_eq!(

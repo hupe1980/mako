@@ -773,6 +773,26 @@ pub fn specimen_invoice() -> en16931::Invoice {
         ])),
     });
 
+    // BG-20 — one document-level allowance, because production emits them: a
+    // **Restrechnung** deducts each advance as an allowance carrying its own
+    // VAT rate (§ 14 Abs. 5 Satz 2 UStG). It is what makes BT-106 and BT-109
+    // differ, so a template proven against a specimen without one can print a
+    // "Summe netto" that does not reconcile with the total below it — while the
+    // embedded XML stays correct. That is the failure this gate exists to catch.
+    inv.allowances
+        .push(en16931::invoice::DocumentAllowanceCharge {
+            amount: InvoiceAmount::try_from(rust_decimal::dec!(50.00)).expect("in range"),
+            base_amount: None,
+            percentage: None,
+            vat: en16931::invoice::LineVat {
+                category: Code::from("S"),
+                rate: Some(Percentage::from(rust_decimal::dec!(19))),
+            },
+            reason: Some("Abzug erhaltener Abschlagszahlung".to_owned()),
+            // UNCL 5189 code 95 — "Discount".
+            reason_code: Some(Code::from("95")),
+        });
+
     // BG-23 and BG-22 are derived from the lines rather than asserted, so the
     // specimen's totals cannot drift from its positions — which is exactly the
     // guarantee production relies on.

@@ -96,7 +96,7 @@ async fn setup() -> (
     let (pool, url, warehouse_uri, container, warehouse) = boot().await;
     // Builds both tables (reads + Typ-2) over one shared catalog/session; this
     // helper exercises the authoritative reads store.
-    let (reads_store, _typ2_store, _cold) = build_stores(
+    let (reads_store, _typ2_store, zsg_store, _cold) = build_stores(
         pool.clone(),
         &url,
         &warehouse_uri,
@@ -107,12 +107,16 @@ async fn setup() -> (
     .expect("build meterstore tiers");
 
     (
-        MeterStoreTimeSeriesRepository::new(reads_store, pool.clone()),
+        MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone()),
         pool,
         container,
         warehouse,
     )
 }
+
+/// A 33-character Zählpunktbezeichnung, for the ZSG point table whose merge key
+/// includes the Messlokation.
+const TEST_MELO: &str = "DE0001234567890123456789012345678";
 
 fn kwh(s: &str) -> Decimal {
     s.parse().expect("decimal")
@@ -229,7 +233,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
     // The point of two tables is isolation: an ESA Typ-2 value must never surface
     // in a billing read, and vice versa.
     let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
-    let (reads_store, typ2_store, _cold) = build_stores(
+    let (reads_store, typ2_store, zsg_store, _cold) = build_stores(
         pool.clone(),
         &url,
         &warehouse_uri,
@@ -238,7 +242,7 @@ async fn reads_and_typ2_share_a_catalog_but_stay_isolated() {
     )
     .await
     .expect("build meterstore tiers");
-    let reads = MeterStoreTimeSeriesRepository::new(reads_store, pool.clone());
+    let reads = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone());
     let typ2 = MeterStoreTyp2Repository::new(typ2_store);
 
     let t = OffsetDateTime::now_utc() - Duration::days(1);
@@ -2104,20 +2108,20 @@ async fn erasure_removes_virtual_meter_configs_naming_the_subject() {
     for (vmalo, rule) in [
         (
             erased,
-            serde_json::json!({"Sum": {"source_malo_ids": [other]}}),
+            serde_json::json!({"kind": "SUM", "source_malo_ids": [other]}),
         ),
         (
             other,
-            serde_json::json!({"Sum": {"source_malo_ids": [erased, other]}}),
+            serde_json::json!({"kind": "SUM", "source_malo_ids": [erased, other]}),
         ),
         (
             unrelated,
-            serde_json::json!({"Sum": {"source_malo_ids": [unrelated]}}),
+            serde_json::json!({"kind": "SUM", "source_malo_ids": [unrelated]}),
         ),
     ] {
         sqlx::query(
             "INSERT INTO virtual_meter_configs (virtual_malo_id, rule_type, rule_json, tenant)
-             VALUES ($1, 'Sum', $2, $3)",
+             VALUES ($1, 'SUM', $2, $3)",
         )
         .bind(vmalo)
         .bind(&rule)
@@ -2299,7 +2303,7 @@ async fn a_substitute_is_filed_under_the_register_it_fills() {
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn erasure_unlinks_the_esa_typ2_store_as_well() {
     let (pool, url, warehouse_uri, _pg, _wh) = boot().await;
-    let (reads_store, typ2_store, _cold) = build_stores(
+    let (reads_store, typ2_store, _zsg_store, _cold) = build_stores(
         pool.clone(),
         &url,
         &warehouse_uri,
@@ -2396,6 +2400,7 @@ async fn a_zaehlerstandsgang_differences_into_a_lastgang() {
         quality: QualityFlag::Measured,
         sparte: Sparte::Strom,
         obis_code: Some("1-0:1.8.0".to_owned()),
+        melo_id: Some(TEST_MELO.to_owned()),
         tenant: tenant.to_owned(),
         source: IngestionSource::DirectPush,
         sender_mp_id: Some("9900000000001".to_owned()),
@@ -2452,6 +2457,7 @@ async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
         quality: QualityFlag::Measured,
         sparte: Sparte::Strom,
         obis_code: Some("1-0:1.8.0".to_owned()),
+        melo_id: Some(TEST_MELO.to_owned()),
         tenant: tenant.to_owned(),
         source: IngestionSource::DirectPush,
         sender_mp_id: None,
@@ -2512,15 +2518,15 @@ async fn a_billing_period_reports_its_opening_and_closing_zaehlerstand() {
 
 /// Article 17 erasure reaches the Zählerstandsgang.
 ///
-/// A table added after the erasure path was written is the classic way a subject
-/// stays named — `virtual_meter_configs` was one, and `meter_readings` holds the
-/// *primary* measurement, so it would have been a worse one. It is a
-/// Buchungsbeleg (§ 147 Abs. 1 AO), so the row survives and the identity does
-/// not.
+/// The ZSG is the *primary* measurement — every derived interval and the
+/// § 40 Abs. 2 Nr. 6 EnWG opening/closing reading come from it — and it is a
+/// Buchungsbeleg (§ 147 Abs. 1 AO), so the values survive and the identity does
+/// not. One subject registry spans the catalog's tables, so the same erasure
+/// that unlinks the intervals unlinks these.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
-async fn erasure_pseudonymises_the_zaehlerstandsgang() {
-    let (repo, pool, _pg, _wh) = setup().await;
+async fn erasure_unlinks_the_zaehlerstandsgang() {
+    let (repo, _pool, _pg, _wh) = setup().await;
     let tenant = "9910000000001";
     let malo = "51238696129";
     let at = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
@@ -2532,6 +2538,7 @@ async fn erasure_pseudonymises_the_zaehlerstandsgang() {
         quality: QualityFlag::Measured,
         sparte: Sparte::Strom,
         obis_code: Some("1-0:1.8.0".to_owned()),
+        melo_id: Some(TEST_MELO.to_owned()),
         tenant: tenant.to_owned(),
         source: IngestionSource::DirectPush,
         sender_mp_id: None,
@@ -2540,46 +2547,46 @@ async fn erasure_pseudonymises_the_zaehlerstandsgang() {
     .await
     .expect("store a Zählerstand");
 
-    // The erasure path's own statement, run the way the handler runs it.
-    let pseudonym = "SUBJ-TEST";
-    sqlx::query("UPDATE meter_readings SET malo_id = $1 WHERE malo_id = $2 AND tenant = $3")
-        .bind(pseudonym)
-        .bind(malo)
-        .bind(tenant)
-        .execute(&pool)
+    let registry = repo
+        .zsg_store()
+        .subject_registry()
+        .expect("the Zählerstandsgang store has a subject registry");
+    let natural = edmd::store::subject_natural_id(tenant, malo);
+    let subject = registry
+        .lookup(&natural)
         .await
-        .expect("pseudonymise");
+        .expect("lookup")
+        .expect("storing a Zählerstand registers the MaLo as a subject");
 
-    let named: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM meter_readings WHERE malo_id = $1 AND tenant = $2",
-    )
-    .bind(malo)
-    .bind(tenant)
-    .fetch_one(&pool)
-    .await
-    .expect("count");
-    assert_eq!(named, 0, "the MaLo must not survive erasure by name");
+    repo.zsg_store()
+        .erase_subject(
+            &subject,
+            "Art. 17 request",
+            "dpo",
+            OffsetDateTime::now_utc(),
+        )
+        .await
+        .expect("erase subject");
 
-    let kept: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM meter_readings WHERE malo_id = $1 AND tenant = $2",
-    )
-    .bind(pseudonym)
-    .bind(tenant)
-    .fetch_one(&pool)
-    .await
-    .expect("count");
-    assert_eq!(
-        kept, 1,
-        "the value survives — § 147 Abs. 1 AO, Art. 17 Abs. 3 lit. b"
+    assert!(
+        registry.lookup(&natural).await.expect("lookup").is_none(),
+        "the mapping must be destroyed, leaving the readings unattributable"
     );
+
+    // The measurement itself survives — § 147 Abs. 1 AO keeps the Buchungsbeleg.
+    let kept = repo
+        .readings(
+            malo,
+            at - Duration::hours(1),
+            at + Duration::hours(1),
+            tenant,
+        )
+        .await
+        .expect("read back");
+    assert_eq!(kept.len(), 1, "the reading is retained, only unlinked");
 }
 
-/// A completed Ablesung files its Zählerstand where billing can see it.
-///
-/// The whole point of a reading order is to obtain one number, and that number
-/// used to be written onto the order row and nowhere else — unreachable from
-/// § 40 Abs. 2 Nr. 6 EnWG and from the year-on-year difference that *is* the
-/// billing path for an SLP point with no interval metering at all.
+// billing path for an SLP point with no interval metering at all.
 #[tokio::test]
 #[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
 async fn a_completed_ablesung_reaches_the_reading_store() {
@@ -2626,7 +2633,8 @@ async fn a_completed_ablesung_reaches_the_reading_store() {
             zaehlerstand: kwh(value),
             quality: QualityFlag::Measured,
             sparte: Sparte::Strom,
-            obis_code: None,
+            obis_code: Some("1-0:1.8.0".to_owned()),
+            melo_id: Some(TEST_MELO.to_owned()),
             tenant: tenant.to_owned(),
             source: IngestionSource::Manual,
             sender_mp_id: None,
@@ -2682,16 +2690,15 @@ async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
         ("VIRT-OTHER", tenant_a, "51238696137"),
     ] {
         let rule = serde_json::json!({
-            "GgvConstantAllocation": {
-                "plant_melo_id": plant_melo,
-                "tenant_melo_id": tenant_melo,
-                "fraction": "0.5",
-            }
+            "kind": "GGV_CONSTANT_ALLOCATION",
+            "plant_melo_id": plant_melo,
+            "tenant_melo_id": tenant_melo,
+            "fraction": "0.5",
         });
         sqlx::query(
             "INSERT INTO virtual_meter_configs
                (virtual_malo_id, display_name, rule_type, rule_json, sparte, valid_from, tenant)
-             VALUES ($1,$1,'GgvConstantAllocation',$2,'STROM',CURRENT_DATE,$3)",
+             VALUES ($1,$1,'GGV_CONSTANT_ALLOCATION',$2,'STROM',CURRENT_DATE,$3)",
         )
         .bind(vid)
         .bind(&rule)
@@ -2705,7 +2712,7 @@ async fn a_sharing_community_is_the_set_of_rules_sharing_a_plant() {
     let found: Vec<String> = sqlx::query_scalar(
         r"SELECT virtual_malo_id FROM virtual_meter_configs
           WHERE tenant = $2
-            AND rule_type IN ('GgvConstantAllocation','GgvProportionalAllocation')
+            AND rule_type IN ('GGV_CONSTANT_ALLOCATION','GGV_PROPORTIONAL_ALLOCATION')
             AND jsonb_path_exists(
                     rule_json,
                     '$.**.plant_melo_id ? (@ == $p)',
@@ -2830,4 +2837,54 @@ async fn the_portfolio_aggregate_does_not_double_count_a_dual_tariff_prosumer() 
         "the Bezug is the total register alone — not it plus its own HT/NT split, \
          plus the feed-in, plus a kvarh channel"
     );
+}
+
+/// A Zählerstand is stored in the unit the **register** counts.
+///
+/// Not the Sparte's billing unit. § 25 Nr. 4 MessEV converts the *difference*
+/// between two readings; a register value rewritten into kWh is no longer the
+/// number on the meter, and § 40 Abs. 2 Nr. 6 EnWG puts that number on an
+/// invoice for a customer to check. A gas register counts m³, so it round-trips
+/// as the volume it displayed.
+#[tokio::test]
+#[ignore = "requires Docker (testcontainers PostgreSQL + filesystem Iceberg warehouse)"]
+async fn a_gas_zaehlerstand_round_trips_unconverted() {
+    let (repo, _pool, _pg, _wh) = setup().await;
+    let tenant = "9910000000001";
+    let malo = "51238696129";
+    let at = OffsetDateTime::from_unix_timestamp(1_767_225_600).expect("2026-01-01T00:00Z");
+
+    // 4321 m³ on the register — not the ~45 600 kWh_Hs it settles as.
+    repo.store_readings(&[edmd::domain::MeterReading {
+        malo_id: malo.to_owned(),
+        read_at: at,
+        zaehlerstand: kwh("4321.0"),
+        quality: QualityFlag::Measured,
+        sparte: Sparte::Gas,
+        obis_code: Some("7-1:3.0.0".to_owned()),
+        melo_id: Some(TEST_MELO.to_owned()),
+        tenant: tenant.to_owned(),
+        source: IngestionSource::DirectPush,
+        sender_mp_id: None,
+        push_session: None,
+    }])
+    .await
+    .expect("store a gas Zählerstand");
+
+    let back = repo
+        .readings(
+            malo,
+            at - Duration::hours(1),
+            at + Duration::hours(1),
+            tenant,
+        )
+        .await
+        .expect("read back");
+    assert_eq!(back.len(), 1, "one reading stored, one read back");
+    assert_eq!(
+        back[0].zaehlerstand,
+        kwh("4321.0"),
+        "a gas register counts m³ and is stored as it displayed, unconverted"
+    );
+    assert_eq!(back[0].sparte, Sparte::Gas);
 }

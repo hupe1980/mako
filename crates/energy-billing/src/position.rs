@@ -338,6 +338,20 @@ pub struct BillingPosition {
 /// supplier's invoice shows no VAT, and the recipient owes it.
 pub const REVERSE_CHARGE_TAG: &str = "reverse-charge";
 
+/// Tag marking a position as **not subject to VAT** — a hoheitliche Leistung
+/// outside the scope of the UStG, EN 16931 category `O`.
+///
+/// Distinct from zero-rated (`Z`) and from exempt (`E`): a public-law
+/// Abwassergebühr levied under a KAG-Satzung is not a supply the UStG reaches
+/// at all. Set by [`BillingPosition::with_out_of_scope`].
+///
+/// EN 16931 **BR-O-11 … BR-O-14** make `O` exclusive: a document containing one
+/// `O` breakdown group may contain no other breakdown group and no line in any
+/// other category. That is a real constraint on what may share an invoice, not
+/// a formatting detail — see the guard in
+/// [`WaterProvider`](crate::WaterProvider).
+pub const OUT_OF_SCOPE_TAG: &str = "nicht-steuerbar";
+
 impl BillingPosition {
     /// Construct a debit position (customer owes the amount).
     ///
@@ -441,6 +455,28 @@ impl BillingPosition {
         self.has_tag(REVERSE_CHARGE_TAG)
     }
 
+    /// Mark this position as **not subject to VAT** (EN 16931 `O`).
+    ///
+    /// For hoheitliche Leistungen — a public-law Gebühr levied under a
+    /// KAG-Satzung — which the UStG does not reach. Forces the rate to 0 and
+    /// categorises the position `O`, not `Z`: zero-rating asserts a taxable
+    /// supply at 0 %, which a Gebührenbescheid is not, and the two carry
+    /// different EN 16931 business rules.
+    #[must_use]
+    pub fn with_out_of_scope(mut self) -> Self {
+        if !self.has_tag(OUT_OF_SCOPE_TAG) {
+            self.tags.push(OUT_OF_SCOPE_TAG.to_owned());
+        }
+        self.applicable_tax_rate = Some(Decimal::ZERO);
+        self
+    }
+
+    /// `true` when this position is outside the scope of the UStG.
+    #[must_use]
+    pub fn is_out_of_scope(&self) -> bool {
+        self.has_tag(OUT_OF_SCOPE_TAG)
+    }
+
     /// `true` when this position carries the given tag.
     #[must_use]
     pub fn has_tag(&self, tag: &str) -> bool {
@@ -466,7 +502,11 @@ impl BillingPosition {
 
 /// Round and range-validate a monetary EUR amount to 5 decimal places.
 ///
-/// Uses [`EuroAmount`] internally to detect overflow (max ~92 M EUR).
+/// Uses [`EuroAmount`] internally to detect overflow. The ceiling is
+/// `i64::MAX × 10⁻⁵` ≈ **92,2 billion EUR** (`billing::Amount::MAX`) — not the
+/// ~92 M this said, which would have put it inside the range of a real
+/// industrial portfolio. The check is here for a corrupt input, not a large
+/// customer.
 /// Beyond the fixed-point range the amount is kept and rounded directly —
 /// zeroing it (the old behaviour) silently erased the position's value,
 /// which is exactly the silent-degradation failure a billing engine must

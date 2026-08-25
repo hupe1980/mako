@@ -28,7 +28,7 @@ metering  = { workspace = true, features = ["serde"] }
 # directly — it pulls only `axum` (already a dep), not `reqwest`. `object-store-all`
 # enables meterstore's S3/GCS/Azure cold-tier backends: meterstore owns the whole
 # Iceberg catalog stack now, so edmd links none of it directly (see below).
-meterstore = { version = "0.4", default-features = false, features = ["catalog-facade", "object-store-all"] }
+meterstore = { version = "0.5", default-features = false, features = ["catalog-facade", "object-store-all"] }
 rubo4e     = { workspace = true }
 
 anyhow             = { workspace = true }

@@ -470,7 +470,7 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
     // ── meterstore-backed storage tier ─────────────────────────────────────────
     // The hot PostgreSQL window and the cold Iceberg history are owned by
     // `meterstore`: `build_stores` constructs one `SqlCatalog` over this same
-    // Postgres and an OpenDAL S3 warehouse, then builds both tables over it as a
+    // Postgres and an OpenDAL S3 warehouse, then builds every table over it as a
     // shared `MeterCatalog`. `meter_reads` is the authoritative store (with a GDPR
     // subject registry); `esa_typ2_reads` is a second, non-authoritative table for
     // the ESA "Werte nach Typ 2" stream. The warehouse URI comes from
@@ -510,10 +510,11 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         })
         .unwrap_or_default();
 
-    // Both tables share one Iceberg catalog and one DataFusion session (§15.3):
-    // `meter_reads` (authoritative, with the GDPR subject registry) and
-    // `esa_typ2_reads` (non-authoritative ESA stream).
-    let (reads_store, typ2_store, reads_cold) = build_stores(
+    // All three tables share one Iceberg catalog and one DataFusion session
+    // (§15.3): `meter_reads` (authoritative intervals, with the GDPR subject
+    // registry), `esa_typ2_reads` (non-authoritative ESA stream) and
+    // `meter_readings` (the Zählerstandsgang — register values at instants).
+    let (reads_store, typ2_store, zsg_store, reads_cold) = build_stores(
         pool.clone(),
         &database_url,
         &warehouse_uri,
@@ -538,12 +539,17 @@ pub async fn build(cfg: RunConfig) -> anyhow::Result<Router> {
         vec![
             reads_store.maintenance().interval(period).spawn(),
             typ2_store.maintenance().interval(period).spawn(),
+            // The Zählerstandsgang tiers too: a quarter-hourly ZSG is the same
+            // volume as the Lastgang it produces, and settling one while the
+            // other grows unbounded in the hot tier is not a decision anyone
+            // made.
+            zsg_store.maintenance().interval(period).spawn(),
         ]
     } else {
         Vec::new()
     };
 
-    let repo = MeterStoreTimeSeriesRepository::new(reads_store, pool.clone());
+    let repo = MeterStoreTimeSeriesRepository::new(reads_store, zsg_store, pool.clone());
     // The surveillance worker reads the resolved series across both tiers, so it
     // needs the store handle, not just the business-table pool.
     let repo_for_surveillance = repo.clone();

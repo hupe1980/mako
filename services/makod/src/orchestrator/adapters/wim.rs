@@ -10,7 +10,7 @@ use super::*;
 
 /// Build an [`AdapterRegistry`] for [`WimInvoicWorkflow`].
 ///
-/// Extracts INVOIC fields to construct a [`WimInvoicCommand::ReceiveInvoic`]
+/// Extracts INVOIC fields to construct a [`InvoicCommand::ReceiveInvoic`]
 /// for the WiM Strom MSB-Rechnung (PID 31009). This PID is explicitly excluded
 /// from `mako-gpke`'s GPKE_INVOIC_PIDS. (The Gas WiM-Rechnung 31003 lives in
 /// `mako-wim-gas`, duplicated per Sparte.)
@@ -45,8 +45,8 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                 .and_then(|b| b.document_id.as_deref())
                 .unwrap_or(msg.message_ref());
 
-            Ok(WimInvoicCommand::ReceiveInvoic {
-                pruefidentifikator: pid,
+            Ok(InvoicCommand::ReceiveInvoic {
+                pid,
                 sender: MarktpartnerCode::new(
                     inv.sender()
                         .and_then(|n| n.party_id.as_deref())
@@ -67,8 +67,7 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                     .to_owned(),
                 validation_passed,
                 validation_errors,
-                rechnung: serde_json::to_value(build_rechnung(inv.segments()))
-                    .unwrap_or(serde_json::Value::Null),
+                rechnung: Some(Box::new(build_rechnung(inv.segments()))),
             })
         },
     ));
@@ -83,7 +82,7 @@ pub fn wim_invoic_registry() -> AdapterRegistry<WimInvoicWorkflow> {
 /// After the MSB sends INVOIC 31009, the payer (NB/LF/ESA) returns a REMADV:
 /// 33001 confirms payment; 33002 non-itemized Abweisung; 33003/33004 the itemized
 /// Strom Abweisungen (Kopf+Summe / Position). `makod` resumes the billing process
-/// with [`WimInvoicCommand::ReceiveRemadv`]. Mirrors `gpke_abrechnung_remadv_registry`.
+/// with [`InvoicCommand::ReceiveRemadv`]. Mirrors `gpke_abrechnung_remadv_registry`.
 #[must_use]
 pub fn wim_invoic_remadv_registry() -> AdapterRegistry<WimInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -107,7 +106,7 @@ pub fn wim_invoic_remadv_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                     )
                 })
                 .and_then(convert_pid)?;
-            Ok(WimInvoicCommand::ReceiveRemadv {
+            Ok(InvoicCommand::ReceiveRemadv {
                 pid,
                 remadv_ref: MessageRef::new(msg.message_ref()),
                 sender: MarktpartnerCode::new(
@@ -125,7 +124,7 @@ pub fn wim_invoic_remadv_registry() -> AdapterRegistry<WimInvoicWorkflow> {
 ///
 /// After the payer sends a REMADV, the MSB (invoicer) may reject it via COMDIS
 /// 29001 (Ablehnung der Zahlung); `makod` resumes with
-/// [`WimInvoicCommand::ReceiveComdis`]. Mirrors `gpke_abrechnung_comdis_registry`.
+/// [`InvoicCommand::ReceiveComdis`]. Mirrors `gpke_abrechnung_comdis_registry`.
 #[must_use]
 pub fn wim_invoic_comdis_registry() -> AdapterRegistry<WimInvoicWorkflow> {
     let mut registry = AdapterRegistry::new();
@@ -140,7 +139,7 @@ pub fn wim_invoic_comdis_registry() -> AdapterRegistry<WimInvoicWorkflow> {
                     "WiM COMDIS adapter: expected COMDIS message (PID 29001)".into(),
                 ));
             };
-            Ok(WimInvoicCommand::ReceiveComdis {
+            Ok(InvoicCommand::ReceiveComdis {
                 comdis_ref: MessageRef::new(msg.message_ref()),
             })
         },

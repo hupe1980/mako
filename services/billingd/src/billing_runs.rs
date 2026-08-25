@@ -20,7 +20,7 @@
 //!    for someone to call an endpoint.
 //! 4. Accumulate the month's `billing_run_log` row (audit).
 //! 5. For iMSys MaLos, deliver the free monthly **Abrechnungsinformation**
-//!    (§40b Abs. 2 EnWG) as a `de.billing.abrechnungsinformation.monatlich`
+//!    (§ 40b Abs. 3 EnWG) as a `de.billing.abrechnungsinformation.monatlich`
 //!    CloudEvent — a preview calculation, not a persisted invoice, logged in
 //!    `abrechnungsinfo_log` so each month is delivered exactly once.
 
@@ -282,7 +282,7 @@ async fn sweep(deps: &Arc<BillingDeps>, pool: &PgPool, today: Date) {
             }
         }
 
-        // §40b Abs. 2: monthly Abrechnungsinformation for iMSys MaLos — once per
+        // § 40b Abs. 3: monthly Abrechnungsinformation for iMSys MaLos — once per
         // candidate per sweep, independent of the invoice cadence.
         if cfg.billing_runs.abrechnungsinformation {
             deliver_abrechnungsinfo(deps, pool, cand, today).await;
@@ -547,9 +547,16 @@ async fn bill_one(
     Ok(())
 }
 
-/// §40b Abs. 2 EnWG: deliver the previous month's consumption/cost info for
+/// § 40b Abs. 3 EnWG: deliver the previous month's consumption/cost info for
 /// iMSys MaLos — a preview calculation emitted as a CloudEvent, never a
 /// persisted invoice.
+///
+/// **Abs. 3, not Abs. 2.** § 40b splits the duty by whether the metering point
+/// is *fernauslesbar*: Abs. 2 covers customers **without** remote read-out
+/// (every six months, or three on request), Abs. 3 those **with** it — monthly
+/// and free. This worker runs for iMSys MaLos, so it is Abs. 3 throughout; the
+/// citation said Abs. 2 in nine places including the `rechtsgrundlage` field of
+/// the CloudEvent itself.
 async fn deliver_abrechnungsinfo(
     deps: &Arc<BillingDeps>,
     pool: &PgPool,
@@ -584,7 +591,7 @@ async fn deliver_abrechnungsinfo(
 
     // From here the claim is held. Every path that does not deliver must give
     // it back: holding a claim whose delivery failed suppresses that month's
-    // §40b Abs. 2 information for good, and the customer's statutory
+    // § 40b Abs. 3 information for good, and the customer's statutory
     // entitlement is not something a transient edmd outage may consume.
     let release = || async {
         if let Err(e) =
@@ -637,7 +644,7 @@ async fn deliver_abrechnungsinfo(
         }
     };
 
-    // Unlike an invoice, the §40b Abs. 2 information *is* the CloudEvent — there
+    // Unlike an invoice, the § 40b Abs. 3 information *is* the CloudEvent — there
     // is no record to persist and nothing else delivers it. Without a webhook
     // there is nowhere to send it, so the claim goes back and the month stays
     // open for a sweep that runs once one is configured.
@@ -656,7 +663,7 @@ async fn deliver_abrechnungsinfo(
             "period_to": to.to_string(),
             "brutto_eur": invoice.brutto_eur,
             "netto_eur": invoice.netto_eur,
-            "rechtsgrundlage": "§40b Abs. 2 EnWG",
+            "rechtsgrundlage": "§ 40b Abs. 3 EnWG",
             "hinweis": "Monatliche Abrechnungsinformation — keine Rechnung",
         }),
     );

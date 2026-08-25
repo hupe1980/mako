@@ -83,7 +83,11 @@ pub const VALID_PREISTYPEN: &[&str] = &[
     "KWKG_ZUSCHLAG",
     "MARKTWERT",
     "VERMARKTUNGSGEBUEHR",
-    "MIETERSTROM_AUFSCHLAG",
+    // The Mieterstromzuschlag (§ 21 Abs. 3 EEG 2023) is deliberately **not** a
+    // retail Preistyp: it is the Anlagenbetreiber's claim against the
+    // Netzbetreiber, settled by `einsd`/`eeg-billing`. Carrying it as a price
+    // position here would invite billing it to the tenant.
+    "GRUNDVERSORGUNG_ARBEITSPREIS",
     "GEMEINSCHAFT_RABATT",
     "STEUERUNGSRABATT_MODUL1",
     "STEUERUNGSRABATT_MODUL3",

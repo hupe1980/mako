@@ -37,7 +37,7 @@ pub(crate) async fn get_sharing_allocation(
     Path(community_id): Path<String>,
     Query(params): Query<LastgangParams>,
 ) -> impl IntoResponse {
-    use metering::{AggregationRule, MeterInterval, compute_virtual_meter};
+    use metering::{AggregationRule, MeterInterval};
     use rust_decimal::Decimal;
     use sqlx::Row as _;
     use std::collections::HashMap;
@@ -66,7 +66,7 @@ pub(crate) async fn get_sharing_allocation(
         r"SELECT virtual_malo_id, rule_type, rule_json, display_name, legal_basis
           FROM virtual_meter_configs
           WHERE tenant = $2
-            AND rule_type IN ('GgvConstantAllocation','GgvProportionalAllocation')
+            AND rule_type IN ('GGV_CONSTANT_ALLOCATION','GGV_PROPORTIONAL_ALLOCATION')
             AND jsonb_path_exists(
                     rule_json,
                     '$.**.plant_melo_id ? (@ == $p)',
@@ -186,7 +186,13 @@ pub(crate) async fn get_sharing_allocation(
             // is unreachable; skipping is the conservative answer if it is not.
             _ => continue,
         };
-        let net = match compute_virtual_meter(rule, &series) {
+        // The allocation comes from the engine whole: `consumption ==
+        // allocated + net_grid_draw` holds exactly in every interval, and the
+        // §42b Abs. 5 `Pos()` cap is reported rather than inferred. Recovering
+        // `allocated` by subtracting the net draw from a re-projected
+        // consumption series made this endpoint restate arithmetic the engine
+        // had already done, on a series it had to read twice.
+        let allocation = match metering::compute_ggv_allocation(rule, &series) {
             Ok(intervals) => intervals,
             Err(e) => {
                 tracing::error!(error = %e, virtual_malo_id, "edmd: GGV allocation failed");
@@ -201,26 +207,23 @@ pub(crate) async fn get_sharing_allocation(
                     .into_response();
             }
         };
-        let consumption: HashMap<OffsetDateTime, Decimal> = series
-            .get(&tenant_melo)
-            .map(|ivs| ivs.iter().map(|iv| (iv.from, iv.value)).collect())
-            .unwrap_or_default();
 
-        // allocated[t] = consumption[t] − net_grid_draw[t]. Taken from the
-        // engine's output rather than recomputed, so §42b Abs. 5's `Pos()` cap
-        // and the zero-consumption guard apply here as they do to the series.
-        let mut intervals: Vec<serde_json::Value> = Vec::with_capacity(net.len());
+        let mut intervals: Vec<serde_json::Value> = Vec::with_capacity(allocation.len());
         let mut participant_total = Decimal::ZERO;
-        for iv in &net {
-            let consumed = consumption.get(&iv.from).copied().unwrap_or(Decimal::ZERO);
-            let allocated = (consumed - iv.value).max(Decimal::ZERO);
-            participant_total += allocated;
+        for iv in &allocation {
+            participant_total += iv.allocated;
             intervals.push(serde_json::json!({
                 "from": iv.from,
                 "to": iv.to,
-                "consumption_kwh": consumed.to_string(),
-                "net_grid_draw_kwh": iv.value.to_string(),
-                "allocated_kwh": allocated.to_string(),
+                "consumption_kwh": iv.consumption.to_string(),
+                "generation_kwh": iv.generation.to_string(),
+                // The nominal share before the cap, and the part of it the
+                // tenant could not use — which fed the public grid.
+                "share_kwh": iv.share.to_string(),
+                "capped": iv.capped(),
+                "surplus_to_grid_kwh": iv.surplus_to_grid().to_string(),
+                "net_grid_draw_kwh": iv.net_grid_draw.to_string(),
+                "allocated_kwh": iv.allocated.to_string(),
                 "quality": crate::store::quality_to_str(iv.quality),
             }));
         }

@@ -92,20 +92,40 @@ pub struct VatView {
     pub exemption_reason: Option<String>,
 }
 
+/// One document-level allowance or charge (BG-20 / BG-21).
+///
+/// A **Restrechnung** carries one per `(VAT category, rate)` group of advances
+/// it deducts. The VAT terms are its own: an advance invoiced at 19 % stays a
+/// 19 % deduction even on a settlement billed at another rate, which is exactly
+/// what a flat BT-113 cannot express.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct AllowanceView {
+    /// BT-92 / BT-99 — the amount, always stated positive.
+    pub amount: String,
+    /// BT-95 / BT-102 — VAT category code.
+    pub vat_category: String,
+    /// BT-96 / BT-103 — VAT rate in percent.
+    pub vat_rate: Option<String>,
+    /// BT-97 / BT-104 — reason text.
+    pub reason: Option<String>,
+}
+
 /// Document totals (BG-22).
 ///
-/// There is no BG-20/BG-21 here — no document-level allowance or charge —
-/// because `energy_billing` never emits one: every discount in this engine is a
-/// negative *line*, so BT-106 and BT-109 are always equal. That is an invariant
-/// of the mapping rather than of EN 16931, and
-/// billingd's
-/// `tests/einvoice_render.rs::the_view_may_omit_document_level_allowances_only_while_there_are_none`
-/// is the tripwire that fails the day it stops holding — it lives with the
-/// mapping it guards.
+/// BT-106 and BT-109 diverge whenever the document carries a BG-20 allowance,
+/// which a **Restrechnung** does: each advance is deducted as a document-level
+/// allowance carrying its own VAT rate (§ 14 Abs. 5 Satz 2 UStG). A template
+/// that renders only `line_total` and `taxable_total` and no allowance rows
+/// would then print two totals with an unexplained gap between them — so the
+/// allowances are part of the view, and `allowance_total` states their sum.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct TotalsView {
     /// BT-106 — sum of line net amounts.
     pub line_total: String,
+    /// BT-107 — sum of document-level allowances. `None` when there are none.
+    pub allowance_total: Option<String>,
+    /// BT-108 — sum of document-level charges. `None` when there are none.
+    pub charge_total: Option<String>,
     /// BT-109 — total without VAT.
     pub taxable_total: String,
     /// BT-110 — total VAT.
@@ -145,12 +165,25 @@ pub struct DocumentView {
     pub buyer: PartyView,
     /// BG-25, in document order.
     pub lines: Vec<LineView>,
+    /// BG-20 — document-level allowances, in document order.
+    pub allowances: Vec<AllowanceView>,
+    /// BG-21 — document-level charges, in document order.
+    pub charges: Vec<AllowanceView>,
     /// BG-23, one entry per VAT rate.
     pub vat_breakdown: Vec<VatView>,
     /// BG-22.
     pub totals: TotalsView,
     /// BT-22 — free-text notes, in document order.
     pub notes: Vec<String>,
+}
+
+fn allowance(a: &en16931::invoice::DocumentAllowanceCharge) -> AllowanceView {
+    AllowanceView {
+        amount: a.amount.to_string(),
+        vat_category: a.vat.category.to_string(),
+        vat_rate: a.vat.rate.as_ref().map(ToString::to_string),
+        reason: a.reason.clone(),
+    }
 }
 
 fn party(p: &en16931::invoice::Party) -> PartyView {
@@ -210,6 +243,8 @@ impl DocumentView {
                     vat_rate: l.vat.rate.as_ref().map(ToString::to_string),
                 })
                 .collect(),
+            allowances: inv.allowances.iter().map(allowance).collect(),
+            charges: inv.charges.iter().map(allowance).collect(),
             vat_breakdown: inv
                 .vat_breakdown
                 .iter()
@@ -223,6 +258,8 @@ impl DocumentView {
                 .collect(),
             totals: TotalsView {
                 line_total: inv.totals.line_total.to_string(),
+                allowance_total: inv.totals.allowance_total.as_ref().map(ToString::to_string),
+                charge_total: inv.totals.charge_total.as_ref().map(ToString::to_string),
                 taxable_total: inv.totals.taxable_total.to_string(),
                 vat_total: inv.totals.vat_total.as_ref().map(ToString::to_string),
                 gross_total: inv.totals.gross_total.to_string(),
@@ -254,6 +291,24 @@ mod tests {
     fn the_view_carries_what_an_invoice_must_print() {
         let model = crate::document::gate::specimen_invoice();
         let view = DocumentView::of(&model);
+
+        // BG-20 — the document-level allowance a Restrechnung deducts each
+        // advance with. It is what makes BT-106 and BT-109 differ, so a page
+        // that cannot render it shows two totals with an unexplained gap.
+        assert_eq!(view.allowances.len(), 1, "BG-20 reaches the view");
+        let a = &view.allowances[0];
+        assert!(!a.amount.is_empty(), "BT-92 amount");
+        assert_eq!(a.vat_category, "S", "BT-95 category");
+        assert!(a.vat_rate.is_some(), "BT-96 rate — its own, not the page's");
+        assert!(a.reason.is_some(), "BT-97 reason");
+        assert!(
+            view.totals.allowance_total.is_some(),
+            "BT-107 states the sum a template needs to explain the gap"
+        );
+        assert_ne!(
+            view.totals.line_total, view.totals.taxable_total,
+            "BT-106 and BT-109 differ exactly because of the allowance"
+        );
 
         // §14 Abs. 4 UStG Pflichtangaben the page cannot omit.
         assert!(view.number.is_some(), "BT-1 invoice number");

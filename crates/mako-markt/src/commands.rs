@@ -133,6 +133,46 @@ pub const GELI_EOG_BESTAETIGEN: &str = "geli.eog.bestaetigen";
 /// UTILMD G 44015 — the E/G refuses a Gas EoG-Anmeldung (`E_3008`).
 pub const GELI_EOG_ABLEHNEN: &str = "geli.eog.ablehnen";
 
+// ── INVOIC billing (the answer to an inbound invoice) ─────────────────────────
+//
+// `invoicd` runs the plausibility check and answers with one of these. Five
+// families, one pair each — the whole INVOIC settle/dispute surface, which is
+// `mako-invoic`'s single state machine seen from the outside.
+
+/// LF: settle an inbound Netznutzungs- or MMM-Rechnung Strom
+/// (PIDs 31001 / 31002 / 31005 / 31006) → REMADV 33001.
+pub const GPKE_ABRECHNUNG_ANNEHMEN: &str = "gpke.abrechnung.annehmen";
+/// LF: dispute one → REMADV 33002 / 33003 / 33004.
+pub const GPKE_ABRECHNUNG_ABLEHNEN: &str = "gpke.abrechnung.ablehnen";
+
+/// Settle an inbound `WiM` invoice — the MSB-Rechnung 31009 and the
+/// WiM-Rechnung 31003 (Dienstleistungen im Messwesen, **both Sparten**).
+///
+/// There is no `wim.gas.*` twin: the Gas 31003 rides this command too, which is
+/// why its descriptor carries `Gnb` among the permitted roles.
+pub const WIM_RECHNUNG_ANNEHMEN: &str = "wim.rechnung.annehmen";
+/// Dispute one, by the Zahlungsziel the invoice carries (`SG8 DTM+265`).
+pub const WIM_RECHNUNG_ABLEHNEN: &str = "wim.rechnung.ablehnen";
+
+/// Settle an inbound `GaBi` Gas invoice — the aggregated MMM-Rechnung
+/// 31007 / 31008 (received by the **MGV**) and the Kapazitätsrechnung 31010
+/// (received by the **BKV**).
+pub const GABI_RECHNUNG_ANNEHMEN: &str = "gabi.rechnung.annehmen";
+/// Dispute one.
+pub const GABI_RECHNUNG_ABLEHNEN: &str = "gabi.rechnung.ablehnen";
+
+/// Settle an inbound Stornorechnung (PID 31004) — Sparte-neutral and
+/// cross-process (INVOIC AHB § 3.1.2), so it cancels an invoice from any family.
+pub const INVOIC_STORNORECHNUNG_ANNEHMEN: &str = "invoic.stornorechnung.annehmen";
+/// Dispute one.
+pub const INVOIC_STORNORECHNUNG_ABLEHNEN: &str = "invoic.stornorechnung.ablehnen";
+
+/// Settle an inbound Rechnung sonstige Leistung (PID 31011) — Sparte-neutral
+/// (GPKE Teil 2 · AWH Sperrprozesse Gas).
+pub const INVOIC_SONSTIGE_LEISTUNG_ANNEHMEN: &str = "invoic.sonstige-leistung.annehmen";
+/// Dispute one.
+pub const INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN: &str = "invoic.sonstige-leistung.ablehnen";
+
 pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     GPKE_LIEFERBEGINN_ANMELDEN,
     GPKE_EOG_ANMELDEN,
@@ -173,4 +213,14 @@ pub const DISPATCHED_BY_SERVICES: &[&str] = &[
     WIM_STEUERUNGSAUFTRAG_BESTAETIGEN,
     WIM_STEUERUNGSAUFTRAG_ABLEHNEN,
     WIM_PREISANFRAGE_ANGEBOT_SENDEN,
+    GPKE_ABRECHNUNG_ANNEHMEN,
+    GPKE_ABRECHNUNG_ABLEHNEN,
+    WIM_RECHNUNG_ANNEHMEN,
+    WIM_RECHNUNG_ABLEHNEN,
+    GABI_RECHNUNG_ANNEHMEN,
+    GABI_RECHNUNG_ABLEHNEN,
+    INVOIC_STORNORECHNUNG_ANNEHMEN,
+    INVOIC_STORNORECHNUNG_ABLEHNEN,
+    INVOIC_SONSTIGE_LEISTUNG_ANNEHMEN,
+    INVOIC_SONSTIGE_LEISTUNG_ABLEHNEN,
 ];

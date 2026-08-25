@@ -1,0 +1,22 @@
+[package]
+name         = "mako-invoic"
+version.workspace      = true
+description  = "The INVOIC settle/dispute state machine shared by every German energy market billing process (GPKE, WiM, GaBi Gas, GeLi Gas)"
+authors.workspace      = true
+edition.workspace      = true
+license.workspace      = true
+repository.workspace   = true
+rust-version.workspace = true
+keywords     = ["invoic", "remadv", "comdis", "mako", "bdew"]
+categories   = ["data-structures"]
+
+[dependencies]
+mako-engine = { workspace = true }
+rubo4e      = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+
+[dev-dependencies]
+mako-engine = { workspace = true, features = ["testing"] }
+serde_json  = { workspace = true }
+tokio       = { version = "1", features = ["full"] }
