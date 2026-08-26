@@ -4,9 +4,15 @@
 //! it prices an EEG-Marktprämie, a HEMS optimisation event, an E-Mobility
 //! roaming fee, none of which the standard models. Written straight into
 //! `tarifpreispositionen[*].preistyp`, they make a document stamped
-//! `_typ: "TARIFPREISBLATT"` carry price types a conforming reader resolves to
-//! `Unknown` — silently, because forward-compatible decoding is what
-//! BO4E-python, go-bo4e and BO4E-dotnet are supposed to do.
+//! `_typ: "TARIFPREISBLATT"` carry price types that are not BO4E values.
+//!
+//! What that costs depends on the reader, and the lenient case is the *mild*
+//! one. `rubo4e` decodes an unlisted value to its `Unknown` catch-all and says
+//! nothing. go-bo4e's generated `UnmarshalJSON` returns `invalid Preistyp %q`
+//! and has no catch-all at all; BO4E-python's enums are pydantic `StrEnum`s,
+//! which raise a `ValidationError`. Both reject the **whole document** — so a
+//! Go or Python counterparty does not misread the price sheet, it fails to
+//! read it.
 //!
 //! They travel instead in the `mako:preistyp` `ZusatzAttribut`, which is BO4E's
 //! own answer to carrying something the schema does not define. These tests pin
@@ -49,9 +55,8 @@ fn a_stored_tarifpreisblatt_has_no_unknown_enums() {
         let typed: Tarifpreisblatt = serde_json::from_value(stored.clone())
             .unwrap_or_else(|e| panic!("{preistyp} is not a Tarifpreisblatt: {e}"));
 
-        rubo4e::Bo4eStrict::ensure_known_enums(&typed).unwrap_or_else(|e| {
-            panic!("{preistyp} produced a document with out-of-schema enums: {e}")
-        });
+        mako_markt::bo4e::ensure_conformant(&typed)
+            .unwrap_or_else(|e| panic!("{preistyp} produced a document mako would refuse: {e}"));
     }
 }
 

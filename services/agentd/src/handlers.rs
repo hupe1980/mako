@@ -10,6 +10,16 @@
 //! `POST /api/v1/run` **waits**: an operator asked for an answer, so the request
 //! is held until every run concludes or suspends, under a wall-clock ceiling.
 //!
+//! ## Both human doors are authorized, not just authenticated
+//!
+//! `POST /api/v1/run` and the two inventory reads ask the **same Cedar set** the
+//! runtime checks every effect against, under agentd's own `api:` verbs. A
+//! `Claims` extractor on its own proves the realm knows the caller and says
+//! nothing about whether they may spend a run on a Marktlokation, so each of
+//! those handlers begins with a `refusal` check and a `403` that names the
+//! verb. `POST /webhook` is the machine door and is authenticated by the
+//! Standard Webhooks signature instead.
+//!
 //! Nothing is here that agentplane's operator surface already answers. The
 //! worklist, run views, case history and event delivery are its own, mounted by
 //! [`plane::oversight`] under `/api/v1/oversight`: re-implementing them would put
@@ -59,6 +69,55 @@ pub struct AppState {
     /// across instances and counts *runs* rather than one permit for a fan-out
     /// that starts six of them.
     pub plane: Plane,
+    /// The same compiled Cedar set the runtime checks every effect against.
+    ///
+    /// Held here so agentd's **own** doors are authorized by the policy the
+    /// deployment reviewed, rather than by the fact that a caller had a token.
+    /// One engine, not two: a second policy source for the REST surface is a
+    /// second place for an audience to drift from the one the worklist uses.
+    pub policy: Arc<dyn agentplane::core::PolicyEngine>,
+}
+
+/// The refusal a caller the policy set does not admit gets, or `None` when they
+/// are admitted.
+///
+/// `Option` rather than `Result`: an `axum::Response` is a large `Err` variant,
+/// and "no refusal" reads more honestly than "Ok(())" for a check whose only
+/// product is the refusal itself. The `403` body names the verb, so an operator
+/// reading it can ask for the role rather than guessing which door refused them.
+/// The roles come from the verified token; nothing in the request body reaches
+/// this.
+fn refusal(
+    state: &AppState,
+    claims: &Claims,
+    action: &'static str,
+) -> Option<axum::response::Response> {
+    if crate::plane::policy::caller_may(
+        state.policy.as_ref(),
+        claims.sub(),
+        &claims.0.mako_roles,
+        claims.tenant(),
+        action,
+    ) {
+        return None;
+    }
+    tracing::warn!(
+        sub = claims.sub(),
+        action,
+        "agentd: caller is authenticated but not authorized for this action"
+    );
+    Some(
+        (
+            StatusCode::FORBIDDEN,
+            Json(serde_json::json!({
+                "error": format!(
+                    "your roles do not admit `{action}` on this plane — authorization comes \
+                     from the Cedar set in agentd's policy, not from holding a token"
+                )
+            })),
+        )
+            .into_response(),
+    )
 }
 
 /// The three CloudEvents attributes this door cannot work without.
@@ -249,10 +308,17 @@ pub async fn webhook(
 
 pub async fn manual_run(
     State(state): State<Arc<AppState>>,
-    _claims: Claims,
+    claims: Claims,
     headers: HeaderMap,
     Json(req): Json<Value>,
 ) -> impl IntoResponse {
+    // Authenticated *and* authorized. Without the second half every principal
+    // the realm issues a token to could start any specialist on any
+    // Marktlokation and spend the tenant's model budget doing it.
+    if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::RUN_START) {
+        return refused;
+    }
+
     // No concurrency cap here. It was an in-process semaphore, and the ceiling
     // that replaced it is `[quota] max_concurrent_runs` — reserved in the store
     // at admission, so it holds across instances and a refusal names the tenant
@@ -332,12 +398,16 @@ pub async fn manual_run(
 /// What is *running here*, as opposed to `/api/v1/agents/catalog`, which lists
 /// everything compiled in whether activated or not.
 ///
-/// Authenticated: in a combined-role deployment the activated set names which
-/// arm's specialists this process runs, which is § 9 EnWG-relevant deployment
-/// detail rather than public capability advertising. The Agent Cards under
-/// `/.well-known/agents/{name}` stay open — a card is what an agent *is*, and
-/// carries no endpoint credential.
-pub async fn list_agents(_claims: Claims, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+/// Authorized, not merely authenticated: in a combined-role deployment the
+/// activated set names which arm's specialists this process runs, which is
+/// § 9 EnWG-relevant deployment detail rather than public capability
+/// advertising, and a token is not a reason to be shown it. The Agent Cards
+/// under `/.well-known/agents/{name}` stay open — a card is what an agent *is*,
+/// and carries no endpoint credential.
+pub async fn list_agents(claims: Claims, State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
+        return refused;
+    }
     let routes = state.plane.router().routes();
     Json(serde_json::json!({
         "total": routes.len(),
@@ -414,9 +484,15 @@ pub async fn agent_card(
 /// see what `[bundled_agents] enable` accepts. The declared ceilings come from
 /// each specialist's manifest, which is the authority on them.
 ///
-/// Authenticated for the same reason as `/api/v1/agents`: the catalogue is the
-/// compiled set, which in a role-scoped build is the deployment's Marktrolle.
-pub async fn agents_catalog(_claims: Claims) -> impl IntoResponse {
+/// Gated by the same verb as `/api/v1/agents`: the catalogue is the compiled
+/// set, which in a role-scoped build is the deployment's Marktrolle.
+pub async fn agents_catalog(
+    claims: Claims,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    if let Some(refused) = refusal(&state, &claims, crate::plane::policy::action::AGENT_LIST) {
+        return refused;
+    }
     let catalog: Vec<serde_json::Value> = crate::builtin::all()
         .map(|def| {
             let manifest = crate::plane::find_manifest(def.name);
@@ -435,9 +511,22 @@ pub async fn agents_catalog(_claims: Claims) -> impl IntoResponse {
                     )
                 });
 
+            let declaration = crate::plane::declaration(def.name);
+
             serde_json::json!({
                 "name": def.name,
-                "specialty": def.specialty,
+                // Which revision this binary embeds. The journal records the
+                // same identity on every run, so a decision can be traced to a
+                // declaration; this is the only way to ask the *running* plane.
+                "version": declaration.as_ref().map(|d| d.version.clone()),
+                "digest": declaration.as_ref().and_then(|d| d.digest.clone()),
+                // The manifest's own `identity.role` — the sentence the model
+                // is given. A second copy in Rust drifted from it, so the
+                // catalogue reads the one the agent actually runs on.
+                "specialty": manifest
+                    .as_ref()
+                    .and_then(|m| m.spec.identity.as_ref())
+                    .map(|i| i.role.as_str()),
                 "trigger_patterns": def.trigger_patterns,
                 "model": model,
                 "max_turns": max_turns,

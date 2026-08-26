@@ -90,7 +90,7 @@ permit(principal, action == Action::"effect:perform", resource);
 // deployment-configured transport, so a mis-typed `[mcp_servers]` entry pointing
 // at somebody else's endpoint is a configuration error this refuses rather than
 // calls. `context.args.server` is what makes this expressible without naming the
-// 904 granted tools one by one.
+// 155 granted tools one by one.
 //
 // **This list must cover every server the manifests grant.** A granted server
 // missing from it is not a narrower policy — it is a specialist that boots, runs
@@ -245,3 +245,36 @@ when { context.roles.contains("mako-operations") };
 // human ones above.
 permit(principal, action == Action::"api:event.deliver", resource)
 when { context.roles.contains("mako-service") || context.roles.contains("mako-operations") };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// agentd's own doors
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// The three routes agentd serves itself, as opposed to agentplane's operator
+// surface above. An OIDC `Claims` extractor alone authenticates a caller and
+// authorizes nobody: without these rules any principal the realm issues a token
+// to — a portal customer, another daemon's service key, an operator from a role
+// with no business here — could start any specialist on any Marktlokation, spend
+// the tenant's whole model budget doing it, and read back which Marktrolle a
+// role-scoped deployment is.
+//
+// The audience is the same operations union the worklist uses, plus
+// `mako-service`: the two manual-only specialists (`jahresabrechnung-agent`,
+// `regulatory-reporting-agent`) exist precisely because no CloudEvent marks
+// "the period ended", so a scheduler is a first-class caller of this door and
+// not an exception to it.
+//
+// What this does *not* do is decide which specialist. Cedar sees the door;
+// narrowing per agent belongs in the manifest's own controls — the ceilings, the
+// protected fields, and the approval in front of every mutating call.
+permit(
+  principal,
+  action in [Action::"api:run.start", Action::"api:agent.list"],
+  resource
+)
+when {
+  ["mako-operations", "mako-service", "gas-operations", "billing-operations",
+   "billing-compliance", "credit-control", "eeg-operations", "grid-operations",
+   "marktkommunikation", "metering", "netzbilanz", "regulatory"]
+    .containsAny(context.roles)
+};

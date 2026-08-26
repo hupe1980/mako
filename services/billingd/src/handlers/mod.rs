@@ -202,7 +202,15 @@ fn build_aggregate_invoice(
             .into_iter()
             .filter(|p| p.category != PositionCategory::Tax)
             .collect();
-        slices.push((malo_id, non_tax.len()));
+        // Counted with the engine's own predicate, not a local filter: the
+        // annotation below indexes the *emitted* `rechnungspositionen`, and
+        // those are net supply lines only. Counting a position `to_rechnung`
+        // will not emit — an Abschlag deduction on a sub-invoice — shifts every
+        // later slice and annotates positions with the wrong MaLo.
+        slices.push((
+            malo_id,
+            non_tax.iter().filter(|p| p.is_rechnungsposition()).count(),
+        ));
         base.extend(non_tax);
         warnings.extend(invoice.warnings);
     }
@@ -243,6 +251,13 @@ fn build_aggregate_invoice(
             .get_or_insert_with(Vec::new)
             .extend(extra_attrs);
     }
+    // The outbound gate. `energy-billing`'s own emissions are test-guarded, but
+    // this document is assembled here at runtime — many invoices' positions
+    // concatenated, re-taxed as one, then annotated — and the result is a shape
+    // no engine test covers. mako refuses a received document that breaks a
+    // BO4E-stated rule, so it must not send one.
+    mako_markt::bo4e::ensure_conformant(&rechnung)
+        .map_err(|e| anyhow::anyhow!("the aggregate invoice is not a valid BO4E document: {e}"))?;
     let json = serde_json::to_value(&rechnung)?;
     Ok((aggregate, json))
 }

@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Customer portal proactive notification orchestrator. Triggers invoice-ready notifications, EEG Förderung expiry alerts, Mahnung reminders, and Tarifwechsel confirmation messages.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: portald-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -38,8 +37,16 @@ spec:
       ## PROCEDURE
 
       1. Determine notification type from event.
-      2. Call portald to check if customer has active portal session.
-      3. Retrieve relevant data (invoice brutto_eur, EEG foerderendedatum, Mahnstufe).
+      2. Call portald `get_dashboard` — a notification for a customer with no portal view
+         reaches nobody, and that is worth saying rather than composing.
+      3. Retrieve what the notification will quote, from the service that owns it:
+         - invoice → portald `get_invoices` for the list the customer sees, and billingd
+           `get_billing_record` for the total it must agree with;
+         - Mahnung → portald `get_balance` and accountingd `list_dunning` for the stage;
+         - EEG expiry → portald `get_eeg_status` and einsd `get_plant` for the
+           Förderende.
+         Where the portal view and the owning service disagree, the notification is
+         wrong whichever number it quotes: report the discrepancy instead.
       4. Compose notification summary for customer-facing display.
       5. Flag if notification requires operator approval before sending.
 
@@ -118,11 +125,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -143,164 +149,42 @@ spec:
     - ref: tool://portald/get_dashboard
       mutates: false
       max_sensitivity: confidential
-      description: "get dashboard via portald"
-    - ref: tool://portald/get_lastgang
-      mutates: false
-      max_sensitivity: confidential
-      description: "get lastgang via portald"
+      description: >-
+        Whether the customer has a portal view at all, and what it currently
+        shows.
+
     - ref: tool://portald/get_invoices
       mutates: false
       max_sensitivity: confidential
-      description: "get invoices via portald"
+      description: >-
+        The invoice list the notification would point at.
+
     - ref: tool://portald/get_balance
       mutates: false
       max_sensitivity: confidential
-      description: "get balance via portald"
-    - ref: tool://portald/get_kontoauszug
-      mutates: false
-      max_sensitivity: confidential
-      description: "get kontoauszug via portald"
-    - ref: tool://portald/get_vorauszahlung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get vorauszahlung via portald"
+      description: >-
+        The balance a Mahnung notification must agree with.
+
     - ref: tool://portald/get_eeg_status
       mutates: false
       max_sensitivity: confidential
-      description: "get eeg status via portald"
-    - ref: tool://portald/get_versorgung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung via portald"
-    - ref: tool://billingd/list_billing_records
-      mutates: false
-      max_sensitivity: internal
-      description: "list billing records via billingd"
+      description: >-
+        The plant view behind an EEG Förderung expiry notification.
+
     - ref: tool://billingd/get_billing_record
       mutates: false
       max_sensitivity: internal
-      description: "get billing record via billingd"
-    - ref: tool://billingd/preview_billing
-      mutates: false
-      max_sensitivity: internal
-      description: "preview billing via billingd"
-    - ref: tool://billingd/get_xrechnung
-      mutates: false
-      max_sensitivity: internal
-      description: "get xrechnung via billingd"
-    - ref: tool://billingd/check_billing_anomaly
-      mutates: false
-      max_sensitivity: internal
-      description: "check billing anomaly via billingd"
-    - ref: tool://billingd/list_vpp_settlements
-      mutates: false
-      max_sensitivity: internal
-      description: "list vpp settlements via billingd"
-    - ref: tool://billingd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via billingd"
-    - ref: tool://billingd/list_product_categories
-      mutates: false
-      max_sensitivity: internal
-      description: "list product categories via billingd"
-    - ref: tool://billingd/validate_tariff_config
-      mutates: false
-      max_sensitivity: internal
-      description: "validate tariff config via billingd"
-    - ref: tool://billingd/explain_invoice_position
-      mutates: false
-      max_sensitivity: internal
-      description: "explain invoice position via billingd"
-    - ref: tool://billingd/get_billing_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via billingd"
-    - ref: tool://einsd/list_plants
-      mutates: false
-      max_sensitivity: internal
-      description: "list plants via einsd"
+      description: >-
+        The invoice total the notification quotes.
+
     - ref: tool://einsd/get_plant
       mutates: false
       max_sensitivity: internal
-      description: "get plant via einsd"
-    - ref: tool://einsd/list_expiring
-      mutates: false
-      max_sensitivity: internal
-      description: "list expiring via einsd"
-    - ref: tool://einsd/list_settlements
-      mutates: false
-      max_sensitivity: internal
-      description: "list settlements via einsd"
-    - ref: tool://einsd/lookup_verguetungssatz
-      mutates: false
-      max_sensitivity: internal
-      description: "lookup verguetungssatz via einsd"
-    - ref: tool://einsd/list_unsettled_plants
-      mutates: false
-      max_sensitivity: internal
-      description: "list unsettled plants via einsd"
-    - ref: tool://einsd/get_epex_monthly_price
-      mutates: false
-      max_sensitivity: internal
-      description: "get epex monthly price via einsd"
-    - ref: tool://einsd/lookup_statutory_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "lookup statutory rate via einsd"
-    - ref: tool://einsd/get_compliance_status
-      mutates: false
-      max_sensitivity: internal
-      description: "get compliance status via einsd"
-    - ref: tool://einsd/list_plants_without_mastr
-      mutates: false
-      max_sensitivity: internal
-      description: "list plants without mastr via einsd"
-    - ref: tool://einsd/check_direktvermarktung_compliance
-      mutates: false
-      max_sensitivity: internal
-      description: "check direktvermarktung compliance via einsd"
-    - ref: tool://einsd/check_sect44b_quota
-      mutates: false
-      max_sensitivity: internal
-      description: "check sect44b quota via einsd"
-    - ref: tool://einsd/get_jahresmarktwert
-      mutates: false
-      max_sensitivity: internal
-      description: "get jahresmarktwert via einsd"
-    - ref: tool://einsd/get_aw_reduktionen
-      mutates: false
-      max_sensitivity: internal
-      description: "get aw reduktionen via einsd"
-    - ref: tool://einsd/get_settlement_state_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get settlement state history via einsd"
-    - ref: tool://einsd/explain_settlement
-      mutates: false
-      max_sensitivity: internal
-      description: "explain settlement via einsd"
-    - ref: tool://accountingd/get_balance
-      mutates: false
-      max_sensitivity: internal
-      description: "get balance via accountingd"
-    - ref: tool://accountingd/list_ledger
-      mutates: false
-      max_sensitivity: internal
-      description: "list ledger via accountingd"
+      description: >-
+        The Förderende the EEG notification quotes.
+
     - ref: tool://accountingd/list_dunning
       mutates: false
       max_sensitivity: internal
-      description: "list dunning via accountingd"
-    - ref: tool://accountingd/list_overdue
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue via accountingd"
-    - ref: tool://accountingd/compute_bilanzielle_abgrenzung
-      mutates: false
-      max_sensitivity: internal
-      description: "compute bilanzielle abgrenzung via accountingd"
-    - ref: tool://accountingd/suggest_payment_match
-      mutates: false
-      max_sensitivity: internal
-      description: "suggest payment match via accountingd"
+      description: >-
+        The Mahnstufe the reminder is about.

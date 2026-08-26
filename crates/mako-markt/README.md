@@ -8,15 +8,60 @@ management.  It is the foundation for [`marktd`](../../services/marktd), the pro
 Market Data Hub.
 
 Key design choices:
+- **`mako_markt::bo4e` is the workspace's BO4E boundary** — the gate every
+  payload crosses in either direction, the rules BO4E states but enforces
+  nowhere, and the typed columns a stored document is indexed by. See
+  [The BO4E gate](#the-bo4e-gate) below.
 - **Typed `rubo4e::current` records** — `MaloRecord.data` stores and returns
   `rubo4e::current::Marktlokation`, `MeloRecord.data` stores `Messlokation`, and so on.
-  Schema is validated at every write boundary; invalid `_typ` or enum values → 422.
+  Writes take the **typed BO**, so an unvalidated payload cannot reach storage
+  and a shadow column cannot disagree with the document it shadows.
 - **`NbContractRecord` carries full BO4E `Vertrag` JSONB** — `data: serde_json::Value`
   stores the canonical BO4E `Vertrag` payload alongside typed SQL columns
   (`netzebene`, `bilanzierungsmethode`, `billing_schedule`).  `vertragsart` and
   `vertragsstatus` are extracted as indexed columns for fast SQL filtering.
 - **25 active `rubo4e::current` types** — `Marktlokation`, `Messlokation`, `Zaehler`,
   `Geraet`, `Vertrag`, `Energiemenge`, `Lastgang`, `Rechnung`, and more.
+
+---
+
+## The BO4E gate
+
+BO4E's schema constrains almost nothing — of the 35 Geschäftsobjekte, two
+declare a `required` field and none declares a `oneOf` — so "it deserialises" is
+not validation. `mako_markt::bo4e::decode` is the four decisions that make up
+accepting a BO4E document, in one place:
+
+```rust
+use mako_markt::bo4e;
+use rubo4e::current::Marktlokation;
+
+let malo: Marktlokation = bo4e::decode(payload)
+    .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
+```
+
+| Stage | Refuses | `code` |
+|---|---|---|
+| 1. Discriminator | a `Zaehler` posted to the `Geraet` endpoint | `bo4e.discriminator` |
+| 2. Schema | a value the type cannot hold | `bo4e.schema` |
+| 3. Strict enums | `"sparte": "STROMM"`, at any depth, by JSON-path | `bo4e.unknown_enum` |
+| 4. BO4E rules | a document the standard's prose forbids | `bo4e.rule` |
+
+Stage 3 carries most of the weight: `Unknown` serialises back as the literal
+`"UNKNOWN"`, so at an endpoint that stores the canonical round-trip, skipping it
+overwrites what the caller sent rather than merely accepting it.
+
+| Variant | Use |
+|---|---|
+| `decode` | an endpoint. All four stages. |
+| `decode_nested` | a COM from a parent's extension map. `_typ` may be absent; a wrong one is still refused. |
+| `decode_received` | a counterparty's document. Stages 1–3 refuse; a rule violation is returned alongside the value, to be disputed rather than dead-lettered. |
+| `ensure_conformant` | outbound: stages 3 and 4 on a value mako built. |
+
+Stage 4 is mostly `rubo4e`'s `.validate()`, which descends the whole tree;
+`bo4e::conformance` adds the two rules BO4E states and `rubo4e` does not check.
+Both report as `ValidationFailure { path, message }`. A rule belongs there
+**only if BO4E asserts it** — endpoint requirements are a separate layer.
 
 ---
 

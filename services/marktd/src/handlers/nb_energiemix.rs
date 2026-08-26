@@ -116,30 +116,13 @@ pub async fn put_nb_energiemix(
     {
         return forbidden("write-energiemix denied");
     }
-    // Validate + canonicalise via rubo4e deserialization.
-    let typed: Energiemix = match serde_json::from_value(req.energiemix) {
+    // The BO4E gate. Its strict-enum stage is what stops an unrecognised
+    // `erzeugungsart` decoding to `Unknown` and being published as a §42 EnWG
+    // Stromkennzeichnung disclosure naming a source that does not exist.
+    let typed: Energiemix = match mako_markt::bo4e::decode(req.energiemix) {
         Ok(e) => e,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!("invalid Energiemix payload: {e}")
-                })),
-            )
-                .into_response();
-        }
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response(),
     };
-    // Strict enum gate: an unrecognised `erzeugungsart` would otherwise decode
-    // to `Unknown` and be published as a §42 EnWG Stromkennzeichnung disclosure.
-    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("Energiemix has out-of-schema enum values: {e}")
-            })),
-        )
-            .into_response();
-    }
     // §42 Abs. 2 Nr. 2 EnWG completeness: the grid-area Reststrommix must carry
     // an energy-source breakdown that accounts for the whole supply. An empty
     // Energiemix satisfies neither the invoice nor the portal disclosure
@@ -277,8 +260,21 @@ pub async fn get_nb_energiemix(
             .into_response(),
         Ok(Some(r)) => {
             let energiemix_json: serde_json::Value = r.try_get("energiemix").unwrap_or_default();
+            // A stored row can predate the current schema series, so a read is
+            // drift-tolerant — but it says so. `unwrap_or_default()` here
+            // returned an *empty* Energiemix, which is a §42 EnWG
+            // Stromkennzeichnung disclosure with no energy sources in it, served
+            // with a 200 and no way to tell it from a genuine one.
             let typed: Energiemix =
-                serde_json::from_value(energiemix_json.clone()).unwrap_or_default();
+                serde_json::from_value(energiemix_json.clone()).unwrap_or_else(|e| {
+                    tracing::error!(
+                        nb_mp_id = %nb_mp_id,
+                        error = %e,
+                        "schema drift: the stored Reststrommix is not a valid BO4E \
+                         Energiemix — re-PUT it; serving an empty disclosure"
+                    );
+                    Energiemix::default()
+                });
             let resp = NbEnergiemixResponse {
                 nb_mp_id: r.try_get("nb_mp_id").unwrap_or_default(),
                 gueltig_fuer: r.try_get("gueltig_fuer").unwrap_or_default(),

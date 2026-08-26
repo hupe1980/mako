@@ -61,47 +61,14 @@ pub enum ParticipantStatus {
     Withdrawn,
 }
 
-// ── Market role sub-element ───────────────────────────────────────────────────
-
-/// Market role element within `sender_MarketParticipant`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StatusRequestSenderMarketRole {
-    /// Role code.
-    #[serde(rename = "type")]
-    pub role_type: StatusRequestSenderRole,
-}
-
-/// Market role element within `receiver_MarketParticipant`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StatusRequestReceiverMarketRole {
-    /// Role code.
-    #[serde(rename = "type")]
-    pub role_type: StatusRequestReceiverRole,
-}
-
-// ── Sender / receiver participants ───────────────────────────────────────────
-
-/// Sender market participant reference.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StatusRequestSender {
-    /// Market participant mRID (simpleContent: text + codingScheme).
-    #[serde(rename = "mRID")]
-    pub m_rid: ParticipantMrid,
-    /// Market role.
-    #[serde(rename = "marketRole")]
-    pub market_role: StatusRequestSenderMarketRole,
-}
-
-/// Receiver market participant reference.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct StatusRequestReceiver {
-    /// Market participant mRID (simpleContent: text + codingScheme).
-    #[serde(rename = "mRID")]
-    pub m_rid: ParticipantMrid,
-    /// Market role.
-    #[serde(rename = "marketRole")]
-    pub market_role: StatusRequestReceiverMarketRole,
-}
+// ── Sender / receiver ────────────────────────────────────────────────────────
+//
+// Flat, dotted elements on the wire — `<sender_MarketParticipant.mRID>` and
+// `<sender_MarketParticipant.marketRole.type>` — not a nested
+// `<sender_MarketParticipant>` container. That is the ENTSO-E CIM convention
+// the BDEW XSD follows, and the difference is not cosmetic: a nested document
+// fails XSD validation at the counterparty, and an inbound flat one loses the
+// sender entirely, because `serde` skips elements the model does not declare.
 
 // ── AttributeInstanceComponent ────────────────────────────────────────────────
 
@@ -148,12 +115,18 @@ pub struct StatusRequestMarketDocument {
     /// Document type.
     #[serde(rename = "type")]
     pub doc_type: StatusRequestDocType,
-    /// Sender market participant.
-    #[serde(rename = "sender_MarketParticipant")]
-    pub sender_market_participant: StatusRequestSender,
-    /// Receiver market participant.
-    #[serde(rename = "receiver_MarketParticipant")]
-    pub receiver_market_participant: StatusRequestReceiver,
+    /// Sender market participant identifier.
+    #[serde(rename = "sender_MarketParticipant.mRID")]
+    pub sender_m_rid: ParticipantMrid,
+    /// Sender market role.
+    #[serde(rename = "sender_MarketParticipant.marketRole.type")]
+    pub sender_market_role: StatusRequestSenderRole,
+    /// Receiver market participant identifier.
+    #[serde(rename = "receiver_MarketParticipant.mRID")]
+    pub receiver_m_rid: ParticipantMrid,
+    /// Receiver market role.
+    #[serde(rename = "receiver_MarketParticipant.marketRole.type")]
+    pub receiver_market_role: StatusRequestReceiverRole,
     /// Document creation timestamp (UTC, second precision).
     #[serde(rename = "createdDateTime")]
     pub created_date_time: UtcDateTime,

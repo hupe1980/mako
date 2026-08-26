@@ -53,7 +53,7 @@ graph LR
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version in `product_history`; validates `_typ`, `_version`, enum fields, and the `preistyp` whitelist (mako-only types move to the `mako:preistyp` ZusatzAttribut) |
+| `PUT` | `/api/v1/products/{lf_mp_id}/{product_code}` | Upsert product; archives previous version in `product_history`. Runs the `preistyp` whitelist (mako-only types move to the `mako:preistyp` ZusatzAttribut), then [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate). What is stored is the canonical round-trip, so the gate's strict-enum stage is what keeps a `sparte` typo from being rewritten to the literal `"UNKNOWN"` |
 | `GET` | `/api/v1/products/{lf_mp_id}/{product_code}` | Fetch latest product |
 | `DELETE` | `/api/v1/products/{lf_mp_id}/{product_code}` | **Soft-delete** — sets `valid_to = today`; product retained for billing history; excluded from comparison feed |
 | `GET` | `/api/v1/products/{lf_mp_id}` | List products (`?category=&sparte=&kundentyp=&include_drafts=&include_expired=`) |
@@ -109,9 +109,17 @@ model — an EEG-Marktprämie, a HEMS optimisation event, an E-Mobility roaming 
 
 Those extras do **not** go in the BO4E field. A document stamped
 `_typ: "TARIFPREISBLATT"` carrying `preistyp: "EEG_MARKTPRAEMIE"` is not valid
-BO4E: every conforming reader (BO4E-python, go-bo4e, BO4E-dotnet) resolves it to
-`Unknown`, silently, because forward-compatible decoding is what they are
-supposed to do. A mako-only price type therefore travels in the `mako:preistyp`
+BO4E, and what a reader does with it depends entirely on the reader.
+
+**The silent-`Unknown` behaviour is `rubo4e`'s, not the market's.** Checked
+against the reference implementations: go-bo4e's generated `UnmarshalJSON`
+returns `invalid Sparte %q` for an unlisted value and has no catch-all variant
+at all, and BO4E-python's enums are pydantic `StrEnum`s, which raise a
+`ValidationError`. Both **reject the whole document**. So a mako value written
+into a BO4E enum field is worse than misread — for a Go or Python counterparty
+it is an invoice that does not parse.
+
+A mako-only price type therefore travels in the `mako:preistyp`
 `ZusatzAttribut` — BO4E's own mechanism for carrying what the schema does not
 define — with `preistyp` left absent, which the schema permits:
 

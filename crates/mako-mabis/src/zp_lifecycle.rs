@@ -28,30 +28,61 @@
 //! what distinguishes an Anfrage (1) from an Antwort (2) and a Weiterleitung
 //! (4).
 //!
-//! | Anfrage | Vorgang       | Antwort | Weiterleitung | Serie                              |
-//! |--------:|---------------|--------:|--------------:|------------------------------------|
-//! | 55062   | Aktivierung   | 55064   | —             | MaBiS-Zählpunkt                    |
-//! | 55063   | Deaktivierung | 55064   | —             | MaBiS-Zählpunkt                    |
-//! | 55071   | Aktivierung   | —       | —             | Zuordnungsermächtigung             |
-//! | 55072   | Deaktivierung | —       | —             | Zuordnungsermächtigung             |
-//! | 55197   | Aktivierung   | —       | —             | tägliche AAÜZ                      |
-//! | 55198   | Deaktivierung | —       | —             | tägliche AAÜZ                      |
-//! | 55199   | Aktivierung   | —       | —             | LF-AASZR                           |
-//! | 55200   | Deaktivierung | —       | —             | LF-AASZR                           |
-//! | 55203   | Aktivierung   | 55204   | 55205         | monatliche AAÜZ (BKV des LF)       |
-//! | 55206   | Deaktivierung | 55207   | 55208         | monatliche AAÜZ (BKV des LF)       |
-//! | 55209   | Aktivierung   | 55210   | 55211         | monatliche AAÜZ (BKV des anf. NB)  |
-//! | 55212   | Deaktivierung | 55213   | 55214         | monatliche AAÜZ (BKV des anf. NB)  |
+//! ## 55062 / 55063 / 55064 are generic codes, not one process
 //!
-//! The two monatliche-AAÜZ families are otherwise identical and differ **only**
-//! in who receives the Weiterleitung: the BKV of the Lieferant (55205/55208)
-//! versus the BKV of the anfordernder Netzbetreiber (55211/55214). They are
-//! kept as separate families because collapsing them would lose the recipient
-//! distinction that is the entire reason BDEW assigned separate codes.
+//! This is the trap the family table exists to close. **55062 „Aktivierung von
+//! ZP" and 55063 „Deaktivierung von ZP" are used for eleven different
+//! Summenzeitreihen**, and 55064 „Antwort" answers all of them — out of
+//! **twelve different Entscheidungsbäume**:
 //!
-//! PID **55064** is shared: it is the Antwort to both 55062 and 55063. The
-//! answering PID therefore cannot be derived from the request by arithmetic —
-//! it comes from the table below.
+//! | Serie | Achse | Antwort | EBD Aktivierung | EBD Deaktivierung |
+//! |-------|-------|--------:|-----------------|-------------------|
+//! | Netzzeitreihe | NB (verantw.) → NB (benachbart) | 55064 | `E_0020` | `E_0010` |
+//! | Netzzeitreihe | NB (verantw.) → BIKO | 55064 | `E_0024` | `E_0009` |
+//! | Lieferantensummenzeitreihe | NB → LF | — | — | — |
+//! | Lieferantensummenzeitreihe | ÜNB → LF | — | — | — |
+//! | Bilanzierungsgebietssummenzeitreihe | ÜNB → BIKO | 55064 | `E_0015` | `E_0035` |
+//! | Bilanzkreissummenzeitreihe | NB → BIKO | 55064 | `E_0034` | `E_0018` |
+//! | Bilanzkreissummenzeitreihe | ÜNB → BIKO | 55064 | `E_0011` | `E_0012` |
+//! | Deltazeitreihenübertrag | ÜNB → BIKO | 55064 | `E_0027` | `E_0028` |
+//! | Abrechnungssummenzeitreihe | BIKO → NB / BKV / ÜNB | — | — | — |
+//! | tägliche Bilanzierungsgebietssummenzeitreihe | ÜNB → NB | — | — | — |
+//! | tägliche Bilanzkreissummenzeitreihe | ÜNB → BKV | — | — | — |
+//!
+//! Three consequences follow, and none of them is derivable from the PID:
+//!
+//! - **Whether an Antwort is owed at all** varies by series. Six of the eleven
+//!   owe a 55064 and five are record-only. A model that answers "55062 → 55064"
+//!   invents five obligations; one that never answers drops six real ones.
+//! - **Which Codeliste the answer comes from** varies by series *and*
+//!   direction. A code read against the wrong tree means something else there —
+//!   the same trap `A02` sets across the GPKE trees.
+//! - **The Weiterleitung re-uses the request code.** For the four series that
+//!   have one, Prozessschritt 4 is another 55062/55063 addressed to the
+//!   downstream party, not a distinct PID.
+//!
+//! [`ZpSerie`] therefore carries the series *and* its axis, and it is an
+//! explicit input: the MaBiS-Zählpunkt is created **for** one Summenzeitreihe,
+//! so the caller always knows which.
+//!
+//! ## The series with their own codes
+//!
+//! | Serie | Anfrage | Antwort | EBD | Weiterleitung |
+//! |-------|--------:|--------:|-----|--------------:|
+//! | Zuordnungsermächtigung (BKV → NB) | 55071 / 55072 | — | — | — |
+//! | tägliche AAÜZ (NB (ANB) → ÜNB) | 55197 / 55198 | — | — | — |
+//! | LF-AASZR (NB (ANB) → LF) | 55199 / 55200 | — | — | — |
+//! | monatliche AAÜZ, BKV des LF (NB (ANB) → BIKO) | 55203 / 55206 | 55204 / 55207 | `E_0071` / `E_0072` | 55205 / 55208 |
+//! | monatliche AAÜZ, BKV des anfNB (NB (ANB) → BIKO) | 55209 / 55212 | 55210 / 55213 | `E_0078` / `E_0079` | 55211 / 55214 |
+//!
+//! ## The tägliche AAÜZ expires on 30.09.2026
+//!
+//! 55197/55198 implement MaBiS Anlage 1 **Kapitel 17.2**, which BK6-23-241
+//! Tenorziffer 5 repeals with the end of **30.09.2026**. Unlike the rest of
+//! Kapitel 17 it is *not* republished as the Anlage zur BilAReM: 17.2 and
+//! 17.3.2.1 are the two parts that simply stop. [`ZpSerie::endet_am`] carries
+//! the date so a deployment can refuse to activate a Zählpunkt for a series
+//! that will not exist when the month it settles is due.
 //!
 //! # Not in this family
 //!
@@ -95,30 +126,76 @@ pub enum ZpVorgang {
     Deaktivierung,
 }
 
-/// Which MaBiS series the Anfrage activates or deactivates.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+/// Which MaBiS series — and on which axis — the Anfrage activates or
+/// deactivates.
+///
+/// The axis is part of the identity, not decoration: the Netzzeitreihe is
+/// activated twice, once toward the neighbouring NB and once toward the BIKO,
+/// and the two are answered out of different Entscheidungsbäume.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ZpSerie {
-    /// MaBiS-Zählpunkt itself (55062/55063).
-    MabisZaehlpunkt,
-    /// Zuordnungsermächtigung of a BKV toward an NB (55071/55072).
+    /// Netzzeitreihe, verantwortlicher NB → benachbarter NB.
+    NetzzeitreiheNachbarNb,
+    /// Netzzeitreihe, verantwortlicher NB → BIKO.
+    NetzzeitreiheBiko,
+    /// Lieferantensummenzeitreihe (Kategorie A), NB → LF.
+    LieferantensummenzeitreiheNb,
+    /// Lieferantensummenzeitreihe (Kategorie B), ÜNB → LF.
+    LieferantensummenzeitreiheUenb,
+    /// Bilanzierungsgebietssummenzeitreihe, ÜNB → BIKO, weitergeleitet an den NB.
+    Bilanzierungsgebietssummenzeitreihe,
+    /// Bilanzkreissummenzeitreihe (Kategorie A), NB → BIKO, weitergeleitet an den BKV.
+    BilanzkreissummenzeitreiheNb,
+    /// Bilanzkreissummenzeitreihe (Kategorie B), ÜNB → BIKO, weitergeleitet an den BKV.
+    BilanzkreissummenzeitreiheUenb,
+    /// Deltazeitreihenübertrag, ÜNB → BIKO, weitergeleitet an den NB.
+    Deltazeitreihenuebertrag,
+    /// Abrechnungssummenzeitreihe, BIKO → NB / BKV / ÜNB.
+    Abrechnungssummenzeitreihe,
+    /// Tägliche Bilanzierungsgebietssummenzeitreihe, ÜNB → NB.
+    TaeglicheBgSzr,
+    /// Tägliche Bilanzkreissummenzeitreihe, ÜNB → BKV.
+    TaeglicheBkSzr,
+    /// Zuordnungsermächtigung des BKV beim NB (55071/55072).
     Zuordnungsermaechtigung,
-    /// Tägliche Ausfallarbeitsüberführungszeitreihe (55197/55198).
+    /// Tägliche Ausfallarbeitsüberführungszeitreihe (55197/55198), NB (ANB) → ÜNB.
+    ///
+    /// MaBiS Kap. 17.2 — repealed with the end of 30.09.2026 and **not**
+    /// republished as the Anlage zur BilAReM.
     TaeglicheAauez,
-    /// LF-Ausfallarbeitssummenzeitreihe (55199/55200).
+    /// Lieferantenausfallarbeitssummenzeitreihe (55199/55200), NB (ANB) → LF.
     LfAaszr,
-    /// Monatliche AAÜZ forwarded to the BKV of the Lieferant (55203–55208).
+    /// Monatliche AAÜZ, forwarded to the BKV of the Lieferant (55203–55208).
     MonatlicheAauezBkvLf,
-    /// Monatliche AAÜZ forwarded to the BKV of the anfordernder NB (55209–55214).
+    /// Monatliche AAÜZ, forwarded to the BKV of the anfordernder NB (55209–55214).
     MonatlicheAauezBkvAnfNb,
 }
 
+/// Last day the tägliche AAÜZ process exists — BK6-23-241 Tenorziffer 5 repeals
+/// MaBiS Anlage 1 Kap. 17.2 with the end of this day.
+pub const TAEGLICHE_AAUEZ_ENDE: time::Date =
+    match time::Date::from_calendar_date(2026, time::Month::September, 30) {
+        Ok(d) => d,
+        Err(_) => panic!("valid date"),
+    };
+
 impl ZpSerie {
-    /// Canonical BDEW name of the series.
+    /// Canonical BDEW name of the series, including its axis.
     #[must_use]
     pub fn label(self) -> &'static str {
         match self {
-            Self::MabisZaehlpunkt => "MaBiS-Zählpunkt",
+            Self::NetzzeitreiheNachbarNb => "Netzzeitreihe (NB → benachbarter NB)",
+            Self::NetzzeitreiheBiko => "Netzzeitreihe (NB → BIKO)",
+            Self::LieferantensummenzeitreiheNb => "Lieferantensummenzeitreihe (NB → LF)",
+            Self::LieferantensummenzeitreiheUenb => "Lieferantensummenzeitreihe (ÜNB → LF)",
+            Self::Bilanzierungsgebietssummenzeitreihe => "Bilanzierungsgebietssummenzeitreihe",
+            Self::BilanzkreissummenzeitreiheNb => "Bilanzkreissummenzeitreihe (NB → BIKO)",
+            Self::BilanzkreissummenzeitreiheUenb => "Bilanzkreissummenzeitreihe (ÜNB → BIKO)",
+            Self::Deltazeitreihenuebertrag => "Deltazeitreihenübertrag",
+            Self::Abrechnungssummenzeitreihe => "Abrechnungssummenzeitreihe",
+            Self::TaeglicheBgSzr => "tägliche Bilanzierungsgebietssummenzeitreihe",
+            Self::TaeglicheBkSzr => "tägliche Bilanzkreissummenzeitreihe",
             Self::Zuordnungsermaechtigung => "Zuordnungsermächtigung",
             Self::TaeglicheAauez => "tägliche AAÜZ",
             Self::LfAaszr => "LF-AASZR",
@@ -126,119 +203,390 @@ impl ZpSerie {
             Self::MonatlicheAauezBkvAnfNb => "monatliche AAÜZ (BKV des anfordernden NB)",
         }
     }
+
+    /// The last day this series exists, where a Festlegung ends it.
+    ///
+    /// Only the tägliche AAÜZ has one: BK6-23-241 Tenorziffer 5 repeals MaBiS
+    /// Anlage 1 Kap. 17.2 with the end of 30.09.2026, and — unlike Kap. 17.1
+    /// and 17.3 — it is not republished as the Anlage zur BilAReM.
+    #[must_use]
+    pub fn endet_am(self) -> Option<time::Date> {
+        match self {
+            Self::TaeglicheAauez => Some(TAEGLICHE_AAUEZ_ENDE),
+            _ => None,
+        }
+    }
+
+    /// Whether the series still exists on `date`.
+    #[must_use]
+    pub fn gilt_am(self, date: time::Date) -> bool {
+        self.endet_am().is_none_or(|ende| date <= ende)
+    }
+
+    /// Resolve the series from what the UTILMD actually carries.
+    ///
+    /// The two codes together are the discriminator 55062/55063 lack:
+    ///
+    /// - `cav` — `SG10 CCI+++ZB4` / `CAV` DE 7111 „Bezeichnung der
+    ///   Summenzeitreihe" ([`crate::zeitreihen::zeitreihe_aus_cav`]).
+    /// - `verantwortlicher` — `SG10 CCI+6` DE 7037, the role responsible for
+    ///   the series ([`crate::zeitreihen::rolle_aus_cci`]).
+    ///
+    /// The Verantwortliche is needed because two pairs of families share a CAV
+    /// code and differ only in who owns the series: the BK-SZR is `Z97`/`Z99`
+    /// whether the NB or the ÜNB aggregates it, and the LF-SZR likewise. Those
+    /// pairs answer out of different Entscheidungsbäume, so collapsing them
+    /// would send a code from the wrong tree.
+    ///
+    /// Returns `None` when the pair names no family here — including every
+    /// series with its own Anfrage PID (Zuordnungsermächtigung, AAÜZ, LF-AASZR),
+    /// which is not activated with 55062/55063 at all.
+    #[must_use]
+    pub fn from_wire(cav: &str, verantwortlicher: &str) -> Option<Self> {
+        use crate::zeitreihen::{Aggregationsebene as E, Familie as F, Kategorie as K, Rolle};
+        let (zeitreihe, ebene) = crate::zeitreihen::zeitreihe_aus_cav(cav)?;
+        let rolle = crate::zeitreihen::rolle_aus_cci(verantwortlicher)?;
+        Some(
+            match (zeitreihe.familie(), zeitreihe.kategorie(), ebene, rolle) {
+                (F::Nzr, _, _, Rolle::Nb) => {
+                    // Both Netzzeitreihe legs are the verantwortlicher NB's, and
+                    // the AHB does not distinguish them here — the recipient
+                    // does. `from_wire` therefore returns the BIKO leg, and a
+                    // caller that knows it is answering a neighbouring NB names
+                    // `NetzzeitreiheNachbarNb` explicitly.
+                    Self::NetzzeitreiheBiko
+                }
+                (F::LfSzr, Some(K::A), _, _) => Self::LieferantensummenzeitreiheNb,
+                (F::LfSzr, Some(K::B), _, _) => Self::LieferantensummenzeitreiheUenb,
+                (F::BgSzr, Some(K::B), _, _) => Self::Bilanzierungsgebietssummenzeitreihe,
+                (F::BgSzr, Some(K::C), _, _) => Self::TaeglicheBgSzr,
+                (F::BkSzr, Some(K::A), _, _) => Self::BilanzkreissummenzeitreiheNb,
+                (F::BkSzr, Some(K::B), Some(E::Bilanzierungsgebiet), _) => {
+                    Self::BilanzkreissummenzeitreiheUenb
+                }
+                (F::BkSzr, Some(K::C), _, _) => Self::TaeglicheBkSzr,
+                (F::Dzue, _, _, _) => Self::Deltazeitreihenuebertrag,
+                (F::Abrechnungssummenzeitreihe, _, _, _) => Self::Abrechnungssummenzeitreihe,
+                _ => return None,
+            },
+        )
+    }
 }
 
 /// One row of the Anfrage → Antwort → Weiterleitung table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ZpFamilie {
-    /// Inbound Anfrage Prüfidentifikator (Prozessschritt 1).
-    pub anfrage: u32,
+    /// Series and axis this row describes.
+    pub serie: ZpSerie,
     /// Whether this row activates or deactivates.
     pub vorgang: ZpVorgang,
-    /// Series being activated or deactivated.
-    pub serie: ZpSerie,
+    /// Inbound Anfrage Prüfidentifikator (Prozessschritt 1).
+    pub anfrage: u32,
     /// Outbound Antwort PID (Prozessschritt 2), when the AHB defines one.
     pub antwort: Option<u32>,
+    /// EBD the answering party runs to build that Antwort.
+    ///
+    /// Always `Some` exactly when [`Self::antwort`] is: an answer PID without a
+    /// decision tree would be a code with no Codeliste to read it against.
+    pub antwort_ebd: Option<&'static str>,
     /// Outbound Weiterleitung PID (Prozessschritt 4), when the AHB defines one.
+    ///
+    /// For the series that share 55062/55063 this is the **same code again**,
+    /// re-addressed to the downstream party.
     pub weiterleitung: Option<u32>,
 }
 
-/// Every Anfrage this workflow accepts, with its answer and forwarding PIDs.
+/// Every Anfrage this workflow accepts, with its answer tree and forwarding PID.
 ///
-/// This table is the single source of truth for the family: the workflow never
-/// computes an answer PID from the request. BDEW does not number these `+1/+2`
-/// — 55062 and 55063 share the Antwort 55064.
+/// This table is the single source of truth: the workflow never computes an
+/// answer PID or an EBD from the request. BDEW does not number these `+1/+2` —
+/// 55062 and 55063 share the Antwort 55064 across eleven series, and each
+/// (series, axis, direction) reads it out of a different tree.
 pub const ZP_FAMILIEN: &[ZpFamilie] = &[
+    // ── Series sharing the generic 55062 / 55063 / 55064 codes ──────────────
     ZpFamilie {
+        serie: ZpSerie::NetzzeitreiheNachbarNb,
+        vorgang: ZpVorgang::Aktivierung,
         anfrage: 55062,
-        vorgang: ZpVorgang::Aktivierung,
-        serie: ZpSerie::MabisZaehlpunkt,
         antwort: Some(55064),
+        antwort_ebd: Some("E_0020"),
         weiterleitung: None,
     },
     ZpFamilie {
+        serie: ZpSerie::NetzzeitreiheNachbarNb,
+        vorgang: ZpVorgang::Deaktivierung,
         anfrage: 55063,
-        vorgang: ZpVorgang::Deaktivierung,
-        serie: ZpSerie::MabisZaehlpunkt,
         antwort: Some(55064),
+        antwort_ebd: Some("E_0010"),
         weiterleitung: None,
     },
     ZpFamilie {
+        serie: ZpSerie::NetzzeitreiheBiko,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0024"),
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::NetzzeitreiheBiko,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0009"),
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::LieferantensummenzeitreiheNb,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::LieferantensummenzeitreiheNb,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::LieferantensummenzeitreiheUenb,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::LieferantensummenzeitreiheUenb,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::Bilanzierungsgebietssummenzeitreihe,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0015"),
+        // Prozessschritt 4: the BIKO re-sends 55062 to the NB.
+        weiterleitung: Some(55062),
+    },
+    ZpFamilie {
+        serie: ZpSerie::Bilanzierungsgebietssummenzeitreihe,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0035"),
+        weiterleitung: Some(55063),
+    },
+    ZpFamilie {
+        serie: ZpSerie::BilanzkreissummenzeitreiheNb,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0034"),
+        weiterleitung: Some(55062),
+    },
+    ZpFamilie {
+        serie: ZpSerie::BilanzkreissummenzeitreiheNb,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0018"),
+        weiterleitung: Some(55063),
+    },
+    ZpFamilie {
+        serie: ZpSerie::BilanzkreissummenzeitreiheUenb,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0011"),
+        weiterleitung: Some(55062),
+    },
+    ZpFamilie {
+        serie: ZpSerie::BilanzkreissummenzeitreiheUenb,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0012"),
+        weiterleitung: Some(55063),
+    },
+    ZpFamilie {
+        serie: ZpSerie::Deltazeitreihenuebertrag,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0027"),
+        weiterleitung: Some(55062),
+    },
+    ZpFamilie {
+        serie: ZpSerie::Deltazeitreihenuebertrag,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: Some(55064),
+        antwort_ebd: Some("E_0028"),
+        weiterleitung: Some(55063),
+    },
+    ZpFamilie {
+        serie: ZpSerie::Abrechnungssummenzeitreihe,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::Abrechnungssummenzeitreihe,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::TaeglicheBgSzr,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::TaeglicheBgSzr,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::TaeglicheBkSzr,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55062,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    ZpFamilie {
+        serie: ZpSerie::TaeglicheBkSzr,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55063,
+        antwort: None,
+        antwort_ebd: None,
+        weiterleitung: None,
+    },
+    // ── Series with their own codes ─────────────────────────────────────────
+    ZpFamilie {
+        serie: ZpSerie::Zuordnungsermaechtigung,
+        vorgang: ZpVorgang::Aktivierung,
         anfrage: 55071,
-        vorgang: ZpVorgang::Aktivierung,
-        serie: ZpSerie::Zuordnungsermaechtigung,
         antwort: None,
+        antwort_ebd: None,
         weiterleitung: None,
     },
     ZpFamilie {
+        serie: ZpSerie::Zuordnungsermaechtigung,
+        vorgang: ZpVorgang::Deaktivierung,
         anfrage: 55072,
-        vorgang: ZpVorgang::Deaktivierung,
-        serie: ZpSerie::Zuordnungsermaechtigung,
         antwort: None,
+        antwort_ebd: None,
         weiterleitung: None,
     },
     ZpFamilie {
+        serie: ZpSerie::TaeglicheAauez,
+        vorgang: ZpVorgang::Aktivierung,
         anfrage: 55197,
-        vorgang: ZpVorgang::Aktivierung,
-        serie: ZpSerie::TaeglicheAauez,
         antwort: None,
+        antwort_ebd: None,
         weiterleitung: None,
     },
     ZpFamilie {
+        serie: ZpSerie::TaeglicheAauez,
+        vorgang: ZpVorgang::Deaktivierung,
         anfrage: 55198,
-        vorgang: ZpVorgang::Deaktivierung,
-        serie: ZpSerie::TaeglicheAauez,
         antwort: None,
+        antwort_ebd: None,
         weiterleitung: None,
     },
     ZpFamilie {
+        serie: ZpSerie::LfAaszr,
+        vorgang: ZpVorgang::Aktivierung,
         anfrage: 55199,
-        vorgang: ZpVorgang::Aktivierung,
-        serie: ZpSerie::LfAaszr,
         antwort: None,
+        antwort_ebd: None,
         weiterleitung: None,
     },
     ZpFamilie {
-        anfrage: 55200,
+        serie: ZpSerie::LfAaszr,
         vorgang: ZpVorgang::Deaktivierung,
-        serie: ZpSerie::LfAaszr,
+        anfrage: 55200,
         antwort: None,
+        antwort_ebd: None,
         weiterleitung: None,
     },
     ZpFamilie {
-        anfrage: 55203,
-        vorgang: ZpVorgang::Aktivierung,
         serie: ZpSerie::MonatlicheAauezBkvLf,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55203,
         antwort: Some(55204),
+        antwort_ebd: Some("E_0071"),
         weiterleitung: Some(55205),
     },
     ZpFamilie {
-        anfrage: 55206,
-        vorgang: ZpVorgang::Deaktivierung,
         serie: ZpSerie::MonatlicheAauezBkvLf,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55206,
         antwort: Some(55207),
+        antwort_ebd: Some("E_0072"),
         weiterleitung: Some(55208),
     },
     ZpFamilie {
-        anfrage: 55209,
-        vorgang: ZpVorgang::Aktivierung,
         serie: ZpSerie::MonatlicheAauezBkvAnfNb,
+        vorgang: ZpVorgang::Aktivierung,
+        anfrage: 55209,
         antwort: Some(55210),
+        antwort_ebd: Some("E_0078"),
         weiterleitung: Some(55211),
     },
     ZpFamilie {
-        anfrage: 55212,
-        vorgang: ZpVorgang::Deaktivierung,
         serie: ZpSerie::MonatlicheAauezBkvAnfNb,
+        vorgang: ZpVorgang::Deaktivierung,
+        anfrage: 55212,
         antwort: Some(55213),
+        antwort_ebd: Some("E_0079"),
         weiterleitung: Some(55214),
     },
 ];
 
-/// Look up the family for an inbound Anfrage PID.
+/// Look up the family for one series and Vorgang.
+///
+/// This is the only lookup: the Anfrage PID alone does **not** identify a
+/// family, because 55062/55063 are shared by eleven series with five different
+/// answer obligations between them.
 #[must_use]
-pub fn familie_for(anfrage: u32) -> Option<&'static ZpFamilie> {
-    ZP_FAMILIEN.iter().find(|f| f.anfrage == anfrage)
+pub fn familie_for(serie: ZpSerie, vorgang: ZpVorgang) -> Option<&'static ZpFamilie> {
+    ZP_FAMILIEN
+        .iter()
+        .find(|f| f.serie == serie && f.vorgang == vorgang)
+}
+
+/// Every series that uses `anfrage` as its Anfrage PID.
+///
+/// Useful for diagnostics — an inbound 55062 is ambiguous until the caller says
+/// which Summenzeitreihe its MaBiS-Zählpunkt belongs to.
+#[must_use]
+pub fn serien_fuer_pid(anfrage: u32) -> Vec<ZpSerie> {
+    ZP_FAMILIEN
+        .iter()
+        .filter(|f| f.anfrage == anfrage)
+        .map(|f| f.serie)
+        .collect()
 }
 
 /// Every PID this workflow is registered for — Anfragen, Antworten and
@@ -324,6 +672,9 @@ pub enum ZpLifecycleEvent {
     AntwortGesendet {
         /// Antwort Prüfidentifikator actually sent.
         antwort_pid: Pruefidentifikator,
+        /// EBD the Antwortcode was read against — recorded because 55064 is
+        /// answered out of twelve different trees.
+        ebd: String,
         /// `true` when the Anfrage was confirmed.
         bestaetigt: bool,
         /// Rejection reason, when `bestaetigt` is `false`.
@@ -422,7 +773,17 @@ pub enum ZpLifecycleCommand {
     /// Inbound Anfrage received from the AS4 layer.
     ReceiveAnfrage {
         /// Prüfidentifikator of the inbound UTILMD.
+        ///
+        /// Checked against the family, not used to find it: 55062/55063 are
+        /// shared by eleven series.
         pid: Pruefidentifikator,
+        /// Which Summenzeitreihe — and axis — the MaBiS-Zählpunkt belongs to.
+        ///
+        /// An explicit input because the PID does not carry it. A MaBiS-ZP is
+        /// created **for** one Summenzeitreihe, so the adapter always knows.
+        serie: ZpSerie,
+        /// Activation or deactivation, from the message content.
+        vorgang: ZpVorgang,
         /// MaBiS-Zählpunkt the Anfrage refers to, as it arrived.
         ///
         /// Deliberately a `String` and not
@@ -540,6 +901,8 @@ impl Workflow for MabisZpLifecycleWorkflow {
         match command {
             ZpLifecycleCommand::ReceiveAnfrage {
                 pid,
+                serie,
+                vorgang,
                 mabis_zp_id,
                 sender,
                 receiver,
@@ -554,12 +917,24 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     return Ok(vec![].into());
                 }
 
-                let Some(familie) = familie_for(pid.as_u32()) else {
+                let Some(familie) = familie_for(serie, vorgang) else {
                     return Err(WorkflowError::rejected(format!(
-                        "PID {pid} is not a MaBiS-ZP lifecycle Anfrage; expected one of {:?}",
-                        ZP_FAMILIEN.iter().map(|f| f.anfrage).collect::<Vec<_>>()
+                        "{} kennt keinen Vorgang {vorgang:?}",
+                        serie.label()
                     )));
                 };
+
+                // 55062/55063 are shared by eleven series, so the PID cannot
+                // identify the family — but it can still contradict it, and a
+                // 55197 filed against the Netzzeitreihe is a routing error, not
+                // a variant.
+                if familie.anfrage != pid.as_u32() {
+                    return Err(WorkflowError::rejected(format!(
+                        "PID {pid} passt nicht zu {} / {vorgang:?} — erwartet {}",
+                        serie.label(),
+                        familie.anfrage
+                    )));
+                }
 
                 if !validation_passed {
                     return Ok(vec![ZpLifecycleEvent::ValidationFailed {
@@ -598,16 +973,17 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     )));
                 };
 
-                let familie = familie_for(data.pruefidentifikator.as_u32()).ok_or_else(|| {
+                let familie = familie_for(data.serie, data.vorgang).ok_or_else(|| {
                     WorkflowError::rejected(format!(
-                        "no family for recorded Anfrage {}",
-                        data.pruefidentifikator
+                        "keine Familie für {} / {:?}",
+                        data.serie.label(),
+                        data.vorgang
                     ))
                 })?;
 
-                let Some(antwort) = familie.antwort else {
+                let (Some(antwort), Some(ebd)) = (familie.antwort, familie.antwort_ebd) else {
                     return Err(WorkflowError::rejected(format!(
-                        "the {} family (Anfrage {}) defines no Antwort PID",
+                        "{} (Anfrage {}) definiert keine Antwort",
                         familie.serie.label(),
                         familie.anfrage
                     )));
@@ -628,6 +1004,9 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     data.sender.as_str(),
                     serde_json::json!({
                         "pid": antwort,
+                        // The Antwortcode must be read against this tree and no
+                        // other — 55064 is answered out of twelve of them.
+                        "ebd": ebd,
                         "mabis_zp_id": data.mabis_zp_id,
                         "process_date": data.document_date,
                         "bestaetigt": bestaetigt,
@@ -638,6 +1017,7 @@ impl Workflow for MabisZpLifecycleWorkflow {
                 Ok(WorkflowOutput {
                     events: vec![ZpLifecycleEvent::AntwortGesendet {
                         antwort_pid,
+                        ebd: ebd.to_owned(),
                         bestaetigt,
                         grund,
                     }],
@@ -654,16 +1034,17 @@ impl Workflow for MabisZpLifecycleWorkflow {
                     )));
                 };
 
-                let familie = familie_for(data.pruefidentifikator.as_u32()).ok_or_else(|| {
+                let familie = familie_for(data.serie, data.vorgang).ok_or_else(|| {
                     WorkflowError::rejected(format!(
-                        "no family for recorded Anfrage {}",
-                        data.pruefidentifikator
+                        "keine Familie für {} / {:?}",
+                        data.serie.label(),
+                        data.vorgang
                     ))
                 })?;
 
                 let Some(weiterleitung) = familie.weiterleitung else {
                     return Err(WorkflowError::rejected(format!(
-                        "the {} family (Anfrage {}) defines no Weiterleitung PID",
+                        "{} (Anfrage {}) definiert keine Weiterleitung",
                         familie.serie.label(),
                         familie.anfrage
                     )));
@@ -706,9 +1087,16 @@ mod tests {
         MarktpartnerCode::new(s)
     }
 
-    fn receive(pid: u32) -> ZpLifecycleCommand {
+    fn receive(serie: ZpSerie, vorgang: ZpVorgang) -> ZpLifecycleCommand {
+        let pid = familie_for(serie, vorgang).expect("in the table").anfrage;
+        receive_with_pid(serie, vorgang, pid)
+    }
+
+    fn receive_with_pid(serie: ZpSerie, vorgang: ZpVorgang, pid: u32) -> ZpLifecycleCommand {
         ZpLifecycleCommand::ReceiveAnfrage {
             pid: Pruefidentifikator::new(pid).expect("valid PID"),
+            serie,
+            vorgang,
             mabis_zp_id: "DE0001112223334445556667778889990".to_owned(),
             sender: mp("9900123456789"),
             receiver: mp("9900987654321"),
@@ -726,30 +1114,92 @@ mod tests {
         })
     }
 
-    #[test]
-    fn every_family_pid_is_distinct_and_no_pid_is_both_anfrage_and_answer() {
-        let anfragen: Vec<u32> = ZP_FAMILIEN.iter().map(|f| f.anfrage).collect();
-        let mut sorted = anfragen.clone();
-        sorted.sort_unstable();
-        sorted.dedup();
-        assert_eq!(sorted.len(), anfragen.len(), "duplicate Anfrage PID");
+    // ── Table integrity ─────────────────────────────────────────────────────
 
+    #[test]
+    fn every_series_has_exactly_one_row_per_vorgang() {
         for f in ZP_FAMILIEN {
-            for answer in [f.antwort, f.weiterleitung].into_iter().flatten() {
-                assert!(
-                    familie_for(answer).is_none(),
-                    "{answer} is an answer PID but is also registered as an Anfrage — \
-                     receiving it would spawn a process that answers an answer"
-                );
+            for vorgang in [ZpVorgang::Aktivierung, ZpVorgang::Deaktivierung] {
+                let rows = ZP_FAMILIEN
+                    .iter()
+                    .filter(|r| r.serie == f.serie && r.vorgang == vorgang)
+                    .count();
+                assert_eq!(rows, 1, "{} / {vorgang:?}", f.serie.label());
             }
         }
     }
 
     #[test]
-    fn the_shared_antwort_pid_is_not_derived_arithmetically() {
-        // 55062 and 55063 both answer with 55064 — the reason this is a table.
-        assert_eq!(familie_for(55062).unwrap().antwort, Some(55064));
-        assert_eq!(familie_for(55063).unwrap().antwort, Some(55064));
+    fn an_antwort_pid_always_comes_with_its_tree() {
+        // An answer code without a Codeliste to read it against is not an
+        // answer — 55064 alone says nothing.
+        for f in ZP_FAMILIEN {
+            assert_eq!(
+                f.antwort.is_some(),
+                f.antwort_ebd.is_some(),
+                "{} / {:?}",
+                f.serie.label(),
+                f.vorgang
+            );
+        }
+    }
+
+    #[test]
+    fn the_generic_codes_are_shared_by_eleven_series() {
+        // This is the fact the whole module is shaped around: 55062/55063 do
+        // not identify a process.
+        let akt = serien_fuer_pid(55062);
+        let deakt = serien_fuer_pid(55063);
+        assert_eq!(akt.len(), 11, "55062 is shared: {akt:?}");
+        assert_eq!(deakt.len(), 11, "55063 is shared: {deakt:?}");
+    }
+
+    #[test]
+    fn the_shared_antwort_pid_reads_out_of_twelve_different_trees() {
+        let mut ebds: Vec<&str> = ZP_FAMILIEN
+            .iter()
+            .filter(|f| f.antwort == Some(55064))
+            .map(|f| f.antwort_ebd.expect("paired"))
+            .collect();
+        let total = ebds.len();
+        ebds.sort_unstable();
+        ebds.dedup();
+        assert_eq!(
+            total, 12,
+            "twelve (series, direction) pairs answer with 55064"
+        );
+        assert_eq!(ebds.len(), 12, "and no two of them share a tree: {ebds:?}");
+    }
+
+    #[test]
+    fn six_of_the_eleven_generic_series_answer_and_five_do_not() {
+        let generic = |with_antwort: bool| {
+            ZP_FAMILIEN
+                .iter()
+                .filter(|f| f.anfrage == 55062 && f.antwort.is_some() == with_antwort)
+                .count()
+        };
+        assert_eq!(
+            generic(true),
+            6,
+            "an implementation that never answers 55062 drops six obligations"
+        );
+        assert_eq!(
+            generic(false),
+            5,
+            "modelling 55062 → 55064 invents five obligations"
+        );
+    }
+
+    #[test]
+    fn the_generic_weiterleitung_re_uses_the_request_code() {
+        // Prozessschritt 4 is another 55062/55063 to the downstream party, not
+        // a distinct PID.
+        for f in ZP_FAMILIEN.iter().filter(|f| f.anfrage == 55062) {
+            if let Some(w) = f.weiterleitung {
+                assert_eq!(w, 55062, "{}", f.serie.label());
+            }
+        }
     }
 
     #[test]
@@ -761,20 +1211,58 @@ mod tests {
                 assert!(pids.contains(&p), "{p} missing from all_pids()");
             }
         }
-        // 12 Anfragen + 55064 + (55204,55205,55207,55208,55210,55211,55213,55214)
-        assert_eq!(pids.len(), 21, "unexpected PID count: {pids:?}");
+        let expected: Vec<u32> = vec![
+            55062, 55063, 55064, 55071, 55072, 55197, 55198, 55199, 55200, 55203, 55204, 55205,
+            55206, 55207, 55208, 55209, 55210, 55211, 55212, 55213, 55214,
+        ];
+        assert_eq!(pids, expected);
     }
 
     #[test]
+    fn the_two_monatliche_families_forward_to_different_recipients() {
+        // Identical process, different Weiterleitung code and a different EBD —
+        // the only things separating them, and the reason they are not merged.
+        let lf = familie_for(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung).unwrap();
+        let nb = familie_for(ZpSerie::MonatlicheAauezBkvAnfNb, ZpVorgang::Aktivierung).unwrap();
+        assert_eq!(lf.weiterleitung, Some(55205));
+        assert_eq!(nb.weiterleitung, Some(55211));
+        assert_eq!(lf.antwort_ebd, Some("E_0071"));
+        assert_eq!(nb.antwort_ebd, Some("E_0078"));
+    }
+
+    // ── The 30.09.2026 cut ──────────────────────────────────────────────────
+
+    #[test]
+    fn only_the_taegliche_aauez_expires() {
+        for f in ZP_FAMILIEN {
+            let expected = f.serie == ZpSerie::TaeglicheAauez;
+            assert_eq!(
+                f.serie.endet_am().is_some(),
+                expected,
+                "{}",
+                f.serie.label()
+            );
+        }
+        let ende = TAEGLICHE_AAUEZ_ENDE;
+        assert!(ZpSerie::TaeglicheAauez.gilt_am(ende));
+        assert!(!ZpSerie::TaeglicheAauez.gilt_am(ende.next_day().unwrap()));
+        // Everything else is unaffected by the Kap.-17 repeal.
+        assert!(ZpSerie::LfAaszr.gilt_am(ende.next_day().unwrap()));
+    }
+
+    // ── Behaviour ───────────────────────────────────────────────────────────
+
+    #[test]
     fn a_family_without_an_antwort_is_terminal_on_arrival() {
-        // 55071 Zuordnungsermächtigung has no Antwort PID.
-        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, receive(55071))
-            .expect("accepted");
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(ZpSerie::Zuordnungsermaechtigung, ZpVorgang::Aktivierung),
+        )
+        .expect("accepted");
         let state = fold(&out.events);
         assert_eq!(state.label(), "Erfasst");
         assert!(out.outbox.is_empty(), "record-only family must not emit");
 
-        // Asking it to answer is an error, not a silently wrong PID.
         let err = MabisZpLifecycleWorkflow::handle(
             &state,
             ZpLifecycleCommand::SendAntwort {
@@ -787,9 +1275,54 @@ mod tests {
     }
 
     #[test]
+    fn the_same_pid_answers_or_does_not_depending_on_the_series() {
+        // Both arrive as 55062. One owes a 55064, the other is terminal — the
+        // single fact a PID-keyed table cannot represent.
+        let owes = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(
+                ZpSerie::Bilanzierungsgebietssummenzeitreihe,
+                ZpVorgang::Aktivierung,
+            ),
+        )
+        .expect("accepted");
+        assert_eq!(fold(&owes.events).label(), "AnfrageErhalten");
+
+        let terminal = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(ZpSerie::TaeglicheBkSzr, ZpVorgang::Aktivierung),
+        )
+        .expect("accepted");
+        assert_eq!(fold(&terminal.events).label(), "Erfasst");
+    }
+
+    #[test]
+    fn the_antwort_carries_the_tree_it_was_read_against() {
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(ZpSerie::Deltazeitreihenuebertrag, ZpVorgang::Deaktivierung),
+        )
+        .expect("accepted");
+        let state = fold(&out.events);
+        let antwort = MabisZpLifecycleWorkflow::handle(
+            &state,
+            ZpLifecycleCommand::SendAntwort {
+                bestaetigt: true,
+                grund: None,
+            },
+        )
+        .expect("answered");
+        assert_eq!(antwort.outbox[0].payload["pid"], 55064);
+        assert_eq!(antwort.outbox[0].payload["ebd"], "E_0028");
+    }
+
+    #[test]
     fn anfrage_antwort_weiterleitung_happy_path() {
-        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, receive(55203))
-            .expect("accepted");
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(ZpSerie::MonatlicheAauezBkvLf, ZpVorgang::Aktivierung),
+        )
+        .expect("accepted");
         let state = fold(&out.events);
         assert_eq!(state.label(), "AnfrageErhalten");
 
@@ -803,13 +1336,13 @@ mod tests {
         .expect("pruefung");
         assert_eq!(antwort.outbox.len(), 1);
         assert_eq!(antwort.outbox[0].payload["pid"], 55204);
+        assert_eq!(antwort.outbox[0].payload["ebd"], "E_0071");
         assert_eq!(
             antwort.outbox[0].recipient.as_ref(),
             "9900123456789",
             "the Antwort goes back to the requesting party"
         );
 
-        // Continue folding onto the state the Anfrage produced.
         let state = antwort
             .events
             .iter()
@@ -827,21 +1360,12 @@ mod tests {
     }
 
     #[test]
-    fn the_two_monatliche_families_forward_to_different_recipients() {
-        // Identical process, different Weiterleitung code — the only thing
-        // separating them, and the reason they are not merged.
-        assert_eq!(familie_for(55203).unwrap().weiterleitung, Some(55205));
-        assert_eq!(familie_for(55209).unwrap().weiterleitung, Some(55211));
-        assert_ne!(
-            familie_for(55203).unwrap().serie,
-            familie_for(55209).unwrap().serie
-        );
-    }
-
-    #[test]
     fn a_rejecting_antwort_requires_a_reason() {
-        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, receive(55062))
-            .expect("accepted");
+        let out = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung),
+        )
+        .expect("accepted");
         let state = fold(&out.events);
         let err = MabisZpLifecycleWorkflow::handle(
             &state,
@@ -855,10 +1379,24 @@ mod tests {
     }
 
     #[test]
+    fn a_pid_that_contradicts_the_series_is_rejected() {
+        // 55197 is the tägliche AAÜZ; filing it against the Netzzeitreihe is a
+        // routing error, not a variant.
+        let err = MabisZpLifecycleWorkflow::handle(
+            &ZpLifecycleState::New,
+            receive_with_pid(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung, 55197),
+        )
+        .expect_err("must reject");
+        assert!(format!("{err}").contains("55062"), "got: {err}");
+    }
+
+    #[test]
     fn validation_failure_is_terminal_and_emits_nothing() {
-        let cmd = match receive(55062) {
+        let cmd = match receive(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung) {
             ZpLifecycleCommand::ReceiveAnfrage {
                 pid,
+                serie,
+                vorgang,
                 mabis_zp_id,
                 sender,
                 receiver,
@@ -868,6 +1406,8 @@ mod tests {
                 ..
             } => ZpLifecycleCommand::ReceiveAnfrage {
                 pid,
+                serie,
+                vorgang,
                 mabis_zp_id,
                 sender,
                 receiver,
@@ -885,22 +1425,168 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_pid_is_rejected_rather_than_silently_recorded() {
-        // 55218 is GPKE Teil 2 (Abr.-Daten NNA), not MaBiS.
-        let err = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, receive(55218))
-            .expect_err("must reject");
-        assert!(
-            format!("{err}").contains("not a MaBiS-ZP lifecycle"),
-            "{err}"
+    fn a_redelivered_anfrage_is_a_no_op() {
+        let cmd = receive(ZpSerie::NetzzeitreiheBiko, ZpVorgang::Aktivierung);
+        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, cmd.clone())
+            .expect("accepted");
+        let state = fold(&out.events);
+        let again = MabisZpLifecycleWorkflow::handle(&state, cmd).expect("idempotent");
+        assert!(again.events.is_empty());
+        assert!(again.outbox.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod wire_tests {
+    use super::*;
+    use crate::zeitreihen::{
+        Aggregationsebene, Familie, Kategorie, Rolle, Zeitreihe, cav_aus_zeitreihe, cci_aus_rolle,
+    };
+
+    #[test]
+    fn the_wire_codes_resolve_the_series_a_shared_pid_cannot() {
+        /// One row: the Tabelle-1 identity, its Aggregationsebene where it has
+        /// one, the responsible role, and the family it must resolve to.
+        type Fall = (
+            Familie,
+            Option<Kategorie>,
+            Option<Aggregationsebene>,
+            Rolle,
+            ZpSerie,
         );
+        let cases: &[Fall] = &[
+            (
+                Familie::BgSzr,
+                Some(Kategorie::B),
+                None,
+                Rolle::Uenb,
+                ZpSerie::Bilanzierungsgebietssummenzeitreihe,
+            ),
+            (
+                Familie::BgSzr,
+                Some(Kategorie::C),
+                None,
+                Rolle::Uenb,
+                ZpSerie::TaeglicheBgSzr,
+            ),
+            (
+                Familie::BkSzr,
+                Some(Kategorie::A),
+                None,
+                Rolle::Nb,
+                ZpSerie::BilanzkreissummenzeitreiheNb,
+            ),
+            (
+                Familie::BkSzr,
+                Some(Kategorie::B),
+                Some(Aggregationsebene::Bilanzierungsgebiet),
+                Rolle::Uenb,
+                ZpSerie::BilanzkreissummenzeitreiheUenb,
+            ),
+            (
+                Familie::BkSzr,
+                Some(Kategorie::C),
+                None,
+                Rolle::Uenb,
+                ZpSerie::TaeglicheBkSzr,
+            ),
+            (
+                Familie::LfSzr,
+                Some(Kategorie::A),
+                None,
+                Rolle::Nb,
+                ZpSerie::LieferantensummenzeitreiheNb,
+            ),
+            (
+                Familie::LfSzr,
+                Some(Kategorie::B),
+                Some(Aggregationsebene::Bilanzierungsgebiet),
+                Rolle::Uenb,
+                ZpSerie::LieferantensummenzeitreiheUenb,
+            ),
+            (
+                Familie::Dzue,
+                None,
+                None,
+                Rolle::Uenb,
+                ZpSerie::Deltazeitreihenuebertrag,
+            ),
+            (
+                Familie::Nzr,
+                None,
+                None,
+                Rolle::Nb,
+                ZpSerie::NetzzeitreiheBiko,
+            ),
+            (
+                Familie::Abrechnungssummenzeitreihe,
+                None,
+                None,
+                Rolle::Biko,
+                ZpSerie::Abrechnungssummenzeitreihe,
+            ),
+        ];
+        for &(familie, kategorie, ebene, rolle, expected) in cases {
+            let z = Zeitreihe::new(familie, kategorie).expect("Tabelle-1 row");
+            let cav = cav_aus_zeitreihe(z, ebene).expect("has a CAV code");
+            let cci = cci_aus_rolle(rolle).expect("has a CCI code");
+            assert_eq!(
+                ZpSerie::from_wire(cav, cci),
+                Some(expected),
+                "CAV {cav} / CCI {cci}"
+            );
+        }
     }
 
     #[test]
-    fn a_redelivered_anfrage_is_a_no_op() {
-        let out = MabisZpLifecycleWorkflow::handle(&ZpLifecycleState::New, receive(55062))
-            .expect("accepted");
-        let state = fold(&out.events);
-        let again = MabisZpLifecycleWorkflow::handle(&state, receive(55062)).expect("idempotent");
-        assert!(again.events.is_empty());
+    fn every_resolved_series_has_a_family_row() {
+        for cav in [
+            "Z95", "Z96", "Z97", "Z99", "ZA0", "ZA1", "ZA3", "ZA4", "ZA5", "ZA6",
+        ] {
+            for cci in ["ZA8", "ZA9", "ZB7"] {
+                if let Some(serie) = ZpSerie::from_wire(cav, cci) {
+                    for vorgang in [ZpVorgang::Aktivierung, ZpVorgang::Deaktivierung] {
+                        assert!(
+                            familie_for(serie, vorgang).is_some(),
+                            "{cav}/{cci} → {serie:?} / {vorgang:?} has no family row"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_code_resolves_to_nothing_rather_than_a_neighbour() {
+        assert_eq!(
+            ZpSerie::from_wire("ZG7", "ZA9"),
+            None,
+            "eMob is not MaBiS Tabelle 1"
+        );
+        assert_eq!(ZpSerie::from_wire("ZZZ", "ZA9"), None);
+        assert_eq!(ZpSerie::from_wire("Z95", "ZZZ"), None);
+    }
+
+    #[test]
+    fn the_series_with_their_own_pids_are_not_reachable_from_the_generic_codes() {
+        // The Zuordnungsermächtigung, the AAÜZ families and the LF-AASZR are
+        // activated with 55071/55072 and 55197–55214, not with 55062/55063, so
+        // no CAV code names them.
+        let unreachable = [
+            ZpSerie::Zuordnungsermaechtigung,
+            ZpSerie::TaeglicheAauez,
+            ZpSerie::LfAaszr,
+            ZpSerie::MonatlicheAauezBkvLf,
+            ZpSerie::MonatlicheAauezBkvAnfNb,
+        ];
+        for cav in [
+            "Z95", "Z96", "Z97", "Z98", "Z99", "ZA0", "ZA1", "ZA2", "ZA3", "ZA4", "ZA5", "ZA6",
+        ] {
+            for cci in ["ZA8", "ZA9", "ZB7"] {
+                if let Some(s) = ZpSerie::from_wire(cav, cci) {
+                    assert!(!unreachable.contains(&s), "{cav}/{cci} → {s:?}");
+                }
+            }
+        }
     }
 }

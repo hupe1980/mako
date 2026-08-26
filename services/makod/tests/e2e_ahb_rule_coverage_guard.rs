@@ -72,13 +72,20 @@ const KNOWN_PROFILE_GAPS: &[u32] = &[
     // curated.
     55062, 55063, 55064, 55071, 55072, 55197, 55198, 55199, 55200, 55203, 55204, 55205, 55206,
     55207, 55208, 55209, 55210, 55211, 55212, 55213, 55214,
-    // MaBiS Anforderungen (`mabis-anforderung`) — ORDERS 17201–17208. Same
-    // curation gate as the UTILMD band above: the ORDERS AHB carries them, the
-    // extracted drafts are stricter than the AHB, so they stay uncurated.
+    // MaBiS Anforderungen (`mabis-anforderung`) — ORDERS 17201–17208. 17210 is
+    // curated and so is absent from this list. Same curation gate as the UTILMD
+    // band above: the ORDERS AHB carries them, the extracted drafts are
+    // stricter than the AHB, so they stay uncurated.
     17201, 17202, 17203, 17204, 17205, 17206, 17207, 17208,
-    // MaBiS Listenabgleich (`mabis-listenabgleich`) — the three list/correction
-    // pairs. Same curation gate as the bands above.
-    55195, 55196, 55201, 55202, 55223, 55224,
+    // MaBiS Listenabgleich (`mabis-listenabgleich`) — the four list/correction
+    // pairs. 55065 itself is curated; its Korrekturliste 55066 is not, which is
+    // consistent with 55065 having been filed as record-only until now, so
+    // nothing ever needed the answer leg's rules.
+    55066, 55195, 55196, 55201, 55202, 55223, 55224,
+    // MaBiS record-only lists (`mabis-clearingliste`) — 55067
+    // Bilanzkreiszuordnungsliste (the delivery leg of ORDERS 17203) and 55073
+    // Liste der Profildefinitionen. Neither was routed at all before.
+    55067, 55073,
 ];
 
 /// Message type a PID belongs to, from its leading digits.

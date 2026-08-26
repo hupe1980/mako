@@ -79,6 +79,28 @@ impl Daemon for MyService {
         Ok(Router::new())
     }
 }
+```
+
+### One optional hook: `tracing_layer`
+
+`Daemon::tracing_layer() -> Option<ExtraLayer>` installs one extra `tracing`
+layer on the registry, ahead of the filter and the formatter. It exists for a
+daemon embedding a library that **emits** metrics without choosing an exporter:
+`agentplane` publishes its whole instrument catalogue as `tracing` events on a
+dedicated target and leaves the bridge to whoever embeds it, so `agentd` returns
+a layer that turns those events into Prometheus series on the registry
+`GET /metrics` already serves. Without a seam like this the counters are emitted
+and collected by nobody — which, on a dashboard, reads exactly like a service
+where nothing happens.
+
+It is called once, before the config is loaded, so it takes no arguments. The
+layer is typed against the bare `Registry` because it is added first; a layer
+added later would be typed against a `Layered<…>` stack no caller can name.
+
+```rust,ignore
+fn tracing_layer() -> Option<mako_service::ExtraLayer> {
+    Some(Box::new(MyMetricBridge))
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -256,6 +278,31 @@ async fn get_order(id: String, pool: sqlx::PgPool) -> ApiResult<Json<String>> {
     Ok(Json(row.0))
 }
 ```
+
+**A 422 can carry structure, not just a sentence.** `unprocessable_with` merges
+an object's keys into the problem body alongside `error` and `detail`, so a
+caller can branch on *why* a payload was refused rather than parsing prose. The
+BO4E gate is what this exists for — its rejection names the stage that refused
+and the JSON-path or rule that stopped it:
+
+```rust,no_run
+# use mako_service::{ApiError, ApiResult};
+# fn demo(e: impl std::fmt::Display, detail: serde_json::Map<String, serde_json::Value>) -> ApiError {
+ApiError::unprocessable_with(e.to_string(), detail.into())
+# }
+```
+
+```json
+{
+  "error":  "Unprocessable Entity",
+  "detail": "MARKTLOKATION carries 1 out-of-schema enum value(s) at: sparte",
+  "code":   "bo4e.unknown_enum",
+  "paths":  ["sparte"]
+}
+```
+
+`error` and `detail` are never overwritten by the extra keys: the shape of a
+problem body is this type's contract, not the caller's.
 
 ### Health endpoints
 

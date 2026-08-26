@@ -224,30 +224,11 @@ pub async fn put_preisblatt(
     }
 
     // REST API calls always count as source='api' — operator override protection.
-    // Validate the payload against rubo4e::current::PreisblattNetznutzung (B15).
-    // This catches wrong `_typ`, invalid enum values in `preispositionen`, and
-    // malformed `zeitvariablePreispositionen.zaehlzeitregister` before DB insert.
-    match serde_json::from_value::<PreisblattNetznutzung>(req.data.clone()) {
-        Ok(bo) => {
-            if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&bo) {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!("PreisblattNetznutzung has out-of-schema enum values: {e}")
-                    })),
-                )
-                    .into_response();
-            }
-        }
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({
-                    "error": format!("invalid PreisblattNetznutzung: {e}")
-                })),
-            )
-                .into_response();
-        }
+    // The BO4E gate: wrong `_typ`, invalid enum values anywhere in
+    // `preispositionen`, and malformed `zeitvariablePreispositionen` are all
+    // refused before the insert.
+    if let Err(e) = mako_markt::bo4e::decode::<PreisblattNetznutzung>(req.data.clone()) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response();
     }
 
     // ── Validate lastvariablePreispositionen (§14a Modul 3, BK6-22-300 Anlage 2 §3) ──
@@ -267,16 +248,21 @@ pub async fn put_preisblatt(
         .and_then(|v| v.as_array())
     {
         for (i, item) in lvp_arr.iter().enumerate() {
-            if let Err(e) = serde_json::from_value::<LastvariablePreisposition>(item.clone()) {
-                return (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    Json(serde_json::json!({
-                        "error": format!(
-                            "lastvariablePreispositionen[{i}] is not a valid LastvariablePreisposition: {e}"
-                        )
-                    })),
-                )
-                    .into_response();
+            // `decode_nested`: the enclosing PreisblattNetznutzung has
+            // already established what this is, and BO4E producers do not
+            // reliably stamp `_typ` on a nested COM. The remaining stages —
+            // schema, strict enums, BO4E rules — still run.
+            if let Err(e) =
+                mako_markt::bo4e::decode_nested::<LastvariablePreisposition>(item.clone())
+            {
+                let mut body = e.to_json();
+                if let Some(obj) = body.as_object_mut() {
+                    obj.insert(
+                        "at".into(),
+                        format!("lastvariablePreispositionen[{i}]").into(),
+                    );
+                }
+                return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
             }
             // M7.2: tarifkalkulationsmethode must be SPOTPREIS for §14a Modul 3 NNE
             if let Some(method) = item
@@ -596,18 +582,16 @@ pub async fn put_preisblatt_messung(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    // ── Basic BO4E schema validation ─────────────────────────────────────────
-    // Catches wrong `_typ`, missing required fields, and invalid enum values.
-    // `ZeitvariablePreisposition` elements are stored in `_additional` extension
-    // data of `PreisblattMessung` — they are validated separately below.
-    if let Err(e) = serde_json::from_value::<PreisblattMessung>(req.data.clone()) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("invalid PreisblattMessung: {e}")
-            })),
-        )
-            .into_response();
+    // ── The BO4E gate ────────────────────────────────────────────────────────
+    // Catches wrong `_typ`, values the type cannot hold, and any enum outside
+    // the schema — without which a `preistyp` typo decodes to the `Unknown`
+    // catch-all and `invoic-checker` later matches INVOIC positions against a
+    // price sheet whose price type nothing can resolve.
+    // `ZeitvariablePreisposition` elements live in the `_additional` extension
+    // map of `PreisblattMessung`, which typed deserialization does not reach —
+    // they are validated separately below.
+    if let Err(e) = mako_markt::bo4e::decode::<PreisblattMessung>(req.data.clone()) {
+        return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response();
     }
 
     // ── Full ZeitvariablePreisposition validation ────────────────────────
@@ -649,23 +633,22 @@ pub async fn put_preisblatt_messung(
                     .into_response();
             }
 
-            // Parse as ZeitvariablePreisposition to validate schema.
-            let zvp = match serde_json::from_value::<ZeitvariablePreisposition>(item.clone()) {
-                Ok(z) => z,
-                Err(e) => {
-                    return (
-                        StatusCode::UNPROCESSABLE_ENTITY,
-                        Json(serde_json::json!({
-                            "error": format!(
-                                "zeitvariablePreispositionen[{}] is not a valid \
-                                 ZeitvariablePreisposition: {}",
-                                i, e
-                            )
-                        })),
-                    )
-                        .into_response();
-                }
-            };
+            // The BO4E gate, minus the `_typ` stage the enclosing
+            // PreisblattMessung has already settled.
+            let zvp =
+                match mako_markt::bo4e::decode_nested::<ZeitvariablePreisposition>(item.clone()) {
+                    Ok(z) => z,
+                    Err(e) => {
+                        let mut body = e.to_json();
+                        if let Some(obj) = body.as_object_mut() {
+                            obj.insert(
+                                "at".into(),
+                                format!("zeitvariablePreispositionen[{i}]").into(),
+                            );
+                        }
+                        return (StatusCode::UNPROCESSABLE_ENTITY, Json(body)).into_response();
+                    }
+                };
 
             // Business rule (§14a Modul 2, BK6-22-300): `zaehlzeitregister` is mandatory.
             // Without it, `invoicd` / `invoic-checker` cannot route INVOIC positions to bands.

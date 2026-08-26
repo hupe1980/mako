@@ -151,8 +151,8 @@ the component statuses and never returns from a terminal state.
 | `GET` | `/api/v1/kunden/authenticate?malo_id=` | portald's authorization check |
 | `POST`/`GET` | `/api/v1/kunden/{id}/identitaeten` | Portal users (max 50, configurable) |
 | `DELETE` | `/api/v1/kunden/{id}/identitaeten/{sub}` | Revoke portal access |
-| `GET`/`PUT` | `/api/v1/kunden/{id}/person` | BO4E `Person` (B2C) |
-| `GET`/`PUT` | `/api/v1/kunden/{id}/zahlungsinformation` | BO4E `Zahlungsinformation`, IBAN mod-97 validated |
+| `GET`/`PUT` | `/api/v1/kunden/{id}/person` | BO4E `Person` (B2C), through the BO4E gate |
+| `GET`/`PUT` | `/api/v1/kunden/{id}/zahlungsinformation` | BO4E `Zahlungsinformation`, through the gate, then IBAN mod-97 and BIC validated |
 | `GET` | `/api/v1/kunden/{id}/export` | DSGVO Art. 15 / Art. 20 |
 | `POST` | `/api/v1/kunden/{id}/anonymize` | DSGVO Art. 17 |
 | `GET` | `/api/v1/kunden/{id}/portfolio` | One row per active MaLo/Sparte |
@@ -171,7 +171,13 @@ the component statuses and never returns from a terminal state.
 | `POST` | `/api/v1/vertraege/{id}/widerruf-kuendigung` | Withdraw before the Lieferende |
 | `POST` | `/api/v1/vertraege/{id}/stornieren` | Cancel before supply began |
 | `POST` | `/api/v1/vertraege/{id}/tarifwechsel` | Change product |
-| `GET`/`PUT` | `/api/v1/vertraege/{id}/preisgarantie` | BO4E `Preisgarantie` |
+| `GET`/`PUT` | `/api/v1/vertraege/{id}/preisgarantie` | BO4E `Preisgarantie`, through the gate — which checks the `Zeitraum` in `zeitlicheGueltigkeit`, the field `preisgarantie_bis` and the Tarifwechsel guard are derived from |
+
+All three store the **canonical round-trip**, not the request body, which is why
+the gate's strict-enum stage matters here: a BO4E enum that decodes to the
+`Unknown` catch-all serialises back as the literal string `"UNKNOWN"`, so
+skipping it did not merely accept an unrecognised value — it replaced what the
+caller sent.
 | `GET` | `/api/v1/vertraege/billing-candidates` | § 40b EnWG cadence feed for billingd |
 | `GET` | `/api/v1/vertraege/expiring` | `?days=` (default 30) |
 

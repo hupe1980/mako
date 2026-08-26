@@ -16,56 +16,6 @@
 
 use rubo4e::current::Marktlokation;
 
-/// The BO4E schema version every payload mako stores is interpreted under.
-///
-/// Derived from the linked `rubo4e` rather than written down: mako parses every
-/// payload with its own generated types regardless of what a request claims, so
-/// the version a row is stamped with is the server's fact, not the client's.
-///
-/// The column is **provenance, not a migration mechanism** — nothing branches
-/// on it. A schema flip means regenerating `rubo4e` and reading existing rows
-/// under the new types, which works because unknown fields survive in
-/// `_additional`. What the stamp buys is the ability to tell which rows have
-/// not been rewritten yet.
-pub static SCHEMA_VERSION: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    use rubo4e::Bo4eObject as _;
-    Marktlokation::default().schema_version()
-});
-
-/// The BO4E schema version, as an owned `String`, for `serde` defaults and
-/// row construction.
-#[must_use]
-pub fn schema_version() -> String {
-    (*SCHEMA_VERSION).to_owned()
-}
-
-/// The BO4E schema **series** — the `YYYYMM` prefix, without the patch level.
-///
-/// This is the granularity at which rubo4e exposes a module, and the right key
-/// for deciding whether a stored payload is readable: BO4E ships patch releases
-/// *inside* a series and every one of them deserializes into the same types.
-pub static SCHEMA_SERIES: std::sync::LazyLock<&'static str> = std::sync::LazyLock::new(|| {
-    use rubo4e::Bo4eObject as _;
-    Marktlokation::default().schema_series()
-});
-
-/// Is `stored` a payload version this build can read?
-///
-/// True for **any** release in the current series. Matching the full triple
-/// instead rejects a payload from a producer one BO4E patch ahead that mako
-/// reads perfectly — and rejected every payload at all when rubo4e 0.10
-/// corrected the wire spelling.
-///
-/// # The `v` is tolerated on input and never written
-///
-/// BO4E prefixes its git *tags* with a `v`; the `_version` field inside a
-/// payload never has one. A stored value carrying it is read rather than
-/// refused; what mako *writes* is always [`SCHEMA_VERSION`].
-#[must_use]
-pub fn version_is_readable(stored: &str) -> bool {
-    stored.strip_prefix('v').unwrap_or(stored).split('.').next() == Some(*SCHEMA_SERIES)
-}
-
 /// The `malo` row's typed columns, derived from the BO4E `Marktlokation`.
 ///
 /// Every field is `Option`: BO4E's schema makes every field optional, and a
@@ -157,15 +107,23 @@ impl MeloShadowColumns {
             match melo.extension_data().get("standorteigenschaften") {
                 None => (None, None),
                 Some(raw) => {
-                    let typed: Standorteigenschaften = serde_json::from_value(raw.clone())
+                    // The same gate every BO4E payload crosses, minus the `_typ`
+                    // stage: the key in the extension map already named the BO,
+                    // and producers do not reliably stamp `_typ` on a nested one.
+                    let typed: Standorteigenschaften = super::gate::decode_nested(raw.clone())
                         .map_err(|e| StandorteigenschaftenError(e.to_string()))?;
-                    rubo4e::Bo4eStrict::ensure_known_enums(&typed)
-                        .map_err(|e| StandorteigenschaftenError(e.to_string()))?;
+                    // `regelzoneEic`, not `regelzone`. BO4E ships both and they
+                    // are different things: `regelzone` is „Der Name der
+                    // Regelzone", `regelzoneEic` is „De EIC-Nummer der
+                    // Regelzone". Both render through `ToString`, so reading the
+                    // wrong one compiles — and this column is an EIC, indexed
+                    // and filtered on to map a MeLo to its ÜNB for MaBiS IFTSTA
+                    // and Redispatch 2.0.
                     let eic = typed
                         .eigenschaften_strom
                         .as_ref()
                         .and_then(|v| v.first())
-                        .and_then(|s| s.regelzone.as_ref())
+                        .and_then(|s| s.regelzone_eic.as_ref())
                         .map(ToString::to_string);
                     let json = serde_json::to_value(&typed)
                         .map_err(|e| StandorteigenschaftenError(e.to_string()))?;
@@ -229,9 +187,10 @@ pub fn geraet_typ(g: &rubo4e::current::Geraet) -> Option<&'static str> {
 /// }
 /// ```
 ///
-/// Writing a mako value into BO4E's own enum field would make a document a
-/// conforming reader resolves to `Unknown` — silently, forward-compatible
-/// decoding being what it is for.
+/// Writing a mako value into BO4E's own enum field makes a document that
+/// `rubo4e` decodes to `Unknown` in silence, and that go-bo4e (`invalid
+/// <Enum> %q`, no catch-all variant) and BO4E-python (a pydantic
+/// `ValidationError`) refuse outright. The lenient reading is the mild case.
 pub const MAKO_PREISTYP_ATTRIBUT: &str = "mako:preistyp";
 
 /// Read the effective price type of one `tarifpreispositionen` entry.
@@ -449,7 +408,7 @@ mod check_constraint_drift {
 
     #[test]
     fn bo4e_check_constraints_match_the_schema() {
-        let sql = include_str!("../../../services/marktd/migrations/0001_initial.sql");
+        let sql = include_str!("../../../../services/marktd/migrations/0001_initial.sql");
 
         for (table, lists) in [
             ("malo", super::malo_enum_check_lists()),
@@ -471,49 +430,6 @@ mod check_constraint_drift {
                 );
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod schema_version_tests {
-    /// The stamp is whatever the linked `rubo4e` generates, so a schema bump
-    /// changes it without a source edit — the point of deriving it.
-    #[test]
-    fn the_schema_version_is_the_linked_crates_own() {
-        use rubo4e::Bo4eObject as _;
-        assert_eq!(
-            super::schema_version(),
-            rubo4e::current::Vertrag::default().schema_version(),
-            "every BO in a schema series reports the same version"
-        );
-        // BO4E prefixes its git *tags* with a `v` (`v202607.1.0`); the
-        // `_version` field inside a payload never does (`202607.1.0`), and no
-        // BO4E schema accepts one that carries it.
-        assert!(
-            !super::schema_version().starts_with('v'),
-            "the payload spelling carries no `v`; only the git tag does"
-        );
-        assert_eq!(
-            super::schema_version().split('.').next(),
-            Some(*super::SCHEMA_SERIES),
-            "the series is the release's own YYYYMM prefix"
-        );
-    }
-
-    /// Readability is decided by the **series**, and the old spelling still reads.
-    ///
-    /// BO4E ships patch releases inside a series and all of them deserialize
-    /// into the same types, so matching the full triple would reject a producer
-    /// one patch ahead. Rows written before rubo4e 0.10 carry the `v`-prefixed
-    /// tag; they stay readable rather than being orphaned by the correction.
-    #[test]
-    fn the_series_decides_what_is_readable() {
-        let series = *super::SCHEMA_SERIES;
-        assert!(super::version_is_readable(&super::schema_version()));
-        assert!(super::version_is_readable(&format!("{series}.9.9")));
-        assert!(super::version_is_readable(&format!("v{series}.0.0")));
-        assert!(!super::version_is_readable("202501.0.0"));
-        assert!(!super::version_is_readable(""));
     }
 }
 

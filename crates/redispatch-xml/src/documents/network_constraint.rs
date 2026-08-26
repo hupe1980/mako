@@ -67,6 +67,29 @@ pub struct NetworkConstraintTimeSeries {
     /// Unique time-series identifier (max 35 chars).
     #[serde(rename = "TimeSeriesIdentification")]
     pub time_series_identification: AttrV<DocumentId>,
+    /// Reference to the original time series when this one corrects it.
+    ///
+    /// Without it a correction cannot be matched to what it corrects, so the
+    /// receiver either applies it twice or not at all.
+    #[serde(
+        rename = "OriginalTimeSeriesIdentification",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub original_time_series_identification: Option<AttrV<DocumentId>>,
+    /// The **anfordernder Netzbetreiber** — the operator that identified the
+    /// Netzengpass and requested the Maßnahme (`BilAReM` Kap. 1).
+    ///
+    /// It is not necessarily the anweisende Netzbetreiber: a request travels up
+    /// the cascade, and Kap. 17.3.4 of the `MaBiS` Anlage puts a whole
+    /// Ausfallarbeit exchange between the two. Dropping it leaves the
+    /// Ausfallarbeit with no addressee.
+    #[serde(
+        rename = "RequestingGridOperator",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub requesting_grid_operator: Option<AttrVWithScheme<MarketParticipantId>>,
     /// Business type: dispatchable production (`A77`) or network element (`B59`).
     #[serde(rename = "BusinessType")]
     pub business_type: AttrV<NcdBusinessType>,
@@ -86,6 +109,14 @@ pub struct NetworkConstraintTimeSeries {
     #[serde(rename = "MeasurementUnit")]
     pub measurement_unit: AttrV<MeasureUnit>,
     /// Optional activation status.
+    /// Resource provider that operates the resource.
+    #[serde(
+        rename = "ResourceProvider",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub resource_provider: Option<AttrVWithScheme<MarketParticipantId>>,
+    /// Status of the constraint series.
     #[serde(rename = "Status", default, skip_serializing_if = "Option::is_none")]
     pub status: Option<AttrV<NcdStatus>>,
     /// Quarter-hour constraint data for the delivery day.
@@ -103,6 +134,34 @@ pub struct NetworkConstraintTimeSeries {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename = "NetworkConstraintDocument")]
 pub struct NetworkConstraintDocument {
+    /// Original sender when this document corrects an earlier one.
+    #[serde(
+        rename = "OriginalSenderIdentification",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub original_sender_identification: Option<AttrVWithScheme<MarketParticipantId>>,
+    /// Identifier of the document being corrected.
+    #[serde(
+        rename = "OriginalDocumentIdentification",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub original_document_identification: Option<AttrV<DocumentId>>,
+    /// Version of the document being corrected.
+    #[serde(
+        rename = "OriginalDocumentVersion",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub original_document_version: Option<AttrV<DocumentVersion>>,
+    /// Creation timestamp of the document being corrected.
+    #[serde(
+        rename = "OriginalDocumentDateTime",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub original_document_date_time: Option<AttrV<UtcDateTime>>,
     /// Unique document identifier (max 35 chars).
     #[serde(rename = "DocumentIdentification")]
     pub document_identification: AttrV<DocumentId>,

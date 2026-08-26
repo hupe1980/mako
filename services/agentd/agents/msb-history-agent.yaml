@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # WiM Strom MSB-change history and INSRPT reading-order lifecycle. Detects stuck reading orders, quality issues after MSB transitions, and iMSys rollout progress per §31 MsbG.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: MSB. Compiled only into a `role-msb` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: msb-history-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -33,14 +32,28 @@ spec:
       - `de.messwert.reading.quality.warning` — quality flag on new meter readings
       - `de.messwert.reading.direct.stored` — iMSys push (verify against expected MSB)
       - `de.mako.process.completed` — WiM MSB-change completed
+      - `de.messwert.reading.order.failed` — an INSRPT reading order failed
+      - `de.messwert.reading.delivery.overdue` — a reading delivery is past its window
 
       ## PROCEDURE
 
       1. Call edmd `get_device_history` for the MaLo — identify current MSB.
-      2. Cross-check against marktd `get_malo` to verify MSB assignment matches edmd history.
-      3. For quality warnings: check if warning coincides with recent MSB change (transition reading errors are expected).
-      4. For iMSys push: verify SMGW session is active (BSI TR-03109).
-      5. Report any stuck INSRPT reading orders.
+      2. Cross-check against marktd `get_malo` for the MSB assignment of record, and
+         marktd `get_melo` for the Messlokation the device sits on. A history that
+         disagrees with the registry is the finding, whichever side is wrong.
+      3. For quality warnings: call edmd `get_quality_warnings` and check whether the
+         warning coincides with a recent MSB change — transition reading errors are
+         expected and are not a fault of the new MSB.
+      4. Report stuck INSRPT reading orders: call edmd `list_reading_orders` for the
+         MaLo's orders and `list_overdue_reading_orders` for the ones past their
+         window. On `de.messwert.reading.order.failed` or
+         `de.messwert.reading.delivery.overdue` the failing order is the subject of
+         the run rather than a detail of it: say which order, whose obligation it
+         is, and whether the MaLo changed MSB inside the window — a delivery that
+         went late across a transition is the outgoing MSB's, and one that went
+         late after it is the incoming MSB's.
+      5. Gateway health after an iMSys push is smgw-diagnostics-agent's subject, not
+         this one's — say so rather than guessing at a session this agent cannot read.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -61,7 +74,7 @@ spec:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
     # Reads the agent's own answer during memory formation — model output, and
     # therefore untrusted. A model that cannot call a tool is what should read it.
-    quarantined: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
 
   # Memory, bound to the party this run is about.
   #
@@ -151,11 +164,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -169,167 +181,38 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://edmd/get_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "get timeseries via edmd"
-    - ref: tool://edmd/get_imbalance
-      mutates: false
-      max_sensitivity: internal
-      description: "get imbalance via edmd"
-    - ref: tool://edmd/get_billing_period
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing period via edmd"
     - ref: tool://edmd/get_device_history
       mutates: false
       max_sensitivity: internal
-      description: "get device history via edmd"
+      description: >-
+        The MaLo's device and MSB timeline.
+
     - ref: tool://edmd/get_quality_warnings
       mutates: false
       max_sensitivity: internal
-      description: "get quality warnings via edmd"
+      description: >-
+        Reading anomalies, to test whether they coincide with an MSB change.
+
     - ref: tool://edmd/list_reading_orders
       mutates: false
       max_sensitivity: internal
-      description: "list reading orders via edmd"
+      description: >-
+        INSRPT reading orders and their state.
+
     - ref: tool://edmd/list_overdue_reading_orders
       mutates: false
       max_sensitivity: internal
-      description: "list overdue reading orders via edmd"
-    - ref: tool://edmd/get_correction_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get correction history via edmd"
-    - ref: tool://edmd/validate_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "validate timeseries via edmd"
-    - ref: tool://edmd/get_quality_assessments
-      mutates: false
-      max_sensitivity: internal
-      description: "get quality assessments via edmd"
-    - ref: tool://edmd/get_summenzeitreihe
-      mutates: false
-      max_sensitivity: internal
-      description: "get summenzeitreihe via edmd"
-    - ref: tool://edmd/get_annual_forecast
-      mutates: false
-      max_sensitivity: internal
-      description: "get annual forecast via edmd"
-    - ref: tool://edmd/get_gas_quality
-      mutates: false
-      max_sensitivity: internal
-      description: "get gas quality via edmd"
-    - ref: tool://makod/list_commands
-      mutates: false
-      max_sensitivity: internal
-      description: "list commands via makod"
-    - ref: tool://makod/get_malo
-      mutates: false
-      max_sensitivity: internal
-      description: "get malo via makod"
-    - ref: tool://makod/list_partners
-      mutates: false
-      max_sensitivity: internal
-      description: "list partners via makod"
-    - ref: tool://makod/get_partner
-      mutates: false
-      max_sensitivity: internal
-      description: "get partner via makod"
-    - ref: tool://makod/get_health
-      mutates: false
-      max_sensitivity: internal
-      description: "get health via makod"
-    - ref: tool://makod/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via makod"
-    - ref: tool://makod/list_overdue_deadlines
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue deadlines via makod"
-    - ref: tool://makod/list_active_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list active processes via makod"
-    - ref: tool://makod/get_format_version_coverage
-      mutates: false
-      max_sensitivity: internal
-      description: "get format version coverage via makod"
-    - ref: tool://makod/get_outbox_status
-      mutates: false
-      max_sensitivity: internal
-      description: "get outbox status via makod"
-    - ref: tool://makod/list_dead_letters
-      mutates: false
-      max_sensitivity: internal
-      description: "list dead letters via makod"
+      description: >-
+        Reading orders past their window — the stuck ones.
+
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
+      description: >-
+        The MSB assignment of record, to compare against edmd's history.
+
     - ref: tool://marktd/get_melo
       mutates: false
       max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        The Messlokation the device sits on.

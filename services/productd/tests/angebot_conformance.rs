@@ -72,16 +72,20 @@ fn an_emitted_angebot_is_valid_bo4e() {
                 sparte,
                 &[],
             );
-            rubo4e::Bo4eStrict::ensure_known_enums(&angebot).unwrap_or_else(|e| {
-                panic!("status {status}, sparte {sparte:?}: out-of-schema enums: {e}")
+            // The outbound gate — out-of-schema enums *and* the BO4E-stated
+            // rules. An Angebot productd emits is a document vertragd (and,
+            // through it, a customer) receives, and mako refuses a received
+            // document that breaks these.
+            mako_markt::bo4e::ensure_conformant(&angebot).unwrap_or_else(|e| {
+                panic!("status {status}, sparte {sparte:?}: mako would refuse this Angebot: {e}")
             });
 
             // And through JSON, which is how vertragd actually receives it.
             let json = serde_json::to_value(&angebot).expect("serialisable");
             let back: rubo4e::current::Angebot =
                 serde_json::from_value(json).expect("round-trips as an Angebot");
-            rubo4e::Bo4eStrict::ensure_known_enums(&back)
-                .unwrap_or_else(|e| panic!("status {status}: JSON form has unknowns: {e}"));
+            mako_markt::bo4e::ensure_conformant(&back)
+                .unwrap_or_else(|e| panic!("status {status}: the JSON form would be refused: {e}"));
         }
     }
 }

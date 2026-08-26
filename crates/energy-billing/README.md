@@ -81,6 +81,22 @@ BG-25 line keeps a correct BT-151/152, and the BG-23 breakdown plus BG-22 totals
 are derived from the rounded line amounts so BR-CO-10/13 and BR-S-08 reconcile.
 E-invoicing does not round-trip through BO4E.
 
+**Both mappings emit net supply lines only.** `Tax` and `Abschlag` positions
+live in this crate's flat position vector so one pass can compute everything,
+but neither is an invoice *line* at either boundary: EN 16931 carries them as
+BG-23 and BT-113, and BO4E as `steuerbetraege`/`gesamtsteuer` and
+`vorauszahlungen`/`zuZahlen`. Emitting them as lines states each amount twice
+and leaves the document's own totals irreconcilable —
+`BillingPosition::is_rechnungsposition` is the single predicate both mappings
+use, so they cannot drift apart again. `Info` positions do belong: they carry
+`net_eur == 0`, so they change no sum, and § 40 EnWG wants the Zählerstand and
+Brennwert lines on the document.
+
+Every shape `to_rechnung()` can emit is asserted against mako's outbound BO4E
+gate in `tests/golden_scenarios.rs` — out-of-schema enums *and* the rules BO4E
+states about an invoice's totals. mako refuses a received document that breaks
+those, so it must not emit one.
+
 `to_en16931` is **fallible**, for one reason: EN 16931 category `O` (*not
 subject to VAT*) is exclusive to its document under **BR-O-11 … BR-O-14**. A
 hoheitliche Abwassergebühr is category `O`, so a combined

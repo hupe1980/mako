@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # GPKE/WiM/GeLi Gas process lifecycle expert. Diagnoses Anmeldung rejections, APERAK errors, stuck processes, and format-version mismatches. Queries makod MCP and obsd KPI reports.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Cross-cutting: present in every role-scoped build.
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: mako-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -43,10 +42,16 @@ spec:
       2. Call makod `get_process` for the current workflow state.
       3. Call obsd `get_process` for full timeline and deadline status.
       4. Determine root cause:
-         - APERAK BGM+313? → check NB rejection reason code (E01/E02/A05/A06/A97)
-         - Timed out? → check if APERAK was never received (AS4 delivery issue)
-         - Format error? → check PID + format version compatibility
-      5. For NB rejections: check marktd `get_malo_grid` and `get_malo` to verify master data completeness.
+         - APERAK BGM+313? → check the NB rejection reason code (E01/E02/A05/A06/A97).
+         - Timed out with no APERAK at all? → call makod `get_outbox_status`, and
+           `list_dead_letters` when the outbox says the message was abandoned. Our own
+           dispatch is the first thing to rule out, not the last.
+         - Format error? → call makod `get_format_version_coverage` for the PID the
+           counterparty used.
+      5. For NB rejections: call marktd `get_malo` for the Netzebene, the
+         Bilanzierungsgebiet and the NB assignment, and marktd `get_nb_contract` for the
+         contract the Anmeldung needs. There is no MCP tool for the grid record itself —
+         those fields are on the Marktlokation.
       6. Recommend corrective action.
 
   # What this agent is in a multi-agent arrangement.
@@ -130,11 +135,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -152,139 +156,45 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://makod/list_commands
-      mutates: false
-      max_sensitivity: internal
-      description: "list commands via makod"
-    - ref: tool://makod/get_malo
-      mutates: false
-      max_sensitivity: internal
-      description: "get malo via makod"
-    - ref: tool://makod/list_partners
-      mutates: false
-      max_sensitivity: internal
-      description: "list partners via makod"
-    - ref: tool://makod/get_partner
-      mutates: false
-      max_sensitivity: internal
-      description: "get partner via makod"
-    - ref: tool://makod/get_health
-      mutates: false
-      max_sensitivity: internal
-      description: "get health via makod"
     - ref: tool://makod/get_process
       mutates: false
       max_sensitivity: internal
-      description: "get process via makod"
-    - ref: tool://makod/list_overdue_deadlines
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue deadlines via makod"
-    - ref: tool://makod/list_active_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list active processes via makod"
+      description: >-
+        The workflow state of the process that failed.
+
     - ref: tool://makod/get_format_version_coverage
       mutates: false
       max_sensitivity: internal
-      description: "get format version coverage via makod"
+      description: >-
+        Whether the PID is served in the format version the counterparty used.
+
     - ref: tool://makod/get_outbox_status
       mutates: false
       max_sensitivity: internal
-      description: "get outbox status via makod"
+      description: >-
+        Whether our own message ever left, before blaming the counterparty.
+
     - ref: tool://makod/list_dead_letters
       mutates: false
       max_sensitivity: internal
-      description: "list dead letters via makod"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        Deliveries that were abandoned, for a process with no APERAK at all.
+
     - ref: tool://obsd/get_process
       mutates: false
       max_sensitivity: internal
-      description: "get process via obsd"
-    - ref: tool://obsd/list_overdue_processes
+      description: >-
+        The full timeline and deadline status behind the same process.
+
+    - ref: tool://marktd/get_malo
       mutates: false
-      max_sensitivity: internal
-      description: "list overdue processes via obsd"
-    - ref: tool://obsd/get_kpi_report
+      max_sensitivity: confidential
+      description: >-
+        Master data completeness for an NB rejection: Netzebene,
+        Bilanzierungsgebiet, NB assignment.
+
+    - ref: tool://marktd/get_nb_contract
       mutates: false
-      max_sensitivity: internal
-      description: "get kpi report via obsd"
-    - ref: tool://obsd/get_parity_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get parity report via obsd"
-    - ref: tool://obsd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via obsd"
-    - ref: tool://obsd/list_processes_by_family
-      mutates: false
-      max_sensitivity: internal
-      description: "list processes by family via obsd"
+      max_sensitivity: confidential
+      description: >-
+        Whether the NB contract the Anmeldung needs exists for the period.

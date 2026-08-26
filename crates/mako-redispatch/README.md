@@ -21,12 +21,23 @@ design).
 ## Regulatory scope
 
 Redispatch 2.0 is mandatory for all German grid operators (ÜNB and VNB) and
-their connected asset operators (ANB) under BNetzA rulings BK6-20-059,
-BK6-20-060, and BK6-20-061, effective 2021-10-01. Suppliers (LF) and metering
-operators (MSB) are out of scope.
+their connected asset operators (ANB), effective 2021-10-01. Suppliers (LF) and
+metering operators (MSB) are out of scope.
 
-**Market roles in scope:** ANB (Anlagenbetreiber), VNB (Verteilnetzbetreiber),
-ÜNB (Übertragungsnetzbetreiber), BKV (Bilanzkreisverantwortlicher).
+**BK6-23-241 (Beschluss 07.05.2026) consolidated it.** Its Anlage „Bilanzieller
+Ausgleich von Redispatch-Maßnahmen (BilAReM)" replaces the three decisions this
+crate used to cite:
+
+| Repealed | By | With effect from |
+|---|---|---|
+| BK6-20-059 Tenorziffer 1 | Tenorziffer 1 | end of 30.06.2026 |
+| BK6-20-060 (Netzbetreiberkoordinierung) | Tenorziffer 4 | 07.05.2026 |
+| BK6-20-061 (Informationsbereitstellung) | Tenorziffer 3 | 07.05.2026 |
+| BK6-20-059 Tenorziffer 2 · Anlage zur BilAReM | Tenorziffer 8 | first day the new EDI@Energy documents apply |
+| MaBiS Anlage 1 Kap. 17 | Tenorziffer 5 | end of 30.09.2026 |
+
+**Market roles in scope:** ANB (Anschlussnetzbetreiber), BTR (Betreiber der
+technischen Ressource), EIV (Einsatzverantwortlicher), VNB, ÜNB, LF, BKV.
 
 ## Three-crate architecture
 
@@ -49,32 +60,95 @@ operators (MSB) are out of scope.
 | `redispatch-statusanfrage` | `StatusRequest_MarketDocument` | bidirectional |
 | `redispatch-kostenblatt` | `Kostenblatt` | VNB → ÜNB |
 
-## Regulatory deadlines
+## Deadlines
 
-| Obligation | Deadline | Clock |
+Four Redispatch deadlines are widely quoted — a 6-hour acknowledgement, a
+24-hour Statusanfrage answer, a 5-minute activation response, and a Kostenblatt
+due on the 15th. **Three of them no longer have a published source, and the
+fourth was never 6 hours.** `mako_redispatch::fristen` splits them accordingly.
+
+### Sourced
+
+| Obligation | Value | Source |
 |---|---|---|
-| `AcknowledgementDocument` | 6 wall-clock hours | **UTC** |
-| `StatusRequest` response | 24 wall-clock hours | **UTC** |
-| Stammdaten forward (VNB→ÜNB) | 1 Werktag | German local time |
-| Activation (ACO) response | **5 minutes** | **UTC** |
-| Kostenblatt submission | 15th of following month | German local time |
+| `AcknowledgementDocument` | **3 minutes**, unverzüglich | AcknowledgementDocument FB 1.0g |
+| Vorab-Information, Prognosemodell | 30 minutes before validity | BilAReM Kap. 6.3.1 |
+| Ausfallarbeit final or Dissens established | end of the **3rd** following month, no restart after | BilAReM Kap. 6.4.3 |
+| Wetterdaten of the Anlagenbetreiber | 4th Werktag of the following month | BilAReM Kap. 3.2.1 |
+| Stammdaten `gueltig_ab` | ≥ 5 or ≥ 10 Werktage ahead, ≤ 2 years | Stammdaten AWT 1.4b Fn. 27/31/32/33 |
+| Überführung ins Planwertmodell | ≥ 6 months' notice, only on 01.01./04./07./10. | BilAReM Kap. 2.3.2 |
+| Zuordnung einer neuen SR | ≥ 5 WT before IBN if informed ≥ 10 WT ahead, else ≤ 5 WT after | BilAReM Kap. 2.3.2 |
 
-> **5-minute hard real-time constraint:** The `makod` Redispatch deadline
-> scheduler must poll at ≤ 30-second intervals. Configure a dedicated
-> `DeadlineScheduler` instance for Redispatch workflows — the standard
+> **The acknowledgement is three minutes, not six hours.** The
+> AcknowledgementDocument Formatbeschreibung 1.0g states „unverzüglich, jedoch
+> spätestens **3 Minuten** nach Erhalt der Übertragungsdatei". Six hours is a
+> batch job; three minutes has to be answered by the ingest path.
+
+The ACK carries four protocol rules worth stating separately (same source):
+exactly one per Übertragungsdatei, confirming or rejecting the file as a whole;
+a **missing** ACK means the message was not processed; an ACK is never itself
+acknowledged; and a **late** ACK „darf nicht zu einer Fristverletzung des
+eigentlichen Geschäftsvorfalles führen".
+
+### Operator-configured
+
+BK6-23-241 Tenorziffer 7 obliges the ÜNB to develop bundesweit einheitliche
+Prozessbeschreibungen with the industry and submit them to the Beschlusskammer,
+which then publishes them. Until that happens these windows are the operator's
+own — `fristen::Betreiberfristen` holds them, with the historical BK6-20-05x
+figure as a documented default:
+
+| Obligation | Historical default | Was |
+|---|---|---|
+| Activation (ACO) response | 5 minutes | BK6-20-060 §6.3 |
+| Kostenblatt submission | 15th of the following month | BK6-20-061 §7 |
+| Stammdaten forward (VNB→ÜNB) | 1 Werktag | BK6-20-060 §3.2 |
+
+> **`StatusRequest_MarketDocument` is not a request/response pair.** Its `type`
+> codes are `A60` (status request for a position independently from a specific
+> process) and `Z15` Erreichbarkeitsinformation, and its `status` carries `A03`
+> Deactivated / `A04` Reactivated / `A13` Withdrawn — a communication-
+> availability notification about a Marktpartner. There is no answer document
+> and no 24-hour window.
+
+> **Real-time scheduling:** whatever the configured ACR/AAR window, it stays a
+> real-time constraint, and the 3-minute ACK is stricter still. The `makod`
+> Redispatch deadline scheduler must poll well inside it — the standard
 > Werktage-based scheduler used for GPKE/WiM is not sufficient.
 
-## IFTSTA PIDs
+## EDIFACT PIDs
 
-Redispatch 2.0 IFTSTA messages (confirmed from IFTSTA AHB 2.1 + PID 4.0):
+The complete EDIFACT half of Redispatch 2.0, from the BDEW *Anwendungsübersicht
+Prüfidentifikatoren 4.0* (01.04.2026) — every row whose Prozessbeschreibung is
+„Kommunikationsprozesse Redispatch":
 
-| PID | Perspective | Description |
-|-----|-------------|-------------|
-| 21037 | NB (VNB) | Kommunikationsprozesse Redispatch — Ansicht NB |
-| 21038 | BTR | Kommunikationsprozesse Redispatch — Ansicht BTR |
+| PID | Nachricht | Inhalt | Von → An | EBD |
+|----:|-----------|--------|----------|-----|
+| 13021 | MSCONS | meteorologische Daten (Ex-post) | BTR → ANB · ANB → anfNB | — |
+| 13022 | MSCONS | Einzelzeitreihe Ausfallarbeit | BTR ↔ NB · anfNB → ANB | — |
+| 17209 | ORDERS | Anforderung der Ausfallarbeit | anfNB → ANB | — |
+| 21037 | IFTSTA | Ansicht NB | NB → BTR | `E_0902` |
+| 21038 | IFTSTA | Ansicht BTR | BTR → NB | `E_0900` |
 
-These PIDs route to the `redispatch-aktivierung` workflow via `PidRouter` and
-are registered by `RedispatchModule` in `makod`.
+There is **no ORDRSP in this family**: the ANB answers ORDERS 17209 with MSCONS
+13022 (Prozessschritt 2).
+
+### Seven PIDs this crate used to claim and does not own
+
+| PID | Belongs to |
+|----:|------------|
+| 13020 | `mako-mabis` `mabis-billing` — Ausfallarbeitsüberführungszeitreihe |
+| 13023 | `mako-mabis` `mabis-billing` — Lieferantenausfallarbeitssummenzeitreihe |
+| 13026 | Geschäftsprozesse für EEG-Überführungszeitreihen |
+| 17210 | `mako-mabis` `mabis-anforderung` — Anforderung LF-AACL |
+| 17211 | `mako-mabis` `mabis-profile` — Reklamation Profile bzw. Profilscharen (`E_0100`) |
+| 19204 | `mako-mabis` `mabis-anforderung` — Ablehnung Ab-/Bestellung der Aggregationsebene |
+| 19301 / 19302 | Herkunftsnachweisregister (NB ↔ RB HKN-R), `S_0092` / `S_0093` |
+
+13020 and 13023 are MaBiS Summenzeitreihen with a full Prüfmitteilung/
+Datenstatus cycle; routing them here gave them no settlement stream to live in,
+so the obligation they carry had nowhere to be recorded. 19301/19302 belong to a
+different market exchange entirely.
 
 ## Routing
 
@@ -85,13 +159,27 @@ non-whitespace byte `<`), parses them with
 `redispatch_xml::parse_and_validate`, and maps the document type to a
 `RedispatchDocumentKind` before routing.
 
-## Regulatory basis
+## BilAReM
 
-| Document | Topic |
-|---|---|
-| BK6-20-059 | AcknowledgementDocument (6h), StatusRequest (24h) |
-| BK6-20-060 | Stammdaten (1 Werktag), Activation (5 min) |
-| BK6-20-061 | Kostenblatt (15th of following month) |
+`mako_redispatch::bilarem` and `mako_redispatch::ausfallarbeit` implement the
+Anlage to BK6-23-241:
+
+- **Two Bilanzierungsmodelle.** The NB-side Ausgleich happens „ausschließlich im
+  Planwertmodell" (Kap. 2.1) via korrespondierende Fahrpläne against the NB's
+  single Redispatch-Bilanzkreis. In the Prognosemodell the NB does not settle at
+  all until 31.12.2031 (§14 Abs. 1 S. 3 EnWG); the BKV keeps the imbalance and
+  receives Aufwendungsersatz.
+- **Migration is one-way**, effective only on 01.01./01.04./01.07./01.10. with
+  ≥ 6 months' notice. `Zuordnungsmitteilung::validate` refuses the rest.
+- **The Ausfallarbeit window is a hard stop.** Kap. 6.4.3: by the end of the
+  third following month the figure stands or the Dissens is formally
+  established — „Danach dürfen die Prozesse … **nicht erneut gestartet**
+  werden." `bilarem::abstimmung_zulaessig` enforces it.
+- **Kap. 3 Ausfallarbeit** — `P_lim` per Aufforderungs-/Duldungsfall and
+  Referenzprofil, Wind Spitz- and vereinfachte Spitzabrechnung, the Wind-Bin
+  method for WEA auf See, Solar Spitz and Pauschal, the nicht-fluktuierende
+  variants, the Kap.-3.4 Überbauungs-cap and the §24 Abs. 3 S. 2 EEG 2023
+  MaLo→TR split.
 
 ---
 

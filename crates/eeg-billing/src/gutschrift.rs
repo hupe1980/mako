@@ -328,8 +328,11 @@ mod tests {
         for vat in [VatStatus::Regelbesteuerung, VatStatus::Kleinunternehmer] {
             let g = settlement_to_gutschrift(&feed_in_output(), vat, meta())
                 .unwrap_or_else(|e| panic!("{vat:?}: settlement failed: {e}"));
-            rubo4e::Bo4eStrict::ensure_known_enums(&g)
-                .unwrap_or_else(|e| panic!("{vat:?}: emitted out-of-schema enums: {e}"));
+            // The outbound gate: out-of-schema enums *and* the BO4E-stated
+            // rules — net plus tax is gross, the Steuerbetrag breakdown sums to
+            // the tax total, the positions sum to the net.
+            mako_markt::bo4e::ensure_conformant(&g)
+                .unwrap_or_else(|e| panic!("{vat:?}: emitted a document mako would refuse: {e}"));
         }
     }
 }

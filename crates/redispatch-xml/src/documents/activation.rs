@@ -227,6 +227,50 @@ pub struct ActivationTimeSeries {
 
 // ── ActivationDocument ────────────────────────────────────────────────────────
 
+/// One korrespondierender Fahrplan of an `ActivationDocument`.
+///
+/// This is how the bilanzielle Ausgleich is actually executed: `BilAReM`
+/// Kap. 2.1.2 — „Der bilanzielle Ausgleich erfolgt durch die **Anmeldung
+/// korrespondierender Fahrpläne**. Jeder Netzbetreiber verwendet genau einen
+/// Bilanzkreis als Redispatch-Bilanzkreis." The four area/party fields are that
+/// correspondence: energy leaves one balance area/party and arrives in the
+/// other, so a negative Redispatch schedules out of the NB's
+/// Redispatch-Bilanzkreis into the betroffener Bilanzkreis, and a positive one
+/// the reverse.
+///
+/// Dropping the group leaves an activation with no counterpart schedule at all,
+/// which is the half of the process that moves the energy on paper.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ScheduleTimeSeries {
+    /// Unique time-series identifier.
+    #[serde(rename = "TimeSeriesIdentification")]
+    pub time_series_identification: AttrV<DocumentId>,
+    /// Business type of the schedule.
+    #[serde(rename = "BusinessType")]
+    pub business_type: AttrV<String>,
+    /// Product (always active power).
+    #[serde(rename = "Product")]
+    pub product: AttrV<String>,
+    /// Balance area energy flows **into**.
+    #[serde(rename = "InArea")]
+    pub in_area: AttrVWithScheme<String, EicCodingScheme>,
+    /// Balance area energy flows **out of**.
+    #[serde(rename = "OutArea")]
+    pub out_area: AttrVWithScheme<String, EicCodingScheme>,
+    /// Balance party energy flows **into** — the receiving Bilanzkreis.
+    #[serde(rename = "InParty")]
+    pub in_party: AttrVWithScheme<String, EicCodingScheme>,
+    /// Balance party energy flows **out of** — the sending Bilanzkreis.
+    #[serde(rename = "OutParty")]
+    pub out_party: AttrVWithScheme<String, EicCodingScheme>,
+    /// Unit of the scheduled quantities.
+    #[serde(rename = "MeasurementUnit")]
+    pub measurement_unit: AttrV<MeasureUnit>,
+    /// The quarter-hour schedule.
+    #[serde(rename = "Period")]
+    pub period: Period,
+}
+
 /// `ActivationDocument` — Redispatch 2.0 activation instruction, response, or
 /// reduction document.
 ///
@@ -286,6 +330,14 @@ pub struct ActivationDocument {
         skip_serializing_if = "Option::is_none"
     )]
     pub order_identification_version: Option<AttrV<DocumentVersion>>,
+    /// Korrespondierende Fahrpläne accompanying the activation — how the
+    /// bilanzielle Ausgleich is executed (`BilAReM` Kap. 2.1.2).
+    #[serde(
+        rename = "ScheduleTimeSeries",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub schedule_time_series: Vec<ScheduleTimeSeries>,
     /// Activated time series (1–2 entries; one per direction).
     #[serde(rename = "ActivationTimeSeries", default)]
     pub time_series: Vec<ActivationTimeSeries>,

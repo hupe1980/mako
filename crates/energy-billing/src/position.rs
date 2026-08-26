@@ -353,6 +353,32 @@ pub const REVERSE_CHARGE_TAG: &str = "reverse-charge";
 pub const OUT_OF_SCOPE_TAG: &str = "nicht-steuerbar";
 
 impl BillingPosition {
+    /// Does this position belong in a BO4E document's `rechnungspositionen`?
+    ///
+    /// A BO4E `Rechnungsposition` is a **net supply line**: `gesamtnetto` is
+    /// „Die Summe der Nettobeträge der Rechnungsteile", with tax in
+    /// `steuerbetraege` and advances in `vorauszahlungen`. So [`Tax`] and
+    /// [`Abschlag`] — which this engine keeps in one flat vector — are not
+    /// positions on the wire; emitting them states each amount twice and leaves
+    /// the totals irreconcilable.
+    ///
+    /// [`Info`] positions do belong: `net_eur == 0`, so they change no sum, and
+    /// § 40 EnWG wants the Zählerstand and Brennwert lines on the document.
+    ///
+    /// Shared with the `en16931_map` line filter and `billingd`'s aggregate
+    /// position index, which must agree on what gets emitted.
+    ///
+    /// [`Tax`]: PositionCategory::Tax
+    /// [`Abschlag`]: PositionCategory::Abschlag
+    /// [`Info`]: PositionCategory::Info
+    #[must_use]
+    pub const fn is_rechnungsposition(&self) -> bool {
+        !matches!(
+            self.category,
+            PositionCategory::Tax | PositionCategory::Abschlag
+        )
+    }
+
     /// Construct a debit position (customer owes the amount).
     ///
     /// `net_eur` is automatically computed as `quantity × unit_price_eur`.

@@ -79,7 +79,10 @@ pub use cloudevent::{CloudEvent, PublishError, post_ce_with_retry, source};
 pub use config::{ConfigError, DatabaseConfig, HttpConfig, load_config};
 pub use error::{ApiError, ApiResult};
 pub use service::{Daemon, ServiceConfig, ServiceContext, run};
-pub use telemetry::{OtelConfig, OtelGuard, init_tracing, init_tracing_from_env};
+pub use telemetry::{
+    ExtraLayer, OtelConfig, OtelGuard, init_tracing, init_tracing_from_env,
+    init_tracing_from_env_with, init_tracing_with,
+};
 
 #[cfg(feature = "metrics")]
 pub use metrics::init_metrics;

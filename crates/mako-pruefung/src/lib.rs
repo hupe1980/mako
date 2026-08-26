@@ -20,12 +20,31 @@
 //! |---|---|---|
 //! | [`nb`] | Netzbetreiber | `E_0622` Anmeldung, `E_0607` Abmeldung |
 //! | [`lf`] | Lieferant | `E_0609`, `E_0624`, `E_0614`, `E_0615`, `E_0603`–`E_0606`; Gas `E_3001`, `E_3002`, `E_3020`, `E_3008` |
+//! | [`msb`] | Messstellenbetrieb | `E_0200`–`E_0203` und die WiM-Codelisten |
+//! | [`mabis`] | NB, LF, BKV | the 28 MaBiS and Redispatch trees (`E_0004`–`E_0104`, `E_0901`, `E_0902`) |
 //!
 //! The document defines around sixty trees with the LF as prüfende Rolle;
 //! these are its **process** answers, the messages that move a Marktlokation
-//! between suppliers. Rechnungsprüfung (`E_0406`), Stammdatenänderung
-//! (`E_0408`) and MaBiS (`E_0004`) are separate obligations — see
-//! [`codes::E_0406_CODES`] for what of `E_0406` is resolved here.
+//! between suppliers. Rechnungsprüfung (`E_0406`) and Stammdatenänderung
+//! (`E_0408`) are separate obligations — see [`codes::E_0406_CODES`] for what
+//! of `E_0406` is resolved here.
+//!
+//! # MaBiS widens the Cluster axis
+//!
+//! A GPKE answer is a Zustimmung or an Ablehnung, and the cluster picks
+//! between two PIDs. MaBiS needs more, and the differences are observable:
+//!
+//! - an **Abweisung** was refused *before* it was assessed, and MaBiS
+//!   Kap. 9.8.2 Nr. 2 says its Prüfmitteilung is **not forwarded** — while an
+//!   Ablehnung's is;
+//! - **Ablehnung der gesamten Liste** carries no positions, a
+//!   **Korrekturliste wegen Ablehnung** is itself a list of them;
+//! - a **Reklamation** tree publishes no Zustimmung at all, because an
+//!   acceptable profile is answered with silence.
+//!
+//! Reducing any of these to `zustimmung: bool` loses a decision the market
+//! acts on, so [`Cluster`] names all eight and
+//! [`AntwortCode::ist_zustimmung`] answers `None` off the agreement axis.
 //!
 //! # Why one crate and not one per role
 //!
@@ -72,6 +91,8 @@ pub mod error;
 
 #[cfg(feature = "role-lf")]
 pub mod lf;
+#[cfg(feature = "role-mabis")]
+pub mod mabis;
 #[cfg(feature = "role-msb")]
 pub mod msb;
 #[cfg(feature = "role-nb")]

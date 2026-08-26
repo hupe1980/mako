@@ -21,9 +21,9 @@
 //! | Route | What it is for |
 //! |---|---|
 //! | `POST /webhook` | CloudEvent ingest (Standard Webhooks-verified) |
-//! | `POST /api/v1/run` | Run a specialist by hand (OIDC; honours `Idempotency-Key`) |
-//! | `GET /api/v1/agents` | What this deployment activated |
-//! | `GET /api/v1/agents/catalog` | Everything compiled in |
+//! | `POST /api/v1/run` | Run a specialist by hand (OIDC + `api:run.start`; honours `Idempotency-Key`) |
+//! | `GET /api/v1/agents` | What this deployment activated (OIDC + `api:agent.list`) |
+//! | `GET /api/v1/agents/catalog` | Everything compiled in (OIDC + `api:agent.list`) |
 //! | `GET /.well-known/agents/{name}` | A2A Agent Card, derived from the manifest |
 //! | `/api/v1/oversight/*` | agentplane's operator surface: worklist, runs, cases, breached obligations |
 //!
@@ -57,6 +57,33 @@ struct Agentd;
 impl Daemon for Agentd {
     type Config = AgentdConfig;
     const NAME: &'static str = "agentd";
+
+    /// agentplane's instrument catalogue, bridged onto mako's Prometheus
+    /// registry.
+    ///
+    /// The crate emits every metric it declares as a `tracing` event on its own
+    /// target and chooses no exporter — the right call for a library, and a job
+    /// for whoever embeds it. Without the bridge, runs by terminal outcome,
+    /// policy denials, budget refusals, quarantines and breached obligations
+    /// reach the log stream and nobody else, which reads on a dashboard exactly
+    /// like a plane where none of it happens.
+    fn tracing_layer() -> Option<mako_service::ExtraLayer> {
+        Some(Box::new(agentd::plane::metrics::PlaneMetrics))
+    }
+
+    /// Real readiness: the journal is agentd's only hard dependency after
+    /// startup, and the runner's built-in database ping covers nothing here —
+    /// this daemon has no `[database]`.
+    ///
+    /// It matters for the topology the Postgres backend exists for. Several
+    /// instances share a store that can go away *after* startup; without this
+    /// the pod stays in rotation, keeps being handed market messages, and fails
+    /// every admission. Nothing is lost — a store failure is classified
+    /// retryable, so the door answers `429` and the emitter keeps the message —
+    /// but the instance is advertising a capacity it does not have.
+    async fn ready(_ctx: &ServiceContext) -> bool {
+        agentd::plane::readiness::journal_is_reachable().await
+    }
 
     async fn build(cfg: Arc<AgentdConfig>, ctx: ServiceContext) -> anyhow::Result<Router> {
         // Credentials first: an `env:VAR` placeholder that reached a driver
@@ -184,6 +211,9 @@ impl Daemon for Agentd {
         // cursor: registrations are made at admission so no run exists
         // unwatched, and the cursor advances only on 2xx, so a receiver that is
         // down for a deploy is caught up rather than having missed everything.
+        // Published before the plane is assembled, so `/health/ready` reports
+        // the store rather than a constant from the first probe onwards.
+        agentd::plane::readiness::register(std::sync::Arc::clone(&stores.journal));
         let journal_for_delivery = std::sync::Arc::clone(&stores.journal);
         let journal_for_retention = std::sync::Arc::clone(&stores.journal);
         let stores_journal = std::sync::Arc::clone(&stores.journal);
@@ -252,6 +282,11 @@ impl Daemon for Agentd {
             ))
         });
 
+        // The same engine reaches both places: the runtime checks every effect
+        // against it, and agentd's own REST doors check their `api:` verbs
+        // against it. Two engines would be two audiences drifting apart.
+        let policy_for_routes = Arc::clone(&policy);
+
         let plane = Plane::new(
             stores,
             PlaneConfig {
@@ -280,7 +315,11 @@ impl Daemon for Agentd {
         info!(
             specialists = plane.router().routes().len(),
             tenant = %cfg.tenant,
-            "agent plane ready"
+            instruments = agentplane::runtime::metrics::CATALOGUE.len(),
+            "agent plane ready — agentplane's instruments are bridged to GET /metrics; a \
+             deployment running below `info` must admit the metric target explicitly \
+             (LOG_LEVEL=\"warn,agentplane.metric=info\"), or the series flatline rather \
+             than disappear"
         );
 
         // ── Back-pressure ────────────────────────────────────────────────
@@ -430,9 +469,11 @@ impl Daemon for Agentd {
         // a forged signature on a regulated dispatch.
         let oversight = if oidc.is_disabled() {
             warn!(
-                "agentd: OIDC disabled — POST /api/v1/run accepts all requests and the \
-                 oversight surface ({}) is NOT mounted. Every tool grant that requires \
-                 approval will suspend its run with nobody able to answer it.",
+                "agentd: OIDC disabled — POST /api/v1/run, /api/v1/agents and \
+                 /api/v1/agents/catalog accept all requests (the Cedar gate in front of \
+                 them reads the roles off a token nobody verified), and the oversight \
+                 surface ({}) is NOT mounted. Every tool grant that requires approval \
+                 will suspend its run with nobody able to answer it.",
                 agentd::plane::oversight::MOUNT
             );
             None
@@ -447,6 +488,7 @@ impl Daemon for Agentd {
             cfg: Arc::clone(&cfg),
             secrets,
             plane,
+            policy: policy_for_routes,
         });
 
         let mut app = Router::new()
@@ -459,6 +501,22 @@ impl Daemon for Agentd {
             .route("/api/v1/agents/catalog", get(handlers::agents_catalog))
             // A2A Agent Cards, derived from each manifest
             .route("/.well-known/agents/{name}", get(handlers::agent_card))
+            // **This deployment's tenant, pinned at extraction.**
+            //
+            // A token signed by the same realm for a different operator is
+            // otherwise indistinguishable from a local one: it verifies, it
+            // carries `mako_tenant`, and nothing here compares that to ours. It
+            // would then reach every route below — starting runs against *this*
+            // operator's journal and reading which Marktrolle this deployment is.
+            // agentplane's own surface is already safe by a different mechanism
+            // (`Planes::get` resolves the plane from the caller's tenant, and
+            // there is no plane for theirs), so this closes the doors agentd
+            // serves itself. Put in the extractor rather than in each handler:
+            // a route added later cannot forget the check without also dropping
+            // authentication.
+            .layer(Extension(mako_service::oidc::ExpectedTenant(
+                cfg.tenant.clone(),
+            )))
             // OIDC verifier extension for the Claims Axum extractor
             .layer(Extension(oidc))
             .with_state(state);

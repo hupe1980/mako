@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Annual Schlussabrechnung orchestrator (LF role). Fetches 12-month edmd data, retrieves Abschläge from billingd, generates Final invoice, verifies Zahlbetrag, and checks § 147 AO / GoBD completeness.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: jahresabrechnung-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -38,7 +37,8 @@ spec:
       ### Step 1 — Retrieve meter data
       1. Call edmd `get_billing_period` for malo_id, year (period_from: YYYY-01-01, period_to: YYYY-12-31).
       2. Verify all 12 months have consumption data. Flag gaps if present.
-      3. Check `is_estimated` flags — flag for operator review if substituted values.
+      3. Call edmd `get_quality_assessments` for the year — `is_estimated` says a figure
+         was substituted, the assessment says how badly. Flag for operator review.
 
       ### Step 2 — Fetch tariff and grid
       1. Call marktd `get_malo` for the NB assignment, and `get_preisblatt` for NNE
@@ -47,7 +47,9 @@ spec:
 
       ### Step 3 — Fetch Abschläge (advance payments)
       1. Call billingd `list_billing_records` filtered by malo_id, year, type=ABSCHLAGSRECHNUNG.
-      2. Sum all Abschlag amounts (= total received from customer).
+      2. Sum all Abschlag amounts (= total received from customer). Where a row is
+         ambiguous — a reversed Abschlag, a partial period — call billingd
+         `get_billing_record` for that one rather than guessing from the list.
 
       ### Step 4 — Generate Schlussabrechnung
       1. **Prepare** the Final-invoice parameters — period 01-01 to 12-31, the meter
@@ -58,12 +60,39 @@ spec:
          billingd's, on an operator's instruction.
       2. Verify: brutto_eur matches consumption × tariff + levies.
       3. Verify: zahlbetrag_eur = brutto_eur − sum_abschlage_eur.
-      4. If zahlbetrag_eur < 0: LF must refund within 6 weeks (StromGVV §17 / GasGVV §14).
+      4. If zahlbetrag_eur < 0 the invoice owes the customer money, and § 40c
+         Abs. 3 EnWG says by when. **Do not compute the date** — the engine puts
+         it on the document as `guthabenerstattung`, with `spaetestens`,
+         `verrechnung_zulaessig` and the Satz it rests on. Read it and report it.
+         The rule, so a wrong figure is recognisable: a credit is offset in full
+         against the **next Abschlag** or paid out within **two weeks**
+         (Satz 1), and a credit from an Abschlussrechnung must be paid out
+         within two weeks regardless, because there is no next Abschlag to
+         offset it against (Satz 2). The six weeks people reach for is
+         § 40c Abs. 2 — the deadline for *issuing* the Abschlussrechnung after
+         the Lieferverhältnis ends — and StromGVV § 17 is Zahlung und Verzug and
+         says nothing about a refund at all.
 
-      ### Step 5 — Regulatory check
-      1. §41 EnWG fields: Zählernummer, Verbrauchshistorie, Energiemix present?
-      2. §40a: Kilowattstundenpreis present for Haushalt?
-      3. § 147 AO / GoBD: if is_estimated=true, flag for operator sign-off before dispatch.
+      ### Step 5 — Deadlines the document itself carries
+      1. § 40c Abs. 2 EnWG: the Abschlussrechnung is due **six weeks** after the
+         Lieferverhältnis ended. State whether that window is still open.
+      2. § 40c Abs. 1 EnWG: the amount falls due at the stated date and at the
+         earliest **two weeks** after the Zahlungsaufforderung reaches the
+         customer. An earlier Fälligkeit on the document is a finding.
+
+      ### Step 6 — Regulatory check
+      The Schlussabrechnung is an Energierechnung, so its content is **§ 40 EnWG** —
+      not § 41, which governs the supply contract, and not § 40a, which governs how a
+      consumption figure may be arrived at.
+      1. § 40 Abs. 2 Nr. 6 EnWG: Anfangs- and Endzählerstand, the consumption, and how
+         the reading was obtained.
+      2. § 40 Abs. 2 Nr. 7 and Nr. 8: the Vorjahresvergleich and the Vergleichskundengruppe,
+         both also in graphical form.
+      3. § 40 Abs. 4 EnWG: the Berechnungsfaktoren — Arbeitspreis, Grundpreis, the
+         resulting Kilowattstundenpreis — complete and in ordinary language.
+      4. § 42 EnWG: call productd `get_product_energiemix` and check the Energieträgermix
+         and the CO₂ figure reach the customer with the invoice.
+      5. § 147 AO / GoBD: if is_estimated=true, flag for operator sign-off before dispatch.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -88,12 +117,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -138,7 +172,7 @@ spec:
         audience: [billing-operations]
         priority: high
         summary: >-
-          The annual settlement cannot be issued. §40 EnWG requires it within six weeks of the billing period ending.
+          The annual settlement cannot be issued. § 40c Abs. 2 EnWG requires it within six weeks of the abgerechneter Zeitraum ending — and within six weeks of the Lieferverhältnis ending where this is an Abschlussrechnung.
         when:
           - path: /compliance_status
             equals: "BLOCKED"
@@ -190,11 +224,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -212,167 +245,44 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://billingd/list_billing_records
-      mutates: false
-      max_sensitivity: internal
-      description: "list billing records via billingd"
-    - ref: tool://billingd/get_billing_record
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing record via billingd"
-    - ref: tool://billingd/preview_billing
-      mutates: false
-      max_sensitivity: internal
-      description: "preview billing via billingd"
-    - ref: tool://billingd/get_xrechnung
-      mutates: false
-      max_sensitivity: internal
-      description: "get xrechnung via billingd"
-    - ref: tool://billingd/check_billing_anomaly
-      mutates: false
-      max_sensitivity: internal
-      description: "check billing anomaly via billingd"
-    - ref: tool://billingd/list_vpp_settlements
-      mutates: false
-      max_sensitivity: internal
-      description: "list vpp settlements via billingd"
-    - ref: tool://billingd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via billingd"
-    - ref: tool://billingd/list_product_categories
-      mutates: false
-      max_sensitivity: internal
-      description: "list product categories via billingd"
-    - ref: tool://billingd/validate_tariff_config
-      mutates: false
-      max_sensitivity: internal
-      description: "validate tariff config via billingd"
-    - ref: tool://billingd/explain_invoice_position
-      mutates: false
-      max_sensitivity: internal
-      description: "explain invoice position via billingd"
-    - ref: tool://billingd/get_billing_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via billingd"
-    - ref: tool://edmd/get_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "get timeseries via edmd"
-    - ref: tool://edmd/get_imbalance
-      mutates: false
-      max_sensitivity: internal
-      description: "get imbalance via edmd"
     - ref: tool://edmd/get_billing_period
       mutates: false
       max_sensitivity: internal
-      description: "get billing period via edmd"
-    - ref: tool://edmd/get_device_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get device history via edmd"
-    - ref: tool://edmd/get_quality_warnings
-      mutates: false
-      max_sensitivity: internal
-      description: "get quality warnings via edmd"
-    - ref: tool://edmd/list_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list reading orders via edmd"
-    - ref: tool://edmd/list_overdue_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue reading orders via edmd"
-    - ref: tool://edmd/get_correction_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get correction history via edmd"
-    - ref: tool://edmd/validate_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "validate timeseries via edmd"
+      description: >-
+        Twelve months of consumption for the MaLo, month by month.
+
     - ref: tool://edmd/get_quality_assessments
       mutates: false
       max_sensitivity: internal
-      description: "get quality assessments via edmd"
-    - ref: tool://edmd/get_summenzeitreihe
-      mutates: false
-      max_sensitivity: internal
-      description: "get summenzeitreihe via edmd"
-    - ref: tool://edmd/get_annual_forecast
-      mutates: false
-      max_sensitivity: internal
-      description: "get annual forecast via edmd"
-    - ref: tool://edmd/get_gas_quality
-      mutates: false
-      max_sensitivity: internal
-      description: "get gas quality via edmd"
+      description: >-
+        Which of those months rest on substituted values.
+
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
+      description: >-
+        The NB assignment for the billing year.
+
     - ref: tool://marktd/get_preisblatt
       mutates: false
       max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
+      description: >-
+        PreisblattNetznutzung validity across the year.
+
+    - ref: tool://billingd/list_billing_records
       mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
+      max_sensitivity: internal
+      description: >-
+        The Abschlagsrechnungen issued during the year.
+
+    - ref: tool://billingd/get_billing_record
       mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
+      max_sensitivity: internal
+      description: >-
+        One Abschlag in full, where the list is not enough.
+
+    - ref: tool://productd/get_product_energiemix
       mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      max_sensitivity: internal
+      description: >-
+        The § 42 EnWG Energiemix the Schlussabrechnung must carry.

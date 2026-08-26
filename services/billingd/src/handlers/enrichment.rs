@@ -472,8 +472,14 @@ mod gas_enrichment_tests {
         assert_eq!(steuer, dec!(5.71));
     }
 
-    /// Every rendered position names the MaLo it came from; the document-level
-    /// tax position names none.
+    /// Every emitted position names the MaLo it came from, and the tax is
+    /// stated once — in `steuerbetraege`, not as a position.
+    ///
+    /// A BO4E `Rechnungsposition` is a net supply line: `gesamtnetto` is „Die
+    /// Summe der Nettobeträge der Rechnungsteile", so a tax line among the
+    /// positions is the same amount stated twice and makes the document's own
+    /// totals irreconcilable. That also makes the annotation total: there is no
+    /// longer a position with no MaLo to account for.
     #[test]
     fn aggregate_annotates_positions_with_their_malo() {
         use rust_decimal::dec;
@@ -493,14 +499,31 @@ mod gas_enrichment_tests {
         )
         .unwrap();
         let pos = json["rechnungspositionen"].as_array().unwrap();
-        // 2 commodity positions annotated + 1 aggregate tax position without.
         assert_eq!(pos[0]["marktlokationsId"], "11111111115");
         assert_eq!(pos[1]["marktlokationsId"], "22222222220");
-        let tax = pos
+        assert!(
+            !pos.iter().any(|p| p["kategorie"] == "Tax"),
+            "tax belongs in steuerbetraege, not among the positions"
+        );
+        assert!(
+            pos.iter().all(|p| p.get("marktlokationsId").is_some()),
+            "every emitted position is a supply line, so every one names its MaLo"
+        );
+        // …and the tax the positions no longer state is still on the document.
+        let steuer: rust_decimal::Decimal = json["steuerbetraege"]
+            .as_array()
+            .expect("steuerbetraege")
             .iter()
-            .find(|p| p["kategorie"] == "Tax")
-            .expect("aggregate tax position");
-        assert!(tax.get("marktlokationsId").is_none());
+            .filter_map(|e| e["steuerwert"].as_str())
+            .filter_map(|v| v.parse::<rust_decimal::Decimal>().ok())
+            .sum();
+        assert_eq!(
+            steuer,
+            json["gesamtsteuer"]["wert"]
+                .as_str()
+                .and_then(|v| v.parse::<rust_decimal::Decimal>().ok())
+                .expect("gesamtsteuer"),
+        );
         // Deterministic rechnungsdatum — no wall clock in the document.
         //
         // BO4E declares `rechnungsdatum` as `format: date-time`, so the wire

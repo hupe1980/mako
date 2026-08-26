@@ -166,16 +166,24 @@ pub(super) async fn dispatch_wim_iftsta(
 
 /// Dispatch `mabis.iftsta.empfangen` or `mabis.datenstatus.empfangen`.
 ///
-/// When `is_datenstatus = true` (`mabis.datenstatus.empfangen`), the payload
-/// must include `data_status` (`"abrechnungsdaten"` / `"abgerechnete_daten"` /
-/// `"abgerechnete_daten_kbka"`). The PID is forced to 21004.
+/// Both carry an inbound MaBiS IFTSTA over ERP REST instead of AS4.
 ///
-/// When `is_datenstatus = false` (`mabis.iftsta.empfangen`), `data_status` is
-/// `None` and `pid` must be a non-21004 MaBiS IFTSTA PID from
-/// [`MABIS_IFTSTA_PIDS`].
+/// | Command | PIDs accepted | Required payload |
+/// |---|---|---|
+/// | `mabis.datenstatus.empfangen` | 21003, 21004 | `datenstatus` |
+/// | `mabis.iftsta.empfangen` | 21002 | `abweisungsgrund` |
 ///
-/// Expected payload fields: `stream_id`, `pid` (optional for datenstatus),
-/// `sender_mp_id`, `receiver_mp_id`, `message_ref`. For datenstatus: `data_status`.
+/// **Both Datenstatus PIDs are accepted**, and which one applies follows from
+/// the participant's role: the BIKO sends 21003 to an NB or ÜNB and 21004 to a
+/// BKV. Forcing the PID to 21004 — as this handler used to — silently relabels
+/// every Datenstatus an NB receives.
+///
+/// 21000, 21001 and 21005 are refused: they are this participant's **own
+/// outbound** Prüfmitteilungen, so accepting one as an arrival would record a
+/// check nobody performed.
+///
+/// Expected payload fields: `stream_id`, `pid`, `version`, `message_ref`, plus
+/// `datenstatus` or `abweisungsgrund` per the table above.
 pub(super) async fn dispatch_mabis_iftsta(
     state: &CommandsApiState,
     payload: &serde_json::Value,
@@ -186,76 +194,110 @@ pub(super) async fn dispatch_mabis_iftsta(
         .and_then(|v| v.as_str())
         .ok_or_else(|| DispatchError::InvalidPayload("\"stream_id\" is required".into()))?
         .to_owned();
-    let pid_code = if is_datenstatus {
-        IFTSTA_DATENSTATUS_PID.as_u32()
-    } else {
-        let code = payload
-            .get("pid")
-            .and_then(|v| v.as_u64())
-            .map(|n| n as u32)
-            .ok_or_else(|| DispatchError::InvalidPayload("\"pid\" (u32) is required".into()))?;
-        if !MABIS_IFTSTA_PIDS.contains(&code) || code == IFTSTA_DATENSTATUS_PID.as_u32() {
-            return Err(DispatchError::InvalidPayload(format!(
-                "pid {code} is not a valid non-datenstatus MaBiS IFTSTA PID; \
-                 use mabis.datenstatus.empfangen for PID {IFTSTA_DATENSTATUS_PID}"
-            )));
-        }
-        code
-    };
+
+    let pid_code = payload
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+        .ok_or_else(|| DispatchError::InvalidPayload("\"pid\" (u32) is required".into()))?;
+
+    if MABIS_IFTSTA_PRUEFMITTEILUNG_PIDS.contains(&pid_code) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "pid {pid_code} is an outbound Prüfmitteilung of this participant and cannot \
+             be recorded as an arrival"
+        )));
+    }
+    let erwartet_datenstatus = MABIS_IFTSTA_DATENSTATUS_PIDS.contains(&pid_code);
+    if erwartet_datenstatus != is_datenstatus {
+        return Err(DispatchError::InvalidPayload(if is_datenstatus {
+            format!(
+                "pid {pid_code} carries no Datenstatus; \
+                 valid: {MABIS_IFTSTA_DATENSTATUS_PIDS:?}"
+            )
+        } else {
+            format!("pid {pid_code} carries a Datenstatus — use mabis.datenstatus.empfangen")
+        }));
+    }
+    if !erwartet_datenstatus && pid_code != MABIS_IFTSTA_ABWEISUNG_PID {
+        return Err(DispatchError::InvalidPayload(format!(
+            "pid {pid_code} is not an inbound MaBiS IFTSTA; \
+             valid: {MABIS_IFTSTA_DATENSTATUS_PIDS:?} or {MABIS_IFTSTA_ABWEISUNG_PID}"
+        )));
+    }
+
     let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
-    let sender = MarktpartnerCode::new(
-        payload
-            .get("sender_mp_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
-    let receiver = MarktpartnerCode::new(
-        payload
-            .get("receiver_mp_id")
-            .and_then(|v| v.as_str())
-            .unwrap_or(""),
-    );
+
+    // The version of a Summenzeitreihe is its Erstellungszeitpunkt, carried in
+    // IFTSTA `SG4 RFF+AUU` (17 characters). It is the key both ends match on,
+    // so it is required and validated rather than defaulted.
+    let version = payload
+        .get("version")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "\"version\" (Erstellungszeitpunkt, RFF+AUU) is required".into(),
+            )
+        })
+        .and_then(|v| {
+            SzrVersion::new(v).map_err(|e| DispatchError::InvalidPayload(e.to_string()))
+        })?;
+
     let message_ref = MessageRef::new(
         payload
             .get("message_ref")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
-    let data_status = if is_datenstatus {
+
+    let (datenstatus, abweisungsgrund) = if erwartet_datenstatus {
         let code = payload
-            .get("data_status")
+            .get("datenstatus")
             .and_then(|v| v.as_str())
             .ok_or_else(|| {
                 DispatchError::InvalidPayload(
-                    "\"data_status\" is required for mabis.datenstatus.empfangen".into(),
+                    "\"datenstatus\" is required for mabis.datenstatus.empfangen".into(),
                 )
             })?;
-        let ds = match code {
-            "abrechnungsdaten" => DataStatus::Abrechnungsdaten,
-            "abgerechnete_daten" => DataStatus::AbgerechtneteDaten,
-            "abgerechnete_daten_kbka" => DataStatus::AbgerechtneteDatenKbka,
-            other => {
-                return Err(DispatchError::InvalidPayload(format!(
-                    "unknown data_status \"{other}\"; valid values: \
-                     abrechnungsdaten, abgerechnete_daten, abgerechnete_daten_kbka"
-                )));
-            }
-        };
-        Some(ds)
+        // The STS+Z04 codelist (A01/A02/A03/A04/A06) is accepted verbatim, and
+        // so are the snake_case names, so an ERP can send either.
+        let ds = Datenstatus::from_code(code)
+            .or(match code {
+                "pruefdaten" => Some(Datenstatus::Pruefdaten),
+                "abrechnungsdaten" => Some(Datenstatus::Abrechnungsdaten),
+                "abrechnungsdaten_kbka" => Some(Datenstatus::AbrechnungsdatenKbka),
+                "abgerechnete_daten" => Some(Datenstatus::AbgerechneteDaten),
+                "abgerechnete_daten_kbka" => Some(Datenstatus::AbgerechneteDatenKbka),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload(format!(
+                    "unknown datenstatus \"{code}\"; valid: A01/A02/A03/A04/A06 or \
+                     pruefdaten, abrechnungsdaten, abrechnungsdaten_kbka, \
+                     abgerechnete_daten, abgerechnete_daten_kbka"
+                ))
+            })?;
+        (Some(ds), None)
     } else {
-        None
+        let grund = payload
+            .get("abweisungsgrund")
+            .and_then(|v| v.as_str())
+            .filter(|g| !g.trim().is_empty())
+            .ok_or_else(|| {
+                DispatchError::InvalidPayload(
+                    "\"abweisungsgrund\" is required for an Abweisung (PID 21002)".into(),
+                )
+            })?
+            .to_owned();
+        (None, Some(grund))
     };
+
     dispatch_to_process::<MabisBillingWorkflow, _>(state, &stream_id, "mabis-billing", move || {
         BillingCommand::ReceiveIftsta {
             pid,
-            sender,
-            receiver,
+            version,
+            datenstatus,
+            abweisungsgrund,
             message_ref,
-            // IFTSTA arrives via ERP REST, not AS4; no EDIFACT AHB profile applies.
-            // The ERP operator is responsible for providing a conformant IFTSTA payload.
-            validation_passed: true,
-            validation_errors: vec![],
-            data_status,
         }
     })
     .await

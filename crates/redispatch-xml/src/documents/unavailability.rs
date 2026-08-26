@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::documents::activation::EicCodingScheme;
 use crate::documents::kaskade::ParticipantMrid;
-use crate::types::{Mrid, RevisionNumber, SimpleContent, UtcDateTime, UtcMinuteDateTime};
+use crate::types::{Decimal3, Mrid, RevisionNumber, SimpleContent, UtcDateTime, UtcMinuteDateTime};
 
 // ── Namespace ─────────────────────────────────────────────────────────────────
 
@@ -89,23 +89,31 @@ pub enum UnavailabilityMarketRoleType {
     DataProvider,
 }
 
-/// Market role sub-element.
+// The sender and receiver are **flat, dotted** elements on the wire —
+// `<sender_MarketParticipant.mRID>` and
+// `<sender_MarketParticipant.marketRole.type>` — not a nested
+// `<sender_MarketParticipant>` container. That is the ENTSO-E CIM convention
+// the BDEW XSD follows, and the difference is not cosmetic: a nested document
+// fails XSD validation at the counterparty, and an inbound flat one loses the
+// sender entirely, because `serde` skips elements the model does not declare.
+// `original_sender_MarketParticipant.mRID` in the TimeSeries already had the
+// right shape, which is what made the mismatch easy to miss.
+
+/// One quarter-hour point of an unavailability curve.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UnavailabilityMarketRole {
-    /// Market role type code.
-    #[serde(rename = "type")]
-    pub role_type: UnavailabilityMarketRoleType,
+pub struct UnavailabilityPoint {
+    /// 1-based position within the `Available_Period`.
+    pub position: u32,
+    /// Available capacity in that interval (MW).
+    pub quantity: Decimal3,
 }
 
-/// Market participant reference.
+/// The asset this unavailability applies to.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UnavailabilityParticipant {
-    /// Market participant identifier (EIC or national code).
+pub struct AssetRegisteredResource {
+    /// Asset identifier.
     #[serde(rename = "mRID")]
     pub m_rid: ParticipantMrid,
-    /// Market role of this participant.
-    #[serde(rename = "marketRole")]
-    pub market_role: UnavailabilityMarketRole,
 }
 
 // ── UnavailabilityTimeInterval ────────────────────────────────────────────────
@@ -120,12 +128,25 @@ pub struct UnavailabilityTimeInterval {
     pub end: UtcMinuteDateTime,
 }
 
-/// `unavailability_Time_Period` wrapper element.
+/// The interval-resolved availability curve.
+///
+/// This is the document's actual payload: `start_DateAndOrTime` and
+/// `end_DateAndOrTime` say *when* the resource is affected, and these points
+/// say *how much* capacity remains in each interval. A model without them
+/// reduces an unavailability to a date range, and the Ausfallarbeit of
+/// `BilAReM` Kap. 3.2.2.1 is bounded by exactly this figure — `P_bean`, „die
+/// beanspruchbare Leistung der TR … die sich aus Subtraktion der
+/// Nichtbeanspruchbarkeit von der installierten Leistung ergibt".
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UnavailabilityTimePeriod {
-    /// The time interval covered by this unavailability period.
+pub struct UnavailabilityAvailablePeriod {
+    /// Interval the curve covers.
     #[serde(rename = "timeInterval")]
     pub time_interval: UnavailabilityTimeInterval,
+    /// Resolution of the points (ISO 8601 duration, e.g. `PT15M`).
+    pub resolution: String,
+    /// The points (at least one).
+    #[serde(rename = "Point")]
+    pub points: Vec<UnavailabilityPoint>,
 }
 
 // ── docStatus ─────────────────────────────────────────────────────────────────
@@ -142,13 +163,8 @@ pub struct DocStatus {
 /// Bidding zone domain reference in `Unavailability_MarketDocument`.
 pub type UnavailabilityBiddingZone = SimpleContent<String, EicCodingScheme>;
 
-/// `biddingZone_Domain` element in `Unavailability_MarketDocument`.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UnavailabilityBiddingZoneDomain {
-    /// EIC code of the bidding zone / control zone.
-    #[serde(rename = "mRID")]
-    pub m_rid: UnavailabilityBiddingZone,
-}
+// `biddingZone_Domain.mRID` and `quantity_Measure_Unit.name` are likewise flat
+// dotted elements, not containers.
 
 /// A single unavailability time series.
 ///
@@ -200,8 +216,22 @@ pub struct UnavailabilityTimeSeries {
     #[serde(rename = "businessType")]
     pub business_type: UnavailabilityBusinessType,
     /// Control zone of the resource.
-    #[serde(rename = "biddingZone_Domain")]
-    pub bidding_zone_domain: UnavailabilityBiddingZoneDomain,
+    #[serde(rename = "biddingZone_Domain.mRID")]
+    pub bidding_zone_domain_m_rid: UnavailabilityBiddingZone,
+    /// The production resource this unavailability applies to.
+    #[serde(
+        rename = "production_RegisteredResource.mRID",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub production_registered_resource_m_rid: Option<ParticipantMrid>,
+    /// The power-system resource the production resource belongs to.
+    #[serde(
+        rename = "production_RegisteredResource.pSRType.powerSystemResources.mRID",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub production_registered_resource_psr_type_m_rid: Option<ParticipantMrid>,
     /// Start date of the unavailability period (ISO date `yyyy-mm-dd`).
     #[serde(rename = "start_DateAndOrTime.date")]
     pub start_date: String,
@@ -214,6 +244,22 @@ pub struct UnavailabilityTimeSeries {
     /// End time of the unavailability period (`hh:mm:ssZ`).
     #[serde(rename = "end_DateAndOrTime.time")]
     pub end_time: String,
+    /// Power unit of the availability curve (always `MAW`).
+    #[serde(rename = "quantity_Measure_Unit.name")]
+    pub quantity_measure_unit_name: String,
+    /// Curve type.
+    #[serde(rename = "curveType")]
+    pub curve_type: String,
+    /// The asset this unavailability applies to.
+    #[serde(
+        rename = "Asset_RegisteredResource",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub asset_registered_resource: Option<AssetRegisteredResource>,
+    /// The interval-resolved availability curve.
+    #[serde(rename = "Available_Period")]
+    pub available_period: UnavailabilityAvailablePeriod,
 }
 
 // ── Unavailability_MarketDocument ─────────────────────────────────────────────
@@ -244,15 +290,24 @@ pub struct UnavailabilityMarketDocument {
     /// Document creation timestamp (UTC, second precision).
     #[serde(rename = "createdDateTime")]
     pub created_date_time: UtcDateTime,
-    /// Sender market participant.
-    #[serde(rename = "sender_MarketParticipant")]
-    pub sender_market_participant: UnavailabilityParticipant,
-    /// Receiver market participant.
-    #[serde(rename = "receiver_MarketParticipant")]
-    pub receiver_market_participant: UnavailabilityParticipant,
+    /// Sender market participant identifier.
+    #[serde(rename = "sender_MarketParticipant.mRID")]
+    pub sender_m_rid: ParticipantMrid,
+    /// Sender market role.
+    #[serde(rename = "sender_MarketParticipant.marketRole.type")]
+    pub sender_market_role: UnavailabilityMarketRoleType,
+    /// Receiver market participant identifier.
+    #[serde(rename = "receiver_MarketParticipant.mRID")]
+    pub receiver_m_rid: ParticipantMrid,
+    /// Receiver market role.
+    #[serde(rename = "receiver_MarketParticipant.marketRole.type")]
+    pub receiver_market_role: UnavailabilityMarketRoleType,
     /// The overall unavailability period (one calendar day).
-    #[serde(rename = "unavailability_Time_Period")]
-    pub unavailability_time_period: UnavailabilityTimePeriod,
+    ///
+    /// One flat dotted element on the wire, not a
+    /// `<unavailability_Time_Period>` container with a `<timeInterval>` child.
+    #[serde(rename = "unavailability_Time_Period.timeInterval")]
+    pub unavailability_time_interval: UnavailabilityTimeInterval,
     /// Document withdrawal status (mutually exclusive with `time_series`).
     #[serde(rename = "docStatus", default, skip_serializing_if = "Option::is_none")]
     pub doc_status: Option<DocStatus>,

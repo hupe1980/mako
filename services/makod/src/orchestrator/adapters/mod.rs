@@ -163,8 +163,9 @@ use mako_gpke::{
     SperrungCommand, SperrungLfCommand, SupplierChangeCommand, UtiltsKonfigCommand,
 };
 use mako_mabis::{
-    BillingCommand, ClearinglisteCommand, DataStatus, IFTSTA_DATENSTATUS_PID, MabisBillingWorkflow,
-    MabisClearinglisteWorkflow,
+    BillingCommand, ClearinglisteCommand, Datenstatus, IFTSTA_ABWEISUNG_PID,
+    IFTSTA_DATENSTATUS_PIDS, MabisBillingWorkflow, MabisClearinglisteWorkflow,
+    RFF_QUALIFIER_VERSION, STS_KATEGORIE_DATENSTATUS, SzrVersion,
 };
 use mako_wim::{
     DeviceChangeCommand, GeraeteubernahmeCommand, PreisanfrageCommand, PreislisteCommand,
@@ -456,68 +457,124 @@ fn iftsta_zuordnungsbeginn(i: &edi_energy::messages::iftsta::IftstaMessage) -> O
         .map(|raw| raw.chars().filter(char::is_ascii_digit).take(8).collect())
 }
 
-/// Extract a [`BillingCommand::ReceiveIftsta`] from an IFTSTA message routed
-/// to the MABIS billing workflow (PIDs 21000–21007).
+/// The Versionsangabe of the Summenzeitreihe an inbound MaBiS IFTSTA refers to.
+///
+/// `SG4 RFF+AUU`, DE 1154 `an17`. The MIG is explicit that this *is* the
+/// version: „Die Versionsangabe erfolgt über den Erstellungszeitpunkt, der in
+/// der MSCONS übermittelt wurde. Beispiel: `RFF+AUU:20110503121544?+00`"
+/// (IFTSTA MIG 2.1). It is the key the BIKO and this participant match on, so
+/// it is taken verbatim rather than reformatted.
+fn iftsta_szr_version(i: &edi_energy::messages::iftsta::IftstaMessage) -> Option<&str> {
+    i.segments()
+        .iter()
+        .filter(|s| s.tag == "RFF")
+        .find(|s| s.component_str(0, 0) == Some(RFF_QUALIFIER_VERSION))
+        .and_then(|s| s.component_str(0, 1))
+}
+
+/// The `(code, EBD)` pair of an `STS+Z04` Datenstatus segment.
+///
+/// `STS+Z04+<DE 4405>:<DE 1131>` — Statuskategorie `Z04` „Datenstatus zur
+/// Summenzeitreihe", the code, then the EBD it was read against; the MIG's own
+/// example is `STS+Z04+A03:E_0026`.
+///
+/// The category is matched exactly. An IFTSTA can carry other `STS` segments
+/// (a Prüfmitteilung result, for one), and reading the first one found would
+/// take a code out of the wrong catalogue.
+fn iftsta_datenstatus(
+    i: &edi_energy::messages::iftsta::IftstaMessage,
+) -> Option<(Datenstatus, Option<String>)> {
+    let sts = i
+        .segments()
+        .iter()
+        .filter(|s| s.tag == "STS")
+        .find(|s| s.component_str(0, 0) == Some(STS_KATEGORIE_DATENSTATUS))?;
+    let code = sts.component_str(1, 0)?;
+    let ebd = sts.component_str(1, 1).map(str::to_owned);
+    Datenstatus::from_code(code).map(|ds| (ds, ebd))
+}
+
+/// Extract a [`BillingCommand::ReceiveIftsta`] from an IFTSTA message routed to
+/// the MaBiS billing workflow.
 ///
 /// Called from `mabis_registry()` when `msg` is `AnyMessage::Iftsta`.
 ///
-/// For PID 21004 (Datenstatus vom BIKO), the `DataStatus` value is extracted
-/// from the STS segment element 2 (DE 9013, status reason):
+/// # Only three of the six PIDs arrive here
 ///
-/// | STS element 2 | `DataStatus` variant |
-/// |---------------|----------------------|
-/// | `Z03`         | `Abrechnungsdaten`   |
-/// | `Z49`         | `AbgerechtneteDaten` |
-/// | `Z86`         | `AbgerechtneteDatenKbka` |
+/// | PID | Meaning | Direction |
+/// |----:|---------|-----------|
+/// | 21002 | Abweisung einer Prüfmitteilung | BIKO → NB/ÜNB |
+/// | 21003 | Datenstatus / Weiterleitung Prüfmitteilung | BIKO → NB/ÜNB |
+/// | 21004 | Datenstatus / Weiterleitung Prüfmitteilung | BIKO → BKV/NB |
 ///
-/// Codes are per BDEW MaBiS IFTSTA AHB 2.0g. All other MaBiS PIDs set
-/// `data_status = None`.
+/// 21000, 21001 and 21005 are **this participant's own outbound
+/// Prüfmitteilungen** and are refused here: recording one as an arrival would
+/// enter a check nobody performed. The workflow refuses them too, so the two
+/// halves cannot drift.
 fn build_mabis_iftsta_command(msg: &AnyMessage) -> Result<BillingCommand, EngineError> {
     let AnyMessage::Iftsta(i) = msg else {
         return Err(EngineError::Deserialization(
-            "MABIS IFTSTA adapter: expected AnyMessage::Iftsta".into(),
+            "MaBiS IFTSTA adapter: expected AnyMessage::Iftsta".into(),
         ));
     };
     let pid = msg
         .detect_pruefidentifikator()
         .map_err(|e| {
-            EngineError::Deserialization(format!("MABIS IFTSTA adapter: PID detection failed: {e}"))
+            EngineError::Deserialization(format!("MaBiS IFTSTA adapter: PID detection failed: {e}"))
         })
         .and_then(convert_pid)?;
-    let (validation_passed, validation_errors) = ahb_verdict(msg);
 
-    // For PID 21004 (Statusmeldung vom BIKO an BKV/NB), extract the Datenstatus
-    // code from the first STS segment at element index 2 (DE 9013, status reason).
-    //
-    // IFTSTA MaBiS AHB 2.0g STS segment: STS+status_category+status_code+status_reason
-    // The BDEW Datenstatus qualifier occupies element position 2 (0-based).
-    let data_status = if pid == IFTSTA_DATENSTATUS_PID {
-        i.segments()
-            .iter()
-            .find(|s| s.tag == "STS")
-            .and_then(|s| s.element_str(2))
-            .and_then(|code| match code {
-                "Z03" => Some(DataStatus::Abrechnungsdaten),
-                "Z49" => Some(DataStatus::AbgerechtneteDaten),
-                "Z86" => Some(DataStatus::AbgerechtneteDatenKbka),
-                _ => None,
+    let raw = pid.as_u32();
+    if !IFTSTA_DATENSTATUS_PIDS.contains(&raw) && raw != IFTSTA_ABWEISUNG_PID {
+        return Err(EngineError::Deserialization(format!(
+            "MaBiS IFTSTA adapter: PID {raw} is an outbound Prüfmitteilung of this \
+             participant (21000/21001/21005), not an arrival"
+        )));
+    }
+
+    let version = iftsta_szr_version(i)
+        .ok_or_else(|| {
+            EngineError::Deserialization(
+                "MaBiS IFTSTA adapter: SG4 RFF+AUU (Versionsangabe der Summenzeitreihe) \
+                 is missing — the message cannot be matched to a version"
+                    .into(),
+            )
+        })
+        .and_then(|v| {
+            SzrVersion::new(v).map_err(|e| {
+                EngineError::Deserialization(format!(
+                    "MaBiS IFTSTA adapter: RFF+AUU '{v}' is not an Erstellungszeitpunkt: {e}"
+                ))
             })
+        })?;
+
+    let (datenstatus, abweisungsgrund) = if IFTSTA_DATENSTATUS_PIDS.contains(&raw) {
+        let (ds, _ebd) = iftsta_datenstatus(i).ok_or_else(|| {
+            EngineError::Deserialization(format!(
+                "MaBiS IFTSTA adapter: PID {raw} carries a Datenstatus but no readable \
+                 STS+{STS_KATEGORIE_DATENSTATUS} segment was found"
+            ))
+        })?;
+        (Some(ds), None)
     } else {
-        None
+        // 21002 Abweisung. The reason rides the FTX free text; without one the
+        // workflow refuses, because an Abweisung nobody can act on wastes the
+        // only correction leg the process has.
+        let grund = i
+            .segments()
+            .iter()
+            .find(|s| s.tag == "FTX")
+            .and_then(|s| s.component_str(3, 0))
+            .map(str::to_owned);
+        (None, grund)
     };
 
     Ok(BillingCommand::ReceiveIftsta {
         pid,
-        sender: MarktpartnerCode::new(i.sender().and_then(|n| n.party_id.as_deref()).unwrap_or("")),
-        receiver: MarktpartnerCode::new(
-            i.receiver()
-                .and_then(|n| n.party_id.as_deref())
-                .unwrap_or(""),
-        ),
+        version,
+        datenstatus,
+        abweisungsgrund,
         message_ref: MessageRef::new(msg.message_ref()),
-        validation_passed,
-        validation_errors,
-        data_status,
     })
 }
 
@@ -646,10 +703,13 @@ coverage_table! {
     gpke_stammdaten_registry,
     gpke_stornierung_registry,
     gpke_utilts_registry,
+    mabis_anforderung_ablehnung_registry,
     mabis_anforderung_registry,
     mabis_clearingliste_registry,
     mabis_listenabgleich_registry,
+    mabis_profil_registry,
     mabis_registry,
+    mabis_summenzeitreihe_registry,
     mabis_zp_lifecycle_registry,
     wim_geraeteubernahme_registry(mako_engine::types::Sparte::Strom),
     wim_insrpt_registry(mako_engine::types::Sparte::Strom, mako_fristen::antwort::Messtechnik::RlmOderImsMsHs),
@@ -1104,7 +1164,7 @@ fn cci_merkmal(s: &OwnedSegment) -> Option<&str> {
 }
 
 /// The DE 7037 Merkmal of the first `CCI` whose DE 7059 Klassentyp is `class`.
-fn cci_merkmal_of_class<'a>(segs: &'a [OwnedSegment], class: &str) -> Option<&'a str> {
+pub(super) fn cci_merkmal_of_class<'a>(segs: &'a [OwnedSegment], class: &str) -> Option<&'a str> {
     segs.iter()
         .filter(|s| s.tag == "CCI")
         .find(|s| cci_klassentyp(s) == Some(class))
@@ -1126,7 +1186,7 @@ fn cav_codes_after(segs: &[OwnedSegment], idx: usize) -> impl Iterator<Item = &s
 
 /// The `CAV` DE 7111 codes under the first `CCI` whose DE 7037 Merkmal is
 /// `merkmal` and whose DE 7059 Klassentyp is unused.
-fn cav_codes_under_merkmal<'a>(
+pub(super) fn cav_codes_under_merkmal<'a>(
     segs: &'a [OwnedSegment],
     merkmal: &str,
 ) -> impl Iterator<Item = &'a str> {

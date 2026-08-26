@@ -22,7 +22,7 @@ mako-fristen = { workspace = true }
 mako-events = { workspace = true }
 # The BDEW MaKo Werktage calendar, so an agent's approval window and the
 # regulatory window it guards resolve through the same holiday table.
-mako-service = { workspace = true, features = ["otel", "oidc", "cedar"] }
+mako-service = { workspace = true, features = ["otel", "oidc", "cedar", "metrics"] }
 axum         = { version = "0.8" }
 tokio        = { version = "1", features = ["full"] }
 serde        = { workspace = true, features = ["derive"] }
@@ -30,6 +30,11 @@ serde_json   = { workspace = true }
 time         = { workspace = true }
 uuid         = { workspace = true, features = ["v4", "serde"] }
 tracing      = "0.1"
+# The bridge from agentplane's instrument catalogue to `GET /metrics`.
+# agentplane emits every metric as a `tracing` event on its own target and picks
+# no exporter, so the embedder supplies the collector — `plane::metrics`.
+tracing-subscriber = { workspace = true }
+prometheus   = "0.14"
 anyhow       = "1"
 reqwest      = { workspace = true }
 tokio-util   = { workspace = true }

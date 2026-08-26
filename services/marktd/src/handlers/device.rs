@@ -34,55 +34,24 @@ use super::{Claims, TenantGln};
 
 pub type SrRepoExt = Arc<PgSteuerbareRessourceRepository>;
 
-/// Inject the canonical all-uppercase BO4E `_typ` discriminator if absent.
-///
-/// Values: `"ZAEHLER"`, `"GERAET"`, `"STEUERBARERESSOURCE"`, `"TECHNISCHERESSOURCE"`.
-fn inject_bo4e_typ(data: &mut serde_json::Value, typ_name: &str) {
-    if let Some(obj) = data.as_object_mut() {
-        obj.entry("_typ")
-            .or_insert_with(|| serde_json::Value::String(typ_name.to_owned()));
-    }
-}
-
-/// Validate `_typ`, deserialise as `T`, and reject any out-of-schema enum.
+/// Put a device payload through the BO4E gate.
 ///
 /// Returns the **typed** BO: the repository derives both the JSONB payload and
 /// the shadow columns from it, so the two cannot disagree.
 ///
-/// The strict enum gate is not optional here. `serde` maps an unrecognised wire
-/// value to `Unknown`, which would reach `zaehler.zaehler_typ` as the literal
-/// `"UNKNOWN"` — a value the column's `CHECK` refuses, turning a caller's typo
-/// into a 500 at the database instead of a 422 naming the field.
-fn validate_typed<T>(
-    data: serde_json::Value,
-    expected_typ: &str,
-) -> Result<T, (StatusCode, serde_json::Value)>
+/// The strict-enum stage is not optional here. `serde` maps an unrecognised
+/// wire value to `Unknown`, which would reach `zaehler.zaehler_typ` as the
+/// literal `"UNKNOWN"` — a value the column's `CHECK` refuses, turning a
+/// caller's typo into a 500 at the database instead of a 422 naming the field.
+fn validate_typed<T>(data: serde_json::Value) -> Result<T, (StatusCode, serde_json::Value)>
 where
-    T: serde::de::DeserializeOwned + rubo4e::Bo4eStrict,
+    T: serde::de::DeserializeOwned
+        + mako_markt::bo4e::Bo4eTyped
+        + rubo4e::Bo4eStrict
+        + mako_markt::bo4e::Bo4eConformance
+        + rubo4e::prelude::Validate<Context = ()>,
 {
-    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
-        && typ.to_uppercase() != expected_typ.to_uppercase()
-    {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("expected _typ {expected_typ}, got '{typ}'") }),
-        ));
-    }
-    let typed: T = serde_json::from_value(data).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid {expected_typ} payload: {e}") }),
-        )
-    })?;
-    rubo4e::Bo4eStrict::ensure_known_enums(&typed).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({
-                "error": format!("{expected_typ} has out-of-schema enum values: {e}")
-            }),
-        )
-    })?;
-    Ok(typed)
+    mako_markt::bo4e::decode(data).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
 }
 
 pub type DeviceRepoExt = Arc<PgDeviceRepository>;
@@ -129,15 +98,20 @@ pub struct GeraetResponse {
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertSrRequest {
     /// Full BO4E `SteuerbareRessource` payload (may be `{}`).
+    ///
+    /// The contracted iMS control products live **inside** it, as
+    /// `konfigurationsprodukte`, **not** beside it: the column `makod` reads
+    /// before confirming a Steuerungsauftrag is derived from this payload, so
+    /// the two cannot name different product lists.
     pub data: serde_json::Value,
     /// Associated MaLo-ID, if known.
+    ///
+    /// mako's own: `SteuerbareRessource` declares no MaLo or MeLo field (only
+    /// `lokationszuordnungen`), so this is not a restatement of anything the BO
+    /// carries and the upsert leaves it alone when omitted.
     pub malo_id: Option<String>,
-    /// Associated MeLo-ID, if known.
+    /// Associated MeLo-ID, if known. mako's own, as above.
     pub melo_id: Option<String>,
-    /// Contracted iMS control products (`Vec<Konfigurationsprodukt>` as JSON array).
-    /// When provided, replaces the stored list; `null` preserves the existing list.
-    #[serde(default)]
-    pub konfigurationsprodukte: Option<serde_json::Value>,
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -224,25 +198,35 @@ pub async fn put_steuerbare_ressource(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    // Validate data against rubo4e::current::SteuerbareRessource (N1).
-    // An empty object `{}` is valid — all fields are optional.
-    // A wrong `_typ` (e.g. "MARKTLOKATION") is rejected with 422.
-    if let Err(e) = serde_json::from_value::<SteuerbareRessource>(req.data.clone())
-        .map_err(|e| e.to_string())
-        .and_then(|bo| {
-            rubo4e::Bo4eStrict::ensure_known_enums(&bo)
-                .map_err(|e| format!("out-of-schema enum values: {e}"))
-        })
-    {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({ "error": format!("invalid SteuerbareRessource: {e}") })),
-        )
-            .into_response();
-    }
-
-    let mut data = req.data;
-    inject_bo4e_typ(&mut data, "STEUERBARERESSOURCE");
+    // The BO4E gate. An empty object `{}` is valid — every BO4E field is
+    // optional — but a payload naming another BO is not.
+    let typed_sr: SteuerbareRessource = match validate_typed(req.data) {
+        Ok(v) => v,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
+    // Derived from the document, not taken beside it. `makod` reads this column
+    // before confirming a `wim.steuerungsauftrag`, and an uncontracted
+    // `produktcode` must be rejected — so the list it reads has to be the list
+    // the stored SteuerbareRessource states, including when that list is empty.
+    let konfigurationsprodukte = match typed_sr.konfigurationsprodukte.as_ref() {
+        None => None,
+        Some(kp) => match serde_json::to_value(kp) {
+            Ok(v) => Some(v),
+            Err(e) => {
+                return (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(serde_json::json!({
+                        "error": format!("could not serialise konfigurationsprodukte: {e}")
+                    })),
+                )
+                    .into_response();
+            }
+        },
+    };
+    let data = match super::serialise_or_500(&typed_sr, "SteuerbareRessource") {
+        Ok(v) => v,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
 
     match repo
         .upsert_sr(
@@ -252,7 +236,7 @@ pub async fn put_steuerbare_ressource(
             req.melo_id.as_deref(),
             data,
             &req.bo4e_version,
-            req.konfigurationsprodukte,
+            konfigurationsprodukte,
         )
         .await
     {
@@ -608,10 +592,8 @@ pub async fn put_zaehler(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let mut data = req.data;
-    inject_bo4e_typ(&mut data, "ZAEHLER");
-    // Hard cut: validate schema on write.
-    let zaehler = match validate_typed::<Zaehler>(data, "ZAEHLER") {
+    // The gate injects `_typ` itself, and refuses a payload that names another BO.
+    let zaehler = match validate_typed::<Zaehler>(req.data) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -681,7 +663,7 @@ pub async fn get_zaehlwerke(
             // with a warning so the operator can investigate schema drift.
             tracing::warn!(
                 zaehler_id,
-                "edmd: zaehlwerke deserialization failed, returning raw JSON"
+                "marktd: zaehlwerke deserialization failed, returning raw JSON"
             );
             Json(zaehlwerke_json).into_response()
         }
@@ -750,10 +732,8 @@ pub async fn put_geraet(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    let mut data = req.data;
-    inject_bo4e_typ(&mut data, "GERAET");
-    // Hard cut: validate schema on write.
-    let geraet = match validate_typed::<Geraet>(data, "GERAET") {
+    // The gate injects `_typ` itself, and refuses a payload that names another BO.
+    let geraet = match validate_typed::<Geraet>(req.data) {
         Ok(v) => v,
         Err((status, body)) => return (status, Json(body)).into_response(),
     };
@@ -1021,21 +1001,16 @@ pub type TrRepoExt = Arc<PgTechnischeRessourceRepository>;
 /// Request body for `PUT /api/v1/technische-ressourcen/{tr_id}`.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct UpsertTrRequest {
-    /// Full BO4E `TechnischeRessource` payload.
+    /// Full BO4E `TechnischeRessource` payload — and the **only** source of
+    /// every queryable field on the row.
+    ///
+    /// `TechnischeRessource` declares `zugeordneteMarktlokationId`,
+    /// `vorgelagerteMesslokationId`, `technischeRessourceNutzung`,
+    /// `technischeRessourceVerbrauchsart` and `istFernschaltbar`, so none of
+    /// them is an envelope field. `istFernschaltbar` is what §14a steering
+    /// reads: a resource whose column says controllable while its document says
+    /// otherwise is one mako will try to steer and the field will not answer.
     pub data: serde_json::Value,
-    /// Associated MaLo-ID (`zugeordnete_marktlokation_id`), if known.
-    pub malo_id: Option<String>,
-    /// Associated MeLo-ID (`vorgelagerte_messlokation_id`), if known.
-    pub melo_id: Option<String>,
-    /// BO4E `TechnischeRessourceNutzung`: `"STROMVERBRAUCHSART"` |
-    /// `"STROMERZEUGUNGSART"` | `"SPEICHER"`. Falls back to `data`'s
-    /// `technischeRessourceNutzung` when omitted.
-    pub nutzung: Option<String>,
-    /// BO4E `TechnischeRessourceVerbrauchsart` (only for `STROMVERBRAUCHSART`):
-    /// `"KRAFT_LICHT"` | `"WAERME"` | `"E_MOBILITAET"` | `"STRASSENBELEUCHTUNG"`.
-    pub verbrauchsart: Option<String>,
-    /// Whether the resource can be remote-controlled (Redispatch 2.0).
-    pub ist_fernschaltbar: Option<bool>,
     #[serde(default = "default_bo4e_version")]
     pub bo4e_version: String,
 }
@@ -1072,75 +1047,37 @@ pub async fn put_technische_ressource(
         return (StatusCode::FORBIDDEN, "access denied").into_response();
     }
 
-    // Validate nutzung / verbrauchsart against the BO4E TechnischeRessource enums.
-    const VALID_NUTZUNG: &[&str] = &["STROMVERBRAUCHSART", "STROMERZEUGUNGSART", "SPEICHER"];
-    const VALID_VERBRAUCHSART: &[&str] = &[
-        "KRAFT_LICHT",
-        "WAERME",
-        "E_MOBILITAET",
-        "STRASSENBELEUCHTUNG",
-    ];
-    if let Some(n) = req.nutzung.as_deref()
-        && !VALID_NUTZUNG.contains(&n)
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!("invalid nutzung '{n}': must be one of {VALID_NUTZUNG:?}"),
-        )
-            .into_response();
-    }
-    if let Some(v) = req.verbrauchsart.as_deref()
-        && !VALID_VERBRAUCHSART.contains(&v)
-    {
-        return (
-            StatusCode::BAD_REQUEST,
-            format!("invalid verbrauchsart '{v}': must be one of {VALID_VERBRAUCHSART:?}"),
-        )
-            .into_response();
-    }
-
-    // Validate data against rubo4e::current::TechnischeRessource (N1).
-    // Also derive typed fields from the payload when not set in the request.
-    let typed_tr = match serde_json::from_value::<TechnischeRessource>(req.data.clone()) {
+    // No hand-written whitelist for `nutzung` / `verbrauchsart`: they are the
+    // wire values of `TechnischeRessourceNutzung` and
+    // `TechnischeRessourceVerbrauchsart`, which the gate's strict-enum stage
+    // already refuses anything outside — by JSON-path, and without a second
+    // copy of the vocabulary to keep in step with the schema.
+    //
+    // The gate also supplies every queryable column below.
+    let typed_tr: TechnischeRessource = match validate_typed(req.data) {
         Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invalid TechnischeRessource: {e}") })),
-            )
-                .into_response();
-        }
+        Err((status, body)) => return (status, Json(body)).into_response(),
     };
-    // Strict enum gate — reject out-of-schema enum values anywhere in the tree.
-    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed_tr) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("TechnischeRessource has out-of-schema enum values: {e}")
-            })),
-        )
-            .into_response();
-    }
-    // Prefer the explicit request fields; fall back to what the BO4E payload declares.
-    let ist_fernschaltbar = req.ist_fernschaltbar.or(typed_tr.ist_fernschaltbar);
-    let nutzung = req
-        .nutzung
-        .clone()
-        .or_else(|| bo4e_wire(typed_tr.technische_ressource_nutzung.as_ref()));
-    let verbrauchsart = req
-        .verbrauchsart
-        .clone()
-        .or_else(|| bo4e_wire(typed_tr.technische_ressource_verbrauchsart.as_ref()));
+    // Every queryable column, derived from the one object the gate validated.
+    let ist_fernschaltbar = typed_tr.ist_fernschaltbar;
+    let nutzung = bo4e_wire(typed_tr.technische_ressource_nutzung.as_ref());
+    let verbrauchsart = bo4e_wire(typed_tr.technische_ressource_verbrauchsart.as_ref());
+    let malo_id = typed_tr.zugeordnete_marktlokation_id.clone();
+    let melo_id = typed_tr.vorgelagerte_messlokation_id.clone();
 
-    let mut data = req.data;
-    inject_bo4e_typ(&mut data, "TECHNISCHERESSOURCE");
+    // The canonical form of what the gate accepted, so the stored document and
+    // the typed columns derived above come from one object.
+    let data = match super::serialise_or_500(&typed_tr, "TechnischeRessource") {
+        Ok(v) => v,
+        Err((status, body)) => return (status, Json(body)).into_response(),
+    };
 
     match repo
         .upsert_tr(
             &tr_id,
             &tenant_gln,
-            req.malo_id.as_deref(),
-            req.melo_id.as_deref(),
+            malo_id.as_deref(),
+            melo_id.as_deref(),
             nutzung.as_deref(),
             verbrauchsart.as_deref(),
             ist_fernschaltbar,

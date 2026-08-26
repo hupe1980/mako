@@ -106,21 +106,32 @@ pub const ESA_TYP2_PIDS: &[u32] = &[13027];
 /// which is the opposite of what the message says.
 pub const STORNO_PIDS: &[u32] = &[13006];
 
-/// MSCONS PIDs for Redispatch 2.0 time-series data delivery.
+/// MSCONS PIDs carrying Ausfallarbeit-related time series.
 ///
-/// These PIDs carry Ausfallarbeit, meteorological data, and Redispatch 2.0
-/// time-series. Handled by `mako-redispatch` for workflow routing; raw
-/// intervals are also stored in `edmd` for OLAP and audit.
+/// **This is a storage set, not a routing set.** `edmd` keeps the raw intervals
+/// for OLAP and audit whoever routes the message, and the five PIDs below reach
+/// three different process families:
 ///
-/// | PID   | Description |
-/// |-------|-------------|
-/// | 13020 | Ausfallarbeitsüberführungszeitreihe (NB → ÜNB) |
-/// | 13021 | Redispatch meteorologische Daten |
-/// | 13022 | Redispatch Einzelzeitreihe Ausfallarbeit |
-/// | 13023 | Redispatch Ausfallarbeitssummen |
-/// | 13026 | Redispatch Summenzeitreihe (ÜNB/VNB) |
+/// | PID   | Inhalt | Routed by |
+/// |-------|--------|-----------|
+/// | 13020 | Ausfallarbeitsüberführungszeitreihe (AAÜZ) | `mako-mabis` `mabis-billing` |
+/// | 13021 | meteorologische Daten (Ex-post) | `mako-redispatch` `redispatch-aktivierung` |
+/// | 13022 | Einzelzeitreihe Ausfallarbeit (TR-scharf) | `mako-redispatch` `redispatch-aktivierung` |
+/// | 13023 | Lieferantenausfallarbeitssummenzeitreihe (LF-AASZR) | `mako-mabis` `mabis-billing` |
+/// | 13026 | EEG-Überführungszeitreihe aufgrund Ausfallarbeit | — (family not implemented) |
 ///
-/// Source: MSCONS AHB 3.1g §5; BNetzA BK6-20-059; `mako-redispatch`.
+/// The name is historical: all five were once filed under Redispatch, and the
+/// BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0* puts only 13021 and 13022
+/// under „Kommunikationsprozesse Redispatch". What they still share is the
+/// subject — the Ausfallarbeit of a Redispatch-Maßnahme — which is why `edmd`
+/// keeps them together.
+///
+/// `cargo xtask validate-pruefids` checks the invariant that matters:
+/// `mako_redispatch::aktivierung::MSCONS_PIDS` ⊆ this set, so a PID the
+/// workflow accepts always has its intervals stored.
+///
+/// Source: BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0* (01.04.2026);
+/// MSCONS AHB 3.1g §5.
 pub const REDISPATCH_MSCONS_PIDS: &[u32] = &[13_020, 13_021, 13_022, 13_023, 13_026];
 
 /// All MSCONS PIDs that `edmd` accepts (Messwesen + Redispatch 2.0).

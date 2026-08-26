@@ -40,6 +40,20 @@ async fn dispatcher() -> EdifactIngestDispatcher {
 
 /// A minimal UTILMD interchange announcing `pid`.
 fn utilmd(pid: u32) -> String {
+    utilmd_mit_serie(pid, None)
+}
+
+/// A UTILMD announcing `pid`, optionally carrying the `SG10` pair that names
+/// which Summenzeitreihe it is about.
+///
+/// 55062 and 55063 are shared by eleven Summenzeitreihen, so a message using
+/// them **must** carry `CCI+++ZB4` / `CAV` DE 7111 and `CCI+6` — the adapter
+/// refuses without them rather than guessing, and there are eleven wrong
+/// answers to guess between (UTILMD AHB Strom 2.2 Kap. 13.1).
+fn utilmd_mit_serie(pid: u32, serie: Option<(&str, &str)>) -> String {
+    let sg10 = serie.map_or_else(String::new, |(cav, verantwortlicher)| {
+        format!("CCI+++ZB4'CAV+{cav}'CCI+6++{verantwortlicher}'")
+    });
     format!(
         "UNB+UNOC:3+{SENDER_MP}:14+{OWN_MP}:14+230101:0000+1'\
 UNH+1+UTILMD:D:11A:UN:S2.1'\
@@ -49,6 +63,7 @@ RFF+Z13:REF001'\
 NAD+MS+{SENDER_MP}::293'\
 NAD+MR+{OWN_MP}::293'\
 IDE+24+{LOC}'\
+{sg10}\
 UNT+8+1'\
 UNZ+1+1'"
     )
@@ -84,6 +99,44 @@ async fn dispatch(edi: &str, workflow: &str, pid: u32) -> IngestOutcome {
         .unwrap_or_else(|e| panic!("dispatch of {pid} errored: {e}"))
 }
 
+/// The `SG10` pair naming `serie`, for the families that share 55062/55063.
+fn cav_fuer(serie: mako_mabis::ZpSerie) -> Option<(&'static str, &'static str)> {
+    use mako_mabis::ZpSerie as S;
+    Some(match serie {
+        S::NetzzeitreiheNachbarNb | S::NetzzeitreiheBiko => ("ZA5", "ZA8"),
+        S::LieferantensummenzeitreiheNb => ("ZA1", "ZA8"),
+        S::LieferantensummenzeitreiheUenb => ("ZA3", "ZA9"),
+        S::Bilanzierungsgebietssummenzeitreihe => ("Z95", "ZA9"),
+        S::BilanzkreissummenzeitreiheNb => ("Z97", "ZA8"),
+        S::BilanzkreissummenzeitreiheUenb => ("Z99", "ZA9"),
+        S::Deltazeitreihenuebertrag => ("ZA4", "ZA9"),
+        S::Abrechnungssummenzeitreihe => ("ZA6", "ZB7"),
+        S::TaeglicheBgSzr => ("Z96", "ZA9"),
+        S::TaeglicheBkSzr => ("ZA0", "ZA9"),
+        // These have their own Anfrage PIDs and carry no CAV code.
+        S::Zuordnungsermaechtigung
+        | S::TaeglicheAauez
+        | S::LfAaszr
+        | S::MonatlicheAauezBkvLf
+        | S::MonatlicheAauezBkvAnfNb => return None,
+    })
+}
+
+/// A shared Anfrage code without the SG10 pair is refused, not guessed.
+#[tokio::test]
+async fn a_shared_anfrage_pid_without_its_series_is_refused() {
+    let msg = edi_energy::parse(utilmd(55062).as_bytes()).expect("parses");
+    let err = dispatcher()
+        .await
+        .dispatch(&msg, "mabis-zp-lifecycle", 55062)
+        .await
+        .expect_err("55062 alone does not say what was activated");
+    assert!(
+        format!("{err}").contains("Summenzeitreihen"),
+        "the error must say why: {err}"
+    );
+}
+
 /// `true` when the dispatcher had no arm for the PID and dropped the message.
 fn was_dropped(outcome: &IngestOutcome) -> bool {
     matches!(outcome, IngestOutcome::Skipped { reason, .. } if reason.starts_with("pid_not_in_"))
@@ -92,8 +145,13 @@ fn was_dropped(outcome: &IngestOutcome) -> bool {
 #[tokio::test]
 async fn every_zp_lifecycle_anfrage_reaches_its_arm() {
     for familie in mako_mabis::ZP_FAMILIEN {
+        // A shared Anfrage code needs the SG10 pair; a code used by exactly one
+        // series does not.
+        let serie = (mako_mabis::serien_fuer_pid(familie.anfrage).len() > 1)
+            .then(|| cav_fuer(familie.serie))
+            .flatten();
         let outcome = dispatch(
-            &utilmd(familie.anfrage),
+            &utilmd_mit_serie(familie.anfrage, serie),
             "mabis-zp-lifecycle",
             familie.anfrage,
         )

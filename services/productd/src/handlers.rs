@@ -160,27 +160,7 @@ pub fn normalize_tarifpreisblatt(
         ));
     }
 
-    // ── 1. _typ: inject for BO4E categories, reject mismatches ───────────────
-    if is_bo4e_category {
-        match data.get("_typ").and_then(|v| v.as_str()) {
-            None => {
-                data["_typ"] = serde_json::json!("TARIFPREISBLATT");
-            }
-            Some("TARIFPREISBLATT") => {}
-            Some(other) => {
-                return Err((
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    serde_json::json!({
-                        "error": format!(
-                            "expected _typ=TARIFPREISBLATT for category {category}, got {other:?}"
-                        )
-                    }),
-                ));
-            }
-        }
-    }
-
-    // ── 2. Normalise tarifpreispositionen ─────────────────────────────────────
+    // ── 1. Normalise tarifpreispositionen ─────────────────────────────────────
     //    - ALLCAPS preistyp normalisation + whitelist check
     //    - scalar Decimal validation for preisstaffeln[*].preis
     if let Some(positionen) = data
@@ -254,21 +234,22 @@ pub fn normalize_tarifpreisblatt(
         }
     }
 
-    // ── 3. BO4E envelope roundtrip (BO4E categories only) ────────────────────
-    //    Validates sparte, tariftyp, kundentypen, registeranzahl,
-    //    berechnungsparameter, preisgarantie, vertragskonditionen, tarifmerkmale.
-    //    Step 2 has already moved every mako-only preistyp into the
-    //    `mako:preistyp` ZusatzAttribut, so nothing in the tree decodes to
-    //    `Preistyp::Unknown` and the round-trip is lossless.
+    // ── 2. The BO4E gate ─────────────────────────────────────────────────────
+    //    `_typ`, typed deserialization, strict enums, and the BO4E-stated
+    //    rules, in that order — see `mako_markt::bo4e::gate`.
+    //
+    //    The strict-enum stage is load-bearing *here* in a way it is not at a
+    //    store-the-payload endpoint: this function returns the **canonical
+    //    round-trip** as what gets stored, and a BO4E enum decoding to the
+    //    `Unknown` catch-all serialises back as the literal `"UNKNOWN"` — so
+    //    without it `"sparte": "STROMM"` would overwrite what the caller sent.
+    //
+    //    Step 1 has already moved every mako-only preistyp into the
+    //    `mako:preistyp` ZusatzAttribut, so nothing in the tree is expected to
+    //    reach the catch-all and the round-trip is lossless.
     if is_bo4e_category {
-        let typed: Tarifpreisblatt = serde_json::from_value(data.clone()).map_err(|e| {
-            (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                serde_json::json!({
-                    "error": format!("invalid Tarifpreisblatt: {e}")
-                }),
-            )
-        })?;
+        let typed: Tarifpreisblatt = mako_markt::bo4e::decode(data.clone())
+            .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
 
         // ── Cross-validation: the BO4E `sparte` must match the product
         //    category. A GAS product carrying `sparte: Strom` (or vice versa)
@@ -323,19 +304,17 @@ pub fn normalize_tarifpreisblatt(
 
 /// Validate an `Energiemix` COM payload.
 ///
-/// `Energiemix` is a COM (not a BO) — it has no `_typ` discriminator.
-/// Validation: deserialise as `rubo4e::current::Energiemix` to enforce
-/// enum fields (`erzeugungsart`, `sparte`, …).  Re-serialise to canonical
-/// BO4E camelCase form.
+/// Runs the BO4E gate (`_typ`, schema, strict enums, BO4E rules) and then the
+/// §42 EnWG completeness rule the standard does not state. The strict-enum
+/// stage matters here for the same reason it does for the price sheet: the
+/// canonical round-trip is what gets stored, so an unrecognised
+/// `erzeugungsart` would be written back as the literal `"UNKNOWN"` and the
+/// disclosure would name a source that does not exist.
 fn normalize_energiemix(
     data: serde_json::Value,
 ) -> Result<(Energiemix, serde_json::Value), (StatusCode, serde_json::Value)> {
-    let mix: Energiemix = serde_json::from_value(data).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid Energiemix payload: {e}") }),
-        )
-    })?;
+    let mix: Energiemix = mako_markt::bo4e::decode(data)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
 
     // §42 Abs. 2 Nr. 2 EnWG completeness: the energy-source breakdown must be
     // present and account for the whole supply. An empty `{}` Energiemix used
@@ -1437,8 +1416,22 @@ pub async fn get_angebot_comparison(
             }
         };
 
-    let varianten: Vec<crate::pg::AngebotVariante> =
-        serde_json::from_value(angebot.varianten.clone()).unwrap_or_default();
+    // Unlike `positionen` above, an Angebot legitimately has no variants, so a
+    // deserialization failure and an absent list are not the same thing — the
+    // first is logged rather than silently rendered as the second.
+    let varianten: Vec<crate::pg::AngebotVariante> = if angebot.varianten.is_null() {
+        Vec::new()
+    } else {
+        serde_json::from_value(angebot.varianten.clone()).unwrap_or_else(|e| {
+            tracing::error!(
+                angebot_id = %angebot.id,
+                error = %e,
+                "schema drift: stored Angebot varianten do not deserialise — \
+                 rendering the offer without them"
+            );
+            Vec::new()
+        })
+    };
 
     // Build a product cache to avoid redundant DB lookups.
     let mut product_cache: std::collections::HashMap<String, Option<crate::pg::ProductRow>> =

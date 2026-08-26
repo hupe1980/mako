@@ -52,9 +52,18 @@ caller:
 
 | Window | Werktage after period end | Datenstatus of a new version |
 |---|---|---|
-| Erstaufschlag (BKA) | ≤ 10 WT | Abrechnungsdaten directly |
-| Clearing (BKA) | ≤ 30 WT | Prüfdaten, promoted by a positive Prüfmitteilung |
-| KBKA | after 30 WT | Prüfdaten |
+| Erstaufschlag (BKA) | 1.–10. WT | Abrechnungsdaten directly |
+| Clearing (BKA) | 11.–30. WT | Prüfdaten, promoted by a positive Prüfmitteilung |
+| KBKA | 31. WT – end of month 7 | Prüfdaten |
+
+Those are the **BG-SZR (Kategorie B)** rows of § 3.10 Tabelle 2, which is what
+this service files. A BK-SZR runs two Werktage longer at each end (1.–12. and
+13.–30. WT) and the DZÜ has no Erstaufschlag at all — `mako_mabis::fristen` has
+the whole table, keyed on the Summenzeitreihe.
+
+The BIKO's own Abrechnungsstichtage sit after the clearing window: the
+vorläufige Bilanzierung on the 18. WT (Datenstand 15. WT) and the
+abrechnungsrelevante on the 42. WT (Datenstand 30. WT).
 
 The scheduler fires at `run_hour_utc` on `erstaufschlag_werktag` — the last
 Werktag of the Erstaufschlag window, which gives the aggregate the most complete

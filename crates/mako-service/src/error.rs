@@ -43,6 +43,20 @@ pub enum ApiError {
     /// 422 — well-formed but semantically invalid.
     #[error("{0}")]
     Unprocessable(String),
+    /// 422 whose body also carries machine-readable detail.
+    ///
+    /// The `detail` object's keys are merged into the problem body alongside
+    /// `error` and `detail`, so a client can branch on *why* the payload was
+    /// refused without parsing prose. The BO4E gate is the reason this exists:
+    /// its rejection names the stage (`code`), and the JSON-paths or the rule
+    /// that stopped it, and that is worth more to a caller than a sentence.
+    #[error("{message}")]
+    UnprocessableWith {
+        /// The client-visible sentence.
+        message: String,
+        /// Extra top-level keys for the problem body. Ignored unless an object.
+        detail: serde_json::Value,
+    },
     /// 409 — conflicts with current state (duplicate, version race).
     #[error("{0}")]
     Conflict(String),
@@ -67,6 +81,19 @@ impl ApiError {
         Self::Unprocessable(msg.into())
     }
 
+    /// A 422 with a client-visible message and machine-readable detail.
+    ///
+    /// `detail`'s keys are merged into the problem body. Use it wherever the
+    /// reason for the refusal is structured — a JSON-path, a rule name, a
+    /// field — rather than only a sentence.
+    #[must_use]
+    pub fn unprocessable_with(msg: impl Into<String>, detail: serde_json::Value) -> Self {
+        Self::UnprocessableWith {
+            message: msg.into(),
+            detail,
+        }
+    }
+
     /// A 409 with a client-visible message.
     #[must_use]
     pub fn conflict(msg: impl Into<String>) -> Self {
@@ -81,7 +108,9 @@ impl ApiError {
             Self::Unauthorized => StatusCode::UNAUTHORIZED,
             Self::Forbidden => StatusCode::FORBIDDEN,
             Self::BadRequest(_) => StatusCode::BAD_REQUEST,
-            Self::Unprocessable(_) => StatusCode::UNPROCESSABLE_ENTITY,
+            Self::Unprocessable(_) | Self::UnprocessableWith { .. } => {
+                StatusCode::UNPROCESSABLE_ENTITY
+            }
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -100,11 +129,26 @@ impl IntoResponse for ApiError {
             }
             other => other.to_string(),
         };
-        let body = Json(serde_json::json!({
+        let mut body = serde_json::json!({
             "error": status.canonical_reason().unwrap_or("error"),
             "detail": detail,
-        }));
-        (status, body).into_response()
+        });
+        // Machine-readable keys ride alongside the sentence. `error` and
+        // `detail` are never overwritten: the shape of a problem body is this
+        // type's contract, not the caller's.
+        if let Self::UnprocessableWith {
+            detail: serde_json::Value::Object(extra),
+            ..
+        } = self
+            && let Some(obj) = body.as_object_mut()
+        {
+            for (k, v) in extra {
+                if k != "error" && k != "detail" {
+                    obj.insert(k, v);
+                }
+            }
+        }
+        (status, Json(body)).into_response()
     }
 }
 

@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Retail invoice anomaly detection. Rolling 3-month statistical deviation analysis (threshold: 20%). Investigates root causes: meter exchange, tariff change, quality substitution, or data error.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: billing-anomaly-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -43,15 +42,15 @@ spec:
          POST /api/v1/billing/{id}/release.
       3. Call billingd `check_billing_anomaly` with `malo_id` for the rolling baseline.
       4. If `risk_band` is REVIEW/HELD or `is_anomaly = true` (deviation > 20%):
-         a. Call billingd `get_billing_record` for full position details.
+         a. Call billingd `explain_invoice_position` for the position that moved.
          b. Call edmd `get_timeseries` to compare metered consumption.
          c. Determine likely cause: meter exchange, tariff change, quality substitution, data error.
-      4. If deviation > 50%: CRITICAL — escalate immediately.
+      5. If deviation > 50%: CRITICAL — escalate immediately.
 
       ## ROOT CAUSE TAXONOMY
-      - METER_EXCHANGE: zaehler_replaced=true in positions
+      - METER_EXCHANGE: call edmd `get_device_history` — a meter change inside the period
       - TARIFF_CHANGE: arbeitspreis changed between periods
-      - QUALITY_SUBSTITUTION: is_estimated=true, Ersatzwert used
+      - QUALITY_SUBSTITUTION: call edmd `get_quality_assessments` — the period rests on Ersatzwerte
       - DATA_ERROR: consumption implausibly high/low vs Vorjahr
 
   # What this agent is in a multi-agent arrangement.
@@ -73,7 +72,7 @@ spec:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
     # Reads the agent's own answer during memory formation — model output, and
     # therefore untrusted. A model that cannot call a tool is what should read it.
-    quarantined: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
 
   # Memory, bound to the party this run is about.
   #
@@ -115,12 +114,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -206,17 +210,27 @@ spec:
             - WARNING
             - OK
         root_cause:
-          type: string
+          type: [string, "null"]
+          description: >-
+            The taxonomy the procedure classifies into. An enum rather than free
+            text because the whole point of a taxonomy is that a consumer can
+            count it — as a string, four categories and four hundred phrasings
+            are the same field.
+          enum:
+            - METER_EXCHANGE
+            - TARIFF_CHANGE
+            - QUALITY_SUBSTITUTION
+            - DATA_ERROR
+            - null
         recommended_action:
           type: string
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -234,99 +248,40 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://billingd/list_billing_records
-      mutates: false
-      max_sensitivity: internal
-      description: "list billing records via billingd"
     - ref: tool://billingd/get_billing_record
       mutates: false
       max_sensitivity: internal
-      description: "get billing record via billingd"
-    - ref: tool://billingd/preview_billing
-      mutates: false
-      max_sensitivity: internal
-      description: "preview billing via billingd"
-    - ref: tool://billingd/get_xrechnung
-      mutates: false
-      max_sensitivity: internal
-      description: "get xrechnung via billingd"
+      description: >-
+        The invoice and the deterministic risk gate's own verdict on it.
+
     - ref: tool://billingd/check_billing_anomaly
       mutates: false
       max_sensitivity: internal
-      description: "check billing anomaly via billingd"
-    - ref: tool://billingd/list_vpp_settlements
-      mutates: false
-      max_sensitivity: internal
-      description: "list vpp settlements via billingd"
-    - ref: tool://billingd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via billingd"
-    - ref: tool://billingd/list_product_categories
-      mutates: false
-      max_sensitivity: internal
-      description: "list product categories via billingd"
-    - ref: tool://billingd/validate_tariff_config
-      mutates: false
-      max_sensitivity: internal
-      description: "validate tariff config via billingd"
+      description: >-
+        The rolling three-month baseline this specialist triages against.
+
     - ref: tool://billingd/explain_invoice_position
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via billingd"
-    - ref: tool://billingd/get_billing_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via billingd"
+      description: >-
+        Which position moved, once the total is known to have moved.
+
     - ref: tool://edmd/get_timeseries
       mutates: false
       max_sensitivity: internal
-      description: "get timeseries via edmd"
-    - ref: tool://edmd/get_imbalance
-      mutates: false
-      max_sensitivity: internal
-      description: "get imbalance via edmd"
-    - ref: tool://edmd/get_billing_period
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing period via edmd"
-    - ref: tool://edmd/get_device_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get device history via edmd"
-    - ref: tool://edmd/get_quality_warnings
-      mutates: false
-      max_sensitivity: internal
-      description: "get quality warnings via edmd"
-    - ref: tool://edmd/list_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list reading orders via edmd"
-    - ref: tool://edmd/list_overdue_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue reading orders via edmd"
-    - ref: tool://edmd/get_correction_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get correction history via edmd"
-    - ref: tool://edmd/validate_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "validate timeseries via edmd"
+      description: >-
+        Metered consumption for the period, to tell a data error from a real
+        change.
+
     - ref: tool://edmd/get_quality_assessments
       mutates: false
       max_sensitivity: internal
-      description: "get quality assessments via edmd"
-    - ref: tool://edmd/get_summenzeitreihe
+      description: >-
+        Whether the period was billed on substituted values
+        (QUALITY_SUBSTITUTION).
+
+    - ref: tool://edmd/get_device_history
       mutates: false
       max_sensitivity: internal
-      description: "get summenzeitreihe via edmd"
-    - ref: tool://edmd/get_annual_forecast
-      mutates: false
-      max_sensitivity: internal
-      description: "get annual forecast via edmd"
-    - ref: tool://edmd/get_gas_quality
-      mutates: false
-      max_sensitivity: internal
-      description: "get gas quality via edmd"
+      description: >-
+        Whether a meter exchange falls in the period (METER_EXCHANGE).

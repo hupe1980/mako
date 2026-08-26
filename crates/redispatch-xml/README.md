@@ -12,13 +12,14 @@ structural validation, and semantic validation. The crate targets MSRV 1.94 and 
 
 ## Regulatory basis
 
-| Document | Authority | Binding since |
+| Document | Authority | Status |
 |---|---|---|
-| NABEG 2019, § 13 ff. EnWG | Bundestag | 2021-10-01 |
-| BNetzA BK6-20-059 (Abrechnungsbilanzkreis) | BNetzA | 2021-10-01 |
-| BNetzA BK6-20-060 (Netzbetreiber-Koordination) | BNetzA | 2021-10-01 |
-| BNetzA BK6-20-061 (Informationsbereitstellung) | BNetzA | 2021-10-01 |
-| BDEW XML-Datenformate Redispatch 2.0 | BDEW | Annual update |
+| NABEG 2019, § 13 ff. EnWG | Bundestag | in force since 2021-10-01 |
+| **BNetzA BK6-23-241** — Anlage „BilAReM" | BNetzA | Beschluss 07.05.2026; ÜNB settle under it since 01.07.2026 |
+| BNetzA BK6-20-059 | BNetzA | TZ 1 repealed with the end of 30.06.2026; TZ 2 survives until the new EDI@Energy documents apply |
+| BNetzA BK6-20-060 (Netzbetreiber-Koordination) | BNetzA | **repealed** by BK6-23-241 TZ 4 |
+| BNetzA BK6-20-061 (Informationsbereitstellung) | BNetzA | **repealed** by BK6-23-241 TZ 3 |
+| BDEW XML-Datenformate Redispatch 2.0 | BDEW | the XSDs this crate models |
 
 All German grid operators (TSO/DSO) must implement Redispatch 2.0. Absence of a
 conformant implementation is a regulatory violation under § 14 EnWG.
@@ -45,6 +46,34 @@ messages (EDIFACT) are handled by the `edi-energy` crate.
 XSD schemas and application guidelines are published by BDEW at
 [bdew-mako.de](https://www.bdew-mako.de/market_communication/documents)
 (topicGroupId 25 — XML-Datenformate Redispatch 2.0).
+
+---
+
+## XSD conformance is checked, not assumed
+
+`tests/xsd_coverage.rs` reads the published XSDs from `regulatories/bdew-mako/`
+and asserts that **every element BDEW declares appears in the model**, scoped per
+document. Anything deliberately left out is listed in `NOT_MODELLED` with a
+reason; an unexplained entry fails the test.
+
+The check exists because the failure mode is invisible. `serde` ignores unknown
+XML elements, so a field simply absent from a struct means an inbound document
+carrying it is accepted and the value silently dropped — indistinguishable from
+a document that genuinely omitted it. It caught, among others:
+
+| Defect | Consequence |
+|---|---|
+| `sender_MarketParticipant` modelled as a **nested container** in `Kaskade`, `StatusRequest` and `Unavailability` | The XSD declares the flat dotted `sender_MarketParticipant.mRID`. Every document mako emitted failed XSD validation at the counterparty; every inbound one lost its sender. Same for `receiver_…`, `biddingZone_Domain.mRID`, `quantity_Measure_Unit.name`, `unavailability_Time_Period.timeInterval` |
+| `MeasureUnit` where the XSD says `MeasurementUnit` | Kostenblatt, PlannedResourceScheduleDocument. Only `ActivationDocument` uses the shorter spelling, and only in its `ActivationTimeSeries` |
+| `Bilanzkreis_Ausgleichsfahrplan_anfNB` and the per-Quote `Bilanzkreis_Ausgleichsfahrplan` absent | The **Redispatch-Bilanzkreis**, which `BilAReM` Kap. 2.3.2 names as one of the three things a Planwertmodell-Zuordnung must carry — where the bilanzielle Ausgleich is booked |
+| `ScheduleTimeSeries` absent from `ActivationDocument` | The korrespondierende Fahrpläne. `BilAReM` Kap. 2.1.2: „Der bilanzielle Ausgleich erfolgt durch die Anmeldung korrespondierender Fahrpläne" — the half of the process that moves the energy on paper |
+| `Abrechnungsmodell` absent from `Enthaltene_TR` | The Spitz / vereinfachte Spitz / Pauschal election. Without it the Ausfallarbeit of a Maßnahme cannot be computed at all |
+| `Available_Period` / `Point` absent from `Unavailability` `TimeSeries` | The availability curve itself. The model reduced an unavailability to a date range, dropping the per-interval capacity that bounds `P_bean` in `BilAReM` Kap. 3.2.2.1 |
+| One `TechnischeParameter` type shared across three different XSD complexTypes | The whole TR nameplate (Nettonennleistung, Nabenhöhe, storage capacities …) was dropped |
+
+The XSDs are third-party publications and are **not tracked in git**, so the test
+skips — visibly — when `regulatories/bdew-mako/` is absent.
+`regulatories/README.md` carries the download URL for each file.
 
 ---
 

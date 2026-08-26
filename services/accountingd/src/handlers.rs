@@ -2776,28 +2776,11 @@ pub async fn put_vorauszahlung(
     use rubo4e::current::Vorauszahlung;
     use rust_decimal::Decimal;
 
-    // Validate via rubo4e roundtrip.
-    let typed: Vorauszahlung = match serde_json::from_value(body) {
+    // The BO4E gate — the same four stages every BO4E endpoint in mako runs.
+    let typed: Vorauszahlung = match mako_markt::bo4e::decode(body) {
         Ok(v) => v,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invalid Vorauszahlung: {e}") })),
-            )
-                .into_response();
-        }
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response(),
     };
-    // Strict enum gate — the same one the marktd BO4E endpoints apply. Without
-    // it an unrecognised enum decodes to `Unknown` and is stored as if valid.
-    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("Vorauszahlung has out-of-schema enum values: {e}")
-            })),
-        )
-            .into_response();
-    }
     let canonical = match serde_json::to_value(&typed) {
         Ok(v) => v,
         Err(e) => {
@@ -3656,28 +3639,13 @@ pub async fn put_zahlungsinformation(
     use rubo4e::current::Zahlungsinformation;
     let lf_mp_id = q.lf_mp_id.as_deref().unwrap_or(&cfg.tenant).to_owned();
 
-    let typed: Zahlungsinformation = match serde_json::from_value(body) {
+    // The BO4E gate. Its strict-enum stage is what keeps `zahlungsart` — which
+    // drives the SEPA collection path — from degrading to `Unknown` and being
+    // stored as a mandate instruction nobody can act on.
+    let typed: Zahlungsinformation = match mako_markt::bo4e::decode(body) {
         Ok(z) => z,
-        Err(e) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(serde_json::json!({ "error": format!("invalid Zahlungsinformation: {e}") })),
-            )
-                .into_response();
-        }
+        Err(e) => return (StatusCode::UNPROCESSABLE_ENTITY, Json(e.to_json())).into_response(),
     };
-    // Strict enum gate: `zahlungsart` drives the SEPA collection path, so an
-    // unrecognised value degrading to `Unknown` would be stored as a mandate
-    // instruction nobody can act on.
-    if let Err(e) = rubo4e::Bo4eStrict::ensure_known_enums(&typed) {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(serde_json::json!({
-                "error": format!("Zahlungsinformation has out-of-schema enum values: {e}")
-            })),
-        )
-            .into_response();
-    }
 
     // Validate IBAN when present.
     if let Some(ref iban) = typed.iban

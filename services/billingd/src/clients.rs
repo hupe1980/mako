@@ -288,9 +288,30 @@ fn extract_tariff_from_product_data(
 
         // preisstaffeln[0].preis is a scalar Decimal (string or number); a
         // nested {"wert": "..."} object is not BO4E and is never stored.
-        let preis = pp
-            .get("preisstaffeln")
-            .and_then(|v| v.as_array())
+        //
+        // **A retail `Product` is flat-priced by construction** — its fields are
+        // scalars (`arbeitspreis_ct_per_kwh`, `grundpreis_ct_per_day`), with no
+        // room for a tier boundary. So a position carrying *several*
+        // `preisstaffeln` cannot be represented, and taking the first silently
+        // billed every kWh at tier 1's price: a 2-tier tariff whose second tier
+        // is cheaper over-charged every customer past the boundary, with nothing
+        // in the invoice showing it. BO4E's own tier semantics are subtler still
+        // — a quantity falling *between* two tiers „rutscht in die obere Zone",
+        // which `rubo4e`'s `PreisstaffelSliceExt::select_for` implements and
+        // `invoic-checker` uses on the grid side.
+        //
+        // Reported rather than guessed, through the same channel as an unmapped
+        // preistyp. Tiered retail pricing is a `Product` model change, not
+        // something to approximate at the mapping boundary.
+        let staffeln = pp.get("preisstaffeln").and_then(|v| v.as_array());
+        if let Some(tiers) = staffeln.filter(|a| a.len() > 1) {
+            dropped.push(format!(
+                "{pt} ({} Preisstaffeln — a retail Product is flat-priced)",
+                tiers.len()
+            ));
+            continue;
+        }
+        let preis = staffeln
             .and_then(|a| a.first())
             .and_then(|s| decimal_from_json(s.get("preis")));
 

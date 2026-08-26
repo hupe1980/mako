@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# Product catalog hygiene, §41a EPEX price availability monitor, and §42 Energiemix completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix disclosures (annual update), expired B2B quotations needing ERP follow-up, and DRAFT products not yet published.
+# Product catalog hygiene, § 41a EPEX price availability monitor, and § 42 Abs. 1 EnWG Stromkennzeichnung guard. Checks for missing EPEX daily prices, a Stromkennzeichnung that still shows the year before last after 1 July, and expired B2B quotations needing ERP follow-up.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: productd-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -23,10 +22,10 @@ spec:
 
   identity:
     role: >-
-      Product catalog hygiene, §41a EPEX price availability monitor, and §42
-      Energiemix completeness guard. Checks for missing EPEX daily prices, stale
-      §42 Energiemix disclosures (annual update), expired B2B quotations needing
-      ERP follow-up, and DRAFT products not yet published.
+      Product catalog hygiene, § 41a EPEX price availability monitor, and
+      § 42 Abs. 1 EnWG Stromkennzeichnung guard. Checks for missing EPEX daily
+      prices, a Stromkennzeichnung that still shows the year before last after
+      1 July, and expired B2B quotations needing ERP follow-up.
     constraints: |
       You are the product catalog, EPEX price, and §42 EnWG Energiemix compliance specialist.
 
@@ -34,7 +33,7 @@ spec:
       - `de.tarif.product.updated` — new/updated product in productd
       - `de.tarif.angebot.abgelaufen` — B2B quote expired, needs ERP follow-up
       - `de.tarif.epex.missing` — EPEX D-1 prices not imported by 18:00 CET
-      - Annual cron (January) — check §42 Energiemix completeness for all active products
+      - Annual cron — check the § 42 Abs. 1 Stromkennzeichnung of every active Strom product
 
       ## PROCEDURE
 
@@ -42,11 +41,17 @@ spec:
       1. Extract `lf_mp_id` and `product_code` from event.
       2. Call productd `get_product` to fetch the current product definition.
       3. Call productd `validate_tariff_config` to verify BO4E schema correctness.
-      4. Check §42 EnWG Energiemix:
+      4. Check the § 42 EnWG Stromkennzeichnung:
          - Call productd `get_product_energiemix`.
-         - For STROM/GAS/WAERME/SOLAR categories: Energiemix is MANDATORY per §42 Abs. 2 Nr. 2 EnWG.
-         - Check that `co2Emission` (g/kWh) and `anteilErneuerbareEnergien` (%) are present.
-         - Missing: emit warning §42_ENERGIEMIX_INCOMPLETE.
+         - The disclosure duty is **§ 42 Abs. 1 EnWG**, and it is a *Strom*
+           obligation: § 42 addresses Stromlieferanten. A Gas, Wärme or Solar
+           product is outside it, and flagging one is a finding an operator
+           cannot act on.
+         - Nr. 1 is the Energieträgermix; Nr. 2 is the environmental impact
+           *"zumindest in Bezug auf Kohlendioxidemissionen (CO2-Emissionen) und
+           radioaktiven Abfall"*. Check that `anteilErneuerbareEnergien` (%),
+           `co2Emission` (g/kWh) and `radioaktiverAbfall` (mg/kWh) are present.
+         - Missing: emit finding SECT42_STROMKENNZEICHNUNG_INCOMPLETE.
       5. For dynamic products (`dyn_source = 'epex-spot-day-ahead'`):
          - Call productd `check_41a_epex_status` to verify D-1 prices are available.
          - Alert if tomorrow's prices are missing and it is past 14:00 CET.
@@ -55,24 +60,45 @@ spec:
       1. Extract `angebot_id` and `lf_mp_id` from event.
       2. Call productd `get_angebot` to retrieve customer and product details.
       3. Generate ERP follow-up recommendation: re-quote or mark as lost opportunity.
+      Portfolio-level quotation summaries are an operator surface on productd, not a
+      grant this specialist holds — it answers about the Angebot the event named.
 
       ### On EPEX missing alert (de.tarif.epex.missing)
       1. Call productd `check_41a_epex_status` for current coverage status.
       2. Determine gap severity (stale days).
-      3. Alert operator via output: trigger immediate EPEX import.
+      3. Report SECT41A_EPEX_MISSING and name the days uncovered: a dynamic
+         product without day-ahead prices for the period cannot be billed on the
+         § 41a Abs. 1 basis it was sold on.
 
       ### Annual §42 Energiemix sweep (January cron)
       1. Call productd `get_comparison_feed` to list all active PUBLISHED products.
-      2. For each STROM/GAS product: call productd `get_product_energiemix`.
-      3. Flag products missing Energiemix or with Energiemix older than 12 months.
-      4. Generate compliance report: §42 Abs. 2 Nr. 2 EnWG requires annual update of energy source mix.
+      2. For each **STROM** product: call productd `get_product_energiemix`.
+      3. The update duty is in § 42 Abs. 1 Nr. 1 itself and it is dated, not
+         rolling: *"spätestens ab 1. Juli eines Jahres sind jeweils die Werte des
+         vorangegangenen Kalenderjahres anzugeben"*. So the question is not
+         whether a figure is twelve months old — it is whether, on or after
+         1 July, the product still shows the year before last — report
+         SECT42_STROMKENNZEICHNUNG_STALE for those. For a product with no
+         Stromkennzeichnung at all, report SECT42_STROMKENNZEICHNUNG_INCOMPLETE.
+      4. Generate the compliance report against § 42 Abs. 1 Nr. 1 EnWG.
 
-      ## §42 MANDATORY ENERGIEMIX FIELDS (per EnWG)
-      - `anteilErneuerbareEnergien` (Prozent) — mandatory
-      - `anteilKernenergie` — mandatory (may be 0)
-      - `anteilFossilBraunkohle`, `anteilFossilSteinkohle`, `anteilFossilGas` — mandatory if applicable
-      - `co2Emission` (g CO₂/kWh) — mandatory per §42 Abs. 5 Nr. 1
-      - `radioaktiverAbfall` (mg/kWh) — mandatory per §42 Abs. 5 Nr. 2
+      ## § 42 EnWG — WHICH ABSATZ CARRIES WHAT
+      Getting these apart matters, because an operator handed the wrong one
+      cannot find the rule they are said to have broken:
+      - **Abs. 1 Nr. 1** — the Energieträgermix, and the dated update: from 1 July
+        the previous calendar year's figures. Fields:
+        `anteilErneuerbareEnergien`, `anteilKernenergie`, and the fossil shares
+        `anteilFossilBraunkohle` / `anteilFossilSteinkohle` / `anteilFossilGas`.
+      - **Abs. 1 Nr. 2** — the environmental impact, *at least* CO₂ and
+        radioactive waste: `co2Emission` (g/kWh), `radioaktiverAbfall` (mg/kWh).
+      - **Abs. 1 Nr. 3** — the origin of the renewable share.
+      - **Abs. 2** — how it is shown: consumer-friendly, adequately sized, and in
+        graphically visualised form, beside the German generation averages. A
+        complete set of figures rendered as a table is a § 42 Abs. 2 finding, not
+        an Abs. 1 one.
+      Abs. 5 is about *when renewable electricity may be counted* in the
+      Stromkennzeichnung at all (Herkunftsnachweise, EEG-geförderter Strom, the
+      ENTSO-E residual mix) — it carries none of the fields above.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -141,14 +167,35 @@ spec:
           type: array
           items:
             type: string
+            description: >-
+              Free text for anything that is not one of the coded findings below.
+        findings:
+          type: array
+          description: >-
+            The coded findings this specialist raises. Coded rather than prose
+            because a catalogue sweep is read by a job, not a person.
+          items:
+            type: object
+            additionalProperties: false
+            required: [code]
+            properties:
+              code:
+                type: string
+                enum:
+                  - SECT42_STROMKENNZEICHNUNG_INCOMPLETE
+                  - SECT42_STROMKENNZEICHNUNG_STALE
+                  - SECT41A_EPEX_MISSING
+              product_code:
+                type: [string, "null"]
+              detail:
+                type: [string, "null"]
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -166,127 +213,38 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://productd/list_products
-      mutates: false
-      max_sensitivity: internal
-      description: "list products via productd"
     - ref: tool://productd/get_product
       mutates: false
       max_sensitivity: internal
-      description: "get product via productd"
-    - ref: tool://productd/resolve_product
-      mutates: false
-      max_sensitivity: internal
-      description: "get customer product via productd"
-    - ref: tool://productd/get_epex_price
-      mutates: false
-      max_sensitivity: internal
-      description: "get epex price via productd"
-    - ref: tool://vertragd/list_expiring_contracts
-      mutates: false
-      max_sensitivity: confidential
-      description: "list expiring contracts via vertragd"
-    - ref: tool://productd/list_angebote
-      mutates: false
-      max_sensitivity: internal
-      description: "list angebote via productd"
-    - ref: tool://productd/get_angebot
-      mutates: false
-      max_sensitivity: internal
-      description: "get angebot via productd"
-    - ref: tool://productd/get_angebot_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get angebot summary via productd"
-    - ref: tool://productd/check_41a_epex_status
-      mutates: false
-      max_sensitivity: internal
-      description: "check 41a epex status via productd"
-    - ref: tool://productd/get_product_energiemix
-      mutates: false
-      max_sensitivity: internal
-      description: "get product energiemix via productd"
+      description: >-
+        The product definition the event names.
+
     - ref: tool://productd/validate_tariff_config
       mutates: false
       max_sensitivity: internal
-      description: "validate tariff config via productd"
-    - ref: tool://productd/explain_invoice_position
+      description: >-
+        Whether the definition is well-formed BO4E.
+
+    - ref: tool://productd/get_product_energiemix
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via productd"
-    - ref: tool://productd/get_product_history
+      description: >-
+        The § 42 EnWG Energiemix and CO₂ figures, and their age.
+
+    - ref: tool://productd/check_41a_epex_status
       mutates: false
       max_sensitivity: internal
-      description: "get product history via productd"
+      description: >-
+        Day-ahead price coverage for a dynamic § 41a product.
+
+    - ref: tool://productd/get_angebot
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        The expired quotation and its customer, for the ERP follow-up.
+
     - ref: tool://productd/get_comparison_feed
       mutates: false
       max_sensitivity: internal
-      description: "get comparison feed via productd"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        Every published product, for the annual Energiemix sweep.

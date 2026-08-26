@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Sperr-/Entsperrauftrag execution monitor (NB role). Tracks the queue (pending→executed/failed/cancelled), flags orders past the date the Lieferant asked for, and diagnoses IFTSTA 21039 dispatches that never reached the LF.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: sperrd-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -44,21 +43,50 @@ spec:
          process cannot close. Classify BREACH.
       3. `iftsta_outstanding > 0` with `iftsta_stuck = 0` is a dispatch in
          flight — the retry worker is on it. Not a finding on its own.
-      4. `overdue_pending > 0` → call `list_due_orders`. Read `ist_fixtermin`:
+      4. `frist_ueberschritten > 0` is the **regulatory** miss: those orders are
+         past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1. Classify BREACH, and
+         separately from `overdue_pending`, which is only past the date the
+         Lieferant asked for.
+      5. `iftsta_ueberfaellig > 0` with `iftsta_stuck = 0` is the 1-Werktag IFTSTA
+         window already missed while the retry worker is still trying. Report it —
+         it is late, not lost, and it becomes `iftsta_stuck` if the budget runs out.
+      6. `overdue_pending > 0` → call `list_due_orders`. Read `ist_fixtermin`:
          a missed DTM+203 fixed date is a broken commitment to the LF; a passed
          DTM+469 earliest-start only means the job is now schedulable.
-      5. Diagnose: field-team backlog, makod AS4 delivery, or — the usual cause
+      7. Diagnose: field-team backlog, makod AS4 delivery, or — the usual cause
          of a stuck IFTSTA — no makod `gpke-sperrung` process in
-         `ValidationPassed` for that MaLo.
+         `ValidationPassed` for that MaLo. Call makod `get_process` for the MaLo the
+         order names, and makod `list_active_processes` when several orders are stuck at
+         once: one MaLo without a process is an order, and twenty is a dispatch outage.
+      8. Where the queue's own counters are not enough — a dispute about one order, or a
+         backlog whose shape matters — call sperrd `get_sperr_order` for the order and
+         sperrd `list_sperr_orders` for the period around it.
 
       ## TIMING — read this before classifying
-      GPKE fixes **no execution deadline in Werktagen** for the physical act.
-      The only date is the Lieferant's own DTM+203 Ausführungsdatum or DTM+469
-      frühestes Startdatum, which sperrd stores and reports as `soll_am`.
-      Earlier versions of this file asserted a two-Werktage BK6-22-024 execution
-      SLA; it appears in no BNetzA or BDEW document, and orders were classified
-      against it. GPKE Teil 2 § 3.5's 1 Werktag is the deadline for the
-      NB's **ORDRSP**, which makod tracks — not this queue.
+
+      Three different clocks run on a Sperrauftrag, and sperrd computes all three.
+      Classify against **its** counters, never against a window derived here: an
+      agent judging the queue by a different deadline than the service that owns
+      it produces findings the service cannot reproduce.
+
+      | Clock | Counter | Source |
+      |---|---|---|
+      | The Lieferant's own date — DTM+203 Ausführungsdatum, or DTM+469 frühestes Startdatum | `overdue_pending`, and `soll_am` / `ist_fixtermin` on the row | the ORDERS itself |
+      | Execution: **6 Werktage** after the earliest possible Sperrtermin | `frist_ueberschritten` | GPKE Teil 2 § 3.5.1.2 Nr. 1 — the regulatory one |
+      | IFTSTA back to the Lieferant: **1 Werktag** after the order is closed | `iftsta_ueberfaellig` (of the `iftsta_outstanding`) | GPKE Teil 2 § 3.5 |
+
+      Two things this list is correcting, because both were asserted here and
+      classified real orders:
+
+      - There *is* a regulatory execution window, and it is the 6 Werktage of
+        GPKE Teil 2 § 3.5.1.2 Nr. 1. This file used to say GPKE fixes none, so
+        `frist_ueberschritten` — the counter sperrd computes for exactly that —
+        was never read.
+      - It is **not** two Werktage from BK6-22-024. That figure appears in no
+        BNetzA or BDEW document.
+
+      The ORDRSP window — 1 Werktag for the NB's answer to the ORDERS — belongs to
+      makod, not to this queue.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -83,12 +111,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -119,10 +152,17 @@ spec:
     escalate_to: [mako-operations]
     triage:
       - name: sperr-compliance
-        audience: [credit-control]
+        # **The grid desk, not credit control.** This specialist is NB-role: it
+        # watches the queue the Netzbetreiber executes from. The §§ 41f/41g
+        # notice sequence is the *Lieferant's* and is credit-control's business
+        # (payment-reconciliation-agent files that row); what breaches here is
+        # the NB's own GPKE execution and IFTSTA obligation. Routing an NB
+        # finding to a supply-side desk is also the § 9 EnWG boundary crossed by
+        # a worklist row, in a build that may not contain that desk at all.
+        audience: [grid-operations]
         priority: urgent
         summary: >-
-          A §§41f/41g EnWG disconnection sequence is out of compliance — an overdue step or a missing IFTSTA. The sequence itself is accountingd's deterministic state machine; this row is the human check on it.
+          A Sperrauftrag queue is out of compliance on the Netzbetreiber's own obligations — an order past the 6 Werktage of GPKE Teil 2 § 3.5.1.2 Nr. 1, or an IFTSTA 21039 that never reached the Lieferant so their gpke-sperrung-lf process cannot close.
         when:
           - path: /sperr_compliance
             equals: "BREACH"
@@ -147,6 +187,7 @@ spec:
       required:
         - sperr_compliance
         - overdue_count
+        - frist_ueberschritten_count
         - missing_iftsta_count
       properties:
         sperr_compliance:
@@ -157,8 +198,27 @@ spec:
             - BREACH
         overdue_count:
           type: number
+          description: >-
+            Orders past the date the **Lieferant** asked for (DTM+203 or
+            DTM+469). A commitment, not a regulatory window.
+        frist_ueberschritten_count:
+          type: number
+          description: >-
+            Orders past the **6 Werktage** of GPKE Teil 2 § 3.5.1.2 Nr. 1 — the
+            regulatory execution window. Separate from `overdue_count` because
+            only this one is a breach of a published rule, and reporting them as
+            one number makes a missed Frist indistinguishable from a late job.
         missing_iftsta_count:
           type: number
+          description: >-
+            Terminal orders whose IFTSTA 21039 has not reached the Lieferant, so
+            their gpke-sperrung-lf process cannot close.
+        iftsta_ueberfaellig_count:
+          type: number
+          description: >-
+            Of those, the ones past the 1-Werktag window after completion. Late
+            while the retry worker is still trying — distinct from
+            `missing_iftsta_count`, which includes a dispatch in flight.
         oldest_overdue_days:
           type: number
         action:
@@ -170,11 +230,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -192,131 +251,39 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://sperrd/list_sperr_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list sperr orders via sperrd"
-    - ref: tool://sperrd/get_sperr_order
-      mutates: false
-      max_sensitivity: internal
-      description: "get sperr order via sperrd"
     - ref: tool://sperrd/get_sperr_stats
       mutates: false
       max_sensitivity: internal
-      description: "get sperr stats via sperrd"
+      description: >-
+        The queue's own counters — `iftsta_stuck` is the finding that matters.
+
     - ref: tool://sperrd/list_due_orders
       mutates: false
       max_sensitivity: internal
-      description: "list orders whose requested execution date has arrived, with the Treffpunkt"
-    - ref: tool://makod/list_commands
+      description: >-
+        Orders past the date the Lieferant asked for, with `ist_fixtermin` and
+        `soll_am`.
+
+    - ref: tool://sperrd/get_sperr_order
       mutates: false
       max_sensitivity: internal
-      description: "list commands via makod"
-    - ref: tool://makod/get_malo
+      description: >-
+        One order in full, once the queue says which.
+
+    - ref: tool://sperrd/list_sperr_orders
       mutates: false
       max_sensitivity: internal
-      description: "get malo via makod"
-    - ref: tool://makod/list_partners
-      mutates: false
-      max_sensitivity: internal
-      description: "list partners via makod"
-    - ref: tool://makod/get_partner
-      mutates: false
-      max_sensitivity: internal
-      description: "get partner via makod"
-    - ref: tool://makod/get_health
-      mutates: false
-      max_sensitivity: internal
-      description: "get health via makod"
+      description: >-
+        Orders across the period, to tell a backlog from a single failure.
+
     - ref: tool://makod/get_process
       mutates: false
       max_sensitivity: internal
-      description: "get process via makod"
-    - ref: tool://makod/list_overdue_deadlines
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue deadlines via makod"
+      description: >-
+        Whether a `gpke-sperrung` process reached ValidationPassed for the MaLo.
+
     - ref: tool://makod/list_active_processes
       mutates: false
       max_sensitivity: internal
-      description: "list active processes via makod"
-    - ref: tool://makod/get_format_version_coverage
-      mutates: false
-      max_sensitivity: internal
-      description: "get format version coverage via makod"
-    - ref: tool://makod/get_outbox_status
-      mutates: false
-      max_sensitivity: internal
-      description: "get outbox status via makod"
-    - ref: tool://makod/list_dead_letters
-      mutates: false
-      max_sensitivity: internal
-      description: "list dead letters via makod"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        Sperrung processes in flight, for a queue-wide diagnosis.

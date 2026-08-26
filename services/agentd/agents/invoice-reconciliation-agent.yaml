@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# REMADV payment reconciliation and overdue invoice resolution. Matches incoming REMADV 33001/33002 against open invoices, identifies partial payments, and triggers dunning when appropriate.
+# REMADV payment reconciliation and overdue invoice resolution. Matches incoming REMADV against open invoices, tells the one confirmation apart from the three Abweisungen, and says which escalation step is next.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: invoice-reconciliation-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -24,8 +23,8 @@ spec:
   identity:
     role: >-
       REMADV payment reconciliation and overdue invoice resolution. Matches
-      incoming REMADV 33001/33002 against open invoices, identifies partial
-      payments, and triggers dunning when appropriate.
+      incoming REMADV against open invoices, tells the one confirmation apart
+      from the three Abweisungen, and says which escalation step is next.
     constraints: |
       You are the invoice reconciliation specialist.
 
@@ -36,12 +35,29 @@ spec:
       ## STEP-BY-STEP PROCEDURE
 
       1. Call invoicd `get_receipt` for disputed/overdue invoice details.
-      2. Call accountingd `get_balance` for the outstanding balance, and `list_ledger`
-         for the entries behind it. (Open items are an HTTP endpoint, not a tool.)
+      2. Call accountingd `get_balance` for the outstanding balance, then call accountingd
+         `list_ledger` for the entries behind it. Open items are an HTTP endpoint on
+         accountingd, not a tool, so the ledger is where they are read from here.
       3. Cross-reference invoicd receipt against accountingd ledger entries.
-      4. Check if a REMADV 33002 (partial payment) was received.
-      5. For disputes: retrieve the original Rechnung from billingd and compare against disputed amount.
-      6. Determine escalation level (reminder → fee → Sperrauftrag).
+      4. Call invoicd `get_zahlungsstatus` for what has been paid. **Read the
+         REMADV PID before concluding anything about the money**, because only
+         one of the four is a payment:
+         - **33001** — Bestätigung: the Zahlungsavis confirming the invoice was
+           paid *in full*.
+         - **33002** — Abweisung, nicht positionsscharf. A refusal that does not
+           say which position.
+         - **33003** — Strom Abweisung Kopf und Summe, positionsscharf.
+         - **33004** — Strom Abweisung Position, positionsscharf.
+         The German INVOIC/REMADV process knows **no Teilzahlung**: there is no
+         partial-payment REMADV, so 33002, 33003 and 33004 are all refusals and
+         none of them reduces the open amount. Treating one as a part payment
+         closes an invoice that was never paid.
+      5. On `de.invoic.payment.overdue`, call invoicd `list_overdue_remadv` for the rest
+         of the overdue set — one overdue receipt in a portfolio of forty is a different
+         escalation from the only one.
+      6. For disputes: call billingd `get_billing_record` for the original Rechnung and
+         compare it against the disputed amount.
+      7. Determine escalation level (reminder → fee → Sperrauftrag).
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -66,12 +82,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -166,11 +187,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -188,127 +208,40 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://accountingd/get_balance
-      mutates: false
-      max_sensitivity: internal
-      description: "get balance via accountingd"
     - ref: tool://invoicd/get_receipt
       mutates: false
       max_sensitivity: internal
-      description: "get receipt via invoicd"
-    - ref: tool://invoicd/list_disputes
-      mutates: false
-      max_sensitivity: internal
-      description: "list disputes via invoicd"
-    - ref: tool://invoicd/get_check_result
-      mutates: false
-      max_sensitivity: internal
-      description: "get check result via invoicd"
-    - ref: tool://invoicd/list_overdue_remadv
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue remadv via invoicd"
+      description: >-
+        The disputed or overdue receipt in full.
+
     - ref: tool://invoicd/get_zahlungsstatus
       mutates: false
       max_sensitivity: internal
-      description: "get zahlungsstatus via invoicd"
-    - ref: tool://invoicd/summarize_billing_month
+      description: >-
+        What has been paid against it. Only REMADV 33001 confirms a payment —
+        33002, 33003 and 33004 are Abweisungen, and the process has no
+        Teilzahlung.
+
+    - ref: tool://invoicd/list_overdue_remadv
       mutates: false
       max_sensitivity: internal
-      description: "summarize billing month via invoicd"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
-    - ref: tool://netzbilanzd/list_drafts
+      description: >-
+        Receipts whose payment window has passed, for the escalation ladder.
+
+    - ref: tool://accountingd/get_balance
       mutates: false
       max_sensitivity: internal
-      description: "list invoices via netzbilanzd"
-    - ref: tool://netzbilanzd/list_disputed
+      description: >-
+        The outstanding balance the receipt should reconcile to.
+
+    - ref: tool://accountingd/list_ledger
       mutates: false
       max_sensitivity: internal
-      description: "list disputed via netzbilanzd"
-    - ref: tool://netzbilanzd/get_draft
+      description: >-
+        The ledger entries behind that balance.
+
+    - ref: tool://billingd/get_billing_record
       mutates: false
       max_sensitivity: internal
-      description: "get one invoice in full via netzbilanzd"
-    - ref: tool://netzbilanzd/list_pending_kostenblatt
-      mutates: false
-      max_sensitivity: internal
-      description: "list pending kostenblatt via netzbilanzd"
-    - ref: tool://netzbilanzd/get_billing_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via netzbilanzd"
-    - ref: tool://netzbilanzd/list_undispatched
-      mutates: false
-      max_sensitivity: internal
-      description: "list drafts past their dispatch window via netzbilanzd"
-    - ref: tool://netzbilanzd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via netzbilanzd"
+      description: >-
+        The original Rechnung, to compare against the disputed amount.

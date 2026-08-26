@@ -216,7 +216,7 @@ guaranteed 500).
 | `GET`/`PUT` | `/api/v1/zaehler-register/{register_id}/saisons` | ToU windows (`HH:MM:SS`, ISO weekdays) |
 | `PUT` | `/api/v1/geraete/{geraet_id}` | Upsert a Gerät |
 | `GET`/`PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}` | SteuerbareRessource (§ 14a iMS) |
-| `GET`/`PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | Contracted control products (`produktcode` mandatory, BK6-24-174 § 4.3) |
+| `GET`/`PUT` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte` | Contracted control products (`produktcode` mandatory — the § 14a Konfigurationsprodukt of **BK6-22-300**; BK6-24-174 is GPKE) |
 | `DELETE` | `/api/v1/steuerbare-ressourcen/{sr_id}/konfigurationsprodukte/{produktcode}` | Remove one product |
 | `GET`/`PUT` | `/api/v1/technische-ressourcen/{tr_id}` | TechnischeRessource (E-mobility, generation, storage) |
 | `PUT` | `/api/v1/lokationszuordnungen` | Upsert a graph edge |

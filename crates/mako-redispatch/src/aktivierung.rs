@@ -13,22 +13,32 @@
 //! 3. ANB confirms with ACR (A41) or partially rejects with AAR (A42).
 //! 4. VNB aggregates responses and sends upstream ACR/AAR to ÜNB.
 //!
-//! # Critical timing
+//! # Two clocks, two sources
 //!
-//! The ANB must confirm or reject within **5 minutes** of receiving the ACO
-//! (BK6-20-060 §6.3). This is a **hard real-time constraint** — late
-//! confirmation is a regulatory failure.
+//! **The `AcknowledgementDocument` is due in 3 minutes** — „unverzüglich, jedoch
+//! spätestens 3 Minuten nach Erhalt der Übertragungsdatei"
+//! (`AcknowledgementDocument` FB 1.0g). It answers the *transfer file*, reports a
+//! syntax result, and a late one „darf nicht zu einer Fristverletzung des
+//! eigentlichen Geschäftsvorfalles führen" — so it never fails the activation
+//! it carried. See [`crate::fristen::ACK_FRIST`] and
+//! [`crate::fristen::ack_regeln`].
 //!
-//! The `makod` deadline scheduler for Redispatch must poll at ≤ 30 second
-//! intervals (see `site/content/docs/reference/redispatch.md`).
+//! **The ACR/AAR window is operator-configured.** It was five minutes under
+//! BK6-20-060 §6.3, but BK6-23-241 Tenorziffer 4 repealed that decision and the
+//! replacement Prozessbeschreibungen (Tenorziffer 7) are not published yet.
+//! [`crate::fristen::`Betreiberfristen`::aktivierung_antwort`] carries the value,
+//! defaulting to the historical five minutes.
 //!
-//! In addition, each party must send an `AcknowledgementDocument` (transport
-//! ACK) within **6 wall-clock hours** of receiving the ACO (BK6-20-059 §4.3).
+//! Whatever the configured value, this stays a **real-time** constraint: the
+//! `makod` deadline scheduler must tick well inside the window, not on the
+//! Werktag cadence `GPKE` and `WiM` use.
 //!
 //! # Clock semantics
 //!
-//! All Redispatch 2.0 fristen use **UTC wall-clock hours** (not German local
-//! time). The XSD `UtcDateTime` fields carry explicit `Z` offsets.
+//! Both windows are wall-clock and run in **UTC** — the XSD `UtcDateTime`
+//! fields carry explicit `Z` offsets. Only the `BilAReM` Werktag obligations
+//! (Wetterdaten, `Stammdaten`-Gültigkeit, Planwert-Überführung) follow German
+//! local time.
 //!
 //! # IFTSTA integration
 //!
@@ -49,7 +59,10 @@
 //!
 //! # Regulatory basis
 //!
-//! `BNetzA` BK6-20-059 §4.3 (6h transport ACK), BK6-20-060 §6.3 (5 min activation).
+//! `BNetzA` **BK6-23-241** (Beschluss 07.05.2026), Anlage `BilAReM` Kap. 6.3
+//! (Abrufprozesse) and Kap. 6.4 (Abstimmung der Ausfallarbeit); EDI@Energy
+//! *`ActivationDocument`* FB 1.1f and *`AcknowledgementDocument`* FB 1.0g for the
+//! wire format and the acknowledgement Frist.
 
 use mako_engine::{
     deadline::Deadline,
@@ -83,62 +96,84 @@ pub const IFTSTA_PIDS: &[u32] = &[21_037, 21_038];
 ///
 /// | PID   | Beschreibung                                       |
 /// |-------|----------------------------------------------------|
-/// | 13020 | Ausfallarbeitsüberführungszeitreihe                |
-/// | 13021 | Redispatch meteorologische Daten                   |
-/// | 13022 | Redispatch Einzelzeitreihe Ausfallarbeit           |
-/// | 13023 | Redispatch Ausfallarbeitssummen                    |
-/// | 13026 | EEG-Überführungszeitreihe aufgrund Ausfallarbeit   |
+/// | 13021 | Übermittlung von meteorologischen Daten (Ex-post) — BTR → ANB, ANB → anfNB |
+/// | 13022 | Redispatch 2.0 Einzelzeitreihe Ausfallarbeit — BTR ↔ NB, anfNB → ANB |
 ///
-/// Source: MSCONS AHB (Redispatch 2.0 Annex), IFTSTA AHB + PID 4.0.
+/// Source: BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0* (01.04.2026),
+/// sheet *Prüf-ID Prozessschritt*, rows whose Prozessbeschreibung is
+/// „Kommunikationsprozesse Redispatch".
 ///
-/// ## Design note — intentional duplication
+/// ## What was removed and why
 ///
-/// These five PID numbers are also defined in `edmd::domain::REDISPATCH_MSCONS_PIDS`
-/// so that the `edmd` ingest filter can accept them without depending on
-/// `mako-redispatch`. The two definitions must always agree; they are validated
-/// together by `cargo xtask validate-pruefids`.
+/// | PID | Belongs to | Was routed here |
+/// |----:|------------|-----------------|
+/// | 13020 | `mabis-billing` — Ausfallarbeitsüberführungszeitreihe | ✗ |
+/// | 13023 | `mabis-billing` — Lieferantenausfallarbeitssummenzeitreihe | ✗ |
+/// | 13026 | „Geschäftsprozesse für EEG-Überführungszeitreihen" | ✗ |
 ///
-/// A cross-crate dependency between this process-engine crate and `edmd`'s
-/// data-tier domain would be the wrong direction architecturally:
-///   - `mako-redispatch` = process/workflow layer (stateful, event-sourced)
-///   - `edmd::domain` = data/repository layer (storage types, receipts, OLAP)
+/// 13020 and 13023 are `MaBiS` Summenzeitreihen with a full Prüfmitteilung/
+/// Datenstatus cycle (IFTSTA 21000, 21002–21005). Routing them to the
+/// Aktivierung workflow gave them no settlement stream to live in, so the
+/// Prüfmitteilung obligation they carry had nowhere to be recorded. 13026
+/// belongs to a third process family entirely.
 ///
-/// Coupling the workflow layer to the data layer just for 5 constants would be
-/// over-engineering. Stable regulatory constants with cross-crate `xtask`
-/// validation are an acceptable and common Rust workspace pattern.
-pub const MSCONS_PIDS: &[u32] = &[13_020, 13_021, 13_022, 13_023, 13_026];
+/// ## Relationship to `edmd::domain::REDISPATCH_MSCONS_PIDS`
+///
+/// The two lists answer different questions and are deliberately not equal:
+/// this one says which PIDs route to the Redispatch **workflow**, `edmd`'s says
+/// which Ausfallarbeit-related PIDs it **stores intervals for** — a superset,
+/// because 13020/13023 route to `mabis-billing` and 13026 to a family that is
+/// not implemented, yet all of them still belong in the OLAP store.
+///
+/// `cargo xtask validate-pruefids` enforces the invariant that does have to
+/// hold: this set ⊆ `edmd`'s. A PID the workflow accepts whose intervals `edmd`
+/// drops would leave the process with no data to settle against.
+///
+/// A cross-crate dependency from this process-engine crate to `edmd`'s
+/// data-tier domain would be the wrong direction architecturally, so the two
+/// constants stay separate and the xtask check keeps them consistent.
+pub const MSCONS_PIDS: &[u32] = &[13_021, 13_022];
 
-/// Redispatch ORDERS PIDs — inbound requests related to Ausfallarbeit.
+/// Redispatch ORDERS PIDs.
 ///
-/// | PID   | Beschreibung                                                          |
-/// |-------|-----------------------------------------------------------------------|
-/// | 17209 | Anforderung der Ausfallarbeit durch den anfNB                         |
-/// | 17210 | Anforderung Lieferantenausfallarbeitsclearingliste / Beendigung Abo   |
-/// | 17211 | Reklamation von Profilen bzw. Profilscharen                           |
+/// | PID   | Beschreibung                                  | Von → An            |
+/// |-------|-----------------------------------------------|---------------------|
+/// | 17209 | Anforderung der Ausfallarbeit durch den anfNB  | NB (anfNB) → NB (ANB) |
 ///
-/// Source: ORDERS AHB (Redispatch 2.0), PID 4.0.
-pub const ORDERS_PIDS: &[u32] = &[17_209, 17_210, 17_211];
-
-/// Redispatch ORDRSP PIDs — responses to Redispatch subscription/aggregation requests.
+/// The ANB answers it with MSCONS **13022** (Prozessschritt 2), not with an
+/// ORDRSP — which is why this family has no ORDRSP codes at all.
 ///
-/// | PID   | Beschreibung                                       |
-/// |-------|----------------------------------------------------|
-/// | 19204 | Ablehnung Ab-/Bestellung der Aggregationsebene     |
-/// | 19301 | Ablehnung Abo                                      |
-/// | 19302 | Bestätigung Ende Abo                               |
+/// ## What was removed and why
 ///
-/// Source: ORDRSP AHB (Redispatch 2.0), PID 4.0.
-pub const ORDRSP_PIDS: &[u32] = &[19_204, 19_301, 19_302];
+/// | PID | Belongs to |
+/// |----:|------------|
+/// | 17210 | `mabis-anforderung` — Anforderung Lieferantenausfallarbeitsclearingliste |
+/// | 17211 | `mabis-profile` — Reklamation Profile bzw. Profilscharen (EBD `E_0100`) |
+/// | 19204 | `mabis-anforderung` — Ablehnung Ab-/Bestellung der Aggregationsebene |
+/// | 19301 | Herkunftsnachweisregister — Ablehnung der Anforderung (`S_0092`) |
+/// | 19302 | Herkunftsnachweisregister — Bestätigung Ende des Abos (`S_0093`) |
+///
+/// All five carry the `MaBiS` or HKN-R Prozessbeschreibung in the PID overview,
+/// not „Kommunikationsprozesse Redispatch". 19301/19302 are the NB ↔ RB HKN-R
+/// exchange and have nothing to do with either family.
+///
+/// Source: BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0* (01.04.2026).
+pub const ORDERS_PIDS: &[u32] = &[17_209];
 
 // ── Deadline labels ───────────────────────────────────────────────────────────
 
-/// **5-minute hard constraint** for ANB activation response (BK6-20-060 §6.3).
+/// Deadline label for the ANB's ACR/AAR window.
+///
+/// Operator-configured — see
+/// [`crate::fristen::`Betreiberfristen`::aktivierung_antwort`]. Historically five
+/// minutes under BK6-20-060 §6.3, which BK6-23-241 Tenorziffer 4 repealed.
 ///
 /// Register immediately after [`AktivierungEvent::AcoReceived`] is applied.
 /// The `makod` Redispatch scheduler must poll at ≤ 30 s intervals.
 pub const ACTIVATION_RESPONSE_WINDOW_LABEL: &str = "redispatch-activation-response-window";
 
-/// 6h UTC window for `AcknowledgementDocument` (BK6-20-059 §4.3).
+/// Deadline label for the 3-minute `AcknowledgementDocument` window
+/// ([`crate::fristen::ACK_FRIST`]).
 pub const ACK_WINDOW_LABEL: &str = "redispatch-aktivierung-ack-window";
 
 // ── Enumerations ──────────────────────────────────────────────────────────────
@@ -152,7 +187,7 @@ pub enum ResponseType {
     PartialRejection,
 }
 
-/// Abruf variant in the Aufforderungsfall (Stammdaten `AbrufartAufforderungsfall`).
+/// Abruf variant in the Aufforderungsfall (`Stammdaten` `AbrufartAufforderungsfall`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Abrufart {
     /// Z01 — Delta: the schedule states the *change* against the planned value.
@@ -162,7 +197,7 @@ pub enum Abrufart {
 }
 
 /// How an activation is executed — the central Redispatch 2.0 case split
-/// (BK6-20-060: Aufforderungsfall vs Duldungsfall).
+/// (`BilAReM` Kap. 1: Aufforderungsfall vs Duldungsfall).
 ///
 /// - **Aufforderungsfall**: the Einsatzverantwortliche (EIV/BTR) steers the
 ///   resource itself according to the transmitted schedule. The 5-minute
@@ -417,7 +452,7 @@ pub enum AktivierungCommand {
     ReceiveAco {
         /// MRID of the ACO document.
         mrid: String,
-        /// Aufforderungsfall vs Duldungsfall — from the resource's Stammdaten
+        /// Aufforderungsfall vs Duldungsfall — from the resource's `Stammdaten`
         /// (`StatusDuldungsfall`/`AbrufartAufforderungsfall`), resolved by the
         /// transport layer before the command is issued.
         abwicklung: Abwicklung,
@@ -493,7 +528,7 @@ pub enum AktivierungCommand {
     },
     /// `AcknowledgementDocument` received for a document this process sent
     /// (correlation-routed via `ReceivingDocumentIdentification`). Audit
-    /// record — the 6h ACK deadline simply stops mattering once this lands.
+    /// record — the ACK deadline simply stops mattering once this lands.
     ReceiveAck {
         /// MRID of the `AcknowledgementDocument`.
         ack_mrid: String,
@@ -535,7 +570,8 @@ impl CommandPayload for AktivierungCommand {}
 ///
 /// The `makod` daemon must configure a **separate `DeadlineScheduler`** with a
 /// ≤ 30 s tick interval for Redispatch workflows to honour the 5-minute ACO
-/// response window (BK6-20-060 §6.3). The standard Werktage scheduler used
+/// response window ([`crate::fristen::`Betreiberfristen`::aktivierung_antwort`]).
+/// The standard Werktage scheduler used
 /// for GPKE/WiM is not sufficient.
 ///
 /// Spawn via [`mako_engine::process::Process`]:
@@ -554,7 +590,7 @@ impl Workflow for AktivierungWorkflow {
 
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            // 5-minute response window (BK6-20-060): only meaningful in the
+            // ACR/AAR response window: only meaningful in the
             // Aufforderungsfall — in the Duldungsfall the NB steers the
             // resource itself and awaits no counterparty response, so a
             // mistakenly scheduled window is ignored here.
@@ -567,7 +603,7 @@ impl Workflow for AktivierungWorkflow {
                     label: deadline.label().into(),
                 })
             }
-            // 6h AcknowledgementDocument window (BK6-20-059): our sent
+            // 3-minute AcknowledgementDocument window: our sent
             // ACR/AAR was never technically acknowledged — escalate.
             (
                 ACK_WINDOW_LABEL,
@@ -645,7 +681,7 @@ impl Workflow for AktivierungWorkflow {
             AktivierungEvent::DeadlineExpired { label, .. } => {
                 let is_ack_window = &**label == ACK_WINDOW_LABEL;
                 match state {
-                    // 6h ACK window: an unacknowledged ACR/AAR is a terminal
+                    // ACK window: an unacknowledged ACR/AAR is a terminal
                     // error even from Confirmed/PartialRejection.
                     AktivierungState::Confirmed { .. }
                     | AktivierungState::PartialRejection { .. }
@@ -653,7 +689,7 @@ impl Workflow for AktivierungWorkflow {
                     {
                         AktivierungState::DeadlineExpired {
                             reason: format!(
-                                "AcknowledgementDocument not received within the 6h window ({label})"
+                                "AcknowledgementDocument not received within the 3-minute window ({label})"
                             ),
                         }
                     }
@@ -836,7 +872,7 @@ impl Workflow for AktivierungWorkflow {
 
             AktivierungCommand::TimeoutExpired { deadline_id, label } => {
                 match (state, &*label) {
-                    // 6h ACK escalation is valid from a sent-response state.
+                    // ACK escalation is valid from a sent-response state.
                     (
                         AktivierungState::Confirmed { .. }
                         | AktivierungState::PartialRejection { .. },
@@ -1046,7 +1082,7 @@ mod tests {
         };
         let deadline = test_deadline(ACK_WINDOW_LABEL);
         let cmd = AktivierungWorkflow::on_deadline(&deadline, &state)
-            .expect("6h ACK window fires from Confirmed");
+            .expect("ACK window fires from Confirmed");
         let out = AktivierungWorkflow::handle(&state, cmd).expect("timeout handled");
         let next = out.events.iter().fold(state, AktivierungWorkflow::apply);
         assert!(

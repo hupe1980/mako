@@ -1,57 +1,60 @@
 //! MaBiS Clearingliste workflows — clearing-list distribution in the
 //! Bilanzkreisabrechnung settlement process (BNetzA BK6-24-174).
 //!
-//! Implements three related **receive-and-validate** workflows for UTILMD-based
-//! clearing-list messages published by the BIKO or NB during the MaBiS
-//! settlement cycle.
+//! Four **receive-and-record** UTILMD lists. Nothing is owed back on any of
+//! them: no Antwort PID, no Korrekturliste, no deadline.
 //!
-//! # Process overview
+//! # What makes a list record-only
 //!
-//! After the billing period closes, the BIKO distributes clearing lists that
-//! document the final assignment of market locations to suppliers and balance
-//! groups. These messages are **inbound-only** documents — no response is
-//! expected from the receiving party beyond the implicit APERAK acknowledgement
-//! at the AS4 transport level.
+//! Not "it looks like a list". A list is record-only when the BDEW
+//! *Anwendungsübersicht Prüfidentifikatoren* gives it **no answering
+//! Prozessschritt**. Three of the four here are the *delivery* leg of a request
+//! the counterparty already made (ORDERS 17203/17204/17205/17208 →
+//! [`crate::anforderung`]); the fourth is a broadcast of profile definitions.
+//!
+//! The list that is **not** here is the Lieferantenclearingliste **55065**. It
+//! carries a Prozessschritt-3 answer — 55066 „Korrekturliste zu
+//! Lieferantenclearingliste" — and therefore lives in
+//! [`crate::listenabgleich`]. Filing it as record-only drops the LF's
+//! correction obligation, and the drop is invisible: the list still arrives,
+//! still validates, still gets stored.
 //!
 //! ```text
-//! BIKO ──┬──(UTILMD 55069 Clearingliste DZR)──→  NB / ÜNB (this workflow)
-//!        └──(UTILMD 55070 Clearingliste BAS)──→  BKV       (this workflow)
-//! NB   ─────(UTILMD 55065 Lieferantenclearingliste)──→  LF (this workflow)
+//! NB / ÜNB ──(55067 Bilanzkreiszuordnungsliste)──→  BKV
+//! BIKO ────┬─(55069 Clearingliste DZR)──────────→  NB / ÜNB
+//!          └─(55070 Clearingliste BAS)──────────→  BKV
+//! NB ──────┬─(55073 Liste der Profildefinitionen)→  LF
+//!          └─(55073 Liste der Profildefinitionen)→  MSB
 //! ```
 //!
-//! # Prüfidentifikatoren (UTILMD AHB Strom FV2025-10-01)
+//! # Prüfidentifikatoren
 //!
-//! | PID   | Process name (AHB)                        | Direction       |
-//! |-------|-------------------------------------------|-----------------|
-//! | 55065 | Lieferantenclearingliste                  | NB → LF         |
-//! | 55069 | Clearingliste DZR                         | BIKO → NB / ÜNB |
-//! | 55070 | Clearingliste BAS                         | BIKO → BKV      |
+//! Verified against the BDEW *Anwendungsübersicht Prüfidentifikatoren 4.0*
+//! (01.04.2026), sheet *Prüf-ID Prozessschritt*.
+//!
+//! | PID   | Liste                          | Von → An        | Prozessschritt | Anfordernde ORDERS |
+//! |-------|--------------------------------|-----------------|---------------:|--------------------|
+//! | 55067 | Bilanzkreiszuordnungsliste     | NB/ÜNB → BKV    | 2              | 17203              |
+//! | 55069 | Clearingliste DZR              | BIKO → NB/ÜNB   | 3              | 17205 / 17208      |
+//! | 55070 | Clearingliste BAS              | BIKO → BKV      | 3              | 17204              |
+//! | 55073 | Liste der Profildefinitionen   | NB → LF/MSB     | 1              | —                  |
 //!
 //! # Regulatory basis
 //!
-//! - **BNetzA BK6-24-174 Anlage 3 MaBiS** — Clearingverfahren
-//! - **UTILMD S2.1 / S2.2** — EDI@Energy message format
+//! - **BNetzA BK6-24-174 Anlage 3 MaBiS** — Kap. 6.3/6.7 (Profildefinitionen),
+//!   Kap. 10.6/11.4 (Bilanzkreiszuordnungsliste), Kap. 13.11–13.13
+//!   (Clearinglisten BAS / DZR / ÜNB-DZR)
+//! - **UTILMD AHB Strom S2.1 / S2.2** — EDI@Energy message format
 //!
 //! # State machine
 //!
-//! All three PIDs share the same state machine:
+//! All four PIDs share the same state machine:
 //!
 //! ```text
 //! New
 //!  └─ ClearinglisteErhalten ──── (ValidationPassed) ──→ ValidationPassed (terminal)
 //!                           └─── (ValidationFailed) ──→ ValidationFailed (terminal)
 //! ```
-//!
-//! No outbound messages and no deadline are associated with these workflows.
-//! The absence of a follow-up APERAK deadline distinguishes them from
-//! request–response workflows such as `gpke-supplier-change` or `mabis-billing`.
-//!
-//! # Notes on PID 55065
-//!
-//! The Lieferantenclearingliste (PID 55065) is sent by the NB to the LF at the
-//! end of each billing period to communicate the final clearing list of assigned
-//! market locations. It is listed under MaBiS in BK6-24-174 Anlage 3 because it
-//! is part of the billing coordination cycle even though the sender is the NB.
 
 use mako_engine::types::Pruefidentifikator;
 use mako_engine::{
@@ -65,12 +68,16 @@ use mako_engine::{
 /// All UTILMD Clearingliste Prüfidentifikatoren handled by
 /// [`MabisClearinglisteWorkflow`].
 ///
-/// | PID   | Process (AHB name)              | Direction       |
-/// |-------|---------------------------------|-----------------|
-/// | 55065 | Lieferantenclearingliste        | NB → LF         |
-/// | 55069 | Clearingliste DZR               | BIKO → NB / ÜNB |
-/// | 55070 | Clearingliste BAS               | BIKO → BKV      |
-pub const CLEARINGLISTE_PIDS: &[u32] = &[55065, 55069, 55070];
+/// | PID   | Liste                        | Von → An      |
+/// |-------|------------------------------|---------------|
+/// | 55067 | Bilanzkreiszuordnungsliste   | NB/ÜNB → BKV  |
+/// | 55069 | Clearingliste DZR            | BIKO → NB/ÜNB |
+/// | 55070 | Clearingliste BAS            | BIKO → BKV    |
+/// | 55073 | Liste der Profildefinitionen | NB → LF/MSB   |
+///
+/// **55065 is deliberately absent**: it owes a 55066 Korrekturliste and is
+/// handled by [`crate::listenabgleich`].
+pub const CLEARINGLISTE_PIDS: &[u32] = &[55067, 55069, 55070, 55073];
 
 /// Stable workflow name for process routing.
 pub const WORKFLOW_NAME: &str = "mabis-clearingliste";
@@ -83,12 +90,17 @@ pub const WORKFLOW_NAME: &str = "mabis-clearingliste";
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ClearinglisteKind {
-    /// PID 55065 — Lieferantenclearingliste (NB → LF).
-    Lieferantenclearingliste,
-    /// PID 55069 — Clearingliste DZR (BIKO → NB / ÜNB).
+    /// PID 55067 — Bilanzkreiszuordnungsliste (NB / ÜNB → BKV), the delivery
+    /// leg of ORDERS 17203.
+    Bilanzkreiszuordnungsliste,
+    /// PID 55069 — Clearingliste DZR (BIKO → NB / ÜNB), the delivery leg of
+    /// ORDERS 17205 (NB) and 17208 (ÜNB).
     ClearinglisteDzr,
-    /// PID 55070 — Clearingliste BAS (BIKO → BKV).
+    /// PID 55070 — Clearingliste BAS (BIKO → BKV), the delivery leg of
+    /// ORDERS 17204.
     ClearinglisteBas,
+    /// PID 55073 — Liste der Profildefinitionen (NB → LF / MSB).
+    Profildefinitionen,
 }
 
 impl ClearinglisteKind {
@@ -98,9 +110,10 @@ impl ClearinglisteKind {
     #[must_use]
     pub fn from_pid(pid: u32) -> Option<Self> {
         match pid {
-            55065 => Some(Self::Lieferantenclearingliste),
+            55067 => Some(Self::Bilanzkreiszuordnungsliste),
             55069 => Some(Self::ClearinglisteDzr),
             55070 => Some(Self::ClearinglisteBas),
+            55073 => Some(Self::Profildefinitionen),
             _ => None,
         }
     }
@@ -109,9 +122,10 @@ impl ClearinglisteKind {
     #[must_use]
     pub fn process_name(self) -> &'static str {
         match self {
-            Self::Lieferantenclearingliste => "Lieferantenclearingliste",
+            Self::Bilanzkreiszuordnungsliste => "Bilanzkreiszuordnungsliste",
             Self::ClearinglisteDzr => "Clearingliste DZR",
             Self::ClearinglisteBas => "Clearingliste BAS",
+            Self::Profildefinitionen => "Liste der Profildefinitionen",
         }
     }
 }
@@ -150,7 +164,7 @@ pub struct ClearinglisteData {
 pub enum ClearinglisteEvent {
     /// Inbound Clearingliste UTILMD received.
     ClearinglisteErhalten {
-        /// BDEW Prüfidentifikator (55065, 55069, or 55070).
+        /// BDEW Prüfidentifikator (55067, 55069, 55070 or 55073).
         pruefidentifikator: Pruefidentifikator,
         /// Clearing list variant derived from the PID.
         kind: ClearinglisteKind,
@@ -236,7 +250,7 @@ impl ClearinglisteState {
 /// `Workflow::handle()` is pure — no I/O, no EDIFACT parsing, no store access.
 #[derive(Clone)]
 pub enum ClearinglisteCommand {
-    /// Inbound Clearingliste UTILMD received (PIDs 55065, 55069, or 55070).
+    /// Inbound Clearingliste UTILMD received (PIDs 55067, 55069, 55070, 55073).
     ///
     /// Constructed by the EDIFACT adapter in `makod` when a UTILMD with one of
     /// the handled PIDs arrives on the AS4 inbound channel.
@@ -266,9 +280,9 @@ impl CommandPayload for ClearinglisteCommand {}
 
 /// MaBiS Clearingliste workflow — handles inbound clearing-list UTILMD messages.
 ///
-/// Handles PIDs 55065 (Lieferantenclearingliste), 55069 (Clearingliste DZR),
-/// and 55070 (Clearingliste BAS) in the MaBiS settlement cycle (BK6-24-174
-/// Anlage 3).
+/// Handles PIDs 55067 (Bilanzkreiszuordnungsliste), 55069 (Clearingliste DZR),
+/// 55070 (Clearingliste BAS) and 55073 (Liste der Profildefinitionen) in the
+/// MaBiS settlement cycle (BK6-24-174 Anlage 3).
 ///
 /// This workflow is purely receive-and-record: it validates the inbound UTILMD
 /// and stores the clearing data for downstream billing-period projection,
@@ -343,7 +357,8 @@ impl Workflow for MabisClearinglisteWorkflow {
                 let kind = ClearinglisteKind::from_pid(pid.as_u32()).ok_or_else(|| {
                     WorkflowError::rejected(format!(
                         "PID {pid} is not a handled Clearingliste PID \
-                         (expected 55065, 55069, or 55070)"
+                         (erwartet 55067, 55069, 55070 oder 55073; \
+                         55065 gehört zu mabis-listenabgleich)"
                     ))
                 })?;
 

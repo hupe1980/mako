@@ -331,7 +331,14 @@ pub struct Steuerbarkeit {
 
 // ── Technische_Parameter ──────────────────────────────────────────────────────
 
-/// Technical parameters of a controllable resource.
+/// Technical parameters of a **Steuerbare Ressource**.
+///
+/// The XSD declares `Technische_Parameter` three times with **three different
+/// anonymous complexTypes** — once under `SR_Objekt` (this one, the dispatch
+/// timings), once under `Enthaltene_TR` ([`TrTechnischeParameter`], the plant
+/// nameplate) and once under `CR_Objekt` (the load gradients alone). Sharing
+/// one Rust type across them silently drops whichever fields the other shapes
+/// carry, which is what used to happen to the entire TR nameplate.
 ///
 /// All fields are optional; only those relevant to the resource type are
 /// populated.
@@ -399,31 +406,344 @@ pub struct TechnischeParameter {
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub lastgradient_erhoehung: Option<Decimal3>,
+    pub lastgradient_erhoehung: Option<Lastgradient>,
     /// Load gradient — downward ramp rate.
     #[serde(
         rename = "Lastgradient_Reduzierung",
         default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub lastgradient_reduzierung: Option<Decimal3>,
+    pub lastgradient_reduzierung: Option<Lastgradient>,
+}
+
+/// A load gradient and the capacity it is expressed relative to.
+///
+/// `Basisgroesse` is what makes `@Gradient` interpretable: a gradient given in
+/// `%/min` is a percentage **of that base**, so a reader that drops it either
+/// has to guess the reference or cannot use the figure at all.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Lastgradient {
+    /// The ramp rate.
+    #[serde(rename = "@Gradient")]
+    pub gradient: Decimal3,
+    /// Unit of the ramp rate (`Z01` = %/min, or `MAW`).
+    #[serde(rename = "@Einheit")]
+    pub einheit: String,
+    /// Capacity the gradient is relative to (MW).
+    #[serde(
+        rename = "Basisgroesse",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub basisgroesse: Option<Decimal3>,
+}
+
+// ── TR-level Technische_Parameter ────────────────────────────────────────────
+
+/// Whether a 70 % Wirkleistungsbegrenzung applies (`Absenkung_70`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JaNein {
+    /// `A01` — yes.
+    #[serde(rename = "A01")]
+    Ja,
+    /// `A02` — no.
+    #[serde(rename = "A02")]
+    Nein,
+}
+
+/// Site coordinates of a Technische Ressource.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Geokoordinaten {
+    /// Longitude, degrees east.
+    #[serde(rename = "@LaengeOst")]
+    pub laenge_ost: f64,
+    /// Latitude, degrees north.
+    #[serde(rename = "@BreiteNord")]
+    pub breite_nord: f64,
+}
+
+/// Technical parameters of a **Technische Ressource** — the plant nameplate.
+///
+/// A different complexType from [`TechnischeParameter`] despite sharing the
+/// element name; see that type's docs. These are the figures the Ausfallarbeit
+/// calculation reads: `BilAReM` Kap. 3.2.2.1 bounds `W_A` by `P_bean`, which is
+/// „die installierte Leistung der TR" less any Nichtbeanspruchbarkeit, and the
+/// Pauschal-Abrechnung of Kap. 3.2.2.3 multiplies an Anlagenfaktor by exactly
+/// that installed capacity.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TrTechnischeParameter {
+    /// Nettonennleistung, production direction (MW).
+    #[serde(
+        rename = "Nettonennleistung_Prod",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nettonennleistung_prod: Option<Decimal3>,
+    /// Nettonennleistung, consumption direction (MW).
+    #[serde(
+        rename = "Nettonennleistung_Verb",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nettonennleistung_verb: Option<Decimal3>,
+    /// Nettoengpassleistung, production direction (MW).
+    #[serde(
+        rename = "Nettoengpassleistung_Prod",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nettoengpassleistung_prod: Option<Decimal3>,
+    /// Nettoengpassleistung, consumption direction (MW).
+    #[serde(
+        rename = "Nettoengpassleistung_Verb",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nettoengpassleistung_verb: Option<Decimal3>,
+    /// Bruttonennleistung (MW).
+    #[serde(
+        rename = "Bruttonennleistung",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bruttonennleistung: Option<Decimal3>,
+    /// Cumulated inverter capacity (MW).
+    #[serde(
+        rename = "Wechselrichterleistung_kumuliert",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub wechselrichterleistung_kumuliert: Option<Decimal3>,
+    /// Whether the 70 % Wirkleistungsbegrenzung applies.
+    #[serde(
+        rename = "Absenkung_70",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub absenkung_70: Option<JaNein>,
+    /// Plant type.
+    #[serde(
+        rename = "Anlagentyp",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub anlagentyp: Option<String>,
+    /// Hub height of a wind turbine (m).
+    #[serde(
+        rename = "Nabenhoehe",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nabenhoehe: Option<Decimal3>,
+    /// Site coordinates.
+    #[serde(
+        rename = "Geokoordinaten",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub geokoordinaten: Option<Geokoordinaten>,
+    /// Round-trip efficiency of a storage unit.
+    #[serde(
+        rename = "Wirkungsgrad_Speicher",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub wirkungsgrad_speicher: Option<Decimal3>,
+    /// Usable energy content of a storage unit (MWh).
+    #[serde(
+        rename = "Nutzbarer_Energieinhalt_Speichers",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub nutzbarer_energieinhalt_speichers: Option<Decimal3>,
+    /// Maximum charging power (MW).
+    #[serde(
+        rename = "Wirkleistung_Einspeichern_max",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub wirkleistung_einspeichern_max: Option<Decimal3>,
+    /// Maximum discharging power (MW).
+    #[serde(
+        rename = "Wirkleistung_Ausspeichern_max",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub wirkleistung_ausspeichern_max: Option<Decimal3>,
+}
+
+// ── Abrechnungsmodell ────────────────────────────────────────────────────────
+
+/// `Abrechnungsmodell` — the Ausfallarbeit settlement method elected for a
+/// Technische Ressource.
+///
+/// The election is the Anlagenbetreiber's, made by 30 November for the
+/// following calendar year (`BilAReM` Kap. 3.2.1); the ANB carries it in the
+/// Stammdaten. It is **mandatory** on every TR, because without it the
+/// Ausfallarbeit of a Redispatch-Maßnahme cannot be computed at all.
+///
+/// | Code | XSD label | `BilAReM` Kap. 3.2.1 |
+/// |------|-----------|----------------------|
+/// | `Z01` | `PAUSCHAL` | Pauschal-Abrechnung — grandfathered TR only, until 31.12.2028 |
+/// | `Z02` | `SPITZ` | Spitzabrechnung — measured Wetterdaten at the TR |
+/// | `Z03` | `SPITZLIGHT` | vereinfachte Spitzabrechnung — Referenzmesswerte or site weather data |
+///
+/// The XSD label `SPITZLIGHT` is the *vereinfachte* Spitzabrechnung, not a
+/// lighter variant of the Spitzabrechnung: it is the one that applies when no
+/// suitable weather data is measured **at** the TR, and it is the default when
+/// the Anlagenbetreiber elects nothing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Abrechnungsmodell {
+    /// `Z01` — Pauschal-Abrechnung (`BilAReM` Kap. 3.2.2.3 / 3.2.4.3).
+    #[serde(rename = "Z01")]
+    Pauschal,
+    /// `Z02` — Spitzabrechnung (`BilAReM` Kap. 3.2.2.1 / 3.2.4.1).
+    #[serde(rename = "Z02")]
+    Spitz,
+    /// `Z03` — vereinfachte Spitzabrechnung (`BilAReM` Kap. 3.2.2.2 / 3.2.4.2).
+    #[serde(rename = "Z03")]
+    SpitzLight,
+}
+
+/// `Betrieb` — the Stilllegungs-Status of a Technische Ressource on
+/// `Gueltig_ab`.
+///
+/// A container, not a flag: the XSD distinguishes the **vorläufige** from the
+/// **endgültige** Stilllegung, and the two have different consequences. A
+/// vorläufig stillgelegte Anlage still exists for Redispatch purposes; an
+/// endgültig stillgelegte one does not.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Betrieb {
+    /// Whether the vorläufige Stilllegung is reached on `Gueltig_ab`.
+    #[serde(
+        rename = "Stilllegung_vorlaeufig_erreicht",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub stilllegung_vorlaeufig_erreicht: Option<JaNein>,
+    /// Whether the endgültige Stilllegung is reached on `Gueltig_ab`.
+    #[serde(
+        rename = "Stilllegung_endgueltig_erreicht",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub stilllegung_endgueltig_erreicht: Option<JaNein>,
+}
+
+// ── Marktlokation and Tranche ────────────────────────────────────────────────
+
+/// A Tranche of a Marktlokation, with the Bilanzkreis and Lieferant it belongs
+/// to.
+///
+/// `BilAReM` Kap. 2.1.2: „Ist die Einspeisung mehreren Tranchen … zugeordnet,
+/// wird der bilanzielle Ausgleich nach den für die Aufteilung der Einspeisung
+/// in Tranchen jeweils geltenden Regeln aufgeteilt." The split therefore needs
+/// both values, per Tranche.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tranche {
+    /// Tranche identifier.
+    #[serde(rename = "@Code")]
+    pub code: String,
+    /// Bilanzkreis of this Tranche (16-character EIC).
+    #[serde(rename = "Bilanzkreis_Tranche")]
+    pub bilanzkreis: String,
+    /// Lieferant of this Tranche.
+    #[serde(rename = "Lieferant_Tranche")]
+    pub lieferant: StammdatenParticipantRef,
+    /// Share of the Marktlokation this Tranche represents.
+    ///
+    /// `BilAReM` Kap. 2.1.2: the bilanzielle Ausgleich is split across Tranchen
+    /// „nach den für die Aufteilung der Einspeisung in Tranchen jeweils
+    /// geltenden Regeln", so the share is what the split is computed from.
+    #[serde(rename = "Tranchengroesse")]
+    pub tranchengroesse: Tranchengroesse,
+}
+
+/// The share of a Marktlokation one Tranche represents.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Tranchengroesse {
+    /// Unit — always `P1` (percent).
+    #[serde(rename = "@Einheit")]
+    pub einheit: String,
+    /// The share, in percent.
+    #[serde(rename = "@Groesse")]
+    pub groesse: Decimal3,
+}
+
+/// A coded reference carried entirely in a `@Code` attribute.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CodeRef {
+    /// The code.
+    #[serde(rename = "@Code")]
+    pub code: String,
+}
+
+/// The Marktlokation a Technische Ressource is billed through, and the
+/// **betroffener Bilanzkreis** the bilanzieller Ausgleich lands in.
+///
+/// A TR may name up to two (`maxOccurs="2"`) — a Stromspeichereinheit that both
+/// charges and discharges is billed through one MaLo per direction.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Marktlokation {
+    /// The MaLo-ID.
+    #[serde(rename = "@Code")]
+    pub code: String,
+    /// Energy flow direction of this Marktlokation.
+    #[serde(rename = "@Lieferrichtung")]
+    pub lieferrichtung: String,
+    /// Bilanzkreis of the Marktlokation (16-character EIC), when the MaLo is
+    /// not split into Tranchen.
+    #[serde(
+        rename = "Bilanzkreis_Marktlokation",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bilanzkreis: Option<String>,
+    /// Tranchen of the Marktlokation, when the Einspeisung is split.
+    #[serde(rename = "Tranche", default, skip_serializing_if = "Vec::is_empty")]
+    pub tranchen: Vec<Tranche>,
+    /// Voltage level of the Marktlokation.
+    #[serde(rename = "Spannungsebene_Marktlokation")]
+    pub spannungsebene: CodeRef,
+    /// Transformation level, when the MaLo sits at one.
+    #[serde(
+        rename = "Umspannung_Marktlokation",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub umspannung: Option<CodeRef>,
+    /// Messlokationen behind this Marktlokation (at least one).
+    #[serde(rename = "Messlokation")]
+    pub messlokationen: Vec<CodeRef>,
+    /// Lieferant of the Marktlokation, when it is not split into Tranchen.
+    #[serde(
+        rename = "Lieferant_Marktlokation",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub lieferant: Option<StammdatenParticipantRef>,
 }
 
 // ── Enthaltene_TR (contained technical resources) ────────────────────────────
 
 /// A technical resource (Technische Ressource) contained within an
-/// `SR_Objekt` (cluster resource or control group).
+/// `SR_Objekt`.
+///
+/// `BilAReM` Kap. 6.1.5: „Eine SR setzt sich aus **mindestens einer** TR
+/// zusammen" and „Jede TR ist genau einer SR zugeordnet."
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct EnthaltenesTr {
     /// MaStR number (Marktstammdatenregister).
-    #[serde(rename = "MaStR_Nr", default, skip_serializing_if = "Option::is_none")]
+    ///
+    /// The XSD element is `MaStR-Nr`; the hyphen is preserved on the wire.
+    #[serde(rename = "MaStR-Nr", default, skip_serializing_if = "Option::is_none")]
     pub ma_str_nr: Option<String>,
     /// Human-readable name.
     #[serde(rename = "Klarname", default, skip_serializing_if = "Option::is_none")]
     pub klarname: Option<String>,
     /// Resource type code.
-    #[serde(rename = "Typ", default, skip_serializing_if = "Option::is_none")]
-    pub typ: Option<String>,
+    #[serde(rename = "Typ")]
+    pub typ: String,
     /// Plant code (`Code_Kraftwerk`).
     #[serde(
         rename = "Code_Kraftwerk",
@@ -431,13 +751,50 @@ pub struct EnthaltenesTr {
         skip_serializing_if = "Option::is_none"
     )]
     pub code_kraftwerk: Option<String>,
-    /// Market location (Marktlokation).
+    /// Storage units this TR is assigned to.
+    #[serde(
+        rename = "Zuordnung_Speicher",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub zuordnung_speicher: Vec<StammdatenParticipantRef>,
+    /// The Marktlokationen this TR is billed through (at most two — one per
+    /// direction for a Stromspeichereinheit).
     #[serde(
         rename = "Marktlokation",
         default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub marktlokationen: Vec<Marktlokation>,
+    /// EEG-Anlagenschlüssel of the plants behind this TR.
+    #[serde(
+        rename = "EEG_Anlagenschluessel",
+        default,
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub eeg_anlagenschluessel: Vec<String>,
+    /// Ausfallarbeit settlement method — **mandatory**, because without it the
+    /// Ausfallarbeit of a Redispatch-Maßnahme cannot be computed.
+    #[serde(rename = "Abrechnungsmodell")]
+    pub abrechnungsmodell: Abrechnungsmodell,
+    /// Betreiber der technischen Ressource (BTR).
+    #[serde(
+        rename = "Betreiber_TR",
+        default,
         skip_serializing_if = "Option::is_none"
     )]
-    pub marktlokation: Option<String>,
+    pub betreiber_tr: Option<StammdatenParticipantRef>,
+    /// Whether the Stilllegungszeitpunkt is reached on `Gueltig_ab`.
+    #[serde(rename = "Betrieb", default, skip_serializing_if = "Option::is_none")]
+    pub betrieb: Option<Betrieb>,
+    /// Technical parameters of this TR — the plant nameplate, a **different**
+    /// complexType from the SR-level one despite the shared element name.
+    #[serde(
+        rename = "Technische_Parameter",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub technische_parameter: Option<TrTechnischeParameter>,
 }
 
 // ── SR_Objekt ─────────────────────────────────────────────────────────────────
@@ -475,6 +832,20 @@ pub struct SrObjekt {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub weitere_betroffene_netzbetreiber: Vec<NbRef>,
+    /// Einsatzverantwortlicher (EIV) — the party responsible for deploying the
+    /// SR.
+    ///
+    /// `BilAReM` Kap. 6.1.5: „Jede SR ist genau einem EIV zugeordnet", and
+    /// Kap. 6.1.6 names the default: the LF of the betroffene Marktlokation,
+    /// unless another company was designated. The element is optional in the
+    /// XSD because a `Z02` reduzierte Stammdaten message omits it, not because
+    /// an SR may lack one.
+    #[serde(
+        rename = "Einsatzverantwortlicher",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub einsatzverantwortlicher: Option<StammdatenParticipantRef>,
     /// Energy carrier.
     #[serde(
         rename = "Energietraeger",
@@ -520,6 +891,14 @@ pub struct SrObjekt {
         skip_serializing_if = "Option::is_none"
     )]
     pub individuelle_quote: Option<IndividuelleQuote>,
+    /// Bearbeitungszeit beim EIV in minutes — from an Aufforderung reaching the
+    /// EIV to its implementation in the plant.
+    #[serde(
+        rename = "Bearbeitungszeit_EIV",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bearbeitungszeit_eiv: Option<Decimal3>,
     /// Control zone (Regelzone / TSO EIC code).
     #[serde(rename = "Regelzone")]
     pub regelzone: Regelzone,
@@ -530,21 +909,83 @@ pub struct SrObjekt {
         skip_serializing_if = "Option::is_none"
     )]
     pub technische_parameter: Option<TechnischeParameter>,
-    /// Contained technical resources (for cluster / control group resources).
-    #[serde(
-        rename = "Enthaltene_TR",
-        default,
-        skip_serializing_if = "Vec::is_empty"
-    )]
+    /// Contained technical resources.
+    ///
+    /// `minOccurs="1"` in the XSD, and `BilAReM` Kap. 6.1.5 says why: „Eine SR
+    /// setzt sich aus mindestens einer TR zusammen." An SR with none is a
+    /// resource nothing can be dispatched against.
+    #[serde(rename = "Enthaltene_TR")]
     pub enthaltene_tr: Vec<EnthaltenesTr>,
 }
 
-/// Individual allocation quota definition.
+/// One share of the bilanzieller Ausgleich, and where it is booked.
+///
+/// Each Quote names the **Redispatch-Bilanzkreis** the corresponding share of
+/// the Ausgleichsfahrplan is scheduled against, and the Lieferant it belongs
+/// to. `BilAReM` Kap. 2.1.2 makes both load-bearing: the Ausgleich runs „durch
+/// die Anmeldung korrespondierender Fahrpläne", and „jeder Netzbetreiber
+/// verwendet genau einen Bilanzkreis als Redispatch-Bilanzkreis".
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Quote {
+    /// Unit of `wert` — always `P1` (percent) in the current XSD.
+    #[serde(rename = "@Einheit")]
+    pub einheit: String,
+    /// The share, in percent.
+    #[serde(rename = "@Wert")]
+    pub wert: Decimal3,
+    /// Bilanzkreis the Ausgleichsfahrplan for this share is scheduled against
+    /// (16-character EIC).
+    #[serde(rename = "Bilanzkreis_Ausgleichsfahrplan")]
+    pub bilanzkreis_ausgleichsfahrplan: String,
+    /// Lieferant this share belongs to.
+    #[serde(rename = "Lieferant")]
+    pub lieferant: StammdatenParticipantRef,
+}
+
+/// Individual allocation quota definition — up to twenty shares.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct IndividuelleQuote {
-    /// List of percentage quota values.
-    #[serde(rename = "Quote", default)]
-    pub quoten: Vec<Decimal3>,
+    /// The shares. `maxOccurs="20"` in the XSD.
+    #[serde(rename = "Quote")]
+    pub quoten: Vec<Quote>,
+}
+
+// ── Existenzende and the anfNB Redispatch-Bilanzkreis ────────────────────────
+
+/// End of existence of one or more resources.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Existenzende {
+    /// References of the resources whose existence is ending.
+    #[serde(rename = "Objektreferenz")]
+    pub objektreferenzen: Vec<StammdatenParticipantRef>,
+}
+
+/// The Redispatch-Bilanzkreis of one anfordernder Netzbetreiber.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AnfordernderNetzbetreiber {
+    /// The anfNB's Redispatch-Bilanzkreis (16-character EIC).
+    #[serde(rename = "Bilanzkreis_anfNB")]
+    pub bilanzkreis: String,
+    /// The anfNB's Marktpartner-ID.
+    #[serde(rename = "Marktpartner_ID")]
+    pub marktpartner_id: StammdatenParticipantRef,
+}
+
+/// Which Redispatch-Bilanzkreis each anfordernder Netzbetreiber uses for one SR.
+///
+/// `BilAReM` Kap. 2.3.2 lists this among the three things a Planwertmodell
+/// Zuordnungsmitteilung must contain: „die Bezeichnung der SR mit ihrer SR-ID,
+/// das Datum der Wirksamkeit der Zuordnung und die **Nennung des
+/// Redispatch-Bilanzkreises** des ANB." Without it the LF and the EIV know an
+/// SR moved into the Planwertmodell but not where the Ausgleich will be booked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BilanzkreisAusgleichsfahrplanAnfNb {
+    /// The SR this applies to.
+    #[serde(rename = "SR_Objekt_Referenz")]
+    pub sr_objekt_referenz: StammdatenParticipantRef,
+    /// One entry per anfordernder Netzbetreiber (up to twenty).
+    #[serde(rename = "anfordernder_Netzbetreiber")]
+    pub anfordernde_netzbetreiber: Vec<AnfordernderNetzbetreiber>,
 }
 
 // ── Stammdaten ────────────────────────────────────────────────────────────────
@@ -618,4 +1059,20 @@ pub struct Stammdaten {
     /// Controllable resource objects described in this document.
     #[serde(rename = "SR_Objekt", default)]
     pub sr_objekte: Vec<SrObjekt>,
+    /// End of existence of one or more resources.
+    #[serde(
+        rename = "Existenzende",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub existenzende: Option<Existenzende>,
+    /// The Redispatch-Bilanzkreis each anfordernder Netzbetreiber uses for one
+    /// SR — one of the three things a Planwertmodell Zuordnungsmitteilung must
+    /// carry (`BilAReM` Kap. 2.3.2).
+    #[serde(
+        rename = "Bilanzkreis_Ausgleichsfahrplan_anfNB",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub bilanzkreis_ausgleichsfahrplan_anf_nb: Option<BilanzkreisAusgleichsfahrplanAnfNb>,
 }

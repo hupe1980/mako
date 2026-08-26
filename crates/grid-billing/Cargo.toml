@@ -26,4 +26,13 @@ bo4e = ["dep:rubo4e", "dep:serde_json"]
 
 [dev-dependencies]
 proptest            = "1"
+# Test-only: the BO4E gate, so every Rechnung this crate emits is asserted
+# against the same rules mako applies to one it receives. A dev-dependency
+# keeps the shipped engine as rubo4e-light as the `bo4e` feature makes it.
+# Test-only, and **path-only on purpose**: the release workflow publishes this
+# crate *before* `mako-markt`, and a dev-dependency carrying a version
+# requirement has to resolve on crates.io at publish time. Cargo strips a
+# dev-dependency with no version, so this compiles the tests locally and
+# disappears from the published manifest.
+mako-markt          = { path = "../mako-markt" }
 

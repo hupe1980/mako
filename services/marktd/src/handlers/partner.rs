@@ -41,48 +41,15 @@ pub struct PartnerQuery {
 
 /// Validate and normalise a partner `data` payload as `rubo4e::current::Geschaeftspartner`.
 ///
-/// 1. Auto-injects `"_typ": "GESCHAEFTSPARTNER"` when absent.
-/// 2. Rejects 422 when `_typ` is present but wrong.
-/// 3. Validates all enum fields (`marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`).
-/// 4. Re-serialises to canonical camelCase BO4E form.
-///
-/// The `data` field in `PartnerRecord.channels` is the partner's BO4E payload.
-/// Returns the normalised JSON on success, or a 422 error body on failure.
+/// The `data` field in `PartnerRecord.channels` is the partner's BO4E payload;
+/// this returns its canonical serialization, having put it through the BO4E
+/// gate — `_typ`, schema, strict enums (`marktrolle`, `rollencodetyp`,
+/// `marktteilnehmerstatus`, and every other enum in the tree), BO4E rules.
 fn normalize_geschaeftspartner(
-    mut data: serde_json::Value,
+    data: serde_json::Value,
 ) -> Result<serde_json::Value, (StatusCode, serde_json::Value)> {
-    if let Some(obj) = data.as_object_mut() {
-        obj.entry("_typ")
-            .or_insert_with(|| serde_json::json!("GESCHAEFTSPARTNER"));
-    }
-    if data
-        .get("_typ")
-        .and_then(|v| v.as_str())
-        .map(|t| t.to_uppercase() != "GESCHAEFTSPARTNER")
-        .unwrap_or(false)
-    {
-        let typ = data.get("_typ").and_then(|v| v.as_str()).unwrap_or("");
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({
-                "error": format!("expected _typ GESCHAEFTSPARTNER, got '{typ}'")
-            }),
-        ));
-    }
-    let partner: Geschaeftspartner = serde_json::from_value(data).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid Geschaeftspartner payload: {e}") }),
-        )
-    })?;
-    // Strict enum gate — reject out-of-schema enum values (which serde would
-    // otherwise decode to `Unknown`) anywhere in the tree, with JSON-paths.
-    rubo4e::Bo4eStrict::ensure_known_enums(&partner).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("Geschaeftspartner has out-of-schema enum values: {e}") }),
-        )
-    })?;
+    let partner: Geschaeftspartner = mako_markt::bo4e::decode(data)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
     super::serialise_or_500(&partner, "Geschaeftspartner")
 }
 

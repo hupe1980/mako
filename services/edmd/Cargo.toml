@@ -45,7 +45,12 @@ mako-service       = { workspace = true, features = ["otel", "cedar", "oidc", "r
 krafka             = { workspace = true }
 futures            = { version = "0.3", default-features = false, features = ["std"] }
 rmcp               = { workspace = true }
-schemars           = { workspace = true }
+# `rust_decimal1` gives `JsonSchema` for `Decimal`, which the MCP tool schemas
+# need for their money and energy fields. It used to arrive by accident —
+# `rubo4e`'s `schemars` feature selected it, and feature unification handed it
+# to edmd, so removing that feature elsewhere broke this build. Declared here
+# now, where it is actually used.
+schemars           = { workspace = true, features = ["rust_decimal1"] }
 secrecy            = "0.10"
 subtle             = "2"
 reqwest            = { workspace = true }

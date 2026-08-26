@@ -32,9 +32,12 @@ pub fn kind_to_artikelnummer(
     kind: crate::BillingPositionKind,
     settlement_type: crate::SettlementType,
 ) -> Option<rubo4e::current::BdewArtikelnummer> {
-    use std::str::FromStr as _;
+    // `from_wire`, not `FromStr`: both parse the same strings, but `FromStr`
+    // comes from `strum`, whose derive also accepts `"UNKNOWN"` — the
+    // catch-all's own spelling — and would hand back `Unknown` as if it were an
+    // article number. `from_wire` refuses it, and needs no feature flag.
     kind.artikelnummer(settlement_type)
-        .and_then(|name| rubo4e::current::BdewArtikelnummer::from_str(name).ok())
+        .and_then(|name| rubo4e::current::BdewArtikelnummer::from_wire(name).ok())
 }
 
 /// The BO4E `rechnungstyp` for a settlement, when it is a Netznutzungsrechnung.
@@ -835,10 +838,13 @@ mod tests {
 
     /// Every `Rechnung` this adapter emits must round-trip with no `Unknown`.
     ///
-    /// `into_rechnung` is what reaches the LF over AS4. An enum in it that a
-    /// conforming reader resolves to `Unknown` is a settlement position the
-    /// recipient cannot classify — and neither side errors, because
-    /// forward-compatible decoding is what BO4E-python and go-bo4e are for.
+    /// `into_rechnung` is what reaches the LF over AS4. An out-of-schema enum
+    /// in it costs the recipient differently depending on what they run:
+    /// `rubo4e` decodes it to its `Unknown` catch-all and says nothing, while
+    /// go-bo4e (`invalid <Enum> %q`, no catch-all) and BO4E-python (a pydantic
+    /// `ValidationError`) reject the **whole document**. So the failure is
+    /// either a settlement position the recipient cannot classify or an invoice
+    /// they cannot parse — and this test is what stops either.
     ///
     /// The cases below are the branches that differ in which BO4E enums get
     /// set: the Sparte, the tax treatment (`Steuerart::Ust` vs `Rcv`), the
@@ -862,16 +868,21 @@ mod tests {
         cases.push(("storno", storno));
 
         for (label, doc) in cases {
+            // The outbound gate: out-of-schema enums *and* the BO4E-stated
+            // rules. mako refuses a received document that breaks these, so a
+            // Netznutzungsrechnung it issues must not break them either — the
+            // counterparty runs the same arithmetic (`invoic-checker` stage 3)
+            // and disputes what does not reconcile.
             let rechnung = into_rechnung(&doc);
-            rubo4e::Bo4eStrict::ensure_known_enums(&rechnung)
-                .unwrap_or_else(|e| panic!("{label}: emitted out-of-schema enums: {e}"));
+            mako_markt::bo4e::ensure_conformant(&rechnung)
+                .unwrap_or_else(|e| panic!("{label}: emitted a Rechnung mako would refuse: {e}"));
 
             let json = serde_json::to_value(&rechnung)
                 .unwrap_or_else(|e| panic!("{label}: not serialisable: {e}"));
             let back: Rechnung = serde_json::from_value(json)
                 .unwrap_or_else(|e| panic!("{label}: does not round-trip: {e}"));
-            rubo4e::Bo4eStrict::ensure_known_enums(&back)
-                .unwrap_or_else(|e| panic!("{label}: JSON form has unknowns: {e}"));
+            mako_markt::bo4e::ensure_conformant(&back)
+                .unwrap_or_else(|e| panic!("{label}: the JSON form would be refused: {e}"));
         }
     }
 }

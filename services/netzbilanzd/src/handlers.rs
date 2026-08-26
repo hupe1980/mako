@@ -557,6 +557,19 @@ async fn dispatch_one(
         rechnung.fremdkosten = Some(Box::new(typed));
     }
 
+    // The outbound gate, at the one point where this document is *assembled at
+    // runtime* rather than emitted whole by an engine: a stored Rechnung plus a
+    // separately stored Fremdkosten, each valid when it was written, combined
+    // here into a document no test has ever seen. `invoic-checker` below covers
+    // the arithmetic; this covers what it does not — an out-of-schema enum
+    // anywhere in the merged tree, and the BO4E-stated Storno rule.
+    mako_markt::bo4e::ensure_conformant(&rechnung).map_err(|e| {
+        ApiError::unprocessable_with(
+            format!("this invoice is not a document mako may send: {e}"),
+            e.detail().into(),
+        )
+    })?;
+
     let pid = u32::try_from(row.pid).unwrap_or_default();
     let report = billing::check(&rechnung, &row.sender_mp_id, pid);
     if report.outcome == invoic_checker::CheckOutcome::Dispute {
@@ -1623,10 +1636,13 @@ pub async fn put_fremdkosten(
     Path(draft_id): Path<Uuid>,
     Json(req): Json<pg::UpsertFremdkostenRequest>,
 ) -> ApiResult<Json<serde_json::Value>> {
-    // Typed round-trip: the stored JSON has to *be* a Fremdkosten, not merely
-    // carry the right `_typ`, because dispatch deserialises it into the document.
-    serde_json::from_value::<rubo4e::current::Fremdkosten>(req.fremdkosten_json.clone())
-        .map_err(|e| ApiError::unprocessable(format!("invalid Fremdkosten payload: {e}")))?;
+    // The BO4E gate: the stored JSON has to *be* a Fremdkosten, not merely
+    // carry the right `_typ`, because dispatch merges it into the document that
+    // reaches the counterparty. Strict enums included — an out-of-schema
+    // `bdewArtikelnummer` on a cost block would otherwise be dispatched as
+    // `"UNKNOWN"`.
+    mako_markt::bo4e::decode::<rubo4e::current::Fremdkosten>(req.fremdkosten_json.clone())
+        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
 
     // Checked before the insert so a missing draft is a 404 rather than a
     // foreign-key violation matched on its error text.

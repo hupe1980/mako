@@ -120,7 +120,7 @@ Each is independently testable and suitable for crates.io publication.
 | `eeg-billing` | Pure EEG/KWKG feed-in settlement (NB) | `calculate_settlement`, 10 settlement schemes, §51/§52 rules, `InbetriebnahmeTyp`, proptest invariants; statutory anzulegende Werte per §§40–45 with each Erzeugungsart's own annual Absenkung; opt-in `bo4e` feature → **§14 UStG Gutschrift** (`settlement_to_gutschrift` → BO4E `Rechnung` with per-rate USt breakdown) |
 | `mako-invoic` | The INVOIC settle/dispute process, once — shared by all four billing families (GPKE, WiM, GaBi Gas, GeLi Gas) | `InvoicFamily` (PID set · deadline label · the two role capabilities), `InvoicWorkflow<F>`, `InvoicState`/`InvoicEvent`/`InvoicCommand` |
 | `invoic-checker` | INVOIC plausibility 6-check pipeline | `InvoicCheckEngine::check`, `CheckOutcome` |
-| `mako-pruefung` | NB Anmeldung 6-check validation | `check_anmeldung`, ERC A02/A05/A06/A07/E17 |
+| `mako-pruefung` | The published **Antwortcode** decision trees, executable | `nb`/`lf`/`msb`/`mabis` modules behind `role-*` features; `codes::lookup` resolves a code **within** its EBD; `Cluster` (8 variants incl. MaBiS `Abweisung` / list / `Reklamation`) picks the answer PID; unknown facts escalate, never guess |
 | `mako-obs` | Process observability types | `ProcessProjection`, `KpiReport`, `DeadlineRisk` |
 | `mako-service` | **Service SDK** — cross-cutting infrastructure for all 17 daemons | `load_config`, `DatabaseConfig`, `HttpConfig`, `shutdown::token/serve`, `OidcConfig::build_verifier`, `McpAuth`, `McpAuthConfig`, `init_tracing_from_env`, `CedarEnforcer`, `outbox`, `ServiceBuilder` |
 | `mako-plugin` | Operator CloudEvent extension point | `CloudEventPlugin`, `PluginRegistry`, re-exported by `mako-service`. No daemon runs a registry today — it is an integration seam, not an active hook |
@@ -202,7 +202,7 @@ Pass 5  Cancellation sign reversal   (Stornorechnung)
 | [`metering`](https://crates.io/crates/metering) | `0.19` | German energy metering domain — `MeterInterval`, `aggregate`, `fill_gaps_with_config` (§ 60 Abs. 2 MsbG), `gas_m3_to_kwh_hs` (§ 25 Nr. 4 MessEV / DVGW G 685), `score_intervals` (Hampel A/B/C/F), the V01–V12 validation engine with a `RuleSet` saying which rules actually ran, `compute_ggv_allocation` (§ 42b share, cap and residual draw in one), `DayBoundary` for the 06:00 Gastag, check-digit-validated `MaloId`/`MeloId`, SLP/RLM/iMSys classification, BDEW 2025 load profiles; pure computation, no storage — used by `edmd`, `marktd`, `mabis-syncd`, `mako-gabi-gas` and `mako-mabis` |
 | [`meterstore`](https://crates.io/crates/meterstore) | `0.5` | Metering time-series store — the persistence layer beneath `edmd`: PostgreSQL hot window + Apache Iceberg/S3 settled history, version-resolved reads, `as_known_at` transaction-time reads across both tiers (what backs `edmd`'s `?as_of=` snapshots), `append_authoritative` for values the operator authors rather than receives, and `scoped` sessions that enforce an identity predicate below the projection — the only way to confine caller-supplied SQL |
 | [`doubleentry`](https://crates.io/crates/doubleentry) | `0.6` | General-purpose double-entry ledger — append-only BLAKE3 Merkle log with `O(log n)` inclusion, consistency and balance proofs (all verified against a tree head, never a bare root), period seals over the journal, the trial balance and the account bindings; deliberately domain-neutral, with the energy and SEPA specifics kept in `accountingd` |
-| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.10` | BO4E business-object types — the `rubo4e::current` versioned schema, validated at every read/write boundary |
+| [`rubo4e`](https://crates.io/crates/rubo4e) | `0.11` | BO4E business-object types — the `rubo4e::current` versioned schema, validated at every read/write boundary |
 
 ---
 
@@ -243,7 +243,7 @@ and `agentd`, which is the MCP *host* that calls the others.
 `marktd` is the single source of truth for all market entity state.
 It stores Marktlokationen (MaLo) with typed columns (`netzebene`, `bilanzierungsgebiet`,
 `gasqualitaet`, `energierichtung`, `bilanzierungsmethode`, `regelzone`, `fallgruppe`)
-and **typed `rubo4e::current::Marktlokation`** API responses (schema validated on every `PUT` — wrong `_typ`, or any out-of-schema enum value anywhere in the tree, → 422; the strict check is `rubo4e`'s `Bo4eStrict::ensure_known_enums`, which reports each offending JSON-path instead of silently decoding it to `Unknown`),
+and **typed `rubo4e::current::Marktlokation`** API responses (every `PUT` crosses [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) — `_typ`, schema, out-of-schema enums by JSON-path, and the rules BO4E states in prose and enforces nowhere; every refusal is a 422 with the same `code`),
 Messlokationen (MeLo) with typed `netzebene_messung`, `regelzone`, `standorteigenschaften JSONB`,
 and **typed `rubo4e::current::Messlokation`** responses,
 contracts, trading partners, network contracts (`NbContractRecord`),

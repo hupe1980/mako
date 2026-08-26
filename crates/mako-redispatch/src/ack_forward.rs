@@ -3,14 +3,18 @@
 //! Shared state machine used by:
 //! - Verfügbarkeitsmeldung (`redispatch-verfuegbarkeit`)
 //! - Netzengpassinformation (`redispatch-netzengpass`)
-//! - Kaskade §13 Abs. 2 (`redispatch-kaskade`)
+//! - `Kaskade` §13 Abs. 2 (`redispatch-kaskade`)
 //! - Planungsdaten Abruffahrplan (`redispatch-planungsdaten`)
 //! - Statusanfrage (`redispatch-statusanfrage`)
-//! - Kostenblatt (`redispatch-kostenblatt`)
+//! - `Kostenblatt` (`redispatch-kostenblatt`)
 //!
 //! Each of these processes follows the same pattern:
 //! 1. Receive an XML document.
-//! 2. Send an `AcknowledgementDocument` within **6 wall-clock hours** (UTC).
+//! 2. Send an `AcknowledgementDocument` within **3 minutes** (UTC) —
+//!    „unverzüglich, jedoch spätestens 3 Minuten nach Erhalt der
+//!    Übertragungsdatei" (`AcknowledgementDocument` FB 1.0g). It answers the
+//!    transfer file's *syntax*; a late one must not fail the Geschäftsvorfall
+//!    it carried.
 //! 3. Optionally forward to an upstream party.
 //!
 //! A separate workflow struct per process is defined below so that workflow
@@ -34,7 +38,7 @@ pub enum AckForwardEvent {
     Received {
         /// MRID (UUID) of the received document.
         mrid: String,
-        /// Document type string (e.g. `"Unavailability"`, `"Kaskade"`).
+        /// Document type string (e.g. `"Unavailability"`, `"`Kaskade`"`).
         doc_type: String,
         /// GLN of the sender.
         sender: String,
@@ -43,7 +47,7 @@ pub enum AckForwardEvent {
         /// UTC receipt timestamp (ISO-8601).
         received_at: String,
     },
-    /// `AcknowledgementDocument` dispatched within the 6h window.
+    /// `AcknowledgementDocument` dispatched within the 3-minute window.
     Acknowledged {
         /// MRID of the outbound `AcknowledgementDocument`.
         ack_mrid: String,
@@ -376,7 +380,8 @@ macro_rules! ack_forward_workflow {
 ack_forward_workflow!(
     /// Verfügbarkeitsmeldung workflow — `UnavailabilityMarketDocument`.
     ///
-    /// ANB → VNB. Receiver acknowledges within 6h (BK6-20-059 §4.3).
+    /// ANB → VNB. Receiver acknowledges within 3 minutes
+    /// ([`crate::fristen::ACK_FRIST`]).
     VerfuegbarkeitWorkflow,
     VerfuegbarkeitEvent,
     "redispatch-verfuegbarkeit",
@@ -387,7 +392,8 @@ ack_forward_workflow!(
 ack_forward_workflow!(
     /// Netzengpassinformation workflow — `NetworkConstraintDocument`.
     ///
-    /// ÜNB ↔ VNB. Receiver acknowledges within 6h (BK6-20-059 §4.3).
+    /// ÜNB ↔ VNB. Receiver acknowledges within 3 minutes
+    /// ([`crate::fristen::ACK_FRIST`]).
     NetzengpassWorkflow,
     NetzengpassEvent,
     "redispatch-netzengpass",
@@ -396,9 +402,10 @@ ack_forward_workflow!(
 );
 
 ack_forward_workflow!(
-    /// Kaskade workflow — emergency measures per § 13 Abs. 2 `EnWG`.
+    /// `Kaskade` workflow — emergency measures per § 13 Abs. 2 `EnWG`.
     ///
-    /// ÜNB → VNB → ANB. Receiver acknowledges within 6h (BK6-20-059 §4.3).
+    /// ÜNB → VNB → ANB. Receiver acknowledges within 3 minutes
+    /// ([`crate::fristen::ACK_FRIST`]).
     /// Only active for `Marktrolle::Nb` and `Marktrolle::Unb` deployments.
     KaskadeWorkflow,
     KaskadeEvent,
@@ -410,7 +417,8 @@ ack_forward_workflow!(
 ack_forward_workflow!(
     /// Planungsdaten (Abruffahrplan) workflow — `PlannedResourceScheduleDocument`.
     ///
-    /// ÜNB → VNB → ANB. Receiver acknowledges within 6h (BK6-20-059 §4.3).
+    /// ÜNB → VNB → ANB. Receiver acknowledges within 3 minutes
+    /// ([`crate::fristen::ACK_FRIST`]).
     PlanungsdatenWorkflow,
     PlanungsdatenEvent,
     "redispatch-planungsdaten",
@@ -421,7 +429,13 @@ ack_forward_workflow!(
 ack_forward_workflow!(
     /// Statusanfrage workflow — `StatusRequest_MarketDocument`.
     ///
-    /// Addressed party responds within 24h (BK6-20-059 §4.4).
+    /// **Not a request/response pair.** The document's `type` is `A60` (status
+    /// request for a position independently from a specific process) or `Z15`
+    /// Erreichbarkeitsinformation, and its `status` carries `A03` Deactivated /
+    /// `A04` Reactivated / `A13` Withdrawn — a communication-availability
+    /// notification about a Marktpartner. There is no answer document and no
+    /// 24-hour window; the acknowledgement is the only thing owed back
+    /// (`StatusRequest_MarketDocument` FB 1.1).
     StatusanfrageWorkflow,
     StatusanfrageEvent,
     "redispatch-statusanfrage",
@@ -430,10 +444,14 @@ ack_forward_workflow!(
 );
 
 ack_forward_workflow!(
-    /// Kostenblatt workflow — monthly cost reconciliation.
+    /// `Kostenblatt` workflow — monthly cost reconciliation.
     ///
-    /// VNB → ÜNB. Receiver acknowledges within 6h (BK6-20-059 §4.3).
-    /// VNB submits by the 15th of the following month (BK6-20-061 §7).
+    /// VNB → ÜNB. Receiver acknowledges within 3 minutes
+    /// ([`crate::fristen::ACK_FRIST`]). The submission day is
+    /// operator-configured — BK6-23-241 Tenorziffer 3 repealed BK6-20-061, so
+    /// the 15th of the following month is a historical default rather than a
+    /// published obligation
+    /// ([`crate::fristen::`Betreiberfristen`::kostenblatt_stichtag`]).
     KostenblattWorkflow,
     KostenblattEvent,
     "redispatch-kostenblatt",

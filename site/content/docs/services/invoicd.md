@@ -93,6 +93,24 @@ dispatched and `422` when it carries no message reference.
 
 ---
 
+## Reading the inbound Rechnung
+
+The BO4E payload crosses the gate on its
+[**received-document** setting](@/docs/architecture/domain-model.md#the-bo4e-gate).
+The distinction is load-bearing:
+
+- A document that will not **type** — a wrong `_typ`, an out-of-schema
+  `rechnungstyp` that would otherwise decode to `Unknown` — is dead-lettered.
+  There is nothing for the checker to adjudicate, and saying so is the honest
+  outcome.
+- A document that types but breaks a **BO4E-stated rule** — a `gesamtbrutto`
+  that is not net plus tax — is *not* refused. That invoice is **disputable**,
+  and the market's answer to it is a REMADV naming the defect, which check
+  stage 3 below already produces. Refusing to parse would replace that answer
+  with silence and a dead letter for an operator to find.
+
+---
+
 ## Handled PIDs
 
 | PID | Description | Direction | Sparte | Status |

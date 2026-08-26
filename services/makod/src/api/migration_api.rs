@@ -835,6 +835,12 @@ pub fn router(state: Arc<MigrationApiState>) -> Router {
 /// survives a cutover for the migration to repoint.
 const NO_MIGRATION_NEEDED: &[(&str, &str)] = &[
     (
+        "mabis-profile",
+        "records one MSCONS profile delivery and either accepts it or sends the \
+         ORDERS 17211 Reklamation; a stream lives for one Bilanzierungsmonat and \
+         does not survive a format-version change",
+    ),
+    (
         "geli-gas-mscons",
         "records inbound MSCONS Messdaten and completes",
     ),

@@ -7,20 +7,53 @@
 //! # Process description
 //!
 //! 1. ANB sends `Stammdaten` to VNB (initial + updates on change).
-//! 2. Receiver sends `AcknowledgementDocument` within **6 wall-clock hours**
+//! 2. Receiver sends `AcknowledgementDocument` within **3 minutes**
 //!    (UTC — see note below).
-//! 3. VNB optionally forwards enriched `Stammdaten` to ÜNB within **1 Werktag**
-//!    of the master-data change (BK6-20-060 §3.2).
+//! 3. VNB optionally forwards enriched `Stammdaten` to ÜNB. `BilAReM`
+//!    Kap. 6.2.1.1 obliges the responsible Marktpartner to send a changed value
+//!    „unverzüglich nach Bekanntwerden" but names no countable window, so the
+//!    length is operator-configured
+//!    ([`crate::fristen::`Betreiberfristen`::stammdaten_weiterleitung_werktage`]).
+//!
+//! # Who owns which Stammdatum
+//!
+//! `BilAReM` Kap. 6.2.1.1: „Für jedes ausgetauschte Stammdatum gibt es genau
+//! **einen** Verantwortlichen und mindestens einen Berechtigten." The
+//! Verantwortliche is the final authority on the value and must push a change
+//! unverzüglich; the Berechtigte may request one (Kap. 6.2.1.4) and dispute it
+//! through a Clearingprozess (Kap. 6.2.1.5). Kap. 6.1.3 fixes what a
+//! Clearingprozess has to achieve: agreement **or a formally established
+//! Dissens** — and „bis zu einer Änderung … durch den Verantwortlichen sind die
+//! vom Verantwortlichen verteilten Informationen weiter gültig", so a disputed
+//! Stammdatum keeps its current value rather than becoming unknown.
+//!
+//! Kap. 6.2.1.2 assigns the TR-, SR- and SG-bezogene `Stammdaten` to the **ANB**
+//! and Kap. 6.2.1.7 the clusterbezogene to the **clusternder NB**.
+//!
+//! # `gueltig_ab` is bounded on both sides
+//!
+//! The `Stammdaten` AWT 1.4b constrains the effective date of a change:
+//!
+//! | Rule | Value | Source |
+//! |---|---|---|
+//! | at least this far ahead of receipt | 5 Werktage | Fußnote 27 |
+//! | …or, for the `Stammdaten` marked with Fußnote 33 | 10 Werktage | Fußnote 33 |
+//! | at most this far after the Erstellungszeitpunkt | 2 years | Fußnoten 31, 32 |
+//!
+//! See [`crate::fristen`] for the constants.
 //!
 //! # Clock semantics
 //!
-//! All Redispatch 2.0 fristen use **UTC wall-clock hours**, not German local
-//! time (CET/CEST). The `UtcDateTime` fields in XSD carry explicit `Z` offsets.
-//! This differs from GPKE/WiM deadlines, which use German local time.
+//! The acknowledgement window is wall-clock **UTC** — the XSD `UtcDateTime`
+//! fields carry explicit `Z` offsets. The `gueltig_ab` Werktag rules follow
+//! German local time and the GPKE Werktag definition, like GPKE/WiM.
 //!
 //! # Regulatory basis
 //!
-//! `BNetzA` BK6-20-059 §4.3 (6h ACK), BK6-20-060 §3.2 (Stammdaten update).
+//! `BNetzA` **BK6-23-241** Anlage `BilAReM` Kap. 6.2.1 (Austausch von
+//! `Stammdaten`); EDI@Energy *`Stammdaten`* FB/AWT 1.4b for the wire format, the
+//! `gueltig_ab` Werktag rules and the two-year ceiling; *`AcknowledgementDocument`*
+//! FB 1.0g for the 3-minute Frist.
 
 use mako_engine::{
     deadline::Deadline,
@@ -37,12 +70,18 @@ pub const WORKFLOW_NAME: &str = "redispatch-stammdaten";
 
 // ── Deadline labels ───────────────────────────────────────────────────────────
 
-/// 6h UTC window for dispatching `AcknowledgementDocument` (BK6-20-059 §4.3).
+/// Deadline label for the 3-minute `AcknowledgementDocument` window
+/// ([`crate::fristen::ACK_FRIST`]).
 ///
 /// Register immediately after [`StammdatenEvent::Received`] is applied.
 pub const ACK_WINDOW_LABEL: &str = "redispatch-stammdaten-ack-window";
 
-/// 1 Werktag forwarding window for VNB→ÜNB enrichment (BK6-20-060 §3.2).
+/// Deadline label for the VNB→ÜNB forwarding window.
+///
+/// The length is operator-configured: BK6-23-241 Tenorziffer 4 repealed
+/// BK6-20-060, and `BilAReM` Kap. 6.2.1.1 keeps the obligation („unverzüglich
+/// nach Bekanntwerden") without a countable window. See
+/// [`crate::fristen::`Betreiberfristen`::stammdaten_weiterleitung_werktage`].
 ///
 /// Register after [`StammdatenEvent::Acknowledged`] is applied, when the
 /// deployment role is VNB.
@@ -50,7 +89,7 @@ pub const FORWARD_WINDOW_LABEL: &str = "redispatch-stammdaten-forward-window";
 
 // ── Events ────────────────────────────────────────────────────────────────────
 
-/// Events emitted by the Stammdaten workflow.
+/// Events emitted by the `Stammdaten` workflow.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data")]
 pub enum StammdatenEvent {
@@ -69,7 +108,7 @@ pub enum StammdatenEvent {
         /// UTC receipt timestamp in ISO-8601 format.
         received_at: String,
     },
-    /// `AcknowledgementDocument` dispatched within the 6h window.
+    /// `AcknowledgementDocument` dispatched within the 3-minute window.
     Acknowledged {
         /// MRID of the outbound `AcknowledgementDocument`.
         ack_mrid: String,
@@ -79,7 +118,7 @@ pub enum StammdatenEvent {
         /// MRID of the upstream `Stammdaten` sent to ÜNB.
         upstream_mrid: String,
     },
-    /// The 6h acknowledgement window expired without a response.
+    /// The acknowledgement window expired without a response.
     DeadlineExpired {
         /// Unique ID of the expired deadline.
         deadline_id: DeadlineId,
@@ -121,13 +160,13 @@ pub struct ReceivedData {
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-/// Current state of a Stammdaten process stream.
+/// Current state of a `Stammdaten` process stream.
 ///
 /// # Lifecycle
 ///
 /// ```text
 /// New → Received → Acknowledged → [Forwarded →] Done
-///                ↘ DeadlineExpired (6h window lapsed)
+///                ↘ DeadlineExpired (ACK window lapsed)
 /// ```
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "status", content = "data")]
@@ -164,7 +203,7 @@ impl StammdatenState {
 
 // ── Commands ──────────────────────────────────────────────────────────────────
 
-/// Commands for the Stammdaten workflow.
+/// Commands for the `Stammdaten` workflow.
 ///
 /// All domain values are pre-extracted by the transport layer before
 /// construction. `Workflow::handle` is pure — no I/O.
@@ -235,8 +274,8 @@ impl Workflow for StammdatenWorkflow {
     /// Fire deadline commands when the ACK or forward windows expire.
     fn on_deadline(deadline: &Deadline, state: &Self::State) -> Option<Self::Command> {
         match (deadline.label(), state) {
-            // 6h ACK window while Received; 1-Werktag forward window (VNB →
-            // ÜNB, BK6-20-060) while Acknowledged, so an acknowledged
+            // ACK window while Received; forwarding window (VNB → ÜNB)
+            // while Acknowledged, so an acknowledged
             // Stammdaten document that is never forwarded expires visibly.
             (ACK_WINDOW_LABEL, StammdatenState::Received(_))
             | (FORWARD_WINDOW_LABEL, StammdatenState::Acknowledged { .. }) => {
@@ -489,7 +528,7 @@ mod tests {
         )
         .expect("forward-window timeout handled");
         assert_eq!(out.events.len(), 1, "1-Werktag forward window must fire");
-        // The 6h ACK label stays a no-op in Acknowledged.
+        // The ACK label stays a no-op in Acknowledged.
         let noop = StammdatenWorkflow::handle(
             &state,
             StammdatenCommand::TimeoutExpired {

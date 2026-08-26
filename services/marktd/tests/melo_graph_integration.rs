@@ -732,6 +732,26 @@ async fn tr_patch_stammdaten_updates_fernschaltbarkeit() {
         Some(true),
         "Fernschaltbarkeit retained"
     );
+
+    // **The stored document moved with the columns.** All three are fields
+    // `TechnischeRessource` declares, so the columns index the document rather
+    // than standing beside it. Before, a Stammdatenänderung wrote only the
+    // columns: a `GET` returned the superseded document while §14a steering
+    // read the current column.
+    assert_eq!(
+        after.data["technischeRessourceNutzung"], "STROMVERBRAUCHSART",
+        "the document states the Nutzung the column does"
+    );
+    assert_eq!(
+        after.data["technischeRessourceVerbrauchsart"],
+        "E_MOBILITAET"
+    );
+    assert_eq!(after.data["istFernschaltbar"], true);
+    // …and the keys the patch did not name survived the merge.
+    assert_eq!(
+        after.data["_typ"], "TECHNISCHERESSOURCE",
+        "JSONB concatenation replaces only the keys the patch names"
+    );
 }
 
 /// A `LOC+Z19` SR Stammdatenänderung replaces the contracted
@@ -792,6 +812,16 @@ async fn sr_konfigurationsprodukte_replace() {
     assert_eq!(arr.len(), 1);
     assert_eq!(arr[0]["produktcode"], "PRODUKT_A");
     assert_eq!(arr[0]["marktpartner"]["rollencodenummer"], "9900123456789");
+
+    // **The stored document carries the same list.** `konfigurationsprodukte`
+    // is a field `SteuerbareRessource` declares, so the column indexes the
+    // document rather than standing beside it — `makod` reads the column before
+    // confirming a `wim.steuerungsauftrag`, and a `GET` returns the document.
+    // Before, contracting a product here left it absent from the document.
+    assert_eq!(
+        after.data["konfigurationsprodukte"], kp,
+        "the document states the products the column does"
+    );
 }
 
 /// A `LOC+Z21` Stammdatenänderung patches the typed Tranche columns via

@@ -1,37 +1,41 @@
-//! Integration tests for the MABIS Bilanzkreisabrechnung (PID 13003) workflow.
+//! Integration tests for the MaBiS Bilanzkreisabrechnung workflow.
 //!
 //! Covers the full write→store→read cycle using `InMemoryEventStore` — no
-//! SlateDB required. Tests exercise the complete billing lifecycle,
-//! validation guards, deadline wiring, dispute paths, and the
-//! `BillingProjection` read-model.
+//! SlateDB required.
+//!
+//! # What this file is guarding against
+//!
+//! The workflow used to model a settlement as a single request/response with a
+//! **1-Werktag Prüfmitteilung deadline**. Both halves were wrong:
+//!
+//! - BK6-24-174 Anlage 3 Kap. 9.8.2 Nr. 1 gives the Prüfmitteilung an empty
+//!   Frist cell — the receiving party „kann" answer. Kap. 13.8.2, the section
+//!   the deadline used to cite, defines no answer at all; its Fristen are the
+//!   **BIKO's own** dispatch dates (18. WT / 42. WT).
+//! - A settlement carries a *sequence* of versions (Kap. 3.8.2), so a one-shot
+//!   state machine cannot represent the Clearingphase at all.
 //!
 //! # State machine under test
 //!
 //! ```text
-//! New → SummenzeitreiheReceived → PruefmitteilungSent → Settled
-//!                              ↘ Disputed (negative Prüfmitteilung)
-//!                              ↘ DeadlineExpired (1-Werktag deadline)
+//! New → Offen ──(versions arrive, are checked, get a Datenstatus)──► Geschlossen
 //! ```
-//!
-//! # Regulatory basis
-//!
-//! BNetzA BK6-24-174 §13.8: The BIKO sends the Abrechnungssummenzeitreihe to
-//! the BKV. The BKV must respond with a Prüfmitteilung within **1 Werktag**.
 
 use mako_engine::{
     event_store::InMemoryEventStore,
-    ids::{DeadlineId, TenantId},
+    ids::TenantId,
     process::Process,
     projection::ProjectionRunner,
-    types::{BikoId, BillingPeriod, BkvId, MessageRef, Pruefidentifikator},
+    types::{BikoId, BillingPeriod, MarktpartnerCode, MessageRef, Pruefidentifikator},
     version::WorkflowId,
 };
 use mako_mabis::{
-    BillingCommand, BillingProjection, BillingState, BillingVersion, DataStatus,
-    MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
+    Abrechnungslauf, BillingCommand, BillingProjection, BillingState, Datenstatus, Familie,
+    Kategorie, MabisBillingWorkflow, MabisZaehlpunktId, Pruefergebnis, SUMMENZEITREIHE_PID,
+    SzrVersion, Zeitreihe,
 };
 
-// ── Helpers ────────────────────────────────────────────────────────────────────
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 fn make_process() -> Process<MabisBillingWorkflow, InMemoryEventStore> {
     Process::new(
@@ -41,444 +45,421 @@ fn make_process() -> Process<MabisBillingWorkflow, InMemoryEventStore> {
     )
 }
 
-fn receive_summenzeitreihe_cmd(version: BillingVersion) -> BillingCommand {
+/// Build a version from an ordinal — the wire form is an Erstellungszeitpunkt
+/// (IFTSTA `RFF+AUU`), so the ordinals become ascending seconds.
+fn v(n: u32) -> SzrVersion {
+    SzrVersion::new(format!("202601011200{n:02}+00")).expect("17 characters")
+}
+
+fn bg_szr() -> Zeitreihe {
+    Zeitreihe::new(Familie::BgSzr, Some(Kategorie::B)).expect("BG-SZR Kategorie B")
+}
+
+fn mabis_zp() -> MabisZaehlpunktId {
+    MabisZaehlpunktId::new("DE0001111222233334444555566667777").expect("33 characters")
+}
+
+fn receive(version: u32, im_erstaufschlag: bool) -> BillingCommand {
     BillingCommand::ReceiveSummenzeitreihe {
-        pid: Pruefidentifikator::new(13_003).unwrap(),
-        billing_period: BillingPeriod::new("2025-09"),
-        bkv_id: BkvId::new("BKV-DE-TEST-001"),
-        biko_id: BikoId::new("BIKO-DE-TEST-001"),
-        version,
-        message_ref: MessageRef::new("MSCONS-BKA-2025-09-001"),
+        pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID).expect("13003"),
+        zeitreihe: bg_szr(),
+        mabis_zp: mabis_zp(),
+        bilanzierungsmonat: BillingPeriod::new("2026-01"),
+        version: v(version),
+        im_erstaufschlag,
+        absender: MarktpartnerCode::new("9900357000004"),
+        biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+        message_ref: MessageRef::new(format!("MSCONS-BG-2026-01-V{version}")),
     }
 }
 
-// ── Happy-path lifecycle ───────────────────────────────────────────────────────
-
-/// Full MABIS billing lifecycle:
-/// New → SummenzeitreiheReceived → PruefmitteilungSent → Settled.
-#[tokio::test]
-async fn happy_path_full_lifecycle() {
-    let p = make_process();
-
-    // Step 1: BIKO sends Abrechnungssummenzeitreihe
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Vorlaeufig))
-        .await
-        .expect("ReceiveSummenzeitreihe must succeed for PID 13003");
-
-    let state = p.state().await.expect("state after ReceiveSummenzeitreihe");
-    assert!(
-        matches!(state, BillingState::SummenzeitreiheReceived(_)),
-        "process must be SummenzeitreiheReceived, got: {state:?}",
-    );
-
-    // Step 2: BKV sends positive Prüfmitteilung within 1 Werktag
-    p.execute(BillingCommand::SendPruefmitteilungPositiv {
-        message_ref: MessageRef::new("PRUEF-POS-2025-09-001"),
-    })
-    .await
-    .expect("SendPruefmitteilungPositiv must succeed from SummenzeitreiheReceived");
-
-    let state = p
-        .state()
-        .await
-        .expect("state after SendPruefmitteilungPositiv");
-    assert!(
-        matches!(state, BillingState::PruefmitteilungSent(_)),
-        "process must be PruefmitteilungSent, got: {state:?}",
-    );
-
-    // Step 3: BIKO sends Datenstatus confirming settlement
-    p.execute(BillingCommand::ReceiveDatastatus {
-        data_status: DataStatus::AbgerechtneteDaten,
-    })
-    .await
-    .expect("ReceiveDatastatus must succeed from PruefmitteilungSent");
-
-    let state = p.state().await.expect("state after ReceiveDatastatus");
-    assert!(
-        matches!(state, BillingState::Settled(_)),
-        "process must be Settled, got: {state:?}",
-    );
-}
-
-/// Final billing version (endgültig) also completes the lifecycle correctly.
-#[tokio::test]
-async fn happy_path_endgueltig_version() {
-    let p = make_process();
-
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Endgueltig))
-        .await
-        .expect("endgültig version must succeed");
-
-    let state = p.state().await.unwrap();
-    if let BillingState::SummenzeitreiheReceived(d) = &state {
-        assert_eq!(d.version, BillingVersion::Endgueltig);
-    } else {
-        panic!("expected SummenzeitreiheReceived, got: {state:?}");
+/// `E_0062` decides a BG-SZR: `A03` is its Zustimmung, `A02` its Ablehnung.
+fn pruefmitteilung(version: u32, antwortcode: &str, grund: Option<&str>) -> BillingCommand {
+    BillingCommand::SendPruefmitteilung {
+        version: v(version),
+        pid: Pruefidentifikator::new(21_005).expect("21005"),
+        antwortcode: antwortcode.to_owned(),
+        grund: grund.map(ToOwned::to_owned),
+        message_ref: MessageRef::new(format!("IFTSTA-PM-V{version}")),
     }
 }
 
-// ── Dispute path ───────────────────────────────────────────────────────────────
+fn datenstatus(pid: u32, version: u32, status: Datenstatus) -> BillingCommand {
+    BillingCommand::ReceiveIftsta {
+        pid: Pruefidentifikator::new(pid).expect("valid PID"),
+        version: v(version),
+        datenstatus: Some(status),
+        abweisungsgrund: None,
+        message_ref: MessageRef::new(format!("IFTSTA-DS-V{version}")),
+    }
+}
 
-/// A negative Prüfmitteilung transitions to `Disputed`.
+// ── Happy path ───────────────────────────────────────────────────────────────
+
+/// Erstaufschlag → Datenstatus „Abrechnungsdaten" → Abrechnungsstichtag.
 #[tokio::test]
-async fn negative_pruefmitteilung_transitions_to_disputed() {
-    let p = make_process();
+async fn erstaufschlag_settles_without_a_pruefmitteilung() {
+    let process = make_process();
 
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Vorlaeufig))
+    process
+        .execute(receive(1, true))
         .await
-        .unwrap();
-
-    p.execute(BillingCommand::SendPruefmitteilungNegativ {
-        message_ref: MessageRef::new("PRUEF-NEG-2025-09-001"),
-        reason: "Zählpunkt DE00123456789012345678901234567890 fehlt in der Summenzeitreihe"
-            .to_owned(),
-    })
-    .await
-    .expect("SendPruefmitteilungNegativ must succeed from SummenzeitreiheReceived");
-
-    let state = p
-        .state()
+        .expect("V1 accepted");
+    // Kap. 3.8.3: a version inside the Erstaufschlag window is assigned
+    // „Abrechnungsdaten" automatically — nobody has to check it first.
+    process
+        .execute(datenstatus(21_003, 1, Datenstatus::Abrechnungsdaten))
         .await
-        .expect("state after negative Prüfmitteilung");
+        .expect("Datenstatus accepted");
+
+    let state = process.state().await.expect("state loads");
+    let data = state.data().expect("open");
+    assert_eq!(
+        data.abrechnungsrelevante_version().map(|r| &r.version),
+        Some(&v(1))
+    );
+
+    // The Abrechnungsstichtag (42. WT) turns it into „abgerechnete Daten".
+    process
+        .execute(datenstatus(21_003, 1, Datenstatus::AbgerechneteDaten))
+        .await
+        .expect("final Datenstatus accepted");
+    let state = process.state().await.expect("state loads");
     assert!(
-        matches!(state, BillingState::Disputed { .. }),
-        "process must be Disputed, got: {state:?}",
+        state
+            .data()
+            .unwrap()
+            .version(&v(1))
+            .unwrap()
+            .datenstatus
+            .unwrap()
+            .ist_abgerechnet()
     );
 }
 
-// ── Guard: unsupported PID ─────────────────────────────────────────────────────
-
-/// PIDs other than 13003 must return `WorkflowError::NotImplemented`.
+/// Clearingphase: a version filed after the Erstaufschlag arrives as
+/// „Prüfdaten" and a positive Prüfmitteilung promotes it.
 #[tokio::test]
-async fn unsupported_pid_returns_not_implemented() {
-    let p = make_process();
+async fn clearing_version_is_promoted_by_a_positive_pruefmitteilung() {
+    let process = make_process();
 
-    let result = p
-        .execute(BillingCommand::ReceiveSummenzeitreihe {
-            pid: Pruefidentifikator::new(13_002).unwrap(),
-            billing_period: BillingPeriod::new("2025-09"),
-            bkv_id: BkvId::new("BKV-001"),
-            biko_id: BikoId::new("BIKO-001"),
-            version: BillingVersion::Vorlaeufig,
-            message_ref: MessageRef::new("REF-001"),
+    process.execute(receive(1, true)).await.expect("V1");
+    process
+        .execute(datenstatus(21_003, 1, Datenstatus::Abrechnungsdaten))
+        .await
+        .expect("V1 status");
+    process
+        .execute(pruefmitteilung(1, "A02", Some("Summe weicht um 12 kWh ab")))
+        .await
+        .expect("negative check");
+
+    // Kap. 3.8.3: the negative check leaves the Datenstatus untouched.
+    let state = process.state().await.expect("state loads");
+    assert_eq!(
+        state.data().unwrap().version(&v(1)).unwrap().datenstatus,
+        Some(Datenstatus::Abrechnungsdaten),
+        "a negative Prüfmitteilung must not change the Datenstatus"
+    );
+    assert_eq!(state.data().unwrap().offener_korrekturbedarf(), vec![&v(1)]);
+
+    // The correction is a new version, filed in the Clearingphase.
+    process.execute(receive(2, false)).await.expect("V2");
+    process
+        .execute(datenstatus(21_003, 2, Datenstatus::Pruefdaten))
+        .await
+        .expect("V2 status");
+    process
+        .execute(pruefmitteilung(2, "A03", None))
+        .await
+        .expect("positive check");
+    process
+        .execute(datenstatus(21_003, 2, Datenstatus::Abrechnungsdaten))
+        .await
+        .expect("promotion");
+
+    let state = process.state().await.expect("state loads");
+    let data = state.data().unwrap();
+    assert!(data.offener_korrekturbedarf().is_empty());
+    assert_eq!(
+        data.abrechnungsrelevante_version().map(|r| &r.version),
+        Some(&v(2))
+    );
+}
+
+// ── Versionierung ────────────────────────────────────────────────────────────
+
+/// Kap. 3.8.2 — versions ascend across the whole BKA.
+#[tokio::test]
+async fn a_repeated_or_lower_version_is_refused() {
+    let process = make_process();
+    process.execute(receive(3, true)).await.expect("V3");
+
+    assert!(
+        process.execute(receive(3, false)).await.is_err(),
+        "the same version twice is a filing error, not a redelivery"
+    );
+    assert!(process.execute(receive(2, false)).await.is_err());
+    process.execute(receive(4, false)).await.expect("V4");
+}
+
+// ── PID direction ────────────────────────────────────────────────────────────
+
+/// 21003 and 21004 both carry a Datenstatus; which one a participant receives
+/// follows from its role.
+#[tokio::test]
+async fn both_biko_datenstatus_pids_are_accepted() {
+    for pid in [21_003_u32, 21_004] {
+        let process = make_process();
+        process.execute(receive(1, false)).await.expect("V1");
+        process
+            .execute(datenstatus(pid, 1, Datenstatus::Pruefdaten))
+            .await
+            .unwrap_or_else(|e| panic!("PID {pid} must carry a Datenstatus: {e}"));
+        let state = process.state().await.expect("state loads");
+        assert_eq!(
+            state.data().unwrap().version(&v(1)).unwrap().datenstatus,
+            Some(Datenstatus::Pruefdaten)
+        );
+    }
+}
+
+/// 21000 / 21001 / 21005 are this participant's own outbound Prüfmitteilungen.
+#[tokio::test]
+async fn an_outbound_pruefmitteilung_pid_is_refused_as_an_inbound_message() {
+    let process = make_process();
+    process.execute(receive(1, true)).await.expect("V1");
+
+    for pid in [21_000_u32, 21_001, 21_005] {
+        let cmd = BillingCommand::ReceiveIftsta {
+            pid: Pruefidentifikator::new(pid).expect("valid"),
+            version: v(1),
+            datenstatus: Some(Datenstatus::Abrechnungsdaten),
+            abweisungsgrund: None,
+            message_ref: MessageRef::new("IN"),
+        };
+        assert!(
+            process.execute(cmd).await.is_err(),
+            "PID {pid} is outbound and must not be recorded as an arrival"
+        );
+    }
+}
+
+// ── Abweisung ────────────────────────────────────────────────────────────────
+
+/// Kap. 9.8.2 Nr. 2 — a rejected Prüfmitteilung is never forwarded, so the
+/// check has to be redone.
+#[tokio::test]
+async fn an_abgewiesene_pruefmitteilung_no_longer_stands() {
+    let process = make_process();
+    process.execute(receive(1, true)).await.expect("V1");
+    process
+        .execute(pruefmitteilung(1, "A03", None))
+        .await
+        .expect("check sent");
+    process
+        .execute(BillingCommand::ReceiveIftsta {
+            pid: Pruefidentifikator::new(21_002).expect("21002"),
+            version: v(1),
+            datenstatus: None,
+            abweisungsgrund: Some("MaBiS-ZP für diesen Monat nicht aktiv".into()),
+            message_ref: MessageRef::new("IFTSTA-AB-1"),
         })
-        .await;
+        .await
+        .expect("Abweisung accepted");
 
-    assert!(
-        result.is_err(),
-        "PID 13002 must return NotImplemented error"
+    let state = process.state().await.expect("state loads");
+    let rec = state.data().unwrap().version(&v(1)).unwrap();
+    assert!(rec.pruefergebnis.is_none());
+    assert_eq!(
+        rec.pruefmitteilung_abgewiesen.as_deref(),
+        Some("MaBiS-ZP für diesen Monat nicht aktiv")
     );
-    let err = result.unwrap_err();
-    assert!(
-        err.to_string().contains("not implemented") || err.to_string().contains("NotImplemented"),
-        "error must mention NotImplemented, got: {err}",
-    );
+
+    // Re-checking supersedes the Abweisung.
+    process
+        .execute(pruefmitteilung(1, "A03", None))
+        .await
+        .expect("re-check");
+    let state = process.state().await.expect("state loads");
+    let rec = state.data().unwrap().version(&v(1)).unwrap();
+    assert!(rec.pruefergebnis.is_some());
+    assert!(rec.pruefmitteilung_abgewiesen.is_none());
 }
 
-// ── Guard: wrong-state transitions ────────────────────────────────────────────
+// ── Clearing window ──────────────────────────────────────────────────────────
 
-/// Sending a Prüfmitteilung from `New` must fail.
+/// Kap. 3.10 — after the clearing window closes, nothing can change the
+/// settlement.
 #[tokio::test]
-async fn pruefmitteilung_from_new_is_rejected() {
-    let p = make_process();
-
-    let result = p
-        .execute(BillingCommand::SendPruefmitteilungPositiv {
-            message_ref: MessageRef::new("PRUEF-POS-EARLY"),
+async fn a_closed_settlement_takes_no_version_and_no_check() {
+    let process = make_process();
+    process.execute(receive(1, true)).await.expect("V1");
+    process
+        .execute(BillingCommand::CloseClearing {
+            lauf: Abrechnungslauf::Bka,
         })
-        .await;
-
-    assert!(result.is_err(), "Prüfmitteilung from New must fail");
-    let err = result.unwrap_err();
-    assert!(
-        err.to_string().contains("SummenzeitreiheReceived"),
-        "error must reference expected state, got: {err}",
-    );
-}
-
-/// Receiving Datenstatus before sending Prüfmitteilung must fail.
-#[tokio::test]
-async fn datenstatus_from_summenzeitreihe_received_is_rejected() {
-    let p = make_process();
-
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Vorlaeufig))
         .await
-        .unwrap();
+        .expect("window closed");
 
-    let result = p
-        .execute(BillingCommand::ReceiveDatastatus {
-            data_status: DataStatus::Abrechnungsdaten,
-        })
-        .await;
+    let state = process.state().await.expect("state loads");
+    assert!(matches!(state, BillingState::Geschlossen(_)));
 
+    assert!(process.execute(receive(2, false)).await.is_err());
     assert!(
-        result.is_err(),
-        "ReceiveDatastatus from SummenzeitreiheReceived must fail"
-    );
-    let err = result.unwrap_err();
-    assert!(
-        err.to_string().contains("PruefmitteilungSent"),
-        "error must reference expected state, got: {err}",
+        process
+            .execute(pruefmitteilung(1, "A03", None))
+            .await
+            .is_err()
     );
 }
 
-// ── Deadline wiring ────────────────────────────────────────────────────────────
+// ── Validation guards ────────────────────────────────────────────────────────
 
-/// A 1-Werktag deadline firing on `SummenzeitreiheReceived` transitions to
-/// `DeadlineExpired`.
+/// Kap. 3.8.3 — a Kategorie-C series carries neither a Prüfmitteilung nor a
+/// Datenstatus, so it never enters a settlement stream.
 #[tokio::test]
-async fn pruefmitteilung_deadline_transitions_to_deadline_expired() {
-    let p = make_process();
+async fn a_kategorie_c_series_is_refused() {
+    let process = make_process();
+    let cmd = BillingCommand::ReceiveSummenzeitreihe {
+        pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID).expect("13003"),
+        zeitreihe: Zeitreihe::new(Familie::BkSzr, Some(Kategorie::C)).expect("row"),
+        mabis_zp: mabis_zp(),
+        bilanzierungsmonat: BillingPeriod::new("2026-01"),
+        version: v(1),
+        im_erstaufschlag: true,
+        absender: MarktpartnerCode::new("9900357000004"),
+        biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+        message_ref: MessageRef::new("MSCONS-C"),
+    };
+    assert!(process.execute(cmd).await.is_err());
+}
 
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Vorlaeufig))
-        .await
-        .unwrap();
+/// A stream settles exactly one Summenzeitreihe; a second one belongs in its
+/// own stream, because its Fristen and its Kategorie differ.
+#[tokio::test]
+async fn a_second_zeitreihe_is_refused_in_the_same_stream() {
+    let process = make_process();
+    process.execute(receive(1, true)).await.expect("V1");
 
-    let deadline_id = DeadlineId::new();
-    p.execute(BillingCommand::PruefmitteilungDeadlineExpired {
-        deadline_id,
-        label: PRUEFMITTEILUNG_DEADLINE_LABEL.into(),
-    })
-    .await
-    .expect("PruefmitteilungDeadlineExpired must succeed from SummenzeitreiheReceived");
+    let cmd = BillingCommand::ReceiveSummenzeitreihe {
+        pid: Pruefidentifikator::new(SUMMENZEITREIHE_PID).expect("13003"),
+        zeitreihe: Zeitreihe::new(Familie::BkSzr, Some(Kategorie::B)).expect("row"),
+        mabis_zp: mabis_zp(),
+        bilanzierungsmonat: BillingPeriod::new("2026-01"),
+        version: v(2),
+        im_erstaufschlag: false,
+        absender: MarktpartnerCode::new("9900357000004"),
+        biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
+        message_ref: MessageRef::new("MSCONS-BK"),
+    };
+    assert!(process.execute(cmd).await.is_err());
+}
 
-    let state = p.state().await.expect("state after deadline");
+/// A Prüfmitteilung always refers to a version that was actually received
+/// (Kap. 3.8.3).
+#[tokio::test]
+async fn a_check_on_an_unknown_version_is_refused() {
+    let process = make_process();
+    process.execute(receive(1, true)).await.expect("V1");
     assert!(
-        matches!(state, BillingState::DeadlineExpired(_)),
-        "process must be DeadlineExpired, got: {state:?}",
+        process
+            .execute(pruefmitteilung(2, "A03", None))
+            .await
+            .is_err()
     );
 }
 
-/// A deadline firing on an already-`Settled` process is absorbed harmlessly
-/// (produces zero events, state unchanged).
+// ── Projection ───────────────────────────────────────────────────────────────
+
 #[tokio::test]
-async fn deadline_on_settled_is_absorbed() {
-    let p = make_process();
-
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Vorlaeufig))
-        .await
-        .unwrap();
-    p.execute(BillingCommand::SendPruefmitteilungPositiv {
-        message_ref: MessageRef::new("PRUEF-POS-001"),
-    })
-    .await
-    .unwrap();
-    p.execute(BillingCommand::ReceiveDatastatus {
-        data_status: DataStatus::AbgerechtneteDaten,
-    })
-    .await
-    .unwrap();
-
-    // Late deadline fire after Settled → absorbed
-    let deadline_id = DeadlineId::new();
-    p.execute(BillingCommand::PruefmitteilungDeadlineExpired {
-        deadline_id,
-        label: PRUEFMITTEILUNG_DEADLINE_LABEL.into(),
-    })
-    .await
-    .expect("late deadline on Settled must be absorbed");
-
-    let state = p.state().await.expect("state after late deadline");
-    assert!(
-        matches!(state, BillingState::Settled(_)),
-        "process must remain Settled, got: {state:?}",
-    );
-}
-
-// ── Read-model projection ──────────────────────────────────────────────────────
-
-/// Verify that `BillingProjection` correctly tracks the full happy-path lifecycle.
-#[tokio::test]
-async fn projection_tracks_full_lifecycle() {
+async fn projection_tracks_the_highest_version_and_its_status() {
     let store = InMemoryEventStore::new();
-    let p: Process<MabisBillingWorkflow, _> = Process::new(
+    let process: Process<MabisBillingWorkflow, _> = Process::new(
         store.clone(),
         TenantId::new(),
         WorkflowId::new("mabis-billing", "FV2025-10-01"),
     );
 
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Vorlaeufig))
+    process.execute(receive(1, true)).await.expect("V1");
+    process
+        .execute(datenstatus(21_003, 1, Datenstatus::Abrechnungsdaten))
         .await
-        .unwrap();
-    p.execute(BillingCommand::SendPruefmitteilungPositiv {
-        message_ref: MessageRef::new("PRUEF-POS-001"),
-    })
-    .await
-    .unwrap();
-    p.execute(BillingCommand::ReceiveDatastatus {
-        data_status: DataStatus::AbgerechtneteDaten,
-    })
-    .await
-    .unwrap();
+        .expect("V1 status");
+    process
+        .execute(pruefmitteilung(1, "A02", Some("Abweichung")))
+        .await
+        .expect("negative check");
 
-    let events = store.all_events().await;
     let mut projection = BillingProjection::default();
-    ProjectionRunner::run(&mut projection, &events);
-
-    assert_eq!(
-        projection.records.len(),
-        1,
-        "exactly one stream in projection"
+    ProjectionRunner::run(
+        &mut projection,
+        &store.events_for(process.stream_id()).await,
     );
 
-    let record = projection.records.values().next().unwrap();
-    assert_eq!(
-        record.status(),
-        "Settled",
-        "projection status must be Settled"
+    let record = projection
+        .records
+        .get(process.stream_id().as_str())
+        .expect("stream recorded");
+    assert_eq!(record.status, "Offen");
+    assert_eq!(record.hoechste_version, Some(v(1)));
+    assert_eq!(record.datenstatus, Some(Datenstatus::Abrechnungsdaten));
+    assert_eq!(record.offene_korrekturen, vec![v(1)]);
+    assert_eq!(record.zeitreihe, Some(bg_szr()));
+
+    // A new version clears the correction need and drops the stale status.
+    process.execute(receive(2, false)).await.expect("V2");
+    let mut projection = BillingProjection::default();
+    ProjectionRunner::run(
+        &mut projection,
+        &store.events_for(process.stream_id()).await,
     );
-    // SummenzeitreiheReceived + PruefmitteilungPositivSent + DatenstatusReceived = 3 events
-    assert_eq!(record.event_count(), 3, "3 events in the stream");
-    let data = record
-        .active_data()
-        .expect("record must be Active after full lifecycle");
-    assert!(
-        !data.billing_period.to_string().is_empty(),
-        "billing_period must be populated"
-    );
-    assert!(!data.bkv_id.as_str().is_empty(), "bkv_id must be populated");
-    assert!(
-        !data.biko_id.as_str().is_empty(),
-        "biko_id must be populated"
-    );
-    assert_eq!(
-        *data.version,
-        BillingVersion::Vorlaeufig,
-        "version must be Vorlaeufig"
-    );
+    let record = projection
+        .records
+        .get(process.stream_id().as_str())
+        .expect("stream recorded");
+    assert_eq!(record.hoechste_version, Some(v(2)));
+    assert_eq!(record.datenstatus, None);
+    assert!(record.offene_korrekturen.is_empty());
 }
 
-/// Verify that `BillingProjection` correctly tracks a disputed process.
+/// `A06` is „Zeitreihe akzeptiert" in `E_0041` and is not published by
+/// `E_0062` at all. Because the command names a code rather than a verdict,
+/// the mistake is caught instead of being sent as a positive check.
 #[tokio::test]
-async fn projection_tracks_disputed_process() {
-    let store = InMemoryEventStore::new();
-    let p: Process<MabisBillingWorkflow, _> = Process::new(
-        store.clone(),
-        TenantId::new(),
-        WorkflowId::new("mabis-billing", "FV2025-10-01"),
-    );
+async fn a_code_from_another_trees_codeliste_is_refused() {
+    let process = make_process();
+    process.execute(receive(1, true)).await.expect("V1");
 
-    p.execute(receive_summenzeitreihe_cmd(BillingVersion::Endgueltig))
+    let lf_szr = Zeitreihe::new(Familie::LfSzr, Some(Kategorie::B)).expect("LF-SZR Kategorie B");
+    assert_eq!(lf_szr.pruef_ebd(), Some("E_0041"));
+    assert_eq!(bg_szr().pruef_ebd(), Some("E_0062"));
+
+    let err = process
+        .execute(pruefmitteilung(1, "A06", None))
         .await
-        .unwrap();
-    p.execute(BillingCommand::SendPruefmitteilungNegativ {
-        message_ref: MessageRef::new("PRUEF-NEG-001"),
-        reason: "Datenfehler beim Aggregat".to_owned(),
-    })
-    .await
-    .unwrap();
-
-    let events = store.all_events().await;
-    let mut projection = BillingProjection::default();
-    ProjectionRunner::run(&mut projection, &events);
-
-    let record = projection.records.values().next().unwrap();
-    assert_eq!(
-        record.status(),
-        "Disputed",
-        "projection status must be Disputed"
-    );
-    // SummenzeitreiheReceived + PruefmitteilungNegativSent = 2 events
-    assert_eq!(record.event_count(), 2, "2 events in the stream");
+        .expect_err("E_0062 does not publish A06");
+    assert!(format!("{err}").contains("E_0062"), "{err}");
 }
 
-// ── Deadline accuracy ─────────────────────────────────────────────────────────
-
-/// MABIS BK6-24-174 §13.8: The BKV must respond with a Prüfmitteilung within
-/// **1 Werktag** of receiving the Summenzeitreihe.
-///
-/// This test verifies the deadline arithmetic on a holiday-boundary date.
-/// The Summenzeitreihe arrives on Mon 2025-01-06 (Heilige Drei Könige, a
-/// BDEW MaKo public holiday).  The 1-Werktag deadline skips the holiday and
-/// lands on Tue 2025-01-07 — not on Mon 06 itself (non-Werktag) or Wed 08
-/// (would be 2 Werktage).
+/// The two refusal clusters differ in whether the BIKO forwards the
+/// Prüfmitteilung at all (MaBiS Kap. 9.8.2 Nr. 2).
 #[test]
-fn pruefmitteilung_deadline_1_werktag_after_heilige_drei_koenige() {
-    use mako_fristen::{self as fristen, HolidayCalendar};
-    use time::{Date, Month};
-
-    // Received on Mon 2025-01-06 — Heilige Drei Könige (public holiday).
-    let received = Date::from_calendar_date(2025, Month::January, 6).unwrap();
-    let due = fristen::add_werktage(received, 1, HolidayCalendar::BdewMaKo);
-
-    // Mon 06 is a holiday → the next Werktag is Tue 07 Jan 2025.
-    assert_eq!(
-        due,
-        Date::from_calendar_date(2025, Month::January, 7).unwrap(),
-        "1 Werktag after Heilige Drei Könige (Mon 2025-01-06) must be Tue 2025-01-07, \
-         not Mon 2025-01-06 (holiday) or Wed 2025-01-08 (2 Werktage)"
-    );
+fn an_abweisung_is_negative_but_not_forwarded() {
+    let dublette = Pruefergebnis::negativ(bg_szr(), "A01", "Zeitreihe bereits vorhanden")
+        .expect("E_0062 publishes A01");
+    let abweichung =
+        Pruefergebnis::negativ(bg_szr(), "A02", "Abweichung").expect("E_0062 publishes A02");
+    assert!(!dublette.ist_positiv() && !abweichung.ist_positiv());
+    assert!(!dublette.wird_weitergeleitet());
+    assert!(abweichung.wird_weitergeleitet());
 }
 
-/// Verify the deadline label constant is stable.
-///
-/// Changing [`PRUEFMITTEILUNG_DEADLINE_LABEL`] after deployment would
-/// orphan all existing `Deadline` records in the store — processes whose
-/// deadline was registered with the old label would never fire.
+/// A tree's Zustimmung cannot be smuggled onto a negative Prüfmitteilung.
 #[test]
-fn pruefmitteilung_deadline_label_is_stable() {
-    assert_eq!(
-        PRUEFMITTEILUNG_DEADLINE_LABEL, "mabis-pruefmitteilung-1-werktag",
-        "changing this label orphans existing Deadline records"
-    );
-}
-
-// ── Negative AHB conformance tests ───────────────────────────────────────────
-
-/// A MSCONS PID 13003 with an invalid BGM qualifier (`Z27` instead of `7`)
-/// must be rejected by the AHB rule pack with rule `AHB-13003-BGM-1001-Q`.
-///
-/// `Z27` is the Geschäftsbestätigung qualifier valid for PID 13002 but not for
-/// PID 13003 (Summenzeitreihe Bilanzkreisabrechnung).
-///
-/// This guards against a profile regression that removes or relaxes the BGM
-/// qualifier check, or against the `Some(_unknown)` fallback silently returning
-/// `is_valid = true` for any PID absent from the MSCONS AHB dispatch table.
-#[test]
-fn negative_ahb_wrong_bgm_qualifier_pid_13003() {
-    use edi_energy::{EdiEnergyMessage, Platform};
-
-    let invalid_bytes: &[u8] = b"\
-UNB+UNOC:3+4012345000023:14+9900357000004:14+230101:0000+1'\
-UNH+1+MSCONS:D:04B:UN:2.5'\
-BGM+Z27:::+00013003::+9'\
-DTM+137:20230101:102'\
-RFF+Z13:13003'\
-NAD+MS+4012345000023::293'\
-NAD+MR+9900357000004::293'\
-UNS+D'\
-LOC+172+51238696781'\
-QTY+220:1500.000:KWH'\
-UNT+10+1'\
-UNZ+1+1'";
-
-    let platform = Platform::with_all_profiles();
-    let msg = platform
-        .parse(invalid_bytes)
-        .expect("EDIFACT syntax is valid; parse must succeed");
-
-    // Reference date 2027-10-01 is conformance_reference_date() — max(valid_from) + 365d
-    // — which selects the mscons fv20261001 profile (MSCONS 2.5).
-    let ref_date = time::Date::from_calendar_date(2027, time::Month::October, 1).unwrap();
-    let report = msg
-        .validate_on_date(ref_date)
-        .expect("validate_on_date must not error");
-
+fn the_zustimmungscode_is_refused_as_a_rejection() {
+    assert!(Pruefergebnis::negativ(bg_szr(), "A03", "…").is_err());
     assert!(
-        !report.is_valid(),
-        "wrong BGM qualifier Z27 must cause AHB validation failure for PID 13003"
-    );
-    assert!(
-        report.errors().iter().any(|e| e
-            .rule_id
-            .as_deref()
-            .is_some_and(|id| id == "AHB-13003-BGM-1001-Q")),
-        "error list must contain rule AHB-13003-BGM-1001-Q; got: {:?}",
-        report
-            .errors()
-            .iter()
-            .map(|e| e.rule_id.as_deref())
-            .collect::<Vec<_>>(),
+        Pruefergebnis::negativ(bg_szr(), "A99", "…").is_err(),
+        "E_0062 has no A99"
     );
 }

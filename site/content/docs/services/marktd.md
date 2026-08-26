@@ -313,6 +313,39 @@ Interactive docs: `http://localhost:8180/api/v1/docs/`
 
 OpenAPI spec: `GET /api/v1/openapi.json`
 
+### The BO4E gate
+
+Every `PUT` carrying a BO4E payload runs the same four stages —
+`mako_markt::bo4e::decode`, described in
+[The BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) — and every
+refusal is a `422` naming the stage in `code`:
+
+```json
+{
+  "error": "MARKTLOKATION carries 1 out-of-schema enum value(s) at: sparte",
+  "code":  "bo4e.unknown_enum",
+  "paths": ["sparte"]
+}
+```
+
+Two consequences are specific to `marktd`, which stores what it accepts:
+
+- **The stored `data` is the canonical round-trip**, and the typed columns
+  beside it are derived from the same object, so a column cannot disagree with
+  the document it shadows. That is also why the strict-enum stage matters here:
+  `Unknown` serialises back as the literal `"UNKNOWN"`, so skipping it would
+  replace a caller's value rather than merely accept it.
+- **The envelope never asks for a field the BO declares.** `sparte` on a NeLo,
+  `nutzung`/`verbrauchsart`/`ist_fernschaltbar`/`malo_id`/`melo_id` on a
+  TechnischeRessource, `konfigurationsprodukte` on a SteuerbareRessource and
+  `zaehler_typ`/`eichung_bis` on a Zaehler are derived from the payload. Where
+  the BO declares no such field — `nelos.nb_mp_id`, a MaLo's `fallgruppe` and
+  `fernsteuerbar` — the envelope keeps it and an upsert leaves the column alone.
+
+Writes that touch a shadowed column merge into the JSONB in the same statement,
+so the EDIFACT Stammdatenänderung patch and the `konfigurationsprodukte`
+sub-resource cannot leave the column and the document disagreeing.
+
 ### Endpoints
 
 | Method | Path | Cedar action | Description |
@@ -320,14 +353,14 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/health/live` | — | Liveness (no DB, no auth) |
 | `GET` | `/health/ready` | — | Readiness (bounded DB ping, no auth). Mounted by `mako_service::run` |
 | `GET` | `/metrics` | — | Prometheus (no auth) |
-| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert Marktlokation; validates `_typ = MARKTLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path); pushes to makod MaLo cache |
+| `PUT` | `/api/v1/malos/{malo_id}` | `write-malo` | Upsert Marktlokation through [the BO4E gate](#the-bo4e-gate); pushes to makod MaLo cache |
 | `GET` | `/api/v1/malos/{malo_id}` | `read-malo` | Get Marktlokation as typed `rubo4e::current::Marktlokation` (canonical BO4E camelCase) |
 | `GET` | `/api/v1/malos/{malo_id}/lastprofil` | `read-malo` | Lastprofil (SLP/TLP) assigned to the Marktlokation |
 | `GET` | `/api/v1/malos` | `read-malo` | List Marktlokationen (schema-drift records silently filtered) |
-| `PUT` | `/api/v1/melos/{melo_id}` | `write-melo` | Upsert Messlokation; validates `_typ = MESSLOKATION` and **strictly** rejects any out-of-schema enum value anywhere in the BO (`Bo4eStrict::ensure_known_enums`, 422 with the offending JSON-path) |
+| `PUT` | `/api/v1/melos/{melo_id}` | `write-melo` | Upsert Messlokation through [the BO4E gate](#the-bo4e-gate) |
 | `GET` | `/api/v1/melos/{melo_id}` | `read-melo` | Get Messlokation as typed `rubo4e::current::Messlokation` |
 | `GET` | `/api/v1/melos/{melo_id}/standorteigenschaften` | `read-melo` | BO4E `Standorteigenschaften` for the MeLo |
-| `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner — validates payload as `rubo4e::current::Geschaeftspartner` (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`; canonicalises camelCase) |
+| `PUT` | `/api/v1/partners/{mp_id}` | `write-partner` | Upsert trading partner as a `Geschaeftspartner` through [the BO4E gate](#the-bo4e-gate); the stored form is the canonical camelCase round-trip |
 | `GET` | `/api/v1/partners/{mp_id}` | `read-partner` | Get trading partner — returns a `geschaeftspartner` field with the typed `rubo4e::current::Geschaeftspartner` payload (graceful fallback for legacy records) |
 | `GET` | `/api/v1/partners` | `read-partner` | List partners |
 | `GET` | `/api/v1/partners/{mp_id}/as4-address` | `read-partner` | AS4 endpoint URL and certificate for a partner |
@@ -365,7 +398,7 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/msb-rahmenvertraege-gas/{id}` | `read-msb-rv-gas` | Get one Gas MSB framework contract |
 | `GET` | `/api/v1/nelos` | `read-nelo` | List NeLos (`?nb_mp_id=` filters by Netzbetreiber) |
 | `GET` | `/api/v1/nelos/{id}` | `read-nelo` | Get a NeLo by EIC / BDEW Codenummer |
-| `PUT` | `/api/v1/nelos/{id}` | `write-nelo` (NB role) | Insert or update a NeLo |
+| `PUT` | `/api/v1/nelos/{id}` | `write-nelo` (NB role) | Insert or update a NeLo through [the BO4E gate](#the-bo4e-gate). `sparte` is **derived from the payload** and required by this endpoint's profile (`STROM`/`GAS` only — MaKo is a two-commodity market where BO4E's `Sparte` has seven values); only `nb_mp_id`, which `Netzlokation` declares no field for, rides in the envelope |
 | `GET` | `/api/v1/tranchen` | `read-tranche` | List Tranchen (`?malo_id=` filters by parent MaLo) |
 | `GET` | `/api/v1/tranchen/{id}` | `read-tranche` | Get a Tranche |
 | `PUT` | `/api/v1/tranchen/{id}` | `write-tranche` (NB role) | Insert or update a Tranche (GPKE Teil 4 „Daten der Tranche") |
@@ -393,12 +426,12 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET` | `/api/v1/melos/{melo_id}/msb` | `read-melo-msb` | The MSB responsible for the MeLo on `?at=YYYY-MM-DD` (default today) — WiM Teil 2 UC 4.1.1 historical Werteanfrage routing |
 | `PUT` | `/api/v1/melos/{melo_id}/msb` | `write-melo-msb` | Record a dated MSB assignment (`{ msb_mp_id, valid_from }`); closes the previously-open assignment atomically |
 | `GET` | `/api/v1/melos/{melo_id}/msb/history` | `read-melo-msb` | Full dated MSB timeline for the MeLo (newest first) |
-| `PUT` | `/api/v1/malos/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) — type-validated, keyed on `(malo, bilanzierungsbeginn)`; typed columns (Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/Fallgruppe) extracted, full BO stored as JSONB |
+| `PUT` | `/api/v1/malos/{malo_id}/bilanzierung` | `write-bilanzierung` | Upsert a **BO4E `Bilanzierung`** (BO #3) through [the BO4E gate](#the-bo4e-gate), keyed on `(malo, bilanzierungsbeginn)`; typed columns (Bilanzkreis/Aggregationsverantwortung/Prognosegrundlage/Fallgruppe) extracted, full BO stored as JSONB |
 | `GET` | `/api/v1/malos/{malo_id}/bilanzierung` | `read-bilanzierung` | The Bilanzierung effective at `?at=<RFC3339\|YYYY-MM-DD>` (default now) — point-in-time by validity window |
 | `GET` | `/api/v1/malos/{malo_id}/bilanzierung/history` | `read-bilanzierung` | Full Bilanzierung history for the MaLo (newest validity-start first) |
 | `GET` | `/api/v1/melos/{melo_id}/sharing-eligibility` | `read-sharing-eligibility` | §42c EnWG metering **capability** — qualifies via Zählerstandsgangmessung (§2 Satz 1 Nr. 27 MsbG) **or** viertelstündliche RLM. Returns `capability`, `basis`, `required_action`, `reasons`, `bilanzierungsgebiet`, and the master-data `evidence` it decided from. |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlwerke` | `read-device` | List `Zaehlwerk` registers for a Zaehler (typed `Vec<Zaehlwerk>` from JSONB) |
-| `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler`; validates `_typ = ZAEHLER` and schema (422 on violation) |
+| `PUT` | `/api/v1/zaehler/{zaehler_id}` | `write-device` | Upsert a `Zaehler` through [the BO4E gate](#the-bo4e-gate). `zaehler_typ` and `eichung_bis` are **derived from the BO**, never taken beside it |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/geraete` | `read-device` | List `Geraete` for a `Zaehler` (typed `Vec<GeraetResponse>` with `data: rubo4e::current::Geraet` + `konfigurationen: Vec<GeraetKonfiguration>`) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}` | `read-device` | Get a single `Geraet` — full BO4E payload + `konfigurationen`; 404 when not found |
 | `GET/PUT` | `/api/v1/zaehler/{zaehler_id}/geraete/{geraet_id}/konfigurationen` | `read-device` / `write-device` | Get or atomically replace typed `GeraetKonfiguration` entries (MsbG §23); PUT emits `de.markt.geraet.konfiguration.updated` |
@@ -406,9 +439,9 @@ OpenAPI spec: `GET /api/v1/openapi.json`
 | `GET/PUT` | `/api/v1/zaehler-register/{register_id}/saisons` | `read-device` / `write-device` | List/upsert seasonal TOU windows (`ZaehlzeitSaison`) |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/tariff-zone` | `read-device` | Resolve HT/NT/EINZEL tariff zone for a given local datetime |
 | `GET` | `/api/v1/zaehler/{zaehler_id}/zaehlzeitdefinitionen` | `read-device` | Return typed `rubo4e::current::Zaehlzeitdefinition` assembled from `zaehler_register` + `zaehler_saisons`; `?valid_only=true` filters to current registers |
-| `PUT` | `/api/v1/geraete/{geraet_id}` | `write-device` | Upsert a `Geraet`; validates `_typ = GERAET` and schema (422 on violation) |
+| `PUT` | `/api/v1/geraete/{geraet_id}` | `write-device` | Upsert a `Geraet` through [the BO4E gate](#the-bo4e-gate) |
 | `GET` | `/api/v1/nb-contracts/{id}` | `read-nb-contract` | Get NB network contract with typed BO4E `Vertrag` payload |
-| `PUT` | `/api/v1/nb-contracts/{id}` | `write-nb-contract` | Upsert NB network contract; validates `Vertrag` `_typ` and enums (422 on violation); emits `de.markt.nb-contract.updated` |
+| `PUT` | `/api/v1/nb-contracts/{id}` | `write-nb-contract` | Upsert NB network contract as a `Vertrag` through [the BO4E gate](#the-bo4e-gate); emits `de.markt.nb-contract.updated` |
 | `GET` | `/api/v1/nb-contracts` | `read-nb-contract` | List NB contracts (`?nb_mp_id=...` required) |
 | `GET` | `/api/v1/nb-contracts/by-malo/{malo_id}` | `read-nb-contract` | Contract in force for a MaLo on `?on=` (default today) — the Netznutzer and its type |
 | `GET/PUT` | `/api/v1/energiemix/{nb_mp_id}` | `read-energiemix` / `write-energiemix` | §42 EnWG Energiemix for a Netzbetreiber (`?year=`) |

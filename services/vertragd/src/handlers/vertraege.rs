@@ -764,8 +764,11 @@ pub async fn put_preisgarantie(
     Json(body): Json<serde_json::Value>,
 ) -> ApiResult<StatusCode> {
     use rubo4e::current::Preisgarantie;
-    let typed: Preisgarantie = serde_json::from_value(body)
-        .map_err(|e| ApiError::unprocessable(format!("invalid Preisgarantie payload: {e}")))?;
+    // The BO4E gate, which for a `Preisgarantie` also checks the `Zeitraum` in
+    // `zeitlicheGueltigkeit` — the very field `preisgarantie_bis` is derived
+    // from below, and the one the Tarifwechsel guard reads.
+    let typed: Preisgarantie = mako_markt::bo4e::decode(body)
+        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
     let canonical =
         serde_json::to_value(&typed).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
     let bis = canonical

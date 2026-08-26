@@ -90,24 +90,13 @@ pub enum KaskadeReasonCode {
 /// `mRID` element with `codingScheme` attribute (IEC 62325 simpleContent).
 pub type ParticipantMrid = SimpleContent<String>;
 
-/// Market role element used in IEC 62325 `marketRole` sub-element.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct KaskadeMarketRole {
-    /// Market role type code.
-    #[serde(rename = "type")]
-    pub role_type: KaskadeRoleType,
-}
-
-/// Market participant reference in the IEC 62325 style.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct KaskadeParticipant {
-    /// Market participant mRID (text + codingScheme attribute).
-    #[serde(rename = "mRID")]
-    pub m_rid: ParticipantMrid,
-    /// Market role.
-    #[serde(rename = "marketRole")]
-    pub market_role: KaskadeMarketRole,
-}
+// The sender and receiver are **flat, dotted** elements on the wire —
+// `<sender_MarketParticipant.mRID>` and
+// `<sender_MarketParticipant.marketRole.type>` — not a nested
+// `<sender_MarketParticipant>` container. That is the ENTSO-E CIM convention
+// the BDEW XSD follows, and the difference is not cosmetic: a nested document
+// fails XSD validation at the counterparty, and an inbound flat one loses the
+// sender entirely, because `serde` skips elements the model does not declare.
 
 // ── Status ────────────────────────────────────────────────────────────────────
 
@@ -201,22 +190,8 @@ pub type ResourceObjectRef = SimpleContent<String, ResourceObjScheme>;
 /// Bidding zone domain reference (control zone EIC, simpleContent + A01).
 pub type BiddingZoneMrid = SimpleContent<String, EicCodingScheme>;
 
-/// `biddingZone_Domain` element.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct BiddingZoneDomain {
-    /// EIC code of the control zone.
-    #[serde(rename = "mRID")]
-    pub m_rid: BiddingZoneMrid,
-}
-
-// ── QuantityMeasureUnit ───────────────────────────────────────────────────────
-
-/// `quantity_Measure_Unit` element.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct QuantityMeasureUnit {
-    /// Unit name (always `MAW`).
-    pub name: KaskadeMeasureUnit,
-}
+// `biddingZone_Domain.mRID` and `quantity_Measure_Unit.name` are likewise flat
+// dotted elements, not containers.
 
 // ── KaskadeTimeSeries ─────────────────────────────────────────────────────────
 
@@ -257,12 +232,12 @@ pub struct KaskadeTimeSeries {
         skip_serializing_if = "Vec::is_empty"
     )]
     pub resource_objects: Vec<ResourceObjectRef>,
-    /// Bidding zone domain (control zone).
-    #[serde(rename = "biddingZone_Domain")]
-    pub bidding_zone_domain: BiddingZoneDomain,
+    /// Bidding zone domain (control zone EIC).
+    #[serde(rename = "biddingZone_Domain.mRID")]
+    pub bidding_zone_domain_m_rid: BiddingZoneMrid,
     /// Power unit (always `MAW`).
-    #[serde(rename = "quantity_Measure_Unit")]
-    pub quantity_measure_unit: QuantityMeasureUnit,
+    #[serde(rename = "quantity_Measure_Unit.name")]
+    pub quantity_measure_unit_name: KaskadeMeasureUnit,
     /// Curve type (always `A03`).
     #[serde(rename = "curveType")]
     pub curve_type: CurveType,
@@ -301,12 +276,18 @@ pub struct Kaskade {
     /// Document type: emergency measure (`Z16`) or test (`Z17`).
     #[serde(rename = "type")]
     pub doc_type: KaskadeType,
-    /// Sender market participant.
-    #[serde(rename = "sender_MarketParticipant")]
-    pub sender_market_participant: KaskadeParticipant,
-    /// Receiver market participant.
-    #[serde(rename = "receiver_MarketParticipant")]
-    pub receiver_market_participant: KaskadeParticipant,
+    /// Sender market participant identifier.
+    #[serde(rename = "sender_MarketParticipant.mRID")]
+    pub sender_m_rid: ParticipantMrid,
+    /// Sender market role.
+    #[serde(rename = "sender_MarketParticipant.marketRole.type")]
+    pub sender_market_role: KaskadeRoleType,
+    /// Receiver market participant identifier.
+    #[serde(rename = "receiver_MarketParticipant.mRID")]
+    pub receiver_m_rid: ParticipantMrid,
+    /// Receiver market role.
+    #[serde(rename = "receiver_MarketParticipant.marketRole.type")]
+    pub receiver_market_role: KaskadeRoleType,
     /// The curtailment / emergency time series.
     #[serde(rename = "TimeSeries")]
     pub time_series: KaskadeTimeSeries,

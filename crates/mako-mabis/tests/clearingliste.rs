@@ -1,4 +1,8 @@
-//! Integration tests for MaBiS Clearingliste workflows (PIDs 55065, 55069, 55070).
+//! Integration tests for the record-only MaBiS Clearingliste workflow
+//! (PIDs 55067, 55069, 55070, 55073).
+//!
+//! 55065 is **not** here: it owes a 55066 Korrekturliste and is covered by
+//! `mabis-listenabgleich`.
 //!
 //! Covers receive-and-validate logic using `InMemoryEventStore`.
 //!
@@ -140,16 +144,16 @@ async fn pid_55070_validation_failed() {
     );
 }
 
-// ── PID 55065: Lieferantenclearingliste (NB → LF) ────────────────────────────
+// ── PID 55067: Bilanzkreiszuordnungsliste (NB / ÜNB → BKV) ───────────────────
 
-/// Happy path for PID 55065 (Lieferantenclearingliste): validation passes.
+/// Happy path for PID 55067 (Bilanzkreiszuordnungsliste): validation passes.
 #[tokio::test]
-async fn pid_55065_validation_passed() {
+async fn pid_55067_validation_passed() {
     let p = make_process();
 
-    p.execute(receive_cmd(55065, true))
+    p.execute(receive_cmd(55067, true))
         .await
-        .expect("ReceiveClearingliste PID 55065 must succeed");
+        .expect("ReceiveClearingliste PID 55067 must succeed");
 
     let state = p.state().await.expect("state after receive");
     assert!(
@@ -158,19 +162,19 @@ async fn pid_55065_validation_passed() {
     );
 
     if let ClearinglisteState::ValidationPassed(data) = state {
-        assert_eq!(data.pruefidentifikator.as_u32(), 55065);
-        assert_eq!(data.kind, ClearinglisteKind::Lieferantenclearingliste);
+        assert_eq!(data.pruefidentifikator.as_u32(), 55067);
+        assert_eq!(data.kind, ClearinglisteKind::Bilanzkreiszuordnungsliste);
     }
 }
 
-/// Validation failure path for PID 55065.
+/// Validation failure path for PID 55067.
 #[tokio::test]
-async fn pid_55065_validation_failed() {
+async fn pid_55067_validation_failed() {
     let p = make_process();
 
-    p.execute(receive_cmd(55065, false))
+    p.execute(receive_cmd(55067, false))
         .await
-        .expect("ReceiveClearingliste PID 55065 must succeed even when validation fails");
+        .expect("ReceiveClearingliste PID 55067 must succeed even when validation fails");
 
     let state = p.state().await.expect("state after receive");
     assert!(
@@ -231,8 +235,8 @@ async fn double_receive_rejected() {
 #[test]
 fn kind_from_pid_mapping() {
     assert_eq!(
-        ClearinglisteKind::from_pid(55065),
-        Some(ClearinglisteKind::Lieferantenclearingliste),
+        ClearinglisteKind::from_pid(55067),
+        Some(ClearinglisteKind::Bilanzkreiszuordnungsliste),
     );
     assert_eq!(
         ClearinglisteKind::from_pid(55069),
@@ -251,8 +255,8 @@ fn kind_from_pid_mapping() {
 #[test]
 fn kind_process_names() {
     assert_eq!(
-        ClearinglisteKind::Lieferantenclearingliste.process_name(),
-        "Lieferantenclearingliste",
+        ClearinglisteKind::Bilanzkreiszuordnungsliste.process_name(),
+        "Bilanzkreiszuordnungsliste",
     );
     assert_eq!(
         ClearinglisteKind::ClearinglisteDzr.process_name(),

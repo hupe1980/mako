@@ -34,13 +34,16 @@
 ///
 /// Keeping a second copy of the prompt here would let the two disagree about
 /// what the agent is, with the manifest the one the model actually reads.
+///
+/// The same argument keeps the one-line description out of this struct: it would
+/// restate `identity.role`, the sentence the model is actually given. The
+/// catalogue endpoint reads the role off the manifest instead, so there is one
+/// description and it is the one the model reads.
 #[derive(Debug, Clone)]
 pub struct Specialist {
     /// Unique identifier, matching the manifest's `metadata.name` and the
     /// name used in `[bundled_agents] enable`.
     pub name: &'static str,
-    /// One-line description for the catalogue endpoint.
-    pub specialty: &'static str,
     /// CloudEvent type glob patterns that route an event to this specialist.
     pub trigger_patterns: &'static [&'static str],
 }
@@ -190,7 +193,6 @@ static BUILTIN_AGENTS: &[Specialist] = &[
 
 const MAKO_AGENT: Specialist = Specialist {
     name: "mako-agent",
-    specialty: "GPKE/WiM/GeLi Gas process lifecycle expert. Diagnoses Anmeldung rejections, APERAK errors, stuck processes, and format-version mismatches. Queries makod MCP and obsd KPI reports.",
     trigger_patterns: &[
         mako_events::mako::PROCESS_FAILED,
         mako_events::mako::APERAK_TIMEOUT,
@@ -200,7 +202,6 @@ const MAKO_AGENT: Specialist = Specialist {
 
 const DEADLINE_ALERT_AGENT: Specialist = Specialist {
     name: "deadline-alert-agent",
-    specialty: "APERAK deadline monitor. Detects processes approaching BDEW MaKo response windows (45 min Strom UTILMD, 3 WT Gas APERAK). Triggers operator alerts when SLAs are at risk.",
     trigger_patterns: &[
         mako_events::mako::PROCESS_FAILED,
         mako_events::mako::APERAK_TIMEOUT,
@@ -214,7 +215,6 @@ const DEADLINE_ALERT_AGENT: Specialist = Specialist {
 ))]
 const BILLING_AGENT: Specialist = Specialist {
     name: "billing-agent",
-    specialty: "INVOIC dispute resolution and O2C lifecycle. Handles receipt.disputed events, checks REMADV positions against Rechnung, and coordinates with netzbilanzd for settlement corrections.",
     trigger_patterns: &[
         mako_events::invoic::RECEIPT_DISPUTED,
         mako_events::accounting::MAHNUNG_ISSUED,
@@ -227,11 +227,14 @@ const BILLING_AGENT: Specialist = Specialist {
 ))]
 const NETZBILANZ_AGENT: Specialist = Specialist {
     name: "netzbilanz-agent",
-    specialty: "NNE/KA/MMM billing draft lifecycle (NB role). Monitors invoice_drafts, detects overdue dispatch alerts, verifies CalculationTrace completeness, and handles REMADV payment confirmations.",
     trigger_patterns: &[
         mako_events::netzbilanz::INVOIC_DRAFTED,
         mako_events::netzbilanz::INVOIC_DISPATCHED,
         mako_events::netzbilanz::INVOIC_DISPATCH_OVERDUE,
+        // A counterparty rejecting one of our invoices is the moment this
+        // specialist's `list_disputed` and `list_corrections` reach matters,
+        // and it was the one invoice-lifecycle event nothing woke for.
+        mako_events::netzbilanz::INVOIC_DISPUTED,
     ],
 };
 
@@ -241,7 +244,6 @@ const NETZBILANZ_AGENT: Specialist = Specialist {
 ))]
 const INVOICE_RECONCILIATION_AGENT: Specialist = Specialist {
     name: "invoice-reconciliation-agent",
-    specialty: "REMADV payment reconciliation and overdue invoice resolution. Matches incoming REMADV 33001/33002 against open invoices, identifies partial payments, and triggers dunning when appropriate.",
     trigger_patterns: &[mako_events::invoic::PAYMENT_OVERDUE, "de.invoic.receipt.*"],
 };
 
@@ -251,7 +253,6 @@ const INVOICE_RECONCILIATION_AGENT: Specialist = Specialist {
 ))]
 const BILLING_ANOMALY_AGENT: Specialist = Specialist {
     name: "billing-anomaly-agent",
-    specialty: "Retail invoice anomaly detection. Rolling 3-month statistical deviation analysis (threshold: 20%). Investigates root causes: meter exchange, tariff change, quality substitution, or data error.",
     trigger_patterns: &[mako_events::billing::RECHNUNG_ERSTELLT],
 };
 
@@ -261,7 +262,6 @@ const BILLING_ANOMALY_AGENT: Specialist = Specialist {
 ))]
 const BILLING_REGULATORY_GUARD_AGENT: Specialist = Specialist {
     name: "billing-regulatory-guard-agent",
-    specialty: "Post-billing §40/§41/§41a Abs. 1/§42 EnWG compliance guard. Validates every dispatched invoice for mandatory fields, §41a Abs. 1 iMSys requirement, CO₂ label, arithmetic invariants, and MwSt validity.",
     trigger_patterns: &[mako_events::billing::RECHNUNG_ERSTELLT],
 };
 
@@ -271,7 +271,6 @@ const BILLING_REGULATORY_GUARD_AGENT: Specialist = Specialist {
 ))]
 const JAHRESABRECHNUNG_AGENT: Specialist = Specialist {
     name: "jahresabrechnung-agent",
-    specialty: "Annual Schlussabrechnung orchestrator (LF role). Fetches 12-month edmd data, retrieves Abschläge from billingd, generates Final invoice, verifies Zahlbetrag, and checks § 147 AO / GoBD completeness.",
     trigger_patterns: &[],
 };
 
@@ -281,7 +280,6 @@ const JAHRESABRECHNUNG_AGENT: Specialist = Specialist {
 ))]
 const EEG_AGENT: Specialist = Specialist {
     name: "eeg-agent",
-    specialty: "EEG/KWKG plant lifecycle and settlement. Handles Förderung expiry, post-EEG transition planning, settlement history queries, and iMSys rollout detection from edmd direct pushes.",
     trigger_patterns: &[
         mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
         mako_events::messwert::READING_DIRECT_STORED,
@@ -294,12 +292,15 @@ const EEG_AGENT: Specialist = Specialist {
 ))]
 const EEG_COMPLIANCE_AGENT: Specialist = Specialist {
     name: "eeg-compliance-agent",
-    specialty: "EEG/KWKG regulatory compliance monitor. Checks §52 Pflichtzahlungen, §44b Biogas 45% cap, §20 Direktvermarktungspflicht (>100 kW), §42a Holzbiomasse, and §43 Substratdeckel violations.",
     trigger_patterns: &[
         "de.eeg.anlage.*",
         "de.eeg.verguetung.*",
         "de.eeg.marktpraemie.*",
         "de.eeg.compliance.*",
+        // The event the § 21b Abs. 1 / § 21c duty is *about*. A change of
+        // Veräußerungsform is what § 52 Abs. 1 Nr. 9 penalises going
+        // unreported, and it is the moment the 100 kW question is live.
+        mako_events::eeg::VERAEUSSERUNGSFORM_GEWECHSELT,
     ],
 };
 
@@ -309,16 +310,25 @@ const EEG_COMPLIANCE_AGENT: Specialist = Specialist {
 ))]
 const PAYMENT_RECONCILIATION_AGENT: Specialist = Specialist {
     name: "payment-reconciliation-agent",
-    specialty: "SEPA payment reconciliation and Mahnwesen escalation. Matches CAMT.054 bank returns against accountingd ledger, triggers Mahnstufe escalation (1→2→3), and generates Sperrauftrag when needed.",
     trigger_patterns: &[
         mako_events::accounting::PAYMENT_DUE,
         mako_events::accounting::BANKRUECKLAST,
+        // A rejected collection never settled, so it is a different
+        // reconciliation from a return — and a different R-transaction fee.
+        mako_events::accounting::SEPA_COLLECTION_REJECTED,
+        // The §§ 41f/41g EnWG sequence. Nothing on this plane received any of
+        // it, while the documentation claimed an out-of-compliance sequence was
+        // a finding it kept findable — a control that read as configured and
+        // could not fire, because the events reached no specialist at all.
+        mako_events::accounting::SPERRANDROHUNG,
+        mako_events::accounting::SPERRANKUENDIGUNG,
+        mako_events::accounting::ABWENDUNG_ANGEBOTEN,
+        mako_events::accounting::ABWENDUNG_GEBROCHEN,
     ],
 };
 
 const COMPLIANCE_AGENT: Specialist = Specialist {
     name: "compliance-agent",
-    specialty: "§20 EnWG Diskriminierungsfreiheit parity monitor and BNetzA KPI reporting. Tracks STP rates across market roles, generates BNetzA Diskriminierungsbericht, and flags parity violations.",
     trigger_patterns: &[mako_events::obs::STP_PARITY_ALERT],
 };
 
@@ -328,11 +338,16 @@ const COMPLIANCE_AGENT: Specialist = Specialist {
 ))]
 const MSB_HISTORY_AGENT: Specialist = Specialist {
     name: "msb-history-agent",
-    specialty: "WiM Strom MSB-change history and INSRPT reading-order lifecycle. Detects stuck reading orders, quality issues after MSB transitions, and iMSys rollout progress per §31 MsbG.",
     trigger_patterns: &[
         mako_events::messwert::READING_QUALITY_WARNING,
         mako_events::messwert::READING_DIRECT_STORED,
         mako_events::mako::PROCESS_COMPLETED,
+        // "Report stuck INSRPT reading orders" was a step in its procedure and
+        // `list_overdue_reading_orders` was in its grants, and it never woke
+        // for one: the two events that say an order failed or a delivery is
+        // late reached nobody.
+        mako_events::messwert::READING_ORDER_FAILED,
+        mako_events::messwert::READING_DELIVERY_OVERDUE,
     ],
 };
 
@@ -342,7 +357,6 @@ const MSB_HISTORY_AGENT: Specialist = Specialist {
 ))]
 const METER_DATA_AGENT: Specialist = Specialist {
     name: "meter-data-agent",
-    specialty: "MSCONS meter data quality and § 60 Abs. 2 MsbG substitute value analysis. Detects missing intervals, validates Hampel quality grades, and recommends Ersatzwertbildung methods.",
     trigger_patterns: &[
         mako_events::messwert::READING_QUALITY_WARNING,
         mako_events::mako::PROCESS_COMPLETED,
@@ -355,7 +369,6 @@ const METER_DATA_AGENT: Specialist = Specialist {
 ))]
 const GRID_ANOMALY_AGENT: Specialist = Specialist {
     name: "grid-anomaly-agent",
-    specialty: "NB grid-assignment and contract gap detection. Flags MaLos whose marktd malo_grid record is missing or lacks a valid NB contract (Vertrag), which would block NB STP auto-decisions (processd check 5).",
     trigger_patterns: &[
         mako_events::markt::NB_CONTRACT_UPDATED,
         mako_events::markt::MALO_UPDATED,
@@ -368,7 +381,6 @@ const GRID_ANOMALY_AGENT: Specialist = Specialist {
 ))]
 const TARIFF_OPTIMIZATION_AGENT: Specialist = Specialist {
     name: "tariff-optimization-agent",
-    specialty: "§41a dynamic tariff upgrade advisor. Identifies iMSys customers not yet on dynamic tariffs, estimates annual savings vs fixed tariff, and recommends product changes in productd.",
     trigger_patterns: &[
         mako_events::billing::RECHNUNG_ERSTELLT,
         mako_events::mako::PROCESS_COMPLETED,
@@ -381,7 +393,6 @@ const TARIFF_OPTIMIZATION_AGENT: Specialist = Specialist {
 ))]
 const VERTRAGD_AGENT: Specialist = Specialist {
     name: "vertragd-agent",
-    specialty: "Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards, § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.",
     trigger_patterns: &[
         "de.vertrag.*",
         mako_events::mako::APERAK_REJECTED,
@@ -397,9 +408,6 @@ const VERTRAGD_AGENT: Specialist = Specialist {
 ))]
 const PRODUCTD_AGENT: Specialist = Specialist {
     name: "productd-agent",
-    specialty: "Product catalog hygiene, §41a EPEX price availability monitor, and §42 Energiemix \
-completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix disclosures \
-(annual update), expired B2B quotations needing ERP follow-up, and DRAFT products not yet published.",
     trigger_patterns: &[
         mako_events::tarif::PRODUCT_UPDATED,
         mako_events::tarif::ANGEBOT_ABGELAUFEN,
@@ -409,7 +417,6 @@ completeness guard. Checks for missing EPEX daily prices, stale §42 Energiemix 
 
 const PROCESSD_AGENT: Specialist = Specialist {
     name: "processd-agent",
-    specialty: "NB STP decision trace and LF E_0624 auto-response monitor. Explains why processd rejected an Anmeldung (which of 6 `mako-pruefung` checks failed), and tracks approval_queue items.",
     trigger_patterns: &[
         mako_events::mako::PROCESS_INITIATED,
         mako_events::mako::APERAK_REJECTED,
@@ -423,7 +430,6 @@ const PROCESSD_AGENT: Specialist = Specialist {
 ))]
 const SPERRD_AGENT: Specialist = Specialist {
     name: "sperrd-agent",
-    specialty: "Sperr-/Entsperrauftrag execution monitor (NB role). Tracks the queue (pending→executed/failed/cancelled), flags orders past the date the Lieferant asked for, and diagnoses IFTSTA 21039 dispatches that never reached the LF.",
     trigger_patterns: &[
         mako_events::accounting::SPERRAUFTRAG,
         "de.sperr.*",
@@ -437,7 +443,6 @@ const SPERRD_AGENT: Specialist = Specialist {
 ))]
 const PORTALD_AGENT: Specialist = Specialist {
     name: "portald-agent",
-    specialty: "Customer portal proactive notification orchestrator. Triggers invoice-ready notifications, EEG Förderung expiry alerts, Mahnung reminders, and Tarifwechsel confirmation messages.",
     trigger_patterns: &[
         mako_events::billing::RECHNUNG_ERSTELLT,
         mako_events::eeg::ANLAGE_FOERDERUNG_AUSLAUFEND,
@@ -448,7 +453,6 @@ const PORTALD_AGENT: Specialist = Specialist {
 
 const REGULATORY_REPORTING_AGENT: Specialist = Specialist {
     name: "regulatory-reporting-agent",
-    specialty: "BNetzA §20 EnWG annual Diskriminierungsbericht generator and quarterly KPI reporter. Aggregates process STP rates, APERAK response times, and parity metrics for regulatory submissions.",
     trigger_patterns: &[],
 };
 
@@ -458,7 +462,6 @@ const REGULATORY_REPORTING_AGENT: Specialist = Specialist {
 ))]
 const REPLACEMENT_VALUE_AGENT: Specialist = Specialist {
     name: "replacement-value-agent",
-    specialty: "§ 60 Abs. 2 MsbG Ersatzwertbildung orchestrator. Selects and applies the correct substitute-value method (linear/prior-period/profile) for missing meter intervals, with full audit trail.",
     trigger_patterns: &[
         mako_events::messwert::READING_QUALITY_WARNING,
         mako_events::mako::PROCESS_COMPLETED,
@@ -471,7 +474,6 @@ const REPLACEMENT_VALUE_AGENT: Specialist = Specialist {
 ))]
 const MABIS_SYNCD_AGENT: Specialist = Specialist {
     name: "mabis-syncd-agent",
-    specialty: "MaBiS Summenzeitreihe submission monitor. Triages failed submissions and open Korrekturbedarf against the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), and checks whether a quality warning threatens Summenzeitreihe accuracy.",
     trigger_patterns: &[
         mako_events::mabis::SUBMISSION_FAILED,
         mako_events::mabis::KORREKTURBEDARF_OPENED,
@@ -485,7 +487,6 @@ const MABIS_SYNCD_AGENT: Specialist = Specialist {
 ))]
 const SMGW_DIAGNOSTICS_AGENT: Specialist = Specialist {
     name: "smgw-diagnostics-agent",
-    specialty: "BSI TR-03109 Smart Meter Gateway lifecycle diagnostics. Detects certificate expiry (TLS/SIG/ENC/KEY_AGREEMENT), CLS channel §14a compliance gaps, communication faults, and stalled iMSys rollout. Uses edmd SMGW registry API.",
     trigger_patterns: &[
         mako_events::messwert::CLS_COMPLIANCE_ISSUE,
         mako_events::messwert::SMGW_CERT_EXPIRY_WARNING,
@@ -502,9 +503,6 @@ const SMGW_DIAGNOSTICS_AGENT: Specialist = Specialist {
 ))]
 const VPP_BILLING_AGENT: Specialist = Specialist {
     name: "vpp-billing-agent",
-    specialty: "VPP settlement anomaly monitor. Verifies that every `de.vpp.dispatch.confirmed` \
-                event produced a matching `de.vpp.settlement.berechnet` within 5 minutes, \
-                alerts on missing settlements, and performs Art. 17 RL (EU) 2019/944 audit checks.",
     trigger_patterns: &[
         mako_events::vpp::DISPATCH_CONFIRMED,
         mako_events::vpp::SETTLEMENT_BERECHNET,
@@ -517,15 +515,10 @@ const VPP_BILLING_AGENT: Specialist = Specialist {
 ))]
 const GABI_GAS_AGENT: Specialist = Specialist {
     name: "gabi-gas-agent",
-    specialty: "GaBi Gas 2.1 (BK7-24-01-008) balancing and allocation monitor. Tracks ALOCAT/IMBNOT \
-                gas imbalance saldos, monitors daily nomination/allocation cycle completeness, \
-                flags Mehr-/Mindermengensaldo deviations, and diagnoses MSCONS 13013 dispatch \
-                failures (Allokationsliste Gas, MMMA).",
     trigger_patterns: &[
         "de.gabi.imbalance.*",
         mako_events::gabi::ALOCAT_MISSING,
         "de.gabi.nomination.*",
-        mako_events::netzbilanz::INVOIC_DRAFTED,
     ],
 };
 
@@ -535,10 +528,6 @@ const GABI_GAS_AGENT: Specialist = Specialist {
 ))]
 const EINSD_BATCH_AGENT: Specialist = Specialist {
     name: "einsd-batch-agent",
-    specialty: "EEG/KWKG monthly auto-settlement orchestrator and §52 violation sweep. Triggers \
-                batch settlement for all active plants, detects §52 Pflichtzahlungen accrual, \
-                checks §44b biogas cap utilisation, and ensures post-EEG plants are on correct \
-                remuneration scheme.",
     trigger_patterns: &[
         mako_events::eeg::SETTLEMENT_BATCH_DUE,
         "de.eeg.compliance.*",

@@ -273,6 +273,22 @@ repair of one already agreed.
 Whichever branch runs, the change is **one slice write in the contract's own
 transaction**. There is nothing to project anywhere and nothing to reconcile.
 
+### BO4E payloads cross the gate
+
+`PUT /kunden/{id}/person`, `/kunden/{id}/zahlungsinformation` and
+`/vertraege/{id}/preisgarantie` take BO4E COMs, and each runs
+[the gate](@/docs/architecture/domain-model.md#the-bo4e-gate) before storing.
+
+All three store the **canonical round-trip**, not the request body — and a BO4E
+enum that decodes to the `Unknown` catch-all serialises back as the literal
+string `"UNKNOWN"`. The strict-enum stage is therefore what keeps an
+unrecognised `anrede` or `zahlungsart` from *replacing* what the caller sent.
+
+For a `Preisgarantie` the gate also checks the `Zeitraum` in
+`zeitlicheGueltigkeit` — the field `preisgarantie_bis` is derived from, and the
+one the Tarifwechsel guard below reads. A period running backwards there is a
+guard that opens the wrong window.
+
 ### Which product a MaLo is on lives here
 
 Agreeing it is a Tarifwechsel — a contract act under § 41 Abs. 5 EnWG, guarded

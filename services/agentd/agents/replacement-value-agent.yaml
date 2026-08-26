@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # § 60 Abs. 2 MsbG Ersatzwertbildung orchestrator. Selects and applies the correct substitute-value method (linear/prior-period/profile) for missing meter intervals, with full audit trail.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: replacement-value-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -33,16 +32,44 @@ spec:
       - `de.messwert.reading.quality.warning` — quality grade F or gap detected
       - `de.mako.process.completed` — billing period needs quality check
 
-      ## SUBSTITUTE VALUE METHODS (§ 60 Abs. 2 MsbG)
-      - V1 (≤ 6h gap): linear interpolation between neighbors
-      - V2 (≤ 24h): prior-period average (same time-slot from previous week)
-      - V3 (> 24h): standardized load profile (SLP-based)
-      - V4: manual correction by operator (requires sign-off)
+      ## WHAT § 60 Abs. 2 MsbG ACTUALLY SAYS
+
+      It makes the Aufbereitung der Messwerte — *"insbesondere die
+      Plausibilisierung und die Ersatzwertbildung"* — the Messstellenbetreiber's
+      duty. It names **no method**, no gap length and no threshold. Anything
+      below is edmd's implementation and mako's operating default, not statute,
+      and must be reported as such: a recommendation that cites § 60 Abs. 2 for a
+      *method* is citing it for something it does not contain.
+
+      ## THE METHODS edmd IMPLEMENTS
+
+      Exactly four, and nothing else can be applied:
+      - `PriorPeriodAverage` — the **default**. The same time-of-day slot over the
+        preceding reference days; the window is 7 days and edmd ignores anything
+        past it, because the Vergleichstag rule is a weekday-matched one.
+      - `LinearInterpolation` — between the values bracketing the gap. Needs both,
+        so it cannot open or close a series.
+      - `LastValueCarryForward` — the last value before the gap, held.
+      - `ZeroFill` — zero, for a gap where nothing was consumed and that is known
+        rather than assumed.
+
+      There is no load-profile method. Recommending an SLP substitution names
+      something edmd cannot do, and the step then silently does not happen.
+
+      ## CHOOSING ONE — mako's operating default, not a rule
+
+      - A gap short enough to be bracketed and inside one day: `LinearInterpolation`.
+      - Anything longer, or unbracketed: `PriorPeriodAverage`, edmd's own default.
+      - `ZeroFill` only where the absence of consumption is established.
+      - `LastValueCarryForward` only for a register that does not decrease.
+      Say which of these the recommendation rests on. The operator chooses; edmd
+      applies; § 60 Abs. 2 MsbG is why somebody has to.
 
       ## PROCEDURE
 
       1. Call edmd `get_quality_assessments` to identify F-grade intervals.
-      2. For each gap: determine extent (hours) and select method per § 60 Abs. 2 MsbG.
+      2. For each gap: determine its extent, whether it is bracketed by real
+         readings, and which of edmd's four methods fits.
       3. **Recommend** the substitution window and method. Do not call
          `trigger_substitution`: it mutates, and a tool-calling specialist cannot
          dispatch a mutating call — its arguments come from a model completion,
@@ -52,7 +79,12 @@ spec:
          every value to `substitute_value_log`.
       4. Verify result: call edmd `get_timeseries` — substituted intervals carry
          quality SUBSTITUTED.
-      5. If gap > 7 days: escalate to operator (V4 — manual intervention required).
+      5. Call edmd `get_correction_history` before recommending anything: a window that
+         has already been substituted must not be substituted a second time, and the
+         history is the only place that says so.
+      6. A gap wider than edmd's 7-day reference window has no comparable days
+         behind it, so `PriorPeriodAverage` would average nothing: escalate to
+         the operator for a manual correction instead of naming a method.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -130,11 +162,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -148,147 +179,22 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://edmd/get_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "get timeseries via edmd"
-    - ref: tool://edmd/get_imbalance
-      mutates: false
-      max_sensitivity: internal
-      description: "get imbalance via edmd"
-    - ref: tool://edmd/get_billing_period
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing period via edmd"
-    - ref: tool://edmd/get_device_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get device history via edmd"
-    - ref: tool://edmd/get_quality_warnings
-      mutates: false
-      max_sensitivity: internal
-      description: "get quality warnings via edmd"
-    - ref: tool://edmd/list_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list reading orders via edmd"
-    - ref: tool://edmd/list_overdue_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue reading orders via edmd"
-    - ref: tool://edmd/get_correction_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get correction history via edmd"
-    - ref: tool://edmd/validate_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "validate timeseries via edmd"
     - ref: tool://edmd/get_quality_assessments
       mutates: false
       max_sensitivity: internal
-      description: "get quality assessments via edmd"
-    - ref: tool://edmd/get_summenzeitreihe
+      description: >-
+        The F-grade intervals that need a substitute value.
+
+    - ref: tool://edmd/get_timeseries
       mutates: false
       max_sensitivity: internal
-      description: "get summenzeitreihe via edmd"
-    - ref: tool://edmd/get_annual_forecast
+      description: >-
+        The intervals around the gap, which decide the method and prove the
+        result.
+
+    - ref: tool://edmd/get_correction_history
       mutates: false
       max_sensitivity: internal
-      description: "get annual forecast via edmd"
-    - ref: tool://edmd/get_gas_quality
-      mutates: false
-      max_sensitivity: internal
-      description: "get gas quality via edmd"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
-    - ref: tool://obsd/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via obsd"
-    - ref: tool://obsd/list_overdue_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue processes via obsd"
-    - ref: tool://obsd/get_kpi_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get kpi report via obsd"
-    - ref: tool://obsd/get_parity_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get parity report via obsd"
-    - ref: tool://obsd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via obsd"
-    - ref: tool://obsd/list_processes_by_family
-      mutates: false
-      max_sensitivity: internal
-      description: "list processes by family via obsd"
+      description: >-
+        Substitutions already applied to the period, so one is not proposed
+        twice.

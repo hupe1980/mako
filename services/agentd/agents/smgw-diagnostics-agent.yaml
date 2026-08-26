@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # BSI TR-03109 Smart Meter Gateway lifecycle diagnostics. Detects certificate expiry (TLS/SIG/ENC/KEY_AGREEMENT), CLS channel §14a compliance gaps, communication faults, and stalled iMSys rollout. Uses edmd SMGW registry API.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: MSB. Compiled only into a `role-msb` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: smgw-diagnostics-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -51,19 +50,36 @@ spec:
       ### Step 2 — Correlate with metering history
       Use the edmd MCP tools you hold — `get_device_history` for the MaLo's device/MSB
       timeline and `get_quality_warnings` for recent reading anomalies — to judge
-      whether the gateway fault has already disrupted metering. (Fleet-wide status is an
+      whether the gateway fault has already disrupted metering. Call edmd
+      `list_overdue_reading_orders` as well: orders left outstanding are what a gateway
+      that stopped answering looks like from the outside. (Fleet-wide status is an
       operator surface, `GET /api/v1/smgw/compliance`, not an agent tool.)
 
       ### Step 3 — Certificate triage
       Parse `session.certificates` from the response:
       - TLS cert valid? → check `valid_to` ≥ today + 30 days
       - SIG cert valid? → required for metering data integrity
-      - Any cert `is_revoked = true`? → CRITICAL: SMGW must be replaced (MsbG §29)
+      - Any cert `is_revoked = true`? → CRITICAL. The gateway no longer meets the
+        § 22 MsbG minimum requirements. § 19 MsbG permits only technical systems
+        and components that meet §§ 21 and 22 to be used at all, and § 22 is where
+        conformity with the BSI Schutzprofile and Technischen Richtlinien is
+        presumed from — a revoked certificate withdraws that presumption. § 22 states the
+        requirement and is silent on the remedy, so say what is true: the gateway
+        is out of conformity and the MSB decides between renewal and replacement.
+        § 29 MsbG is the Einbaupflicht and has nothing to say about a gateway
+        already installed.
 
       ### Step 4 — CLS §14a compliance
       For each CLS channel in `session.cls_channels`:
-      - `channel_status = 'ACTIVE'` but `produktcode` is null → WARNING (BK6-24-174 §4.3)
+      - `channel_status = 'ACTIVE'` but `produktcode` is null → WARNING. The
+        Konfigurationsprodukt a CLS channel needs before a Netzbetreiber may
+        steer the load is **BK6-22-300** (27.11.2023, in force 01.01.2024).
+        BK6-24-174 is GPKE and has nothing to do with it.
       - Channel `valid_to` expired → stale configuration
+      Call marktd `get_steuerbare_ressource` for the resource the channel is meant to
+      reach and marktd `get_technische_ressource` for the device behind it. A channel
+      that is healthy but points at no registered steuerbare Ressource controls nothing,
+      and reads from the gateway alone as compliant.
 
       ### Step 5 — Communication fault
       If `last_contact_at` is > 2 hours ago → `COMMUNICATION_FAULT`:
@@ -75,11 +91,27 @@ spec:
       - Logs all current issues to `cls_compliance_log`
       - Emits `de.messwert.cls.compliance-issue` CloudEvents to ERP
 
-      ## BSI TR-03109 REQUIREMENTS
-      - TLS certificate: issued by BSI-approved CA, renew ≥ 30 days before expiry (TR-03109-4 §6.3)
-      - SMGW must maintain active session with MSB backend (TR-03109-1 §3.2)
-      - CLS channel + Konfigurationsprodukt required for §14a load control (BK6-22-300)
-      - Communication fault > 2h → § 60 Abs. 2 MsbG substitute values mandatory
+      ## WHAT BINDS, AND WHAT IS ONLY OUR SCHEDULE
+
+      | Rule | Source |
+      |---|---|
+      | SMGW architecture, and the CLS channel a control command travels over | BSI TR-03109-1 |
+      | SM-PKI: certificate **runtimes** | BSI TR-03109-4 |
+      | The SM-PKI trust root the gateway certificates chain to | § 28 MsbG |
+      | The Konfigurationsprodukt a CLS channel needs before a DSO may steer | BK6-22-300 |
+      | Plausibilisierung und Ersatzwertbildung when a gateway goes silent | § 60 Abs. 2 MsbG |
+
+      **The 90/30/7-day expiry ladder is edmd's operational warning schedule, not
+      a deadline anybody published.** TR-03109-4 binds certificate *runtimes*; the
+      renewal lead time and the Zertifikatswechsel overlap live in the Root-CP.
+      Report the ladder as the operator's own, and never as "TR-03109-4 requires
+      renewal 30 days before expiry" — the TR says no such thing, and a citation
+      that points somewhere real but irrelevant is worse than none, because
+      nobody re-checks it.
+
+      Two more that were here and were wrong: **§ 21c MsbG does not exist** (the
+      MsbG runs § 21 → § 22), and **§ 29 MsbG** is the Einbaupflicht with its 2032
+      deadlines — it says nothing about certificates.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -104,12 +136,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -195,11 +232,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -213,175 +249,32 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://edmd/get_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "get timeseries via edmd"
-    - ref: tool://edmd/get_imbalance
-      mutates: false
-      max_sensitivity: internal
-      description: "get imbalance via edmd"
-    - ref: tool://edmd/get_billing_period
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing period via edmd"
     - ref: tool://edmd/get_device_history
       mutates: false
       max_sensitivity: internal
-      description: "get device history via edmd"
+      description: >-
+        The MaLo's gateway and MSB timeline.
+
     - ref: tool://edmd/get_quality_warnings
       mutates: false
       max_sensitivity: internal
-      description: "get quality warnings via edmd"
-    - ref: tool://edmd/list_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list reading orders via edmd"
+      description: >-
+        Whether the gateway fault has already disrupted metering.
+
     - ref: tool://edmd/list_overdue_reading_orders
       mutates: false
       max_sensitivity: internal
-      description: "list overdue reading orders via edmd"
-    - ref: tool://edmd/get_correction_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get correction history via edmd"
-    - ref: tool://edmd/validate_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "validate timeseries via edmd"
-    - ref: tool://edmd/get_quality_assessments
-      mutates: false
-      max_sensitivity: internal
-      description: "get quality assessments via edmd"
-    - ref: tool://edmd/get_summenzeitreihe
-      mutates: false
-      max_sensitivity: internal
-      description: "get summenzeitreihe via edmd"
-    - ref: tool://edmd/get_annual_forecast
-      mutates: false
-      max_sensitivity: internal
-      description: "get annual forecast via edmd"
-    - ref: tool://edmd/get_gas_quality
-      mutates: false
-      max_sensitivity: internal
-      description: "get gas quality via edmd"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
+      description: >-
+        Reading orders left outstanding by a gateway that stopped answering.
+
     - ref: tool://marktd/get_technische_ressource
       mutates: false
       max_sensitivity: confidential
-      description: "get technische ressource via marktd"
+      description: >-
+        The technical resource behind the gateway's CLS channel.
+
     - ref: tool://marktd/get_steuerbare_ressource
       mutates: false
       max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
-    - ref: tool://obsd/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via obsd"
-    - ref: tool://obsd/list_overdue_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue processes via obsd"
-    - ref: tool://obsd/get_kpi_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get kpi report via obsd"
-    - ref: tool://obsd/get_parity_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get parity report via obsd"
-    - ref: tool://obsd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via obsd"
-    - ref: tool://obsd/list_processes_by_family
-      mutates: false
-      max_sensitivity: internal
-      description: "list processes by family via obsd"
-    - ref: tool://processd/list_decisions
-      mutates: false
-      max_sensitivity: internal
-      description: "list decisions via processd"
-    - ref: tool://processd/get_decision
-      mutates: false
-      max_sensitivity: internal
-      description: "get decision via processd"
-    - ref: tool://processd/get_stp_breakdown_by_erc
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp breakdown by erc via processd"
-    - ref: tool://processd/list_affiliate_decisions
-      mutates: false
-      max_sensitivity: internal
-      description: "list affiliate decisions via processd"
-    - ref: tool://processd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via processd"
-    - ref: tool://processd/list_pending_approvals
-      mutates: false
-      max_sensitivity: internal
-      description: "list pending approvals via processd"
-    - ref: tool://processd/get_queue_entry
-      mutates: false
-      max_sensitivity: internal
-      description: "get queue entry via processd"
+      description: >-
+        The steuerbare Ressource a § 14a control channel must reach.

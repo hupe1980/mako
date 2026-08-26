@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # SEPA payment reconciliation and Mahnwesen escalation. Matches CAMT.054 bank returns against accountingd ledger, triggers Mahnstufe escalation (1→2→3), and generates Sperrauftrag when needed.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: payment-reconciliation-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -32,6 +31,11 @@ spec:
       ## TRIGGERED BY
       - `de.accounting.payment.due` — SEPA DD due date approaching
       - `de.accounting.bankruecklast` — SEPA direct debit returned by bank
+      - `de.accounting.sepa.collection-rejected` — a pain.002 refused the collection; it never settled
+      - `de.accounting.sperrandrohung` — § 41f Abs. 1 EnWG threat issued, the four weeks are running
+      - `de.accounting.sperrankuendigung` — § 41f Abs. 5 EnWG date announced, eight Werktage ahead
+      - `de.accounting.abwendung.angeboten` — § 41g Abs. 1 EnWG instalment offer made
+      - `de.accounting.abwendung.gebrochen` — § 41g Abs. 1 S. 11 EnWG: the agreement was broken
 
       ## PROCEDURE
 
@@ -40,9 +44,69 @@ spec:
       3. Call accountingd `list_ledger` for the entries behind that balance, and
          `list_sepa_collections` for collections still in flight. (Open items are
          an HTTP endpoint, not a tool.)
-      4. For Bankrücklast: identify which invoice triggered the return, check return code.
-      5. Determine Mahnwesen level: Mahnstufe 1 (reminder) → 2 (fee) → 3 (Sperrauftrag).
-      6. If Sperrauftrag required: emit `de.accounting.sperrauftrag` for sperrd processing.
+      4. Tell the two SEPA refusals apart, because they reconcile differently and
+         carry different R-transaction fees:
+         - `de.accounting.bankruecklast` — the collection **settled** and was then
+           returned. The money arrived and left again; the receivable reopens and
+           the booking has to be reversed.
+         - `de.accounting.sepa.collection-rejected` — a pain.002 refused it before
+           settlement. Nothing ever arrived, so there is nothing to reverse — the
+           receivable simply stayed open, and the reason code says whether the
+           mandate needs attention (`AC01` wrong IBAN, `MD01` no mandate) or the
+           account did not cover it (`AM04`).
+         Name the invoice behind either, and the reason code.
+      5. Call accountingd `list_dunning` for the Mahnstufe already reached, then
+         determine the next: 1 (reminder) → 2 (fee) → 3 (Sperrauftrag). Read the stage
+         rather than inferring it — a repeat of a stage already sent restarts the clock
+         the § 41f EnWG sequence runs on.
+      6. Report whether a Sperrauftrag is now due. Dispatching it is
+         accountingd's, on the § 41f sequence below — this specialist says what
+         the state is and what the statute requires next.
+
+      ## THE §§ 41f/41g EnWG SEQUENCE
+
+      An interruption is lawful only at the end of a sequence, and every step of
+      it has its own event. Read the state, never assume it:
+
+      1. **Androhung** (`de.accounting.sperrandrohung`, § 41f Abs. 1) — the
+         four-week clock starts. Two § 41f Abs. 3 gates must hold together, and
+         the second is the one people forget:
+         - Satz 1: arrears of **twice** the Abschlag or Vorauszahlung computed
+           on the current Kalendermonat (Nr. 1), or — only where no Abschlag is
+           owed — at least **one sixth** of the expected annual bill (Nr. 2),
+           after deducting any Anzahlungen;
+         - Satz 2: **and** at least **100 EUR** on top of that.
+         Four kinds of arrears are **excluded from both figures** (Sätze 3–5),
+         and each of them is a case where the ledger balance overstates the
+         lawful basis: a claim the customer disputed in form and time with a
+         coherent reason and which is not titled; an amount not yet due under an
+         agreement with us; an amount from a contested price increase not yet
+         finally decided; and an amount already before the Schlichtungsstelle
+         (§ 111b Abs. 1) at the moment of the Androhung.
+         Call accountingd `get_balance` and `list_ledger`, name the figure the
+         gate rests on, and say which entries you excluded and under which Satz.
+      2. **Ankündigung** (`de.accounting.sperrankuendigung`, § 41f Abs. 5) — the
+         concrete date, in writing, **eight Werktage** ahead, and never before the
+         four weeks have run. Both notices must state the **Grund** and the
+         **costs** the interruption and the later restoration may be billed for
+         (§ 41f Abs. 6); a notice missing either is not a valid notice.
+      3. **Abwendungsvereinbarung** (`de.accounting.abwendung.angeboten`,
+         § 41g Abs. 1) — an offer of interest-free instalments, due within a week
+         of the customer asking and at the latest with the Ankündigung. An
+         accepted one halts the sequence.
+      4. **A broken agreement** (`de.accounting.abwendung.gebrochen`,
+         § 41g Abs. 1 S. 11) — the supplier may resume, and must issue a **fresh**
+         Ankündigung. Treating acceptance as a permanent halt, or resuming on the
+         old Ankündigung, are the two errors here and both are BLOCKED.
+      5. **Restoration** (§ 41f Abs. 7) — unverzüglich once the arrears and the
+         costs of interruption and restoration are settled. It is not conditional
+         on the customer asking for it.
+
+      Report it in `sperr_sequence`: the step the case has reached, the instant
+      that step's clock expires, and — where the sequence is out of order —
+      `compliant: BLOCKED` with the finding in one sentence and the Absatz it
+      rests on. A sequence out of order is BLOCKED, not a warning: an
+      interruption executed on it is unlawful whatever the balance says.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -63,7 +127,7 @@ spec:
     privileged:  { provider: anthropic, model: claude-sonnet-5 }
     # Reads the agent's own answer during memory formation — model output, and
     # therefore untrusted. A model that cannot call a tool is what should read it.
-    quarantined: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
 
   # Memory, bound to the party this run is about.
   #
@@ -105,12 +169,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -140,7 +209,7 @@ spec:
     # is required and states the same window the rule below uses. One figure
     # written twice is cheaper than one field meaning two things.
     deadline:
-      name: sperr-review-review
+      name: sperr-triage
       kind: working-days
       params: { n: 1 }
     # A triage row *is* the finding, so an unanswered one widens rather than
@@ -155,12 +224,34 @@ spec:
         audience: [credit-control]
         priority: urgent
         summary: >-
-          Arrears have reached the §41f threshold. A human decides whether the disconnection sequence opens — accountingd dispatches it, this row is the review before that.
+          Arrears have reached the § 41f Abs. 3 threshold. A human decides whether the disconnection sequence opens — accountingd dispatches it, this row is the review before that.
         when:
           - path: /payment_status
             equals: "SPERR_REQUIRED"
         deadline:
-          name: sperr-review-review
+          name: sperr-triage
+          kind: working-days
+          params: { n: 1 }
+      # The sequence itself, separately from the money.
+      #
+      # A disconnection out of order is unlawful whatever the balance says: a
+      # notice missing its Grund or its costs (§ 41f Abs. 6), an Ankündigung
+      # before the four weeks ran (Abs. 1 and Abs. 5), a resumption on the old
+      # Ankündigung after a broken Abwendungsvereinbarung (§ 41g Abs. 1 S. 11),
+      # or a restoration waiting to be asked for (Abs. 7). None of those is
+      # visible in `payment_status`, and the documentation claimed this plane
+      # kept an out-of-compliance sequence findable while no specialist even
+      # received the events.
+      - name: sperr-sequence-breach
+        audience: [credit-control, billing-compliance]
+        priority: urgent
+        summary: >-
+          The §§ 41f/41g EnWG disconnection sequence is out of order for this customer. An interruption executed on it would be unlawful, and the sequence has to be restarted from the step the finding names.
+        when:
+          - path: /sperr_sequence/compliant
+            equals: "BLOCKED"
+        deadline:
+          name: sperr-triage
           kind: working-days
           params: { n: 1 }
 
@@ -207,14 +298,59 @@ spec:
             - MAHNUNG_1
             - MAHNUNG_2
             - SPERRAUFTRAG
+        # Where the §§ 41f/41g EnWG sequence stands, and whether it is lawful.
+        #
+        # Separate from `payment_status`, which is about money: a customer can
+        # be current and the sequence still out of order, and an arrears figure
+        # says nothing about whether the Androhung stated its costs. Without
+        # this the specialist was asked to judge the sequence and had nowhere
+        # to put the judgement — a closed schema means it could not say it at
+        # all, so the finding would have arrived as prose in a field for
+        # something else, or not at all.
+        sperr_sequence:
+          type: object
+          additionalProperties: false
+          required: [step, compliant]
+          properties:
+            step:
+              type: string
+              description: The last step of the sequence this case has reached.
+              enum:
+                - NONE
+                - ANDROHUNG
+                - ANKUENDIGUNG
+                - ABWENDUNG_ANGEBOTEN
+                - ABWENDUNG_GEBROCHEN
+                - SPERRAUFTRAG
+                - WIEDERHERGESTELLT
+            compliant:
+              type: string
+              enum:
+                - OK
+                - BLOCKED
+            clock_expires_at:
+              type: [string, "null"]
+              description: >-
+                When the current step's window closes — the four weeks of
+                § 41f Abs. 1 or the eight Werktage of Abs. 5. Null where no
+                clock is running.
+            finding:
+              type: [string, "null"]
+              description: >-
+                What is wrong with the sequence, in one sentence, when
+                `compliant` is BLOCKED.
+            legal_basis:
+              type: [string, "null"]
+              description: >-
+                The Absatz the finding rests on — § 41f Abs. 3, Abs. 5,
+                Abs. 6, Abs. 7 or § 41g Abs. 1 S. 11.
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -231,24 +367,24 @@ spec:
     - ref: tool://accountingd/get_balance
       mutates: false
       max_sensitivity: internal
-      description: "get balance via accountingd"
+      description: >-
+        The customer's current balance.
+
     - ref: tool://accountingd/list_ledger
       mutates: false
       max_sensitivity: internal
-      description: "list ledger via accountingd"
+      description: >-
+        The entries behind that balance.
+
+    - ref: tool://accountingd/list_sepa_collections
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        Collections still in flight, so a return is not double-counted.
+
     - ref: tool://accountingd/list_dunning
       mutates: false
       max_sensitivity: internal
-      description: "list dunning via accountingd"
-    - ref: tool://accountingd/list_overdue
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue via accountingd"
-    - ref: tool://accountingd/compute_bilanzielle_abgrenzung
-      mutates: false
-      max_sensitivity: internal
-      description: "compute bilanzielle abgrenzung via accountingd"
-    - ref: tool://accountingd/suggest_payment_match
-      mutates: false
-      max_sensitivity: internal
-      description: "suggest payment match via accountingd"
+      description: >-
+        The Mahnstufe already reached, so an escalation is a step and not a
+        repeat.

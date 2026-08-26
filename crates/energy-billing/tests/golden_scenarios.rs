@@ -1149,10 +1149,15 @@ fn an_industrial_customer_is_billed_the_full_stromsteuer_and_told_about_9b() {
 // mako strict-decodes every BO4E document it *receives* (`ensure_known_enums`
 // at each ingest boundary), and until now checked nothing about what it
 // *emits*. That asymmetry mattered here more than anywhere: `to_rechnung()` is
-// what reaches a counterparty, and a `Rechnung` carrying an enum that resolves
-// to `Unknown` in BO4E-python or go-bo4e is an invoice the recipient cannot
-// fully read — with no error on either side, because forward-compatible
-// decoding is what those implementations are built to do.
+// what reaches a counterparty.
+//
+// The catch-all is `rubo4e`'s own forward-compatibility choice, not the
+// market's. go-bo4e's generated `UnmarshalJSON` returns `invalid <Enum> %q` for
+// an unlisted value and has no catch-all variant; BO4E-python's enums are
+// pydantic `StrEnum`s and raise a `ValidationError`. Both reject the **whole
+// document**, so an out-of-schema enum in an emitted `Rechnung` is not an
+// invoice the recipient reads imperfectly — it is one a Go or Python
+// counterparty cannot parse at all.
 //
 // The convention this pins is already the crate's own: a concept BO4E does not
 // model rides in a `ZusatzAttribut` rather than being forced into a typed
@@ -1165,10 +1170,13 @@ fn an_industrial_customer_is_billed_the_full_stromsteuer_and_told_about_9b() {
 #[test]
 fn every_emitted_rechnung_is_valid_bo4e() {
     for (label, invoice) in emitted_invoices() {
+        // The outbound gate: out-of-schema enums *and* the BO4E-stated rules —
+        // net plus tax is gross, the Steuerbetrag breakdown sums to the tax
+        // total, the positions sum to the net. mako refuses a received document
+        // that breaks these, so it must not emit one either.
         let rechnung = invoice.to_rechnung();
-        rubo4e::Bo4eStrict::ensure_known_enums(&rechnung).unwrap_or_else(|e| {
-            panic!("{label}: emitted a Rechnung with out-of-schema enums: {e}")
-        });
+        mako_markt::bo4e::ensure_conformant(&rechnung)
+            .unwrap_or_else(|e| panic!("{label}: emitted a Rechnung mako would refuse: {e}"));
 
         // …and the JSON a caller stores is the same document, not a null.
         let json = invoice.to_rechnung_json();
@@ -1178,8 +1186,8 @@ fn every_emitted_rechnung_is_valid_bo4e() {
         );
         let round_tripped: rubo4e::current::Rechnung =
             serde_json::from_value(json).unwrap_or_else(|e| panic!("{label}: not a Rechnung: {e}"));
-        rubo4e::Bo4eStrict::ensure_known_enums(&round_tripped)
-            .unwrap_or_else(|e| panic!("{label}: JSON form has out-of-schema enums: {e}"));
+        mako_markt::bo4e::ensure_conformant(&round_tripped)
+            .unwrap_or_else(|e| panic!("{label}: the stored JSON form would be refused: {e}"));
     }
 }
 

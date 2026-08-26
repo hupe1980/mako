@@ -438,7 +438,7 @@ curl -X PUT http://localhost:8680/api/v1/billing/fremdkosten/{draft_id} -d @frem
 curl -X PUT http://localhost:8680/api/v1/billing/drafts/{draft_id}/dispatch
 ```
 
-Dispatch does three things in order, inside one transaction:
+Dispatch does four things in order, inside one transaction:
 
 1. **Merges the Fremdkosten** into `Rechnung.fremdkosten`. BO4E models external cost
    pass-through as a first-class field, so it does not travel as a free-text `ZusatzAttribut`
@@ -452,10 +452,18 @@ Dispatch does three things in order, inside one transaction:
    the invoice is a `draft`: the merge happens here, at dispatch, so a later attachment would
    store costs the counterparty never receives and `GET` would describe a document nobody was
    sent. That answers `409`.
-2. **Re-checks the amended document.** The verdict stored at drafting time describes the
+2. **Runs the outbound BO4E gate** over the merged document
+   ([`ensure_conformant`](@/docs/architecture/domain-model.md#the-bo4e-gate)).
+   This is the one point in netzbilanzd where a document is *assembled at runtime*
+   rather than emitted whole by the settlement engine — a stored `Rechnung` plus a
+   separately stored `Fremdkosten`, each valid when written, combined here into a
+   shape no test has seen. Step 3 covers the arithmetic; this covers what it does
+   not, notably an out-of-schema enum anywhere in the merged tree. **mako does not
+   send a document it would refuse to receive.**
+3. **Re-checks the amended document.** The verdict stored at drafting time describes the
    document as drafted; the counterparty checks what actually arrives. A `Dispute` verdict
    blocks the send and returns the disputing findings.
-3. **Hands it to `makod`** under the idempotency key `netzbilanzd-invoic-{draft_id}`, with:
+4. **Hands it to `makod`** under the idempotency key `netzbilanzd-invoic-{draft_id}`, with:
 
    | Field | Value |
    |---|---|

@@ -31,37 +31,15 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 
 // ── BO4E validation helpers ──────────────────────────────────────────────────────────
 
-/// Validate and normalise a `Messlokation` payload (L4 hard cut).
+/// Validate and normalise a `Messlokation` payload through the BO4E gate.
+///
+/// The BO4E-stated rule this adds for a `Messlokation` is that at most one of
+/// `messadresse`, `geoadresse` and `katasterinformation` may be present.
 fn normalize_messlokation(
-    mut data: serde_json::Value,
+    data: serde_json::Value,
 ) -> Result<Messlokation, (axum::http::StatusCode, serde_json::Value)> {
-    if let Some(obj) = data.as_object_mut() {
-        obj.entry("_typ")
-            .or_insert_with(|| serde_json::json!("MESSLOKATION"));
-    }
-    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
-        && typ.to_uppercase() != "MESSLOKATION"
-    {
-        return Err((
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("expected _typ MESSLOKATION, got '{typ}'") }),
-        ));
-    }
-    let melo: Messlokation = serde_json::from_value(data).map_err(|e| {
-        (
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid Messlokation payload: {e}") }),
-        )
-    })?;
-    // Strict enum gate — reject out-of-schema enum values (which serde would
-    // otherwise decode to `Unknown`) anywhere in the tree, with JSON-paths.
-    rubo4e::Bo4eStrict::ensure_known_enums(&melo).map_err(|e| {
-        (
-            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("Messlokation has out-of-schema enum values: {e}") }),
-        )
-    })?;
-    Ok(melo)
+    mako_markt::bo4e::decode(data)
+        .map_err(|e| (axum::http::StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
 }
 
 /// Deserialise stored JSONB as `Messlokation`. Returns `None` on schema drift.

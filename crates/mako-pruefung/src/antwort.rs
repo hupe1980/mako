@@ -11,7 +11,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::codes::{AntwortCode, Cluster};
+use crate::codes::AntwortCode;
 
 /// A resolved Antwortcode: the code, the tree that publishes it, and the BDEW's
 /// own wording.
@@ -108,9 +108,13 @@ impl RejectReason {
         pruefschritt: u16,
         detail: impl Into<String>,
     ) -> Self {
-        debug_assert_eq!(
-            code.cluster,
-            Cluster::Ablehnung,
+        // Not `== Ablehnung`: MaBiS refuses through four further clusters
+        // (Abweisung, Ablehnung der gesamten Liste, Korrekturliste wegen
+        // Ablehnung, Reklamation). The invariant is that an *agreement* never
+        // carries a rejection, which is what `ist_zustimmung` states.
+        debug_assert_ne!(
+            code.ist_zustimmung(),
+            Some(true),
             "{} is a Zustimmungscode and cannot carry a rejection",
             code.code
         );

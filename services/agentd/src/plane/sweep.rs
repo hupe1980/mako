@@ -187,9 +187,9 @@ pub fn spawn_admission_retention(
 /// That ordering is the whole guarantee. A crash after the POST and before the
 /// cursor moves re-delivers rather than loses — at-least-once, which is the
 /// honest contract for a webhook and the one every other mako service gets from
-/// its transactional outbox. A decision POSTed at request time
-/// and drop it on failure: the single outbound path in the system with no
-/// persist-before-dispatch.
+/// its transactional outbox. The alternative this replaces was a decision POSTed
+/// at request time and dropped on failure: the one outbound path in the system
+/// with no persist-before-dispatch behind it.
 ///
 /// A receiver that is down for a deploy is caught up afterwards. One that has
 /// gone away, or that refuses permanently, is **parked** past the retry ceiling

@@ -24,7 +24,7 @@ workflow by PID.
 | **Reaktion** | PID that this message _reacts to_ (i.e. is a response/follow-up to). `—` if the column is empty in the source xlsx. |
 | **⚡ / 🔥** | Sparte: ✅ = covered; — = not applicable. |
 | **3.3 / 4.0** | ✅ = present in BDEW PID overview for that format version; ⚠️ = absent (sunset or not-yet-added). |
-| **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter`. `—` = not yet implemented. ⁽ᴺᴮ⁾ = NB-role conditional registration only. Multiple entries separated by ` · ` = same PID registered independently in different crates (commodity-isolated; each crate is loaded only in the relevant Strom or Gas deployment). |
+| **Crate / Workflow** | The `mako-*` crate and `workflow-name` that registers this PID in `PidRouter`. `—` = no workflow registers it. ⁽ᴺᴮ⁾ = NB-role conditional registration only. Multiple entries separated by ` · ` = same PID registered independently in different crates (commodity-isolated; each crate is loaded only in the relevant Strom or Gas deployment). |
 
 **Commodity isolation is per *process family*, not per Sparte.** The Lieferanten­
 wechsel is genuinely two different Festlegungen — GPKE (`mako-gpke`) against GeLi
@@ -219,14 +219,14 @@ section on this page.
 | 55062 | Aktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55063 | Deaktivierung von ZP | MaBiS / AWH Modell 2 ladev.scharf. bila. Energie.zuord.möglichkeit | NB → NB · NB → BIKO · NB → LF · ÜNB → LF · ÜNB → BIKO · BIKO → NB · BIKO → BKV · BIKO → ÜNB · ÜNB → NB · ÜNB → BKV · NB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55064 | Antwort | MaBiS | NB → NB · BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
-| 55065 | Lieferantenclearingliste | MaBiS | NB → LF · ÜNB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
-| 55066 | Korrekturliste zu Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | — | ✅ | — | ✅ | ✅ | — |
-| 55067 | Bilanzkreiszuordnungsliste | MaBiS | NB → BKV · ÜNB → BKV | — | ✅ | — | ✅ | ✅ | — |
+| 55065 | Lieferantenclearingliste | MaBiS | NB → LF · ÜNB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55066 | Korrekturliste zu Lieferantenclearingliste | MaBiS | LF → NB · LF → ÜNB | `E_0047` (NB) · `E_0004` (ÜNB) | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-listenabgleich` |
+| 55067 | Bilanzkreiszuordnungsliste | MaBiS | NB → BKV · ÜNB → BKV | `E_0068` (NB) · `E_0039` (ÜNB) | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55069 | Clearingliste DZR | MaBiS | BIKO → NB · BIKO → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55070 | Clearingliste BAS | MaBiS | BIKO → BKV | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55071 | Aktivierung der Zuordnungsermächtigung | MaBiS | BKV → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
 | 55072 | Deaktivierung der Zuordnungsermächtigung | MaBiS | BKV → NB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-zp-lifecycle` |
-| 55073 | Übermittlung der Profildefinitionen | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | — |
+| 55073 | Übermittlung der Profildefinitionen | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-clearingliste` |
 | 55074 | Stammdaten auf eine ORDERS | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | — |
 | 55075 | Stammdaten aufgrund einer Änderung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | — |
 | 55076 | Antwort auf Stammdatenänderung | HKN-R (NB↔UBA) | HKN-R → NB | — | ✅ | — | ✅ | ✅ | — |
@@ -522,8 +522,8 @@ section on this page.
 | 17207 | Ab-/Bestellung BK-SZR auf Aggregationsebene RZ | MaBiS | BKV → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
 | 17208 | Anforderung Clearingliste ÜNB-DZR | MaBiS | ÜNB → BIKO | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
 | 17209 | Anforderung Ausfallarbeit | Redispatch 2.0 | aNB → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
-| 17210 | Anforderung Lieferantenausfallarbeitsclearingliste | MaBiS | LF → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
-| 17211 | Reklamation Profile bzw. Profilscharen | MABIS | LF → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 17210 | Anforderung Lieferantenausfallarbeitsclearingliste | MaBiS | LF → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 17211 | Reklamation Profile bzw. Profilscharen | MABIS | LF → NB | `E_0100` | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-profile` |
 | 17301 | Anforderung von Stammdaten bzw. Messwerten | HKN-R (NB↔UBA) | HKN-R → NB | — | ✅ | — | ✅ | ✅ | — |
 
 ## ORDRSP AHB
@@ -567,9 +567,9 @@ section on this page.
 | 19131 | Mitteilung zur Beendigung Konfiguration | GPKE Teil 3 | MSB → NB · MSB → MSB · MSB → LF | 17129 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19132 | Mitteilung zur Bestellung Konfiguration | GPKE Teil 3 | MSB → NB · MSB → MSB · MSB → LF | 17130 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
 | 19133 | Bearbeitungsstand Bestellung Änderung Abrechnungsdaten | GPKE Teil 2 | NB → LF | 17133 | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-konfiguration-aenderung` |
-| 19204 | Ablehnung Ab-/Bestellung der Aggregationsebene | MaBiS | ÜNB → BKV | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
-| 19301 | Abl. der Anforderung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
-| 19302 | Best. der Anforderung zum Beenden des Abos zur Stammdaten bzw. Messwertübermittlung | HKN-R (NB↔UBA) | NB → HKN-R | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 19204 | Ablehnung Ab-/Bestellung der Aggregationsebene | MaBiS | ÜNB → BKV | `E_0003` (Bestellung) · `E_0022` (Abbestellung) | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-anforderung` |
+| 19301 | Abl. der Anforderung | HKN-R (NB↔UBA) | NB → HKN-R | `S_0092` | ✅ | — | ✅ | ✅ | — (Herkunftsnachweisregister, not implemented) |
+| 19302 | Best. der Anforderung zum Beenden des Abos zur Stammdaten bzw. Messwertübermittlung | HKN-R (NB↔UBA) | NB → HKN-R | `S_0093` | ✅ | — | ✅ | ✅ | — (Herkunftsnachweisregister, not implemented) |
 
 ## ORDCHG AHB
 
@@ -630,9 +630,9 @@ section on this page.
 | 13007 | Gasbeschaffenheit | KoV BK-Mgmt Gas / WiM Gas / GeLi Gas 2.0 | NB → LF · NB → NB · MSBN → NB · MSBA → NB · MSB → NB | — | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
 | 13008 | Lastgang (Gas) | KoV BK-Mgmt Gas / WiM Gas / Marktkommunikation mit der Sicherheitsplattform Gas / GeLi Gas 2.0 | NB → NB · MSBN → NB · MSBA → NB · NB → LF · NB → MSB · NB → MGV · MSB → NB | 17102 | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
 | 13009 | Energiemenge (Gas) | WiM Gas / GeLi Gas 2.0 | MSBN → NB · MSBA → NB · MSB → NB · NB → MSB · NB → LF | 17102 | — | ✅ | ✅ | ✅ | `mako-geli-gas` `geli-gas-mscons` |
-| 13010 | normiertes Profil | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
-| 13011 | Profilschar | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
-| 13012 | TEP vergh. Werte Referenzmessung | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
+| 13010 | normiertes Profil | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-profile` |
+| 13011 | Profilschar | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-profile` |
+| 13012 | TEP vergh. Werte Referenzmessung | MaBiS | NB → MSB · NB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-profile` |
 | 13013 | Marktlokationsscharfe Allokationsliste Gas (MMMA) | MMM Strom/Gas | NB → LF | — | — | ✅ | ✅ | ✅ | `mako-gabi-gas` `gabi-gas-mmma` |
 | 13014 | Marktlokationsscharfe bilanzierte Menge Strom/Gas (MMMA) | MMM Strom/Gas | ÜNB → NB · NB → LF | — | ✅ | ✅ | ✅ | ✅ | `mako-gpke` `gpke-allokationsliste` |
 | 13015 | Arbeit Leistungsmax. Kalenderjahr vor Lieferbeginn | GPKE Teil 2 | NB → LF | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
@@ -640,12 +640,12 @@ section on this page.
 | 13017 | Zählerstand (Strom) | HKN-R (NB↔UBA) / GPKE Teil 4 / WiM Strom Teil 1 / WiM Strom Teil 2 | NB → HKN-R · MSB → LF · MSBN → MSBA · MSBA → MSBN · MSB → MSB · MSB → NB · LF → MSB · NB → MSB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13018 | Lastgang Messlokation, Netzkoppelpunkt, Netzlokation | MaBiS / BK-Treue / MaBiS / GPKE Teil 4 / WiM Strom Teil 2 | NB → NB · NB → ÜNB · MSB → LF · MSB → MSB · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13019 | Energiemenge (Strom) | HKN-R (NB↔UBA) / GPKE Teil 2 / GPKE Teil 4 / WiM Strom Teil 2 | NB → HKN-R · NB → LF · MSB → LF · MSB → NB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
-| 13020 | Ausfallarbeitsüberführungszeitreihe | MaBiS | ANB → ÜNB · ANB → BIKO · BIKO → BKV · ÜNB → BIKO · BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 13020 | Ausfallarbeitsüberführungszeitreihe | MaBiS | ANB → ÜNB · ANB → BIKO · BIKO → BKV · ÜNB → BIKO · BIKO → ANB | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13021 | Übermittlung von meteorologischen Daten | Redispatch 2.0 | BTR → ANB · ANB → aNB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
 | 13022 | Redispatch 2.0 Einzelzeitreihe Ausfallarbeit | Redispatch 2.0 / MaBiS | NB → BTR · BTR → NB · aNB → ANB · ANB → LF · ANB → aNB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
-| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 13023 | Redispatch 2.0 Ausfallarbeitssummenzeitreihe | MaBiS | ANB → LF | — | ✅ | — | ✅ | ✅ | `mako-mabis` `mabis-billing` |
 | 13025 | Lastgang Marktlokation, Tranche | HKN-R (NB↔UBA) / GPKE Teil 4 / WiM Strom Teil 2 | NB → HKN-R · MSB → LF · MSB → NB · MSB → ÜNB | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
-| 13026 | EEG-Überf.-ZR Aufgrund Ausfallarbeit | EEG-Überf.-ZR | BIKO → BKV · BIKO → NB | — | ✅ | — | ✅ | ✅ | `mako-redispatch` `redispatch-aktivierung` |
+| 13026 | EEG-Überf.-ZR Aufgrund Ausfallarbeit | EEG-Überf.-ZR | BIKO → BKV · BIKO → NB | — | ✅ | — | ✅ | ✅ | — (Geschäftsprozesse für EEG-Überführungszeitreihen, not implemented) |
 | 13027 | Werte nach Typ 2 | WiM Strom Teil 2 | MSB → NB · MSB → LF · MSB → ESA | — | ✅ | — | ✅ | ✅ | `mako-gpke` `gpke-messwerte` |
 | 13028 | Grundlage POG-Ermittlung | GPKE Teil 4 | NB → MSB | — | ✅ | — | ✅ | ✅ | — |
 

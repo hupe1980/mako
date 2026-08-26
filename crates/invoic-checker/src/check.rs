@@ -160,6 +160,14 @@ pub enum FindingKind {
     SteuerMissing,
     /// `gesamtbrutto` does not equal `gesamtnetto + gesamtsteuer`.
     SteuerMismatch,
+    /// The document's monetary fields do not agree on a currency.
+    ///
+    /// Every amount in this crate is an [`EuroAmount`], because a German MaKo
+    /// invoice is denominated in EUR — which means a `Betrag` carrying
+    /// `waehrung: CHF` is read *as if it were EUR* and every later comparison
+    /// silently comes out right. This is the check that stops that, and it runs
+    /// before the arithmetic for exactly that reason.
+    WaehrungMismatch,
     /// A reverse-charge invoice (`RCV`) nonetheless states a tax amount.
     ///
     /// Tax shown on a §13b invoice is owed under §14c Abs. 1 UStG and is still
@@ -421,6 +429,7 @@ impl InvoicCheckEngine {
         }
 
         // ── Stage 2: Arithmetic (qty × unit_price ≈ gesamtpreis) ─────────────
+        Self::check_waehrung(rechnung, &mut findings);
         Self::check_arithmetic(rechnung, config, &mut findings);
 
         // ── Stage 3: Total consistency (Σ gesamtpreis ≈ gesamtnetto) ──────────
@@ -563,6 +572,51 @@ impl InvoicCheckEngine {
     ///
     /// Uses `billing::Amount::checked_sub` + `checked_mul_qty` — no `f64`
     /// intermediate — satisfying the §40 EnWG itemised-billing accuracy requirement.
+    /// One currency across every monetary field on the document.
+    ///
+    /// BO4E does not state this as a sentence of its own; it is the premise of
+    /// the two sums it *does* state (`gesamtbrutto` is „Die Summe aus Netto-
+    /// und Steuerbetrag", `steuerbetraege` sum to `gesamtsteuer`) — amounts
+    /// denominated differently have no sum.
+    ///
+    /// A **dispute**, not a warning: the checker reads every amount as an
+    /// [`EuroAmount`], so a mixed-currency document does not fail any later
+    /// comparison. It passes them, wrongly.
+    fn check_waehrung(rechnung: &Rechnung, findings: &mut Vec<Finding>) {
+        let mut first: Option<(&str, rubo4e::current::Waehrungscode)> = None;
+        for (field, code) in [
+            ("gesamtnetto", &rechnung.gesamtnetto),
+            ("gesamtsteuer", &rechnung.gesamtsteuer),
+            ("gesamtbrutto", &rechnung.gesamtbrutto),
+            ("rabattNetto", &rechnung.rabatt_netto),
+            ("zuZahlen", &rechnung.zu_zahlen),
+        ]
+        .into_iter()
+        .filter_map(|(f, b)| b.as_ref().and_then(|b| b.waehrung).map(|c| (f, c)))
+        {
+            match first {
+                None => first = Some((field, code)),
+                Some((first_field, first_code)) if first_code != code => {
+                    findings.push(Finding::dispute(
+                        FindingKind::WaehrungMismatch,
+                        format!(
+                            "{first_field} is denominated in {} but {field} in {} — \
+                             amounts in different currencies have no sum, and every \
+                             figure below is read as EUR.",
+                            first_code.as_wire(),
+                            code.as_wire()
+                        ),
+                        None,
+                        None,
+                        None,
+                    ));
+                    return;
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
     fn check_arithmetic(rechnung: &Rechnung, config: &CheckConfig, findings: &mut Vec<Finding>) {
         for pos in rechnung.rechnungspositionen.iter().flatten() {
             let qty = pos.positions_menge.wert_decimal();
@@ -668,9 +722,11 @@ impl InvoicCheckEngine {
 
         // **The breakdown must add up to the total it breaks down.**
         //
-        // BO4E states this rule outright, and rubo4e validates it since 0.10;
-        // this check verified `netto + steuer == brutto` and never looked
-        // inside `steuerbetraege`. The two figures are read by different
+        // BO4E states this rule outright („die Summe dieser Beträge ergibt den
+        // Wert für gesamtsteuer") and enforces it nowhere: `rubo4e` ships a
+        // validator for it behind a feature mako does not enable, and no
+        // reference implementation runs it. This check verified
+        // `netto + steuer == brutto` and never looked inside `steuerbetraege`. The two figures are read by different
         // parties for different purposes — the recipient computes its
         // Vorsteuerabzug from the per-rate breakdown (§14 Abs. 4 Nr. 8 UStG,
         // §15 Abs. 1) and pays from the total — so an invoice stating 19 % on
@@ -1001,6 +1057,7 @@ impl InvoicCheckEngine {
         // The structural checks are the same invoice arithmetic as everywhere
         // else; only the price basis differs.
         Self::check_periods(rechnung, &mut findings);
+        Self::check_waehrung(rechnung, &mut findings);
         Self::check_arithmetic(rechnung, config, &mut findings);
         let computed_total = Self::check_total(rechnung, config, &mut findings);
         Self::check_zahlungsziel(rechnung, config, &mut findings);
@@ -1151,6 +1208,7 @@ impl InvoicCheckEngine {
 
         // Checks 1–3 are identical to the standard pipeline.
         Self::check_periods(rechnung, &mut findings);
+        Self::check_waehrung(rechnung, &mut findings);
         Self::check_arithmetic(rechnung, config, &mut findings);
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
@@ -1327,6 +1385,7 @@ impl InvoicCheckEngine {
         }
 
         // Stage 2 + 3: Arithmetic and total (still apply to Storno amounts).
+        Self::check_waehrung(rechnung, &mut findings);
         Self::check_arithmetic(rechnung, config, &mut findings);
         let computed_total = Self::check_total(rechnung, config, &mut findings);
 
@@ -2472,5 +2531,68 @@ mod tests {
             "{:?}",
             report.findings
         );
+    }
+}
+
+#[cfg(test)]
+mod waehrung_tests {
+    use super::{CheckConfig, FindingKind, InvoicCheckEngine};
+    use rubo4e::current::{Betrag, Rechnung, Waehrungscode};
+    use rust_decimal::dec;
+
+    fn betrag(wert: rust_decimal::Decimal, waehrung: Waehrungscode) -> Option<Betrag> {
+        Some(Betrag {
+            wert: Some(wert),
+            waehrung: Some(waehrung),
+            ..Default::default()
+        })
+    }
+
+    /// The arithmetic below this check reads every amount as EUR, so a
+    /// mixed-currency invoice does not fail it — it *passes* it, wrongly.
+    #[test]
+    fn a_mixed_currency_invoice_is_disputed() {
+        let mut findings = Vec::new();
+        let r = Rechnung {
+            gesamtnetto: betrag(dec!(300.00), Waehrungscode::Eur),
+            gesamtsteuer: betrag(dec!(57.00), Waehrungscode::Eur),
+            gesamtbrutto: betrag(dec!(357.00), Waehrungscode::Chf),
+            ..Default::default()
+        };
+        InvoicCheckEngine::check_waehrung(&r, &mut findings);
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].kind, FindingKind::WaehrungMismatch);
+        assert!(findings[0].is_dispute);
+        // …and note the totals themselves reconcile, which is the point.
+        assert_eq!(dec!(300.00) + dec!(57.00), dec!(357.00));
+    }
+
+    #[test]
+    fn one_currency_throughout_is_silent() {
+        let mut findings = Vec::new();
+        let r = Rechnung {
+            gesamtnetto: betrag(dec!(300.00), Waehrungscode::Eur),
+            gesamtbrutto: betrag(dec!(357.00), Waehrungscode::Eur),
+            ..Default::default()
+        };
+        InvoicCheckEngine::check_waehrung(&r, &mut findings);
+        assert!(findings.is_empty());
+    }
+
+    /// A document that states no currency at all is not this check's business —
+    /// BO4E makes the field optional, and there is nothing to disagree about.
+    #[test]
+    fn an_absent_currency_is_not_a_mismatch() {
+        let mut findings = Vec::new();
+        let r = Rechnung {
+            gesamtnetto: Some(Betrag {
+                wert: Some(dec!(300.00)),
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        InvoicCheckEngine::check_waehrung(&r, &mut findings);
+        assert!(findings.is_empty());
+        let _ = CheckConfig::default();
     }
 }

@@ -14,12 +14,15 @@
 //! PUT body: `rubo4e::current::Netzlokation` JSON (camelCase).
 //! GET returns: `NetzlokationResponse` with `data: rubo4e::current::Netzlokation`.
 //!
-//! Validation on PUT:
-//!   1. Auto-inject `_typ: "NETZLOKATION"` when absent.
-//!   2. Reject 422 if `_typ` is present but does not equal `NETZLOKATION`.
-//!   3. Deserialise as `rubo4e::current::Netzlokation` — invalid enum fields
-//!      (`sparte`, `eigenschaftMsbLokation`, …) return 422.
-//!   4. Re-serialise to canonical BO4E camelCase form; extract typed SQL columns.
+//! Validation on PUT is [the BO4E gate](mako_markt::bo4e::decode) — `_typ`,
+//! schema, out-of-schema enums by JSON-path, BO4E's own rules — followed by
+//! this endpoint's mako profile: `sparte` is **required** despite BO4E making
+//! it optional, and must be `STROM` or `GAS`, because market communication is a
+//! two-commodity affair where BO4E's `Sparte` has seven values.
+//!
+//! Every typed SQL column is then derived from the object the gate returned.
+//! Only `nb_mp_id` rides in the envelope, and only because `Netzlokation`
+//! declares no Netzbetreiber field for it to duplicate.
 
 use std::sync::Arc;
 
@@ -50,41 +53,13 @@ pub type NeLoRepoExt = Arc<PgNeLoRepository>;
 
 // ── BO4E validation helpers ───────────────────────────────────────────────────
 
-/// Validate and normalise a `Netzlokation` payload.
-///
-/// 1. Auto-inject `_typ: "NETZLOKATION"` when absent.
-/// 2. Reject 422 if `_typ` is present but is not `NETZLOKATION`.
-/// 3. Deserialise as `rubo4e::current::Netzlokation` to validate all enum fields.
-/// 4. Re-serialise to canonical BO4E camelCase form.
+/// Validate and normalise a `Netzlokation` payload through the BO4E gate,
+/// returning it alongside its canonical serialization.
 fn normalize_netzlokation(
-    mut data: serde_json::Value,
+    data: serde_json::Value,
 ) -> Result<(Netzlokation, serde_json::Value), (StatusCode, serde_json::Value)> {
-    if let Some(obj) = data.as_object_mut() {
-        obj.entry("_typ")
-            .or_insert_with(|| serde_json::json!("NETZLOKATION"));
-    }
-    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
-        && typ.to_uppercase() != "NETZLOKATION"
-    {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("expected _typ NETZLOKATION, got '{typ}'") }),
-        ));
-    }
-    let nelo: Netzlokation = serde_json::from_value(data).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid Netzlokation payload: {e}") }),
-        )
-    })?;
-    // Strict enum gate — reject out-of-schema enum values (which serde would
-    // otherwise decode to `Unknown`) anywhere in the tree, with JSON-paths.
-    rubo4e::Bo4eStrict::ensure_known_enums(&nelo).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("Netzlokation has out-of-schema enum values: {e}") }),
-        )
-    })?;
+    let nelo: Netzlokation = mako_markt::bo4e::decode(data)
+        .map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))?;
     let canonical = super::serialise_or_500(&nelo, "Netzlokation")?;
     Ok((nelo, canonical))
 }
@@ -105,22 +80,31 @@ fn deserialize_stored_nelo(data: serde_json::Value, nelo_id: &str) -> Option<Net
 
 // ── DTOs ──────────────────────────────────────────────────────────────────────
 
-/// PUT body — accepts a `rubo4e::current::Netzlokation` JSON object.
+/// PUT body — the BO4E `Netzlokation` in `data`, plus what the BO does not carry.
 ///
-/// Top-level convenience fields (`nb_mp_id`, `sparte`) are REQUIRED separately
-/// since they are indexed SQL columns.  The full BO4E payload goes in `data`.
+/// `nb_mp_id` is the one envelope field: it is an indexed column and
+/// `Netzlokation` declares no Netzbetreiber. `sparte` is indexed too, but the
+/// BO declares it, so it is derived from the payload and required by the
+/// endpoint's profile.
 #[derive(Debug, Deserialize, ToSchema)]
 pub struct NeLoUpsertRequest {
     /// Owning Netzbetreiber MP-ID (indexed column, required for filtering).
+    ///
+    /// mako's own: `Netzlokation` declares no Netzbetreiber field, so this is
+    /// not a restatement of anything the BO carries.
     pub nb_mp_id: String,
-    /// `STROM` or `GAS` (indexed column — must also match `data.sparte` when present).
-    #[schema(value_type = String, example = "STROM")]
-    pub sparte: Sparte,
     /// Full `rubo4e::current::Netzlokation` payload (BO4E camelCase JSON).
     ///
-    /// `_typ` is auto-injected as `NETZLOKATION` if absent.
-    /// Unknown `_typ` values are rejected with 422.
-    /// Invalid enum fields (`eigenschaftMsbLokation`, …) are rejected with 422.
+    /// Crosses [the BO4E gate](mako_markt::bo4e::decode), and then this
+    /// endpoint's own profile: `sparte` is **required** despite BO4E making it
+    /// optional, and must be `STROM` or `GAS` — MaKo is a two-commodity market
+    /// by regulation, while BO4E's `Sparte` also covers Fernwärme, Wasser and
+    /// Abwasser.
+    ///
+    /// `sparte` is **not** an envelope field: the BO declares it, and two
+    /// sources for one fact would let a caller file a Netzlokation under `GAS`
+    /// while its stored document says `STROM`. The column is what every query
+    /// reads.
     #[schema(value_type = Object)]
     pub data: serde_json::Value,
 }
@@ -244,6 +228,42 @@ pub async fn put_nelo(
         Err((status, json)) => return (status, Json(json)).into_response(),
     };
 
+    // The mako profile for this endpoint: BO4E makes `sparte` optional, marktd
+    // does not — it is an indexed column every query filters on, and MaKo knows
+    // only two commodities where BO4E knows seven.
+    let sparte = match typed_nelo.sparte {
+        Some(rubo4e::current::Sparte::Strom) => Sparte::Strom,
+        Some(rubo4e::current::Sparte::Gas) => Sparte::Gas,
+        Some(other) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": format!(
+                        "sparte {} is a BO4E value, but market communication covers \
+                         only STROM and GAS",
+                        other.as_wire()
+                    ),
+                    "code": "mako.profile",
+                    "field": "sparte",
+                })),
+            )
+                .into_response();
+        }
+        None => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(serde_json::json!({
+                    "error": "sparte is required on a Netzlokation stored by marktd, \
+                              though BO4E makes it optional — it is the indexed column \
+                              every query filters on",
+                    "code": "mako.profile",
+                    "field": "sparte",
+                })),
+            )
+                .into_response();
+        }
+    };
+
     // Typed SQL columns, derived from the validated BO4E struct — the single
     // derivation. `as_wire()` and not `format!("{r:?}")`: `Debug` renders
     // `Marktrolle::Nb` as `"Nb"`, not the BO4E wire value `"NB"`.
@@ -265,7 +285,7 @@ pub async fn put_nelo(
         nelo_id,
         tenant: tenant_gln,
         name: None,
-        sparte: body.sparte,
+        sparte,
         netzebene: None,
         nb_mp_id: body.nb_mp_id,
         steuerkanal,

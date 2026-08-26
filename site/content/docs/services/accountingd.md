@@ -206,8 +206,8 @@ Stufe is 3.
 | `POST` | `/api/v1/clearings/{clearing_id}/reset` | Release a mis-assigned Zahlungszuordnung |
 | `GET` | `/api/v1/trial-balance` | **Summen- und Saldenliste** (§ 238 HGB) — Soll/Haben/Saldo per account, Σ debits = Σ credits |
 | `PUT` | `/api/v1/accounts/{malo_id}/abschlag` | Update monthly advance payment |
-| `GET/PUT` | `/api/v1/accounts/{malo_id}/vorauszahlung` | Typed `rubo4e::current::Vorauszahlung` (§40 EnWG) |
-| `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | Typed `rubo4e::current::Zahlungsinformation` |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}/vorauszahlung` | Typed `rubo4e::current::Vorauszahlung` (§40 EnWG), through [the BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) |
+| `GET/PUT` | `/api/v1/accounts/{malo_id}/zahlungsinformation` | Typed `rubo4e::current::Zahlungsinformation`, through the same gate — its strict-enum stage is what keeps `zahlungsart`, which drives the SEPA collection path, from degrading to a mandate instruction nobody can act on |
 | `POST` | `/api/v1/accounts/{malo_id}/buchen` | **Manual booking** (operator-authorised ledger entry) |
 | `POST` | `/api/v1/accounts/{malo_id}/reconcile` | **Balance reconciliation** — detect/repair `balance_ct` cache drift |
 | `POST` | `/api/v1/accounts/{malo_id}/anonymize` | **GDPR Art. 17** pseudonymization (preserves ledger) — OIDC required |

@@ -36,6 +36,21 @@
 
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
+/// An extra `tracing` layer a daemon installs beside the standard ones.
+///
+/// Typed against the bare [`tracing_subscriber::Registry`] because it is added
+/// **first**, before the filter and the formatter: a layer added later would be
+/// typed against whatever `Layered<…>` stack precedes it, which no daemon can
+/// name. Added first, the type is one every caller can write down.
+///
+/// It exists because a library can emit a metric without choosing an exporter.
+/// `agentplane` publishes its whole instrument catalogue as `tracing` events on
+/// a dedicated target and leaves the bridge to whoever embeds it — so without a
+/// seam like this, an embedder gets a plane whose counters are all dark and no
+/// place to plug a collector in.
+pub type ExtraLayer =
+    Box<dyn tracing_subscriber::Layer<tracing_subscriber::Registry> + Send + Sync>;
+
 // ── Public types ──────────────────────────────────────────────────────────────
 
 /// Configuration for the OpenTelemetry OTLP exporter.
@@ -103,6 +118,25 @@ impl Drop for OtelGuard {
 /// Panics if called more than once per process.
 #[must_use]
 pub fn init_tracing(service_name: &str, log_level: &str, otel: Option<&OtelConfig>) -> OtelGuard {
+    init_tracing_with(service_name, log_level, otel, None)
+}
+
+/// [`init_tracing`], plus one daemon-supplied layer.
+///
+/// `extra` is installed directly on the registry, ahead of the filter and the
+/// formatter — see [`ExtraLayer`] for why that ordering is the one that gives
+/// the type a name.
+///
+/// # Panics
+///
+/// Panics if called more than once per process.
+#[must_use]
+pub fn init_tracing_with(
+    service_name: &str,
+    log_level: &str,
+    otel: Option<&OtelConfig>,
+    extra: Option<ExtraLayer>,
+) -> OtelGuard {
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new(log_level));
 
     let fmt_layer = fmt::layer()
@@ -135,6 +169,7 @@ pub fn init_tracing(service_name: &str, log_level: &str, otel: Option<&OtelConfi
                         tracing_opentelemetry::layer().with_tracer(provider.tracer(svc_name));
 
                     tracing_subscriber::registry()
+                        .with(extra)
                         .with(filter)
                         .with(fmt_layer)
                         .with(otel_layer)
@@ -154,6 +189,7 @@ pub fn init_tracing(service_name: &str, log_level: &str, otel: Option<&OtelConfi
                 Err(e) => {
                     // Fall through to plain logging — never block startup on OTel
                     tracing_subscriber::registry()
+                        .with(extra)
                         .with(filter)
                         .with(fmt_layer)
                         .init();
@@ -170,6 +206,7 @@ pub fn init_tracing(service_name: &str, log_level: &str, otel: Option<&OtelConfi
 
     // Plain JSON logging (no OTel)
     tracing_subscriber::registry()
+        .with(extra)
         .with(filter)
         .with(fmt_layer)
         .init();
@@ -279,5 +316,33 @@ pub fn init_tracing_from_env(service_name: &str) -> OtelGuard {
         service_name: otel_svc,
     });
 
-    init_tracing(service_name, &level, otel.as_ref())
+    init_tracing_with(service_name, &level, otel.as_ref(), None)
+}
+
+/// [`init_tracing_from_env`], plus one daemon-supplied layer.
+///
+/// # Panics
+///
+/// Panics if called more than once per process.
+#[must_use]
+pub fn init_tracing_from_env_with(service_name: &str, extra: Option<ExtraLayer>) -> OtelGuard {
+    let prefixed = format!(
+        "{}_LOG_LEVEL",
+        service_name.to_uppercase().replace('-', "_")
+    );
+    let level = std::env::var(&prefixed)
+        .or_else(|_| std::env::var("LOG_LEVEL"))
+        .or_else(|_| std::env::var("RUST_LOG"))
+        .unwrap_or_else(|_| "info".to_owned());
+
+    let otel_endpoint = std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT").ok();
+    let otel_svc = std::env::var("OTEL_SERVICE_NAME")
+        .ok()
+        .unwrap_or_else(|| service_name.to_owned());
+    let otel = otel_endpoint.map(|ep| OtelConfig {
+        endpoint: ep,
+        service_name: otel_svc,
+    });
+
+    init_tracing_with(service_name, &level, otel.as_ref(), extra)
 }

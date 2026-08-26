@@ -300,6 +300,7 @@ impl EdifactIngestDispatcher {
         "mabis-billing",
         "mabis-clearingliste",
         "mabis-listenabgleich",
+        "mabis-profile",
         "mabis-zp-lifecycle",
         "redispatch-aktivierung",
         "wim-device-change",

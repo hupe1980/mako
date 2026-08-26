@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # Contract & customer lifecycle specialist. Preisgarantie Tarifwechsel guards, § 41 Abs. 5 EnWG price-change notices, expiring contract alerts, stuck MaKo workflows (§20 EnWG parity), and B2B Rahmenvertrag.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: vertragd-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -42,14 +41,16 @@ spec:
       1. Extract `vertrag_id`, `malo_id`, and `kunden_id` from payload.
       2. Call vertragd `get_vertrag_status` — check all Vertragskomponenten.
       3. For ANGEMELDET > 5 WT (Strom) or 10 WT (Gas): call `find_stuck_workflows`.
-      4. For ABGELEHNT: check ERC code (A02=MaLo not in NB grid, A05=LF not registered).
+      4. For ABGELEHNT: call processd `get_decision` for the refusal code behind it
+         (A02 = MaLo not in the NB's grid, A05 = LF not registered).
          - A02: call marktd `get_malo` to verify NB assignment.
          - A05: check lf_mp_id published in bdew-codes.de.
       5. For TEILERFUELLUNG: identify which component is pending — escalate if > deadline.
 
       ### On process rejection (de.mako.aperak.rejected)
-      1. Get rejected process from processd.
-      2. Call vertragd to identify the affected Vertragskomponente.
+      1. Call processd `get_decision` for the refusal and the check behind it.
+      2. Call vertragd `get_vertrag_status` to identify the affected Vertragskomponente,
+         and vertragd `get_kunde` where the correction touches customer master data.
       3. Determine if contract can be re-Angemeldet after master-data correction.
 
       ### On expiry notification (de.vertrag.ablauf.ankuendigung)
@@ -60,11 +61,14 @@ spec:
          § 41 Abs. 5 Satz 4 EnWG, § 309 Nr. 9 lit. c BGB). Never derive a period
          from kuendigungsfrist_monate alone: for a Verbraucher a longer agreed
          period is void, and in the Grundversorgung it does not apply at all.
-      4. Generate renewal offers via productd for eligible contracts.
+      4. Call productd `list_products` for what a renewal could be built from, and
+         recommend one. Issuing the offer is productd's, on an operator's instruction.
 
       ### On Preisgarantie Tarifwechsel conflict
-      1. Call vertragd `get_vertrag_status` — check `preisgarantie_bis` date.
-      2. Calculate remaining days in guarantee window.
+      1. Call vertragd `check_preisgarantie` for the MaLo and the intended change date —
+         it answers whether the change would cross an active guarantee, which
+         `preisgarantie_bis` on its own does not.
+      2. Call vertragd `get_vertrag_status` for the components the change would touch.
       3. If operator requests bypass: document customer consent requirement.
 
       ## §20 EnWG PARITY MONITORING
@@ -141,11 +145,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -162,160 +165,53 @@ spec:
     - ref: tool://vertragd/get_vertrag_status
       mutates: false
       max_sensitivity: confidential
-      description: "get vertrag status via vertragd"
-    - ref: tool://vertragd/list_offene_vertraege
-      mutates: false
-      max_sensitivity: confidential
-      description: "list offene vertraege via vertragd"
-    - ref: tool://vertragd/get_kunde_by_sub
-      mutates: false
-      max_sensitivity: confidential
-      description: "get kunde by sub via vertragd"
-    - ref: tool://vertragd/list_expiring_contracts
-      mutates: false
-      max_sensitivity: confidential
-      description: "list expiring contracts via vertragd"
-    - ref: tool://vertragd/list_pending_tarifwechsel
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pending tarifwechsel via vertragd"
+      description: >-
+        Every Vertragskomponente and its state, including `preisgarantie_bis`.
+
     - ref: tool://vertragd/find_stuck_workflows
       mutates: false
       max_sensitivity: confidential
-      description: "find stuck workflows via vertragd"
-    - ref: tool://vertragd/get_customer_portfolio
+      description: >-
+        Components stuck in ANGEMELDET past the Vorlauffrist.
+
+    - ref: tool://vertragd/list_expiring_contracts
       mutates: false
       max_sensitivity: confidential
-      description: "get customer portfolio via vertragd"
-    - ref: tool://vertragd/list_alle_kunden
-      mutates: false
-      max_sensitivity: confidential
-      description: "list alle kunden via vertragd"
+      description: >-
+        Contracts and price guarantees inside the notice window.
+
     - ref: tool://vertragd/compute_kuendigungsfrist
       mutates: false
       max_sensitivity: confidential
-      description: "compute kuendigungsfrist via vertragd"
-    - ref: tool://vertragd/get_kunde
-      mutates: false
-      max_sensitivity: confidential
-      description: "get kunde via vertragd"
-    - ref: tool://vertragd/get_rahmenvertrag
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rahmenvertrag via vertragd"
-    - ref: tool://vertragd/list_pending_kuendigungen
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pending kuendigungen via vertragd"
+      description: >-
+        The earliest lawful end date, with the rule it rests on named.
+
     - ref: tool://vertragd/check_preisgarantie
       mutates: false
       max_sensitivity: confidential
-      description: "check preisgarantie via vertragd"
-    - ref: tool://vertragd/get_zahlungsinformation
+      description: >-
+        Whether a Tarifwechsel would cross an active price guarantee.
+
+    - ref: tool://vertragd/get_kunde
       mutates: false
       max_sensitivity: confidential
-      description: "get zahlungsinformation via vertragd"
-    - ref: tool://vertragd/list_auto_renewal_due
-      mutates: false
-      max_sensitivity: confidential
-      description: "list auto renewal due via vertragd"
-    - ref: tool://vertragd/check_mako_trigger_status
-      mutates: false
-      max_sensitivity: confidential
-      description: "check mako trigger status via vertragd"
-    - ref: tool://processd/list_decisions
-      mutates: false
-      max_sensitivity: internal
-      description: "list decisions via processd"
+      description: >-
+        The customer behind the contract, for the notice obligations.
+
     - ref: tool://processd/get_decision
       mutates: false
       max_sensitivity: internal
-      description: "get decision via processd"
-    - ref: tool://processd/get_stp_breakdown_by_erc
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp breakdown by erc via processd"
-    - ref: tool://processd/list_affiliate_decisions
-      mutates: false
-      max_sensitivity: internal
-      description: "list affiliate decisions via processd"
-    - ref: tool://processd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via processd"
-    - ref: tool://processd/list_pending_approvals
-      mutates: false
-      max_sensitivity: internal
-      description: "list pending approvals via processd"
-    - ref: tool://processd/get_queue_entry
-      mutates: false
-      max_sensitivity: internal
-      description: "get queue entry via processd"
+      description: >-
+        The refusal code behind a rejected Anmeldung.
+
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
+      description: >-
+        The NB assignment an A02 refusal points at.
+
+    - ref: tool://productd/list_products
       mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      max_sensitivity: internal
+      description: >-
+        Products a renewal offer could be built from.

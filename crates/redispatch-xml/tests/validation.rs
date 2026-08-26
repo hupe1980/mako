@@ -10,10 +10,9 @@ use redispatch_xml::documents::activation::{
     ControlZoneRef, EicCodingScheme, ResourceObjectCodingScheme, ResourceObjectRef,
 };
 use redispatch_xml::documents::kaskade::{
-    AvailablePeriod, BiddingZoneDomain, CurveType, Kaskade, KaskadeBusinessType, KaskadeMarketRole,
-    KaskadeMeasureUnit, KaskadeParticipant, KaskadeReason, KaskadeReasonCode, KaskadeRoleType,
-    KaskadeStatus, KaskadeTimeInterval, KaskadeTimeSeries, KaskadeType, QuantityMeasureUnit,
-    StatusElement,
+    AvailablePeriod, CurveType, Kaskade, KaskadeBusinessType, KaskadeMeasureUnit, KaskadeReason,
+    KaskadeReasonCode, KaskadeRoleType, KaskadeStatus, KaskadeTimeInterval, KaskadeTimeSeries,
+    KaskadeType, StatusElement,
 };
 use redispatch_xml::documents::network_constraint::{
     NcdBusinessType, NcdDocStatus, NcdDocType, NcdProcessType, NetworkConstraintDocument,
@@ -132,24 +131,16 @@ fn valid_kaskade() -> Kaskade {
             value: KaskadeStatus::Ordered,
         },
         doc_type: KaskadeType::EmergencyMeasures,
-        sender_market_participant: KaskadeParticipant {
-            m_rid: SimpleContent {
-                value: "4045399000008".to_string(),
-                coding_scheme: CodingScheme::Gs1,
-            },
-            market_role: KaskadeMarketRole {
-                role_type: KaskadeRoleType::GridOperator,
-            },
+        sender_m_rid: SimpleContent {
+            value: "4045399000008".to_string(),
+            coding_scheme: CodingScheme::Gs1,
         },
-        receiver_market_participant: KaskadeParticipant {
-            m_rid: SimpleContent {
-                value: "4045399000015".to_string(),
-                coding_scheme: CodingScheme::Gs1,
-            },
-            market_role: KaskadeMarketRole {
-                role_type: KaskadeRoleType::GridOperator,
-            },
+        sender_market_role: KaskadeRoleType::GridOperator,
+        receiver_m_rid: SimpleContent {
+            value: "4045399000015".to_string(),
+            coding_scheme: CodingScheme::Gs1,
         },
+        receiver_market_role: KaskadeRoleType::GridOperator,
         time_series: KaskadeTimeSeries {
             m_rid: mrid("KAS-TS-001"),
             senders_document_m_rid: None,
@@ -157,15 +148,11 @@ fn valid_kaskade() -> Kaskade {
             senders_created_date_time: None,
             business_type: KaskadeBusinessType::Production,
             resource_objects: vec![],
-            bidding_zone_domain: BiddingZoneDomain {
-                m_rid: SimpleContent {
-                    value: "10YDE-EON------1".to_string(),
-                    coding_scheme: EicCodingScheme::Eic,
-                },
+            bidding_zone_domain_m_rid: SimpleContent {
+                value: "10YDE-EON------1".to_string(),
+                coding_scheme: EicCodingScheme::Eic,
             },
-            quantity_measure_unit: QuantityMeasureUnit {
-                name: KaskadeMeasureUnit::Megawatt,
-            },
+            quantity_measure_unit_name: KaskadeMeasureUnit::Megawatt,
             curve_type: CurveType::VariableSizedBlock,
             available_period: AvailablePeriod {
                 time_interval: KaskadeTimeInterval {
@@ -264,6 +251,8 @@ fn valid_stammdaten_deactivation() -> Stammdaten {
         gueltig_ab: ts(),
         meldungsstatus: Meldungsstatus::Deactivation,
         sr_objekte: vec![],
+        existenzende: None,
+        bilanzkreis_ausgleichsfahrplan_anf_nb: None,
     }
 }
 
@@ -348,6 +337,9 @@ fn stammdaten_round_trips_through_validate() {
 
 fn valid_ncd_with_time_series() -> NetworkConstraintDocument {
     let ncd_ts = NetworkConstraintTimeSeries {
+        resource_provider: None,
+        original_time_series_identification: None,
+        requesting_grid_operator: None,
         time_series_identification: doc_id(),
         business_type: AttrV {
             v: NcdBusinessType::ProductionDispatchable,
@@ -366,6 +358,10 @@ fn valid_ncd_with_time_series() -> NetworkConstraintDocument {
         period: period(),
     };
     NetworkConstraintDocument {
+        original_sender_identification: None,
+        original_document_identification: None,
+        original_document_version: None,
+        original_document_date_time: None,
         document_identification: doc_id(),
         document_version: doc_version(),
         document_type: AttrV {
@@ -451,6 +447,8 @@ fn ncd_round_trips_through_validate() {
 
 fn valid_prs_with_time_series() -> PlannedResourceScheduleDocument {
     let prs_ts = PlannedResourceTimeSeries {
+        original_time_series_identification: None,
+        requesting_grid_operator: None,
         time_series_identification: doc_id(),
         business_type: AttrV {
             v: PrsBusinessType::Production,
@@ -463,7 +461,7 @@ fn valid_prs_with_time_series() -> PlannedResourceScheduleDocument {
         },
         acquiring_area: None,
         grid_element: None,
-        measure_unit: AttrV {
+        measurement_unit: AttrV {
             v: MeasureUnit::Megawatt,
         },
         status: None,
@@ -471,6 +469,10 @@ fn valid_prs_with_time_series() -> PlannedResourceScheduleDocument {
         period: period(),
     };
     PlannedResourceScheduleDocument {
+        original_sender_identification: None,
+        original_document_identification: None,
+        original_document_version: None,
+        original_document_date_time: None,
         document_identification: doc_id(),
         document_version: doc_version(),
         document_type: AttrV {

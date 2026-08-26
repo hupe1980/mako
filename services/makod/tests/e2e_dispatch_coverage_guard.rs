@@ -68,21 +68,15 @@ const SEND_ONLY_PIDS: &[(u32, &str, &str)] = &[
         "gpke-supplier-change",
         "Änderung MSB-Abr.-Daten (GPKE Teil 4) — no Antwort mapping, receiver not implemented",
     ),
-    // ── MaBiS MSCONS series (NB → MSB · NB → LF) ─────────────────────────────
-    // Built by the aggregation layer (`startup.rs`) and rendered outbound;
-    // makod never ingests one.
-    (
-        13003,
-        "mabis-billing",
-        "Abrechnungssummenzeitreihe — aggregation layer",
-    ),
-    (13010, "mabis-billing", "normiertes Profil — outbound only"),
-    (13011, "mabis-billing", "Profilschar — outbound only"),
-    (
-        13012,
-        "mabis-billing",
-        "TEP vergl. Werte Referenzmessung — outbound only",
-    ),
+    // No MaBiS MSCONS PID is send-only any more.
+    //
+    // 13003, 13020 and 13023 used to be: a participant that *files* a
+    // Summenzeitreihe also receives one — the BIKO forwards it, and the BKV, NB
+    // and ÜNB each sit on the receiving end of some series in Tabelle 1 — so
+    // filing them as outbound meant every inbound version was dropped without a
+    // trace. 13010–13012 likewise: the LF and the MSB receive the normierte
+    // Profile and may answer with an ORDERS 17211 Reklamation, which is what
+    // `mabis-profile` exists for.
     // ── GPKE Datenabruf ORDERS Anfragen (→ MSB) ──────────────────────────────
     // mako is the requester; it ingests only the ORDRSP answers. An MSB-side
     // receiver for these does not exist.

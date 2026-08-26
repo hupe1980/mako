@@ -43,11 +43,59 @@ pub fn validate(doc: &Document, result: &mut ValidationResult) {
         Document::Stammdaten(d) => {
             // A Stammdaten document must describe at least one SR_Objekt
             // (controllable resource) unless it is a deactivation/withdrawal.
-            use crate::documents::stammdaten::Meldungsstatus;
+            use crate::documents::stammdaten::{Bilanzierungsmodell, Meldungsstatus};
             if d.meldungsstatus != Meldungsstatus::Deactivation && d.sr_objekte.is_empty() {
                 result.errors.push(ValidationError::Semantic(
                     "Stammdaten (creation/update) must contain at least one SR_Objekt".to_string(),
                 ));
+            }
+            for (i, sr) in d.sr_objekte.iter().enumerate() {
+                // BilAReM Kap. 6.1.5: „Eine SR setzt sich aus mindestens einer
+                // TR zusammen." The XSD says minOccurs="1"; an SR with none is
+                // a resource nothing can be dispatched against.
+                if sr.enthaltene_tr.is_empty() {
+                    result.errors.push(ValidationError::Semantic(format!(
+                        "SR_Objekt[{i}] contains no Enthaltene_TR — BilAReM Kap. 6.1.5 \
+                         requires at least one Technische Ressource per Steuerbare Ressource"
+                    )));
+                }
+
+                // The Individuelle_Quote shares are percentages of one
+                // bilanzieller Ausgleich, so they have to add up. A short set
+                // books less than the Maßnahme caused and an over-long one
+                // books more, and neither is visible downstream: each Fahrplan
+                // on its own looks well-formed.
+                if let Some(q) = &sr.individuelle_quote {
+                    let summe: f64 = q.quoten.iter().map(|x| x.wert.value()).sum();
+                    // Decimal3 is three fractional digits, so anything further
+                    // from 100 than half a unit in the last place is a real
+                    // discrepancy rather than binary rounding.
+                    if (summe - 100.0).abs() > 0.000_5 {
+                        result.errors.push(ValidationError::Semantic(format!(
+                            "SR_Objekt[{i}] Individuelle_Quote sums to {summe} %, not 100 %"
+                        )));
+                    }
+                }
+
+                // BilAReM Kap. 2.3.2 lists the Redispatch-Bilanzkreis among the
+                // three things a Planwertmodell Zuordnung must name. Without it
+                // the LF and EIV learn that an SR moved into the Planwertmodell
+                // but not where the Ausgleich will be booked.
+                let nennt_bilanzkreis = d.bilanzkreis_ausgleichsfahrplan_anf_nb.is_some()
+                    || sr
+                        .individuelle_quote
+                        .as_ref()
+                        .is_some_and(|q| !q.quoten.is_empty());
+                if sr.bilanzierungsmodell == Bilanzierungsmodell::Planwert
+                    && d.meldungsstatus != Meldungsstatus::Deactivation
+                    && !nennt_bilanzkreis
+                {
+                    result.errors.push(ValidationError::Semantic(format!(
+                        "SR_Objekt[{i}] is in the Planwertmodell but the document names no \
+                         Redispatch-Bilanzkreis (neither Individuelle_Quote nor \
+                         Bilanzkreis_Ausgleichsfahrplan_anfNB) — BilAReM Kap. 2.3.2"
+                    )));
+                }
             }
         }
         Document::NetworkConstraint(d) => {

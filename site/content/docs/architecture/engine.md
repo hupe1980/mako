@@ -300,7 +300,7 @@ Within a single process the store uses a per-key `DashMap<_, Arc<Mutex<()>>>` to
 | WiM, beide Sparten | 3 / 5 / 7 / 1 Werktage, per PID | `antwort_frist_werktage(pid)` → `fristen::deadline_at_werktage` |
 | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags nach Eingang | `mako_fristen::antwort::antwort_deadline(pid, received)` |
 | INVOIC | zum Zahlungsziel der Rechnung; der NB bei 31009 zum 4. WT davor | `mako_fristen::vorlauf::rechnung_antwort_spaetester_uet` |
-| MaBiS | 1 Werktag (Prüfmitteilung) | `fristen::add_werktage(d, 1, BdewMaKo)` |
+| MaBiS | no response Frist — the clearing window of Kap. 3.10 Tabelle 2 bounds it | `mako_mabis::Bilanzierungsmonat::clearing` |
 
 **Saturday is not a Werktag.** GPKE (BK6-24-174) Teil 1: *"alle Tage ..., die kein Samstag, Sonntag oder gesetzlicher Feiertag sind"*. A holiday observed in any single Bundesland counts nationwide, and 24.12. and 31.12. count as holidays.
 

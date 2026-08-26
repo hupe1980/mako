@@ -583,6 +583,115 @@ println!("Fully settled: {}",       balance.is_fully_settled());
 | BDEW-Codenummer (LF) | 13 digits, starts `99` | BDEW registry | `9900357000004` |
 | Gas Zählpunkt (MeLo) | 11 chars | DVGW G 2000 | `DE000123400M` |
 
+## The BO4E gate
+
+BO4E's machine-readable schema constrains almost nothing. Of the 35
+Geschäftsobjekte at v202607.1.0, exactly **two** declare a `required` field —
+`Lastgang` and `Tarif` — and not one declares a `oneOf`, `anyOf` or `not`. A
+payload that satisfies `Marktlokation.json` can be an empty object. Every rule
+the standard actually has lives in prose: in a field description, in a class
+docstring, in a comment above three fields in the reference implementation.
+
+So "it deserialises as a `Marktlokation`" is not validation, and mako does not
+treat it as such. Accepting a BO4E document is four decisions, and
+`mako_markt::bo4e::decode` is all four, once, for every endpoint:
+
+| Stage | Refuses | `code` |
+|---|---|---|
+| 1. **Discriminator** | a `Zaehler` posted to the `Geraet` endpoint. `_typ` is injected when absent — the endpoint already fixes which BO it takes — and read off the type's own `Default`, so it cannot drift from what the type serialises | `bo4e.discriminator` |
+| 2. **Schema** | a value the type cannot hold | `bo4e.schema` |
+| 3. **Strict enums** | `"sparte": "STROMM"`, at any depth, reported by JSON-path (`rubo4e`'s `Bo4eStrict::ensure_known_enums`) | `bo4e.unknown_enum` |
+| 4. **BO4E rules** | a document the standard's prose forbids | `bo4e.rule` |
+
+Stage 3 is the one that most needs to be unmissable, because BO4E's forward
+compatibility cuts both ways. Every BO4E enum carries an `Unknown` catch-all, so
+an unrecognised value decodes rather than failing — and `Unknown` **serialises
+back as the literal string `"UNKNOWN"`**. At an endpoint that stores the
+canonical round-trip rather than the request body, a typo is therefore not
+merely accepted: the value the caller sent is *overwritten* by a marker meaning
+"something this build did not recognise". Eight write paths were missing this
+stage, and the ones that canonicalise are where it did that.
+
+### Stage 4: the rules BO4E states and enforces nowhere
+
+Rules that live only in prose still have to be run. `rubo4e`'s `.validate()`
+descends the whole tree and reports each failure at its path; mako's own module
+holds the **two** it does not check:
+
+| Rule | Source | Checked by |
+|---|---|---|
+| `marktlokation` Ortsangabe | „Es darf immer nur eine Art der Ortsangabe vorhanden sein (entweder eine Adresse oder eine GeoKoordinate oder eine Katasteradresse)" — **at most** one. A location *reference* (a `Marktlokation` embedded in a `Rechnung` to say which location it settles) carries none, and is conformant | `rubo4e` |
+| `messlokation` Ortsangabe | the same, with `messadresse` | `rubo4e` |
+| `zeitraum` states a period | „Es muss daher eine der drei Möglichkeiten angegeben sein" — dauer, or start/enddatum, or start/enduhrzeit | `rubo4e` |
+| `zeitraum` ordering | both bounds documented **inclusive**, so a one-day period has `start == end` | `rubo4e` |
+| `rechnung.gesamtbrutto` | `gesamtbrutto`: „Die Summe aus Netto- und Steuerbetrag" | `rubo4e` |
+| `rechnung.steuerbetraege` | `steuerbetraege`: „die Summe dieser Beträge ergibt den Wert für gesamtsteuer" | `rubo4e` |
+| currency agreement | the premise of both sums: net and tax denominated differently have no gross | `rubo4e` |
+| `vertrag` / `bilanzierung` dates, `kostenposition` line totals | field descriptions | `rubo4e` |
+| **`rechnung.gesamtnetto`** | `gesamtnetto`: „Die Summe der Nettobeträge der Rechnungsteile" | **mako** |
+| **`rechnung.storno`** | `istStorno`: „im Falle 'true' findet sich im Attribut 'originalrechnungsnummer' die Nummer der Originalrechnung" | **mako** |
+
+Both sides report in the same shape — `rubo4e`'s own
+`ValidationFailure { path, message }` — so the stage returns one list and a
+caller never has to know which side found what.
+
+**At most one Ortsangabe, not exactly one.** All three fields are optional, and a
+location reference carries none of them by design.
+
+**A rule earns a place only if BO4E asserts it.** The rules apply to documents
+mako *receives*, so enforcing more than the standard does would reject a
+conformant counterparty. Endpoint requirements ("this endpoint needs a
+`sparte`") are a separate layer, stated at the endpoint that has them.
+
+Money is compared at the scale of the stated total, with the cent as the floor.
+A position vector carried at six decimals sums to a figure no invoice states;
+demanding exact equality would reject the whole real-world corpus.
+
+### Received, nested, emitted
+
+Three call sites need something other than all four stages, and each says why:
+
+- **`decode_received`** — a market document from a counterparty. Stages 1–3
+  still refuse, because a document that will not type has nothing to
+  adjudicate. The **rules deliberately do not refuse**: an invoice whose
+  `gesamtbrutto` is not net plus tax is *disputable*, and the market's answer is
+  a REMADV naming the defect (`invoic-checker` stage 3 already produces it).
+  Refusing to parse would replace that answer with silence and a dead letter.
+- **`decode_nested`** — a COM read out of the extension map of the BO that
+  carried it. It relaxes stage 1 by exactly one step: `_typ` may be **absent**
+  (the key it was filed under already named it, and producers do not reliably
+  stamp it on a nested COM), but a `_typ` that is present and **wrong** is still
+  refused. Nothing else catches that one: `ensure_known_enums` walks a value's
+  *fields* and never reaches `typ` itself, so a nested
+  `{"_typ": "MARKTLOKATION"}` otherwise decodes to `typ: Some(Unknown)` and
+  passes every remaining stage.
+- **`ensure_conformant`** — the outbound gate: stages 3 and 4 on a value mako
+  *built*, the first two being the compiler's job there. **mako never sends a
+  document it would refuse to receive.** It runs in tests over every shape the
+  three billing engines can emit, and at runtime wherever a document is
+  *assembled* rather than emitted whole — `netzbilanzd` merging a stored
+  `Fremdkosten` into a stored `Rechnung`, `billingd` concatenating many
+  invoices' positions into a Sammelrechnung.
+
+A BO4E `Rechnungsposition` is a **net supply line**: tax lives in
+`steuerbetraege`/`gesamtsteuer` and advances in `vorauszahlungen`/`zuZahlen`, so
+emitting either as a position states the amount twice and leaves `gesamtnetto`
+irreconcilable. `BillingPosition::is_rechnungsposition` is the shared predicate
+for the BO4E and EN 16931 mappings and for `billingd`'s Sammelrechnung position
+index.
+
+### One extra rule, outbound only
+
+`rubo4e::validation::current::quality` holds rules that crate considers sensible
+and BO4E does not state, kept out of `.validate()` so a consumer can assert
+*"this conforms to BO4E"* without also asserting *"…and satisfies rubo4e"*.
+That is right for an inbound gate and backwards for an outbound one, where mako
+controls the document.
+
+`rechnung_totals_are_complete` — state all three invoice totals or none —
+therefore runs in `ensure_conformant` and nowhere else. Every mako engine
+already emits all three, so it pins that rather than requesting it.
+
 ## BO4E extensions: `ZusatzAttribut`
 
 BO4E cannot model everything mako bills for, and its answer is `ZusatzAttribut`
@@ -609,6 +718,11 @@ Two rules follow:
   `Preistyp` has ten values against mako's thirty, so an EEG-Marktprämie rides
   as `mako:preistyp`.
 - **What mako emits is checked, not just what it receives.** Every `Rechnung`,
-  `Angebot` and stored `Tarifpreisblatt` must round-trip through `rubo4e` with
-  no enum falling through to `Unknown` — otherwise the document is one a
-  conforming reader silently cannot understand.
+  `Angebot` and stored `Tarifpreisblatt` crosses the same gate on the way out
+  (`ensure_conformant`, above) — no enum falling through to `Unknown`, and the
+  BO4E-stated rules satisfied. The silent catch-all is `rubo4e`'s own choice,
+  not the market's: go-bo4e returns `invalid <Enum> %q` and declares no
+  catch-all, BO4E-python raises a pydantic `ValidationError`, and both reject
+  the **whole document**. A document that fails the outbound gate is therefore
+  either one a reader silently cannot understand, one they cannot parse at all,
+  or one they openly dispute.

@@ -68,6 +68,24 @@ canonical BO4E fields: `rechnungstyp`, `istStorno`, `originalRechnungsnummer`,
 mako-specific §40b/§40-Abs.-2 facts ride as `zusatzAttribute`).
 `to_rechnung_json()` is its thin serialization wrapper (JSONB for `accountingd`
 ingestion and the stored `billing_records.rechnung_json`).
+
+**`rechnungspositionen` are net supply lines only.** BO4E states that
+`gesamtnetto` is „Die Summe der Nettobeträge der Rechnungsteile" and expresses
+tax as `steuerbetraege`/`gesamtsteuer` and advances as
+`vorauszahlungen`/`zuZahlen` — so the `Tax` and `Abschlag` positions the engine
+carries in its flat vector are **not** positions on the wire. Emitting either as
+a position states the amount twice and leaves `gesamtnetto` irreconcilable
+against the position vector — the same defect `invoic-checker` disputes when a
+counterparty sends it. `BillingPosition::is_rechnungsposition` is the shared
+predicate for the BO4E mapping, the EN 16931 mapping and billingd's
+Sammelrechnung position index. `Info` positions stay — they carry
+`net_eur == 0`, so they change no sum, and § 40 EnWG wants the Zählerstand and
+Brennwert lines on the document.
+
+Every shape the engine can emit is asserted against
+[the outbound BO4E gate](@/docs/architecture/domain-model.md#the-bo4e-gate) in
+tests, and the Sammelrechnung — assembled at runtime from many invoices —
+crosses it again before it is stored.
 Helper methods: `.assert_valid()`, `.total_by_tag()`, `.positions_by_tag()`,
 `.kilowattstundenpreis_brutto_ct()`, `.has_errors()`.
 

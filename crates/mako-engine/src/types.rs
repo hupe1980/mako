@@ -202,11 +202,17 @@ domain_id!(
     /// Bilanzkoordinator-ID (BIKO).
     ///
     /// Identifies the Bilanzkoordinator in MaBiS processes. The BIKO is the
-    /// central actor in Bilanzkreisabrechnung Strom: it calculates and sends
-    /// the `Abrechnungssummenzeitreihe` to BKV, NB, and ÜNB, and receives
-    /// the `Prüfmitteilung` back from BKV. The BKV must respond with a
-    /// Prüfmitteilung within **1 Werktag** of receiving the Abrechnungs-
-    /// summenzeitreihe (MaBiS BK6-24-174, §13.8).
+    /// central actor in Bilanzkreisabrechnung Strom: it assigns every
+    /// Datenstatus (BK6-24-174 Anlage 3 Kap. 3.8.3), sends the
+    /// `Abrechnungssummenzeitreihe` to BKV, NB and ÜNB, and forwards the
+    /// `Prüfmitteilung` between them.
+    ///
+    /// The Prüfmitteilung itself carries **no Frist** — Kap. 9.8.2 Nr. 1 leaves
+    /// the cell empty and the receiving party „kann" answer. What bounds it is
+    /// the clearing window of Kap. 3.10 Tabelle 2. The two genuine 1-Werktag
+    /// obligations are the BIKO's own: forwarding a Prüfmitteilung (Kap. 9.8.2
+    /// Nr. 3) and dispatching the Datenstatus (Kap. 9.9.2 Nr. 1). See
+    /// `mako_mabis::fristen`.
     BikoId,
     "Bilanzkoordinator-ID — balance coordinator identifier (BIKO)"
 );

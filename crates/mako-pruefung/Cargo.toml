@@ -12,7 +12,7 @@ keywords         = ["energy", "mako", "bdew", "gpke", "edifact"]
 categories       = ["data-structures"]
 
 [features]
-default = ["role-nb", "role-lf", "role-msb"]
+default = ["role-nb", "role-lf", "role-msb", "role-mabis"]
 ## The trees whose prüfende Rolle is the Netzbetreiber (`E_0622`, `E_0607`).
 role-nb = ["dep:mako-markt"]
 ## The trees whose prüfende Rolle is the Lieferant (`E_0609`, `E_0624`, `E_0614`,
@@ -22,6 +22,11 @@ role-lf = []
 ## Two of them are answered by the MSB and two by the NB, so the feature names
 ## the process family rather than one Marktrolle.
 role-msb = []
+## The MaBiS (BK6-24-174 Anlage 3) and Redispatch-Ausfallarbeit trees. Both the
+## NB-side and the LF-side trees, because MaBiS keys its trees on the
+## *Summenzeitreihe* rather than on one Marktrolle and a combined deployment
+## checks both.
+role-mabis = []
 ## Enable in-memory test doubles. Must never appear in production builds.
 testing = []
 

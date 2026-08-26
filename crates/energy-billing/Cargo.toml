@@ -42,6 +42,9 @@ full = ["eeg", "bo4e", "en16931"]
 time = { workspace = true, features = ["macros"] }
 serde_json = { workspace = true }
 proptest   = "1"
+# Test-only: the BO4E gate (see grid-billing for the reasoning, including why
+# this is path-only rather than `workspace = true`).
+mako-markt = { path = "../mako-markt" }
 
 [[test]]
 name = "calculator_tests"

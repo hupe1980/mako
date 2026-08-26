@@ -49,6 +49,43 @@ pub enum Cluster {
     AenderungDerDaten,
     /// `E_0595` — none follows.
     KeineAenderungDerDaten,
+    /// MaBiS — the message is **refused before it is assessed**.
+    ///
+    /// An Abweisung is not a weaker Ablehnung: it says the message never
+    /// entered the check at all (arrived after the Clearingfrist, names an
+    /// inactive Bilanzierungsmonat, repeats a version already held). MaBiS
+    /// Kap. 9.8.2 Nr. 2 turns that into an observable difference — a
+    /// **abgewiesene Prüfmitteilung is not forwarded**, an abgelehnte is.
+    /// Collapsing the two into `Ablehnung` forwards traffic the BIKO must not
+    /// see, so they stay distinct; ask [`Cluster::ist_abweisung`].
+    Abweisung,
+    /// MaBiS Listenabgleich — **the whole list is refused**.
+    ///
+    /// The answer carries no positions: the list was never assessable (not
+    /// subscribed, version not permitted, implausible period). The sender must
+    /// resend a whole list.
+    AblehnungDerGesamtenListe,
+    /// MaBiS Listenabgleich — refused **with a Korrekturliste**.
+    ///
+    /// The list was assessable and individual positions are wrong, so the
+    /// answer is itself a list: one entry per disputed Marktlokation. The
+    /// correction count is the payload, which is why this cannot share a
+    /// variant with [`Cluster::AblehnungDerGesamtenListe`] — one carries
+    /// positions and the other must not.
+    KorrekturlisteWegenAblehnung,
+    /// MaBiS — the tree publishes **only** reasons to complain.
+    ///
+    /// `E_0100` (Profile bzw. Profilscharen prüfen), `E_0068` and `E_0104`
+    /// print no „Cluster:" line beside their codes, because every code in them
+    /// is a Reklamationsgrund and there is no positive counterpart to
+    /// distinguish. This crate still needs a cluster to key the catalogue on,
+    /// so it names that single cluster rather than inventing an `Ablehnung`
+    /// the document does not print.
+    ///
+    /// It is **off the agreement axis**: a Profil-Reklamation does not
+    /// invalidate the profile it complains about, so
+    /// [`AntwortCode::ist_zustimmung`] answers `None` here.
+    Reklamation,
 }
 
 impl Cluster {
@@ -60,7 +97,22 @@ impl Cluster {
             Self::Ablehnung => "Ablehnung",
             Self::AenderungDerDaten => "Änderung der Daten",
             Self::KeineAenderungDerDaten => "keine Änderung der Daten",
+            Self::Abweisung => "Abweisung",
+            Self::AblehnungDerGesamtenListe => "Ablehnung der gesamten Liste",
+            Self::KorrekturlisteWegenAblehnung => "Korrekturliste wegen Ablehnung",
+            Self::Reklamation => "Reklamation",
         }
+    }
+
+    /// `true` when the message was refused **before** it was assessed.
+    ///
+    /// MaBiS Kap. 9.8.2 Nr. 2: an abgewiesene Prüfmitteilung is not forwarded
+    /// to the next market partner, an abgelehnte is. Every caller that decides
+    /// whether to forward must branch on this and not on
+    /// [`AntwortCode::ist_zustimmung`], which reads both as `Some(false)`.
+    #[must_use]
+    pub const fn ist_abweisung(self) -> bool {
+        matches!(self, Self::Abweisung)
     }
 
     /// `true` when a Stammdatenänderung follows the answer carrying this code.
@@ -72,7 +124,12 @@ impl Cluster {
         match self {
             Self::AenderungDerDaten => Some(true),
             Self::KeineAenderungDerDaten => Some(false),
-            Self::Zustimmung | Self::Ablehnung => None,
+            Self::Zustimmung
+            | Self::Ablehnung
+            | Self::Abweisung
+            | Self::AblehnungDerGesamtenListe
+            | Self::KorrekturlisteWegenAblehnung
+            | Self::Reklamation => None,
         }
     }
 }
@@ -111,8 +168,15 @@ impl AntwortCode {
     pub const fn ist_zustimmung(&self) -> Option<bool> {
         match self.cluster {
             Cluster::Zustimmung => Some(true),
-            Cluster::Ablehnung => Some(false),
-            Cluster::AenderungDerDaten | Cluster::KeineAenderungDerDaten => None,
+            Cluster::Ablehnung
+            | Cluster::Abweisung
+            | Cluster::AblehnungDerGesamtenListe
+            | Cluster::KorrekturlisteWegenAblehnung => Some(false),
+            // Off the agreement axis: `E_0595` states whether data follows, and
+            // a Profil-Reklamation does not invalidate the profile.
+            Cluster::AenderungDerDaten | Cluster::KeineAenderungDerDaten | Cluster::Reklamation => {
+                None
+            }
         }
     }
 
@@ -158,8 +222,14 @@ pub fn wire_codeliste(ebd: &str, cluster: Cluster) -> Option<&'static str> {
     match cluster {
         Cluster::Zustimmung => Some(zustimmung),
         Cluster::Ablehnung => Some(ablehnung),
-        // The Datenänderung axis belongs to `E_0595`, which names its EBD.
-        Cluster::AenderungDerDaten | Cluster::KeineAenderungDerDaten => None,
+        // The Datenänderung axis belongs to `E_0595` and the MaBiS clusters to
+        // the MaBiS trees; all of them name their EBD on the wire.
+        Cluster::AenderungDerDaten
+        | Cluster::KeineAenderungDerDaten
+        | Cluster::Abweisung
+        | Cluster::AblehnungDerGesamtenListe
+        | Cluster::KorrekturlisteWegenAblehnung
+        | Cluster::Reklamation => None,
     }
 }
 
@@ -202,24 +272,26 @@ pub const WIRE_CODELISTEN: &[(&str, &str, &str)] = &[
 
 macro_rules! code {
     ($code:literal, $ebd:expr, $cluster:ident, $bedeutung:literal) => {
-        AntwortCode {
+        $crate::codes::AntwortCode {
             code: $code,
             ebd: $ebd,
-            cluster: Cluster::$cluster,
+            cluster: $crate::codes::Cluster::$cluster,
             bedeutung: $bedeutung,
             braucht_bemerkung: false,
         }
     };
     ($code:literal, $ebd:expr, $cluster:ident, $bedeutung:literal, bemerkung) => {
-        AntwortCode {
+        $crate::codes::AntwortCode {
             code: $code,
             ebd: $ebd,
-            cluster: Cluster::$cluster,
+            cluster: $crate::codes::Cluster::$cluster,
             bedeutung: $bedeutung,
             braucht_bemerkung: true,
         }
     };
 }
+
+pub(crate) use code;
 
 // ── E_0609 — Abmeldung prüfen (Lieferende von NB an LF, 55007 → 55008/55009) ──
 

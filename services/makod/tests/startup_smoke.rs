@@ -244,7 +244,7 @@ fn the_landing_page_figures_match_the_registered_engine() {
     // dropped — `dvgw-edi` parses none of those formats, so their synthetic
     // 900xx codes counted messages the daemon could never receive.
     const LANDING_PAGE_PIDS: usize = 449;
-    const LANDING_PAGE_WORKFLOWS: usize = 60;
+    const LANDING_PAGE_WORKFLOWS: usize = 61;
 
     assert_eq!(
         pids, LANDING_PAGE_PIDS,

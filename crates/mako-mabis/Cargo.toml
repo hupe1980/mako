@@ -13,6 +13,10 @@ categories   = ["data-structures"]
 [dependencies]
 mako-fristen = { workspace = true }
 mako-engine  = { workspace = true }
+# The Antwortcode catalogue. A MaBiS Prüfmitteilung states a published code
+# from the tree that decides *this* Summenzeitreihe, so the workflow resolves
+# it rather than carrying free text.
+mako-pruefung = { workspace = true, features = ["role-mabis"] }
 metering     = { workspace = true, features = ["serde"] }
 # The validated BDEW/ENTSO-E identifier types. A Bilanzkreis (EIC type `X`)
 # and a Bilanzierungsgebiet (type `Y`) are told apart here rather than by

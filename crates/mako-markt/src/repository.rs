@@ -201,7 +201,8 @@ pub struct MeloRecord {
     /// Voltage/pressure level at the metering point, extracted from `Messlokation.netzebene_messung`.
     pub netzebene_messung: Option<String>,
     /// Regelzone EIC code extracted from
-    /// `Messlokation.standorteigenschaften.eigenschaftenStrom[0].regelzone`.
+    /// `Messlokation.standorteigenschaften.eigenschaftenStrom[0].regelzoneEic`
+    /// — the EIC, not the sibling `regelzone`, which is the Regelzone's *name*.
     ///
     /// Maps this MeLo to the \u00dcNB (Transmission System Operator) for:
     /// - Redispatch 2.0 `Stammdaten` forwarding (VNB \u2192 \u00dcNB)
@@ -3657,7 +3658,13 @@ mod partner_record_tests {
         // strum Display matches the serde repr — the PG TEXT binding uses it.
         assert_eq!(rubo4e::current::Marktrolle::Nb.to_string(), "NB");
         assert_eq!(rubo4e::current::Rollencodetyp::Gln.to_string(), "GLN");
-        assert_eq!("LF".parse(), Ok(rubo4e::current::Marktrolle::Lf));
+        // `from_wire`, not `str::parse`: the `FromStr` impl comes from rubo4e's
+        // `strum` feature, which mako does not enable — and which would accept
+        // `"UNKNOWN"`, the catch-all's own spelling, as a Marktrolle.
+        assert_eq!(
+            rubo4e::current::Marktrolle::from_wire("LF"),
+            Ok(rubo4e::current::Marktrolle::Lf)
+        );
     }
 
     /// `to_marktteilnehmer` maps every stored field into the BO4E shape.

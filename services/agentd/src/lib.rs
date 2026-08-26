@@ -7,7 +7,7 @@
 //!
 //! | Module | Purpose |
 //! |---|---|
-//! | [`builtin`] | Compiled-in specialist definitions: name, specialty, triggers |
+//! | [`builtin`] | The subscription table: which CloudEvent types reach which specialist |
 //! | [`config`] | Configuration (`agentd.toml`) |
 //! | [`handlers`] | HTTP handlers + `AppState` |
 //! | [`plane`] | The agentplane runtime: manifests, labelling, policy, oversight |

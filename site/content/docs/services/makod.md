@@ -738,7 +738,7 @@ irrelevant for a particular operator — reducing binary size and attack surface
 |---|---|
 | `role-lf-strom` | `mako-gpke` (LF side): `gpke-lf-anmeldung`, `gpke-lf-abmeldung`, `gpke-beendigung-zuordnung`, `gpke-ankuendigung-zuordnung-lf`, `gpke-abrechnung`, `gpke-messwerte`, `gpke-allokationsliste`, `gpke-datenabruf`, `gpke-anfrage-bestellung`, `gpke-utilts` |
 | `role-lf-gas` | `mako-geli-gas` (LF side): `geli-gas-stornierung-lf`, `geli-gas-sperrung-lf`, `geli-gas-mscons` |
-| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side), **`mako-redispatch`** (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
+| `role-nb-strom` | `mako-gpke` (NB side): `gpke-supplier-change`, `gpke-sperrung`, `gpke-konfiguration`, `gpke-konfiguration-aenderung`, `gpke-neuanlage`, `gpke-partin`, `mako-wim` (NB side); `mako-mabis`: `mabis-billing`, `mabis-zp-lifecycle`, `mabis-listenabgleich`, `mabis-clearingliste`, `mabis-anforderung`, `mabis-profile`; `mako-redispatch`: `redispatch-stammdaten`, `redispatch-aktivierung`, `redispatch-verfuegbarkeit`, `redispatch-netzengpass`, `redispatch-kaskade`, `redispatch-planungsdaten`, `redispatch-statusanfrage`, `redispatch-kostenblatt` (Redispatch 2.0 is gated to NB Strom / ÜNB — LF and MSB deployments are out of scope per BK6-20-059/060/061) |
 | `role-nb-gas` | `mako-geli-gas` (GNB side): `geli-gas-supplier-change`, `geli-gas-sperrung-nb`, `geli-gas-stornierung`, `geli-gas-datenabruf`, `geli-gas-partin`, `geli-gas-sperrprozesse-invoic` |
 | `role-msb-strom` | `mako-wim`: `wim-device-change`, `wim-geraeteubernahme`, `wim-stammdaten`, `wim-preisanfrage`, `wim-rechnungsabwicklung`, `wim-preisliste`, `wim-invoic`, `wim-insrpt`, `wim-wertebestellung`, `wim-technik-aenderung`, `esa-wertebestellung` |
 | `role-msb-gas` | `mako-wim`: the WiM workflows on the Gas Prüfidentifikatoren |
@@ -1437,7 +1437,7 @@ When a client connects, `makod` returns dynamic server instructions that include
 
 - The instance's tenant ID and configured Marktrollen
 - A filtered command list (only commands relevant to the configured roles)
-- A regulatory deadline table (GPKE 24 h, WiM Strom 3/5/7/1 Werktage per PID, GeLi Gas 10 Werktage, MABIS 1 Werktag)
+- A regulatory deadline table (GPKE 24 h, WiM Strom 3/5/7/1 Werktage per PID, GeLi Gas 10 Werktage; MaBiS has no response Frist — see `mako_mabis::fristen`)
 - Machine-readable error prefix glossary
 
 This means the LLM always has full operational context without additional configuration.
@@ -1822,10 +1822,10 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.rechnungsabwicklung.ablehnen` | `LF` or `MSB` | WiM | 19010 | Reject a received Beendigung (ORDRSP) |
 | `wim.steuerungsauftrag.bestaetigen` | `MSB` | WiM | — | MSB sends final positive control-measure response |
 | `wim.steuerungsauftrag.ablehnen` | `MSB` | WiM | — | MSB sends final negative control-measure response |
-| `mabis.abrechnung.einleiten` | `BKV` | MABIS | 13003 | Open a balancing-zone billing period |
-| `mabis.abrechnung.daten-einreichen` | `BKV` | MABIS | 13003 | BKV answers the Abrechnungssummenzeitreihe with a Prüfmitteilung (positive, or negative with `reason`) |
-| `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MABIS | 13003 | Mark billing period settled |
-| `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MABIS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
+| `mabis.abrechnung.einleiten` | `BKV` | MaBiS | 13003 · 13020 · 13023 | Record a version of a Summenzeitreihe; opens the settlement on the first one and resumes it on every later one. Requires `zeitreihe` (the `SG10 CAV` code) and `version` (the Erstellungszeitpunkt) |
+| `mabis.abrechnung.daten-einreichen` | `BKV` | MaBiS | 21000 · 21001 · 21005 | Send a Prüfmitteilung for one version. Requires `antwortcode` — a code published by the Entscheidungsbaum that decides *this* Summenzeitreihe — plus `grund` for anything other than that tree's Zustimmung. **No Frist** — bounded by the § 3.10 clearing window |
+| `mabis.abrechnung.begleichen` | `BKV` or `ÜNB` | MaBiS | — | Close the clearing window. It does **not** set a Datenstatus: that is the BIKO's alone (§ 3.8.3) and arrives as IFTSTA 21003/21004 |
+| `mabis.summenzeitreihe.uebermitteln` | `NB` or `ÜNB` | MaBiS | 13003 | File a Summenzeitreihe for one Bilanzierungsgebiet with the BIKO |
 | `gpke.vollzugsmeldung.empfangen` | `NB`/`LFN`/`LFA` | GPKE | 21024–21033 | Vollzugsmeldung received via REST (manual replay) |
 | `wim.iftsta.empfangen` | `NB`/`MSB` | WiM | 21009–21018 | WiM IFTSTA status received via REST (manual replay) |
 | `wim.gas.anmeldung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44042–44044 / 44051–44053 | GNB accepts GMSB Anmeldung (positive APERAK within 10 WT) |
@@ -1834,8 +1834,8 @@ endpoint.  If the MaLo is not in the cache, the engine returns
 | `wim.gas.kuendigung.ablehnen` | `NB`/`GNB` | WiM Gas | 44039–44041 | GNB rejects GMSB Kündigung |
 | `wim.gas.stornierung.bestaetigen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends positive APERAK 44023 to LF Stornierung |
 | `wim.gas.stornierung.ablehnen` | `NB`/`GNB` | WiM Gas | 44022–44024 | GNB sends negative APERAK 44024 to LF Stornierung |
-| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB`/`BIKO` | MABIS | 21000–21003, 21005, 21007 | MABIS IFTSTA informational status received via REST |
-| `mabis.datenstatus.empfangen` | `BKV`/`NB`/`BIKO` | MABIS | 21004 | MABIS Datenstatus received via REST (BIKO → BKV/NB) |
+| `mabis.iftsta.empfangen` | `BKV`/`NB`/`ÜNB` | MaBiS | 21002 | Abweisung einer Prüfmitteilung (BIKO → NB/ÜNB); requires `abweisungsgrund`. A rejected Prüfmitteilung is never forwarded, so the check has to be redone (§ 9.8.2 Nr. 2) |
+| `mabis.datenstatus.empfangen` | `BKV`/`NB`/`ÜNB` | MaBiS | 21003 · 21004 | Datenstatus received via REST. **Both** PIDs carry one — 21003 addresses the NB/ÜNB, 21004 the BKV — so which one arrives follows from the role. Accepts the `STS+Z04` codes `A01`/`A02`/`A03`/`A04`/`A06` or their snake_case names |
 
 | `gpke.lieferbeginn.ablehnen` | `NB` | GPKE | 55003 | DSO rejects supply start (`E_0622`/`E_0623` code) |
 | `gpke.neuanlage.bestaetigen` | `NB` | GPKE | 55602/55603 | NB confirms a Neuanlage (`E_0608`; cluster picks the PID) |
@@ -1927,7 +1927,8 @@ MP-IDs resolved by the engine (sender, receiver) are intentionally absent.
 | `wim.gas.kuendigung.ablehnen` | `malo_id` (gas MaLo), `reason` |
 | `wim.gas.stornierung.bestaetigen` | `vorgang_id` (Vorgangsnummer from PID 44022 IDE+24) |
 | `wim.gas.stornierung.ablehnen` | `vorgang_id`, `reason` |
-| `mabis.abrechnung.einleiten` | `bilanzierungsgebiet`, `abrechnungszeitraum_von`, `abrechnungszeitraum_bis` |
+| `mabis.abrechnung.einleiten` | `zeitreihe`, `mabis_zp_id`, `bilanzierungsmonat`, `version`, `biko_id`, `absender_mp_id` |
+| `mabis.abrechnung.daten-einreichen` | `version`, `pid`, `antwortcode`, `grund` (required unless the code is the tree's Zustimmung) |
 
 ¹ `alter_lf_mp_id` is required only when the old supplier is a different legal entity.
   The ERP derives it from contract data; the engine does not know the previous LF.

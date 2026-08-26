@@ -208,7 +208,7 @@ lets an estimate settle as a reading.
 |---|---|
 | **BK6-24-174 Anlage 3 §3.8.2** | Version ascending per (MaBiS-ZP, Bilanzierungsmonat) |
 | **BK6-24-174 Anlage 3 §3.8.3** | Datenstatus assigned exclusively by the BIKO |
-| **BK6-24-174 Anlage 3 §3.10** | Erstaufschlag 1.–10. WT, Clearingphase 11.–30. WT, KBKA to month 7 |
+| **BK6-24-174 Anlage 3 §3.10** | BG-SZR: Erstaufschlag 1.–10. WT, Clearing 11.–30. WT; BK-SZR: 1.–12. / 13.–30. WT; KBKA to month 7; Abrechnungsstichtage 18./42. WT |
 | **BK6-24-174 Anlage 3 §9.8.1** | Negative Prüfmitteilung → corrected Summenzeitreihe |
 | **MSCONS AHB 3.2 §8.3.1** | PID 13003, Summenzeitreihe message format |
 | **IFTSTA AHB 2.1** | PID 21000/21001 Prüfmitteilung, 21003/21004 Datenstatus |
@@ -344,19 +344,38 @@ derives a Datenstatus; it only records what the BIKO sent.
 
 ### Fristen (§3.10, Tabelle 2)
 
-Werktage after the end of the Bilanzierungsmonat, for a BG-SZR (Kategorie B):
+Werktage after the end of the Bilanzierungsmonat. The whole table is executable
+as `mako_mabis::Bilanzierungsmonat`; `mabis-syncd` files a **BG-SZR
+(Kategorie B)**, which is the first row:
 
-| Phase | BKA | KBKA |
+| Zeitreihe | BKA Erstaufschlag | BKA Clearing | KBKA |
+|---|---|---|---|
+| **BG-SZR (Kategorie B)** · NZR | **1.–10. WT** | **11.–30. WT** | 31. WT – end of month 7 |
+| BK-SZR (Kategorie A und B) | 1.–**12.** WT | **13.**–30. WT | 31. WT – end of month 7 |
+| DZÜ | — | 31.–34. WT | 1.–8. WT of month 8 |
+
+| Abrechnungsstichtag | BKA | KBKA |
 |---|---|---|
-| Erstaufschlag | 1.–10. WT | — |
-| Clearingphase | 11.–30. WT | 31. WT – end of month 7 |
-| Abrechnungsstichtag | 42. WT | end of month 8 |
+| Vorläufige Bilanzierung | 18. WT, Datenstand 15. WT | 8. WT of month 5, Datenstand end of month 4 |
+| Abrechnungsrelevante Bilanzierung | 42. WT, Datenstand 30. WT | end of month 8, Datenstand end of month 7 |
 
-Within the Erstaufschlag a new version is assigned `Abrechnungsdaten`
-automatically; after it a new version starts as `Prüfdaten` and needs a positive
-Prüfmitteilung to be promoted. The scheduler therefore submits on the **10.
-Werktag** by default, which maximises the input data while the automatic
-assignment still applies.
+**The BG/BK offset is two Werktage and it is not cosmetic.** Within the
+Erstaufschlag a new version is assigned `Abrechnungsdaten` automatically; after
+it a new version starts as `Prüfdaten` and needs a positive Prüfmitteilung to be
+promoted (§3.8.3). A BK-SZR filed on the 11. WT is still an Erstaufschlag; a
+BG-SZR filed the same day is already in the Clearingphase. Filing a day late
+therefore does not merely miss a deadline — it changes the settlement path,
+silently, because the BIKO accepts the message either way.
+
+The scheduler submits on the **10. Werktag** by default, which maximises the
+input data while the automatic assignment still applies.
+
+**There is no Prüfmitteilung deadline.** §9.8.2 Nr. 1 leaves the Frist cell
+empty — the receiving party „kann" answer — and §13.8.2 defines no answer at
+all; its two rows are the BIKO's own dispatch dates above. What bounds a
+Prüfmitteilung is the clearing window. The two genuine 1-Werktag Fristen are the
+BIKO's: forwarding a Prüfmitteilung (§9.8.2 Nr. 3) and dispatching the
+Datenstatus (§9.9.2 Nr. 1).
 
 ---
 

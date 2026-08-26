@@ -297,20 +297,15 @@ pub async fn put_person(
     _claims: Claims,
     Extension(ctx): Extension<Arc<Ctx>>,
     Path(id): Path<Uuid>,
-    Json(mut body): Json<serde_json::Value>,
+    Json(body): Json<serde_json::Value>,
 ) -> ApiResult<StatusCode> {
     use rubo4e::current::Person;
-    match body.get("_typ").and_then(serde_json::Value::as_str) {
-        None => body["_typ"] = serde_json::json!("PERSON"),
-        Some("PERSON") => {}
-        Some(other) => {
-            return Err(ApiError::unprocessable(format!(
-                "expected _typ=PERSON, got {other:?}"
-            )));
-        }
-    }
-    let typed: Person = serde_json::from_value(body)
-        .map_err(|e| ApiError::unprocessable(format!("invalid Person payload: {e}")))?;
+    // The BO4E gate. Its strict-enum stage matters because `canonical` — the
+    // round-trip, not the request — is what gets stored, and a BO4E enum
+    // decoding to the `Unknown` catch-all serialises back as the literal
+    // `"UNKNOWN"`, replacing what the caller sent.
+    let typed: Person = mako_markt::bo4e::decode(body)
+        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
     let canonical =
         serde_json::to_value(&typed).map_err(|e| ApiError::Internal(anyhow::Error::new(e)))?;
     if pg::upsert_person(&ctx.pool, id, ctx.tenant(), canonical)
@@ -357,8 +352,8 @@ pub async fn put_zahlungsinformation(
 ) -> ApiResult<Json<serde_json::Value>> {
     use rubo4e::current::Zahlungsinformation;
     require_kunde(&ctx, kunden_id).await?;
-    let typed: Zahlungsinformation = serde_json::from_value(body)
-        .map_err(|e| ApiError::unprocessable(format!("invalid Zahlungsinformation: {e}")))?;
+    let typed: Zahlungsinformation = mako_markt::bo4e::decode(body)
+        .map_err(|e| ApiError::unprocessable_with(e.to_string(), e.detail().into()))?;
     if let Some(ref iban) = typed.iban
         && let Err(msg) = sepa::validate_iban(iban)
     {

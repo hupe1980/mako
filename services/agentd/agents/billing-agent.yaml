@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # INVOIC dispute resolution and O2C lifecycle. Handles receipt.disputed events, checks REMADV positions against Rechnung, and coordinates with netzbilanzd for settlement corrections.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: billing-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -37,16 +36,27 @@ spec:
 
       1. Extract `malo_id`, `receipt_id`, and `lf_mp_id` from the event.
       2. Call invoicd `get_receipt` to retrieve full check results (6 checks).
-      3. Identify which check failed:
+      3. Identify which check failed, and call invoicd `get_check_result` for its detail:
          - Check 1 (period): billing period validity
          - Check 2 (arithmetic): position totals match Gesamtbetrag
          - Check 3 (document total): Brutto = Netto + MwSt
-         - Check 4 (tariff match): tariff matches PreisblattNetznutzung
-         - Check 5 (tariff found): product code exists in marktd
-         - Check 6 (MMM settlement): MMM prices match marktd store
-      4. For arithmetic errors: call billingd `get_billing_record` to compare positions.
-      5. For tariff errors: call marktd to check PreisblattNetznutzung validity dates.
-      6. Determine if dispute is valid or can be auto-resolved.
+         - Check 4 (tariff match): PRICAT unit price vs INVOIC, within 3 %
+         - Check 5 (tariff found): a PRICAT entry exists for the billing period
+         - Check 6 (MMM / AufAbschlag): the Strom MMMA reference, the Trading Hub
+           Europe MMMA Gas reference, or — on a 31009 — the discount positions
+           against the contracted AufAbschlag. Which of the three applies is
+           decided by the document, not by the check number.
+      4. For arithmetic errors: call billingd `get_billing_record` to compare positions,
+         and billingd `explain_invoice_position` for the one that moved.
+      5. For tariff errors: call marktd `get_preisblatt` for the PreisblattNetznutzung
+         validity dates, and marktd `get_malo` for the Sparte and NB assignment the
+         receipt names.
+      6. Call invoicd `get_zahlungsstatus` — a dispute over an invoice already paid is a
+         different conversation from one over an open item.
+      7. On `de.accounting.mahnung.issued`: call accountingd `get_balance` for the open
+         amount and `list_dunning` for the Mahnstufe already reached, so an escalation is
+         a step rather than a repeat.
+      8. Determine if dispute is valid or can be auto-resolved.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -116,11 +126,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -141,120 +150,57 @@ spec:
     - ref: tool://invoicd/get_receipt
       mutates: false
       max_sensitivity: internal
-      description: "get receipt via invoicd"
-    - ref: tool://invoicd/list_disputes
-      mutates: false
-      max_sensitivity: internal
-      description: "list disputes via invoicd"
+      description: >-
+        The disputed INVOIC receipt and the six check results behind the
+        dispute.
+
     - ref: tool://invoicd/get_check_result
       mutates: false
       max_sensitivity: internal
-      description: "get check result via invoicd"
-    - ref: tool://invoicd/list_overdue_remadv
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue remadv via invoicd"
+      description: >-
+        One check's detail, once `get_receipt` says which of the six failed.
+
     - ref: tool://invoicd/get_zahlungsstatus
       mutates: false
       max_sensitivity: internal
-      description: "get zahlungsstatus via invoicd"
-    - ref: tool://invoicd/summarize_billing_month
-      mutates: false
-      max_sensitivity: internal
-      description: "summarize billing month via invoicd"
-    - ref: tool://billingd/list_billing_records
-      mutates: false
-      max_sensitivity: internal
-      description: "list billing records via billingd"
+      description: >-
+        Whether the disputed invoice has been paid, partially paid or is still
+        open.
+
     - ref: tool://billingd/get_billing_record
       mutates: false
       max_sensitivity: internal
-      description: "get billing record via billingd"
-    - ref: tool://billingd/preview_billing
-      mutates: false
-      max_sensitivity: internal
-      description: "preview billing via billingd"
-    - ref: tool://billingd/get_xrechnung
-      mutates: false
-      max_sensitivity: internal
-      description: "get xrechnung via billingd"
-    - ref: tool://billingd/check_billing_anomaly
-      mutates: false
-      max_sensitivity: internal
-      description: "check billing anomaly via billingd"
-    - ref: tool://billingd/list_vpp_settlements
-      mutates: false
-      max_sensitivity: internal
-      description: "list vpp settlements via billingd"
-    - ref: tool://billingd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via billingd"
-    - ref: tool://billingd/list_product_categories
-      mutates: false
-      max_sensitivity: internal
-      description: "list product categories via billingd"
-    - ref: tool://billingd/validate_tariff_config
-      mutates: false
-      max_sensitivity: internal
-      description: "validate tariff config via billingd"
+      description: >-
+        The Rechnung behind the receipt, to compare positions against the
+        dispute.
+
     - ref: tool://billingd/explain_invoice_position
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via billingd"
-    - ref: tool://billingd/get_billing_summary
+      description: >-
+        Why one position holds the amount it does — the arithmetic-error path.
+
+    - ref: tool://marktd/get_preisblatt
       mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via billingd"
+      max_sensitivity: confidential
+      description: >-
+        PreisblattNetznutzung validity dates, for a check-4 tariff mismatch.
+
+    - ref: tool://marktd/get_malo
+      mutates: false
+      max_sensitivity: confidential
+      description: >-
+        The Marktlokation the receipt names, for the Sparte and the NB
+        assignment.
+
     - ref: tool://accountingd/get_balance
       mutates: false
       max_sensitivity: internal
-      description: "get balance via accountingd"
-    - ref: tool://accountingd/list_ledger
-      mutates: false
-      max_sensitivity: internal
-      description: "list ledger via accountingd"
+      description: >-
+        The open balance behind a Mahnung, on `de.accounting.mahnung.issued`.
+
     - ref: tool://accountingd/list_dunning
       mutates: false
       max_sensitivity: internal
-      description: "list dunning via accountingd"
-    - ref: tool://accountingd/list_overdue
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue via accountingd"
-    - ref: tool://accountingd/compute_bilanzielle_abgrenzung
-      mutates: false
-      max_sensitivity: internal
-      description: "compute bilanzielle abgrenzung via accountingd"
-    - ref: tool://accountingd/suggest_payment_match
-      mutates: false
-      max_sensitivity: internal
-      description: "suggest payment match via accountingd"
-    - ref: tool://netzbilanzd/list_drafts
-      mutates: false
-      max_sensitivity: internal
-      description: "list invoices via netzbilanzd"
-    - ref: tool://netzbilanzd/list_disputed
-      mutates: false
-      max_sensitivity: internal
-      description: "list disputed via netzbilanzd"
-    - ref: tool://netzbilanzd/get_draft
-      mutates: false
-      max_sensitivity: internal
-      description: "get one invoice in full via netzbilanzd"
-    - ref: tool://netzbilanzd/list_pending_kostenblatt
-      mutates: false
-      max_sensitivity: internal
-      description: "list pending kostenblatt via netzbilanzd"
-    - ref: tool://netzbilanzd/get_billing_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via netzbilanzd"
-    - ref: tool://netzbilanzd/list_undispatched
-      mutates: false
-      max_sensitivity: internal
-      description: "list drafts past their dispatch window via netzbilanzd"
-    - ref: tool://netzbilanzd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via netzbilanzd"
+      description: >-
+        Which Mahnstufe the customer is on, so an escalation is not repeated.

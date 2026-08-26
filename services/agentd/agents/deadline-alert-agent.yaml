@@ -1,5 +1,5 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# APERAK / response-window deadline triage.
+# MaKo deadline triage. Classifies processes past or approaching a BDEW response window — the business Antwortfrist and the APERAK acknowledgement clock, kept apart — by how much time remains, and attributes each to the market participant that owes the response.
 #
 # ## This specialist runs no model, and that is declared
 #
@@ -35,7 +35,7 @@ apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: deadline-alert-agent
-  version: "3.0.0"
+  version: "4.0.0"
 spec:
   # No `execution`: the behaviour is `agentd::skills::DeadlineTriage`.
   # No `oversight`: this specialist reads and reports, and oversight without
@@ -56,8 +56,9 @@ spec:
         WARNING   under 2 hours remain
         COMPLIANT more than 2 hours remain
 
-      The set classified is the union of the **triggering event** and obsd's
-      overdue list, deduplicated by process_id. The trigger matters: a
+      The set classified is the union of the **triggering event** and the rows obsd
+      `list_overdue_processes` returns — the one tool this specialist holds —
+      deduplicated by process_id. The trigger matters: a
       `de.obs.deadline.approaching` alert carries a deadline that is usually
       still in the future, and a run that ignored it answered only about
       processes that had already breached — saying nothing about the one it was
@@ -157,6 +158,7 @@ spec:
           type: array
           items:
             type: object
+            additionalProperties: false
             required: [process_id, severity, remaining_secs]
             properties:
               process_id:    { type: string }
@@ -181,9 +183,9 @@ spec:
           description: The event that caused this run, reported back for correlation.
 
   tools:
-    # The one tool the skill calls. obsd computes the deadlines with mako's own
-    # BDEW calendar; this specialist classifies what it returns.
     - ref: tool://obsd/list_overdue_processes
       mutates: false
       max_sensitivity: internal
-      description: "Processes past their regulatory deadline, most urgent first."
+      description: >-
+        The overdue set, already ordered most-urgent-first with `deadline_at`
+        and `deadline_source` on every row.

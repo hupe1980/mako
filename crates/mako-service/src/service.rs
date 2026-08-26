@@ -125,6 +125,22 @@ pub trait Daemon: Send + 'static {
         async { true }
     }
 
+    /// One extra `tracing` layer, installed before the filter and the formatter.
+    ///
+    /// The seam for a daemon that embeds a library which *emits* metrics without
+    /// choosing an exporter. `agentplane` publishes its whole instrument
+    /// catalogue as `tracing` events on a dedicated target and leaves the bridge
+    /// to its embedder — so `agentd` returns a layer here that turns those
+    /// events into Prometheus series on the same registry `GET /metrics` serves.
+    /// Without it the plane's counters are emitted and collected by nobody,
+    /// which reads on a dashboard exactly like a plane where nothing happens.
+    ///
+    /// Called once, before the config is loaded, so it takes no arguments and
+    /// must not need any. Default: no extra layer.
+    fn tracing_layer() -> Option<crate::ExtraLayer> {
+        None
+    }
+
     /// Build the domain [`axum::Router`] and spawn background workers on
     /// `ctx.shutdown`. The runner merges this with the infra routes (health,
     /// metrics, tracing) — do not add those here.
@@ -156,7 +172,7 @@ pub async fn run<D: Daemon>() -> anyhow::Result<()> {
 
     // Keep the tracing/OTel guard alive until serve returns (dropping it flushes
     // spans), so bind it to a name that lives for the whole function.
-    let _guard = crate::init_tracing_from_env(D::NAME);
+    let _guard = crate::init_tracing_from_env_with(D::NAME, D::tracing_layer());
 
     let cfg: D::Config =
         crate::load_config(D::NAME).with_context(|| format!("load {} config", D::NAME))?;

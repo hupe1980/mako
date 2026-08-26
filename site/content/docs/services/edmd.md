@@ -1192,9 +1192,9 @@ does. Every ingest body takes an optional `max_plant_power_kw`:
 The same field is on the bulk and IoT bodies, on the Kafka wire batch, on the
 MSCONS `process.completed` payload, and on the MCP `validate_timeseries` tool.
 Absent, the rule stays off: an invented ceiling would block billing on a reading
-that is merely large. Deriving it from `marktd`'s Anschlussleistung is a
-per-ingest lookup and is on the roadmap, not a constant that could be hard-coded
-here.
+that is merely large. It is not derived from `marktd`'s Anschlussleistung, which
+would cost a lookup per ingest, and it is not a constant — the ceiling is a
+property of the Marktlokation, so the caller states it.
 
 ## V07 — DST ambiguity
 

@@ -206,6 +206,90 @@ impl Zuordnungsmitteilung {
     }
 }
 
+// ── Abstimmung der Ausfallarbeit (Kap. 6.4.3) ───────────────────────────────
+
+/// Why an Ausfallarbeits-Abstimmung may not be started or continued.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AbstimmungError {
+    /// The window closed. Kap. 6.4.3: „Danach dürfen die Prozesse zur
+    /// Abstimmung der Ausfallarbeit **nicht erneut gestartet** werden."
+    #[error(
+        "Abstimmungsfenster geschlossen: Maßnahme endete {massnahme_ende}, \
+         Frist lief am {frist} ab (BilAReM Kap. 6.4.3)"
+    )]
+    FensterGeschlossen {
+        /// Day the Redispatch-Maßnahme ended.
+        massnahme_ende: Date,
+        /// Last day the Abstimmung could run.
+        frist: Date,
+    },
+}
+
+/// Whether the Ausfallarbeit of a Maßnahme ending on `massnahme_ende` may still
+/// be adjusted on `heute` (`BilAReM` Kap. 6.4.3).
+///
+/// The window is a **hard stop**, not a target: once the end of the third
+/// following month has passed, the figure that stands is either the agreed one
+/// or the formally established Dissens, and neither side may reopen it. A
+/// system that keeps accepting corrections afterwards produces settlements the
+/// counterparty is entitled to refuse.
+///
+/// # Errors
+///
+/// [`AbstimmungError::FensterGeschlossen`], naming both dates.
+pub fn abstimmung_zulaessig(massnahme_ende: Date, heute: Date) -> Result<(), AbstimmungError> {
+    let frist = crate::fristen::ausfallarbeit_endet_am(massnahme_ende);
+    if heute > frist {
+        return Err(AbstimmungError::FensterGeschlossen {
+            massnahme_ende,
+            frist,
+        });
+    }
+    Ok(())
+}
+
+// ── Zuordnung einer neu eingerichteten SR (Kap. 2.3.2) ──────────────────────
+
+/// Latest day the ANB may notify the Bilanzierungsmodell of a **newly created**
+/// SR (`BilAReM` Kap. 2.3.2).
+///
+/// Two cases, and the second is the one that is easy to miss:
+///
+/// - The BTR or EIV gave the ANB everything it needed at least ten Werktage
+///   before the planned Inbetriebnahme → the notice is due **five Werktage
+///   before** that date.
+/// - They did not → the notice is due **five Werktage after** the information
+///   was complete, which can fall *after* the Inbetriebnahme. Late information
+///   moves the ANB's deadline; it does not remove it.
+///
+/// The Zuordnung takes effect with the Inbetriebnahme of the first TR assigned
+/// to the SR, regardless of which case applied.
+#[must_use]
+pub fn neue_sr_mitteilung_spaetestens(
+    geplante_inbetriebnahme: Date,
+    information_vollstaendig_am: Date,
+    kalender: mako_fristen::HolidayCalendar,
+) -> Date {
+    let rechtzeitig = mako_fristen::sub_werktage(
+        geplante_inbetriebnahme,
+        crate::fristen::PLANWERT_NEUE_SR_INFORMATION_WERKTAGE,
+        kalender,
+    );
+    if information_vollstaendig_am <= rechtzeitig {
+        mako_fristen::sub_werktage(
+            geplante_inbetriebnahme,
+            crate::fristen::PLANWERT_NEUE_SR_MITTEILUNG_WERKTAGE,
+            kalender,
+        )
+    } else {
+        mako_fristen::add_werktage(
+            information_vollstaendig_am,
+            crate::fristen::PLANWERT_NEUE_SR_MITTEILUNG_WERKTAGE,
+            kalender,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,5 +349,39 @@ mod tests {
         assert!(A::Spitz.admissible(date!(2032 - 01 - 01), false, B::Planwertmodell));
         assert!(A::VereinfachteSpitz.admissible(date!(2029 - 01 - 01), true, B::Prognosemodell));
         assert_eq!(A::post_pauschal_default(), A::VereinfachteSpitz);
+    }
+
+    #[test]
+    fn the_ausfallarbeit_window_is_a_hard_stop() {
+        // Kap. 6.4.3 — a Maßnahme ending in January closes at the end of April.
+        let ende = date!(2026 - 01 - 20);
+        assert!(abstimmung_zulaessig(ende, date!(2026 - 04 - 30)).is_ok());
+        assert!(matches!(
+            abstimmung_zulaessig(ende, date!(2026 - 05 - 01)),
+            Err(AbstimmungError::FensterGeschlossen { .. })
+        ));
+    }
+
+    #[test]
+    fn late_information_moves_the_new_sr_deadline_instead_of_removing_it() {
+        use mako_fristen::HolidayCalendar::BdewMaKo;
+        let ibn = date!(2027 - 03 - 15);
+        // Information complete well ahead → five Werktage before the IBN.
+        let rechtzeitig = neue_sr_mitteilung_spaetestens(ibn, date!(2027 - 01 - 04), BdewMaKo);
+        assert_eq!(
+            rechtzeitig,
+            mako_fristen::sub_werktage(ibn, 5, BdewMaKo),
+            "the ordinary case is anchored on the Inbetriebnahme"
+        );
+        assert!(rechtzeitig < ibn);
+
+        // Information complete only two days before → five Werktage after that,
+        // which lands *after* the Inbetriebnahme. The obligation survives.
+        let spaet = neue_sr_mitteilung_spaetestens(ibn, date!(2027 - 03 - 13), BdewMaKo);
+        assert_eq!(
+            spaet,
+            mako_fristen::add_werktage(date!(2027 - 03 - 13), 5, BdewMaKo)
+        );
+        assert!(spaet > ibn);
     }
 }

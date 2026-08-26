@@ -22,9 +22,11 @@ pub mod attest;
 pub mod calendar;
 pub mod keys;
 pub mod label;
+pub mod metrics;
 pub mod oversight;
 pub mod policy;
 pub mod providers;
+pub mod readiness;
 pub mod runtime;
 pub mod sweep;
 pub mod tools;
@@ -97,6 +99,39 @@ pub fn manifests() -> &'static BTreeMap<String, Manifest> {
 #[must_use]
 pub fn find_manifest(name: &str) -> Option<&'static Manifest> {
     manifests().get(name)
+}
+
+/// Which revision of a specialist this binary embeds.
+///
+/// The digest is over the manifest's canonical bytes, so key order and
+/// formatting cannot change it: two files that declare the same thing share
+/// one, and a file that declares something different cannot. agentplane records
+/// the same identity on every run it admits, which is what makes *"which
+/// declaration governed this decision"* answerable months later.
+///
+/// This is the live half: the same identity read off a **running** plane, so a
+/// reviewer who approved a file in a diff can check the process against it.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct Declaration {
+    /// `metadata.version` — the human-readable bump a reviewer sees.
+    pub version: String,
+    /// The digest over the canonical manifest, hex.
+    ///
+    /// `None` where the manifest cannot be canonicalised. Reported as absent
+    /// rather than as an empty string, for the reason agentplane records an
+    /// absent identity rather than a false one: a run governed by a declaration
+    /// that cannot name itself is not a run governed by nothing.
+    pub digest: Option<String>,
+}
+
+/// The embedded revision of one specialist, for the inventory endpoints.
+#[must_use]
+pub fn declaration(name: &str) -> Option<Declaration> {
+    let m = find_manifest(name)?;
+    Some(Declaration {
+        version: m.metadata.version.clone(),
+        digest: m.digest().ok().map(|d| d.to_hex()),
+    })
 }
 
 /// Parse a manifest, failing loudly — a manifest that does not load is a
@@ -330,9 +365,62 @@ mod tests {
         );
     }
 
+    /// **Closed all the way down**, not only at the top.
+    ///
+    /// The root is where the argument for closing a schema is usually made, and
+    /// the holes are one level in: `findings[]`, `violations[]`,
+    /// `failed_checks[]` carry what the specialist concluded, which is the part a
+    /// triage rule's `path` reaches and an ERP reads.
+    ///
+    /// Scoped to objects that declare `properties`. One with none is a map whose
+    /// keys are data — `by_partner_mp_id` counts per MP-ID, `trigger` echoes the
+    /// event back — and closing it would forbid the content it exists to carry.
+    #[test]
+    fn every_object_in_an_answer_schema_that_names_its_fields_is_closed() {
+        /// Walk a schema, collecting the JSON pointers of open objects.
+        fn open_objects(node: &serde_json::Value, at: &str, out: &mut Vec<String>) {
+            if let Some(map) = node.as_object() {
+                if map.contains_key("properties")
+                    && map.get("additionalProperties") != Some(&serde_json::Value::Bool(false))
+                {
+                    out.push(if at.is_empty() {
+                        "<root>".to_owned()
+                    } else {
+                        at.to_owned()
+                    });
+                }
+                for (key, value) in map {
+                    open_objects(value, &format!("{at}/{key}"), out);
+                }
+            } else if let Some(items) = node.as_array() {
+                for (i, value) in items.iter().enumerate() {
+                    open_objects(value, &format!("{at}[{i}]"), out);
+                }
+            }
+        }
+
+        let mut open = Vec::new();
+        for (name, m) in manifests() {
+            let Some(schema) = m.output_schema() else {
+                continue;
+            };
+            let mut here = Vec::new();
+            open_objects(schema, "", &mut here);
+            for path in here {
+                open.push(format!("{name}: {path}"));
+            }
+        }
+        assert!(
+            open.is_empty(),
+            "these answer-schema objects name their fields and then accept any others — \
+             a model may pad exactly the part a triage rule reads: {open:#?}. Add \
+             `additionalProperties: false` beside each `properties`."
+        );
+    }
+
     /// Knowledge is granted, not copied.
     ///
-    /// mako's MCP servers publish fifty step-by-step prompts for their own
+    /// mako's MCP servers publish 57 step-by-step prompts for their own
     /// procedures. A manifest names the prompt it needs; a hand-typed paraphrase
     /// in `constraints` drifts from the server's prompt the first time either
     /// changes.
@@ -500,9 +588,15 @@ mod tests {
                 .oversight
                 .as_ref()
                 .is_some_and(|o| !o.triage.is_empty());
-            // A coded specialist has `StepCtx::open_task` instead; oversight
-            // without `execution` is refused, so it cannot declare triage.
-            let coded = m.spec.execution.is_none();
+            // A coded specialist cannot declare `oversight` at all — agentplane
+            // refuses the block on a manifest with no `execution` — so it opens
+            // its row with `StepCtx::open_task`. That was stated here as an
+            // exemption and checked by nothing, and the one coded specialist did
+            // not do it: `deadline-alert-agent` could report `BREACH` and told
+            // nobody. `CODED_TRIAGE` is the list of coded specialists whose Rust
+            // *does* open a row, asserted below rather than assumed.
+            const CODED_TRIAGE: &[&str] = &[crate::skills::DeadlineTriage::NAME];
+            let coded = m.spec.execution.is_none() && CODED_TRIAGE.contains(&name.as_str());
             if !triaged && !coded {
                 silent.push(name.as_str());
             }
@@ -513,6 +607,37 @@ mod tests {
              Add an `oversight.triage` rule, or explain in the file why the finding needs \
              no human"
         );
+    }
+
+    /// The coded specialist's worklist row names an audience the policy admits.
+    ///
+    /// A manifest's audiences are checked against `policy/agentd.cedar` by
+    /// `plane::policy`; a coded specialist's is a Rust constant, so it is checked
+    /// here. A row filed for a role Cedar refuses at the door reads, from the
+    /// worklist, exactly like a row that was answered.
+    #[test]
+    fn the_coded_specialists_triage_audience_is_admitted_by_the_policy_set() {
+        use agentplane::core::{PolicyDecision, PolicyRequest};
+
+        let engine = crate::plane::policy::engine(crate::plane::policy::DEFAULT_POLICY)
+            .expect("the embedded policy set compiles");
+        for role in [
+            crate::skills::DeadlineTriage::TRIAGE_AUDIENCE,
+            crate::skills::DeadlineTriage::TRIAGE_ESCALATION,
+        ] {
+            let context = serde_json::json!({ "roles": [role], "tenant": "9900357000004" });
+            let decision = engine.authorize(&PolicyRequest {
+                principal: "user:reviewer",
+                action: "api:task.decide",
+                resource: "*",
+                context: &context,
+            });
+            assert!(
+                matches!(decision, PolicyDecision::Permit),
+                "`{role}` is named as the coded specialist's triage audience but \
+                 policy/agentd.cedar refuses it the worklist"
+            );
+        }
     }
 
     /// Every manifest file is embedded, and every embedded manifest is a file.
@@ -550,6 +675,356 @@ mod tests {
             misnamed.is_empty(),
             "these specialists declare a `metadata.name` that is not their filename: \
              {misnamed:?}"
+        );
+    }
+
+    /// **Every model a manifest names is one this deployment reviewed.**
+    ///
+    /// The model answering a regulated decision is part of what a reviewer
+    /// approves, and it is declared in 28 separate strings. Two spellings of one
+    /// model both resolve, so nothing fails — and a fleet answering from two
+    /// models is not the fleet anybody reviewed.
+    ///
+    /// The list here is the second place, deliberately: moving a specialist onto
+    /// a different model is a manifest edit *and* this edit, both on the
+    /// reviewable path. A model id no provider serves fails here rather than at
+    /// the first dispatch of the event that needed it.
+    #[test]
+    fn every_declared_model_is_one_this_deployment_reviewed() {
+        /// The models mako's specialists run on.
+        ///
+        /// `privileged` reads the payload and decides; `quarantined` reads
+        /// counterparty-derived content and cannot call a tool, so it is the
+        /// cheaper model on purpose — it is doing extraction, not judgement.
+        const REVIEWED: &[&str] = &["claude-sonnet-5", "claude-haiku-4-5"];
+
+        let mut unreviewed = Vec::new();
+        for (name, m) in manifests() {
+            let Some(models) = m.spec.models.as_ref() else {
+                continue;
+            };
+            for (which, pair) in [
+                ("privileged", models.privileged.as_ref()),
+                ("quarantined", models.quarantined.as_ref()),
+            ] {
+                if let Some(pair) = pair
+                    && !REVIEWED.contains(&pair.model.as_str())
+                {
+                    unreviewed.push(format!("{name}: {which} = {}", pair.model));
+                }
+            }
+        }
+        assert!(
+            unreviewed.is_empty(),
+            "these manifests name a model that is not on this deployment's reviewed list: \
+             {unreviewed:#?}. Add it to REVIEWED — deliberately — or correct the manifest."
+        );
+    }
+
+    /// **Every embedded manifest can name itself.**
+    ///
+    /// agentplane records an [`AgentIdentity`](agentplane::journal::AgentIdentity)
+    /// on every admitted run and computes the digest there, recording an *absent*
+    /// identity when a manifest cannot be canonicalised rather than a false one.
+    /// The right refusal upstream and a silent one here: such a specialist runs
+    /// perfectly and leaves a journal that cannot say what governed it.
+    #[test]
+    fn every_manifest_produces_a_digest() {
+        let nameless: Vec<&str> = manifests()
+            .keys()
+            .map(String::as_str)
+            .filter(|name| declaration(name).is_none_or(|d| d.digest.is_none()))
+            .collect();
+        assert!(
+            nameless.is_empty(),
+            "these declarations cannot be canonicalised, so every run they govern is \
+             journaled with no identity: {nameless:?}"
+        );
+    }
+
+    /// Two files that declare different things do not share a digest.
+    ///
+    /// The property the whole review path rests on: editing a procedure changes
+    /// the digest, so a reviewer sees a version bump rather than a silent
+    /// substitution.
+    #[test]
+    fn a_digest_distinguishes_one_declaration_from_another() {
+        let digests: std::collections::BTreeSet<String> = manifests()
+            .keys()
+            .filter_map(|name| declaration(name)?.digest)
+            .collect();
+        assert_eq!(
+            digests.len(),
+            manifests().len(),
+            "two specialists share a digest — a declaration that cannot be told from \
+             another is one an auditor cannot attribute a decision to"
+        );
+    }
+
+    /// **A role build's worklist rows stay inside its own arm (§ 9 EnWG).**
+    ///
+    /// The structural half is asserted elsewhere: a `role-lf` binary does not
+    /// *contain* the NB specialists and does not require their MCP endpoints.
+    /// This is the half that leaks the other way — not what a specialist reads,
+    /// but who it hands a finding to.
+    ///
+    /// A worklist row carries the finding, the justification and the run it came
+    /// from, so filing an NB one on a supply desk is grid operational state
+    /// reaching supply people — the boundary § 6a and § 9 EnWG draw — and in a
+    /// role build that desk may not exist to answer it.
+    ///
+    /// Compiled only where **exactly one** role feature is on, because that is
+    /// the only build whose compiled set *is* an arm. `--all-features` turns all
+    /// three on and is an all-roles build wearing role flags: the specialists are
+    /// all present and no arm is excluded, so asking which desks are foreign has
+    /// no answer. Gating on `any(...)` made `just test --all-features` pick the
+    /// LF answer for a binary containing every specialist, and fail on eight
+    /// perfectly correct audiences.
+    #[cfg(any(
+        all(
+            feature = "role-lf",
+            not(feature = "role-nb"),
+            not(feature = "role-msb")
+        ),
+        all(
+            feature = "role-nb",
+            not(feature = "role-lf"),
+            not(feature = "role-msb")
+        ),
+        all(
+            feature = "role-msb",
+            not(feature = "role-lf"),
+            not(feature = "role-nb")
+        ),
+    ))]
+    #[test]
+    fn role_scoped_worklist_audiences_stay_inside_the_arm() {
+        /// Desks that answer for the supply business.
+        const SUPPLY: &[&str] = &["billing-operations", "billing-compliance", "credit-control"];
+        /// Desks that answer for the grid business.
+        const GRID: &[&str] = &[
+            "grid-operations",
+            "netzbilanz",
+            "eeg-operations",
+            "gas-operations",
+        ];
+        /// Desks that answer for metering.
+        const METERING: &[&str] = &["metering"];
+        /// Desks every arm shares: the plane's own operations, the MaKo desk,
+        /// and the regulatory function that answers to the BNetzA for all of it.
+        const CROSS_CUTTING: &[&str] = &["mako-operations", "marktkommunikation", "regulatory"];
+
+        let forbidden: &[&[&str]] = if cfg!(feature = "role-lf") {
+            &[GRID, METERING]
+        } else if cfg!(feature = "role-nb") {
+            &[SUPPLY, METERING]
+        } else {
+            &[SUPPLY, GRID]
+        };
+
+        let mut crossings = Vec::new();
+        for (name, m) in manifests() {
+            // Only the specialists this build compiled: `manifests![]` is not
+            // role-gated, so the embedded set still carries the other arms'.
+            if crate::builtin::find(name).is_none() {
+                continue;
+            }
+            let Some(oversight) = m.spec.oversight.as_ref() else {
+                continue;
+            };
+            let mut named: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            named.extend(oversight.approvers.iter().map(String::as_str));
+            named.extend(oversight.escalate_to.iter().map(String::as_str));
+            for rule in &oversight.triage {
+                named.extend(rule.audience.iter().map(String::as_str));
+            }
+            for role in named {
+                if CROSS_CUTTING.contains(&role) {
+                    continue;
+                }
+                if forbidden.iter().any(|arm| arm.contains(&role)) {
+                    crossings.push(format!("{name} → {role}"));
+                }
+            }
+        }
+
+        assert!(
+            crossings.is_empty(),
+            "these specialists hand a finding to a desk in another Marktrolle's arm, which \
+             this build does not serve: {crossings:#?}. A worklist row carries the run's \
+             own state across that boundary, and in a role-scoped deployment the desk may \
+             not exist to answer it."
+        );
+    }
+
+    /// Every desk a manifest names is classified by the check above.
+    ///
+    /// Runs in the default build, where every specialist is present, so a new
+    /// audience cannot arrive unclassified — which would make the § 9 EnWG check
+    /// silently skip it rather than fail.
+    #[test]
+    fn every_audience_a_manifest_names_belongs_to_a_known_arm() {
+        const KNOWN: &[&str] = &[
+            // supply
+            "billing-operations",
+            "billing-compliance",
+            "credit-control",
+            // grid
+            "grid-operations",
+            "netzbilanz",
+            "eeg-operations",
+            "gas-operations",
+            // metering
+            "metering",
+            // cross-cutting
+            "mako-operations",
+            "marktkommunikation",
+            "regulatory",
+        ];
+
+        let mut unclassified = Vec::new();
+        for (name, m) in manifests() {
+            let Some(oversight) = m.spec.oversight.as_ref() else {
+                continue;
+            };
+            let mut named: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+            named.extend(oversight.approvers.iter().map(String::as_str));
+            named.extend(oversight.escalate_to.iter().map(String::as_str));
+            for rule in &oversight.triage {
+                named.extend(rule.audience.iter().map(String::as_str));
+            }
+            for role in named {
+                if !KNOWN.contains(&role) {
+                    unclassified.push(format!("{name} → {role}"));
+                }
+            }
+        }
+        assert!(
+            unclassified.is_empty(),
+            "these audiences belong to no arm this codebase knows, so the § 9 EnWG check \
+             cannot decide whether a role build may name them: {unclassified:#?}. Add the \
+             desk to its arm in `role_scoped_worklist_audiences_stay_inside_the_arm`, \
+             deliberately."
+        );
+    }
+
+    /// **A code a procedure tells the model to emit has somewhere to go.**
+    ///
+    /// An answer schema is closed, so a finding code the procedure defines and
+    /// the schema does not carry cannot be returned *at all*: the model is told
+    /// to report `SECT41A_IMSYS_REQUIRED`, has no field for it, and puts
+    /// something adjacent in a field meant for something else — or nothing
+    /// anywhere. The run completes, the answer validates, the finding is gone.
+    ///
+    /// Reads **emitted** codes only: a token introduced by `ERROR`, `WARNING`,
+    /// `report` or `emit finding`. A code a procedure merely *reads* —
+    /// `PERIOD_OVERLAP` off billingd's risk gate, `NEEDS_REVIEW` off einsd's
+    /// settlement state — is an input and belongs in no answer schema.
+    #[test]
+    fn every_code_a_procedure_emits_exists_in_its_answer_schema() {
+        /// The verbs that mark a token as this specialist's own output.
+        const EMITS: &[&str] = &["ERROR", "WARNING", "report", "emit finding"];
+
+        /// Whether `token` is a coded finding rather than a word.
+        fn is_code(token: &str) -> bool {
+            token.contains('_')
+                && token.len() > 4
+                && token
+                    .bytes()
+                    .all(|b| b.is_ascii_uppercase() || b.is_ascii_digit() || b == b'_')
+        }
+
+        let mut orphaned = Vec::new();
+        for (name, m) in manifests() {
+            let (Some(identity), Some(schema)) = (m.spec.identity.as_ref(), m.output_schema())
+            else {
+                continue;
+            };
+            let procedure = agentplane::manifest::Identity::system_prompt(identity);
+            let rendered = serde_json::to_string(schema).unwrap_or_default();
+
+            for verb in EMITS {
+                let mut rest = procedure.as_str();
+                while let Some(at) = rest.find(verb) {
+                    rest = &rest[at + verb.len()..];
+                    // **Skip the whitespace first.** A procedure is a wrapped
+                    // YAML block scalar, so the code frequently lands on the
+                    // next line: `— report\n   SECT42_…_STALE for those.`
+                    // Reading straight from the verb found an empty token and
+                    // the check passed on everything, which is the way a lint
+                    // fails that nobody notices.
+                    let token: String = rest
+                        .trim_start()
+                        .chars()
+                        .take_while(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || *c == '_')
+                        .collect();
+                    if is_code(&token) && !rendered.contains(&token) {
+                        orphaned.push(format!("{name}: {token}"));
+                    }
+                }
+            }
+        }
+        orphaned.sort();
+        orphaned.dedup();
+        assert!(
+            orphaned.is_empty(),
+            "these procedures tell the model to emit a code its own closed answer schema \
+             cannot carry, so the finding has nowhere to go and the run completes without \
+             it: {orphaned:#?}"
+        );
+    }
+
+    /// **A manifest's own comments do not contradict it.**
+    ///
+    /// The comments in `agents/*.yaml` explain what the declaration below them
+    /// does, and they sit inside the file the digest covers — so a drifted one is
+    /// a false statement a reviewer reads *while* approving the thing it
+    /// misdescribes. "No `oversight` block" above an `oversight:` block is the
+    /// shape: one fact in two places, and the copy nobody validates is the one
+    /// people read.
+    ///
+    /// Only absences are checked, because only an absence can be contradicted by
+    /// the file itself without ambiguity.
+    #[test]
+    fn no_manifest_comment_claims_an_absence_the_file_contradicts() {
+        /// A phrase that claims something is absent, and how to see whether it is.
+        struct Claim {
+            phrase: &'static str,
+            present: fn(&Manifest) -> bool,
+        }
+
+        const CLAIMS: &[Claim] = &[
+            Claim {
+                phrase: "No `oversight` block",
+                present: |m| m.spec.oversight.is_some(),
+            },
+            Claim {
+                phrase: "no mutating tool grant",
+                present: |m| m.spec.tools.iter().any(|t| t.mutates),
+            },
+            Claim {
+                phrase: "no mutating grants here at all",
+                present: |m| m.spec.tools.iter().any(|t| t.mutates),
+            },
+        ];
+
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("agents");
+        let mut contradictions = Vec::new();
+        for (name, m) in manifests() {
+            let Ok(src) = std::fs::read_to_string(dir.join(format!("{name}.yaml"))) else {
+                continue;
+            };
+            for claim in CLAIMS {
+                if src.contains(claim.phrase) && (claim.present)(m) {
+                    contradictions.push(format!("{name}: \"{}\"", claim.phrase));
+                }
+            }
+        }
+        assert!(
+            contradictions.is_empty(),
+            "these manifests carry a comment claiming an absence the declaration below it \
+             contradicts — a false sentence a reviewer reads while approving the thing it \
+             misdescribes: {contradictions:#?}"
         );
     }
 

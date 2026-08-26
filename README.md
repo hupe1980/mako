@@ -189,14 +189,16 @@ flowchart LR
 
 ### BO4E typed API (`marktd`)
 
-**83 active `rubo4e::current` types — schema validated at every read/write boundary.**
+**83 active `rubo4e::current` types — every payload, in or out, crosses one four-stage gate.**
 
 | Category | Detail |
 |---|---|
 | 📦 **Typed responses** | `GET /api/v1/malos` → `Marktlokation`; `GET /api/v1/melos` → `Messlokation`; `GET /api/v1/zaehler` → `Zaehler`; `GET /api/v1/geraete` → `Geraet` — all canonical BO4E camelCase |
-| 🔍 **Schema validation on write** | `PUT` endpoints reject wrong `_typ` with 422; validate enum fields (`bilanzierungsmethode`, `netzebene`, `vertragsart`, …) against `rubo4e::current` types; a customer's **IBAN** (ISO 7064 MOD-97-10) and **BIC** (ISO 9362) are checked before storage, so a typo is a 422 rather than a returned direct debit |
+| 🔍 **One gate on write** | `mako_markt::bo4e::decode`, at every BO4E endpoint: `_typ` (injected when absent, refused when it names another BO) → typed deserialization → **strict enums** by JSON-path → the rules BO4E states in prose and enforces nowhere. Every refusal is a 422 with the same `code`. Of the 35 BOs, exactly two declare a `required` field and none declares a `oneOf`, so "it deserialises" is not validation |
+| 📤 **Nothing is emitted that would be refused** | The same rules run outbound — over every shape the three billing engines can produce, and at runtime wherever a document is *assembled* (a Sammelrechnung, a Rechnung merged with its Fremdkosten). Money is compared at the scale of the stated total |
+| 🏦 **Identifiers and bank details** | A customer's **IBAN** (ISO 7064 MOD-97-10) and **BIC** (ISO 9362) are checked before storage, so a typo is a 422 rather than a returned direct debit; `MaloId`, `MeloId` and `EicCode` carry their check digits |
 | 📋 **`Vertrag` for LRV exchange** | `nb_contracts` stores full BO4E `Vertrag` JSONB + typed SQL columns; `PUT /api/v1/nb-contracts` validates `vertragsart` / `vertragsstatus`; emits `de.markt.nb-contract.updated` CloudEvent |
-| 👤 **`Geschaeftspartner` typed partners** | `PUT /api/v1/partners/{mp_id}` validates the BO4E `Geschaeftspartner` payload (auto-injects `_typ`; validates `marktrolle`, `rollencodetyp`, `marktteilnehmerstatus`, `adresse`). `GET` returns the typed `geschaeftspartner` field. |
+| 👤 **`Geschaeftspartner` typed partners** | `PUT /api/v1/partners/{mp_id}` puts the BO4E `Geschaeftspartner` through the gate and stores the canonical round-trip. `GET` returns the typed `geschaeftspartner` field. |
 | 🔢 **`Zaehlwerk` register access** | `GET /api/v1/zaehler/{id}/zaehlwerke` → `Vec<Zaehlwerk>` — OBIS registers for TOU billing and iMSyS demand management |
 | ⏰ **`ZaehlzeitRegister` + `ZaehlzeitSaison`** | `GET/PUT /api/v1/zaehler/{id}/register` + `/zaehler-register/{id}/saisons` — iMSys TOU register definitions (HT/NT/EINZEL); `GET /api/v1/zaehler/{id}/tariff-zone?datetime=ISO` resolves zone in one SQL JOIN (§14a Modul 2) |
 | ⚡ **`Energiemenge` deliveries** | `GET /api/v1/deliveries/{malo_id}` → `Vec<Energiemenge>` — typed ERP-consumable meter readings without EDIFACT parsing |
@@ -387,17 +389,25 @@ them, and a workflow for a format nothing parses would be unreachable.
 
 ### Redispatch 2.0 XML (`redispatch-xml`) — 9 document types
 
-| Document type | BNetzA ruling | Deadline | Status |
-|---|---|---|---|
-| `ActivationDocument` | BK6-20-060 | 5 min (UTC) | ✅ |
-| `PlannedResourceScheduleDocument` | BK6-20-060 | — | ✅ |
-| `AcknowledgementDocument` | BK6-20-059 | 6 h (UTC) | ✅ |
-| `Stammdaten` | BK6-20-060 | 1 Werktag (CET/CEST) | ✅ |
-| `Unavailability_MarketDocument` | BK6-20-059 | — | ✅ |
-| `NetworkConstraintDocument` | BK6-20-060 | — | ✅ |
-| `Kaskade` | BK6-20-060 | — | ✅ |
-| `StatusRequest_MarketDocument` | BK6-20-059 | 24 h (UTC) | ✅ |
-| `Kostenblatt` | BK6-20-061 | 15th of following month (CET/CEST) | ✅ |
+**BK6-23-241 (07.05.2026) repealed the decisions this table used to cite.**
+BK6-20-060 and BK6-20-061 are gone (Tenorziffern 4 and 3), BK6-20-059
+Tenorziffer 1 with the end of 30.06.2026 — and what replaces them is not a new
+table of Fristen but an obligation on the ÜNB to develop bundesweit einheitliche
+Prozessbeschreibungen (Tenorziffer 7). So a deadline here is either **sourced**
+from a document that still states it, or the **operator's own**, with the
+historical figure offered as a labelled default (`fristen::Betreiberfristen`).
+
+| Document type | Deadline | Where it comes from |
+|---|---|---|
+| `AcknowledgementDocument` | 3 min from receipt of the Übertragungsdatei | **sourced** — `AcknowledgementDocument` FB 1.0g. Never six hours |
+| `ActivationDocument` | 5 min | operator's own; historically BK6-20-060 (repealed) |
+| `Stammdaten` (VNB → ÜNB) | 1 Werktag | operator's own; historically BK6-20-060 (repealed) |
+| `Kostenblatt` | 15th of the following month | operator's own; historically BK6-20-061 (repealed) |
+| `PlannedResourceScheduleDocument` | Vorab-Information 30 min before validity (Prognosemodell) | **sourced** — BilAReM Kap. 6.3.1 |
+| `Unavailability_MarketDocument` | — | — |
+| `NetworkConstraintDocument` | — | — |
+| `Kaskade` | — | — |
+| `StatusRequest_MarketDocument` | none | it is a Marktpartner availability notification, not a request/response pair — there is no answer document and no 24-hour window |
 
 ---
 

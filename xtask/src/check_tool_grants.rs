@@ -234,6 +234,54 @@ fn mcp_tools(workspace_root: &Path) -> BTreeMap<String, bool> {
 /// Checked here rather than in a command of its own because this file already
 /// walks every `#[tool(...)]` in the workspace; a second walker would be a
 /// second definition of "an MCP tool" waiting to disagree with this one.
+/// How many MCP **prompts** the platform publishes, and across how many servers.
+///
+/// A context grant is not a tool grant, so `check-tool-grants` would not
+/// naturally count these — but they are the other half of what a specialist is
+/// given, they are stated in 26 manifest comments and in the README, and nothing
+/// regenerated the figure. It read "fifty of them across thirteen servers" while
+/// the real numbers were 57 and 15, in every one of those places at once.
+fn prompt_count(workspace_root: &Path) -> (usize, usize) {
+    let services = workspace_root.join("services");
+    let Ok(entries) = std::fs::read_dir(&services) else {
+        return (0, 0);
+    };
+    let mut total = 0usize;
+    let mut serving = 0usize;
+    for entry in entries.flatten() {
+        let mut here = 0usize;
+        for tail in ["src/mcp_server.rs", "src/api/mcp_server.rs"] {
+            if let Ok(src) = std::fs::read_to_string(entry.path().join(tail)) {
+                here += src.matches("#[prompt(").count();
+            }
+        }
+        if here > 0 {
+            serving += 1;
+            total += here;
+        }
+    }
+    (total, serving)
+}
+
+/// Every `tool://` grant across the specialist manifests.
+///
+/// Counted from the files rather than passed in from the caller's own loop, so
+/// the documented figure and the checked figure come from one reading of the
+/// same directory.
+fn grant_count(workspace_root: &Path) -> usize {
+    let dir = workspace_root.join("services/agentd/agents");
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "yaml"))
+        .filter_map(|p| std::fs::read_to_string(p).ok())
+        .map(|src| parse_grants(&src).len())
+        .sum()
+}
+
 fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bool>) -> bool {
     let services: BTreeSet<&str> = tools.keys().filter_map(|id| id.split('/').next()).collect();
     let total = tools.len();
@@ -242,6 +290,8 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
         .map(|e| e.flatten().filter(|e| e.path().is_dir()).count())
         .unwrap_or(0);
     let agents = specialist_count(workspace_root);
+    let grants = grant_count(workspace_root);
+    let (prompts, prompt_servers) = prompt_count(workspace_root);
 
     // One phrase per place, spelled as it is written there, so a mismatch names
     // the file and the sentence rather than a number to hunt for. The list is
@@ -268,6 +318,41 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
             format!(
                 "over the {total} MCP tools the other services expose ({serving} of {all_services})"
             ),
+        ),
+        // ── How many tools the specialists are actually granted ──
+        //
+        // The number that says whether least privilege is real. It went from
+        // 904 (every specialist holding the whole read surface of every server
+        // it touched) to a set each procedure names, and a figure that drifts
+        // back up unnoticed is how the old shape returns.
+        (
+            "services/agentd/README.md",
+            format!("{grants} grants across {agents} manifests"),
+        ),
+        (
+            "services/agentd/policy/agentd.cedar",
+            format!("// {grants} granted tools one by one."),
+        ),
+        (
+            "site/content/docs/services/agentd.md",
+            format!("{grants} grants across {agents} manifests"),
+        ),
+        (
+            "concepts/AGENTD.md",
+            format!("{grants} grants across {agents} manifests"),
+        ),
+        // ── How many step-by-step prompts a specialist may be granted ──
+        (
+            "services/agentd/README.md",
+            format!("publish {prompts} step-by-step prompts across {prompt_servers} servers"),
+        ),
+        (
+            "services/agentd/agents/mako-agent.yaml",
+            format!("publish {prompts} step-by-step prompts across {prompt_servers} servers"),
+        ),
+        (
+            "site/content/docs/services/agentd.md",
+            format!("publish {prompts} step-by-step prompts across {prompt_servers} servers"),
         ),
         // ── How many specialists agentd ships ──
         //
@@ -333,8 +418,9 @@ fn inventory_matches_the_docs(workspace_root: &Path, tools: &BTreeMap<String, bo
 
     if stale.is_empty() {
         println!(
-            "check-tool-grants: {total} MCP tools across {serving} of {all_services} services \
-             and {agents} specialists, as documented"
+            "check-tool-grants: {total} MCP tools across {serving} of {all_services} services, \
+             {agents} specialists holding {grants} grants, {prompts} MCP prompts across \
+             {prompt_servers} servers, as documented"
         );
         return true;
     }

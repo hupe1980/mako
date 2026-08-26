@@ -18,11 +18,77 @@
 
 use std::sync::Arc;
 
-use agentplane::core::PolicyEngine;
+use agentplane::core::{PolicyDecision, PolicyEngine, PolicyRequest};
 use agentplane::policy::CedarEngine;
 
 /// mako's own rules, embedded at compile time.
 pub const DEFAULT_POLICY: &str = include_str!("../../policy/agentd.cedar");
+
+/// The verbs **agentd's own** doors ask about.
+///
+/// agentplane's operator surface enumerates its verbs in
+/// [`agentplane::api::action::ALL`] and asks the same engine about each. The
+/// three routes agentd serves itself — starting a run by hand, and the two
+/// inventory reads — had no verb at all: they took a `Claims` extractor and
+/// stopped there, so any principal the realm would issue a token to could start
+/// any specialist on any Marktlokation, spend the tenant's model budget, and
+/// read which Marktrolle a role-scoped deployment is.
+///
+/// Authentication is not authorization, and a door with only the first is open
+/// to everyone the IDP knows.
+pub mod action {
+    /// `POST /api/v1/run` — start a specialist by hand.
+    ///
+    /// Distinct from `run:admit`, which asks whether *an agent* may be admitted
+    /// at all and whose principal is the agent. This one's principal is a person
+    /// (or a scheduler's service key), and it is the verb that decides whether
+    /// they may spend a run.
+    pub const RUN_START: &str = "api:run.start";
+
+    /// `GET /api/v1/agents` and `/api/v1/agents/catalog` — what this deployment
+    /// runs, and what it could run.
+    ///
+    /// In a role-scoped build the activated set *is* the deployment's Marktrolle
+    /// (§ 9 EnWG), so it is deployment detail rather than public capability
+    /// advertising. The A2A Agent Cards under `/.well-known/agents/{name}` stay
+    /// open: a card is what an agent is, and carries no endpoint credential.
+    pub const AGENT_LIST: &str = "api:agent.list";
+
+    /// Every verb agentd's own surface asks about.
+    ///
+    /// Walked by a test against the policy set for the same reason agentplane
+    /// publishes its own list: a verb granted to nobody is a permanent 403 on a
+    /// route, behind a policy set that compiles clean.
+    pub const ALL: &[&str] = &[RUN_START, AGENT_LIST];
+}
+
+/// Whether this caller may perform `action` on agentd's own surface.
+///
+/// The roles come from the verified token and nothing else — the same rule the
+/// oversight surface follows, and for the same reason: a caller who can name
+/// their own roles has authorization in name only.
+///
+/// Fails closed. A `PolicyDecision` that is not `Permit` — a denial, or a rule
+/// that could not be evaluated — is a refusal.
+#[must_use]
+pub fn caller_may(
+    engine: &dyn PolicyEngine,
+    subject: &str,
+    roles: &[String],
+    tenant: &str,
+    action: &str,
+) -> bool {
+    let context = serde_json::json!({ "roles": roles, "tenant": tenant });
+    matches!(
+        engine.authorize(&PolicyRequest {
+            principal: subject,
+            action,
+            resource: "agentd",
+            context: &context,
+        }),
+        PolicyDecision::Permit
+    )
+}
 
 /// Compile a policy set.
 ///
@@ -61,7 +127,6 @@ pub fn source(path: Option<&str>) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use agentplane::core::{PolicyDecision, PolicyRequest};
     use serde_json::json;
 
     fn engine() -> Arc<dyn PolicyEngine> {
@@ -454,6 +519,53 @@ mod tests {
         }
     }
 
+    /// **agentd's own doors are governed too.**
+    ///
+    /// `POST /api/v1/run` and the two inventory reads took a `Claims` extractor
+    /// and nothing else, which authenticates a caller and authorizes nobody. The
+    /// consequence was not subtle: any principal the realm would issue a token
+    /// to could start any specialist on any Marktlokation and spend the tenant's
+    /// model budget doing it.
+    ///
+    /// Walked over [`action::ALL`] rather than a hand-written pair, for the same
+    /// reason agentplane publishes its own list: a verb this file forgets is a
+    /// verb nobody checks is closed.
+    #[test]
+    fn agentds_own_verbs_are_granted_to_an_audience_and_refused_to_everyone_else() {
+        let engine = engine();
+        let may = |roles: &[&str], action: &str| {
+            caller_may(
+                engine.as_ref(),
+                "user:someone",
+                &roles.iter().map(|r| (*r).to_owned()).collect::<Vec<_>>(),
+                "9900357000004",
+                action,
+            )
+        };
+
+        for action in action::ALL {
+            assert!(
+                may(&["mako-operations"], action),
+                "{action}: operations cannot reach agentd's own door"
+            );
+            // The two manual-only specialists exist because no CloudEvent marks
+            // "the reporting period ended", so a scheduler is a first-class
+            // caller of `POST /api/v1/run` rather than an exception to it.
+            assert!(
+                may(&["mako-service"], action),
+                "{action}: a scheduler cannot start the batch specialists it exists to start"
+            );
+            assert!(
+                !may(&[], action),
+                "{action}: a token with no roles was admitted — this is the whole finding"
+            );
+            assert!(
+                !may(&["portal-customer"], action),
+                "{action}: a role with no business on this plane was admitted"
+            );
+        }
+    }
+
     /// An unauthenticated-shaped request — no roles at all — reaches nothing.
     ///
     /// Over `action::ALL` rather than a hand-written list, for the same reason
@@ -461,7 +573,7 @@ mod tests {
     #[test]
     fn a_caller_with_no_roles_is_refused_everywhere() {
         let none = json!({ "roles": [], "tenant": "9900357000004" });
-        for action in agentplane::api::action::ALL {
+        for action in agentplane::api::action::ALL.iter().chain(action::ALL) {
             let d = engine().authorize(&PolicyRequest {
                 principal: "user:nobody",
                 action,

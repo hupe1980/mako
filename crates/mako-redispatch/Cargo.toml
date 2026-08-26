@@ -17,6 +17,7 @@ categories   = ["data-structures"]
 
 [dependencies]
 mako-engine      = { workspace = true }
+mako-fristen     = { workspace = true }
 rust_decimal     = { workspace = true }
 serde            = { workspace = true }
 serde_json       = { workspace = true }

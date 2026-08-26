@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # BNetzA §20 EnWG annual Diskriminierungsbericht generator and quarterly KPI reporter. Aggregates process STP rates, APERAK response times, and parity metrics for regulatory submissions.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Cross-cutting: present in every role-scoped build.
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: regulatory-reporting-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -34,12 +33,28 @@ spec:
 
       ## PROCEDURE
 
-      1. Call obsd `get_kpi_report` (the BNetzA report is assembled from it) for BNetzA Diskriminierungsbericht data.
-      2. Call obsd `get_kpi_report` for current KPI metrics.
-      3. Call obsd `get_parity_report` for market-role parity comparison.
-      4. Validate: STP rate ≥ 95% (§20 EnWG target).
-      5. Identify any periods where parity deviation > 5% (reportable to BNetzA).
-      6. Structure report for operator review and submission.
+      1. Call obsd `get_kpi_report` for the KPI figures. There is no single tool that
+         produces the BNetzA Diskriminierungsbericht; it is assembled from this and the
+         parity comparison below.
+      2. Call obsd `get_parity_report` for the market-role parity comparison, and obsd
+         `get_stp_rate` for a family whose figure the report has to state on its own.
+      3. Call processd `list_affiliate_decisions` for the affiliated versus
+         non-affiliated split — the comparison § 20 Abs. 1 EnWG is actually about, and
+         the one an aggregate rate can hide.
+      4. For a role below target, call processd `get_stp_breakdown_by_erc`: a report that
+         states a rate without the refusal codes behind it cannot be answered.
+      5. **§ 20 Abs. 1 EnWG obliges discriminationsfreien Netzzugang — it names no
+         rate.** There is no statutory straight-through-processing target, and a
+         report that attributes one to the statute is asserting authority it does
+         not have. State the measured rate, state the operator's own target
+         beside it, and say which is which.
+      6. The parity threshold is the same kind of number: obsd's comparison flags
+         a deviation above **5 percentage points**, which is mako's own screening
+         figure and not a reporting trigger anybody published. What § 20 makes
+         reportable is the *discrimination*, and the deviation is the evidence
+         somebody has to explain — so report the figure, the roles it is between,
+         and the refusal codes behind it.
+      7. Structure report for operator review and submission.
 
   # What this agent is in a multi-agent arrangement.
   #
@@ -61,7 +76,7 @@ spec:
     # Reads the agent's own answer during memory formation — model output, and
     # therefore untrusted. A model that cannot call a tool is what should be
     # looking at it.
-    quarantined: { provider: anthropic, model: claude-haiku-4-5-20251001 }
+    quarantined: { provider: anthropic, model: claude-haiku-4-5 }
 
   # Memory: only where the subject is the operator itself.
   #
@@ -150,11 +165,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -168,147 +182,32 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://obsd/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via obsd"
-    - ref: tool://obsd/list_overdue_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue processes via obsd"
     - ref: tool://obsd/get_kpi_report
       mutates: false
       max_sensitivity: internal
-      description: "get kpi report via obsd"
+      description: >-
+        The KPI figures the report is assembled from.
+
     - ref: tool://obsd/get_parity_report
       mutates: false
       max_sensitivity: internal
-      description: "get parity report via obsd"
+      description: >-
+        Parity between market roles, per process family.
+
     - ref: tool://obsd/get_stp_rate
       mutates: false
       max_sensitivity: internal
-      description: "get stp rate via obsd"
-    - ref: tool://obsd/list_processes_by_family
-      mutates: false
-      max_sensitivity: internal
-      description: "list processes by family via obsd"
-    - ref: tool://processd/list_decisions
-      mutates: false
-      max_sensitivity: internal
-      description: "list decisions via processd"
-    - ref: tool://processd/get_decision
-      mutates: false
-      max_sensitivity: internal
-      description: "get decision via processd"
+      description: >-
+        One family's straight-through rate, where the report needs the detail.
+
     - ref: tool://processd/get_stp_breakdown_by_erc
       mutates: false
       max_sensitivity: internal
-      description: "get stp breakdown by erc via processd"
+      description: >-
+        Which refusal codes account for a rate below target.
+
     - ref: tool://processd/list_affiliate_decisions
       mutates: false
       max_sensitivity: internal
-      description: "list affiliate decisions via processd"
-    - ref: tool://processd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via processd"
-    - ref: tool://processd/list_pending_approvals
-      mutates: false
-      max_sensitivity: internal
-      description: "list pending approvals via processd"
-    - ref: tool://processd/get_queue_entry
-      mutates: false
-      max_sensitivity: internal
-      description: "get queue entry via processd"
-    - ref: tool://invoicd/get_receipt
-      mutates: false
-      max_sensitivity: internal
-      description: "get receipt via invoicd"
-    - ref: tool://invoicd/list_disputes
-      mutates: false
-      max_sensitivity: internal
-      description: "list disputes via invoicd"
-    - ref: tool://invoicd/get_check_result
-      mutates: false
-      max_sensitivity: internal
-      description: "get check result via invoicd"
-    - ref: tool://invoicd/list_overdue_remadv
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue remadv via invoicd"
-    - ref: tool://invoicd/get_zahlungsstatus
-      mutates: false
-      max_sensitivity: internal
-      description: "get zahlungsstatus via invoicd"
-    - ref: tool://invoicd/summarize_billing_month
-      mutates: false
-      max_sensitivity: internal
-      description: "summarize billing month via invoicd"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        Affiliated versus non-affiliated outcomes — the reportable comparison.

@@ -32,7 +32,10 @@
 
 use std::collections::BTreeMap;
 
-use agentplane::core::{Outcome, Skill, SkillDescriptor, SkillError, Tainted, Timestamp};
+use agentplane::core::{
+    DeadlineSpec, Justification, Outcome, Priority, Skill, SkillDescriptor, SkillError, Tainted,
+    TaskSpec, Timestamp,
+};
 use agentplane::runtime::StepCtx;
 use agentplane::tools::ToolId;
 use serde_json::{Value, json};
@@ -41,6 +44,30 @@ use serde_json::{Value, json};
 const CRITICAL_SECS: i64 = 30 * 60;
 /// Under this much, `WARNING`.
 const WARNING_SECS: i64 = 2 * 60 * 60;
+
+/// Who is asked to look at a breached Frist.
+///
+/// The desk that answers for MaKo traffic. Named here rather than in a manifest
+/// because this specialist's conduct is Rust — and checked against
+/// `policy/agentd.cedar` by a test, exactly as a manifest's audiences are: a row
+/// whose audience the policy refuses is worse than no row.
+const TRIAGE_AUDIENCE: &str = "marktkommunikation";
+
+/// Who the row widens to when nobody answers it.
+///
+/// A breach row gates nothing — the Frist has already passed — so expiring it
+/// would delete the delivery of something correctly detected. It escalates
+/// instead, and the original audience stays eligible.
+const TRIAGE_ESCALATION: &str = "mako-operations";
+
+/// The obligation a breach row is bounded by, and how long it runs.
+///
+/// One Werktag, on mako's own BDEW calendar — the same table the Frist that was
+/// missed was computed against, so the window to answer for a missed Frist
+/// cannot land on a day the Frist itself would have skipped.
+const TRIAGE_OBLIGATION: &str = "deadline-breach-triage";
+/// Werktage the triage row runs for.
+const TRIAGE_WERKTAGE: u64 = 1;
 
 /// Deadline triage for `de.obs.deadline.approaching`, `de.mako.aperak.timeout`
 /// and `de.mako.process.failed`.
@@ -53,6 +80,12 @@ impl DeadlineTriage {
     pub const CAPABILITY: &'static str = "deadline.alert";
     /// The skill name, matching `metadata.name`.
     pub const NAME: &'static str = "deadline-alert-agent";
+    /// Who is asked to look at a breached Frist. Re-exported from the module
+    /// constant so a test can check it against the Cedar set the way a
+    /// manifest's audiences are checked.
+    pub const TRIAGE_AUDIENCE: &'static str = super::deadline::TRIAGE_AUDIENCE;
+    /// Who the row widens to when nobody answers it.
+    pub const TRIAGE_ESCALATION: &'static str = super::deadline::TRIAGE_ESCALATION;
 
     /// The skill holds nothing — no catalogue, no transport.
     /// `StepCtx::call_tool` dispatches through the plane's own catalogue, the
@@ -278,19 +311,95 @@ impl Skill for DeadlineTriage {
         // label rather than being promoted on the way through.
         let trigger = input.peek().clone();
 
-        Ok(Outcome::done(overdue.map(|_| {
-            json!({
-                "deadline_status":  worst.as_str(),
-                "at_risk_count":    classified.len(),
-                "unclassifiable":   unclassifiable,
-                // `true` means obsd returned a full batch: at least the cap was
-                // waiting, never that the cap was all there was.
-                "truncated":        saturated,
-                "by_partner_mp_id": by_partner,
-                "processes":        classified,
-                "trigger":          trigger,
+        let answer = json!({
+            "deadline_status":  worst.as_str(),
+            "at_risk_count":    classified.len(),
+            "unclassifiable":   unclassifiable,
+            // `true` means obsd returned a full batch: at least the cap was
+            // waiting, never that the cap was all there was.
+            "truncated":        saturated,
+            "by_partner_mp_id": by_partner,
+            "processes":        classified,
+            "trigger":          trigger,
+        });
+
+        // **A breach reaches a person.**
+        //
+        // Every model-backed specialist that can report a terminal finding
+        // declares an `oversight.triage` rule, and a `plane::` test refuses one
+        // that cannot. This one could not declare it — agentplane refuses
+        // `oversight` on a manifest with no `execution` block — so the check
+        // exempted coded specialists on the stated assumption that they call
+        // `open_task` instead. Nothing verified the assumption, and this skill
+        // did not: a `BREACH` went into the journal, into the decision webhook,
+        // and in front of nobody.
+        //
+        // Opened rather than awaited. The Frist has already passed, so there is
+        // no decision left to gate: `task` would suspend a run per breach and
+        // buy nothing. `open_task` files the row and the run concludes.
+        if worst == Severity::Breach {
+            self.open_breach_row(cx, &classified, unclassifiable)
+                .await?;
+        }
+
+        Ok(Outcome::done(overdue.map(|_| answer)))
+    }
+}
+
+impl DeadlineTriage {
+    /// File the worklist row a breach earns.
+    ///
+    /// Both halves are journaled effects: the obligation resolves through
+    /// mako's own Werktage calendar and is recorded with its digest, and the
+    /// row's id is derived from the effect key — so a resumed run addresses the
+    /// row it already opened rather than filing a second one.
+    async fn open_breach_row(
+        &self,
+        cx: &mut StepCtx<'_>,
+        classified: &[Value],
+        unclassifiable: usize,
+    ) -> Result<(), SkillError> {
+        let breached: Vec<&Value> = classified
+            .iter()
+            .filter(|row| {
+                row.get("severity").and_then(Value::as_str) == Some(Severity::Breach.as_str())
             })
-        })))
+            .collect();
+
+        // The obligation the row is bounded by. `open_task` reads its instant,
+        // so it has to exist before the row does.
+        cx.deadline(
+            TRIAGE_OBLIGATION,
+            &DeadlineSpec::new("working-days", json!({ "n": TRIAGE_WERKTAGE })),
+            None,
+        )
+        .await
+        .map_err(|e| SkillError::Other(format!("register the triage obligation: {e}")))?;
+
+        let summary = format!(
+            "{} MaKo process(es) are past their Frist{}. The window has closed, so this row              reports what was missed rather than gating anything.",
+            breached.len(),
+            if unclassifiable > 0 {
+                format!(", and {unclassifiable} more carry a deadline mako could not read")
+            } else {
+                String::new()
+            }
+        );
+
+        let spec = TaskSpec::new(
+            "deadline.breach",
+            Justification::new(summary, json!({ "breached": breached })),
+            TRIAGE_OBLIGATION,
+        )
+        .role(TRIAGE_AUDIENCE)
+        .priority(Priority::Urgent)
+        .on_expiry(agentplane::core::OnExpiry::Escalate)
+        .escalate_to(TRIAGE_ESCALATION);
+
+        cx.open_task(&spec)
+            .await
+            .map_err(|e| SkillError::Other(format!("open the breach triage row: {e}")))?;
+        Ok(())
     }
 }
 

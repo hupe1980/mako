@@ -224,9 +224,7 @@ use mako_engine::{
     marktrolle::{DeploymentRoles, LicensingError, Marktrolle, resolve_role},
     metrics::EngineMetrics,
     registry::ProcessRegistry as _,
-    types::{
-        BikoId, BillingPeriod, BkvId, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator,
-    },
+    types::{BikoId, BillingPeriod, MaLo, MarktpartnerCode, MeLo, MessageRef, Pruefidentifikator},
     version::WorkflowId,
     workflow::OccupiesBusinessKey as _,
 };
@@ -249,8 +247,10 @@ use mako_gpke::{
 };
 use mako_invoic::InvoicCommand;
 use mako_mabis::{
-    BillingCommand, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID,
-    IFTSTA_PIDS as MABIS_IFTSTA_PIDS, MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL,
+    BillingCommand, Datenstatus, IFTSTA_ABWEISUNG_PID as MABIS_IFTSTA_ABWEISUNG_PID,
+    IFTSTA_DATENSTATUS_PIDS as MABIS_IFTSTA_DATENSTATUS_PIDS,
+    IFTSTA_PRUEFMITTEILUNG_PIDS as MABIS_IFTSTA_PRUEFMITTEILUNG_PIDS, MabisBillingWorkflow,
+    SzrVersion,
 };
 use mako_markt::repository::{
     NetzzugangAktion, NetzzugangAntrag, NetzzugangAntragTyp, NetzzugangStatus,
@@ -952,79 +952,152 @@ mod tests {
         }
     }
 
-    /// `mabis.abrechnung.einleiten` must spawn a new billing process
-    /// (`DispatchOutcome::Spawned`), not report `NotImplemented`.
+    /// The Bilanzierungsmonat that is open for filing today, so the tests do
+    /// not go stale as the calendar moves.
+    ///
+    /// A settlement accepts versions only inside its Erstaufschlag or clearing
+    /// window (Kap. 3.10 Tabelle 2), so a hard-coded month would start failing
+    /// the moment its KBKA closed. Two months back is inside the BKA clearing
+    /// window for every Summenzeitreihe in the table.
+    fn offener_bilanzierungsmonat() -> String {
+        let heute = time::OffsetDateTime::now_utc().date();
+        let mut d = heute.replace_day(1).expect("day 1 exists");
+        for _ in 0..2 {
+            d = d
+                .checked_sub(time::Duration::days(1))
+                .expect("date underflow")
+                .replace_day(1)
+                .expect("day 1 exists");
+        }
+        format!("{}-{:02}", d.year(), u8::from(d.month()))
+    }
+
+    fn mabis_einleiten_payload(version: &str) -> serde_json::Value {
+        serde_json::json!({
+            // SG10 CAV Z99 — BK-SZR (Kategorie B) auf Ebene Bilanzierungsgebiet.
+            "zeitreihe":          "Z99",
+            "mabis_zp_id":        "DE0001111222233334444555566667777",
+            "bilanzierungsmonat": offener_bilanzierungsmonat(),
+            "version":            version,
+            "biko_id":            "10YDE-VE-TRANSMIX",
+            "absender_mp_id":     "9900357000004",
+        })
+    }
+
+    /// `mabis.abrechnung.einleiten` must spawn a new settlement.
     #[tokio::test]
     async fn dispatch_mabis_einleiten_spawns_process() {
         let state = mabis_dispatch_state(&["BKV"]).await;
-        let payload = serde_json::json!({
-            "billing_period": "2025-09",
-            "bkv_id":         "4033872000022",
-            "biko_id":        "10YDE-VE-TRANSMIX",
-            "version":        "vorlaeufig",
-        });
-        let outcome = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-            .await
-            .expect("einleiten must succeed");
+        let outcome = dispatch_command(
+            &state,
+            "mabis.abrechnung.einleiten",
+            &mabis_einleiten_payload("20260101120001+00"),
+        )
+        .await
+        .expect("einleiten must succeed");
         assert!(
             matches!(outcome, DispatchOutcome::Spawned { .. }),
             "first einleiten must return Spawned; got: {outcome:?}"
         );
     }
 
-    /// Duplicate `einleiten` for the same BKV/period must be idempotent.
+    /// A settlement **accumulates** versions, so a second `einleiten` with a
+    /// higher version resumes the existing process rather than being refused.
     ///
-    /// The second call returns `Dispatched` (reuses the existing process)
-    /// rather than spawning a second one.
+    /// That is the whole point of the Clearingphase: more versions arrive.
     #[tokio::test]
-    async fn dispatch_mabis_einleiten_is_idempotent() {
+    async fn dispatch_mabis_einleiten_accumulates_versions() {
         let state = mabis_dispatch_state(&["BKV"]).await;
-        let payload = serde_json::json!({
-            "billing_period": "2025-09",
-            "bkv_id":         "4033872000022",
-            "biko_id":        "10YDE-VE-TRANSMIX",
-            "version":        "vorlaeufig",
-        });
-        dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-            .await
-            .expect("first einleiten");
-        let second = dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
-            .await
-            .expect("second einleiten must be idempotent");
-        assert!(
-            matches!(second, DispatchOutcome::Dispatched { .. }),
-            "duplicate einleiten must return Dispatched; got: {second:?}"
-        );
-    }
-
-    /// `mabis.abrechnung.daten-einreichen` must route to an existing process.
-    ///
-    /// Regression guard for F-001: `daten-einreichen` returned `NotImplemented`
-    /// before the dispatch arm was added.
-    #[tokio::test]
-    async fn dispatch_mabis_daten_einreichen_routes_to_process() {
-        let state = mabis_dispatch_state(&["BKV"]).await;
-        // Seed the process.
         dispatch_command(
             &state,
             "mabis.abrechnung.einleiten",
-            &serde_json::json!({
-                "billing_period": "2025-09",
-                "bkv_id":         "4033872000022",
-                "biko_id":        "10YDE-VE-TRANSMIX",
-                "version":        "vorlaeufig",
-            }),
+            &mabis_einleiten_payload("20260101120001+00"),
+        )
+        .await
+        .expect("first einleiten");
+        let second = dispatch_command(
+            &state,
+            "mabis.abrechnung.einleiten",
+            &mabis_einleiten_payload("20260101120002+00"),
+        )
+        .await
+        .expect("a higher version must be accepted");
+        assert!(
+            matches!(second, DispatchOutcome::Dispatched { .. }),
+            "a second version must resume the settlement; got: {second:?}"
+        );
+    }
+
+    /// Kap. 3.8.2 — versions ascend, so a repeated one is refused.
+    #[tokio::test]
+    async fn dispatch_mabis_einleiten_refuses_a_repeated_version() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        let payload = mabis_einleiten_payload("20260101120001+00");
+        dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+            .await
+            .expect("first einleiten");
+        assert!(
+            dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+                .await
+                .is_err(),
+            "the same version twice is a filing error, not a redelivery"
+        );
+    }
+
+    /// An unknown `zeitreihe` code is refused rather than defaulted: eleven
+    /// Summenzeitreihen share PID 13003's activation codes and five of them owe
+    /// no answer, so a wrong guess invents or drops an obligation.
+    #[tokio::test]
+    async fn dispatch_mabis_einleiten_refuses_an_unknown_zeitreihe() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        let mut payload = mabis_einleiten_payload("20260101120001+00");
+        payload["zeitreihe"] = serde_json::json!("ZZZ");
+        assert!(
+            dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+                .await
+                .is_err()
+        );
+    }
+
+    /// A version that is not an Erstellungszeitpunkt is refused: it is the key
+    /// the BIKO matches on, and a repaired one no longer matches.
+    #[tokio::test]
+    async fn dispatch_mabis_einleiten_refuses_a_non_timestamp_version() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        for bad in ["1", "vorlaeufig", "2026010112000100"] {
+            let payload = mabis_einleiten_payload(bad);
+            assert!(
+                dispatch_command(&state, "mabis.abrechnung.einleiten", &payload)
+                    .await
+                    .is_err(),
+                "version {bad:?} must be refused"
+            );
+        }
+    }
+
+    /// `mabis.abrechnung.daten-einreichen` must route to the settlement.
+    #[tokio::test]
+    async fn dispatch_mabis_daten_einreichen_routes_to_process() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
+        dispatch_command(
+            &state,
+            "mabis.abrechnung.einleiten",
+            &mabis_einleiten_payload("20260101120001+00"),
         )
         .await
         .expect("einleiten");
-        // Send positive Prüfmitteilung.
         let outcome = dispatch_command(
             &state,
             "mabis.abrechnung.daten-einreichen",
             &serde_json::json!({
-                "bkv_id":         "4033872000022",
-                "billing_period": "2025-09",
-                "reject":         false,
+                "mabis_zp_id":        "DE0001111222233334444555566667777",
+                "bilanzierungsmonat": offener_bilanzierungsmonat(),
+                "version":            "20260101120001+00",
+                "pid":                21005,
+                // BK-SZR (Kategorie B) is decided by `E_0064`, whose
+                // Zustimmung is `A03`. The code is named, not derived from a
+                // boolean — see `Zeitreihe::pruef_ebd`.
+                "antwortcode":        "A03",
             }),
         )
         .await
@@ -1035,43 +1108,57 @@ mod tests {
         );
     }
 
-    /// `mabis.abrechnung.begleichen` must route Datenstatus to an existing process.
-    ///
-    /// Regression guard for F-001: `begleichen` returned `NotImplemented` before
-    /// the dispatch arm was added.
+    /// A Prüfmitteilung may only ride an outbound PID (21000/21001/21005).
     #[tokio::test]
-    async fn dispatch_mabis_begleichen_routes_to_process() {
+    async fn dispatch_mabis_daten_einreichen_refuses_an_inbound_pid() {
         let state = mabis_dispatch_state(&["BKV"]).await;
-        let bkv = "4033872000022";
-        let period = "2025-09";
-        // Seed + advance to PruefmitteilungSent.
         dispatch_command(
             &state,
             "mabis.abrechnung.einleiten",
-            &serde_json::json!({
-                "billing_period": period,
-                "bkv_id":         bkv,
-                "biko_id":        "10YDE-VE-TRANSMIX",
-                "version":        "vorlaeufig",
-            }),
+            &mabis_einleiten_payload("20260101120001+00"),
         )
         .await
         .expect("einleiten");
+        for pid in [21002, 21003, 21004] {
+            assert!(
+                dispatch_command(
+                    &state,
+                    "mabis.abrechnung.daten-einreichen",
+                    &serde_json::json!({
+                        "mabis_zp_id":        "DE0001111222233334444555566667777",
+                        "bilanzierungsmonat": offener_bilanzierungsmonat(),
+                        "version":            "20260101120001+00",
+                        "pid":                pid,
+                    }),
+                )
+                .await
+                .is_err(),
+                "PID {pid} is inbound"
+            );
+        }
+    }
+
+    /// `mabis.abrechnung.begleichen` closes the clearing window.
+    ///
+    /// It does **not** set a Datenstatus: that is assigned exclusively by the
+    /// BIKO (Kap. 3.8.3) and arrives as IFTSTA 21003/21004.
+    #[tokio::test]
+    async fn dispatch_mabis_begleichen_routes_to_process() {
+        let state = mabis_dispatch_state(&["BKV"]).await;
         dispatch_command(
             &state,
-            "mabis.abrechnung.daten-einreichen",
-            &serde_json::json!({ "bkv_id": bkv, "billing_period": period, "reject": false }),
+            "mabis.abrechnung.einleiten",
+            &mabis_einleiten_payload("20260101120001+00"),
         )
         .await
-        .expect("daten-einreichen");
-        // Now receive Datenstatus → Settled.
+        .expect("einleiten");
         let outcome = dispatch_command(
             &state,
             "mabis.abrechnung.begleichen",
             &serde_json::json!({
-                "bkv_id":         bkv,
-                "billing_period": period,
-                "data_status":    "abgerechnete_daten",
+                "mabis_zp_id":        "DE0001111222233334444555566667777",
+                "bilanzierungsmonat": offener_bilanzierungsmonat(),
+                "lauf":               "bka",
             }),
         )
         .await

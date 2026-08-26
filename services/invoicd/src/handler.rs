@@ -290,8 +290,26 @@ async fn extract(
         }
     };
 
-    let rechnung: Rechnung = serde_json::from_value(rechnung_json.clone())
-        .map_err(|e| format!("Rechnung does not deserialize as BO4E: {e}"))?;
+    // The BO4E gate, on its received-document setting. Stages 1–3 refuse: a
+    // document that will not type — a wrong `_typ`, an out-of-schema
+    // `rechnungstyp` decoding to `Unknown` — has nothing for the checker to
+    // adjudicate, and dead-lettering it is the honest outcome.
+    //
+    // The BO4E *rules* deliberately do not refuse here. A `gesamtbrutto` that
+    // is not net plus tax is a **disputable** invoice, and the market's answer
+    // to it is a REMADV naming the defect — which `invoic-checker` stage 3
+    // already produces as a finding. Refusing to parse would replace that
+    // answer with silence and a dead letter for an operator to find.
+    let (rechnung, bo4e_failures) =
+        mako_markt::bo4e::decode_received::<Rechnung>(rechnung_json.clone())
+            .map_err(|e| format!("Rechnung is not a readable BO4E document: {e}"))?;
+    for f in &bo4e_failures {
+        warn!(
+            %process_id, pid = route.pid, path = %f.path, reason = %f.message,
+            "invoicd: inbound Rechnung breaks a BO4E-stated rule — the check stages \
+             below turn it into a finding, and the finding into a dispute"
+        );
+    }
 
     let malo_id = rechnung
         .marktlokation

@@ -547,6 +547,7 @@ pub fn all() -> &'static [&'static str] {
         // de.markt.*
         markt::MALO_UPDATED,
         markt::MALO_STAMMDATEN_GEAENDERT,
+        markt::STAMMDATEN_GEAENDERT,
         markt::MELO_UPDATED,
         markt::PARTNER_UPDATED,
         markt::NB_CONTRACT_UPDATED,
@@ -590,6 +591,7 @@ pub fn all() -> &'static [&'static str] {
         accounting::ERSTATTUNG_FAELLIG,
         accounting::INTEREST_CHARGED,
         accounting::EEG_PAYOUT_REJECTED,
+        accounting::JAHRESABSCHLUSS_ABGESCHLOSSEN,
         accounting::SPERRANDROHUNG,
         accounting::SPERRANKUENDIGUNG,
         accounting::SPERRAUFTRAG,
@@ -597,6 +599,9 @@ pub fn all() -> &'static [&'static str] {
         accounting::ABWENDUNG_ANGEBOTEN,
         accounting::ABWENDUNG_GEBROCHEN,
         accounting::BANKRUECKLAST,
+        accounting::SEPA_COLLECTION_REJECTED,
+        accounting::SEPA_REVERSAL_ISSUED,
+        accounting::PAYEE_VERIFICATION_MISMATCH,
         // de.netzbilanz.*
         netzbilanz::INVOIC_DRAFTED,
         netzbilanz::INVOIC_DISPATCHED,
@@ -612,6 +617,8 @@ pub fn all() -> &'static [&'static str] {
         messwert::READING_CONFIRMATION_OVERDUE,
         messwert::READING_DELIVERY_OVERDUE,
         messwert::READING_DELIVERY_RESUMED,
+        messwert::ESA_TYP2_DELIVERY_OVERDUE,
+        messwert::ESA_TYP2_DELIVERY_RESUMED,
         messwert::CLS_COMPLIANCE_ISSUE,
         messwert::CLS_COMPLIANCE_RESOLVED,
         messwert::SMGW_CERT_EXPIRY_WARNING,
@@ -621,6 +628,7 @@ pub fn all() -> &'static [&'static str] {
         tarif::ANGEBOT_ABGELAUFEN,
         tarif::EPEX_MISSING,
         // de.vertrag.*
+        vertrag::ABGESCHLOSSEN,
         vertrag::AKTIV,
         vertrag::GEKUENDIGT,
         vertrag::KUENDIGUNG,
@@ -808,6 +816,49 @@ mod tests {
     /// anywhere outside this crate must carry the marker. The reverse does not
     /// hold — `ALOCAT_MISSING` is referenced by a *subscriber* and is still
     /// phantom, because subscribing is not emitting.
+    /// **Every declared type is in the catalogue.**
+    ///
+    /// `all()` is what a subscriber is checked against, what an inventory
+    /// counts, and what a doc table is generated from. A `pub const` missing
+    /// from it is a published type nothing can subscribe to: `agentd`'s
+    /// subscription guard refuses a pattern that matches no catalogue entry, so
+    /// a specialist that should watch it *cannot be wired* — and the refusal
+    /// names the pattern, which reads like a typo rather than like a gap here.
+    ///
+    /// Three of accountingd's own emitted types were in that state:
+    /// `sepa.collection-rejected`, `sepa.reversal-issued` and
+    /// `payee.verification-mismatch`. All three passed the phantom check, which
+    /// asks the opposite question — *is this referenced anywhere* — and cannot
+    /// see a constant that is emitted and uncatalogued.
+    #[test]
+    fn every_declared_constant_is_in_the_catalogue() {
+        let src = include_str!("lib.rs");
+        let catalog = src.split("#[cfg(test)]").next().expect("catalog section");
+
+        let declared: Vec<&str> = catalog
+            .lines()
+            .filter_map(|line| {
+                let rest = line.trim().strip_prefix("pub const ")?;
+                let (_, value) = rest.split_once("= \"")?;
+                value.split('"').next()
+            })
+            .filter(|v| v.starts_with("de."))
+            .collect();
+
+        assert!(
+            declared.len() > 80,
+            "parsed only {} constants — the parser broke, not the catalog",
+            declared.len()
+        );
+
+        let missing: Vec<&&str> = declared.iter().filter(|v| !all().contains(v)).collect();
+        assert!(
+            missing.is_empty(),
+            "these event types are declared and absent from `all()`, so nothing can \
+             subscribe to them and no inventory counts them: {missing:#?}"
+        );
+    }
+
     #[test]
     fn unreferenced_constants_are_marked_phantom() {
         let src = include_str!("lib.rs");

@@ -32,13 +32,13 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 
 // ── BO4E validation helpers ──────────────────────────────────────────────────────────
 
-/// Validate and normalise a `Marktlokation` payload (L4 hard cut).
+/// Validate and normalise a `Marktlokation` payload through the BO4E gate.
 ///
-/// 1. Auto-inject `_typ: "MARKTLOKATION"` when absent.
-/// 2. Reject 422 if `_typ` is present but does not equal `MARKTLOKATION`.
-/// 3. Deserialise as `rubo4e::current::Marktlokation`, which types every field.
-/// 4. Reject 422 on any out-of-schema enum anywhere in the tree
-///    (`Bo4eStrict::ensure_known_enums`), with the offending JSON-paths.
+/// `mako_markt::bo4e::decode` runs the four stages every BO4E endpoint runs —
+/// `_typ` (injected when absent, refused when it names another BO), typed
+/// deserialization, strict enums with their JSON-paths, and the BO4E-stated
+/// rules (for a `Marktlokation`: at most one of `lokationsadresse`,
+/// `geoadresse`, `katasterinformation`).
 ///
 /// The caller stores the returned **value**, not the input: `PgMaloRepository`
 /// serialises the BO itself and derives the typed columns from the same object,
@@ -48,36 +48,9 @@ use super::{Claims, IfMatch, IntoMdmResponse as _, etag, malformed_if_match, par
 /// Non-standard keys (e.g. `fallgruppenzuordnung`) are preserved through the
 /// `_additional` extension map (serde `flatten`) — round-trip is lossless.
 fn normalize_marktlokation(
-    mut data: serde_json::Value,
+    data: serde_json::Value,
 ) -> Result<Marktlokation, (StatusCode, serde_json::Value)> {
-    if let Some(obj) = data.as_object_mut() {
-        obj.entry("_typ")
-            .or_insert_with(|| serde_json::json!("MARKTLOKATION"));
-    }
-    if let Some(typ) = data.get("_typ").and_then(|v| v.as_str())
-        && typ.to_uppercase() != "MARKTLOKATION"
-    {
-        return Err((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("expected _typ MARKTLOKATION, got '{typ}'") }),
-        ));
-    }
-    let malo: Marktlokation = serde_json::from_value(data).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("invalid Marktlokation payload: {e}") }),
-        )
-    })?;
-    // Strict enum gate: serde is intentionally lenient (unknown wire values decode
-    // to `Unknown`), so reject any out-of-schema enum anywhere in the tree here —
-    // one recursive call replaces per-field `== Unknown` checks and reports paths.
-    rubo4e::Bo4eStrict::ensure_known_enums(&malo).map_err(|e| {
-        (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            serde_json::json!({ "error": format!("Marktlokation has out-of-schema enum values: {e}") }),
-        )
-    })?;
-    Ok(malo)
+    mako_markt::bo4e::decode(data).map_err(|e| (StatusCode::UNPROCESSABLE_ENTITY, e.to_json()))
 }
 
 /// Deserialise stored JSONB as `Marktlokation`. Returns `None` and logs an

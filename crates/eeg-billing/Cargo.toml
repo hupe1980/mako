@@ -27,6 +27,9 @@ bo4e    = ["dep:rubo4e"]
 [dev-dependencies]
 proptest = "1"
 time = { workspace = true, features = ["macros"] }
+# Test-only: the BO4E gate (see grid-billing for the reasoning, including why
+# this is path-only rather than `workspace = true`).
+mako-markt = { path = "../mako-markt" }
 
 [[test]]
 name = "prop_tests"

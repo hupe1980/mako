@@ -1,75 +1,68 @@
-//! `mako-mabis` — MABIS (Marktprozesse für Bilanzkreis- und
-//! Aggregationsverantwortliche) process engine for German electricity market
-//! balance group accounting (BDEW MaKo).
+//! `mako-mabis` — MaBiS, the German electricity balance-group settlement
+//! (BNetzA **BK6-24-174 Anlage 3**).
 //!
-//! ## Process family
+//! Strom only: gas balances through GaBi Gas, on the Gastag and against a
+//! Marktgebiet.
 //!
-//! MABIS governs the billing and settlement processes for
-//! Bilanzkreisverantwortliche (BKV) in the German **electricity** balancing
-//! market. There is no gas component in MABIS.
+//! # Three shapes MaBiS does not share with the other process families
 //!
-//! | Process | PID | Status |
-//! |---|---|---|
-//! | Bilanzkreisabrechnung Strom | **13003** | ✅ Implemented |
-//! | Clearingliste DZR (BIKO → NB/ÜNB) | **55069** | ✅ Implemented |
-//! | Clearingliste BAS (BIKO → BKV) | **55070** | ✅ Implemented |
-//! | Lieferantenclearingliste (NB → LF) | **55065** | ✅ Implemented |
-//! | Summenzeitreihe aggregation (ÜNB/NB → BIKO) | **13003** | ✅ `summenzeitreihe` |
+//! ## There is no Prüfmitteilung deadline
 //!
-//! > **PID 13003** is the MSCONS Summenzeitreihe PID (`"Summenzeitreihen und
-//! > Ausfallarbeitssummen"`), confirmed in MSCONS AHB 2.4c/2.5 (all FV versions)
-//! > and the BDEW MSCONS AHB 3.1g PDF §5 page 14. The `edi-energy` MSCONS
-//! > profiles contain full segment rules for PID 13003 from FV2024-04-01 onward.
+//! A Summenzeitreihe arrives and a Prüfmitteilung goes back, so it is natural
+//! to hang a response Frist off the arrival the way GPKE and WiM do. The
+//! Festlegung says otherwise twice: Kap. 9.8.2 Nr. 1 leaves the Frist cell
+//! **empty** and says the receiving party „kann" answer, and Kap. 13.8.2 — the
+//! section a 1-Werktag deadline is usually attributed to — defines no answer at
+//! all; its two rows are the **BIKO's own** dispatch dates.
 //!
-//! ## PIDs 13002–13028 belong to Messwesen, not MABIS
+//! What bounds a Prüfmitteilung is the clearing window of Kap. 3.10 Tabelle 2,
+//! a date range on the Bilanzierungsmonat rather than a countdown from an
+//! arrival. See [`fristen`].
 //!
-//! The `edi-energy` MSCONS AHB profiles contain PIDs 13002–13028. These are
-//! **Messwerten-PIDs** (meter data exchange) — e.g. 13002 "Messwerte
-//! Zählerstand Gas", 13017 "Messwerte Zählerstand Strom" — and belong to the
-//! Messwesen process family, not to MABIS billing. They must not be registered
-//! under any `"mabis-billing"` workflow identifier.
+//! ## A settlement is a sequence of versions
 //!
-//! ## Architecture
+//! Kap. 3.8.2: versions ascend „über die gesamte BKA". One MaBiS-Zählpunkt in
+//! one Bilanzierungsmonat receives a stream of them, each checked, corrected
+//! and superseded until the window closes. The version is the
+//! **Erstellungszeitpunkt** — 17 characters in IFTSTA `SG4 RFF+AUU` and MSCONS
+//! `SG6 DTM+293` — and it is the key both ends match on.
 //!
-//! Each BDEW process variant is a separate [`mako_engine::workflow::Workflow`]
-//! implementation. This crate contains **only pure domain logic** — no I/O,
-//! no EDIFACT parsing, no network calls.
+//! ## 55062 / 55063 / 55064 are generic codes
 //!
-//! ## Key difference from supplier-switch processes
+//! Eleven Summenzeitreihen share them and 55064 answers all of them out of
+//! twelve different Entscheidungsbäume; six owe an answer and five do not. The
+//! discriminator is `SG10 CCI+++ZB4` / `CAV` DE 7111 plus `SG10 CCI+6`
+//! ([`zeitreihen::zeitreihe_aus_cav`], [`zp_lifecycle::ZpSerie::from_wire`]).
 //!
-//! | Aspect | GPKE / WiM / GeLi Gas | MABIS |
-//! |---|---|---|
-//! | Trigger | Single inbound EDIFACT | **Abrechnungssummenzeitreihe from BIKO** |
-//! | Location scope | Single MeLo / MaLo | **Many MaLo streams per Bilanzkreis** |
-//! | Message types | UTILMD + APERAK | **MSCONS Summenzeitreihen + Prüfmitteilung** |
-//! | Counterparty | NB / LFA | **BIKO (Bilanzkoordinator)** |
-//! | Response Frist | 24 h / 5 Wkt / 10 Wkt | **1 Werktag (Prüfmitteilung, BK6-24-174 §13.8)** |
+//! # Workflows
 //!
-//! ## Multi-stream aggregation note
+//! | Workflow | PIDs |
+//! |---|---|
+//! | `mabis-billing` | MSCONS 13003 · 13020 · 13023; IFTSTA 21000–21005 |
+//! | `mabis-profile` | MSCONS 13010–13012; ORDERS 17211 |
+//! | `mabis-clearingliste` | UTILMD 55067 · 55069 · 55070 · 55073 |
+//! | `mabis-listenabgleich` | UTILMD 55065/55066 · 55195/55196 · 55201/55202 · 55223/55224 |
+//! | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 |
+//! | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
 //!
-//! In a full production implementation, the BIKO's Abrechnungssummenzeitreihe
-//! already contains the pre-aggregated billing totals for the billing period.
-//! No client-side aggregation is required before issuing `ReceiveSummenzeitreihe`.
-//! Any per-MaLo MSCONS meter data streams are managed separately outside this
-//! workflow (e.g., via `ProjectionRunner::run_all_streams` in a read-model).
+//! # The Kapitel-17 series expire on 30.09.2026
 //!
-//! ## Command construction example
+//! BK6-23-241 Tenorziffer 5 repeals MaBiS Anlage 1 Kapitel 17 with the end of
+//! **30.09.2026**. Kap. 17.1 and 17.3 continue as the „Anlage zur BilAReM";
+//! Kap. **17.2** (Bilanzkreismonitoring, tägliche AAÜZ — PIDs 55197/55198) and
+//! Kap. **17.3.2.1** do not. [`zeitreihen::Familie::endet_am`] and
+//! [`zp_lifecycle::ZpSerie::endet_am`] carry the date.
 //!
-//! ```rust,ignore
-//! use mako_mabis::{MabisBillingWorkflow, BillingCommand, BillingVersion};
-//! use mako_engine::types::{BikoId, BillingPeriod, BkvId, MessageRef, Pruefidentifikator};
+//! # Architecture
 //!
-//! // Called from the EDIFACT adapter when an inbound MSCONS Summenzeitreihe
-//! // from the BIKO is validated and decoded.
-//! let cmd = BillingCommand::ReceiveSummenzeitreihe {
-//!     pid: Pruefidentifikator::new(13003).expect("13003 is valid"),
-//!     billing_period: BillingPeriod::new("2025-09"),
-//!     bkv_id: BkvId::new("4033872000022"),
-//!     biko_id: BikoId::new("10YDE-VE-TRANSMIX"),
-//!     version: BillingVersion::Vorlaeufig,
-//!     message_ref: MessageRef::new("MSCONS-BKA-2025-09-001"),
-//! };
-//! process.execute(cmd).await?;
+//! Each BDEW process variant is a separate [`mako_engine::workflow::Workflow`].
+//! This crate contains **only pure domain logic** — no I/O, no EDIFACT parsing,
+//! no clock.
+//!
+//! # Example
+//!
+//! ```sh
+//! cargo run --example mabis_bilanzkreisabrechnung -p mako-mabis
 //! ```
 
 #![deny(unsafe_code)]
@@ -88,9 +81,12 @@
 pub mod anforderung;
 pub mod bilanzkreisabrechnung;
 pub mod clearingliste;
+pub mod fristen;
 pub mod ids;
 pub mod listenabgleich;
+pub mod profile;
 pub mod summenzeitreihe;
+pub mod zeitreihen;
 pub mod zp_lifecycle;
 
 pub use anforderung::{
@@ -99,39 +95,68 @@ pub use anforderung::{
     WORKFLOW_NAME as ANFORDERUNG_WORKFLOW_NAME,
 };
 pub use bilanzkreisabrechnung::{
-    BillingCommand, BillingData, BillingEvent, BillingProjection, BillingRecord, BillingRecordData,
-    BillingState, BillingVersion, DataStatus, IFTSTA_DATENSTATUS_PID, IFTSTA_PIDS,
-    MabisBillingWorkflow, PRUEFMITTEILUNG_DEADLINE_LABEL, WORKFLOW_NAME as BILLING_WORKFLOW_NAME,
+    AUSFALLARBEIT_PIDS, BillingCommand, BillingData, BillingEvent, BillingProjection,
+    BillingRecord, BillingState, Datenstatus, IFTSTA_ABWEISUNG_PID, IFTSTA_DATENSTATUS_PIDS,
+    IFTSTA_PIDS, IFTSTA_PRUEFMITTEILUNG_PIDS, InvalidSzrVersion, MabisBillingWorkflow,
+    Pruefergebnis, RFF_QUALIFIER_VERSION, STS_KATEGORIE_DATENSTATUS, SUMMENZEITREIHE_PID,
+    SzrVersion, VersionRecord, WORKFLOW_NAME as BILLING_WORKFLOW_NAME, ist_zeitreihen_pid,
 };
 pub use clearingliste::{
     CLEARINGLISTE_PIDS, ClearinglisteCommand, ClearinglisteData, ClearinglisteEvent,
     ClearinglisteKind, ClearinglisteState, MabisClearinglisteWorkflow,
     WORKFLOW_NAME as CLEARINGLISTE_WORKFLOW_NAME,
 };
+pub use fristen::{
+    Abrechnungslauf, BIKO_DATENSTATUS_WERKTAGE, BIKO_WEITERLEITUNG_WERKTAGE, Bilanzierungsmonat,
+    CLEARING_ENDE_LABEL, Fenster, Phase, Stichtag,
+};
 pub use listenabgleich::{
     LISTEN_FAMILIEN, ListenFamilie, ListenTyp, ListenabgleichCommand, ListenabgleichData,
     ListenabgleichEvent, ListenabgleichState, MabisListenabgleichWorkflow,
     WORKFLOW_NAME as LISTENABGLEICH_WORKFLOW_NAME, all_pids as listenabgleich_pids,
 };
+pub use zeitreihen::{
+    Aggregationsebene, Bezugszeitraum, CCI_BEZEICHNUNG_SUMMENZEITREIHE,
+    CCI_KLASSENTYP_VERANTWORTLICHER, Familie, KAPITEL_17_2_ENDE, Kategorie, Messtechnik, Rolle,
+    UnbekannteKategorie, Zeitreihe, aggregationsverantwortung, alle as alle_zeitreihen,
+    cav_aus_zeitreihe, cci_aus_rolle, rolle_aus_cci, zeitreihe_aus_cav,
+};
 // Canonical balance-group topology IDs (defined in `ids`).
+pub use anforderung::{ABLEHNUNG_PID, all_pids as anforderung_pids};
 pub use ids::{BilanzierungsgebietId, BilanzkreisId, InvalidMabisZaehlpunkt, MabisZaehlpunktId};
+pub use profile::{
+    Bilanzierungsverfahren, ERSTLIEFERUNG_WERKTAGE, MabisProfilWorkflow, PROFIL_PIDS,
+    ProfilCommand, ProfilData, ProfilEvent, ProfilState, Profilart, REKLAMATION_EBD,
+    REKLAMATION_PID, WORKFLOW_NAME as PROFIL_WORKFLOW_NAME, all_pids as profil_pids,
+};
 pub use summenzeitreihe::{
     MABIS_SLOT, SlotResolutionError, SumInterval, Summenzeitreihe, SummenzeitreiheBuilder,
 };
 pub use zp_lifecycle::{
-    MabisZpLifecycleWorkflow, WORKFLOW_NAME as ZP_LIFECYCLE_WORKFLOW_NAME, ZP_FAMILIEN, ZpFamilie,
-    ZpLifecycleCommand, ZpLifecycleData, ZpLifecycleEvent, ZpLifecycleState, ZpSerie, ZpVorgang,
-    all_pids as zp_lifecycle_pids, familie_for,
+    MabisZpLifecycleWorkflow, TAEGLICHE_AAUEZ_ENDE, WORKFLOW_NAME as ZP_LIFECYCLE_WORKFLOW_NAME,
+    ZP_FAMILIEN, ZpFamilie, ZpLifecycleCommand, ZpLifecycleData, ZpLifecycleEvent,
+    ZpLifecycleState, ZpSerie, ZpVorgang, all_pids as zp_lifecycle_pids, familie_for,
+    serien_fuer_pid,
 };
 
 // ── EngineModule ──────────────────────────────────────────────────────────────
 
-/// Engine module for the MABIS process family.
+/// Engine module for the MaBiS process family.
 ///
-/// Registers:
-/// - PID 13003, 13010–13012 (MSCONS Summenzeitreihe — Bilanzkreisabrechnung Strom)
-/// - PIDs 55065, 55069, 55070 (UTILMD Clearinglisten)
-/// - PIDs 21000–21005 (IFTSTA MaBiS Statusmeldungen)
+/// # PID ownership
+///
+/// | Workflow | PIDs |
+/// |---|---|
+/// | `mabis-billing` | MSCONS 13003 · 13020 · 13023; IFTSTA 21000–21005 |
+/// | `mabis-profile` | MSCONS 13010–13012; ORDERS 17211 |
+/// | `mabis-clearingliste` | UTILMD 55067 · 55069 · 55070 · 55073 |
+/// | `mabis-listenabgleich` | UTILMD 55065/55066 · 55195/55196 · 55201/55202 · 55223/55224 |
+/// | `mabis-zp-lifecycle` | UTILMD 55062–55064 · 55071/55072 · 55197–55214 |
+/// | `mabis-anforderung` | ORDERS 17201–17208 · 17210; ORDRSP 19204 |
+/// | `mabis-ausgleichsenergiepreis` | PRICAT 27001 |
+///
+/// Six of these were previously registered elsewhere or nowhere. See the module
+/// docs of each workflow for what the misplacement cost.
 pub struct MabisModule;
 
 impl mako_engine::builder::EngineModule for MabisModule {
@@ -142,6 +167,7 @@ impl mako_engine::builder::EngineModule for MabisModule {
     fn workflow_names(&self) -> &'static [&'static str] {
         &[
             "mabis-billing",
+            "mabis-profile",
             "mabis-clearingliste",
             "mabis-zp-lifecycle",
             "mabis-anforderung",
@@ -150,76 +176,91 @@ impl mako_engine::builder::EngineModule for MabisModule {
     }
 
     fn register_pids(&self, router: &mut mako_engine::pid_router::PidRouter) {
-        // PID 13003 — Bilanzkreisabrechnung Strom (MABIS electricity billing).
+        // ── MSCONS Summenzeitreihen ─────────────────────────────────────────
         //
-        // MSCONS AHB 2.4c/2.5 §5: "Summenzeitreihen und Ausfallarbeitssummen".
+        // 13003 „Summenzeitreihen und Ausfallarbeitssummen" (MSCONS AHB 3.1g §5)
+        // carries every BG-/BK-/LF-SZR, the DZÜ, the NZR and the
+        // Abrechnungssummenzeitreihe.
+        //
+        // 13020 Ausfallarbeitsüberführungszeitreihe and 13023
+        // Lieferantenausfallarbeitssummenzeitreihe are **MaBiS**, not
+        // Redispatch: the PID overview files both under the MaBiS
+        // Prozessbeschreibung and both carry the full Prüfmitteilung/
+        // Datenstatus cycle (IFTSTA 21000/21002–21005). They were routed to a
+        // Redispatch workflow, which had no settlement stream to put them in.
+        //
+        // 13022 stays with `mako-redispatch`: it is the TR-scharfe Einzel-
+        // zeitreihe the BTR and the NB reconcile, not a Summenzeitreihe.
+        // 13021 (meteorologische Ex-post-Daten) and 13026 (EEG-Überführungs-
+        // zeitreihe) are likewise not MaBiS.
+        //
         // Confirmed absent: PID 13001 does not exist in any MSCONS AHB version.
-        // Gas/WiM meter PIDs (13002, 13005–13009, 13013–13019, 13020–13028) are
-        // Messwesen or Redispatch PIDs and are registered in their respective crates.
-        // Exception: PIDs 13010/13011/13012 (normiertes Profil / Profilschar / TEP)
-        // are BK-Treue/MaBiS settlement profile data and are registered here.
-        router.register(13003, "mabis-billing");
-        router.register(13010, "mabis-billing");
-        router.register(13011, "mabis-billing");
-        router.register(13012, "mabis-billing");
+        router.register(bilanzkreisabrechnung::SUMMENZEITREIHE_PID, "mabis-billing");
+        for &pid in bilanzkreisabrechnung::AUSFALLARBEIT_PIDS {
+            router.register(pid, "mabis-billing");
+        }
 
-        // IFTSTA MaBiS PIDs 21000–21005.
+        // ── IFTSTA MaBiS Statusmeldungen 21000–21005 ────────────────────────
         //
-        // All MaBiS IFTSTA status messages are routed to the same
-        // `mabis-billing` workflow so they can be correlated with their
-        // billing stream by conversation ID (CI tag).
+        // All six route to `mabis-billing` so they correlate with their
+        // settlement stream by conversation ID. Their *direction* is not
+        // uniform: 21000/21001/21005 are this participant's own outbound
+        // Prüfmitteilungen, 21002 is the BIKO's Abweisung, and **both** 21003
+        // and 21004 carry a Datenstatus — 21003 to the NB/ÜNB, 21004 to the
+        // BKV. See `bilanzkreisabrechnung` for the table.
         //
-        // PID 21004 ("Statusmeldung vom BIKO an BKV/NB") is the Datenstatus
-        // confirmation that drives the PruefmitteilungSent → Settled transition.
-        // All other MaBiS IFTSTA PIDs are informational status notifications.
-        //
-        // Note: PID 21006 does not exist. PID 21007 is WiM Strom Teil 1 /
-        // WiM Gas and is registered in `mako-wim` (`wim-device-change`).
+        // PID 21006 does not exist. PID 21007 is WiM Strom Teil 1 / WiM Gas and
+        // is registered in `mako-wim` (`wim-device-change`).
         for &pid in bilanzkreisabrechnung::IFTSTA_PIDS {
             router.register(pid, "mabis-billing");
         }
 
-        // UTILMD Clearingliste PIDs (55065, 55069, 55070).
+        // ── Normierte Profile (Kap. 6.5 / 6.7) ──────────────────────────────
         //
-        // PIDs 55065 (Lieferantenclearingliste, NB → LF),
-        //      55069 (Clearingliste DZR, BIKO → NB/ÜNB),
-        //      55070 (Clearingliste BAS, BIKO → BKV)
-        // are all part of the MaBiS Clearingverfahren (BK6-24-174 Anlage 3).
-        for &pid in clearingliste::CLEARINGLISTE_PIDS {
-            router.register(pid, "mabis-clearingliste");
+        // MSCONS 13010/13011/13012 deliver the values; ORDERS 17211 is the LF's
+        // Reklamation (EBD E_0100). 17211 was filed with the Redispatch ORDERS
+        // codes, which left the delivery with no correction leg at all.
+        for pid in profile::all_pids() {
+            router.register(pid, profile::WORKFLOW_NAME);
         }
 
-        // MaBiS-Zählpunkt lifecycle — Aktivierung/Deaktivierung of the MaBiS-ZP,
-        // the Zuordnungsermächtigung and the AAÜZ/LF-AASZR series, together with
-        // their Antwort and Weiterleitung codes.
+        // ── Record-only UTILMD lists ────────────────────────────────────────
+        //
+        // 55067 Bilanzkreiszuordnungsliste, 55069 Clearingliste DZR,
+        // 55070 Clearingliste BAS, 55073 Liste der Profildefinitionen.
+        //
+        // 55065 is deliberately **not** here: it owes a 55066 Korrekturliste and
+        // belongs to `mabis-listenabgleich`.
+        for &pid in clearingliste::CLEARINGLISTE_PIDS {
+            router.register(pid, clearingliste::WORKFLOW_NAME);
+        }
+
+        // ── UTILMD lists with a correction leg ──────────────────────────────
+        //
+        // 55065/55066, 55195/55196, 55201/55202, 55223/55224.
+        for pid in listenabgleich::all_pids() {
+            router.register(pid, listenabgleich::WORKFLOW_NAME);
+        }
+
+        // ── MaBiS-Zählpunkt lifecycle ───────────────────────────────────────
         //
         // The PID set comes from `zp_lifecycle::ZP_FAMILIEN`, so the router and
-        // the state machine cannot disagree about which codes exist. See that
-        // module for the table and its BDEW source.
-        //
-        // These PIDs have no AHB profile entry yet, so their validation is
-        // vacuous; they are enumerated in `KNOWN_PROFILE_GAPS` and tracked by
-        // the AHB-coverage item in the roadmap.
+        // the state machine cannot disagree about which codes exist. 55062,
+        // 55063 and 55064 are **generic**: eleven series share them and 55064 is
+        // answered out of twelve different EBDs, so the workflow is keyed on the
+        // series and not on the PID.
         for pid in zp_lifecycle::all_pids() {
             router.register(pid, zp_lifecycle::WORKFLOW_NAME);
         }
 
-        // MaBiS Anforderungen — ORDERS 17201–17208. mako plays both sides:
-        // it requests lists as LF/BKV/NB/ÜNB and receives requests for lists it
-        // maintains as NB/ÜNB/BIKO.
+        // ── MaBiS Anforderungen ─────────────────────────────────────────────
         //
-        // No AHB profile entry yet; enumerated in `KNOWN_PROFILE_GAPS`.
-        for &pid in anforderung::ANFORDERUNG_PIDS {
+        // ORDERS 17201–17208 and 17210, plus the one Ablehnung the family has,
+        // ORDRSP 19204 (only 17207 can be refused). 17210 was filed with the
+        // Redispatch codes; it asks the ANB for the
+        // Lieferantenausfallarbeitsclearingliste, which is a MaBiS list.
+        for pid in anforderung::all_pids() {
             router.register(pid, anforderung::WORKFLOW_NAME);
-        }
-
-        // MaBiS Listenabgleich — list distribution with a correction leg
-        // (55195/55196, 55201/55202, 55223/55224). Distinct from
-        // `mabis-clearingliste`, whose lists are record-only.
-        //
-        // No AHB profile entry yet; enumerated in `KNOWN_PROFILE_GAPS`.
-        for pid in listenabgleich::all_pids() {
-            router.register(pid, listenabgleich::WORKFLOW_NAME);
         }
     }
 
@@ -228,7 +269,7 @@ impl mako_engine::builder::EngineModule for MabisModule {
         &[
             ProfileRequirement {
                 message_type: "MSCONS",
-                label: "MSCONS Summenzeitreihen (MABIS)",
+                label: "MSCONS Summenzeitreihen und Profile (MaBiS 13003, 13010–13012, 13020, 13023)",
             },
             ProfileRequirement {
                 message_type: "IFTSTA",
@@ -236,12 +277,99 @@ impl mako_engine::builder::EngineModule for MabisModule {
             },
             ProfileRequirement {
                 message_type: "UTILMD",
-                label: "UTILMD Clearingliste (MaBiS 55065 / 55069 / 55070)",
+                label: "UTILMD MaBiS-Listen und ZP-Lifecycle (55062–55073, 55195–55224)",
+            },
+            ProfileRequirement {
+                message_type: "ORDERS",
+                label: "ORDERS MaBiS Anforderungen (17201–17208, 17210, 17211)",
+            },
+            ProfileRequirement {
+                message_type: "ORDRSP",
+                label: "ORDRSP Ablehnung Ab-/Bestellung der Aggregationsebene (19204)",
             },
         ]
     }
 
     fn configure(&self) -> Result<(), String> {
+        // No two workflows may claim the same PID: the router is last-write-wins,
+        // so a collision would silently route a message to whichever module
+        // registered second.
+        let mut seen: Vec<(u32, &'static str)> = Vec::new();
+        let mut push = |pids: Vec<u32>, wf: &'static str| -> Result<(), String> {
+            for pid in pids {
+                if let Some((_, other)) = seen.iter().find(|(p, _)| *p == pid) {
+                    return Err(format!("PID {pid} claimed by both {other} and {wf}"));
+                }
+                seen.push((pid, wf));
+            }
+            Ok(())
+        };
+        let mut billing = vec![bilanzkreisabrechnung::SUMMENZEITREIHE_PID];
+        billing.extend_from_slice(bilanzkreisabrechnung::AUSFALLARBEIT_PIDS);
+        billing.extend_from_slice(bilanzkreisabrechnung::IFTSTA_PIDS);
+        push(billing, "mabis-billing")?;
+        push(profile::all_pids(), profile::WORKFLOW_NAME)?;
+        push(
+            clearingliste::CLEARINGLISTE_PIDS.to_vec(),
+            clearingliste::WORKFLOW_NAME,
+        )?;
+        push(listenabgleich::all_pids(), listenabgleich::WORKFLOW_NAME)?;
+        push(zp_lifecycle::all_pids(), zp_lifecycle::WORKFLOW_NAME)?;
+        push(anforderung::all_pids(), anforderung::WORKFLOW_NAME)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod module_tests {
+    use super::*;
+    use mako_engine::builder::EngineModule;
+
+    #[test]
+    fn no_two_workflows_claim_the_same_pid() {
+        MabisModule.configure().expect("PID ownership is disjoint");
+    }
+
+    #[test]
+    fn the_lieferantenclearingliste_is_not_record_only() {
+        assert!(!clearingliste::CLEARINGLISTE_PIDS.contains(&55065));
+        assert!(listenabgleich::all_pids().contains(&55065));
+        assert!(listenabgleich::all_pids().contains(&55066));
+    }
+
+    #[test]
+    fn the_mabis_ausfallarbeit_series_are_registered_here() {
+        // 13020 (AAÜZ) and 13023 (LF-AASZR) are MaBiS Summenzeitreihen with a
+        // full Prüfmitteilung/Datenstatus cycle, so they settle here; a
+        // Redispatch workflow has no settlement stream for them.
+        assert_eq!(bilanzkreisabrechnung::AUSFALLARBEIT_PIDS, &[13_020, 13_023]);
+    }
+
+    #[test]
+    fn the_redispatch_only_mscons_pids_stay_out() {
+        // 13021 meteorologische Daten, 13022 Einzelzeitreihe Ausfallarbeit,
+        // 13026 EEG-Überführungszeitreihe are not MaBiS.
+        let mut claimed = vec![bilanzkreisabrechnung::SUMMENZEITREIHE_PID];
+        claimed.extend_from_slice(bilanzkreisabrechnung::AUSFALLARBEIT_PIDS);
+        claimed.extend(profile::all_pids());
+        for pid in [13_021, 13_022, 13_026] {
+            assert!(!claimed.contains(&pid), "{pid} is not a MaBiS PID");
+        }
+    }
+
+    #[test]
+    fn the_hkn_register_ordrsp_codes_stay_out() {
+        // 19301/19302 belong to the Herkunftsnachweisregister exchange, not to
+        // MaBiS and not to Redispatch.
+        for pid in [19_301_u32, 19_302] {
+            assert!(!anforderung::all_pids().contains(&pid));
+        }
+    }
+
+    #[test]
+    fn every_workflow_name_is_prefixed() {
+        for name in MabisModule.workflow_names() {
+            assert!(name.starts_with("mabis-"), "{name}");
+        }
     }
 }

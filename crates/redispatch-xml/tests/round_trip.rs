@@ -12,10 +12,9 @@ use redispatch_xml::documents::activation::{
     TimeSeriesBusinessType, TimeSeriesStatus,
 };
 use redispatch_xml::documents::kaskade::{
-    AvailablePeriod, BiddingZoneDomain, CurveType, Kaskade, KaskadeBusinessType, KaskadeMarketRole,
-    KaskadeMeasureUnit, KaskadeParticipant, KaskadeReason, KaskadeReasonCode, KaskadeRoleType,
-    KaskadeStatus, KaskadeTimeInterval, KaskadeTimeSeries, KaskadeType, QuantityMeasureUnit,
-    StatusElement,
+    AvailablePeriod, CurveType, Kaskade, KaskadeBusinessType, KaskadeMeasureUnit, KaskadeReason,
+    KaskadeReasonCode, KaskadeRoleType, KaskadeStatus, KaskadeTimeInterval, KaskadeTimeSeries,
+    KaskadeType, StatusElement,
 };
 use redispatch_xml::documents::kostenblatt::{
     CostBusinessType, CostTimeSeries, Kostenblatt, KostenblattDocType, KostenblattProcessType,
@@ -32,14 +31,12 @@ use redispatch_xml::documents::stammdaten::{
     StammdatenReceiverRole, StammdatenSenderRole,
 };
 use redispatch_xml::documents::status_request::{
-    StatusRequestDocType, StatusRequestMarketDocument, StatusRequestReceiver,
-    StatusRequestReceiverMarketRole, StatusRequestReceiverRole, StatusRequestSender,
-    StatusRequestSenderMarketRole, StatusRequestSenderRole,
+    StatusRequestDocType, StatusRequestMarketDocument, StatusRequestReceiverRole,
+    StatusRequestSenderRole,
 };
 use redispatch_xml::documents::unavailability::{
-    UnavailabilityDocType, UnavailabilityMarketDocument, UnavailabilityMarketRole,
-    UnavailabilityMarketRoleType, UnavailabilityParticipant, UnavailabilityProcessType,
-    UnavailabilityTimeInterval, UnavailabilityTimePeriod,
+    UnavailabilityDocType, UnavailabilityMarketDocument, UnavailabilityMarketRoleType,
+    UnavailabilityProcessType, UnavailabilityTimeInterval,
 };
 use redispatch_xml::types::{
     AttrV, AttrVWithScheme, CodingScheme, ControlZone, Decimal3, Direction, DocumentId,
@@ -216,6 +213,7 @@ fn sample_activation_ts() -> ActivationTimeSeries {
 #[test]
 fn activation_document_round_trip() {
     let doc = ActivationDocument {
+        schedule_time_series: vec![],
         document_identification: sample_doc_id(),
         document_version: sample_doc_version(),
         document_type: AttrV {
@@ -254,6 +252,8 @@ fn activation_document_round_trip() {
 #[test]
 fn planned_resource_schedule_round_trip() {
     let ts = PlannedResourceTimeSeries {
+        original_time_series_identification: None,
+        requesting_grid_operator: None,
         time_series_identification: sample_doc_id(),
         business_type: AttrV {
             v: PrsBusinessType::Production,
@@ -266,7 +266,7 @@ fn planned_resource_schedule_round_trip() {
         },
         acquiring_area: None,
         grid_element: None,
-        measure_unit: AttrV {
+        measurement_unit: AttrV {
             v: MeasureUnit::Megawatt,
         },
         status: None,
@@ -274,6 +274,10 @@ fn planned_resource_schedule_round_trip() {
         period: sample_period(),
     };
     let doc = PlannedResourceScheduleDocument {
+        original_sender_identification: None,
+        original_document_identification: None,
+        original_document_version: None,
+        original_document_date_time: None,
         document_identification: sample_doc_id(),
         document_version: sample_doc_version(),
         document_type: AttrV {
@@ -313,6 +317,9 @@ fn network_constraint_round_trip() {
     use redispatch_xml::documents::network_constraint::NcdDocType;
 
     let ts = NetworkConstraintTimeSeries {
+        resource_provider: None,
+        original_time_series_identification: None,
+        requesting_grid_operator: None,
         time_series_identification: sample_doc_id(),
         business_type: AttrV {
             v: NcdBusinessType::ProductionDispatchable,
@@ -331,6 +338,10 @@ fn network_constraint_round_trip() {
         period: sample_period(),
     };
     let doc = NetworkConstraintDocument {
+        original_sender_identification: None,
+        original_document_identification: None,
+        original_document_version: None,
+        original_document_date_time: None,
         document_identification: sample_doc_id(),
         document_version: sample_doc_version(),
         document_type: AttrV {
@@ -368,6 +379,13 @@ fn network_constraint_round_trip() {
 #[test]
 fn kostenblatt_round_trip() {
     let ts = CostTimeSeries {
+        measurement_unit: AttrV {
+            v: "MAW".to_string(),
+        },
+        resource_provider: None,
+        status: None,
+        original_time_series_identification: None,
+        curve_type: None,
         time_series_identification: sample_doc_id(),
         business_type: AttrV {
             v: CostBusinessType::ProductionEnergy,
@@ -381,6 +399,10 @@ fn kostenblatt_round_trip() {
         period: sample_period(),
     };
     let doc = Kostenblatt {
+        original_sender_identification: None,
+        original_document_identification: None,
+        original_document_version: None,
+        original_document_date_time: None,
         document_identification: sample_doc_id(),
         document_version: sample_doc_version(),
         document_type: AttrV {
@@ -437,6 +459,8 @@ fn stammdaten_round_trip() {
         gueltig_ab: UtcDateTime::new(datetime!(2025-10-01 00:00:00 UTC)).unwrap(),
         meldungsstatus: Meldungsstatus::Creation,
         sr_objekte: vec![],
+        existenzende: None,
+        bilanzkreis_ausgleichsfahrplan_anf_nb: None,
     };
 
     let xml = redispatch_xml::serialize_as(&doc, true).unwrap();
@@ -458,18 +482,10 @@ fn status_request_round_trip() {
     let doc = StatusRequestMarketDocument {
         m_rid: sample_mrid("SR-DOC-001"),
         doc_type: StatusRequestDocType::StatusRequest,
-        sender_market_participant: StatusRequestSender {
-            m_rid: sample_participant_mrid("4045399000008"),
-            market_role: StatusRequestSenderMarketRole {
-                role_type: StatusRequestSenderRole::GridOperator,
-            },
-        },
-        receiver_market_participant: StatusRequestReceiver {
-            m_rid: sample_participant_mrid("4045399000015"),
-            market_role: StatusRequestReceiverMarketRole {
-                role_type: StatusRequestReceiverRole::ResourceProvider,
-            },
-        },
+        sender_m_rid: sample_participant_mrid("4045399000008"),
+        sender_market_role: StatusRequestSenderRole::GridOperator,
+        receiver_m_rid: sample_participant_mrid("4045399000015"),
+        receiver_market_role: StatusRequestReceiverRole::ResourceProvider,
         created_date_time: sample_ts(),
         attributes: vec![],
         mkt_activity_records: vec![],
@@ -482,7 +498,7 @@ fn status_request_round_trip() {
 
     let back: StatusRequestMarketDocument = redispatch_xml::parse_as(&xml).unwrap();
     assert_eq!(back.m_rid.as_str(), "SR-DOC-001");
-    assert_eq!(back.sender_market_participant.m_rid.value, "4045399000008");
+    assert_eq!(back.sender_m_rid.value, "4045399000008");
 }
 
 // ── Unavailability_MarketDocument round-trip ──────────────────────────────────
@@ -495,23 +511,13 @@ fn unavailability_round_trip() {
         doc_type: UnavailabilityDocType::PlannedUnavailability,
         process_type: UnavailabilityProcessType::Forecast,
         created_date_time: sample_ts(),
-        sender_market_participant: UnavailabilityParticipant {
-            m_rid: sample_participant_mrid("4045399000008"),
-            market_role: UnavailabilityMarketRole {
-                role_type: UnavailabilityMarketRoleType::ResourceProvider,
-            },
-        },
-        receiver_market_participant: UnavailabilityParticipant {
-            m_rid: sample_participant_mrid("4045399000015"),
-            market_role: UnavailabilityMarketRole {
-                role_type: UnavailabilityMarketRoleType::GridOperator,
-            },
-        },
-        unavailability_time_period: UnavailabilityTimePeriod {
-            time_interval: UnavailabilityTimeInterval {
-                start: sample_minute_dt(),
-                end: UtcMinuteDateTime::new(datetime!(2025-10-02 22:00:00 UTC)).unwrap(),
-            },
+        sender_m_rid: sample_participant_mrid("4045399000008"),
+        sender_market_role: UnavailabilityMarketRoleType::ResourceProvider,
+        receiver_m_rid: sample_participant_mrid("4045399000015"),
+        receiver_market_role: UnavailabilityMarketRoleType::GridOperator,
+        unavailability_time_interval: UnavailabilityTimeInterval {
+            start: sample_minute_dt(),
+            end: UtcMinuteDateTime::new(datetime!(2025-10-02 22:00:00 UTC)).unwrap(),
         },
         doc_status: None,
         time_series: vec![],
@@ -539,24 +545,16 @@ fn kaskade_round_trip() {
             value: KaskadeStatus::Ordered,
         },
         doc_type: KaskadeType::EmergencyMeasures,
-        sender_market_participant: KaskadeParticipant {
-            m_rid: SimpleContent {
-                value: "4045399000008".to_string(),
-                coding_scheme: CodingScheme::Gs1,
-            },
-            market_role: KaskadeMarketRole {
-                role_type: KaskadeRoleType::GridOperator,
-            },
+        sender_m_rid: SimpleContent {
+            value: "4045399000008".to_string(),
+            coding_scheme: CodingScheme::Gs1,
         },
-        receiver_market_participant: KaskadeParticipant {
-            m_rid: SimpleContent {
-                value: "4045399000015".to_string(),
-                coding_scheme: CodingScheme::Gs1,
-            },
-            market_role: KaskadeMarketRole {
-                role_type: KaskadeRoleType::GridOperator,
-            },
+        sender_market_role: KaskadeRoleType::GridOperator,
+        receiver_m_rid: SimpleContent {
+            value: "4045399000015".to_string(),
+            coding_scheme: CodingScheme::Gs1,
         },
+        receiver_market_role: KaskadeRoleType::GridOperator,
         time_series: KaskadeTimeSeries {
             m_rid: sample_mrid("KAS-TS-001"),
             senders_document_m_rid: None,
@@ -564,15 +562,11 @@ fn kaskade_round_trip() {
             senders_created_date_time: None,
             business_type: KaskadeBusinessType::Production,
             resource_objects: vec![],
-            bidding_zone_domain: BiddingZoneDomain {
-                m_rid: SimpleContent {
-                    value: "10YDE-EON------1".to_string(),
-                    coding_scheme: EicCodingScheme::Eic,
-                },
+            bidding_zone_domain_m_rid: SimpleContent {
+                value: "10YDE-EON------1".to_string(),
+                coding_scheme: EicCodingScheme::Eic,
             },
-            quantity_measure_unit: QuantityMeasureUnit {
-                name: KaskadeMeasureUnit::Megawatt,
-            },
+            quantity_measure_unit_name: KaskadeMeasureUnit::Megawatt,
             curve_type: CurveType::VariableSizedBlock,
             available_period: AvailablePeriod {
                 time_interval: KaskadeTimeInterval {
@@ -612,6 +606,7 @@ fn parse_and_validate_accepts_valid_activation() {
     // Build an ActivationDocument, serialize it, then manually inject the required namespace
     // since quick-xml serde does not emit xmlns from struct definitions.
     let doc = ActivationDocument {
+        schedule_time_series: vec![],
         document_identification: sample_doc_id(),
         document_version: sample_doc_version(),
         document_type: AttrV {
@@ -747,6 +742,7 @@ fn market_participant_id_try_from() {
 #[test]
 fn serialized_activation_survives_the_namespace_checked_parse() {
     let doc = ActivationDocument {
+        schedule_time_series: vec![],
         document_identification: sample_doc_id(),
         document_version: sample_doc_version(),
         document_type: AttrV {

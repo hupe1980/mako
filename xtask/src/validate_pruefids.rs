@@ -444,13 +444,22 @@ fn collect_orphaned_in_dir(
 
 // ── Cross-crate PID agreement check ──────────────────────────────────────────
 
-/// Verify that `mako-redispatch::aktivierung::MSCONS_PIDS` and
-/// `edmd::domain::REDISPATCH_MSCONS_PIDS` define the same set.
+/// Verify that every MSCONS PID `mako-redispatch` routes is one `edmd` stores.
 ///
-/// Both constants are intentionally duplicated across architectural layers
-/// (workflow vs. data-tier), but they MUST agree.  This check prevents silent
-/// drift when a new Redispatch MSCONS PID is added to one crate but not the
-/// other.
+/// The two constants used to be required to be *equal*, which was right while
+/// the redispatch workflow claimed the whole Ausfallarbeit band. It no longer
+/// does — 13020 and 13023 are MaBiS Summenzeitreihen and 13026 belongs to the
+/// EEG-Überführungszeitreihen family — so equality would now force one of the
+/// two lists to be wrong. They answer different questions:
+///
+/// * `mako-redispatch::aktivierung::MSCONS_PIDS` — which PIDs route to the
+///   Redispatch **workflow**.
+/// * `edmd::domain::REDISPATCH_MSCONS_PIDS` — which Ausfallarbeit-related PIDs
+///   `edmd` **stores intervals for**, whoever routes them.
+///
+/// The invariant that still has to hold is **containment**: a PID the workflow
+/// accepts whose intervals `edmd` drops would leave the process with no data to
+/// settle against.
 ///
 /// The check is source-text based (regex over the two Rust files) rather than
 /// compiled, so it runs without building either crate.
@@ -500,20 +509,22 @@ fn check_redispatch_pid_agreement(workspace_root: &str) -> bool {
         }
     };
 
-    if redispatch_pids == edm_pids {
+    let missing: Vec<u32> = redispatch_pids.difference(&edm_pids).copied().collect();
+    if missing.is_empty() {
         println!(
-            "validate-pruefids: Redispatch MSCONS PIDs agree across crates ({} PIDs: {:?}) ✓",
-            redispatch_pids.len(),
-            redispatch_pids
+            "validate-pruefids: every routed Redispatch MSCONS PID is stored by edmd \
+             ({:?} ⊆ {:?}) ✓",
+            redispatch_pids, edm_pids
         );
         true
     } else {
         eprintln!(
-            "validate-pruefids: FAIL — Redispatch MSCONS PID mismatch!\n  \
-             mako-redispatch::aktivierung::MSCONS_PIDS    = {:?}\n  \
-             edmd::domain::REDISPATCH_MSCONS_PIDS     = {:?}\n  \
-             Fix: update both to match, then re-run `cargo xtask validate-pruefids`.",
-            redispatch_pids, edm_pids
+            "validate-pruefids: FAIL — Redispatch MSCONS PIDs {missing:?} route to a \
+             workflow but edmd does not store their intervals!\n  \
+             mako-redispatch::aktivierung::MSCONS_PIDS = {redispatch_pids:?}\n  \
+             edmd::domain::REDISPATCH_MSCONS_PIDS      = {edm_pids:?}\n  \
+             Fix: add them to edmd::domain::REDISPATCH_MSCONS_PIDS (and to \
+             ALL_MSCONS_PIDS), then re-run `cargo xtask validate-pruefids`."
         );
         false
     }

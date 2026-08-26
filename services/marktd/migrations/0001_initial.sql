@@ -115,7 +115,7 @@ CREATE TABLE melo (
                                 'NSP', 'MSP', 'HSP', 'HSS',
                                 'MSP_NSP_UMSP', 'HSP_MSP_UMSP', 'HSS_HSP_UMSP',
                                 'HD', 'MD', 'ND')),
-    regelzone              TEXT,   -- Regelzone EIC (Standorteigenschaften.eigenschaftenStrom[0].regelzone)
+    regelzone              TEXT,   -- Regelzone EIC (Standorteigenschaften.eigenschaftenStrom[0].regelzoneEic)
                                    -- maps MeLo → ÜNB for Redispatch 2.0 Stammdaten + MABIS IFTSTA 21000
     -- Full BO4E Standorteigenschaften — stored for Redispatch 2.0
     -- NetworkConstraintDocument and Gas billing zone lookup

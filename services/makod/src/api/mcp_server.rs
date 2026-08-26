@@ -1438,7 +1438,7 @@ impl ServerHandler for MakodMcpHandler {
              | GPKE Strom | a clock time on the 1. WT nach dem ÜT — 11:00 Anmeldung, 06:00 Abmeldung, 05:00 Lieferende NB→LF, 09:00 Beendigung der Zuordnung | BK6-24-174 GPKE Teil 2 |\n\
              | WiM, both Sparten | 3 / 5 / 7 / 1 Werktage per PID | BK6-22-024 Anlage 2a · AWH WiM Gas 2.0 |\n\
              | GeLi Gas | Ablauf des 4. / 3. / 2. Werktags | BK7-24-01-009 |\n\
-             | MaBiS | 1 Werktag | BK6-24-174 Anlage 3 § 13.8 |\n\
+             | MaBiS | keine Antwortfrist — Clearingfenster, BK6-24-174 Anlage 3 Kap. 3.10 Tabelle 2 |\n\
              | INVOIC | zum Zahlungsziel (`SG8 DTM+265`) | per Festlegung |\n\
              \n\
              **Saturday is not a Werktag** (GPKE Teil 1 Kap. 1.7). A holiday observed in any single \
@@ -1750,7 +1750,9 @@ fn next_steps_hint(command: &str) -> &'static str {
             "WiM Gas Stornierung APERAK dispatched (PID 44023 or 44024). Process closes (BK7-24-01-009)."
         }
         "mabis.abrechnung.einleiten" | "mabis.abrechnung.daten-einreichen" => {
-            "ÜNB has 1 Werktag to issue a Prüfmitteilung IFTSTA (BK6-24-174 § 13.8)."
+            "A Prüfmitteilung has no Frist (BK6-24-174 Anlage 3 Kap. 9.8.2 Nr. 1 — the \
+             receiving party „kann\" answer). It is bounded by the clearing window of \
+             Kap. 3.10 Tabelle 2: 11.–30. WT for a BG-SZR, 13.–30. WT for a BK-SZR."
         }
         _ => "Engine accepted the command. Monitor the ERP webhook for status updates.",
     }

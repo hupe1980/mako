@@ -65,7 +65,7 @@ use mako_gpke::{
     sperrung_lf::WORKFLOW_NAME as SPERRUNG_LF_WORKFLOW,
 };
 use mako_invoic::InvoicCommand;
-use mako_mabis::{BillingCommand, MabisBillingWorkflow};
+use mako_mabis::MabisBillingWorkflow;
 use mako_redispatch::{
     ack_forward::{
         AckForwardCommand, KaskadeWorkflow, KostenblattWorkflow, NetzengpassWorkflow,
@@ -198,7 +198,12 @@ deadline_dispatch! {
     "geli-gas-datenabruf" => GeliGasDatanabrufWorkflow : GeliGasDatanabrufCommand::TimeoutExpired,
     "geli-gas-sperrung-lf" => GeliGasSperrungLfWorkflow : GasSperrungLfCommand::TimeoutExpired,
     "geli-gas-sperrung-nb" => GeliGasSperrungNbWorkflow : GasSperrungNbCommand::TimeoutExpired,
-    "mabis-billing" => MabisBillingWorkflow : BillingCommand::PruefmitteilungDeadlineExpired,
+    // `mabis-billing` has no timeout arm: BK6-24-174 Anlage 3 defines no
+    // response Frist for a Prüfmitteilung (Kap. 9.8.2 Nr. 1 leaves the cell
+    // empty). Its only deadline is the close of the clearing window, which is
+    // not a response window — nothing is owed when it fires, the settlement
+    // simply stops accepting versions — and the workflow answers it through its
+    // own `on_deadline` with `CloseClearing`.
     "gpke-neuanlage" => GpkeNeuanlageWorkflow : NeuanlageCommand::TimeoutExpired,
     "gpke-abrechnungsdaten" => GpkeAbrechnungsdatenWorkflow : GpkeAbrechnungsdatenCommand::TimeoutExpired,
     "gpke-lf-abmeldung" => GpkeLfAbmeldungWorkflow : LfAbmeldungCommand::TimeoutExpired,
@@ -239,6 +244,9 @@ deadline_dispatch! {
         "mabis-listenabgleich",
         "mabis-anforderung",
         "mabis-zp-lifecycle",
+        // The two profile delivery Fristen (Kap. 6.5.3) are the **NB's**
+        // obligations toward the LF; this workflow models the receiving side.
+        "mabis-profile",
         // MMMA delegates delivery to gpke-allokationsliste.
         "gabi-gas-mmma",
         // Registered by an EngineModule but carrying no deadline of their own.
@@ -250,6 +258,7 @@ deadline_dispatch! {
     custom: [
         // Commands with extra fields, or arms that consult state before
         // alerting. Written out in `dispatch_deadline` below.
+        "mabis-billing",
         "gabi-gas-nomination",
         "gabi-gas-allocation",
         // Delivery-window markers: no workflow, only a regulatory alert.
@@ -342,6 +351,33 @@ pub async fn dispatch_deadline(
             deadline.workflow_id().clone(),
         );
         match wf_name {
+            "mabis-billing" => {
+                // The close of the clearing window (Kap. 3.10 Tabelle 2), not a
+                // response window: nothing is owed by this participant when it
+                // fires, the settlement simply stops accepting versions.
+                //
+                // It is `custom` because the command carries the Abrechnungslauf
+                // rather than a deadline id, and because there is deliberately
+                // **no** Prüfmitteilung timeout to sit alongside it — Kap. 9.8.2
+                // Nr. 1 gives the Prüfmitteilung an empty Frist cell.
+                let p = Process::<MabisBillingWorkflow, _>::from_identity(
+                    Arc::clone(&event_store),
+                    identity,
+                );
+                let lauf = if label.as_ref() == mako_mabis::CLEARING_ENDE_LABEL {
+                    mako_mabis::Abrechnungslauf::Bka
+                } else {
+                    mako_mabis::Abrechnungslauf::Kbka
+                };
+                p.execute_and_enqueue_with_retry(
+                    mako_mabis::BillingCommand::CloseClearing { lauf },
+                    3,
+                )
+                .await?;
+                p.take_snapshot(&snap_store, snapshot_interval)
+                    .await
+                    .map(|_| ())
+            }
             "gabi-gas-nomination" => {
                 // NOMRES response deadline — no response from FNB/MGV before D-1 15:00.
                 let p = Process::<GaBiGasNominationWorkflow, _>::from_identity(

@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
 # MaBiS Summenzeitreihe submission monitor. Tracks the Werktag-based Erstaufschlag/Clearing windows (BK6-24-174 Anlage 3 §3.10), detects failed aggregations, and diagnoses BIKO delivery issues.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: NB. Compiled only into a `role-nb` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: mabis-syncd-agent
-  version: "2.1.0"
+  version: "3.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -47,7 +46,10 @@ spec:
       3. At 3, triage `error_msg`: an aggregation error means edmd data is missing
          (call edmd `get_billing_period` and `get_quality_warnings` to say which MaLos);
          a submission error means the MSCONS never reached the BIKO (makod dispatch).
-      4. State which window is closing: within Erstaufschlag a retry still lands as
+      4. Call mabis-syncd `list_failed_submissions` for the period. One failed run is an
+         incident; the same Bilanzierungsgebiet failing every month is a configuration
+         fault, and only the list tells them apart.
+      5. State which window is closing: within Erstaufschlag a retry still lands as
          Abrechnungsdaten; after it, only as Prüfdaten.
 
       ## ON KORREKTURBEDARF OPENED
@@ -89,12 +91,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -191,11 +198,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -209,163 +215,45 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://mabis_syncd/get_submission_status
-      mutates: false
-      max_sensitivity: internal
-      description: "recent submission runs + failed / retry-exhausted / Korrekturbedarf counts"
-    - ref: tool://mabis_syncd/list_failed_submissions
-      mutates: false
-      max_sensitivity: internal
-      description: "failed Summenzeitreihe runs with attempt_count and error_msg"
     - ref: tool://mabis_syncd/get_submission_run
       mutates: false
       max_sensitivity: internal
-      description: "one submission run by UUID"
+      description: >-
+        The failed run named by the event: phase, attempt count and error.
+
+    - ref: tool://mabis_syncd/get_submission_status
+      mutates: false
+      max_sensitivity: internal
+      description: >-
+        Whether a submission for the affected period is pending or already
+        corrected.
+
     - ref: tool://mabis_syncd/list_korrekturbedarf
       mutates: false
       max_sensitivity: internal
-      description: "open negative Prüfmitteilungen (§9.8.1 obligations)"
-    - ref: tool://edmd/get_timeseries
+      description: >-
+        Every open § 9.8.1 correction obligation.
+
+    - ref: tool://mabis_syncd/list_failed_submissions
       mutates: false
       max_sensitivity: internal
-      description: "get timeseries via edmd"
-    - ref: tool://edmd/get_imbalance
-      mutates: false
-      max_sensitivity: internal
-      description: "get imbalance via edmd"
+      description: >-
+        Failures across the period, to tell one bad run from a systematic gap.
+
     - ref: tool://edmd/get_billing_period
       mutates: false
       max_sensitivity: internal
-      description: "get billing period via edmd"
-    - ref: tool://edmd/get_device_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get device history via edmd"
+      description: >-
+        Which MaLos are missing data behind an aggregation error.
+
     - ref: tool://edmd/get_quality_warnings
       mutates: false
       max_sensitivity: internal
-      description: "get quality warnings via edmd"
-    - ref: tool://edmd/list_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list reading orders via edmd"
-    - ref: tool://edmd/list_overdue_reading_orders
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue reading orders via edmd"
-    - ref: tool://edmd/get_correction_history
-      mutates: false
-      max_sensitivity: internal
-      description: "get correction history via edmd"
-    - ref: tool://edmd/validate_timeseries
-      mutates: false
-      max_sensitivity: internal
-      description: "validate timeseries via edmd"
-    - ref: tool://edmd/get_quality_assessments
-      mutates: false
-      max_sensitivity: internal
-      description: "get quality assessments via edmd"
+      description: >-
+        Quality flags on the period the Summenzeitreihe aggregates.
+
     - ref: tool://edmd/get_summenzeitreihe
       mutates: false
       max_sensitivity: internal
-      description: "get summenzeitreihe via edmd"
-    - ref: tool://edmd/get_annual_forecast
-      mutates: false
-      max_sensitivity: internal
-      description: "get annual forecast via edmd"
-    - ref: tool://edmd/get_gas_quality
-      mutates: false
-      max_sensitivity: internal
-      description: "get gas quality via edmd"
-    - ref: tool://obsd/get_process
-      mutates: false
-      max_sensitivity: internal
-      description: "get process via obsd"
-    - ref: tool://obsd/list_overdue_processes
-      mutates: false
-      max_sensitivity: internal
-      description: "list overdue processes via obsd"
-    - ref: tool://obsd/get_kpi_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get kpi report via obsd"
-    - ref: tool://obsd/get_parity_report
-      mutates: false
-      max_sensitivity: internal
-      description: "get parity report via obsd"
-    - ref: tool://obsd/get_stp_rate
-      mutates: false
-      max_sensitivity: internal
-      description: "get stp rate via obsd"
-    - ref: tool://obsd/list_processes_by_family
-      mutates: false
-      max_sensitivity: internal
-      description: "list processes by family via obsd"
-    - ref: tool://marktd/get_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        Whether the affected MaLo's intervals are substituted in the aggregate.

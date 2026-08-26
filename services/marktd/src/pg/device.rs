@@ -138,9 +138,19 @@ impl SteuerbareRessourceRepository for PgSteuerbareRessourceRepository {
         tenant: &str,
         konfigurationsprodukte: serde_json::Value,
     ) -> Result<bool, MdmError> {
+        // **The document moves with the column.** `konfigurationsprodukte` is a
+        // field `SteuerbareRessource` declares, so this column indexes the
+        // stored document rather than standing beside it: writing only the
+        // column would leave a contracted product absent from the
+        // `SteuerbareRessource` a `GET` returns.
+        //
+        // `jsonb_set` with `create_missing = true`, so a document that has
+        // never carried the key gains it.
         let affected = sqlx::query(
             r"UPDATE steuerbare_ressourcen
               SET konfigurationsprodukte = $3,
+                  data                   = jsonb_set(
+                                               data, '{konfigurationsprodukte}', $3::jsonb, true),
                   version                = version + 1,
                   updated_at             = now()
               WHERE sr_id = $1 AND tenant = $2",
@@ -579,12 +589,35 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         if patch.is_empty() {
             return Ok(false);
         }
-        // COALESCE per column; JSONB payload and version are untouched.
+
+        // **The document moves with the columns.** All three are fields
+        // `TechnischeRessource` declares, so the columns index the stored
+        // document rather than standing beside it. Leaving the JSONB untouched
+        // would make a `GET` return the superseded document while §14a steering
+        // reads the current `ist_fernschaltbar` — same fact, two answers.
+        //
+        // The merge is `data || patch` — JSONB concatenation replaces the
+        // top-level keys it names and keeps every other key, which is exactly
+        // the semantics of a partial Stammdatenänderung. Keys are the BO4E
+        // camelCase spellings, because that is what the document is written in.
+        let mut doc_patch = serde_json::Map::new();
+        if let Some(n) = patch.nutzung.as_deref() {
+            doc_patch.insert("technischeRessourceNutzung".into(), n.into());
+        }
+        if let Some(v) = patch.verbrauchsart.as_deref() {
+            doc_patch.insert("technischeRessourceVerbrauchsart".into(), v.into());
+        }
+        if let Some(f) = patch.ist_fernschaltbar {
+            doc_patch.insert("istFernschaltbar".into(), f.into());
+        }
+        let doc_patch = serde_json::Value::Object(doc_patch);
+
         let affected = sqlx::query(
             r"UPDATE technische_ressourcen
                SET nutzung           = COALESCE($3, nutzung),
                    verbrauchsart     = COALESCE($4, verbrauchsart),
                    ist_fernschaltbar = COALESCE($5, ist_fernschaltbar),
+                   data              = data || $6::jsonb,
                    updated_at        = now()
                WHERE tr_id = $1 AND tenant = $2",
         )
@@ -593,6 +626,7 @@ impl TechnischeRessourceRepository for PgTechnischeRessourceRepository {
         .bind(patch.nutzung.as_deref())
         .bind(patch.verbrauchsart.as_deref())
         .bind(patch.ist_fernschaltbar)
+        .bind(&doc_patch)
         .execute(&self.pool)
         .await
         .map_err(|e| MdmError::Internal(e.to_string()))?

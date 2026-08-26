@@ -41,81 +41,111 @@ pub(super) fn cmd_mabis_abrechnung_begleichen<'a>(
     Box::pin(dispatch_mabis_billing_begleichen(s, p))
 }
 
-/// Dispatch `mabis.abrechnung.einleiten` — BIKO sends Abrechnungssummenzeitreihe;
-/// open the billing period from the BKV's perspective (MaBiS BK6-24-174 §13).
+/// Dispatch `mabis.abrechnung.einleiten` — a version of a Summenzeitreihe
+/// arrived; open or extend its settlement (BK6-24-174 Anlage 3 Kap. 3.8).
 ///
 /// # Payload fields
 ///
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
-/// | `billing_period` | Yes | Billing period in `"YYYY-MM"` format (e.g. `"2025-09"`) |
-/// | `bkv_id` | Yes | BKV MP-ID (13-digit) |
-/// | `biko_id` | Yes | BIKO EIC code (16-char) |
-/// | `version` | Yes | `"vorlaeufig"` or `"endgueltig"` |
-/// | `message_ref` | Yes | MSCONS message reference |
+/// | `zeitreihe` | Yes | `SG10 CAV` DE 7111 code — `Z95`…`ZA6` (see `mako_mabis::zeitreihe_aus_cav`) |
+/// | `mabis_zp_id` | Yes | MaBiS-Zählpunkt, 33 characters |
+/// | `bilanzierungsmonat` | Yes | `"YYYY-MM"` |
+/// | `version` | Yes | Erstellungszeitpunkt, `CCYYMMDDHHMMSSZZZ` (`RFF+AUU`) |
+/// | `biko_id` | Yes | BIKO EIC |
+/// | `absender_mp_id` | Yes | party that sent the Summenzeitreihe |
+/// | `pid` | No | MSCONS PID; defaults to 13003 |
+/// | `message_ref` | No | MSCONS message reference |
 ///
-/// # Deadline
+/// # No deadline is registered
 ///
-/// Registers a 1-Werktag Prüfmitteilung deadline (BK6-24-174 §13.8) immediately
-/// after spawning. The deadline scheduler fires `PruefmitteilungDeadlineExpired`
-/// if the BKV does not issue `daten-einreichen` within 1 Werktag.
+/// The Prüfmitteilung has **no Frist**: Kap. 9.8.2 Nr. 1 leaves the cell empty
+/// and says the receiving party „kann" answer, and Kap. 13.8.2 — which the
+/// previous 1-Werktag deadline cited — defines no answer at all; its two rows
+/// are the BIKO's own dispatch dates. What bounds a Prüfmitteilung is the
+/// clearing window of Tabelle 2, and that is a date range anchored on the
+/// Bilanzierungsmonat rather than a countdown from this arrival. The window is
+/// derived here so the caller sees it, and a version that arrives after it is
+/// refused rather than accepted into a settlement it can no longer change.
 pub(super) async fn dispatch_mabis_billing_einleiten(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let billing_period_str = payload
-        .get("billing_period")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"billing_period\" (e.g. \"2025-09\")".into(),
-            )
-        })?
-        .to_owned();
-    let bkv_id_str = payload
-        .get("bkv_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"bkv_id\" (BKV MP-ID, 13 digits)".into(),
-            )
-        })?
-        .to_owned();
-    let biko_id_str = payload
-        .get("biko_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload("payload must contain \"biko_id\" (BIKO EIC code)".into())
-        })?
-        .to_owned();
-    let version_str = payload
-        .get("version")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| {
-            DispatchError::InvalidPayload(
-                "payload must contain \"version\" (\"vorlaeufig\" or \"endgueltig\")".into(),
-            )
-        })?;
-    let version = match version_str {
-        "vorlaeufig" => BillingVersion::Vorlaeufig,
-        "endgueltig" => BillingVersion::Endgueltig,
-        other => {
-            return Err(DispatchError::InvalidPayload(format!(
-                "\"version\" must be \"vorlaeufig\" or \"endgueltig\", got \"{other}\""
-            )));
-        }
+    let require = |field: &str| -> Result<String, DispatchError> {
+        payload
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
     };
+
+    let cav = require("zeitreihe")?;
+    let (zeitreihe, _ebene) = mako_mabis::zeitreihe_aus_cav(&cav).ok_or_else(|| {
+        DispatchError::InvalidPayload(format!(
+            "\"zeitreihe\" \"{cav}\" is not an SG10 CAV Summenzeitreihen code \
+                 (Z95…ZA6, UTILMD AHB Strom 2.2 Kap. 13.1)"
+        ))
+    })?;
+    let mabis_zp_id = require("mabis_zp_id")?;
+    let mabis_zp = mako_mabis::MabisZaehlpunktId::new(&mabis_zp_id)
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+    let bilanzierungsmonat_str = require("bilanzierungsmonat")?;
+    let version = mako_mabis::SzrVersion::new(require("version")?)
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+    let biko_id_str = require("biko_id")?;
+    let absender_str = require("absender_mp_id")?;
     let message_ref_str = payload
         .get("message_ref")
         .and_then(|v| v.as_str())
         .unwrap_or("");
 
-    let pid = Pruefidentifikator::new(13_003).map_err(DispatchError::InvalidPayload)?;
+    let pid_code = payload
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .map_or(mako_mabis::SUMMENZEITREIHE_PID, |n| {
+            u32::try_from(n).unwrap_or(u32::MAX)
+        });
+    if !mako_mabis::ist_zeitreihen_pid(pid_code) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "pid {pid_code} carries no MaBiS Summenzeitreihe"
+        )));
+    }
+    let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
 
-    // Business key: unique per BKV + billing period combination.
-    let business_key = format!("{bkv_id_str}|{billing_period_str}");
+    // ── Which phase the arrival falls in (Tabelle 2, Kap. 3.10) ──────────────
+    //
+    // This is what decides the Datenstatus the BIKO will assign, so it is
+    // derived from the calendar rather than taken from the payload.
+    let monat = parse_bilanzierungsmonat(&bilanzierungsmonat_str)?;
+    let heute = time::OffsetDateTime::now_utc().date();
+    let phase = monat.phase(zeitreihe, heute);
+    if !phase.nimmt_versionen_an() {
+        return Err(DispatchError::InvalidPayload(format!(
+            "das Abrechnungsfenster für {zeitreihe} im Bilanzierungsmonat \
+             {bilanzierungsmonat_str} nimmt am {heute} keine Version mehr an (Phase {phase:?}, \
+             BK6-24-174 Anlage 3 Kap. 3.10)"
+        )));
+    }
 
-    // ── Idempotency guard ─────────────────────────────────────────────────────
+    // Business key: one settlement per MaBiS-Zählpunkt and Bilanzierungsmonat.
+    let business_key = format!("{mabis_zp_id}|{bilanzierungsmonat_str}");
+
+    let domain_cmd = BillingCommand::ReceiveSummenzeitreihe {
+        pid,
+        zeitreihe,
+        mabis_zp,
+        bilanzierungsmonat: BillingPeriod::new(bilanzierungsmonat_str.clone()),
+        version,
+        im_erstaufschlag: phase.ist_erstaufschlag(),
+        absender: MarktpartnerCode::new(absender_str),
+        biko_id: BikoId::new(biko_id_str),
+        message_ref: MessageRef::new(message_ref_str),
+    };
+
+    // A settlement accumulates versions, so a second one **resumes** the
+    // existing process rather than being refused as a duplicate — the whole
+    // point of the Clearingphase is that more versions arrive.
     let existing = state
         .store
         .as_process_registry()
@@ -124,22 +154,20 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
         .map_err(|e| {
             DispatchError::Engine(mako_engine::error::EngineError::store(e.to_string()))
         })?;
-    let already_active: Vec<_> = existing
-        .into_iter()
-        .filter(|id| id.workflow_id.name.as_ref() == "mabis-billing")
-        .collect();
-    if let Some(dup) = already_active.into_iter().next() {
-        tracing::warn!(
-            business_key = %business_key,
-            process_id   = %dup.process_id,
-            "mabis.abrechnung.einleiten refused: active billing process already registered for this BKV/period",
-        );
-        return Ok(DispatchOutcome::Dispatched {
-            process_id: dup.process_id,
-        });
+    if existing
+        .iter()
+        .any(|id| id.workflow_id.name.as_ref() == "mabis-billing")
+    {
+        return dispatch_to_process::<MabisBillingWorkflow, _>(
+            state,
+            &business_key,
+            "mabis-billing",
+            move || domain_cmd,
+        )
+        .await;
     }
 
-    // ── Spawn process and execute command ─────────────────────────────────────
+    // ── Spawn the settlement ─────────────────────────────────────────────────
     let workflow_id = WorkflowId::new("mabis-billing", latest_format_version());
     let process = mako_engine::process::Process::<
         MabisBillingWorkflow,
@@ -150,48 +178,15 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
         workflow_id.clone(),
     );
     let process_id = process.process_id();
-    let domain_cmd = BillingCommand::ReceiveSummenzeitreihe {
-        pid,
-        billing_period: BillingPeriod::new(billing_period_str.clone()),
-        bkv_id: BkvId::new(bkv_id_str.clone()),
-        biko_id: BikoId::new(biko_id_str),
-        version,
-        message_ref: MessageRef::new(message_ref_str),
-    };
+    process.execute_and_enqueue(domain_cmd).await.map_err(|e| {
+        tracing::error!(
+            process_id = %process_id,
+            error      = %e,
+            "MaBiS billing: spawn failed",
+        );
+        DispatchError::Engine(e)
+    })?;
 
-    // ── Build 1-Werktag Prüfmitteilung deadline before the atomic write ───────
-    //
-    // Due at 17:00 Europe/Berlin on the first Werktag following receipt
-    // (BK6-24-174 §13.8).  The deadline is passed to
-    // `execute_and_enqueue_with_deadlines` so that the event, outbox entry,
-    // and the deadline all land in a single SSI transaction (F-009).
-    let due_at = mako_fristen::deadline_at_werktage(
-        time::OffsetDateTime::now_utc(),
-        1,
-        mako_fristen::HolidayCalendar::BdewMaKo,
-    );
-    let deadline = Deadline::new(
-        process.stream_id().clone(),
-        process_id,
-        state.tenant_id,
-        workflow_id.clone(),
-        PRUEFMITTEILUNG_DEADLINE_LABEL,
-        due_at,
-    );
-    process
-        .execute_and_enqueue_with_deadlines(domain_cmd, &[deadline])
-        .await
-        .map_err(|e| {
-            tracing::error!(
-                process_id = %process_id,
-                error      = %e,
-                "MABIS billing: atomic event+deadline write failed — \
-                 process not spawned, BKV deadline enforcement inactive",
-            );
-            DispatchError::Engine(e)
-        })?;
-
-    // ── Register process under BKV|billing_period business key ────────────────
     let identity = process.identity();
     if let Err(e) = state
         .store
@@ -203,12 +198,26 @@ pub(super) async fn dispatch_mabis_billing_einleiten(
             process_id   = %process_id,
             business_key = %business_key,
             error        = %e,
-            "MABIS billing: process registry registration failed — \
-             follow-up commands (daten-einreichen/begleichen) may not route correctly",
+            "MaBiS billing: process registry registration failed — \
+             follow-up commands may not route correctly",
         );
     }
 
     Ok(DispatchOutcome::Spawned { process_id })
+}
+
+/// Parse a `"YYYY-MM"` Bilanzierungsmonat into its Fristenkalender.
+fn parse_bilanzierungsmonat(s: &str) -> Result<mako_mabis::Bilanzierungsmonat, DispatchError> {
+    let invalid = || {
+        DispatchError::InvalidPayload(format!("\"bilanzierungsmonat\" \"{s}\" is not \"YYYY-MM\""))
+    };
+    let (y, m) = s.split_once('-').ok_or_else(invalid)?;
+    let year: i32 = y.parse().map_err(|_| invalid())?;
+    let month: u8 = m.parse().map_err(|_| invalid())?;
+    let month = time::Month::try_from(month).map_err(|_| invalid())?;
+    let letzter = time::util::days_in_month(month, year);
+    let ende = time::Date::from_calendar_date(year, month, letzter).map_err(|_| invalid())?;
+    Ok(mako_mabis::Bilanzierungsmonat::new(ende))
 }
 
 /// Dispatch `mabis.summenzeitreihe.uebermitteln` — NB/ÜNB sends a BG-SZR to the
@@ -326,117 +335,148 @@ pub(super) async fn dispatch_mabis_summenzeitreihe_uebermitteln(
     Ok(DispatchOutcome::Spawned { process_id })
 }
 
-/// Dispatch `mabis.abrechnung.daten-einreichen` — BKV sends Prüfmitteilung.
+/// Dispatch `mabis.abrechnung.daten-einreichen` — send a Prüfmitteilung.
 ///
-/// The BKV must respond to the Abrechnungssummenzeitreihe within 1 Werktag
-/// (BK6-24-174 §13.8) with either a positive or negative Prüfmitteilung.
+/// # There is no deadline on this
+///
+/// Kap. 9.8.2 Nr. 1 gives the Prüfmitteilung an empty Frist cell; the receiving
+/// party „kann" answer positively or negatively. What bounds it is the clearing
+/// window of Tabelle 2 (Kap. 3.10), which the workflow enforces by refusing once
+/// the settlement is closed.
 ///
 /// # Payload fields
 ///
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
-/// | `bkv_id` | Yes | BKV MP-ID (same as used in `einleiten`) |
-/// | `billing_period` | Yes | Billing period `"YYYY-MM"` (same as used in `einleiten`) |
-/// | `message_ref` | No | Message reference for the outbound Prüfmitteilung |
-/// | `reject` | No | `true` to send a negative Prüfmitteilung (default: `false`) |
-/// | `reason` | Conditional | Dispute reason; required when `reject = true` |
+/// | `mabis_zp_id` | Yes | MaBiS-Zählpunkt (same as used in `einleiten`) |
+/// | `bilanzierungsmonat` | Yes | `"YYYY-MM"` (same as used in `einleiten`) |
+/// | `version` | Yes | which version is being checked — a Prüfmitteilung always refers to one (Kap. 3.8.3) |
+/// | `pid` | Yes | 21000 (LF → NB/ÜNB), 21001 (NB → NB) or 21005 (BKV/NB → BIKO) |
+/// | `message_ref` | No | reference for the outbound IFTSTA |
+/// | `reject` | No | `true` for a negative Prüfmitteilung (default `false`) |
+/// | `reason` | Conditional | required when `reject = true` |
 pub(super) async fn dispatch_mabis_billing_daten_einreichen(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let bkv_id = payload
-        .get("bkv_id")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("\"bkv_id\" is required".into()))?;
-    let billing_period = payload
-        .get("billing_period")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("\"billing_period\" is required".into()))?;
-    let business_key = format!("{bkv_id}|{billing_period}");
+    let require = |field: &str| -> Result<String, DispatchError> {
+        payload
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
+    };
+    let mabis_zp_id = require("mabis_zp_id")?;
+    let bilanzierungsmonat = require("bilanzierungsmonat")?;
+    let business_key = format!("{mabis_zp_id}|{bilanzierungsmonat}");
+    let version = mako_mabis::SzrVersion::new(require("version")?)
+        .map_err(|e| DispatchError::InvalidPayload(e.to_string()))?;
+
+    let pid_code = payload
+        .get("pid")
+        .and_then(|v| v.as_u64())
+        .map(|n| u32::try_from(n).unwrap_or(u32::MAX))
+        .ok_or_else(|| DispatchError::InvalidPayload("\"pid\" (u32) is required".into()))?;
+    if !MABIS_IFTSTA_PRUEFMITTEILUNG_PIDS.contains(&pid_code) {
+        return Err(DispatchError::InvalidPayload(format!(
+            "pid {pid_code} carries no Prüfmitteilung of this participant; \
+             valid: {MABIS_IFTSTA_PRUEFMITTEILUNG_PIDS:?}"
+        )));
+    }
+    let pid = Pruefidentifikator::new(pid_code).map_err(DispatchError::InvalidPayload)?;
+
     let message_ref = MessageRef::new(
         payload
             .get("message_ref")
             .and_then(|v| v.as_str())
             .unwrap_or(""),
     );
-    let reject = payload
-        .get("reject")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(false);
+    // The caller names a published Antwortcode, not a verdict: whether the
+    // Prüfmitteilung is positive follows from the code's Cluster, and which
+    // codes exist follows from the Entscheidungsbaum that decides the
+    // Summenzeitreihe this stream settles. The workflow resolves both.
+    let antwortcode = payload
+        .get("antwortcode")
+        .and_then(|v| v.as_str())
+        .filter(|c| !c.trim().is_empty())
+        .ok_or_else(|| {
+            DispatchError::InvalidPayload(
+                "\"antwortcode\" (the EBD code, e.g. \"A03\") is required".into(),
+            )
+        })?
+        .to_owned();
+    let grund = payload
+        .get("grund")
+        .and_then(|v| v.as_str())
+        .filter(|r| !r.trim().is_empty())
+        .map(ToOwned::to_owned);
 
-    if reject {
-        let reason = payload
-            .get("reason")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                DispatchError::InvalidPayload(
-                    "\"reason\" is required when \"reject\" is true".into(),
-                )
-            })?
-            .to_owned();
-        dispatch_to_process::<MabisBillingWorkflow, _>(
-            state,
-            &business_key,
-            "mabis-billing",
-            move || BillingCommand::SendPruefmitteilungNegativ {
-                message_ref,
-                reason,
-            },
-        )
-        .await
-    } else {
-        dispatch_to_process::<MabisBillingWorkflow, _>(
-            state,
-            &business_key,
-            "mabis-billing",
-            move || BillingCommand::SendPruefmitteilungPositiv { message_ref },
-        )
-        .await
-    }
+    dispatch_to_process::<MabisBillingWorkflow, _>(
+        state,
+        &business_key,
+        "mabis-billing",
+        move || BillingCommand::SendPruefmitteilung {
+            version,
+            pid,
+            antwortcode,
+            grund,
+            message_ref,
+        },
+    )
+    .await
 }
 
-/// Dispatch `mabis.abrechnung.begleichen` — BIKO sends Datenstatus; BKV marks settled.
+/// Dispatch `mabis.abrechnung.begleichen` — close the clearing window.
+///
+/// The Datenstatus itself is **not** set here: it is assigned exclusively by the
+/// BIKO (Kap. 3.8.3) and arrives inbound as IFTSTA 21003 or 21004, which
+/// `mabis.datenstatus.empfangen` records. What this command does is mark the
+/// settlement closed once the clearing window of Tabelle 2 has lapsed, after
+/// which no further version can change it.
 ///
 /// # Payload fields
 ///
 /// | Field | Required | Description |
 /// |-------|----------|-------------|
-/// | `bkv_id` | Yes | BKV MP-ID (same as used in `einleiten`) |
-/// | `billing_period` | Yes | Billing period `"YYYY-MM"` (same as used in `einleiten`) |
-/// | `data_status` | Yes | `"abrechnungsdaten"`, `"abgerechnete_daten"`, or `"abgerechnete_daten_kbka"` |
+/// | `mabis_zp_id` | Yes | MaBiS-Zählpunkt (same as used in `einleiten`) |
+/// | `bilanzierungsmonat` | Yes | `"YYYY-MM"` (same as used in `einleiten`) |
+/// | `lauf` | No | `"bka"` (default) or `"kbka"` |
 pub(super) async fn dispatch_mabis_billing_begleichen(
     state: &CommandsApiState,
     payload: &serde_json::Value,
 ) -> Result<DispatchOutcome, DispatchError> {
-    let bkv_id = payload
-        .get("bkv_id")
+    let require = |field: &str| -> Result<String, DispatchError> {
+        payload
+            .get(field)
+            .and_then(|v| v.as_str())
+            .filter(|v| !v.is_empty())
+            .map(str::to_owned)
+            .ok_or_else(|| DispatchError::InvalidPayload(format!("\"{field}\" is required")))
+    };
+    let mabis_zp_id = require("mabis_zp_id")?;
+    let bilanzierungsmonat = require("bilanzierungsmonat")?;
+    let business_key = format!("{mabis_zp_id}|{bilanzierungsmonat}");
+
+    let lauf = match payload
+        .get("lauf")
         .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("\"bkv_id\" is required".into()))?;
-    let billing_period = payload
-        .get("billing_period")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("\"billing_period\" is required".into()))?;
-    let business_key = format!("{bkv_id}|{billing_period}");
-    let code = payload
-        .get("data_status")
-        .and_then(|v| v.as_str())
-        .ok_or_else(|| DispatchError::InvalidPayload("\"data_status\" is required".into()))?;
-    let data_status = match code {
-        "abrechnungsdaten" => DataStatus::Abrechnungsdaten,
-        "abgerechnete_daten" => DataStatus::AbgerechtneteDaten,
-        "abgerechnete_daten_kbka" => DataStatus::AbgerechtneteDatenKbka,
+        .unwrap_or("bka")
+    {
+        "bka" => mako_mabis::Abrechnungslauf::Bka,
+        "kbka" => mako_mabis::Abrechnungslauf::Kbka,
         other => {
             return Err(DispatchError::InvalidPayload(format!(
-                "unknown data_status \"{other}\"; valid values: \
-                 abrechnungsdaten, abgerechnete_daten, abgerechnete_daten_kbka"
+                "unknown lauf \"{other}\"; valid: bka, kbka"
             )));
         }
     };
+
     dispatch_to_process::<MabisBillingWorkflow, _>(
         state,
         &business_key,
         "mabis-billing",
-        move || BillingCommand::ReceiveDatastatus { data_status },
+        move || BillingCommand::CloseClearing { lauf },
     )
     .await
 }

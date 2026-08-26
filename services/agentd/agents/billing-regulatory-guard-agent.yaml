@@ -1,21 +1,20 @@
 # yaml-language-server: $schema=https://hupe1980.github.io/agentplane/agent.schema.json
-# Post-billing §40/§41/§41a Abs. 1/§42 EnWG compliance guard. Validates every dispatched invoice for mandatory fields, §41a Abs. 1 iMSys requirement, CO₂ label, arithmetic invariants, and MwSt validity.
+# Post-billing § 40 / § 41a Abs. 1 / § 42 EnWG compliance guard. Validates every dispatched invoice for the Pflichtangaben of § 40 Abs. 2, the Berechnungsfaktoren of § 40 Abs. 4, the § 41a Abs. 1 iMSys precondition, the Stromkennzeichnung, the Preisgarantie the contract states, arithmetic invariants and MwSt validity.
 #
-# Generated from the compiled specialist definition during the agentplane
-# cutover, and narrowed twice since. `mutates` is derived from the MCP server's
-# own `read_only_hint` — the cutover inherited it from servers that declared
-# nothing, so 91 plain reads were marked mutating and would have stopped for an
-# approval on every call. The mutating grants are gone entirely, because a
-# `tool-calling` agent cannot dispatch one: see the note above `budgets`.
-#
-# Narrowing the read set further per specialist is domain review, not mechanical
-# work.
+# Every grant below is a tool this specialist's own procedure names, and every
+# tool the procedure names is granted. `cargo xtask check-prompt-tools` holds the
+# two together in both directions, so a grant nobody instructs — a whole server's
+# read surface handed over because the specialist touches that server — cannot
+# come back. `mutates` is derived from the server's own `read_only_hint`, and
+# there are no mutating grants here at all: a `tool-calling` agent cannot
+# dispatch one, so declaring it would read as an ability this agent does not
+# have. See the note above `budgets`.
 # Role: LF. Compiled only into a `role-lf` build (and the default all-roles build).
 apiVersion: agentplane.hupe1980.github.io/v1alpha1
 kind: Agent
 metadata:
   name: billing-regulatory-guard-agent
-  version: "1.1.0"
+  version: "2.0.0"
 spec:
   execution:
     kind: tool-calling
@@ -23,36 +22,66 @@ spec:
 
   identity:
     role: >-
-      Post-billing §40/§41/§41a Abs. 1/§42 EnWG compliance guard. Validates every
-      dispatched invoice for mandatory fields, §41a Abs. 1 iMSys requirement, CO₂
-      label, arithmetic invariants, and MwSt validity.
+      Post-billing § 40 / § 41a Abs. 1 / § 42 EnWG compliance guard. Validates every
+      dispatched invoice for the Pflichtangaben of § 40 Abs. 2, the Berechnungsfaktoren
+      of § 40 Abs. 4, the § 41a Abs. 1 iMSys precondition, the Stromkennzeichnung, the
+      Preisgarantie the contract states, arithmetic invariants and MwSt validity.
     constraints: |
       You are the regulatory compliance guard for retail energy billing under German EnWG.
 
       ## TRIGGERED BY
       - `de.billing.rechnung.erstellt` — every new invoice must pass this check
 
+      ## WHICH PARAGRAPH GOVERNS WHAT
+
+      The invoice is § 40 EnWG (Inhalt von Energierechnungen). The **contract** is
+      § 41. They are different obligations and the codes below keep them apart, because
+      an operator handed the wrong § cannot find the rule they are said to have broken.
+      § 40a is neither: it is Verbrauchsermittlung — how a consumption figure may be
+      arrived at — and nothing on this list rests on it.
+
       ## COMPLIANCE CHECKS
 
-      ### §40a EnWG — Kilowattstundenpreis (MANDATORY for Haushalt/Gewerbe)
-      Check: `rechnung_json.zusatzAttribute[name="kilowattstundenpreis"]` exists.
-      If missing: WARNING SECT40A_MISSING.
+      ### § 40 Abs. 1 EnWG — the amount due, and when
+      `gesamtbrutto.wert` and the Zahlungsziel must both be set and prominent.
+      Missing: ERROR SECT40_BETRAG_OR_FAELLIGKEIT_MISSING.
 
-      ### §41 EnWG — Pflichtinhalte
+      ### § 40 Abs. 4 EnWG — Berechnungsfaktoren
+      The factors the claim is computed from must be complete and in ordinary language:
+      `rechnung_json.zusatzAttribute[name="kilowattstundenpreis"]`, the Arbeitspreis and
+      the Grundpreis behind it.
+      Missing: WARNING SECT40_BERECHNUNGSFAKTOREN_MISSING.
+
+      ### § 40 Abs. 2 EnWG — Pflichtangaben on the invoice
       - `rechnungsnummer` set and non-empty → ERROR if missing
-      - `rechnungsperiode.startdatum` and `enddatum` set
-      - `gesamtbrutto.wert` ≈ Σ(rechnungspositionen[].gesamtpreis.wert) ± 0.01 → ERROR if mismatch
-      - `nb_mp_id` present (§41 Abs. 1 Nr. 5) → WARNING SECT41_NB_MISSING if absent
+      - `rechnungsperiode.startdatum` and `enddatum` set (Nr. 6)
+      - Anfangs- and Endzählerstand and how the reading was obtained (Nr. 6)
+      - `nb_mp_id` — the Codenummer des Netzbetreibers (Nr. 5) → WARNING
+        SECT40_NB_CODE_MISSING if absent. Confirm it against marktd `get_malo`.
+      - `gesamtbrutto.wert` ≈ Σ(rechnungspositionen[].gesamtpreis.wert) ± 0.01 → ERROR
+        if mismatch
 
-      ### §41 Abs. 5 EnWG — Preisgarantie
-      Positions repricing a period covered by an active Preisgarantie (vertragd `preisgarantie_bis` >= period end) must not raise guaranteed price components. Violation: ERROR SECT41_PREISGARANTIE_VIOLATION.
+      ### § 40 Abs. 3 EnWG — Umlagen und Abgaben gesondert
+      Levies that are Kalkulationsbestandteile of the billed price must be shown
+      separately. Absent on a Strom invoice: WARNING SECT40_UMLAGEN_NOT_ITEMISED.
 
-      ### §41a Abs. 1 EnWG — iMSys guard for §41a dynamic tariffs
+      ### Preisgarantie — a contract term, checked against the contract
+      Call vertragd `check_preisgarantie` for the MaLo and the billing period. Positions
+      repricing a period the guarantee covers must not raise a guaranteed component:
+      the contract's own Preisanpassungsklausel is what § 41 Abs. 1 Nr. 5 EnWG requires
+      the contract to state, and this invoice contradicts it.
+      Violation: ERROR PREISGARANTIE_VIOLATION.
+      A price change *outside* a guarantee window is lawful and is not a finding here —
+      what it needs is the § 41 Abs. 5 EnWG notice, which vertragd-agent tracks.
+
+      ### § 41a Abs. 1 EnWG — iMSys guard for dynamic tariffs
       If any position has tag `"sect41a"`: verify `metering_mode=IMSYS`.
       SLP/RLM + dynamic tariff → ERROR SECT41A_IMSYS_REQUIRED.
 
-      ### §42 EnWG — Energiemix + CO₂ label
-      For STROM: `zusatzAttribute[name="energiemix"]` or `zusatzAttribute[name="co2_g_per_kwh"]` must exist.
+      ### § 42 EnWG — Stromkennzeichnung on the invoice
+      For STROM the Energieträgermix (§ 42 Abs. 1 Nr. 1) and the CO₂ and radioactive-waste
+      figures (§ 42 Abs. 1 Nr. 2) must reach the customer with the invoice. Read them from
+      productd `get_product_energiemix` and check the invoice carries them.
       Missing: WARNING SECT42_ENERGIEMIX_MISSING.
 
       ### Arithmetic invariants
@@ -65,7 +94,8 @@ spec:
       2. Call billingd `get_billing_record` for full Rechnung JSON.
       3. Run all compliance checks above in sequence.
       4. Call billingd `validate_tariff_config` with the invoice's tariff category.
-      5. Aggregate findings and determine overall status.
+      5. Aggregate findings and determine overall status. Every finding names the
+         Absatz it rests on, not just the §.
       6. If ERROR-severity: emit alert.
 
   # What this agent is in a multi-agent arrangement.
@@ -91,12 +121,17 @@ spec:
     max_delegation_depth: 0
     max_sensitivity_journaled: internal
 
-  # No `oversight` block, and no mutating tool grant: this specialist reads and
-  # reports. Both absences are the same fact — a `tool-calling` agent cannot
-  # dispatch a mutating call at all, because the arguments come from a model
-  # completion, which agentplane labels untrusted by construction, and its taint
-  # gate refuses a mutating sink with untrusted arguments. Declaring the grant
-  # anyway would read as an ability this agent does not have.
+  # No mutating tool grant, and no approval: this specialist reads and reports.
+  # Both absences are the same fact — a `tool-calling` agent cannot dispatch a
+  # mutating call at all, because the arguments come from a model completion,
+  # which agentplane labels untrusted by construction, and its taint gate refuses
+  # a mutating sink with untrusted arguments. Declaring the grant anyway would
+  # read as an ability this agent does not have.
+  #
+  # It does declare `oversight`, for **triage** — a row beside a finished answer
+  # rather than a gate in front of a call. That is the only mode that fits an
+  # agent which cannot act: gating its answer would gate nothing while suspending
+  # a run per finding.
   #
   # Acting on a conclusion is a `planned` specialist's job — see
   # `gabi-gas-agent`, whose plan passes `$input/…` references the runtime
@@ -141,7 +176,7 @@ spec:
         audience: [billing-compliance]
         priority: urgent
         summary: >-
-          A Rechnung failed a §40a/§41/§42 EnWG check. It must not be dispatched until the finding is resolved or overruled.
+          A Rechnung failed a § 40 / § 41a / § 42 EnWG check. It must not be dispatched until the finding is resolved or overruled.
         when:
           - path: /compliance_status
             equals: "VIOLATIONS"
@@ -182,13 +217,34 @@ spec:
           type: array
           items:
             type: object
+            additionalProperties: false
+            required: [code, severity, paragraph]
             properties:
+              # **Closed, because a consumer keys on it.** The procedure defines
+              # nine codes; as a free string the model could invent a tenth and a
+              # downstream rule matching `SECT41A_IMSYS_REQUIRED` would silently
+              # never fire. An enum makes the vocabulary the whole vocabulary.
               code:
                 type: string
+                enum:
+                  - SECT40_BETRAG_OR_FAELLIGKEIT_MISSING
+                  - SECT40_BERECHNUNGSFAKTOREN_MISSING
+                  - SECT40_NB_CODE_MISSING
+                  - SECT40_UMLAGEN_NOT_ITEMISED
+                  - PREISGARANTIE_VIOLATION
+                  - SECT41A_IMSYS_REQUIRED
+                  - SECT42_ENERGIEMIX_MISSING
+                  - ARITHMETIC_INVARIANT
+                  - INVALID_MWST_RATE
               severity:
                 type: string
+                enum: [ERROR, WARNING]
               paragraph:
                 type: string
+                description: >-
+                  The Absatz the finding rests on, not just the §. An operator
+                  handed "§ 40 EnWG" cannot find the rule; "§ 40 Abs. 2 Nr. 5"
+                  is a sentence they can read.
               description:
                 type: string
         dispatch_safe:
@@ -199,11 +255,10 @@ spec:
 
   # Knowledge, granted rather than copied.
   #
-  # Every mako MCP server publishes step-by-step prompts for its own procedures —
-  # fifty of them across thirteen servers — and not one manifest reached a single
-  # one. Each specialist instead carried a hand-typed paraphrase in its
-  # `constraints`, which is a second copy of a procedure with nothing keeping the
-  # two in agreement: the server's prompt changes with the code, the paraphrase
+  # mako's MCP servers publish 57 step-by-step prompts across 15 servers for
+  # their own procedures. A specialist names the one it needs; a hand-typed
+  # paraphrase in `constraints` would be a second copy with nothing keeping the
+  # two in agreement — the server's prompt changes with the code, a paraphrase
   # changes when somebody remembers.
   #
   # A context grant is not a tool grant. Reading a prompt authorises no action,
@@ -221,115 +276,33 @@ spec:
         output_sensitivity: internal
 
   tools:
-    - ref: tool://billingd/list_billing_records
-      mutates: false
-      max_sensitivity: internal
-      description: "list billing records via billingd"
     - ref: tool://billingd/get_billing_record
       mutates: false
       max_sensitivity: internal
-      description: "get billing record via billingd"
-    - ref: tool://billingd/preview_billing
-      mutates: false
-      max_sensitivity: internal
-      description: "preview billing via billingd"
-    - ref: tool://billingd/get_xrechnung
-      mutates: false
-      max_sensitivity: internal
-      description: "get xrechnung via billingd"
-    - ref: tool://billingd/check_billing_anomaly
-      mutates: false
-      max_sensitivity: internal
-      description: "check billing anomaly via billingd"
-    - ref: tool://billingd/list_vpp_settlements
-      mutates: false
-      max_sensitivity: internal
-      description: "list vpp settlements via billingd"
-    - ref: tool://billingd/list_corrections
-      mutates: false
-      max_sensitivity: internal
-      description: "list corrections via billingd"
-    - ref: tool://billingd/list_product_categories
-      mutates: false
-      max_sensitivity: internal
-      description: "list product categories via billingd"
+      description: >-
+        The full Rechnung JSON every § 40 EnWG field check reads.
+
     - ref: tool://billingd/validate_tariff_config
       mutates: false
       max_sensitivity: internal
-      description: "validate tariff config via billingd"
-    - ref: tool://billingd/explain_invoice_position
+      description: >-
+        Whether the tariff the invoice was built from is itself well-formed.
+
+    - ref: tool://vertragd/check_preisgarantie
+      mutates: false
+      max_sensitivity: confidential
+      description: >-
+        The Preisgarantie window the repricing check needs — without it the
+        check is unanswerable.
+
+    - ref: tool://productd/get_product_energiemix
       mutates: false
       max_sensitivity: internal
-      description: "explain invoice position via billingd"
-    - ref: tool://billingd/get_billing_summary
-      mutates: false
-      max_sensitivity: internal
-      description: "get billing summary via billingd"
+      description: >-
+        The § 42 EnWG Energiemix and CO₂ figures the invoice must carry.
+
     - ref: tool://marktd/get_malo
       mutates: false
       max_sensitivity: confidential
-      description: "get malo via marktd"
-    - ref: tool://marktd/list_partners
-      mutates: false
-      max_sensitivity: confidential
-      description: "list partners via marktd"
-    - ref: tool://marktd/get_preisblatt
-      mutates: false
-      max_sensitivity: confidential
-      description: "get preisblatt via marktd"
-    - ref: tool://marktd/get_versorgungsstatus
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus via marktd"
-    - ref: tool://marktd/get_nb_contract
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb contract via marktd"
-    - ref: tool://marktd/get_correlation
-      mutates: false
-      max_sensitivity: confidential
-      description: "get correlation via marktd"
-    - ref: tool://marktd/list_pricat_versions
-      mutates: false
-      max_sensitivity: confidential
-      description: "list pricat versions via marktd"
-    - ref: tool://marktd/list_malo
-      mutates: false
-      max_sensitivity: confidential
-      description: "list malo via marktd"
-    - ref: tool://marktd/get_melo
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo via marktd"
-    - ref: tool://marktd/get_rollenzuordnung
-      mutates: false
-      max_sensitivity: confidential
-      description: "get rollenzuordnung via marktd"
-    - ref: tool://marktd/get_versorgungsstatus_history
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgungsstatus history via marktd"
-    - ref: tool://marktd/get_nb_energiemix
-      mutates: false
-      max_sensitivity: confidential
-      description: "get nb energiemix via marktd"
-    - ref: tool://marktd/get_technische_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get technische ressource via marktd"
-    - ref: tool://marktd/get_steuerbare_ressource
-      mutates: false
-      max_sensitivity: confidential
-      description: "get steuerbare ressource via marktd"
-    - ref: tool://marktd/get_partner
-      mutates: false
-      max_sensitivity: confidential
-      description: "get partner via marktd"
-    - ref: tool://marktd/get_melo_standorteigenschaften
-      mutates: false
-      max_sensitivity: confidential
-      description: "get melo standorteigenschaften via marktd"
-    - ref: tool://marktd/get_versorgung_at
-      mutates: false
-      max_sensitivity: confidential
-      description: "get versorgung at via marktd"
+      description: >-
+        The Netzbetreiber code § 40 Abs. 2 Nr. 5 EnWG requires on the invoice.

@@ -401,9 +401,27 @@ impl Invoice {
             })
             .collect();
 
+        // A BO4E `Rechnungsposition` is a **net supply line**. BO4E states the
+        // relationship itself — `gesamtnetto` is „Die Summe der Nettobeträge
+        // der Rechnungsteile" — and expresses the other two things separately:
+        // tax as `steuerbetraege`/`gesamtsteuer`, advances as
+        // `vorauszahlungen` and the `zuZahlen` balance.
+        //
+        // So the `Tax` and `Abschlag` positions this engine carries internally
+        // must not be emitted as positions. Doing so stated each of them
+        // **twice**, in two shapes, and left `gesamtnetto` irreconcilable
+        // against the position vector for every conforming reader — the same
+        // defect `invoic-checker` stage 3 disputes when a counterparty sends
+        // it. The EN 16931 mapping (`en16931_map`) has always excluded them;
+        // this path was the outlier.
+        //
+        // `Info` positions stay: they carry `net_eur == 0` (Zählerstand,
+        // Brennwertkorrektur, § 51 suspension notes), so they change no sum,
+        // and § 40 EnWG wants them on the document.
         let rechnungspositionen: Vec<bo::Rechnungsposition> = self
             .positions
             .iter()
+            .filter(|p| p.is_rechnungsposition())
             .enumerate()
             .map(|(i, p)| {
                 let einheit = mengeneinheit_of(&p.unit);

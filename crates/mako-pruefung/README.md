@@ -17,6 +17,7 @@ from its own Codeliste. This crate is those rules, executable.
 | `nb` | Netzbetreiber | Anmeldung (`E_0622` → `E_0623` / `E_3005` → `E_3007`), Abmeldung (`E_0607` / `E_3019`), Neuanlage (`E_0608`) |
 | `lf` | Lieferant | Abmeldung (`E_0609`/`E_3002`), Beendigung der Zuordnung (`E_0624`/`E_3020`), Kündigung (`E_0614`/`E_3001`), Anmeldung E/G (`E_0615`/`E_3008`), Zuordnung LF (`E_0603`–`E_0606`, Strom only) |
 | `msb` | Messstellenbetreiber **und** Netzbetreiber | Anmeldung MSB (`E_0201`), Ende MSB (`E_0202`), Kündigung MSB (`E_0200`), Weiterverpflichtung (`E_0203`) |
+| `mabis` | NB, LF **und** BKV | Summenzeitreihen (`E_0007`, `E_0040`–`E_0041`, `E_0062`–`E_0065`, `E_0093`, `E_0098`/`E_0099`), Listenabgleich (`E_0004`, `E_0014`, `E_0017`, `E_0047`, `E_0049`, `E_0052`, `E_0070`, `E_0096`, `E_0097`), MaBiS-ZP (`E_0010`, `E_0020`, `E_0102`, `E_0103`), Profile (`E_0100`), Redispatch-Ausfallarbeit (`E_0901`, `E_0902`) |
 
 The `msb` module is named for the process family, not one Marktrolle: WiM Teil 1
 has the NB answer the Anmeldung and the Abmeldung, while the abgebender MSB
@@ -24,19 +25,47 @@ answers the Kündigung and the Weiterverpflichtung. The Kündigung never reaches
 the NB at all, so its Prüfschritte ask about the MSBA's own
 Messstellenbetriebsvertrag rather than about any grid registry.
 
+The `mabis` module is likewise named for the regulation (BNetzA BK6-24-174
+Anlage 3) rather than one Marktrolle, because MaBiS keys its trees on the
+**Summenzeitreihe** and not on who receives it: for Kategorie B the ÜNB is
+aggregationsverantwortlich, so it sends the BG-SZR that the NB checks, the
+LF-SZR that the LF checks and the BK-SZR that the BKV checks. Only the trees
+mako can actually decide are catalogued — the BIKO, ÜNB and
+Redispatch-Betreiber trees are deliberately absent, because shipping their
+codes would claim decisions this platform never makes.
+
 The document defines around sixty trees with the LF as prüfende Rolle. The ones
 here are the **process** answers — the messages that move a Marktlokation
 between suppliers. The rest (Rechnungsprüfung `E_0406` / `E_0519`,
-Stammdatenänderung `E_0408`, MaBiS `E_0004`, …) are separate obligations that
-belong beside the service owning their data.
+Stammdatenänderung `E_0408`, …) are separate obligations that belong beside the
+service owning their data.
 
 Each role module is split **by process**, with the Strom tree and its Gas
 counterpart together — they are the same business decision expressed in two
 documents.
 
-The `role-nb`, `role-lf` and `role-msb` Cargo features compile only their own
-rules, so a role-gated binary carries only the decisions it is licensed to make
-(§ 7 EnWG).
+The `role-nb`, `role-lf`, `role-msb` and `role-mabis` Cargo features compile
+only their own rules, so a role-gated binary carries only the decisions it is
+licensed to make (§ 7 EnWG).
+
+## Eight clusters, not two
+
+A GPKE answer is a Zustimmung or an Ablehnung, and the cluster picks between two
+PIDs. MaBiS adds four more, and every one of them is observable on the wire:
+
+| Cluster | What it means | Consequence |
+|---|---|---|
+| `Zustimmung` / `Ablehnung` | the agreement axis | picks the answer PID |
+| `Abweisung` | refused **before** it was assessed | its Prüfmitteilung is **not forwarded** (MaBiS Kap. 9.8.2 Nr. 2) |
+| `AblehnungDerGesamtenListe` | the whole list is refused | carries **no** positions; resend a whole list |
+| `KorrekturlisteWegenAblehnung` | individual positions are disputed | the answer **is** a list, one entry per Marktlokation |
+| `Reklamation` | the tree publishes only complaints | there is no Zustimmung; an acceptable profile is answered with silence |
+| `AenderungDerDaten` / `KeineAenderungDerDaten` | `E_0595` — whether data follows | off the agreement axis |
+
+`ist_zustimmung()` answers `None` on the two axes that are not about agreement,
+so a caller cannot read a Profil-Reklamation as a refusal of the profile — it
+is not one, and the LF keeps bilanzierend with that profile until a corrected
+version arrives.
 
 ## A code has no meaning without its tree
 
